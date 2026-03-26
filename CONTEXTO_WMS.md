@@ -103,7 +103,7 @@ app/
 ## Sprints
 - [x] Sprint 0 — Base: modelos, auth, JWT, deploy Railway
 - [x] Sprint 1 — Picking FEFO: tareas, reserva stock, confirmación
-- [ ] Sprint 2 — Packing + Gateway Connekta (EN CURSO)
+- [x] Sprint 2 — Packing + verificación ítem a ítem + Gateway Connekta
 - [ ] Sprint 3 — Recepción de mercancía + verificación vs OC Siesa
 - [ ] Sprint 4 — Conteo cíclico + ABC Analysis
 - [ ] Sprint 5 — Dashboard operativo en tiempo real
