@@ -120,6 +120,33 @@ class ConnektaGateway:
         except requests.exceptions.RequestException as e:
             logger.error(f'[CONNEKTA] Error enviando ajuste {tipo}: {str(e)}')
             raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
+        
+    def confirmar_entrada_compras(self, numero_oc: str, datos_recepcion: dict):
+      
+        payload = {
+            'numero_oc': numero_oc,
+            'fecha_entrada': datetime.utcnow().isoformat(),
+            'es_parcial': datos_recepcion.get('es_parcial', False),
+            'items': datos_recepcion.get('items', []),
+            'codigo_recepcion_wms': datos_recepcion.get('codigo_recepcion', ''),
+            'observaciones': datos_recepcion.get('observaciones', ''),
+            'origen': 'WMS_RECEPCION'
+        }
+
+        if self.modo_simulacion:
+            return self._simular_respuesta('CONFIRMAR_ENTRADA_COMPRAS', payload)
+
+        try:
+            url = f'{self.base_url}/entradas/compras'
+            response = requests.post(
+                url, json=payload, headers=self.headers, timeout=30
+            )
+            response.raise_for_status()
+            logger.info(f'[CONNEKTA] Entrada compras confirmada para OC {numero_oc}')
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f'[CONNEKTA] Error confirmando entrada OC {numero_oc}: {str(e)}')
+            raise Exception(f'Error confirmando entrada en Siesa: {str(e)}')
 
     def estado(self):
         """Verifica el estado de la conexión con Connekta."""
