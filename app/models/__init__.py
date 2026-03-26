@@ -6,3 +6,4 @@ from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.picking import TareaPicking
 from app.models.packing import TareaPacking, ItemPacking
 from app.models.recepcion import RecepcionMercancia, ItemRecepcion
+from app.models.conteo import SesionConteo

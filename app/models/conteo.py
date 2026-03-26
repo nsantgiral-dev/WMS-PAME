@@ -1,0 +1,106 @@
+from datetime import datetime
+from app.extensions import db
+
+
+class SesionConteo(db.Model):
+    __tablename__ = 'sesiones_conteo'
+
+    id = db.Column(db.Integer, primary_key=True)
+    codigo = db.Column(db.String(50), unique=True, nullable=False)
+
+    # Origen de la tarea
+    # DIARIO_ABC (generado automático desde Siesa) o MANUAL
+    tipo = db.Column(db.String(20), default='DIARIO_ABC', nullable=False)
+    clasificacion_abc = db.Column(db.String(1))  # A, B, C
+
+    # Ubicación a contar
+    ubicacion_id = db.Column(db.Integer, db.ForeignKey('ubicaciones.id'), nullable=False)
+    almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
+
+    # Producto
+    producto_id = db.Column(db.Integer, db.ForeignKey('productos.id'), nullable=False)
+    producto_codigo_siesa = db.Column(db.String(50))
+    maneja_lote = db.Column(db.Boolean, default=False)
+
+    # Operario asignado
+    operario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+
+    # Estado
+    # PENDIENTE → EN_PROCESO → MATCH → DESCUADRE → SEGUNDO_CONTEO → AJUSTADO → CANCELADO
+    estado = db.Column(db.String(20), default='PENDIENTE', nullable=False)
+
+    # Conteo — NUNCA exponer existencia_siesa al operario
+    existencia_siesa = db.Column(db.Integer)  # Oculto — viene de Siesa en tiempo real
+    cantidad_fisica = db.Column(db.Integer)   # Lo que contó el operario
+    lote_id = db.Column(db.String(50))        # Obligatorio si maneja_lote=True
+
+    # Diferencia calculada al conciliar
+    diferencia = db.Column(db.Integer)
+    motivo_codigo = db.Column(db.String(20))  # AJ-ENT o AJ-SAL
+
+    # Segundo conteo (double-blind)
+    es_segundo_conteo = db.Column(db.Boolean, default=False)
+    sesion_origen_id = db.Column(db.Integer, db.ForeignKey('sesiones_conteo.id'), nullable=True)
+    segundo_operario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+
+    # Trigger a Siesa
+    siesa_triggered = db.Column(db.Boolean, default=False)
+    siesa_response = db.Column(db.Text)
+    siesa_triggered_at = db.Column(db.DateTime)
+
+    # Tiempos
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+    fecha_inicio = db.Column(db.DateTime)
+    fecha_cierre = db.Column(db.DateTime)
+
+    # Relaciones
+    ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)
+    producto = db.relationship('Producto', backref='sesiones_conteo', lazy=True)
+    operario = db.relationship('Usuario', foreign_keys=[operario_id],
+                               backref='conteos_asignados', lazy=True)
+    segundo_operario = db.relationship('Usuario', foreign_keys=[segundo_operario_id],
+                                       backref='segundos_conteos', lazy=True)
+
+    def to_dict_operario(self):
+        """Vista para el operario — SIN cantidad esperada (conteo ciego)."""
+        return {
+            'id': self.id,
+            'codigo': self.codigo,
+            'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
+            'producto_id': self.producto_id,
+            'producto_codigo': self.producto.codigo if self.producto else None,
+            'producto_nombre': self.producto.nombre if self.producto else None,
+            'maneja_lote': self.maneja_lote,
+            'estado': self.estado,
+            'es_segundo_conteo': self.es_segundo_conteo
+        }
+
+    def to_dict(self):
+        """Vista completa para supervisores."""
+        return {
+            'id': self.id,
+            'codigo': self.codigo,
+            'tipo': self.tipo,
+            'clasificacion_abc': self.clasificacion_abc,
+            'ubicacion_id': self.ubicacion_id,
+            'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
+            'almacen_id': self.almacen_id,
+            'producto_id': self.producto_id,
+            'producto_codigo': self.producto.codigo if self.producto else None,
+            'producto_nombre': self.producto.nombre if self.producto else None,
+            'maneja_lote': self.maneja_lote,
+            'operario_id': self.operario_id,
+            'estado': self.estado,
+            'existencia_siesa': self.existencia_siesa,
+            'cantidad_fisica': self.cantidad_fisica,
+            'lote_id': self.lote_id,
+            'diferencia': self.diferencia,
+            'motivo_codigo': self.motivo_codigo,
+            'es_segundo_conteo': self.es_segundo_conteo,
+            'sesion_origen_id': self.sesion_origen_id,
+            'siesa_triggered': self.siesa_triggered,
+            'siesa_triggered_at': self.siesa_triggered_at.isoformat() if self.siesa_triggered_at else None,
+            'fecha_creacion': self.fecha_creacion.isoformat(),
+            'fecha_inicio': self.fecha_inicio.isoformat() if self.fecha_inicio else None,
+            'fecha_cierre': self.fecha_cierre.isoformat() if self.fecha_cierre else None
+        }
