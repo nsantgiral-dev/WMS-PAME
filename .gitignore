@@ -1,0 +1,26 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Entorno
+.env
+.env.local
+
+# Mac
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Testing
+.pytest_cache/
+
+# Migraciones compiladas
+migrations/versions/__pycache__/
