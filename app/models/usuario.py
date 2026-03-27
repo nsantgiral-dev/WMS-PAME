@@ -2,6 +2,7 @@ from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 from app.extensions import db
 
+
 class Usuario(db.Model):
     __tablename__ = 'usuarios'
 
@@ -12,6 +13,7 @@ class Usuario(db.Model):
     rol = db.Column(db.String(50), default='operario')
     activo = db.Column(db.Boolean, default=True)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=True)
+    puede_usar_camara = db.Column(db.Boolean, default=False)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, password):
@@ -27,5 +29,6 @@ class Usuario(db.Model):
             'email': self.email,
             'rol': self.rol,
             'activo': self.activo,
-            'almacen_id': self.almacen_id
+            'almacen_id': self.almacen_id,
+            'puede_usar_camara': self.puede_usar_camara or False
         }

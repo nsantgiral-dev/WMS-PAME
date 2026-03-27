@@ -1,5 +1,4 @@
 from datetime import datetime
-from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
@@ -16,6 +15,7 @@ def listar_tareas():
     operario_id = request.args.get('operario_id', type=int)
     almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
 
     query = TareaPicking.query.order_by(
         TareaPicking.prioridad.desc(),
@@ -29,7 +29,7 @@ def listar_tareas():
     if almacen_id:
         query = query.filter_by(almacen_id=almacen_id)
 
-    tareas = query.paginate(page=page, per_page=50, error_out=False)
+    tareas = query.paginate(page=page, per_page=per_page, error_out=False)
 
     return jsonify({
         'tareas': [t.to_dict() for t in tareas.items],
@@ -49,12 +49,10 @@ def obtener_tarea(id):
 @jwt_required()
 def crear_tarea():
     data = request.get_json()
-
     requeridos = ['producto_id', 'cantidad', 'almacen_id']
     for campo in requeridos:
         if campo not in data:
             return jsonify({'error': f'Campo requerido: {campo}'}), 400
-
     try:
         tareas = PickingService.crear_tareas(
             producto_id=data['producto_id'],
@@ -69,7 +67,6 @@ def crear_tarea():
             'mensaje': f'{len(tareas)} tarea(s) de picking creadas',
             'tareas': [t.to_dict() for t in tareas]
         }), 201
-
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -90,10 +87,8 @@ def iniciar_tarea(id):
 def confirmar_tarea(id):
     usuario_id = int(get_jwt_identity())
     data = request.get_json()
-
     if 'cantidad_recogida' not in data:
         return jsonify({'error': 'cantidad_recogida requerida'}), 400
-
     try:
         tarea = PickingService.confirmar_picking(
             tarea_id=id,
@@ -129,28 +124,27 @@ def cancelar_tarea(id):
 @jwt_required()
 def calcular_fefo():
     data = request.get_json()
-
     requeridos = ['producto_id', 'cantidad', 'almacen_id']
     for campo in requeridos:
         if campo not in data:
             return jsonify({'error': f'Campo requerido: {campo}'}), 400
-
     resultado = PickingService.calcular_fefo(
         producto_id=data['producto_id'],
         cantidad=data['cantidad'],
         almacen_id=data['almacen_id']
     )
     return jsonify(resultado), 200
+
+
 @picking_bp.route('/siguiente-tarea', methods=['GET'])
 @jwt_required()
 def siguiente_tarea():
     """
-    Dispensador automático de tareas — el operario pide trabajo, el sistema lo asigna.
-    El operario nunca espera que alguien le asigne manualmente.
+    Dispensador automático — el operario pide trabajo, el sistema asigna.
+    Nunca espera asignación manual.
     """
     operario_id = int(get_jwt_identity())
 
-    # Buscar si ya tiene una tarea en proceso
     tarea_activa = TareaPicking.query.filter_by(
         operario_id=operario_id,
         estado='EN_PROCESO'
@@ -162,24 +156,13 @@ def siguiente_tarea():
             'mensaje': 'Tienes una tarea en proceso'
         }), 200
 
-    # Tomar la tarea más prioritaria de la cola global
-    # Orden: prioridad DESC, fecha_creacion ASC (más antigua primero)
     tarea = TareaPicking.query.filter_by(
         estado='PENDIENTE',
         operario_id=None
     ).order_by(
         TareaPicking.prioridad.desc(),
         TareaPicking.fecha_creacion.asc()
-    ).with_for_update(skip_locked=True).first()
-
-    if not tarea:
-        # Buscar tareas pendientes sin importar si tienen operario
-        tarea = TareaPicking.query.filter_by(
-            estado='PENDIENTE'
-        ).order_by(
-            TareaPicking.prioridad.desc(),
-            TareaPicking.fecha_creacion.asc()
-        ).first()
+    ).first()
 
     if not tarea:
         return jsonify({
@@ -187,17 +170,14 @@ def siguiente_tarea():
             'mensaje': 'No hay tareas pendientes en la cola'
         }), 200
 
-    # Asignar automáticamente al operario
     tarea.operario_id = operario_id
     tarea.estado = 'EN_PROCESO'
     tarea.fecha_inicio = datetime.utcnow()
-
-    from app.extensions import db
     db.session.commit()
 
     return jsonify({
         'tarea': tarea.to_dict(),
-        'mensaje': f'Tarea asignada automáticamente'
+        'mensaje': 'Tarea asignada automáticamente'
     }), 200
 
 
@@ -206,13 +186,40 @@ def siguiente_tarea():
 def mis_tareas_activas():
     """Tareas activas del operario actual."""
     operario_id = int(get_jwt_identity())
-
     tareas = TareaPicking.query.filter(
         TareaPicking.operario_id == operario_id,
         TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
     ).order_by(TareaPicking.prioridad.desc()).all()
-
     return jsonify({
         'tareas': [t.to_dict() for t in tareas],
         'total': len(tareas)
+    }), 200
+
+
+@picking_bp.route('/<int:id>/reportar-problema', methods=['POST'])
+@jwt_required()
+def reportar_problema(id):
+    """
+    Operario reporta un problema — Ubicación vacía o Mercancía averiada.
+    Bloquea la tarea, la saca de la cola del operario y
+    la envía al dashboard del jefe para resolución.
+    El operario pasa automáticamente a la siguiente tarea.
+    """
+    operario_id = int(get_jwt_identity())
+    data = request.get_json() or {}
+    motivo = data.get('motivo', 'PROBLEMA_REPORTADO')
+
+    tarea = TareaPicking.query.get_or_404(id)
+
+    if tarea.operario_id != operario_id:
+        return jsonify({'error': 'Esta tarea no te pertenece'}), 403
+
+    tarea.estado = 'BLOQUEADO'
+    tarea.operario_id = None
+    db.session.commit()
+
+    return jsonify({
+        'mensaje': 'Problema reportado — el jefe de almacén lo resolverá',
+        'motivo': motivo,
+        'tarea_id': id
     }), 200

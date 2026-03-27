@@ -1,8 +1,5 @@
 'use strict';
 
-// ============================================
-// ESTADO GLOBAL
-// ============================================
 const API = window.location.origin;
 let TOKEN = localStorage.getItem('wms_token');
 let OPERARIO = JSON.parse(localStorage.getItem('wms_operario') || 'null');
@@ -18,9 +15,6 @@ let ALMACEN_ID = 1;
 let TIMER_ADMIN = null;
 let TIMER_OPERARIO = null;
 
-// ============================================
-// ARRANQUE
-// ============================================
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/pwa/sw.js').catch(() => {});
@@ -34,14 +28,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// ============================================
-// ROLES
-// ============================================
 function mostrarSegunRol(rol) {
   pararTimers();
   const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
   const esRecepcion = rol === 'recepcionista';
-
   if (esAdmin) {
     pantalla('pantalla-admin');
     cargarAdmin();
@@ -52,9 +42,7 @@ function mostrarSegunRol(rol) {
   } else {
     pantalla('pantalla-operario');
     pedirTarea();
-    TIMER_OPERARIO = setInterval(() => {
-      if (!TAREA_ACTUAL) pedirTarea();
-    }, 5000);
+    TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   }
 }
 
@@ -63,9 +51,6 @@ function pararTimers() {
   clearInterval(TIMER_OPERARIO);
 }
 
-// ============================================
-// RED Y OFFLINE
-// ============================================
 function monitorRed() {
   const update = () => {
     const on = navigator.onLine;
@@ -97,23 +82,18 @@ function guardarOffline(datos) {
   alerta('Sin WiFi — guardado para sincronizar', 'advertencia');
 }
 
-// ============================================
-// SCANNER LÁSER — INPUT INVISIBLE
-// ============================================
 function scannerLaser() {
   const inp = document.getElementById('scanner-input');
   if (!inp) return;
-
   const focus = () => {
     const a = document.activeElement;
     const esForm = a && ['INPUT','TEXTAREA','SELECT'].includes(a.tagName);
-    if (!CAMARA_ACTIVA && !esForm) inp.focus();
+    const hayModal = document.getElementById('modal-problema');
+    if (!CAMARA_ACTIVA && !esForm && !hayModal) inp.focus();
   };
-
   document.addEventListener('click', focus);
   document.addEventListener('touchend', focus);
   setInterval(focus, 1000);
-
   inp.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       const cod = SCANNER_BUFFER.trim();
@@ -128,9 +108,6 @@ function scannerLaser() {
   });
 }
 
-// ============================================
-// HTTP
-// ============================================
 async function get(url) {
   const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });
   if (r.status === 401) { salir(); throw new Error('401'); }
@@ -157,18 +134,13 @@ async function put(url, body = {}) {
   return r.json();
 }
 
-// ============================================
-// LOGIN
-// ============================================
 async function login() {
   const email = document.getElementById('login-email').value.trim();
   const pass = document.getElementById('login-password').value.trim();
   if (!email || !pass) { alerta('Ingresa usuario y contraseña', 'error'); return; }
-
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
   btn.disabled = true;
-
   try {
     const r = await fetch(API + '/api/auth/login', {
       method: 'POST',
@@ -207,9 +179,6 @@ function salir() {
   pantalla('pantalla-login');
 }
 
-// ============================================
-// PANEL ADMIN
-// ============================================
 async function cargarAdmin() {
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
@@ -285,11 +254,11 @@ async function cargarPedidos() {
             <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
             <div style="font-size:12px;color:#666;margin-top:2px;">${t.codigo} · ${t.ubicacion_codigo || '—'}</div>
             <div style="font-size:11px;color:#444;margin-top:2px;">
-              ${t.operario_id ? '👤 Asignado #' + t.operario_id : '⏳ En cola'}
+              ${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado — requiere atención' : '⏳ En cola'}
             </div>
           </div>
           <div style="text-align:right;">
-            <span class="badge ${t.estado === 'EN_PROCESO' ? 'badge-blue' : t.estado === 'COMPLETADO' ? 'badge-green' : 'badge-yellow'}">${t.estado}</span>
+            <span class="badge ${t.estado === 'EN_PROCESO' ? 'badge-blue' : t.estado === 'COMPLETADO' ? 'badge-green' : t.estado === 'BLOQUEADO' ? 'badge-red' : 'badge-yellow'}">${t.estado}</span>
             <div style="font-size:24px;font-weight:800;margin-top:4px;">${t.cantidad_recogida}/${t.cantidad_solicitada}</div>
           </div>
         </div>
@@ -362,9 +331,6 @@ async function cargarConnekta() {
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
-// ============================================
-// OPERARIO — DISPENSADOR AUTOMÁTICO
-// ============================================
 async function pedirTarea() {
   try {
     const d = await get('/api/mobile/tarea-actual');
@@ -390,6 +356,7 @@ function renderTarea(t) {
   const color = colores[t.tipo] || '#333';
   const esConteo = t.tipo === 'CONTEO';
   const pct = t.cantidad_requerida ? Math.min((t.cantidad_escaneada / t.cantidad_requerida) * 100, 100) : 0;
+  const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
 
   document.getElementById('contenido-tarea').innerHTML = `
     <div style="padding:16px;">
@@ -420,29 +387,32 @@ function renderTarea(t) {
         <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
       </div>`}
 
+      ${puedeCamara ? `
       <button onclick="abrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
         📷 Escanear con cámara
       </button>
-
       <div id="camara-box" style="display:none;margin-bottom:10px;">
         <div id="lector-qr" style="border-radius:12px;overflow:hidden;"></div>
         <button onclick="cerrarCamara()" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
-      </div>
+      </div>` : ''}
 
       <button id="btn-ok" onclick="confirmar()" ${esConteo ? '' : 'disabled'}
-        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:#000;color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${esConteo?1:0.3};">
+        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:#000;color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${esConteo?1:0.3};margin-bottom:10px;">
         ✓ Confirmar
+      </button>
+
+      <button onclick="reportarProblema(${t.id})"
+        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:12px;cursor:pointer;">
+        ⚠ Reportar problema
       </button>
 
       ${t.referencia ? `<div style="text-align:center;margin-top:10px;font-size:12px;color:#555;">Ref: ${t.referencia}</div>` : ''}
     </div>`;
 }
 
-// ============================================
-// CÁMARA
-// ============================================
 async function abrirCamara() {
-  document.getElementById('camara-box').style.display = 'block';
+  const box = document.getElementById('camara-box');
+  if (box) box.style.display = 'block';
   CAMARA_ACTIVA = true;
   if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
   HTML5QR = new Html5Qrcode('lector-qr');
@@ -470,9 +440,6 @@ function loadScript(src) {
   });
 }
 
-// ============================================
-// ESCANEO
-// ============================================
 async function procesarScan(codigo) {
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
@@ -484,7 +451,6 @@ async function procesarScan(codigo) {
       cantidad: 1
     });
     if (r.error) { alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
-
     const contador = document.getElementById('contador');
     if (contador) {
       contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
@@ -503,9 +469,6 @@ async function procesarScan(codigo) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-// ============================================
-// CONFIRMAR
-// ============================================
 async function confirmar() {
   if (!TAREA_ACTUAL) return;
   const btn = document.getElementById('btn-ok');
@@ -528,9 +491,48 @@ async function confirmar() {
   }
 }
 
-// ============================================
-// RECEPCIÓN
-// ============================================
+async function reportarProblema(tareaId) {
+  const modal = document.createElement('div');
+  modal.id = 'modal-problema';
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:380px;border:1px solid #333;">
+        <div style="font-size:18px;font-weight:700;margin-bottom:6px;color:#f87171;">⚠ Reportar problema</div>
+        <div style="font-size:13px;color:#555;margin-bottom:16px;">La tarea se bloqueará y el jefe la resolverá. Pasarás a la siguiente tarea automáticamente.</div>
+        <button onclick="confirmarProblema(${tareaId},'UBICACION_VACIA')"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          📦 Ubicación vacía
+        </button>
+        <button onclick="confirmarProblema(${tareaId},'MERCANCIA_AVERIADA')"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          🚫 Mercancía averiada
+        </button>
+        <button onclick="confirmarProblema(${tareaId},'PRODUCTO_INCORRECTO')"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          ❌ Producto incorrecto
+        </button>
+        <button onclick="document.getElementById('modal-problema').remove()"
+          style="width:100%;padding:12px;font-size:14px;background:#222;color:#666;border:none;border-radius:10px;cursor:pointer;margin-top:4px;">
+          Cancelar
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function confirmarProblema(tareaId, motivo) {
+  const modal = document.getElementById('modal-problema');
+  if (modal) modal.remove();
+  try {
+    await post('/api/picking/' + tareaId + '/reportar-problema', { motivo });
+    alerta('Problema reportado — pasando a siguiente tarea', 'advertencia');
+    TAREA_ACTUAL = null;
+    setTimeout(pedirTarea, 1500);
+  } catch (e) {
+    alerta('Error reportando problema', 'error');
+  }
+}
+
 async function cargarRecepciones() {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
@@ -567,9 +569,6 @@ async function iniciarRec(id) {
   } catch (e) { alerta('Error', 'error'); }
 }
 
-// ============================================
-// UI HELPERS
-// ============================================
 function pantalla(id) {
   ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion'].forEach(p => {
     const el = document.getElementById(p);
