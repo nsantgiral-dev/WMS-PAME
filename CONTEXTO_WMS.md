@@ -32,91 +32,64 @@
 1. Leer siempre Cantidad Disponible de Siesa, NUNCA existencia física
 2. El WMS es un Trigger — solo cambia estado a "Cumplido"
 3. Siesa genera automáticamente: Remisión + descarga inventario + Factura
-4. Ajustes inventario: conector 05_Entrada y 06_Salida
+4. Ajustes inventario: AJ-ENT (sobrante) y AJ-SAL (faltante)
 5. Recepción ciega — operario escanea sin ver cantidades esperadas
 6. Cross-dock si hay backorders — mercancía nunca toca estante
 7. Bloqueo de excesos según tolerancia del proveedor
+8. Conteo double-blind — segundo conteo por operario diferente
+9. ABC viene de Siesa — WMS nunca calcula clasificación
 
 ## Flujo operativo maestro
 Siesa aprueba pedido
-→ WMS GET Connekta (pedidos aprobados + cantidad disponible)
+→ WMS GET Connekta (pedidos + cantidad disponible)
 → WMS crea tareas picking FEFO
 → Operario recoge y confirma (escaneo)
 → Empacador verifica ítem por ítem (escaneo)
 → Confirmar packing → POST Connekta "Cumplido"
 → Siesa genera Remisión + Factura automáticamente
 
-Camión llega con mercancía
+Camión llega
 → Recepcionista selecciona OC aprobada
 → Escaneo ciego ítem por ítem
-→ WMS decide: Cross-dock si hay backorder / Put-away por ABC
+→ WMS decide: Cross-dock si backorder / Put-away por ABC
 → Confirmar → POST Connekta entrada contable
 → Siesa debita cuenta 1435 automáticamente
 
-## Modelos en base de datos (10 tablas)
-- usuarios ✓
-- productos ✓
-- almacenes ✓
-- ubicaciones ✓
+Conteo cíclico
+→ ABC genera tareas automáticas (A=semanal, B=mensual, C=trimestral)
+→ Operario cuenta sin ver cantidad esperada
+→ Conciliación en tiempo real contra Siesa
+→ Descuadre → segundo conteo por operario diferente
+→ Confirmado → POST Connekta AJ-ENT o AJ-SAL
+
+## Modelos en base de datos (11 tablas)
+- usuarios, productos, almacenes, ubicaciones ✓
 - ubicaciones_productos ✓ (fuente de verdad del stock)
 - movimientos_inventario ✓ (kardex)
 - tareas_picking ✓
 - tareas_packing + items_packing ✓
 - recepciones + items_recepcion ✓
+- sesiones_conteo ✓
 
 ## Endpoints activos
-### Auth
-- POST /api/auth/login
-- GET  /api/auth/me
-- POST /api/auth/register
-
-### Productos
-- GET/POST /api/productos/
-- GET/PUT/DELETE /api/productos/<id>
-
-### Almacenes
-- GET/POST /api/almacenes/
-- GET/POST /api/almacenes/<id>/ubicaciones
-
-### Inventario
-- POST /api/inventario/ajuste
-- GET  /api/inventario/stock/<producto_id>
-- GET  /api/inventario/movimientos
-
-### Picking
-- GET  /api/picking/
-- POST /api/picking/crear
-- PUT  /api/picking/<id>/iniciar
-- PUT  /api/picking/<id>/confirmar
-- PUT  /api/picking/<id>/cancelar
-- POST /api/picking/fefo
-
-### Packing
-- GET  /api/packing/
-- POST /api/packing/crear-desde-picking
-- POST /api/packing/crear-manual
-- PUT  /api/packing/<id>/iniciar
-- POST /api/packing/<id>/escanear
-- PUT  /api/packing/<id>/confirmar
-- PUT  /api/packing/<id>/cancelar
-- GET  /api/packing/connekta/estado
-
-### Recepción
-- GET  /api/recepcion/
-- POST /api/recepcion/crear
-- PUT  /api/recepcion/<id>/iniciar
-- POST /api/recepcion/<id>/escanear
-- PUT  /api/recepcion/<id>/confirmar
-- PUT  /api/recepcion/<id>/cancelar
+### Auth: POST /login, GET /me, POST /register
+### Productos: CRUD completo
+### Almacenes: CRUD + ubicaciones
+### Inventario: ajuste, stock, movimientos
+### Picking: crear, iniciar, confirmar, cancelar, fefo
+### Packing: crear, escanear, confirmar, cancelar, connekta/estado
+### Recepcion: crear, iniciar, escanear, confirmar, cancelar
+### Conteo: listar, mis-tareas, registrar, ajustar, abc/generar, abc/resumen
+### Dashboard: kpis, productividad, movimientos, alertas-stock, resumen-completo
 
 ## Sprints
 - [x] Sprint 0 — Base: modelos, auth, JWT, deploy Railway
 - [x] Sprint 1 — Picking FEFO
 - [x] Sprint 2 — Packing + Gateway Connekta
 - [x] Sprint 3 — Recepción ciega + Cross-dock + Trigger Siesa
-- [ ] Sprint 4 — Conteo cíclico + ABC Analysis
-- [ ] Sprint 5 — Dashboard operativo
-- [ ] Sprint 6 — App móvil operarios (PWA)
+- [x] Sprint 4 — Conteo cíclico double-blind + ABC desde Siesa
+- [x] Sprint 5 — Dashboard operativo KPIs tiempo real
+- [ ] Sprint 6 — App móvil operarios (PWA tablet Android)
 
 ## Credenciales desarrollo
 - Admin: admin@papeleria.com / admin2026

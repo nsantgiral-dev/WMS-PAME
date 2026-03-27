@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <title>WMS Papelería</title>
+  <link rel="manifest" href="/static/pwa/manifest.json">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #000;
+      color: #fff;
+      min-height: 100vh;
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: #111;
+      border-bottom: 1px solid #222;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-logo { font-size: 18px; font-weight: 700; }
+    .header-ops { display: flex; align-items: center; gap: 12px; }
+
+    /* Login */
+    #pantalla-login {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 24px;
+    }
+    .login-logo {
+      font-size: 72px;
+      margin-bottom: 16px;
+    }
+    .login-titulo {
+      font-size: 28px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+    .login-subtitulo {
+      font-size: 16px;
+      color: #666;
+      margin-bottom: 40px;
+      text-align: center;
+    }
+    .login-form { width: 100%; max-width: 360px; }
+    .input-group { margin-bottom: 16px; }
+    .input-label {
+      display: block;
+      font-size: 13px;
+      color: #666;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .input-field {
+      width: 100%;
+      padding: 16px;
+      font-size: 20px;
+      background: #111;
+      border: 2px solid #333;
+      border-radius: 12px;
+      color: #fff;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .input-field:focus { border-color: #fff; }
+    .btn-primary {
+      width: 100%;
+      padding: 18px;
+      font-size: 20px;
+      font-weight: 700;
+      background: #fff;
+      color: #000;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      margin-top: 8px;
+      transition: opacity 0.2s;
+    }
+    .btn-primary:active { opacity: 0.8; }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Pantalla tareas */
+    #pantalla-tareas { display: none; min-height: 100vh; }
+
+    /* Operario info */
+    .operario-bar {
+      background: #111;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #222;
+    }
+    .operario-nombre { font-size: 14px; font-weight: 600; }
+    .operario-rol { font-size: 12px; color: #666; }
+    .btn-logout {
+      font-size: 13px;
+      color: #666;
+      background: none;
+      border: 1px solid #333;
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      color: #fff;
+    }
+
+    /* Contenido tarea */
+    #contenido-tarea { padding-bottom: 32px; }
+
+    /* Cola offline badge */
+    .offline-badge {
+      position: fixed;
+      bottom: 20px;
+      right: 16px;
+      background: #d97706;
+      color: #fff;
+      padding: 8px 14px;
+      border-radius: 20px;
+      font-size: 13px;
+      font-weight: 600;
+      display: none;
+      z-index: 500;
+    }
+
+    /* Scanner input invisible */
+    #scanner-input {
+      position: fixed;
+      opacity: 0;
+      width: 1px;
+      height: 1px;
+      top: -100px;
+      left: -100px;
+    }
+
+    /* Animaciones */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    }
+    @keyframes flash {
+      0%   { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    /* Scrollbar oculto */
+    ::-webkit-scrollbar { display: none; }
+  </style>
+</head>
+<body>
+
+  <!-- Input invisible para escáner láser Bluetooth -->
+  <input id="scanner-input" type="text" autocomplete="off"
+         autocorrect="off" autocapitalize="off" spellcheck="false">
+
+  <!-- ==================== LOGIN ==================== -->
+  <div id="pantalla-login">
+    <div class="login-logo">📦</div>
+    <div class="login-titulo">WMS Papelería</div>
+    <div class="login-subtitulo">Sistema de bodega</div>
+
+    <div class="login-form">
+      <div class="input-group">
+        <label class="input-label">Usuario (email)</label>
+        <input id="login-email" class="input-field" type="email"
+               placeholder="operario@papeleria.com"
+               autocomplete="email">
+      </div>
+      <div class="input-group">
+        <label class="input-label">Contraseña</label>
+        <input id="login-password" class="input-field" type="password"
+               placeholder="••••••"
+               autocomplete="current-password"
+               onkeydown="if(event.key==='Enter') login()">
+      </div>
+      <button id="btn-login" class="btn-primary" onclick="login()">
+        Entrar
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== TAREAS ==================== -->
+  <div id="pantalla-tareas">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="header-logo">📦 WMS</div>
+      <div class="header-ops">
+        <span id="conexion-status" style="font-size:13px;">● Online</span>
+        <button onclick="cargarTareaActual()"
+                style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">
+          ↻
+        </button>
+      </div>
+    </div>
+
+    <!-- Info operario -->
+    <div class="operario-bar" id="operario-bar">
+      <div>
+        <div class="operario-nombre" id="operario-nombre">—</div>
+        <div class="operario-rol" id="operario-rol">—</div>
+      </div>
+      <button class="btn-logout" onclick="cerrarSesion()">Salir</button>
+    </div>
+
+    <!-- Contenido dinámico de la tarea -->
+    <div id="contenido-tarea">
+      <div style="text-align:center;padding:60px 20px;color:#666;">
+        Cargando...
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Badge cola offline -->
+  <div class="offline-badge" id="offline-badge">
+    ⚡ <span id="offline-count">0</span> en cola
+  </div>
+
+  <script src="/static/pwa/app.js"></script>
+  <script>
+    // Mostrar nombre del operario cuando carga
+    document.addEventListener('DOMContentLoaded', () => {
+      const op = JSON.parse(localStorage.getItem('wms_operario') || 'null');
+      if (op) {
+        const nombre = document.getElementById('operario-nombre');
+        const rol = document.getElementById('operario-rol');
+        if (nombre) nombre.textContent = op.nombre;
+        if (rol) rol.textContent = op.rol;
+      }
+    });
+
+    // Mostrar badge si hay cola offline
+    setInterval(() => {
+      const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
+      const badge = document.getElementById('offline-badge');
+      const count = document.getElementById('offline-count');
+      if (badge && count) {
+        badge.style.display = cola.length > 0 ? 'block' : 'none';
+        count.textContent = cola.length;
+      }
+    }, 2000);
+  </script>
+
+</body>
+</html>
