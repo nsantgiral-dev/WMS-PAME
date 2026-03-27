@@ -1,18 +1,15 @@
-// ============================================
-// WMS PWA — Lógica principal
-// Soporta cámara (ahora) y láser Bluetooth (después)
-// ============================================
-
 const API_BASE = window.location.origin;
 let TOKEN = localStorage.getItem('wms_token');
 let OPERARIO = JSON.parse(localStorage.getItem('wms_operario') || 'null');
 let TAREA_ACTUAL = null;
-let ITEMS_ESCANEADOS = [];
 let COLA_OFFLINE = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
 let SCANNER_BUFFER = '';
 let SCANNER_TIMEOUT = null;
 let CAMARA_ACTIVA = false;
 let HTML5QR = null;
+let CHART_ACTIVIDAD = null;
+let TAB_ACTUAL = 'tab-dashboard';
+let ADMIN_ALMACEN_ID = 1;
 
 // ============================================
 // INICIALIZACIÓN
@@ -20,17 +17,33 @@ let HTML5QR = null;
 document.addEventListener('DOMContentLoaded', () => {
   registrarServiceWorker();
   monitorearConexion();
+  inicializarScannerLaser();
 
   if (TOKEN && OPERARIO) {
-    mostrarPantalla('pantalla-tareas');
-    cargarTareaActual();
+    mostrarPantallaSegunRol(OPERARIO.rol);
   } else {
     mostrarPantalla('pantalla-login');
   }
-
-  // Input invisible para escáner láser — siempre con focus
-  inicializarScannerLaser();
 });
+
+// ============================================
+// ROLES — pantalla según quien entra
+// ============================================
+function mostrarPantallaSegunRol(rol) {
+  const rolesAdmin = ['admin', 'gerente', 'jefe_almacen', 'supervisor'];
+  const rolesRecepcion = ['recepcionista'];
+
+  if (rolesAdmin.includes(rol)) {
+    mostrarPantalla('pantalla-admin');
+    cargarDashboardAdmin();
+  } else if (rolesRecepcion.includes(rol)) {
+    mostrarPantalla('pantalla-recepcion');
+    cargarRecepcionesActivas();
+  } else {
+    mostrarPantalla('pantalla-operario');
+    cargarTareaActual();
+  }
+}
 
 // ============================================
 // SERVICE WORKER
@@ -40,24 +53,19 @@ async function registrarServiceWorker() {
     try {
       await navigator.serviceWorker.register('/static/pwa/sw.js');
       navigator.serviceWorker.addEventListener('message', event => {
-        if (event.data.tipo === 'SINCRONIZAR') {
-          sincronizarColaOffline();
-        }
+        if (event.data.tipo === 'SINCRONIZAR') sincronizarColaOffline();
       });
-    } catch (e) {
-      console.error('SW error:', e);
-    }
+    } catch (e) { console.error('SW error:', e); }
   }
 }
 
 // ============================================
-// ESCÁNER LÁSER — INPUT INVISIBLE CON FOCUS PERMANENTE
+// SCANNER LÁSER
 // ============================================
 function inicializarScannerLaser() {
   const input = document.getElementById('scanner-input');
   if (!input) return;
 
-  // Mantener focus siempre activo
   const mantenerFocus = () => {
     const activo = document.activeElement;
     const esInputUsuario = activo && (
@@ -70,7 +78,7 @@ function inicializarScannerLaser() {
       input.focus();
     }
   };
-  
+
   document.addEventListener('click', mantenerFocus);
   document.addEventListener('touchend', mantenerFocus);
   setInterval(mantenerFocus, 500);
@@ -84,9 +92,7 @@ function inicializarScannerLaser() {
     } else {
       SCANNER_BUFFER += e.key;
       clearTimeout(SCANNER_TIMEOUT);
-      SCANNER_TIMEOUT = setTimeout(() => {
-        SCANNER_BUFFER = '';
-      }, 100);
+      SCANNER_TIMEOUT = setTimeout(() => { SCANNER_BUFFER = ''; }, 100);
     }
   });
 }
@@ -95,19 +101,17 @@ function inicializarScannerLaser() {
 // CONEXIÓN Y OFFLINE
 // ============================================
 function monitorearConexion() {
-  const indicador = document.getElementById('conexion-status');
-
   const actualizar = () => {
     const online = navigator.onLine;
-    if (indicador) {
-      indicador.textContent = online ? '● Online' : '● Offline';
-      indicador.style.color = online ? '#22c55e' : '#ef4444';
-    }
-    if (online && COLA_OFFLINE.length > 0) {
-      sincronizarColaOffline();
-    }
+    ['conexion-status', 'conexion-status-admin'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.textContent = online ? '● Online' : '● Offline';
+        el.style.color = online ? '#22c55e' : '#ef4444';
+      }
+    });
+    if (online && COLA_OFFLINE.length > 0) sincronizarColaOffline();
   };
-
   window.addEventListener('online', actualizar);
   window.addEventListener('offline', actualizar);
   actualizar();
@@ -115,7 +119,6 @@ function monitorearConexion() {
 
 async function sincronizarColaOffline() {
   if (COLA_OFFLINE.length === 0) return;
-
   try {
     const resp = await apiPost('/api/mobile/sync', { cola: COLA_OFFLINE });
     if (resp.sincronizados > 0) {
@@ -123,9 +126,7 @@ async function sincronizarColaOffline() {
       localStorage.setItem('wms_cola_offline', '[]');
       mostrarAlerta(`✓ ${resp.sincronizados} tarea(s) sincronizadas`, 'exito');
     }
-  } catch (e) {
-    console.error('Error sincronizando:', e);
-  }
+  } catch (e) { console.error('Error sincronizando:', e); }
 }
 
 function guardarEnColaOffline(datos) {
@@ -140,16 +141,10 @@ function guardarEnColaOffline(datos) {
 async function apiPost(endpoint, body) {
   const resp = await fetch(API_BASE + endpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${TOKEN}`
-    },
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
     body: JSON.stringify(body)
   });
-  if (resp.status === 401) {
-    cerrarSesion();
-    throw new Error('Sesión expirada');
-  }
+  if (resp.status === 401) { cerrarSesion(); throw new Error('Sesión expirada'); }
   return resp.json();
 }
 
@@ -157,10 +152,17 @@ async function apiGet(endpoint) {
   const resp = await fetch(API_BASE + endpoint, {
     headers: { 'Authorization': `Bearer ${TOKEN}` }
   });
-  if (resp.status === 401) {
-    cerrarSesion();
-    throw new Error('Sesión expirada');
-  }
+  if (resp.status === 401) { cerrarSesion(); throw new Error('Sesión expirada'); }
+  return resp.json();
+}
+
+async function apiPut(endpoint, body = {}) {
+  const resp = await fetch(API_BASE + endpoint, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+    body: JSON.stringify(body)
+  });
+  if (resp.status === 401) { cerrarSesion(); throw new Error('Sesión expirada'); }
   return resp.json();
 }
 
@@ -170,11 +172,7 @@ async function apiGet(endpoint) {
 async function login() {
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value.trim();
-
-  if (!email || !password) {
-    mostrarAlerta('Ingresa tu usuario y contraseña', 'error');
-    return;
-  }
+  if (!email || !password) { mostrarAlerta('Ingresa usuario y contraseña', 'error'); return; }
 
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
@@ -186,7 +184,6 @@ async function login() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
     });
-
     const data = await resp.json();
 
     if (resp.ok) {
@@ -194,8 +191,8 @@ async function login() {
       OPERARIO = data.usuario;
       localStorage.setItem('wms_token', TOKEN);
       localStorage.setItem('wms_operario', JSON.stringify(OPERARIO));
-      mostrarPantalla('pantalla-tareas');
-      cargarTareaActual();
+      actualizarNombresUI(OPERARIO);
+      mostrarPantallaSegunRol(OPERARIO.rol);
     } else {
       mostrarAlerta(data.error || 'Credenciales incorrectas', 'error');
     }
@@ -207,75 +204,335 @@ async function login() {
   }
 }
 
+function actualizarNombresUI(op) {
+  ['op-nombre','admin-nombre','rec-nombre'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = op.nombre;
+  });
+  ['op-rol','admin-rol'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = op.rol;
+  });
+}
+
 // ============================================
-// TAREAS
+// DASHBOARD ADMIN
+// ============================================
+async function cargarDashboardAdmin() {
+  try {
+    const data = await apiGet(`/api/dashboard/resumen-completo?almacen_id=${ADMIN_ALMACEN_ID}`);
+
+    // KPIs
+    const k = data.kpis;
+    setText('kpi-pick-pend', k.picking.total_activo);
+    setText('kpi-pack-hoy', k.packing.facturas_generadas_hoy);
+    setText('kpi-rec-hoy', k.recepcion.confirmadas_hoy);
+    setText('kpi-alertas', k.alertas.productos_bajo_minimo);
+
+    // Gráfica de actividad
+    renderizarGraficaActividad(k);
+
+    // Movimientos recientes
+    renderizarMovimientos(data.movimientos_recientes.movimientos);
+
+  } catch (e) {
+    mostrarAlerta('Error cargando dashboard', 'error');
+  }
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val ?? '—';
+}
+
+function renderizarGraficaActividad(kpis) {
+  const ctx = document.getElementById('chart-actividad');
+  if (!ctx) return;
+
+  if (CHART_ACTIVIDAD) CHART_ACTIVIDAD.destroy();
+
+  CHART_ACTIVIDAD = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['Picking\npendiente', 'Picking\nhoy', 'Packing\nhoy', 'Facturas\nSiesa', 'Conteos\nMatch'],
+      datasets: [{
+        data: [
+          kpis.picking.total_activo,
+          kpis.picking.completado_hoy,
+          kpis.packing.completado_hoy,
+          kpis.packing.facturas_generadas_hoy,
+          kpis.conteo.match_hoy
+        ],
+        backgroundColor: ['#1e3a5f','#14532d','#14532d','#065f46','#713f12'],
+        borderRadius: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#666', font: { size: 10 } }, grid: { color: '#1a1a1a' } },
+        y: { ticks: { color: '#666' }, grid: { color: '#1a1a1a' }, beginAtZero: true }
+      }
+    }
+  });
+}
+
+function renderizarMovimientos(movimientos) {
+  const el = document.getElementById('movimientos-recientes');
+  if (!el) return;
+
+  if (!movimientos || movimientos.length === 0) {
+    el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:#555;font-size:13px;padding:8px 0;">Sin movimientos hoy</div>';
+    return;
+  }
+
+  const filas = movimientos.slice(0, 8).map(m => {
+    const color = m.tipo === 'ENTRADA' ? '#4ade80' : '#f87171';
+    const signo = m.tipo === 'ENTRADA' ? '+' : '-';
+    const fecha = new Date(m.fecha).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+    return `
+      <div class="tabla-fila">
+        <div>
+          <div class="tabla-nombre">${m.tipo}</div>
+          <div style="font-size:11px;color:#555;">${fecha} · Doc: ${m.numero_documento || '—'}</div>
+        </div>
+        <div style="color:${color};font-weight:700;">${signo}${m.cantidad}</div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `<div class="tabla-titulo">Últimos movimientos</div>${filas}`;
+}
+
+// ============================================
+// TABS ADMIN
+// ============================================
+function mostrarTab(tabId) {
+  ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = id === tabId ? 'block' : 'none';
+  });
+
+  document.querySelectorAll('.nav-tab').forEach((tab, i) => {
+    const tabs = ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'];
+    tab.classList.toggle('active', tabs[i] === tabId);
+  });
+
+  TAB_ACTUAL = tabId;
+
+  if (tabId === 'tab-pedidos') cargarPedidos();
+  else if (tabId === 'tab-operarios') cargarProductividad();
+  else if (tabId === 'tab-stock') cargarAlertasStock();
+  else if (tabId === 'tab-connekta') cargarEstadoConnekta();
+}
+
+async function cargarPedidos() {
+  const el = document.getElementById('lista-pedidos');
+  if (!el) return;
+  try {
+    const data = await apiGet('/api/picking/?estado=PENDIENTE&per_page=20');
+    if (!data.tareas || data.tareas.length === 0) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos pendientes ✓</div>';
+      return;
+    }
+    el.innerHTML = data.tareas.map(t => `
+      <div class="tabla-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
+            <div style="font-size:12px;color:#666;margin-top:2px;">${t.codigo} · ${t.ubicacion_codigo || '—'}</div>
+          </div>
+          <div style="text-align:right;">
+            <span class="badge badge-yellow">${t.estado}</span>
+            <div style="font-size:18px;font-weight:800;margin-top:4px;">${t.cantidad_solicitada}</div>
+            <div style="font-size:10px;color:#555;">unidades</div>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
+  }
+}
+
+async function cargarProductividad() {
+  const el = document.getElementById('lista-operarios');
+  if (!el) return;
+  try {
+    const data = await apiGet(`/api/dashboard/productividad?almacen_id=${ADMIN_ALMACEN_ID}&dias=7`);
+    if (!data.operarios || data.operarios.length === 0) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin datos de operarios</div>';
+      return;
+    }
+    el.innerHTML = data.operarios.map((op, i) => `
+      <div class="tabla-card">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div>
+            <div style="font-size:14px;font-weight:600;">${op.nombre}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">${op.rol}</div>
+            <div style="font-size:11px;color:#444;margin-top:4px;">
+              Pick: ${op.pickings_completados} · Pack: ${op.packings_completados} · Conteos: ${op.conteos_completados}
+            </div>
+          </div>
+          <div style="text-align:right;">
+            <div style="font-size:28px;font-weight:800;color:${i === 0 ? '#4ade80' : '#fff'};">${op.total_tareas}</div>
+            <div style="font-size:10px;color:#555;">tareas 7d</div>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;">Error cargando operarios</div>';
+  }
+}
+
+async function cargarAlertasStock() {
+  const el = document.getElementById('lista-alertas');
+  if (!el) return;
+  try {
+    const data = await apiGet(`/api/dashboard/alertas-stock?almacen_id=${ADMIN_ALMACEN_ID}`);
+    if (!data.alertas || data.alertas.length === 0) {
+      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;">✓ Sin alertas de stock</div>';
+      return;
+    }
+    el.innerHTML = data.alertas.map(a => `
+      <div class="tabla-card">
+        <div class="alerta-item">
+          <div>
+            <div class="alerta-producto">${a.nombre}</div>
+            <div class="alerta-codigo">${a.codigo} · Clase ${a.clasificacion_abc || '—'}</div>
+          </div>
+          <div class="alerta-stock">
+            <span class="badge ${a.urgencia === 'CRITICO' ? 'badge-red' : 'badge-yellow'}">${a.urgencia}</span>
+            <div class="alerta-num" style="color:${a.urgencia === 'CRITICO' ? '#f87171' : '#facc15'}">${a.stock_actual}</div>
+            <div style="font-size:10px;color:#555;">mín: ${a.stock_minimo}</div>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;">Error cargando alertas</div>';
+  }
+}
+
+async function cargarEstadoConnekta() {
+  const el = document.getElementById('estado-connekta');
+  if (!el) return;
+  try {
+    const token = TOKEN;
+    const resp = await fetch(API_BASE + '/api/packing/connekta/estado', {
+      headers: { 'Authorization': `Bearer ${token}` }
+    });
+    const data = await resp.json();
+    const color = data.modo_simulacion ? '#facc15' : '#4ade80';
+    const estado = data.modo_simulacion ? 'SIMULACIÓN' : 'PRODUCCIÓN';
+    el.innerHTML = `
+      <div class="tabla-card">
+        <div style="text-align:center;padding:20px 0;">
+          <div style="font-size:14px;color:#666;margin-bottom:8px;">Estado Connekta</div>
+          <div style="font-size:28px;font-weight:800;color:${color};">${estado}</div>
+          <div style="font-size:13px;color:#555;margin-top:12px;">${data.mensaje}</div>
+        </div>
+        <div style="margin-top:16px;">
+          <div class="tabla-fila"><span class="tabla-nombre">URL configurada</span><span class="badge ${data.url_configurada ? 'badge-green' : 'badge-red'}">${data.url_configurada ? 'Sí' : 'No'}</span></div>
+          <div class="tabla-fila"><span class="tabla-nombre">Credenciales</span><span class="badge ${data.credenciales_configuradas ? 'badge-green' : 'badge-red'}">${data.credenciales_configuradas ? 'Sí' : 'No'}</span></div>
+          <div class="tabla-fila"><span class="tabla-nombre">Modo</span><span class="badge ${data.modo_simulacion ? 'badge-yellow' : 'badge-green'}">${data.modo_simulacion ? 'Simulación' : 'Real'}</span></div>
+        </div>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;">Error consultando Connekta</div>';
+  }
+}
+
+// ============================================
+// RECEPCIÓN
+// ============================================
+async function cargarRecepcionesActivas() {
+  const el = document.getElementById('contenido-recepcion');
+  if (!el) return;
+  try {
+    const data = await apiGet('/api/recepcion/?estado=ABIERTA');
+    if (!data.recepciones || data.recepciones.length === 0) {
+      el.innerHTML = `
+        <div style="text-align:center;padding:40px 20px;">
+          <div style="font-size:60px;">✓</div>
+          <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin recepciones</div>
+          <div style="font-size:14px;color:#666;margin-top:8px;">No hay OCs pendientes de recibir</div>
+          <button onclick="cargarRecepcionesActivas()" style="margin-top:24px;padding:14px 28px;font-size:16px;background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">Actualizar</button>
+        </div>`;
+      return;
+    }
+    el.innerHTML = data.recepciones.map(r => `
+      <div class="rec-card">
+        <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
+        <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'}</div>
+        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
+          <span class="badge badge-blue">${r.estado}</span>
+          <span style="font-size:12px;color:#555;">${r.total_items} ítems</span>
+        </div>
+        <button onclick="iniciarRecepcion(${r.id})" style="width:100%;margin-top:12px;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
+          Iniciar recepción
+        </button>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;">Error cargando recepciones</div>';
+  }
+}
+
+async function iniciarRecepcion(id) {
+  try {
+    await apiPut(`/api/recepcion/${id}/iniciar`);
+    mostrarAlerta('Recepción iniciada — escanea los productos', 'exito');
+    cargarRecepcionesActivas();
+  } catch (e) {
+    mostrarAlerta('Error iniciando recepción', 'error');
+  }
+}
+
+// ============================================
+// OPERARIO — TAREAS
 // ============================================
 async function cargarTareaActual() {
   try {
     const data = await apiGet('/api/mobile/tarea-actual');
-
     if (data.sin_tareas) {
       document.getElementById('contenido-tarea').innerHTML = `
         <div style="text-align:center;padding:60px 20px;">
           <div style="font-size:80px;">✓</div>
           <div style="font-size:28px;font-weight:700;margin-top:16px;">Sin tareas</div>
           <div style="font-size:18px;color:#666;margin-top:8px;">Todas las tareas completadas</div>
-          <button onclick="cargarTareaActual()" style="margin-top:32px;padding:16px 32px;font-size:18px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;">
-            Actualizar
-          </button>
+          <button onclick="cargarTareaActual()" style="margin-top:32px;padding:16px 32px;font-size:18px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;">Actualizar</button>
         </div>`;
       return;
     }
-
     TAREA_ACTUAL = data;
-    ITEMS_ESCANEADOS = [];
     renderizarTarea(data);
-
   } catch (e) {
     mostrarAlerta('Error cargando tareas', 'error');
   }
 }
 
 function renderizarTarea(tarea) {
-  const colores = {
-    'PICKING': '#1d4ed8',
-    'PACKING': '#7c3aed',
-    'CONTEO': '#b45309'
-  };
-
+  const colores = { 'PICKING': '#1d4ed8', 'PACKING': '#7c3aed', 'CONTEO': '#b45309' };
   const color = colores[tarea.tipo] || '#000';
   const esConteo = tarea.tipo === 'CONTEO';
-  const cantidadTexto = esConteo ? '?' : `${tarea.cantidad_escaneada} / ${tarea.cantidad_requerida}`;
 
   document.getElementById('contenido-tarea').innerHTML = `
     <div style="padding:16px;">
-
-      <!-- Tipo de tarea -->
-      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;
-                  font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;">
-        ${tarea.tipo}
-      </div>
-
-      <!-- Datos principales en letras grandes -->
-      <div style="background:#000;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;">
+      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;">${tarea.tipo}</div>
+      <div style="background:#000;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;border:1px solid #222;">
         <div style="font-size:14px;color:#999;margin-bottom:4px;">UBICACIÓN</div>
         <div style="font-size:42px;font-weight:900;letter-spacing:2px;">${tarea.ubicacion}</div>
       </div>
-
       <div style="background:#111;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;">
         <div style="font-size:14px;color:#999;margin-bottom:4px;">PRODUCTO</div>
         <div style="font-size:28px;font-weight:700;">${tarea.producto_codigo}</div>
         <div style="font-size:16px;color:#aaa;margin-top:4px;">${tarea.producto_nombre}</div>
       </div>
-
       ${!esConteo ? `
       <div style="background:#1a1a1a;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;text-align:center;">
         <div style="font-size:14px;color:#999;margin-bottom:4px;">CANTIDAD</div>
-        <div style="font-size:64px;font-weight:900;" id="contador-cantidad">${cantidadTexto}</div>
+        <div style="font-size:64px;font-weight:900;" id="contador-cantidad">${tarea.cantidad_escaneada} / ${tarea.cantidad_requerida}</div>
         <div style="height:8px;background:#333;border-radius:4px;margin-top:12px;">
-          <div id="barra-progreso" style="height:100%;background:#22c55e;border-radius:4px;
-               width:${tarea.cantidad_requerida ? (tarea.cantidad_escaneada/tarea.cantidad_requerida*100) : 0}%;
-               transition:width 0.3s;"></div>
+          <div id="barra-progreso" style="height:100%;background:#22c55e;border-radius:4px;width:${tarea.cantidad_requerida ? (tarea.cantidad_escaneada/tarea.cantidad_requerida*100) : 0}%;transition:width 0.3s;"></div>
         </div>
       </div>` : `
       <div style="background:#1a1a1a;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;text-align:center;">
@@ -283,37 +540,17 @@ function renderizarTarea(tarea) {
         <div style="font-size:64px;font-weight:900;" id="contador-cantidad">0</div>
         <div style="font-size:14px;color:#666;margin-top:8px;">Cuenta sin ver la cantidad esperada</div>
       </div>`}
-
-      <!-- Escanear con cámara -->
       <div style="margin-bottom:12px;">
-        <button onclick="toggleCamara()" style="width:100%;padding:16px;font-size:18px;
-                background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;">
-          📷 Escanear con cámara
-        </button>
+        <button onclick="toggleCamara()" style="width:100%;padding:16px;font-size:18px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;">📷 Escanear con cámara</button>
       </div>
-
       <div id="camara-container" style="display:none;margin-bottom:12px;">
         <div id="lector-qr" style="border-radius:12px;overflow:hidden;"></div>
-        <button onclick="toggleCamara()" style="width:100%;padding:12px;margin-top:8px;
-                font-size:16px;background:#333;color:#fff;border:none;border-radius:12px;cursor:pointer;">
-          Cerrar cámara
-        </button>
+        <button onclick="toggleCamara()" style="width:100%;padding:12px;margin-top:8px;font-size:16px;background:#333;color:#fff;border:none;border-radius:12px;cursor:pointer;">Cerrar cámara</button>
       </div>
-
-      <!-- Botón confirmar -->
-      <button id="btn-confirmar" onclick="confirmarTarea()"
-              style="width:100%;padding:20px;font-size:22px;font-weight:700;
-                     background:#000;color:#fff;border:none;border-radius:16px;
-                     cursor:pointer;opacity:${esConteo ? 1 : 0.3};"
-              ${esConteo ? '' : 'disabled'}>
+      <button id="btn-confirmar" onclick="confirmarTarea()" style="width:100%;padding:20px;font-size:22px;font-weight:700;background:#000;color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${esConteo ? 1 : 0.3};" ${esConteo ? '' : 'disabled'}>
         ✓ Confirmar
       </button>
-
-      ${tarea.referencia ? `
-      <div style="text-align:center;margin-top:12px;font-size:13px;color:#666;">
-        Ref: ${tarea.referencia}
-      </div>` : ''}
-
+      ${tarea.referencia ? `<div style="text-align:center;margin-top:12px;font-size:13px;color:#666;">Ref: ${tarea.referencia}</div>` : ''}
     </div>`;
 }
 
@@ -322,34 +559,23 @@ function renderizarTarea(tarea) {
 // ============================================
 async function toggleCamara() {
   const container = document.getElementById('camara-container');
-
   if (CAMARA_ACTIVA) {
-    if (HTML5QR) {
-      await HTML5QR.stop();
-      HTML5QR = null;
-    }
+    if (HTML5QR) { await HTML5QR.stop(); HTML5QR = null; }
     CAMARA_ACTIVA = false;
     container.style.display = 'none';
     return;
   }
-
   container.style.display = 'block';
   CAMARA_ACTIVA = true;
-
-  // Cargar librería de escaneo si no está cargada
   if (!window.Html5Qrcode) {
     await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
   }
-
   HTML5QR = new Html5Qrcode('lector-qr');
-
   try {
     await HTML5QR.start(
       { facingMode: 'environment' },
       { fps: 10, qrbox: { width: 250, height: 150 } },
-      (codigo) => {
-        procesarCodigoEscaneado(codigo);
-      },
+      (codigo) => { procesarCodigoEscaneado(codigo); },
       () => {}
     );
   } catch (e) {
@@ -362,9 +588,7 @@ async function toggleCamara() {
 function cargarScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = src;
-    s.onload = resolve;
-    s.onerror = reject;
+    s.src = src; s.onload = resolve; s.onerror = reject;
     document.head.appendChild(s);
   });
 }
@@ -374,10 +598,8 @@ function cargarScript(src) {
 // ============================================
 async function procesarCodigoEscaneado(codigo) {
   if (!TAREA_ACTUAL) return;
-
   vibrar();
   mostrarFlash();
-
   try {
     const resp = await apiPost('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
@@ -385,41 +607,25 @@ async function procesarCodigoEscaneado(codigo) {
       codigo: codigo,
       cantidad: 1
     });
-
     if (resp.error) {
-      mostrarAlerta(
-        typeof resp.error === 'object' ? resp.error.mensaje : resp.error,
-        'error'
-      );
+      mostrarAlerta(typeof resp.error === 'object' ? resp.error.mensaje : resp.error, 'error');
       return;
     }
-
-    // Actualizar contador en pantalla
     const contador = document.getElementById('contador-cantidad');
     if (contador) {
       contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
         ? resp.cantidad_contada
         : `${resp.cantidad_actual} / ${resp.cantidad_requerida}`;
     }
-
-    // Actualizar barra de progreso
     const barra = document.getElementById('barra-progreso');
     if (barra && resp.cantidad_requerida) {
-      const pct = (resp.cantidad_actual / resp.cantidad_requerida) * 100;
-      barra.style.width = `${Math.min(pct, 100)}%`;
+      barra.style.width = `${Math.min((resp.cantidad_actual / resp.cantidad_requerida) * 100, 100)}%`;
     }
-
-    // Habilitar botón confirmar si está completo
     if (resp.puede_confirmar) {
       const btn = document.getElementById('btn-confirmar');
-      if (btn) {
-        btn.disabled = false;
-        btn.style.opacity = '1';
-        btn.style.background = '#16a34a';
-      }
+      if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#16a34a'; }
       mostrarAlerta(resp.mensaje || '¡Listo para confirmar!', 'exito');
     }
-
   } catch (e) {
     mostrarAlerta('Error de conexión', 'error');
   }
@@ -430,42 +636,23 @@ async function procesarCodigoEscaneado(codigo) {
 // ============================================
 async function confirmarTarea() {
   if (!TAREA_ACTUAL) return;
-
   const btn = document.getElementById('btn-confirmar');
   btn.textContent = 'Confirmando...';
   btn.disabled = true;
-
-  const payload = {
-    tarea_id: TAREA_ACTUAL.id,
-    tipo: TAREA_ACTUAL.tipo,
-    items_escaneados: ITEMS_ESCANEADOS
-  };
-
+  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: TAREA_ACTUAL.tipo, items_escaneados: [] };
   try {
     const resp = await apiPost('/api/mobile/confirmar', payload);
-
     if (resp.error) {
       mostrarAlerta(resp.error, 'error');
       btn.textContent = '✓ Confirmar';
       btn.disabled = false;
       return;
     }
-
     mostrarAlerta('¡Tarea completada!', 'exito');
-
-    setTimeout(() => {
-      TAREA_ACTUAL = null;
-      ITEMS_ESCANEADOS = [];
-      cargarTareaActual();
-    }, 1500);
-
+    setTimeout(() => { TAREA_ACTUAL = null; cargarTareaActual(); }, 1500);
   } catch (e) {
-    // Sin conexión — guardar en cola offline
     guardarEnColaOffline(payload);
-    setTimeout(() => {
-      TAREA_ACTUAL = null;
-      cargarTareaActual();
-    }, 2000);
+    setTimeout(() => { TAREA_ACTUAL = null; cargarTareaActual(); }, 2000);
   }
 }
 
@@ -473,29 +660,16 @@ async function confirmarTarea() {
 // UI HELPERS
 // ============================================
 function mostrarPantalla(id) {
-  ['pantalla-login', 'pantalla-tareas'].forEach(p => {
+  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion'].forEach(p => {
     const el = document.getElementById(p);
     if (el) el.style.display = p === id ? 'block' : 'none';
   });
 }
 
 function mostrarAlerta(mensaje, tipo = 'info') {
-  const colores = {
-    exito: { bg: '#16a34a', text: '#fff' },
-    error: { bg: '#dc2626', text: '#fff' },
-    advertencia: { bg: '#d97706', text: '#fff' },
-    info: { bg: '#2563eb', text: '#fff' }
-  };
-
-  const c = colores[tipo] || colores.info;
+  const colores = { exito: '#16a34a', error: '#dc2626', advertencia: '#d97706', info: '#2563eb' };
   const alerta = document.createElement('div');
-  alerta.style.cssText = `
-    position:fixed;top:20px;left:50%;transform:translateX(-50%);
-    background:${c.bg};color:${c.text};
-    padding:16px 24px;border-radius:12px;font-size:18px;font-weight:600;
-    z-index:9999;max-width:90%;text-align:center;
-    animation:fadeIn 0.2s ease;
-  `;
+  alerta.style.cssText = `position:fixed;top:20px;left:50%;transform:translateX(-50%);background:${colores[tipo]};color:#fff;padding:16px 24px;border-radius:12px;font-size:18px;font-weight:600;z-index:9999;max-width:90%;text-align:center;animation:fadeIn 0.2s ease;`;
   alerta.textContent = mensaje;
   document.body.appendChild(alerta);
   setTimeout(() => alerta.remove(), 2500);
@@ -503,21 +677,15 @@ function mostrarAlerta(mensaje, tipo = 'info') {
 
 function mostrarFlash() {
   const flash = document.createElement('div');
-  flash.style.cssText = `
-    position:fixed;inset:0;background:rgba(255,255,255,0.3);
-    z-index:9998;pointer-events:none;animation:flash 0.15s ease;
-  `;
+  flash.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.3);z-index:9998;pointer-events:none;animation:flash 0.15s ease;';
   document.body.appendChild(flash);
   setTimeout(() => flash.remove(), 150);
 }
 
-function vibrar() {
-  if (navigator.vibrate) navigator.vibrate(50);
-}
+function vibrar() { if (navigator.vibrate) navigator.vibrate(50); }
 
 function cerrarSesion() {
-  TOKEN = null;
-  OPERARIO = null;
+  TOKEN = null; OPERARIO = null;
   localStorage.removeItem('wms_token');
   localStorage.removeItem('wms_operario');
   mostrarPantalla('pantalla-login');

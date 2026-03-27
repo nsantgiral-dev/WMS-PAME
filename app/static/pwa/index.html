@@ -8,257 +8,260 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <title>WMS Papelería</title>
   <link rel="manifest" href="/static/pwa/manifest.json">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      background: #000;
-      color: #fff;
-      min-height: 100vh;
-      max-width: 480px;
-      margin: 0 auto;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #000; color: #fff; min-height: 100vh; max-width: 480px; margin: 0 auto; }
 
     /* Header */
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 16px;
-      background: #111;
-      border-bottom: 1px solid #222;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
+    .header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #111; border-bottom: 1px solid #222; position: sticky; top: 0; z-index: 100; }
     .header-logo { font-size: 18px; font-weight: 700; }
-    .header-ops { display: flex; align-items: center; gap: 12px; }
 
     /* Login */
-    #pantalla-login {
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 32px 24px;
-    }
-    .login-logo {
-      font-size: 72px;
-      margin-bottom: 16px;
-    }
-    .login-titulo {
-      font-size: 28px;
-      font-weight: 800;
-      margin-bottom: 8px;
-      text-align: center;
-    }
-    .login-subtitulo {
-      font-size: 16px;
-      color: #666;
-      margin-bottom: 40px;
-      text-align: center;
-    }
+    #pantalla-login { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 24px; }
+    .login-logo { font-size: 72px; margin-bottom: 16px; }
+    .login-titulo { font-size: 28px; font-weight: 800; margin-bottom: 8px; text-align: center; }
+    .login-subtitulo { font-size: 16px; color: #666; margin-bottom: 40px; text-align: center; }
     .login-form { width: 100%; max-width: 360px; }
     .input-group { margin-bottom: 16px; }
-    .input-label {
-      display: block;
-      font-size: 13px;
-      color: #666;
-      margin-bottom: 6px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-    }
-    .input-field {
-      width: 100%;
-      padding: 16px;
-      font-size: 20px;
-      background: #111;
-      border: 2px solid #333;
-      border-radius: 12px;
-      color: #fff;
-      outline: none;
-      transition: border-color 0.2s;
-    }
+    .input-label { display: block; font-size: 13px; color: #666; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .input-field { width: 100%; padding: 16px; font-size: 20px; background: #111; border: 2px solid #333; border-radius: 12px; color: #fff; outline: none; transition: border-color 0.2s; }
     .input-field:focus { border-color: #fff; }
-    .btn-primary {
-      width: 100%;
-      padding: 18px;
-      font-size: 20px;
-      font-weight: 700;
-      background: #fff;
-      color: #000;
-      border: none;
-      border-radius: 12px;
-      cursor: pointer;
-      margin-top: 8px;
-      transition: opacity 0.2s;
-    }
+    .btn-primary { width: 100%; padding: 18px; font-size: 20px; font-weight: 700; background: #fff; color: #000; border: none; border-radius: 12px; cursor: pointer; margin-top: 8px; }
     .btn-primary:active { opacity: 0.8; }
     .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    /* Pantalla tareas */
-    #pantalla-tareas { display: none; min-height: 100vh; }
+    /* Pantallas */
+    #pantalla-operario { display: none; min-height: 100vh; }
+    #pantalla-admin { display: none; min-height: 100vh; }
+    #pantalla-recepcion { display: none; min-height: 100vh; }
 
-    /* Operario info */
-    .operario-bar {
-      background: #111;
-      padding: 10px 16px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      border-bottom: 1px solid #222;
-    }
+    /* Operario bar */
+    .operario-bar { background: #111; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #222; }
     .operario-nombre { font-size: 14px; font-weight: 600; }
     .operario-rol { font-size: 12px; color: #666; }
-    .btn-logout {
-      font-size: 13px;
-      color: #666;
-      background: none;
-      border: 1px solid #333;
-      padding: 6px 12px;
-      border-radius: 8px;
-      cursor: pointer;
-      color: #fff;
-    }
+    .btn-logout { font-size: 13px; background: none; border: 1px solid #333; padding: 6px 12px; border-radius: 8px; cursor: pointer; color: #fff; }
 
-    /* Contenido tarea */
-    #contenido-tarea { padding-bottom: 32px; }
+    /* Admin nav */
+    .admin-nav { display: flex; background: #111; border-bottom: 1px solid #222; overflow-x: auto; }
+    .nav-tab { flex-shrink: 0; padding: 12px 16px; font-size: 13px; color: #666; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
+    .nav-tab.active { color: #fff; border-bottom-color: #fff; }
 
-    /* Cola offline badge */
-    .offline-badge {
-      position: fixed;
-      bottom: 20px;
-      right: 16px;
-      background: #d97706;
-      color: #fff;
-      padding: 8px 14px;
-      border-radius: 20px;
-      font-size: 13px;
-      font-weight: 600;
-      display: none;
-      z-index: 500;
-    }
+    /* Admin contenido */
+    .admin-content { padding: 16px; }
+
+    /* KPI cards */
+    .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .kpi-card { background: #111; border-radius: 12px; padding: 14px; border: 1px solid #222; }
+    .kpi-valor { font-size: 36px; font-weight: 800; }
+    .kpi-label { font-size: 12px; color: #666; margin-top: 4px; }
+    .kpi-sub { font-size: 11px; color: #444; margin-top: 2px; }
+
+    /* Tabla */
+    .tabla-card { background: #111; border-radius: 12px; padding: 14px; border: 1px solid #222; margin-bottom: 12px; }
+    .tabla-titulo { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #fff; }
+    .tabla-fila { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1a1a1a; }
+    .tabla-fila:last-child { border-bottom: none; }
+    .tabla-nombre { font-size: 13px; color: #ccc; }
+    .tabla-valor { font-size: 13px; font-weight: 600; }
+    .badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+    .badge-green { background: #14532d; color: #4ade80; }
+    .badge-yellow { background: #713f12; color: #facc15; }
+    .badge-red { background: #7f1d1d; color: #f87171; }
+    .badge-blue { background: #1e3a5f; color: #60a5fa; }
+
+    /* Alerta stock */
+    .alerta-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #1a1a1a; }
+    .alerta-item:last-child { border-bottom: none; }
+    .alerta-producto { font-size: 13px; color: #ccc; }
+    .alerta-codigo { font-size: 11px; color: #555; margin-top: 2px; }
+    .alerta-stock { text-align: right; }
+    .alerta-num { font-size: 16px; font-weight: 700; }
+
+    /* Recepción */
+    .rec-card { background: #111; border-radius: 16px; padding: 20px; margin-bottom: 12px; border: 1px solid #222; }
+    .rec-titulo { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+    .rec-sub { font-size: 14px; color: #666; }
 
     /* Scanner input invisible */
-    #scanner-input {
-      position: fixed;
-      opacity: 0;
-      width: 1px;
-      height: 1px;
-      top: -100px;
-      left: -100px;
-    }
+    #scanner-input { position: fixed; opacity: 0; width: 1px; height: 1px; top: -100px; left: -100px; }
+
+    /* Offline badge */
+    .offline-badge { position: fixed; bottom: 20px; right: 16px; background: #d97706; color: #fff; padding: 8px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; display: none; z-index: 500; }
 
     /* Animaciones */
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateX(-50%) translateY(-10px); }
-      to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-    }
-    @keyframes flash {
-      0%   { opacity: 1; }
-      100% { opacity: 0; }
-    }
-
-    /* Scrollbar oculto */
+    @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(-10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+    @keyframes flash { 0% { opacity: 1; } 100% { opacity: 0; } }
     ::-webkit-scrollbar { display: none; }
+
+    /* Chart container */
+    .chart-container { background: #111; border-radius: 12px; padding: 14px; border: 1px solid #222; margin-bottom: 12px; }
+    .chart-titulo { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
   </style>
 </head>
 <body>
 
-  <!-- Input invisible para escáner láser Bluetooth -->
-  <input id="scanner-input" type="text" autocomplete="off"
-         autocorrect="off" autocapitalize="off" spellcheck="false">
+  <input id="scanner-input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 
-  <!-- ==================== LOGIN ==================== -->
+  <!-- LOGIN -->
   <div id="pantalla-login">
     <div class="login-logo">📦</div>
     <div class="login-titulo">WMS Papelería</div>
     <div class="login-subtitulo">Sistema de bodega</div>
-
     <div class="login-form">
       <div class="input-group">
         <label class="input-label">Usuario (email)</label>
-        <input id="login-email" class="input-field" type="email"
-               placeholder="operario@papeleria.com"
-               autocomplete="email">
+        <input id="login-email" class="input-field" type="email" placeholder="usuario@papeleria.com" autocomplete="email">
       </div>
       <div class="input-group">
         <label class="input-label">Contraseña</label>
-        <input id="login-password" class="input-field" type="password"
-               placeholder="••••••"
-               autocomplete="current-password"
-               onkeydown="if(event.key==='Enter') login()">
+        <input id="login-password" class="input-field" type="password" placeholder="••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter') login()">
       </div>
-      <button id="btn-login" class="btn-primary" onclick="login()">
-        Entrar
-      </button>
+      <button id="btn-login" class="btn-primary" onclick="login()">Entrar</button>
     </div>
   </div>
 
-  <!-- ==================== TAREAS ==================== -->
-  <div id="pantalla-tareas">
-
-    <!-- Header -->
+  <!-- OPERARIO -->
+  <div id="pantalla-operario">
     <div class="header">
       <div class="header-logo">📦 WMS</div>
-      <div class="header-ops">
+      <div style="display:flex;align-items:center;gap:12px;">
         <span id="conexion-status" style="font-size:13px;">● Online</span>
-        <button onclick="cargarTareaActual()"
-                style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">
-          ↻
-        </button>
+        <button onclick="cargarTareaActual()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">↻</button>
       </div>
     </div>
-
-    <!-- Info operario -->
-    <div class="operario-bar" id="operario-bar">
+    <div class="operario-bar">
       <div>
-        <div class="operario-nombre" id="operario-nombre">—</div>
-        <div class="operario-rol" id="operario-rol">—</div>
+        <div class="operario-nombre" id="op-nombre">—</div>
+        <div class="operario-rol" id="op-rol">—</div>
       </div>
       <button class="btn-logout" onclick="cerrarSesion()">Salir</button>
     </div>
-
-    <!-- Contenido dinámico de la tarea -->
     <div id="contenido-tarea">
-      <div style="text-align:center;padding:60px 20px;color:#666;">
-        Cargando...
+      <div style="text-align:center;padding:60px 20px;color:#666;">Cargando...</div>
+    </div>
+  </div>
+
+  <!-- ADMIN / JEFE -->
+  <div id="pantalla-admin">
+    <div class="header">
+      <div class="header-logo">📦 WMS Admin</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span id="conexion-status-admin" style="font-size:13px;">● Online</span>
+        <button class="btn-logout" onclick="cerrarSesion()">Salir</button>
+      </div>
+    </div>
+    <div class="operario-bar">
+      <div>
+        <div class="operario-nombre" id="admin-nombre">—</div>
+        <div class="operario-rol" id="admin-rol">—</div>
       </div>
     </div>
 
+    <!-- Tabs de navegación -->
+    <div class="admin-nav">
+      <div class="nav-tab active" onclick="mostrarTab('tab-dashboard')">Dashboard</div>
+      <div class="nav-tab" onclick="mostrarTab('tab-pedidos')">Pedidos</div>
+      <div class="nav-tab" onclick="mostrarTab('tab-operarios')">Operarios</div>
+      <div class="nav-tab" onclick="mostrarTab('tab-stock')">Stock</div>
+      <div class="nav-tab" onclick="mostrarTab('tab-connekta')">Siesa</div>
+    </div>
+
+    <!-- Tab Dashboard -->
+    <div id="tab-dashboard" class="admin-content">
+      <div class="kpi-grid" id="kpi-grid">
+        <div class="kpi-card"><div class="kpi-valor" id="kpi-pick-pend">—</div><div class="kpi-label">Picking pendiente</div></div>
+        <div class="kpi-card"><div class="kpi-valor" id="kpi-pack-hoy">—</div><div class="kpi-label">Facturas hoy</div><div class="kpi-sub">via Siesa automático</div></div>
+        <div class="kpi-card"><div class="kpi-valor" id="kpi-rec-hoy">—</div><div class="kpi-label">Recepciones hoy</div></div>
+        <div class="kpi-card"><div class="kpi-valor" id="kpi-alertas">—</div><div class="kpi-label">Alertas stock</div></div>
+      </div>
+      <div class="chart-container">
+        <div class="chart-titulo">Actividad de hoy</div>
+        <div style="position:relative;height:200px;">
+          <canvas id="chart-actividad"></canvas>
+        </div>
+      </div>
+      <div class="tabla-card" id="movimientos-recientes">
+        <div class="tabla-titulo">Últimos movimientos</div>
+        <div style="color:#555;font-size:13px;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- Tab Pedidos -->
+    <div id="tab-pedidos" class="admin-content" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div style="font-size:16px;font-weight:700;">Pedidos activos</div>
+        <button onclick="cargarPedidos()" style="background:#222;border:1px solid #333;color:#fff;padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;">↻ Actualizar</button>
+      </div>
+      <div id="lista-pedidos" style="color:#555;font-size:13px;">Cargando...</div>
+    </div>
+
+    <!-- Tab Operarios -->
+    <div id="tab-operarios" class="admin-content" style="display:none;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Productividad — últimos 7 días</div>
+      <div id="lista-operarios" style="color:#555;font-size:13px;">Cargando...</div>
+    </div>
+
+    <!-- Tab Stock -->
+    <div id="tab-stock" class="admin-content" style="display:none;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Alertas de stock</div>
+      <div id="lista-alertas" style="color:#555;font-size:13px;">Cargando...</div>
+    </div>
+
+    <!-- Tab Connekta -->
+    <div id="tab-connekta" class="admin-content" style="display:none;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Estado integración Siesa</div>
+      <div id="estado-connekta" style="color:#555;font-size:13px;">Cargando...</div>
+    </div>
   </div>
 
-  <!-- Badge cola offline -->
-  <div class="offline-badge" id="offline-badge">
-    ⚡ <span id="offline-count">0</span> en cola
+  <!-- RECEPCIÓN -->
+  <div id="pantalla-recepcion">
+    <div class="header">
+      <div class="header-logo">📦 Recepción</div>
+      <button class="btn-logout" onclick="cerrarSesion()">Salir</button>
+    </div>
+    <div class="operario-bar">
+      <div>
+        <div class="operario-nombre" id="rec-nombre">—</div>
+        <div class="operario-rol" id="rec-rol">Recepcionista</div>
+      </div>
+    </div>
+    <div id="contenido-recepcion" style="padding:16px;">
+      <div style="text-align:center;padding:40px 20px;color:#666;">Cargando recepciones...</div>
+    </div>
   </div>
+
+  <div class="offline-badge" id="offline-badge">⚡ <span id="offline-count">0</span> en cola</div>
 
   <script src="/static/pwa/app.js"></script>
   <script>
-    // Mostrar nombre del operario cuando carga
     document.addEventListener('DOMContentLoaded', () => {
       const op = JSON.parse(localStorage.getItem('wms_operario') || 'null');
       if (op) {
-        const nombre = document.getElementById('operario-nombre');
-        const rol = document.getElementById('operario-rol');
-        if (nombre) nombre.textContent = op.nombre;
-        if (rol) rol.textContent = op.rol;
+        actualizarNombresUI(op);
       }
+      setInterval(() => {
+        const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
+        const badge = document.getElementById('offline-badge');
+        const count = document.getElementById('offline-count');
+        if (badge && count) {
+          badge.style.display = cola.length > 0 ? 'block' : 'none';
+          count.textContent = cola.length;
+        }
+      }, 2000);
     });
 
-    // Mostrar badge si hay cola offline
-    setInterval(() => {
-      const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
-      const badge = document.getElementById('offline-badge');
-      const count = document.getElementById('offline-count');
-      if (badge && count) {
-        badge.style.display = cola.length > 0 ? 'block' : 'none';
-        count.textContent = cola.length;
-      }
-    }, 2000);
+    function actualizarNombresUI(op) {
+      ['op-nombre','admin-nombre','rec-nombre'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = op.nombre;
+      });
+      ['op-rol','admin-rol'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = op.rol;
+      });
+    }
   </script>
-
 </body>
 </html>
