@@ -89,7 +89,7 @@ Conteo cíclico
 - [x] Sprint 3 — Recepción ciega + Cross-dock + Trigger Siesa
 - [x] Sprint 4 — Conteo cíclico double-blind + ABC desde Siesa
 - [x] Sprint 5 — Dashboard operativo KPIs tiempo real
-- [ ] Sprint 6 — App móvil operarios (PWA tablet Android)
+- [x] Sprint 6 — PWA móvil operarios completa
 
 ## Credenciales desarrollo
 - Admin: admin@papeleria.com / admin2026
