@@ -1,745 +1,601 @@
-const API_BASE = window.location.origin;
+'use strict';
+
+// ============================================
+// ESTADO GLOBAL
+// ============================================
+const API = window.location.origin;
 let TOKEN = localStorage.getItem('wms_token');
 let OPERARIO = JSON.parse(localStorage.getItem('wms_operario') || 'null');
 let TAREA_ACTUAL = null;
 let COLA_OFFLINE = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
 let SCANNER_BUFFER = '';
-let SCANNER_TIMEOUT = null;
+let SCANNER_TIMER = null;
 let CAMARA_ACTIVA = false;
 let HTML5QR = null;
-let CHART_ACTIVIDAD = null;
-let TAB_ACTUAL = 'tab-dashboard';
-let ADMIN_ALMACEN_ID = 1;
-let REFRESH_INTERVAL_ADMIN = null;
-let REFRESH_INTERVAL_OPERARIO = null;
+let CHART = null;
+let TAB = 'tab-dashboard';
+let ALMACEN_ID = 1;
+let TIMER_ADMIN = null;
+let TIMER_OPERARIO = null;
 
+// ============================================
+// ARRANQUE
+// ============================================
 document.addEventListener('DOMContentLoaded', () => {
-  registrarServiceWorker();
-  monitorearConexion();
-  inicializarScannerLaser();
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/static/pwa/sw.js').catch(() => {});
+  }
+  monitorRed();
+  scannerLaser();
   if (TOKEN && OPERARIO) {
-    mostrarPantallaSegunRol(OPERARIO.rol);
+    mostrarSegunRol(OPERARIO.rol);
   } else {
-    mostrarPantalla('pantalla-login');
+    pantalla('pantalla-login');
   }
 });
 
-function mostrarPantallaSegunRol(rol) {
-  const rolesAdmin = ['admin', 'gerente', 'jefe_almacen', 'supervisor'];
-  const rolesRecepcion = ['recepcionista'];
-  detenerRefresh();
-  if (rolesAdmin.includes(rol)) {
-    mostrarPantalla('pantalla-admin');
-    cargarDashboardAdmin();
-    iniciarAutoRefreshAdmin();
-  } else if (rolesRecepcion.includes(rol)) {
-    mostrarPantalla('pantalla-recepcion');
-    cargarRecepcionesActivas();
+// ============================================
+// ROLES
+// ============================================
+function mostrarSegunRol(rol) {
+  pararTimers();
+  const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
+  const esRecepcion = rol === 'recepcionista';
+
+  if (esAdmin) {
+    pantalla('pantalla-admin');
+    cargarAdmin();
+    TIMER_ADMIN = setInterval(cargarAdmin, 30000);
+  } else if (esRecepcion) {
+    pantalla('pantalla-recepcion');
+    cargarRecepciones();
   } else {
-    mostrarPantalla('pantalla-operario');
-    cargarTareaActual();
-    iniciarAutoRefreshOperario();
+    pantalla('pantalla-operario');
+    pedirTarea();
+    TIMER_OPERARIO = setInterval(() => {
+      if (!TAREA_ACTUAL) pedirTarea();
+    }, 5000);
   }
 }
 
-async function registrarServiceWorker() {
-  if ('serviceWorker' in navigator) {
-    try {
-      await navigator.serviceWorker.register('/static/pwa/sw.js');
-      navigator.serviceWorker.addEventListener('message', event => {
-        if (event.data.tipo === 'SINCRONIZAR') sincronizarColaOffline();
-      });
-    } catch (e) { console.error('SW error:', e); }
-  }
+function pararTimers() {
+  clearInterval(TIMER_ADMIN);
+  clearInterval(TIMER_OPERARIO);
 }
 
-function inicializarScannerLaser() {
-  const input = document.getElementById('scanner-input');
-  if (!input) return;
-
-  const mantenerFocus = () => {
-    const activo = document.activeElement;
-    const esInputUsuario = activo && (
-      activo.id === 'login-email' ||
-      activo.id === 'login-password' ||
-      activo.tagName === 'INPUT' ||
-      activo.tagName === 'TEXTAREA' ||
-      activo.tagName === 'SELECT'
-    );
-    const hayFormulario = document.getElementById('form-crear-picking') &&
-      document.getElementById('form-crear-picking').style.display !== 'none';
-
-    if (!CAMARA_ACTIVA && !esInputUsuario && !hayFormulario && activo !== input) {
-      input.focus();
-    }
-  };
-
-  document.addEventListener('click', mantenerFocus);
-  document.addEventListener('touchend', mantenerFocus);
-  setInterval(mantenerFocus, 500);
-
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && SCANNER_BUFFER.trim()) {
-      const codigo = SCANNER_BUFFER.trim();
-      SCANNER_BUFFER = '';
-      clearTimeout(SCANNER_TIMEOUT);
-      procesarCodigoEscaneado(codigo);
-    } else {
-      SCANNER_BUFFER += e.key;
-      clearTimeout(SCANNER_TIMEOUT);
-      SCANNER_TIMEOUT = setTimeout(() => { SCANNER_BUFFER = ''; }, 100);
-    }
-  });
-}
-
-function monitorearConexion() {
-  const actualizar = () => {
-    const online = navigator.onLine;
-    ['conexion-status', 'conexion-status-admin'].forEach(id => {
+// ============================================
+// RED Y OFFLINE
+// ============================================
+function monitorRed() {
+  const update = () => {
+    const on = navigator.onLine;
+    ['conexion-status','conexion-status-admin'].forEach(id => {
       const el = document.getElementById(id);
-      if (el) {
-        el.textContent = online ? '● Online' : '● Offline';
-        el.style.color = online ? '#22c55e' : '#ef4444';
-      }
+      if (el) { el.textContent = on ? '● Online' : '● Offline'; el.style.color = on ? '#22c55e' : '#ef4444'; }
     });
-    if (online && COLA_OFFLINE.length > 0) sincronizarColaOffline();
+    if (on && COLA_OFFLINE.length) syncOffline();
   };
-  window.addEventListener('online', actualizar);
-  window.addEventListener('offline', actualizar);
-  actualizar();
+  window.addEventListener('online', update);
+  window.addEventListener('offline', update);
+  update();
 }
 
-async function sincronizarColaOffline() {
-  if (COLA_OFFLINE.length === 0) return;
+async function syncOffline() {
   try {
-    const resp = await apiPost('/api/mobile/sync', { cola: COLA_OFFLINE });
-    if (resp.sincronizados > 0) {
+    const r = await post('/api/mobile/sync', { cola: COLA_OFFLINE });
+    if (r.sincronizados > 0) {
       COLA_OFFLINE = [];
       localStorage.setItem('wms_cola_offline', '[]');
-      mostrarAlerta(`✓ ${resp.sincronizados} tarea(s) sincronizadas`, 'exito');
+      alerta('✓ ' + r.sincronizados + ' tarea(s) sincronizadas', 'exito');
     }
-  } catch (e) { console.error('Error sincronizando:', e); }
+  } catch (e) {}
 }
 
-function guardarEnColaOffline(datos) {
-  COLA_OFFLINE.push({ ...datos, timestamp: Date.now() });
+function guardarOffline(datos) {
+  COLA_OFFLINE.push({ ...datos, ts: Date.now() });
   localStorage.setItem('wms_cola_offline', JSON.stringify(COLA_OFFLINE));
-  mostrarAlerta('Sin WiFi — guardado para sincronizar después', 'advertencia');
+  alerta('Sin WiFi — guardado para sincronizar', 'advertencia');
 }
 
-async function apiPost(endpoint, body) {
-  const resp = await fetch(API_BASE + endpoint, {
+// ============================================
+// SCANNER LÁSER — INPUT INVISIBLE
+// ============================================
+function scannerLaser() {
+  const inp = document.getElementById('scanner-input');
+  if (!inp) return;
+
+  const focus = () => {
+    const a = document.activeElement;
+    const esForm = a && ['INPUT','TEXTAREA','SELECT'].includes(a.tagName);
+    if (!CAMARA_ACTIVA && !esForm) inp.focus();
+  };
+
+  document.addEventListener('click', focus);
+  document.addEventListener('touchend', focus);
+  setInterval(focus, 1000);
+
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const cod = SCANNER_BUFFER.trim();
+      SCANNER_BUFFER = '';
+      clearTimeout(SCANNER_TIMER);
+      if (cod) procesarScan(cod);
+    } else if (e.key.length === 1) {
+      SCANNER_BUFFER += e.key;
+      clearTimeout(SCANNER_TIMER);
+      SCANNER_TIMER = setTimeout(() => { SCANNER_BUFFER = ''; }, 150);
+    }
+  });
+}
+
+// ============================================
+// HTTP
+// ============================================
+async function get(url) {
+  const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });
+  if (r.status === 401) { salir(); throw new Error('401'); }
+  return r.json();
+}
+
+async function post(url, body) {
+  const r = await fetch(API + url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
     body: JSON.stringify(body)
   });
-  if (resp.status === 401) { cerrarSesion(); throw new Error('Sesión expirada'); }
-  return resp.json();
+  if (r.status === 401) { salir(); throw new Error('401'); }
+  return r.json();
 }
 
-async function apiGet(endpoint) {
-  const resp = await fetch(API_BASE + endpoint, {
-    headers: { 'Authorization': `Bearer ${TOKEN}` }
-  });
-  if (resp.status === 401) { cerrarSesion(); throw new Error('Sesión expirada'); }
-  return resp.json();
-}
-
-async function apiPut(endpoint, body = {}) {
-  const resp = await fetch(API_BASE + endpoint, {
+async function put(url, body = {}) {
+  const r = await fetch(API + url, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TOKEN}` },
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
     body: JSON.stringify(body)
   });
-  if (resp.status === 401) { cerrarSesion(); throw new Error('Sesión expirada'); }
-  return resp.json();
+  if (r.status === 401) { salir(); throw new Error('401'); }
+  return r.json();
 }
 
+// ============================================
+// LOGIN
+// ============================================
 async function login() {
   const email = document.getElementById('login-email').value.trim();
-  const password = document.getElementById('login-password').value.trim();
-  if (!email || !password) { mostrarAlerta('Ingresa usuario y contraseña', 'error'); return; }
+  const pass = document.getElementById('login-password').value.trim();
+  if (!email || !pass) { alerta('Ingresa usuario y contraseña', 'error'); return; }
+
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
   btn.disabled = true;
+
   try {
-    const resp = await fetch(API_BASE + '/api/auth/login', {
+    const r = await fetch(API + '/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password })
+      body: JSON.stringify({ email, password: pass })
     });
-    const data = await resp.json();
-    if (resp.ok) {
-      TOKEN = data.token;
-      OPERARIO = data.usuario;
+    const d = await r.json();
+    if (r.ok) {
+      TOKEN = d.token;
+      OPERARIO = d.usuario;
       localStorage.setItem('wms_token', TOKEN);
       localStorage.setItem('wms_operario', JSON.stringify(OPERARIO));
-      actualizarNombresUI(OPERARIO);
-      mostrarPantallaSegunRol(OPERARIO.rol);
+      actualizarUI(OPERARIO);
+      mostrarSegunRol(OPERARIO.rol);
     } else {
-      mostrarAlerta(data.error || 'Credenciales incorrectas', 'error');
+      alerta(d.error || 'Credenciales incorrectas', 'error');
     }
   } catch (e) {
-    mostrarAlerta('Sin conexión — verifica el WiFi', 'error');
+    alerta('Sin conexión', 'error');
   } finally {
     btn.textContent = 'Entrar';
     btn.disabled = false;
   }
 }
 
-function actualizarNombresUI(op) {
-  ['op-nombre','admin-nombre','rec-nombre'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = op.nombre;
-  });
-  ['op-rol','admin-rol'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = op.rol;
-  });
+function actualizarUI(op) {
+  ['op-nombre','admin-nombre','rec-nombre'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.nombre; });
+  ['op-rol','admin-rol'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.rol; });
 }
 
-async function cargarDashboardAdmin() {
+function salir() {
+  pararTimers();
+  TOKEN = null; OPERARIO = null; TAREA_ACTUAL = null;
+  localStorage.removeItem('wms_token');
+  localStorage.removeItem('wms_operario');
+  pantalla('pantalla-login');
+}
+
+// ============================================
+// PANEL ADMIN
+// ============================================
+async function cargarAdmin() {
+  if (TAB === 'tab-dashboard') await cargarDashboard();
+  else if (TAB === 'tab-pedidos') await cargarPedidos();
+  else if (TAB === 'tab-operarios') await cargarOperarios();
+  else if (TAB === 'tab-stock') await cargarStock();
+  else if (TAB === 'tab-connekta') await cargarConnekta();
+}
+
+function tab(id) {
+  ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'].forEach(t => {
+    const el = document.getElementById(t);
+    if (el) el.style.display = t === id ? 'block' : 'none';
+  });
+  document.querySelectorAll('.nav-tab').forEach((t, i) => {
+    t.classList.toggle('active', ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'][i] === id);
+  });
+  TAB = id;
+  cargarAdmin();
+}
+
+async function cargarDashboard() {
   try {
-    const data = await apiGet(`/api/dashboard/resumen-completo?almacen_id=${ADMIN_ALMACEN_ID}`);
-    const k = data.kpis;
-    setText('kpi-pick-pend', k.picking.total_activo);
-    setText('kpi-pack-hoy', k.packing.facturas_generadas_hoy);
-    setText('kpi-rec-hoy', k.recepcion.confirmadas_hoy);
-    setText('kpi-alertas', k.alertas.productos_bajo_minimo);
-    renderizarGraficaActividad(k);
-    renderizarMovimientos(data.movimientos_recientes.movimientos);
-  } catch (e) {
-    mostrarAlerta('Error cargando dashboard', 'error');
-  }
+    const d = await get('/api/dashboard/resumen-completo?almacen_id=' + ALMACEN_ID);
+    const k = d.kpis;
+    set('kpi-pick-pend', k.picking.total_activo);
+    set('kpi-pack-hoy', k.packing.facturas_generadas_hoy);
+    set('kpi-rec-hoy', k.recepcion.confirmadas_hoy);
+    set('kpi-alertas', k.alertas.productos_bajo_minimo);
+    graficaActividad(k);
+    movimientos(d.movimientos_recientes.movimientos);
+  } catch (e) {}
 }
 
-function iniciarAutoRefreshAdmin() {
-  if (REFRESH_INTERVAL_ADMIN) clearInterval(REFRESH_INTERVAL_ADMIN);
-  REFRESH_INTERVAL_ADMIN = setInterval(() => {
-    const formAbierto = document.getElementById('form-crear-picking') &&
-                        document.getElementById('form-crear-picking').style.display !== 'none';
-    if (formAbierto) return;
-    if (TAB_ACTUAL === 'tab-dashboard') cargarDashboardAdmin();
-    else if (TAB_ACTUAL === 'tab-pedidos') cargarPedidos();
-    else if (TAB_ACTUAL === 'tab-operarios') cargarProductividad();
-    else if (TAB_ACTUAL === 'tab-stock') cargarAlertasStock();
-  }, 30000);
-}
-
-function iniciarAutoRefreshOperario() {
-  if (REFRESH_INTERVAL_OPERARIO) clearInterval(REFRESH_INTERVAL_OPERARIO);
-  REFRESH_INTERVAL_OPERARIO = setInterval(() => {
-    if (!TAREA_ACTUAL) cargarTareaActual();
-  }, 5000);
-}
-
-function detenerRefresh() {
-  if (REFRESH_INTERVAL_ADMIN) clearInterval(REFRESH_INTERVAL_ADMIN);
-  if (REFRESH_INTERVAL_OPERARIO) clearInterval(REFRESH_INTERVAL_OPERARIO);
-}
-
-function setText(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val ?? '—';
-}
-
-function renderizarGraficaActividad(kpis) {
+function graficaActividad(k) {
   const ctx = document.getElementById('chart-actividad');
-  if (!ctx) return;
-  if (CHART_ACTIVIDAD) CHART_ACTIVIDAD.destroy();
-  CHART_ACTIVIDAD = new Chart(ctx, {
+  if (!ctx || !window.Chart) return;
+  if (CHART) CHART.destroy();
+  CHART = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: ['Picking\npendiente', 'Picking\nhoy', 'Packing\nhoy', 'Facturas\nSiesa', 'Conteos\nMatch'],
-      datasets: [{
-        data: [
-          kpis.picking.total_activo,
-          kpis.picking.completado_hoy,
-          kpis.packing.completado_hoy,
-          kpis.packing.facturas_generadas_hoy,
-          kpis.conteo.match_hoy
-        ],
-        backgroundColor: ['#1e3a5f','#14532d','#14532d','#065f46','#713f12'],
-        borderRadius: 6
-      }]
+      labels: ['Picking', 'Pick hoy', 'Pack hoy', 'Facturas', 'Conteos'],
+      datasets: [{ data: [k.picking.total_activo, k.picking.completado_hoy, k.packing.completado_hoy, k.packing.facturas_generadas_hoy, k.conteo.match_hoy], backgroundColor: ['#1e3a5f','#14532d','#14532d','#065f46','#713f12'], borderRadius: 6 }]
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: '#666', font: { size: 10 } }, grid: { color: '#1a1a1a' } },
-        y: { ticks: { color: '#666' }, grid: { color: '#1a1a1a' }, beginAtZero: true }
-      }
-    }
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#666' }, grid: { color: '#1a1a1a' } }, y: { ticks: { color: '#666' }, grid: { color: '#1a1a1a' }, beginAtZero: true } } }
   });
 }
 
-function renderizarMovimientos(movimientos) {
+function movimientos(lista) {
   const el = document.getElementById('movimientos-recientes');
   if (!el) return;
-  if (!movimientos || movimientos.length === 0) {
-    el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:#555;font-size:13px;padding:8px 0;">Sin movimientos hoy</div>';
-    return;
-  }
-  const filas = movimientos.slice(0, 8).map(m => {
-    const color = m.tipo === 'ENTRADA' ? '#4ade80' : '#f87171';
-    const signo = m.tipo === 'ENTRADA' ? '+' : '-';
-    const fecha = new Date(m.fecha).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
-    return `<div class="tabla-fila">
-      <div>
-        <div class="tabla-nombre">${m.tipo}</div>
-        <div style="font-size:11px;color:#555;">${fecha} · Doc: ${m.numero_documento || '—'}</div>
-      </div>
-      <div style="color:${color};font-weight:700;">${signo}${m.cantidad}</div>
-    </div>`;
+  if (!lista || !lista.length) { el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:#555;font-size:13px;padding:8px 0;">Sin movimientos</div>'; return; }
+  el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div>' + lista.slice(0,8).map(m => {
+    const c = m.tipo === 'ENTRADA' ? '#4ade80' : '#f87171';
+    const s = m.tipo === 'ENTRADA' ? '+' : '-';
+    const h = new Date(m.fecha).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+    return `<div class="tabla-fila"><div><div class="tabla-nombre">${m.tipo}</div><div style="font-size:11px;color:#555;">${h}</div></div><div style="color:${c};font-weight:700;">${s}${m.cantidad}</div></div>`;
   }).join('');
-  el.innerHTML = `<div class="tabla-titulo">Últimos movimientos</div>${filas}`;
-}
-
-function mostrarTab(tabId) {
-  ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.style.display = id === tabId ? 'block' : 'none';
-  });
-  document.querySelectorAll('.nav-tab').forEach((tab, i) => {
-    const tabs = ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'];
-    tab.classList.toggle('active', tabs[i] === tabId);
-  });
-  TAB_ACTUAL = tabId;
-  if (tabId === 'tab-pedidos') cargarPedidos();
-  else if (tabId === 'tab-operarios') cargarProductividad();
-  else if (tabId === 'tab-stock') cargarAlertasStock();
-  else if (tabId === 'tab-connekta') cargarEstadoConnekta();
 }
 
 async function cargarPedidos() {
   const el = document.getElementById('lista-pedidos');
   if (!el) return;
   try {
-    const data = await apiGet('/api/picking/?estado=PENDIENTE&per_page=20');
-    const btnCrear = `
-      <div style="margin-bottom:12px;">
-        <button onclick="mostrarFormCrearPicking()" style="width:100%;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">
-          + Crear tarea de picking
-        </button>
-      </div>
-      <div id="form-crear-picking" style="display:none;"></div>`;
-    if (!data.tareas || data.tareas.length === 0) {
-      el.innerHTML = btnCrear + '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos pendientes ✓</div>';
+    const d = await get('/api/picking/?per_page=30');
+    if (!d.tareas || !d.tareas.length) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos activos ✓</div>';
       return;
     }
-    const filas = data.tareas.map(t => `
+    el.innerHTML = d.tareas.map(t => `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
             <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
             <div style="font-size:12px;color:#666;margin-top:2px;">${t.codigo} · ${t.ubicacion_codigo || '—'}</div>
-            <div style="font-size:11px;color:#444;margin-top:2px;">Operario: ${t.operario_id ? '#'+t.operario_id : 'Sin asignar'}</div>
+            <div style="font-size:11px;color:#444;margin-top:2px;">
+              ${t.operario_id ? '👤 Asignado #' + t.operario_id : '⏳ En cola'}
+            </div>
           </div>
           <div style="text-align:right;">
-            <span class="badge ${t.estado === 'EN_PROCESO' ? 'badge-blue' : 'badge-yellow'}">${t.estado}</span>
+            <span class="badge ${t.estado === 'EN_PROCESO' ? 'badge-blue' : t.estado === 'COMPLETADO' ? 'badge-green' : 'badge-yellow'}">${t.estado}</span>
             <div style="font-size:24px;font-weight:800;margin-top:4px;">${t.cantidad_recogida}/${t.cantidad_solicitada}</div>
-            <div style="font-size:10px;color:#555;">unidades</div>
           </div>
         </div>
       </div>`).join('');
-    el.innerHTML = btnCrear + filas;
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
   }
 }
 
-async function mostrarFormCrearPicking() {
-  const form = document.getElementById('form-crear-picking');
-  if (!form) return;
-  let opcionesProductos = '<option value="">Selecciona producto</option>';
-  try {
-    const data = await apiGet('/api/productos/');
-    const prods = data.productos || data.items || data || [];
-    if (Array.isArray(prods)) {
-      opcionesProductos += prods.map(p =>
-        `<option value="${p.id}">${p.codigo} — ${p.nombre} (stock: ${p.stock_total})</option>`
-      ).join('');
-    }
-  } catch (e) { console.error('Error productos:', e); }
-
-  let opcionesUbicaciones = '<option value="">Selecciona ubicación</option>';
-  try {
-    const data = await apiGet('/api/almacenes/1/ubicaciones');
-    const ubs = Array.isArray(data) ? data : (data.ubicaciones || []);
-    opcionesUbicaciones += ubs
-      .filter(u => u.tipo !== 'cross_dock')
-      .map(u => `<option value="${u.id}">${u.codigo} — Zona ${u.zona}</option>`)
-      .join('');
-  } catch (e) { console.error('Error ubicaciones:', e); }
-
-  form.style.display = 'block';
-  form.innerHTML = `
-    <div style="background:#111;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #333;">
-      <div style="font-size:15px;font-weight:700;margin-bottom:12px;">Nueva tarea de picking</div>
-      <div style="margin-bottom:10px;">
-        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Producto</div>
-        <select id="pick-producto" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">${opcionesProductos}</select>
-      </div>
-      <div style="margin-bottom:10px;">
-        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Ubicación</div>
-        <select id="pick-ubicacion" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">${opcionesUbicaciones}</select>
-      </div>
-      <div style="margin-bottom:10px;">
-        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Cantidad</div>
-        <input id="pick-cantidad" type="number" min="1" value="10" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:20px;font-weight:700;">
-      </div>
-      <div style="margin-bottom:12px;">
-        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Referencia pedido Siesa</div>
-        <input id="pick-referencia" type="text" value="PV-2024-001" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
-      </div>
-      <div style="display:flex;gap:8px;">
-        <button onclick="crearPickingDesdeAdmin()" style="flex:1;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Crear tarea</button>
-        <button onclick="document.getElementById('form-crear-picking').style.display='none'" style="padding:14px 20px;font-size:16px;background:#222;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cancelar</button>
-      </div>
-    </div>`;
-}
-
-async function crearPickingDesdeAdmin() {
-  const productoId = document.getElementById('pick-producto').value;
-  const ubicacionId = document.getElementById('pick-ubicacion').value;
-  const cantidad = parseInt(document.getElementById('pick-cantidad').value);
-  const referenciaEl = document.getElementById('pick-referencia');
-  const referencia = referenciaEl ? referenciaEl.value.trim() || 'MANUAL' : 'MANUAL';
-
-  if (!productoId || productoId === '') { mostrarAlerta('Selecciona un producto', 'error'); return; }
-  if (!ubicacionId || ubicacionId === '') { mostrarAlerta('Selecciona una ubicación', 'error'); return; }
-  if (!cantidad || cantidad < 1) { mostrarAlerta('Ingresa una cantidad válida', 'error'); return; }
-
-  try {
-    const resp = await apiPost('/api/picking/crear', {
-      producto_id: parseInt(productoId),
-      ubicacion_id: parseInt(ubicacionId),
-      almacen_id: 1,
-      cantidad: cantidad,
-      referencia_documento: referencia,
-      tipo_documento: 'PEDIDO_VENTA',
-      prioridad: 1
-    });
-    if (resp.error) { mostrarAlerta(resp.error, 'error'); return; }
-    mostrarAlerta('✓ Tarea de picking creada — el operario la verá en segundos', 'exito');
-    document.getElementById('form-crear-picking').style.display = 'none';
-    setTimeout(() => cargarPedidos(), 1000);
-  } catch (e) {
-    mostrarAlerta('Error creando picking', 'error');
-  }
-}
-
-async function cargarProductividad() {
+async function cargarOperarios() {
   const el = document.getElementById('lista-operarios');
   if (!el) return;
   try {
-    const data = await apiGet(`/api/dashboard/productividad?almacen_id=${ADMIN_ALMACEN_ID}&dias=7`);
-    if (!data.operarios || data.operarios.length === 0) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin datos de operarios</div>';
-      return;
-    }
-    el.innerHTML = data.operarios.map((op, i) => `
+    const d = await get('/api/dashboard/productividad?almacen_id=' + ALMACEN_ID + '&dias=7');
+    if (!d.operarios || !d.operarios.length) { el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin datos</div>'; return; }
+    el.innerHTML = d.operarios.map((op, i) => `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
             <div style="font-size:14px;font-weight:600;">${op.nombre}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px;">${op.rol}</div>
-            <div style="font-size:11px;color:#444;margin-top:4px;">Pick: ${op.pickings_completados} · Pack: ${op.packings_completados} · Conteos: ${op.conteos_completados}</div>
+            <div style="font-size:11px;color:#555;">${op.rol}</div>
+            <div style="font-size:11px;color:#444;margin-top:4px;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Conteos:${op.conteos_completados}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-size:28px;font-weight:800;color:${i === 0 ? '#4ade80' : '#fff'};">${op.total_tareas}</div>
+            <div style="font-size:28px;font-weight:800;color:${i===0?'#4ade80':'#fff'}">${op.total_tareas}</div>
             <div style="font-size:10px;color:#555;">tareas 7d</div>
           </div>
         </div>
       </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;">Error cargando operarios</div>';
-  }
+  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
-async function cargarAlertasStock() {
+async function cargarStock() {
   const el = document.getElementById('lista-alertas');
   if (!el) return;
   try {
-    const data = await apiGet(`/api/dashboard/alertas-stock?almacen_id=${ADMIN_ALMACEN_ID}`);
-    if (!data.alertas || data.alertas.length === 0) {
-      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;">✓ Sin alertas de stock</div>';
-      return;
-    }
-    el.innerHTML = data.alertas.map(a => `
+    const d = await get('/api/dashboard/alertas-stock?almacen_id=' + ALMACEN_ID);
+    if (!d.alertas || !d.alertas.length) { el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;">✓ Sin alertas</div>'; return; }
+    el.innerHTML = d.alertas.map(a => `
       <div class="tabla-card">
-        <div class="alerta-item">
-          <div>
-            <div class="alerta-producto">${a.nombre}</div>
-            <div class="alerta-codigo">${a.codigo} · Clase ${a.clasificacion_abc || '—'}</div>
-          </div>
-          <div class="alerta-stock">
-            <span class="badge ${a.urgencia === 'CRITICO' ? 'badge-red' : 'badge-yellow'}">${a.urgencia}</span>
-            <div class="alerta-num" style="color:${a.urgencia === 'CRITICO' ? '#f87171' : '#facc15'}">${a.stock_actual}</div>
-            <div style="font-size:10px;color:#555;">mín: ${a.stock_minimo}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div><div style="font-size:13px;font-weight:600;">${a.nombre}</div><div style="font-size:11px;color:#555;">${a.codigo} · Clase ${a.clasificacion_abc||'—'}</div></div>
+          <div style="text-align:right;">
+            <span class="badge ${a.urgencia==='CRITICO'?'badge-red':'badge-yellow'}">${a.urgencia}</span>
+            <div style="font-size:20px;font-weight:800;color:${a.urgencia==='CRITICO'?'#f87171':'#facc15'}">${a.stock_actual}</div>
+            <div style="font-size:10px;color:#555;">mín:${a.stock_minimo}</div>
           </div>
         </div>
       </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;">Error cargando alertas</div>';
-  }
+  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
-async function cargarEstadoConnekta() {
+async function cargarConnekta() {
   const el = document.getElementById('estado-connekta');
   if (!el) return;
   try {
-    const resp = await fetch(API_BASE + '/api/packing/connekta/estado', {
-      headers: { 'Authorization': `Bearer ${TOKEN}` }
-    });
-    const data = await resp.json();
-    const color = data.modo_simulacion ? '#facc15' : '#4ade80';
-    const estado = data.modo_simulacion ? 'SIMULACIÓN' : 'PRODUCCIÓN';
+    const d = await get('/api/packing/connekta/estado');
+    const color = d.modo_simulacion ? '#facc15' : '#4ade80';
+    const estado = d.modo_simulacion ? 'SIMULACIÓN' : 'PRODUCCIÓN';
     el.innerHTML = `
       <div class="tabla-card">
         <div style="text-align:center;padding:20px 0;">
-          <div style="font-size:14px;color:#666;margin-bottom:8px;">Estado Connekta</div>
-          <div style="font-size:28px;font-weight:800;color:${color};">${estado}</div>
-          <div style="font-size:13px;color:#555;margin-top:12px;">${data.mensaje}</div>
+          <div style="font-size:13px;color:#666;margin-bottom:8px;">Estado Connekta</div>
+          <div style="font-size:32px;font-weight:800;color:${color};">${estado}</div>
+          <div style="font-size:12px;color:#555;margin-top:10px;">${d.mensaje}</div>
         </div>
-        <div style="margin-top:16px;">
-          <div class="tabla-fila"><span class="tabla-nombre">URL configurada</span><span class="badge ${data.url_configurada ? 'badge-green' : 'badge-red'}">${data.url_configurada ? 'Sí' : 'No'}</span></div>
-          <div class="tabla-fila"><span class="tabla-nombre">Credenciales</span><span class="badge ${data.credenciales_configuradas ? 'badge-green' : 'badge-red'}">${data.credenciales_configuradas ? 'Sí' : 'No'}</span></div>
-          <div class="tabla-fila"><span class="tabla-nombre">Modo</span><span class="badge ${data.modo_simulacion ? 'badge-yellow' : 'badge-green'}">${data.modo_simulacion ? 'Simulación' : 'Real'}</span></div>
-        </div>
+        <div class="tabla-fila"><span class="tabla-nombre">URL</span><span class="badge ${d.url_configurada?'badge-green':'badge-red'}">${d.url_configurada?'✓':'✗'}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">Credenciales</span><span class="badge ${d.credenciales_configuradas?'badge-green':'badge-red'}">${d.credenciales_configuradas?'✓':'✗'}</span></div>
       </div>`;
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;">Error consultando Connekta</div>';
-  }
+  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
-async function cargarRecepcionesActivas() {
-  const el = document.getElementById('contenido-recepcion');
-  if (!el) return;
+// ============================================
+// OPERARIO — DISPENSADOR AUTOMÁTICO
+// ============================================
+async function pedirTarea() {
   try {
-    const data = await apiGet('/api/recepcion/?estado=ABIERTA');
-    if (!data.recepciones || data.recepciones.length === 0) {
-      el.innerHTML = `
-        <div style="text-align:center;padding:40px 20px;">
-          <div style="font-size:60px;">✓</div>
-          <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin recepciones</div>
-          <div style="font-size:14px;color:#666;margin-top:8px;">No hay OCs pendientes de recibir</div>
-          <button onclick="cargarRecepcionesActivas()" style="margin-top:24px;padding:14px 28px;font-size:16px;background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">Actualizar</button>
-        </div>`;
-      return;
-    }
-    el.innerHTML = data.recepciones.map(r => `
-      <div class="rec-card">
-        <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
-        <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'}</div>
-        <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
-          <span class="badge badge-blue">${r.estado}</span>
-          <span style="font-size:12px;color:#555;">${r.total_items} ítems</span>
-        </div>
-        <button onclick="iniciarRecepcion(${r.id})" style="width:100%;margin-top:12px;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Iniciar recepción</button>
-      </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;">Error cargando recepciones</div>';
-  }
-}
-
-async function iniciarRecepcion(id) {
-  try {
-    await apiPut(`/api/recepcion/${id}/iniciar`);
-    mostrarAlerta('Recepción iniciada — escanea los productos', 'exito');
-    cargarRecepcionesActivas();
-  } catch (e) {
-    mostrarAlerta('Error iniciando recepción', 'error');
-  }
-}
-
-async function cargarTareaActual() {
-  try {
-    const data = await apiGet('/api/mobile/tarea-actual');
-    if (data.sin_tareas) {
+    const d = await get('/api/mobile/tarea-actual');
+    if (!d || d.sin_tareas) {
+      TAREA_ACTUAL = null;
       document.getElementById('contenido-tarea').innerHTML = `
         <div style="text-align:center;padding:60px 20px;">
           <div style="font-size:80px;">✓</div>
           <div style="font-size:28px;font-weight:700;margin-top:16px;">Sin tareas</div>
-          <div style="font-size:18px;color:#666;margin-top:8px;">Todas las tareas completadas</div>
-          <button onclick="cargarTareaActual()" style="margin-top:32px;padding:16px 32px;font-size:18px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;">Actualizar</button>
+          <div style="font-size:16px;color:#666;margin-top:8px;">El sistema te asignará la próxima automáticamente</div>
         </div>`;
       return;
     }
-    TAREA_ACTUAL = data;
-    renderizarTarea(data);
+    TAREA_ACTUAL = d;
+    renderTarea(d);
   } catch (e) {
-    mostrarAlerta('Error cargando tareas', 'error');
+    console.error('Error cargando tarea:', e);
   }
 }
 
-function renderizarTarea(tarea) {
-  const colores = { 'PICKING': '#1d4ed8', 'PACKING': '#7c3aed', 'CONTEO': '#b45309' };
-  const color = colores[tarea.tipo] || '#000';
-  const esConteo = tarea.tipo === 'CONTEO';
+function renderTarea(t) {
+  const colores = { PICKING: '#1d4ed8', PACKING: '#7c3aed', CONTEO: '#b45309' };
+  const color = colores[t.tipo] || '#333';
+  const esConteo = t.tipo === 'CONTEO';
+  const pct = t.cantidad_requerida ? Math.min((t.cantidad_escaneada / t.cantidad_requerida) * 100, 100) : 0;
+
   document.getElementById('contenido-tarea').innerHTML = `
     <div style="padding:16px;">
-      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;">${tarea.tipo}</div>
-      <div style="background:#000;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;border:1px solid #222;">
-        <div style="font-size:14px;color:#999;margin-bottom:4px;">UBICACIÓN</div>
-        <div style="font-size:42px;font-weight:900;letter-spacing:2px;">${tarea.ubicacion}</div>
+      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;">${t.tipo}</div>
+
+      <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
+        <div style="font-size:13px;color:#666;">UBICACIÓN</div>
+        <div style="font-size:44px;font-weight:900;letter-spacing:2px;">${t.ubicacion}</div>
       </div>
-      <div style="background:#111;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;">
-        <div style="font-size:14px;color:#999;margin-bottom:4px;">PRODUCTO</div>
-        <div style="font-size:28px;font-weight:700;">${tarea.producto_codigo}</div>
-        <div style="font-size:16px;color:#aaa;margin-top:4px;">${tarea.producto_nombre}</div>
+
+      <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
+        <div style="font-size:13px;color:#666;">PRODUCTO</div>
+        <div style="font-size:26px;font-weight:700;">${t.producto_codigo}</div>
+        <div style="font-size:15px;color:#aaa;">${t.producto_nombre}</div>
       </div>
+
       ${!esConteo ? `
-      <div style="background:#1a1a1a;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;text-align:center;">
-        <div style="font-size:14px;color:#999;margin-bottom:4px;">CANTIDAD</div>
-        <div style="font-size:64px;font-weight:900;" id="contador-cantidad">${tarea.cantidad_escaneada} / ${tarea.cantidad_requerida}</div>
-        <div style="height:8px;background:#333;border-radius:4px;margin-top:12px;">
-          <div id="barra-progreso" style="height:100%;background:#22c55e;border-radius:4px;width:${tarea.cantidad_requerida ? (tarea.cantidad_escaneada/tarea.cantidad_requerida*100) : 0}%;transition:width 0.3s;"></div>
+      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:13px;color:#666;">CANTIDAD</div>
+        <div id="contador" style="font-size:64px;font-weight:900;">${t.cantidad_escaneada}/${t.cantidad_requerida}</div>
+        <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;">
+          <div id="barra" style="height:100%;background:#22c55e;border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
         </div>
       </div>` : `
-      <div style="background:#1a1a1a;color:#fff;border-radius:16px;padding:20px;margin-bottom:16px;text-align:center;">
-        <div style="font-size:14px;color:#999;margin-bottom:4px;">CONTEO CIEGO</div>
-        <div style="font-size:64px;font-weight:900;" id="contador-cantidad">0</div>
-        <div style="font-size:14px;color:#666;margin-top:8px;">Cuenta sin ver la cantidad esperada</div>
+      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:13px;color:#666;">CONTEO CIEGO</div>
+        <div id="contador" style="font-size:64px;font-weight:900;">0</div>
+        <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
       </div>`}
-      <div style="margin-bottom:12px;">
-        <button onclick="toggleCamara()" style="width:100%;padding:16px;font-size:18px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;">📷 Escanear con cámara</button>
-      </div>
-      <div id="camara-container" style="display:none;margin-bottom:12px;">
+
+      <button onclick="abrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+        📷 Escanear con cámara
+      </button>
+
+      <div id="camara-box" style="display:none;margin-bottom:10px;">
         <div id="lector-qr" style="border-radius:12px;overflow:hidden;"></div>
-        <button onclick="toggleCamara()" style="width:100%;padding:12px;margin-top:8px;font-size:16px;background:#333;color:#fff;border:none;border-radius:12px;cursor:pointer;">Cerrar cámara</button>
+        <button onclick="cerrarCamara()" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
       </div>
-      <button id="btn-confirmar" onclick="confirmarTarea()" style="width:100%;padding:20px;font-size:22px;font-weight:700;background:#000;color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${esConteo ? 1 : 0.3};" ${esConteo ? '' : 'disabled'}>
+
+      <button id="btn-ok" onclick="confirmar()" ${esConteo ? '' : 'disabled'}
+        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:#000;color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${esConteo?1:0.3};">
         ✓ Confirmar
       </button>
-      ${tarea.referencia ? `<div style="text-align:center;margin-top:12px;font-size:13px;color:#666;">Ref: ${tarea.referencia}</div>` : ''}
+
+      ${t.referencia ? `<div style="text-align:center;margin-top:10px;font-size:12px;color:#555;">Ref: ${t.referencia}</div>` : ''}
     </div>`;
 }
 
-async function toggleCamara() {
-  const container = document.getElementById('camara-container');
-  if (CAMARA_ACTIVA) {
-    if (HTML5QR) { await HTML5QR.stop(); HTML5QR = null; }
-    CAMARA_ACTIVA = false;
-    container.style.display = 'none';
-    return;
-  }
-  container.style.display = 'block';
+// ============================================
+// CÁMARA
+// ============================================
+async function abrirCamara() {
+  document.getElementById('camara-box').style.display = 'block';
   CAMARA_ACTIVA = true;
-  if (!window.Html5Qrcode) {
-    await cargarScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
-  }
+  if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
   HTML5QR = new Html5Qrcode('lector-qr');
   try {
-    await HTML5QR.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 250, height: 150 } },
-      (codigo) => { procesarCodigoEscaneado(codigo); },
-      () => {}
-    );
+    await HTML5QR.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 150 } },
+      cod => procesarScan(cod), () => {});
   } catch (e) {
-    mostrarAlerta('No se pudo activar la cámara', 'error');
-    CAMARA_ACTIVA = false;
-    container.style.display = 'none';
+    alerta('No se pudo activar la cámara', 'error');
+    cerrarCamara();
   }
 }
 
-function cargarScript(src) {
-  return new Promise((resolve, reject) => {
+async function cerrarCamara() {
+  if (HTML5QR) { try { await HTML5QR.stop(); } catch(e) {} HTML5QR = null; }
+  CAMARA_ACTIVA = false;
+  const box = document.getElementById('camara-box');
+  if (box) box.style.display = 'none';
+}
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
     const s = document.createElement('script');
-    s.src = src; s.onload = resolve; s.onerror = reject;
+    s.src = src; s.onload = res; s.onerror = rej;
     document.head.appendChild(s);
   });
 }
 
-async function procesarCodigoEscaneado(codigo) {
+// ============================================
+// ESCANEO
+// ============================================
+async function procesarScan(codigo) {
   if (!TAREA_ACTUAL) return;
-  vibrar();
-  mostrarFlash();
+  vibrar(); flash();
   try {
-    const resp = await apiPost('/api/mobile/escanear', {
+    const r = await post('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
       tipo: TAREA_ACTUAL.tipo,
-      codigo: codigo,
+      codigo,
       cantidad: 1
     });
-    if (resp.error) {
-      mostrarAlerta(typeof resp.error === 'object' ? resp.error.mensaje : resp.error, 'error');
-      return;
-    }
-    const contador = document.getElementById('contador-cantidad');
+    if (r.error) { alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+
+    const contador = document.getElementById('contador');
     if (contador) {
       contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
-        ? resp.cantidad_contada
-        : `${resp.cantidad_actual} / ${resp.cantidad_requerida}`;
+        ? r.cantidad_contada
+        : r.cantidad_actual + '/' + r.cantidad_requerida;
     }
-    const barra = document.getElementById('barra-progreso');
-    if (barra && resp.cantidad_requerida) {
-      barra.style.width = `${Math.min((resp.cantidad_actual / resp.cantidad_requerida) * 100, 100)}%`;
+    const barra = document.getElementById('barra');
+    if (barra && r.cantidad_requerida) {
+      barra.style.width = Math.min((r.cantidad_actual / r.cantidad_requerida) * 100, 100) + '%';
     }
-    if (resp.puede_confirmar) {
-      const btn = document.getElementById('btn-confirmar');
+    if (r.puede_confirmar) {
+      const btn = document.getElementById('btn-ok');
       if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#16a34a'; }
-      mostrarAlerta(resp.mensaje || '¡Listo para confirmar!', 'exito');
+      alerta(r.mensaje || '¡Listo!', 'exito');
     }
-  } catch (e) {
-    mostrarAlerta('Error de conexión', 'error');
-  }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-async function confirmarTarea() {
+// ============================================
+// CONFIRMAR
+// ============================================
+async function confirmar() {
   if (!TAREA_ACTUAL) return;
-  const btn = document.getElementById('btn-confirmar');
-  btn.textContent = 'Confirmando...';
-  btn.disabled = true;
+  const btn = document.getElementById('btn-ok');
+  if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
   const payload = { tarea_id: TAREA_ACTUAL.id, tipo: TAREA_ACTUAL.tipo, items_escaneados: [] };
   try {
-    const resp = await apiPost('/api/mobile/confirmar', payload);
-    if (resp.error) {
-      mostrarAlerta(resp.error, 'error');
-      btn.textContent = '✓ Confirmar';
-      btn.disabled = false;
+    const r = await post('/api/mobile/confirmar', payload);
+    if (r.error) {
+      alerta(r.error, 'error');
+      if (btn) { btn.textContent = '✓ Confirmar'; btn.disabled = false; }
       return;
     }
-    mostrarAlerta('¡Tarea completada!', 'exito');
-    setTimeout(() => { TAREA_ACTUAL = null; cargarTareaActual(); }, 1500);
+    alerta('¡Tarea completada!', 'exito');
+    TAREA_ACTUAL = null;
+    setTimeout(pedirTarea, 1500);
   } catch (e) {
-    guardarEnColaOffline(payload);
-    setTimeout(() => { TAREA_ACTUAL = null; cargarTareaActual(); }, 2000);
+    guardarOffline(payload);
+    TAREA_ACTUAL = null;
+    setTimeout(pedirTarea, 2000);
   }
 }
 
-function mostrarPantalla(id) {
+// ============================================
+// RECEPCIÓN
+// ============================================
+async function cargarRecepciones() {
+  const el = document.getElementById('contenido-recepcion');
+  if (!el) return;
+  try {
+    const d = await get('/api/recepcion/?estado=ABIERTA');
+    if (!d.recepciones || !d.recepciones.length) {
+      el.innerHTML = `<div style="text-align:center;padding:40px;">
+        <div style="font-size:50px;">✓</div>
+        <div style="font-size:22px;font-weight:700;margin-top:12px;">Sin recepciones</div>
+        <button onclick="cargarRecepciones()" style="margin-top:20px;padding:12px 24px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Actualizar</button>
+      </div>`;
+      return;
+    }
+    el.innerHTML = d.recepciones.map(r => `
+      <div class="rec-card">
+        <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
+        <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'}</div>
+        <div style="margin-top:10px;display:flex;justify-content:space-between;">
+          <span class="badge badge-blue">${r.estado}</span>
+          <span style="font-size:12px;color:#555;">${r.total_items} ítems</span>
+        </div>
+        <button onclick="iniciarRec(${r.id})" style="width:100%;margin-top:10px;padding:12px;font-size:15px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
+          Iniciar recepción
+        </button>
+      </div>`).join('');
+  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
+}
+
+async function iniciarRec(id) {
+  try {
+    await put('/api/recepcion/' + id + '/iniciar');
+    alerta('Recepción iniciada', 'exito');
+    cargarRecepciones();
+  } catch (e) { alerta('Error', 'error'); }
+}
+
+// ============================================
+// UI HELPERS
+// ============================================
+function pantalla(id) {
   ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion'].forEach(p => {
     const el = document.getElementById(p);
     if (el) el.style.display = p === id ? 'block' : 'none';
   });
 }
 
-function mostrarAlerta(mensaje, tipo = 'info') {
-  const colores = { exito: '#16a34a', error: '#dc2626', advertencia: '#d97706', info: '#2563eb' };
-  const alerta = document.createElement('div');
-  alerta.style.cssText = `position:fixed;top:20px;left:50%;transform:translateX(-50%);background:${colores[tipo]};color:#fff;padding:16px 24px;border-radius:12px;font-size:18px;font-weight:600;z-index:9999;max-width:90%;text-align:center;animation:fadeIn 0.2s ease;`;
-  alerta.textContent = mensaje;
-  document.body.appendChild(alerta);
-  setTimeout(() => alerta.remove(), 2500);
+function set(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val ?? '—';
 }
 
-function mostrarFlash() {
-  const flash = document.createElement('div');
-  flash.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.3);z-index:9998;pointer-events:none;animation:flash 0.15s ease;';
-  document.body.appendChild(flash);
-  setTimeout(() => flash.remove(), 150);
+function alerta(msg, tipo = 'info') {
+  const c = { exito: '#16a34a', error: '#dc2626', advertencia: '#d97706', info: '#2563eb' }[tipo] || '#2563eb';
+  const d = document.createElement('div');
+  d.style.cssText = `position:fixed;top:20px;left:50%;transform:translateX(-50%);background:${c};color:#fff;padding:14px 22px;border-radius:12px;font-size:17px;font-weight:600;z-index:9999;max-width:90%;text-align:center;`;
+  d.textContent = msg;
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 2500);
 }
 
-function vibrar() { if (navigator.vibrate) navigator.vibrate(50); }
-
-function cerrarSesion() {
-  detenerRefresh();
-  TOKEN = null; OPERARIO = null;
-  localStorage.removeItem('wms_token');
-  localStorage.removeItem('wms_operario');
-  mostrarPantalla('pantalla-login');
+function flash() {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.25);z-index:9998;pointer-events:none;';
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 120);
 }
+
+function vibrar() { if (navigator.vibrate) navigator.vibrate(40); }

@@ -216,8 +216,3 @@ def mis_tareas_activas():
         'tareas': [t.to_dict() for t in tareas],
         'total': len(tareas)
     }), 200
-```
-
-Necesitas agregar el import de `datetime` al inicio del archivo. Ejecuta:
-```
-head -5 app/routes/picking.py

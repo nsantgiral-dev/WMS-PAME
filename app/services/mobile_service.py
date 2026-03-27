@@ -2,6 +2,7 @@
 Servicio Mobile — API optimizada para tablets y celulares de operarios.
 Dispensador automático de tareas — el operario pide trabajo, el sistema asigna.
 """
+
 import logging
 from datetime import datetime
 from app.extensions import db
