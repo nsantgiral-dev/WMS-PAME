@@ -33,15 +33,19 @@ function mostrarPantallaSegunRol(rol) {
   const rolesAdmin = ['admin', 'gerente', 'jefe_almacen', 'supervisor'];
   const rolesRecepcion = ['recepcionista'];
 
+  detenerRefresh();
+
   if (rolesAdmin.includes(rol)) {
     mostrarPantalla('pantalla-admin');
     cargarDashboardAdmin();
+    iniciarAutoRefreshAdmin();
   } else if (rolesRecepcion.includes(rol)) {
     mostrarPantalla('pantalla-recepcion');
     cargarRecepcionesActivas();
   } else {
     mostrarPantalla('pantalla-operario');
     cargarTareaActual();
+    iniciarAutoRefreshOperario();
   }
 }
 
@@ -234,10 +238,43 @@ async function cargarDashboardAdmin() {
 
     // Movimientos recientes
     renderizarMovimientos(data.movimientos_recientes.movimientos);
+    // Auto-refresh cada 30 segundos
+    setTimeout(() => {
+      if (document.getElementById('pantalla-admin').style.display !== 'none') {
+        cargarDashboardAdmin();
+      }
+    }, 30000);
 
   } catch (e) {
     mostrarAlerta('Error cargando dashboard', 'error');
   }
+}
+// ============================================
+// AUTO-REFRESH — TIEMPO REAL
+// ============================================
+let REFRESH_INTERVAL_ADMIN = null;
+let REFRESH_INTERVAL_OPERARIO = null;
+
+function iniciarAutoRefreshAdmin() {
+  if (REFRESH_INTERVAL_ADMIN) clearInterval(REFRESH_INTERVAL_ADMIN);
+  REFRESH_INTERVAL_ADMIN = setInterval(() => {
+    if (TAB_ACTUAL === 'tab-dashboard') cargarDashboardAdmin();
+    else if (TAB_ACTUAL === 'tab-pedidos') cargarPedidos();
+    else if (TAB_ACTUAL === 'tab-operarios') cargarProductividad();
+    else if (TAB_ACTUAL === 'tab-stock') cargarAlertasStock();
+  }, 30000); // cada 30 segundos
+}
+
+function iniciarAutoRefreshOperario() {
+  if (REFRESH_INTERVAL_OPERARIO) clearInterval(REFRESH_INTERVAL_OPERARIO);
+  REFRESH_INTERVAL_OPERARIO = setInterval(() => {
+    if (!TAREA_ACTUAL) cargarTareaActual();
+  }, 5000); // cada 5 segundos
+}
+
+function detenerRefresh() {
+  if (REFRESH_INTERVAL_ADMIN) clearInterval(REFRESH_INTERVAL_ADMIN);
+  if (REFRESH_INTERVAL_OPERARIO) clearInterval(REFRESH_INTERVAL_OPERARIO);
 }
 
 function setText(id, val) {
@@ -332,26 +369,149 @@ async function cargarPedidos() {
   if (!el) return;
   try {
     const data = await apiGet('/api/picking/?estado=PENDIENTE&per_page=20');
+
+    // Botón crear picking
+    const btnCrear = `
+      <div style="margin-bottom:12px;">
+        <button onclick="mostrarFormCrearPicking()"
+                style="width:100%;padding:14px;font-size:16px;font-weight:700;
+                       background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">
+          + Crear tarea de picking
+        </button>
+      </div>
+      <div id="form-crear-picking" style="display:none;"></div>`;
+
     if (!data.tareas || data.tareas.length === 0) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos pendientes ✓</div>';
+      el.innerHTML = btnCrear + '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos pendientes ✓</div>';
       return;
     }
-    el.innerHTML = data.tareas.map(t => `
+
+    const filas = data.tareas.map(t => `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
             <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
             <div style="font-size:12px;color:#666;margin-top:2px;">${t.codigo} · ${t.ubicacion_codigo || '—'}</div>
+            <div style="font-size:11px;color:#444;margin-top:2px;">Operario: ${t.operario_id ? '#'+t.operario_id : 'Sin asignar'}</div>
           </div>
           <div style="text-align:right;">
-            <span class="badge badge-yellow">${t.estado}</span>
-            <div style="font-size:18px;font-weight:800;margin-top:4px;">${t.cantidad_solicitada}</div>
+            <span class="badge ${t.estado === 'EN_PROCESO' ? 'badge-blue' : 'badge-yellow'}">${t.estado}</span>
+            <div style="font-size:24px;font-weight:800;margin-top:4px;">${t.cantidad_recogida}/${t.cantidad_solicitada}</div>
             <div style="font-size:10px;color:#555;">unidades</div>
           </div>
         </div>
       </div>`).join('');
+
+    el.innerHTML = btnCrear + filas;
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
+  }
+}
+
+async function mostrarFormCrearPicking() {
+  const form = document.getElementById('form-crear-picking');
+  if (!form) return;
+
+  // Cargar productos disponibles
+  let opcionesProductos = '<option value="">Selecciona producto</option>';
+  try {
+    const data = await apiGet('/api/productos/');
+    if (data.productos) {
+      opcionesProductos += data.productos.map(p =>
+        `<option value="${p.id}" data-codigo="${p.codigo}">${p.codigo} — ${p.nombre}</option>`
+      ).join('');
+    }
+  } catch (e) {}
+
+  // Cargar ubicaciones
+  let opcionesUbicaciones = '<option value="">Selecciona ubicación</option>';
+  try {
+    const data = await apiGet('/api/almacenes/1/ubicaciones');
+    if (data.ubicaciones) {
+      opcionesUbicaciones += data.ubicaciones
+        .filter(u => u.tipo !== 'cross_dock')
+        .map(u => `<option value="${u.id}">${u.codigo}</option>`)
+        .join('');
+    }
+  } catch (e) {}
+
+  form.style.display = 'block';
+  form.innerHTML = `
+    <div style="background:#111;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #333;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:12px;">Nueva tarea de picking</div>
+
+      <div style="margin-bottom:10px;">
+        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Producto</div>
+        <select id="pick-producto" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
+          ${opcionesProductos}
+        </select>
+      </div>
+
+      <div style="margin-bottom:10px;">
+        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Ubicación</div>
+        <select id="pick-ubicacion" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
+          ${opcionesUbicaciones}
+        </select>
+      </div>
+
+      <div style="margin-bottom:10px;">
+        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Cantidad</div>
+        <input id="pick-cantidad" type="number" min="1" value="10"
+               style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:20px;font-weight:700;">
+      </div>
+
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Referencia pedido Siesa</div>
+        <input id="pick-referencia" type="text" placeholder="PV-2024-001"
+               style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
+      </div>
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="crearPickingDesdeAdmin()"
+                style="flex:1;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
+          Crear tarea
+        </button>
+        <button onclick="document.getElementById('form-crear-picking').style.display='none'"
+                style="padding:14px 20px;font-size:16px;background:#222;color:#fff;border:none;border-radius:10px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>`;
+}
+
+async function crearPickingDesdeAdmin() {
+  const productoId = document.getElementById('pick-producto').value;
+  const ubicacionId = document.getElementById('pick-ubicacion').value;
+  const cantidad = parseInt(document.getElementById('pick-cantidad').value);
+  const referencia = document.getElementById('pick-referencia').value;
+
+  if (!productoId || !ubicacionId || !cantidad) {
+    mostrarAlerta('Completa todos los campos', 'error');
+    return;
+  }
+
+  try {
+    const resp = await apiPost('/api/picking/crear', {
+      producto_id: parseInt(productoId),
+      ubicacion_id: parseInt(ubicacionId),
+      almacen_id: 1,
+      cantidad_solicitada: cantidad,
+      referencia_documento: referencia || 'MANUAL',
+      tipo_documento: 'PEDIDO_VENTA',
+      prioridad: 1
+    });
+
+    if (resp.error) {
+      mostrarAlerta(resp.error, 'error');
+      return;
+    }
+
+    mostrarAlerta('✓ Tarea de picking creada — el operario la verá en segundos', 'exito');
+    document.getElementById('form-crear-picking').style.display = 'none';
+    setTimeout(() => cargarPedidos(), 1000);
+
+  } catch (e) {
+    mostrarAlerta('Error creando picking', 'error');
   }
 }
 
@@ -505,6 +665,14 @@ async function cargarTareaActual() {
     }
     TAREA_ACTUAL = data;
     renderizarTarea(data);
+    // Auto-refresh cada 5 segundos si no hay tarea activa
+    if (data.sin_tareas) {
+      setTimeout(() => {
+        if (document.getElementById('pantalla-operario').style.display !== 'none') {
+          cargarTareaActual();
+        }
+      }, 5000);
+    }
   } catch (e) {
     mostrarAlerta('Error cargando tareas', 'error');
   }
@@ -685,6 +853,7 @@ function mostrarFlash() {
 function vibrar() { if (navigator.vibrate) navigator.vibrate(50); }
 
 function cerrarSesion() {
+  detenerRefresh();
   TOKEN = null; OPERARIO = null;
   localStorage.removeItem('wms_token');
   localStorage.removeItem('wms_operario');
