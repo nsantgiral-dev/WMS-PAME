@@ -10,15 +10,13 @@ let HTML5QR = null;
 let CHART_ACTIVIDAD = null;
 let TAB_ACTUAL = 'tab-dashboard';
 let ADMIN_ALMACEN_ID = 1;
+let REFRESH_INTERVAL_ADMIN = null;
+let REFRESH_INTERVAL_OPERARIO = null;
 
-// ============================================
-// INICIALIZACIÓN
-// ============================================
 document.addEventListener('DOMContentLoaded', () => {
   registrarServiceWorker();
   monitorearConexion();
   inicializarScannerLaser();
-
   if (TOKEN && OPERARIO) {
     mostrarPantallaSegunRol(OPERARIO.rol);
   } else {
@@ -26,15 +24,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// ============================================
-// ROLES — pantalla según quien entra
-// ============================================
 function mostrarPantallaSegunRol(rol) {
   const rolesAdmin = ['admin', 'gerente', 'jefe_almacen', 'supervisor'];
   const rolesRecepcion = ['recepcionista'];
-
   detenerRefresh();
-
   if (rolesAdmin.includes(rol)) {
     mostrarPantalla('pantalla-admin');
     cargarDashboardAdmin();
@@ -49,9 +42,6 @@ function mostrarPantallaSegunRol(rol) {
   }
 }
 
-// ============================================
-// SERVICE WORKER
-// ============================================
 async function registrarServiceWorker() {
   if ('serviceWorker' in navigator) {
     try {
@@ -63,9 +53,6 @@ async function registrarServiceWorker() {
   }
 }
 
-// ============================================
-// SCANNER LÁSER
-// ============================================
 function inicializarScannerLaser() {
   const input = document.getElementById('scanner-input');
   if (!input) return;
@@ -76,9 +63,13 @@ function inicializarScannerLaser() {
       activo.id === 'login-email' ||
       activo.id === 'login-password' ||
       activo.tagName === 'INPUT' ||
-      activo.tagName === 'TEXTAREA'
+      activo.tagName === 'TEXTAREA' ||
+      activo.tagName === 'SELECT'
     );
-    if (!CAMARA_ACTIVA && !esInputUsuario && activo !== input) {
+    const hayFormulario = document.getElementById('form-crear-picking') &&
+      document.getElementById('form-crear-picking').style.display !== 'none';
+
+    if (!CAMARA_ACTIVA && !esInputUsuario && !hayFormulario && activo !== input) {
       input.focus();
     }
   };
@@ -101,9 +92,6 @@ function inicializarScannerLaser() {
   });
 }
 
-// ============================================
-// CONEXIÓN Y OFFLINE
-// ============================================
 function monitorearConexion() {
   const actualizar = () => {
     const online = navigator.onLine;
@@ -139,9 +127,6 @@ function guardarEnColaOffline(datos) {
   mostrarAlerta('Sin WiFi — guardado para sincronizar después', 'advertencia');
 }
 
-// ============================================
-// API
-// ============================================
 async function apiPost(endpoint, body) {
   const resp = await fetch(API_BASE + endpoint, {
     method: 'POST',
@@ -170,18 +155,13 @@ async function apiPut(endpoint, body = {}) {
   return resp.json();
 }
 
-// ============================================
-// LOGIN
-// ============================================
 async function login() {
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value.trim();
   if (!email || !password) { mostrarAlerta('Ingresa usuario y contraseña', 'error'); return; }
-
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
   btn.disabled = true;
-
   try {
     const resp = await fetch(API_BASE + '/api/auth/login', {
       method: 'POST',
@@ -189,7 +169,6 @@ async function login() {
       body: JSON.stringify({ email, password })
     });
     const data = await resp.json();
-
     if (resp.ok) {
       TOKEN = data.token;
       OPERARIO = data.usuario;
@@ -219,57 +198,39 @@ function actualizarNombresUI(op) {
   });
 }
 
-// ============================================
-// DASHBOARD ADMIN
-// ============================================
 async function cargarDashboardAdmin() {
   try {
     const data = await apiGet(`/api/dashboard/resumen-completo?almacen_id=${ADMIN_ALMACEN_ID}`);
-
-    // KPIs
     const k = data.kpis;
     setText('kpi-pick-pend', k.picking.total_activo);
     setText('kpi-pack-hoy', k.packing.facturas_generadas_hoy);
     setText('kpi-rec-hoy', k.recepcion.confirmadas_hoy);
     setText('kpi-alertas', k.alertas.productos_bajo_minimo);
-
-    // Gráfica de actividad
     renderizarGraficaActividad(k);
-
-    // Movimientos recientes
     renderizarMovimientos(data.movimientos_recientes.movimientos);
-    // Auto-refresh cada 30 segundos
-    setTimeout(() => {
-      if (document.getElementById('pantalla-admin').style.display !== 'none') {
-        cargarDashboardAdmin();
-      }
-    }, 30000);
-
   } catch (e) {
     mostrarAlerta('Error cargando dashboard', 'error');
   }
 }
-// ============================================
-// AUTO-REFRESH — TIEMPO REAL
-// ============================================
-let REFRESH_INTERVAL_ADMIN = null;
-let REFRESH_INTERVAL_OPERARIO = null;
 
 function iniciarAutoRefreshAdmin() {
   if (REFRESH_INTERVAL_ADMIN) clearInterval(REFRESH_INTERVAL_ADMIN);
   REFRESH_INTERVAL_ADMIN = setInterval(() => {
+    const formAbierto = document.getElementById('form-crear-picking') &&
+                        document.getElementById('form-crear-picking').style.display !== 'none';
+    if (formAbierto) return;
     if (TAB_ACTUAL === 'tab-dashboard') cargarDashboardAdmin();
     else if (TAB_ACTUAL === 'tab-pedidos') cargarPedidos();
     else if (TAB_ACTUAL === 'tab-operarios') cargarProductividad();
     else if (TAB_ACTUAL === 'tab-stock') cargarAlertasStock();
-  }, 30000); // cada 30 segundos
+  }, 30000);
 }
 
 function iniciarAutoRefreshOperario() {
   if (REFRESH_INTERVAL_OPERARIO) clearInterval(REFRESH_INTERVAL_OPERARIO);
   REFRESH_INTERVAL_OPERARIO = setInterval(() => {
     if (!TAREA_ACTUAL) cargarTareaActual();
-  }, 5000); // cada 5 segundos
+  }, 5000);
 }
 
 function detenerRefresh() {
@@ -285,9 +246,7 @@ function setText(id, val) {
 function renderizarGraficaActividad(kpis) {
   const ctx = document.getElementById('chart-actividad');
   if (!ctx) return;
-
   if (CHART_ACTIVIDAD) CHART_ACTIVIDAD.destroy();
-
   CHART_ACTIVIDAD = new Chart(ctx, {
     type: 'bar',
     data: {
@@ -319,45 +278,35 @@ function renderizarGraficaActividad(kpis) {
 function renderizarMovimientos(movimientos) {
   const el = document.getElementById('movimientos-recientes');
   if (!el) return;
-
   if (!movimientos || movimientos.length === 0) {
     el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:#555;font-size:13px;padding:8px 0;">Sin movimientos hoy</div>';
     return;
   }
-
   const filas = movimientos.slice(0, 8).map(m => {
     const color = m.tipo === 'ENTRADA' ? '#4ade80' : '#f87171';
     const signo = m.tipo === 'ENTRADA' ? '+' : '-';
     const fecha = new Date(m.fecha).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
-    return `
-      <div class="tabla-fila">
-        <div>
-          <div class="tabla-nombre">${m.tipo}</div>
-          <div style="font-size:11px;color:#555;">${fecha} · Doc: ${m.numero_documento || '—'}</div>
-        </div>
-        <div style="color:${color};font-weight:700;">${signo}${m.cantidad}</div>
-      </div>`;
+    return `<div class="tabla-fila">
+      <div>
+        <div class="tabla-nombre">${m.tipo}</div>
+        <div style="font-size:11px;color:#555;">${fecha} · Doc: ${m.numero_documento || '—'}</div>
+      </div>
+      <div style="color:${color};font-weight:700;">${signo}${m.cantidad}</div>
+    </div>`;
   }).join('');
-
   el.innerHTML = `<div class="tabla-titulo">Últimos movimientos</div>${filas}`;
 }
 
-// ============================================
-// TABS ADMIN
-// ============================================
 function mostrarTab(tabId) {
   ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.style.display = id === tabId ? 'block' : 'none';
   });
-
   document.querySelectorAll('.nav-tab').forEach((tab, i) => {
     const tabs = ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'];
     tab.classList.toggle('active', tabs[i] === tabId);
   });
-
   TAB_ACTUAL = tabId;
-
   if (tabId === 'tab-pedidos') cargarPedidos();
   else if (tabId === 'tab-operarios') cargarProductividad();
   else if (tabId === 'tab-stock') cargarAlertasStock();
@@ -369,23 +318,17 @@ async function cargarPedidos() {
   if (!el) return;
   try {
     const data = await apiGet('/api/picking/?estado=PENDIENTE&per_page=20');
-
-    // Botón crear picking
     const btnCrear = `
       <div style="margin-bottom:12px;">
-        <button onclick="mostrarFormCrearPicking()"
-                style="width:100%;padding:14px;font-size:16px;font-weight:700;
-                       background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">
+        <button onclick="mostrarFormCrearPicking()" style="width:100%;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">
           + Crear tarea de picking
         </button>
       </div>
       <div id="form-crear-picking" style="display:none;"></div>`;
-
     if (!data.tareas || data.tareas.length === 0) {
       el.innerHTML = btnCrear + '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos pendientes ✓</div>';
       return;
     }
-
     const filas = data.tareas.map(t => `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
@@ -401,7 +344,6 @@ async function cargarPedidos() {
           </div>
         </div>
       </div>`).join('');
-
     el.innerHTML = btnCrear + filas;
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
@@ -411,70 +353,50 @@ async function cargarPedidos() {
 async function mostrarFormCrearPicking() {
   const form = document.getElementById('form-crear-picking');
   if (!form) return;
-
-  // Cargar productos disponibles
   let opcionesProductos = '<option value="">Selecciona producto</option>';
   try {
     const data = await apiGet('/api/productos/');
-    if (data.productos) {
-      opcionesProductos += data.productos.map(p =>
-        `<option value="${p.id}" data-codigo="${p.codigo}">${p.codigo} — ${p.nombre}</option>`
+    const prods = data.productos || data.items || data || [];
+    if (Array.isArray(prods)) {
+      opcionesProductos += prods.map(p =>
+        `<option value="${p.id}">${p.codigo} — ${p.nombre} (stock: ${p.stock_total})</option>`
       ).join('');
     }
-  } catch (e) {}
+  } catch (e) { console.error('Error productos:', e); }
 
-  // Cargar ubicaciones
   let opcionesUbicaciones = '<option value="">Selecciona ubicación</option>';
   try {
     const data = await apiGet('/api/almacenes/1/ubicaciones');
-    if (data.ubicaciones) {
-      opcionesUbicaciones += data.ubicaciones
-        .filter(u => u.tipo !== 'cross_dock')
-        .map(u => `<option value="${u.id}">${u.codigo}</option>`)
-        .join('');
-    }
-  } catch (e) {}
+    const ubs = Array.isArray(data) ? data : (data.ubicaciones || []);
+    opcionesUbicaciones += ubs
+      .filter(u => u.tipo !== 'cross_dock')
+      .map(u => `<option value="${u.id}">${u.codigo} — Zona ${u.zona}</option>`)
+      .join('');
+  } catch (e) { console.error('Error ubicaciones:', e); }
 
   form.style.display = 'block';
   form.innerHTML = `
     <div style="background:#111;border-radius:12px;padding:16px;margin-bottom:12px;border:1px solid #333;">
       <div style="font-size:15px;font-weight:700;margin-bottom:12px;">Nueva tarea de picking</div>
-
       <div style="margin-bottom:10px;">
         <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Producto</div>
-        <select id="pick-producto" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
-          ${opcionesProductos}
-        </select>
+        <select id="pick-producto" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">${opcionesProductos}</select>
       </div>
-
       <div style="margin-bottom:10px;">
         <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Ubicación</div>
-        <select id="pick-ubicacion" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
-          ${opcionesUbicaciones}
-        </select>
+        <select id="pick-ubicacion" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">${opcionesUbicaciones}</select>
       </div>
-
       <div style="margin-bottom:10px;">
         <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Cantidad</div>
-        <input id="pick-cantidad" type="number" min="1" value="10"
-               style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:20px;font-weight:700;">
+        <input id="pick-cantidad" type="number" min="1" value="10" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:20px;font-weight:700;">
       </div>
-
       <div style="margin-bottom:12px;">
         <div style="font-size:11px;color:#666;margin-bottom:4px;text-transform:uppercase;">Referencia pedido Siesa</div>
-        <input id="pick-referencia" type="text" placeholder="PV-2024-001"
-               style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
+        <input id="pick-referencia" type="text" value="PV-2024-001" style="width:100%;padding:12px;background:#000;color:#fff;border:1px solid #333;border-radius:8px;font-size:14px;">
       </div>
-
       <div style="display:flex;gap:8px;">
-        <button onclick="crearPickingDesdeAdmin()"
-                style="flex:1;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
-          Crear tarea
-        </button>
-        <button onclick="document.getElementById('form-crear-picking').style.display='none'"
-                style="padding:14px 20px;font-size:16px;background:#222;color:#fff;border:none;border-radius:10px;cursor:pointer;">
-          Cancelar
-        </button>
+        <button onclick="crearPickingDesdeAdmin()" style="flex:1;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Crear tarea</button>
+        <button onclick="document.getElementById('form-crear-picking').style.display='none'" style="padding:14px 20px;font-size:16px;background:#222;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cancelar</button>
       </div>
     </div>`;
 }
@@ -483,33 +405,27 @@ async function crearPickingDesdeAdmin() {
   const productoId = document.getElementById('pick-producto').value;
   const ubicacionId = document.getElementById('pick-ubicacion').value;
   const cantidad = parseInt(document.getElementById('pick-cantidad').value);
-  const referencia = document.getElementById('pick-referencia').value;
+  const referenciaEl = document.getElementById('pick-referencia');
+  const referencia = referenciaEl ? referenciaEl.value.trim() || 'MANUAL' : 'MANUAL';
 
-  if (!productoId || !ubicacionId || !cantidad) {
-    mostrarAlerta('Completa todos los campos', 'error');
-    return;
-  }
+  if (!productoId || productoId === '') { mostrarAlerta('Selecciona un producto', 'error'); return; }
+  if (!ubicacionId || ubicacionId === '') { mostrarAlerta('Selecciona una ubicación', 'error'); return; }
+  if (!cantidad || cantidad < 1) { mostrarAlerta('Ingresa una cantidad válida', 'error'); return; }
 
   try {
     const resp = await apiPost('/api/picking/crear', {
       producto_id: parseInt(productoId),
       ubicacion_id: parseInt(ubicacionId),
       almacen_id: 1,
-      cantidad_solicitada: cantidad,
-      referencia_documento: referencia || 'MANUAL',
+      cantidad: cantidad,
+      referencia_documento: referencia,
       tipo_documento: 'PEDIDO_VENTA',
       prioridad: 1
     });
-
-    if (resp.error) {
-      mostrarAlerta(resp.error, 'error');
-      return;
-    }
-
+    if (resp.error) { mostrarAlerta(resp.error, 'error'); return; }
     mostrarAlerta('✓ Tarea de picking creada — el operario la verá en segundos', 'exito');
     document.getElementById('form-crear-picking').style.display = 'none';
     setTimeout(() => cargarPedidos(), 1000);
-
   } catch (e) {
     mostrarAlerta('Error creando picking', 'error');
   }
@@ -530,9 +446,7 @@ async function cargarProductividad() {
           <div>
             <div style="font-size:14px;font-weight:600;">${op.nombre}</div>
             <div style="font-size:11px;color:#555;margin-top:2px;">${op.rol}</div>
-            <div style="font-size:11px;color:#444;margin-top:4px;">
-              Pick: ${op.pickings_completados} · Pack: ${op.packings_completados} · Conteos: ${op.conteos_completados}
-            </div>
+            <div style="font-size:11px;color:#444;margin-top:4px;">Pick: ${op.pickings_completados} · Pack: ${op.packings_completados} · Conteos: ${op.conteos_completados}</div>
           </div>
           <div style="text-align:right;">
             <div style="font-size:28px;font-weight:800;color:${i === 0 ? '#4ade80' : '#fff'};">${op.total_tareas}</div>
@@ -577,9 +491,8 @@ async function cargarEstadoConnekta() {
   const el = document.getElementById('estado-connekta');
   if (!el) return;
   try {
-    const token = TOKEN;
     const resp = await fetch(API_BASE + '/api/packing/connekta/estado', {
-      headers: { 'Authorization': `Bearer ${token}` }
+      headers: { 'Authorization': `Bearer ${TOKEN}` }
     });
     const data = await resp.json();
     const color = data.modo_simulacion ? '#facc15' : '#4ade80';
@@ -602,9 +515,6 @@ async function cargarEstadoConnekta() {
   }
 }
 
-// ============================================
-// RECEPCIÓN
-// ============================================
 async function cargarRecepcionesActivas() {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
@@ -628,9 +538,7 @@ async function cargarRecepcionesActivas() {
           <span class="badge badge-blue">${r.estado}</span>
           <span style="font-size:12px;color:#555;">${r.total_items} ítems</span>
         </div>
-        <button onclick="iniciarRecepcion(${r.id})" style="width:100%;margin-top:12px;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
-          Iniciar recepción
-        </button>
+        <button onclick="iniciarRecepcion(${r.id})" style="width:100%;margin-top:12px;padding:14px;font-size:16px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Iniciar recepción</button>
       </div>`).join('');
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;">Error cargando recepciones</div>';
@@ -647,9 +555,6 @@ async function iniciarRecepcion(id) {
   }
 }
 
-// ============================================
-// OPERARIO — TAREAS
-// ============================================
 async function cargarTareaActual() {
   try {
     const data = await apiGet('/api/mobile/tarea-actual');
@@ -665,14 +570,6 @@ async function cargarTareaActual() {
     }
     TAREA_ACTUAL = data;
     renderizarTarea(data);
-    // Auto-refresh cada 5 segundos si no hay tarea activa
-    if (data.sin_tareas) {
-      setTimeout(() => {
-        if (document.getElementById('pantalla-operario').style.display !== 'none') {
-          cargarTareaActual();
-        }
-      }, 5000);
-    }
   } catch (e) {
     mostrarAlerta('Error cargando tareas', 'error');
   }
@@ -682,7 +579,6 @@ function renderizarTarea(tarea) {
   const colores = { 'PICKING': '#1d4ed8', 'PACKING': '#7c3aed', 'CONTEO': '#b45309' };
   const color = colores[tarea.tipo] || '#000';
   const esConteo = tarea.tipo === 'CONTEO';
-
   document.getElementById('contenido-tarea').innerHTML = `
     <div style="padding:16px;">
       <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;">${tarea.tipo}</div>
@@ -722,9 +618,6 @@ function renderizarTarea(tarea) {
     </div>`;
 }
 
-// ============================================
-// ESCANEO CON CÁMARA
-// ============================================
 async function toggleCamara() {
   const container = document.getElementById('camara-container');
   if (CAMARA_ACTIVA) {
@@ -761,9 +654,6 @@ function cargarScript(src) {
   });
 }
 
-// ============================================
-// PROCESAR CÓDIGO ESCANEADO
-// ============================================
 async function procesarCodigoEscaneado(codigo) {
   if (!TAREA_ACTUAL) return;
   vibrar();
@@ -799,9 +689,6 @@ async function procesarCodigoEscaneado(codigo) {
   }
 }
 
-// ============================================
-// CONFIRMAR TAREA
-// ============================================
 async function confirmarTarea() {
   if (!TAREA_ACTUAL) return;
   const btn = document.getElementById('btn-confirmar');
@@ -824,9 +711,6 @@ async function confirmarTarea() {
   }
 }
 
-// ============================================
-// UI HELPERS
-// ============================================
 function mostrarPantalla(id) {
   ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion'].forEach(p => {
     const el = document.getElementById(p);

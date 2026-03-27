@@ -1,9 +1,10 @@
 """
 Servicio Mobile — API optimizada para tablets y celulares de operarios.
-Soporta escaneo por cámara (ahora) y láser Bluetooth (después).
+Dispensador automático de tareas — el operario pide trabajo, el sistema asigna.
 """
 import logging
 from datetime import datetime
+from app.extensions import db
 from app.models.picking import TareaPicking
 from app.models.packing import TareaPacking, ItemPacking
 from app.models.conteo import SesionConteo
@@ -94,12 +95,69 @@ class MobileService:
 
     @staticmethod
     def get_tarea_actual(operario_id: int):
-        """La tarea más prioritaria del operario."""
-        resultado = MobileService.get_tareas_operario(operario_id)
-        tareas = resultado['tareas']
-        if not tareas:
+        """
+        Dispensador automático — el operario pide trabajo y el sistema lo asigna.
+        Si ya tiene una tarea en proceso la devuelve.
+        Si no, toma la siguiente de la cola global.
+        """
+        # Verificar si ya tiene tarea activa
+        tarea_activa = TareaPicking.query.filter_by(
+            operario_id=operario_id,
+            estado='EN_PROCESO'
+        ).first()
+
+        if tarea_activa:
+            return {
+                'id': tarea_activa.id,
+                'tipo': 'PICKING',
+                'prioridad': tarea_activa.prioridad,
+                'ubicacion': tarea_activa.ubicacion.codigo if tarea_activa.ubicacion else '',
+                'producto_codigo': tarea_activa.producto.codigo if tarea_activa.producto else '',
+                'producto_nombre': tarea_activa.producto.nombre if tarea_activa.producto else '',
+                'cantidad_requerida': tarea_activa.cantidad_solicitada,
+                'cantidad_escaneada': tarea_activa.cantidad_recogida,
+                'estado': tarea_activa.estado,
+                'referencia': tarea_activa.referencia_documento,
+                'lote': tarea_activa.lote
+            }
+
+        # Tomar siguiente tarea de la cola global — más prioritaria y más antigua
+        tarea = TareaPicking.query.filter_by(
+            estado='PENDIENTE',
+            operario_id=None
+        ).order_by(
+            TareaPicking.prioridad.desc(),
+            TareaPicking.fecha_creacion.asc()
+        ).first()
+
+        if not tarea:
+            # Verificar packing o conteo pendiente
+            resultado = MobileService.get_tareas_operario(operario_id)
+            if resultado['tareas']:
+                return resultado['tareas'][0]
             return None
-        return tareas[0]
+
+        # Asignar automáticamente al operario
+        tarea.operario_id = operario_id
+        tarea.estado = 'EN_PROCESO'
+        tarea.fecha_inicio = datetime.utcnow()
+        db.session.commit()
+
+        logger.info(f'[MOBILE] Tarea {tarea.codigo} asignada automáticamente a operario {operario_id}')
+
+        return {
+            'id': tarea.id,
+            'tipo': 'PICKING',
+            'prioridad': tarea.prioridad,
+            'ubicacion': tarea.ubicacion.codigo if tarea.ubicacion else '',
+            'producto_codigo': tarea.producto.codigo if tarea.producto else '',
+            'producto_nombre': tarea.producto.nombre if tarea.producto else '',
+            'cantidad_requerida': tarea.cantidad_solicitada,
+            'cantidad_escaneada': tarea.cantidad_recogida,
+            'estado': tarea.estado,
+            'referencia': tarea.referencia_documento,
+            'lote': tarea.lote
+        }
 
     @staticmethod
     def procesar_escaneo(operario_id: int, tarea_id: int,
@@ -113,7 +171,6 @@ class MobileService:
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 
-            # Verificar que el código escaneado es el producto correcto
             producto = tarea.producto
             if not producto:
                 raise ValueError('Producto no encontrado en la tarea')
@@ -141,9 +198,7 @@ class MobileService:
                 tarea.operario_id = operario_id
                 tarea.fecha_inicio = datetime.utcnow()
 
-            from app.extensions import db
             db.session.commit()
-
             completado = nueva_cantidad >= tarea.cantidad_solicitada
 
             return {
@@ -162,11 +217,7 @@ class MobileService:
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 
-            # Buscar el ítem por código de producto
-            producto = Producto.query.filter(
-                Producto.codigo == codigo
-            ).first()
-
+            producto = Producto.query.filter_by(codigo=codigo).first()
             if not producto:
                 raise ValueError(f'Producto {codigo} no encontrado')
 
@@ -180,8 +231,6 @@ class MobileService:
 
             item.cantidad_real += cantidad
             item.verificado = item.cantidad_real >= item.cantidad_esperada
-
-            from app.extensions import db
             db.session.commit()
 
             todos_verificados = all(i.verificado for i in tarea.items)
@@ -209,7 +258,6 @@ class MobileService:
             if codigo not in [producto.codigo, producto.codigo_siesa or '']:
                 raise ValueError(f'Producto incorrecto — escanea {producto.codigo}')
 
-            from app.extensions import db
             if not sesion.cantidad_fisica:
                 sesion.cantidad_fisica = 0
             sesion.cantidad_fisica += cantidad

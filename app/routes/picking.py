@@ -1,3 +1,5 @@
+from datetime import datetime
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
@@ -139,3 +141,83 @@ def calcular_fefo():
         almacen_id=data['almacen_id']
     )
     return jsonify(resultado), 200
+@picking_bp.route('/siguiente-tarea', methods=['GET'])
+@jwt_required()
+def siguiente_tarea():
+    """
+    Dispensador automático de tareas — el operario pide trabajo, el sistema lo asigna.
+    El operario nunca espera que alguien le asigne manualmente.
+    """
+    operario_id = int(get_jwt_identity())
+
+    # Buscar si ya tiene una tarea en proceso
+    tarea_activa = TareaPicking.query.filter_by(
+        operario_id=operario_id,
+        estado='EN_PROCESO'
+    ).first()
+
+    if tarea_activa:
+        return jsonify({
+            'tarea': tarea_activa.to_dict(),
+            'mensaje': 'Tienes una tarea en proceso'
+        }), 200
+
+    # Tomar la tarea más prioritaria de la cola global
+    # Orden: prioridad DESC, fecha_creacion ASC (más antigua primero)
+    tarea = TareaPicking.query.filter_by(
+        estado='PENDIENTE',
+        operario_id=None
+    ).order_by(
+        TareaPicking.prioridad.desc(),
+        TareaPicking.fecha_creacion.asc()
+    ).with_for_update(skip_locked=True).first()
+
+    if not tarea:
+        # Buscar tareas pendientes sin importar si tienen operario
+        tarea = TareaPicking.query.filter_by(
+            estado='PENDIENTE'
+        ).order_by(
+            TareaPicking.prioridad.desc(),
+            TareaPicking.fecha_creacion.asc()
+        ).first()
+
+    if not tarea:
+        return jsonify({
+            'sin_tareas': True,
+            'mensaje': 'No hay tareas pendientes en la cola'
+        }), 200
+
+    # Asignar automáticamente al operario
+    tarea.operario_id = operario_id
+    tarea.estado = 'EN_PROCESO'
+    tarea.fecha_inicio = datetime.utcnow()
+
+    from app.extensions import db
+    db.session.commit()
+
+    return jsonify({
+        'tarea': tarea.to_dict(),
+        'mensaje': f'Tarea asignada automáticamente'
+    }), 200
+
+
+@picking_bp.route('/mis-tareas-activas', methods=['GET'])
+@jwt_required()
+def mis_tareas_activas():
+    """Tareas activas del operario actual."""
+    operario_id = int(get_jwt_identity())
+
+    tareas = TareaPicking.query.filter(
+        TareaPicking.operario_id == operario_id,
+        TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+    ).order_by(TareaPicking.prioridad.desc()).all()
+
+    return jsonify({
+        'tareas': [t.to_dict() for t in tareas],
+        'total': len(tareas)
+    }), 200
+```
+
+Necesitas agregar el import de `datetime` al inicio del archivo. Ejecuta:
+```
+head -5 app/routes/picking.py
