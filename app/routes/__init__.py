@@ -7,6 +7,7 @@ def register_routes(app):
     from app.routes.packing import packing_bp
     from app.routes.recepcion import recepcion_bp
     from app.routes.conteo import conteo_bp
+    from app.routes.dashboard import dashboard_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(productos_bp, url_prefix='/api/productos')
@@ -16,3 +17,4 @@ def register_routes(app):
     app.register_blueprint(packing_bp, url_prefix='/api/packing')
     app.register_blueprint(recepcion_bp, url_prefix='/api/recepcion')
     app.register_blueprint(conteo_bp, url_prefix='/api/conteo')
+    app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
