@@ -13,6 +13,7 @@ from app.models.conteo import SesionConteo
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.producto import Producto
 from app.models.usuario import Usuario
+from app.models.ubicacion import Ubicacion
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
@@ -22,9 +23,7 @@ class DashboardService:
 
     @staticmethod
     def kpis_operativos(almacen_id: int):
-        """
-        KPIs principales del almacén en tiempo real.
-        """
+        """KPIs principales del almacén en tiempo real."""
         hoy = datetime.utcnow().date()
         inicio_hoy = datetime.combine(hoy, datetime.min.time())
 
@@ -85,13 +84,24 @@ class DashboardService:
             SesionConteo.fecha_cierre >= inicio_hoy
         ).count()
 
-        # --- ALERTAS DE STOCK ---
+        # --- ALERTAS DE STOCK — misma lógica que alertas_stock() ---
+        stock_sub = db.session.query(
+            UbicacionProducto.producto_id,
+            func.sum(UbicacionProducto.cantidad).label('stock_total')
+        ).join(Ubicacion).filter(
+            Ubicacion.almacen_id == almacen_id
+        ).group_by(UbicacionProducto.producto_id).subquery()
+
         productos_bajo_minimo = db.session.query(
             func.count(Producto.id)
+        ).join(
+            stock_sub,
+            Producto.id == stock_sub.c.producto_id
         ).filter(
             Producto.activo == True,
-            Producto.stock_minimo > 0
-        ).scalar()
+            Producto.stock_minimo > 0,
+            stock_sub.c.stock_total <= Producto.stock_minimo
+        ).scalar() or 0
 
         return {
             'fecha': hoy.isoformat(),
@@ -125,9 +135,7 @@ class DashboardService:
 
     @staticmethod
     def productividad_operarios(almacen_id: int, dias: int = 7):
-        """
-        Productividad por operario en los últimos N días.
-        """
+        """Productividad por operario en los últimos N días."""
         fecha_inicio = datetime.utcnow() - timedelta(days=dias)
 
         operarios = Usuario.query.filter(
@@ -136,7 +144,6 @@ class DashboardService:
         ).all()
 
         resultado = []
-
         for operario in operarios:
             pickings = TareaPicking.query.filter(
                 TareaPicking.operario_id == operario.id,
@@ -176,9 +183,7 @@ class DashboardService:
 
     @staticmethod
     def movimientos_recientes(almacen_id: int, limite: int = 20):
-        """
-        Últimos movimientos de inventario del almacén.
-        """
+        """Últimos movimientos de inventario del almacén."""
         movimientos = MovimientoInventario.query.filter_by(
             almacen_id=almacen_id
         ).order_by(
@@ -192,14 +197,8 @@ class DashboardService:
 
     @staticmethod
     def alertas_stock(almacen_id: int):
-        """
-        Productos bajo mínimo o sin stock.
-        """
-        from app.models.ubicacion import Ubicacion
-        from sqlalchemy import func
-
-        # Calcular stock real por producto en este almacén
-        stock_por_producto = db.session.query(
+        """Productos bajo mínimo o sin stock."""
+        stock_sub = db.session.query(
             UbicacionProducto.producto_id,
             func.sum(UbicacionProducto.cantidad).label('stock_total')
         ).join(Ubicacion).filter(
@@ -207,12 +206,12 @@ class DashboardService:
         ).group_by(UbicacionProducto.producto_id).subquery()
 
         productos_alerta = db.session.query(Producto).join(
-            stock_por_producto,
-            Producto.id == stock_por_producto.c.producto_id
+            stock_sub,
+            Producto.id == stock_sub.c.producto_id
         ).filter(
             Producto.activo == True,
             Producto.stock_minimo > 0,
-            stock_por_producto.c.stock_total <= Producto.stock_minimo
+            stock_sub.c.stock_total <= Producto.stock_minimo
         ).all()
 
         alertas = []
