@@ -9,11 +9,16 @@ Bodies oficiales confirmados desde Ver Guía en Connekta:
   142948 → EntradaOC:       Inicial, Documentos, Movimientos, Final
   142951 → DocumentoInv:    Inicial, Documentos, Movimientos, Final
 
-Sintaxis GET certificada:
-  Headers:    ConniKey / ConniToken
-  Textos:     comillas dobles → f150_id="NB1"
-  Enteros:    sin comillas    → f430_ind_estado=1
-  Paginacion: numPag=1|tamPag=100
+Diccionario real Siesa confirmado:
+  f430_id_co           → Centro de operación
+  f150_id              → Bodega
+  f430_ind_estado      → Estado (1=aprobado)
+  f120_referencia      → Código producto
+  f431_cant1_pedida    → Cantidad pedida
+  f431_cant1_remisionada → Cantidad despachada
+  f470_referencia_item → Código producto en movimiento
+  f470_cant_base       → Cantidad del movimiento
+  f470_id_bodega       → Bodega en movimiento
 """
 import os
 import logging
@@ -70,9 +75,11 @@ class ConnektaGateway:
     def _get(self, nombre_api: str, params_extra: dict = None):
         if self.modo_simulacion:
             return self._simular(f'GET_{nombre_api}', params_extra)
+
         params = {'idCompania': self.id_compania, 'descripcion': nombre_api}
         if params_extra:
             params.update(params_extra)
+
         try:
             r = requests.get(self.url_get, headers=self.headers, params=params, timeout=30)
             r.raise_for_status()
@@ -86,11 +93,13 @@ class ConnektaGateway:
     def _post(self, id_conector: str, nombre_conector: str, payload: dict):
         if self.modo_simulacion:
             return self._simular(f'POST_{id_conector}', payload)
+
         params = {
             'idCompania': self.id_compania,
             'idDocumento': id_conector,
             'nombreDocumento': nombre_conector
         }
+
         try:
             r = requests.post(self.url_post, headers=self.headers, params=params, json=payload, timeout=30)
             r.raise_for_status()
@@ -108,7 +117,7 @@ class ConnektaGateway:
     def get_pedidos_aprobados(self):
         """
         API_v2_Ventas_Pedidos — cola de picking.
-        Solo ítems con cant_pendiente > 0.
+        Regla WMS: solo ítems con cant_pendiente > 0.
         """
         parametros = (
             f'f150_id="{self.bodega}"'
@@ -191,10 +200,11 @@ class ConnektaGateway:
                           items: list):
         """
         142945 → API_v1_Ventas_Comercial_RemisionPedido
-        Genera remisión desde pedido. Siesa descarga inventario
-        cuenta 14 y factura electrónica automáticamente.
+        Genera remisión desde pedido — descarga inventario cuenta 14.
+        Siesa factura automáticamente. El WMS solo inyecta el documento.
         """
         fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+
         payload = {
             'Inicial': [
                 {'F_CIA': self.id_compania}
@@ -269,17 +279,19 @@ class ConnektaGateway:
                 {'F_CIA': self.id_compania}
             ]
         }
-        logger.info(f'[CONNEKTA] Despacho {tipo_docto_pedido}{consec_docto_pedido}')
-        return self._post(self.conector_despacho,
-                          'API_v1_Ventas_Comercial_RemisionPedido', payload)
 
-    def confirmar_entrada_compras(self, tipo_docto_oc: str, consec_docto_oc: str,
-                                   items: list, es_parcial: bool = False):
+        logger.info(f'[CONNEKTA] Despacho {tipo_docto_pedido}{consec_docto_pedido}')
+        return self._post(self.conector_despacho, 'API_v1_Ventas_Comercial_RemisionPedido', payload)
+
+    def confirmar_entrada_compras(self, id_co_oc: str, tipo_docto_oc: str,
+                                   consec_docto_oc: str, items: list,
+                                   es_parcial: bool = False):
         """
         142948 → API_v1_Compras_Comercial_EntradaOC
-        Confirma entrada por OC. Siesa debita cuenta 1435.
+        Genera entrada desde OC — debita cuenta 1435.
         """
         fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+
         payload = {
             'Inicial': [
                 {'F_CIA': self.id_compania}
@@ -319,7 +331,7 @@ class ConnektaGateway:
                     'f462_valor_seguros': '',
                     'f462_notas': '',
                     'f451_ind_consignacion': '',
-                    'f420_id_co_docto': self.centro_op,
+                    'f420_id_co_docto': id_co_oc,
                     'f420_id_tipo_docto': tipo_docto_oc,
                     'f420_consec_docto': consec_docto_oc,
                     'f420_ind_modo_sobrecosto': ''
@@ -355,9 +367,9 @@ class ConnektaGateway:
                 {'F_CIA': self.id_compania}
             ]
         }
-        logger.info(f'[CONNEKTA] Entrada OC {tipo_docto_oc}{consec_docto_oc}')
-        return self._post(self.conector_entrada,
-                          'API_v1_Compras_Comercial_EntradaOC', payload)
+
+        logger.info(f'[CONNEKTA] Entrada OC {id_co_oc}/{tipo_docto_oc}/{consec_docto_oc}')
+        return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
                                   cantidad: int, referencia: str):
@@ -370,6 +382,7 @@ class ConnektaGateway:
             raise ValueError(f'Motivo inválido: {motivo_codigo}')
 
         fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+
         payload = {
             'Inicial': [
                 {'F_CIA': self.id_compania}
@@ -445,9 +458,9 @@ class ConnektaGateway:
                 {'F_CIA': self.id_compania}
             ]
         }
+
         logger.info(f'[CONNEKTA] Ajuste {motivo_codigo} {item_codigo}:{cantidad}')
-        return self._post(self.conector_ajuste,
-                          'API_v1_Inventarios_Comercial_DocumentoInv', payload)
+        return self._post(self.conector_ajuste, 'API_v1_Inventarios_Comercial_DocumentoInv', payload)
 
     # ==========================================
     # Estado
