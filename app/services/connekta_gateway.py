@@ -2,20 +2,18 @@
 Gateway Connekta — Arquitectura doble autopista certificada.
 
 GET  → v3/ejecutarconsultaestandar
-POST → v3/conectoresimportarestandar  ← URL REAL confirmada desde Ver Guía
+POST → v3/conectoresimportarestandar
 
-Sintaxis GET confirmada:
+Bodies oficiales confirmados desde Ver Guía en Connekta:
+  142945 → RemisionPedido:  Inicial, Remision, Movtoventascomercial, Final
+  142948 → EntradaOC:       Inicial, Documentos, Movimientos, Final
+  142951 → DocumentoInv:    Inicial, Documentos, Movimientos, Final
+
+Sintaxis GET certificada:
   Headers:    ConniKey / ConniToken
   Textos:     comillas dobles → f150_id="NB1"
   Enteros:    sin comillas    → f430_ind_estado=1
   Paginacion: numPag=1|tamPag=100
-
-Body POST confirmado desde Ver Guía conector 142945:
-  Secciones: Inicial, Remision, Movtoventascomercial, Final
-  F430_ID_TIPO_DOCTO + F430_CONSEC_DOCTO = identifican el pedido origen
-  f470_referencia_item = código del producto
-  f470_cant_base = cantidad empacada
-  f470_id_bodega = bodega NB1
 """
 import os
 import logging
@@ -34,18 +32,15 @@ class ConnektaGateway:
         self.bodega = os.getenv('CONNEKTA_BODEGA', 'NB1')
         self.centro_op = os.getenv('CONNEKTA_CENTRO_OP', '003')
 
-        # APIs V2 para GETs
         self.api_pedidos = os.getenv('CONNEKTA_API_PEDIDOS', 'API_v2_Ventas_Pedidos')
         self.api_ordenes = os.getenv('CONNEKTA_API_ORDENES', 'API_v2_Compras_Ordenes')
         self.api_inventario = os.getenv('CONNEKTA_API_INVENTARIO', 'API_v2_Inventarios_InvFecha')
         self.api_barras = os.getenv('CONNEKTA_API_BARRAS', 'API_v2_ItemsBarras')
 
-        # Conectores V1 Genery Transfer para POSTs
         self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')
         self.conector_entrada = os.getenv('CONNEKTA_CONECTOR_ENTRADA', '142948')
         self.conector_ajuste = os.getenv('CONNEKTA_CONECTOR_AJUSTE', '142951')
 
-        # URLs base — ambas en v3, confirmadas desde Ver Guía
         self.url_get = 'https://serviciosqa.siesacloud.com/api/siesa/v3/ejecutarconsultaestandar'
         self.url_post = 'https://serviciosqa.siesacloud.com/api/siesa/v3/conectoresimportarestandar'
 
@@ -56,7 +51,6 @@ class ConnektaGateway:
 
     @property
     def headers(self):
-        """Headers confirmados desde Ver Guía de Connekta."""
         return {
             'Content-Type': 'application/json',
             'ConniKey': self.ikey,
@@ -74,27 +68,13 @@ class ConnektaGateway:
         }
 
     def _get(self, nombre_api: str, params_extra: dict = None):
-        """
-        GET → v3/ejecutarconsultaestandar
-        Siempre filtrado. Sin filtros = colapso de memoria en PDA.
-        """
         if self.modo_simulacion:
             return self._simular(f'GET_{nombre_api}', params_extra)
-
-        params = {
-            'idCompania': self.id_compania,
-            'descripcion': nombre_api
-        }
+        params = {'idCompania': self.id_compania, 'descripcion': nombre_api}
         if params_extra:
             params.update(params_extra)
-
         try:
-            r = requests.get(
-                self.url_get,
-                headers=self.headers,
-                params=params,
-                timeout=30
-            )
+            r = requests.get(self.url_get, headers=self.headers, params=params, timeout=30)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.Timeout:
@@ -104,28 +84,15 @@ class ConnektaGateway:
             raise Exception(f'Error consultando Siesa: {e}')
 
     def _post(self, id_conector: str, nombre_conector: str, payload: dict):
-        """
-        POST → v3/conectoresimportarestandar
-        Sin idSistema — confirmado desde Ver Guía.
-        Params: idCompania, idDocumento, nombreDocumento.
-        """
         if self.modo_simulacion:
             return self._simular(f'POST_{id_conector}', payload)
-
         params = {
             'idCompania': self.id_compania,
             'idDocumento': id_conector,
             'nombreDocumento': nombre_conector
         }
-
         try:
-            r = requests.post(
-                self.url_post,
-                headers=self.headers,
-                params=params,
-                json=payload,
-                timeout=30
-            )
+            r = requests.post(self.url_post, headers=self.headers, params=params, json=payload, timeout=30)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.Timeout:
@@ -197,14 +164,9 @@ class ConnektaGateway:
 
     def get_ordenes_compra_aprobadas(self):
         """API_v2_Compras_Ordenes — muelle de recepción ciega."""
-        parametros = (
-            f'f150_id="{self.bodega}"'
-            f' AND f430_id_co="{self.centro_op}"'
-            f' AND f430_ind_estado=1'
-        )
         return self._get(self.api_ordenes, {
             'paginacion': 'numPag=1|tamPag=100',
-            'parametros': parametros
+            'parametros': f'f150_id="{self.bodega}" AND f430_id_co="{self.centro_op}" AND f430_ind_estado=1'
         })
 
     def get_inventario_fecha(self, item_codigo: str):
@@ -222,25 +184,17 @@ class ConnektaGateway:
         })
 
     # ==========================================
-    # POSTs — Estructura oficial desde Ver Guía
+    # POSTs — Bodies oficiales desde Ver Guía
     # ==========================================
 
     def trigger_despacho(self, tipo_docto_pedido: str, consec_docto_pedido: str,
                           items: list):
         """
         142945 → API_v1_Ventas_Comercial_RemisionPedido
-        Genera remisión desde pedido — descarga inventario cuenta 14.
-        Siesa factura automáticamente por debajo.
-
-        Campos clave confirmados desde Ver Guía:
-          F430_ID_TIPO_DOCTO  → tipo documento del pedido origen
-          F430_CONSEC_DOCTO   → consecutivo del pedido origen
-          f470_referencia_item → código del producto
-          f470_cant_base       → cantidad empacada
-          f470_id_bodega       → bodega NB1
+        Genera remisión desde pedido. Siesa descarga inventario
+        cuenta 14 y factura electrónica automáticamente.
         """
         fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
-
         payload = {
             'Inicial': [
                 {'F_CIA': self.id_compania}
@@ -315,88 +269,185 @@ class ConnektaGateway:
                 {'F_CIA': self.id_compania}
             ]
         }
+        logger.info(f'[CONNEKTA] Despacho {tipo_docto_pedido}{consec_docto_pedido}')
+        return self._post(self.conector_despacho,
+                          'API_v1_Ventas_Comercial_RemisionPedido', payload)
 
-        logger.info(f'[CONNEKTA] Despacho pedido {tipo_docto_pedido}{consec_docto_pedido}')
-        return self._post(
-            self.conector_despacho,
-            'API_v1_Ventas_Comercial_RemisionPedido',
-            payload
-        )
-
-    def confirmar_entrada_compras(self, numero_oc: str, items: list,
-                                   es_parcial: bool = False):
+    def confirmar_entrada_compras(self, tipo_docto_oc: str, consec_docto_oc: str,
+                                   items: list, es_parcial: bool = False):
         """
         142948 → API_v1_Compras_Comercial_EntradaOC
-        Body pendiente de confirmar con Ver Guía del conector.
+        Confirma entrada por OC. Siesa debita cuenta 1435.
         """
+        fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
         payload = {
-            'Inicial': [{'F_CIA': self.id_compania}],
-            'Entrada': [
+            'Inicial': [
+                {'F_CIA': self.id_compania}
+            ],
+            'Documentos': [
                 {
                     'F_CIA': self.id_compania,
-                    'numero_oc': numero_oc,
-                    'bodega': self.bodega,
-                    'centro_op': self.centro_op,
-                    'es_parcial': es_parcial,
-                    'fecha': datetime.utcnow().strftime('%Y-%m-%d')
+                    'F_CONSEC_AUTO_REG': '',
+                    'f350_id_co': self.centro_op,
+                    'f350_id_tipo_docto': '',
+                    'f350_consec_docto': '',
+                    'f350_fecha': fecha_hoy,
+                    'f350_id_tercero': '',
+                    'f350_ind_estado': '',
+                    'f350_ind_impresion': '',
+                    'f350_notas': '',
+                    'f451_id_sucursal_prov': '',
+                    'f451_id_tercero_comprador': '',
+                    'f451_num_docto_referencia': '',
+                    'f451_id_moneda_docto': '',
+                    'f451_id_moneda_conv': '',
+                    'f451_tasa_conv': '',
+                    'f451_id_moneda_local': '',
+                    'f451_tasa_local': '',
+                    'f451_tasa_dscto_global1': '',
+                    'f451_tasa_dscto_global2': '',
+                    'f462_id_vehiculo': '',
+                    'f462_id_tercero_transp': '',
+                    'f462_id_sucursal_transp': '',
+                    'f462_id_tercero_conductor': '',
+                    'f462_nombre_conductor': '',
+                    'f462_identif_conductor': '',
+                    'f462_numero_guia': '',
+                    'f462_cajas': '',
+                    'f462_peso': '',
+                    'f462_volumen': '',
+                    'f462_valor_seguros': '',
+                    'f462_notas': '',
+                    'f451_ind_consignacion': '',
+                    'f420_id_co_docto': self.centro_op,
+                    'f420_id_tipo_docto': tipo_docto_oc,
+                    'f420_consec_docto': consec_docto_oc,
+                    'f420_ind_modo_sobrecosto': ''
                 }
             ],
-            'Movimiento': [
+            'Movimientos': [
                 {
                     'F_CIA': self.id_compania,
-                    'referencia_item': i.get('producto_codigo'),
-                    'cantidad': i.get('cantidad_recibida'),
-                    'bodega': self.bodega
+                    'f470_id_co': self.centro_op,
+                    'f470_id_tipo_docto': '',
+                    'f470_consec_docto': '',
+                    'f470_nro_registro': '',
+                    'f470_id_bodega': self.bodega,
+                    'f470_id_ubicacion_aux': '',
+                    'f470_id_lote': '',
+                    'f470_id_unidad_medida': '',
+                    'f421_fecha_entrega': fecha_hoy,
+                    'f470_cant_base': i.get('cantidad_recibida'),
+                    'f470_cant_2': '',
+                    'f470_notas': '',
+                    'f470_id_item': '',
+                    'f470_referencia_item': i.get('producto_codigo'),
+                    'f470_codigo_barras': '',
+                    'f470_id_ext1_detalle': '',
+                    'f470_id_ext2_detalle': '',
+                    'f470_id_ccosto_movto': '',
+                    'f470_id_proyecto': '',
+                    'f470_rowid': ''
                 }
                 for i in items
             ],
-            'Final': [{'F_CIA': self.id_compania}]
+            'Final': [
+                {'F_CIA': self.id_compania}
+            ]
         }
-        logger.info(f'[CONNEKTA] Entrada OC {numero_oc}')
-        return self._post(
-            self.conector_entrada,
-            'API_v1_Compras_Comercial_EntradaOC',
-            payload
-        )
+        logger.info(f'[CONNEKTA] Entrada OC {tipo_docto_oc}{consec_docto_oc}')
+        return self._post(self.conector_entrada,
+                          'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
                                   cantidad: int, referencia: str):
         """
         142951 → API_v1_Inventarios_Comercial_DocumentoInv
-        Body pendiente de confirmar con Ver Guía del conector.
-        AJ-ENT: sobrante. AJ-SAL: faltante.
+        Ajuste físico tras conteo cíclico double-blind.
+        AJ-ENT: sobrante. AJ-SAL: faltante. Cantidad siempre positiva.
         """
         if motivo_codigo not in ['AJ-ENT', 'AJ-SAL']:
             raise ValueError(f'Motivo inválido: {motivo_codigo}')
 
+        fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
         payload = {
-            'Inicial': [{'F_CIA': self.id_compania}],
-            'Documento': [
+            'Inicial': [
+                {'F_CIA': self.id_compania}
+            ],
+            'Documentos': [
                 {
                     'F_CIA': self.id_compania,
-                    'motivo': motivo_codigo,
-                    'bodega': self.bodega,
-                    'centro_op': self.centro_op,
-                    'fecha': datetime.utcnow().strftime('%Y-%m-%d'),
-                    'referencia': referencia
+                    'F_CONSEC_AUTO_REG': '',
+                    'f350_id_co': self.centro_op,
+                    'f350_id_tipo_docto': '',
+                    'f350_consec_docto': '',
+                    'f350_fecha': fecha_hoy,
+                    'f350_id_tercero': '',
+                    'f350_id_clase_docto': '',
+                    'f350_ind_estado': '',
+                    'f350_ind_impresion': '',
+                    'f350_notas': referencia,
+                    'f450_id_concepto': motivo_codigo,
+                    'f450_id_bodega_salida': self.bodega if motivo_codigo == 'AJ-SAL' else '',
+                    'f450_id_bodega_entrada': self.bodega if motivo_codigo == 'AJ-ENT' else '',
+                    'f450_docto_alterno': '',
+                    'f350_id_co_base': '',
+                    'f350_id_tipo_docto_base': '',
+                    'f350_consec_docto_base': '',
+                    'f462_id_vehiculo': '',
+                    'f462_id_tercero_transp': '',
+                    'f462_id_sucursal_transp': '',
+                    'f462_id_tercero_conductor': '',
+                    'f462_nombre_conductor': '',
+                    'f462_identif_conductor': '',
+                    'f462_numero_guia': '',
+                    'f462_cajas': '',
+                    'f462_peso': '',
+                    'f462_volumen': '',
+                    'f462_valor_seguros': '',
+                    'f462_notas': ''
                 }
             ],
-            'Movimiento': [
+            'Movimientos': [
                 {
                     'F_CIA': self.id_compania,
-                    'referencia_item': item_codigo,
-                    'cantidad': abs(cantidad),
-                    'bodega': self.bodega
+                    'f470_id_co': self.centro_op,
+                    'f470_id_tipo_docto': '',
+                    'f470_consec_docto': '',
+                    'f470_nro_registro': '',
+                    'f470_id_bodega': self.bodega,
+                    'f470_id_ubicacion_aux': '',
+                    'f470_id_lote': '',
+                    'f470_id_concepto': '',
+                    'f470_id_motivo': '',
+                    'f470_id_co_movto': self.centro_op,
+                    'f470_id_ccosto_movto': '',
+                    'f470_id_proyecto': '',
+                    'f470_id_unidad_medida': '',
+                    'f470_cant_base': abs(cantidad),
+                    'f470_cant_2': '',
+                    'f470_costo_prom_uni': '',
+                    'f470_notas': '',
+                    'f470_desc_varible': '',
+                    'F_DESC_ITEM': '',
+                    'F_ID_UM_INVENTARIO': '',
+                    'f470_id_ubicacion_aux_ent': '',
+                    'f470_id_lote_ent': '',
+                    'f470_id_item': '',
+                    'f470_referencia_item': item_codigo,
+                    'f470_codigo_barras': '',
+                    'f470_id_ext1_detalle': '',
+                    'f470_id_ext2_detalle': '',
+                    'f470_id_un_movto': self.centro_op
                 }
             ],
-            'Final': [{'F_CIA': self.id_compania}]
+            'Final': [
+                {'F_CIA': self.id_compania}
+            ]
         }
         logger.info(f'[CONNEKTA] Ajuste {motivo_codigo} {item_codigo}:{cantidad}')
-        return self._post(
-            self.conector_ajuste,
-            'API_v1_Inventarios_Comercial_DocumentoInv',
-            payload
-        )
+        return self._post(self.conector_ajuste,
+                          'API_v1_Inventarios_Comercial_DocumentoInv', payload)
 
     # ==========================================
     # Estado
@@ -418,6 +469,12 @@ class ConnektaGateway:
                 'despacho': f'{self.conector_despacho} RemisionPedido',
                 'entrada': f'{self.conector_entrada} EntradaOC',
                 'ajuste': f'{self.conector_ajuste} DocumentoInv'
+            },
+            'apis_get': {
+                'pedidos': self.api_pedidos,
+                'ordenes': self.api_ordenes,
+                'inventario': self.api_inventario,
+                'barras': self.api_barras
             },
             'mensaje': 'Listo para producción' if not self.modo_simulacion
                        else 'Pendiente: CONNEKTA_IKEY, CONNEKTA_ITOKEN'
