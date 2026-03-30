@@ -411,7 +411,8 @@ async function sincronizarProductos() {
     if (r.status === 401) { salir(); return; }
     if (d.error) {
       res.style.color = '#ef4444';
-      res.textContent = 'Error servidor: ' + d.error;
+      const traza = d.trace ? d.trace.split('\n').slice(-4).join(' | ') : '';
+      res.textContent = 'Error: ' + d.error + (traza ? ' — ' + traza : '');
     } else if (d.simulado) {
       res.style.color = '#fb923c';
       res.textContent = 'Modo simulación — conecta credenciales Siesa primero';

@@ -36,11 +36,21 @@ def sync_productos():
 
 @siesa_bp.route('/test-sync-noauth', methods=['GET'])
 def test_sync_noauth():
-    """Debug sin JWT: verifica que el módulo importa y el servicio funciona."""
+    """Debug sin JWT: llama a API_v2_Items página 1 y devuelve la respuesta cruda."""
     import traceback
     try:
-        from app.services.siesa_sync_service import ejecutar_sync  # noqa
-        return jsonify({'ok': True}), 200
+        resp = connekta.get_items_catalogo(1)
+        keys = list(resp.keys()) if isinstance(resp, dict) else str(type(resp))
+        detalle = resp.get('detalle', {}) if isinstance(resp, dict) else {}
+        table = detalle.get('Table', []) if isinstance(detalle, dict) else []
+        primer_row = table[0] if table else None
+        return jsonify({
+            'ok': True,
+            'resp_keys': keys,
+            'table_len': len(table),
+            'primer_row': primer_row,
+            'resp_raw': resp if len(str(resp)) < 500 else str(resp)[:500]
+        }), 200
     except BaseException as e:
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
