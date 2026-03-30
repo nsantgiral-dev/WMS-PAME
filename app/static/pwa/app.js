@@ -233,10 +233,13 @@ function movimientos(lista) {
   const el = document.getElementById('movimientos-recientes');
   if (!el) return;
   if (!lista || !lista.length) { el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div><div style="color:#555;font-size:13px;padding:8px 0;">Sin movimientos</div>'; return; }
+  const TIPOS_ENTRADA = new Set(['ENTRADA', 'CARGA_INICIAL_SIESA', 'RECEPCION', 'AJUSTE_ENTRADA', 'DEVOLUCION']);
   el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div>' + lista.slice(0,8).map(m => {
-    const c = m.tipo === 'ENTRADA' ? '#4ade80' : '#f87171';
-    const s = m.tipo === 'ENTRADA' ? '+' : '-';
-    const h = new Date(m.fecha).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' });
+    const esEntrada = TIPOS_ENTRADA.has(m.tipo);
+    const c = esEntrada ? '#4ade80' : '#f87171';
+    const s = esEntrada ? '+' : '-';
+    const fechaStr = m.fecha && !m.fecha.endsWith('Z') ? m.fecha + 'Z' : m.fecha;
+    const h = new Date(fechaStr).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
     return `<div class="tabla-fila"><div><div class="tabla-nombre">${m.tipo}</div><div style="font-size:11px;color:#555;">${h}</div></div><div style="color:${c};font-weight:700;">${s}${m.cantidad}</div></div>`;
   }).join('');
 }
