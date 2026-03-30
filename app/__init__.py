@@ -42,7 +42,11 @@ def create_app():
 
     # ── Scheduler: sync automático cada hora 7am–8pm (Bogotá) ─────────────
     if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
-        from app.services.siesa_sync_service import init_scheduler
-        init_scheduler(app)
+        try:
+            from app.services.siesa_sync_service import init_scheduler
+            init_scheduler(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[SCHEDULER] No se pudo iniciar: {e}')
 
     return app
