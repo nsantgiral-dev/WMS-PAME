@@ -39,6 +39,35 @@ def sync_estado():
     return jsonify(estado_sync()), 200
 
 
+@siesa_bp.route('/cargar-inventario', methods=['POST'])
+@jwt_required()
+def cargar_inventario():
+    """Inicia la carga inicial de stock desde Siesa en background."""
+    from flask import current_app
+    from app.services.inventario_siesa_service import iniciar_carga_inventario
+    resultado = iniciar_carga_inventario(current_app._get_current_object())
+    return jsonify(resultado), 202
+
+
+@siesa_bp.route('/carga-inventario-estado', methods=['GET'])
+@jwt_required()
+def carga_inventario_estado():
+    """Estado de la carga de inventario en curso."""
+    from app.services.inventario_siesa_service import estado_carga_inventario
+    return jsonify(estado_carga_inventario()), 200
+
+
+@siesa_bp.route('/reconciliacion', methods=['GET'])
+@jwt_required()
+def reconciliacion():
+    """
+    Compara stock WMS vs Siesa. NO modifica nada.
+    Puede tardar ~60 seg con 5000 productos — llamar bajo demanda.
+    """
+    from app.services.inventario_siesa_service import reconciliar_inventario
+    return jsonify(reconciliar_inventario()), 200
+
+
 @siesa_bp.route('/debug-inventario-raw', methods=['GET'])
 @jwt_required()
 def debug_inventario_raw():

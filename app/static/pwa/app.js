@@ -426,6 +426,21 @@ async function cargarConnekta() {
         ↻ Sincronizar catálogo de productos desde Siesa
       </button>
       <div id="sync-resultado" style="margin-top:8px;font-size:12px;color:#666;text-align:center;"></div>
+
+      <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Inventario bilateral</div>
+        <button onclick="cargarInventarioInicial()"
+          style="width:100%;padding:12px;background:#0d2d1a;color:#4ade80;border:1px solid #1a4a2a;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:6px;">
+          ↓ Cargar stock inicial desde Siesa
+        </button>
+        <button onclick="verReconciliacion()"
+          style="width:100%;padding:12px;background:#1a1a2e;color:#93c5fd;border:1px solid #2a2a5a;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">
+          ⚖ Ver reconciliación WMS vs Siesa
+        </button>
+        <div id="inv-resultado" style="margin-top:8px;font-size:12px;color:#666;text-align:center;"></div>
+      </div>
+      <div id="panel-reconciliacion" style="margin-top:8px;"></div>
+
       ${d.modo_ensayo ? `
       <div style="background:#1a0f00;border:1px solid #7c2d12;border-radius:10px;padding:12px;margin-top:8px;font-size:12px;color:#fb923c;line-height:1.6;">
         <strong>MODO ENSAYO activo</strong><br>
@@ -495,6 +510,71 @@ async function sincronizarProductos() {
     btn.disabled = false;
     btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
   }
+}
+
+async function cargarInventarioInicial() {
+  const res = document.getElementById('inv-resultado');
+  if (!res) return;
+  res.style.color = '#93c5fd';
+  res.textContent = '⏳ Iniciando carga de stock desde Siesa...';
+  try {
+    const d = await post('/api/siesa/cargar-inventario', {});
+    if (d.simulado) { res.style.color = '#fb923c'; res.textContent = d.mensaje; return; }
+    if (d.en_curso && !d.iniciado) { res.style.color = '#fb923c'; res.textContent = '⏳ Ya en proceso — monitoreando...'; }
+    else { res.style.color = '#93c5fd'; res.textContent = '⏳ Cargando stock... (~60 seg)'; }
+    const iv = setInterval(async () => {
+      try {
+        const e = await get('/api/siesa/carga-inventario-estado');
+        if (!e.en_curso) {
+          clearInterval(iv);
+          if (e.ultimo_error) {
+            res.style.color = '#ef4444'; res.textContent = 'Error: ' + e.ultimo_error;
+          } else if (e.ultimo_resultado) {
+            const r = e.ultimo_resultado;
+            res.style.color = '#4ade80';
+            res.textContent = `✓ ${r.cargados} nuevos · ${r.actualizados} actualizados · ${r.sin_producto_wms} sin match WMS`;
+          }
+        } else { res.textContent = '⏳ Cargando stock desde Siesa...'; }
+      } catch(e) { clearInterval(iv); }
+    }, 6000);
+  } catch(e) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + (e.message || e); }
+}
+
+async function verReconciliacion() {
+  const res = document.getElementById('inv-resultado');
+  const panel = document.getElementById('panel-reconciliacion');
+  if (!res || !panel) return;
+  res.style.color = '#93c5fd';
+  res.textContent = '⏳ Consultando Siesa y comparando... (~60 seg)';
+  panel.innerHTML = '';
+  try {
+    const d = await get('/api/siesa/reconciliacion');
+    if (d.simulado) { res.style.color = '#fb923c'; res.textContent = 'Modo simulación'; return; }
+    if (d.error) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + d.error; return; }
+    const total = d.total_discrepancias;
+    if (total === 0) {
+      res.style.color = '#4ade80';
+      res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${d.total_productos_siesa} productos)`;
+      return;
+    }
+    res.style.color = '#facc15';
+    res.textContent = `⚠ ${total} diferencias encontradas de ${d.total_productos_siesa} productos`;
+    panel.innerHTML = `
+      <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa):</div>
+      ${d.discrepancias.slice(0,20).map(x => `
+        <div class="tabla-fila" style="font-size:12px;">
+          <div>
+            <div style="font-weight:600;">${x.nombre}</div>
+            <div style="color:#555;">${x.codigo}</div>
+          </div>
+          <div style="text-align:right;">
+            <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${x.stock_wms}</span>
+            <span style="color:#555;margin:0 4px;">·</span>
+            <span style="color:#93c5fd;">Siesa: ${x.stock_siesa}</span>
+            <div style="color:${x.diferencia > 0 ? '#4ade80':'#f87171'};font-size:11px;">${x.diferencia > 0 ? '+' : ''}${x.diferencia}</div>
+          </div>
+        </div>`).join('')}`;
+  } catch(e) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + (e.message || e); }
 }
 
 async function pedirTarea() {
