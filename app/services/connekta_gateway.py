@@ -203,7 +203,7 @@ class ConnektaGateway:
             # f150_id y f420_id_co son rechazados como filtros por esta API —
             # traemos todos los Aprobados y filtramos CO/bodega en Python.
             params = {
-                'paginacion': 'numPag=1|tamPag=200',
+                'paginacion': 'numPag=1|tamPag=100',
                 'parametros': 'f420_ind_estado=1'
             }
         return self._get(self.api_ordenes, params)
