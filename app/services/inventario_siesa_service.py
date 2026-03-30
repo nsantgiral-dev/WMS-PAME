@@ -80,27 +80,34 @@ def _get_o_crear_ubicacion_general(almacen_id: int) -> Ubicacion:
 
 def _descargar_inventario_siesa():
     """
-    Descarga TODAS las existencias de Siesa para la bodega configurada.
+    Descarga existencias de Siesa SIN filtro en la API (el API rechaza f150_id
+    como parámetro igual que en OCs). Filtra por bodega en Python.
+
     Retorna dict {codigo_producto: {existencia, comprometido, ubicacion_aux}}
     agregado por producto (un producto puede aparecer en múltiples lotes/ubicaciones).
+    Cubre catálogos de hasta 50 000 filas de inventario.
     """
     api = 'API_v2_Inventarios_InvFecha'
-    parametros = f'f150_id="{connekta.bodega}"'
-    inventario = {}  # {f120_referencia: {existencia, comprometido, ubicacion_aux}}
+    inventario = {}
+    bodega = connekta.bodega  # filtro Python
 
-    for pag in range(1, 101):  # hasta 10 000 filas (100 págs × 100)
+    for pag in range(1, 501):  # hasta 50 000 filas (500 págs × 100)
         resp = connekta._get(api, {
-            'paginacion': f'numPag={pag}|tamPag=100',
-            'parametros': parametros
+            'paginacion': f'numPag={pag}|tamPag=100'
         })
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
             break
 
         for row in rows:
+            # Filtrar por bodega en Python
+            if (row.get('f150_id') or '').strip() != bodega:
+                continue
+
             codigo = (row.get('f120_referencia') or '').strip()
             if not codigo:
                 continue
+
             existencia = float(row.get('f400_cant_existencia_1') or 0)
             comprometido = float(row.get('f400_cant_comprometida_1') or 0)
             ubicacion_aux = (row.get('f400_id_ubicacion_aux') or '').strip()
@@ -110,7 +117,7 @@ def _descargar_inventario_siesa():
             inventario[codigo]['existencia'] += existencia
             inventario[codigo]['comprometido'] += comprometido
 
-        logger.info(f'[INV-SIESA] Página {pag}: {len(rows)} filas · {len(inventario)} productos únicos')
+        logger.info(f'[INV-SIESA] Página {pag}: {len(rows)} filas totales · {len(inventario)} productos en {bodega}')
         if len(rows) < 100:
             break
 

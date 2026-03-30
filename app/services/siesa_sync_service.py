@@ -35,7 +35,7 @@ def _run_sync(app):
         total_procesados = 0
 
         try:
-            for pag in range(1, 201):  # hasta 20 000 items (200 págs × 100)
+            for pag in range(1, 501):  # hasta 50 000 items (500 págs × 100) — catálogo 28k+
                 resp = connekta.get_items_catalogo(pag)
                 rows = resp.get('detalle', {}).get('Table', [])
 
