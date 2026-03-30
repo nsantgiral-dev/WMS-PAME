@@ -229,6 +229,13 @@ class ConnektaGateway:
             'parametros': f'f178_id="{codigo_barras}"'
         })
 
+    def get_items_catalogo(self, pagina: int = 1):
+        """API_v2_Items — catálogo completo de productos Siesa (para sync)."""
+        api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
+        return self._get(api_items, {
+            'paginacion': f'numPag={pagina}|tamPag=100'
+        })
+
     # ==========================================
     # POSTs — Bodies oficiales desde Ver Guía
     # ==========================================

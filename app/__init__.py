@@ -1,4 +1,5 @@
 import os
+import click
 from flask import Flask, send_from_directory
 from dotenv import load_dotenv
 from app.extensions import db, migrate, jwt, cors
@@ -30,5 +31,18 @@ def create_app():
     def pwa():
         pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
         return send_from_directory(pwa_dir, 'index.html')
+
+    # ── CLI: flask sync-productos ──────────────────────────────────────────
+    @app.cli.command('sync-productos')
+    def cmd_sync_productos():
+        """Sincroniza el catálogo de productos desde Siesa (upsert)."""
+        from app.services.siesa_sync_service import ejecutar_sync
+        resultado = ejecutar_sync()
+        click.echo(resultado)
+
+    # ── Scheduler: sync automático cada hora 7am–8pm (Bogotá) ─────────────
+    if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
+        from app.services.siesa_sync_service import init_scheduler
+        init_scheduler(app)
 
     return app

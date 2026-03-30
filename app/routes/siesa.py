@@ -17,6 +17,19 @@ from app.services.recepcion_service import RecepcionService
 
 siesa_bp = Blueprint('siesa', __name__)
 
+# ──────────────────────────────────────────────
+# Sync manual (admin)
+# ──────────────────────────────────────────────
+
+@siesa_bp.route('/sync-productos', methods=['POST'])
+@jwt_required()
+def sync_productos():
+    """Admin dispara sync manual del catálogo de productos Siesa → WMS."""
+    from flask import current_app
+    from app.services.siesa_sync_service import ejecutar_sync
+    resultado = ejecutar_sync(app=current_app._get_current_object())
+    return jsonify(resultado), 200
+
 
 def _buscar_producto(codigo):
     """Busca un producto por código WMS o código Siesa."""

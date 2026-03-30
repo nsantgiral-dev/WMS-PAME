@@ -376,6 +376,11 @@ async function cargarConnekta() {
         <div class="tabla-fila"><span class="tabla-nombre">Bodega</span><span style="font-size:13px;color:#aaa;">${d.bodega||'—'}</span></div>
         <div class="tabla-fila"><span class="tabla-nombre">CO</span><span style="font-size:13px;color:#aaa;">${d.centro_operacion||'—'}</span></div>
       </div>
+      <button id="btn-sync-productos" onclick="sincronizarProductos()"
+        style="width:100%;margin-top:12px;padding:14px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+        ↻ Sincronizar catálogo de productos desde Siesa
+      </button>
+      <div id="sync-resultado" style="margin-top:8px;font-size:12px;color:#666;text-align:center;"></div>
       ${d.modo_ensayo ? `
       <div style="background:#1a0f00;border:1px solid #7c2d12;border-radius:10px;padding:12px;margin-top:8px;font-size:12px;color:#fb923c;line-height:1.6;">
         <strong>MODO ENSAYO activo</strong><br>
@@ -383,6 +388,34 @@ async function cargarConnekta() {
         Para activar producción: borrar la variable <code>MODO_ENSAYO</code> en Railway.
       </div>` : ''}`;
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
+}
+
+async function sincronizarProductos() {
+  const btn = document.getElementById('btn-sync-productos');
+  const res = document.getElementById('sync-resultado');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '↻ Sincronizando...';
+  res.textContent = '';
+  try {
+    const d = await post('/api/siesa/sync-productos', {});
+    if (d.simulado) {
+      res.style.color = '#fb923c';
+      res.textContent = 'Modo simulación — conecta credenciales Siesa primero';
+    } else if (d.omitido) {
+      res.style.color = '#fb923c';
+      res.textContent = 'Sync reciente — espera unos minutos';
+    } else {
+      res.style.color = '#4ade80';
+      res.textContent = `✓ ${d.creados} creados · ${d.actualizados} actualizados · ${d.total_procesados} total`;
+    }
+  } catch (e) {
+    res.style.color = '#ef4444';
+    res.textContent = 'Error: ' + (e.message || e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
+  }
 }
 
 async function pedirTarea() {
