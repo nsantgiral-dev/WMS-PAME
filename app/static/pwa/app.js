@@ -396,37 +396,60 @@ async function sincronizarProductos() {
   if (!btn) return;
   btn.disabled = true;
   btn.textContent = '↻ Sincronizando...';
-  res.textContent = '';
+  res.style.color = '#93c5fd';
+  res.textContent = 'Iniciando sync en background...';
   try {
-    const r = await fetch(API + '/api/siesa/sync-productos', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({})
-    });
-    const text = await r.text();
-    let d;
-    try { d = JSON.parse(text); } catch(e) {
-      throw new Error(`HTTP ${r.status} — ${text.substring(0, 120)}`);
-    }
-    if (r.status === 401) { salir(); return; }
-    if (d.error) {
-      res.style.color = '#ef4444';
-      const traza = d.trace ? d.trace.split('\n').slice(-4).join(' | ') : '';
-      res.textContent = 'Error: ' + d.error + (traza ? ' — ' + traza : '');
-    } else if (d.simulado) {
+    const d = await post('/api/siesa/sync-productos', {});
+    if (d.simulado) {
       res.style.color = '#fb923c';
-      res.textContent = 'Modo simulación — conecta credenciales Siesa primero';
-    } else if (d.omitido) {
-      res.style.color = '#fb923c';
-      res.textContent = 'Sync reciente — espera unos minutos';
-    } else {
-      res.style.color = '#4ade80';
-      res.textContent = `✓ ${d.creados} creados · ${d.actualizados} actualizados · ${d.total_procesados} total`;
+      res.textContent = d.mensaje || 'Modo simulación';
+      btn.disabled = false;
+      btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
+      return;
     }
+    if (d.omitido) {
+      res.style.color = '#fb923c';
+      res.textContent = d.mensaje || 'Sync reciente';
+      if (d.ultimo_resultado) {
+        const r = d.ultimo_resultado;
+        res.textContent += ` — último: ✓ ${r.creados} creados · ${r.actualizados} actualizados`;
+      }
+      btn.disabled = false;
+      btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
+      return;
+    }
+    if (d.en_curso && !d.iniciado) {
+      res.style.color = '#fb923c';
+      res.textContent = d.mensaje || 'Ya en proceso';
+      btn.disabled = false;
+      btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
+      return;
+    }
+    // Sync iniciado — polling cada 5 seg hasta completar
+    res.textContent = '⏳ Sincronizando productos... (puede tardar ~30 seg)';
+    const intervalo = setInterval(async () => {
+      try {
+        const estado = await get('/api/siesa/sync-estado');
+        if (!estado.en_curso) {
+          clearInterval(intervalo);
+          btn.disabled = false;
+          btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
+          if (estado.ultimo_error) {
+            res.style.color = '#ef4444';
+            res.textContent = 'Error: ' + estado.ultimo_error;
+          } else if (estado.ultimo_resultado) {
+            const r = estado.ultimo_resultado;
+            res.style.color = '#4ade80';
+            res.textContent = `✓ ${r.creados} creados · ${r.actualizados} actualizados · ${r.total_procesados} total`;
+          }
+        } else {
+          res.textContent = '⏳ Sincronizando... en proceso';
+        }
+      } catch (e) { clearInterval(intervalo); }
+    }, 5000);
   } catch (e) {
     res.style.color = '#ef4444';
     res.textContent = 'Error: ' + (e.message || e);
-  } finally {
     btn.disabled = false;
     btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
   }

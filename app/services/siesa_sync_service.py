@@ -1,14 +1,12 @@
 """
 Sincronización del catálogo de productos Siesa → WMS.
 
-Estrategia: upsert por codigo_siesa.
-  - Si el producto no existe → lo crea con clasificacion_abc='C' por defecto.
-  - Si ya existe → actualiza nombre y estado activo si cambiaron.
-
-El scheduler llama a `ejecutar_sync()` cada hora de 7am a 8pm (hora Colombia, UTC-5).
-En Railway (UTC), eso equivale a horas 12–01 UTC → usamos 12-01 con cron de hora.
+El sync puede tardar minutos (múltiples páginas × llamadas HTTP).
+Para evitar timeout de gunicorn (30 seg), el sync manual corre en hilo de fondo
+y el endpoint retorna inmediatamente con el estado.
 """
 import logging
+import threading
 from datetime import datetime, timezone
 from app.extensions import db
 from app.models.producto import Producto
@@ -16,37 +14,28 @@ from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
 
-# Último sync exitoso — evita que múltiples workers ejecuten en paralelo
-_ultimo_sync = None
-_MIN_INTERVALO_SEG = 55 * 60  # 55 minutos entre syncs
+# Estado global del sync (acceso desde ruta y scheduler)
+_sync_estado = {
+    'en_curso': False,
+    'ultimo_inicio': None,
+    'ultimo_resultado': None,   # dict con estadísticas del último sync exitoso
+    'ultimo_error': None,
+}
+_MIN_INTERVALO_SEG = 55 * 60
 
 
-def ejecutar_sync(app=None):
-    """
-    Descarga el catálogo completo de items Siesa y hace upsert en la BD.
-    Debe llamarse dentro de un contexto Flask (o pasarle app para crearlo aquí).
-    Retorna dict con estadísticas.
-    """
-    global _ultimo_sync
+def _run_sync(app):
+    """Lógica real del sync — se ejecuta en un hilo separado con su propio app_context."""
+    global _sync_estado
 
-    # Guard: no ejecutar si corrió hace menos de 55 min (protege contra workers múltiples)
-    ahora = datetime.now(timezone.utc)
-    if _ultimo_sync and (ahora - _ultimo_sync).total_seconds() < _MIN_INTERVALO_SEG:
-        logger.info('[SYNC] Omitido — sync reciente hace menos de 55 min')
-        return {'omitido': True, 'razon': 'sync_reciente'}
-
-    def _run():
-        if connekta.modo_simulacion:
-            logger.warning('[SYNC] Modo simulación — sin acceso real a Siesa')
-            return {'simulado': True}
-
+    with app.app_context():
         creados = 0
         actualizados = 0
         errores = 0
         total_procesados = 0
 
-        for pag in range(1, 51):  # hasta 5 000 items (50 páginas × 100)
-            try:
+        try:
+            for pag in range(1, 51):  # hasta 5 000 items
                 resp = connekta.get_items_catalogo(pag)
                 rows = resp.get('detalle', {}).get('Table', [])
 
@@ -96,15 +85,17 @@ def ejecutar_sync(app=None):
                         errores += 1
 
                 db.session.commit()
-                logger.info(f'[SYNC] Página {pag}: {len(rows)} items procesados')
+                logger.info(f'[SYNC] Página {pag}: {len(rows)} items · creados={creados}')
 
                 if len(rows) < 100:
                     break
 
-            except Exception as e:
-                logger.error(f'[SYNC] Error en página {pag}: {e}')
-                db.session.rollback()
-                break
+        except Exception as e:
+            logger.error(f'[SYNC] Error durante sync: {e}')
+            db.session.rollback()
+            _sync_estado['en_curso'] = False
+            _sync_estado['ultimo_error'] = str(e)
+            return
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),
@@ -114,30 +105,71 @@ def ejecutar_sync(app=None):
             'errores': errores
         }
         logger.info(f'[SYNC] Completado: {resultado}')
-        return resultado
+        _sync_estado['ultimo_resultado'] = resultado
+        _sync_estado['ultimo_error'] = None
+        _sync_estado['en_curso'] = False
 
+
+def iniciar_sync_background(app):
+    """
+    Arranca el sync en un hilo de fondo y retorna inmediatamente.
+    Si ya hay un sync en curso o se hizo hace menos de 55 min, retorna el estado actual.
+    """
+    global _sync_estado
+
+    ahora = datetime.now(timezone.utc)
+
+    if _sync_estado['en_curso']:
+        return {'en_curso': True, 'mensaje': 'Sync ya en proceso — espera que termine'}
+
+    ultimo = _sync_estado.get('ultimo_inicio')
+    if ultimo and (ahora - ultimo).total_seconds() < _MIN_INTERVALO_SEG:
+        mins = int(((ahora - ultimo).total_seconds()) / 60)
+        return {
+            'omitido': True,
+            'mensaje': f'Sync reciente hace {mins} min — próximo disponible en {55 - mins} min',
+            'ultimo_resultado': _sync_estado['ultimo_resultado']
+        }
+
+    if connekta.modo_simulacion:
+        return {'simulado': True, 'mensaje': 'Modo simulación — conecta credenciales Siesa'}
+
+    _sync_estado['en_curso'] = True
+    _sync_estado['ultimo_inicio'] = ahora
+
+    hilo = threading.Thread(target=_run_sync, args=(app,), daemon=True)
+    hilo.start()
+
+    return {'iniciado': True, 'mensaje': 'Sync iniciado en background — refresca en ~30 seg'}
+
+
+def estado_sync():
+    """Retorna el estado actual del último sync."""
+    return {
+        'en_curso': _sync_estado['en_curso'],
+        'ultimo_inicio': _sync_estado['ultimo_inicio'].isoformat() if _sync_estado['ultimo_inicio'] else None,
+        'ultimo_resultado': _sync_estado['ultimo_resultado'],
+        'ultimo_error': _sync_estado['ultimo_error'],
+    }
+
+
+def ejecutar_sync(app=None):
+    """
+    Compatibilidad con el scheduler de APScheduler (corre en su propio hilo).
+    Llama directamente a _run_sync() ya que el scheduler maneja el threading.
+    """
     if app:
-        with app.app_context():
-            resultado = _run()
-    else:
-        resultado = _run()
-
-    if not resultado.get('simulado') and not resultado.get('omitido'):
-        _ultimo_sync = ahora
-
-    return resultado
+        _run_sync(app)
+    # Si no hay app, no puede correr (necesita contexto)
 
 
 def init_scheduler(app):
-    """
-    Inicia el BackgroundScheduler de APScheduler con un cron que corre cada hora
-    de 7am a 8pm hora Colombia (UTC-5 → horas UTC 12 a 01 del día siguiente).
-    """
+    """Scheduler horario 7am–8pm hora Bogotá."""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
     except ImportError:
-        logger.error('[SYNC] APScheduler no instalado — scheduler no iniciado')
+        logger.error('[SYNC] APScheduler no instalado')
         return None
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
@@ -149,7 +181,7 @@ def init_scheduler(app):
         name='Sync catálogo Siesa → WMS',
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=300  # 5 min de gracia si el servidor estaba ocupado
+        misfire_grace_time=300
     )
     scheduler.start()
     logger.info('[SYNC] Scheduler iniciado — sync cada hora 7am–8pm (Bogotá)')
