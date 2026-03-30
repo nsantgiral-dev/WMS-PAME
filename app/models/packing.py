@@ -10,6 +10,9 @@ class TareaPacking(db.Model):
 
     # Referencia al pedido de Siesa
     numero_pedido_siesa = db.Column(db.String(50), nullable=False)
+    # Componentes separados requeridos por el gateway (F430_ID_TIPO_DOCTO / F430_CONSEC_DOCTO)
+    tipo_docto_pedido_siesa = db.Column(db.String(20))
+    consec_docto_pedido_siesa = db.Column(db.String(30))
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
 
     # Empacador asignado
@@ -54,6 +57,8 @@ class TareaPacking(db.Model):
             'id': self.id,
             'codigo': self.codigo,
             'numero_pedido_siesa': self.numero_pedido_siesa,
+            'tipo_docto_pedido_siesa': self.tipo_docto_pedido_siesa,
+            'consec_docto_pedido_siesa': self.consec_docto_pedido_siesa,
             'almacen_id': self.almacen_id,
             'empacador_id': self.empacador_id,
             'estado': self.estado,

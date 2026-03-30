@@ -50,9 +50,15 @@ class ConnektaGateway:
         self.url_post = 'https://serviciosqa.siesacloud.com/api/siesa/v3/conectoresimportarestandar'
 
         self.modo_simulacion = not all([self.ikey, self.itoken])
+        # MODO_ENSAYO: credenciales reales, GETs reales, POSTs bloqueados en servidor.
+        # Activar con variable de entorno MODO_ENSAYO=true en Railway para pruebas UX.
+        # Desactivar (borrar la variable) para producción real.
+        self.modo_ensayo = os.getenv('MODO_ENSAYO', '').lower() == 'true'
 
         if self.modo_simulacion:
             logger.warning('[CONNEKTA] Modo simulación — faltan: CONNEKTA_IKEY, CONNEKTA_ITOKEN')
+        elif self.modo_ensayo:
+            logger.warning('[CONNEKTA] MODO ENSAYO activo — GETs reales, POSTs bloqueados en servidor')
 
     @property
     def headers(self):
@@ -94,6 +100,20 @@ class ConnektaGateway:
         if self.modo_simulacion:
             return self._simular(f'POST_{id_conector}', payload)
 
+        if self.modo_ensayo:
+            logger.info(
+                f'[CONNEKTA ENSAYO] POST bloqueado — conector={id_conector} '
+                f'nombre={nombre_conector}\nPAYLOAD:\n{payload}'
+            )
+            return {
+                'modo_ensayo': True,
+                'conector': id_conector,
+                'nombre': nombre_conector,
+                'mensaje': 'POST bloqueado en modo ensayo — payload certificado, sin impacto en Siesa',
+                'payload': payload,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+
         params = {
             'idCompania': self.id_compania,
             'idDocumento': id_conector,
@@ -114,16 +134,20 @@ class ConnektaGateway:
     # GETs
     # ==========================================
 
-    def get_pedidos_aprobados(self):
+    def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
         API_v2_Ventas_Pedidos — cola de picking.
         Regla WMS: solo ítems con cant_pendiente > 0.
+        sin_filtros=True: barrido general sin filtrar por bodega/CO (solo para descubrimiento en ensayo).
         """
-        parametros = (
-            f'f150_id="{self.bodega}"'
-            f' AND f430_id_co="{self.centro_op}"'
-            f' AND f430_ind_estado=1'
-        )
+        if sin_filtros:
+            parametros = 'f430_ind_estado=1'
+        else:
+            parametros = (
+                f'f150_id="{self.bodega}"'
+                f' AND f430_id_co="{self.centro_op}"'
+                f' AND f430_ind_estado=1'
+            )
         resultado = self._get(self.api_pedidos, {
             'paginacion': 'numPag=1|tamPag=100',
             'parametros': parametros
@@ -469,6 +493,7 @@ class ConnektaGateway:
     def estado(self):
         return {
             'modo_simulacion': self.modo_simulacion,
+            'modo_ensayo': self.modo_ensayo,
             'connekta_configurado': not self.modo_simulacion,
             'credenciales_configuradas': bool(self.ikey and self.itoken),
             'id_compania': self.id_compania,

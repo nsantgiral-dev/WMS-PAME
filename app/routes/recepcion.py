@@ -52,7 +52,10 @@ def crear_recepcion():
             almacen_id=data['almacen_id'],
             proveedor_codigo=data.get('proveedor_codigo', ''),
             proveedor_nombre=data.get('proveedor_nombre', ''),
-            items=data['items']
+            items=data['items'],
+            co_oc_siesa=data.get('co_oc_siesa', ''),
+            tipo_docto_oc_siesa=data.get('tipo_docto_oc_siesa', ''),
+            consec_docto_oc_siesa=data.get('consec_docto_oc_siesa', '')
         )
         return jsonify({
             'mensaje': 'Recepción creada — listo para iniciar escaneo ciego',

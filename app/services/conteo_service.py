@@ -174,15 +174,12 @@ class ConteoService:
             return reg.cantidad if reg else 0
 
         try:
-            params = {
-                'item_codigo': producto_codigo_siesa,
-                'ubicacion': ubicacion_codigo
-            }
-            if lote_id:
-                params['lote'] = lote_id
-
-            response = connekta._hacer_get('existencias', params=params)
-            return response.get('cantidad_disponible', 0)
+            response = connekta.get_inventario_fecha(producto_codigo_siesa)
+            tabla = response.get('detalle', {}).get('Table', [])
+            if not tabla:
+                return 0
+            fila = tabla[0]
+            return float(fila.get('cantidad_disponible', fila.get('f470_cant_base', 0)))
 
         except Exception as e:
             logger.error(f'[CONTEO] Error consultando Siesa: {str(e)}')
@@ -273,8 +270,9 @@ class ConteoService:
 
         try:
             respuesta = connekta.enviar_ajuste_inventario(
-                tipo=tipo_ajuste,
-                items=[payload_siesa],
+                motivo_codigo=motivo_codigo,
+                item_codigo=sesion.producto_codigo_siesa or sesion.producto.codigo,
+                cantidad=cantidad_ajuste,
                 referencia=sesion.codigo
             )
             sesion.siesa_triggered = True

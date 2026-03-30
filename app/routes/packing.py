@@ -50,7 +50,9 @@ def crear_desde_picking():
         tarea = PackingService.crear_desde_picking(
             tareas_picking_ids=data['tareas_picking_ids'],
             numero_pedido_siesa=data['numero_pedido_siesa'],
-            almacen_id=data['almacen_id']
+            almacen_id=data['almacen_id'],
+            tipo_docto_pedido_siesa=data.get('tipo_docto_pedido_siesa', ''),
+            consec_docto_pedido_siesa=data.get('consec_docto_pedido_siesa', '')
         )
         return jsonify({
             'mensaje': 'Tarea de packing creada',
@@ -73,7 +75,9 @@ def crear_manual():
         tarea = PackingService.crear_manual(
             numero_pedido_siesa=data['numero_pedido_siesa'],
             almacen_id=data['almacen_id'],
-            items=data['items']
+            items=data['items'],
+            tipo_docto_pedido_siesa=data.get('tipo_docto_pedido_siesa', ''),
+            consec_docto_pedido_siesa=data.get('consec_docto_pedido_siesa', '')
         )
         return jsonify({
             'mensaje': 'Tarea de packing creada manualmente',

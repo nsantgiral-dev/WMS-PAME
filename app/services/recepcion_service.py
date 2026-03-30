@@ -21,7 +21,8 @@ class RecepcionService:
     @staticmethod
     def crear_recepcion(numero_oc_siesa: str, almacen_id: int,
                         proveedor_codigo: str, proveedor_nombre: str,
-                        items: list):
+                        items: list, co_oc_siesa: str = '',
+                        tipo_docto_oc_siesa: str = '', consec_docto_oc_siesa: str = ''):
         """
         Crea una recepción a partir de una OC de Siesa.
         items: [{'producto_id', 'cantidad_ordenada', 'tolerancia_exceso_pct'}]
@@ -39,6 +40,9 @@ class RecepcionService:
         recepcion = RecepcionMercancia(
             codigo=codigo,
             numero_oc_siesa=numero_oc_siesa,
+            co_oc_siesa=co_oc_siesa,
+            tipo_docto_oc_siesa=tipo_docto_oc_siesa,
+            consec_docto_oc_siesa=consec_docto_oc_siesa,
             proveedor_codigo=proveedor_codigo,
             proveedor_nombre=proveedor_nombre,
             almacen_id=almacen_id,
@@ -323,13 +327,11 @@ class RecepcionService:
 
         try:
             respuesta_siesa = connekta.confirmar_entrada_compras(
-                numero_oc=recepcion.numero_oc_siesa,
-                datos_recepcion={
-                    'items': items_payload,
-                    'codigo_recepcion': recepcion.codigo,
-                    'es_parcial': tiene_faltantes,
-                    'observaciones': observaciones or ''
-                }
+                id_co_oc=recepcion.co_oc_siesa or connekta.centro_op,
+                tipo_docto_oc=recepcion.tipo_docto_oc_siesa or '',
+                consec_docto_oc=recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
+                items=items_payload,
+                es_parcial=tiene_faltantes
             )
             recepcion.siesa_triggered = True
             recepcion.siesa_response = json.dumps(respuesta_siesa)

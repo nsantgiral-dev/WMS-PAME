@@ -10,6 +10,10 @@ class RecepcionMercancia(db.Model):
 
     # Orden de compra de Siesa
     numero_oc_siesa = db.Column(db.String(50), nullable=False)
+    # Componentes separados requeridos por el gateway (f420_id_co_docto / f420_id_tipo_docto / f420_consec_docto)
+    co_oc_siesa = db.Column(db.String(20))
+    tipo_docto_oc_siesa = db.Column(db.String(20))
+    consec_docto_oc_siesa = db.Column(db.String(30))
     proveedor_codigo = db.Column(db.String(50))
     proveedor_nombre = db.Column(db.String(200))
 
@@ -56,6 +60,9 @@ class RecepcionMercancia(db.Model):
             'id': self.id,
             'codigo': self.codigo,
             'numero_oc_siesa': self.numero_oc_siesa,
+            'co_oc_siesa': self.co_oc_siesa,
+            'tipo_docto_oc_siesa': self.tipo_docto_oc_siesa,
+            'consec_docto_oc_siesa': self.consec_docto_oc_siesa,
             'proveedor_codigo': self.proveedor_codigo,
             'proveedor_nombre': self.proveedor_nombre,
             'almacen_id': self.almacen_id,

@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 class PackingService:
 
     @staticmethod
-    def crear_desde_picking(tareas_picking_ids: list, numero_pedido_siesa: str, almacen_id: int):
+    def crear_desde_picking(tareas_picking_ids: list, numero_pedido_siesa: str, almacen_id: int,
+                            tipo_docto_pedido_siesa: str = '', consec_docto_pedido_siesa: str = ''):
         """
         Crea una tarea de packing a partir de tareas de picking completadas.
         Agrupa todos los ítems del pedido en una sola tarea de packing.
@@ -43,6 +44,8 @@ class PackingService:
         tarea = TareaPacking(
             codigo=codigo,
             numero_pedido_siesa=numero_pedido_siesa,
+            tipo_docto_pedido_siesa=tipo_docto_pedido_siesa,
+            consec_docto_pedido_siesa=consec_docto_pedido_siesa,
             almacen_id=almacen_id,
             estado='PENDIENTE'
         )
@@ -73,7 +76,8 @@ class PackingService:
         return tarea
 
     @staticmethod
-    def crear_manual(numero_pedido_siesa: str, almacen_id: int, items: list):
+    def crear_manual(numero_pedido_siesa: str, almacen_id: int, items: list,
+                     tipo_docto_pedido_siesa: str = '', consec_docto_pedido_siesa: str = ''):
         """
         Crea una tarea de packing manualmente con lista de ítems.
         Útil cuando el pedido viene directo de Siesa sin picking previo.
@@ -91,6 +95,8 @@ class PackingService:
         tarea = TareaPacking(
             codigo=codigo,
             numero_pedido_siesa=numero_pedido_siesa,
+            tipo_docto_pedido_siesa=tipo_docto_pedido_siesa,
+            consec_docto_pedido_siesa=consec_docto_pedido_siesa,
             almacen_id=almacen_id,
             estado='PENDIENTE'
         )
@@ -216,13 +222,10 @@ class PackingService:
 
         # TRIGGER A SIESA — aquí Siesa genera remisión + factura
         try:
-            respuesta_siesa = connekta.marcar_pedido_cumplido(
-                numero_pedido=tarea.numero_pedido_siesa,
-                datos_packing={
-                    'items': items_payload,
-                    'observaciones': observaciones or '',
-                    'codigo_packing': tarea.codigo
-                }
+            respuesta_siesa = connekta.trigger_despacho(
+                tipo_docto_pedido=tarea.tipo_docto_pedido_siesa or '',
+                consec_docto_pedido=tarea.consec_docto_pedido_siesa or tarea.numero_pedido_siesa,
+                items=items_payload
             )
             tarea.siesa_triggered = True
             tarea.siesa_response = json.dumps(respuesta_siesa)

@@ -9,6 +9,7 @@ def register_routes(app):
     from app.routes.conteo import conteo_bp
     from app.routes.dashboard import dashboard_bp
     from app.routes.mobile import mobile_bp
+    from app.routes.siesa import siesa_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(productos_bp, url_prefix='/api/productos')
@@ -20,3 +21,4 @@ def register_routes(app):
     app.register_blueprint(conteo_bp, url_prefix='/api/conteo')
     app.register_blueprint(dashboard_bp, url_prefix='/api/dashboard')
     app.register_blueprint(mobile_bp, url_prefix='/api/mobile')
+    app.register_blueprint(siesa_bp, url_prefix='/api/siesa')

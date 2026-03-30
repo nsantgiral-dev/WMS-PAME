@@ -14,6 +14,9 @@ let TAB = 'tab-dashboard';
 let ALMACEN_ID = 1;
 let TIMER_ADMIN = null;
 let TIMER_OPERARIO = null;
+let RECEPCION_ACTUAL = null;   // recepción en escaneo activo (pantalla recepcionista)
+let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
+let SIESA_OCS = [];            // OCs cargadas desde Siesa (pantalla recepcionista)
 
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
@@ -242,27 +245,60 @@ async function cargarPedidos() {
   const el = document.getElementById('lista-pedidos');
   if (!el) return;
   try {
-    const d = await get('/api/picking/?per_page=30');
-    if (!d.tareas || !d.tareas.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos activos ✓</div>';
-      return;
+    const [siesa, db] = await Promise.all([
+      get('/api/siesa/pedidos').catch(() => ({ pedidos: [] })),
+      get('/api/picking/?per_page=20').catch(() => ({ tareas: [] }))
+    ]);
+    SIESA_PEDIDOS = siesa.pedidos || [];
+    let html = '';
+
+    if (siesa.simulado) {
+      html += `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">⚡ Connekta en simulación — conecta credenciales para ver pedidos reales</div>`;
+    } else if (SIESA_PEDIDOS.length) {
+      html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">PENDIENTES EN SIESA</div>`;
+      html += SIESA_PEDIDOS.map((p, i) => {
+        const sinProd = p.items.filter(it => !it.producto_id).length;
+        const totalUds = p.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
+        return `
+          <div class="tabla-card">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+              <div style="min-width:0;">
+                <div style="font-size:15px;font-weight:700;">${p.numero_pedido}</div>
+                <div style="font-size:12px;color:#666;margin-top:2px;">${p.cliente || 'Sin cliente'}</div>
+                <div style="font-size:11px;color:#444;margin-top:2px;">${p.items.length} producto(s) · ${totalUds} uds</div>
+                ${sinProd ? `<div style="font-size:11px;color:#d97706;margin-top:2px;">⚠ ${sinProd} sin registrar en WMS</div>` : ''}
+              </div>
+              <button onclick="iniciarDespachoDesdeSiesa(${i})"
+                style="flex-shrink:0;background:#fff;color:#000;border:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+                Despachar
+              </button>
+            </div>
+          </div>`;
+      }).join('');
+    } else {
+      html += `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin pedidos pendientes en Siesa</div>`;
     }
-    el.innerHTML = d.tareas.map(t => `
-      <div class="tabla-card">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div>
-            <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
-            <div style="font-size:12px;color:#666;margin-top:2px;">${t.codigo} · ${t.ubicacion_codigo || '—'}</div>
-            <div style="font-size:11px;color:#444;margin-top:2px;">
-              ${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado — requiere atención' : '⏳ En cola'}
+
+    if (db.tareas && db.tareas.length) {
+      html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin:10px 0 8px;">TAREAS EN BODEGA</div>`;
+      html += db.tareas.map(t => `
+        <div class="tabla-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
+              <div style="font-size:12px;color:#666;margin-top:2px;">${t.codigo} · ${t.ubicacion_codigo || '—'}</div>
+              <div style="font-size:11px;color:#444;margin-top:2px;">${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado' : '⏳ En cola'}</div>
+            </div>
+            <div style="text-align:right;">
+              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='COMPLETADO'?'badge-green':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
+              <div style="font-size:22px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
             </div>
           </div>
-          <div style="text-align:right;">
-            <span class="badge ${t.estado === 'EN_PROCESO' ? 'badge-blue' : t.estado === 'COMPLETADO' ? 'badge-green' : t.estado === 'BLOQUEADO' ? 'badge-red' : 'badge-yellow'}">${t.estado}</span>
-            <div style="font-size:24px;font-weight:800;margin-top:4px;">${t.cantidad_recogida}/${t.cantidad_solicitada}</div>
-          </div>
-        </div>
-      </div>`).join('');
+        </div>`).join('');
+    }
+
+    if (!html) html = '<div style="color:#555;text-align:center;padding:40px;">Sin actividad ✓</div>';
+    el.innerHTML = html;
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
   }
@@ -316,18 +352,36 @@ async function cargarConnekta() {
   if (!el) return;
   try {
     const d = await get('/api/packing/connekta/estado');
-    const color = d.modo_simulacion ? '#facc15' : '#4ade80';
-    const estado = d.modo_simulacion ? 'SIMULACIÓN' : 'PRODUCCIÓN';
+    let color, estado, detalle;
+    if (d.modo_simulacion) {
+      color = '#facc15'; estado = 'SIMULACIÓN';
+      detalle = 'Sin credenciales — todo simulado localmente';
+    } else if (d.modo_ensayo) {
+      color = '#fb923c'; estado = 'MODO ENSAYO';
+      detalle = 'Credenciales activas · GETs reales · POSTs bloqueados en servidor';
+    } else {
+      color = '#4ade80'; estado = 'PRODUCCIÓN';
+      detalle = d.mensaje || 'Listo para operar';
+    }
     el.innerHTML = `
       <div class="tabla-card">
         <div style="text-align:center;padding:20px 0;">
-          <div style="font-size:13px;color:#666;margin-bottom:8px;">Estado Connekta</div>
-          <div style="font-size:32px;font-weight:800;color:${color};">${estado}</div>
-          <div style="font-size:12px;color:#555;margin-top:10px;">${d.mensaje}</div>
+          <div style="font-size:13px;color:#666;margin-bottom:8px;">Estado Connekta / Siesa</div>
+          <div style="font-size:28px;font-weight:800;color:${color};">${estado}</div>
+          <div style="font-size:12px;color:#666;margin-top:8px;line-height:1.5;">${detalle}</div>
         </div>
-        <div class="tabla-fila"><span class="tabla-nombre">URL</span><span class="badge ${d.url_configurada?'badge-green':'badge-red'}">${d.url_configurada?'✓':'✗'}</span></div>
-        <div class="tabla-fila"><span class="tabla-nombre">Credenciales</span><span class="badge ${d.credenciales_configuradas?'badge-green':'badge-red'}">${d.credenciales_configuradas?'✓':'✗'}</span></div>
-      </div>`;
+        <div class="tabla-fila"><span class="tabla-nombre">Credenciales</span><span class="badge ${d.credenciales_configuradas?'badge-green':'badge-red'}">${d.credenciales_configuradas?'✓ Activas':'✗ Faltan'}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">GETs (lectura)</span><span class="badge ${!d.modo_simulacion?'badge-green':'badge-yellow'}">${!d.modo_simulacion?'✓ Real':'Simulado'}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">POSTs (escritura)</span><span class="badge ${(!d.modo_simulacion&&!d.modo_ensayo)?'badge-green':d.modo_ensayo?'badge-yellow':'badge-red'}">${(!d.modo_simulacion&&!d.modo_ensayo)?'✓ Activos':d.modo_ensayo?'Bloqueados (ensayo)':'Simulados'}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">Bodega</span><span style="font-size:13px;color:#aaa;">${d.bodega||'—'}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">CO</span><span style="font-size:13px;color:#aaa;">${d.centro_operacion||'—'}</span></div>
+      </div>
+      ${d.modo_ensayo ? `
+      <div style="background:#1a0f00;border:1px solid #7c2d12;border-radius:10px;padding:12px;margin-top:8px;font-size:12px;color:#fb923c;line-height:1.6;">
+        <strong>MODO ENSAYO activo</strong><br>
+        Los pedidos y OCs vienen de Siesa real. Al confirmar despacho o recepción, el payload se certifica en los logs del servidor pero <strong>no mueve inventario en Siesa</strong>.<br>
+        Para activar producción: borrar la variable <code>MODO_ENSAYO</code> en Railway.
+      </div>` : ''}`;
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
@@ -441,6 +495,7 @@ function loadScript(src) {
 }
 
 async function procesarScan(codigo) {
+  if (RECEPCION_ACTUAL) { await procesarScanRecepcion(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
   try {
@@ -534,39 +589,18 @@ async function confirmarProblema(tareaId, motivo) {
 }
 
 async function cargarRecepciones() {
+  if (RECEPCION_ACTUAL) return;
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:40px;color:#666;">Cargando...</div>';
   try {
-    const d = await get('/api/recepcion/?estado=ABIERTA');
-    if (!d.recepciones || !d.recepciones.length) {
-      el.innerHTML = `<div style="text-align:center;padding:40px;">
-        <div style="font-size:50px;">✓</div>
-        <div style="font-size:22px;font-weight:700;margin-top:12px;">Sin recepciones</div>
-        <button onclick="cargarRecepciones()" style="margin-top:20px;padding:12px 24px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Actualizar</button>
-      </div>`;
-      return;
-    }
-    el.innerHTML = d.recepciones.map(r => `
-      <div class="rec-card">
-        <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
-        <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'}</div>
-        <div style="margin-top:10px;display:flex;justify-content:space-between;">
-          <span class="badge badge-blue">${r.estado}</span>
-          <span style="font-size:12px;color:#555;">${r.total_items} ítems</span>
-        </div>
-        <button onclick="iniciarRec(${r.id})" style="width:100%;margin-top:10px;padding:12px;font-size:15px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
-          Iniciar recepción
-        </button>
-      </div>`).join('');
-  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
-}
-
-async function iniciarRec(id) {
-  try {
-    await put('/api/recepcion/' + id + '/iniciar');
-    alerta('Recepción iniciada', 'exito');
-    cargarRecepciones();
-  } catch (e) { alerta('Error', 'error'); }
+    const [siesa, db] = await Promise.all([
+      get('/api/siesa/ordenes-compra').catch(() => ({ ordenes: [] })),
+      get('/api/recepcion/?estado=EN_PROCESO').catch(() => ({ recepciones: [] }))
+    ]);
+    SIESA_OCS = siesa.ordenes || [];
+    renderListaRecepciones(siesa, db.recepciones || []);
+  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error cargando</div>'; }
 }
 
 function pantalla(id) {
@@ -598,3 +632,266 @@ function flash() {
 }
 
 function vibrar() { if (navigator.vibrate) navigator.vibrate(40); }
+
+// ─────────────────────────────────────────────────────────────
+// ADMIN — Despacho desde Siesa
+// ─────────────────────────────────────────────────────────────
+
+async function iniciarDespachoDesdeSiesa(idx) {
+  const pedido = SIESA_PEDIDOS[idx];
+  if (!pedido) return;
+  const itemsValidos = pedido.items.filter(it => it.producto_id);
+  if (!itemsValidos.length) {
+    alerta('Ningún producto está registrado en el WMS', 'error');
+    return;
+  }
+  const totalUds = itemsValidos.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
+  if (!confirm(`¿Iniciar despacho ${pedido.numero_pedido}?\n${itemsValidos.length} productos · ${totalUds} uds → ${pedido.cliente || 'cliente'}`)) return;
+
+  try {
+    const r = await post('/api/siesa/iniciar-despacho', {
+      numero_pedido: pedido.numero_pedido,
+      tipo_docto: pedido.tipo_docto,
+      consec_docto: pedido.consec_docto,
+      co: pedido.centro_op,
+      almacen_id: ALMACEN_ID,
+      items: itemsValidos
+    });
+    if (r.error) { alerta(r.error, 'error'); return; }
+    alerta(`Despacho iniciado — Packing ${r.packing_codigo}`, 'exito');
+    setTimeout(cargarPedidos, 800);
+  } catch (e) { alerta('Error iniciando despacho', 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECEPCIONISTA — Lista de OCs y recepciones en proceso
+// ─────────────────────────────────────────────────────────────
+
+function renderListaRecepciones(siesa, dbRecs) {
+  const el = document.getElementById('contenido-recepcion');
+  if (!el) return;
+  let html = '';
+
+  // Sección 1: OCs de Siesa
+  if (siesa.simulado) {
+    html += `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">
+      ⚡ Connekta en simulación — conecta credenciales para ver OCs reales de Siesa
+    </div>`;
+  } else if (SIESA_OCS.length) {
+    html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">OCs PENDIENTES EN SIESA</div>`;
+    html += SIESA_OCS.map((oc, i) => {
+      const sinProd = oc.items.filter(it => !it.producto_id).length;
+      const totalUds = oc.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
+      return `
+        <div class="rec-card">
+          <div class="rec-titulo">OC: ${oc.numero_oc}</div>
+          <div class="rec-sub">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+          ${sinProd ? `<div style="font-size:11px;color:#d97706;margin-top:4px;">⚠ ${sinProd} producto(s) no registrado(s) en WMS</div>` : ''}
+          <button onclick="crearRecepcionDesdeSiesa(${i})"
+            style="width:100%;margin-top:12px;padding:14px;font-size:17px;font-weight:700;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">
+            Iniciar recepción
+          </button>
+        </div>`;
+    }).join('');
+  } else {
+    html += `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin OCs pendientes en Siesa</div>`;
+  }
+
+  // Sección 2: Recepciones en proceso (desde DB)
+  if (dbRecs.length) {
+    html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin:10px 0 8px;">EN PROCESO</div>`;
+    html += dbRecs.map(r => `
+      <div class="rec-card">
+        <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
+        <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'}</div>
+        <div style="margin-top:6px;font-size:13px;color:#666;">${r.items_escaneados} / ${r.total_items} ítems escaneados</div>
+        <button onclick="continuarRecepcion(${r.id})"
+          style="width:100%;margin-top:10px;padding:13px;font-size:16px;font-weight:700;background:#1d4ed8;color:#fff;border:none;border-radius:10px;cursor:pointer;">
+          Continuar escaneo
+        </button>
+      </div>`).join('');
+  }
+
+  if (!html) {
+    html = `<div style="text-align:center;padding:50px 20px;">
+      <div style="font-size:50px;">✓</div>
+      <div style="font-size:22px;font-weight:700;margin-top:12px;">Sin recepciones</div>
+      <button onclick="cargarRecepciones()" style="margin-top:20px;padding:12px 24px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Actualizar</button>
+    </div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+async function crearRecepcionDesdeSiesa(idx) {
+  const oc = SIESA_OCS[idx];
+  if (!oc) return;
+  const itemsValidos = oc.items.filter(it => it.producto_id);
+  if (!itemsValidos.length) { alerta('Ningún producto de la OC está en el WMS', 'error'); return; }
+
+  const el = document.getElementById('contenido-recepcion');
+  if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#666;">Creando recepción...</div>';
+
+  try {
+    const r = await post('/api/siesa/iniciar-recepcion', {
+      numero_oc: oc.numero_oc,
+      tipo_docto: oc.tipo_docto,
+      consec_docto: oc.consec_docto,
+      co: oc.co,
+      proveedor: oc.proveedor,
+      almacen_id: ALMACEN_ID,
+      items: itemsValidos
+    });
+    if (r.error) { alerta(r.error, 'error'); cargarRecepciones(); return; }
+    RECEPCION_ACTUAL = r.recepcion;
+    renderEscaneoRecepcion(r.recepcion);
+  } catch (e) { alerta('Error creando recepción', 'error'); cargarRecepciones(); }
+}
+
+async function continuarRecepcion(id) {
+  try {
+    const r = await get('/api/recepcion/' + id);
+    RECEPCION_ACTUAL = r;
+    renderEscaneoRecepcion(r);
+  } catch (e) { alerta('Error cargando recepción', 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECEPCIONISTA — Pantalla de escaneo ciego
+// ─────────────────────────────────────────────────────────────
+
+function renderEscaneoRecepcion(rec) {
+  const el = document.getElementById('contenido-recepcion');
+  if (!el) return;
+  const todoCompleto = rec.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+
+  el.innerHTML = `
+    <div style="padding:16px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <button onclick="volverListaRecepciones()"
+          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
+          ← Volver
+        </button>
+        <div style="min-width:0;">
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${rec.numero_oc_siesa}</div>
+          <div style="font-size:12px;color:#666;">${rec.proveedor_nombre || ''}</div>
+        </div>
+      </div>
+
+      <div style="background:#111;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#666;text-align:center;">
+        Apunta el escáner — 1 beep = 1 unidad
+      </div>
+
+      <div id="items-rec-list" style="margin-bottom:14px;">
+        ${renderItemsRecepcion(rec.items)}
+      </div>
+
+      <button id="btn-confirmar-rec" onclick="confirmarRecepcionActiva()" ${todoCompleto ? '' : 'disabled'}
+        style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${todoCompleto ? '#16a34a' : '#222'};color:#fff;border:none;border-radius:14px;cursor:${todoCompleto ? 'pointer' : 'default'};margin-bottom:10px;">
+        ✓ Confirmar recepción
+      </button>
+
+      <button onclick="volverListaRecepciones()"
+        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        Guardar y salir (continuar más tarde)
+      </button>
+    </div>`;
+}
+
+function renderItemsRecepcion(items) {
+  return items.map(it => {
+    const pct = it.cantidad_ordenada > 0 ? Math.min((it.cantidad_recibida / it.cantidad_ordenada) * 100, 100) : 0;
+    const completo = it.cantidad_recibida >= it.cantidad_ordenada;
+    return `
+      <div id="item-rec-${it.producto_id}"
+        style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="min-width:0;">
+            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${it.producto_nombre || it.producto_codigo}</div>
+            <div style="font-size:11px;color:#555;">${it.producto_codigo}</div>
+            ${it.destino === 'CROSS_DOCK' ? '<div style="font-size:11px;color:#60a5fa;margin-top:4px;">↔ CROSS-DOCK</div>' : ''}
+          </div>
+          <div style="text-align:right;flex-shrink:0;padding-left:8px;">
+            <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${it.cantidad_recibida}/${it.cantidad_ordenada}</div>
+          </div>
+        </div>
+        <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
+          <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.3s;"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function procesarScanRecepcion(codigo) {
+  if (!RECEPCION_ACTUAL) return;
+  vibrar(); flash();
+
+  try {
+    // 1. Traducir código de barras → producto_id
+    const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+    if (prod.error) { alerta('Producto no encontrado: ' + codigo, 'error'); return; }
+
+    // 2. Registrar en la recepción (cantidad 1 por escaneo)
+    const r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
+      producto_id: prod.producto_id,
+      cantidad: 1
+    });
+    if (r.error) {
+      const msg = typeof r.error === 'object' ? r.error.mensaje : r.error;
+      alerta(msg, 'error');
+      return;
+    }
+
+    // 3. Actualizar estado local
+    const idx = RECEPCION_ACTUAL.items.findIndex(it => it.producto_id === prod.producto_id);
+    if (idx >= 0) RECEPCION_ACTUAL.items[idx] = r.item;
+
+    // 4. Re-renderizar items
+    const lista = document.getElementById('items-rec-list');
+    if (lista) lista.innerHTML = renderItemsRecepcion(RECEPCION_ACTUAL.items);
+
+    if (r.alerta) {
+      const tipo = r.alerta.includes('EXCESO') ? 'error' : r.alerta.includes('CROSS') ? 'advertencia' : 'info';
+      alerta(r.alerta, tipo);
+    }
+
+    // 5. Habilitar confirmar si todo está listo
+    const todoCompleto = RECEPCION_ACTUAL.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+    const btn = document.getElementById('btn-confirmar-rec');
+    if (btn && todoCompleto) {
+      btn.disabled = false;
+      btn.style.background = '#16a34a';
+      btn.style.cursor = 'pointer';
+      alerta('Todo escaneado — confirma la recepción', 'exito');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function confirmarRecepcionActiva() {
+  if (!RECEPCION_ACTUAL) return;
+  const btn = document.getElementById('btn-confirmar-rec');
+  if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
+
+  try {
+    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/confirmar');
+    if (r.error) {
+      alerta(r.error, 'error');
+      if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
+      return;
+    }
+    let msg = 'Recepción confirmada';
+    if (r.siesa_triggered) msg += ' — Siesa actualizó inventario';
+    if (r.tiene_cross_dock) msg += ' · revisar Cross-Dock';
+    alerta(msg, 'exito');
+    RECEPCION_ACTUAL = null;
+    setTimeout(cargarRecepciones, 1500);
+  } catch (e) {
+    alerta('Error confirmando', 'error');
+    if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
+  }
+}
+
+function volverListaRecepciones() {
+  RECEPCION_ACTUAL = null;
+  cargarRecepciones();
+}
