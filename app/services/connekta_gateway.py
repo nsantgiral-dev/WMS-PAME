@@ -198,11 +198,13 @@ class ConnektaGateway:
     def get_ordenes_compra_aprobadas(self, sin_filtros: bool = False):
         """API_v2_Compras_Ordenes — muelle de recepción ciega."""
         if sin_filtros:
-            params = {'paginacion': 'numPag=1|tamPag=20'}
+            params = {'paginacion': 'numPag=1|tamPag=100'}
         else:
+            # f150_id y f420_id_co son rechazados como filtros por esta API —
+            # traemos todos los Aprobados y filtramos CO/bodega en Python.
             params = {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': f'f150_id="{self.bodega}" AND f420_id_co="{self.centro_op}" AND f420_ind_estado=1'
+                'paginacion': 'numPag=1|tamPag=200',
+                'parametros': 'f420_ind_estado=1'
             }
         return self._get(self.api_ordenes, params)
 

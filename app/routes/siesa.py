@@ -100,6 +100,12 @@ def ordenes_compra():
         return jsonify(resultado), 200
 
     items_raw = resultado.get('detalle', {}).get('Table', [])
+    # Filtrar por CO y bodega en Python (la API no acepta esos campos como filtro)
+    items_raw = [
+        r for r in items_raw
+        if r.get('f420_id_co', '').strip() == connekta.centro_op
+        and r.get('f150_id', '').strip() == connekta.bodega
+    ]
     ordenes = {}
     for row in items_raw:
         try:
