@@ -196,17 +196,24 @@ class ConnektaGateway:
         }
 
     def get_ordenes_compra_aprobadas(self, sin_filtros: bool = False):
-        """API_v2_Compras_Ordenes — muelle de recepción ciega."""
-        if sin_filtros:
-            params = {'paginacion': 'numPag=1|tamPag=100'}
-        else:
-            # f150_id y f420_id_co son rechazados como filtros por esta API —
-            # traemos todos los Aprobados y filtramos CO/bodega en Python.
-            params = {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': 'f420_ind_estado=1'
-            }
-        return self._get(self.api_ordenes, params)
+        """API_v2_Compras_Ordenes — muelle de recepción ciega.
+        Pagina automáticamente (tamPag=100) hasta agotar los registros,
+        porque la API no acepta filtros por CO/bodega.
+        """
+        base_params = {} if sin_filtros else {'parametros': 'f420_ind_estado=1'}
+        todos = []
+        for pag in range(1, 6):  # máximo 5 páginas = 500 items
+            params = {**base_params, 'paginacion': f'numPag={pag}|tamPag=100'}
+            resp = self._get(self.api_ordenes, params)
+            if self.modo_simulacion:
+                return resp
+            rows = resp.get('detalle', {}).get('Table', [])
+            if not rows or (len(rows) == 1 and 'alerta' in rows[0]):
+                break
+            todos.extend(rows)
+            if len(rows) < 100:
+                break
+        return {'detalle': {'Table': todos}}
 
     def get_inventario_fecha(self, item_codigo: str):
         """API_v2_Inventarios_InvFecha — existencia real para conteo cíclico."""
