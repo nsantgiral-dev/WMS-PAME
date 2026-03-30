@@ -17,7 +17,7 @@ from app.services.connekta_gateway import connekta
 logger = logging.getLogger(__name__)
 
 # Último sync exitoso — evita que múltiples workers ejecuten en paralelo
-_ultimo_sync: datetime | None = None
+_ultimo_sync = None
 _MIN_INTERVALO_SEG = 55 * 60  # 55 minutos entre syncs
 
 

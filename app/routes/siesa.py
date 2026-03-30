@@ -25,9 +25,8 @@ siesa_bp = Blueprint('siesa', __name__)
 @jwt_required()
 def sync_productos():
     """Admin dispara sync manual del catálogo de productos Siesa → WMS."""
-    from app.services.siesa_sync_service import ejecutar_sync
     try:
-        # Ya estamos en app context (request Flask) — no pasar app
+        from app.services.siesa_sync_service import ejecutar_sync
         resultado = ejecutar_sync()
         return jsonify(resultado), 200
     except Exception as e:
