@@ -536,6 +536,8 @@ async function cargarInventarioInicial() {
             const r = e.ultimo_resultado;
             res.style.color = '#4ade80';
             res.textContent = `✓ ${r.cargados} nuevos · ${r.actualizados} actualizados · ${r.sin_producto_wms} sin match WMS`;
+          } else {
+            res.style.color = '#fb923c'; res.textContent = 'No hay resultado aún — intenta de nuevo';
           }
         } else { res.textContent = '⏳ Cargando stock desde Siesa...'; }
       } catch(e) { clearInterval(iv); }
