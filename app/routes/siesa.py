@@ -25,12 +25,24 @@ siesa_bp = Blueprint('siesa', __name__)
 @jwt_required()
 def sync_productos():
     """Admin dispara sync manual del catálogo de productos Siesa → WMS."""
+    import traceback
     try:
         from app.services.siesa_sync_service import ejecutar_sync
         resultado = ejecutar_sync()
         return jsonify(resultado), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except BaseException as e:
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
+
+
+@siesa_bp.route('/test-sync-noauth', methods=['GET'])
+def test_sync_noauth():
+    """Debug sin JWT: verifica que el módulo importa y el servicio funciona."""
+    import traceback
+    try:
+        from app.services.siesa_sync_service import ejecutar_sync  # noqa
+        return jsonify({'ok': True}), 200
+    except BaseException as e:
+        return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
 def _buscar_producto(codigo):
