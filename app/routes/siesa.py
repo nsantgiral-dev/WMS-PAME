@@ -36,22 +36,30 @@ def sync_productos():
 
 @siesa_bp.route('/test-sync-noauth', methods=['GET'])
 def test_sync_noauth():
-    """Debug sin JWT: llama a API_v2_Items página 1 y devuelve la respuesta cruda."""
+    """Debug: sync de SOLO 3 productos para aislar el error de inserción."""
     import traceback
+    from app.extensions import db
+    from app.models.producto import Producto
     try:
         resp = connekta.get_items_catalogo(1)
-        keys = list(resp.keys()) if isinstance(resp, dict) else str(type(resp))
-        detalle = resp.get('detalle', {}) if isinstance(resp, dict) else {}
-        table = detalle.get('Table', []) if isinstance(detalle, dict) else []
-        primer_row = table[0] if table else None
-        return jsonify({
-            'ok': True,
-            'resp_keys': keys,
-            'table_len': len(table),
-            'primer_row': primer_row,
-            'resp_raw': resp if len(str(resp)) < 500 else str(resp)[:500]
-        }), 200
+        rows = resp.get('detalle', {}).get('Table', [])[:3]  # solo 3 filas
+        creados = 0
+        for row in rows:
+            codigo_siesa = (row.get('f120_referencia') or '').strip()
+            nombre = (row.get('f120_descripcion') or '').strip()
+            if not codigo_siesa:
+                continue
+            prod = (Producto.query.filter_by(codigo_siesa=codigo_siesa).first()
+                    or Producto.query.filter_by(codigo=codigo_siesa).first())
+            if not prod:
+                prod = Producto(codigo=codigo_siesa, nombre=nombre or codigo_siesa,
+                                codigo_siesa=codigo_siesa, activo=True, clasificacion_abc='C')
+                db.session.add(prod)
+                creados += 1
+        db.session.commit()
+        return jsonify({'ok': True, 'creados': creados, 'filas_probadas': len(rows)}), 200
     except BaseException as e:
+        db.session.rollback()
         return jsonify({'error': str(e), 'trace': traceback.format_exc()}), 500
 
 
