@@ -345,6 +345,51 @@ async function cargarStock() {
         </div>
       </div>`).join('');
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
+  await cargarCatalogo(1);
+}
+
+let _catalogoPag = 1;
+async function cargarCatalogo(pag) {
+  _catalogoPag = pag || 1;
+  const el = document.getElementById('lista-productos');
+  const totalEl = document.getElementById('total-productos');
+  const pagEl = document.getElementById('paginacion-productos');
+  if (!el) return;
+  const q = (document.getElementById('input-buscar-producto') || {}).value || '';
+  try {
+    const d = await get(`/api/productos/?page=${_catalogoPag}&per_page=20&q=${encodeURIComponent(q)}`);
+    if (totalEl) totalEl.textContent = `${d.total} productos`;
+    if (!d.productos || !d.productos.length) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:20px;font-size:13px;">Sin productos</div>';
+      if (pagEl) pagEl.innerHTML = '';
+      return;
+    }
+    el.innerHTML = d.productos.map(p => `
+      <div class="tabla-fila">
+        <div>
+          <div style="font-size:13px;font-weight:600;">${p.nombre}</div>
+          <div style="font-size:11px;color:#555;">${p.codigo}${p.codigo_siesa && p.codigo_siesa !== p.codigo ? ' · Siesa: ' + p.codigo_siesa : ''} · Clase ${p.clasificacion_abc || '—'}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:16px;font-weight:700;color:${p.stock_total > 0 ? '#4ade80' : '#555'}">${p.stock_total}</div>
+          <div style="font-size:10px;color:#555;">${p.unidad_medida || 'UND'}</div>
+        </div>
+      </div>`).join('');
+    // Paginación
+    if (pagEl && d.paginas > 1) {
+      let btns = '';
+      if (_catalogoPag > 1) btns += `<button onclick="cargarCatalogo(${_catalogoPag - 1})" style="padding:6px 12px;background:#222;border:1px solid #333;color:#aaa;border-radius:6px;cursor:pointer;">◀</button>`;
+      btns += `<span style="font-size:12px;color:#555;align-self:center;">${_catalogoPag} / ${d.paginas}</span>`;
+      if (_catalogoPag < d.paginas) btns += `<button onclick="cargarCatalogo(${_catalogoPag + 1})" style="padding:6px 12px;background:#222;border:1px solid #333;color:#aaa;border-radius:6px;cursor:pointer;">▶</button>`;
+      pagEl.innerHTML = btns;
+    } else if (pagEl) pagEl.innerHTML = '';
+  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error cargando productos</div>'; }
+}
+
+let _buscarTimer;
+function buscarProductos() {
+  clearTimeout(_buscarTimer);
+  _buscarTimer = setTimeout(() => cargarCatalogo(1), 400);
 }
 
 async function cargarConnekta() {
