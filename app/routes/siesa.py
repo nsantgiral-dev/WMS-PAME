@@ -77,7 +77,8 @@ def ordenes_compra():
     Cola de recepción: OCs aprobadas en Siesa con cantidad pendiente > 0.
     Enriquece con producto_id interno y agrupa por número de OC.
     """
-    resultado = connekta.get_ordenes_compra_aprobadas()
+    sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
+    resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
 
     if resultado.get('simulado'):
         return jsonify(resultado), 200

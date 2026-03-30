@@ -195,12 +195,16 @@ class ConnektaGateway:
             'items': items_pendientes
         }
 
-    def get_ordenes_compra_aprobadas(self):
+    def get_ordenes_compra_aprobadas(self, sin_filtros: bool = False):
         """API_v2_Compras_Ordenes — muelle de recepción ciega."""
-        return self._get(self.api_ordenes, {
-            'paginacion': 'numPag=1|tamPag=100',
-            'parametros': f'f150_id="{self.bodega}" AND f430_id_co="{self.centro_op}" AND f430_ind_estado=1'
-        })
+        if sin_filtros:
+            params = {'paginacion': 'numPag=1|tamPag=20'}
+        else:
+            params = {
+                'paginacion': 'numPag=1|tamPag=100',
+                'parametros': f'f150_id="{self.bodega}" AND f430_id_co="{self.centro_op}" AND f430_ind_estado=1'
+            }
+        return self._get(self.api_ordenes, params)
 
     def get_inventario_fecha(self, item_codigo: str):
         """API_v2_Inventarios_InvFecha — existencia real para conteo cíclico."""
