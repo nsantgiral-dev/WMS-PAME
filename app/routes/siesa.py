@@ -27,7 +27,7 @@ def sync_productos():
     """Inicia el sync en background y retorna inmediatamente (evita timeout gunicorn)."""
     from flask import current_app
     from app.services.siesa_sync_service import iniciar_sync_background
-    resultado = iniciar_sync_background(current_app._get_current_object())
+    resultado = iniciar_sync_background(current_app._get_current_object(), forzar=True)
     return jsonify(resultado), 202
 
 

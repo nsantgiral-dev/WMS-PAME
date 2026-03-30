@@ -21,7 +21,7 @@ _sync_estado = {
     'ultimo_resultado': None,   # dict con estadísticas del último sync exitoso
     'ultimo_error': None,
 }
-_MIN_INTERVALO_SEG = 55 * 60
+_MIN_INTERVALO_SEG = 4 * 60  # 4 min — deja margen al scheduler de 5 min
 
 
 def _run_sync(app):
@@ -35,7 +35,7 @@ def _run_sync(app):
         total_procesados = 0
 
         try:
-            for pag in range(1, 51):  # hasta 5 000 items
+            for pag in range(1, 201):  # hasta 20 000 items (200 págs × 100)
                 resp = connekta.get_items_catalogo(pag)
                 rows = resp.get('detalle', {}).get('Table', [])
 
@@ -110,10 +110,11 @@ def _run_sync(app):
         _sync_estado['en_curso'] = False
 
 
-def iniciar_sync_background(app):
+def iniciar_sync_background(app, forzar=False):
     """
     Arranca el sync en un hilo de fondo y retorna inmediatamente.
-    Si ya hay un sync en curso o se hizo hace menos de 55 min, retorna el estado actual.
+    forzar=True: el admin dispara manualmente — ignora el guard de intervalo.
+    forzar=False: llamada automática del scheduler — respeta el guard.
     """
     global _sync_estado
 
@@ -122,14 +123,10 @@ def iniciar_sync_background(app):
     if _sync_estado['en_curso']:
         return {'en_curso': True, 'mensaje': 'Sync ya en proceso — espera que termine'}
 
-    ultimo = _sync_estado.get('ultimo_inicio')
-    if ultimo and (ahora - ultimo).total_seconds() < _MIN_INTERVALO_SEG:
-        mins = int(((ahora - ultimo).total_seconds()) / 60)
-        return {
-            'omitido': True,
-            'mensaje': f'Sync reciente hace {mins} min — próximo disponible en {55 - mins} min',
-            'ultimo_resultado': _sync_estado['ultimo_resultado']
-        }
+    if not forzar:
+        ultimo = _sync_estado.get('ultimo_inicio')
+        if ultimo and (ahora - ultimo).total_seconds() < _MIN_INTERVALO_SEG:
+            return {'omitido': True, 'mensaje': 'Sync reciente — scheduler omite esta vuelta'}
 
     if connekta.modo_simulacion:
         return {'simulado': True, 'mensaje': 'Modo simulación — conecta credenciales Siesa'}
@@ -164,7 +161,7 @@ def ejecutar_sync(app=None):
 
 
 def init_scheduler(app):
-    """Scheduler horario 7am–8pm hora Bogotá."""
+    """Scheduler cada 5 min entre 7am y 8pm hora Bogotá."""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
@@ -175,14 +172,14 @@ def init_scheduler(app):
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     scheduler.add_job(
         func=ejecutar_sync,
-        trigger=CronTrigger(hour='7-20', minute=0, timezone='America/Bogota'),
+        trigger=CronTrigger(hour='7-20', minute='*/5', timezone='America/Bogota'),
         kwargs={'app': app},
         id='sync_productos_siesa',
-        name='Sync catálogo Siesa → WMS',
+        name='Sync catálogo Siesa → WMS cada 5 min',
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=300
+        misfire_grace_time=60
     )
     scheduler.start()
-    logger.info('[SYNC] Scheduler iniciado — sync cada hora 7am–8pm (Bogotá)')
+    logger.info('[SYNC] Scheduler iniciado — sync cada 5 min 7am–8pm (Bogotá)')
     return scheduler
