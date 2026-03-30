@@ -57,15 +57,22 @@ def carga_inventario_estado():
     return jsonify(estado_carga_inventario()), 200
 
 
-@siesa_bp.route('/reconciliacion', methods=['GET'])
+@siesa_bp.route('/reconciliacion', methods=['POST'])
 @jwt_required()
-def reconciliacion():
-    """
-    Compara stock WMS vs Siesa. NO modifica nada.
-    Puede tardar ~60 seg con 5000 productos — llamar bajo demanda.
-    """
-    from app.services.inventario_siesa_service import reconciliar_inventario
-    return jsonify(reconciliar_inventario()), 200
+def reconciliacion_iniciar():
+    """Inicia la reconciliación en background (puede tardar 2+ min)."""
+    from flask import current_app
+    from app.services.inventario_siesa_service import iniciar_reconciliacion
+    resultado = iniciar_reconciliacion(current_app._get_current_object())
+    return jsonify(resultado), 202
+
+
+@siesa_bp.route('/reconciliacion-estado', methods=['GET'])
+@jwt_required()
+def reconciliacion_estado():
+    """Retorna el estado de la reconciliación en curso o el último resultado."""
+    from app.services.inventario_siesa_service import estado_reconciliacion
+    return jsonify(estado_reconciliacion()), 200
 
 
 @siesa_bp.route('/debug-inventario-raw', methods=['GET'])

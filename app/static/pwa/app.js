@@ -550,35 +550,47 @@ async function verReconciliacion() {
   const panel = document.getElementById('panel-reconciliacion');
   if (!res || !panel) return;
   res.style.color = '#93c5fd';
-  res.textContent = '⏳ Consultando Siesa y comparando... (~60 seg)';
+  res.textContent = '⏳ Iniciando reconciliación... (~2 min)';
   panel.innerHTML = '';
   try {
-    const d = await get('/api/siesa/reconciliacion');
+    const d = await post('/api/siesa/reconciliacion', {});
     if (d.simulado) { res.style.color = '#fb923c'; res.textContent = 'Modo simulación'; return; }
-    if (d.error) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + d.error; return; }
-    const total = d.total_discrepancias;
-    if (total === 0) {
-      res.style.color = '#4ade80';
-      res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${d.total_productos_siesa} productos)`;
-      return;
-    }
-    res.style.color = '#facc15';
-    res.textContent = `⚠ ${total} diferencias encontradas de ${d.total_productos_siesa} productos`;
-    panel.innerHTML = `
-      <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa):</div>
-      ${d.discrepancias.slice(0,20).map(x => `
-        <div class="tabla-fila" style="font-size:12px;">
-          <div>
-            <div style="font-weight:600;">${x.nombre}</div>
-            <div style="color:#555;">${x.codigo}</div>
-          </div>
-          <div style="text-align:right;">
-            <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${x.stock_wms}</span>
-            <span style="color:#555;margin:0 4px;">·</span>
-            <span style="color:#93c5fd;">Siesa: ${x.stock_siesa}</span>
-            <div style="color:${x.diferencia > 0 ? '#4ade80':'#f87171'};font-size:11px;">${x.diferencia > 0 ? '+' : ''}${x.diferencia}</div>
-          </div>
-        </div>`).join('')}`;
+    if (d.en_curso && !d.iniciado) { res.textContent = '⏳ Ya en proceso — monitoreando...'; }
+    const iv = setInterval(async () => {
+      try {
+        const e = await get('/api/siesa/reconciliacion-estado');
+        if (!e.en_curso) {
+          clearInterval(iv);
+          if (e.ultimo_error) {
+            res.style.color = '#ef4444'; res.textContent = 'Error: ' + e.ultimo_error; return;
+          }
+          const r = e.ultimo_resultado;
+          if (!r) { res.style.color = '#fb923c'; res.textContent = 'Sin resultado — intenta de nuevo'; return; }
+          if (r.total_discrepancias === 0) {
+            res.style.color = '#4ade80';
+            res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${r.total_productos_siesa} productos)`;
+            return;
+          }
+          res.style.color = '#facc15';
+          res.textContent = `⚠ ${r.total_discrepancias} diferencias de ${r.total_productos_siesa} productos`;
+          panel.innerHTML = `
+            <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa):</div>
+            ${r.discrepancias.slice(0,20).map(x => `
+              <div class="tabla-fila" style="font-size:12px;">
+                <div>
+                  <div style="font-weight:600;">${x.nombre}</div>
+                  <div style="color:#555;">${x.codigo}</div>
+                </div>
+                <div style="text-align:right;">
+                  <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${x.stock_wms}</span>
+                  <span style="color:#555;margin:0 4px;">·</span>
+                  <span style="color:#93c5fd;">Siesa: ${x.stock_siesa}</span>
+                  <div style="color:${x.diferencia > 0 ? '#4ade80':'#f87171'};font-size:11px;">${x.diferencia > 0 ? '+' : ''}${x.diferencia}</div>
+                </div>
+              </div>`).join('')}`;
+        } else { res.textContent = '⏳ Comparando WMS vs Siesa...'; }
+      } catch(err) { clearInterval(iv); res.style.color = '#ef4444'; res.textContent = 'Error polling'; }
+    }, 8000);
   } catch(e) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + (e.message || e); }
 }
 

@@ -276,107 +276,137 @@ def estado_carga_inventario():
 
 
 # ─────────────────────────────────────────────
-# 2. RECONCILIACIÓN
+# 2. RECONCILIACIÓN (background — puede tardar 2+ min)
 # ─────────────────────────────────────────────
 
-def reconciliar_inventario():
-    """
-    Compara totales WMS vs Siesa por producto.
-    NO modifica nada. Solo informa diferencias.
-    Retorna lista de discrepancias ordenada por diferencia absoluta.
-    Diseñado para producción: consultas bulk, sin N+1 queries.
-    """
+_estado_reconciliacion = {
+    'en_curso': False,
+    'ultimo_inicio': None,
+    'ultimo_resultado': None,
+    'ultimo_error': None,
+}
+
+
+def _run_reconciliacion(app):
+    """Lógica real de reconciliación — corre en hilo de fondo."""
+    global _estado_reconciliacion
+
+    with app.app_context():
+        try:
+            # Stock WMS: una sola query bulk (no N+1)
+            stock_wms_rows = (
+                db.session.query(
+                    UbicacionProducto.producto_id,
+                    func.sum(UbicacionProducto.cantidad).label('total')
+                )
+                .group_by(UbicacionProducto.producto_id)
+                .all()
+            )
+            stock_wms = {row.producto_id: int(row.total) for row in stock_wms_rows}
+            productos_ids = set(stock_wms.keys())
+
+            inventario_siesa = _descargar_inventario_siesa()
+
+            codigos_siesa = list(inventario_siesa.keys())
+            prods_siesa = (
+                Producto.query
+                .filter(
+                    db.or_(
+                        Producto.codigo_siesa.in_(codigos_siesa),
+                        Producto.codigo.in_(codigos_siesa)
+                    )
+                )
+                .all()
+            )
+            mapa_codigo = {}
+            for p in prods_siesa:
+                if p.codigo_siesa:
+                    mapa_codigo[p.codigo_siesa] = p
+                mapa_codigo[p.codigo] = p
+
+            discrepancias = []
+
+            for codigo, datos in inventario_siesa.items():
+                existencia_siesa = int(round(datos['existencia']))
+                prod = mapa_codigo.get(codigo)
+                if not prod:
+                    continue
+                total_wms = stock_wms.get(prod.id, 0)
+                diferencia = total_wms - existencia_siesa
+                if diferencia != 0:
+                    discrepancias.append({
+                        'producto_id': prod.id,
+                        'codigo': prod.codigo,
+                        'nombre': prod.nombre,
+                        'stock_wms': total_wms,
+                        'stock_siesa': existencia_siesa,
+                        'diferencia': diferencia,
+                        'diferencia_abs': abs(diferencia),
+                        'estado': 'WMS_MAYOR' if diferencia > 0 else 'SIESA_MAYOR'
+                    })
+                productos_ids.discard(prod.id)
+
+            for prod_id in productos_ids:
+                total_wms = stock_wms.get(prod_id, 0)
+                if total_wms == 0:
+                    continue
+                prod = Producto.query.get(prod_id)
+                if not prod:
+                    continue
+                discrepancias.append({
+                    'producto_id': prod_id,
+                    'codigo': prod.codigo,
+                    'nombre': prod.nombre,
+                    'stock_wms': total_wms,
+                    'stock_siesa': 0,
+                    'diferencia': total_wms,
+                    'diferencia_abs': total_wms,
+                    'estado': 'SOLO_WMS'
+                })
+
+            discrepancias.sort(key=lambda x: x['diferencia_abs'], reverse=True)
+
+            _estado_reconciliacion['ultimo_resultado'] = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'total_productos_siesa': len(inventario_siesa),
+                'total_discrepancias': len(discrepancias),
+                'discrepancias': discrepancias[:100]
+            }
+            _estado_reconciliacion['ultimo_error'] = None
+
+        except Exception as e:
+            logger.error(f'[RECONCILIACION] Error: {e}')
+            _estado_reconciliacion['ultimo_error'] = str(e)
+            _estado_reconciliacion['ultimo_resultado'] = None
+
+        _estado_reconciliacion['en_curso'] = False
+
+
+def iniciar_reconciliacion(app):
+    """Arranca la reconciliación en background. Retorna estado inmediatamente."""
+    global _estado_reconciliacion
+
     if connekta.modo_simulacion:
         return {'simulado': True}
 
-    # Stock WMS: una sola query bulk (no N+1)
-    stock_wms_rows = (
-        db.session.query(
-            UbicacionProducto.producto_id,
-            func.sum(UbicacionProducto.cantidad).label('total')
-        )
-        .group_by(UbicacionProducto.producto_id)
-        .all()
-    )
-    stock_wms = {row.producto_id: int(row.total) for row in stock_wms_rows}
+    if _estado_reconciliacion['en_curso']:
+        return {'en_curso': True, 'mensaje': 'Reconciliación ya en proceso — espera que termine'}
 
-    # Productos: cargar solo los que tienen stock en algún sistema
-    productos_ids = set(stock_wms.keys())
+    _estado_reconciliacion['en_curso'] = True
+    _estado_reconciliacion['ultimo_inicio'] = datetime.now(timezone.utc)
+    _estado_reconciliacion['ultimo_resultado'] = None
+    _estado_reconciliacion['ultimo_error'] = None
 
-    # Stock Siesa
-    try:
-        inventario_siesa = _descargar_inventario_siesa()
-    except Exception as e:
-        return {'error': f'Error consultando Siesa: {e}'}
+    hilo = threading.Thread(target=_run_reconciliacion, args=(app,), daemon=True)
+    hilo.start()
 
-    # Construir mapa codigo → producto_id para Siesa
-    codigos_siesa = list(inventario_siesa.keys())
-    prods_siesa = (
-        Producto.query
-        .filter(
-            db.or_(
-                Producto.codigo_siesa.in_(codigos_siesa),
-                Producto.codigo.in_(codigos_siesa)
-            )
-        )
-        .all()
-    )
-    # {codigo: producto}
-    mapa_codigo = {}
-    for p in prods_siesa:
-        if p.codigo_siesa:
-            mapa_codigo[p.codigo_siesa] = p
-        mapa_codigo[p.codigo] = p
+    return {'iniciado': True, 'mensaje': 'Reconciliación iniciada — refresca en ~2 min'}
 
-    discrepancias = []
 
-    # Productos que Siesa tiene pero WMS no (o con diferencia)
-    for codigo, datos in inventario_siesa.items():
-        existencia_siesa = int(round(datos['existencia']))
-        prod = mapa_codigo.get(codigo)
-        if not prod:
-            continue
-
-        total_wms = stock_wms.get(prod.id, 0)
-        diferencia = total_wms - existencia_siesa
-
-        if diferencia != 0:
-            discrepancias.append({
-                'producto_id': prod.id,
-                'codigo': prod.codigo,
-                'nombre': prod.nombre,
-                'stock_wms': total_wms,
-                'stock_siesa': existencia_siesa,
-                'diferencia': diferencia,
-                'diferencia_abs': abs(diferencia),
-                'estado': 'WMS_MAYOR' if diferencia > 0 else 'SIESA_MAYOR'
-            })
-        productos_ids.discard(prod.id)
-
-    # Productos en WMS sin stock en Siesa (diferencia = total_wms)
-    for prod_id in productos_ids:
-        total_wms = stock_wms.get(prod_id, 0)
-        if total_wms == 0:
-            continue
-        prod = Producto.query.get(prod_id)
-        if not prod:
-            continue
-        discrepancias.append({
-            'producto_id': prod_id,
-            'codigo': prod.codigo,
-            'nombre': prod.nombre,
-            'stock_wms': total_wms,
-            'stock_siesa': 0,
-            'diferencia': total_wms,
-            'diferencia_abs': total_wms,
-            'estado': 'SOLO_WMS'
-        })
-
-    discrepancias.sort(key=lambda x: x['diferencia_abs'], reverse=True)
-
+def estado_reconciliacion():
     return {
-        'timestamp': datetime.utcnow().isoformat(),
-        'total_productos_siesa': len(inventario_siesa),
-        'total_discrepancias': len(discrepancias),
-        'discrepancias': discrepancias[:100]  # top 100
+        'en_curso': _estado_reconciliacion['en_curso'],
+        'ultimo_inicio': _estado_reconciliacion['ultimo_inicio'].isoformat() if _estado_reconciliacion['ultimo_inicio'] else None,
+        'ultimo_resultado': _estado_reconciliacion['ultimo_resultado'],
+        'ultimo_error': _estado_reconciliacion['ultimo_error'],
     }
