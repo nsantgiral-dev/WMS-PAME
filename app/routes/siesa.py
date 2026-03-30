@@ -39,6 +39,26 @@ def sync_estado():
     return jsonify(estado_sync()), 200
 
 
+@siesa_bp.route('/debug-inventario-raw', methods=['GET'])
+@jwt_required()
+def debug_inventario_raw():
+    """
+    Descubrimiento: devuelve las primeras filas de API_v2_Inventarios_InvFecha
+    para bodega NB1 sin filtros adicionales.
+    Usar solo para identificar nombres reales de campos de existencias.
+    """
+    api_inv = 'API_v2_Inventarios_InvFecha'
+    resultado = connekta._get(api_inv, {
+        'paginacion': 'numPag=1|tamPag=3'
+    })
+    tabla = resultado.get('detalle', {}).get('Table', [])
+    return jsonify({
+        'total_filas_pagina': len(tabla),
+        'campos_disponibles': list(tabla[0].keys()) if tabla else [],
+        'muestra': tabla[:3]
+    }), 200
+
+
 def _buscar_producto(codigo):
     """Busca un producto por código WMS o código Siesa."""
     return (Producto.query.filter_by(codigo=codigo).first() or
