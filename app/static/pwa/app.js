@@ -764,6 +764,10 @@ function renderEscaneoRecepcion(rec) {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
   const todoCompleto = rec.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+  const hayAlgoEscaneado = rec.items.some(it => it.cantidad_recibida > 0);
+  const btnActivo = true;
+  const btnTexto = todoCompleto ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial';
+  const btnColor = todoCompleto ? '#16a34a' : '#b45309';
 
   el.innerHTML = `
     <div style="padding:16px;">
@@ -786,9 +790,9 @@ function renderEscaneoRecepcion(rec) {
         ${renderItemsRecepcion(rec.items)}
       </div>
 
-      <button id="btn-confirmar-rec" onclick="confirmarRecepcionActiva()" ${todoCompleto ? '' : 'disabled'}
-        style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${todoCompleto ? '#16a34a' : '#222'};color:#fff;border:none;border-radius:14px;cursor:${todoCompleto ? 'pointer' : 'default'};margin-bottom:10px;">
-        ✓ Confirmar recepción
+      <button id="btn-confirmar-rec" onclick="confirmarRecepcionActiva()" ${btnActivo ? '' : 'disabled'}
+        style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${btnActivo ? btnColor : '#222'};color:#fff;border:none;border-radius:14px;cursor:${btnActivo ? 'pointer' : 'default'};margin-bottom:10px;">
+        ${btnTexto}
       </button>
 
       <button onclick="volverListaRecepciones()"
@@ -869,6 +873,11 @@ async function procesarScanRecepcion(codigo) {
 
 async function confirmarRecepcionActiva() {
   if (!RECEPCION_ACTUAL) return;
+  const todoCompleto = RECEPCION_ACTUAL.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+  if (!todoCompleto) {
+    const ok = confirm('Hay ítems sin completar. ¿Confirmar como recepción parcial?');
+    if (!ok) return;
+  }
   const btn = document.getElementById('btn-confirmar-rec');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
 
