@@ -332,8 +332,10 @@ async function cargarStock() {
   if (!el) return;
   try {
     const d = await get('/api/dashboard/alertas-stock?almacen_id=' + ALMACEN_ID);
-    if (!d.alertas || !d.alertas.length) { el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;">✓ Sin alertas</div>'; return; }
-    el.innerHTML = d.alertas.map(a => `
+    if (!d.alertas || !d.alertas.length) {
+      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;">✓ Sin alertas</div>';
+    } else {
+      el.innerHTML = d.alertas.map(a => `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div><div style="font-size:13px;font-weight:600;">${a.nombre}</div><div style="font-size:11px;color:#555;">${a.codigo} · Clase ${a.clasificacion_abc||'—'}</div></div>
@@ -344,6 +346,7 @@ async function cargarStock() {
           </div>
         </div>
       </div>`).join('');
+    }
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
   await cargarCatalogo(1);
 }
