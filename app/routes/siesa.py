@@ -75,7 +75,14 @@ def pedidos_aprobados():
 def debug_oc_raw():
     """Debug: devuelve el JSON crudo de Siesa sin procesar."""
     sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
-    resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
+    parametros_custom = request.args.get('parametros')
+    if parametros_custom:
+        resultado = connekta._get(connekta.api_ordenes, {
+            'paginacion': 'numPag=1|tamPag=10',
+            'parametros': parametros_custom
+        })
+    else:
+        resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
     return jsonify(resultado), 200
 
 
