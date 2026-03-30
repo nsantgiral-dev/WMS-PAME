@@ -243,13 +243,6 @@ class RecepcionService:
         if recepcion.estado != 'EN_PROCESO':
             raise ValueError(f'No se puede confirmar en estado {recepcion.estado}')
 
-        items_sin_escanear = [i for i in recepcion.items if i.cantidad_recibida == 0]
-        if items_sin_escanear:
-            nombres = [i.producto.nombre for i in items_sin_escanear[:3]]
-            raise ValueError(
-                f'Hay {len(items_sin_escanear)} ítem(s) sin escanear: {", ".join(nombres)}'
-            )
-
         # Ingresar al inventario
         tiene_excesos = False
         tiene_faltantes = False
