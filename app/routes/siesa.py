@@ -70,6 +70,15 @@ def pedidos_aprobados():
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200
 
 
+@siesa_bp.route('/debug-oc-raw', methods=['GET'])
+@jwt_required()
+def debug_oc_raw():
+    """Debug: devuelve el JSON crudo de Siesa sin procesar."""
+    sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
+    resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
+    return jsonify(resultado), 200
+
+
 @siesa_bp.route('/ordenes-compra', methods=['GET'])
 @jwt_required()
 def ordenes_compra():
