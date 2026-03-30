@@ -202,7 +202,7 @@ class ConnektaGateway:
         else:
             params = {
                 'paginacion': 'numPag=1|tamPag=100',
-                'parametros': f'f150_id="{self.bodega}" AND f430_id_co="{self.centro_op}" AND f430_ind_estado=1'
+                'parametros': f'f150_id="{self.bodega}" AND f420_id_co="{self.centro_op}" AND f420_ind_estado=1'
             }
         return self._get(self.api_ordenes, params)
 

@@ -96,14 +96,14 @@ def ordenes_compra():
     ordenes = {}
     for row in items_raw:
         try:
-            cant_pedida = float(row.get('f431_cant1_pedida', 0))
-            cant_recibida = float(row.get('f431_cant1_remisionada', 0))
+            cant_pedida = float(row.get('f421_cant_pedida', 0))
+            cant_recibida = float(row.get('f421_cant_entrada', 0))
             cant_pendiente = cant_pedida - cant_recibida
             if cant_pendiente <= 0:
                 continue
 
-            tipo_docto = row.get('f430_id_tipo_docto', '').strip()
-            consec_docto = str(row.get('f430_consec_docto', ''))
+            tipo_docto = row.get('f420_id_tipo_docto', '').strip()
+            consec_docto = str(row.get('f420_consec_docto', ''))
             numero_oc = f"{tipo_docto}{consec_docto}"
             item_codigo = row.get('f120_referencia', '').strip()
 
@@ -114,8 +114,8 @@ def ordenes_compra():
                     'numero_oc': numero_oc,
                     'tipo_docto': tipo_docto,
                     'consec_docto': consec_docto,
-                    'co': row.get('f430_id_co', '').strip(),
-                    'proveedor': row.get('f200_razon_social', ''),
+                    'co': row.get('f420_id_co', '').strip(),
+                    'proveedor': row.get('f200_razon_social_prov', ''),
                     'items': []
                 }
             ordenes[numero_oc]['items'].append({
