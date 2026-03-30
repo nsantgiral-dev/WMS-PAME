@@ -398,8 +398,21 @@ async function sincronizarProductos() {
   btn.textContent = '↻ Sincronizando...';
   res.textContent = '';
   try {
-    const d = await post('/api/siesa/sync-productos', {});
-    if (d.simulado) {
+    const r = await fetch(API + '/api/siesa/sync-productos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({})
+    });
+    const text = await r.text();
+    let d;
+    try { d = JSON.parse(text); } catch(e) {
+      throw new Error(`HTTP ${r.status} — ${text.substring(0, 120)}`);
+    }
+    if (r.status === 401) { salir(); return; }
+    if (d.error) {
+      res.style.color = '#ef4444';
+      res.textContent = 'Error servidor: ' + d.error;
+    } else if (d.simulado) {
       res.style.color = '#fb923c';
       res.textContent = 'Modo simulación — conecta credenciales Siesa primero';
     } else if (d.omitido) {
