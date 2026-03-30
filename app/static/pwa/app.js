@@ -465,12 +465,9 @@ async function sincronizarProductos() {
     }
     if (d.en_curso && !d.iniciado) {
       res.style.color = '#fb923c';
-      res.textContent = d.mensaje || 'Ya en proceso';
-      btn.disabled = false;
-      btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
-      return;
+      res.textContent = '⏳ ' + (d.mensaje || 'Ya en proceso — monitoreando...');
     }
-    // Sync iniciado — polling cada 5 seg hasta completar
+    // Sync iniciado o ya en curso — polling cada 5 seg hasta completar
     res.textContent = '⏳ Sincronizando productos... (puede tardar ~30 seg)';
     const intervalo = setInterval(async () => {
       try {
