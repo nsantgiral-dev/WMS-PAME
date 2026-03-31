@@ -75,6 +75,27 @@ def reconciliacion_estado():
     return jsonify(estado_reconciliacion()), 200
 
 
+@siesa_bp.route('/debug-pedidos-raw', methods=['GET'])
+@jwt_required()
+def debug_pedidos_raw():
+    """
+    Debug: devuelve las primeras filas de API_v2_Ventas_Pedidos SIN filtrar por bodega/CO.
+    Muestra todos los campos reales para diagnosticar por qué no aparece un pedido.
+    """
+    resultado = connekta._get(connekta.api_pedidos, {
+        'paginacion': 'numPag=1|tamPag=10',
+        'parametros': 'f430_ind_estado=1'
+    })
+    tabla = resultado.get('detalle', {}).get('Table', [])
+    return jsonify({
+        'total_filas': len(tabla),
+        'bodega_configurada': connekta.bodega,
+        'co_configurado': connekta.centro_op,
+        'campos_disponibles': list(tabla[0].keys()) if tabla else [],
+        'filas': tabla[:10]
+    }), 200
+
+
 @siesa_bp.route('/debug-inventario-raw', methods=['GET'])
 @jwt_required()
 def debug_inventario_raw():
