@@ -148,9 +148,11 @@ class ConnektaGateway:
         fecha_desde = (date.today() - timedelta(days=3)).strftime('%Y-%m-%d')
 
         if sin_filtros:
-            parametros = 'f430_ind_estado=1'
+            parametros = 'f430_ind_estado=2'
         else:
-            parametros = f'f430_ind_estado=1 AND f430_fecha>="{fecha_desde}"'
+            # estado=2 → Aprobado (listo para despacho)
+            # f430_id_fecha → fecha del documento (campo oficial)
+            parametros = f'f430_ind_estado=2 AND f430_id_fecha>="{fecha_desde}"'
 
         resultado = self._get(self.api_pedidos, {
             'paginacion': 'numPag=1|tamPag=100',

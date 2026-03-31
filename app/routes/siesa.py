@@ -105,7 +105,7 @@ def debug_pedidos_raw():
             filtros.append('f430_ind_estado=1')
         params['parametros'] = ' AND '.join(filtros)
     elif not sin_estado:
-        params['parametros'] = 'f430_ind_estado=1'
+        params['parametros'] = 'f430_ind_estado=2'  # 2=Aprobado (listo para despacho)
 
     # Modo echo: muestra la URL exacta que se mandaría a Connekta
     if echo:
