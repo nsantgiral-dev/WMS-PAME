@@ -49,7 +49,17 @@ class ConnektaGateway:
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
 
+        # Consulta dinámica para picking — filtra NB1/003 en SQL directo
+        self.api_pedidos_picking = os.getenv(
+            'CONNEKTA_API_PEDIDOS_PICKING',
+            'papeleriamedellin_WMS_Picking_Pedidos_NB1'
+        )
+
         self.url_get = 'https://serviciosqa.siesacloud.com/api/siesa/v3/ejecutarconsultaestandar'
+        self.url_get_dinamica = os.getenv(
+            'CONNEKTA_URL_DINAMICA',
+            'https://serviciosqa.siesacloud.com/api/connekta/v3.0.1/ejecutarconsulta'
+        )
         self.url_post = 'https://serviciosqa.siesacloud.com/api/siesa/v3/conectoresimportarestandar'
 
         self.modo_simulacion = not all([self.ikey, self.itoken])
@@ -80,6 +90,26 @@ class ConnektaGateway:
             'mensaje': f'{operacion} simulado exitosamente',
             'payload': payload or {}
         }
+
+    def _get_dinamica(self, descripcion: str, paginacion: str = 'numPag=1|tamPag=100'):
+        """GET a la API dinámica (Generador de consultas) — filtra en SQL directo en Siesa."""
+        if self.modo_simulacion:
+            return self._simular(f'GET_DINAMICA_{descripcion}')
+
+        params = {
+            'idCompania': self.id_compania,
+            'descripcion': descripcion,
+            'paginacion': paginacion
+        }
+        try:
+            r = requests.get(self.url_get_dinamica, headers=self.headers, params=params, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except requests.exceptions.Timeout:
+            raise Exception('Connekta no respondió — reintenta')
+        except requests.exceptions.RequestException as e:
+            logger.error(f'[CONNEKTA] GET_DINAMICA {descripcion}: {e}')
+            raise Exception(f'Error consultando Siesa: {e}')
 
     def _get(self, nombre_api: str, params_extra: dict = None):
         if self.modo_simulacion:
@@ -139,71 +169,64 @@ class ConnektaGateway:
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
-        API_v2_Ventas_Pedidos — cola de picking.
-        Siesa rechaza f150_id en parametros (igual que inventario y OCs).
-        Estrategia: pedir solo estado=1, filtrar bodega/CO en Python.
-        sin_filtros=True: devuelve todos los aprobados sin filtrar por bodega/CO.
+        Cola de picking NB1/003 — usa la consulta dinámica papeleriamedellin_WMS_Picking_Pedidos_NB1.
+        El SQL filtra directamente en Siesa: CO=003, bodega=NB1, estado=1, cant_pendiente>0.
+        sin_filtros=True: usa API estándar sin filtros (solo para diagnóstico/ensayo).
         """
-        todos = []
-        # API_v2_Ventas_Pedidos devuelve máximo 50 filas por página.
-        # El único filtro soportado en parametros es f430_ind_estado.
-        # Bodega y CO se filtran en Python después de paginar.
-        for pag in range(1, 41):  # máx 40 páginas = 2000 items
+        if sin_filtros:
+            # Modo diagnóstico: API estándar sin filtros
             resultado = self._get(self.api_pedidos, {
-                'paginacion': f'numPag={pag}|tamPag=50',
+                'paginacion': 'numPag=1|tamPag=50',
                 'parametros': 'f430_ind_estado=1'
             })
-
             if self.modo_simulacion or resultado.get('simulado'):
                 return resultado
-
             items_raw = resultado.get('detalle', {}).get('Table', [])
-            if not items_raw:
-                break
-            todos.extend(items_raw)
-            if len(items_raw) < 50:  # última página parcial = fin de datos
-                break
+            return {'codigo': 0, 'total_siesa': len(items_raw), 'total_pendientes': len(items_raw), 'items': items_raw}
 
-        if not todos:
+        # Consulta dinámica: SQL filtra en origen, no hay paginación masiva
+        resultado = self._get_dinamica(self.api_pedidos_picking, 'numPag=1|tamPag=100')
+
+        if self.modo_simulacion or resultado.get('simulado'):
+            return resultado
+
+        items_raw = resultado.get('detalle', {}).get('Table', [])
+        if not items_raw:
             return {'codigo': 0, 'total_siesa': 0, 'total_pendientes': 0, 'items': []}
 
         items_pendientes = []
-        for item in todos:
-            # Filtro Python: bodega y CO exactos (API no acepta f150_id en parametros)
-            if not sin_filtros:
-                if item.get('f150_id', '').strip() != self.bodega:
-                    continue
-                if item.get('f430_id_co', '').strip() != self.centro_op:
-                    continue
+        for item in items_raw:
             try:
-                cant_pedida = float(item.get('f431_cant1_pedida', 0))
-                cant_remisionada = float(item.get('f431_cant1_remisionada', 0))
+                cant_pedida = float(item.get('cant_pedida') or item.get('f431_cant1_pedida') or 0)
+                cant_remisionada = float(item.get('cant_remisionada') or item.get('f431_cant1_remisionada') or 0)
                 cant_pendiente = cant_pedida - cant_remisionada
                 if cant_pendiente > 0:
+                    consec = item.get('numero_pedido') or item.get('f430_consec_docto', '')
+                    tipo = item.get('tipo_docto') or item.get('f430_id_tipo_docto', '')
                     items_pendientes.append({
-                        'numero_pedido': f"{item.get('f430_id_tipo_docto','').strip()}{item.get('f430_consec_docto','')}",
-                        'tipo_docto': item.get('f430_id_tipo_docto', '').strip(),
-                        'consec_docto': item.get('f430_consec_docto'),
-                        'centro_op': item.get('f430_id_co'),
-                        'bodega': item.get('f150_id'),
-                        'item_codigo': item.get('f120_referencia'),
-                        'item_descripcion': item.get('f120_descripcion'),
-                        'item_id_siesa': item.get('f120_id'),
+                        'numero_pedido': f"{str(tipo).strip()}{consec}",
+                        'tipo_docto': str(tipo).strip(),
+                        'consec_docto': consec,
+                        'centro_op': item.get('centro_op') or item.get('f430_id_co'),
+                        'bodega': item.get('bodega') or item.get('f431_id_bodega'),
+                        'item_codigo': item.get('item_codigo') or item.get('f431_id_item'),
+                        'item_descripcion': item.get('item_descripcion') or item.get('f120_descripcion'),
+                        'item_id_siesa': item.get('item_id_siesa'),
                         'cantidad_pedida': cant_pedida,
                         'cantidad_remisionada': cant_remisionada,
                         'cantidad_pendiente': cant_pendiente,
-                        'cliente': item.get('f200_razon_social_pedido_fact'),
-                        'fecha_entrega': item.get('f430_fecha_entrega'),
-                        'estado': item.get('f430_ind_estado')
+                        'cliente': item.get('cliente') or item.get('f200_razon_social_pedido_fact'),
+                        'fecha_entrega': item.get('fecha_entrega') or item.get('f430_fecha_entrega'),
+                        'estado': item.get('estado') or item.get('f430_ind_estado')
                     })
             except (ValueError, TypeError) as e:
                 logger.warning(f'[CONNEKTA] Item inválido: {e}')
                 continue
 
-        logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} pendientes de {len(todos)} totales')
+        logger.info(f'[CONNEKTA] pedidos NB1: {len(items_pendientes)} pendientes (consulta dinámica)')
         return {
             'codigo': 0,
-            'total_siesa': len(todos),
+            'total_siesa': len(items_raw),
             'total_pendientes': len(items_pendientes),
             'items': items_pendientes
         }
