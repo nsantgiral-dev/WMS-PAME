@@ -79,20 +79,50 @@ def reconciliacion_estado():
 @jwt_required()
 def debug_pedidos_raw():
     """
-    Debug: devuelve las primeras filas de API_v2_Ventas_Pedidos SIN filtrar por bodega/CO.
-    Muestra todos los campos reales para diagnosticar por qué no aparece un pedido.
+    Debug: devuelve hasta 50 filas de API_v2_Ventas_Pedidos sin filtrar por bodega/CO.
+    ?sin_estado=true → incluye pedidos en cualquier estado (no solo aprobados).
+    Muestra resumen de bodegas y COs encontrados para diagnosticar filtros.
     """
-    resultado = connekta._get(connekta.api_pedidos, {
-        'paginacion': 'numPag=1|tamPag=10',
-        'parametros': 'f430_ind_estado=1'
-    })
+    sin_estado = request.args.get('sin_estado', '').lower() == 'true'
+    params = {'paginacion': 'numPag=1|tamPag=50'}
+    if not sin_estado:
+        params['parametros'] = 'f430_ind_estado=1'
+
+    resultado = connekta._get(connekta.api_pedidos, params)
     tabla = resultado.get('detalle', {}).get('Table', [])
+
+    # Resumen de bodegas y COs para diagnóstico rápido
+    bodegas = {}
+    cos = {}
+    estados = {}
+    for r in tabla:
+        b = r.get('f150_id', '?')
+        c = r.get('f430_id_co', '?')
+        e = str(r.get('f430_ind_estado', '?'))
+        bodegas[b] = bodegas.get(b, 0) + 1
+        cos[c] = cos.get(c, 0) + 1
+        estados[e] = estados.get(e, 0) + 1
+
     return jsonify({
         'total_filas': len(tabla),
         'bodega_configurada': connekta.bodega,
         'co_configurado': connekta.centro_op,
-        'campos_disponibles': list(tabla[0].keys()) if tabla else [],
-        'filas': tabla[:10]
+        'resumen_bodegas': bodegas,
+        'resumen_cos': cos,
+        'resumen_estados': estados,
+        'filas_nb1': [
+            {k: r[k] for k in ['f430_consec_docto', 'f430_id_co', 'f150_id',
+                                'f430_ind_estado', 'f120_referencia', 'f431_cant1_pedida',
+                                'f431_cant1_remisionada', 'f200_razon_social_pedido_fact']
+             if k in r}
+            for r in tabla if r.get('f150_id') == connekta.bodega
+        ],
+        'muestra_todas': [
+            {k: r[k] for k in ['f430_consec_docto', 'f430_id_co', 'f150_id',
+                                'f430_ind_estado', 'f120_referencia']
+             if k in r}
+            for r in tabla[:20]
+        ]
     }), 200
 
 
