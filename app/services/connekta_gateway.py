@@ -150,7 +150,7 @@ class ConnektaGateway:
 
         ESTADOS_EXCLUIR = {0, 9}
         TAM_PAG = 100
-        MAX_PAGINAS = 200   # 200 × 100 = 20 000 filas máximo
+        MAX_PAGINAS = 9999  # Sin límite práctico — para cuando una página devuelva <TAM_PAG filas
         WORKERS = 10
 
         def _fetch_page(num_pag):
