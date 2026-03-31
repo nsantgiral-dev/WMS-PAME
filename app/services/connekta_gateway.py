@@ -145,16 +145,13 @@ class ConnektaGateway:
         sin_filtros=True: devuelve todos los aprobados sin filtrar por bodega/CO.
         """
         todos = []
-        for pag in range(1, 11):  # máx 10 páginas = 1000 items
-            # Filtro CO en API: reduce el universo a nuestro centro de operación.
-            # Siesa acepta f430_id_co en parametros (confirmado en capacitación Connekta).
-            # Python filtra bodega exacta después (API rechaza f150_id).
-            parametros = f'f430_ind_estado=1 AND f430_id_co="{self.centro_op}"'
-            if sin_filtros:
-                parametros = 'f430_ind_estado=1'
+        # API_v2_Ventas_Pedidos devuelve máximo 50 filas por página.
+        # El único filtro soportado en parametros es f430_ind_estado.
+        # Bodega y CO se filtran en Python después de paginar.
+        for pag in range(1, 41):  # máx 40 páginas = 2000 items
             resultado = self._get(self.api_pedidos, {
-                'paginacion': f'numPag={pag}|tamPag=100',
-                'parametros': parametros
+                'paginacion': f'numPag={pag}|tamPag=50',
+                'parametros': 'f430_ind_estado=1'
             })
 
             if self.modo_simulacion or resultado.get('simulado'):
@@ -164,7 +161,7 @@ class ConnektaGateway:
             if not items_raw:
                 break
             todos.extend(items_raw)
-            if len(items_raw) < 100:
+            if len(items_raw) < 50:  # última página parcial = fin de datos
                 break
 
         if not todos:
