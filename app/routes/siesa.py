@@ -88,8 +88,10 @@ def debug_pedidos_raw():
     co = request.args.get('co', '').strip()
     params_raw = request.args.get('params_raw', '').strip()
     echo = request.args.get('echo', '').lower() == 'true'
-    num_pag = request.args.get('num_pag', '1').strip()  # ?num_pag=2 → segunda página
+    num_pag = request.args.get('num_pag', '1').strip()
     tam_pag = request.args.get('tam_pag', '50').strip()
+    # ?api=API_v2_Ventas_Pedidos_Compromisos → explorar APIs alternativas
+    api_nombre = request.args.get('api', connekta.api_pedidos).strip()
 
     params = {'paginacion': f'numPag={num_pag}|tamPag={tam_pag}'}
 
@@ -125,7 +127,7 @@ def debug_pedidos_raw():
             'modo_simulacion': connekta.modo_simulacion
         }), 200
 
-    resultado = connekta._get(connekta.api_pedidos, params)
+    resultado = connekta._get(api_nombre, params)
     tabla = resultado.get('detalle', {}).get('Table', [])
 
     # Resumen de bodegas y COs para diagnóstico rápido
