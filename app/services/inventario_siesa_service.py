@@ -366,8 +366,20 @@ def _run_reconciliacion(app):
 
             discrepancias.sort(key=lambda x: x['diferencia_abs'], reverse=True)
 
+            ts = datetime.utcnow().isoformat()
+
+            # Disparar creación automática de tareas de logística inversa
+            try:
+                from app.services.devolucion_service import crear_tareas_desde_discrepancias
+                almacen = _get_almacen()
+                if almacen:
+                    resumen_dev = crear_tareas_desde_discrepancias(discrepancias, almacen.id, ts)
+                    logger.info(f'[RECONCILIACION] Tareas devolución: {resumen_dev}')
+            except Exception as e_dev:
+                logger.warning(f'[RECONCILIACION] Error creando tareas devolución: {e_dev}')
+
             _estado_reconciliacion['ultimo_resultado'] = {
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': ts,
                 'total_productos_siesa': len(inventario_siesa),
                 'total_discrepancias': len(discrepancias),
                 'discrepancias': discrepancias[:100]

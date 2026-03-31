@@ -1,0 +1,70 @@
+"""
+TareaDevolucion — representa una devolución física pendiente de ubicar en bodega.
+
+El WMS NO crea notas crédito ni toca finanzas. Solo gestiona el movimiento físico:
+Siesa ya procesó el dinero → el recepcionista ubica la caja en el estante.
+
+Estados: PENDIENTE → EN_PROCESO → COMPLETADO | DESCARTADO
+"""
+from datetime import datetime
+from app.extensions import db
+
+
+class TareaDevolucion(db.Model):
+    __tablename__ = 'tareas_devolucion'
+
+    id = db.Column(db.Integer, primary_key=True)
+    codigo = db.Column(db.String(50), unique=True, nullable=False)
+
+    # Producto y cantidad diferencial (Siesa - WMS)
+    producto_id = db.Column(db.Integer, db.ForeignKey('productos.id'), nullable=False)
+    almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
+    cantidad_diferencia = db.Column(db.Integer, nullable=False)  # unidades a ubicar
+
+    # Ubicación donde el recepcionista pone la mercancía
+    ubicacion_id = db.Column(db.Integer, db.ForeignKey('ubicaciones.id'), nullable=True)
+    es_averiado = db.Column(db.Boolean, default=False)
+
+    # Recepcionista asignado
+    recepcionista_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+
+    # Estado
+    estado = db.Column(db.String(20), default='PENDIENTE', nullable=False)
+    # PENDIENTE → EN_PROCESO → COMPLETADO | DESCARTADO
+
+    # Trazabilidad: de qué reconciliación surgió
+    origen_reconciliacion = db.Column(db.String(50))  # timestamp de la reconciliación
+
+    # Idempotencia: no crear duplicados si ya hay tarea PENDIENTE para mismo producto
+    idempotency_key = db.Column(db.String(64), unique=True)
+
+    # Observaciones del recepcionista
+    observaciones = db.Column(db.Text)
+
+    # Tiempos
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+    fecha_completado = db.Column(db.DateTime)
+
+    # Relaciones
+    producto = db.relationship('Producto', backref='tareas_devolucion', lazy=True)
+    ubicacion = db.relationship('Ubicacion', backref='tareas_devolucion', lazy=True)
+    recepcionista = db.relationship('Usuario', backref='tareas_devolucion', lazy=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'codigo': self.codigo,
+            'producto_id': self.producto_id,
+            'producto_codigo': self.producto.codigo if self.producto else None,
+            'producto_nombre': self.producto.nombre if self.producto else None,
+            'almacen_id': self.almacen_id,
+            'cantidad_diferencia': self.cantidad_diferencia,
+            'ubicacion_id': self.ubicacion_id,
+            'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
+            'es_averiado': self.es_averiado,
+            'recepcionista_id': self.recepcionista_id,
+            'estado': self.estado,
+            'observaciones': self.observaciones,
+            'fecha_creacion': self.fecha_creacion.isoformat(),
+            'fecha_completado': self.fecha_completado.isoformat() if self.fecha_completado else None,
+        }
