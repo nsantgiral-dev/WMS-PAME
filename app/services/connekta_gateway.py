@@ -145,13 +145,14 @@ class ConnektaGateway:
         Campo fecha: f430_fecha (nombre estándar Siesa para fecha del documento).
         """
         from datetime import date, timedelta
-        fecha_desde = (date.today() - timedelta(days=3)).strftime('%Y-%m-%d')
+        # Formato Connekta: YYYYMMDD sin guiones
+        fecha_desde = (date.today() - timedelta(days=3)).strftime('%Y%m%d')
 
         if sin_filtros:
             parametros = 'f430_ind_estado=2'
         else:
             # estado=2 → Aprobado (listo para despacho)
-            # f430_id_fecha → fecha del documento (campo oficial)
+            # f430_id_fecha → fecha del documento (campo oficial, formato YYYYMMDD)
             parametros = f'f430_ind_estado=2 AND f430_id_fecha>="{fecha_desde}"'
 
         resultado = self._get(self.api_pedidos, {

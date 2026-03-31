@@ -233,7 +233,7 @@ def pedidos_aprobados():
             }
         pedidos[num]['items'].append(item)
 
-    lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '')
+    lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '', reverse=True)
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200
 
 
