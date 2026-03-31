@@ -219,7 +219,7 @@ class ConnektaGateway:
         logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} NB1/003 de {len(all_items)} total Siesa')
         return {
             'codigo': 0,
-            'total_siesa': len(items_raw),
+            'total_siesa': len(all_items),
             'total_pendientes': len(items_pendientes),
             'items': items_pendientes
         }
