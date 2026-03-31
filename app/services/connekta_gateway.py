@@ -148,12 +148,15 @@ class ConnektaGateway:
         # Formato Connekta: YYYYMMDD sin guiones
         fecha_desde = (date.today() - timedelta(days=3)).strftime('%Y%m%d')
 
+        # Estados inválidos para picking: 0=Elaboración, 9=Anulado
+        # Estados válidos: 1=Aprobado cartera, 2=Aprobado, 4=Comprometido (y cualquier otro activo)
+        ESTADOS_EXCLUIR = {0, 9}
+
         if sin_filtros:
-            parametros = 'f430_ind_estado=2'
+            parametros = f'f430_id_fecha>="{fecha_desde}"'
         else:
-            # estado=2 → Aprobado (listo para despacho)
-            # f430_id_fecha → fecha del documento (campo oficial, formato YYYYMMDD)
-            parametros = f'f430_ind_estado=2 AND f430_id_fecha>="{fecha_desde}"'
+            # Solo filtrar por fecha en Siesa — Python descarta estados inválidos y filtra bodega/CO
+            parametros = f'f430_id_fecha>="{fecha_desde}"'
 
         resultado = self._get(self.api_pedidos, {
             'paginacion': 'numPag=1|tamPag=100',
@@ -169,6 +172,13 @@ class ConnektaGateway:
 
         items_pendientes = []
         for item in items_raw:
+            # Excluir estados inválidos (borrador y anulado)
+            estado_num = item.get('f430_ind_estado')
+            try:
+                if int(estado_num) in ESTADOS_EXCLUIR:
+                    continue
+            except (TypeError, ValueError):
+                pass
             # Python filtra bodega y CO (API ignora esos campos en parametros)
             if not sin_filtros:
                 if item.get('f150_id', '').strip() != self.bodega:
