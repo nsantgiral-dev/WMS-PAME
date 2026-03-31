@@ -169,23 +169,23 @@ class ConnektaGateway:
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
-        Cola de picking NB1/003 — usa la consulta dinámica papeleriamedellin_WMS_Picking_Pedidos_NB1.
-        El SQL filtra directamente en Siesa: CO=003, bodega=NB1, estado=1, cant_pendiente>0.
-        sin_filtros=True: usa API estándar sin filtros (solo para diagnóstico/ensayo).
+        Cola viva de picking: pedidos aprobados de los últimos 3 días.
+        Estrategia: filtrar por fecha en Siesa (reduce de ~10k a ~30 filas),
+        luego Python filtra bodega NB1 y CO 003.
+        Campo fecha: f430_fecha (nombre estándar Siesa para fecha del documento).
         """
-        if sin_filtros:
-            # Modo diagnóstico: API estándar sin filtros
-            resultado = self._get(self.api_pedidos, {
-                'paginacion': 'numPag=1|tamPag=50',
-                'parametros': 'f430_ind_estado=1'
-            })
-            if self.modo_simulacion or resultado.get('simulado'):
-                return resultado
-            items_raw = resultado.get('detalle', {}).get('Table', [])
-            return {'codigo': 0, 'total_siesa': len(items_raw), 'total_pendientes': len(items_raw), 'items': items_raw}
+        from datetime import date, timedelta
+        fecha_desde = (date.today() - timedelta(days=3)).strftime('%Y-%m-%d')
 
-        # Consulta dinámica: SQL filtra en origen, no hay paginación masiva
-        resultado = self._get_dinamica(self.api_pedidos_picking, 'numPag=1|tamPag=100')
+        if sin_filtros:
+            parametros = 'f430_ind_estado=1'
+        else:
+            parametros = f'f430_ind_estado=1 AND f430_fecha>="{fecha_desde}"'
+
+        resultado = self._get(self.api_pedidos, {
+            'paginacion': 'numPag=1|tamPag=100',
+            'parametros': parametros
+        })
 
         if self.modo_simulacion or resultado.get('simulado'):
             return resultado
@@ -196,34 +196,38 @@ class ConnektaGateway:
 
         items_pendientes = []
         for item in items_raw:
+            # Python filtra bodega y CO (API ignora esos campos en parametros)
+            if not sin_filtros:
+                if item.get('f150_id', '').strip() != self.bodega:
+                    continue
+                if item.get('f430_id_co', '').strip() != self.centro_op:
+                    continue
             try:
-                cant_pedida = float(item.get('cant_pedida') or item.get('f431_cant1_pedida') or 0)
-                cant_remisionada = float(item.get('cant_remisionada') or item.get('f431_cant1_remisionada') or 0)
+                cant_pedida = float(item.get('f431_cant1_pedida', 0))
+                cant_remisionada = float(item.get('f431_cant1_remisionada', 0))
                 cant_pendiente = cant_pedida - cant_remisionada
                 if cant_pendiente > 0:
-                    consec = item.get('numero_pedido') or item.get('f430_consec_docto', '')
-                    tipo = item.get('tipo_docto') or item.get('f430_id_tipo_docto', '')
                     items_pendientes.append({
-                        'numero_pedido': f"{str(tipo).strip()}{consec}",
-                        'tipo_docto': str(tipo).strip(),
-                        'consec_docto': consec,
-                        'centro_op': item.get('centro_op') or item.get('f430_id_co'),
-                        'bodega': item.get('bodega') or item.get('f431_id_bodega'),
-                        'item_codigo': item.get('item_codigo') or item.get('f431_id_item'),
-                        'item_descripcion': item.get('item_descripcion') or item.get('f120_descripcion'),
-                        'item_id_siesa': item.get('item_id_siesa'),
+                        'numero_pedido': f"{item.get('f430_id_tipo_docto','').strip()}{item.get('f430_consec_docto','')}",
+                        'tipo_docto': item.get('f430_id_tipo_docto', '').strip(),
+                        'consec_docto': item.get('f430_consec_docto'),
+                        'centro_op': item.get('f430_id_co'),
+                        'bodega': item.get('f150_id'),
+                        'item_codigo': item.get('f120_referencia'),
+                        'item_descripcion': item.get('f120_descripcion'),
+                        'item_id_siesa': item.get('f120_id'),
                         'cantidad_pedida': cant_pedida,
                         'cantidad_remisionada': cant_remisionada,
                         'cantidad_pendiente': cant_pendiente,
-                        'cliente': item.get('cliente') or item.get('f200_razon_social_pedido_fact'),
-                        'fecha_entrega': item.get('fecha_entrega') or item.get('f430_fecha_entrega'),
-                        'estado': item.get('estado') or item.get('f430_ind_estado')
+                        'cliente': item.get('f200_razon_social_pedido_fact'),
+                        'fecha_entrega': item.get('f430_fecha_entrega'),
+                        'estado': item.get('f430_ind_estado')
                     })
             except (ValueError, TypeError) as e:
                 logger.warning(f'[CONNEKTA] Item inválido: {e}')
                 continue
 
-        logger.info(f'[CONNEKTA] pedidos NB1: {len(items_pendientes)} pendientes (consulta dinámica)')
+        logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} NB1/003 de {len(items_raw)} últimos 3 días')
         return {
             'codigo': 0,
             'total_siesa': len(items_raw),

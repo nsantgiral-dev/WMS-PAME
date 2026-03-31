@@ -209,11 +209,7 @@ def pedidos_aprobados():
     if sin_filtros and not connekta.modo_ensayo:
         sin_filtros = False
 
-    try:
-        resultado = connekta.get_pedidos_aprobados(sin_filtros=sin_filtros)
-    except Exception as e:
-        import traceback
-        return jsonify({'error': str(e), 'detalle': traceback.format_exc()}), 500
+    resultado = connekta.get_pedidos_aprobados(sin_filtros=sin_filtros)
 
     if resultado.get('simulado'):
         return jsonify(resultado), 200
