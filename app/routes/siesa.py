@@ -21,6 +21,24 @@ siesa_bp = Blueprint('siesa', __name__)
 # Sync manual (admin)
 # ──────────────────────────────────────────────
 
+@siesa_bp.route('/sync-pedidos', methods=['POST'])
+@jwt_required()
+def sync_pedidos():
+    """Dispara sync de pedidos Siesa → DB local en background."""
+    from flask import current_app
+    from app.services.pedidos_sync_service import iniciar_sync_background
+    resultado = iniciar_sync_background(current_app._get_current_object(), forzar=True)
+    return jsonify(resultado), 202
+
+
+@siesa_bp.route('/sync-pedidos-estado', methods=['GET'])
+@jwt_required()
+def sync_pedidos_estado():
+    """Estado del último sync de pedidos."""
+    from app.services.pedidos_sync_service import estado_sync
+    return jsonify(estado_sync()), 200
+
+
 @siesa_bp.route('/sync-productos', methods=['POST'])
 @jwt_required()
 def sync_productos():
@@ -199,39 +217,32 @@ def _buscar_producto(codigo):
 @jwt_required()
 def pedidos_aprobados():
     """
-    Cola de despacho: pedidos aprobados en Siesa con cantidad pendiente > 0.
-    Enriquece cada ítem con producto_id interno y agrupa por número de pedido.
-    ?sin_filtros=true  → barrido general sin filtrar por bodega/CO (solo en modo_ensayo).
+    Cola de despacho: lee del Read Model local (tabla pedidos_siesa).
+    El sync en background mantiene la tabla actualizada cada 5 min.
+    Respuesta instantánea desde DB local — nunca toca Connekta en tiempo real.
     """
-    sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
-    # El barrido general solo se permite en modo ensayo para evitar exponer
-    # pedidos de otras bodegas en producción accidentalmente.
-    if sin_filtros and not connekta.modo_ensayo:
-        sin_filtros = False
+    from app.models.pedido_siesa import PedidoSiesa
 
-    resultado = connekta.get_pedidos_aprobados(sin_filtros=sin_filtros)
-
-    if resultado.get('simulado'):
+    if connekta.modo_simulacion:
+        resultado = connekta.get_pedidos_aprobados()
         return jsonify(resultado), 200
 
-    pedidos = {}
-    for item in resultado.get('items', []):
-        prod = _buscar_producto(item['item_codigo'])
-        item['producto_id'] = prod.id if prod else None
-        item['producto_nombre_wms'] = prod.nombre if prod else None
+    rows = PedidoSiesa.query.order_by(PedidoSiesa.fecha_entrega.desc()).all()
 
-        num = item['numero_pedido']
+    pedidos = {}
+    for row in rows:
+        num = row.numero_pedido
         if num not in pedidos:
             pedidos[num] = {
                 'numero_pedido': num,
-                'tipo_docto': item['tipo_docto'],
-                'consec_docto': item['consec_docto'],
-                'centro_op': item['centro_op'],
-                'cliente': item.get('cliente', ''),
-                'fecha_entrega': item.get('fecha_entrega', ''),
-                'items': []
+                'tipo_docto':    row.tipo_docto,
+                'consec_docto':  row.consec_docto,
+                'centro_op':     row.centro_op,
+                'cliente':       row.cliente or '',
+                'fecha_entrega': row.fecha_entrega or '',
+                'items':         []
             }
-        pedidos[num]['items'].append(item)
+        pedidos[num]['items'].append(row.to_dict())
 
     lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '', reverse=True)
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200

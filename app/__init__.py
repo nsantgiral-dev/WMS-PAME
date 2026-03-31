@@ -48,5 +48,11 @@ def create_app():
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f'[SCHEDULER] No se pudo iniciar: {e}')
+        try:
+            from app.services.pedidos_sync_service import init_scheduler as init_pedidos_scheduler
+            init_pedidos_scheduler(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[PEDIDOS_SCHEDULER] No se pudo iniciar: {e}')
 
     return app
