@@ -86,12 +86,12 @@ def debug_pedidos_raw():
     sin_estado = request.args.get('sin_estado', '').lower() == 'true'
     consec = request.args.get('consec_docto', '').strip()
     co = request.args.get('co', '').strip()
-    # ?params_raw=... → pasa el string de parametros directamente a Connekta sin tocar
     params_raw = request.args.get('params_raw', '').strip()
-    # ?echo=true → devuelve la URL que se enviaría sin hacer la llamada real
     echo = request.args.get('echo', '').lower() == 'true'
+    num_pag = request.args.get('num_pag', '1').strip()  # ?num_pag=2 → segunda página
+    tam_pag = request.args.get('tam_pag', '50').strip()
 
-    params = {'paginacion': 'numPag=1|tamPag=50'}
+    params = {'paginacion': f'numPag={num_pag}|tamPag={tam_pag}'}
 
     if params_raw:
         params['parametros'] = params_raw
