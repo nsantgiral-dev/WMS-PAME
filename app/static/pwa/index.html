@@ -200,7 +200,22 @@
         <div class="operario-rol">Recepcionista</div>
       </div>
     </div>
+    <!-- Tabs recepcionista -->
+    <div style="display:flex;background:#111;border-bottom:1px solid #222;">
+      <div id="rec-tab-ocs" onclick="recTab('ocs')"
+        style="flex:1;padding:11px;font-size:13px;color:#fff;text-align:center;border-bottom:2px solid #fff;cursor:pointer;">
+        Recepciones
+      </div>
+      <div id="rec-tab-dev" onclick="recTab('dev')"
+        style="flex:1;padding:11px;font-size:13px;color:#666;text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
+        Devoluciones
+        <span id="badge-dev" style="display:none;position:absolute;top:6px;right:18px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;"></span>
+      </div>
+    </div>
     <div id="contenido-recepcion" style="padding:16px;">
+      <div style="text-align:center;padding:40px 20px;color:#666;">Cargando...</div>
+    </div>
+    <div id="contenido-devoluciones" style="padding:16px;display:none;">
       <div style="text-align:center;padding:40px 20px;color:#666;">Cargando...</div>
     </div>
   </div>

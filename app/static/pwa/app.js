@@ -15,6 +15,9 @@ let ALMACEN_ID = 1;
 let TIMER_ADMIN = null;
 let TIMER_OPERARIO = null;
 let RECEPCION_ACTUAL = null;   // recepción en escaneo activo (pantalla recepcionista)
+let DEVOLUCION_ACTUAL = null;  // tarea de devolución en flujo activo
+let REC_TAB_ACTIVO = 'ocs';   // tab activo en pantalla recepcionista
+let TIMER_REC = null;          // polling recepcionista (30 seg)
 let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
 let SIESA_OCS = [];            // OCs cargadas desde Siesa (pantalla recepcionista)
 
@@ -42,6 +45,13 @@ function mostrarSegunRol(rol) {
   } else if (esRecepcion) {
     pantalla('pantalla-recepcion');
     cargarRecepciones();
+    cargarDevoluciones();
+    TIMER_REC = setInterval(() => {
+      if (!RECEPCION_ACTUAL && !DEVOLUCION_ACTUAL) {
+        cargarRecepciones();
+        cargarDevoluciones();
+      }
+    }, 30000);
   } else {
     pantalla('pantalla-operario');
     pedirTarea();
@@ -52,6 +62,9 @@ function mostrarSegunRol(rol) {
 function pararTimers() {
   clearInterval(TIMER_ADMIN);
   clearInterval(TIMER_OPERARIO);
+  clearInterval(TIMER_REC);
+  RECEPCION_ACTUAL = null;
+  DEVOLUCION_ACTUAL = null;
 }
 
 function monitorRed() {
@@ -707,6 +720,7 @@ function loadScript(src) {
 }
 
 async function procesarScan(codigo) {
+  if (DEVOLUCION_ACTUAL) { await procesarScanDevolucion(codigo); return; }
   if (RECEPCION_ACTUAL) { await procesarScanRecepcion(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
@@ -1115,4 +1129,206 @@ async function confirmarRecepcionActiva() {
 function volverListaRecepciones() {
   RECEPCION_ACTUAL = null;
   cargarRecepciones();
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECEPCIONISTA — Tabs (Recepciones / Devoluciones)
+// ─────────────────────────────────────────────────────────────
+
+function recTab(tab) {
+  REC_TAB_ACTIVO = tab;
+  const tabOcs = document.getElementById('rec-tab-ocs');
+  const tabDev = document.getElementById('rec-tab-dev');
+  const contOcs = document.getElementById('contenido-recepcion');
+  const contDev = document.getElementById('contenido-devoluciones');
+  if (!tabOcs || !tabDev) return;
+
+  const activo = 'border-bottom:2px solid #fff;color:#fff;';
+  const inactivo = 'border-bottom:2px solid transparent;color:#666;';
+  tabOcs.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;${tab==='ocs' ? activo : inactivo}`;
+  tabDev.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;position:relative;${tab==='dev' ? activo : inactivo}`;
+  // re-append badge (se pierde al resetear cssText)
+  const badge = document.getElementById('badge-dev');
+  if (badge && tabDev) tabDev.appendChild(badge);
+
+  if (contOcs) contOcs.style.display = tab === 'ocs' ? 'block' : 'none';
+  if (contDev) contDev.style.display = tab === 'dev' ? 'block' : 'none';
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECEPCIONISTA — Lista de Devoluciones
+// ─────────────────────────────────────────────────────────────
+
+async function cargarDevoluciones() {
+  if (DEVOLUCION_ACTUAL) return;
+  const el = document.getElementById('contenido-devoluciones');
+  const badge = document.getElementById('badge-dev');
+  if (!el) return;
+
+  try {
+    const d = await get('/api/devoluciones/?almacen_id=' + ALMACEN_ID);
+    const tareas = d.tareas || [];
+
+    // Badge en el tab
+    if (badge) {
+      badge.style.display = tareas.length ? 'inline' : 'none';
+      badge.textContent = tareas.length;
+    }
+
+    if (!tareas.length) {
+      el.innerHTML = `<div style="text-align:center;padding:50px 20px;">
+        <div style="font-size:48px;color:#4ade80;">✓</div>
+        <div style="font-size:20px;font-weight:700;margin-top:12px;">Sin devoluciones pendientes</div>
+        <div style="font-size:13px;color:#555;margin-top:8px;">La reconciliación detectará nuevas automáticamente</div>
+      </div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 8px;border-bottom:1px solid #222;margin-bottom:10px;">
+        ${tareas.length} DEVOLUCIÓN(ES) PARA UBICAR
+      </div>
+      ${tareas.map(t => `
+        <div class="rec-card" onclick="abrirDevolucion(${t.id})" style="cursor:pointer;">
+          <div class="rec-titulo" style="font-size:18px;">${t.producto_nombre}</div>
+          <div class="rec-sub">${t.producto_codigo}</div>
+          <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:13px;color:#666;">Diferencia Siesa vs WMS</span>
+            <span style="font-size:28px;font-weight:800;color:#facc15;">+${t.cantidad_diferencia}</span>
+          </div>
+          <div style="margin-top:10px;padding:10px;background:#1a1500;border-radius:8px;font-size:12px;color:#facc15;">
+            ⚠ Tocar para ubicar en bodega
+          </div>
+        </div>`).join('')}`;
+  } catch (e) {
+    if (badge) badge.style.display = 'none';
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando devoluciones</div>';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECEPCIONISTA — Flujo de ubicación de devolución
+// ─────────────────────────────────────────────────────────────
+
+async function abrirDevolucion(id) {
+  try {
+    const d = await get('/api/devoluciones/?almacen_id=' + ALMACEN_ID);
+    const tarea = (d.tareas || []).find(t => t.id === id);
+    if (!tarea) { alerta('Tarea no encontrada', 'error'); return; }
+    DEVOLUCION_ACTUAL = tarea;
+    renderEscaneoDevolucion(tarea);
+  } catch (e) { alerta('Error cargando tarea', 'error'); }
+}
+
+function renderEscaneoDevolucion(tarea) {
+  // Cambiar al tab devoluciones si no está ahí
+  recTab('dev');
+  const el = document.getElementById('contenido-devoluciones');
+  if (!el) return;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+      <button onclick="volverListaDevoluciones()"
+        style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;">
+        ← Volver
+      </button>
+      <span style="font-size:14px;font-weight:700;">Ubicar devolución</span>
+    </div>
+
+    <div class="rec-card" style="margin-bottom:16px;">
+      <div style="font-size:22px;font-weight:800;">${tarea.producto_nombre}</div>
+      <div style="font-size:13px;color:#666;margin-top:4px;">${tarea.producto_codigo}</div>
+      <div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:13px;color:#aaa;">Unidades a ubicar</span>
+        <span style="font-size:36px;font-weight:800;color:#facc15;">${tarea.cantidad_diferencia}</span>
+      </div>
+    </div>
+
+    <div style="background:#0d1f0d;border:1px solid #1a3a1a;border-radius:12px;padding:16px;margin-bottom:16px;">
+      <div style="font-size:14px;font-weight:700;color:#4ade80;margin-bottom:8px;">FLUJO 1 — Mercancía en buen estado</div>
+      <div style="font-size:12px;color:#666;margin-bottom:12px;">Escanea el código de barras de la ubicación/estante donde vas a poner la mercancía</div>
+      <div style="display:flex;gap:8px;">
+        <input id="input-ubicacion-dev" type="text" placeholder="Código ubicación (ej: A-01-02)"
+          style="flex:1;padding:12px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:16px;"
+          onkeydown="if(event.key==='Enter') confirmarUbicacionDev()" />
+        <button onclick="confirmarUbicacionDev()"
+          style="padding:12px 16px;background:#16a34a;color:#fff;border:none;border-radius:8px;font-size:20px;cursor:pointer;">
+          ✓
+        </button>
+      </div>
+      <div id="estado-ubicacion-dev" style="margin-top:8px;font-size:12px;color:#555;text-align:center;"></div>
+    </div>
+
+    <div style="background:#1f0d0d;border:1px solid #3a1a1a;border-radius:12px;padding:16px;">
+      <div style="font-size:14px;font-weight:700;color:#f87171;margin-bottom:8px;">FLUJO 2 — Mercancía averiada</div>
+      <div style="font-size:12px;color:#666;margin-bottom:12px;">La mercancía está dañada. Se moverá a bodega AV1 en Siesa automáticamente.</div>
+      <button onclick="confirmarAveria(${tarea.id})"
+        style="width:100%;padding:16px;background:#7f1d1d;color:#fca5a5;border:1px solid #991b1b;border-radius:10px;font-size:16px;font-weight:700;cursor:pointer;">
+        ⚠ Reportar Avería
+      </button>
+    </div>`;
+}
+
+async function confirmarUbicacionDev() {
+  if (!DEVOLUCION_ACTUAL) return;
+  const inp = document.getElementById('input-ubicacion-dev');
+  const estado = document.getElementById('estado-ubicacion-dev');
+  const codigo = (inp ? inp.value : '').trim();
+  if (!codigo) { alerta('Escanea o ingresa el código de ubicación', 'advertencia'); return; }
+
+  if (estado) { estado.textContent = '⏳ Confirmando...'; estado.style.color = '#93c5fd'; }
+  try {
+    const r = await post(`/api/devoluciones/${DEVOLUCION_ACTUAL.id}/ubicar`, {
+      ubicacion_codigo: codigo
+    });
+    if (r.error) { if (estado) { estado.textContent = 'Error: ' + r.error; estado.style.color = '#ef4444'; } return; }
+    vibrar(); flash();
+    alerta(`✓ ${DEVOLUCION_ACTUAL.cantidad_diferencia} uds ubicadas en ${codigo}`, 'exito');
+    DEVOLUCION_ACTUAL = null;
+    setTimeout(cargarDevoluciones, 800);
+  } catch (e) {
+    if (estado) { estado.textContent = 'Error de conexión'; estado.style.color = '#ef4444'; }
+  }
+}
+
+async function procesarScanDevolucion(codigo) {
+  // En flujo devolución el escáner llena el campo de ubicación
+  const inp = document.getElementById('input-ubicacion-dev');
+  if (inp) {
+    inp.value = codigo;
+    vibrar(); flash();
+    await confirmarUbicacionDev();
+  }
+}
+
+async function confirmarAveria(tareaId) {
+  const tarea = DEVOLUCION_ACTUAL;
+  if (!tarea) return;
+  const ok = confirm(
+    `¿Confirmas que esta mercancía está AVERIADA?\n\n` +
+    `Producto: ${tarea.producto_nombre}\n` +
+    `Cantidad: ${tarea.cantidad_diferencia} uds\n\n` +
+    `Esta acción moverá el inventario en Siesa a bodega AV1.\nNo se puede deshacer.`
+  );
+  if (!ok) return;
+
+  const btn = document.querySelector(`button[onclick="confirmarAveria(${tareaId})"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Procesando...'; }
+
+  try {
+    const r = await post(`/api/devoluciones/${tareaId}/ubicar`, { es_averiado: true });
+    if (r.error) { alerta('Error: ' + r.error, 'error'); if (btn) { btn.disabled = false; btn.textContent = '⚠ Reportar Avería'; } return; }
+    vibrar(); flash();
+    alerta(`✓ Avería registrada — ${tarea.cantidad_diferencia} uds trasladadas a AV1 en Siesa`, 'exito');
+    DEVOLUCION_ACTUAL = null;
+    setTimeout(cargarDevoluciones, 800);
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '⚠ Reportar Avería'; }
+  }
+}
+
+function volverListaDevoluciones() {
+  DEVOLUCION_ACTUAL = null;
+  cargarDevoluciones();
 }

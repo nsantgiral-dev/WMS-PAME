@@ -19,6 +19,7 @@ from app.models.devolucion import TareaDevolucion
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.ubicacion import Ubicacion
 from app.models.almacen import Almacen
+from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,21 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
 
     db.session.commit()
     logger.info(f'[DEV] Tarea {tarea.codigo} completada · ubicación {codigo_ub} · averiado={es_averiado}')
+
+    # Disparar traslado NB1 → AV1 en Siesa para que vendedores no vean unidades dañadas
+    if es_averiado and not connekta.modo_simulacion:
+        try:
+            item_codigo = tarea.producto.codigo_siesa or tarea.producto.codigo
+            connekta.transferir_a_averias(
+                item_codigo=item_codigo,
+                cantidad=tarea.cantidad_diferencia,
+                referencia=tarea.codigo
+            )
+            logger.info(f'[DEV] Traslado Siesa NB1→AV1 OK para {item_codigo}')
+        except Exception as e:
+            # No revertir el WMS — el traslado Siesa puede hacerse manualmente
+            logger.error(f'[DEV] Error disparando traslado Siesa: {e} — WMS actualizado, Siesa pendiente manual')
+
     return tarea
 
 

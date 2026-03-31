@@ -45,6 +45,9 @@ class ConnektaGateway:
         self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')
         self.conector_entrada = os.getenv('CONNEKTA_CONECTOR_ENTRADA', '142948')
         self.conector_ajuste = os.getenv('CONNEKTA_CONECTOR_AJUSTE', '142951')
+        self.bodega_averias = os.getenv('SIESA_BODEGA_AVERIAS', 'AV1')
+        self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
+        self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
 
         self.url_get = 'https://serviciosqa.siesacloud.com/api/siesa/v3/ejecutarconsultaestandar'
         self.url_post = 'https://serviciosqa.siesacloud.com/api/siesa/v3/conectoresimportarestandar'
@@ -504,6 +507,94 @@ class ConnektaGateway:
         }
 
         logger.info(f'[CONNEKTA] Ajuste {motivo_codigo} {item_codigo}:{cantidad}')
+        return self._post(self.conector_ajuste, 'API_v1_Inventarios_Comercial_DocumentoInv', payload)
+
+    def transferir_a_averias(self, item_codigo: str, cantidad: int, referencia: str = ''):
+        """
+        142951 → API_v1_Inventarios_Comercial_DocumentoInv
+        Traslado físico NB1 → AV1 cuando el recepcionista marca mercancía como averiada.
+        Usa SIESA_TIPO_DOCTO_TRASLADO (TRA) y SIESA_MOTIVO_TRASLADO (01).
+        Siesa mueve el stock entre bodegas — vendedores ya no ven las unidades averiadas.
+        """
+        fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+
+        payload = {
+            'Inicial': [
+                {'F_CIA': self.id_compania}
+            ],
+            'Documentos': [
+                {
+                    'F_CIA': self.id_compania,
+                    'F_CONSEC_AUTO_REG': '',
+                    'f350_id_co': self.centro_op,
+                    'f350_id_tipo_docto': self.tipo_docto_traslado,
+                    'f350_consec_docto': '',
+                    'f350_fecha': fecha_hoy,
+                    'f350_id_tercero': '',
+                    'f350_id_clase_docto': '',
+                    'f350_ind_estado': '',
+                    'f350_ind_impresion': '',
+                    'f350_notas': referencia or f'Avería detectada por WMS · {item_codigo}',
+                    'f450_id_concepto': self.motivo_traslado,
+                    'f450_id_bodega_salida': self.bodega,
+                    'f450_id_bodega_entrada': self.bodega_averias,
+                    'f450_docto_alterno': '',
+                    'f350_id_co_base': '',
+                    'f350_id_tipo_docto_base': '',
+                    'f350_consec_docto_base': '',
+                    'f462_id_vehiculo': '',
+                    'f462_id_tercero_transp': '',
+                    'f462_id_sucursal_transp': '',
+                    'f462_id_tercero_conductor': '',
+                    'f462_nombre_conductor': '',
+                    'f462_identif_conductor': '',
+                    'f462_numero_guia': '',
+                    'f462_cajas': '',
+                    'f462_peso': '',
+                    'f462_volumen': '',
+                    'f462_valor_seguros': '',
+                    'f462_notas': ''
+                }
+            ],
+            'Movimientos': [
+                {
+                    'F_CIA': self.id_compania,
+                    'f470_id_co': self.centro_op,
+                    'f470_id_tipo_docto': '',
+                    'f470_consec_docto': '',
+                    'f470_nro_registro': '',
+                    'f470_id_bodega': self.bodega,
+                    'f470_id_ubicacion_aux': '',
+                    'f470_id_lote': '',
+                    'f470_id_concepto': '',
+                    'f470_id_motivo': '',
+                    'f470_id_co_movto': self.centro_op,
+                    'f470_id_ccosto_movto': '',
+                    'f470_id_proyecto': '',
+                    'f470_id_unidad_medida': '',
+                    'f470_cant_base': abs(cantidad),
+                    'f470_cant_2': '',
+                    'f470_costo_prom_uni': '',
+                    'f470_notas': '',
+                    'f470_desc_varible': '',
+                    'F_DESC_ITEM': '',
+                    'F_ID_UM_INVENTARIO': '',
+                    'f470_id_ubicacion_aux_ent': '',
+                    'f470_id_lote_ent': '',
+                    'f470_id_item': '',
+                    'f470_referencia_item': item_codigo,
+                    'f470_codigo_barras': '',
+                    'f470_id_ext1_detalle': '',
+                    'f470_id_ext2_detalle': '',
+                    'f470_id_un_movto': self.centro_op
+                }
+            ],
+            'Final': [
+                {'F_CIA': self.id_compania}
+            ]
+        }
+
+        logger.info(f'[CONNEKTA] Traslado averías {item_codigo}:{cantidad} {self.bodega}→{self.bodega_averias}')
         return self._post(self.conector_ajuste, 'API_v1_Inventarios_Comercial_DocumentoInv', payload)
 
     # ==========================================
