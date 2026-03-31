@@ -140,31 +140,44 @@ class ConnektaGateway:
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
         API_v2_Ventas_Pedidos — cola de picking.
-        Regla WMS: solo ítems con cant_pendiente > 0.
-        sin_filtros=True: barrido general sin filtrar por bodega/CO (solo para descubrimiento en ensayo).
+        Siesa rechaza f150_id en parametros (igual que inventario y OCs).
+        Estrategia: pedir solo estado=1, filtrar bodega/CO en Python.
+        sin_filtros=True: devuelve todos los aprobados sin filtrar por bodega/CO.
         """
-        if sin_filtros:
-            parametros = 'f430_ind_estado=1'
-        else:
-            parametros = (
-                f'f150_id="{self.bodega}"'
-                f' AND f430_id_co="{self.centro_op}"'
-                f' AND f430_ind_estado=1'
-            )
-        resultado = self._get(self.api_pedidos, {
-            'paginacion': 'numPag=1|tamPag=100',
-            'parametros': parametros
-        })
+        todos = []
+        for pag in range(1, 11):  # máx 10 páginas = 1000 items
+            # Filtro CO en API: reduce el universo a nuestro centro de operación.
+            # Siesa acepta f430_id_co en parametros (confirmado en capacitación Connekta).
+            # Python filtra bodega exacta después (API rechaza f150_id).
+            parametros = f'f430_ind_estado=1 AND f430_id_co="{self.centro_op}"'
+            if sin_filtros:
+                parametros = 'f430_ind_estado=1'
+            resultado = self._get(self.api_pedidos, {
+                'paginacion': f'numPag={pag}|tamPag=100',
+                'parametros': parametros
+            })
 
-        if self.modo_simulacion or resultado.get('simulado'):
-            return resultado
+            if self.modo_simulacion or resultado.get('simulado'):
+                return resultado
 
-        items_raw = resultado.get('detalle', {}).get('Table', [])
-        if not items_raw:
+            items_raw = resultado.get('detalle', {}).get('Table', [])
+            if not items_raw:
+                break
+            todos.extend(items_raw)
+            if len(items_raw) < 100:
+                break
+
+        if not todos:
             return {'codigo': 0, 'total_siesa': 0, 'total_pendientes': 0, 'items': []}
 
         items_pendientes = []
-        for item in items_raw:
+        for item in todos:
+            # Filtro Python: bodega y CO exactos (API no acepta f150_id en parametros)
+            if not sin_filtros:
+                if item.get('f150_id', '').strip() != self.bodega:
+                    continue
+                if item.get('f430_id_co', '').strip() != self.centro_op:
+                    continue
             try:
                 cant_pedida = float(item.get('f431_cant1_pedida', 0))
                 cant_remisionada = float(item.get('f431_cant1_remisionada', 0))
@@ -190,10 +203,10 @@ class ConnektaGateway:
                 logger.warning(f'[CONNEKTA] Item inválido: {e}')
                 continue
 
-        logger.info(f'[CONNEKTA] {len(items_pendientes)} pendientes de {len(items_raw)}')
+        logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} pendientes de {len(todos)} totales')
         return {
             'codigo': 0,
-            'total_siesa': len(items_raw),
+            'total_siesa': len(todos),
             'total_pendientes': len(items_pendientes),
             'items': items_pendientes
         }

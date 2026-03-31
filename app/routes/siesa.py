@@ -84,9 +84,46 @@ def debug_pedidos_raw():
     Muestra resumen de bodegas y COs encontrados para diagnosticar filtros.
     """
     sin_estado = request.args.get('sin_estado', '').lower() == 'true'
+    consec = request.args.get('consec_docto', '').strip()
+    co = request.args.get('co', '').strip()
+    # ?params_raw=... → pasa el string de parametros directamente a Connekta sin tocar
+    params_raw = request.args.get('params_raw', '').strip()
+    # ?echo=true → devuelve la URL que se enviaría sin hacer la llamada real
+    echo = request.args.get('echo', '').lower() == 'true'
+
     params = {'paginacion': 'numPag=1|tamPag=50'}
-    if not sin_estado:
+
+    if params_raw:
+        params['parametros'] = params_raw
+    elif consec:
+        filtros = [f'f430_consec_docto={consec}']
+        if co:
+            filtros.append(f'f430_id_co="{co}"')
+        if not sin_estado:
+            filtros.append('f430_ind_estado=1')
+        params['parametros'] = ' AND '.join(filtros)
+    elif not sin_estado:
         params['parametros'] = 'f430_ind_estado=1'
+
+    # Modo echo: muestra la URL exacta que se mandaría a Connekta
+    if echo:
+        import requests as req_lib
+        req = req_lib.Request(
+            'GET',
+            connekta.url_get,
+            headers=connekta.headers,
+            params={
+                'idCompania': connekta.id_compania,
+                'descripcion': connekta.api_pedidos,
+                **params
+            }
+        )
+        prepared = req.prepare()
+        return jsonify({
+            'url_exacta_connekta': prepared.url,
+            'parametros_enviado': params.get('parametros', '(ninguno)'),
+            'modo_simulacion': connekta.modo_simulacion
+        }), 200
 
     resultado = connekta._get(connekta.api_pedidos, params)
     tabla = resultado.get('detalle', {}).get('Table', [])
