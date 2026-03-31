@@ -139,47 +139,53 @@ class ConnektaGateway:
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
-        Cola viva de picking: pedidos aprobados de los últimos 3 días.
-        Estrategia: filtrar por fecha en Siesa (reduce de ~10k a ~30 filas),
-        luego Python filtra bodega NB1 y CO 003.
-        Campo fecha: f430_fecha (nombre estándar Siesa para fecha del documento).
+        Cola viva de picking: barre todas las páginas de Siesa en paralelo
+        y filtra NB1/CO003 en Python. Connekta no soporta filtros de fecha
+        ni de bodega/CO, por lo que la paginación completa es obligatoria.
         """
-        from datetime import date, timedelta
-        # Formato Connekta: YYYYMMDD sin guiones
-        fecha_desde = (date.today() - timedelta(days=3)).strftime('%Y%m%d')
+        from concurrent.futures import ThreadPoolExecutor
 
-        # Estados inválidos para picking: 0=Elaboración, 9=Anulado
-        # Estados válidos: 1=Aprobado cartera, 2=Aprobado, 4=Comprometido (y cualquier otro activo)
+        if self.modo_simulacion:
+            return self._simular('GET_pedidos_aprobados')
+
         ESTADOS_EXCLUIR = {0, 9}
+        TAM_PAG = 100
+        MAX_PAGINAS = 200   # 200 × 100 = 20 000 filas máximo
+        WORKERS = 10
 
-        if sin_filtros:
-            parametros = f'f430_id_fecha>="{fecha_desde}"'
-        else:
-            # Solo filtrar por fecha en Siesa — Python descarta estados inválidos y filtra bodega/CO
-            parametros = f'f430_id_fecha>="{fecha_desde}"'
+        def _fetch_page(num_pag):
+            try:
+                res = self._get(self.api_pedidos, {
+                    'paginacion': f'numPag={num_pag}|tamPag={TAM_PAG}'
+                })
+                return res.get('detalle', {}).get('Table', [])
+            except Exception as e:
+                logger.warning(f'[CONNEKTA] Página {num_pag} error: {e}')
+                return []
 
-        resultado = self._get(self.api_pedidos, {
-            'paginacion': 'numPag=1|tamPag=100',
-            'parametros': parametros
-        })
-
-        if self.modo_simulacion or resultado.get('simulado'):
-            return resultado
-
-        items_raw = resultado.get('detalle', {}).get('Table', [])
-        if not items_raw:
-            return {'codigo': 0, 'total_siesa': 0, 'total_pendientes': 0, 'items': []}
+        # Barrer todas las páginas en lotes de WORKERS concurrentes.
+        # Parar cuando una página devuelva menos de TAM_PAG filas (fin del histórico).
+        all_items = []
+        done = False
+        for batch_start in range(1, MAX_PAGINAS + 1, WORKERS):
+            if done:
+                break
+            pages = range(batch_start, min(batch_start + WORKERS, MAX_PAGINAS + 1))
+            with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+                results = list(ex.map(_fetch_page, pages))
+            for rows in results:
+                all_items.extend(rows)
+                if len(rows) < TAM_PAG:
+                    done = True
+                    break
 
         items_pendientes = []
-        for item in items_raw:
-            # Excluir estados inválidos (borrador y anulado)
-            estado_num = item.get('f430_ind_estado')
+        for item in all_items:
             try:
-                if int(estado_num) in ESTADOS_EXCLUIR:
+                if int(item.get('f430_ind_estado', 0)) in ESTADOS_EXCLUIR:
                     continue
             except (TypeError, ValueError):
                 pass
-            # Python filtra bodega y CO (API ignora esos campos en parametros)
             if not sin_filtros:
                 if item.get('f150_id', '').strip() != self.bodega:
                     continue
@@ -210,7 +216,7 @@ class ConnektaGateway:
                 logger.warning(f'[CONNEKTA] Item inválido: {e}')
                 continue
 
-        logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} NB1/003 de {len(items_raw)} últimos 3 días')
+        logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} NB1/003 de {len(all_items)} total Siesa')
         return {
             'codigo': 0,
             'total_siesa': len(items_raw),
