@@ -49,17 +49,7 @@ class ConnektaGateway:
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
 
-        # Consulta dinámica para picking — filtra NB1/003 en SQL directo
-        self.api_pedidos_picking = os.getenv(
-            'CONNEKTA_API_PEDIDOS_PICKING',
-            'papeleriamedellin_WMS_Picking_Pedidos_NB1'
-        )
-
         self.url_get = 'https://serviciosqa.siesacloud.com/api/siesa/v3/ejecutarconsultaestandar'
-        self.url_get_dinamica = os.getenv(
-            'CONNEKTA_URL_DINAMICA',
-            'https://serviciosqa.siesacloud.com/api/connekta/v3.0.1/ejecutarconsulta'
-        )
         self.url_post = 'https://serviciosqa.siesacloud.com/api/siesa/v3/conectoresimportarestandar'
 
         self.modo_simulacion = not all([self.ikey, self.itoken])
@@ -90,26 +80,6 @@ class ConnektaGateway:
             'mensaje': f'{operacion} simulado exitosamente',
             'payload': payload or {}
         }
-
-    def _get_dinamica(self, descripcion: str, paginacion: str = 'numPag=1|tamPag=100'):
-        """GET a la API dinámica (Generador de consultas) — filtra en SQL directo en Siesa."""
-        if self.modo_simulacion:
-            return self._simular(f'GET_DINAMICA_{descripcion}')
-
-        params = {
-            'idCompania': self.id_compania,
-            'descripcion': descripcion,
-            'paginacion': paginacion
-        }
-        try:
-            r = requests.get(self.url_get_dinamica, headers=self.headers, params=params, timeout=30)
-            r.raise_for_status()
-            return r.json()
-        except requests.exceptions.Timeout:
-            raise Exception('Connekta no respondió — reintenta')
-        except requests.exceptions.RequestException as e:
-            logger.error(f'[CONNEKTA] GET_DINAMICA {descripcion}: {e}')
-            raise Exception(f'Error consultando Siesa: {e}')
 
     def _get(self, nombre_api: str, params_extra: dict = None):
         if self.modo_simulacion:
