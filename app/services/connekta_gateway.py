@@ -329,7 +329,7 @@ class ConnektaGateway:
                     'f470_notas': '',
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
-                    'F_ID_UM_INVENTARIO': '',
+                    'F_ID_UM_INVENTARIO': i.get('unidad_medida') or '',
                     'f470_id_item': i.get('item_id_siesa') or '',
                     'f470_referencia_item': i.get('producto_codigo'),
                     'f470_codigo_barras': '',

@@ -305,13 +305,38 @@ class PackingService:
     @staticmethod
     def cancelar(tarea_id: int, motivo: str = None):
         """Cancela una tarea de packing."""
+        from app.models.bulto import Bulto
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
-        if tarea.estado in ['VERIFICADO', 'DESPACHADO']:
-            raise ValueError('No se puede cancelar una tarea ya verificada o despachada')
+        if tarea.estado == 'DESPACHADO' and tarea.siesa_triggered:
+            raise ValueError('No se puede cancelar — Siesa ya generó la remisión')
 
+        # Si tiene bultos sin cargar, eliminarlos antes de cancelar
+        Bulto.query.filter_by(tarea_id=tarea_id, estado='PENDIENTE').delete()
         tarea.estado = 'CANCELADO'
         tarea.observaciones = motivo
+        db.session.commit()
+        return tarea
+
+    @staticmethod
+    def resetear_siesa(tarea_id: int):
+        """
+        Elimina los bultos pendientes y vuelve el estado a VERIFICADO
+        para poder reintentar el cierre con Siesa.
+        Solo aplica cuando Siesa falló (siesa_triggered=False).
+        """
+        from app.models.bulto import Bulto
+        tarea = TareaPacking.query.get(tarea_id)
+        if not tarea:
+            raise ValueError('Tarea no encontrada')
+        if tarea.siesa_triggered:
+            raise ValueError('Siesa ya procesó esta tarea')
+        if tarea.estado not in ['VERIFICADO', 'DESPACHADO']:
+            raise ValueError('Solo se puede resetear una tarea VERIFICADA o con error Siesa')
+
+        Bulto.query.filter_by(tarea_id=tarea_id).delete()
+        tarea.estado = 'VERIFICADO'
+        tarea.siesa_response = None
         db.session.commit()
         return tarea

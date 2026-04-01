@@ -1481,6 +1481,11 @@ async function empCargarTareas() {
         const color = siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
         const bg    = siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
         const label = siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
+        const limpiarBtn = siesaFallo ? `
+          <button onclick="event.stopPropagation();empLimpiarSiesa(${t.id})"
+            style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
+            🗑 Limpiar bultos y redeclarar piezas
+          </button>` : '';
         return `
         <div class="emp-task-card" onclick="empIniciarHUD(${t.id})">
           <div class="emp-task-pedido">${t.numero_pedido_siesa}</div>
@@ -1489,6 +1494,7 @@ async function empCargarTareas() {
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
           </div>` : ''}
           <span class="emp-task-badge" style="background:${bg};color:${color};">${label}</span>
+          ${limpiarBtn}
         </div>`;
       }).join('')}`;
   } catch (e) {
@@ -1531,6 +1537,20 @@ async function empIniciarHUD(packingId) {
     document.getElementById('emp-hud').classList.add('activo');
     document.getElementById('scanner-input').focus();
   } catch (e) { alerta('Error iniciando tarea', 'error'); }
+}
+
+async function empLimpiarSiesa(packingId) {
+  if (!confirm('¿Eliminar los bultos registrados y volver a declarar las piezas?')) return;
+  try {
+    const r = await fetch(`/api/packing/${packingId}/resetear-siesa`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const data = await r.json();
+    if (!r.ok) { alerta(data.error || 'Error al limpiar', 'error'); return; }
+    alerta('Listo — declara las piezas de nuevo al abrir la tarea', 'exito');
+    empCargarTareas();
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function empReintentarSiesa(t) {

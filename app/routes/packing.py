@@ -190,6 +190,17 @@ def cancelar_tarea(id):
         return jsonify({'error': str(e)}), 400
 
 
+@packing_bp.route('/<int:id>/resetear-siesa', methods=['POST'])
+@jwt_required()
+def resetear_siesa(id):
+    """Elimina bultos y vuelve a VERIFICADO para reintentar Siesa desde cero."""
+    try:
+        tarea = PackingService.resetear_siesa(id)
+        return jsonify({'ok': True, 'mensaje': 'Packing reseteado — declara las piezas de nuevo', 'tarea': tarea.to_dict()}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @packing_bp.route('/connekta/estado', methods=['GET'])
 @jwt_required()
 def estado_connekta():
