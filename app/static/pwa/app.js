@@ -780,16 +780,12 @@ async function confirmar() {
 
 async function confirmarManual(tareaId, cantidad) {
   if (!confirm(`¿Confirmar ${cantidad} unidades recogidas manualmente?`)) return;
-  // Simular escaneos hasta completar la cantidad
-  for (let i = 0; i < cantidad; i++) {
-    await post('/api/mobile/escanear', {
-      tarea_id: tareaId,
-      codigo_barras: '__MANUAL__',
-      cantidad: 1
-    }).catch(() => {});
-  }
-  // Confirmar
-  const payload = { tarea_id: tareaId, tipo: TAREA_ACTUAL?.tipo, items_escaneados: [] };
+  const payload = {
+    tarea_id: tareaId,
+    tipo: TAREA_ACTUAL?.tipo,
+    items_escaneados: [],
+    cantidad_manual: cantidad
+  };
   try {
     const r = await post('/api/mobile/confirmar', payload);
     if (r.error) { alerta(r.error, 'error'); return; }

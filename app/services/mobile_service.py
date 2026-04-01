@@ -277,15 +277,18 @@ class MobileService:
 
     @staticmethod
     def confirmar_tarea(operario_id: int, tarea_id: int,
-                        tipo: str, items_escaneados: list = None):
+                        tipo: str, items_escaneados: list = None,
+                        cantidad_manual: int = None):
         """Confirma la tarea completa."""
         if tipo == 'PICKING':
             tarea = TareaPicking.query.get(tarea_id)
             if not tarea:
                 raise ValueError('Tarea no encontrada')
+            # cantidad_manual: confirmación sin escáner (operario contó físicamente)
+            cantidad = cantidad_manual if cantidad_manual is not None else tarea.cantidad_recogida
             return PickingService.confirmar_picking(
                 tarea_id=tarea_id,
-                cantidad_recogida=tarea.cantidad_recogida,
+                cantidad_recogida=cantidad,
                 usuario_id=operario_id
             ).to_dict()
 

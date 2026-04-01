@@ -68,7 +68,8 @@ def confirmar_tarea():
             operario_id=operario_id,
             tarea_id=data['tarea_id'],
             tipo=data['tipo'],
-            items_escaneados=data.get('items_escaneados', [])
+            items_escaneados=data.get('items_escaneados', []),
+            cantidad_manual=data.get('cantidad_manual')
         )
         return jsonify(resultado), 200
     except ValueError as e:
