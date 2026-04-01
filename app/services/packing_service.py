@@ -78,7 +78,7 @@ class PackingService:
     @staticmethod
     def crear_manual(numero_pedido_siesa: str, almacen_id: int, items: list,
                      tipo_docto_pedido_siesa: str = '', consec_docto_pedido_siesa: str = '',
-                     cliente: str = ''):
+                     cliente: str = '', municipio: str = ''):
         """
         Crea una tarea de packing manualmente con lista de ítems.
         Útil cuando el pedido viene directo de Siesa sin picking previo.
@@ -100,6 +100,7 @@ class PackingService:
             consec_docto_pedido_siesa=consec_docto_pedido_siesa,
             almacen_id=almacen_id,
             cliente=cliente,
+            municipio=municipio,
             estado='PENDIENTE'
         )
         db.session.add(tarea)

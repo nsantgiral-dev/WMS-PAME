@@ -31,8 +31,9 @@ class TareaPacking(db.Model):
     siesa_response = db.Column(db.Text)
     siesa_triggered_at = db.Column(db.DateTime)
 
-    # Destino — copiado de PedidoSiesa.cliente al crear la tarea
-    cliente = db.Column(db.String(200))
+    # Destino — copiado de PedidoSiesa al crear la tarea
+    cliente    = db.Column(db.String(200))
+    municipio  = db.Column(db.String(100))
 
     # Tiempos
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -71,6 +72,7 @@ class TareaPacking(db.Model):
             'siesa_triggered': self.siesa_triggered,
             'siesa_triggered_at': self.siesa_triggered_at.isoformat() if self.siesa_triggered_at else None,
             'cliente': self.cliente or '',
+            'municipio': self.municipio or '',
             'total_items': self.total_items(),
             'items_verificados': self.items_verificados(),
             'tiene_diferencias': self.tiene_diferencias(),

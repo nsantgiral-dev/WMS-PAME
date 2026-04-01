@@ -471,7 +471,8 @@ def iniciar_despacho():
     # Obtener cliente/destino del pedido Siesa para el Monitor de Muelle
     from app.models.pedido_siesa import PedidoSiesa as _PS
     pedido_row = _PS.query.filter_by(numero_pedido=numero_pedido).first()
-    cliente_destino = pedido_row.cliente if pedido_row else data.get('cliente', '')
+    cliente_destino  = pedido_row.cliente   if pedido_row else data.get('cliente', '')
+    municipio_destino = pedido_row.municipio if pedido_row else ''
 
     try:
         packing = PackingService.crear_manual(
@@ -480,7 +481,8 @@ def iniciar_despacho():
             items=items_packing,
             tipo_docto_pedido_siesa=tipo_docto,
             consec_docto_pedido_siesa=consec_docto,
-            cliente=cliente_destino
+            cliente=cliente_destino,
+            municipio=municipio_destino
         )
     except ValueError as e:
         return jsonify({

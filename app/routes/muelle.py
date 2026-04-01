@@ -25,10 +25,10 @@ def listos():
         TareaPacking.estado != 'CANCELADO'
     ).order_by(TareaPacking.fecha_verificado.asc()).all()
 
-    # Agrupar por cliente/destino
+    # Agrupar por municipio (fallback: cliente)
     grupos = {}
     for t in tareas:
-        destino = t.cliente or 'Sin destino'
+        destino = t.municipio or t.cliente or 'Sin destino'
         if destino not in grupos:
             grupos[destino] = []
         grupos[destino].append({
@@ -36,6 +36,7 @@ def listos():
             'codigo': t.codigo,
             'numero_pedido_siesa': t.numero_pedido_siesa,
             'cliente': t.cliente or '',
+            'municipio': t.municipio or '',
             'total_items': t.total_items(),
             'siesa_triggered_at': t.siesa_triggered_at.isoformat() if t.siesa_triggered_at else None,
             'fecha_verificado': t.fecha_verificado.isoformat() if t.fecha_verificado else None,

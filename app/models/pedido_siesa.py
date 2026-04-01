@@ -23,6 +23,7 @@ class PedidoSiesa(db.Model):
     item_descripcion = db.Column(db.String(200))
     item_id_siesa    = db.Column(db.String(50))
     cliente          = db.Column(db.String(200))
+    municipio        = db.Column(db.String(100))   # nombre resuelto desde código DANE
     fecha_entrega    = db.Column(db.String(20))
     estado_siesa     = db.Column(db.Integer)
 
@@ -54,6 +55,7 @@ class PedidoSiesa(db.Model):
             'item_descripcion':   self.item_descripcion,
             'item_id_siesa':      self.item_id_siesa,
             'cliente':            self.cliente,
+            'municipio':          self.municipio or '',
             'fecha_entrega':      self.fecha_entrega,
             'estado':             self.estado_siesa,
             'cantidad_pedida':    self.cantidad_pedida,

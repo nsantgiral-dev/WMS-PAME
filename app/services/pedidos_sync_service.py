@@ -11,6 +11,7 @@ Estrategia:
 import logging
 import threading
 from datetime import datetime, timezone
+from app.utils.dane_municipios import resolver_municipio
 
 from app.extensions import db
 from app.models.pedido_siesa import PedidoSiesa
@@ -81,6 +82,7 @@ def _run_sync(app):
                             'item_descripcion':   item.get('f120_descripcion'),
                             'item_id_siesa':      item.get('f120_id'),
                             'cliente':            item.get('f200_razon_social_pedido_fact'),
+                            'municipio':          resolver_municipio(item.get('f015_id_depto_pe', ''), item.get('f015_id_ciudad_pe', '')),
                             'fecha_entrega':      item.get('f430_fecha_entrega'),
                             'estado_siesa':       item.get('f430_ind_estado'),
                             'cantidad_pedida':    cant_pedida,
@@ -114,6 +116,7 @@ def _run_sync(app):
                     reg.cantidad_pendiente   = d['cantidad_pendiente']
                     reg.estado_siesa         = d['estado_siesa']
                     reg.cliente              = d['cliente']
+                    reg.municipio            = d.get('municipio', '')
                     reg.fecha_entrega        = d['fecha_entrega']
                     reg.producto_id          = prod.id if prod else None
                     reg.sync_at              = datetime.utcnow()
