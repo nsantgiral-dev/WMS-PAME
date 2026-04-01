@@ -38,6 +38,8 @@ function mostrarSegunRol(rol) {
   pararTimers();
   const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
   const esRecepcion = rol === 'recepcionista';
+  const puedeEmpacar = OPERARIO?.puede_empacar || false;
+  const puedePicar   = OPERARIO?.puede_picar !== false; // default true
   if (esAdmin) {
     pantalla('pantalla-admin');
     cargarAdmin();
@@ -52,7 +54,19 @@ function mostrarSegunRol(rol) {
         cargarDevoluciones();
       }
     }, 30000);
+  } else if (puedeEmpacar && !puedePicar) {
+    // Empacador puro → directo al HUD de packing
+    pantalla('pantalla-empacador');
+    document.getElementById('emp-nombre').textContent = OPERARIO.nombre;
+    empCargarTareas();
+    TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
+  } else if (puedeEmpacar && puedePicar) {
+    // Rol dual: picker + empacador → picker por defecto con acceso a packing
+    pantalla('pantalla-operario');
+    pedirTarea();
+    TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   } else {
+    // Picker puro (o operario sin flags)
     pantalla('pantalla-operario');
     pedirTarea();
     TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
@@ -199,17 +213,18 @@ async function cargarAdmin() {
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
   else if (TAB === 'tab-operarios') await cargarOperarios();
+  else if (TAB === 'tab-usuarios') await cargarUsuarios();
   else if (TAB === 'tab-stock') await cargarStock();
   else if (TAB === 'tab-connekta') await cargarConnekta();
 }
 
 function tab(id) {
-  ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'].forEach(t => {
+  ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta'].forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
   });
   document.querySelectorAll('.nav-tab').forEach((t, i) => {
-    t.classList.toggle('active', ['tab-dashboard','tab-pedidos','tab-operarios','tab-stock','tab-connekta'][i] === id);
+    t.classList.toggle('active', ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta'][i] === id);
   });
   TAB = id;
   cargarAdmin();
@@ -279,17 +294,25 @@ async function cargarPedidos() {
 
         let accionBtn = '';
         if (p.siesa_triggered) {
+          // Estado final: Siesa tiene la remisión
           accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa</div>`;
+        } else if (p.packing_estado === 'EN_PROCESO') {
+          // Empacador verificando en mesa
+          accionBtn = `<div style="flex-shrink:0;background:#1a0a2e;color:#c084fc;border:1px solid #4c1d95;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
+            En empaque<br>🔄
+          </div>`;
         } else if (p.picking_completado) {
-          accionBtn = `<button onclick="confirmarDespachoSiesa(${p.packing_id}, '${p.numero_pedido}')"
-            style="flex-shrink:0;background:#166534;color:#4ade80;border:1px solid #166534;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            Confirmar<br>en Siesa
-          </button>`;
+          // Picking listo, esperando empacador
+          accionBtn = `<div style="flex-shrink:0;background:#1c1400;color:#fbbf24;border:1px solid #78350f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
+            Packing<br>pendiente
+          </div>`;
         } else if (p.picking_iniciado) {
+          // Operario recogiendo
           accionBtn = `<div style="flex-shrink:0;background:#1a1a2a;color:#93c5fd;border:1px solid #1e3a5f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
             En picking<br>${p.picking_progreso || ''}
           </div>`;
         } else {
+          // Sin tareas — listo para despachar
           accionBtn = `<button onclick="iniciarDespachoDesdeSiesa(${i})"
             style="flex-shrink:0;background:#fff;color:#000;border:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             Despachar
@@ -746,6 +769,10 @@ function loadScript(src) {
 async function procesarScan(codigo) {
   if (DEVOLUCION_ACTUAL) { await procesarScanDevolucion(codigo); return; }
   if (RECEPCION_ACTUAL) { await procesarScanRecepcion(codigo); return; }
+  // HUD del empacador activo
+  if (EMP_TAREA && document.getElementById('emp-hud')?.classList.contains('activo')) {
+    await empProcesarEscaneo(codigo); return;
+  }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
   try {
@@ -871,7 +898,7 @@ async function cargarRecepciones() {
 }
 
 function pantalla(id) {
-  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion'].forEach(p => {
+  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador'].forEach(p => {
     const el = document.getElementById(p);
     if (el) el.style.display = p === id ? 'block' : 'none';
   });
@@ -1388,4 +1415,406 @@ async function confirmarAveria(tareaId) {
 function volverListaDevoluciones() {
   DEVOLUCION_ACTUAL = null;
   cargarDevoluciones();
+}
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — Estado global
+// ─────────────────────────────────────────────────────────────
+
+let EMP_TAREA = null;       // TareaPacking activa en el HUD
+let EMP_ITEMS = [];         // ItemPacking[] con progreso actual
+let EMP_ITEM_IDX = 0;       // índice del ítem que se está escaneando
+
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — Lista de tareas
+// ─────────────────────────────────────────────────────────────
+
+async function empCargarTareas() {
+  const el = document.getElementById('emp-lista');
+  if (!el) return;
+  try {
+    const d = await get('/api/packing/?per_page=50');
+    const tareas = (d.tareas || []).filter(t =>
+      ['PENDIENTE', 'EN_PROCESO'].includes(t.estado)
+    );
+
+    if (!tareas.length) {
+      el.innerHTML = `<div style="text-align:center;padding:60px 20px;color:#555;">
+        Sin tareas de empaque pendientes ✓<br>
+        <button onclick="empCargarTareas()" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
+      </div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 12px;">TAREAS DE EMPAQUE</div>
+      ${tareas.map(t => {
+        const verificados = t.items_verificados || 0;
+        const total = t.total_items || 0;
+        const pct = total ? Math.round(verificados / total * 100) : 0;
+        const enProceso = t.estado === 'EN_PROCESO';
+        const color = enProceso ? '#93c5fd' : '#facc15';
+        const bg = enProceso ? '#1e3a5f' : '#713f12';
+        return `
+        <div class="emp-task-card" onclick="empIniciarHUD(${t.id})">
+          <div class="emp-task-pedido">${t.numero_pedido_siesa}</div>
+          <div class="emp-task-sub">${total} producto(s) · ${t.items_verificados || 0}/${total} verificados</div>
+          ${total > 0 ? `<div style="margin-top:10px;background:#1a1a1a;border-radius:8px;height:6px;overflow:hidden;">
+            <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
+          </div>` : ''}
+          <span class="emp-task-badge" style="background:${bg};color:${color};">${enProceso ? 'En proceso' : 'Pendiente'}</span>
+        </div>`;
+      }).join('')}`;
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando tareas</div>';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — HUD: iniciar tarea y mostrar primer ítem
+// ─────────────────────────────────────────────────────────────
+
+async function empIniciarHUD(packingId) {
+  try {
+    // Cargar detalle completo de la tarea
+    const t = await get(`/api/packing/${packingId}`);
+    if (!t || !t.id) { alerta('Tarea no encontrada', 'error'); return; }
+
+    // Iniciar si aún está PENDIENTE
+    if (t.estado === 'PENDIENTE') {
+      await fetch(`/api/packing/${packingId}/iniciar`, {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
+      });
+    }
+
+    EMP_TAREA = { ...t, id: packingId };
+    // Ítems pendientes de verificar van primero
+    EMP_ITEMS = [...(t.items || [])].sort((a, b) => a.verificado - b.verificado);
+    EMP_ITEM_IDX = EMP_ITEMS.findIndex(i => !i.verificado);
+    if (EMP_ITEM_IDX < 0) EMP_ITEM_IDX = 0;
+
+    empRenderHUDItem();
+    document.getElementById('emp-hud').classList.add('activo');
+    document.getElementById('scanner-input').focus();
+  } catch (e) { alerta('Error iniciando tarea', 'error'); }
+}
+
+function empCerrarHUD() {
+  document.getElementById('emp-hud').classList.remove('activo');
+  EMP_TAREA = null;
+  EMP_ITEMS = [];
+  EMP_ITEM_IDX = 0;
+  empCargarTareas();
+}
+
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — HUD: renderizar ítem actual
+// ─────────────────────────────────────────────────────────────
+
+function empRenderHUDItem() {
+  if (!EMP_TAREA || !EMP_ITEMS.length) return;
+
+  const verificados = EMP_ITEMS.filter(i => i.verificado).length;
+  const total = EMP_ITEMS.length;
+  const pendientes = EMP_ITEMS.filter(i => !i.verificado);
+  const item = pendientes[0] || EMP_ITEMS[EMP_ITEM_IDX] || EMP_ITEMS[0];
+
+  document.getElementById('emp-hud-pedido').textContent = EMP_TAREA.numero_pedido_siesa;
+  document.getElementById('emp-hud-producto').textContent = item.producto_nombre || item.producto_codigo || '—';
+  document.getElementById('emp-hud-contador').textContent = item.cantidad_real || 0;
+  document.getElementById('emp-hud-de').textContent = `de ${item.cantidad_esperada}`;
+  document.getElementById('emp-hud-items').textContent = `${verificados} de ${total} ítems verificados`;
+
+  const pct = total ? Math.round(verificados / total * 100) : 0;
+  document.getElementById('emp-hud-barra').style.width = pct + '%';
+
+  // Botón cerrar caja: solo visible si TODOS verificados
+  const btn = document.getElementById('emp-btn-cerrar-caja');
+  if (verificados === total && total > 0) {
+    btn.style.display = 'block';
+    btn.disabled = false;
+    document.getElementById('emp-hud-producto').textContent = '¡Todo verificado! Cierra la caja.';
+  } else {
+    btn.style.display = 'none';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — HUD: procesar escaneo láser
+// ─────────────────────────────────────────────────────────────
+
+async function empProcesarEscaneo(codigo) {
+  if (!EMP_TAREA) return;
+
+  try {
+    const r = await post('/api/mobile/escanear', {
+      tarea_id: EMP_TAREA.id,
+      tipo: 'PACKING',
+      codigo: codigo,
+      cantidad: 1
+    });
+
+    if (r.error) {
+      empFlash('rojo', r.error);
+      return;
+    }
+
+    // Actualizar estado local del ítem
+    const item = EMP_ITEMS.find(i =>
+      i.producto_codigo === codigo ||
+      (r.codigo_escaneado && i.producto_codigo === r.codigo_escaneado)
+    );
+    if (item) {
+      item.cantidad_real = r.cantidad_actual;
+      item.verificado = r.item_completado;
+    }
+
+    if (r.item_completado) {
+      empFlash('verde', null);
+    } else {
+      // Ítem parcialmente escaneado — actualizar contador
+      if (item) {
+        document.getElementById('emp-hud-contador').textContent = r.cantidad_actual;
+      }
+      empFlash('verde', null);
+    }
+
+    // Si todos los ítems están listos
+    if (r.todos_completados) {
+      // Recargar estado real del servidor
+      const detalle = await get(`/api/packing/${EMP_TAREA.id}`);
+      EMP_ITEMS = detalle.items || EMP_ITEMS;
+    }
+
+    empRenderHUDItem();
+
+  } catch (e) {
+    empFlash('rojo', 'Error de conexión');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — HUD: flash visual verde/rojo
+// ─────────────────────────────────────────────────────────────
+
+function empFlash(color, mensaje) {
+  const flash = document.getElementById('emp-flash');
+  const hud = document.getElementById('emp-hud');
+  const esVerde = color === 'verde';
+
+  flash.style.background = esVerde ? '#15803d' : '#991b1b';
+  flash.style.opacity = '0.7';
+
+  if (!esVerde && mensaje) {
+    // Sonido de error: oscilación roja con mensaje
+    hud.style.background = '#1a0000';
+    const msgEl = document.getElementById('emp-hud-producto');
+    const prevText = msgEl.textContent;
+    msgEl.style.color = '#f87171';
+    msgEl.textContent = '⚠ ' + mensaje;
+    setTimeout(() => {
+      msgEl.style.color = '#fff';
+      msgEl.textContent = prevText;
+      hud.style.background = '#000';
+    }, 1800);
+  }
+
+  setTimeout(() => {
+    flash.style.opacity = '0';
+    if (esVerde) hud.style.background = '#000';
+  }, esVerde ? 150 : 300);
+}
+
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — HUD: confirmar packing → Siesa se dispara solo
+// ─────────────────────────────────────────────────────────────
+
+async function empConfirmarPacking() {
+  if (!EMP_TAREA) return;
+  const btn = document.getElementById('emp-btn-cerrar-caja');
+  btn.disabled = true;
+  btn.textContent = 'Enviando a Siesa...';
+
+  try {
+    const r = await fetch(`/api/packing/${EMP_TAREA.id}/confirmar`, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ forzar: false })
+    });
+    const data = await r.json();
+
+    if (!r.ok) {
+      const msg = typeof data.error === 'string' ? data.error : 'Error confirmando';
+      empFlash('rojo', msg);
+      btn.disabled = false;
+      btn.textContent = 'Cerrar Caja ✓';
+      return;
+    }
+
+    // Éxito — flash verde y volver a lista
+    empFlash('verde', null);
+    setTimeout(() => {
+      document.getElementById('emp-hud').classList.remove('activo');
+      EMP_TAREA = null;
+      EMP_ITEMS = [];
+      alerta(data.siesa_triggered ? '¡Caja cerrada! Siesa generó la remisión.' : '¡Caja cerrada!', 'exito');
+      empCargarTareas();
+    }, 600);
+
+  } catch (e) {
+    empFlash('rojo', 'Error de conexión');
+    btn.disabled = false;
+    btn.textContent = 'Cerrar Caja ✓';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ADMIN — Gestión de usuarios (tab-usuarios)
+// ─────────────────────────────────────────────────────────────
+
+async function cargarUsuarios() {
+  const el = document.getElementById('lista-usuarios');
+  if (!el) return;
+  try {
+    const d = await get('/api/auth/usuarios');
+    const usuarios = d.usuarios || [];
+    if (!usuarios.length) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios</div>';
+      return;
+    }
+    el.innerHTML = usuarios.map(u => {
+      const rolColor = u.rol === 'admin' ? '#f87171' : '#aaa';
+      return `
+      <div class="tabla-card" style="margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div>
+            <div style="font-size:15px;font-weight:700;">${u.nombre}</div>
+            <div style="font-size:12px;color:#555;margin-top:2px;">${u.email}</div>
+            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+              <span style="font-size:11px;font-weight:600;color:${rolColor};background:#1a1a1a;padding:2px 8px;border-radius:8px;">${u.rol}</span>
+              ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
+              ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
+            </div>
+          </div>
+          <button onclick="editarUsuario(${u.id})"
+            style="background:#222;border:1px solid #333;color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;flex-shrink:0;">
+            Editar
+          </button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando usuarios</div>';
+  }
+}
+
+function _formUsuario(u = {}) {
+  return `
+    <div style="font-size:15px;font-weight:700;margin-bottom:16px;">${u.id ? 'Editar usuario' : 'Nuevo usuario'}</div>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <input id="u-nombre" placeholder="Nombre completo" value="${u.nombre || ''}"
+        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+      <input id="u-email" placeholder="email@empresa.com" value="${u.email || ''}" type="email" ${u.id ? 'readonly style="opacity:0.5;"' : ''}
+        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+      <input id="u-password" placeholder="${u.id ? 'Nueva contraseña (dejar vacío para no cambiar)' : 'Contraseña'}" type="password"
+        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+      <select id="u-rol" style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+        <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario</option>
+        <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
+        <option value="supervisor" ${u.rol==='supervisor'?'selected':''}>Supervisor</option>
+        <option value="jefe_almacen" ${u.rol==='jefe_almacen'?'selected':''}>Jefe de almacén</option>
+        <option value="admin" ${u.rol==='admin'?'selected':''}>Admin</option>
+      </select>
+      <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
+        <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
+          <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:#60a5fa;">Picker</div>
+            <div style="font-size:11px;color:#555;">Puede recoger productos del almacén</div>
+          </div>
+        </label>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
+          <input type="checkbox" id="u-puede-empacar" ${u.puede_empacar?'checked':''} style="width:20px;height:20px;accent-color:#c084fc;">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:#c084fc;">Empacador / Auditor</div>
+            <div style="font-size:11px;color:#555;">Verifica y cierra cajas en mesa de empaque</div>
+          </div>
+        </label>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="_guardarUsuario(${u.id || 'null'})"
+          style="flex:1;padding:14px;background:#fff;color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+          ${u.id ? 'Guardar cambios' : 'Crear usuario'}
+        </button>
+        <button onclick="ocultarFormUsuario()"
+          style="padding:14px 18px;background:#222;color:#fff;border:1px solid #333;border-radius:10px;font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>`;
+}
+
+function mostrarFormNuevoUsuario() {
+  const f = document.getElementById('form-nuevo-usuario');
+  if (!f) return;
+  f.innerHTML = _formUsuario();
+  f.style.display = 'block';
+  f.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function editarUsuario(uid) {
+  try {
+    const d = await get('/api/auth/usuarios');
+    const u = (d.usuarios || []).find(x => x.id === uid);
+    if (!u) return;
+    const f = document.getElementById('form-nuevo-usuario');
+    f.innerHTML = _formUsuario(u);
+    f.style.display = 'block';
+    f.scrollIntoView({ behavior: 'smooth' });
+  } catch (e) { alerta('Error cargando usuario', 'error'); }
+}
+
+function ocultarFormUsuario() {
+  const f = document.getElementById('form-nuevo-usuario');
+  if (f) { f.style.display = 'none'; f.innerHTML = ''; }
+}
+
+async function _guardarUsuario(uid) {
+  const nombre = document.getElementById('u-nombre')?.value.trim();
+  const email  = document.getElementById('u-email')?.value.trim();
+  const pass   = document.getElementById('u-password')?.value;
+  const rol    = document.getElementById('u-rol')?.value;
+  const puedePicar   = document.getElementById('u-puede-picar')?.checked;
+  const puedeEmpacar = document.getElementById('u-puede-empacar')?.checked;
+
+  if (!nombre) { alerta('El nombre es requerido', 'error'); return; }
+
+  const payload = { nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar };
+  if (pass) payload.password = pass;
+
+  try {
+    let r;
+    if (uid) {
+      r = await fetch(API + `/api/auth/usuarios/${uid}`, {
+        method: 'PUT',
+        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    } else {
+      if (!email) { alerta('El email es requerido', 'error'); return; }
+      if (!pass)  { alerta('La contraseña es requerida', 'error'); return; }
+      payload.email = email;
+      r = await fetch(API + '/api/auth/register', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+    }
+    const data = await r.json();
+    if (!r.ok) { alerta(data.error || 'Error guardando usuario', 'error'); return; }
+    alerta(uid ? 'Usuario actualizado' : 'Usuario creado', 'exito');
+    ocultarFormUsuario();
+    cargarUsuarios();
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }

@@ -48,7 +48,10 @@ def register():
         nombre=data['nombre'],
         email=data['email'],
         rol=data.get('rol', 'operario'),
-        almacen_id=data.get('almacen_id')
+        almacen_id=data.get('almacen_id'),
+        puede_usar_camara=data.get('puede_usar_camara', False),
+        puede_picar=data.get('puede_picar', True),
+        puede_empacar=data.get('puede_empacar', False),
     )
     usuario.set_password(data['password'])
 
@@ -56,3 +59,39 @@ def register():
     db.session.commit()
 
     return jsonify(usuario.to_dict()), 201
+
+
+@auth_bp.route('/usuarios', methods=['GET'])
+@jwt_required()
+def listar_usuarios():
+    """Lista todos los usuarios activos — para el panel de admin."""
+    usuarios = Usuario.query.filter_by(activo=True).order_by(Usuario.nombre).all()
+    return jsonify({'usuarios': [u.to_dict() for u in usuarios]}), 200
+
+
+@auth_bp.route('/usuarios/<int:uid>', methods=['PUT'])
+@jwt_required()
+def actualizar_usuario(uid):
+    """Actualiza nombre, rol, capacidades y almacén de un usuario."""
+    usuario = Usuario.query.get_or_404(uid)
+    data = request.get_json() or {}
+
+    if 'nombre' in data:
+        usuario.nombre = data['nombre']
+    if 'rol' in data:
+        usuario.rol = data['rol']
+    if 'almacen_id' in data:
+        usuario.almacen_id = data['almacen_id']
+    if 'puede_usar_camara' in data:
+        usuario.puede_usar_camara = bool(data['puede_usar_camara'])
+    if 'puede_picar' in data:
+        usuario.puede_picar = bool(data['puede_picar'])
+    if 'puede_empacar' in data:
+        usuario.puede_empacar = bool(data['puede_empacar'])
+    if 'activo' in data:
+        usuario.activo = bool(data['activo'])
+    if 'password' in data and data['password']:
+        usuario.set_password(data['password'])
+
+    db.session.commit()
+    return jsonify(usuario.to_dict()), 200

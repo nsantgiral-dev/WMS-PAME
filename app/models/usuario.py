@@ -14,6 +14,10 @@ class Usuario(db.Model):
     activo = db.Column(db.Boolean, default=True)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=True)
     puede_usar_camara = db.Column(db.Boolean, default=False)
+    # Capacidades operativas — independientes del rol base
+    # Un mismo operario puede ser picker, empacador, o ambos
+    puede_picar = db.Column(db.Boolean, default=True)
+    puede_empacar = db.Column(db.Boolean, default=False)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, password):
@@ -30,5 +34,7 @@ class Usuario(db.Model):
             'rol': self.rol,
             'activo': self.activo,
             'almacen_id': self.almacen_id,
-            'puede_usar_camara': self.puede_usar_camara or False
+            'puede_usar_camara': self.puede_usar_camara or False,
+            'puede_picar': self.puede_picar if self.puede_picar is not None else True,
+            'puede_empacar': self.puede_empacar or False,
         }
