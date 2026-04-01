@@ -214,7 +214,7 @@ class PackingService:
 
         # Construir payload para Siesa
         items_payload = [{
-            'producto_codigo': i.producto.codigo,
+            'producto_codigo': i.producto.codigo_siesa or i.producto.codigo,
             'cantidad_empacada': i.cantidad_real,
             'cantidad_pedida': i.cantidad_esperada,
             'lote': i.lote
