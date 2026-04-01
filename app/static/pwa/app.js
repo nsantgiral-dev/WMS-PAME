@@ -365,22 +365,40 @@ async function cargarOperarios() {
   const el = document.getElementById('lista-operarios');
   if (!el) return;
   try {
-    const d = await get('/api/dashboard/productividad?almacen_id=' + ALMACEN_ID + '&dias=7');
-    if (!d.operarios || !d.operarios.length) { el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin datos</div>'; return; }
-    el.innerHTML = d.operarios.map((op, i) => `
+    const [prod, usuariosData] = await Promise.all([
+      get('/api/dashboard/productividad?almacen_id=' + ALMACEN_ID + '&dias=7'),
+      get('/api/auth/usuarios')
+    ]);
+    const metricas = {};
+    (prod.operarios || []).forEach(op => { metricas[op.id] = op; });
+
+    // Todos los usuarios activos (operarios/jefe), con métricas si las tienen
+    const todos = (usuariosData.usuarios || []).filter(u => u.activo);
+    if (!todos.length) { el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios</div>'; return; }
+
+    // Ordenar: más tareas primero
+    todos.sort((a, b) => (metricas[b.id]?.total_tareas || 0) - (metricas[a.id]?.total_tareas || 0));
+
+    el.innerHTML = todos.map((u, i) => {
+      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0 };
+      const badges = [u.puede_picar && '<span style="background:#1e40af;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Picker</span>',
+                      u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>'].filter(Boolean).join(' ');
+      const color = op.total_tareas > 0 ? (i === 0 ? '#4ade80' : '#fff') : '#555';
+      return `
       <div class="tabla-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
-            <div style="font-size:14px;font-weight:600;">${op.nombre}</div>
-            <div style="font-size:11px;color:#555;">${op.rol}</div>
-            <div style="font-size:11px;color:#444;margin-top:4px;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Conteos:${op.conteos_completados}</div>
+            <div style="font-size:14px;font-weight:600;">${u.nombre}</div>
+            <div style="font-size:11px;color:#555;margin-bottom:2px;">${u.rol} ${badges}</div>
+            <div style="font-size:11px;color:#444;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Conteos:${op.conteos_completados}</div>
           </div>
           <div style="text-align:right;">
-            <div style="font-size:28px;font-weight:800;color:${i===0?'#4ade80':'#fff'}">${op.total_tareas}</div>
+            <div style="font-size:28px;font-weight:800;color:${color}">${op.total_tareas}</div>
             <div style="font-size:10px;color:#555;">tareas 7d</div>
           </div>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
