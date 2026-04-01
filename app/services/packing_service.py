@@ -228,7 +228,9 @@ class PackingService:
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
-        if tarea.estado not in ['VERIFICADO']:
+        # Permitir retry si Siesa falló (VERIFICADO o DESPACHADO sin siesa_triggered)
+        siesa_pendiente = tarea.estado == 'DESPACHADO' and not tarea.siesa_triggered
+        if tarea.estado not in ['VERIFICADO'] and not siesa_pendiente:
             raise ValueError('El packing debe estar VERIFICADO antes de cerrar')
         if not bultos_data:
             raise ValueError('Debes declarar al menos una pieza')
@@ -255,15 +257,16 @@ class PackingService:
                     )
                     db.session.add(bulto)
                     numero += 1
-            db.session.flush()
+            # Commit bultos antes del trigger — así el retry no los pierde
+            db.session.commit()
             bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
 
         # Construir payload para Siesa
         items_payload = [{
             'producto_codigo': i.producto.codigo_siesa or i.producto.codigo,
-            'cantidad_empacada': i.cantidad_real,
+            'cantidad_empacada': i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada,
             'cantidad_pedida': i.cantidad_esperada,
-            'lote': i.lote
+            'lote': i.lote or ''
         } for i in tarea.items]
 
         # TRIGGER A SIESA — inventario sale de cuenta 14
@@ -281,8 +284,9 @@ class PackingService:
             logger.info(f'[PACKING] Siesa triggered para {tarea.numero_pedido_siesa} — {total} bultos')
         except Exception as e:
             logger.error(f'[PACKING] Error Siesa al cerrar: {str(e)}')
-            db.session.rollback()
-            raise Exception(f'Bultos creados pero error al comunicar con Siesa: {str(e)}')
+            tarea.siesa_response = str(e)
+            db.session.commit()
+            raise Exception(str(e))
 
         db.session.commit()
         return bultos_existentes

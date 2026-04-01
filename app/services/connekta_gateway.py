@@ -125,7 +125,13 @@ class ConnektaGateway:
 
         try:
             r = requests.post(self.url_post, headers=self.headers, params=params, json=payload, timeout=30)
-            r.raise_for_status()
+            if not r.ok:
+                try:
+                    detalle = r.json()
+                except Exception:
+                    detalle = r.text
+                logger.error(f'[CONNEKTA] POST {id_conector} HTTP {r.status_code}: {detalle}')
+                raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
             return r.json()
         except requests.exceptions.Timeout:
             raise Exception('Connekta no respondió — reintenta')

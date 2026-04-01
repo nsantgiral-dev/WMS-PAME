@@ -154,8 +154,12 @@ def cerrar_packing(id):
     """
     data = request.get_json() or {}
     bultos_data = data.get('bultos', [])
+    # Permitir bultos_data vacío solo si ya existen bultos (retry Siesa)
     if not bultos_data:
-        return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
+        from app.models.bulto import Bulto
+        hay_bultos = Bulto.query.filter_by(tarea_id=id).count() > 0
+        if not hay_bultos:
+            return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
     try:
         bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data)
         from app.models.packing import TareaPacking

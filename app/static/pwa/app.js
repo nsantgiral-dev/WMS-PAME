@@ -1506,6 +1506,14 @@ async function empIniciarHUD(packingId) {
     const t = await get(`/api/packing/${packingId}`);
     if (!t || !t.id) { alerta('Tarea no encontrada', 'error'); return; }
 
+    EMP_TAREA = { ...t, id: packingId };
+
+    // Retry Siesa: bultos ya creados pero Siesa falló — reintentar directamente
+    if (t.estado === 'VERIFICADO' && !t.siesa_triggered && t.bultos?.length) {
+      await empReintentarSiesa(t);
+      return;
+    }
+
     // Iniciar si aún está PENDIENTE
     if (t.estado === 'PENDIENTE') {
       await fetch(`/api/packing/${packingId}/iniciar`, {
@@ -1514,7 +1522,6 @@ async function empIniciarHUD(packingId) {
       });
     }
 
-    EMP_TAREA = { ...t, id: packingId };
     // Ítems pendientes de verificar van primero
     EMP_ITEMS = [...(t.items || [])].sort((a, b) => a.verificado - b.verificado);
     EMP_ITEM_IDX = EMP_ITEMS.findIndex(i => !i.verificado);
@@ -1524,6 +1531,40 @@ async function empIniciarHUD(packingId) {
     document.getElementById('emp-hud').classList.add('activo');
     document.getElementById('scanner-input').focus();
   } catch (e) { alerta('Error iniciando tarea', 'error'); }
+}
+
+async function empReintentarSiesa(t) {
+  // Los bultos ya existen — el backend los reutiliza, solo reintenta Siesa
+  const bultoResumen = t.bultos.reduce((acc, b) => {
+    acc[b.tipo] = (acc[b.tipo] || 0) + 1;
+    return acc;
+  }, {});
+  const resumenTexto = Object.entries(bultoResumen).map(([tipo, n]) => `${n} ${tipo}`).join(', ');
+
+  alerta(`Reintentando Siesa para ${t.numero_pedido_siesa} (${resumenTexto})…`, 'info');
+
+  try {
+    const r = await fetch(`/api/packing/${t.id}/cerrar`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      // bultos_data vacío — el backend detecta bultos existentes y solo reintenta Siesa
+      body: JSON.stringify({ bultos: t.bultos.map(b => ({ tipo: b.tipo, cantidad: 1 })) })
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      alerta(`Error Siesa: ${data.error || 'ver logs'}`, 'error');
+      return;
+    }
+    empImprimirEtiquetas(data.bultos, {
+      numero_pedido: data.numero_pedido,
+      cliente: data.cliente,
+      municipio: data.municipio
+    });
+    alerta(`${t.numero_pedido_siesa} despachado — Siesa generó la remisión`, 'exito');
+    empCargarTareas();
+  } catch (e) {
+    alerta('Error de conexión al reintentar Siesa', 'error');
+  }
 }
 
 function empSimularScan() {

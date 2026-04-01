@@ -81,7 +81,9 @@ class TareaPacking(db.Model):
             'fecha_verificado': self.fecha_verificado.isoformat() if self.fecha_verificado else None,
             'fecha_despachado': self.fecha_despachado.isoformat() if self.fecha_despachado else None,
             'fecha_cargado': self.fecha_cargado.isoformat() if self.fecha_cargado else None,
-            'items': [i.to_dict() for i in self.items]
+            'items': [i.to_dict() for i in self.items],
+            'bultos': [{'id': b.id, 'codigo_barras': b.codigo_barras, 'tipo': b.tipo, 'numero': b.numero, 'total': b.total} for b in self.bultos],
+            'siesa_response': self.siesa_response or ''
         }
 
 
