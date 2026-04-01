@@ -302,6 +302,11 @@ async function cargarPedidos() {
           accionBtn = `<div style="flex-shrink:0;background:#1a0a2e;color:#c084fc;border:1px solid #4c1d95;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
             En empaque<br>🔄
           </div>`;
+        } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) {
+          // Empaque listo pero Siesa falló — empacador debe reintentar Cerrar Caja
+          accionBtn = `<div style="flex-shrink:0;background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
+            ⚠ Error<br>Siesa
+          </div>`;
         } else if (p.picking_completado) {
           // Picking listo, esperando empacador
           accionBtn = `<div style="flex-shrink:0;background:#1c1400;color:#fbbf24;border:1px solid #78350f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
@@ -1453,7 +1458,8 @@ async function empCargarTareas() {
   try {
     const d = await get('/api/packing/?per_page=50');
     const tareas = (d.tareas || []).filter(t =>
-      ['PENDIENTE', 'EN_PROCESO'].includes(t.estado)
+      ['PENDIENTE', 'EN_PROCESO'].includes(t.estado) ||
+      (t.estado === 'VERIFICADO' && !t.siesa_triggered)  // Siesa falló — permitir reintento
     );
 
     if (!tareas.length) {
@@ -1470,9 +1476,11 @@ async function empCargarTareas() {
         const verificados = t.items_verificados || 0;
         const total = t.total_items || 0;
         const pct = total ? Math.round(verificados / total * 100) : 0;
+        const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered;
         const enProceso = t.estado === 'EN_PROCESO';
-        const color = enProceso ? '#93c5fd' : '#facc15';
-        const bg = enProceso ? '#1e3a5f' : '#713f12';
+        const color = siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
+        const bg    = siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
+        const label = siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         return `
         <div class="emp-task-card" onclick="empIniciarHUD(${t.id})">
           <div class="emp-task-pedido">${t.numero_pedido_siesa}</div>
@@ -1480,7 +1488,7 @@ async function empCargarTareas() {
           ${total > 0 ? `<div style="margin-top:10px;background:#1a1a1a;border-radius:8px;height:6px;overflow:hidden;">
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
           </div>` : ''}
-          <span class="emp-task-badge" style="background:${bg};color:${color};">${enProceso ? 'En proceso' : 'Pendiente'}</span>
+          <span class="emp-task-badge" style="background:${bg};color:${color};">${label}</span>
         </div>`;
       }).join('')}`;
   } catch (e) {
