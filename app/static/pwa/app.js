@@ -680,6 +680,12 @@ function renderTarea(t) {
         ✓ Confirmar
       </button>
 
+      ${!esConteo ? `
+      <button onclick="confirmarManual(${t.id}, ${t.cantidad_requerida})"
+        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+        ✓ Confirmar cantidad completa (manual)
+      </button>` : ''}
+
       <button onclick="reportarProblema(${t.id})"
         style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:12px;cursor:pointer;">
         ⚠ Reportar problema
@@ -770,6 +776,27 @@ async function confirmar() {
     TAREA_ACTUAL = null;
     setTimeout(pedirTarea, 2000);
   }
+}
+
+async function confirmarManual(tareaId, cantidad) {
+  if (!confirm(`¿Confirmar ${cantidad} unidades recogidas manualmente?`)) return;
+  // Simular escaneos hasta completar la cantidad
+  for (let i = 0; i < cantidad; i++) {
+    await post('/api/mobile/escanear', {
+      tarea_id: tareaId,
+      codigo_barras: '__MANUAL__',
+      cantidad: 1
+    }).catch(() => {});
+  }
+  // Confirmar
+  const payload = { tarea_id: tareaId, tipo: TAREA_ACTUAL?.tipo, items_escaneados: [] };
+  try {
+    const r = await post('/api/mobile/confirmar', payload);
+    if (r.error) { alerta(r.error, 'error'); return; }
+    alerta('¡Tarea completada!', 'exito');
+    TAREA_ACTUAL = null;
+    setTimeout(pedirTarea, 1500);
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function reportarProblema(tareaId) {
