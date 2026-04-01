@@ -261,7 +261,8 @@ class ConnektaGateway:
         Genera remisión desde pedido — descarga inventario cuenta 14.
         Siesa factura automáticamente. El WMS solo inyecta el documento.
         """
-        fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+        # Siesa: fecha en formato YYYYMMDD (8 chars max)
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
             'Inicial': [
@@ -269,14 +270,14 @@ class ConnektaGateway:
             ],
             'Remision': [
                 {
-                    'F_CIA': self.id_compania,
-                    'F_CONSEC_AUTO_REG': '',
+                    'F_CIA': self.centro_op,        # max 3 chars → CO, no compañía
+                    'F_CONSEC_AUTO_REG': 0,
                     'F350_ID_CO': self.centro_op,
                     'F350_ID_TIPO_DOCTO': '',
-                    'F350_CONSEC_DOCTO': '',
-                    'F350_FECHA': fecha_hoy,
-                    'F350_IND_ESTADO': '',
-                    'F350_IND_IMPRESION': '',
+                    'F350_CONSEC_DOCTO': 0,
+                    'F350_FECHA': fecha_hoy,        # YYYYMMDD — 8 chars
+                    'F350_IND_ESTADO': 0,
+                    'F350_IND_IMPRESION': 0,
                     'F430_ID_TIPO_DOCTO': tipo_docto_pedido,
                     'F430_CONSEC_DOCTO': consec_docto_pedido,
                     'f462_id_vehiculo': '',
@@ -296,17 +297,17 @@ class ConnektaGateway:
             ],
             'Movtoventascomercial': [
                 {
-                    'F_CIA': self.id_compania,
+                    'F_CIA': self.centro_op,        # max 3 chars → CO, no compañía
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': '',
-                    'f470_consec_docto': '',
-                    'f470_nro_registro': '',
+                    'f470_consec_docto': 0,
+                    'f470_nro_registro': 0,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
-                    'f470_id_lote': '',
-                    'f470_id_concepto': '',
+                    'f470_id_lote': i.get('lote') or '',
+                    'f470_id_concepto': 0,
                     'f470_id_motivo': '',
-                    'f470_ind_obsequio': '',
+                    'f470_ind_obsequio': 0,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
@@ -316,9 +317,9 @@ class ConnektaGateway:
                     'f470_cant_base': i.get('cantidad_empacada'),
                     'f470_cant_2': '',
                     'f470_vlr_bruto': '',
-                    'f470_ind_naturaleza': '',
-                    'f470_ind_solo_valor': '',
-                    'f470_ind_impto_asumido': '',
+                    'f470_ind_naturaleza': 0,
+                    'f470_ind_solo_valor': 0,
+                    'f470_ind_impto_asumido': 0,
                     'f470_notas': '',
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
