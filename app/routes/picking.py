@@ -14,6 +14,7 @@ def listar_tareas():
     estado = request.args.get('estado')
     operario_id = request.args.get('operario_id', type=int)
     almacen_id = request.args.get('almacen_id', type=int)
+    activas = request.args.get('activas', '').lower() == 'true'
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
 
@@ -22,7 +23,9 @@ def listar_tareas():
         TareaPicking.fecha_creacion.asc()
     )
 
-    if estado:
+    if activas:
+        query = query.filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO', 'BLOQUEADO']))
+    elif estado:
         query = query.filter_by(estado=estado)
     if operario_id:
         query = query.filter_by(operario_id=operario_id)
@@ -36,6 +39,25 @@ def listar_tareas():
         'total': tareas.total,
         'pagina_actual': page
     }), 200
+
+
+@picking_bp.route('/purgar-ceros', methods=['DELETE'])
+@jwt_required()
+def purgar_picks_cero():
+    """Elimina tareas COMPLETADO con cantidad_recogida=0 (registros basura de confirms fallidos)."""
+    referencia = request.args.get('referencia')
+    query = TareaPicking.query.filter(
+        TareaPicking.estado == 'COMPLETADO',
+        TareaPicking.cantidad_recogida == 0
+    )
+    if referencia:
+        query = query.filter_by(referencia_documento=referencia)
+    tareas = query.all()
+    count = len(tareas)
+    for t in tareas:
+        db.session.delete(t)
+    db.session.commit()
+    return jsonify({'eliminadas': count}), 200
 
 
 @picking_bp.route('/<int:id>', methods=['GET'])

@@ -264,7 +264,7 @@ async function cargarPedidos() {
   try {
     const [siesa, db] = await Promise.all([
       get('/api/siesa/pedidos').catch(() => ({ pedidos: [] })),
-      get('/api/picking/?per_page=20').catch(() => ({ tareas: [] }))
+      get('/api/picking/?activas=true&per_page=20').catch(() => ({ tareas: [] }))
     ]);
     SIESA_PEDIDOS = siesa.pedidos || [];
     let html = '';
