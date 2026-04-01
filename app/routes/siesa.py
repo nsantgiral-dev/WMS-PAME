@@ -384,6 +384,18 @@ def iniciar_despacho():
     if not items:
         return jsonify({'error': 'Ningún producto está registrado en el WMS — agrégalos primero'}), 400
 
+    # Idempotencia: evitar crear pickings duplicados para el mismo pedido
+    from app.models.picking import TareaPicking
+    existing = TareaPicking.query.filter(
+        TareaPicking.referencia_documento == numero_pedido,
+        TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO', 'BLOQUEADO'])
+    ).first()
+    if existing:
+        return jsonify({
+            'error': f'Ya hay tareas de picking activas para {numero_pedido}. '
+                     f'Cancela o completa las existentes antes de reiniciar el despacho.'
+        }), 409
+
     tareas_picking_ids = []
     errores = []
 

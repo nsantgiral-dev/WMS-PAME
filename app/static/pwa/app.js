@@ -249,11 +249,12 @@ function movimientos(lista) {
   const TIPOS_ENTRADA = new Set(['ENTRADA', 'CARGA_INICIAL_SIESA', 'RECEPCION', 'AJUSTE_ENTRADA', 'DEVOLUCION']);
   el.innerHTML = '<div class="tabla-titulo">Últimos movimientos</div>' + lista.slice(0,8).map(m => {
     const esEntrada = TIPOS_ENTRADA.has(m.tipo);
-    const c = esEntrada ? '#4ade80' : '#f87171';
-    const s = esEntrada ? '+' : '-';
+    const c = esEntrada ? '#4ade80' : (m.cantidad > 0 ? '#f87171' : '#666');
+    const s = esEntrada ? '+' : (m.cantidad > 0 ? '-' : '');
     const fechaStr = m.fecha && !m.fecha.endsWith('Z') ? m.fecha + 'Z' : m.fecha;
     const h = new Date(fechaStr).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Bogota' });
-    return `<div class="tabla-fila"><div><div class="tabla-nombre">${m.tipo}</div><div style="font-size:11px;color:#555;">${h}</div></div><div style="color:${c};font-weight:700;">${s}${m.cantidad}</div></div>`;
+    const doc = m.numero_documento ? `<div style="font-size:10px;color:#444;">${m.numero_documento}</div>` : '';
+    return `<div class="tabla-fila"><div><div class="tabla-nombre">${m.tipo}</div><div style="font-size:11px;color:#555;">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${m.cantidad}</div></div>`;
   }).join('');
 }
 
@@ -302,7 +303,7 @@ async function cargarPedidos() {
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
               <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
-              <div style="font-size:12px;color:#666;margin-top:2px;">${t.codigo} · ${t.ubicacion_codigo || '—'}</div>
+              <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
               <div style="font-size:11px;color:#444;margin-top:2px;">${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado' : '⏳ En cola'}</div>
             </div>
             <div style="text-align:right;">
