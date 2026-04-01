@@ -122,24 +122,55 @@ def escanear_item(id):
 @packing_bp.route('/<int:id>/confirmar', methods=['PUT'])
 @jwt_required()
 def confirmar_packing(id):
+    """Paso 1: verifica ítems → estado VERIFICADO. NO dispara Siesa."""
     data = request.get_json() or {}
     try:
-        tarea = PackingService.confirmar_packing(
+        PackingService.confirmar_packing(
             tarea_id=id,
             observaciones=data.get('observaciones'),
             forzar=data.get('forzar', False)
         )
+        from app.models.packing import TareaPacking
+        tarea = TareaPacking.query.get(id)
         return jsonify({
-            'mensaje': 'Packing confirmado — Siesa está generando remisión y factura',
+            'mensaje': 'Ítems verificados — declara las piezas físicas para cerrar',
             'tarea': tarea.to_dict(),
-            'siesa_triggered': tarea.siesa_triggered,
-            'modo_simulacion': not tarea.siesa_triggered or 'simulado' in (tarea.siesa_response or '')
         }), 200
     except ValueError as e:
         error = e.args[0]
         if isinstance(error, dict):
             return jsonify(error), 409
         return jsonify({'error': error}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@packing_bp.route('/<int:id>/cerrar', methods=['POST'])
+@jwt_required()
+def cerrar_packing(id):
+    """
+    Paso 2: declara bultos físicos, genera códigos de barras y dispara Siesa.
+    Body: {"bultos": [{"tipo": "Caja", "cantidad": 2}, {"tipo": "Bolsa", "cantidad": 1}]}
+    """
+    data = request.get_json() or {}
+    bultos_data = data.get('bultos', [])
+    if not bultos_data:
+        return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
+    try:
+        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data)
+        from app.models.packing import TareaPacking
+        tarea = TareaPacking.query.get(id)
+        return jsonify({
+            'ok': True,
+            'mensaje': f'{len(bultos)} pieza(s) registradas — Siesa generó la remisión',
+            'siesa_triggered': tarea.siesa_triggered,
+            'numero_pedido': tarea.numero_pedido_siesa,
+            'cliente': tarea.cliente or '',
+            'municipio': tarea.municipio or '',
+            'bultos': [b.to_dict() for b in bultos]
+        }), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

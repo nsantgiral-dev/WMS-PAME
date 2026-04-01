@@ -179,27 +179,23 @@ class PackingService:
     @staticmethod
     def confirmar_packing(tarea_id: int, observaciones: str = None, forzar: bool = False):
         """
-        Confirma el packing y dispara Siesa automáticamente.
-        Si hay diferencias, requiere forzar=True para continuar.
-        ESTE ES EL MOMENTO EN QUE SIESA FACTURA AUTOMÁTICAMENTE.
+        Paso 1: Verifica que todos los ítems fueron escaneados y guarda estado VERIFICADO.
+        NO dispara Siesa — eso ocurre en cerrar_packing() después de declarar los bultos.
         """
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
-        # VERIFICADO sin siesa_triggered = intento previo donde Siesa falló → permitir reintento
-        if tarea.estado == 'VERIFICADO' and not tarea.siesa_triggered:
-            pass  # reintento del trigger Siesa
-        elif tarea.estado not in ['EN_PROCESO', 'PENDIENTE']:
+        if tarea.estado == 'DESPACHADO':
+            raise ValueError('Este pedido ya fue despachado')
+        if tarea.estado not in ['EN_PROCESO', 'PENDIENTE', 'VERIFICADO']:
             raise ValueError(f'No se puede confirmar en estado {tarea.estado}')
 
-        # Verificar que todos los ítems fueron escaneados
         items_sin_verificar = [i for i in tarea.items if not i.verificado]
         if items_sin_verificar:
             nombres = [i.producto.nombre for i in items_sin_verificar[:3]]
             raise ValueError(f'Faltan por escanear: {", ".join(nombres)}')
 
-        # Verificar diferencias
         items_con_diferencia = [i for i in tarea.items if i.tiene_diferencia()]
         if items_con_diferencia and not forzar:
             diferencias = [{
@@ -215,8 +211,52 @@ class PackingService:
 
         tarea.verificacion_exitosa = not bool(items_con_diferencia)
         tarea.observaciones = observaciones
-        tarea.estado = 'VERIFICADO'
-        tarea.fecha_verificado = datetime.utcnow()
+        if tarea.estado != 'VERIFICADO':
+            tarea.estado = 'VERIFICADO'
+            tarea.fecha_verificado = datetime.utcnow()
+        db.session.commit()
+
+    @staticmethod
+    def cerrar_packing(tarea_id: int, bultos_data: list):
+        """
+        Paso 2: El empacador declara las piezas físicas (bultos).
+        Crea los Bultos, dispara Siesa y marca la tarea como DESPACHADO.
+        bultos_data: [{'tipo': 'Caja', 'cantidad': 2}, {'tipo': 'Bolsa', 'cantidad': 1}]
+        """
+        from app.models.bulto import Bulto
+
+        tarea = TareaPacking.query.get(tarea_id)
+        if not tarea:
+            raise ValueError('Tarea no encontrada')
+        if tarea.estado not in ['VERIFICADO']:
+            raise ValueError('El packing debe estar VERIFICADO antes de cerrar')
+        if not bultos_data:
+            raise ValueError('Debes declarar al menos una pieza')
+
+        # Total de piezas
+        total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
+        if total < 1:
+            raise ValueError('Total de piezas debe ser al menos 1')
+
+        # Crear bultos solo si no existen aún (idempotente en caso de reintento)
+        bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
+        if not bultos_existentes:
+            numero = 1
+            for b in bultos_data:
+                tipo = b.get('tipo', 'Caja')
+                cantidad = int(b.get('cantidad', 1))
+                for _ in range(cantidad):
+                    bulto = Bulto(
+                        tarea_id=tarea_id,
+                        codigo_barras=f'{tarea.numero_pedido_siesa}-{numero:02d}',
+                        tipo=tipo,
+                        numero=numero,
+                        total=total
+                    )
+                    db.session.add(bulto)
+                    numero += 1
+            db.session.flush()
+            bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
 
         # Construir payload para Siesa
         items_payload = [{
@@ -226,7 +266,7 @@ class PackingService:
             'lote': i.lote
         } for i in tarea.items]
 
-        # TRIGGER A SIESA — aquí Siesa genera remisión + factura
+        # TRIGGER A SIESA — inventario sale de cuenta 14
         try:
             respuesta_siesa = connekta.trigger_despacho(
                 tipo_docto_pedido=tarea.tipo_docto_pedido_siesa or '',
@@ -236,19 +276,16 @@ class PackingService:
             tarea.siesa_triggered = True
             tarea.siesa_response = json.dumps(respuesta_siesa)
             tarea.siesa_triggered_at = datetime.utcnow()
-            logger.info(f'[PACKING] Siesa triggered exitosamente para pedido {tarea.numero_pedido_siesa}')
-
+            tarea.estado = 'DESPACHADO'
+            tarea.fecha_despachado = datetime.utcnow()
+            logger.info(f'[PACKING] Siesa triggered para {tarea.numero_pedido_siesa} — {total} bultos')
         except Exception as e:
-            logger.error(f'[PACKING] Error triggering Siesa: {str(e)}')
-            tarea.siesa_triggered = False
-            tarea.siesa_response = str(e)
-            # No commit aquí — dejar estado VERIFICADO en sesión sin persistir el error
-            # para que el empacador pueda reintentar "Cerrar Caja"
+            logger.error(f'[PACKING] Error Siesa al cerrar: {str(e)}')
             db.session.rollback()
-            raise Exception(f'Packing verificado pero error al comunicar con Siesa: {str(e)}')
+            raise Exception(f'Bultos creados pero error al comunicar con Siesa: {str(e)}')
 
         db.session.commit()
-        return tarea
+        return bultos_existentes
 
     @staticmethod
     def cancelar(tarea_id: int, motivo: str = None):

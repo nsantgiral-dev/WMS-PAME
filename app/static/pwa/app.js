@@ -1669,7 +1669,7 @@ async function empConfirmarPacking() {
   if (!EMP_TAREA) return;
   const btn = document.getElementById('emp-btn-cerrar-caja');
   btn.disabled = true;
-  btn.textContent = 'Enviando a Siesa...';
+  btn.textContent = 'Verificando...';
 
   try {
     const r = await fetch(`/api/packing/${EMP_TAREA.id}/confirmar`, {
@@ -1680,28 +1680,184 @@ async function empConfirmarPacking() {
     const data = await r.json();
 
     if (!r.ok) {
-      const msg = typeof data.error === 'string' ? data.error : 'Error confirmando';
-      empFlash('rojo', msg);
-      btn.disabled = false;
-      btn.textContent = 'Cerrar Caja ✓';
-      return;
+      if (r.status === 409 && data.diferencias) {
+        const resumen = data.diferencias.map(d => `${d.producto}: esperado ${d.esperado}, real ${d.real}`).join('\n');
+        if (confirm(`Hay diferencias en cantidades:\n${resumen}\n\n¿Confirmar de todas formas?`)) {
+          const r2 = await fetch(`/api/packing/${EMP_TAREA.id}/confirmar`, {
+            method: 'PUT',
+            headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ forzar: true })
+          });
+          if (!r2.ok) {
+            const d2 = await r2.json();
+            empFlash('rojo', d2.error || 'Error confirmando');
+            btn.disabled = false; btn.textContent = 'Cerrar Caja ✓';
+            return;
+          }
+        } else {
+          btn.disabled = false; btn.textContent = 'Cerrar Caja ✓';
+          return;
+        }
+      } else {
+        const msg = typeof data.error === 'string' ? data.error : 'Error confirmando';
+        empFlash('rojo', msg);
+        btn.disabled = false; btn.textContent = 'Cerrar Caja ✓';
+        return;
+      }
     }
 
-    // Éxito — flash verde y volver a lista
+    // Ítems verificados — abrir modal para declarar piezas físicas
+    btn.disabled = false; btn.textContent = 'Cerrar Caja ✓';
     empFlash('verde', null);
-    setTimeout(() => {
-      document.getElementById('emp-hud').classList.remove('activo');
-      EMP_TAREA = null;
-      EMP_ITEMS = [];
-      alerta(data.siesa_triggered ? '¡Caja cerrada! Siesa generó la remisión.' : '¡Caja cerrada!', 'exito');
-      empCargarTareas();
-    }, 600);
+
+    _BULTOS_LINEAS = [];
+    document.getElementById('modal-bultos-lineas').innerHTML = '';
+    document.getElementById('modal-bultos-error').textContent = '';
+    document.getElementById('modal-bultos-pedido').textContent =
+      `${EMP_TAREA.numero_pedido_siesa} · ${EMP_TAREA.cliente || ''} · ${EMP_TAREA.municipio || ''}`;
+    document.getElementById('modal-bultos').style.display = 'flex';
 
   } catch (e) {
     empFlash('rojo', 'Error de conexión');
-    btn.disabled = false;
-    btn.textContent = 'Cerrar Caja ✓';
+    btn.disabled = false; btn.textContent = 'Cerrar Caja ✓';
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// MODAL BULTOS — declaración de piezas físicas al cerrar packing
+// ─────────────────────────────────────────────────────────────
+
+let _BULTOS_LINEAS = [];
+
+function bultosAgregarLinea(tipo) {
+  const existing = _BULTOS_LINEAS.find(l => l.tipo === tipo);
+  if (existing) { existing.cantidad++; }
+  else { _BULTOS_LINEAS.push({ tipo, cantidad: 1 }); }
+  bultosRenderLineas();
+}
+
+function bultosRenderLineas() {
+  const el = document.getElementById('modal-bultos-lineas');
+  if (!el) return;
+  if (!_BULTOS_LINEAS.length) {
+    el.innerHTML = '<div style="color:#555;font-size:13px;text-align:center;padding:12px;">Agrega al menos una pieza ↑</div>';
+    return;
+  }
+  el.innerHTML = _BULTOS_LINEAS.map((l, i) => `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+      <div style="flex:1;font-size:14px;font-weight:600;">${l.tipo}</div>
+      <button onclick="bultosAjustarCantidad(${i},-1)" style="width:32px;height:32px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">−</button>
+      <div style="min-width:28px;text-align:center;font-size:17px;font-weight:700;">${l.cantidad}</div>
+      <button onclick="bultosAjustarCantidad(${i},1)" style="width:32px;height:32px;background:#222;border:1px solid #333;color:#fff;border-radius:6px;cursor:pointer;font-size:18px;">+</button>
+      <button onclick="bultosEliminarLinea(${i})" style="width:32px;height:32px;background:#1a1a1a;border:1px solid #333;color:#ef4444;border-radius:6px;cursor:pointer;font-size:14px;">✕</button>
+    </div>`).join('');
+}
+
+function bultosAjustarCantidad(idx, delta) {
+  _BULTOS_LINEAS[idx].cantidad = Math.max(1, _BULTOS_LINEAS[idx].cantidad + delta);
+  bultosRenderLineas();
+}
+
+function bultosEliminarLinea(idx) {
+  _BULTOS_LINEAS.splice(idx, 1);
+  bultosRenderLineas();
+}
+
+function bultosCancelar() {
+  document.getElementById('modal-bultos').style.display = 'none';
+  _BULTOS_LINEAS = [];
+}
+
+async function bultosConfirmar() {
+  const errEl = document.getElementById('modal-bultos-error');
+  errEl.textContent = '';
+  const total = _BULTOS_LINEAS.reduce((s, l) => s + l.cantidad, 0);
+  if (!_BULTOS_LINEAS.length || total < 1) {
+    errEl.textContent = 'Debes agregar al menos una pieza';
+    return;
+  }
+
+  const btnConf = document.querySelector('#modal-bultos button[onclick="bultosConfirmar()"]');
+  if (btnConf) { btnConf.disabled = true; btnConf.textContent = 'Cerrando...'; }
+
+  try {
+    const r = await fetch(`/api/packing/${EMP_TAREA.id}/cerrar`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bultos: _BULTOS_LINEAS.map(l => ({ tipo: l.tipo, cantidad: l.cantidad })) })
+    });
+    const data = await r.json();
+
+    if (!r.ok) {
+      errEl.textContent = data.error || 'Error al cerrar';
+      if (btnConf) { btnConf.disabled = false; btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
+      return;
+    }
+
+    document.getElementById('modal-bultos').style.display = 'none';
+    _BULTOS_LINEAS = [];
+
+    empImprimirEtiquetas(data.bultos, {
+      numero_pedido: data.numero_pedido,
+      cliente: data.cliente,
+      municipio: data.municipio
+    });
+
+    document.getElementById('emp-hud').classList.remove('activo');
+    EMP_TAREA = null;
+    EMP_ITEMS = [];
+    alerta(`${data.bultos.length} pieza(s) registradas — Siesa generó la remisión`, 'exito');
+    empCargarTareas();
+
+  } catch (e) {
+    errEl.textContent = 'Error de conexión';
+    if (btnConf) { btnConf.disabled = false; btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
+  }
+}
+
+function empImprimirEtiquetas(bultos, meta) {
+  if (!bultos?.length) return;
+  const win = window.open('', '_blank');
+  if (!win) return;
+
+  const rows = bultos.map(b => `
+    <div class="etiqueta">
+      <div class="pedido">${meta.numero_pedido || b.numero_pedido}</div>
+      <div class="cliente">${meta.cliente || b.cliente || ''}</div>
+      <div class="municipio">${meta.municipio || b.municipio || ''}</div>
+      <svg class="barcode" id="bc-${b.id}"></svg>
+      <div class="codigo">${b.codigo_barras}</div>
+      <div class="pieza">${b.tipo} ${b.numero} de ${b.total}</div>
+    </div>`).join('');
+
+  const bcInit = bultos.map(b =>
+    `JsBarcode('#bc-${b.id}','${b.codigo_barras}',{format:'CODE128',displayValue:false,height:50,margin:0});`
+  ).join('\n    ');
+
+  win.document.write(`<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<title>Etiquetas — ${meta.numero_pedido}</title>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
+<style>
+  body{margin:0;font-family:monospace;}
+  .etiqueta{width:80mm;border:1px solid #000;padding:8px;margin:4px auto;page-break-inside:avoid;}
+  .pedido{font-size:20px;font-weight:900;text-align:center;}
+  .cliente{font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .municipio{font-size:14px;font-weight:700;text-align:center;margin-bottom:4px;}
+  .barcode{width:100%;height:50px;}
+  .codigo{font-size:10px;text-align:center;margin-top:2px;}
+  .pieza{font-size:13px;font-weight:700;text-align:center;margin-top:6px;border-top:1px dashed #ccc;padding-top:4px;}
+  @media print{body{margin:0;}}
+</style></head>
+<body>${rows}
+<script>
+  window.onload=function(){
+    ${bcInit}
+    setTimeout(()=>window.print(),500);
+  };
+<\/script>
+</body></html>`);
+  win.document.close();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1888,7 +2044,7 @@ function muelleRenderGrupos(grupos) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
         <div style="flex:1;font-size:13px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.06em;">
           📍 ${g.destino}
-          <span style="color:#555;font-weight:400;font-size:11px;">(${g.cajas.length} caja${g.cajas.length !== 1 ? 's' : ''})</span>
+          <span style="color:#555;font-weight:400;font-size:11px;">(${g.total} pieza${g.total !== 1 ? 's' : ''})</span>
         </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
@@ -1902,16 +2058,16 @@ function muelleRenderGrupos(grupos) {
           Carga<br>#${gi + 1}
         </div>
       </div>
-      ${g.cajas.map((c, ci) => `
-        <div id="muelle-caja-${c.id}" class="tabla-card" style="border-left:3px solid #f59e0b;margin-bottom:8px;transition:opacity .3s;">
+      ${g.bultos.map((b, bi) => `
+        <div id="muelle-bulto-${b.id}" class="tabla-card" style="border-left:3px solid #f59e0b;margin-bottom:8px;transition:opacity .3s;">
           <div style="display:flex;justify-content:space-between;align-items:center;">
             <div>
-              <div style="font-size:13px;font-weight:700;font-family:monospace;">${c.codigo}</div>
-              <div style="font-size:12px;color:#888;margin-top:2px;">${c.numero_pedido_siesa} · ${c.cliente || ''}</div>
-              <div style="font-size:11px;color:#555;">${c.total_items} ítem${c.total_items !== 1 ? 's' : ''} · Sellada ${c.fecha_verificado ? new Date(c.fecha_verificado).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '—'}</div>
+              <div style="font-size:14px;font-weight:700;font-family:monospace;">${b.codigo_barras}</div>
+              <div style="font-size:12px;color:#888;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
+              <div style="font-size:11px;color:#555;">${b.tipo} · pieza ${b.numero} de ${b.total}</div>
             </div>
             <div style="text-align:right;">
-              <div style="font-size:20px;color:#555;font-weight:800;">${ci + 1}</div>
+              <div style="font-size:20px;color:#555;font-weight:800;">${bi + 1}</div>
               <div style="font-size:9px;color:#333;">LIFO</div>
             </div>
           </div>
@@ -1940,10 +2096,10 @@ async function cargarMuelle() {
   if (!el) return;
   try {
     const d = await get('/api/muelle/listos');
-    const total = d.total_cajas || 0;
+    const total = d.total_bultos || 0;
 
     const contador = document.getElementById('muelle-contador');
-    if (contador) contador.textContent = total > 0 ? `${total} caja${total !== 1 ? 's' : ''} esperando` : 'Sin cajas pendientes';
+    if (contador) contador.textContent = total > 0 ? `${total} pieza${total !== 1 ? 's' : ''} esperando` : 'Sin piezas pendientes';
 
     const act = document.getElementById('muelle-ultima-act');
     if (act) act.textContent = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -1980,11 +2136,12 @@ async function muelleCargarCaja() {
     const d = await r.json();
 
     if (r.ok) {
+      const pedidoCompleto = d.pedido_completo ? ' ✓ Pedido completo' : '';
       feedback.style.color = '#4ade80';
-      feedback.textContent = `✓ ${d.numero_pedido_siesa} → ${d.cliente || 'cargado'} `;
+      feedback.textContent = `✓ ${d.codigo_barras} · ${d.tipo} ${d.numero}/${d.total} · ${d.municipio || d.cliente || 'cargado'}${pedidoCompleto}`;
 
       // Animar y eliminar la card
-      const card = document.getElementById('muelle-caja-' + (d.id || ''));
+      const card = document.getElementById('muelle-bulto-' + (d.id || ''));
       if (card) { card.style.opacity = '0'; setTimeout(() => card.remove(), 300); }
       else await cargarMuelle(); // fallback: recargar toda la lista
 
