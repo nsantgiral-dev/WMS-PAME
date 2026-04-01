@@ -148,9 +148,11 @@ class ConnektaGateway:
 
         # Sintaxis oficial Connekta: strings con ''valor'', enteros sin comillas
         if sin_filtros:
-            parametros = 'f430_ind_estado = 2'
+            parametros = 'f430_ind_estado = 3'
         else:
-            parametros = f"f430_id_co = ''{self.centro_op}'' AND f430_ind_estado = 2"
+            # estado=3 → Comprometido: inventario físicamente reservado en Siesa
+            # estado=2 (Aprobado) NO entra — el inventario no está reservado aún
+            parametros = f"f430_id_co = ''{self.centro_op}'' AND f430_ind_estado = 3"
 
         all_items = []
         for pag in range(1, 200):
