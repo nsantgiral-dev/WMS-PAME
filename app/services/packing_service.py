@@ -261,13 +261,24 @@ class PackingService:
             db.session.commit()
             bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
 
-        # Construir payload para Siesa
-        items_payload = [{
-            'producto_codigo': i.producto.codigo_siesa or i.producto.codigo,
-            'cantidad_empacada': i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada,
-            'cantidad_pedida': i.cantidad_esperada,
-            'lote': i.lote or ''
-        } for i in tarea.items]
+        # Construir payload para Siesa — incluir item_id_siesa y unidad_medida
+        from app.models.pedido_siesa import PedidoSiesa
+        items_payload = []
+        for i in tarea.items:
+            codigo = i.producto.codigo_siesa or i.producto.codigo
+            # Buscar el ID interno de Siesa para este producto en este pedido
+            reg_siesa = PedidoSiesa.query.filter_by(
+                numero_pedido=tarea.numero_pedido_siesa,
+                item_codigo=codigo
+            ).first()
+            items_payload.append({
+                'producto_codigo': codigo,
+                'cantidad_empacada': i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada,
+                'cantidad_pedida': i.cantidad_esperada,
+                'lote': i.lote or '',
+                'item_id_siesa': reg_siesa.item_id_siesa if reg_siesa else '',
+                'unidad_medida': i.producto.unidad_medida or ''
+            })
 
         # TRIGGER A SIESA — inventario sale de cuenta 14
         try:

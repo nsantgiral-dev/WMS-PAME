@@ -48,6 +48,9 @@ class ConnektaGateway:
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
         self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
+        # Tipo de documento remisión en Siesa (ej. 'RS', 'REMI', 'RM') — obligatorio
+        # Verificar en Siesa: Ventas → Tipos de documento → código del tipo Remisión
+        self.tipo_docto_remision = os.getenv('SIESA_TIPO_DOCTO_REMISION', '')
         self.bodega_averias = os.getenv('SIESA_BODEGA_AVERIAS', 'AV1')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
@@ -276,7 +279,7 @@ class ConnektaGateway:
                     'F_CIA': self.id_cia_siesa,
                     'F_CONSEC_AUTO_REG': 0,
                     'F350_ID_CO': self.centro_op,
-                    'F350_ID_TIPO_DOCTO': '',
+                    'F350_ID_TIPO_DOCTO': self.tipo_docto_remision,
                     'F350_CONSEC_DOCTO': 0,
                     'F350_FECHA': fecha_hoy,        # YYYYMMDD — 8 chars
                     'F350_IND_ESTADO': 0,
@@ -302,7 +305,7 @@ class ConnektaGateway:
                 {
                     'F_CIA': self.id_cia_siesa,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': '',
+                    'f470_id_tipo_docto': self.tipo_docto_remision,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': 0,
                     'f470_id_bodega': self.bodega,
@@ -316,7 +319,7 @@ class ConnektaGateway:
                     'f470_id_proyecto': '',
                     'f470_id_lista_precio': '',
                     'f470_id_unidad_precio': '',
-                    'f470_id_unidad_medida': '',
+                    'f470_id_unidad_medida': i.get('unidad_medida') or '',
                     'f470_cant_base': i.get('cantidad_empacada'),
                     'f470_cant_2': '',
                     'f470_vlr_bruto': '',
@@ -327,7 +330,7 @@ class ConnektaGateway:
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': '',
-                    'f470_id_item': '',
+                    'f470_id_item': i.get('item_id_siesa') or '',
                     'f470_referencia_item': i.get('producto_codigo'),
                     'f470_codigo_barras': '',
                     'f470_id_ext1_detalle': '',
