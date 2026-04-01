@@ -20,7 +20,7 @@ class TareaPacking(db.Model):
 
     # Estado
     estado = db.Column(db.String(30), default='PENDIENTE', nullable=False)
-    # PENDIENTE → EN_PROCESO → VERIFICADO → DESPACHADO → CANCELADO
+    # PENDIENTE → EN_PROCESO → VERIFICADO → CARGADO → CANCELADO
 
     # Resultado verificación
     verificacion_exitosa = db.Column(db.Boolean, default=False)
@@ -31,11 +31,15 @@ class TareaPacking(db.Model):
     siesa_response = db.Column(db.Text)
     siesa_triggered_at = db.Column(db.DateTime)
 
+    # Destino — copiado de PedidoSiesa.cliente al crear la tarea
+    cliente = db.Column(db.String(200))
+
     # Tiempos
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_inicio = db.Column(db.DateTime)
     fecha_verificado = db.Column(db.DateTime)
     fecha_despachado = db.Column(db.DateTime)
+    fecha_cargado = db.Column(db.DateTime)
 
     # Relaciones
     empacador = db.relationship('Usuario', backref='tareas_packing', lazy=True)
@@ -66,6 +70,7 @@ class TareaPacking(db.Model):
             'observaciones': self.observaciones,
             'siesa_triggered': self.siesa_triggered,
             'siesa_triggered_at': self.siesa_triggered_at.isoformat() if self.siesa_triggered_at else None,
+            'cliente': self.cliente or '',
             'total_items': self.total_items(),
             'items_verificados': self.items_verificados(),
             'tiene_diferencias': self.tiene_diferencias(),
@@ -73,6 +78,7 @@ class TareaPacking(db.Model):
             'fecha_inicio': self.fecha_inicio.isoformat() if self.fecha_inicio else None,
             'fecha_verificado': self.fecha_verificado.isoformat() if self.fecha_verificado else None,
             'fecha_despachado': self.fecha_despachado.isoformat() if self.fecha_despachado else None,
+            'fecha_cargado': self.fecha_cargado.isoformat() if self.fecha_cargado else None,
             'items': [i.to_dict() for i in self.items]
         }
 

@@ -467,13 +467,19 @@ def iniciar_despacho():
     # el picking aún está PENDIENTE (los operarios lo completarán después).
     items_packing = [{'producto_id': i['producto_id'], 'cantidad': int(i['cantidad_pendiente'])} for i in items]
 
+    # Obtener cliente/destino del pedido Siesa para el Monitor de Muelle
+    from app.models.pedido_siesa import PedidoSiesa as _PS
+    pedido_row = _PS.query.filter_by(numero_pedido=numero_pedido).first()
+    cliente_destino = pedido_row.cliente if pedido_row else data.get('cliente', '')
+
     try:
         packing = PackingService.crear_manual(
             numero_pedido_siesa=numero_pedido,
             almacen_id=almacen_id,
             items=items_packing,
             tipo_docto_pedido_siesa=tipo_docto,
-            consec_docto_pedido_siesa=consec_docto
+            consec_docto_pedido_siesa=consec_docto,
+            cliente=cliente_destino
         )
     except ValueError as e:
         return jsonify({

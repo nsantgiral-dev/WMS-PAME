@@ -155,6 +155,7 @@
       <div class="nav-tab" onclick="tab('tab-usuarios')">Usuarios</div>
       <div class="nav-tab" onclick="tab('tab-stock')">Stock</div>
       <div class="nav-tab" onclick="tab('tab-connekta')">Siesa</div>
+      <div class="nav-tab" onclick="tab('tab-muelle')">🚛 Muelle</div>
     </div>
 
     <!-- Dashboard -->
@@ -226,6 +227,35 @@
     <div id="tab-connekta" class="admin-content" style="display:none;">
       <div style="font-size:16px;font-weight:700;margin-bottom:12px;">Estado integración Siesa</div>
       <div id="estado-connekta">Cargando...</div>
+    </div>
+
+    <!-- MONITOR DE MUELLE -->
+    <div id="tab-muelle" class="admin-content" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="font-size:16px;font-weight:700;">🚛 Monitor de Muelle</div>
+        <div id="muelle-contador" style="font-size:12px;color:#666;"></div>
+      </div>
+
+      <!-- Scan-to-Truck -->
+      <div style="background:#111;border:2px solid #333;border-radius:12px;padding:14px;margin-bottom:16px;">
+        <div style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Escanear caja al cargar vehículo</div>
+        <div style="display:flex;gap:8px;">
+          <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código PACK-..." autocomplete="off"
+            style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
+            onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
+            oninput="this.value=this.value.toUpperCase()">
+          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:#fff;color:#000;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;">✓</button>
+        </div>
+        <div id="muelle-scan-feedback" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
+      </div>
+
+      <!-- Lista agrupada por destino -->
+      <div id="lista-muelle"><div style="color:#555;text-align:center;padding:40px;">Sin cajas pendientes de cargue</div></div>
+
+      <!-- Auto-refresh indicator -->
+      <div style="text-align:center;font-size:11px;color:#333;margin-top:16px;">
+        Actualización automática cada 5 seg · <span id="muelle-ultima-act">—</span>
+      </div>
     </div>
   </div>
 

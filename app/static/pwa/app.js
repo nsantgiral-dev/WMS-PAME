@@ -216,15 +216,16 @@ async function cargarAdmin() {
   else if (TAB === 'tab-usuarios') await cargarUsuarios();
   else if (TAB === 'tab-stock') await cargarStock();
   else if (TAB === 'tab-connekta') await cargarConnekta();
+  else if (TAB === 'tab-muelle') await cargarMuelle();
 }
 
 function tab(id) {
-  ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta'].forEach(t => {
+  ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle'].forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
   });
   document.querySelectorAll('.nav-tab').forEach((t, i) => {
-    t.classList.toggle('active', ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta'][i] === id);
+    t.classList.toggle('active', ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle'][i] === id);
   });
   TAB = id;
   cargarAdmin();
@@ -1844,4 +1845,93 @@ async function _guardarUsuario(uid) {
     ocultarFormUsuario();
     cargarUsuarios();
   } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+// ─── MONITOR DE MUELLE ────────────────────────────────────────────────────────
+let MUELLE_TIMER = null;
+
+async function cargarMuelle() {
+  const el = document.getElementById('lista-muelle');
+  if (!el) return;
+  try {
+    const d = await get('/api/muelle/listos');
+    const grupos = d.grupos || [];
+    const total = d.total_cajas || 0;
+
+    const contador = document.getElementById('muelle-contador');
+    if (contador) contador.textContent = total > 0 ? `${total} caja${total !== 1 ? 's' : ''} esperando` : 'Sin cajas pendientes';
+
+    const act = document.getElementById('muelle-ultima-act');
+    if (act) act.textContent = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    if (!grupos.length) {
+      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;font-size:32px;">✓<br><span style="font-size:14px;">Muelle despejado</span></div>';
+      return;
+    }
+
+    el.innerHTML = grupos.map(g => `
+      <div style="margin-bottom:20px;">
+        <div style="font-size:12px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;padding:0 4px;">
+          📍 ${g.destino} <span style="color:#555;font-weight:400;">(${g.cajas.length} caja${g.cajas.length !== 1 ? 's' : ''})</span>
+        </div>
+        ${g.cajas.map((c, i) => `
+          <div id="muelle-caja-${c.id}" class="tabla-card" style="border-left:3px solid #f59e0b;margin-bottom:8px;transition:opacity .3s;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <div style="font-size:13px;font-weight:700;font-family:monospace;">${c.codigo}</div>
+                <div style="font-size:12px;color:#888;margin-top:2px;">Pedido: ${c.numero_pedido_siesa}</div>
+                <div style="font-size:11px;color:#555;">${c.total_items} ítem${c.total_items !== 1 ? 's' : ''} · Sellada ${c.fecha_verificado ? new Date(c.fecha_verificado).toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'}) : '—'}</div>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-size:22px;color:#555;">${i + 1}</div>
+                <div style="font-size:9px;color:#333;">LIFO</div>
+              </div>
+            </div>
+          </div>`).join('')}
+      </div>`).join('');
+
+  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error cargando muelle</div>'; }
+
+  // Auto-refresh cada 5 segundos cuando el tab está activo
+  clearTimeout(MUELLE_TIMER);
+  if (TAB === 'tab-muelle') {
+    MUELLE_TIMER = setTimeout(cargarMuelle, 5000);
+  }
+}
+
+async function muelleCargarCaja() {
+  const input = document.getElementById('muelle-scan-input');
+  const feedback = document.getElementById('muelle-scan-feedback');
+  const codigo = (input?.value || '').trim().toUpperCase();
+  if (!codigo) return;
+
+  feedback.style.color = '#888';
+  feedback.textContent = 'Procesando...';
+
+  try {
+    const r = await fetch(API + '/api/muelle/cargar/' + encodeURIComponent(codigo), {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+
+    if (r.ok) {
+      feedback.style.color = '#4ade80';
+      feedback.textContent = `✓ ${d.numero_pedido_siesa} → ${d.cliente || 'cargado'} `;
+
+      // Animar y eliminar la card
+      const card = document.getElementById('muelle-caja-' + (d.id || ''));
+      if (card) { card.style.opacity = '0'; setTimeout(() => card.remove(), 300); }
+      else await cargarMuelle(); // fallback: recargar toda la lista
+
+      input.value = '';
+    } else {
+      feedback.style.color = '#ef4444';
+      feedback.textContent = d.error || 'Error al registrar carga';
+    }
+  } catch (e) {
+    feedback.style.color = '#ef4444';
+    feedback.textContent = 'Error de conexión';
+  }
+  input?.focus();
 }
