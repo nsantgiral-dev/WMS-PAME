@@ -51,6 +51,12 @@ class ConnektaGateway:
         # Tipo de documento remisión en Siesa (ej. 'RS', 'REMI', 'RM') — obligatorio
         # Verificar en Siesa: Ventas → Tipos de documento → código del tipo Remisión
         self.tipo_docto_remision = os.getenv('SIESA_TIPO_DOCTO_REMISION', '')
+        # Motivo de ventas en Siesa — campo requerido f470_id_motivo (pos 131, ancho 2)
+        # Verificar en Siesa: Ventas → Motivos → código del motivo para ventas/remisiones
+        self.motivo_ventas = os.getenv('SIESA_ID_MOTIVO_VENTAS', '')
+        # Lista de precio en Siesa — campo requerido f470_id_lista_precio (pos 169, ancho 3)
+        # Verificar en Siesa: Ventas → Listas de precio → código de la lista activa
+        self.lista_precio = os.getenv('SIESA_LISTA_PRECIO', '')
         self.bodega_averias = os.getenv('SIESA_BODEGA_AVERIAS', 'AV1')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
@@ -285,7 +291,7 @@ class ConnektaGateway:
                     'F350_IND_ESTADO': 0,
                     'F350_IND_IMPRESION': 0,
                     'F430_ID_TIPO_DOCTO': tipo_docto_pedido,
-                    'F430_CONSEC_DOCTO': consec_docto_pedido,
+                    'F430_CONSEC_DOCTO': int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido,
                     'f462_id_vehiculo': None,
                     'f462_id_tercero_transp': None,
                     'f462_id_sucursal_transp': None,
@@ -311,19 +317,19 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': 0,
-                    'f470_id_motivo': None,
+                    'f470_id_concepto': 501,                          # 501 = Ventas (maestro Siesa)
+                    'f470_id_motivo': self.motivo_ventas or None,     # SIESA_ID_MOTIVO_VENTAS (pos 131, ancho 2)
                     'f470_ind_obsequio': 0,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
-                    'f470_id_lista_precio': None,
+                    'f470_id_lista_precio': self.lista_precio or None,  # SIESA_LISTA_PRECIO (pos 169, ancho 3)
                     'f470_id_unidad_precio': i.get('unidad_medida') or None,
                     'f470_id_unidad_medida': i.get('unidad_medida') or None,
                     'f470_cant_base': i.get('cantidad_empacada'),
                     'f470_cant_2': None,
                     'f470_vlr_bruto': None,
-                    'f470_ind_naturaleza': 0,
+                    'f470_ind_naturaleza': 2,                         # 2 = Salida/Venta
                     'f470_ind_solo_valor': 0,
                     'f470_ind_impto_asumido': 0,
                     'f470_notas': None,
