@@ -1887,47 +1887,34 @@ async function bultosConfirmar() {
 
 function empImprimirEtiquetas(bultos, meta) {
   if (!bultos?.length) return;
-  const win = window.open('', '_blank');
-  if (!win) return;
 
-  const rows = bultos.map(b => `
-    <div class="etiqueta">
-      <div class="pedido">${meta.numero_pedido || b.numero_pedido}</div>
-      <div class="cliente">${meta.cliente || b.cliente || ''}</div>
-      <div class="municipio">${meta.municipio || b.municipio || ''}</div>
-      <svg class="barcode" id="bc-${b.id}"></svg>
-      <div class="codigo">${b.codigo_barras}</div>
-      <div class="pieza">${b.tipo} ${b.numero} de ${b.total}</div>
+  const area = document.getElementById('print-area');
+  if (!area) return;
+
+  area.innerHTML = bultos.map(b => `
+    <div class="etiqueta-print">
+      <div class="ep-pedido">${meta.numero_pedido || ''}</div>
+      <div class="ep-cliente">${meta.cliente || ''}</div>
+      <div class="ep-municipio">${meta.municipio || ''}</div>
+      <svg id="bc-${b.id}"></svg>
+      <div class="ep-codigo">${b.codigo_barras}</div>
+      <div class="ep-pieza">${b.tipo} ${b.numero} de ${b.total}</div>
     </div>`).join('');
 
-  const bcInit = bultos.map(b =>
-    `JsBarcode('#bc-${b.id}','${b.codigo_barras}',{format:'CODE128',displayValue:false,height:50,margin:0});`
-  ).join('\n    ');
+  // Renderizar códigos de barras antes de imprimir
+  bultos.forEach(b => {
+    try {
+      JsBarcode(`#bc-${b.id}`, b.codigo_barras, {
+        format: 'CODE128', displayValue: false, height: 50, margin: 0
+      });
+    } catch (e) { /* JsBarcode no disponible aún */ }
+  });
 
-  win.document.write(`<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<title>Etiquetas — ${meta.numero_pedido}</title>
-<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"><\/script>
-<style>
-  body{margin:0;font-family:monospace;}
-  .etiqueta{width:80mm;border:1px solid #000;padding:8px;margin:4px auto;page-break-inside:avoid;}
-  .pedido{font-size:20px;font-weight:900;text-align:center;}
-  .cliente{font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .municipio{font-size:14px;font-weight:700;text-align:center;margin-bottom:4px;}
-  .barcode{width:100%;height:50px;}
-  .codigo{font-size:10px;text-align:center;margin-top:2px;}
-  .pieza{font-size:13px;font-weight:700;text-align:center;margin-top:6px;border-top:1px dashed #ccc;padding-top:4px;}
-  @media print{body{margin:0;}}
-</style></head>
-<body>${rows}
-<script>
-  window.onload=function(){
-    ${bcInit}
-    setTimeout(()=>window.print(),500);
-  };
-<\/script>
-</body></html>`);
-  win.document.close();
+  setTimeout(() => {
+    window.print();
+    // Limpiar después de imprimir
+    setTimeout(() => { area.innerHTML = ''; }, 1000);
+  }, 300);
 }
 
 // ─────────────────────────────────────────────────────────────
