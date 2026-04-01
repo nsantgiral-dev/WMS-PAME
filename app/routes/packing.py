@@ -1,10 +1,28 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.packing import TareaPacking
+from app.models.picking import TareaPicking
 from app.services.packing_service import PackingService
 from app.services.connekta_gateway import connekta
 
 packing_bp = Blueprint('packing', __name__)
+
+
+def _enriquecer_picking_listo(tarea_dict, numero_pedido):
+    """
+    Determina si el picking está 100% completo para este pedido.
+    Si no hay tareas de picking asociadas, se asume que el packing
+    fue creado manualmente sin picking (picking_listo=True).
+    """
+    pickings = TareaPicking.query.filter(
+        TareaPicking.referencia_documento == numero_pedido,
+        TareaPicking.estado != 'CANCELADO'
+    ).all()
+    if not pickings:
+        tarea_dict['picking_listo'] = True
+        return
+    completados = sum(1 for p in pickings if p.estado == 'COMPLETADO')
+    tarea_dict['picking_listo'] = completados == len(pickings)
 
 
 @packing_bp.route('/', methods=['GET'])
@@ -23,8 +41,14 @@ def listar_tareas():
 
     tareas = query.paginate(page=page, per_page=50, error_out=False)
 
+    items = []
+    for t in tareas.items:
+        d = t.to_dict()
+        _enriquecer_picking_listo(d, t.numero_pedido_siesa)
+        items.append(d)
+
     return jsonify({
-        'tareas': [t.to_dict() for t in tareas.items],
+        'tareas': items,
         'total': tareas.total,
         'pagina_actual': page
     }), 200
@@ -34,7 +58,9 @@ def listar_tareas():
 @jwt_required()
 def obtener_tarea(id):
     tarea = TareaPacking.query.get_or_404(id)
-    return jsonify(tarea.to_dict()), 200
+    d = tarea.to_dict()
+    _enriquecer_picking_listo(d, tarea.numero_pedido_siesa)
+    return jsonify(d), 200
 
 
 @packing_bp.route('/crear-desde-picking', methods=['POST'])

@@ -1476,18 +1476,21 @@ async function empCargarTareas() {
         const verificados = t.items_verificados || 0;
         const total = t.total_items || 0;
         const pct = total ? Math.round(verificados / total * 100) : 0;
+        const pickingListo = t.picking_listo !== false;  // true si no hay picking o ya terminó
         const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered;
         const enProceso = t.estado === 'EN_PROCESO';
-        const color = siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
-        const bg    = siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
-        const label = siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
+        const bloqueado = !pickingListo && t.estado === 'PENDIENTE';
+        const color = bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
+        const bg    = bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
+        const label = bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         const limpiarBtn = siesaFallo ? `
           <button onclick="event.stopPropagation();empLimpiarSiesa(${t.id})"
             style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
             🗑 Limpiar bultos y redeclarar piezas
           </button>` : '';
         return `
-        <div class="emp-task-card" onclick="empIniciarHUD(${t.id})">
+        <div class="emp-task-card" onclick="${bloqueado ? '' : `empIniciarHUD(${t.id})`}"
+          style="${bloqueado ? 'opacity:0.5;cursor:default;' : 'cursor:pointer;'}">
           <div class="emp-task-pedido">${t.numero_pedido_siesa}</div>
           <div class="emp-task-sub">${total} producto(s) · ${t.items_verificados || 0}/${total} verificados</div>
           ${total > 0 ? `<div style="margin-top:10px;background:#1a1a1a;border-radius:8px;height:6px;overflow:hidden;">
@@ -1511,6 +1514,12 @@ async function empIniciarHUD(packingId) {
     // Cargar detalle completo de la tarea
     const t = await get(`/api/packing/${packingId}`);
     if (!t || !t.id) { alerta('Tarea no encontrada', 'error'); return; }
+
+    // Bloquear si el picking aún no está completo
+    if (t.picking_listo === false && t.estado === 'PENDIENTE') {
+      alerta('El operario aún está pickeando — espera a que termine', 'advertencia');
+      return;
+    }
 
     EMP_TAREA = { ...t, id: packingId };
 
