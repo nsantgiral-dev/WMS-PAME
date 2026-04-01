@@ -1,12 +1,15 @@
 """
 Rutas Siesa — expone el gateway Connekta a la PWA.
 
-GET  /api/siesa/pedidos           → cola de despacho desde Siesa (enriquecida con producto_id)
-GET  /api/siesa/ordenes-compra    → cola de recepción desde Siesa (enriquecida con producto_id)
-GET  /api/siesa/producto/<codigo> → lookup producto por código WMS, código Siesa o código de barras
-POST /api/siesa/iniciar-despacho  → crea picking + packing para un pedido completo
-POST /api/siesa/iniciar-recepcion → crea e inicia una recepción desde una OC de Siesa
+GET  /api/siesa/pedidos               → cola de despacho (Read Model) + estado picking WMS
+GET  /api/siesa/ordenes-compra        → cola de recepción desde Siesa
+GET  /api/siesa/producto/<codigo>     → lookup producto
+POST /api/siesa/iniciar-despacho      → crea picking + packing para un pedido
+POST /api/siesa/confirmar-despacho    → dispara RemisionPedido (142945) a Siesa
+POST /api/siesa/iniciar-recepcion     → crea e inicia una recepción desde una OC
 """
+import json
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.connekta_gateway import connekta
@@ -217,11 +220,19 @@ def _buscar_producto(codigo):
 @jwt_required()
 def pedidos_aprobados():
     """
-    Cola de despacho: lee del Read Model local (tabla pedidos_siesa).
-    El sync en background mantiene la tabla actualizada cada 5 min.
-    Respuesta instantánea desde DB local — nunca toca Connekta en tiempo real.
+    Cola de despacho: Read Model local enriquecido con estado del picking WMS.
+    Respuesta instantánea — nunca toca Connekta en tiempo real.
+
+    Estado por pedido:
+      picking_iniciado=False                         → mostrar botón "Despachar"
+      picking_iniciado=True, completado=False        → picking en curso (progreso X/Y)
+      picking_iniciado=True, completado=True,
+        siesa_triggered=False                        → mostrar botón "Confirmar en Siesa"
+      siesa_triggered=True                           → despachado ✓
     """
     from app.models.pedido_siesa import PedidoSiesa
+    from app.models.picking import TareaPicking
+    from app.models.packing import TareaPacking
 
     if connekta.modo_simulacion:
         resultado = connekta.get_pedidos_aprobados()
@@ -243,6 +254,32 @@ def pedidos_aprobados():
                 'items':         []
             }
         pedidos[num]['items'].append(row.to_dict())
+
+    # Enriquecer con estado del picking/packing en WMS
+    for num, pedido in pedidos.items():
+        packing = TareaPacking.query.filter(
+            TareaPacking.numero_pedido_siesa == num,
+            TareaPacking.estado != 'CANCELADO'
+        ).first()
+
+        if not packing:
+            pedido.update({'picking_iniciado': False, 'picking_completado': False,
+                           'picking_progreso': '0/0', 'packing_id': None, 'siesa_triggered': False})
+        else:
+            pickings = TareaPicking.query.filter(
+                TareaPicking.referencia_documento == num,
+                TareaPicking.estado != 'CANCELADO'
+            ).all()
+            total = len(pickings)
+            completados = sum(1 for p in pickings if p.estado == 'COMPLETADO')
+            pedido.update({
+                'picking_iniciado':   True,
+                'picking_completado': total > 0 and completados == total,
+                'picking_progreso':   f'{completados}/{total}',
+                'packing_id':         packing.id,
+                'siesa_triggered':    packing.siesa_triggered,
+                'siesa_triggered_at': packing.siesa_triggered_at.isoformat() if packing.siesa_triggered_at else None,
+            })
 
     lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '', reverse=True)
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200
@@ -384,16 +421,25 @@ def iniciar_despacho():
     if not items:
         return jsonify({'error': 'Ningún producto está registrado en el WMS — agrégalos primero'}), 400
 
-    # Idempotencia: evitar crear pickings duplicados para el mismo pedido
-    from app.models.picking import TareaPicking
-    existing = TareaPicking.query.filter(
-        TareaPicking.referencia_documento == numero_pedido,
-        TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO', 'BLOQUEADO'])
+    # Idempotencia: si ya existe packing no cancelado para este pedido → rechazar
+    from app.models.packing import TareaPacking as _TP
+    existing_packing = _TP.query.filter(
+        _TP.numero_pedido_siesa == numero_pedido,
+        _TP.estado != 'CANCELADO'
     ).first()
-    if existing:
+    if existing_packing:
+        if existing_packing.siesa_triggered:
+            return jsonify({'error': f'{numero_pedido} ya fue despachado a Siesa.'}), 409
+        completado = existing_packing.estado in ['VERIFICADO', 'DESPACHADO']
+        if completado:
+            return jsonify({
+                'error': f'{numero_pedido} ya tiene picking completo — '
+                         f'usa "Confirmar en Siesa" para enviar la remisión.',
+                'packing_id': existing_packing.id
+            }), 409
         return jsonify({
-            'error': f'Ya hay tareas de picking activas para {numero_pedido}. '
-                     f'Cancela o completa las existentes antes de reiniciar el despacho.'
+            'error': f'{numero_pedido} ya está en proceso de picking '
+                     f'(packing {existing_packing.codigo}).'
         }), 409
 
     tareas_picking_ids = []
@@ -444,6 +490,85 @@ def iniciar_despacho():
         'packing_codigo': packing.codigo,
         'errores': errores
     }), 201
+
+
+@siesa_bp.route('/confirmar-despacho', methods=['POST'])
+@jwt_required()
+def confirmar_despacho():
+    """
+    Dispara RemisionPedido (142945) a Siesa para un pedido cuyo picking ya está completo.
+    Idempotente: si ya fue enviado retorna 409.
+
+    Body: { "packing_id": 123 }
+    """
+    from app.extensions import db
+    from app.models.packing import TareaPacking
+    from app.models.picking import TareaPicking
+
+    data = request.get_json()
+    packing_id = data.get('packing_id')
+    if not packing_id:
+        return jsonify({'error': 'packing_id requerido'}), 400
+
+    packing = TareaPacking.query.get(packing_id)
+    if not packing:
+        return jsonify({'error': 'Packing no encontrado'}), 404
+
+    if packing.siesa_triggered:
+        return jsonify({
+            'error': f'Ya enviado a Siesa el {packing.siesa_triggered_at.strftime("%d/%m %H:%M") if packing.siesa_triggered_at else "—"}'
+        }), 409
+
+    # Verificar que el picking esté completamente terminado
+    pickings = TareaPicking.query.filter(
+        TareaPicking.referencia_documento == packing.numero_pedido_siesa,
+        TareaPicking.estado != 'CANCELADO'
+    ).all()
+    pendientes = [p for p in pickings if p.estado != 'COMPLETADO']
+    if pendientes:
+        return jsonify({
+            'error': f'Picking incompleto — {len(pendientes)} tarea(s) sin completar'
+        }), 409
+
+    # Construir items para el gateway usando código Siesa del producto
+    items_gateway = []
+    for item in packing.items:
+        prod = item.producto
+        codigo_siesa = (prod.codigo_siesa or prod.codigo) if prod else None
+        if not codigo_siesa:
+            continue
+        items_gateway.append({
+            'producto_codigo': codigo_siesa,
+            'cantidad_empacada': item.cantidad_esperada
+        })
+
+    if not items_gateway:
+        return jsonify({'error': 'No hay items con código Siesa para despachar'}), 400
+
+    try:
+        resultado = connekta.trigger_despacho(
+            tipo_docto_pedido=packing.tipo_docto_pedido_siesa,
+            consec_docto_pedido=str(packing.consec_docto_pedido_siesa),
+            items=items_gateway
+        )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+    # Marcar packing como despachado a Siesa
+    packing.siesa_triggered = True
+    packing.siesa_triggered_at = datetime.utcnow()
+    packing.siesa_response = json.dumps(resultado)
+    packing.estado = 'DESPACHADO'
+    packing.fecha_despachado = datetime.utcnow()
+    db.session.commit()
+
+    return jsonify({
+        'mensaje': f'Despacho {packing.numero_pedido_siesa} enviado a Siesa',
+        'packing_id': packing.id,
+        'simulado': resultado.get('simulado', False),
+        'modo_ensayo': resultado.get('modo_ensayo', False),
+        'resultado_siesa': resultado
+    }), 200
 
 
 @siesa_bp.route('/iniciar-recepcion', methods=['POST'])

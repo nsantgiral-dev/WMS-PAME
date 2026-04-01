@@ -276,6 +276,26 @@ async function cargarPedidos() {
       html += SIESA_PEDIDOS.map((p, i) => {
         const sinProd = p.items.filter(it => !it.producto_id).length;
         const totalUds = p.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
+
+        let accionBtn = '';
+        if (p.siesa_triggered) {
+          accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa</div>`;
+        } else if (p.picking_completado) {
+          accionBtn = `<button onclick="confirmarDespachoSiesa(${p.packing_id}, '${p.numero_pedido}')"
+            style="flex-shrink:0;background:#166534;color:#4ade80;border:1px solid #166534;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Confirmar<br>en Siesa
+          </button>`;
+        } else if (p.picking_iniciado) {
+          accionBtn = `<div style="flex-shrink:0;background:#1a1a2a;color:#93c5fd;border:1px solid #1e3a5f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
+            En picking<br>${p.picking_progreso || ''}
+          </div>`;
+        } else {
+          accionBtn = `<button onclick="iniciarDespachoDesdeSiesa(${i})"
+            style="flex-shrink:0;background:#fff;color:#000;border:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Despachar
+          </button>`;
+        }
+
         return `
           <div class="tabla-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
@@ -285,10 +305,7 @@ async function cargarPedidos() {
                 <div style="font-size:11px;color:#444;margin-top:2px;">${p.items.length} producto(s) · ${totalUds} uds</div>
                 ${sinProd ? `<div style="font-size:11px;color:#d97706;margin-top:2px;">⚠ ${sinProd} sin registrar en WMS</div>` : ''}
               </div>
-              <button onclick="iniciarDespachoDesdeSiesa(${i})"
-                style="flex-shrink:0;background:#fff;color:#000;border:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-                Despachar
-              </button>
+              ${accionBtn}
             </div>
           </div>`;
       }).join('');
@@ -911,6 +928,22 @@ async function iniciarDespachoDesdeSiesa(idx) {
     alerta(`Despacho iniciado — Packing ${r.packing_codigo}`, 'exito');
     setTimeout(cargarPedidos, 800);
   } catch (e) { alerta('Error iniciando despacho', 'error'); }
+}
+
+async function confirmarDespachoSiesa(packingId, numeroPedido) {
+  if (!confirm(`¿Confirmar despacho ${numeroPedido} en Siesa?\nEsto genera la remisión en Siesa. No se puede deshacer.`)) return;
+  try {
+    const r = await post('/api/siesa/confirmar-despacho', { packing_id: packingId });
+    if (r.error) { alerta(r.error, 'error'); return; }
+    if (r.modo_ensayo) {
+      alerta(`Modo ensayo — payload enviado pero Siesa no lo procesó (${numeroPedido})`, 'advertencia');
+    } else if (r.simulado) {
+      alerta(`Simulado — ${numeroPedido} marcado como despachado`, 'exito');
+    } else {
+      alerta(`¡${numeroPedido} remisionado en Siesa!`, 'exito');
+    }
+    setTimeout(cargarPedidos, 1200);
+  } catch (e) { alerta('Error confirmando despacho', 'error'); }
 }
 
 // ─────────────────────────────────────────────────────────────
