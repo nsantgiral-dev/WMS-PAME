@@ -184,7 +184,10 @@ class PackingService:
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
-        if tarea.estado not in ['EN_PROCESO', 'PENDIENTE']:
+        # VERIFICADO sin siesa_triggered = intento previo donde Siesa falló → permitir reintento
+        if tarea.estado == 'VERIFICADO' and not tarea.siesa_triggered:
+            pass  # reintento del trigger Siesa
+        elif tarea.estado not in ['EN_PROCESO', 'PENDIENTE']:
             raise ValueError(f'No se puede confirmar en estado {tarea.estado}')
 
         # Verificar que todos los ítems fueron escaneados
@@ -236,8 +239,10 @@ class PackingService:
             logger.error(f'[PACKING] Error triggering Siesa: {str(e)}')
             tarea.siesa_triggered = False
             tarea.siesa_response = str(e)
-            db.session.commit()
-            raise Exception(f'Packing confirmado pero error al comunicar con Siesa: {str(e)}')
+            # No commit aquí — dejar estado VERIFICADO en sesión sin persistir el error
+            # para que el empacador pueda reintentar "Cerrar Caja"
+            db.session.rollback()
+            raise Exception(f'Packing verificado pero error al comunicar con Siesa: {str(e)}')
 
         db.session.commit()
         return tarea
