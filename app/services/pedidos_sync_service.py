@@ -26,7 +26,7 @@ _sync_estado = {
     'ultimo_resultado': None,
     'ultimo_error': None,
 }
-_MIN_INTERVALO_SEG = 4 * 60
+_MIN_INTERVALO_SEG = 90  # mínimo 90s entre syncs manuales
 
 
 def _run_sync(app):
@@ -204,7 +204,7 @@ def init_scheduler(app):
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     scheduler.add_job(
         func=lambda: iniciar_sync_background(app),
-        trigger=CronTrigger(minute='*/5', hour='7-20', timezone='America/Bogota'),
+        trigger=CronTrigger(minute='*/2', hour='7-20', timezone='America/Bogota'),
         id='pedidos_siesa_sync',
         replace_existing=True
     )

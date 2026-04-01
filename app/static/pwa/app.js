@@ -277,6 +277,11 @@ function movimientos(lista) {
 async function cargarPedidos() {
   const el = document.getElementById('lista-pedidos');
   if (!el) return;
+  // Disparar sync en background — no esperar, UI carga de DB local igual
+  fetch('/api/siesa/sync-pedidos', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + TOKEN }
+  }).catch(() => {});
   try {
     const [siesa, db] = await Promise.all([
       get('/api/siesa/pedidos').catch(() => ({ pedidos: [] })),
