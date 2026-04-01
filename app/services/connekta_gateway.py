@@ -45,6 +45,9 @@ class ConnektaGateway:
         self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')
         self.conector_entrada = os.getenv('CONNEKTA_CONECTOR_ENTRADA', '142948')
         self.conector_ajuste = os.getenv('CONNEKTA_CONECTOR_AJUSTE', '142951')
+        # id_cia interno de Siesa (distinto de idCompania Connekta)
+        # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
+        self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
         self.bodega_averias = os.getenv('SIESA_BODEGA_AVERIAS', 'AV1')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
@@ -266,11 +269,11 @@ class ConnektaGateway:
 
         payload = {
             'Inicial': [
-                {'F_CIA': self.centro_op}
+                {'F_CIA': self.id_cia_siesa}
             ],
             'Remision': [
                 {
-                    'F_CIA': self.centro_op,        # max 3 chars → CO, no compañía
+                    'F_CIA': self.id_cia_siesa,
                     'F_CONSEC_AUTO_REG': 0,
                     'F350_ID_CO': self.centro_op,
                     'F350_ID_TIPO_DOCTO': '',
@@ -297,7 +300,7 @@ class ConnektaGateway:
             ],
             'Movtoventascomercial': [
                 {
-                    'F_CIA': self.centro_op,        # max 3 chars → CO, no compañía
+                    'F_CIA': self.id_cia_siesa,
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': '',
                     'f470_consec_docto': 0,
@@ -335,7 +338,7 @@ class ConnektaGateway:
                 for i in items
             ],
             'Final': [
-                {'F_CIA': self.centro_op}
+                {'F_CIA': self.id_cia_siesa}
             ]
         }
 
