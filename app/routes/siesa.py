@@ -163,6 +163,10 @@ def debug_pedidos_raw():
         cos[c] = cos.get(c, 0) + 1
         estados[e] = estados.get(e, 0) + 1
 
+    primera_fila_completa = tabla[0] if tabla else {}
+    campos_ciudad = {k: v for k, v in primera_fila_completa.items()
+                     if any(x in k.lower() for x in ['ciudad', 'munici', 'depart', 'dir', 'entrega', 'ciudad'])}
+
     return jsonify({
         'total_filas': len(tabla),
         'bodega_configurada': connekta.bodega,
@@ -170,6 +174,9 @@ def debug_pedidos_raw():
         'resumen_bodegas': bodegas,
         'resumen_cos': cos,
         'resumen_estados': estados,
+        'todos_los_campos_primera_fila': list(primera_fila_completa.keys()),
+        'campos_posible_ciudad': campos_ciudad,
+        'primera_fila_completa': primera_fila_completa,
         'filas_nb1': [
             {k: r[k] for k in ['f430_consec_docto', 'f430_id_co', 'f150_id',
                                 'f430_ind_estado', 'f120_referencia', 'f431_cant1_pedida',
@@ -177,12 +184,6 @@ def debug_pedidos_raw():
              if k in r}
             for r in tabla if r.get('f150_id') == connekta.bodega
         ],
-        'muestra_todas': [
-            {k: r[k] for k in ['f430_consec_docto', 'f430_id_co', 'f150_id',
-                                'f430_ind_estado', 'f120_referencia']
-             if k in r}
-            for r in tabla[:20]
-        ]
     }), 200
 
 
