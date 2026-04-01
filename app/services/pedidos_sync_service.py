@@ -10,7 +10,6 @@ Estrategia:
 """
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from app.extensions import db
@@ -42,43 +41,29 @@ def _run_sync(app):
         paginas_leidas = 0
 
         try:
-            def _fetch_page(num_pag):
+            # Sintaxis oficial Connekta: strings con ''valor'', enteros sin comillas
+            parametros = f"f430_id_co = ''{connekta.centro_op}'' AND f430_ind_estado = 2"
+
+            all_items = []
+            for pag in range(1, 200):
                 try:
                     res = connekta._get(connekta.api_pedidos, {
-                        'paginacion': f'numPag={num_pag}|tamPag={TAM_PAG}'
+                        'paginacion': f'numPag={pag}|tamPag={TAM_PAG}',
+                        'parametros': parametros
                     })
-                    return res.get('detalle', {}).get('Table', [])
-                except Exception as e:
-                    logger.warning(f'[PEDIDOS_SYNC] Página {num_pag}: {e}')
-                    return []
-
-            # Barrer todo el histórico en lotes paralelos
-            all_items = []
-            done = False
-            pag = 1
-            while not done:
-                pages = range(pag, pag + WORKERS)
-                with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-                    results = list(ex.map(_fetch_page, pages))
-                paginas_leidas += WORKERS
-                for rows in results:
+                    rows = res.get('detalle', {}).get('Table', [])
                     all_items.extend(rows)
+                    paginas_leidas += 1
                     if len(rows) < TAM_PAG:
-                        done = True
                         break
-                pag += WORKERS
+                except Exception as e:
+                    logger.warning(f'[PEDIDOS_SYNC] Página {pag}: {e}')
+                    break
 
-            # Filtrar NB1/CO003 con cantidad pendiente
+            # Filtrar bodega NB1 en Python (CO ya filtrado en Siesa)
             items_nb1 = []
             for item in all_items:
-                try:
-                    if int(item.get('f430_ind_estado', 0)) in ESTADOS_EXCLUIR:
-                        continue
-                except (TypeError, ValueError):
-                    pass
                 if item.get('f150_id', '').strip() != connekta.bodega:
-                    continue
-                if item.get('f430_id_co', '').strip() != connekta.centro_op:
                     continue
                 try:
                     cant_pedida = float(item.get('f431_cant1_pedida', 0))

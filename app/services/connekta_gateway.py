@@ -139,57 +139,34 @@ class ConnektaGateway:
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
-        Cola viva de picking: barre todas las páginas de Siesa en paralelo
-        y filtra NB1/CO003 en Python. Connekta no soporta filtros de fecha
-        ni de bodega/CO, por lo que la paginación completa es obligatoria.
+        Cola viva de picking: filtra por CO y estado directo en Connekta.
+        Sintaxis oficial: strings con comillas dobles simples ''valor''.
+        Pagina solo los resultados filtrados (~pocos registros).
         """
-        from concurrent.futures import ThreadPoolExecutor
-
         if self.modo_simulacion:
             return self._simular('GET_pedidos_aprobados')
 
-        ESTADOS_EXCLUIR = {0, 9}
-        TAM_PAG = 100
-        MAX_PAGINAS = 9999  # Sin límite práctico — para cuando una página devuelva <TAM_PAG filas
-        WORKERS = 10
+        # Sintaxis oficial Connekta: strings con ''valor'', enteros sin comillas
+        if sin_filtros:
+            parametros = 'f430_ind_estado = 2'
+        else:
+            parametros = f"f430_id_co = ''{self.centro_op}'' AND f430_ind_estado = 2"
 
-        def _fetch_page(num_pag):
-            try:
-                res = self._get(self.api_pedidos, {
-                    'paginacion': f'numPag={num_pag}|tamPag={TAM_PAG}'
-                })
-                return res.get('detalle', {}).get('Table', [])
-            except Exception as e:
-                logger.warning(f'[CONNEKTA] Página {num_pag} error: {e}')
-                return []
-
-        # Barrer todas las páginas en lotes de WORKERS concurrentes.
-        # Parar cuando una página devuelva menos de TAM_PAG filas (fin del histórico).
         all_items = []
-        done = False
-        for batch_start in range(1, MAX_PAGINAS + 1, WORKERS):
-            if done:
+        for pag in range(1, 200):
+            res = self._get(self.api_pedidos, {
+                'paginacion': f'numPag={pag}|tamPag=100',
+                'parametros': parametros
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            all_items.extend(rows)
+            if len(rows) < 100:
                 break
-            pages = range(batch_start, min(batch_start + WORKERS, MAX_PAGINAS + 1))
-            with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-                results = list(ex.map(_fetch_page, pages))
-            for rows in results:
-                all_items.extend(rows)
-                if len(rows) < TAM_PAG:
-                    done = True
-                    break
 
         items_pendientes = []
         for item in all_items:
-            try:
-                if int(item.get('f430_ind_estado', 0)) in ESTADOS_EXCLUIR:
-                    continue
-            except (TypeError, ValueError):
-                pass
             if not sin_filtros:
                 if item.get('f150_id', '').strip() != self.bodega:
-                    continue
-                if item.get('f430_id_co', '').strip() != self.centro_op:
                     continue
             try:
                 cant_pedida = float(item.get('f431_cant1_pedida', 0))
@@ -216,7 +193,7 @@ class ConnektaGateway:
                 logger.warning(f'[CONNEKTA] Item inválido: {e}')
                 continue
 
-        logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} NB1/003 de {len(all_items)} total Siesa')
+        logger.info(f'[CONNEKTA] pedidos: {len(items_pendientes)} pendientes de {len(all_items)} CO{self.centro_op}')
         return {
             'codigo': 0,
             'total_siesa': len(all_items),
