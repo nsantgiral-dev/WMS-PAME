@@ -1499,6 +1499,15 @@ async function empIniciarHUD(packingId) {
   } catch (e) { alerta('Error iniciando tarea', 'error'); }
 }
 
+function empSimularScan() {
+  const inp = document.getElementById('emp-input-manual');
+  if (!inp) return;
+  const codigo = inp.value.trim();
+  if (!codigo) return;
+  inp.value = '';
+  empProcesarEscaneo(codigo);
+}
+
 function empCerrarHUD() {
   document.getElementById('emp-hud').classList.remove('activo');
   EMP_TAREA = null;
