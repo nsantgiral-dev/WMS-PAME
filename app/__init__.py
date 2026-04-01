@@ -25,12 +25,16 @@ def create_app():
     @app.route('/static/pwa/<path:filename>')
     def pwa_files(filename):
         pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
-        return send_from_directory(pwa_dir, filename)
+        resp = send_from_directory(pwa_dir, filename)
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return resp
 
     @app.route('/pwa')
     def pwa():
         pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
-        return send_from_directory(pwa_dir, 'index.html')
+        resp = send_from_directory(pwa_dir, 'index.html')
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return resp
 
     # ── CLI: flask sync-productos ──────────────────────────────────────────
     @app.cli.command('sync-productos')
