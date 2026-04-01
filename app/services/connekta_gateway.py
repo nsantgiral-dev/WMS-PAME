@@ -266,7 +266,7 @@ class ConnektaGateway:
 
         payload = {
             'Inicial': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': self.centro_op}
             ],
             'Remision': [
                 {
@@ -335,7 +335,7 @@ class ConnektaGateway:
                 for i in items
             ],
             'Final': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': self.centro_op}
             ]
         }
 
