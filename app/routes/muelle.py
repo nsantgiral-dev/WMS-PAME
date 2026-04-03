@@ -54,8 +54,13 @@ def listos():
 @jwt_required()
 def cargar_bulto(codigo_barras):
     """
-    Scan-to-Truck: el despachador escanea el código del bulto en la puerta del camión.
+    Scan-to-Truck: escanea el bulto y lo vincula a la ruta activa.
+    Body opcional: {"ruta_id": 12}
     """
+    from app.models.ruta_despacho import RutaDespacho
+    data = request.get_json(silent=True) or {}
+    ruta_id = data.get('ruta_id')
+
     bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).first()
 
     if not bulto:
@@ -66,14 +71,22 @@ def cargar_bulto(codigo_barras):
         return jsonify({
             'mensaje': 'Bulto ya fue cargado',
             'codigo_barras': codigo_barras,
-            'ya_cargado': True
+            'ya_cargado': True,
+            'ruta_despacho_id': bulto.ruta_despacho_id
         }), 200
+
+    if ruta_id:
+        ruta = RutaDespacho.query.get(ruta_id)
+        if not ruta:
+            return jsonify({'error': 'Ruta no encontrada'}), 404
+        if ruta.estado != 'EN_CARGUE':
+            return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
+        bulto.ruta_despacho_id = ruta_id
 
     bulto.estado = 'CARGADO'
     bulto.fecha_cargado = datetime.utcnow()
     db.session.commit()
 
-    # Verificar si todos los bultos del pedido están cargados
     tarea = bulto.tarea
     pendientes = Bulto.query.filter_by(tarea_id=tarea.id, estado='PENDIENTE').count()
 
@@ -87,6 +100,7 @@ def cargar_bulto(codigo_barras):
         'numero_pedido_siesa': tarea.numero_pedido_siesa,
         'cliente': tarea.cliente or '',
         'municipio': tarea.municipio or '',
+        'ruta_despacho_id': bulto.ruta_despacho_id,
         'pedido_completo': pendientes == 0,
         'bultos_pendientes_pedido': pendientes
     }), 200

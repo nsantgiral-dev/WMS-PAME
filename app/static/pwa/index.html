@@ -181,6 +181,7 @@
       <div class="nav-tab" onclick="tab('tab-stock')">Stock</div>
       <div class="nav-tab" onclick="tab('tab-connekta')">Siesa</div>
       <div class="nav-tab" onclick="tab('tab-muelle')">🚛 Muelle</div>
+      <div class="nav-tab" onclick="tab('tab-rutas')">🗺️ Rutas</div>
     </div>
 
     <!-- Dashboard -->
@@ -261,11 +262,24 @@
         <div id="muelle-contador" style="font-size:12px;color:#666;"></div>
       </div>
 
+      <!-- Ruta activa -->
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="muelle-ruta-select" onchange="muelleSeleccionarRuta(this.value)"
+            style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            <option value="">— Sin ruta (solo registrar) —</option>
+          </select>
+          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
+        </div>
+        <div id="muelle-ruta-info" style="font-size:11px;color:#555;margin-top:6px;min-height:16px;"></div>
+      </div>
+
       <!-- Scan-to-Truck -->
       <div style="background:#111;border:2px solid #333;border-radius:12px;padding:14px;margin-bottom:16px;">
         <div style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Escanear caja al cargar vehículo</div>
         <div style="display:flex;gap:8px;">
-          <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código PACK-..." autocomplete="off"
+          <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
             style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
             onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
             oninput="this.value=this.value.toUpperCase()">
@@ -282,6 +296,117 @@
         Actualización automática cada 5 seg · <span id="muelle-ultima-act">—</span>
       </div>
     </div>
+
+    <!-- RUTAS DE DESPACHO -->
+    <div id="tab-rutas" class="admin-content" style="display:none;">
+
+      <!-- Sub-nav: Rutas | Conductores -->
+      <div style="display:flex;background:#1a1a1a;border-radius:10px;margin-bottom:14px;padding:3px;gap:3px;">
+        <button id="rutas-subnav-rutas" onclick="rutasSubTab('rutas')"
+          style="flex:1;padding:9px;font-size:13px;font-weight:600;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;">
+          Rutas
+        </button>
+        <button id="rutas-subnav-conductores" onclick="rutasSubTab('conductores')"
+          style="flex:1;padding:9px;font-size:13px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          Conductores
+        </button>
+      </div>
+
+      <!-- Sub-panel: Rutas -->
+      <div id="rutas-panel-rutas">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div style="font-size:16px;font-weight:700;">Rutas de despacho</div>
+          <button onclick="rutasMostrarForm()"
+            style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            + Nueva ruta
+          </button>
+        </div>
+
+        <!-- Form nueva ruta (oculto por defecto) -->
+        <div id="rutas-form" style="display:none;background:#111;border:1px solid #333;border-radius:14px;padding:18px;margin-bottom:14px;">
+          <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nueva ruta de despacho</div>
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Conductor</div>
+            <select id="rutas-form-conductor"
+              style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+              <option value="">— Selecciona conductor —</option>
+            </select>
+          </div>
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Tipo de ruta</div>
+            <div style="display:flex;gap:8px;">
+              <button id="rutas-tipo-urbana" onclick="rutasSeleccionarTipo('Urbana')"
+                style="flex:1;padding:12px;background:#1e3a5f;color:#60a5fa;border:2px solid #1e3a5f;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">
+                🏙️ Urbana
+              </button>
+              <button id="rutas-tipo-municipal" onclick="rutasSeleccionarTipo('Municipal')"
+                style="flex:1;padding:12px;background:#1a1a1a;color:#666;border:2px solid #333;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">
+                🛣️ Municipal
+              </button>
+            </div>
+          </div>
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Notas (opcional)</div>
+            <input id="rutas-form-notas" type="text" placeholder="Ej: sector sur, ruta Envigado-Itagüí..."
+              style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+          </div>
+          <div id="rutas-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="rutasCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
+            <button onclick="rutasCrear()" style="flex:2;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Crear ruta →</button>
+          </div>
+        </div>
+
+        <!-- Lista de rutas -->
+        <div id="lista-rutas"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
+      </div>
+
+      <!-- Sub-panel: Conductores -->
+      <div id="rutas-panel-conductores" style="display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div style="font-size:16px;font-weight:700;">Conductores</div>
+          <button onclick="conductoresMostrarForm()"
+            style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            + Nuevo
+          </button>
+        </div>
+
+        <!-- Form nuevo conductor -->
+        <div id="conductores-form" style="display:none;background:#111;border:1px solid #333;border-radius:14px;padding:18px;margin-bottom:14px;">
+          <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nuevo conductor</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div style="grid-column:1/-1;">
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Nombre *</div>
+              <input id="cond-form-nombre" type="text" placeholder="Nombre completo"
+                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            </div>
+            <div>
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Cédula *</div>
+              <input id="cond-form-cedula" type="text" placeholder="12345678"
+                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            </div>
+            <div>
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Teléfono</div>
+              <input id="cond-form-telefono" type="tel" placeholder="3001234567"
+                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            </div>
+            <div>
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Placa</div>
+              <input id="cond-form-placa" type="text" placeholder="ABC123"
+                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;" oninput="this.value=this.value.toUpperCase()">
+            </div>
+          </div>
+          <div id="conductores-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="conductoresCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
+            <button onclick="conductoresCrear()" style="flex:2;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
+          </div>
+        </div>
+
+        <div id="lista-conductores"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
+      </div>
+    </div>
+
   </div>
 
   <!-- RECEPCIÓN -->

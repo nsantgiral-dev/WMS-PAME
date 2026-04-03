@@ -20,6 +20,10 @@ let REC_TAB_ACTIVO = 'ocs';   // tab activo en pantalla recepcionista
 let TIMER_REC = null;          // polling recepcionista (30 seg)
 let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
 let SIESA_OCS = [];            // OCs cargadas desde Siesa (pantalla recepcionista)
+let RUTA_ACTIVA_ID = null;     // ruta EN_CARGUE seleccionada en tab-muelle
+let RUTAS_TIPO_SEL = 'Urbana'; // tipo seleccionado en form nueva ruta
+let RUTAS_SUBTAB = 'rutas';    // sub-tab activo en tab-rutas
+let MUELLE_TIMER = null;
 
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
@@ -217,15 +221,17 @@ async function cargarAdmin() {
   else if (TAB === 'tab-stock') await cargarStock();
   else if (TAB === 'tab-connekta') await cargarConnekta();
   else if (TAB === 'tab-muelle') await cargarMuelle();
+  else if (TAB === 'tab-rutas') await cargarRutas();
 }
 
 function tab(id) {
-  ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle'].forEach(t => {
+  const TABS = ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas'];
+  TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
   });
   document.querySelectorAll('.nav-tab').forEach((t, i) => {
-    t.classList.toggle('active', ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle'][i] === id);
+    t.classList.toggle('active', TABS[i] === id);
   });
   TAB = id;
   cargarAdmin();
@@ -2074,7 +2080,6 @@ async function _guardarUsuario(uid) {
 }
 
 // ─── MONITOR DE MUELLE ────────────────────────────────────────────────────────
-let MUELLE_TIMER = null;
 const MUELLE_ORDEN_KEY = 'wms_muelle_orden'; // localStorage key
 
 function muelleGetOrden() {
@@ -2153,9 +2158,47 @@ function muelleMoverGrupo(idx, dir) {
   muelleRenderGrupos(reordenado);
 }
 
+async function cargarRutaSelector() {
+  const sel = document.getElementById('muelle-ruta-select');
+  if (!sel) return;
+  try {
+    const d = await get('/api/rutas/?estado=EN_CARGUE');
+    const rutas = d.rutas || [];
+    const valorActual = RUTA_ACTIVA_ID;
+    sel.innerHTML = '<option value="">— Sin ruta (solo registrar) —</option>';
+    rutas.forEach(r => {
+      const opt = document.createElement('option');
+      opt.value = r.id;
+      opt.textContent = `#${r.id} · ${r.conductor_nombre} · ${r.tipo_ruta} · ${r.total_bultos} bultos`;
+      if (r.id === valorActual) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    // Si la ruta activa ya no está EN_CARGUE, resetear
+    if (valorActual && !rutas.find(r => r.id === valorActual)) {
+      RUTA_ACTIVA_ID = null;
+      muelleSeleccionarRuta('');
+    }
+  } catch (e) {}
+}
+
+function muelleSeleccionarRuta(idStr) {
+  RUTA_ACTIVA_ID = idStr ? parseInt(idStr) : null;
+  const info = document.getElementById('muelle-ruta-info');
+  if (!info) return;
+  if (!RUTA_ACTIVA_ID) {
+    info.textContent = 'Los bultos se registrarán como CARGADOS sin asignar a ruta.';
+  } else {
+    const sel = document.getElementById('muelle-ruta-select');
+    const txt = sel?.options[sel.selectedIndex]?.textContent || '';
+    info.textContent = `Asignando a: ${txt}`;
+    info.style.color = '#4ade80';
+  }
+}
+
 async function cargarMuelle() {
   const el = document.getElementById('lista-muelle');
   if (!el) return;
+  await cargarRutaSelector();
   try {
     const d = await get('/api/muelle/listos');
     const total = d.total_bultos || 0;
@@ -2191,9 +2234,11 @@ async function muelleCargarCaja() {
   feedback.textContent = 'Procesando...';
 
   try {
+    const body = RUTA_ACTIVA_ID ? JSON.stringify({ ruta_id: RUTA_ACTIVA_ID }) : undefined;
     const r = await fetch(API + '/api/muelle/cargar/' + encodeURIComponent(codigo), {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN }
+      headers: { Authorization: 'Bearer ' + TOKEN, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body,
     });
     const d = await r.json();
 
@@ -2217,4 +2262,274 @@ async function muelleCargarCaja() {
     feedback.textContent = 'Error de conexión';
   }
   input?.focus();
+}
+
+// ══════════════════════════════════════════════════════
+//  MILLA CERO — RUTAS DE DESPACHO
+// ══════════════════════════════════════════════════════
+
+function rutasSubTab(nombre) {
+  RUTAS_SUBTAB = nombre;
+  const paneles = { rutas: 'rutas-panel-rutas', conductores: 'rutas-panel-conductores' };
+  Object.entries(paneles).forEach(([k, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = k === nombre ? 'block' : 'none';
+  });
+  const btnRutas = document.getElementById('rutas-subnav-rutas');
+  const btnCond  = document.getElementById('rutas-subnav-conductores');
+  if (btnRutas) { btnRutas.style.background = nombre === 'rutas' ? '#fff' : 'none'; btnRutas.style.color = nombre === 'rutas' ? '#000' : '#666'; }
+  if (btnCond)  { btnCond.style.background  = nombre === 'conductores' ? '#fff' : 'none'; btnCond.style.color = nombre === 'conductores' ? '#000' : '#666'; }
+  if (nombre === 'rutas') cargarListaRutas();
+  else cargarListaConductores();
+}
+
+async function cargarRutas() {
+  if (RUTAS_SUBTAB === 'rutas') await cargarListaRutas();
+  else await cargarListaConductores();
+}
+
+// ── Rutas ────────────────────────────────────────────
+
+async function cargarListaRutas() {
+  const el = document.getElementById('lista-rutas');
+  if (!el) return;
+  try {
+    const d = await get('/api/rutas/');
+    const rutas = d.rutas || [];
+    if (!rutas.length) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas registradas hoy</div>';
+      return;
+    }
+    el.innerHTML = rutas.map(r => rutaCard(r)).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando rutas</div>';
+  }
+}
+
+function rutaCard(r) {
+  const estadoBadge = {
+    EN_CARGUE:   '<span style="background:#713f12;color:#facc15;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">EN CARGUE</span>',
+    EN_TRANSITO: '<span style="background:#1e3a5f;color:#60a5fa;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">EN TRÁNSITO</span>',
+    ENTREGADA:   '<span style="background:#14532d;color:#4ade80;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">ENTREGADA</span>',
+  }[r.estado] || r.estado;
+
+  const tipoIcon = r.tipo_ruta === 'Urbana' ? '🏙️' : '🛣️';
+  const fecha = new Date(r.fecha_creacion).toLocaleString('es-CO', { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' });
+
+  const btnCerrar = r.estado === 'EN_CARGUE'
+    ? `<button onclick="rutaCerrar(${r.id})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Salió</button>`
+    : '';
+  const btnEntregar = r.estado === 'EN_TRANSITO'
+    ? `<button onclick="rutaEntregar(${r.id})" style="flex:1;padding:10px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✓ Entregada</button>`
+    : '';
+  const btnManifiesto = r.total_bultos > 0
+    ? `<button onclick="rutaVerManifiesto(${r.id})" style="flex:1;padding:10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:13px;cursor:pointer;">📋 Ver</button>`
+    : '';
+
+  return `
+    <div id="ruta-card-${r.id}" style="background:#111;border:1px solid #222;border-radius:14px;padding:16px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <div style="font-size:16px;font-weight:800;">${tipoIcon} Ruta #${r.id}</div>
+          <div style="font-size:13px;color:#ccc;margin-top:2px;">${r.conductor_nombre}</div>
+          <div style="font-size:11px;color:#555;margin-top:1px;">${r.conductor_placa ? 'Placa: ' + r.conductor_placa + ' · ' : ''}${fecha}</div>
+        </div>
+        <div style="text-align:right;">
+          ${estadoBadge}
+          <div style="font-size:20px;font-weight:800;margin-top:6px;">${r.total_bultos}</div>
+          <div style="font-size:10px;color:#555;">bultos</div>
+        </div>
+      </div>
+      ${r.pedidos?.length ? `<div style="font-size:11px;color:#555;margin-bottom:10px;">Pedidos: ${r.pedidos.join(', ')}</div>` : ''}
+      ${r.notas ? `<div style="font-size:12px;color:#666;font-style:italic;margin-bottom:10px;">"${r.notas}"</div>` : ''}
+      ${(btnCerrar || btnEntregar || btnManifiesto) ? `<div style="display:flex;gap:8px;">${btnCerrar}${btnEntregar}${btnManifiesto}</div>` : ''}
+    </div>`;
+}
+
+async function rutaCerrar(id) {
+  if (!confirm(`¿Confirmar que la Ruta #${id} salió? Ya no se podrán agregar bultos.`)) return;
+  try {
+    const r = await fetch(API + '/api/rutas/' + id + '/cerrar', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
+    const d = await r.json();
+    if (r.ok) {
+      // Actualizar card sin recargar todo
+      const card = document.getElementById('ruta-card-' + id);
+      if (card) card.outerHTML = rutaCard(d.ruta);
+      // Limpiar ruta activa si era esta
+      if (RUTA_ACTIVA_ID === id) { RUTA_ACTIVA_ID = null; }
+      await cargarRutaSelector();
+    } else { alert(d.error || 'Error al cerrar ruta'); }
+  } catch (e) { alert('Error de conexión'); }
+}
+
+async function rutaEntregar(id) {
+  if (!confirm(`¿Confirmar entrega de la Ruta #${id}?`)) return;
+  try {
+    const r = await fetch(API + '/api/rutas/' + id + '/entregar', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
+    const d = await r.json();
+    if (r.ok) {
+      const card = document.getElementById('ruta-card-' + id);
+      if (card) card.outerHTML = rutaCard(d.ruta);
+    } else { alert(d.error || 'Error al entregar ruta'); }
+  } catch (e) { alert('Error de conexión'); }
+}
+
+async function rutaVerManifiesto(id) {
+  try {
+    const d = await get('/api/rutas/' + id);
+    const ruta = d.ruta;
+    const manifiesto = ruta.manifiesto || [];
+    let html = `<b>Ruta #${ruta.id} — ${ruta.conductor_nombre} — ${ruta.tipo_ruta}</b>\n\n`;
+    manifiesto.forEach(grupo => {
+      html += `📍 ${grupo.destino}\n`;
+      grupo.bultos.forEach(b => {
+        html += `  ${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente}\n`;
+      });
+      html += '\n';
+    });
+    alert(html);
+  } catch (e) { alert('Error cargando manifiesto'); }
+}
+
+function rutasMostrarForm() {
+  document.getElementById('rutas-form').style.display = 'block';
+  document.getElementById('rutas-form-error').textContent = '';
+  cargarListaConductoresEnSelect('rutas-form-conductor');
+}
+
+function rutasCancelarForm() {
+  document.getElementById('rutas-form').style.display = 'none';
+}
+
+function rutasSeleccionarTipo(tipo) {
+  RUTAS_TIPO_SEL = tipo;
+  const btnU = document.getElementById('rutas-tipo-urbana');
+  const btnM = document.getElementById('rutas-tipo-municipal');
+  if (btnU) { btnU.style.background = tipo === 'Urbana' ? '#1e3a5f' : '#1a1a1a'; btnU.style.color = tipo === 'Urbana' ? '#60a5fa' : '#666'; btnU.style.borderColor = tipo === 'Urbana' ? '#1e3a5f' : '#333'; }
+  if (btnM) { btnM.style.background = tipo === 'Municipal' ? '#1e3a5f' : '#1a1a1a'; btnM.style.color = tipo === 'Municipal' ? '#60a5fa' : '#666'; btnM.style.borderColor = tipo === 'Municipal' ? '#1e3a5f' : '#333'; }
+}
+
+async function rutasCrear() {
+  const errorEl = document.getElementById('rutas-form-error');
+  const conductorId = document.getElementById('rutas-form-conductor')?.value;
+  const notas = document.getElementById('rutas-form-notas')?.value.trim();
+  errorEl.textContent = '';
+
+  if (!conductorId) { errorEl.textContent = 'Selecciona un conductor'; return; }
+
+  try {
+    const r = await fetch(API + '/api/rutas/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conductor_id: parseInt(conductorId), tipo_ruta: RUTAS_TIPO_SEL, notas }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      rutasCancelarForm();
+      document.getElementById('rutas-form-notas').value = '';
+      await cargarListaRutas();
+      await cargarRutaSelector();
+    } else {
+      errorEl.textContent = d.error || 'Error al crear ruta';
+    }
+  } catch (e) { errorEl.textContent = 'Error de conexión'; }
+}
+
+// ── Conductores ──────────────────────────────────────
+
+async function cargarListaConductoresEnSelect(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  try {
+    const d = await get('/api/rutas/conductores?activos=true');
+    sel.innerHTML = '<option value="">— Selecciona conductor —</option>';
+    (d.conductores || []).forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.id;
+      opt.textContent = `${c.nombre}${c.placa ? ' · ' + c.placa : ''}`;
+      sel.appendChild(opt);
+    });
+  } catch (e) {}
+}
+
+async function cargarListaConductores() {
+  const el = document.getElementById('lista-conductores');
+  if (!el) return;
+  try {
+    const d = await get('/api/rutas/conductores?activos=false');
+    const conductores = d.conductores || [];
+    if (!conductores.length) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin conductores registrados</div>';
+      return;
+    }
+    el.innerHTML = conductores.map(c => `
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:14px;font-weight:700;">${c.nombre}</div>
+          <div style="font-size:12px;color:#555;margin-top:2px;">CC ${c.cedula}${c.telefono ? ' · ' + c.telefono : ''}${c.placa ? ' · Placa: ' + c.placa : ''}</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          ${c.activo
+            ? '<span style="background:#14532d;color:#4ade80;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">ACTIVO</span>'
+            : '<span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">INACTIVO</span>'}
+          <button onclick="conductorToggle(${c.id}, ${!c.activo})"
+            style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+            ${c.activo ? 'Desactivar' : 'Activar'}
+          </button>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando conductores</div>';
+  }
+}
+
+function conductoresMostrarForm() {
+  document.getElementById('conductores-form').style.display = 'block';
+  document.getElementById('conductores-form-error').textContent = '';
+}
+
+function conductoresCancelarForm() {
+  document.getElementById('conductores-form').style.display = 'none';
+}
+
+async function conductoresCrear() {
+  const errorEl = document.getElementById('conductores-form-error');
+  const nombre  = document.getElementById('cond-form-nombre')?.value.trim();
+  const cedula  = document.getElementById('cond-form-cedula')?.value.trim();
+  const telefono = document.getElementById('cond-form-telefono')?.value.trim();
+  const placa   = document.getElementById('cond-form-placa')?.value.trim();
+  errorEl.textContent = '';
+
+  if (!nombre) { errorEl.textContent = 'El nombre es requerido'; return; }
+  if (!cedula) { errorEl.textContent = 'La cédula es requerida'; return; }
+
+  try {
+    const r = await fetch(API + '/api/rutas/conductores', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nombre, cedula, telefono: telefono || null, placa: placa || null }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      conductoresCancelarForm();
+      ['cond-form-nombre','cond-form-cedula','cond-form-telefono','cond-form-placa'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+      });
+      await cargarListaConductores();
+    } else {
+      errorEl.textContent = d.error || 'Error al guardar conductor';
+    }
+  } catch (e) { errorEl.textContent = 'Error de conexión'; }
+}
+
+async function conductorToggle(id, activar) {
+  try {
+    const r = await fetch(API + '/api/rutas/conductores/' + id, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activo: activar }),
+    });
+    if (r.ok) await cargarListaConductores();
+    else { const d = await r.json(); alert(d.error || 'Error'); }
+  } catch (e) { alert('Error de conexión'); }
 }
