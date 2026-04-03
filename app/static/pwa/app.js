@@ -2184,44 +2184,147 @@ async function cargarRutaSelector() {
 function muelleSeleccionarRuta(idStr) {
   RUTA_ACTIVA_ID = idStr ? parseInt(idStr) : null;
   const info = document.getElementById('muelle-ruta-info');
-  if (!info) return;
-  if (!RUTA_ACTIVA_ID) {
-    info.textContent = 'Los bultos se registrarán como CARGADOS sin asignar a ruta.';
-  } else {
-    const sel = document.getElementById('muelle-ruta-select');
-    const txt = sel?.options[sel.selectedIndex]?.textContent || '';
-    info.textContent = `Asignando a: ${txt}`;
-    info.style.color = '#4ade80';
+  if (info) {
+    if (!RUTA_ACTIVA_ID) {
+      info.style.color = '#555';
+      info.textContent = 'Los bultos se registrarán como CARGADOS sin asignar a ruta.';
+    } else {
+      const sel = document.getElementById('muelle-ruta-select');
+      const txt = sel?.options[sel.selectedIndex]?.textContent || '';
+      info.style.color = '#4ade80';
+      info.textContent = `Mostrando bultos de: ${txt}`;
+    }
   }
+  // Refrescar la lista inmediatamente al cambiar ruta
+  clearTimeout(MUELLE_TIMER);
+  cargarMuelle();
 }
 
 async function cargarMuelle() {
   const el = document.getElementById('lista-muelle');
   if (!el) return;
   await cargarRutaSelector();
+
+  const act = document.getElementById('muelle-ultima-act');
+  if (act) act.textContent = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
   try {
-    const d = await get('/api/muelle/listos');
-    const total = d.total_bultos || 0;
-
-    const contador = document.getElementById('muelle-contador');
-    if (contador) contador.textContent = total > 0 ? `${total} pieza${total !== 1 ? 's' : ''} esperando` : 'Sin piezas pendientes';
-
-    const act = document.getElementById('muelle-ultima-act');
-    if (act) act.textContent = new Date().toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-    if (!d.grupos?.length) {
-      _MUELLE_GRUPOS_ACTUALES = [];
-      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;font-size:32px;">✓<br><span style="font-size:14px;">Muelle despejado</span></div>';
-      return;
+    if (RUTA_ACTIVA_ID) {
+      await cargarMuelleRuta(RUTA_ACTIVA_ID);
+    } else {
+      await cargarMuellePendientes();
     }
-
-    _MUELLE_GRUPOS_ACTUALES = muelleOrdenarGrupos(d.grupos);
-    muelleRenderGrupos(_MUELLE_GRUPOS_ACTUALES);
-
-  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error cargando muelle</div>'; }
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando muelle</div>';
+  }
 
   clearTimeout(MUELLE_TIMER);
   if (TAB === 'tab-muelle') MUELLE_TIMER = setTimeout(cargarMuelle, 5000);
+}
+
+async function cargarMuellePendientes() {
+  const el = document.getElementById('lista-muelle');
+  const contador = document.getElementById('muelle-contador');
+
+  const d = await get('/api/muelle/listos');
+  const total = d.total_bultos || 0;
+
+  if (contador) contador.textContent = total > 0 ? `${total} pieza${total !== 1 ? 's' : ''} pendiente${total !== 1 ? 's' : ''}` : 'Sin piezas pendientes';
+
+  if (!d.grupos?.length) {
+    _MUELLE_GRUPOS_ACTUALES = [];
+    el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;font-size:32px;">✓<br><span style="font-size:14px;">Muelle despejado</span></div>';
+    return;
+  }
+
+  _MUELLE_GRUPOS_ACTUALES = muelleOrdenarGrupos(d.grupos);
+  muelleRenderGrupos(_MUELLE_GRUPOS_ACTUALES);
+}
+
+// Referencia al manifiesto actual de la ruta para reordenar sin ir al servidor
+let _RUTA_MANIFIESTO_ACTUAL = [];
+
+async function cargarMuelleRuta(rutaId) {
+  const el = document.getElementById('lista-muelle');
+  const contador = document.getElementById('muelle-contador');
+
+  const d = await get('/api/rutas/' + rutaId);
+  const ruta = d.ruta;
+  const manifiesto = ruta.manifiesto || [];
+
+  if (contador) {
+    const pendientesInfo = ruta.total_bultos > 0 ? `${ruta.total_bultos} bulto${ruta.total_bultos !== 1 ? 's' : ''} en ruta` : 'Sin bultos aún';
+    contador.textContent = `Ruta #${rutaId} · ${pendientesInfo}`;
+  }
+
+  if (!manifiesto.length) {
+    _RUTA_MANIFIESTO_ACTUAL = [];
+    el.innerHTML = `
+      <div style="color:#555;text-align:center;padding:40px;">
+        <div style="font-size:32px;margin-bottom:12px;">📭</div>
+        <div style="font-size:14px;">Sin bultos en esta ruta</div>
+        <div style="font-size:12px;margin-top:8px;color:#333;">Escanea los códigos de barras para agregar bultos a la ruta</div>
+      </div>`;
+    return;
+  }
+
+  // Aplicar orden guardado (mismo sistema que pendientes)
+  const ordenKey = 'wms_ruta_orden_' + rutaId;
+  let orden;
+  try { orden = JSON.parse(localStorage.getItem(ordenKey) || '[]'); } catch { orden = []; }
+  const conocidos = orden.filter(d => manifiesto.some(g => g.destino === d));
+  const nuevos = manifiesto.map(g => g.destino).filter(d => !orden.includes(d));
+  const ordenFinal = [...conocidos, ...nuevos];
+  localStorage.setItem(ordenKey, JSON.stringify(ordenFinal));
+  _RUTA_MANIFIESTO_ACTUAL = ordenFinal.map(dest => manifiesto.find(g => g.destino === dest)).filter(Boolean);
+
+  muelleRenderRuta(_RUTA_MANIFIESTO_ACTUAL, rutaId);
+}
+
+function muelleRenderRuta(manifiesto, rutaId) {
+  const el = document.getElementById('lista-muelle');
+  if (!el) return;
+
+  el.innerHTML = manifiesto.map((grupo, gi) => `
+    <div id="ruta-grupo-${gi}" style="margin-bottom:20px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;font-size:13px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.06em;">
+          📍 ${grupo.destino}
+          <span style="color:#555;font-weight:400;font-size:11px;">(${grupo.bultos.length} pieza${grupo.bultos.length !== 1 ? 's' : ''})</span>
+        </div>
+        <div style="display:flex;gap:4px;">
+          ${gi > 0
+            ? `<button onclick="rutaMoverGrupo(${gi},-1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
+            : `<div style="width:28px;"></div>`}
+          ${gi < manifiesto.length - 1
+            ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
+            : `<div style="width:28px;"></div>`}
+        </div>
+        <div style="font-size:11px;color:#444;min-width:44px;text-align:right;">
+          Parada<br>#${gi + 1}
+        </div>
+      </div>
+      ${grupo.bultos.map((b, bi) => `
+        <div style="background:#111;border:1px solid #222;border-left:3px solid #4ade80;border-radius:10px;padding:12px;margin-bottom:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div>
+              <div style="font-size:14px;font-weight:700;font-family:monospace;">${b.codigo_barras}</div>
+              <div style="font-size:12px;color:#888;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
+              <div style="font-size:11px;color:#555;">${b.tipo} · pieza ${b.numero} de ${b.total}</div>
+            </div>
+            <span style="background:#14532d;color:#4ade80;font-size:10px;padding:3px 8px;border-radius:8px;font-weight:700;">✓</span>
+          </div>
+        </div>`).join('')}
+    </div>`).join('');
+}
+
+function rutaMoverGrupo(idx, dir, rutaId) {
+  const nuevoIdx = idx + dir;
+  if (nuevoIdx < 0 || nuevoIdx >= _RUTA_MANIFIESTO_ACTUAL.length) return;
+  [_RUTA_MANIFIESTO_ACTUAL[idx], _RUTA_MANIFIESTO_ACTUAL[nuevoIdx]] = [_RUTA_MANIFIESTO_ACTUAL[nuevoIdx], _RUTA_MANIFIESTO_ACTUAL[idx]];
+  const ordenKey = 'wms_ruta_orden_' + rutaId;
+  localStorage.setItem(ordenKey, JSON.stringify(_RUTA_MANIFIESTO_ACTUAL.map(g => g.destino)));
+  muelleRenderRuta(_RUTA_MANIFIESTO_ACTUAL, rutaId);
 }
 
 async function muelleCargarCaja() {
@@ -2247,10 +2350,15 @@ async function muelleCargarCaja() {
       feedback.style.color = '#4ade80';
       feedback.textContent = `✓ ${d.codigo_barras} · ${d.tipo} ${d.numero}/${d.total} · ${d.municipio || d.cliente || 'cargado'}${pedidoCompleto}`;
 
-      // Animar y eliminar la card
-      const card = document.getElementById('muelle-bulto-' + (d.id || ''));
-      if (card) { card.style.opacity = '0'; setTimeout(() => card.remove(), 300); }
-      else await cargarMuelle(); // fallback: recargar toda la lista
+      // Si hay ruta activa: recargar la vista de la ruta para mostrar el nuevo bulto
+      // Si no: animar y eliminar la card de pendientes
+      if (RUTA_ACTIVA_ID) {
+        await cargarMuelleRuta(RUTA_ACTIVA_ID);
+      } else {
+        const card = document.getElementById('muelle-bulto-' + (d.id || ''));
+        if (card) { card.style.opacity = '0'; setTimeout(() => card.remove(), 300); }
+        else await cargarMuellePendientes();
+      }
 
       input.value = '';
     } else {
