@@ -25,7 +25,8 @@ def listos():
         .filter(
             TareaPacking.siesa_triggered == True,
             TareaPacking.estado != 'CANCELADO',
-            Bulto.estado == 'PENDIENTE'
+            Bulto.estado == 'PENDIENTE',
+            Bulto.ruta_despacho_id == None
         )
         .order_by(TareaPacking.fecha_despachado.asc(), Bulto.numero.asc())
         .all()
@@ -50,16 +51,75 @@ def listos():
     }), 200
 
 
+@muelle_bp.route('/asignar', methods=['POST'])
+@jwt_required()
+def asignar_a_ruta():
+    """
+    Planificación: asigna bultos o un pedido completo a una ruta.
+    Payload: {"ruta_id": 1, "bultos_ids": [10, 11]} O {"ruta_id": 1, "pedido_siesa": "PD1126"}
+    """
+    from app.models.ruta_despacho import RutaDespacho
+    data = request.get_json()
+    ruta_id = data.get('ruta_id')
+    bultos_ids = data.get('bultos_ids', [])
+    pedido_siesa = data.get('pedido_siesa')
+
+    if not ruta_id:
+        return jsonify({'error': 'ruta_id es requerido'}), 400
+
+    ruta = RutaDespacho.query.get(ruta_id)
+    if not ruta:
+        return jsonify({'error': 'Ruta no encontrada'}), 404
+    if ruta.estado != 'EN_CARGUE':
+        return jsonify({'error': f'La ruta ya está {ruta.estado}'}), 400
+
+    query = Bulto.query.filter(Bulto.estado == 'PENDIENTE')
+    if pedido_siesa:
+        query = query.join(TareaPacking).filter(TareaPacking.numero_pedido_siesa == pedido_siesa)
+    elif bultos_ids:
+        query = query.filter(Bulto.id.in_(bultos_ids))
+    else:
+        return jsonify({'error': 'Debe enviar bultos_ids o pedido_siesa'}), 400
+
+    # Bloqueo para evitar doble asignación
+    bultos = query.with_for_update().all()
+
+    for b in bultos:
+        b.ruta_despacho_id = ruta_id
+
+    db.session.commit()
+    return jsonify({
+        'ok': True,
+        'mensaje': f'{len(bultos)} bultos asignados a la ruta {ruta_id}'
+    }), 200
+
+
+@muelle_bp.route('/desasignar/<int:id>', methods=['DELETE'])
+@jwt_required()
+def desasignar_de_ruta(id):
+    """Quita un bulto de la planificación de una ruta."""
+    bulto = Bulto.query.get_or_404(id)
+    if bulto.estado == 'CARGADO':
+        return jsonify({'error': 'No se puede desasignar un bulto que ya fue cargado físicamente'}), 400
+
+    bulto.ruta_despacho_id = None
+    db.session.commit()
+    return jsonify({'ok': True, 'mensaje': 'Bulto desasignado de la ruta'}), 200
+
+
 @muelle_bp.route('/cargar/<string:codigo_barras>', methods=['POST'])
 @jwt_required()
 def cargar_bulto(codigo_barras):
     """
-    Scan-to-Truck: escanea el bulto y lo vincula a la ruta activa.
-    Body opcional: {"ruta_id": 12}
+    Verificación de Cargue: el operario escanea el bulto físico.
+    Requiere ruta_id en el body para validar que el bulto pertenece a esa ruta.
     """
     from app.models.ruta_despacho import RutaDespacho
     data = request.get_json(silent=True) or {}
     ruta_id = data.get('ruta_id')
+
+    if not ruta_id:
+        return jsonify({'error': 'ruta_id es requerido para verificación'}), 400
 
     bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).first()
 
@@ -67,28 +127,39 @@ def cargar_bulto(codigo_barras):
         return jsonify({'error': f'Bulto {codigo_barras} no encontrado'}), 404
     if not bulto.tarea.siesa_triggered:
         return jsonify({'error': 'Este pedido aún no fue procesado por Siesa'}), 400
+    
+    # Validar que el bulto ya esté planificado para ESTA ruta
+    if bulto.ruta_despacho_id != int(ruta_id):
+        if bulto.ruta_despacho_id:
+            return jsonify({'error': f'Bulto planificado para ruta #{bulto.ruta_despacho_id}, no para #{ruta_id}'}), 400
+        else:
+            return jsonify({'error': f'Bulto no ha sido asignado a ninguna ruta. Asígnalo manualmente primero.'}), 400
+
     if bulto.estado == 'CARGADO':
         return jsonify({
-            'mensaje': 'Bulto ya fue cargado',
+            'mensaje': 'Bulto ya fue verificado y cargado',
             'codigo_barras': codigo_barras,
             'ya_cargado': True,
             'ruta_despacho_id': bulto.ruta_despacho_id
         }), 200
 
-    if ruta_id:
-        ruta = RutaDespacho.query.get(ruta_id)
-        if not ruta:
-            return jsonify({'error': 'Ruta no encontrada'}), 404
-        if ruta.estado != 'EN_CARGUE':
-            return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
-        bulto.ruta_despacho_id = ruta_id
+    ruta = RutaDespacho.query.get(ruta_id)
+    if not ruta:
+        return jsonify({'error': 'Ruta no encontrada'}), 404
+    if ruta.estado != 'EN_CARGUE':
+        return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
 
     bulto.estado = 'CARGADO'
     bulto.fecha_cargado = datetime.utcnow()
     db.session.commit()
 
     tarea = bulto.tarea
-    pendientes = Bulto.query.filter_by(tarea_id=tarea.id, estado='PENDIENTE').count()
+    # Pendientes de la misma tarea EN LA MISMA RUTA
+    pendientes_ruta = Bulto.query.filter_by(
+        tarea_id=tarea.id, 
+        ruta_despacho_id=ruta_id,
+        estado='PENDIENTE'
+    ).count()
 
     return jsonify({
         'ok': True,
@@ -101,8 +172,8 @@ def cargar_bulto(codigo_barras):
         'cliente': tarea.cliente or '',
         'municipio': tarea.municipio or '',
         'ruta_despacho_id': bulto.ruta_despacho_id,
-        'pedido_completo': pendientes == 0,
-        'bultos_pendientes_pedido': pendientes
+        'pedido_completo_en_ruta': pendientes_ruta == 0,
+        'bultos_pendientes_pedido_ruta': pendientes_ruta
     }), 200
 
 

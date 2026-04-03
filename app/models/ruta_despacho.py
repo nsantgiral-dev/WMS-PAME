@@ -49,10 +49,12 @@ class RutaDespacho(db.Model):
             for b in self.bultos:
                 destino = (b.tarea.municipio or b.tarea.cliente or 'Sin destino') if b.tarea else 'Sin destino'
                 grupos.setdefault(destino, []).append({
+                    'id':            b.id,
                     'codigo_barras': b.codigo_barras,
                     'tipo':          b.tipo,
                     'numero':        b.numero,
                     'total':         b.total,
+                    'estado':        b.estado, # PENDIENTE (planeado) | CARGADO
                     'numero_pedido': b.tarea.numero_pedido_siesa if b.tarea else '',
                     'cliente':       b.tarea.cliente or '' if b.tarea else '',
                 })
