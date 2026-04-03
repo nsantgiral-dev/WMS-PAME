@@ -23,6 +23,14 @@ class RutaDespacho(db.Model):
     def total_bultos(self):
         return len(self.bultos)
 
+    def total_planificados(self):
+        """Bultos asignados pero aún no confirmados físicamente."""
+        return sum(1 for b in self.bultos if b.estado == 'PENDIENTE')
+
+    def total_confirmados(self):
+        """Bultos confirmados con scan físico."""
+        return sum(1 for b in self.bultos if b.estado == 'CARGADO')
+
     def pedidos(self):
         """Lista de números de pedido únicos en esta ruta."""
         return list({b.tarea.numero_pedido_siesa for b in self.bultos if b.tarea})
@@ -30,19 +38,21 @@ class RutaDespacho(db.Model):
     def to_dict(self, include_bultos=False):
         c = self.conductor
         d = {
-            'id':               self.id,
-            'conductor_id':     self.conductor_id,
-            'conductor_nombre': c.nombre if c else '',
-            'conductor_cedula': c.cedula if c else '',
-            'conductor_placa':  c.placa  if c else '',
-            'tipo_ruta':        self.tipo_ruta,
-            'estado':           self.estado,
-            'notas':            self.notas or '',
-            'total_bultos':     self.total_bultos(),
-            'pedidos':          self.pedidos(),
-            'fecha_creacion':   self.fecha_creacion.isoformat(),
-            'fecha_cierre':     self.fecha_cierre.isoformat() if self.fecha_cierre else None,
-            'fecha_entregada':  self.fecha_entregada.isoformat() if self.fecha_entregada else None,
+            'id':                 self.id,
+            'conductor_id':       self.conductor_id,
+            'conductor_nombre':   c.nombre if c else '',
+            'conductor_cedula':   c.cedula if c else '',
+            'conductor_placa':    c.placa  if c else '',
+            'tipo_ruta':          self.tipo_ruta,
+            'estado':             self.estado,
+            'notas':              self.notas or '',
+            'total_bultos':       self.total_bultos(),
+            'total_planificados': self.total_planificados(),
+            'total_confirmados':  self.total_confirmados(),
+            'pedidos':            self.pedidos(),
+            'fecha_creacion':     self.fecha_creacion.isoformat(),
+            'fecha_cierre':       self.fecha_cierre.isoformat() if self.fecha_cierre else None,
+            'fecha_entregada':    self.fecha_entregada.isoformat() if self.fecha_entregada else None,
         }
         if include_bultos:
             grupos = {}

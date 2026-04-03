@@ -134,11 +134,20 @@ def obtener_ruta(id):
 @jwt_required()
 def cerrar_ruta(id):
     """EN_CARGUE → EN_TRANSITO. El camión sale."""
+    from app.models.bulto import Bulto
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'EN_CARGUE':
         return jsonify({'error': f'La ruta ya está en estado {ruta.estado}'}), 400
     if not ruta.bultos:
-        return jsonify({'error': 'No hay bultos cargados en esta ruta'}), 400
+        return jsonify({'error': 'No hay bultos asignados a esta ruta'}), 400
+
+    # Doble verificación: todos los bultos planificados deben estar confirmados
+    sin_confirmar = Bulto.query.filter_by(ruta_despacho_id=ruta.id, estado='PENDIENTE').count()
+    if sin_confirmar > 0:
+        return jsonify({
+            'error': f'Faltan {sin_confirmar} bulto{"s" if sin_confirmar != 1 else ""} por confirmar. '
+                     f'Escanéalos en el muelle antes de cerrar la ruta.'
+        }), 400
 
     ruta.estado = 'EN_TRANSITO'
     ruta.fecha_cierre = datetime.utcnow()

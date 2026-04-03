@@ -2183,26 +2183,29 @@ async function cargarRutaSelector() {
 
 function muelleSeleccionarRuta(idStr) {
   RUTA_ACTIVA_ID = idStr ? parseInt(idStr) : null;
+
   const info = document.getElementById('muelle-ruta-info');
-  if (info) {
-    if (!RUTA_ACTIVA_ID) {
-      info.style.color = '#555';
-      info.textContent = 'Los bultos se registrarán como CARGADOS sin asignar a ruta.';
-    } else {
-      const sel = document.getElementById('muelle-ruta-select');
-      const txt = sel?.options[sel.selectedIndex]?.textContent || '';
-      info.style.color = '#4ade80';
-      info.textContent = `Mostrando bultos de: ${txt}`;
-    }
+  const scanLabel = document.getElementById('muelle-scan-label');
+
+  if (!RUTA_ACTIVA_ID) {
+    if (info) { info.style.color = '#555'; info.textContent = 'Sin ruta — los bultos no se asignarán a ningún viaje.'; }
+    if (scanLabel) scanLabel.textContent = 'ESCANEAR CAJA AL CARGAR VEHÍCULO';
+  } else {
+    const sel = document.getElementById('muelle-ruta-select');
+    const txt = sel?.options[sel.selectedIndex]?.textContent || '';
+    if (info) { info.style.color = '#4ade80'; info.textContent = `Ruta activa: ${txt}`; }
+    if (scanLabel) scanLabel.textContent = 'ESCANEAR PARA CONFIRMAR CARGA FÍSICA';
   }
-  // Refrescar la lista inmediatamente al cambiar ruta
+
   clearTimeout(MUELLE_TIMER);
   cargarMuelle();
 }
 
+// ── Orquestador principal ─────────────────────────────
 async function cargarMuelle() {
   const el = document.getElementById('lista-muelle');
   if (!el) return;
+
   await cargarRutaSelector();
 
   const act = document.getElementById('muelle-ultima-act');
@@ -2210,119 +2213,246 @@ async function cargarMuelle() {
 
   try {
     if (RUTA_ACTIVA_ID) {
-      // 1. Cargar la ruta seleccionada (Manifiesto de planificación/carga)
-      await cargarMuelleRuta(RUTA_ACTIVA_ID);
-      // 2. Cargar lo que sobra en el muelle (Pendientes por asignar)
-      await cargarMuellePendientes(true); 
+      await cargarMuelleConRuta(RUTA_ACTIVA_ID);
     } else {
-      // Si no hay ruta, solo mostrar pendientes generales
-      await cargarMuellePendientes();
+      await cargarMuelleSinRuta();
     }
   } catch (e) {
-    console.error('[MUELLE] Error en cargarMuelle:', e);
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando muelle<br><span style="font-size:10px;color:#555;">' + e.message + '</span></div>';
+    console.error('[MUELLE] Error:', e);
+    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:40px;">
+      Error cargando muelle<br>
+      <span style="font-size:11px;color:#555;">${e.message || 'Error desconocido'}</span>
+    </div>`;
   }
 
   clearTimeout(MUELLE_TIMER);
-  if (TAB === 'tab-muelle') MUELLE_TIMER = setTimeout(cargarMuelle, 5000);
+  if (TAB === 'tab-muelle') MUELLE_TIMER = setTimeout(cargarMuelle, 8000);
 }
 
-async function cargarMuellePendientes(esSeccionExtra = false) {
-  const el = esSeccionExtra ? document.getElementById('muelle-seccion-pendientes') : document.getElementById('lista-muelle');
+// ── Sin ruta seleccionada: vista informativa ──────────
+async function cargarMuelleSinRuta() {
+  const el = document.getElementById('lista-muelle');
   const contador = document.getElementById('muelle-contador');
-  if (!el) return;
 
   const d = await get('/api/muelle/listos');
-  if (d.error) throw new Error(d.error);
-
+  const grupos = d.grupos || [];
   const total = d.total_bultos || 0;
 
-  if (!esSeccionExtra && contador) {
-    contador.textContent = total > 0 ? `${total} pieza${total !== 1 ? 's' : ''} pendiente${total !== 1 ? 's' : ''}` : 'Sin piezas pendientes';
-  }
+  if (contador) contador.textContent = total > 0 ? `${total} bulto${total !== 1 ? 's' : ''} sin asignar` : 'Sin pedidos pendientes';
 
-  if (!d.grupos?.length) {
-    el.innerHTML = esSeccionExtra ? '' : '<div style="color:#4ade80;text-align:center;padding:40px;font-size:32px;">✓<br><span style="font-size:14px;">Muelle despejado</span></div>';
+  if (!grupos.length) {
+    el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:40px;font-size:32px;">✓<br><span style="font-size:14px;">Sin bultos pendientes</span></div>';
     return;
   }
 
-  const grupos = muelleOrdenarGrupos(d.grupos);
-  
-  if (esSeccionExtra) {
-    el.innerHTML = `
-      <div style="margin-top:40px;border-top:1px solid #222;padding-top:20px;">
-        <div style="font-size:12px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:15px;display:flex;align-items:center;gap:8px;">
-          📦 Pendientes por asignar a ruta
-          <span style="background:#333;color:#fff;padding:2px 6px;border-radius:4px;font-size:10px;">${total}</span>
+  el.innerHTML = `
+    <div style="background:#1a1a1a;border-radius:10px;padding:12px;margin-bottom:16px;text-align:center;font-size:12px;color:#666;">
+      Selecciona una ruta arriba para empezar a planificar el cargue
+    </div>
+    ${grupos.map(g => `
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:700;color:#f59e0b;">📍 ${g.destino}
+          <span style="font-size:11px;color:#555;font-weight:400;"> · ${g.total} bulto${g.total !== 1 ? 's' : ''}</span>
         </div>
-        ${muelleHtmlGrupos(grupos, true)}
-      </div>`;
-  } else {
-    _MUELLE_GRUPOS_ACTUALES = grupos;
-    muelleRenderGrupos(grupos);
-  }
+        ${g.bultos.map(b => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #1a1a1a;margin-top:6px;">
+            <div>
+              <span style="font-family:monospace;font-size:12px;color:#ccc;">${b.codigo_barras}</span>
+              <span style="font-size:10px;color:#555;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
+            </div>
+            <span style="font-size:10px;color:#555;">${b.numero_pedido}</span>
+          </div>`).join('')}
+      </div>`).join('')}`;
 }
 
-function muelleHtmlGrupos(grupos, paraAsignar = false) {
-  return grupos.map((g, gi) => `
-    <div id="muelle-grupo-${gi}" style="margin-bottom:20px;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <div style="flex:1;font-size:13px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.06em;">
-          📍 ${g.destino}
-          <span style="color:#555;font-weight:400;font-size:11px;">(${g.total} pieza${g.total !== 1 ? 's' : ''})</span>
+// ── Con ruta seleccionada: planificación + confirmación ─
+async function cargarMuelleConRuta(rutaId) {
+  const el = document.getElementById('lista-muelle');
+  const contador = document.getElementById('muelle-contador');
+
+  // Fetch paralelo: detalle de la ruta + pendientes sin asignar
+  const [dRuta, dPendientes] = await Promise.all([
+    get('/api/rutas/' + rutaId),
+    get('/api/muelle/listos')
+  ]);
+
+  if (!dRuta.ruta) throw new Error('Ruta #' + rutaId + ' no encontrada');
+
+  const ruta = dRuta.ruta;
+  const manifiesto = ruta.manifiesto || [];           // bultos en la ruta (PENDIENTE + CARGADO)
+  const gruposPendientes = dPendientes.grupos || [];  // bultos sin asignar a ninguna ruta
+
+  // Contar confirmados vs planificados
+  let totalPlan = 0, totalConf = 0;
+  manifiesto.forEach(g => g.bultos.forEach(b => {
+    if (b.estado === 'CARGADO') totalConf++; else totalPlan++;
+  }));
+  const totalEnRuta = totalPlan + totalConf;
+
+  if (contador) {
+    if (totalEnRuta === 0) {
+      contador.textContent = `Ruta #${rutaId} · Sin bultos`;
+    } else {
+      contador.textContent = `Ruta #${rutaId} · ${totalConf}/${totalEnRuta} confirmados · ${totalPlan} pendientes`;
+    }
+  }
+
+  // Aplicar orden guardado a las paradas de la ruta
+  const ordenKey = 'wms_ruta_orden_' + rutaId;
+  let orden;
+  try { orden = JSON.parse(localStorage.getItem(ordenKey) || '[]'); } catch { orden = []; }
+  const conocidos = orden.filter(dest => manifiesto.some(g => g.destino === dest));
+  const nuevos = manifiesto.map(g => g.destino).filter(dest => !orden.includes(dest));
+  const ordenFinal = [...conocidos, ...nuevos];
+  localStorage.setItem(ordenKey, JSON.stringify(ordenFinal));
+  _RUTA_MANIFIESTO_ACTUAL = ordenFinal
+    .map(dest => manifiesto.find(g => g.destino === dest))
+    .filter(Boolean);
+
+  // Construir HTML completo en un solo paso
+  let html = '';
+
+  // — Sección 1: bultos ya en la ruta —
+  if (_RUTA_MANIFIESTO_ACTUAL.length) {
+    html += `<div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">
+      En esta ruta · ${totalConf} confirmado${totalConf !== 1 ? 's' : ''} · ${totalPlan} por confirmar
+    </div>`;
+    html += _RUTA_MANIFIESTO_ACTUAL.map((grupo, gi) =>
+      _htmlGrupoRuta(grupo, gi, _RUTA_MANIFIESTO_ACTUAL.length, rutaId)
+    ).join('');
+  } else {
+    html += `
+      <div style="text-align:center;padding:20px;background:#111;border-radius:12px;border:1px dashed #333;margin-bottom:16px;">
+        <div style="font-size:28px;margin-bottom:6px;">🚛</div>
+        <div style="font-size:13px;font-weight:700;color:#eee;">Ruta vacía</div>
+        <div style="font-size:11px;color:#555;margin-top:4px;">Asigna pedidos desde la lista de abajo</div>
+      </div>`;
+  }
+
+  // — Sección 2: pendientes sin asignar —
+  if (gruposPendientes.length) {
+    html += `
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <span style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;">📦 Pendientes por asignar</span>
+          <span style="background:#333;color:#aaa;font-size:11px;padding:2px 10px;border-radius:10px;">${dPendientes.total_bultos}</span>
         </div>
-        ${!paraAsignar ? `
+        ${gruposPendientes.map(g => _htmlGrupoPendiente(g, rutaId)).join('')}
+      </div>`;
+  } else if (_RUTA_MANIFIESTO_ACTUAL.length > 0) {
+    html += `
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;text-align:center;font-size:12px;color:#555;">
+        ✓ Todos los bultos del muelle están en esta ruta
+      </div>`;
+  }
+
+  el.innerHTML = html;
+}
+
+// ── Helpers de renderizado ────────────────────────────
+
+function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
+  const confirmados = grupo.bultos.filter(b => b.estado === 'CARGADO').length;
+  const totalGrupo = grupo.bultos.length;
+  const todoConfirmado = confirmados === totalGrupo;
+
+  return `
+    <div id="ruta-grupo-${gi}" style="margin-bottom:16px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+        <div style="flex:1;">
+          <span style="font-size:13px;font-weight:700;color:${todoConfirmado ? '#4ade80' : '#eee'};text-transform:uppercase;">
+            📍 ${grupo.destino}
+          </span>
+          <span style="font-size:11px;color:#555;"> · ${confirmados}/${totalGrupo} conf.</span>
+        </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
-            ? `<button onclick="muelleMoverGrupo(${gi},-1)" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
+            ? `<button onclick="rutaMoverGrupo(${gi},-1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
             : `<div style="width:28px;"></div>`}
-          ${gi < grupos.length - 1
-            ? `<button onclick="muelleMoverGrupo(${gi},1)" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
+          ${gi < totalGrupos - 1
+            ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
             : `<div style="width:28px;"></div>`}
-        </div>` : ''}
+        </div>
+        <div style="font-size:10px;color:#444;text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
       </div>
-      ${g.bultos.map((b, bi) => `
-        <div id="muelle-bulto-${b.id}" class="tabla-card" style="border-left:3px solid #f59e0b;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div style="flex:1;">
-              <div style="font-size:14px;font-weight:700;font-family:monospace;">${b.codigo_barras}</div>
-              <div style="font-size:12px;color:#888;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
-              <div style="font-size:11px;color:#555;">${b.tipo} · pieza ${b.numero} de ${b.total}</div>
-            </div>
-            ${paraAsignar ? `
-              <button onclick="muelleAsignar(${b.id})" style="background:#f59e0b;color:#000;border:none;padding:8px 12px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">+ Asignar</button>
-            ` : `
-              <div style="text-align:right;">
-                <div style="font-size:20px;color:#555;font-weight:800;">${bi + 1}</div>
-                <div style="font-size:9px;color:#333;">LIFO</div>
+      ${grupo.bultos.map(b => {
+        const conf = b.estado === 'CARGADO';
+        return `
+          <div style="background:#111;border:1px solid ${conf ? '#14532d' : '#333'};border-left:4px solid ${conf ? '#4ade80' : '#f59e0b'};border-radius:10px;padding:10px 12px;margin-bottom:6px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div style="flex:1;">
+                <div style="font-size:13px;font-weight:700;font-family:monospace;color:${conf ? '#fff' : '#f59e0b'};">${b.codigo_barras}</div>
+                <div style="font-size:11px;color:#888;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
+                <div style="font-size:10px;color:#555;">${b.tipo} · pieza ${b.numero}/${b.total}</div>
               </div>
-            `}
-          </div>
-        </div>`).join('')}
-      ${paraAsignar && g.bultos.length > 1 ? `
-        <button onclick="muelleAsignar(null, '${g.bultos[0].numero_pedido}')" style="width:100%;background:#222;color:#f59e0b;border:1px dashed #f59e0b;padding:8px;border-radius:8px;font-size:11px;font-weight:700;margin-top:5px;cursor:pointer;">
-          + Asignar pedido completo (${g.bultos[0].numero_pedido})
+              <div style="display:flex;align-items:center;gap:8px;">
+                ${!conf ? `<button onclick="muelleDesasignar(${b.id})" title="Quitar de la ruta" style="background:none;border:none;color:#444;font-size:18px;cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
+                <span style="background:${conf ? '#14532d' : '#451a03'};color:${conf ? '#4ade80' : '#f59e0b'};font-size:10px;padding:3px 10px;border-radius:20px;font-weight:700;white-space:nowrap;">
+                  ${conf ? '✓ Cargado' : '⏳ Pendiente'}
+                </span>
+              </div>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function _htmlGrupoPendiente(grupo, rutaId) {
+  const numeroPedido = grupo.bultos[0]?.numero_pedido || '';
+  return `
+    <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#f59e0b;">📍 ${grupo.destino}</div>
+          <div style="font-size:11px;color:#555;margin-top:2px;">${grupo.total} bulto${grupo.total !== 1 ? 's' : ''}</div>
+        </div>
+        <button onclick="muelleAsignar(null,'${numeroPedido}')"
+          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          + Todo el pedido
         </button>
-      ` : ''}
-    </div>`).join('');
+      </div>
+      ${grupo.bultos.map(b => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #1a1a1a;">
+          <div>
+            <span style="font-family:monospace;font-size:12px;color:#ccc;">${b.codigo_barras}</span>
+            <span style="font-size:10px;color:#555;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
+          </div>
+          <button onclick="muelleAsignar(${b.id},null)"
+            style="background:#1a1a1a;color:#aaa;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
+            + Solo esta
+          </button>
+        </div>`).join('')}
+    </div>`;
 }
 
-function muelleRenderGrupos(grupos) {
-  const el = document.getElementById('lista-muelle');
-  if (el) el.innerHTML = muelleHtmlGrupos(grupos, false);
+// ── Reordenar paradas ─────────────────────────────────
+function rutaMoverGrupo(idx, dir, rutaId) {
+  const nuevoIdx = idx + dir;
+  if (nuevoIdx < 0 || nuevoIdx >= _RUTA_MANIFIESTO_ACTUAL.length) return;
+  [_RUTA_MANIFIESTO_ACTUAL[idx], _RUTA_MANIFIESTO_ACTUAL[nuevoIdx]] =
+    [_RUTA_MANIFIESTO_ACTUAL[nuevoIdx], _RUTA_MANIFIESTO_ACTUAL[idx]];
+  localStorage.setItem('wms_ruta_orden_' + rutaId,
+    JSON.stringify(_RUTA_MANIFIESTO_ACTUAL.map(g => g.destino)));
+  // Re-render solo la sección de la ruta sin tocar los pendientes
+  cargarMuelleConRuta(rutaId);
 }
 
+// ── Asignar / desasignar ──────────────────────────────
 async function muelleAsignar(bultoId, pedidoSiesa) {
-  if (!RUTA_ACTIVA_ID) { alerta('Selecciona una ruta primero', 'advertencia'); return; }
+  if (!RUTA_ACTIVA_ID) {
+    alerta('Selecciona una ruta primero', 'advertencia');
+    return;
+  }
   try {
     const payload = { ruta_id: RUTA_ACTIVA_ID };
-    if (bultoId) payload.bultos_ids = [bultoId];
+    if (bultoId)     payload.bultos_ids  = [bultoId];
     if (pedidoSiesa) payload.pedido_siesa = pedidoSiesa;
 
     const r = await post('/api/muelle/asignar', payload);
     if (r.ok) {
       alerta(r.mensaje, 'exito');
-      cargarMuelle(); // Refrescar todo
+      await cargarMuelleConRuta(RUTA_ACTIVA_ID);
+      await cargarRutaSelector(); // actualizar contador de bultos en dropdown
     } else {
       alerta(r.error || 'Error al asignar', 'error');
     }
@@ -2336,114 +2466,26 @@ async function muelleDesasignar(bultoId) {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + TOKEN }
     });
+    const d = await r.json();
     if (r.ok) {
-      alerta('Bulto quitado de la ruta', 'exito');
-      cargarMuelle();
+      await cargarMuelleConRuta(RUTA_ACTIVA_ID);
+      await cargarRutaSelector();
+    } else {
+      alerta(d.error || 'Error al desasignar', 'error');
     }
-  } catch (e) {}
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-async function cargarMuelleRuta(rutaId) {
-  const el = document.getElementById('lista-muelle');
-  const contador = document.getElementById('muelle-contador');
-
-  const d = await get('/api/rutas/' + rutaId);
-  if (d.error) throw new Error(d.error);
-  if (!d.ruta) throw new Error('No se recibió información de la ruta');
-
-  const ruta = d.ruta;
-  const manifiesto = ruta.manifiesto || [];
-
-  if (contador) {
-    const cargados = manifiesto.reduce((acc, g) => acc + (g.bultos || []).filter(b => b.estado === 'CARGADO').length, 0);
-    const total = ruta.total_bultos || 0;
-    contador.textContent = `Ruta #${rutaId} · ${cargados}/${total} cargados`;
-  }
-
-  // Si no hay bultos, preparar el contenedor para que cargarMuellePendientes() pueda renderizar después
-  if (!manifiesto.length) {
-    _RUTA_MANIFIESTO_ACTUAL = [];
-    el.innerHTML = `
-      <div style="color:#555;text-align:center;padding:20px;background:#111;border-radius:12px;border:1px dashed #333;">
-        <div style="font-size:24px;margin-bottom:8px;">🚛</div>
-        <div style="font-size:13px;font-weight:700;color:#eee;">Ruta vacía</div>
-        <div style="font-size:11px;color:#888;">Asigna pedidos de la lista de abajo para planificar el cargue.</div>
-      </div>
-      <div id="muelle-seccion-pendientes"></div>`;
-    return;
-  }
-
-  // Aplicar orden guardado
-  const ordenKey = 'wms_ruta_orden_' + rutaId;
-  let orden;
-  try { orden = JSON.parse(localStorage.getItem(ordenKey) || '[]'); } catch { orden = []; }
-  const conocidos = orden.filter(dest => manifiesto.some(g => g.destino === dest));
-  const nuevos = manifiesto.map(g => g.destino).filter(dest => !orden.includes(dest));
-  const ordenFinal = [...conocidos, ...nuevos];
-  localStorage.setItem(ordenKey, JSON.stringify(ordenFinal));
-  _RUTA_MANIFIESTO_ACTUAL = ordenFinal.map(dest => manifiesto.find(g => g.destino === dest)).filter(Boolean);
-
-  muelleRenderRuta(_RUTA_MANIFIESTO_ACTUAL, rutaId);
-  
-  // Agregar el contenedor para los pendientes debajo del manifiesto
-  const divPend = document.createElement('div');
-  divPend.id = 'muelle-seccion-pendientes';
-  el.appendChild(divPend);
-}
-
-function muelleRenderRuta(manifiesto, rutaId) {
-  const el = document.getElementById('lista-muelle');
-  if (!el) return;
-
-  el.innerHTML = manifiesto.map((grupo, gi) => `
-    <div id="ruta-grupo-${gi}" style="margin-bottom:20px;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <div style="flex:1;font-size:13px;font-weight:700;color:#eee;text-transform:uppercase;letter-spacing:.06em;">
-          📍 ${grupo.destino}
-          <span style="color:#555;font-weight:400;font-size:11px;">(${grupo.bultos.length} pieza${grupo.bultos.length !== 1 ? 's' : ''})</span>
-        </div>
-        <div style="display:flex;gap:4px;">
-          ${gi > 0
-            ? `<button onclick="rutaMoverGrupo(${gi},-1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↑</button>`
-            : `<div style="width:28px;"></div>`}
-          ${gi < manifiesto.length - 1
-            ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
-            : `<div style="width:28px;"></div>`}
-        </div>
-      </div>
-      ${grupo.bultos.map((b, bi) => {
-        const estaCargado = b.estado === 'CARGADO';
-        const colorBorder = estaCargado ? '#4ade80' : '#f59e0b';
-        const colorBg     = estaCargado ? '#064e3b' : '#451a03';
-        return `
-        <div style="background:#111;border:1px solid #222;border-left:4px solid ${colorBorder};border-radius:10px;padding:10px 12px;margin-bottom:6px;position:relative;">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div style="flex:1;">
-              <div style="font-size:14px;font-weight:700;font-family:monospace;color:${estaCargado ? '#fff' : '#f59e0b'};">${b.codigo_barras}</div>
-              <div style="font-size:12px;color:#888;">${b.numero_pedido} · ${b.cliente || ''}</div>
-              <div style="font-size:11px;color:#555;">${b.tipo} · pieza ${b.numero}/${b.total}</div>
-            </div>
-            <div style="display:flex;align-items:center;gap:10px;">
-              ${!estaCargado ? `<button onclick="muelleDesasignar(${b.id})" style="background:none;border:none;color:#555;font-size:16px;cursor:pointer;padding:5px;">×</button>` : ''}
-              <span style="background:${colorBg};color:${colorBorder};font-size:10px;padding:4px 10px;border-radius:20px;font-weight:900;text-transform:uppercase;letter-spacing:0.05em;border:1px solid ${colorBorder}44;">
-                ${estaCargado ? '✓ Cargado' : '⏳ Pendiente'}
-              </span>
-            </div>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>`).join('');
-}
-
+// ── Confirmación de carga física (scan) ───────────────
 async function muelleCargarCaja() {
-  const input = document.getElementById('muelle-scan-input');
+  const input    = document.getElementById('muelle-scan-input');
   const feedback = document.getElementById('muelle-scan-feedback');
-  const codigo = (input?.value || '').trim().toUpperCase();
+  const codigo   = (input?.value || '').trim().toUpperCase();
   if (!codigo) return;
 
   if (!RUTA_ACTIVA_ID) {
-    feedback.style.color = '#ef4444';
-    feedback.textContent = 'Selecciona una ruta antes de escanear para verificar cargue.';
+    feedback.style.color = '#f59e0b';
+    feedback.textContent = '⚠ Selecciona una ruta antes de escanear';
     return;
   }
 
@@ -2459,14 +2501,18 @@ async function muelleCargarCaja() {
     const d = await r.json();
 
     if (r.ok) {
-      feedback.style.color = '#4ade80';
-      feedback.textContent = `✓ CARGADO: ${d.codigo_barras} · ${d.municipio || d.cliente}`;
-      
-      // Feedback auditivo/háptico si es posible
-      if (navigator.vibrate) navigator.vibrate(50);
-      
-      await cargarMuelleRuta(RUTA_ACTIVA_ID);
+      if (d.ya_cargado) {
+        feedback.style.color = '#60a5fa';
+        feedback.textContent = `ℹ Ya estaba cargado: ${d.codigo_barras}`;
+      } else {
+        feedback.style.color = '#4ade80';
+        const rutaLista = d.ruta_lista ? ' · ✓ Ruta lista para salir' : ` · ${d.bultos_pendientes_pedido} bulto${d.bultos_pendientes_pedido !== 1 ? 's' : ''} pendientes en pedido`;
+        feedback.textContent = `✓ ${d.codigo_barras} · ${d.tipo} ${d.numero}/${d.total}${rutaLista}`;
+        if (navigator.vibrate) navigator.vibrate(50);
+      }
       input.value = '';
+      await cargarMuelleConRuta(RUTA_ACTIVA_ID);
+      await cargarRutaSelector();
     } else {
       feedback.style.color = '#ef4444';
       feedback.textContent = d.error || 'Error de verificación';
@@ -2552,7 +2598,11 @@ function rutaCard(r) {
         <div style="text-align:right;">
           ${estadoBadge}
           <div style="font-size:20px;font-weight:800;margin-top:6px;">${r.total_bultos}</div>
-          <div style="font-size:10px;color:#555;">bultos</div>
+          <div style="font-size:10px;color:#555;">
+            ${r.total_confirmados > 0 || r.total_planificados > 0
+              ? `${r.total_confirmados} conf · ${r.total_planificados} plan`
+              : 'bultos'}
+          </div>
         </div>
       </div>
       ${r.pedidos?.length ? `<div style="font-size:11px;color:#555;margin-bottom:10px;">Pedidos: ${r.pedidos.join(', ')}</div>` : ''}
