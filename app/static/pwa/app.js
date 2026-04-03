@@ -2219,7 +2219,8 @@ async function cargarMuelle() {
       await cargarMuellePendientes();
     }
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando muelle</div>';
+    console.error('[MUELLE] Error en cargarMuelle:', e);
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando muelle<br><span style="font-size:10px;color:#555;">' + e.message + '</span></div>';
   }
 
   clearTimeout(MUELLE_TIMER);
@@ -2232,6 +2233,8 @@ async function cargarMuellePendientes(esSeccionExtra = false) {
   if (!el) return;
 
   const d = await get('/api/muelle/listos');
+  if (d.error) throw new Error(d.error);
+
   const total = d.total_bultos || 0;
 
   if (!esSeccionExtra && contador) {
@@ -2345,12 +2348,15 @@ async function cargarMuelleRuta(rutaId) {
   const contador = document.getElementById('muelle-contador');
 
   const d = await get('/api/rutas/' + rutaId);
+  if (d.error) throw new Error(d.error);
+  if (!d.ruta) throw new Error('No se recibió información de la ruta');
+
   const ruta = d.ruta;
   const manifiesto = ruta.manifiesto || [];
 
   if (contador) {
-    const cargados = manifiesto.reduce((acc, g) => acc + g.bultos.filter(b => b.estado === 'CARGADO').length, 0);
-    const total = ruta.total_bultos;
+    const cargados = manifiesto.reduce((acc, g) => acc + (g.bultos || []).filter(b => b.estado === 'CARGADO').length, 0);
+    const total = ruta.total_bultos || 0;
     contador.textContent = `Ruta #${rutaId} · ${cargados}/${total} cargados`;
   }
 
