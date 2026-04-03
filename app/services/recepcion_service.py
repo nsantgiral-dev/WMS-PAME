@@ -267,7 +267,7 @@ class RecepcionService:
                 reg = UbicacionProducto.query.filter_by(
                     ubicacion_id=destino_ubicacion_id,
                     producto_id=item.producto_id
-                ).first()
+                ).with_for_update().first()
 
                 if not reg:
                     reg = UbicacionProducto(

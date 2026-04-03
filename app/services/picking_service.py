@@ -112,11 +112,18 @@ class PickingService:
                 tipo_documento=tipo_documento
             )
 
-            # Reservar el stock
+            # Reservar el stock — lock a nivel de fila para evitar doble reserva concurrente
             reg = UbicacionProducto.query.filter_by(
                 ubicacion_id=asig['ubicacion_id'],
                 producto_id=producto_id
-            ).first()
+            ).with_for_update().first()
+
+            if not reg or reg.cantidad_disponible() < asig['cantidad']:
+                db.session.rollback()
+                raise ValueError(
+                    f'Stock insuficiente al reservar en ubicación {asig["ubicacion_codigo"]}. '
+                    f'Otro proceso puede haber tomado el stock — reintente.'
+                )
             reg.reservado += asig['cantidad']
 
             db.session.add(tarea)
@@ -147,7 +154,7 @@ class PickingService:
         reg = UbicacionProducto.query.filter_by(
             ubicacion_id=tarea.ubicacion_id,
             producto_id=tarea.producto_id
-        ).first()
+        ).with_for_update().first()
 
         if not reg or reg.cantidad < cantidad_recogida:
             raise ValueError('Stock insuficiente en ubicación')
@@ -215,7 +222,7 @@ class PickingService:
         reg = UbicacionProducto.query.filter_by(
             ubicacion_id=tarea.ubicacion_id,
             producto_id=tarea.producto_id
-        ).first()
+        ).with_for_update().first()
         if reg:
             reg.reservado = max(0, reg.reservado - tarea.cantidad_solicitada)
 
