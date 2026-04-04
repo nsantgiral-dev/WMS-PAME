@@ -1390,16 +1390,21 @@ async function cargarDevoluciones() {
   if (!el) return;
 
   try {
-    const d = await get('/api/devoluciones/?almacen_id=' + ALMACEN_ID);
-    const tareas = d.tareas || [];
+    const [devResp, rechResp] = await Promise.all([
+      get('/api/devoluciones/?almacen_id=' + ALMACEN_ID).catch(() => ({ tareas: [] })),
+      get('/api/rutas/bultos-rechazados').catch(() => ({ bultos: [] }))
+    ]);
+    const tareas   = devResp.tareas  || [];
+    const rechazados = rechResp.bultos || [];
+    const total    = tareas.length + rechazados.length;
 
     // Badge en el tab
     if (badge) {
-      badge.style.display = tareas.length ? 'inline' : 'none';
-      badge.textContent = tareas.length;
+      badge.style.display = total ? 'inline' : 'none';
+      badge.textContent = total;
     }
 
-    if (!tareas.length) {
+    if (!total) {
       el.innerHTML = `<div style="text-align:center;padding:50px 20px;">
         <div style="font-size:48px;color:#4ade80;">✓</div>
         <div style="font-size:20px;font-weight:700;margin-top:12px;">Sin devoluciones pendientes</div>
@@ -1408,11 +1413,30 @@ async function cargarDevoluciones() {
       return;
     }
 
-    el.innerHTML = `
-      <div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 8px;border-bottom:1px solid #222;margin-bottom:10px;">
-        ${tareas.length} DEVOLUCIÓN(ES) PARA UBICAR
-      </div>
-      ${tareas.map(t => `
+    let html = '';
+
+    // Sección 1: bultos rechazados en entrega
+    if (rechazados.length) {
+      html += `<div style="font-size:12px;font-weight:600;color:#f87171;padding:4px 0 8px;border-bottom:1px solid #2a1010;margin-bottom:10px;">
+        🔴 ${rechazados.length} BULTO${rechazados.length !== 1 ? 'S' : ''} RECHAZADO${rechazados.length !== 1 ? 'S' : ''} — RE-INGRESAR A BODEGA
+      </div>`;
+      html += rechazados.map(b => `
+        <div class="rec-card" style="border-color:#7f1d1d;background:#1a0d0d;">
+          <div class="rec-titulo" style="font-size:16px;color:#f87171;">${b.codigo_barras}</div>
+          <div class="rec-sub">${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente || '—'}</div>
+          <div style="margin-top:6px;font-size:12px;color:#f87171;">Motivo: ${b.motivo_rechazo || 'Sin especificar'}</div>
+          <div style="margin-top:10px;padding:10px;background:#2a1010;border-radius:8px;font-size:12px;color:#f87171;">
+            📦 Ubicar físicamente en bodega
+          </div>
+        </div>`).join('');
+    }
+
+    // Sección 2: devoluciones por reconciliación Siesa
+    if (tareas.length) {
+      html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 8px;border-bottom:1px solid #222;margin-bottom:10px;margin-top:${rechazados.length ? 16 : 0}px;">
+        ${tareas.length} DEVOLUCIÓN(ES) POR RECONCILIACIÓN
+      </div>`;
+      html += tareas.map(t => `
         <div class="rec-card" onclick="abrirDevolucion(${t.id})" style="cursor:pointer;">
           <div class="rec-titulo" style="font-size:18px;">${t.producto_nombre}</div>
           <div class="rec-sub">${t.producto_codigo}</div>
@@ -1423,7 +1447,10 @@ async function cargarDevoluciones() {
           <div style="margin-top:10px;padding:10px;background:#1a1500;border-radius:8px;font-size:12px;color:#facc15;">
             ⚠ Tocar para ubicar en bodega
           </div>
-        </div>`).join('')}`;
+        </div>`).join('');
+    }
+
+    el.innerHTML = html;
   } catch (e) {
     if (badge) badge.style.display = 'none';
     el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando devoluciones</div>';
@@ -2784,16 +2811,116 @@ async function rutaCerrar(id) {
   } catch (e) { alert('Error de conexión'); }
 }
 
+// ── Entrega por bulto ────────────────────────────────────────
+
+let _ENTREGA_RUTA_ID = null;
+let _ENTREGA_BULTOS  = [];   // [{ id, codigo_barras, tipo, numero, total, cliente, numero_pedido, entregado, motivo_rechazo }]
+
+const MOTIVOS_RECHAZO = ['Cliente rechazó', 'Dirección incorrecta', 'Mercancía averiada', 'No había nadie', 'Pedido duplicado'];
+
 async function rutaEntregar(id) {
-  if (!confirm(`¿Confirmar entrega de la Ruta #${id}?`)) return;
   try {
-    const r = await fetch(API + '/api/rutas/' + id + '/entregar', { method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN } });
+    const d = await get('/api/rutas/' + id);
+    const ruta = d.ruta;
+    const bultos = (ruta.manifiesto || []).flatMap(g => g.bultos || []);
+
+    if (!bultos.length) {
+      // Sin bultos asignados — cierre directo (ruta sin bultos escaneados)
+      if (!confirm(`¿Confirmar entrega de Ruta #${id}?\nNo tiene bultos registrados.`)) return;
+      _enviarConfirmacionEntrega(id, []);
+      return;
+    }
+
+    _ENTREGA_RUTA_ID = id;
+    _ENTREGA_BULTOS  = bultos.map(b => ({ ...b, entregado: true, motivo_rechazo: MOTIVOS_RECHAZO[0] }));
+
+    const modal = document.getElementById('modal-entrega');
+    document.getElementById('modal-entrega-sub').textContent =
+      `Ruta #${id} · ${ruta.conductor_nombre} · ${bultos.length} bulto${bultos.length !== 1 ? 's' : ''}`;
+    _renderEntregaLista();
+    modal.style.display = 'flex';
+  } catch (e) { alerta('Error cargando bultos de la ruta', 'error'); }
+}
+
+function _renderEntregaLista() {
+  const el = document.getElementById('modal-entrega-lista');
+  const rechazados = _ENTREGA_BULTOS.filter(b => !b.entregado).length;
+  document.getElementById('modal-entrega-resumen').innerHTML =
+    rechazados > 0
+      ? `<span style="color:#ef4444;font-weight:700;">${rechazados} bulto${rechazados !== 1 ? 's' : ''} marcado${rechazados !== 1 ? 's' : ''} como rechazado${rechazados !== 1 ? 's' : ''}</span> — aparecerán en Devoluciones`
+      : `<span style="color:#4ade80;">Todos los bultos entregados</span>`;
+
+  el.innerHTML = _ENTREGA_BULTOS.map((b, i) => `
+    <div style="background:${b.entregado ? '#0d1a0d' : '#1a0d0d'};border:1px solid ${b.entregado ? '#166534' : '#7f1d1d'};border-radius:10px;padding:12px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#fff;">${b.codigo_barras}</div>
+          <div style="font-size:11px;color:#666;margin-top:2px;">${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente || '—'}</div>
+          ${!b.entregado ? `<select onchange="_setMotivo(${i}, this.value)"
+            style="margin-top:8px;width:100%;padding:6px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:6px;font-size:12px;">
+            ${MOTIVOS_RECHAZO.map(m => `<option value="${m}" ${b.motivo_rechazo===m?'selected':''}>${m}</option>`).join('')}
+          </select>` : ''}
+        </div>
+        <button onclick="_toggleEntrega(${i})"
+          style="flex-shrink:0;padding:8px 14px;background:${b.entregado ? '#166534' : '#7f1d1d'};color:${b.entregado ? '#4ade80' : '#f87171'};border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          ${b.entregado ? '✓ Entregado' : '✗ Rechazado'}
+        </button>
+      </div>
+    </div>`).join('');
+}
+
+function _toggleEntrega(i) {
+  _ENTREGA_BULTOS[i].entregado = !_ENTREGA_BULTOS[i].entregado;
+  _renderEntregaLista();
+}
+
+function _setMotivo(i, motivo) {
+  _ENTREGA_BULTOS[i].motivo_rechazo = motivo;
+}
+
+function cerrarModalEntrega() {
+  document.getElementById('modal-entrega').style.display = 'none';
+  _ENTREGA_RUTA_ID = null;
+  _ENTREGA_BULTOS  = [];
+}
+
+async function confirmarEntregaFinal() {
+  if (!_ENTREGA_RUTA_ID) return;
+  const btn = document.getElementById('btn-confirmar-entrega');
+  btn.disabled = true;
+  btn.textContent = 'Guardando...';
+
+  const payload = _ENTREGA_BULTOS.map(b => ({
+    id:             b.id,
+    entregado:      b.entregado,
+    motivo_rechazo: b.entregado ? null : b.motivo_rechazo
+  }));
+
+  await _enviarConfirmacionEntrega(_ENTREGA_RUTA_ID, payload);
+  cerrarModalEntrega();
+}
+
+async function _enviarConfirmacionEntrega(id, payload) {
+  try {
+    const r = await fetch(API + '/api/rutas/' + id + '/entregar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ bultos: payload })
+    });
     const d = await r.json();
     if (r.ok) {
+      const rechazados = d.rechazados || 0;
+      if (rechazados > 0) {
+        alerta(`Ruta entregada · ${rechazados} bulto${rechazados !== 1 ? 's' : ''} rechazado${rechazados !== 1 ? 's' : ''} → Devoluciones`, 'advertencia');
+      } else {
+        alerta('Ruta marcada como entregada', 'exito');
+      }
       const card = document.getElementById('ruta-card-' + id);
       if (card) card.outerHTML = rutaCard(d.ruta);
-    } else { alert(d.error || 'Error al entregar ruta'); }
-  } catch (e) { alert('Error de conexión'); }
+    } else {
+      alerta(d.error || 'Error al confirmar entrega', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function rutaVerManifiesto(id) {

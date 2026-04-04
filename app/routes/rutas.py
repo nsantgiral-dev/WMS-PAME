@@ -399,11 +399,63 @@ def cerrar_ruta(id):
 @rutas_bp.route('/<int:id>/entregar', methods=['POST'])
 @jwt_required()
 def entregar_ruta(id):
-    """EN_TRANSITO → ENTREGADA."""
+    """
+    Confirmación de entrega bulto a bulto.
+
+    Payload: { bultos: [ { id, entregado: true/false, motivo_rechazo: '' } ] }
+
+    - Bultos entregados: estado → ENTREGADO
+    - Bultos rechazados: estado → RECHAZADO + motivo_rechazo guardado
+    - Si no se manda payload (flujo legacy sin bultos): cierra directo.
+    - Ruta → ENTREGADA al final.
+    """
+    from app.models.bulto import Bulto
+
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'EN_TRANSITO':
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
+
+    data = request.get_json() or {}
+    ahora = datetime.utcnow()
+    rechazados = 0
+
+    confirmaciones = data.get('bultos', [])
+    if confirmaciones:
+        ids_payload = {c['id'] for c in confirmaciones}
+        bultos_ruta = Bulto.query.filter_by(ruta_despacho_id=id).all()
+
+        for bulto in bultos_ruta:
+            conf = next((c for c in confirmaciones if c['id'] == bulto.id), None)
+            entregado = conf.get('entregado', True) if conf else True
+
+            if entregado:
+                bulto.estado = 'ENTREGADO'
+                bulto.fecha_entrega = ahora
+            else:
+                bulto.estado = 'RECHAZADO'
+                bulto.fecha_entrega = ahora
+                bulto.motivo_rechazo = conf.get('motivo_rechazo', 'Sin especificar') if conf else 'Sin especificar'
+                rechazados += 1
+
     ruta.estado = 'ENTREGADA'
-    ruta.fecha_entregada = datetime.utcnow()
+    ruta.fecha_entregada = ahora
     db.session.commit()
-    return jsonify({'ok': True, 'ruta': ruta.to_dict()}), 200
+
+    return jsonify({
+        'ok': True,
+        'entregados': len(confirmaciones) - rechazados if confirmaciones else 0,
+        'rechazados': rechazados,
+        'ruta': ruta.to_dict()
+    }), 200
+
+
+@rutas_bp.route('/bultos-rechazados', methods=['GET'])
+@jwt_required()
+def bultos_rechazados():
+    """Bultos rechazados en entrega — aparecen en panel recepcionista para re-ingresar."""
+    from app.models.bulto import Bulto
+    bultos = (Bulto.query
+              .filter_by(estado='RECHAZADO')
+              .order_by(Bulto.fecha_entrega.desc())
+              .all())
+    return jsonify({'bultos': [b.to_dict() for b in bultos], 'total': len(bultos)}), 200
