@@ -6,11 +6,13 @@ class RutaDespacho(db.Model):
     """
     Manifiesto de cargue: agrupa los bultos que salen en un mismo vehículo.
     Ciclo: EN_CARGUE → EN_TRANSITO → ENTREGADA
+    El conductor y el vehículo se asignan dinámicamente por viaje.
     """
     __tablename__ = 'rutas_despacho'
 
     id              = db.Column(db.Integer, primary_key=True)
     conductor_id    = db.Column(db.Integer, db.ForeignKey('conductores.id'), nullable=False)
+    vehiculo_id     = db.Column(db.Integer, db.ForeignKey('vehiculos.id'), nullable=False)
     tipo_ruta       = db.Column(db.String(20), nullable=False)   # Urbana | Municipal
     estado          = db.Column(db.String(20), default='EN_CARGUE')  # EN_CARGUE | EN_TRANSITO | ENTREGADA
     notas           = db.Column(db.Text)
@@ -37,12 +39,16 @@ class RutaDespacho(db.Model):
 
     def to_dict(self, include_bultos=False):
         c = self.conductor
+        v = self.vehiculo
         d = {
             'id':                 self.id,
             'conductor_id':       self.conductor_id,
             'conductor_nombre':   c.nombre if c else '',
             'conductor_cedula':   c.cedula if c else '',
-            'conductor_placa':    c.placa  if c else '',
+            'vehiculo_id':        self.vehiculo_id,
+            'vehiculo_placa':     v.placa  if v else '',
+            'vehiculo_tipo':      v.tipo   if v else '',
+            'vehiculo_capacidad': float(v.capacidad_kg) if v and v.capacidad_kg else None,
             'tipo_ruta':          self.tipo_ruta,
             'estado':             self.estado,
             'notas':              self.notas or '',
@@ -64,7 +70,7 @@ class RutaDespacho(db.Model):
                     'tipo':          b.tipo,
                     'numero':        b.numero,
                     'total':         b.total,
-                    'estado':        b.estado, # PENDIENTE (planeado) | CARGADO
+                    'estado':        b.estado,  # PENDIENTE (planificado) | CARGADO (confirmado)
                     'numero_pedido': b.tarea.numero_pedido_siesa if b.tarea else '',
                     'cliente':       b.tarea.cliente or '' if b.tarea else '',
                 })

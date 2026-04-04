@@ -2144,6 +2144,8 @@ function muelleRenderGrupos(grupos) {
 
 // Referencia a los grupos actuales para poder reordenarlos sin ir al servidor
 let _MUELLE_GRUPOS_ACTUALES = [];
+// Manifiesto de la ruta activa (grupos ordenados) para reordenamiento en memoria
+let _RUTA_MANIFIESTO_ACTUAL = [];
 
 function muelleMoverGrupo(idx, dir) {
   const orden = _MUELLE_GRUPOS_ACTUALES.map(g => g.destino);
@@ -2169,7 +2171,7 @@ async function cargarRutaSelector() {
     rutas.forEach(r => {
       const opt = document.createElement('option');
       opt.value = r.id;
-      opt.textContent = `#${r.id} · ${r.conductor_nombre} · ${r.tipo_ruta} · ${r.total_bultos} bultos`;
+      opt.textContent = `#${r.id} · ${r.conductor_nombre} · ${r.vehiculo_placa || ''} · ${r.tipo_ruta} · ${r.total_bultos} bultos`;
       if (r.id === valorActual) opt.selected = true;
       sel.appendChild(opt);
     });
@@ -2531,7 +2533,7 @@ async function muelleCargarCaja() {
 
 function rutasSubTab(nombre) {
   RUTAS_SUBTAB = nombre;
-  const paneles = { rutas: 'rutas-panel-rutas', conductores: 'rutas-panel-conductores' };
+  const paneles = { rutas: 'rutas-panel-rutas', conductores: 'rutas-panel-conductores', vehiculos: 'rutas-panel-vehiculos' };
   Object.entries(paneles).forEach(([k, id]) => {
     const el = document.getElementById(id);
     if (el) el.style.display = k === nombre ? 'block' : 'none';
@@ -2545,8 +2547,9 @@ function rutasSubTab(nombre) {
 }
 
 async function cargarRutas() {
-  if (RUTAS_SUBTAB === 'rutas') await cargarListaRutas();
-  else await cargarListaConductores();
+  if (RUTAS_SUBTAB === 'rutas')        await cargarListaRutas();
+  else if (RUTAS_SUBTAB === 'vehiculos') await cargarListaVehiculos();
+  else                                 await cargarListaConductores();
 }
 
 // ── Rutas ────────────────────────────────────────────
@@ -2593,7 +2596,7 @@ function rutaCard(r) {
         <div>
           <div style="font-size:16px;font-weight:800;">${tipoIcon} Ruta #${r.id}</div>
           <div style="font-size:13px;color:#ccc;margin-top:2px;">${r.conductor_nombre}</div>
-          <div style="font-size:11px;color:#555;margin-top:1px;">${r.conductor_placa ? 'Placa: ' + r.conductor_placa + ' · ' : ''}${fecha}</div>
+          <div style="font-size:11px;color:#555;margin-top:1px;">${r.vehiculo_placa ? r.vehiculo_placa + ' · ' + r.vehiculo_tipo + ' · ' : ''}${fecha}</div>
         </div>
         <div style="text-align:right;">
           ${estadoBadge}
@@ -2660,6 +2663,7 @@ function rutasMostrarForm() {
   document.getElementById('rutas-form').style.display = 'block';
   document.getElementById('rutas-form-error').textContent = '';
   cargarListaConductoresEnSelect('rutas-form-conductor');
+  cargarListaVehiculosEnSelect('rutas-form-vehiculo');
 }
 
 function rutasCancelarForm() {
@@ -2677,16 +2681,18 @@ function rutasSeleccionarTipo(tipo) {
 async function rutasCrear() {
   const errorEl = document.getElementById('rutas-form-error');
   const conductorId = document.getElementById('rutas-form-conductor')?.value;
+  const vehiculoId  = document.getElementById('rutas-form-vehiculo')?.value;
   const notas = document.getElementById('rutas-form-notas')?.value.trim();
   errorEl.textContent = '';
 
   if (!conductorId) { errorEl.textContent = 'Selecciona un conductor'; return; }
+  if (!vehiculoId)  { errorEl.textContent = 'Selecciona un vehículo'; return; }
 
   try {
     const r = await fetch(API + '/api/rutas/', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conductor_id: parseInt(conductorId), tipo_ruta: RUTAS_TIPO_SEL, notas }),
+      body: JSON.stringify({ conductor_id: parseInt(conductorId), vehiculo_id: parseInt(vehiculoId), tipo_ruta: RUTAS_TIPO_SEL, notas }),
     });
     const d = await r.json();
     if (r.ok) {
@@ -2700,6 +2706,103 @@ async function rutasCrear() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+// ── Vehículos ────────────────────────────────────────
+
+async function cargarListaVehiculosEnSelect(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  try {
+    const d = await get('/api/rutas/vehiculos?activos=true');
+    sel.innerHTML = '<option value="">— Selecciona vehículo —</option>';
+    (d.vehiculos || []).forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v.id;
+      opt.textContent = `${v.placa} · ${v.tipo}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}`;
+      sel.appendChild(opt);
+    });
+  } catch (e) {}
+}
+
+async function cargarListaVehiculos() {
+  const el = document.getElementById('lista-vehiculos');
+  if (!el) return;
+  try {
+    const d = await get('/api/rutas/vehiculos?activos=false');
+    const vehiculos = d.vehiculos || [];
+    if (!vehiculos.length) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin vehículos registrados</div>';
+      return;
+    }
+    el.innerHTML = vehiculos.map(v => `
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:15px;font-weight:800;font-family:monospace;">${v.placa}</div>
+          <div style="font-size:12px;color:#888;margin-top:2px;">${v.tipo}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}</div>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;">
+          ${v.activo
+            ? '<span style="background:#14532d;color:#4ade80;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">ACTIVO</span>'
+            : '<span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">INACTIVO</span>'}
+          <button onclick="vehiculoToggle(${v.id}, ${!v.activo})"
+            style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+            ${v.activo ? 'Desactivar' : 'Activar'}
+          </button>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando vehículos</div>';
+  }
+}
+
+function vehiculosMostrarForm() {
+  document.getElementById('vehiculos-form').style.display = 'block';
+  document.getElementById('vehiculos-form-error').textContent = '';
+}
+
+function vehiculosCancelarForm() {
+  document.getElementById('vehiculos-form').style.display = 'none';
+}
+
+async function vehiculosCrear() {
+  const errorEl    = document.getElementById('vehiculos-form-error');
+  const placa      = document.getElementById('veh-form-placa')?.value.trim().toUpperCase();
+  const tipo       = document.getElementById('veh-form-tipo')?.value;
+  const capacidad  = document.getElementById('veh-form-capacidad')?.value.trim();
+  errorEl.textContent = '';
+
+  if (!placa) { errorEl.textContent = 'La placa es requerida'; return; }
+  if (!tipo)  { errorEl.textContent = 'Selecciona el tipo de vehículo'; return; }
+
+  try {
+    const r = await fetch(API + '/api/rutas/vehiculos', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ placa, tipo, capacidad_kg: capacidad ? parseFloat(capacidad) : null }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      vehiculosCancelarForm();
+      ['veh-form-placa','veh-form-capacidad'].forEach(id => {
+        const el = document.getElementById(id); if (el) el.value = '';
+      });
+      await cargarListaVehiculos();
+    } else {
+      errorEl.textContent = d.error || 'Error al guardar vehículo';
+    }
+  } catch (e) { errorEl.textContent = 'Error de conexión'; }
+}
+
+async function vehiculoToggle(id, activar) {
+  try {
+    await fetch(API + '/api/rutas/vehiculos/' + id, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activo: activar }),
+    });
+    await cargarListaVehiculos();
+  } catch (e) { alert('Error de conexión'); }
+}
+
 // ── Conductores ──────────────────────────────────────
 
 async function cargarListaConductoresEnSelect(selectId) {
@@ -2711,7 +2814,7 @@ async function cargarListaConductoresEnSelect(selectId) {
     (d.conductores || []).forEach(c => {
       const opt = document.createElement('option');
       opt.value = c.id;
-      opt.textContent = `${c.nombre}${c.placa ? ' · ' + c.placa : ''}`;
+      opt.textContent = `${c.nombre}${c.telefono ? ' · ' + c.telefono : ''}`;
       sel.appendChild(opt);
     });
   } catch (e) {}
@@ -2731,7 +2834,7 @@ async function cargarListaConductores() {
       <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
         <div>
           <div style="font-size:14px;font-weight:700;">${c.nombre}</div>
-          <div style="font-size:12px;color:#555;margin-top:2px;">CC ${c.cedula}${c.telefono ? ' · ' + c.telefono : ''}${c.placa ? ' · Placa: ' + c.placa : ''}</div>
+          <div style="font-size:12px;color:#555;margin-top:2px;">CC ${c.cedula}${c.telefono ? ' · ' + c.telefono : ''}</div>
         </div>
         <div style="display:flex;gap:6px;align-items:center;">
           ${c.activo
@@ -2758,11 +2861,10 @@ function conductoresCancelarForm() {
 }
 
 async function conductoresCrear() {
-  const errorEl = document.getElementById('conductores-form-error');
-  const nombre  = document.getElementById('cond-form-nombre')?.value.trim();
-  const cedula  = document.getElementById('cond-form-cedula')?.value.trim();
+  const errorEl  = document.getElementById('conductores-form-error');
+  const nombre   = document.getElementById('cond-form-nombre')?.value.trim();
+  const cedula   = document.getElementById('cond-form-cedula')?.value.trim();
   const telefono = document.getElementById('cond-form-telefono')?.value.trim();
-  const placa   = document.getElementById('cond-form-placa')?.value.trim();
   errorEl.textContent = '';
 
   if (!nombre) { errorEl.textContent = 'El nombre es requerido'; return; }
@@ -2772,12 +2874,12 @@ async function conductoresCrear() {
     const r = await fetch(API + '/api/rutas/conductores', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, cedula, telefono: telefono || null, placa: placa || null }),
+      body: JSON.stringify({ nombre, cedula, telefono: telefono || null }),
     });
     const d = await r.json();
     if (r.ok) {
       conductoresCancelarForm();
-      ['cond-form-nombre','cond-form-cedula','cond-form-telefono','cond-form-placa'].forEach(id => {
+      ['cond-form-nombre','cond-form-cedula','cond-form-telefono'].forEach(id => {
         const el = document.getElementById(id); if (el) el.value = '';
       });
       await cargarListaConductores();

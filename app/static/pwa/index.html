@@ -300,11 +300,15 @@
     <!-- RUTAS DE DESPACHO -->
     <div id="tab-rutas" class="admin-content" style="display:none;">
 
-      <!-- Sub-nav: Rutas | Conductores -->
+      <!-- Sub-nav: Rutas | Vehículos | Conductores -->
       <div style="display:flex;background:#1a1a1a;border-radius:10px;margin-bottom:14px;padding:3px;gap:3px;">
         <button id="rutas-subnav-rutas" onclick="rutasSubTab('rutas')"
           style="flex:1;padding:9px;font-size:13px;font-weight:600;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;">
           Rutas
+        </button>
+        <button id="rutas-subnav-vehiculos" onclick="rutasSubTab('vehiculos')"
+          style="flex:1;padding:9px;font-size:13px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          Vehículos
         </button>
         <button id="rutas-subnav-conductores" onclick="rutasSubTab('conductores')"
           style="flex:1;padding:9px;font-size:13px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
@@ -330,6 +334,13 @@
             <select id="rutas-form-conductor"
               style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
               <option value="">— Selecciona conductor —</option>
+            </select>
+          </div>
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Vehículo</div>
+            <select id="rutas-form-vehiculo"
+              style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+              <option value="">— Selecciona vehículo —</option>
             </select>
           </div>
           <div style="margin-bottom:14px;">
@@ -374,26 +385,23 @@
         <!-- Form nuevo conductor -->
         <div id="conductores-form" style="display:none;background:#111;border:1px solid #333;border-radius:14px;padding:18px;margin-bottom:14px;">
           <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nuevo conductor</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
-            <div style="grid-column:1/-1;">
+          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px;">
+            <div>
               <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Nombre *</div>
               <input id="cond-form-nombre" type="text" placeholder="Nombre completo"
                 style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
             </div>
-            <div>
-              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Cédula *</div>
-              <input id="cond-form-cedula" type="text" placeholder="12345678"
-                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-            </div>
-            <div>
-              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Teléfono</div>
-              <input id="cond-form-telefono" type="tel" placeholder="3001234567"
-                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-            </div>
-            <div>
-              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Placa</div>
-              <input id="cond-form-placa" type="text" placeholder="ABC123"
-                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;" oninput="this.value=this.value.toUpperCase()">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+              <div>
+                <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Cédula *</div>
+                <input id="cond-form-cedula" type="text" placeholder="12345678"
+                  style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+              </div>
+              <div>
+                <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Teléfono</div>
+                <input id="cond-form-telefono" type="tel" placeholder="3001234567"
+                  style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+              </div>
             </div>
           </div>
           <div id="conductores-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
@@ -404,6 +412,54 @@
         </div>
 
         <div id="lista-conductores"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
+      </div>
+
+      <!-- Sub-panel: Vehículos -->
+      <div id="rutas-panel-vehiculos" style="display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div style="font-size:16px;font-weight:700;">Flota de vehículos</div>
+          <button onclick="vehiculosMostrarForm()"
+            style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            + Nuevo
+          </button>
+        </div>
+
+        <!-- Form nuevo vehículo -->
+        <div id="vehiculos-form" style="display:none;background:#111;border:1px solid #333;border-radius:14px;padding:18px;margin-bottom:14px;">
+          <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nuevo vehículo</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div>
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Placa *</div>
+              <input id="veh-form-placa" type="text" placeholder="NHR123"
+                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;font-family:monospace;"
+                oninput="this.value=this.value.toUpperCase()">
+            </div>
+            <div>
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Tipo *</div>
+              <select id="veh-form-tipo"
+                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+                <option value="">— Tipo —</option>
+                <option value="NHR">NHR</option>
+                <option value="Turbo">Turbo</option>
+                <option value="Camión">Camión</option>
+                <option value="Van">Van</option>
+                <option value="Moto">Moto</option>
+              </select>
+            </div>
+            <div style="grid-column:1/-1;">
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Capacidad (kg) — opcional</div>
+              <input id="veh-form-capacidad" type="number" placeholder="2000"
+                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            </div>
+          </div>
+          <div id="vehiculos-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="vehiculosCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
+            <button onclick="vehiculosCrear()" style="flex:2;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
+          </div>
+        </div>
+
+        <div id="lista-vehiculos"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
       </div>
     </div>
 

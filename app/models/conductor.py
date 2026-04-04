@@ -9,7 +9,6 @@ class Conductor(db.Model):
     nombre         = db.Column(db.String(100), nullable=False)
     cedula         = db.Column(db.String(20), unique=True, nullable=False)
     telefono       = db.Column(db.String(20))
-    placa          = db.Column(db.String(10))   # placa del vehículo asignado
     activo         = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -21,7 +20,6 @@ class Conductor(db.Model):
             'nombre':         self.nombre,
             'cedula':         self.cedula,
             'telefono':       self.telefono or '',
-            'placa':          self.placa or '',
             'activo':         self.activo,
             'fecha_creacion': self.fecha_creacion.isoformat(),
         }
