@@ -43,10 +43,17 @@ class SesionConteo(db.Model):
     sesion_origen_id = db.Column(db.Integer, db.ForeignKey('sesiones_conteo.id'), nullable=True)
     segundo_operario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
 
+    # Origen de la excepción (si vino de picking)
+    tarea_picking_id = db.Column(db.Integer, db.ForeignKey('tareas_picking.id'), nullable=True)
+
     # Trigger a Siesa
-    siesa_triggered = db.Column(db.Boolean, default=False)
-    siesa_response = db.Column(db.Text)
+    siesa_triggered   = db.Column(db.Boolean, default=False)
+    siesa_response    = db.Column(db.Text)
     siesa_triggered_at = db.Column(db.DateTime)
+    # Quién aprobó el ajuste (admin — nunca el operario que contó)
+    aprobador_id      = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    # Clave de idempotencia — ADJ-{id}-{timestamp_ms}
+    idempotency_key   = db.Column(db.String(80), unique=True, nullable=True)
 
     # Tiempos
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -60,6 +67,8 @@ class SesionConteo(db.Model):
                                backref='conteos_asignados', lazy=True)
     segundo_operario = db.relationship('Usuario', foreign_keys=[segundo_operario_id],
                                        backref='segundos_conteos', lazy=True)
+    aprobador = db.relationship('Usuario', foreign_keys=[aprobador_id],
+                                backref='ajustes_aprobados', lazy=True)
 
     def to_dict_operario(self):
         """Vista para el operario — SIN cantidad esperada (conteo ciego)."""
@@ -98,8 +107,12 @@ class SesionConteo(db.Model):
             'motivo_codigo': self.motivo_codigo,
             'es_segundo_conteo': self.es_segundo_conteo,
             'sesion_origen_id': self.sesion_origen_id,
-            'siesa_triggered': self.siesa_triggered,
+            'tarea_picking_id':  self.tarea_picking_id,
+            'siesa_triggered':   self.siesa_triggered,
             'siesa_triggered_at': self.siesa_triggered_at.isoformat() if self.siesa_triggered_at else None,
+            'aprobador_id':      self.aprobador_id,
+            'aprobador_nombre':  self.aprobador.nombre if self.aprobador else None,
+            'idempotency_key':   self.idempotency_key,
             'fecha_creacion': self.fecha_creacion.isoformat(),
             'fecha_inicio': self.fecha_inicio.isoformat() if self.fecha_inicio else None,
             'fecha_cierre': self.fecha_cierre.isoformat() if self.fecha_cierre else None

@@ -70,16 +70,23 @@ def resumen_completo():
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
     try:
-        kpis = DashboardService.kpis_operativos(almacen_id)
+        from app.models.conteo import SesionConteo
+        kpis         = DashboardService.kpis_operativos(almacen_id)
         productividad = DashboardService.productividad_operarios(almacen_id, dias=7)
-        alertas = DashboardService.alertas_stock(almacen_id)
-        movimientos = DashboardService.movimientos_recientes(almacen_id, limite=10)
+        alertas      = DashboardService.alertas_stock(almacen_id)
+        movimientos  = DashboardService.movimientos_recientes(almacen_id, limite=10)
+
+        auditorias_urgentes = (SesionConteo.query
+            .filter_by(tipo='EXCEPCION_PICKING')
+            .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
+            .count())
 
         return jsonify({
             'kpis': kpis,
             'productividad': productividad,
             'alertas_stock': alertas,
-            'movimientos_recientes': movimientos
+            'movimientos_recientes': movimientos,
+            'auditorias_urgentes': auditorias_urgentes,
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

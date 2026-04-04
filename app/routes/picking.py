@@ -222,26 +222,85 @@ def mis_tareas_activas():
 @jwt_required()
 def reportar_problema(id):
     """
-    Operario reporta un problema — Ubicación vacía o Mercancía averiada.
-    Bloquea la tarea, la saca de la cola del operario y
-    la envía al dashboard del jefe para resolución.
-    El operario pasa automáticamente a la siguiente tarea.
+    Supervisor Guard — Operario reporta faltante o ubicación vacía.
+
+    Flujo:
+    1. Bloquea UbicacionProducto con FOR UPDATE.
+    2. Incrementa `bloqueado` por la cantidad no encontrada.
+    3. Si hubo short-pick (cantidad_encontrada > 0), confirma esa parte.
+    4. Pone la tarea en BLOQUEADO.
+    5. Crea SesionConteo EXCEPCION_PICKING → aparece en "Auditorías Urgentes".
+
+    Payload: { motivo, cantidad_encontrada (int, opcional — default 0) }
+    Motivos: UBICACION_VACIA | FALTANTE | MERCANCIA_AVERIADA | PRODUCTO_INCORRECTO
     """
+    from app.models.inventario import UbicacionProducto
+    from app.services.conteo_service import ConteoService
+
     operario_id = int(get_jwt_identity())
     data = request.get_json() or {}
-    motivo = data.get('motivo', 'PROBLEMA_REPORTADO')
+    motivo = data.get('motivo', 'UBICACION_VACIA')
+    cantidad_encontrada = int(data.get('cantidad_encontrada', 0))
 
     tarea = TareaPicking.query.get_or_404(id)
 
     if tarea.operario_id != operario_id:
         return jsonify({'error': 'Esta tarea no te pertenece'}), 403
 
+    cantidad_faltante = max(0, tarea.cantidad_solicitada - cantidad_encontrada)
+
+    # 1. Bloquear la fila de inventario con FOR UPDATE
+    inv = (UbicacionProducto.query
+           .filter_by(ubicacion_id=tarea.ubicacion_id, producto_id=tarea.producto_id)
+           .with_for_update().first())
+
+    if inv and cantidad_faltante > 0:
+        inv.bloqueado = inv.bloqueado + cantidad_faltante
+
+    # 2. Short-pick: si encontró algo, confirmar esa parte
+    if cantidad_encontrada > 0:
+        tarea.cantidad_recogida = cantidad_encontrada
+        from app.models.inventario import MovimientoInventario
+        import uuid as _uuid
+        from datetime import datetime as _dt
+        if inv:
+            inv.cantidad = max(0, inv.cantidad - cantidad_encontrada)
+            inv.reservado = max(0, inv.reservado - cantidad_encontrada)
+        db.session.add(MovimientoInventario(
+            producto_id=tarea.producto_id,
+            ubicacion_id=tarea.ubicacion_id,
+            almacen_id=tarea.almacen_id,
+            tipo='SHORT_PICK',
+            cantidad=cantidad_encontrada,
+            motivo=f'Short-pick parcial — tarea {tarea.codigo} — faltó {cantidad_faltante}',
+            numero_documento=tarea.referencia_documento,
+            usuario_id=operario_id,
+            idempotency_key=f'SP-{tarea.id}-{int(_dt.utcnow().timestamp()*1000)}',
+        ))
+
+    # 3. Bloquear la tarea
     tarea.estado = 'BLOQUEADO'
     tarea.operario_id = None
+
+    # 4. Crear auditoría urgente solo para faltantes reales
+    auditoria_id = None
+    if motivo in ('UBICACION_VACIA', 'FALTANTE') and cantidad_faltante > 0:
+        sesion = ConteoService.generar_auditoria_por_excepcion(
+            tarea_picking_id=tarea.id,
+            ubicacion_id=tarea.ubicacion_id,
+            producto_id=tarea.producto_id,
+            almacen_id=tarea.almacen_id,
+        )
+        auditoria_id = sesion.id
+
     db.session.commit()
 
     return jsonify({
+        'ok': True,
         'mensaje': 'Problema reportado — el jefe de almacén lo resolverá',
         'motivo': motivo,
-        'tarea_id': id
+        'tarea_id': id,
+        'cantidad_encontrada': cantidad_encontrada,
+        'cantidad_faltante': cantidad_faltante,
+        'auditoria_id': auditoria_id,
     }), 200

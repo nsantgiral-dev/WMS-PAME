@@ -223,6 +223,42 @@ class ConteoService:
         return segundo
 
     @staticmethod
+    def generar_auditoria_por_excepcion(
+        tarea_picking_id: int,
+        ubicacion_id: int,
+        producto_id: int,
+        almacen_id: int,
+    ) -> 'SesionConteo':
+        """
+        Crea una SesionConteo tipo EXCEPCION_PICKING cuando un picker reporta faltante.
+        La auditoría aparece en el dashboard del admin como "Urgente".
+        El auditor realizará un conteo doble-ciego para determinar el ajuste real.
+        """
+        from app.models.producto import Producto
+        producto = Producto.query.get(producto_id)
+        codigo = f'AUD-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+
+        sesion = SesionConteo(
+            codigo=codigo,
+            tipo='EXCEPCION_PICKING',
+            ubicacion_id=ubicacion_id,
+            almacen_id=almacen_id,
+            producto_id=producto_id,
+            producto_codigo_siesa=producto.codigo_siesa if producto else None,
+            maneja_lote=False,
+            tarea_picking_id=tarea_picking_id,
+            estado='PENDIENTE',
+        )
+        db.session.add(sesion)
+        db.session.flush()
+
+        logger.warning(
+            f'[SUPERVISOR_GUARD] Auditoría urgente {codigo} creada '
+            f'por excepción en tarea_picking #{tarea_picking_id}'
+        )
+        return sesion
+
+    @staticmethod
     def confirmar_ajuste(sesion_id: int, supervisor_id: int):
         """
         Después del segundo conteo confirma el descuadre y dispara ajuste a Siesa.
@@ -250,6 +286,11 @@ class ConteoService:
 
         sesion.diferencia = diferencia
         sesion.motivo_codigo = motivo_codigo
+
+        # Idempotency key — garantiza exactamente-una-vez hacia Siesa
+        idem_key = f'ADJ-{sesion_id}-{int(datetime.utcnow().timestamp() * 1000)}'
+        sesion.idempotency_key = idem_key
+        sesion.aprobador_id = supervisor_id
 
         # Payload para Siesa
         payload_siesa = {
@@ -281,9 +322,25 @@ class ConteoService:
             sesion.estado = 'AJUSTADO'
             sesion.fecha_cierre = datetime.utcnow()
 
+            # Desbloquear inventario si vino de una excepción de picking
+            if sesion.tarea_picking_id:
+                from app.models.inventario import UbicacionProducto
+                inv = (UbicacionProducto.query
+                       .filter_by(ubicacion_id=sesion.ubicacion_id,
+                                  producto_id=sesion.producto_id)
+                       .with_for_update().first())
+                if inv:
+                    inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
+                    # Ajustar stock local para consistencia con Siesa
+                    if motivo_codigo == 'AJ-SAL':
+                        inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
+                    else:
+                        inv.cantidad += cantidad_ajuste
+
             logger.info(
-                f'[CONTEO] Ajuste {motivo_codigo} enviado a Siesa — '
-                f'{cantidad_ajuste} unidades de {sesion.producto.codigo}'
+                f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} aprobado por usuario #{supervisor_id} '
+                f'— {cantidad_ajuste} unidades de {sesion.producto.codigo} '
+                f'— idempotency_key: {idem_key}'
             )
 
         except Exception as e:

@@ -247,6 +247,14 @@ async function cargarDashboard() {
     set('kpi-alertas', k.alertas.productos_bajo_minimo);
     graficaActividad(k);
     movimientos(d.movimientos_recientes.movimientos);
+    // Auditorías urgentes — Supervisor Guard
+    const nAud = d.auditorias_urgentes || 0;
+    const audEl = document.getElementById('dashboard-auditorias-urgentes');
+    if (audEl) {
+      audEl.style.display = nAud > 0 ? 'block' : 'none';
+      const badge = document.getElementById('aud-urgentes-count');
+      if (badge) badge.textContent = nAud;
+    }
   } catch (e) {}
 }
 
@@ -879,22 +887,41 @@ async function reportarProblema(tareaId) {
   const modal = document.createElement('div');
   modal.id = 'modal-problema';
   modal.innerHTML = `
-    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:380px;border:1px solid #333;">
-        <div style="font-size:18px;font-weight:700;margin-bottom:6px;color:#f87171;">⚠ Reportar problema</div>
-        <div style="font-size:13px;color:#555;margin-bottom:16px;">La tarea se bloqueará y el jefe la resolverá. Pasarás a la siguiente tarea automáticamente.</div>
-        <button onclick="confirmarProblema(${tareaId},'UBICACION_VACIA')"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
-          📦 Ubicación vacía
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:380px;border:1px solid #7f1d1d;">
+        <div style="font-size:18px;font-weight:700;margin-bottom:4px;color:#f87171;">⚠ Reportar problema</div>
+        <div style="font-size:12px;color:#555;margin-bottom:16px;">La tarea se bloquea. El jefe auditará y ajustará el inventario.</div>
+
+        <button onclick="confirmarProblema(${tareaId},'UBICACION_VACIA',0)"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          📦 Ubicación vacía — no había nada
         </button>
-        <button onclick="confirmarProblema(${tareaId},'MERCANCIA_AVERIADA')"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+
+        <button onclick="mostrarShortPick(${tareaId})"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#451a03;color:#fb923c;border:1px solid #7c2d12;border-radius:10px;cursor:pointer;text-align:left;">
+          📉 Faltante parcial — encontré menos
+        </button>
+
+        <button onclick="confirmarProblema(${tareaId},'MERCANCIA_AVERIADA',0)"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
           🚫 Mercancía averiada
         </button>
-        <button onclick="confirmarProblema(${tareaId},'PRODUCTO_INCORRECTO')"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+
+        <button onclick="confirmarProblema(${tareaId},'PRODUCTO_INCORRECTO',0)"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
           ❌ Producto incorrecto
         </button>
+
+        <div id="short-pick-panel" style="display:none;background:#1a0a00;border:1px solid #7c2d12;border-radius:10px;padding:14px;margin-bottom:8px;">
+          <div style="font-size:12px;color:#fb923c;margin-bottom:8px;">¿Cuántas unidades SÍ encontraste?</div>
+          <input id="short-pick-qty" type="number" min="0" placeholder="Cantidad encontrada"
+            style="width:100%;padding:10px;background:#000;border:2px solid #7c2d12;border-radius:8px;color:#fff;font-size:16px;margin-bottom:10px;">
+          <button onclick="confirmarShortPick(${tareaId})"
+            style="width:100%;padding:12px;background:#fb923c;color:#000;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">
+            Confirmar faltante parcial
+          </button>
+        </div>
+
         <button onclick="document.getElementById('modal-problema').remove()"
           style="width:100%;padding:12px;font-size:14px;background:#222;color:#666;border:none;border-radius:10px;cursor:pointer;margin-top:4px;">
           Cancelar
@@ -904,17 +931,95 @@ async function reportarProblema(tareaId) {
   document.body.appendChild(modal);
 }
 
-async function confirmarProblema(tareaId, motivo) {
+function mostrarShortPick(tareaId) {
+  const panel = document.getElementById('short-pick-panel');
+  if (panel) panel.style.display = 'block';
+}
+
+async function confirmarShortPick(tareaId) {
+  const qty = parseInt(document.getElementById('short-pick-qty')?.value || '0');
+  await confirmarProblema(tareaId, 'FALTANTE', qty);
+}
+
+async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
   const modal = document.getElementById('modal-problema');
   if (modal) modal.remove();
   try {
-    await post('/api/picking/' + tareaId + '/reportar-problema', { motivo });
-    alerta('Problema reportado — pasando a siguiente tarea', 'advertencia');
+    await post('/api/picking/' + tareaId + '/reportar-problema', {
+      motivo,
+      cantidad_encontrada: cantidadEncontrada || 0,
+    });
+    const msg = cantidadEncontrada > 0
+      ? `Short-pick: ${cantidadEncontrada} unidades registradas. Auditoría creada.`
+      : 'Problema reportado — auditoría urgente creada para el jefe';
+    alerta(msg, 'advertencia');
     TAREA_ACTUAL = null;
     setTimeout(pedirTarea, 1500);
   } catch (e) {
     alerta('Error reportando problema', 'error');
   }
+}
+
+// ── Auditorías Urgentes (admin) ──────────────────────
+
+async function cargarAuditoriasUrgentes() {
+  const el = document.getElementById('lista-auditorias-urgentes');
+  if (!el) return;
+  try {
+    const d = await get('/api/conteo/auditorias-urgentes');
+    const auds = d.auditorias || [];
+    if (!auds.length) {
+      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:20px;font-size:13px;">✓ Sin auditorías pendientes</div>';
+      return;
+    }
+    el.innerHTML = auds.map(a => {
+      const diff = a.diferencia;
+      const diffColor = diff === null ? '#666' : diff < 0 ? '#f87171' : '#fb923c';
+      const diffTxt  = diff === null ? 'Pendiente de conteo' : `Diferencia: ${diff > 0 ? '+' : ''}${diff} uds`;
+      const puedAprobar = ['SEGUNDO_CONTEO','DESCUADRE'].includes(a.estado) && diff !== null;
+      return `
+        <div style="background:#111;border:1px solid #7f1d1d;border-radius:12px;padding:14px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#f87171;">${a.codigo}</div>
+              <div style="font-size:11px;color:#555;margin-top:2px;">${a.producto_nombre || ''} · ${a.ubicacion_codigo || ''}</div>
+              ${a.tarea_picking_id ? `<div style="font-size:10px;color:#444;margin-top:1px;">Originó: tarea picking #${a.tarea_picking_id}</div>` : ''}
+            </div>
+            <span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">${a.estado}</span>
+          </div>
+          <div style="font-size:12px;color:${diffColor};margin-bottom:8px;">${diffTxt}</div>
+          ${puedAprobar ? `
+            <div style="background:#0a0a0a;border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px;color:#aaa;">
+              ${diff < 0 ? `<b style="color:#f87171;">AJ-SAL</b> — faltan ${Math.abs(diff)} uds en Siesa` : `<b style="color:#4ade80;">AJ-ENT</b> — sobran ${diff} uds en Siesa`}
+            </div>
+            <button onclick="aprobarAjusteConteo(${a.id})"
+              style="width:100%;padding:11px;background:#7f1d1d;color:#fca5a5;border:1px solid #f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+              ✓ Aprobar ajuste → Siesa
+            </button>` : `
+            <div style="font-size:11px;color:#444;">Esperando que un operario complete el conteo físico</div>`}
+        </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando auditorías</div>';
+  }
+}
+
+async function aprobarAjusteConteo(sesionId) {
+  if (!confirm('¿Confirmar envío del ajuste a Siesa? Esta acción es contable e irreversible.')) return;
+  try {
+    const r = await fetch(API + '/api/conteo/' + sesionId + '/ajustar', {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`Ajuste ${d.motivo_codigo} enviado a Siesa ✓`, 'exito');
+      cargarAuditoriasUrgentes();
+      cargarDashboard();
+    } else {
+      alert(d.error || 'Error al enviar ajuste');
+    }
+  } catch (e) { alert('Error de conexión'); }
 }
 
 async function cargarRecepciones() {

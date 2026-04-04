@@ -118,6 +118,24 @@ def confirmar_ajuste(id):
         return jsonify({'error': str(e)}), 500
 
 
+@conteo_bp.route('/auditorias-urgentes', methods=['GET'])
+@jwt_required()
+def auditorias_urgentes():
+    """
+    Auditorías EXCEPCION_PICKING pendientes de resolución.
+    Solo visibles para admin/supervisor — aparecen en "Auditorías Urgentes".
+    """
+    sesiones = (SesionConteo.query
+                .filter_by(tipo='EXCEPCION_PICKING')
+                .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
+                .order_by(SesionConteo.fecha_creacion.asc())
+                .all())
+    return jsonify({
+        'auditorias': [s.to_dict() for s in sesiones],
+        'total': len(sesiones),
+    }), 200
+
+
 @conteo_bp.route('/abc/generar-tareas', methods=['POST'])
 @jwt_required()
 def generar_tareas_abc():
