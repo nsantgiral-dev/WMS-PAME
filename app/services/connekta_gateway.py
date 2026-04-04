@@ -50,9 +50,14 @@ class ConnektaGateway:
         self.conector_transito_salida = os.getenv('CONNEKTA_CONECTOR_TRANSITO_SALIDA', '173076')
         self.conector_transito_entrada = os.getenv('CONNEKTA_CONECTOR_TRANSITO_ENTRADA', '173079')
         self.conector_transferencia_directa = os.getenv('CONNEKTA_CONECTOR_TRANSF_DIRECTA', '173066')
-        # Tipo de documento para requisiciones de traslado (verificar en Siesa → Tipos de documento)
+        # Tipo documento requisición de traslado (Siesa: Inventarios → Tipos de documento → clase 75)
         self.tipo_docto_req_traslado = os.getenv('SIESA_TIPO_DOCTO_REQ_TRASLADO', '')
-        # Bodega de tránsito para transferencias en tránsito (verificar con equipo Siesa)
+        # Tipo documento tránsito salida/entrada (verificar con consultor Siesa)
+        self.tipo_docto_transito_salida = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_SALIDA', '')
+        self.tipo_docto_transito_entrada = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', '')
+        # Código del solicitante en requisiciones (Siesa: Inventarios → Solicitantes)
+        self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')
+        # Bodega de tránsito (verificar si existe en Siesa — si no, usar TransferenciaDirecta)
         self.bodega_transito = os.getenv('SIESA_BODEGA_TRANSITO', '')
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
@@ -663,13 +668,8 @@ class ConnektaGateway:
         """
         174646 → API_v1_Inventarios_Comercial_RequisicionesParaTransferir
         Compromete inventario en bodega_origen para traslado a bodega_destino.
-        Siesa genera el documento de requisición interna — los vendedores ven
-        el stock comprometido y no pueden venderlo.
-
-        VERIFICAR desde Connekta → Ver Guía del conector 174646:
-        - f350_id_tipo_docto: tipo de documento para requisiciones de traslado
-        - f450_id_bodega_solicita vs f450_id_bodega_suministra: confirmar nombres exactos
-        - Secciones exactas del body (Inicial/Documentos/Movimientos/Final o diferente)
+        Usa f440_* para documentos y f441_* para movimientos (schema propio, distinto
+        al f350_*/f470_* de los demás conectores de inventario).
         """
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
@@ -679,29 +679,54 @@ class ConnektaGateway:
                 {
                     'F_CIA': self.id_cia_siesa,
                     'F_CONSEC_AUTO_REG': 0,
-                    'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': self.tipo_docto_req_traslado,  # VERIFICAR
-                    'f350_consec_docto': 0,
-                    'f350_fecha': fecha_hoy,
-                    'f350_ind_estado': 1,
-                    'f350_notas': f'WMS Solicitud {codigo_solicitud}',
-                    'f450_id_bodega_salida': bodega_origen,     # bodega que suministra
-                    'f450_id_bodega_entrada': bodega_destino,   # bodega que solicita — VERIFICAR
-                    'f450_docto_alterno': codigo_solicitud,
+                    'f440_id_co': self.centro_op,
+                    'f440_id_tipo_docto': self.tipo_docto_req_traslado,
+                    'f440_consec_docto': 0,
+                    'f440_fecha': fecha_hoy,
+                    'f440_id_tercero': '',
+                    'f440_id_solicitante': self.req_solicitante,   # REQUIRED
+                    'f440_fecha_entrega': fecha_hoy,               # REQUIRED
+                    'f440_num_dias_entrega': 0,
+                    'f440_ind_estado': 1,
+                    'f440_ind_impresion': 0,
+                    'f440_notas': f'WMS {codigo_solicitud}',
+                    'f440_id_bodega_salida': bodega_origen,
+                    'f440_id_bodega_entrada': bodega_destino,
+                    'f440_referencia': codigo_solicitud,
+                    'f440_id_ubicacion_ent': '',
+                    'f440_id_cargue': '',
+                    'f440_num_docto_referencia': '',
+                    'f440_id_proyecto': '',
                 }
             ],
             'Movimientos': [
                 {
                     'F_CIA': self.id_cia_siesa,
-                    'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': self.tipo_docto_req_traslado,
-                    'f470_consec_docto': 0,
-                    'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_origen,
-                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
-                    'f470_id_unidad_medida': '',
-                    'f470_notas': '',
+                    'f441_id_co': self.centro_op,
+                    'f441_id_tipo_docto': self.tipo_docto_req_traslado,
+                    'f441_consec_docto': 0,
+                    'f441_nro_registro': idx + 1,
+                    'f441_id_item': '',
+                    'f441_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f441_codigo_barras': '',
+                    'f441_id_ext1_detalle': '',
+                    'f441_id_ext2_detalle': '',
+                    'f441_id_bodega': bodega_origen,
+                    'f441_id_motivo': self.motivo_traslado,        # REQUIRED
+                    'f441_id_unidad_medida': '',
+                    'f441_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
+                    'f441_cant_2': '',
+                    'f441_fecha_entrega': fecha_hoy,               # REQUIRED
+                    'f441_num_dias_entrega': 0,
+                    'f441_id_co_movto': self.centro_op,
+                    'f441_id_ccosto_movto': '',
+                    'f441_id_proyecto': '',
+                    'f441_notas': '',
+                    'f441_id_un_movto': self.centro_op,
+                    'f441_precio_unitario': '',
+                    'f441_id_ubicacion_sal': '',
+                    'f441_id_proy_etapa': '',
+                    'f441_id_rubro_pof': '',
                 }
                 for idx, item in enumerate(items)
             ],
@@ -720,11 +745,7 @@ class ConnektaGateway:
         173076 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoSalida
         Sale de bodega_origen → queda en bodega_transito (limbo contable).
         El inventario NO está en la tienda hasta que se confirme la entrada (173079).
-
-        VERIFICAR desde Connekta → Ver Guía del conector 173076:
-        - Nombres exactos de secciones y campos
-        - f350_id_tipo_docto para este tipo de documento
-        - Cómo referenciar el consec_requisicion del paso anterior
+        NO lleva f350_id_co_base/f350_id_tipo_docto_base — esas son solo de 173079.
         """
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
@@ -735,7 +756,7 @@ class ConnektaGateway:
                     'F_CIA': self.id_cia_siesa,
                     'F_CONSEC_AUTO_REG': 0,
                     'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': '',   # VERIFICAR tipo doc TransitoSalida
+                    'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_ind_estado': 1,
@@ -743,26 +764,26 @@ class ConnektaGateway:
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_transito,
                     'f450_docto_alterno': codigo_solicitud,
-                    # Referencia a la requisición previa
-                    'f350_id_co_base': self.centro_op if consec_requisicion else '',
-                    'f350_id_tipo_docto_base': self.tipo_docto_req_traslado if consec_requisicion else '',
-                    'f350_consec_docto_base': consec_requisicion or '',
                 }
             ],
             'Movimientos': [
                 {
                     'F_CIA': self.id_cia_siesa,
                     'f470_id_co': self.centro_op,
+                    'f470_id_tipo_docto': self.tipo_docto_transito_salida,  # REQUIRED
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_origen,
+                    'f470_id_bodega': bodega_origen,   # debe == f450_id_bodega_salida
+                    'f470_id_motivo': self.motivo_traslado,                 # REQUIRED
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
+                    'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
                     'f470_id_unidad_medida': '',
+                    'f470_id_co_movto': self.centro_op,                     # REQUIRED
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
             ],
+            'Movimiento de Seriales': [],
             'Final': [{'F_CIA': self.id_cia_siesa}]
         }
 
@@ -778,8 +799,9 @@ class ConnektaGateway:
         173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
         Confirma llegada: bodega_transito → bodega_destino.
         Solo en este momento el inventario ingresa a la tienda y puede ser facturado en POS.
-
-        VERIFICAR desde Connekta → Ver Guía del conector 173079.
+        Lleva f350_id_co_base/f350_id_tipo_docto_base/f350_consec_docto_base referenciando
+        el documento 173076 de salida — obligatorio para cerrar el tránsito en Siesa.
+        f470_id_bodega debe ser bodega_transito (== f450_id_bodega_salida de este doc).
         """
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
@@ -790,7 +812,7 @@ class ConnektaGateway:
                     'F_CIA': self.id_cia_siesa,
                     'F_CONSEC_AUTO_REG': 0,
                     'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': '',   # VERIFICAR tipo doc TransitoEntrada
+                    'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_ind_estado': 1,
@@ -798,8 +820,9 @@ class ConnektaGateway:
                     'f450_id_bodega_salida': bodega_transito,
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': codigo_solicitud,
+                    # Referencia obligatoria al doc 173076 de salida
                     'f350_id_co_base': self.centro_op if consec_salida else '',
-                    'f350_id_tipo_docto_base': '',  # VERIFICAR tipo doc salida
+                    'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else '',
                     'f350_consec_docto_base': consec_salida or '',
                 }
             ],
@@ -807,12 +830,15 @@ class ConnektaGateway:
                 {
                     'F_CIA': self.id_cia_siesa,
                     'f470_id_co': self.centro_op,
+                    'f470_id_tipo_docto': self.tipo_docto_transito_entrada,  # REQUIRED
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_destino,
+                    'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
+                    'f470_id_motivo': self.motivo_traslado,                  # REQUIRED
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
+                    'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
                     'f470_id_unidad_medida': '',
+                    'f470_id_co_movto': self.centro_op,                      # REQUIRED
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
@@ -861,12 +887,15 @@ class ConnektaGateway:
                 {
                     'F_CIA': self.id_cia_siesa,
                     'f470_id_co': self.centro_op,
+                    'f470_id_tipo_docto': self.tipo_docto_traslado,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
+                    'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
+                    'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
                     'f470_id_unidad_medida': '',
+                    'f470_id_co_movto': self.centro_op,
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
@@ -906,8 +935,12 @@ class ConnektaGateway:
                 'transf_directa': f'{self.conector_transferencia_directa} TransferenciaDirecta',
             },
             'traslados_config': {
-                'tipo_docto_req': self.tipo_docto_req_traslado or 'NO CONFIGURADO',
+                'tipo_docto_req_traslado': self.tipo_docto_req_traslado or 'NO CONFIGURADO',
+                'tipo_docto_transito_salida': self.tipo_docto_transito_salida or 'NO CONFIGURADO',
+                'tipo_docto_transito_entrada': self.tipo_docto_transito_entrada or 'NO CONFIGURADO',
+                'req_solicitante': self.req_solicitante or 'NO CONFIGURADO',
                 'bodega_transito': self.bodega_transito or 'NO CONFIGURADO',
+                'motivo_traslado': self.motivo_traslado,
             },
             'apis_get': {
                 'pedidos': self.api_pedidos,
