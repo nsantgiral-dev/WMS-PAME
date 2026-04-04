@@ -42,9 +42,15 @@ function mostrarSegunRol(rol) {
   pararTimers();
   const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
   const esRecepcion = rol === 'recepcionista';
+  const esConductor = rol === 'conductor';
   const puedeEmpacar = OPERARIO?.puede_empacar || false;
   const puedePicar   = OPERARIO?.puede_picar !== false; // default true
-  if (esAdmin) {
+  if (esConductor) {
+    pantalla('pantalla-conductor');
+    document.getElementById('cond-nombre').textContent = OPERARIO.nombre || '—';
+    cargarRutasConductor();
+    TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
+  } else if (esAdmin) {
     pantalla('pantalla-admin');
     cargarAdmin();
     TIMER_ADMIN = setInterval(cargarAdmin, 30000);
@@ -1038,7 +1044,7 @@ async function cargarRecepciones() {
 }
 
 function pantalla(id) {
-  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador'].forEach(p => {
+  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador','pantalla-conductor'].forEach(p => {
     const el = document.getElementById(p);
     if (el) el.style.display = p === id ? 'block' : 'none';
   });
@@ -2113,6 +2119,7 @@ function _formUsuario(u = {}) {
       <select id="u-rol" style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
         <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
+        <option value="conductor" ${u.rol==='conductor'?'selected':''}>Conductor</option>
         <option value="supervisor" ${u.rol==='supervisor'?'selected':''}>Supervisor</option>
         <option value="jefe_almacen" ${u.rol==='jefe_almacen'?'selected':''}>Jefe de almacén</option>
         <option value="admin" ${u.rol==='admin'?'selected':''}>Admin</option>
@@ -3292,9 +3299,18 @@ async function cargarListaConductores() {
   }
 }
 
-function conductoresMostrarForm() {
+async function conductoresMostrarForm() {
   document.getElementById('conductores-form').style.display = 'block';
   document.getElementById('conductores-form-error').textContent = '';
+  // Cargar usuarios con rol conductor para el selector
+  try {
+    const d = await get('/api/rutas/usuarios-conductores');
+    const sel = document.getElementById('cond-form-usuario');
+    if (sel) {
+      sel.innerHTML = '<option value="">Sin cuenta (solo flota)</option>' +
+        (d.usuarios || []).map(u => `<option value="${u.id}">${u.nombre} (${u.email})</option>`).join('');
+    }
+  } catch (_) {}
 }
 
 function conductoresCancelarForm() {
@@ -3303,9 +3319,10 @@ function conductoresCancelarForm() {
 
 async function conductoresCrear() {
   const errorEl  = document.getElementById('conductores-form-error');
-  const nombre   = document.getElementById('cond-form-nombre')?.value.trim();
-  const cedula   = document.getElementById('cond-form-cedula')?.value.trim();
-  const telefono = document.getElementById('cond-form-telefono')?.value.trim();
+  const nombre     = document.getElementById('cond-form-nombre')?.value.trim();
+  const cedula     = document.getElementById('cond-form-cedula')?.value.trim();
+  const telefono   = document.getElementById('cond-form-telefono')?.value.trim();
+  const usuarioId  = document.getElementById('cond-form-usuario')?.value || null;
   errorEl.textContent = '';
 
   if (!nombre) { errorEl.textContent = 'El nombre es requerido'; return; }
@@ -3315,7 +3332,7 @@ async function conductoresCrear() {
     const r = await fetch(API + '/api/rutas/conductores', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ nombre, cedula, telefono: telefono || null }),
+      body: JSON.stringify({ nombre, cedula, telefono: telefono || null, usuario_id: usuarioId ? parseInt(usuarioId) : null }),
     });
     const d = await r.json();
     if (r.ok) {
@@ -3340,4 +3357,185 @@ async function conductorToggle(id, activar) {
     if (r.ok) await cargarListaConductores();
     else { const d = await r.json(); alert(d.error || 'Error'); }
   } catch (e) { alert('Error de conexión'); }
+}
+
+// ─────────────────────────────────────────────────────────────
+// CONDUCTOR — Pantalla de confirmación de entregas en campo
+// ─────────────────────────────────────────────────────────────
+
+let _COND_RUTAS = [];
+let _COND_RUTA_ACTIVA = null;   // ruta en confirmación de parada
+let _COND_BULTOS = [];          // bultos de la ruta activa con estado local
+
+async function cargarRutasConductor() {
+  const el = document.getElementById('cond-contenido');
+  if (!el) return;
+  try {
+    const d = await get('/api/rutas/mis-rutas');
+    _COND_RUTAS = d.rutas || [];
+    document.getElementById('cond-badge-rutas').textContent = _COND_RUTAS.length;
+
+    if (!_COND_RUTAS.length) {
+      el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
+        <div style="font-size:60px;">✅</div>
+        <div style="font-size:20px;font-weight:700;color:#4ade80;margin-top:16px;">Sin rutas en tránsito</div>
+        <div style="font-size:13px;color:#555;margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
+        <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:12px;font-size:15px;cursor:pointer;">🔄 Actualizar</button>
+      </div>`;
+      return;
+    }
+
+    el.innerHTML = _COND_RUTAS.map((r, i) => {
+      const totalBultos = (r.manifiesto || []).reduce((s, g) => s + g.bultos.length, 0);
+      const paradas = (r.manifiesto || []).length;
+      return `
+        <div style="background:#111;border:2px solid #1e3a5f;border-radius:16px;padding:20px;margin-bottom:12px;">
+          <div style="font-size:18px;font-weight:800;color:#60a5fa;margin-bottom:4px;">🚛 Ruta #${r.id}</div>
+          <div style="font-size:14px;color:#ccc;margin-bottom:12px;">${r.ruta_maestra_nombre || r.tipo_ruta} · ${r.vehiculo_placa || 'Sin vehículo'}</div>
+          <div style="display:flex;gap:16px;margin-bottom:16px;">
+            <div style="text-align:center;">
+              <div style="font-size:28px;font-weight:800;color:#fff;">${paradas}</div>
+              <div style="font-size:11px;color:#555;">PARADAS</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="font-size:28px;font-weight:800;color:#fff;">${totalBultos}</div>
+              <div style="font-size:11px;color:#555;">BULTOS</div>
+            </div>
+          </div>
+          <button onclick="abrirEntregaConductor(${i})"
+            style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
+            📋 Confirmar Entregas
+          </button>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando rutas. Verifica conexión.</div>';
+  }
+}
+
+function abrirEntregaConductor(idx) {
+  const ruta = _COND_RUTAS[idx];
+  if (!ruta) return;
+  _COND_RUTA_ACTIVA = ruta;
+
+  const bultos = (ruta.manifiesto || []).flatMap(g =>
+    g.bultos.map(b => ({ ...b, _destino: g.destino, entregado: true, motivo_rechazo: MOTIVOS_RECHAZO[0] }))
+  );
+  _COND_BULTOS = bultos;
+
+  _renderPantallaEntregaConductor();
+}
+
+function _renderPantallaEntregaConductor() {
+  const el = document.getElementById('cond-contenido');
+  if (!el || !_COND_RUTA_ACTIVA) return;
+
+  const ruta = _COND_RUTA_ACTIVA;
+  const rechazados = _COND_BULTOS.filter(b => !b.entregado).length;
+  const entregados = _COND_BULTOS.filter(b => b.entregado).length;
+
+  // Agrupar por destino
+  const porDestino = {};
+  _COND_BULTOS.forEach((b, i) => {
+    if (!porDestino[b._destino]) porDestino[b._destino] = [];
+    porDestino[b._destino].push({ ...b, _idx: i });
+  });
+
+  let html = `
+    <div style="margin-bottom:16px;">
+      <button onclick="_cerrarEntregaConductor()" style="background:none;border:none;color:#666;font-size:13px;cursor:pointer;padding:0;">← Volver</button>
+    </div>
+    <div style="background:#111;border:1px solid #333;border-radius:14px;padding:16px;margin-bottom:16px;">
+      <div style="font-size:16px;font-weight:800;color:#60a5fa;">Ruta #${ruta.id}</div>
+      <div style="display:flex;gap:20px;margin-top:10px;">
+        <div><span style="font-size:22px;font-weight:800;color:#4ade80;">${entregados}</span><div style="font-size:11px;color:#555;">ENTREGADOS</div></div>
+        <div><span style="font-size:22px;font-weight:800;color:#f87171;">${rechazados}</span><div style="font-size:11px;color:#555;">RECHAZADOS</div></div>
+      </div>
+    </div>`;
+
+  Object.entries(porDestino).forEach(([destino, bultos]) => {
+    const todoEntregado = bultos.every(b => b.entregado);
+    html += `
+      <div style="margin-bottom:8px;">
+        <div style="font-size:12px;font-weight:700;color:#aaa;padding:8px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">
+          📍 ${destino}
+        </div>
+        ${bultos.map(b => `
+          <div style="background:${b.entregado ? '#0d1a0d' : '#1a0d0d'};border:1px solid ${b.entregado ? '#166534' : '#7f1d1d'};border-radius:12px;padding:14px;margin-bottom:8px;">
+            <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:2px;">${b.codigo_barras}</div>
+            <div style="font-size:12px;color:#666;margin-bottom:12px;">${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente || '—'}</div>
+            <div style="display:flex;gap:8px;">
+              <button onclick="_condToggleBulto(${b._idx}, true)"
+                style="flex:1;padding:14px 8px;background:${b.entregado ? '#166534' : '#1a1a1a'};color:${b.entregado ? '#4ade80' : '#555'};border:1px solid ${b.entregado ? '#166534' : '#333'};border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+                ✓ Entregado
+              </button>
+              <button onclick="_condToggleBulto(${b._idx}, false)"
+                style="flex:1;padding:14px 8px;background:${!b.entregado ? '#7f1d1d' : '#1a1a1a'};color:${!b.entregado ? '#f87171' : '#555'};border:1px solid ${!b.entregado ? '#7f1d1d' : '#333'};border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+                ✗ Rechazado
+              </button>
+            </div>
+            ${!b.entregado ? `<select onchange="_condSetMotivo(${b._idx}, this.value)"
+              style="width:100%;margin-top:10px;padding:10px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;font-size:13px;">
+              ${MOTIVOS_RECHAZO.map(m => `<option value="${m}" ${b.motivo_rechazo===m?'selected':''}>${m}</option>`).join('')}
+            </select>` : ''}
+          </div>`).join('')}
+      </div>`;
+  });
+
+  const todosMarcados = _COND_BULTOS.length > 0;
+  html += `
+    <div style="position:sticky;bottom:16px;margin-top:8px;">
+      <button onclick="_condConfirmarEntrega()"
+        style="width:100%;padding:20px;background:${rechazados > 0 ? '#7f1d1d' : '#166534'};color:${rechazados > 0 ? '#f87171' : '#4ade80'};border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
+        ${rechazados > 0 ? `⚠ Cerrar ruta (${rechazados} rechazado${rechazados !== 1 ? 's' : ''})` : '✅ Cerrar ruta — Todo entregado'}
+      </button>
+    </div>`;
+
+  el.innerHTML = html;
+}
+
+function _condToggleBulto(idx, entregado) {
+  _COND_BULTOS[idx].entregado = entregado;
+  _renderPantallaEntregaConductor();
+}
+
+function _condSetMotivo(idx, motivo) {
+  _COND_BULTOS[idx].motivo_rechazo = motivo;
+}
+
+function _cerrarEntregaConductor() {
+  _COND_RUTA_ACTIVA = null;
+  _COND_BULTOS = [];
+  cargarRutasConductor();
+}
+
+async function _condConfirmarEntrega() {
+  if (!_COND_RUTA_ACTIVA) return;
+  const rechazados = _COND_BULTOS.filter(b => !b.entregado).length;
+  const msg = rechazados > 0
+    ? `¿Confirmar entrega?\n${rechazados} bulto${rechazados !== 1 ? 's' : ''} rechazado${rechazados !== 1 ? 's' : ''} — quedarán en Devoluciones`
+    : '¿Confirmar que todos los bultos fueron entregados?';
+  if (!confirm(msg)) return;
+
+  const payload = _COND_BULTOS.map(b => ({
+    id:             b.id,
+    entregado:      b.entregado,
+    motivo_rechazo: b.entregado ? null : b.motivo_rechazo
+  }));
+
+  try {
+    const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/entregar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ bultos: payload })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      const rec = d.rechazados || 0;
+      alerta(rec > 0 ? `Ruta cerrada · ${rec} bulto${rec!==1?'s':''} devuelto${rec!==1?'s':''} al almacén` : 'Ruta cerrada — ¡Buen trabajo!', rec > 0 ? 'advertencia' : 'exito');
+      _cerrarEntregaConductor();
+    } else {
+      alerta(d.error || 'Error al confirmar entrega', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }

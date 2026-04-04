@@ -4,7 +4,7 @@ Conductores + Vehículos + RutaMaestra (plantilla) + RutaDespacho (instancia/via
 """
 from datetime import datetime, date
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.conductor import Conductor
 from app.models.vehiculo import Vehiculo
@@ -39,6 +39,7 @@ def crear_conductor():
         nombre=data['nombre'].strip(),
         cedula=data['cedula'].strip(),
         telefono=data.get('telefono', '').strip() or None,
+        usuario_id=data.get('usuario_id') or None,
     )
     db.session.add(c)
     db.session.commit()
@@ -48,11 +49,13 @@ def crear_conductor():
 @rutas_bp.route('/conductores/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_conductor(id):
+    from app.models.usuario import Usuario
     c = Conductor.query.get_or_404(id)
     data = request.get_json()
-    if 'nombre'   in data: c.nombre   = data['nombre'].strip()
-    if 'telefono' in data: c.telefono = data['telefono'].strip() or None
-    if 'activo'   in data: c.activo   = bool(data['activo'])
+    if 'nombre'     in data: c.nombre     = data['nombre'].strip()
+    if 'telefono'   in data: c.telefono   = data['telefono'].strip() or None
+    if 'activo'     in data: c.activo     = bool(data['activo'])
+    if 'usuario_id' in data: c.usuario_id = data['usuario_id'] or None
     db.session.commit()
     return jsonify({'conductor': c.to_dict()}), 200
 
@@ -447,6 +450,40 @@ def entregar_ruta(id):
         'rechazados': rechazados,
         'ruta': ruta.to_dict()
     }), 200
+
+
+@rutas_bp.route('/mis-rutas', methods=['GET'])
+@jwt_required()
+def mis_rutas():
+    """
+    Para el conductor autenticado: devuelve sus rutas EN_TRANSITO.
+    Usa la vinculación Conductor.usuario_id → JWT identity.
+    """
+    usuario_id = int(get_jwt_identity())
+    conductor = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
+    if not conductor:
+        return jsonify({'error': 'Tu cuenta no está vinculada a ningún conductor'}), 404
+
+    rutas = (RutaDespacho.query
+             .filter_by(conductor_id=conductor.id, estado='EN_TRANSITO')
+             .order_by(RutaDespacho.fecha_cierre.desc())
+             .all())
+    return jsonify({
+        'conductor': conductor.to_dict(),
+        'rutas': [r.to_dict(include_bultos=True) for r in rutas]
+    }), 200
+
+
+@rutas_bp.route('/usuarios-conductores', methods=['GET'])
+@jwt_required()
+def usuarios_conductores():
+    """Lista de usuarios con rol conductor — para vincular al registro de flota."""
+    from app.models.usuario import Usuario
+    usuarios = (Usuario.query
+                .filter_by(rol='conductor', activo=True)
+                .order_by(Usuario.nombre)
+                .all())
+    return jsonify({'usuarios': [{'id': u.id, 'nombre': u.nombre, 'email': u.email} for u in usuarios]}), 200
 
 
 @rutas_bp.route('/bultos-rechazados', methods=['GET'])
