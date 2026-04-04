@@ -12,7 +12,7 @@ class RutaDespacho(db.Model):
 
     id              = db.Column(db.Integer, primary_key=True)
     conductor_id    = db.Column(db.Integer, db.ForeignKey('conductores.id'), nullable=False)
-    vehiculo_id     = db.Column(db.Integer, db.ForeignKey('vehiculos.id'), nullable=False)
+    vehiculo_id     = db.Column(db.Integer, db.ForeignKey('vehiculos.id'), nullable=True)
     tipo_ruta       = db.Column(db.String(20), nullable=False)   # Urbana | Municipal
     estado          = db.Column(db.String(20), default='EN_CARGUE')  # EN_CARGUE | EN_TRANSITO | ENTREGADA
     notas           = db.Column(db.Text)
