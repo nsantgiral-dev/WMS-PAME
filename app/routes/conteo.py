@@ -158,6 +158,20 @@ def generar_tareas_abc():
         return jsonify({'error': str(e)}), 500
 
 
+@conteo_bp.route('/abc/generar-todas', methods=['POST'])
+@jwt_required()
+def generar_todas_las_clases():
+    """Genera tareas A+B+C en una sola llamada — usado por el botón admin."""
+    data = request.get_json() or {}
+    if 'almacen_id' not in data:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    try:
+        resultado = ABCService.generar_todas_las_clases(almacen_id=data['almacen_id'])
+        return jsonify(resultado), 201
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @conteo_bp.route('/abc/sincronizar', methods=['POST'])
 @jwt_required()
 def sincronizar_abc():

@@ -132,21 +132,61 @@ class MobileService:
         ).first()
 
         if not tarea:
-            # Verificar packing o conteo pendiente
+            # Sin picking pendiente — buscar conteo sin asignar
+            conteo = SesionConteo.query.filter_by(
+                estado='PENDIENTE',
+                operario_id=None
+            ).order_by(SesionConteo.fecha_creacion.asc()).first()
+
+            if conteo:
+                conteo.operario_id = operario_id
+                conteo.estado = 'EN_PROCESO'
+                conteo.fecha_inicio = datetime.utcnow()
+                db.session.commit()
+                logger.info(f'[MOBILE] Conteo {conteo.codigo} asignado a operario {operario_id}')
+                return MobileService._conteo_a_dict(conteo)
+
+            # Sin picking ni conteo — verificar packing
             resultado = MobileService.get_tareas_operario(operario_id)
             if resultado['tareas']:
                 return resultado['tareas'][0]
             return None
 
-        # Asignar automáticamente al operario
+        # ── Task Interleaving ────────────────────────────────────────────────────
+        # El picker va a la ubicación X. Si hay un conteo pendiente ahí, lo
+        # asignamos ahora para que lo haga al terminar el picking — sin viaje extra.
+        conteo_intercalado = None
+        if tarea.ubicacion_id:
+            conteo_mismo_lugar = SesionConteo.query.filter_by(
+                ubicacion_id=tarea.ubicacion_id,
+                estado='PENDIENTE',
+                operario_id=None
+            ).first()
+            if conteo_mismo_lugar:
+                conteo_mismo_lugar.operario_id = operario_id
+                # No cambia a EN_PROCESO aún — el operario primero hace el picking
+                db.session.flush()
+                conteo_intercalado = {
+                    'id':              conteo_mismo_lugar.id,
+                    'codigo':          conteo_mismo_lugar.codigo,
+                    'producto_codigo': conteo_mismo_lugar.producto.codigo if conteo_mismo_lugar.producto else '',
+                    'producto_nombre': conteo_mismo_lugar.producto.nombre if conteo_mismo_lugar.producto else '',
+                    'clasificacion':   conteo_mismo_lugar.clasificacion_abc or '?',
+                }
+                logger.info(
+                    f'[INTERLEAVING] Conteo {conteo_mismo_lugar.codigo} '
+                    f'inyectado junto al picking {tarea.codigo} — ubicación {tarea.ubicacion_id}'
+                )
+
+        # Asignar picking al operario
         tarea.operario_id = operario_id
         tarea.estado = 'EN_PROCESO'
         tarea.fecha_inicio = datetime.utcnow()
         db.session.commit()
 
-        logger.info(f'[MOBILE] Tarea {tarea.codigo} asignada automáticamente a operario {operario_id}')
+        logger.info(f'[MOBILE] Picking {tarea.codigo} asignado a operario {operario_id}')
 
-        return {
+        resultado = {
             'id': tarea.id,
             'tipo': 'PICKING',
             'prioridad': tarea.prioridad,
@@ -157,7 +197,27 @@ class MobileService:
             'cantidad_escaneada': tarea.cantidad_recogida,
             'estado': tarea.estado,
             'referencia': tarea.referencia_documento,
-            'lote': tarea.lote
+            'lote': tarea.lote,
+            'conteo_intercalado': conteo_intercalado,  # None si no hay conteo en este pasillo
+        }
+        return resultado
+
+    @staticmethod
+    def _conteo_a_dict(c: SesionConteo) -> dict:
+        return {
+            'id': c.id,
+            'tipo': 'CONTEO',
+            'prioridad': 1,
+            'ubicacion': c.ubicacion.codigo if c.ubicacion else '',
+            'producto_codigo': c.producto.codigo if c.producto else '',
+            'producto_nombre': c.producto.nombre if c.producto else '',
+            'cantidad_requerida': None,
+            'cantidad_escaneada': 0,
+            'estado': c.estado,
+            'referencia': c.codigo,
+            'maneja_lote': c.maneja_lote,
+            'clasificacion_abc': c.clasificacion_abc,
+            'conteo_intercalado': None,
         }
 
     @staticmethod

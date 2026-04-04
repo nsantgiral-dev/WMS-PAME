@@ -182,6 +182,7 @@
       <div class="nav-tab" onclick="tab('tab-connekta')">Siesa</div>
       <div class="nav-tab" onclick="tab('tab-muelle')">🚛 Muelle</div>
       <div class="nav-tab" onclick="tab('tab-rutas')">🗺️ Rutas</div>
+      <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
     </div>
 
     <!-- Dashboard -->
@@ -544,6 +545,85 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- INVENTARIO CÍCLICO -->
+  <div id="tab-inventario" class="admin-content" style="display:none;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:14px;">📊 Inventario Cíclico</div>
+
+    <!-- Sub-nav -->
+    <div style="display:flex;gap:0;background:#111;border:1px solid #222;border-radius:10px;overflow:hidden;margin-bottom:16px;">
+      <div id="inv-tab-conteos" onclick="invSubtab('conteos')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:#fff;color:#000;font-weight:700;">
+        Conteos
+      </div>
+      <div id="inv-tab-abc" onclick="invSubtab('abc')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:#666;">
+        ABC
+      </div>
+    </div>
+
+    <!-- Panel Conteos -->
+    <div id="inv-panel-conteos">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="font-size:14px;font-weight:700;">Tareas de conteo</div>
+        <select id="inv-filtro-estado" onchange="cargarConteos()"
+          style="padding:7px 10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+          <option value="">Todos</option>
+          <option value="PENDIENTE" selected>Pendientes</option>
+          <option value="EN_PROCESO">En proceso</option>
+          <option value="SEGUNDO_CONTEO">Segundo conteo</option>
+          <option value="DESCUADRE">Descuadre</option>
+          <option value="MATCH">Match</option>
+          <option value="AJUSTADO">Ajustado</option>
+        </select>
+      </div>
+      <div id="inv-conteos-lista" style="min-height:60px;">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- Panel ABC -->
+    <div id="inv-panel-abc" style="display:none;">
+
+      <!-- Selector almacén -->
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Almacén</div>
+        <select id="inv-abc-almacen" onchange="cargarResumenAbc()"
+          style="width:100%;padding:10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+          <option value="">Cargando almacenes...</option>
+        </select>
+      </div>
+
+      <!-- Distribución ABC -->
+      <div id="inv-abc-resumen" style="margin-bottom:16px;">
+        <div style="text-align:center;padding:20px;color:#555;">Selecciona un almacén</div>
+      </div>
+
+      <!-- Generación manual -->
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:12px;">Generar tareas de conteo</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;">
+          <button onclick="generarAbc('A')"
+            style="padding:12px 6px;background:#1e3a1e;color:#4ade80;border:1px solid #166534;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Clase A<br><span style="font-size:10px;color:#86efac;font-weight:400;">cada 15 días</span>
+          </button>
+          <button onclick="generarAbc('B')"
+            style="padding:12px 6px;background:#1e2a3a;color:#60a5fa;border:1px solid #1e40af;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Clase B<br><span style="font-size:10px;color:#93c5fd;font-weight:400;">cada 90 días</span>
+          </button>
+          <button onclick="generarAbc('C')"
+            style="padding:12px 6px;background:#2a1e1e;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Clase C<br><span style="font-size:10px;color:#fca5a5;font-weight:400;">cada 180 días</span>
+          </button>
+        </div>
+        <button onclick="generarTodasClases()"
+          style="width:100%;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+          Generar A + B + C
+        </button>
+        <div id="inv-abc-resultado" style="min-height:20px;font-size:12px;color:#4ade80;margin-top:8px;text-align:center;"></div>
+      </div>
+    </div>
   </div>
 
   <!-- RECEPCIÓN -->

@@ -60,5 +60,11 @@ def create_app():
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f'[PEDIDOS_SCHEDULER] No se pudo iniciar: {e}')
+        try:
+            from app.services.abc_service import ABCService
+            ABCService.init_scheduler(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}')
 
     return app

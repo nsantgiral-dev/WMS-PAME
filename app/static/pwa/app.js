@@ -228,10 +228,11 @@ async function cargarAdmin() {
   else if (TAB === 'tab-connekta') await cargarConnekta();
   else if (TAB === 'tab-muelle') await cargarMuelle();
   else if (TAB === 'tab-rutas') await cargarRutas();
+  else if (TAB === 'tab-inventario') await cargarInventario();
 }
 
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
@@ -782,6 +783,14 @@ function renderTarea(t) {
       </button>
 
       ${t.referencia ? `<div style="text-align:center;margin-top:10px;font-size:12px;color:#555;">Ref: ${t.referencia}</div>` : ''}
+
+      ${t.conteo_intercalado ? `
+      <div style="background:#1c1a0a;border:1px solid #b45309;border-radius:12px;padding:14px;margin-top:12px;">
+        <div style="font-size:12px;color:#f59e0b;font-weight:700;margin-bottom:4px;">📊 CONTEO PENDIENTE AQUÍ</div>
+        <div style="font-size:14px;font-weight:700;color:#fde68a;">${t.conteo_intercalado.producto_codigo}</div>
+        <div style="font-size:12px;color:#d97706;">${t.conteo_intercalado.producto_nombre}</div>
+        <div style="font-size:11px;color:#78350f;margin-top:4px;">Clase ${t.conteo_intercalado.clasificacion} · Hazlo al terminar el picking</div>
+      </div>` : ''}
     </div>`;
 }
 
@@ -3507,6 +3516,209 @@ function _cerrarEntregaConductor() {
   _COND_RUTA_ACTIVA = null;
   _COND_BULTOS = [];
   cargarRutasConductor();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// INVENTARIO CÍCLICO — Admin tab
+// ══════════════════════════════════════════════════════════════════
+
+let _INV_SUBTAB = 'conteos';
+let _INV_ALMACENES = [];
+
+async function cargarInventario() {
+  // Cargar almacenes para el selector ABC (solo una vez)
+  if (_INV_ALMACENES.length === 0) {
+    try {
+      const r = await fetch(API + '/api/almacenes/', { headers: { Authorization: 'Bearer ' + TOKEN } });
+      if (r.ok) {
+        _INV_ALMACENES = await r.json();
+        const sel = document.getElementById('inv-abc-almacen');
+        if (sel) {
+          sel.innerHTML = _INV_ALMACENES.map(a =>
+            `<option value="${a.id}">${a.nombre}</option>`
+          ).join('');
+        }
+      }
+    } catch (e) { /* silencioso */ }
+  }
+  if (_INV_SUBTAB === 'conteos') await cargarConteos();
+  else await cargarResumenAbc();
+}
+
+function invSubtab(nombre) {
+  _INV_SUBTAB = nombre;
+  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc' };
+  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc' };
+  Object.entries(tabs).forEach(([k, id]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const activo = k === nombre;
+    el.style.background = activo ? '#fff' : 'transparent';
+    el.style.color = activo ? '#000' : '#666';
+    el.style.fontWeight = activo ? '700' : '400';
+  });
+  Object.entries(panels).forEach(([k, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = k === nombre ? 'block' : 'none';
+  });
+  if (nombre === 'conteos') cargarConteos();
+  else cargarResumenAbc();
+}
+
+async function cargarConteos() {
+  const lista = document.getElementById('inv-conteos-lista');
+  if (!lista) return;
+  const estado = document.getElementById('inv-filtro-estado')?.value || '';
+  lista.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  try {
+    const qs = estado ? `?estado=${estado}` : '';
+    const r = await fetch(API + '/api/conteo/' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    const d = await r.json();
+    const sesiones = d.sesiones || [];
+    if (!sesiones.length) {
+      lista.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">No hay conteos con este filtro</div>';
+      return;
+    }
+    const colEstado = {
+      PENDIENTE: '#555', EN_PROCESO: '#1d4ed8', SEGUNDO_CONTEO: '#7c3aed',
+      DESCUADRE: '#b45309', MATCH: '#166534', AJUSTADO: '#065f46'
+    };
+    lista.innerHTML = sesiones.map(s => {
+      const col = colEstado[s.estado] || '#333';
+      const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : s.diferencia) : '—';
+      const difCol = s.diferencia > 0 ? '#4ade80' : s.diferencia < 0 ? '#f87171' : '#aaa';
+      return `
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+          <div>
+            <div style="font-size:13px;font-weight:700;">${s.producto_codigo || '—'}</div>
+            <div style="font-size:11px;color:#666;">${s.producto_nombre || ''}</div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            ${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px;">ABC-${s.clasificacion_abc}</span>` : ''}
+            <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:#666;">
+          <span>📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}</span>
+          <span>Diferencia: <span style="color:${difCol};font-weight:700;">${dif}</span></span>
+          ${s.estado === 'DESCUADRE' ? `<button onclick="ajustarConteo(${s.id})"
+            style="background:#b45309;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
+            Ajustar →
+          </button>` : ''}
+        </div>
+        ${s.operario_nombre ? `<div style="font-size:11px;color:#555;margin-top:4px;">Operario: ${s.operario_nombre}</div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando conteos</div>';
+  }
+}
+
+async function cargarResumenAbc() {
+  const almacenId = document.getElementById('inv-abc-almacen')?.value;
+  if (!almacenId) return;
+  const resumenEl = document.getElementById('inv-abc-resumen');
+  if (!resumenEl) return;
+  resumenEl.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  try {
+    const r = await fetch(API + `/api/conteo/abc/resumen?almacen_id=${almacenId}`, {
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    const dist = d.distribucion_abc || {};
+    const items = [
+      { clase: 'A', col: '#4ade80', bg: '#1e3a1e', border: '#166534', desc: 'Alta rotación · cada 15 días' },
+      { clase: 'B', col: '#60a5fa', bg: '#1e2a3a', border: '#1e40af', desc: 'Rotación media · cada 90 días' },
+      { clase: 'C', col: '#f87171', bg: '#2a1e1e', border: '#7f1d1d', desc: 'Baja rotación · cada 180 días' },
+    ];
+    resumenEl.innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px;">
+        ${items.map(it => {
+          const total = dist[it.clase]?.total_productos ?? '—';
+          return `
+          <div style="background:${it.bg};border:1px solid ${it.border};border-radius:10px;padding:14px;text-align:center;">
+            <div style="font-size:22px;font-weight:900;color:${it.col};">${total}</div>
+            <div style="font-size:11px;font-weight:700;color:${it.col};">Clase ${it.clase}</div>
+            <div style="font-size:10px;color:#666;margin-top:2px;">${it.desc}</div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="font-size:11px;color:#555;text-align:right;">Fuente: ${d.fuente || 'WMS'}</div>`;
+  } catch (e) {
+    resumenEl.innerHTML = '<div style="color:#ef4444;font-size:12px;">Error cargando resumen</div>';
+  }
+}
+
+async function generarAbc(clase) {
+  const almacenId = document.getElementById('inv-abc-almacen')?.value;
+  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  const res = document.getElementById('inv-abc-resultado');
+  if (res) res.textContent = 'Generando...';
+  try {
+    const r = await fetch(API + '/api/conteo/abc/generar-tareas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ almacen_id: parseInt(almacenId), clasificacion: clase })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      const msg = `Clase ${clase}: ${d.tareas_creadas} tareas nuevas · ${d.omitidos_por_frecuencia} ya contados · ${d.omitidos_por_pendiente} activos`;
+      if (res) res.textContent = msg;
+      alerta(msg, 'exito');
+      await cargarConteos();
+    } else {
+      if (res) res.textContent = '';
+      alerta(d.error || 'Error generando tareas', 'error');
+    }
+  } catch (e) {
+    if (res) res.textContent = '';
+    alerta('Error de conexión', 'error');
+  }
+}
+
+async function generarTodasClases() {
+  const almacenId = document.getElementById('inv-abc-almacen')?.value;
+  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  const res = document.getElementById('inv-abc-resultado');
+  if (res) res.textContent = 'Generando A+B+C...';
+  try {
+    const r = await fetch(API + '/api/conteo/abc/generar-todas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ almacen_id: parseInt(almacenId) })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      const msg = `Total: ${d.total_tareas_creadas} tareas nuevas`;
+      if (res) res.textContent = msg;
+      alerta(msg, 'exito');
+      await cargarConteos();
+    } else {
+      if (res) res.textContent = '';
+      alerta(d.error || 'Error generando tareas', 'error');
+    }
+  } catch (e) {
+    if (res) res.textContent = '';
+    alerta('Error de conexión', 'error');
+  }
+}
+
+async function ajustarConteo(sesionId) {
+  if (!confirm('¿Confirmar ajuste de inventario? Esto enviará el movimiento a Siesa.')) return;
+  try {
+    const r = await fetch(API + `/api/conteo/${sesionId}/ajustar`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`Ajuste ${d.motivo_codigo} enviado a Siesa · Diferencia: ${d.diferencia}`, 'exito');
+      await cargarConteos();
+    } else {
+      alerta(d.error || 'Error al ajustar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function _condConfirmarEntrega() {
