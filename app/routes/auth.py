@@ -52,6 +52,8 @@ def register():
         puede_usar_camara=data.get('puede_usar_camara', False),
         puede_picar=data.get('puede_picar', True),
         puede_empacar=data.get('puede_empacar', False),
+        bodega_siesa_id=data.get('bodega_siesa_id'),
+        nombre_punto_venta=data.get('nombre_punto_venta'),
     )
     usuario.set_password(data['password'])
 
@@ -90,6 +92,10 @@ def actualizar_usuario(uid):
         usuario.puede_empacar = bool(data['puede_empacar'])
     if 'activo' in data:
         usuario.activo = bool(data['activo'])
+    if 'bodega_siesa_id' in data:
+        usuario.bodega_siesa_id = data['bodega_siesa_id'] or None
+    if 'nombre_punto_venta' in data:
+        usuario.nombre_punto_venta = data['nombre_punto_venta'] or None
     if 'password' in data and data['password']:
         usuario.set_password(data['password'])
 

@@ -183,6 +183,7 @@
       <div class="nav-tab" onclick="tab('tab-muelle')">🚛 Muelle</div>
       <div class="nav-tab" onclick="tab('tab-rutas')">🗺️ Rutas</div>
       <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
+      <div class="nav-tab" onclick="tab('tab-traslados')">🏪 Traslados</div>
     </div>
 
     <!-- Dashboard -->
@@ -622,6 +623,96 @@
           Generar A + B + C
         </button>
         <div id="inv-abc-resultado" style="min-height:20px;font-size:12px;color:#4ade80;margin-top:8px;text-align:center;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRASLADOS — Tab admin -->
+  <div id="tab-traslados" class="admin-content" style="display:none;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:14px;">🏪 Traslados a Puntos de Venta</div>
+
+    <!-- Sub-nav -->
+    <div style="display:flex;gap:0;background:#111;border:1px solid #222;border-radius:10px;overflow:hidden;margin-bottom:14px;">
+      <div id="tras-tab-pendientes" onclick="trasSubtab('pendientes')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:#fff;color:#000;font-weight:700;">
+        Pendientes
+      </div>
+      <div id="tras-tab-transito" onclick="trasSubtab('transito')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:#666;">
+        En Tránsito
+      </div>
+      <div id="tras-tab-historial" onclick="trasSubtab('historial')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:#666;">
+        Historial
+      </div>
+    </div>
+
+    <div id="tras-lista" style="min-height:60px;">
+      <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+    </div>
+  </div>
+
+  <!-- TIENDA — Pantalla punto de venta -->
+  <div id="pantalla-tienda" style="display:none;min-height:100vh;background:#000;">
+    <div class="header">
+      <div class="header-logo">🏪 <span id="tienda-nombre">Punto de Venta</span></div>
+      <button class="btn-logout" onclick="salir()">Salir</button>
+    </div>
+
+    <!-- Sub-nav tienda -->
+    <div style="display:flex;background:#111;border-bottom:1px solid #222;">
+      <div id="tienda-tab-solicitudes" onclick="tiendaSubtab('solicitudes')"
+        style="flex:1;padding:11px;font-size:13px;color:#fff;text-align:center;border-bottom:2px solid #fff;cursor:pointer;">
+        Mis Pedidos
+      </div>
+      <div id="tienda-tab-nueva" onclick="tiendaSubtab('nueva')"
+        style="flex:1;padding:11px;font-size:13px;color:#666;text-align:center;border-bottom:2px solid transparent;cursor:pointer;">
+        Pedir
+      </div>
+      <div id="tienda-tab-recibir" onclick="tiendaSubtab('recibir')"
+        style="flex:1;padding:11px;font-size:13px;color:#666;text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
+        Recibir
+        <span id="badge-recibir" style="display:none;position:absolute;top:6px;right:14px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;"></span>
+      </div>
+    </div>
+
+    <!-- Panel: Mis Pedidos -->
+    <div id="tienda-panel-solicitudes" style="padding:14px;">
+      <div id="tienda-lista-solicitudes">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- Panel: Nueva Solicitud -->
+    <div id="tienda-panel-nueva" style="padding:14px;display:none;">
+      <!-- Carrito -->
+      <div id="tienda-carrito-header" style="display:none;background:#111;border:1px solid #333;border-radius:12px;padding:14px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div style="font-size:14px;font-weight:700;">Carrito</div>
+          <button onclick="tiendaEnviarSolicitud()"
+            style="background:#4ade80;color:#000;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Enviar Pedido →
+          </button>
+        </div>
+        <div id="tienda-carrito-items" style="font-size:12px;color:#aaa;"></div>
+      </div>
+
+      <!-- Búsqueda de productos -->
+      <div style="margin-bottom:12px;">
+        <input id="tienda-buscar" type="text" placeholder="Buscar producto..."
+          style="width:100%;padding:11px 14px;background:#111;border:1px solid #333;border-radius:10px;color:#fff;font-size:14px;"
+          oninput="tiendaFiltrarStock()">
+      </div>
+      <div id="tienda-stock-lista">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando stock disponible...</div>
+      </div>
+    </div>
+
+    <!-- Panel: Recibir -->
+    <div id="tienda-panel-recibir" style="padding:14px;display:none;">
+      <div style="font-size:13px;color:#666;margin-bottom:12px;">Traslados que llegaron — confirmá la recepción</div>
+      <div id="tienda-lista-recibir">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
       </div>
     </div>
   </div>

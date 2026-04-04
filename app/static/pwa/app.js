@@ -43,9 +43,15 @@ function mostrarSegunRol(rol) {
   const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
+  const esTienda = rol === 'tienda';
   const puedeEmpacar = OPERARIO?.puede_empacar || false;
   const puedePicar   = OPERARIO?.puede_picar !== false; // default true
-  if (esConductor) {
+  if (esTienda) {
+    pantalla('pantalla-tienda');
+    document.getElementById('tienda-nombre').textContent =
+      OPERARIO.nombre_punto_venta || OPERARIO.nombre || 'Punto de Venta';
+    tiendaIniciar();
+  } else if (esConductor) {
     pantalla('pantalla-conductor');
     document.getElementById('cond-nombre').textContent = OPERARIO.nombre || '—';
     cargarRutasConductor();
@@ -229,10 +235,11 @@ async function cargarAdmin() {
   else if (TAB === 'tab-muelle') await cargarMuelle();
   else if (TAB === 'tab-rutas') await cargarRutas();
   else if (TAB === 'tab-inventario') await cargarInventario();
+  else if (TAB === 'tab-traslados') await cargarTrasladosAdmin();
 }
 
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-traslados'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
@@ -1053,7 +1060,7 @@ async function cargarRecepciones() {
 }
 
 function pantalla(id) {
-  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador','pantalla-conductor'].forEach(p => {
+  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador','pantalla-conductor','pantalla-tienda'].forEach(p => {
     const el = document.getElementById(p);
     if (el) el.style.display = p === id ? 'block' : 'none';
   });
@@ -2125,14 +2132,23 @@ function _formUsuario(u = {}) {
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
       <input id="u-password" placeholder="${u.id ? 'Nueva contraseña (dejar vacío para no cambiar)' : 'Contraseña'}" type="password"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-      <select id="u-rol" style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+      <select id="u-rol" onchange="document.getElementById('u-tienda-fields').style.display=this.value==='tienda'?'block':'none'"
+        style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
         <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
         <option value="conductor" ${u.rol==='conductor'?'selected':''}>Conductor</option>
+        <option value="tienda" ${u.rol==='tienda'?'selected':''}>Tienda (punto de venta)</option>
         <option value="supervisor" ${u.rol==='supervisor'?'selected':''}>Supervisor</option>
         <option value="jefe_almacen" ${u.rol==='jefe_almacen'?'selected':''}>Jefe de almacén</option>
         <option value="admin" ${u.rol==='admin'?'selected':''}>Admin</option>
       </select>
+      <!-- Campos tienda (solo si rol=tienda) -->
+      <div id="u-tienda-fields" style="display:${(u.rol==='tienda')?'block':'none'};">
+        <input id="u-bodega-siesa" placeholder="ID Bodega Siesa (ej. TP1)" value="${u.bodega_siesa_id || ''}"
+          style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+        <input id="u-nombre-pv" placeholder="Nombre punto de venta (ej. Tienda Centro)" value="${u.nombre_punto_venta || ''}"
+          style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;margin-top:8px;box-sizing:border-box;">
+      </div>
       <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
         <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
@@ -2198,7 +2214,13 @@ async function _guardarUsuario(uid) {
 
   if (!nombre) { alerta('El nombre es requerido', 'error'); return; }
 
-  const payload = { nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar };
+  const bodegaSiesaId = document.getElementById('u-bodega-siesa')?.value.trim() || null;
+  const nombrePv = document.getElementById('u-nombre-pv')?.value.trim() || null;
+
+  const payload = {
+    nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
+    bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv
+  };
   if (pass) payload.password = pass;
 
   try {
@@ -3718,6 +3740,419 @@ async function ajustarConteo(sesionId) {
     } else {
       alerta(d.error || 'Error al ajustar', 'error');
     }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// TRASLADOS — Admin tab
+// ══════════════════════════════════════════════════════════════════
+
+let _TRAS_SUBTAB = 'pendientes';
+const TRAS_ESTADO = {
+  pendientes: ['BORRADOR','ENVIADA','APROBADA','EN_PICKING'],
+  transito:   ['DESPACHADA','EN_TRANSITO'],
+  historial:  ['ENTREGADA','RECHAZADA']
+};
+const TRAS_COL = {
+  BORRADOR:'#555', ENVIADA:'#1d4ed8', APROBADA:'#166534', EN_PICKING:'#7c3aed',
+  DESPACHADA:'#b45309', EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46', RECHAZADA:'#7f1d1d'
+};
+
+function trasSubtab(nombre) {
+  _TRAS_SUBTAB = nombre;
+  ['pendientes','transito','historial'].forEach(k => {
+    const el = document.getElementById(`tras-tab-${k}`);
+    if (!el) return;
+    const activo = k === nombre;
+    el.style.background = activo ? '#fff' : 'transparent';
+    el.style.color = activo ? '#000' : '#666';
+    el.style.fontWeight = activo ? '700' : '400';
+  });
+  cargarTrasladosAdmin();
+}
+
+async function cargarTrasladosAdmin() {
+  const lista = document.getElementById('tras-lista');
+  if (!lista) return;
+  const estados = TRAS_ESTADO[_TRAS_SUBTAB] || [];
+  lista.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  try {
+    // Cargar solicitudes para cada estado del subtab actual
+    const promesas = estados.map(e => get(`/api/traslados/?estado=${e}`));
+    const resultados = await Promise.all(promesas);
+    const todas = resultados.flatMap(r => r.solicitudes || []);
+    todas.sort((a,b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion));
+
+    if (!todas.length) {
+      lista.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin solicitudes</div>';
+      return;
+    }
+    lista.innerHTML = todas.map(s => _renderTrasladoCard(s)).join('');
+  } catch (e) {
+    lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando traslados</div>';
+  }
+}
+
+function _renderTrasladoCard(s) {
+  const col = TRAS_COL[s.estado] || '#333';
+  const fecha = s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : '';
+  const itemsResumen = (s.items || []).map(i =>
+    `<div style="font-size:11px;color:#666;">${i.producto_codigo} · ${i.cantidad_solicitada} und${i.cantidad_aprobada && i.cantidad_aprobada !== i.cantidad_solicitada ? ` <span style="color:#f59e0b">(aprobado: ${i.cantidad_aprobada})</span>` : ''}</div>`
+  ).join('');
+
+  const acciones = [];
+  if (s.estado === 'ENVIADA') {
+    acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Aprobar</button>`);
+    acciones.push(`<button onclick="trasRechazar(${s.id})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;">Rechazar</button>`);
+  }
+  if (['APROBADA','EN_PICKING'].includes(s.estado)) {
+    acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Despachar</button>`);
+  }
+  if (['DESPACHADA','EN_TRANSITO'].includes(s.estado)) {
+    acciones.push(`<button onclick="trasConfirmarRecepcion(${s.id})" style="flex:1;padding:10px;background:#065f46;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Confirmar recepción</button>`);
+  }
+
+  return `
+  <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+      <div>
+        <div style="font-size:13px;font-weight:700;">${s.codigo}</div>
+        <div style="font-size:11px;color:#666;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha}</div>
+      </div>
+      <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;">${s.estado}</span>
+    </div>
+    <div style="margin-bottom:${acciones.length?'10px':'0'};">${itemsResumen}</div>
+    ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
+    ${acciones.length ? `<div style="display:flex;gap:8px;">${acciones.join('')}</div>` : ''}
+  </div>`;
+}
+
+async function trasAprobar(id) {
+  if (!confirm('¿Aprobar esta solicitud? Se generarán tareas de picking y se notificará a Siesa.')) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/aprobar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`Solicitud aprobada — picking generado`, 'exito');
+      cargarTrasladosAdmin();
+    } else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function trasRechazar(id) {
+  const motivo = prompt('Motivo del rechazo:');
+  if (!motivo) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/rechazar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo })
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Solicitud rechazada', 'advertencia'); cargarTrasladosAdmin(); }
+    else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function trasDespachar(id) {
+  if (!confirm('¿Confirmar despacho? Se notificará a Siesa (salida de bodega).')) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/despachar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Despachado — mercancía en tránsito', 'exito'); cargarTrasladosAdmin(); }
+    else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function trasConfirmarRecepcion(id) {
+  if (!confirm('¿Confirmar recepción? Se notificará a Siesa (entrada en tienda).')) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/recibir`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Recepción confirmada — inventario en tienda', 'exito'); cargarTrasladosAdmin(); }
+    else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// TIENDA — Pantalla punto de venta
+// ══════════════════════════════════════════════════════════════════
+
+let _TIENDA_SUBTAB = 'solicitudes';
+let _TIENDA_STOCK = [];   // cache del stock disponible en NB1
+let _TIENDA_CARRITO = []; // [{producto_id, codigo_siesa, nombre, cantidad, disponible}]
+
+function tiendaIniciar() {
+  tiendaSubtab('solicitudes');
+  tiendaCargarStock();  // pre-carga stock en background
+}
+
+function tiendaSubtab(nombre) {
+  _TIENDA_SUBTAB = nombre;
+  ['solicitudes','nueva','recibir'].forEach(k => {
+    const tab = document.getElementById(`tienda-tab-${k}`);
+    const panel = document.getElementById(`tienda-panel-${k}`);
+    const activo = k === nombre;
+    if (tab) {
+      tab.style.color = activo ? '#fff' : '#666';
+      tab.style.borderBottomColor = activo ? '#fff' : 'transparent';
+    }
+    if (panel) panel.style.display = activo ? 'block' : 'none';
+  });
+  if (nombre === 'solicitudes') tiendaCargarSolicitudes();
+  if (nombre === 'nueva') tiendaRenderStock();
+  if (nombre === 'recibir') tiendaCargarRecibir();
+}
+
+async function tiendaCargarSolicitudes() {
+  const el = document.getElementById('tienda-lista-solicitudes');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  try {
+    const d = await get('/api/traslados/');
+    const solicitudes = d.solicitudes || [];
+    if (!solicitudes.length) {
+      el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">No hay pedidos aún</div>';
+      return;
+    }
+    el.innerHTML = solicitudes.map(s => {
+      const col = TRAS_COL[s.estado] || '#333';
+      return `
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:13px;font-weight:700;">${s.codigo}</div>
+          <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;">${s.estado}</span>
+        </div>
+        <div style="font-size:11px;color:#666;">${s.total_items} ítem${s.total_items !== 1 ? 's' : ''} · ${s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : ''}</div>
+        ${s.motivo_rechazo ? `<div style="font-size:11px;color:#f87171;margin-top:4px;">Motivo: ${s.motivo_rechazo}</div>` : ''}
+        ${s.estado === 'BORRADOR' ? `
+        <div style="display:flex;gap:8px;margin-top:10px;">
+          <button onclick="tiendaEnviarSolicitudId(${s.id})"
+            style="flex:1;padding:10px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Enviar al almacén
+          </button>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando pedidos</div>';
+  }
+}
+
+async function tiendaCargarStock() {
+  try {
+    const d = await get('/api/traslados/stock-disponible');
+    if (d.simulado) {
+      _TIENDA_STOCK = [
+        { codigo_siesa: 'DEMO-001', nombre: 'Producto Demo A', disponible: 50 },
+        { codigo_siesa: 'DEMO-002', nombre: 'Producto Demo B', disponible: 30 },
+      ];
+    } else {
+      // Enriquecer con nombres de productos del WMS local
+      const prods = await get('/api/productos/?page=1&per_page=500');
+      const prodMap = {};
+      (prods.productos || []).forEach(p => { prodMap[p.codigo_siesa || p.codigo] = p; });
+      _TIENDA_STOCK = (d.items || []).map(item => ({
+        ...item,
+        nombre: prodMap[item.codigo_siesa]?.nombre || item.codigo_siesa,
+        producto_id: prodMap[item.codigo_siesa]?.id,
+      })).filter(i => i.producto_id);
+    }
+    if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
+  } catch (e) { /* silencioso */ }
+}
+
+let _TIENDA_FILTRO = '';
+function tiendaFiltrarStock() {
+  _TIENDA_FILTRO = (document.getElementById('tienda-buscar')?.value || '').toLowerCase();
+  tiendaRenderStock();
+}
+
+function tiendaRenderStock() {
+  const el = document.getElementById('tienda-stock-lista');
+  if (!el) return;
+  if (!_TIENDA_STOCK.length) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando stock...</div>';
+    return;
+  }
+  const filtrado = _TIENDA_FILTRO
+    ? _TIENDA_STOCK.filter(i => i.nombre.toLowerCase().includes(_TIENDA_FILTRO) || i.codigo_siesa.toLowerCase().includes(_TIENDA_FILTRO))
+    : _TIENDA_STOCK;
+
+  if (!filtrado.length) {
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Sin resultados</div>';
+    return;
+  }
+
+  el.innerHTML = filtrado.slice(0, 100).map(item => {
+    const enCarrito = _TIENDA_CARRITO.find(c => c.codigo_siesa === item.codigo_siesa);
+    return `
+    <div style="background:#111;border:1px solid ${enCarrito?'#4ade80':'#222'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
+      <div style="flex:1;">
+        <div style="font-size:13px;font-weight:600;">${item.nombre}</div>
+        <div style="font-size:11px;color:#666;">${item.codigo_siesa} · Disponible: <span style="color:#4ade80;font-weight:700;">${item.disponible}</span></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <input type="number" min="1" max="${item.disponible}" value="${enCarrito?.cantidad || 1}"
+          id="qty-${item.codigo_siesa.replace(/[^a-zA-Z0-9]/g,'-')}"
+          style="width:56px;padding:7px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
+        <button onclick="tiendaAgregarCarrito('${item.codigo_siesa}','${item.nombre.replace(/'/g,"\\'")}',${item.disponible},${item.producto_id||'null'})"
+          style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+          ${enCarrito ? '✓' : '+'}
+        </button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function tiendaAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
+  const inputId = `qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`;
+  const cantidadInput = document.getElementById(inputId);
+  const cantidad = Math.min(parseInt(cantidadInput?.value || 1), disponible);
+  if (cantidad < 1) return;
+
+  const idx = _TIENDA_CARRITO.findIndex(c => c.codigo_siesa === codigoSiesa);
+  if (idx >= 0) {
+    _TIENDA_CARRITO[idx].cantidad = cantidad;
+  } else {
+    _TIENDA_CARRITO.push({ codigo_siesa: codigoSiesa, nombre, disponible, cantidad, producto_id: productoId });
+  }
+  tiendaActualizarCarrito();
+  tiendaRenderStock();
+}
+
+function tiendaActualizarCarrito() {
+  const header = document.getElementById('tienda-carrito-header');
+  const itemsEl = document.getElementById('tienda-carrito-items');
+  if (!header || !itemsEl) return;
+  if (!_TIENDA_CARRITO.length) { header.style.display = 'none'; return; }
+  header.style.display = 'block';
+  itemsEl.innerHTML = _TIENDA_CARRITO.map(c =>
+    `<div style="display:flex;justify-content:space-between;padding:3px 0;">
+      <span>${c.nombre}</span>
+      <span style="color:#4ade80;font-weight:700;">${c.cantidad} und
+        <button onclick="tiendaQuitarCarrito('${c.codigo_siesa}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:11px;margin-left:4px;">✕</button>
+      </span>
+    </div>`
+  ).join('');
+}
+
+function tiendaQuitarCarrito(codigoSiesa) {
+  _TIENDA_CARRITO = _TIENDA_CARRITO.filter(c => c.codigo_siesa !== codigoSiesa);
+  tiendaActualizarCarrito();
+  tiendaRenderStock();
+}
+
+async function tiendaEnviarSolicitud() {
+  if (!_TIENDA_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
+  if (!confirm(`¿Enviar pedido con ${_TIENDA_CARRITO.length} productos al almacén?`)) return;
+
+  const items = _TIENDA_CARRITO
+    .filter(c => c.producto_id)
+    .map(c => ({
+      producto_id: c.producto_id,
+      cantidad_solicitada: c.cantidad,
+      disponible_siesa: c.disponible,
+    }));
+
+  if (!items.length) { alerta('No se encontraron productos válidos', 'error'); return; }
+
+  try {
+    const r = await fetch(API + '/api/traslados/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items })
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error creando solicitud', 'error'); return; }
+
+    // Enviar inmediatamente
+    const r2 = await fetch(API + `/api/traslados/${d.id}/enviar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    if (r2.ok) {
+      alerta('Pedido enviado al almacén', 'exito');
+      _TIENDA_CARRITO = [];
+      tiendaActualizarCarrito();
+      tiendaSubtab('solicitudes');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function tiendaEnviarSolicitudId(id) {
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/enviar`, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Pedido enviado', 'exito'); tiendaCargarSolicitudes(); }
+    else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function tiendaCargarRecibir() {
+  const el = document.getElementById('tienda-lista-recibir');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  try {
+    const [r1, r2] = await Promise.all([
+      get('/api/traslados/?estado=EN_TRANSITO'),
+      get('/api/traslados/?estado=DESPACHADA'),
+    ]);
+    const pendientes = [...(r1.solicitudes || []), ...(r2.solicitudes || [])];
+
+    const badgeEl = document.getElementById('badge-recibir');
+    if (badgeEl) {
+      badgeEl.style.display = pendientes.length ? 'inline' : 'none';
+      badgeEl.textContent = pendientes.length;
+    }
+
+    if (!pendientes.length) {
+      el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Nada pendiente de recibir</div>';
+      return;
+    }
+    el.innerHTML = pendientes.map(s => `
+    <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${s.codigo}</div>
+      <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${s.total_items} ítem${s.total_items !== 1?'s':''}</div>
+      ${(s.items || []).map(i => `
+        <div style="font-size:11px;color:#aaa;padding:2px 0;">${i.producto_codigo} · ${i.cantidad_aprobada || i.cantidad_solicitada} und</div>
+      `).join('')}
+      <button onclick="tiendaRecibirSolicitud(${s.id})"
+        style="width:100%;padding:13px;margin-top:12px;background:#4ade80;color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+        ✓ Confirmar recepción
+      </button>
+    </div>`).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error</div>';
+  }
+}
+
+async function tiendaRecibirSolicitud(id) {
+  if (!confirm('¿Confirmar que recibiste todos los productos del almacén?')) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/recibir`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta('Recepción confirmada — stock actualizado en Siesa', 'exito');
+      tiendaCargarRecibir();
+    } else { alerta(d.error || 'Error', 'error'); }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
