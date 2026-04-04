@@ -3712,13 +3712,45 @@ async function generarTodasClases() {
     });
     const d = await r.json();
     if (r.ok) {
-      const msg = `Total: ${d.total_tareas_creadas} tareas nuevas`;
+      const watchdog = d.por_clase?.watchdog;
+      const wdMsg = watchdog?.overrides > 0
+        ? ` · 🤖 Watchdog: ${watchdog.overrides} override(s)` : '';
+      const msg = `Total: ${d.total_tareas_creadas} tareas nuevas${wdMsg}`;
       if (res) res.textContent = msg;
       alerta(msg, 'exito');
       await cargarConteos();
     } else {
       if (res) res.textContent = '';
       alerta(d.error || 'Error generando tareas', 'error');
+    }
+  } catch (e) {
+    if (res) res.textContent = '';
+    alerta('Error de conexión', 'error');
+  }
+}
+
+async function ejecutarWatchdog() {
+  const almacenId = document.getElementById('inv-abc-almacen')?.value;
+  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  const res = document.getElementById('inv-abc-resultado');
+  if (res) res.textContent = '🤖 Escaneando anomalías...';
+  try {
+    const r = await fetch(API + '/api/conteo/abc/watchdog', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ almacen_id: parseInt(almacenId) })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      const msg = d.overrides > 0
+        ? `🤖 Watchdog: ${d.overrides} producto(s) con rotación anómala → conteo forzado`
+        : '🤖 Watchdog: sin anomalías detectadas';
+      if (res) res.textContent = msg;
+      alerta(msg, d.overrides > 0 ? 'advertencia' : 'exito');
+      if (d.overrides > 0) await cargarConteos();
+    } else {
+      if (res) res.textContent = '';
+      alerta(d.error || 'Error en watchdog', 'error');
     }
   } catch (e) {
     if (res) res.textContent = '';

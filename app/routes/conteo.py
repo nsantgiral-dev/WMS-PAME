@@ -175,10 +175,36 @@ def generar_todas_las_clases():
 @conteo_bp.route('/abc/sincronizar', methods=['POST'])
 @jwt_required()
 def sincronizar_abc():
-    """Sincroniza clasificación ABC desde Siesa."""
+    """
+    Sincroniza clasificación ABC desde Siesa.
+    Body opcional: {"api_abc": "API_custom_ABC_Rotacion"} — nombre del endpoint
+    custom del Gestor de Consultas de Connekta V2 que expone la clasificación.
+    Sin ese parámetro retorna pending=True (endpoint aún no mapeado).
+    """
+    data = request.get_json() or {}
     try:
-        resultado = ABCService.sincronizar_clasificacion_desde_siesa()
+        resultado = ABCService.sincronizar_clasificacion_desde_siesa(
+            api_abc=data.get('api_abc')
+        )
         return jsonify(resultado), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@conteo_bp.route('/abc/watchdog', methods=['POST'])
+@jwt_required()
+def watchdog_anomalias():
+    """
+    Ejecuta el AI Watchdog manualmente para un almacén.
+    Detecta productos B/C con alta rotación real y fuerza conteo inmediato.
+    Body: {"almacen_id": 1}
+    """
+    data = request.get_json() or {}
+    if 'almacen_id' not in data:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+    try:
+        overrides = ABCService.watchdog_anomalias(almacen_id=data['almacen_id'])
+        return jsonify({'overrides': len(overrides), 'detalle': overrides}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

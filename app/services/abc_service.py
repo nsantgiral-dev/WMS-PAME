@@ -7,10 +7,19 @@ Frecuencias de conteo cíclico (estrategia de costos bajos):
   A — Alta rotación  → contar cada 15 días
   B — Rotación media → contar cada 90 días
   C — Baja rotación  → contar cada 180 días
+
+AI Watchdog — Anomaly Override:
+  Si un producto clase B o C registra picks >= umbral en los últimos 7 días,
+  el WMS ignora la regla de frecuencia y fuerza un conteo inmediato.
+  Esto captura picos estacionales antes de que Siesa recalcule (mensual).
+  Umbrales (picks en 7 días):
+    C → >= 10 picks → override a A (conteo inmediato)
+    B → >= 25 picks → override a A (conteo inmediato)
 """
 import uuid
 import logging
 from datetime import datetime, timedelta
+from sqlalchemy import func
 from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.models.producto import Producto
@@ -22,50 +31,174 @@ logger = logging.getLogger(__name__)
 # Días mínimos entre conteos por clase
 FRECUENCIA_DIAS = {'A': 15, 'B': 90, 'C': 180}
 
+# Watchdog: picks en 7 días que disparan override a clase A
+WATCHDOG_UMBRAL = {'B': 25, 'C': 10}
+WATCHDOG_VENTANA_DIAS = 7
+
 
 class ABCService:
 
     @staticmethod
-    def sincronizar_clasificacion_desde_siesa():
+    def sincronizar_clasificacion_desde_siesa(api_abc: str = None):
         """
         Extrae la clasificación ABC de Siesa y actualiza los productos en el WMS.
         El WMS no calcula — solo sincroniza lo que Siesa ya calculó.
+
+        API_v2_Items (ID 27) NO expone clasificación ABC — solo datos maestros.
+        Se requiere un endpoint custom del Gestor de Consultas de Connekta V2.
+        El parámetro api_abc acepta el nombre de esa consulta cuando el consultor
+        la entregue (ej. 'API_custom_ABC_Rotacion').
+
+        Mientras no exista ese endpoint, este método retorna pending=True y
+        el scheduler diario lo omite sin error — el sistema sigue funcionando
+        con la clasificación que Siesa estampe en el maestro de productos.
         """
         if connekta.modo_simulacion:
-            logger.info('[ABC] Modo simulación — usando clasificación local')
+            logger.info('[ABC] Modo simulación — sincronización ABC omitida')
+            return {'simulado': True, 'productos_actualizados': 0}
+
+        if not api_abc:
+            logger.info('[ABC] Endpoint ABC no configurado — pendiente Gestor de Consultas Connekta')
             return {
-                'simulado': True,
-                'mensaje': 'En producción este método sincroniza ABC desde Siesa',
+                'pending': True,
+                'mensaje': (
+                    'Requiere endpoint custom ABC del Gestor de Consultas de Connekta V2. '
+                    'API_v2_Items (ID 27) no expone clasificación ABC. '
+                    'Pedir al consultor: SELECT f120_referencia, clasificacion_abc FROM ... '
+                    'y publicarla como API en el Gestor de Consultas.'
+                ),
                 'productos_actualizados': 0
             }
 
         try:
-            # GET a Connekta — clasificación ABC de todos los ítems
-            response = connekta._hacer_get('items/clasificacion-abc')
-            items_siesa = response.get('items', [])
-
+            # Paginar — puede haber miles de items
             actualizados = 0
-            for item in items_siesa:
-                producto = Producto.query.filter_by(
-                    codigo_siesa=item.get('codigo')
-                ).first()
+            pag = 1
+            while True:
+                res = connekta._get(api_abc, {'paginacion': f'numPag={pag}|tamPag=200'})
+                rows = res.get('detalle', {}).get('Table', [])
+                if not rows:
+                    break
 
-                if producto:
-                    producto.clasificacion_abc = item.get('clasificacion_abc')
-                    producto.codigo_siesa = item.get('codigo')
-                    actualizados += 1
+                for row in rows:
+                    codigo = (row.get('f120_referencia') or '').strip()
+                    clasificacion = (row.get('clasificacion_abc') or '').strip().upper()
+                    if not codigo or clasificacion not in ('A', 'B', 'C'):
+                        continue
+                    producto = Producto.query.filter_by(codigo_siesa=codigo).first()
+                    if producto and producto.clasificacion_abc != clasificacion:
+                        producto.clasificacion_abc = clasificacion
+                        actualizados += 1
+
+                if len(rows) < 200:
+                    break
+                pag += 1
 
             db.session.commit()
-            logger.info(f'[ABC] {actualizados} productos sincronizados desde Siesa')
-
-            return {
-                'productos_actualizados': actualizados,
-                'total_siesa': len(items_siesa)
-            }
+            logger.info(f'[ABC] {actualizados} productos reclasificados desde Siesa')
+            return {'productos_actualizados': actualizados}
 
         except Exception as e:
-            logger.error(f'[ABC] Error sincronizando desde Siesa: {str(e)}')
+            logger.error(f'[ABC] Error sincronizando desde Siesa: {e}')
             raise
+
+    @staticmethod
+    def watchdog_anomalias(almacen_id: int) -> list:
+        """
+        AI Watchdog — detecta productos cuya rotación real supera su clase ABC.
+
+        Consulta cuántas veces fue picado cada producto en los últimos 7 días.
+        Si un producto clase C supera 10 picks, o clase B supera 25 picks,
+        fuerza una SesionConteo inmediata ignorando la regla de frecuencia.
+
+        Retorna lista de overrides ejecutados: [{producto_id, clase_actual,
+        picks_7dias, umbral, sesion_codigo}]
+        """
+        from app.models.picking import TareaPicking
+        from app.models.inventario import UbicacionProducto
+
+        ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
+        overrides = []
+
+        # Clases susceptibles de override (A ya es la más frecuente)
+        for clase, umbral in WATCHDOG_UMBRAL.items():
+            productos_clase = Producto.query.filter_by(
+                clasificacion_abc=clase, activo=True
+            ).all()
+
+            for producto in productos_clase:
+                # Contar picks completados en ventana de 7 días
+                picks = (
+                    db.session.query(func.count(TareaPicking.id))
+                    .filter(
+                        TareaPicking.producto_id == producto.id,
+                        TareaPicking.estado == 'COMPLETADA',
+                        TareaPicking.fecha_completado >= ventana
+                    )
+                    .scalar() or 0
+                )
+
+                if picks < umbral:
+                    continue
+
+                # Buscar ubicaciones del producto en este almacén
+                registros = (
+                    UbicacionProducto.query
+                    .join(Ubicacion)
+                    .filter(
+                        UbicacionProducto.producto_id == producto.id,
+                        UbicacionProducto.cantidad > 0,
+                        Ubicacion.almacen_id == almacen_id
+                    ).all()
+                )
+
+                for reg in registros:
+                    # No duplicar si ya hay conteo activo
+                    activo = SesionConteo.query.filter(
+                        SesionConteo.producto_id == producto.id,
+                        SesionConteo.ubicacion_id == reg.ubicacion_id,
+                        SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                    ).first()
+                    if activo:
+                        continue
+
+                    codigo = (
+                        f'CC-WATCHDOG-'
+                        f'{datetime.utcnow().strftime("%Y%m%d")}-'
+                        f'{str(uuid.uuid4())[:6].upper()}'
+                    )
+                    sesion = SesionConteo(
+                        codigo=codigo,
+                        tipo='WATCHDOG_ABC',
+                        clasificacion_abc='A',   # override temporal
+                        ubicacion_id=reg.ubicacion_id,
+                        almacen_id=almacen_id,
+                        producto_id=producto.id,
+                        producto_codigo_siesa=producto.codigo_siesa,
+                        maneja_lote=bool(reg.lote if hasattr(reg, 'lote') else False),
+                        estado='PENDIENTE'
+                    )
+                    db.session.add(sesion)
+                    overrides.append({
+                        'producto_id': producto.id,
+                        'producto_codigo': producto.codigo_siesa or producto.codigo,
+                        'clase_actual': clase,
+                        'picks_7dias': picks,
+                        'umbral': umbral,
+                        'sesion_codigo': codigo,
+                    })
+
+        db.session.commit()
+
+        if overrides:
+            logger.warning(
+                f'[ABC WATCHDOG] {len(overrides)} overrides en almacén {almacen_id}: '
+                + ', '.join(f"{o["producto_codigo"]} ({o["clase_actual"]}→A, {o["picks_7dias"]} picks)" for o in overrides)
+            )
+        else:
+            logger.info(f'[ABC WATCHDOG] Sin anomalías en almacén {almacen_id}')
+
+        return overrides
 
     @staticmethod
     def generar_tareas_conteo_diario(almacen_id: int, clasificacion: str = 'A'):
@@ -167,7 +300,7 @@ class ABCService:
     @staticmethod
     def generar_todas_las_clases(almacen_id: int):
         """
-        Genera tareas para A, B y C en una sola llamada.
+        Genera tareas para A, B y C + ejecuta Watchdog de anomalías.
         Usado por el scheduler diario a las 6am.
         """
         resultados = {}
@@ -177,7 +310,19 @@ class ABCService:
             resultados[clase] = r
             total += r['tareas_creadas']
 
-        logger.info(f'[ABC] Generación diaria completa · {total} tareas nuevas en almacén {almacen_id}')
+        # Watchdog DESPUÉS de las tareas normales — detecta reclasificaciones urgentes
+        try:
+            overrides = ABCService.watchdog_anomalias(almacen_id)
+            total += len(overrides)
+            resultados['watchdog'] = {
+                'overrides': len(overrides),
+                'detalle': overrides
+            }
+        except Exception as e:
+            logger.error(f'[ABC WATCHDOG] Error en almacén {almacen_id}: {e}')
+            resultados['watchdog'] = {'error': str(e)}
+
+        logger.info(f'[ABC] Generación completa · {total} tareas nuevas en almacén {almacen_id}')
         return {'total_tareas_creadas': total, 'por_clase': resultados}
 
     @staticmethod
