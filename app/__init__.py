@@ -1,5 +1,6 @@
 import os
 import click
+from datetime import timedelta
 from flask import Flask, send_from_directory
 from dotenv import load_dotenv
 from app.extensions import db, migrate, jwt, cors
@@ -13,6 +14,7 @@ def create_app():
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
+    app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(hours=12)
 
     db.init_app(app)
     migrate.init_app(app, db)

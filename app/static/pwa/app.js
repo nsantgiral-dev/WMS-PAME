@@ -134,7 +134,7 @@ function scannerLaser() {
       SCANNER_BUFFER = '';
       clearTimeout(SCANNER_TIMER);
       if (cod) procesarScan(cod);
-    } else if (e.key.length === 1) {
+    } else if (e.key && e.key.length === 1) {
       SCANNER_BUFFER += e.key;
       clearTimeout(SCANNER_TIMER);
       SCANNER_TIMER = setTimeout(() => { SCANNER_BUFFER = ''; }, 150);
