@@ -11,10 +11,12 @@ class RutaDespacho(db.Model):
     __tablename__ = 'rutas_despacho'
 
     id              = db.Column(db.Integer, primary_key=True)
-    conductor_id    = db.Column(db.Integer, db.ForeignKey('conductores.id'), nullable=False)
-    vehiculo_id     = db.Column(db.Integer, db.ForeignKey('vehiculos.id'), nullable=True)
-    tipo_ruta       = db.Column(db.String(20), nullable=False)   # Urbana | Municipal
-    estado          = db.Column(db.String(20), default='EN_CARGUE')  # EN_CARGUE | EN_TRANSITO | ENTREGADA
+    conductor_id      = db.Column(db.Integer, db.ForeignKey('conductores.id'), nullable=False)
+    vehiculo_id       = db.Column(db.Integer, db.ForeignKey('vehiculos.id'), nullable=True)
+    ruta_maestra_id   = db.Column(db.Integer, db.ForeignKey('rutas_maestras.id'), nullable=True)
+    tipo_ruta         = db.Column(db.String(20), nullable=False)   # Urbana | Municipal
+    fecha_programada  = db.Column(db.Date, nullable=True)
+    estado            = db.Column(db.String(20), default='EN_CARGUE')  # PROGRAMADO | EN_CARGUE | EN_TRANSITO | ENTREGADA
     notas           = db.Column(db.Text)
     fecha_creacion  = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_cierre    = db.Column(db.DateTime)    # cuando pasa a EN_TRANSITO
@@ -45,11 +47,14 @@ class RutaDespacho(db.Model):
             'conductor_id':       self.conductor_id,
             'conductor_nombre':   c.nombre if c else '',
             'conductor_cedula':   c.cedula if c else '',
-            'vehiculo_id':        self.vehiculo_id,
-            'vehiculo_placa':     v.placa  if v else '',
-            'vehiculo_tipo':      v.tipo   if v else '',
-            'vehiculo_capacidad': float(v.capacidad_kg) if v and v.capacidad_kg else None,
-            'tipo_ruta':          self.tipo_ruta,
+            'vehiculo_id':          self.vehiculo_id,
+            'vehiculo_placa':       v.placa  if v else '',
+            'vehiculo_tipo':        v.tipo   if v else '',
+            'vehiculo_capacidad':   float(v.capacidad_kg) if v and v.capacidad_kg else None,
+            'ruta_maestra_id':      self.ruta_maestra_id,
+            'ruta_maestra_nombre':  self.ruta_maestra.nombre if self.ruta_maestra else '',
+            'fecha_programada':     self.fecha_programada.isoformat() if self.fecha_programada else None,
+            'tipo_ruta':            self.tipo_ruta,
             'estado':             self.estado,
             'notas':              self.notas or '',
             'total_bultos':       self.total_bultos(),

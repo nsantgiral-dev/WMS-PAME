@@ -300,18 +300,22 @@
     <!-- RUTAS DE DESPACHO -->
     <div id="tab-rutas" class="admin-content" style="display:none;">
 
-      <!-- Sub-nav: Rutas | Vehículos | Conductores -->
+      <!-- Sub-nav: Rutas | Maestras | Vehículos | Conductores -->
       <div style="display:flex;background:#1a1a1a;border-radius:10px;margin-bottom:14px;padding:3px;gap:3px;">
         <button id="rutas-subnav-rutas" onclick="rutasSubTab('rutas')"
-          style="flex:1;padding:9px;font-size:13px;font-weight:600;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;">
-          Rutas
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;">
+          Viajes
+        </button>
+        <button id="rutas-subnav-maestras" onclick="rutasSubTab('maestras')"
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          Maestras
         </button>
         <button id="rutas-subnav-vehiculos" onclick="rutasSubTab('vehiculos')"
-          style="flex:1;padding:9px;font-size:13px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
-          Vehículos
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          Flota
         </button>
         <button id="rutas-subnav-conductores" onclick="rutasSubTab('conductores')"
-          style="flex:1;padding:9px;font-size:13px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
           Conductores
         </button>
       </div>
@@ -326,45 +330,47 @@
           </button>
         </div>
 
-        <!-- Form nueva ruta (oculto por defecto) -->
-        <div id="rutas-form" style="display:none;background:#111;border:1px solid #333;border-radius:14px;padding:18px;margin-bottom:14px;">
-          <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nueva ruta de despacho</div>
+        <!-- Form programar viaje (oculto por defecto) -->
+        <div id="rutas-form" style="display:none;background:#111;border:1px solid #2d1b69;border-radius:14px;padding:18px;margin-bottom:14px;">
+          <div style="font-size:14px;font-weight:700;margin-bottom:4px;">Programar viaje</div>
+          <div style="font-size:11px;color:#555;margin-bottom:14px;">Selecciona la ruta, la fecha, el conductor y el vehículo</div>
           <div style="margin-bottom:12px;">
-            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Conductor</div>
-            <select id="rutas-form-conductor"
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Ruta maestra *</div>
+            <select id="rutas-form-maestra"
               style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-              <option value="">— Selecciona conductor —</option>
+              <option value="">— Selecciona ruta —</option>
             </select>
           </div>
           <div style="margin-bottom:12px;">
-            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Vehículo</div>
-            <select id="rutas-form-vehiculo"
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Fecha de despacho *</div>
+            <input id="rutas-form-fecha" type="date"
               style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-              <option value="">— Selecciona vehículo —</option>
-            </select>
           </div>
-          <div style="margin-bottom:14px;">
-            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Tipo de ruta</div>
-            <div style="display:flex;gap:8px;">
-              <button id="rutas-tipo-urbana" onclick="rutasSeleccionarTipo('Urbana')"
-                style="flex:1;padding:12px;background:#1e3a5f;color:#60a5fa;border:2px solid #1e3a5f;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">
-                🏙️ Urbana
-              </button>
-              <button id="rutas-tipo-municipal" onclick="rutasSeleccionarTipo('Municipal')"
-                style="flex:1;padding:12px;background:#1a1a1a;color:#666;border:2px solid #333;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;">
-                🛣️ Municipal
-              </button>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div>
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Conductor *</div>
+              <select id="rutas-form-conductor"
+                style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+                <option value="">— Conductor —</option>
+              </select>
+            </div>
+            <div>
+              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Vehículo *</div>
+              <select id="rutas-form-vehiculo"
+                style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+                <option value="">— Vehículo —</option>
+              </select>
             </div>
           </div>
           <div style="margin-bottom:14px;">
             <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Notas (opcional)</div>
-            <input id="rutas-form-notas" type="text" placeholder="Ej: sector sur, ruta Envigado-Itagüí..."
+            <input id="rutas-form-notas" type="text" placeholder="Observaciones del viaje..."
               style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
           </div>
           <div id="rutas-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="rutasCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="rutasCrear()" style="flex:2;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Crear ruta →</button>
+            <button onclick="rutasProgramar()" style="flex:2;padding:13px;background:#a78bfa;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Programar viaje →</button>
           </div>
         </div>
 
@@ -412,6 +418,61 @@
         </div>
 
         <div id="lista-conductores"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
+      </div>
+
+      <!-- Sub-panel: Rutas Maestras -->
+      <div id="rutas-panel-maestras" style="display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div>
+            <div style="font-size:16px;font-weight:700;">Rutas Maestras</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">Catálogo fijo de recorridos geográficos</div>
+          </div>
+          <button onclick="maestraMostrarForm()"
+            style="background:#a78bfa;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            + Nueva
+          </button>
+        </div>
+
+        <!-- Form nueva ruta maestra -->
+        <div id="maestras-form" style="display:none;background:#111;border:1px solid #2d1b69;border-radius:14px;padding:18px;margin-bottom:14px;">
+          <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nueva ruta maestra</div>
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Nombre *</div>
+            <input id="maestra-form-nombre" type="text" placeholder="Ej: Ruta Neiva, Ruta Sur Medellín..."
+              style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+          </div>
+          <div style="margin-bottom:14px;">
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Tipo</div>
+            <div style="display:flex;gap:8px;">
+              <button id="rutas-tipo-urbana" onclick="rutasSeleccionarTipo('Urbana')"
+                style="flex:1;padding:11px;background:#1e3a5f;color:#60a5fa;border:2px solid #1e3a5f;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">
+                🏙️ Urbana
+              </button>
+              <button id="rutas-tipo-municipal" onclick="rutasSeleccionarTipo('Municipal')"
+                style="flex:1;padding:11px;background:#1a1a1a;color:#666;border:2px solid #333;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">
+                🛣️ Municipal
+              </button>
+            </div>
+          </div>
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Paradas en orden de entrega (1ª = primera entrega = última en cargar)</div>
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+              <input id="maestras-parada-input" type="text" placeholder="Municipio o zona..."
+                style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+                onkeydown="if(event.key==='Enter'){event.preventDefault();maestraAgregarParada();}">
+              <button onclick="maestraAgregarParada()"
+                style="padding:10px 16px;background:#fff;color:#000;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">+</button>
+            </div>
+            <div id="maestras-paradas-lista" style="background:#0a0a0a;border-radius:8px;padding:8px;min-height:40px;"></div>
+          </div>
+          <div id="maestras-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="maestraCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
+            <button onclick="maestrasCrear()" style="flex:2;padding:13px;background:#a78bfa;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar ruta →</button>
+          </div>
+        </div>
+
+        <div id="lista-maestras"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
       </div>
 
       <!-- Sub-panel: Vehículos -->

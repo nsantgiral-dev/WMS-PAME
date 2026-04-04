@@ -11,4 +11,5 @@ from app.models.devolucion import TareaDevolucion
 from app.models.pedido_siesa import PedidoSiesa
 from app.models.conductor import Conductor
 from app.models.vehiculo import Vehiculo
+from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho
