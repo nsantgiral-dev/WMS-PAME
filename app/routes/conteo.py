@@ -240,8 +240,9 @@ def cargar_csv_abc():
     if ext not in ('csv', 'xlsx', 'xls', 'txt'):
         return jsonify({'error': f'Formato no soportado: {ext}. Usar CSV o Excel.'}), 400
 
+    almacen_id = request.form.get('almacen_id', type=int)
     try:
-        resultado = ABCService.procesar_csv_abc(f, ext)
+        resultado = ABCService.procesar_csv_abc(f, ext, almacen_id=almacen_id)
         return jsonify(resultado), 200
     except Exception as e:
         current_app.logger.error(f'[ABC CSV] Error procesando archivo: {e}')

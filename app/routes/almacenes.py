@@ -34,12 +34,35 @@ def crear_almacen():
         codigo=data['codigo'],
         nombre=data['nombre'],
         direccion=data.get('direccion'),
-        ciudad=data.get('ciudad')
+        ciudad=data.get('ciudad'),
+        bodega_siesa_id=data.get('bodega_siesa_id'),
+        centro_op_siesa=data.get('centro_op_siesa'),
     )
 
     db.session.add(almacen)
     db.session.commit()
     return jsonify(almacen.to_dict()), 201
+
+
+@almacenes_bp.route('/<int:id>', methods=['PUT'])
+@jwt_required()
+def actualizar_almacen(id):
+    almacen = Almacen.query.get_or_404(id)
+    data = request.get_json() or {}
+    if 'nombre' in data:
+        almacen.nombre = data['nombre']
+    if 'direccion' in data:
+        almacen.direccion = data['direccion']
+    if 'ciudad' in data:
+        almacen.ciudad = data['ciudad']
+    if 'activo' in data:
+        almacen.activo = bool(data['activo'])
+    if 'bodega_siesa_id' in data:
+        almacen.bodega_siesa_id = data['bodega_siesa_id'] or None
+    if 'centro_op_siesa' in data:
+        almacen.centro_op_siesa = data['centro_op_siesa'] or None
+    db.session.commit()
+    return jsonify(almacen.to_dict()), 200
 
 
 @almacenes_bp.route('/<int:id>/ubicaciones', methods=['GET'])

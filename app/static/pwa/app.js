@@ -3743,8 +3743,10 @@ async function subirCsvAbc(input) {
   res.style.color = '#888';
   res.textContent = 'Subiendo archivo...';
 
+  const almacenId = document.getElementById('inv-abc-almacen')?.value;
   const form = new FormData();
   form.append('archivo', archivo);
+  if (almacenId) form.append('almacen_id', almacenId);
 
   try {
     const r = await fetch(API + '/api/conteo/abc/cargar-csv', {

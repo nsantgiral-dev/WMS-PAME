@@ -11,10 +11,16 @@ class Almacen(db.Model):
     ciudad = db.Column(db.String(100))
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+    # Siesa/Connekta — construye payloads dinámicamente por CD
+    bodega_siesa_id = db.Column(db.String(20))   # ej. 'NB1', 'NB2'
+    centro_op_siesa = db.Column(db.String(20))   # ej. '003', '004'
 
     # Relaciones
     ubicaciones = db.relationship('Ubicacion', backref='almacen', lazy=True)
     usuarios = db.relationship('Usuario', backref='almacen', lazy=True)
+    clasificaciones_abc = db.relationship('ProductoClasificacionABC',
+                                          backref='almacen', lazy=True,
+                                          cascade='all, delete-orphan')
 
     def to_dict(self):
         return {
@@ -23,5 +29,7 @@ class Almacen(db.Model):
             'nombre': self.nombre,
             'direccion': self.direccion,
             'ciudad': self.ciudad,
-            'activo': self.activo
+            'activo': self.activo,
+            'bodega_siesa_id': self.bodega_siesa_id,
+            'centro_op_siesa': self.centro_op_siesa,
         }

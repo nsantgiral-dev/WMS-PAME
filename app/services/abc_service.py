@@ -24,6 +24,7 @@ from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
+from app.models.producto_clasificacion_abc import ProductoClasificacionABC
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
@@ -120,11 +121,18 @@ class ABCService:
         ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
         overrides = []
 
-        # Clases susceptibles de override (A ya es la más frecuente)
+        # Clases susceptibles de override — consulta por almacén
         for clase, umbral in WATCHDOG_UMBRAL.items():
-            productos_clase = Producto.query.filter_by(
-                clasificacion_abc=clase, activo=True
-            ).all()
+            productos_clase = (
+                Producto.query
+                .join(ProductoClasificacionABC,
+                      ProductoClasificacionABC.producto_id == Producto.id)
+                .filter(
+                    ProductoClasificacionABC.almacen_id == almacen_id,
+                    ProductoClasificacionABC.clasificacion == clase,
+                    Producto.activo == True
+                ).all()
+            )
 
             for producto in productos_clase:
                 # Contar picks completados en ventana de 7 días
@@ -212,10 +220,17 @@ class ABCService:
         frecuencia = FRECUENCIA_DIAS.get(clasificacion, 15)
         umbral = datetime.utcnow() - timedelta(days=frecuencia)
 
-        productos = Producto.query.filter_by(
-            clasificacion_abc=clasificacion,
-            activo=True
-        ).all()
+        # Productos con clasificación ABC para ESTE almacén específico
+        productos = (
+            Producto.query
+            .join(ProductoClasificacionABC,
+                  ProductoClasificacionABC.producto_id == Producto.id)
+            .filter(
+                ProductoClasificacionABC.almacen_id == almacen_id,
+                ProductoClasificacionABC.clasificacion == clasificacion,
+                Producto.activo == True
+            ).all()
+        )
 
         if not productos:
             return {
@@ -370,8 +385,11 @@ class ABCService:
         resumen = {}
         for clasificacion in ['A', 'B', 'C']:
             total = (
-                database.session.query(func.count(Producto.id))
-                .filter_by(clasificacion_abc=clasificacion, activo=True)
+                database.session.query(func.count(ProductoClasificacionABC.id))
+                .filter(
+                    ProductoClasificacionABC.almacen_id == almacen_id,
+                    ProductoClasificacionABC.clasificacion == clasificacion,
+                )
                 .scalar()
             )
             resumen[clasificacion] = {
@@ -390,7 +408,7 @@ class ABCService:
         }
 
     @staticmethod
-    def procesar_csv_abc(file_obj, ext: str) -> dict:
+    def procesar_csv_abc(file_obj, ext: str, almacen_id: int = None) -> dict:
         """
         Parsea el archivo CSV/Excel del reporte "Recalculo de rotación ABC" de Siesa
         y actualiza clasificacion_abc en la tabla productos.
@@ -516,7 +534,7 @@ class ABCService:
 
         dist = Counter(c for _, c in datos)
 
-        # ── Actualizar BD ───────────────────────────────────────────────
+        # ── Upsert en producto_clasificacion_abc ───────────────────────
         actualizados = 0
         no_encontrados = []
         LOTE = 500
@@ -525,7 +543,7 @@ class ABCService:
             lote = datos[i:i + LOTE]
             refs = [r for r, _ in lote]
 
-            # Mapa referencia → producto.id existente en WMS
+            # Mapa referencia → Producto
             existentes = {
                 p.codigo_siesa or p.codigo: p
                 for p in Producto.query.filter(
@@ -539,17 +557,36 @@ class ABCService:
 
             for referencia, clasificacion in lote:
                 producto = existentes.get(referencia)
-                if producto:
-                    producto.clasificacion_abc = clasificacion
-                    actualizados += 1
-                else:
+                if not producto:
                     no_encontrados.append(referencia)
+                    continue
+
+                if almacen_id:
+                    # Upsert por (producto_id, almacen_id)
+                    registro = ProductoClasificacionABC.query.filter_by(
+                        producto_id=producto.id,
+                        almacen_id=almacen_id
+                    ).first()
+                    if registro:
+                        registro.clasificacion = clasificacion
+                        registro.updated_at = datetime.utcnow()
+                    else:
+                        db.session.add(ProductoClasificacionABC(
+                            producto_id=producto.id,
+                            almacen_id=almacen_id,
+                            clasificacion=clasificacion
+                        ))
+                else:
+                    # Fallback legacy: actualizar campo global
+                    producto.clasificacion_abc = clasificacion
+
+                actualizados += 1
 
             db.session.commit()
 
         logger.info(
-            f'[ABC CSV] Carga completada: {actualizados} actualizados, '
-            f'{len(no_encontrados)} no encontrados, '
+            f'[ABC CSV] almacen={almacen_id} · {actualizados} upserted · '
+            f'{len(no_encontrados)} no encontrados · '
             f'A={dist["A"]} B={dist["B"]} C={dist["C"]}'
         )
 
@@ -561,4 +598,5 @@ class ABCService:
             'distribucion': {'A': dist['A'], 'B': dist['B'], 'C': dist['C']},
             'total_procesados': len(datos),
             'filas_encabezado_saltadas': idx_h,
+            'almacen_id': almacen_id,
         }
