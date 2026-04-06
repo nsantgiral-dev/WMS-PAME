@@ -1,283 +1,329 @@
 """
-seed_abc_csv.py — Carga inicial de clasificación ABC desde CSV exportado de Siesa.
+seed_abc_csv.py — Carga inicial de clasificación ABC desde CSV/Excel de Siesa.
+
+Formato esperado (reporte "Recalculo de rotación ABC" de Siesa Enterprise):
+    Item | Referencia | Extensiones | Descripción | Clasificación | Nro. transacciones
+
+La columna clave es "Referencia" — se cruza contra productos.codigo_siesa.
+Las filas de encabezado de Siesa (nombre empresa, fecha, filtros) se saltan
+automáticamente. El archivo puede venir en cualquier orden.
 
 Uso:
-    python seed_abc_csv.py ruta/al/archivo.csv [--dry-run] [--sep ;]
-
-Argumentos:
-    archivo     CSV exportado desde Siesa (Consultas Flex o reporte de Conteo Cíclico)
-    --dry-run   Muestra lo que haría sin modificar la BD
-    --sep       Separador del CSV (default: auto-detecta , o ;)
-    --col-ref   Nombre de la columna con el código del ítem (auto-detectado si no se da)
-    --col-abc   Nombre de la columna con la clasificación ABC (auto-detectado)
-
-El script detecta automáticamente:
-  - Las filas basura del encabezado de Siesa (nombre empresa, fecha, filtros)
-  - La fila real de títulos de columna
-  - Los posibles nombres de columna (referencia, codigo, item, clasificacion, abc, etc.)
-
-Siesa exporta con nombres de columna como:
-    "Referencia", "Ítem", "Código", "Clasificación", "ABC Rotación", etc.
+    python seed_abc_csv.py ruta/al/archivo.csv
+    python seed_abc_csv.py ruta/al/archivo.csv --dry-run
+    python seed_abc_csv.py ruta/al/archivo.xlsx          # también acepta Excel
+    python seed_abc_csv.py archivo.csv --sep ";"         # forzar separador
 """
 import sys
-import csv
 import os
 import re
+import csv
 import argparse
-import io
+from collections import Counter
 
 
-# ── Nombres de columna que Siesa usa para el código del ítem ──────────────────
+# ── Aliases para columna de código de producto ────────────────────────────────
 ALIASES_REF = [
-    'referencia', 'ref', 'codigo', 'código', 'item', 'ítem',
-    'id_item', 'id item', 'cod_item', 'cod. item', 'codigo item',
-    'código item', 'referencia item', 'f120_referencia',
+    'referencia', 'ref', 'codigo', 'código', 'item ref', 'cod item',
+    'codigo item', 'código item', 'referencia item', 'f120_referencia',
+    'codigo siesa', 'código siesa',
 ]
 
-# ── Nombres de columna que Siesa usa para la clasificación ABC ────────────────
+# ── Aliases para columna de clasificación ABC ─────────────────────────────────
 ALIASES_ABC = [
-    'clasificacion', 'clasificación', 'abc', 'clase', 'rotacion abc',
-    'rotación abc', 'abc rotacion', 'abc rotación', 'clasificacion abc',
-    'clasificación abc', 'clase abc', 'tipo abc', 'grupo abc',
-    'clasificacion_abc',
+    'clasificacion', 'clasificación', 'abc', 'clase', 'clasif',
+    'clasificacion abc', 'clasificación abc', 'rotacion abc', 'rotación abc',
+]
+
+# ── Aliases para columna de transacciones (opcional, para Watchdog) ───────────
+ALIASES_TXN = [
+    'nro. transacciones', 'nro transacciones', 'transacciones', 'txn',
+    'num transacciones', 'número transacciones', 'numero transacciones',
+    'cantidades', 'movimientos',
 ]
 
 
-def _normalizar(s):
-    """Minúsculas + quitar acentos + quitar caracteres raros para comparar."""
-    s = s.lower().strip()
+def _norm(s):
+    """Normaliza texto para comparación: minúsculas, sin acentos, sin puntuación."""
+    s = str(s).lower().strip()
     for a, b in [('á','a'),('é','e'),('í','i'),('ó','o'),('ú','u'),('ñ','n')]:
         s = s.replace(a, b)
-    return re.sub(r'[^a-z0-9 _]', '', s)
+    return re.sub(r'[^\w\s]', '', s).strip()
 
 
-def _detectar_separador(ruta):
+def _detectar_sep(ruta):
     with open(ruta, 'rb') as f:
-        muestra = f.read(4096).decode('utf-8-sig', errors='replace')
+        muestra = f.read(8192).decode('utf-8-sig', errors='replace')
+    tabs = muestra.count('\t')
     puntos = muestra.count(';')
     comas = muestra.count(',')
-    tabs = muestra.count('\t')
-    if tabs > puntos and tabs > comas:
+    if tabs >= max(puntos, comas):
         return '\t'
-    return ';' if puntos > comas else ','
+    return ';' if puntos >= comas else ','
 
 
-def _encontrar_col(headers_norm, aliases):
-    """Retorna el índice de la primera columna que matchea algún alias."""
+def _col(headers_norm, aliases):
+    """Retorna índice de la columna que coincide con algún alias."""
     for alias in aliases:
-        alias_n = _normalizar(alias)
+        an = _norm(alias)
         for i, h in enumerate(headers_norm):
-            if alias_n in h or h in alias_n:
+            if an == h or an in h or h in an:
                 return i
     return None
 
 
-def _encontrar_fila_headers(rows, sep):
-    """
-    Siesa pone filas basura al inicio (empresa, fecha, filtros).
-    La fila de headers es la primera que contiene palabras clave de columna.
-    Retorna (indice_fila, [headers]).
-    """
-    palabras_clave = set(
-        _normalizar(a) for aliases in [ALIASES_REF, ALIASES_ABC] for a in aliases
-    )
-    for i, row in enumerate(rows):
-        if not row or not any(c.strip() for c in row):
-            continue
-        row_norm = [_normalizar(c) for c in row]
-        coincidencias = sum(
-            1 for cell in row_norm
-            if any(kw in cell or cell in kw for kw in palabras_clave if len(kw) > 2)
-        )
-        if coincidencias >= 1:
-            return i, row
-    return None, None
+def _leer_filas(ruta, sep):
+    """Lee el archivo y retorna todas las filas como listas de strings."""
+    ext = os.path.splitext(ruta)[1].lower()
+
+    if ext in ('.xlsx', '.xls'):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(ruta, read_only=True, data_only=True)
+            ws = wb.active
+            filas = []
+            for row in ws.iter_rows(values_only=True):
+                filas.append([str(c) if c is not None else '' for c in row])
+            return filas
+        except ImportError:
+            print("✗ Para leer Excel instala: pip install openpyxl")
+            sys.exit(1)
+
+    with open(ruta, 'r', encoding='utf-8-sig', errors='replace') as f:
+        reader = csv.reader(f, delimiter=sep)
+        return list(reader)
 
 
-def cargar_csv(ruta, sep=None, col_ref=None, col_abc=None, dry_run=False):
+def _encontrar_header(filas):
+    """
+    Salta las filas basura del encabezado de Siesa (empresa, fecha, filtros).
+    La fila de headers es la que contiene 'Referencia' y 'Clasificacion'.
+    Retorna (idx_header, fila_headers).
+    """
+    palabras_clave = {'referencia', 'ref', 'clasificacion', 'clasificacion', 'abc', 'clasif'}
+
+    for i, fila in enumerate(filas):
+        celdas_norm = [_norm(c) for c in fila]
+        hits = sum(1 for c in celdas_norm if c in palabras_clave or any(p in c for p in palabras_clave))
+        if hits >= 1:
+            return i, fila
+
+    # Fallback: primera fila no vacía
+    for i, fila in enumerate(filas):
+        if any(c.strip() for c in fila):
+            return i, fila
+
+    return 0, filas[0] if filas else []
+
+
+def cargar(ruta, sep=None, dry_run=False):
     if not os.path.exists(ruta):
         print(f"✗ Archivo no encontrado: {ruta}")
         sys.exit(1)
 
-    sep = sep or _detectar_separador(ruta)
-    print(f"Separador detectado: {repr(sep)}")
+    ext = os.path.splitext(ruta)[1].lower()
+    es_excel = ext in ('.xlsx', '.xls')
 
-    # Leer todas las filas crudas
-    with open(ruta, 'r', encoding='utf-8-sig', errors='replace') as f:
-        reader = csv.reader(f, delimiter=sep)
-        todas_las_filas = list(reader)
+    if not es_excel:
+        sep = sep or _detectar_sep(ruta)
+        print(f"Separador: {repr(sep)}")
 
-    if not todas_las_filas:
-        print("✗ El archivo está vacío")
-        sys.exit(1)
+    filas = _leer_filas(ruta, sep or ',')
+    print(f"Total filas leídas: {len(filas)}")
 
-    # Encontrar la fila de headers (saltando basura estética de Siesa)
-    idx_header, headers_raw = _encontrar_fila_headers(todas_las_filas, sep)
+    idx_h, headers = _encontrar_header(filas)
+    print(f"Filas basura Siesa omitidas: {idx_h}")
+    print(f"Headers detectados: {headers}")
 
-    if idx_header is None:
-        # Fallback: asumir que la primera fila no vacía es el header
-        for i, row in enumerate(todas_las_filas):
-            if any(c.strip() for c in row):
-                idx_header = i
-                headers_raw = row
-                break
-
-    print(f"Filas de encabezado Siesa omitidas: {idx_header}")
-    print(f"Columnas detectadas: {headers_raw}")
-
-    headers_norm = [_normalizar(h) for h in headers_raw]
+    hn = [_norm(h) for h in headers]
 
     # Detectar columnas
-    idx_ref = _encontrar_col(headers_norm, [col_ref] if col_ref else ALIASES_REF)
-    idx_abc = _encontrar_col(headers_norm, [col_abc] if col_abc else ALIASES_ABC)
+    i_ref = _col(hn, ALIASES_REF)
+    i_abc = _col(hn, ALIASES_ABC)
+    i_txn = _col(hn, ALIASES_TXN)  # opcional
 
-    if idx_ref is None:
-        print(f"\n✗ No encontré columna de código/referencia.")
-        print(f"  Columnas disponibles: {headers_raw}")
-        print(f"  Pasa --col-ref 'nombre exacto de la columna'")
+    if i_ref is None:
+        print(f"\n✗ No encontré columna 'Referencia'.")
+        print(f"  Columnas disponibles: {headers}")
+        print(f"  Pasa --col-ref 'nombre exacto'")
         sys.exit(1)
 
-    if idx_abc is None:
-        print(f"\n✗ No encontré columna de clasificación ABC.")
-        print(f"  Columnas disponibles: {headers_raw}")
-        print(f"  Pasa --col-abc 'nombre exacto de la columna'")
+    if i_abc is None:
+        print(f"\n✗ No encontré columna 'Clasificación'.")
+        print(f"  Columnas disponibles: {headers}")
         sys.exit(1)
 
-    print(f"Columna código/ref: [{idx_ref}] '{headers_raw[idx_ref]}'")
-    print(f"Columna ABC:        [{idx_abc}] '{headers_raw[idx_abc]}'")
+    print(f"\nColumna Referencia:    [{i_ref}] '{headers[i_ref]}'")
+    print(f"Columna Clasificación: [{i_abc}] '{headers[i_abc]}'")
+    if i_txn is not None:
+        print(f"Columna Transacciones: [{i_txn}] '{headers[i_txn]}' (Watchdog calibration)")
+    else:
+        print(f"Columna Transacciones: no encontrada (se omite, no es crítica)")
 
     # Parsear datos
     datos = []
-    filas_invalidas = 0
-    for row in todas_las_filas[idx_header + 1:]:
-        if not row or not any(c.strip() for c in row):
+    omitidos = 0
+
+    for fila in filas[idx_h + 1:]:
+        # Saltar filas vacías o que son resúmenes al pie de Siesa
+        if not fila or not any(c.strip() for c in fila):
             continue
         try:
-            codigo = row[idx_ref].strip()
-            abc = row[idx_abc].strip().upper()
+            referencia = fila[i_ref].strip()
+            clasificacion = fila[i_abc].strip().upper()
         except IndexError:
-            filas_invalidas += 1
+            omitidos += 1
             continue
 
-        if not codigo or abc not in ('A', 'B', 'C'):
-            filas_invalidas += 1
+        # Validación
+        if not referencia or referencia in ('-', 'None', ''):
+            omitidos += 1
+            continue
+        if clasificacion not in ('A', 'B', 'C'):
+            omitidos += 1
             continue
 
-        datos.append((codigo, abc))
+        txn = 0
+        if i_txn is not None:
+            try:
+                txn = int(str(fila[i_txn]).replace('.', '').replace(',', '').strip() or 0)
+            except (ValueError, IndexError):
+                txn = 0
 
-    print(f"\nRegistros válidos:  {len(datos)}")
-    print(f"Registros omitidos: {filas_invalidas}")
+        datos.append((referencia, clasificacion, txn))
 
     if not datos:
-        print("✗ No hay datos válidos para cargar")
+        print("\n✗ No hay datos válidos. Verifica el archivo.")
         sys.exit(1)
 
-    # Distribución
-    from collections import Counter
-    dist = Counter(abc for _, abc in datos)
-    print(f"Distribución ABC: A={dist.get('A',0)}  B={dist.get('B',0)}  C={dist.get('C',0)}")
+    dist = Counter(c for _, c, _ in datos)
+    print(f"\nRegistros válidos:  {len(datos)}")
+    print(f"Omitidos:           {omitidos}")
+    print(f"Distribución ABC:   A={dist['A']}  B={dist['B']}  C={dist['C']}")
 
     if dry_run:
-        print("\n[DRY RUN] Los primeros 10 registros que se actualizarían:")
-        for codigo, abc in datos[:10]:
-            print(f"  {codigo} → {abc}")
-        print("\n[DRY RUN] Sin cambios en la BD. Quita --dry-run para ejecutar.")
+        print(f"\n[DRY-RUN] Primeros 15 registros que se actualizarían:")
+        print(f"  {'Referencia':<20} {'Clase':<6} {'Transacciones'}")
+        print(f"  {'─'*45}")
+        for ref, abc, txn in datos[:15]:
+            print(f"  {ref:<20} {abc:<6} {txn:>10}")
+        print(f"\n[DRY-RUN] Sin cambios en BD. Quita --dry-run para ejecutar.")
         return
 
-    # Conectar a la BD y actualizar
+    # ── Conectar a BD ────────────────────────────────────────────────────────
     print("\nConectando a la base de datos...")
     try:
-        # Cargar configuración de Flask para obtener DATABASE_URL
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from dotenv import load_dotenv
         load_dotenv()
+    except ImportError:
+        pass
+
+    try:
         import psycopg2
+        import psycopg2.extras
+    except ImportError:
+        print("✗ Instala: pip install psycopg2-binary")
+        sys.exit(1)
 
-        db_url = os.getenv('DATABASE_URL', '')
-        if not db_url:
-            # Intentar armar desde variables individuales
-            host = os.getenv('PGHOST') or os.getenv('DB_HOST', 'localhost')
-            port = os.getenv('PGPORT') or os.getenv('DB_PORT', '5432')
-            dbname = os.getenv('PGDATABASE') or os.getenv('DB_NAME', 'wms')
-            user = os.getenv('PGUSER') or os.getenv('DB_USER', 'postgres')
-            pwd = os.getenv('PGPASSWORD') or os.getenv('DB_PASSWORD', '')
-            db_url = f"postgresql://{user}:{pwd}@{host}:{port}/{dbname}"
+    db_url = os.getenv('DATABASE_URL', '')
+    if not db_url:
+        host = os.getenv('PGHOST', 'localhost')
+        port = os.getenv('PGPORT', '5432')
+        dbname = os.getenv('PGDATABASE', 'wms')
+        user = os.getenv('PGUSER', 'postgres')
+        pwd = os.getenv('PGPASSWORD', '')
+        db_url = f"postgresql://{user}:{pwd}@{host}:{port}/{dbname}"
 
-        # psycopg2 no acepta el prefijo postgres:// de Railway
-        db_url = db_url.replace('postgres://', 'postgresql://', 1)
+    db_url = db_url.replace('postgres://', 'postgresql://', 1)
 
+    try:
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
-    except ImportError:
-        print("✗ psycopg2 no instalado. Instala con: pip install psycopg2-binary")
-        sys.exit(1)
     except Exception as e:
-        print(f"✗ Error conectando a BD: {e}")
+        print(f"✗ Error conectando: {e}")
         sys.exit(1)
 
-    # Bulk update por lotes
+    # ── Bulk update en lotes de 500 ──────────────────────────────────────────
     actualizados = 0
     no_encontrados = []
     LOTE = 500
 
+    print(f"Actualizando {len(datos)} productos...")
+
     for i in range(0, len(datos), LOTE):
         lote = datos[i:i + LOTE]
-        for codigo, abc in lote:
-            cur.execute(
-                """
-                UPDATE productos
-                SET clasificacion_abc = %s
-                WHERE (codigo_siesa = %s OR codigo = %s)
-                  AND activo = true
-                """,
-                (abc, codigo, codigo)
-            )
-            if cur.rowcount == 0:
-                no_encontrados.append(codigo)
+
+        # Preparar lista para executemany
+        params = [(abc, ref, ref) for ref, abc, _ in lote]
+
+        cur.executemany(
+            """
+            UPDATE productos
+            SET clasificacion_abc = %s
+            WHERE (codigo_siesa = %s OR codigo = %s)
+              AND activo = true
+            """,
+            params
+        )
+        # Detectar los que no matchearon (rowcount no sirve en executemany)
+        # Verificar individualmente los que quedaron sin actualizar
+        refs_lote = [ref for ref, _, _ in lote]
+        cur.execute(
+            """
+            SELECT codigo_siesa, codigo
+            FROM productos
+            WHERE (codigo_siesa = ANY(%s) OR codigo = ANY(%s)) AND activo = true
+            """,
+            (refs_lote, refs_lote)
+        )
+        encontrados_set = set()
+        for row in cur.fetchall():
+            if row[0]: encontrados_set.add(row[0])
+            if row[1]: encontrados_set.add(row[1])
+
+        for ref, _, _ in lote:
+            if ref not in encontrados_set:
+                no_encontrados.append(ref)
             else:
-                actualizados += cur.rowcount
+                actualizados += 1
+
         conn.commit()
-        print(f"  Procesados {min(i + LOTE, len(datos))}/{len(datos)}...", end='\r')
+        pct = min(i + LOTE, len(datos))
+        print(f"  {pct}/{len(datos)} procesados...", end='\r')
 
     cur.close()
     conn.close()
 
-    print(f"\n\n{'─'*50}")
-    print(f"✓ Actualizados:    {actualizados} productos")
-    print(f"✗ No encontrados:  {len(no_encontrados)} códigos")
+    # ── Resultado ────────────────────────────────────────────────────────────
+    print(f"\n{'─'*55}")
+    print(f"✓ Productos actualizados:  {actualizados}")
+    print(f"✗ Códigos no encontrados:  {len(no_encontrados)}")
+
     if no_encontrados:
-        preview = no_encontrados[:20]
-        print(f"  Primeros 20: {preview}")
-        if len(no_encontrados) > 20:
-            # Guardar log completo
-            log_path = ruta.replace('.csv', '_no_encontrados.txt').replace('.xlsx', '_no_encontrados.txt')
-            with open(log_path, 'w') as lf:
-                lf.write('\n'.join(no_encontrados))
-            print(f"  Log completo: {log_path}")
-    print(f"{'─'*50}")
-    print(f"Distribución final en BD: A={dist.get('A',0)}  B={dist.get('B',0)}  C={dist.get('C',0)}")
-    print("\n✓ Listo. El scheduler de las 6am ya puede generar tareas de conteo cíclico.")
+        log_path = os.path.splitext(ruta)[0] + '_no_encontrados.txt'
+        with open(log_path, 'w') as lf:
+            lf.write('\n'.join(no_encontrados))
+        print(f"  → Log guardado en: {log_path}")
+        print(f"  Estos códigos existen en Siesa pero no en el WMS todavía.")
+        if len(no_encontrados) <= 10:
+            for ref in no_encontrados:
+                print(f"    - {ref}")
+
+    print(f"{'─'*55}")
+    print(f"Distribución cargada: A={dist['A']}  B={dist['B']}  C={dist['C']}")
+    print(f"\n✓ ABC cargado. El scheduler de las 6am ya puede generar tareas.")
+    print(f"  O genera manualmente desde el panel Inventario → ABC → Generar A+B+C")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Carga inicial de clasificación ABC desde CSV de Siesa'
+        description='Carga clasificación ABC desde CSV/Excel de Siesa (Recalculo de rotación ABC)'
     )
-    parser.add_argument('archivo', help='Ruta al CSV exportado de Siesa')
+    parser.add_argument('archivo', help='Ruta al CSV o Excel exportado de Siesa')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Mostrar lo que haría sin modificar la BD')
+                        help='Ver qué se actualizaría sin tocar la BD')
     parser.add_argument('--sep', default=None,
-                        help='Separador del CSV (, o ; o tab). Default: auto-detecta')
-    parser.add_argument('--col-ref', default=None,
-                        help='Nombre exacto de la columna con el código del ítem')
-    parser.add_argument('--col-abc', default=None,
-                        help='Nombre exacto de la columna con la clasificación ABC')
+                        help='Separador CSV (, ; o tab). Se auto-detecta si no se da.')
     args = parser.parse_args()
 
-    cargar_csv(
-        ruta=args.archivo,
-        sep=args.sep,
-        col_ref=args.col_ref,
-        col_abc=args.col_abc,
-        dry_run=args.dry_run,
-    )
+    cargar(ruta=args.archivo, sep=args.sep, dry_run=args.dry_run)
