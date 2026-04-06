@@ -439,7 +439,17 @@ class ABCService:
             except ImportError:
                 raise RuntimeError('openpyxl no instalado en el servidor')
         else:
-            texto = contenido.decode('utf-8-sig', errors='replace')
+            # Detectar encoding — Siesa exporta en latin-1/cp1252, no en UTF-8
+            texto = None
+            for enc in ('utf-8-sig', 'utf-8', 'latin-1', 'cp1252'):
+                try:
+                    texto = contenido.decode(enc)
+                    break
+                except (UnicodeDecodeError, LookupError):
+                    continue
+            if texto is None:
+                texto = contenido.decode('latin-1', errors='replace')
+
             # Auto-detectar separador
             muestra = texto[:4096]
             sep = ';' if muestra.count(';') >= muestra.count(',') else ','
@@ -451,13 +461,22 @@ class ABCService:
             raise ValueError('El archivo está vacío')
 
         # ── Encontrar fila de headers (saltar basura Siesa) ─────────────
-        palabras_clave = {'referencia', 'clasificacion', 'abc', 'clasif'}
+        # La primera fila que contenga "referencia" o "clasificaci" es el header
+        palabras_clave = {'referencia', 'clasificaci', 'abc', 'clasif', 'item'}
         idx_h = None
         for i, fila in enumerate(filas):
             norm_celdas = [_norm(c) for c in fila]
-            if any(any(p in c for p in palabras_clave) for c in norm_celdas if c):
+            hits = sum(1 for c in norm_celdas if any(p in c for p in palabras_clave) and len(c) > 2)
+            if hits >= 2:
                 idx_h = i
                 break
+
+        if idx_h is None:
+            # Fallback: primera fila no vacía
+            for i, fila in enumerate(filas):
+                if any(c.strip() for c in fila):
+                    idx_h = i
+                    break
 
         if idx_h is None:
             raise ValueError('No se encontró la fila de encabezados. '
@@ -470,9 +489,9 @@ class ABCService:
         i_abc = _col(hn, ALIASES_ABC)
 
         if i_ref is None:
-            raise ValueError(f'No encontré columna "Referencia". Columnas: {headers}')
+            raise ValueError(f'No encontré columna "Referencia". Columnas detectadas: {headers}')
         if i_abc is None:
-            raise ValueError(f'No encontré columna "Clasificación". Columnas: {headers}')
+            raise ValueError(f'No encontré columna "Clasificación". Columnas detectadas: {headers}')
 
         # ── Parsear datos ───────────────────────────────────────────────
         datos = []
@@ -481,12 +500,13 @@ class ABCService:
             if not fila or not any(c.strip() for c in fila):
                 continue
             try:
-                referencia = fila[i_ref].strip()
+                # strip() quita espacios; rstrip('-') quita guión de extensión de Siesa
+                referencia = fila[i_ref].strip().rstrip('-').strip()
                 clasificacion = fila[i_abc].strip().upper()
             except IndexError:
                 omitidos += 1
                 continue
-            if not referencia or referencia == '-' or clasificacion not in ('A', 'B', 'C'):
+            if not referencia or referencia in ('-', '') or clasificacion not in ('A', 'B', 'C'):
                 omitidos += 1
                 continue
             datos.append((referencia, clasificacion))
