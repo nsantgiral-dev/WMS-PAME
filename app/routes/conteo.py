@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.conteo import SesionConteo
 from app.services.conteo_service import ConteoService
@@ -217,3 +217,32 @@ def resumen_abc():
         return jsonify({'error': 'almacen_id es requerido'}), 400
     resultado = ABCService.resumen_abc(almacen_id)
     return jsonify(resultado), 200
+
+
+@conteo_bp.route('/abc/cargar-csv', methods=['POST'])
+@jwt_required()
+def cargar_csv_abc():
+    """
+    Recibe el CSV/Excel del reporte "Recalculo de rotación ABC" de Siesa
+    y actualiza clasificacion_abc en la tabla productos.
+
+    Form-data:
+        archivo  — el archivo CSV o Excel
+    """
+    if 'archivo' not in request.files:
+        return jsonify({'error': 'Se requiere el campo "archivo" en el form'}), 400
+
+    f = request.files['archivo']
+    if not f.filename:
+        return jsonify({'error': 'Archivo vacío'}), 400
+
+    ext = f.filename.rsplit('.', 1)[-1].lower()
+    if ext not in ('csv', 'xlsx', 'xls', 'txt'):
+        return jsonify({'error': f'Formato no soportado: {ext}. Usar CSV o Excel.'}), 400
+
+    try:
+        resultado = ABCService.procesar_csv_abc(f, ext)
+        return jsonify(resultado), 200
+    except Exception as e:
+        current_app.logger.error(f'[ABC CSV] Error procesando archivo: {e}')
+        return jsonify({'error': str(e)}), 500

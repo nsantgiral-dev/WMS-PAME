@@ -3729,6 +3729,60 @@ async function generarTodasClases() {
   }
 }
 
+async function subirCsvAbc(input) {
+  const archivo = input.files[0];
+  if (!archivo) return;
+
+  const label = document.getElementById('abc-upload-label');
+  const res = document.getElementById('abc-upload-resultado');
+  const nombreOriginal = label.innerHTML;
+
+  label.style.borderColor = '#555';
+  label.style.color = '#aaa';
+  label.innerHTML = `⏳ Procesando ${archivo.name}... <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">`;
+  res.style.color = '#888';
+  res.textContent = 'Subiendo archivo...';
+
+  const form = new FormData();
+  form.append('archivo', archivo);
+
+  try {
+    const r = await fetch(API + '/api/conteo/abc/cargar-csv', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+      body: form
+    });
+    const d = await r.json();
+
+    if (r.ok) {
+      const dist = d.distribucion || {};
+      const msg = `✓ ${d.actualizados} productos actualizados · A:${dist.A||0} B:${dist.B||0} C:${dist.C||0}`;
+      res.style.color = '#4ade80';
+      res.textContent = msg;
+      label.style.borderColor = '#166534';
+      label.style.color = '#4ade80';
+      label.innerHTML = `✓ ${archivo.name} cargado <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">`;
+
+      if (d.no_encontrados > 0) {
+        res.textContent += ` · ${d.no_encontrados} refs no encontradas en WMS`;
+      }
+      // Recargar resumen ABC
+      await cargarResumenAbc();
+    } else {
+      res.style.color = '#ef4444';
+      res.textContent = `✗ ${d.error || 'Error procesando archivo'}`;
+      label.style.borderColor = '#7f1d1d';
+      label.style.color = '#ef4444';
+      label.innerHTML = `✗ Error — volver a intentar <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">`;
+    }
+  } catch (e) {
+    res.style.color = '#ef4444';
+    res.textContent = '✗ Error de conexión';
+  }
+  // Limpiar input para permitir subir el mismo archivo de nuevo
+  input.value = '';
+}
+
 async function ejecutarWatchdog() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }

@@ -388,3 +388,157 @@ class ABCService:
             'distribucion_abc': resumen,
             'fuente': 'Siesa Enterprise' if not connekta.modo_simulacion else 'WMS local (simulación)'
         }
+
+    @staticmethod
+    def procesar_csv_abc(file_obj, ext: str) -> dict:
+        """
+        Parsea el archivo CSV/Excel del reporte "Recalculo de rotación ABC" de Siesa
+        y actualiza clasificacion_abc en la tabla productos.
+
+        Detecta automáticamente:
+        - Las filas basura del encabezado (empresa, NIT, fechas, filtros)
+        - Las columnas Referencia y Clasificación
+        - El separador del CSV (coma, punto y coma, tab)
+
+        Retorna resumen con actualizados, no_encontrados, distribucion.
+        """
+        import csv
+        import io
+        import re
+        from collections import Counter
+
+        def _norm(s):
+            s = str(s).lower().strip()
+            for a, b in [('á','a'),('é','e'),('í','i'),('ó','o'),('ú','u'),('ñ','n')]:
+                s = s.replace(a, b)
+            return re.sub(r'[^\w\s]', '', s).strip()
+
+        ALIASES_REF = ['referencia', 'ref', 'codigo', 'codigo siesa', 'cod item',
+                       'f120 referencia', 'item ref']
+        ALIASES_ABC = ['clasificacion', 'clasificacion abc', 'abc', 'clase',
+                       'clasif', 'rotacion abc']
+
+        def _col(headers_norm, aliases):
+            for alias in aliases:
+                an = _norm(alias)
+                for i, h in enumerate(headers_norm):
+                    if an == h or an in h or h in an:
+                        return i
+            return None
+
+        # ── Leer contenido ─────────────────────────────────────────────────
+        contenido = file_obj.read()
+
+        if ext in ('xlsx', 'xls'):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(io.BytesIO(contenido), read_only=True, data_only=True)
+                ws = wb.active
+                filas = [[str(c) if c is not None else '' for c in row]
+                         for row in ws.iter_rows(values_only=True)]
+            except ImportError:
+                raise RuntimeError('openpyxl no instalado en el servidor')
+        else:
+            texto = contenido.decode('utf-8-sig', errors='replace')
+            # Auto-detectar separador
+            muestra = texto[:4096]
+            sep = ';' if muestra.count(';') >= muestra.count(',') else ','
+            if muestra.count('\t') > muestra.count(sep):
+                sep = '\t'
+            filas = list(csv.reader(io.StringIO(texto), delimiter=sep))
+
+        if not filas:
+            raise ValueError('El archivo está vacío')
+
+        # ── Encontrar fila de headers (saltar basura Siesa) ─────────────
+        palabras_clave = {'referencia', 'clasificacion', 'abc', 'clasif'}
+        idx_h = None
+        for i, fila in enumerate(filas):
+            norm_celdas = [_norm(c) for c in fila]
+            if any(any(p in c for p in palabras_clave) for c in norm_celdas if c):
+                idx_h = i
+                break
+
+        if idx_h is None:
+            raise ValueError('No se encontró la fila de encabezados. '
+                             'Verifica que el archivo sea el reporte ABC de Siesa.')
+
+        headers = filas[idx_h]
+        hn = [_norm(h) for h in headers]
+
+        i_ref = _col(hn, ALIASES_REF)
+        i_abc = _col(hn, ALIASES_ABC)
+
+        if i_ref is None:
+            raise ValueError(f'No encontré columna "Referencia". Columnas: {headers}')
+        if i_abc is None:
+            raise ValueError(f'No encontré columna "Clasificación". Columnas: {headers}')
+
+        # ── Parsear datos ───────────────────────────────────────────────
+        datos = []
+        omitidos = 0
+        for fila in filas[idx_h + 1:]:
+            if not fila or not any(c.strip() for c in fila):
+                continue
+            try:
+                referencia = fila[i_ref].strip()
+                clasificacion = fila[i_abc].strip().upper()
+            except IndexError:
+                omitidos += 1
+                continue
+            if not referencia or referencia == '-' or clasificacion not in ('A', 'B', 'C'):
+                omitidos += 1
+                continue
+            datos.append((referencia, clasificacion))
+
+        if not datos:
+            raise ValueError(f'No hay filas válidas en el archivo. Omitidos: {omitidos}')
+
+        dist = Counter(c for _, c in datos)
+
+        # ── Actualizar BD ───────────────────────────────────────────────
+        actualizados = 0
+        no_encontrados = []
+        LOTE = 500
+
+        for i in range(0, len(datos), LOTE):
+            lote = datos[i:i + LOTE]
+            refs = [r for r, _ in lote]
+
+            # Mapa referencia → producto.id existente en WMS
+            existentes = {
+                p.codigo_siesa or p.codigo: p
+                for p in Producto.query.filter(
+                    db.or_(
+                        Producto.codigo_siesa.in_(refs),
+                        Producto.codigo.in_(refs)
+                    ),
+                    Producto.activo == True
+                ).all()
+            }
+
+            for referencia, clasificacion in lote:
+                producto = existentes.get(referencia)
+                if producto:
+                    producto.clasificacion_abc = clasificacion
+                    actualizados += 1
+                else:
+                    no_encontrados.append(referencia)
+
+            db.session.commit()
+
+        logger.info(
+            f'[ABC CSV] Carga completada: {actualizados} actualizados, '
+            f'{len(no_encontrados)} no encontrados, '
+            f'A={dist["A"]} B={dist["B"]} C={dist["C"]}'
+        )
+
+        return {
+            'actualizados': actualizados,
+            'no_encontrados': len(no_encontrados),
+            'no_encontrados_muestra': no_encontrados[:20],
+            'omitidos_formato': omitidos,
+            'distribucion': {'A': dist['A'], 'B': dist['B'], 'C': dist['C']},
+            'total_procesados': len(datos),
+            'filas_encabezado_saltadas': idx_h,
+        }

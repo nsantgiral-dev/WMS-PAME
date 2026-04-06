@@ -599,6 +599,17 @@
         <div style="text-align:center;padding:20px;color:#555;">Selecciona un almacén</div>
       </div>
 
+      <!-- Carga CSV Siesa -->
+      <div style="background:#111;border:1px solid #333;border-radius:12px;padding:16px;margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">Cargar clasificación ABC desde Siesa</div>
+        <div style="font-size:11px;color:#555;margin-bottom:12px;">CSV o Excel del reporte "Recalculo de rotación ABC" — columnas Referencia y Clasificación</div>
+        <label style="display:block;padding:13px;background:#1a1a1a;border:2px dashed #333;border-radius:10px;text-align:center;cursor:pointer;color:#888;font-size:13px;" id="abc-upload-label">
+          📂 Seleccionar archivo CSV / Excel
+          <input type="file" id="abc-csv-input" accept=".csv,.xlsx,.xls,.txt" style="display:none;" onchange="subirCsvAbc(this)">
+        </label>
+        <div id="abc-upload-resultado" style="min-height:18px;font-size:12px;margin-top:8px;text-align:center;"></div>
+      </div>
+
       <!-- Generación manual -->
       <div style="background:#111;border:1px solid #222;border-radius:12px;padding:16px;margin-bottom:12px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:12px;">Generar tareas de conteo</div>
