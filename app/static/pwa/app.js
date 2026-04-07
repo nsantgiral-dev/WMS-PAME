@@ -2535,6 +2535,7 @@ function _htmlGrupoPendiente(grupo, rutaId) {
           <div>
             <span style="font-family:monospace;font-size:12px;color:#ccc;">${b.codigo_barras}</span>
             <span style="font-size:10px;color:#555;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
+            ${b.cliente ? `<span style="font-size:10px;color:#666;margin-left:8px;">· ${b.cliente}</span>` : ''}
           </div>
           <button onclick="muelleAsignar(${b.id},null)"
             style="background:#1a1a1a;color:#aaa;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
