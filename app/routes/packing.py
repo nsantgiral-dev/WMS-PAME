@@ -244,7 +244,11 @@ def forzar_retry_siesa(id):
     tarea.siesa_triggered = False
     db.session.commit()
     try:
-        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=[])
+        # Pasar bultos existentes como bultos_data para saltarse la validación de "sin piezas"
+        from app.models.bulto import Bulto as BultoModel
+        bultos_existentes = BultoModel.query.filter_by(tarea_id=id).all()
+        bultos_data_dummy = [{'tipo': b.tipo, 'cantidad': 1} for b in bultos_existentes] if bultos_existentes else [{'tipo': 'Caja', 'cantidad': 1}]
+        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data_dummy)
         tarea = TareaPacking.query.get(id)
         return jsonify({
             'ok': True,
