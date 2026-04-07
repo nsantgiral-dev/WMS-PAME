@@ -144,10 +144,12 @@ def confirmar_recepcion(id):
 @traslados_bp.route('/<int:id>/reintentar-siesa', methods=['POST'])
 @jwt_required()
 def reintentar_siesa(id):
-    """Admin: reintenta la llamada a Siesa 174646 sin volver a aprobar."""
+    """Admin: reintenta la llamada a Siesa 174646 sin volver a aprobar.
+    ?debug=true devuelve el payload sin llamar a Siesa."""
     from app.models.traslado import SolicitudTraslado
     from app.extensions import db
     s = SolicitudTraslado.query.get_or_404(id)
+    debug = request.args.get('debug', '').lower() == 'true'
 
     items_payload = [
         {
@@ -159,8 +161,60 @@ def reintentar_siesa(id):
         for item in s.items if (item.cantidad_aprobada or item.cantidad_solicitada)
     ]
 
+    from app.services.connekta_gateway import connekta
+
+    if debug:
+        # Construir payload sin llamar a Siesa — solo para inspección
+        from datetime import datetime as _dt
+        fecha_hoy = _dt.utcnow().strftime('%Y%m%d')
+        payload_preview = {
+            'Inicial': [{'F_CIA': connekta.id_cia_siesa}],
+            'Documentos': [{
+                'F_CIA': connekta.id_cia_siesa,
+                'f440_id_co': connekta.centro_op,
+                'f440_id_tipo_docto': connekta.tipo_docto_req_traslado,
+                'f440_id_solicitante': connekta.req_solicitante,
+                'f440_fecha': fecha_hoy,
+                'f440_fecha_entrega': fecha_hoy,
+                'f440_id_bodega_salida': s.bodega_origen_siesa,
+                'f440_id_bodega_entrada': s.bodega_destino_siesa,
+            }],
+            'Movimientos': [
+                {
+                    'F_CIA': connekta.id_cia_siesa,
+                    'f441_id_co': connekta.centro_op,
+                    'f441_id_tipo_docto': connekta.tipo_docto_req_traslado,
+                    'f441_consec_docto': 0,
+                    'f441_nro_registro': idx + 1,
+                    'f441_id_item': '',
+                    'f441_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f441_codigo_barras': '',
+                    'f441_id_ext1_detalle': '',
+                    'f441_id_ext2_detalle': '',
+                    'f441_id_bodega': s.bodega_origen_siesa,
+                    'f441_id_motivo': connekta.motivo_traslado,
+                    'f441_id_unidad_medida': item.get('unidad_medida') or '',
+                    'f441_cant_base': f'{abs(item.get("cantidad", 0)):020.4f}',
+                    'f441_cant_2': f'{0:020.4f}',
+                    'f441_fecha_entrega': fecha_hoy,
+                    'f441_num_dias_entrega': 0,
+                    'f441_id_co_movto': connekta.centro_op,
+                    'f441_id_ccosto_movto': '',
+                    'f441_id_proyecto': '',
+                    'f441_notas': '',
+                    'f441_id_un_movto': connekta.centro_op,
+                    'f441_precio_unitario': f'{0:020.4f}',
+                    'f441_id_ubicacion_sal': '',
+                    'f441_id_proy_etapa': '',
+                    'f441_id_rubro_pof': '',
+                }
+                for idx, item in enumerate(items_payload)
+            ],
+            'Final': [{'F_CIA': connekta.id_cia_siesa}],
+        }
+        return jsonify({'debug': True, 'payload': payload_preview, 'items': items_payload}), 200
+
     try:
-        from app.services.connekta_gateway import connekta
         from app.services.traslado_service import TrasladoService
         res = connekta.crear_requisicion_traslado(
             bodega_origen=s.bodega_origen_siesa,
