@@ -233,7 +233,8 @@ def debug_monitor_facturas():
     fecha = request.args.get('fecha')
     try:
         resultado = connekta.get_monitor_facturas_raw(fecha=fecha, pagina=1)
-        tabla = resultado.get('detalle', {}).get('Table', [])
+        detalle = resultado.get('detalle', {})
+        tabla = detalle.get('Datos', detalle.get('Table', []))
         return jsonify({
             'consulta': 'papeleriamedellin_monitos_facturas_wms',
             'fecha_filtro': fecha or 'hoy',
