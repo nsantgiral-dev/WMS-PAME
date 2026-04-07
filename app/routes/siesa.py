@@ -78,6 +78,23 @@ def carga_inventario_estado():
     return jsonify(estado_carga_inventario()), 200
 
 
+@siesa_bp.route('/setup-inicial', methods=['POST'])
+@jwt_required()
+def setup_inicial():
+    """Catálogo sync + carga de stock en una sola operación secuencial."""
+    from flask import current_app
+    from app.services.inventario_siesa_service import iniciar_setup_inicial
+    resultado = iniciar_setup_inicial(current_app._get_current_object())
+    return jsonify(resultado), 202
+
+
+@siesa_bp.route('/setup-inicial-estado', methods=['GET'])
+@jwt_required()
+def setup_inicial_estado():
+    from app.services.inventario_siesa_service import estado_setup_inicial
+    return jsonify(estado_setup_inicial()), 200
+
+
 @siesa_bp.route('/reconciliacion', methods=['POST'])
 @jwt_required()
 def reconciliacion_iniciar():

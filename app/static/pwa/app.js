@@ -538,18 +538,14 @@ async function cargarConnekta() {
         <div class="tabla-fila"><span class="tabla-nombre">Bodega</span><span style="font-size:13px;color:#aaa;">${d.bodega||'—'}</span></div>
         <div class="tabla-fila"><span class="tabla-nombre">CO</span><span style="font-size:13px;color:#aaa;">${d.centro_operacion||'—'}</span></div>
       </div>
-      <button id="btn-sync-productos" onclick="sincronizarProductos()"
+      <button id="btn-setup-inicial" onclick="setupInicial()"
         style="width:100%;margin-top:12px;padding:14px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
-        ↻ Sincronizar catálogo de productos desde Siesa
+        ↻ Sincronizar catálogo + cargar stock inicial
       </button>
-      <div id="sync-resultado" style="margin-top:8px;font-size:12px;color:#666;text-align:center;"></div>
+      <div id="setup-resultado" style="margin-top:8px;font-size:12px;color:#666;text-align:center;"></div>
 
       <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:8px;">Inventario bilateral</div>
-        <button onclick="cargarInventarioInicial()"
-          style="width:100%;padding:12px;background:#0d2d1a;color:#4ade80;border:1px solid #1a4a2a;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;margin-bottom:6px;">
-          ↓ Cargar stock inicial desde Siesa
-        </button>
         <button onclick="verReconciliacion()"
           style="width:100%;padding:12px;background:#1a1a2e;color:#93c5fd;border:1px solid #2a2a5a;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">
           ⚖ Ver reconciliación WMS vs Siesa
@@ -567,96 +563,60 @@ async function cargarConnekta() {
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
-async function sincronizarProductos() {
-  const btn = document.getElementById('btn-sync-productos');
-  const res = document.getElementById('sync-resultado');
+async function setupInicial() {
+  const btn = document.getElementById('btn-setup-inicial');
+  const res = document.getElementById('setup-resultado');
   if (!btn) return;
+
+  const FASES = { iniciando: '⏳ Iniciando...', catalogo: '⏳ Fase 1/2: sincronizando catálogo (~2 min)...', stock: '⏳ Fase 2/2: cargando stock (~60 seg)...' };
+
   btn.disabled = true;
-  btn.textContent = '↻ Sincronizando...';
+  btn.textContent = '↻ Procesando...';
   res.style.color = '#93c5fd';
-  res.textContent = 'Iniciando sync en background...';
+  res.textContent = 'Iniciando setup...';
+
   try {
-    const d = await post('/api/siesa/sync-productos', {});
+    const d = await post('/api/siesa/setup-inicial', {});
     if (d.simulado) {
       res.style.color = '#fb923c';
       res.textContent = d.mensaje || 'Modo simulación';
       btn.disabled = false;
-      btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
-      return;
-    }
-    if (d.omitido) {
-      res.style.color = '#fb923c';
-      res.textContent = d.mensaje || 'Sync reciente';
-      if (d.ultimo_resultado) {
-        const r = d.ultimo_resultado;
-        res.textContent += ` — último: ✓ ${r.creados} creados · ${r.actualizados} actualizados`;
-      }
-      btn.disabled = false;
-      btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
+      btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
       return;
     }
     if (d.en_curso && !d.iniciado) {
       res.style.color = '#fb923c';
-      res.textContent = '⏳ ' + (d.mensaje || 'Ya en proceso — monitoreando...');
+      res.textContent = '⏳ Ya en proceso — monitoreando fase: ' + (d.fase || '...');
     }
-    // Sync iniciado o ya en curso — polling cada 5 seg hasta completar
-    res.textContent = '⏳ Sincronizando productos... (puede tardar ~30 seg)';
-    const intervalo = setInterval(async () => {
+
+    const iv = setInterval(async () => {
       try {
-        const estado = await get('/api/siesa/sync-estado');
-        if (!estado.en_curso) {
-          clearInterval(intervalo);
+        const e = await get('/api/siesa/setup-inicial-estado');
+        res.textContent = FASES[e.fase] || ('⏳ ' + (e.fase || 'en proceso'));
+        if (!e.en_curso) {
+          clearInterval(iv);
           btn.disabled = false;
-          btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
-          if (estado.ultimo_error) {
+          btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
+          if (e.ultimo_error) {
             res.style.color = '#ef4444';
-            res.textContent = 'Error: ' + estado.ultimo_error;
-          } else if (estado.ultimo_resultado) {
-            const r = estado.ultimo_resultado;
+            res.textContent = 'Error en fase ' + e.fase + ': ' + e.ultimo_error;
+          } else {
+            const cat = e.resultado_catalogo;
+            const stk = e.resultado_stock;
             res.style.color = '#4ade80';
-            res.textContent = `✓ ${r.creados} creados · ${r.actualizados} actualizados · ${r.total_procesados} total`;
+            const partesCat = cat ? `catálogo: ${cat.creados} creados · ${cat.actualizados} actualizados` : '';
+            const partesStk = stk ? `stock: ${stk.cargados} nuevos · ${stk.actualizados} actualizados` : '';
+            res.textContent = '✓ ' + [partesCat, partesStk].filter(Boolean).join(' — ');
           }
-        } else {
-          res.textContent = '⏳ Sincronizando... en proceso';
         }
-      } catch (e) { clearInterval(intervalo); }
+      } catch (err) { clearInterval(iv); }
     }, 5000);
   } catch (e) {
     res.style.color = '#ef4444';
     res.textContent = 'Error: ' + (e.message || e);
     btn.disabled = false;
-    btn.textContent = '↻ Sincronizar catálogo de productos desde Siesa';
+    btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
   }
-}
-
-async function cargarInventarioInicial() {
-  const res = document.getElementById('inv-resultado');
-  if (!res) return;
-  res.style.color = '#93c5fd';
-  res.textContent = '⏳ Iniciando carga de stock desde Siesa...';
-  try {
-    const d = await post('/api/siesa/cargar-inventario', {});
-    if (d.simulado) { res.style.color = '#fb923c'; res.textContent = d.mensaje; return; }
-    if (d.en_curso && !d.iniciado) { res.style.color = '#fb923c'; res.textContent = '⏳ Ya en proceso — monitoreando...'; }
-    else { res.style.color = '#93c5fd'; res.textContent = '⏳ Cargando stock... (~60 seg)'; }
-    const iv = setInterval(async () => {
-      try {
-        const e = await get('/api/siesa/carga-inventario-estado');
-        if (!e.en_curso) {
-          clearInterval(iv);
-          if (e.ultimo_error) {
-            res.style.color = '#ef4444'; res.textContent = 'Error: ' + e.ultimo_error;
-          } else if (e.ultimo_resultado) {
-            const r = e.ultimo_resultado;
-            res.style.color = '#4ade80';
-            res.textContent = `✓ ${r.cargados} nuevos · ${r.actualizados} actualizados · ${r.sin_producto_wms} sin match WMS`;
-          } else {
-            res.style.color = '#fb923c'; res.textContent = 'No hay resultado aún — intenta de nuevo';
-          }
-        } else { res.textContent = '⏳ Cargando stock desde Siesa...'; }
-      } catch(e) { clearInterval(iv); }
-    }, 6000);
-  } catch(e) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + (e.message || e); }
 }
 
 async function verReconciliacion() {

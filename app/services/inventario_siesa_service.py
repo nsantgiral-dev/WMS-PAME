@@ -422,3 +422,71 @@ def estado_reconciliacion():
         'ultimo_resultado': _estado_reconciliacion['ultimo_resultado'],
         'ultimo_error': _estado_reconciliacion['ultimo_error'],
     }
+
+
+# ─────────────────────────────────────────────
+# 3. SETUP INICIAL UNIFICADO (catálogo → stock)
+# ─────────────────────────────────────────────
+
+_estado_setup = {
+    'en_curso': False,
+    'fase': None,   # 'catalogo' | 'stock' | 'completado' | 'error'
+    'ultimo_inicio': None,
+    'ultimo_error': None,
+}
+
+
+def _run_setup_inicial(app):
+    """Ejecuta sync de catálogo y luego carga de stock en secuencia, en un solo hilo."""
+    global _estado_setup
+    from app.services.siesa_sync_service import _run_sync
+
+    try:
+        _estado_setup['fase'] = 'catalogo'
+        _run_sync(app)
+
+        _estado_setup['fase'] = 'stock'
+        _run_carga_inicial(app)
+
+        _estado_setup['fase'] = 'completado'
+        _estado_setup['ultimo_error'] = None
+    except Exception as e:
+        logger.error(f'[SETUP] Error en setup inicial: {e}')
+        _estado_setup['ultimo_error'] = str(e)
+        _estado_setup['fase'] = 'error'
+    finally:
+        _estado_setup['en_curso'] = False
+
+
+def iniciar_setup_inicial(app):
+    """Arranca el setup inicial unificado en background. Retorna inmediatamente."""
+    global _estado_setup
+
+    if _estado_setup['en_curso']:
+        return {'en_curso': True, 'fase': _estado_setup['fase'],
+                'mensaje': 'Setup ya en proceso — espera que termine'}
+
+    if connekta.modo_simulacion:
+        return {'simulado': True, 'mensaje': 'Modo simulación — conecta credenciales Siesa'}
+
+    _estado_setup['en_curso'] = True
+    _estado_setup['fase'] = 'iniciando'
+    _estado_setup['ultimo_inicio'] = datetime.now(timezone.utc)
+    _estado_setup['ultimo_error'] = None
+
+    hilo = threading.Thread(target=_run_setup_inicial, args=(app,), daemon=True)
+    hilo.start()
+
+    return {'iniciado': True, 'mensaje': 'Setup iniciado — fase 1/2: sincronizando catálogo'}
+
+
+def estado_setup_inicial():
+    from app.services.siesa_sync_service import estado_sync
+    return {
+        'en_curso': _estado_setup['en_curso'],
+        'fase': _estado_setup['fase'],
+        'ultimo_inicio': _estado_setup['ultimo_inicio'].isoformat() if _estado_setup['ultimo_inicio'] else None,
+        'resultado_catalogo': estado_sync().get('ultimo_resultado'),
+        'resultado_stock': _estado_carga['ultimo_resultado'],
+        'ultimo_error': _estado_setup['ultimo_error'],
+    }
