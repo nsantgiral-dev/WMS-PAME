@@ -82,6 +82,7 @@ class ConnektaGateway:
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
         self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
         self.url_get = f'{_base}/api/siesa/v3/ejecutarconsultaestandar'
+        self.url_get_dinamico = f'{_base}/api/connekta/v3/ejecutarconsulta'
         self.url_post = f'{_base}/api/siesa/v3/conectoresimportarestandar'
         self.url_post_dinamico = f'{_base}/api/siesa/v3.1/conectoresimportar'
 
@@ -296,6 +297,35 @@ class ConnektaGateway:
         return self._get(self.api_clasificacion, {
             'paginacion': f'numPag={pagina}|tamPag=100'
         })
+
+    def get_monitor_facturas_raw(self, fecha: str = None, pagina: int = 1):
+        """
+        Consulta dinámica papeleriamedellin_monitos_facturas_wms.
+        Usa el endpoint /api/connekta/v3/ejecutarconsulta (distinto del estándar).
+        fecha: AAAAMMDD — si None usa hoy. Devuelve JSON crudo para descubrir campos.
+        """
+        if not fecha:
+            fecha = datetime.utcnow().strftime('%Y%m%d')
+
+        if self.modo_simulacion:
+            return self._simular('GET_monitor_facturas', {'fecha': fecha})
+
+        import requests as _req
+        params = {
+            'idCompania': self.id_compania,
+            'descripcion': 'papeleriamedellin_monitos_facturas_wms',
+            'paginacion': f'numPag={pagina}|tamPag=100',
+            'parametros': f"FechaFactura = ''{fecha}''",
+        }
+        try:
+            r = _req.get(self.url_get_dinamico, headers=self.headers, params=params, timeout=30)
+            r.raise_for_status()
+            return r.json()
+        except _req.exceptions.Timeout:
+            raise Exception('Connekta no respondió — reintenta')
+        except _req.exceptions.RequestException as e:
+            logger.error(f'[CONNEKTA] GET monitor_facturas: {e}')
+            raise Exception(f'Error consultando monitor facturas: {e}')
 
     # ==========================================
     # POSTs — Bodies oficiales desde Ver Guía

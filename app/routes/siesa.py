@@ -222,6 +222,27 @@ def debug_clasificacion_raw():
     }), 200
 
 
+@siesa_bp.route('/debug-monitor-facturas', methods=['GET'])
+@jwt_required()
+def debug_monitor_facturas():
+    """
+    Explora el response crudo de papeleriamedellin_monitos_facturas_wms.
+    Acepta ?fecha=AAAAMMDD (default: hoy).
+    Devuelve campos disponibles + primeras 5 filas para mapear antes de construir el monitor.
+    """
+    fecha = request.args.get('fecha')
+    resultado = connekta.get_monitor_facturas_raw(fecha=fecha, pagina=1)
+    tabla = resultado.get('detalle', {}).get('Table', [])
+    return jsonify({
+        'consulta': 'papeleriamedellin_monitos_facturas_wms',
+        'fecha_filtro': fecha or 'hoy',
+        'total_filas': len(tabla),
+        'campos': list(tabla[0].keys()) if tabla else [],
+        'muestra': tabla[:5],
+        'raw': resultado
+    }), 200
+
+
 @siesa_bp.route('/debug-inventario-raw', methods=['GET'])
 @jwt_required()
 def debug_inventario_raw():
