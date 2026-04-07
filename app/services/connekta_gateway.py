@@ -42,9 +42,11 @@ class ConnektaGateway:
         self.api_inventario = os.getenv('CONNEKTA_API_INVENTARIO', 'API_v2_Inventarios_InvFecha')
         self.api_barras = os.getenv('CONNEKTA_API_BARRAS', 'API_v2_ItemsBarras')
 
-        self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')
-        self.conector_entrada = os.getenv('CONNEKTA_CONECTOR_ENTRADA', '142948')
-        self.conector_ajuste = os.getenv('CONNEKTA_CONECTOR_AJUSTE', '142951')
+        self.conector_factura  = os.getenv('CONNEKTA_CONECTOR_FACTURA',  '238925')  # FacturaPedido (reemplaza 142945)
+        self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')  # RemisionPedido (legacy — no usar)
+        self.conector_entrada  = os.getenv('CONNEKTA_CONECTOR_ENTRADA',  '142948')
+        self.conector_ajuste   = os.getenv('CONNEKTA_CONECTOR_AJUSTE',   '142951')
+        self.api_clasificacion = os.getenv('CONNEKTA_API_CLASIFICACION', '238920')  # CLASIFICACION DE ITEMS
         # Traslados entre bodegas (puntos de venta)
         self.conector_requisicion_traslado = os.getenv('CONNEKTA_CONECTOR_REQ_TRASLADO', '174646')
         self.conector_transito_salida = os.getenv('CONNEKTA_CONECTOR_TRANSITO_SALIDA', '173076')
@@ -62,7 +64,9 @@ class ConnektaGateway:
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
         self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
-        # Tipo de documento remisión en Siesa (ej. 'RS', 'REMI', 'RM') — obligatorio
+        # Tipo documento factura electrónica en Siesa (normalmente 'FE')
+        self.tipo_docto_factura  = os.getenv('SIESA_TIPO_DOCTO_FACTURA',  'FE')
+        # Tipo de documento remisión en Siesa (ej. 'RS', 'REMI', 'RM') — legacy
         # Verificar en Siesa: Ventas → Tipos de documento → código del tipo Remisión
         self.tipo_docto_remision = os.getenv('SIESA_TIPO_DOCTO_REMISION', '')
         # Motivo de ventas en Siesa — campo requerido f470_id_motivo (pos 131, ancho 2)
@@ -276,6 +280,17 @@ class ConnektaGateway:
             'paginacion': f'numPag={pagina}|tamPag=100'
         })
 
+    def get_clasificacion_items(self, pagina: int = 1):
+        """
+        238920 — CLASIFICACION DE ITEMS (conector dinámico)
+        Devuelve la clasificación ABC por ítem directamente desde Siesa.
+        Reemplaza la carga manual de CSV del reporte 'Recalculo de rotación ABC'.
+        Los campos exactos se descubren con /api/siesa/debug-clasificacion-raw.
+        """
+        return self._get(self.api_clasificacion, {
+            'paginacion': f'numPag={pagina}|tamPag=100'
+        })
+
     # ==========================================
     # POSTs — Bodies oficiales desde Ver Guía
     # ==========================================
@@ -367,6 +382,85 @@ class ConnektaGateway:
 
         logger.info(f'[CONNEKTA] Despacho {tipo_docto_pedido}{consec_docto_pedido}')
         return self._post(self.conector_despacho, 'API_v1_Ventas_Comercial_RemisionPedido', payload)
+
+    def trigger_factura(self, tipo_docto_pedido: str, consec_docto_pedido: str,
+                        items: list):
+        """
+        238925 → FACTURA_DESDE_PEDIDO
+        Genera factura electrónica (FE) directamente desde el pedido comprometido.
+        La automatización Siesa 'Factura → Remisión' (estado Aprobado) crea la
+        remisión automáticamente, descargando el inventario sin intervención manual.
+
+        Reemplaza trigger_despacho (142945 RemisionPedido) como conector principal
+        de cierre de packing.
+        """
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+
+        payload = {
+            'Inicial': [
+                {'F_CIA': self.id_cia_siesa}
+            ],
+            'Factura': [
+                {
+                    'F_CIA': self.id_cia_siesa,
+                    'F_CONSEC_AUTO_REG': 0,
+                    'F350_ID_CO': self.centro_op,
+                    'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
+                    'F350_CONSEC_DOCTO': 0,
+                    'F350_FECHA': fecha_hoy,
+                    'F350_IND_ESTADO': 1,           # 1=Aprobado — factura debe quedar aprobada
+                    'F350_IND_IMPRESION': 0,
+                    'F430_ID_TIPO_DOCTO': tipo_docto_pedido,
+                    'F430_CONSEC_DOCTO': int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido,
+                    'f460_id_cond_pago': None
+                }
+            ],
+            'Movtoventascomercial': [
+                {
+                    'F_CIA': self.id_cia_siesa,
+                    'f470_id_co': self.centro_op,
+                    'f470_id_tipo_docto': self.tipo_docto_factura,
+                    'f470_consec_docto': 0,
+                    'f470_nro_registro': 0,
+                    'f470_id_bodega': self.bodega,
+                    'f470_id_ubicacion_aux': None,
+                    'f470_id_lote': i.get('lote') or None,
+                    'f470_id_concepto': 501,
+                    'f470_id_motivo': self.motivo_ventas or None,
+                    'f470_ind_obsequio': 0,
+                    'f470_id_co_movto': self.centro_op,
+                    'f470_id_ccosto_movto': None,
+                    'f470_id_proyecto': None,
+                    'f470_id_lista_precio': self.lista_precio or None,
+                    'f470_id_unidad_precio': i.get('unidad_medida') or None,
+                    'f470_id_unidad_medida': i.get('unidad_medida') or None,
+                    'f470_cant_base': i.get('cantidad_empacada'),
+                    'f470_cant_2': None,
+                    'f470_vlr_bruto': None,
+                    'f470_ind_naturaleza': 2,
+                    'f470_ind_solo_valor': 0,
+                    'f470_ind_impto_asumido': 0,
+                    'f470_notas': None,
+                    'f470_desc_variable': None,
+                    'F_DESC_ITEM': None,
+                    'F_ID_UM_INVENTARIO': i.get('unidad_medida') or None,
+                    'f470_id_item': i.get('item_id_siesa') or None,
+                    'f470_referencia_item': i.get('producto_codigo'),
+                    'f470_codigo_barras': None,
+                    'f470_id_ext1_detalle': None,
+                    'f470_id_ext2_detalle': None,
+                    'f470_id_un_movto': self.centro_op,
+                    'f470_id_causal_devol': None
+                }
+                for i in items
+            ],
+            'Final': [
+                {'F_CIA': self.id_cia_siesa}
+            ]
+        }
+
+        logger.info(f'[CONNEKTA] Factura {tipo_docto_pedido}{consec_docto_pedido} — {len(items)} ítems')
+        return self._post(self.conector_factura, 'FACTURA_DESDE_PEDIDO', payload)
 
     def confirmar_entrada_compras(self, id_co_oc: str, tipo_docto_oc: str,
                                    consec_docto_oc: str, items: list,

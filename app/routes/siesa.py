@@ -204,6 +204,24 @@ def debug_pedidos_raw():
     }), 200
 
 
+@siesa_bp.route('/debug-clasificacion-raw', methods=['GET'])
+@jwt_required()
+def debug_clasificacion_raw():
+    """
+    Explora los campos que devuelve el conector dinámico 238920 (CLASIFICACION DE ITEMS).
+    Devuelve las primeras 3 filas para mapear nombres de campos antes de activar
+    el sync automático de ABC.
+    """
+    resultado = connekta.get_clasificacion_items(pagina=1)
+    tabla = resultado.get('detalle', {}).get('Table', [])
+    return jsonify({
+        'conector': connekta.api_clasificacion,
+        'total_filas_pagina': len(tabla),
+        'campos_disponibles': list(tabla[0].keys()) if tabla else [],
+        'muestra': tabla[:3]
+    }), 200
+
+
 @siesa_bp.route('/debug-inventario-raw', methods=['GET'])
 @jwt_required()
 def debug_inventario_raw():

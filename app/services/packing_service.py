@@ -280,9 +280,9 @@ class PackingService:
                 'unidad_medida': i.producto.unidad_medida or ''
             })
 
-        # TRIGGER A SIESA — inventario sale de cuenta 14
+        # TRIGGER A SIESA — 238925 FacturaPedido → factura FE + remisión automática
         try:
-            respuesta_siesa = connekta.trigger_despacho(
+            respuesta_siesa = connekta.trigger_factura(
                 tipo_docto_pedido=tarea.tipo_docto_pedido_siesa or '',
                 consec_docto_pedido=tarea.consec_docto_pedido_siesa or tarea.numero_pedido_siesa,
                 items=items_payload
