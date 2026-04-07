@@ -149,7 +149,8 @@ def reintentar_siesa(id):
     from app.models.traslado import SolicitudTraslado
     from app.extensions import db
     s = SolicitudTraslado.query.get_or_404(id)
-    debug = request.args.get('debug', '').lower() == 'true'
+    body = request.get_json(silent=True) or {}
+    debug = body.get('debug', False) or request.args.get('debug', '').lower() == 'true'
 
     items_payload = [
         {
