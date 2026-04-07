@@ -231,16 +231,19 @@ def debug_monitor_facturas():
     Devuelve campos disponibles + primeras 5 filas para mapear antes de construir el monitor.
     """
     fecha = request.args.get('fecha')
-    resultado = connekta.get_monitor_facturas_raw(fecha=fecha, pagina=1)
-    tabla = resultado.get('detalle', {}).get('Table', [])
-    return jsonify({
-        'consulta': 'papeleriamedellin_monitos_facturas_wms',
-        'fecha_filtro': fecha or 'hoy',
-        'total_filas': len(tabla),
-        'campos': list(tabla[0].keys()) if tabla else [],
-        'muestra': tabla[:5],
-        'raw': resultado
-    }), 200
+    try:
+        resultado = connekta.get_monitor_facturas_raw(fecha=fecha, pagina=1)
+        tabla = resultado.get('detalle', {}).get('Table', [])
+        return jsonify({
+            'consulta': 'papeleriamedellin_monitos_facturas_wms',
+            'fecha_filtro': fecha or 'hoy',
+            'total_filas': len(tabla),
+            'campos': list(tabla[0].keys()) if tabla else [],
+            'muestra': tabla[:5],
+            'raw': resultado
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @siesa_bp.route('/debug-inventario-raw', methods=['GET'])
