@@ -1079,21 +1079,8 @@ async function iniciarDespachoDesdeSiesa(idx) {
   } catch (e) { alerta('Error iniciando despacho', 'error'); }
 }
 
-async function confirmarDespachoSiesa(packingId, numeroPedido) {
-  if (!confirm(`¿Confirmar despacho ${numeroPedido} en Siesa?\nEsto genera la remisión en Siesa. No se puede deshacer.`)) return;
-  try {
-    const r = await post('/api/siesa/confirmar-despacho', { packing_id: packingId });
-    if (r.error) { alerta(r.error, 'error'); return; }
-    if (r.modo_ensayo) {
-      alerta(`Modo ensayo — payload enviado pero Siesa no lo procesó (${numeroPedido})`, 'advertencia');
-    } else if (r.simulado) {
-      alerta(`Simulado — ${numeroPedido} marcado como despachado`, 'exito');
-    } else {
-      alerta(`¡${numeroPedido} remisionado en Siesa!`, 'exito');
-    }
-    setTimeout(cargarPedidos, 1200);
-  } catch (e) { alerta('Error confirmando despacho', 'error'); }
-}
+// confirmarDespachoSiesa eliminado — el único gatillo hacia Siesa
+// es el empacador físico al declarar bultos (POST /packing/<id>/cerrar)
 
 // ─────────────────────────────────────────────────────────────
 // RECEPCIONISTA — Lista de OCs y recepciones en proceso
