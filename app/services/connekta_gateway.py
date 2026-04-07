@@ -409,9 +409,7 @@ class ConnektaGateway:
                 'F350_CONSEC_DOCTO': 0,
                 'F350_FECHA': fecha_hoy,
                 'F430_CONSEC_DOCTO': consec_int
-            }],
-            'Cuotas_CxC': [],
-            'Caja': []
+            }]
         }
 
         logger.info(f'[CONNEKTA] Factura desde pedido {consec_docto_pedido}')
