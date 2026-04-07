@@ -227,6 +227,35 @@ def resetear_siesa(id):
         return jsonify({'error': str(e)}), 400
 
 
+@packing_bp.route('/<int:id>/forzar-siesa', methods=['POST'])
+@jwt_required()
+def forzar_retry_siesa(id):
+    """
+    Admin: fuerza el retry de Siesa aunque siesa_triggered=True.
+    Útil cuando el packing se cerró en MODO_ENSAYO y nunca llegó a Siesa real.
+    Reutiliza los bultos existentes — no los borra.
+    """
+    from app.models.packing import TareaPacking
+    from app.extensions import db
+    tarea = TareaPacking.query.get_or_404(id)
+    if tarea.estado != 'DESPACHADO':
+        return jsonify({'error': f'La tarea debe estar DESPACHADO, está {tarea.estado}'}), 400
+    # Forzar siesa_triggered=False para que cerrar_packing lo reintente
+    tarea.siesa_triggered = False
+    db.session.commit()
+    try:
+        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=[])
+        tarea = TareaPacking.query.get(id)
+        return jsonify({
+            'ok': True,
+            'siesa_triggered': tarea.siesa_triggered,
+            'siesa_response': tarea.siesa_response,
+            'bultos': [b.to_dict() for b in bultos]
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @packing_bp.route('/connekta/estado', methods=['GET'])
 @jwt_required()
 def estado_connekta():
