@@ -79,8 +79,9 @@ class ConnektaGateway:
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
 
-        self.url_get = 'https://serviciosqa.siesacloud.com/api/siesa/v3/ejecutarconsultaestandar'
-        self.url_post = 'https://serviciosqa.siesacloud.com/api/siesa/v3/conectoresimportarestandar'
+        _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
+        self.url_get = f'{_base}/api/siesa/v3/ejecutarconsultaestandar'
+        self.url_post = f'{_base}/api/siesa/v3/conectoresimportarestandar'
 
         self.modo_simulacion = not all([self.ikey, self.itoken])
         # MODO_ENSAYO: credenciales reales, GETs reales, POSTs bloqueados en servidor.
