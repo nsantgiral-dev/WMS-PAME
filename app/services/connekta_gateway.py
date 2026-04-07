@@ -397,8 +397,11 @@ class ConnektaGateway:
         Siesa toma los ítems del pedido original — no se envían líneas de detalle.
         La automatización 'Factura → Remisión' descarga el inventario automáticamente.
         """
+        from datetime import timedelta
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         consec_int = int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido
+        # Vencimiento a 30 días — Siesa usará condición de pago del pedido si la tiene
+        fecha_vcto = (datetime.utcnow() + timedelta(days=30)).strftime('%Y%m%d')
 
         payload = {
             'Docto_ventas_comercial': [{
@@ -409,6 +412,13 @@ class ConnektaGateway:
                 'F350_CONSEC_DOCTO': 0,
                 'F350_FECHA': fecha_hoy,
                 'F430_CONSEC_DOCTO': consec_int
+            }],
+            'Cuotas_CxC': [{
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
+                'F350_CONSEC_DOCTO': 0,
+                'F353_FECHA_VCTO': fecha_vcto,
+                'F353_FECHA_DSCTO_PP': fecha_vcto
             }]
         }
 
