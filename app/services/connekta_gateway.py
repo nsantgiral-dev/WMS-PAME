@@ -80,8 +80,10 @@ class ConnektaGateway:
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
 
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
+        self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
         self.url_get = f'{_base}/api/siesa/v3/ejecutarconsultaestandar'
         self.url_post = f'{_base}/api/siesa/v3/conectoresimportarestandar'
+        self.url_post_dinamico = f'{_base}/api/siesa/v3.1/conectoresimportar'
 
         self.modo_simulacion = not all([self.ikey, self.itoken])
         # MODO_ENSAYO: credenciales reales, GETs reales, POSTs bloqueados en servidor.
@@ -130,7 +132,8 @@ class ConnektaGateway:
             logger.error(f'[CONNEKTA] GET {nombre_api}: {e}')
             raise Exception(f'Error consultando Siesa: {e}')
 
-    def _post(self, id_conector: str, nombre_conector: str, payload: dict):
+    def _post(self, id_conector: str, nombre_conector: str, payload: dict,
+              url: str = None, extra_params: dict = None):
         if self.modo_simulacion:
             return self._simular(f'POST_{id_conector}', payload)
 
@@ -153,9 +156,11 @@ class ConnektaGateway:
             'idDocumento': id_conector,
             'nombreDocumento': nombre_conector
         }
+        if extra_params:
+            params.update(extra_params)
 
         try:
-            r = requests.post(self.url_post, headers=self.headers, params=params, json=payload, timeout=30)
+            r = requests.post(url or self.url_post, headers=self.headers, params=params, json=payload, timeout=30)
             if not r.ok:
                 try:
                     detalle = r.json()
@@ -387,81 +392,34 @@ class ConnektaGateway:
     def trigger_factura(self, tipo_docto_pedido: str, consec_docto_pedido: str,
                         items: list):
         """
-        238925 → FACTURA_DESDE_PEDIDO
+        238925 → FACTURA_DESDE_PEDIDO (conector dinámico v3.1)
         Genera factura electrónica (FE) directamente desde el pedido comprometido.
-        La automatización Siesa 'Factura → Remisión' (estado Aprobado) crea la
-        remisión automáticamente, descargando el inventario sin intervención manual.
-
-        Reemplaza trigger_despacho (142945 RemisionPedido) como conector principal
-        de cierre de packing.
+        Siesa toma los ítems del pedido original — no se envían líneas de detalle.
+        La automatización 'Factura → Remisión' descarga el inventario automáticamente.
         """
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        consec_int = int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido
 
         payload = {
-            'Inicial': [
-                {'F_CIA': self.id_cia_siesa}
-            ],
-            'Factura': [
-                {
-                    'F_CIA': self.id_cia_siesa,
-                    'F_CONSEC_AUTO_REG': 0,
-                    'F350_ID_CO': self.centro_op,
-                    'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
-                    'F350_CONSEC_DOCTO': 0,
-                    'F350_FECHA': fecha_hoy,
-                    'F350_IND_ESTADO': 1,           # 1=Aprobado — factura debe quedar aprobada
-                    'F350_IND_IMPRESION': 0,
-                    'F430_ID_TIPO_DOCTO': tipo_docto_pedido,
-                    'F430_CONSEC_DOCTO': int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido,
-                    'f460_id_cond_pago': None
-                }
-            ],
-            'Movtoventascomercial': [
-                {
-                    'F_CIA': self.id_cia_siesa,
-                    'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': self.tipo_docto_factura,
-                    'f470_consec_docto': 0,
-                    'f470_nro_registro': 0,
-                    'f470_id_bodega': self.bodega,
-                    'f470_id_ubicacion_aux': None,
-                    'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': 501,
-                    'f470_id_motivo': self.motivo_ventas or None,
-                    'f470_ind_obsequio': 0,
-                    'f470_id_co_movto': self.centro_op,
-                    'f470_id_ccosto_movto': None,
-                    'f470_id_proyecto': None,
-                    'f470_id_lista_precio': self.lista_precio or None,
-                    'f470_id_unidad_precio': i.get('unidad_medida') or None,
-                    'f470_id_unidad_medida': i.get('unidad_medida') or None,
-                    'f470_cant_base': i.get('cantidad_empacada'),
-                    'f470_cant_2': None,
-                    'f470_vlr_bruto': None,
-                    'f470_ind_naturaleza': 2,
-                    'f470_ind_solo_valor': 0,
-                    'f470_ind_impto_asumido': 0,
-                    'f470_notas': None,
-                    'f470_desc_variable': None,
-                    'F_DESC_ITEM': None,
-                    'F_ID_UM_INVENTARIO': i.get('unidad_medida') or None,
-                    'f470_id_item': i.get('item_id_siesa') or None,
-                    'f470_referencia_item': i.get('producto_codigo'),
-                    'f470_codigo_barras': None,
-                    'f470_id_ext1_detalle': None,
-                    'f470_id_ext2_detalle': None,
-                    'f470_id_un_movto': self.centro_op,
-                    'f470_id_causal_devol': None
-                }
-                for i in items
-            ],
-            'Final': [
-                {'F_CIA': self.id_cia_siesa}
-            ]
+            'Docto_ventas_comercial': [{
+                'F_CIA': int(self.id_cia_siesa),
+                'F_CONSEC_AUTO_REG': 1,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
+                'F350_CONSEC_DOCTO': 0,
+                'F350_FECHA': fecha_hoy,
+                'F430_CONSEC_DOCTO': consec_int
+            }],
+            'Cuotas_CxC': [],
+            'Caja': []
         }
 
-        logger.info(f'[CONNEKTA] Factura {tipo_docto_pedido}{consec_docto_pedido} — {len(items)} ítems')
-        return self._post(self.conector_factura, 'FACTURA_DESDE_PEDIDO', payload)
+        logger.info(f'[CONNEKTA] Factura desde pedido {consec_docto_pedido}')
+        return self._post(
+            self.conector_factura, 'FACTURA_DESDE_PEDIDO', payload,
+            url=self.url_post_dinamico,
+            extra_params={'idSistema': self.id_sistema}
+        )
 
     def confirmar_entrada_compras(self, id_co_oc: str, tipo_docto_oc: str,
                                    consec_docto_oc: str, items: list,
