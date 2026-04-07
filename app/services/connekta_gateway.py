@@ -315,7 +315,6 @@ class ConnektaGateway:
             'idCompania': self.id_compania,
             'descripcion': 'papeleriamedellin_monitos_facturas_wms',
             'paginacion': f'numPag={pagina}|tamPag=100',
-            'parametros': f"FechaFactura = ''{fecha}''",
         }
         try:
             r = _req.get(self.url_get_dinamico, headers=self.headers, params=params, timeout=30)
