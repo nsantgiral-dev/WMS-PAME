@@ -53,7 +53,7 @@ class ConnektaGateway:
         self.conector_transito_entrada = os.getenv('CONNEKTA_CONECTOR_TRANSITO_ENTRADA', '173079')
         self.conector_transferencia_directa = os.getenv('CONNEKTA_CONECTOR_TRANSF_DIRECTA', '173066')
         # Tipo documento requisición de traslado (Siesa: Inventarios → Tipos de documento → clase 75)
-        self.tipo_docto_req_traslado = os.getenv('SIESA_TIPO_DOCTO_REQ_TRASLADO', '')
+        self.tipo_docto_req_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', '')
         # Tipo documento tránsito salida/entrada (verificar con consultor Siesa)
         self.tipo_docto_transito_salida = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_SALIDA', '')
         self.tipo_docto_transito_entrada = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', '')
@@ -804,8 +804,8 @@ class ConnektaGateway:
                     'f441_id_bodega': bodega_origen,
                     'f441_id_motivo': self.motivo_traslado,        # REQUIRED
                     'f441_id_unidad_medida': '',
-                    'f441_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
-                    'f441_cant_2': '',
+                    'f441_cant_base': abs(item.get('cantidad', 0)),
+                    'f441_cant_2': None,
                     'f441_fecha_entrega': fecha_hoy,               # REQUIRED
                     'f441_num_dias_entrega': 0,
                     'f441_id_co_movto': self.centro_op,
@@ -813,7 +813,7 @@ class ConnektaGateway:
                     'f441_id_proyecto': '',
                     'f441_notas': '',
                     'f441_id_un_movto': self.centro_op,
-                    'f441_precio_unitario': '',
+                    'f441_precio_unitario': None,
                     'f441_id_ubicacion_sal': '',
                     'f441_id_proy_etapa': '',
                     'f441_id_rubro_pof': '',
