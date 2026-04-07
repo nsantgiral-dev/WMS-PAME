@@ -803,9 +803,9 @@ class ConnektaGateway:
                     'f441_id_ext2_detalle': '',
                     'f441_id_bodega': bodega_origen,
                     'f441_id_motivo': self.motivo_traslado,        # REQUIRED
-                    'f441_id_unidad_medida': '',
-                    'f441_cant_base': abs(item.get('cantidad', 0)),
-                    'f441_cant_2': 0,
+                    'f441_id_unidad_medida': item.get('unidad_medida') or '',
+                    'f441_cant_base': f'{abs(item.get("cantidad", 0)):020.4f}',
+                    'f441_cant_2': f'{0:020.4f}',
                     'f441_fecha_entrega': fecha_hoy,               # REQUIRED
                     'f441_num_dias_entrega': 0,
                     'f441_id_co_movto': self.centro_op,
@@ -813,7 +813,7 @@ class ConnektaGateway:
                     'f441_id_proyecto': '',
                     'f441_notas': '',
                     'f441_id_un_movto': self.centro_op,
-                    'f441_precio_unitario': 0,
+                    'f441_precio_unitario': f'{0:020.4f}',
                     'f441_id_ubicacion_sal': '',
                     'f441_id_proy_etapa': '',
                     'f441_id_rubro_pof': '',

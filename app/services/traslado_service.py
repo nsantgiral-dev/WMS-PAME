@@ -123,6 +123,7 @@ class TrasladoService:
                 'codigo_siesa': item.producto_codigo_siesa,
                 'codigo': item.producto.codigo if item.producto else '',
                 'cantidad': item.cantidad_aprobada,
+                'unidad_medida': item.producto.unidad_medida if item.producto else '',
             }
             for item in s.items if item.cantidad_aprobada and item.cantidad_aprobada > 0
         ]
