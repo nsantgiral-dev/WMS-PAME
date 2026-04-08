@@ -76,6 +76,8 @@ class ConnektaGateway:
         # Verificar en Siesa: Ventas → Listas de precio → código de la lista activa
         self.lista_precio = os.getenv('SIESA_LISTA_PRECIO', '')
         self.bodega_averias = os.getenv('SIESA_BODEGA_AVERIAS', 'AV1')
+        # NIT de la empresa — usado como f350_id_tercero en traslados internos
+        self.nit_empresa = os.getenv('SIESA_NIT_EMPRESA', '')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
 
@@ -850,7 +852,7 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': '',
+                    'f350_id_tercero': self.nit_empresa,
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
