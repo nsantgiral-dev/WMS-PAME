@@ -132,36 +132,10 @@ class TrasladoService:
                 f'Configura el mapeo en /api/config/mapeo-unidades y vuelve a aprobar.'
             )
 
-        # ── Trigger Siesa: Requisición de traslado ──
-        items_payload = [
-            {
-                'codigo_siesa': item.producto_codigo_siesa,
-                'codigo': item.producto.codigo if item.producto else '',
-                'cantidad': item.cantidad_aprobada,
-                'unidad_medida': item.producto.unidad_medida if item.producto else '',
-                'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
-            }
-            for item in s.items if item.cantidad_aprobada and item.cantidad_aprobada > 0
-        ]
-
-        try:
-            res = connekta.crear_requisicion_traslado(
-                bodega_origen=s.bodega_origen_siesa,
-                bodega_destino=s.bodega_destino_siesa,
-                items=items_payload,
-                codigo_solicitud=s.codigo
-            )
-            if not res.get('simulado') and not res.get('modo_ensayo'):
-                # Extraer consecutivo de la respuesta Siesa
-                consec = TrasladoService._extraer_consec(res)
-                if consec:
-                    s.siesa_requisicion_consec = consec
-            s.siesa_error = None
-            logger.info(f'[TRASLADO] Requisicion Siesa para {s.codigo}: {res}')
-        except Exception as e:
-            s.siesa_error = f'174646: {str(e)}'
-            logger.error(f'[TRASLADO] Error requisicion Siesa {s.codigo}: {e}')
-            # No bloqueamos — el WMS continúa aunque Siesa falle
+        # 174646 (Requisición de traslado) eliminado del flujo.
+        # El WMS es el único libro de estado (EN_PICKING, EMPACANDO).
+        # Siesa solo recibe los movimientos reales: 173076 al despachar y 173079 al recibir.
+        s.siesa_error = None
 
         # ── Generar tareas de picking ──
         TrasladoService._crear_picking_tasks(s)
