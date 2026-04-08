@@ -859,7 +859,6 @@ class ConnektaGateway:
                     'f450_docto_alterno': codigo_solicitud,
                 }
             ],
-            'Movimiento de Seriales': [],
             'Movimientos': [
                 {
                     # 27 keys obligatorias para f470 — tamaño exacto 2700 bytes
