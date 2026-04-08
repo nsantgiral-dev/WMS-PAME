@@ -14,6 +14,7 @@ def register_routes(app):
     from app.routes.muelle import muelle_bp
     from app.routes.rutas import rutas_bp
     from app.routes.traslados import traslados_bp
+    from app.routes.config_siesa import config_siesa_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(productos_bp, url_prefix='/api/productos')
@@ -30,3 +31,4 @@ def register_routes(app):
     app.register_blueprint(muelle_bp, url_prefix='/api/muelle')
     app.register_blueprint(rutas_bp, url_prefix='/api/rutas')
     app.register_blueprint(traslados_bp, url_prefix='/api/traslados')
+    app.register_blueprint(config_siesa_bp, url_prefix='/api/config')

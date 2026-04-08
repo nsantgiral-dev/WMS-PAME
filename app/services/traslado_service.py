@@ -117,6 +117,19 @@ class TrasladoService:
         s.fecha_aprobacion = datetime.utcnow()
         db.session.flush()
 
+        # ── Validación: todos los ítems deben tener unidad_negocio_id ──
+        sin_unidad = [
+            item.producto_codigo_siesa
+            for item in s.items
+            if item.cantidad_aprobada and item.cantidad_aprobada > 0
+            and item.producto and not item.producto.unidad_negocio_id
+        ]
+        if sin_unidad:
+            raise ValueError(
+                f'Productos sin Unidad de Negocio configurada: {", ".join(sin_unidad)}. '
+                f'Configura el mapeo en /api/config/mapeo-unidades y vuelve a aprobar.'
+            )
+
         # ── Trigger Siesa: Requisición de traslado ──
         items_payload = [
             {

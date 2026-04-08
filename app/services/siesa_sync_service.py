@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timezone
 from app.extensions import db
 from app.models.producto import Producto
+from app.models.siesa_mapeo_unidades import SiesaMapeоUnidades
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,13 @@ def _run_sync(app):
         total_procesados = 0
 
         try:
+            # Cargar tabla de mapeo en memoria para evitar N queries por item
+            mapeo_unidades = {
+                m.tipo_inv_siesa: m.unidad_negocio_id
+                for m in SiesaMapeоUnidades.query.all()
+            }
+            tipos_sin_mapeo = set()  # tipos que Siesa devuelve pero no están en nuestra tabla
+
             for pag in range(1, 501):  # hasta 50 000 items (500 págs × 100) — catálogo 28k+
                 resp = connekta.get_items_catalogo(pag)
                 rows = resp.get('detalle', {}).get('Table', [])
@@ -47,6 +55,12 @@ def _run_sync(app):
                         codigo_siesa = (row.get('f120_referencia') or '').strip()
                         nombre = (row.get('f120_descripcion') or '').strip()
                         activo = str(row.get('f120_ind_estado', '1')) == '1'
+                        unidad_medida = (row.get('f120_id_unidad_medida_inventario') or '').strip() or None
+                        tipo_inv = (row.get('f120_id_tipo_inv_serv') or '').strip()
+                        unidad_negocio = mapeo_unidades.get(tipo_inv) if tipo_inv else None
+
+                        if tipo_inv and unidad_negocio is None:
+                            tipos_sin_mapeo.add(tipo_inv)
 
                         if not codigo_siesa:
                             continue
@@ -67,6 +81,13 @@ def _run_sync(app):
                             if prod.activo != activo:
                                 prod.activo = activo
                                 changed = True
+                            if unidad_medida and prod.unidad_medida != unidad_medida:
+                                prod.unidad_medida = unidad_medida
+                                changed = True
+                            # Solo sobreescribir si el mapeo existe; si no, no borrar lo que haya
+                            if unidad_negocio and prod.unidad_negocio_id != unidad_negocio:
+                                prod.unidad_negocio_id = unidad_negocio
+                                changed = True
                             if changed:
                                 actualizados += 1
                         else:
@@ -75,7 +96,9 @@ def _run_sync(app):
                                 nombre=nombre or f'Producto {codigo_siesa}',
                                 codigo_siesa=codigo_siesa,
                                 activo=activo,
-                                clasificacion_abc='C'
+                                clasificacion_abc='C',
+                                unidad_medida=unidad_medida or 'UND',
+                                unidad_negocio_id=unidad_negocio,
                             )
                             db.session.add(prod)
                             creados += 1
@@ -97,12 +120,21 @@ def _run_sync(app):
             _sync_estado['ultimo_error'] = str(e)
             return
 
+        if tipos_sin_mapeo:
+            lista = sorted(tipos_sin_mapeo)
+            logger.warning(
+                f'[SYNC] ALERTA: {len(lista)} tipo(s) de inventario Siesa sin mapeo de '
+                f'Unidad de Negocio — productos quedarán con unidad_negocio_id=NULL. '
+                f'Configura en /api/config/mapeo-unidades: {lista}'
+            )
+
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),
             'total_procesados': total_procesados,
             'creados': creados,
             'actualizados': actualizados,
-            'errores': errores
+            'errores': errores,
+            'tipos_sin_mapeo': sorted(tipos_sin_mapeo) if tipos_sin_mapeo else [],
         }
         logger.info(f'[SYNC] Completado: {resultado}')
         _sync_estado['ultimo_resultado'] = resultado
