@@ -812,7 +812,7 @@ class ConnektaGateway:
                     'f441_id_ccosto_movto': '',
                     'f441_id_proyecto': '',
                     'f441_notas': '',
-                    'f441_id_un_movto': os.getenv('SIESA_UNIDAD_NEGOCIO', ''),
+                    'f441_id_un_movto': item.get('unidad_negocio_id') or '',
                     'f441_precio_unitario': '',
                     'f441_id_ubicacion_sal': '',
                     'f441_id_proy_etapa': '',

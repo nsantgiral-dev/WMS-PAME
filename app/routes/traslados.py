@@ -158,6 +158,7 @@ def reintentar_siesa(id):
             'codigo': item.producto.codigo if item.producto else '',
             'cantidad': item.cantidad_aprobada or item.cantidad_solicitada,
             'unidad_medida': item.producto.unidad_medida if item.producto else '',
+            'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
         }
         for item in s.items if (item.cantidad_aprobada or item.cantidad_solicitada)
     ]
