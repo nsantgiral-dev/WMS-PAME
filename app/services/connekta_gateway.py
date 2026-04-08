@@ -843,12 +843,14 @@ class ConnektaGateway:
             'Inicial': [{'F_CIA': self.id_cia_siesa}],
             'Documentos': [
                 {
+                    # 13 keys obligatorias para f450 — tamaño exacto 826 bytes
                     'F_CIA': self.id_cia_siesa,
                     'F_CONSEC_AUTO_REG': 0,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
+                    'f350_id_tercero': '',
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
@@ -857,21 +859,37 @@ class ConnektaGateway:
                     'f450_docto_alterno': codigo_solicitud,
                 }
             ],
+            'Movimiento de Seriales': [],
             'Movimientos': [
                 {
+                    # 27 keys obligatorias para f470 — tamaño exacto 2700 bytes
                     'F_CIA': self.id_cia_siesa,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': self.tipo_docto_transito_salida,  # REQUIRED
+                    'f470_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_origen,   # debe == f450_id_bodega_salida
-                    'f470_id_motivo': self.motivo_traslado,                 # REQUIRED
-                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
+                    'f470_id_bodega': bodega_origen,
+                    'f470_id_ubicacion_aux': '',
+                    'f470_id_lote': '',
+                    'f470_id_motivo': self.motivo_traslado,
+                    'f470_id_co_movto': self.centro_op,
+                    'f470_id_ccosto_movto': '',
+                    'f470_id_proyecto': '',
                     'f470_id_unidad_medida': item.get('unidad_medida') or '',
-                    'f470_id_co_movto': self.centro_op,                     # REQUIRED
-                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
+                    'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
+                    'f470_cant_2': 0,
+                    'f470_costo_prom_uni': 0,
                     'f470_notas': '',
+                    'f470_desc_varible': '',
+                    'f470_id_ubicacion_aux_ent': '',
+                    'f470_id_lote_ent': '',
+                    'f470_id_item': '',
+                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f470_codigo_barras': '',
+                    'f470_id_ext1_detalle': '',
+                    'f470_id_ext2_detalle': '',
+                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
+                    'f470_rowid_movto': 0,
                 }
                 for idx, item in enumerate(items)
             ],
