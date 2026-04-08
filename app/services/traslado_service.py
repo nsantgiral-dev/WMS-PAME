@@ -124,7 +124,7 @@ class TrasladoService:
             item.producto_codigo_siesa
             for item in s.items
             if item.cantidad_aprobada and item.cantidad_aprobada > 0
-            and item.producto and not item.producto.unidad_negocio_id
+            and item.producto and not (item.producto.unidad_negocio_id or '').strip()
         ]
         if sin_unidad:
             raise ValueError(

@@ -123,10 +123,21 @@ def _run_sync(app):
         if tipos_sin_mapeo:
             lista = sorted(tipos_sin_mapeo)
             logger.warning(
-                f'[SYNC] ALERTA: {len(lista)} tipo(s) de inventario Siesa sin mapeo de '
-                f'Unidad de Negocio — productos quedarán con unidad_negocio_id=NULL. '
-                f'Configura en /api/config/mapeo-unidades: {lista}'
+                f'[SYNC] ALERTA: {len(lista)} tipo(s) de inventario Siesa sin mapeo. '
+                f'Insertados en siesa_mapeo_unidades con unidad_negocio_id=NULL. '
+                f'Completa el mapeo en /api/config/mapeo-unidades: {lista}'
             )
+            # Auto-insertar tipos desconocidos con unidad_negocio_id=NULL
+            # El admin los verá en /api/config/mapeo-unidades y los completa con un click
+            for tipo in lista:
+                existe = SiesaMapeоUnidades.query.filter_by(tipo_inv_siesa=tipo).first()
+                if not existe:
+                    db.session.add(SiesaMapeоUnidades(
+                        tipo_inv_siesa=tipo,
+                        unidad_negocio_id='',  # vacío — admin debe completar
+                        descripcion='Auto-descubierto por sync — asignar Unidad de Negocio'
+                    ))
+            db.session.commit()
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),

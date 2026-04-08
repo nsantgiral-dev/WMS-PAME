@@ -75,7 +75,8 @@ def tipos_sin_mapeo():
         .all()
     )
     sin_mapeo = db.session.query(Producto.codigo_siesa, Producto.nombre).filter(
-        Producto.unidad_negocio_id.is_(None), Producto.activo.is_(True)
+        (Producto.unidad_negocio_id.is_(None)) | (Producto.unidad_negocio_id == ''),
+        Producto.activo.is_(True)
     ).limit(50).all()
 
     return jsonify({
