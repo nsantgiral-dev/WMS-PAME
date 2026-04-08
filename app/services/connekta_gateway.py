@@ -845,7 +845,7 @@ class ConnektaGateway:
                 {
                     # 13 keys obligatorias para f450 — tamaño exacto 826 bytes
                     'F_CIA': self.id_cia_siesa,
-                    'F_CONSEC_AUTO_REG': 0,
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
