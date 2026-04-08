@@ -94,6 +94,8 @@ def actualizar_usuario(uid):
         usuario.activo = bool(data['activo'])
     if 'bodega_siesa_id' in data:
         usuario.bodega_siesa_id = data['bodega_siesa_id'] or None
+    if 'siesa_co_id' in data:
+        usuario.siesa_co_id = data['siesa_co_id'] or None
     if 'nombre_punto_venta' in data:
         usuario.nombre_punto_venta = data['nombre_punto_venta'] or None
     if 'password' in data and data['password']:

@@ -18,8 +18,9 @@ class Usuario(db.Model):
     puede_picar = db.Column(db.Boolean, default=True)
     puede_empacar = db.Column(db.Boolean, default=False)
     # Punto de venta (solo para rol='tienda')
-    bodega_siesa_id = db.Column(db.String(20), nullable=True)      # ej. 'TP1'
-    nombre_punto_venta = db.Column(db.String(100), nullable=True)  # ej. 'Tienda Centro'
+    bodega_siesa_id = db.Column(db.String(20), nullable=True)      # ej. 'NC1'
+    siesa_co_id = db.Column(db.String(20), nullable=True)          # ej. '003' — C.O. de la tienda
+    nombre_punto_venta = db.Column(db.String(100), nullable=True)  # ej. 'Neiva Centro'
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
     def set_password(self, password):
@@ -40,5 +41,6 @@ class Usuario(db.Model):
             'puede_picar': self.puede_picar if self.puede_picar is not None else True,
             'puede_empacar': self.puede_empacar or False,
             'bodega_siesa_id': self.bodega_siesa_id,
+            'siesa_co_id': self.siesa_co_id,
             'nombre_punto_venta': self.nombre_punto_venta,
         }
