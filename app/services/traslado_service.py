@@ -18,6 +18,8 @@ from datetime import datetime
 from app.extensions import db
 from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado
 from app.models.producto import Producto
+from app.models.inventario import UbicacionProducto, MovimientoInventario
+from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
@@ -199,6 +201,8 @@ class TrasladoService:
                 'codigo_siesa': item.producto_codigo_siesa,
                 'codigo': item.producto.codigo if item.producto else '',
                 'cantidad': item.cantidad_aprobada or item.cantidad_solicitada,
+                'unidad_medida': item.producto.unidad_medida if item.producto else '',
+                'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
             }
             for item in s.items
         ]
@@ -237,6 +241,12 @@ class TrasladoService:
         s.fecha_despacho = datetime.utcnow()
         if nuevo_estado == 'ENTREGADA':
             s.fecha_entrega = datetime.utcnow()
+
+        # ── Descontar inventario WMS ──
+        # Se descuenta al despachar (los bienes salen físicamente de la bodega).
+        # Se hace independientemente del resultado de Siesa — el camión ya salió.
+        TrasladoService._descontar_inventario_wms(s)
+
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → {nuevo_estado}')
         return s
@@ -308,6 +318,66 @@ class TrasladoService:
         """
         logger.info(f'[TRASLADO] Solicitud {solicitud.codigo} en cola de picking — '
                     f'{len(solicitud.items)} ítems por recoger')
+
+    @staticmethod
+    def _descontar_inventario_wms(solicitud: SolicitudTraslado):
+        """
+        Descuenta las cantidades despachadas de ubicaciones_productos y registra
+        un MovimientoInventario de tipo SALIDA_TRASLADO.
+        Solo opera sobre la bodega origen (NB1 en WMS); la bodega destino es un
+        punto de venta externo no gestionado por este WMS.
+        """
+        almacen = Almacen.query.filter_by(
+            bodega_siesa_id=solicitud.bodega_origen_siesa
+        ).first()
+        if not almacen:
+            logger.warning(
+                f'[TRASLADO] No se encontró almacen WMS para bodega {solicitud.bodega_origen_siesa} '
+                f'— inventario WMS no descontado para {solicitud.codigo}'
+            )
+            return
+
+        for item in solicitud.items:
+            cantidad = item.cantidad_aprobada or item.cantidad_solicitada
+            if not cantidad or cantidad <= 0 or not item.producto_id:
+                continue
+
+            restante = cantidad
+            ubicaciones = (
+                UbicacionProducto.query
+                .filter_by(producto_id=item.producto_id)
+                .filter(UbicacionProducto.cantidad > 0)
+                .order_by(UbicacionProducto.cantidad.asc())  # FIFO: vaciar las más pequeñas primero
+                .all()
+            )
+            saldo_antes = sum(u.cantidad for u in ubicaciones)
+
+            for ub in ubicaciones:
+                if restante <= 0:
+                    break
+                descuento = min(ub.cantidad, restante)
+                ub.cantidad -= descuento
+                restante -= descuento
+
+            saldo_despues = saldo_antes - (cantidad - restante)
+            mov = MovimientoInventario(
+                producto_id=item.producto_id,
+                almacen_id=almacen.id,
+                tipo='SALIDA_TRASLADO',
+                cantidad=-(cantidad - restante),
+                saldo_antes=saldo_antes,
+                saldo_despues=saldo_despues,
+                motivo=f'Traslado {solicitud.codigo} → {solicitud.nombre_punto_venta}',
+                numero_documento=solicitud.codigo,
+                siesa_sync='OMITIDO',  # Siesa lo maneja por su cuenta con 173066/173076
+            )
+            db.session.add(mov)
+
+            if restante > 0:
+                logger.warning(
+                    f'[TRASLADO] Stock WMS insuficiente para {item.producto_codigo_siesa}: '
+                    f'pedido {cantidad}, disponible {cantidad - restante}'
+                )
 
     @staticmethod
     def _extraer_consec(respuesta_siesa: dict) -> int | None:

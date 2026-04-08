@@ -850,6 +850,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_ind_estado': 1,
+                    'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_transito,
@@ -867,8 +868,9 @@ class ConnektaGateway:
                     'f470_id_motivo': self.motivo_traslado,                 # REQUIRED
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
-                    'f470_id_unidad_medida': '',
+                    'f470_id_unidad_medida': item.get('unidad_medida') or '',
                     'f470_id_co_movto': self.centro_op,                     # REQUIRED
+                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
@@ -906,6 +908,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_ind_estado': 1,
+                    'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_transito,
                     'f450_id_bodega_entrada': bodega_destino,
@@ -927,8 +930,9 @@ class ConnektaGateway:
                     'f470_id_motivo': self.motivo_traslado,                  # REQUIRED
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
-                    'f470_id_unidad_medida': '',
+                    'f470_id_unidad_medida': item.get('unidad_medida') or '',
                     'f470_id_co_movto': self.centro_op,                      # REQUIRED
+                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
@@ -960,10 +964,11 @@ class ConnektaGateway:
                     'F_CIA': self.id_cia_siesa,
                     'F_CONSEC_AUTO_REG': 0,
                     'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': self.tipo_docto_traslado,  # reutiliza SIESA_TIPO_DOCTO_TRASLADO
+                    'f350_id_tipo_docto': self.tipo_docto_traslado,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_ind_estado': 1,
+                    'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Transferencia directa {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_destino,
@@ -984,8 +989,9 @@ class ConnektaGateway:
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
-                    'f470_id_unidad_medida': '',
+                    'f470_id_unidad_medida': item.get('unidad_medida') or '',
                     'f470_id_co_movto': self.centro_op,
+                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
