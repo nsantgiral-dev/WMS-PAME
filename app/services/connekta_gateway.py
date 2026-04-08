@@ -875,7 +875,6 @@ class ConnektaGateway:
                 }
                 for idx, item in enumerate(items)
             ],
-            'Movimiento de Seriales': [],
             'Final': [{'F_CIA': self.id_cia_siesa}]
         }
 
