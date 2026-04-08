@@ -280,6 +280,8 @@ class TrasladoService:
                     'codigo_siesa': item.producto_codigo_siesa,
                     'codigo': item.producto.codigo if item.producto else '',
                     'cantidad': item.cantidad_recibida,
+                    'unidad_medida': item.producto.unidad_medida if item.producto else '',
+                    'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
                 }
                 for item in s.items
             ]

@@ -237,6 +237,59 @@ def reintentar_siesa(id):
         return jsonify({'error': str(e)}), 400
 
 
+@traslados_bp.route('/<int:id>/reintentar-despacho', methods=['POST'])
+@jwt_required()
+def reintentar_despacho(id):
+    """Admin: reintenta el trigger Siesa de despacho (173066/173076) sin cambiar el estado."""
+    from app.models.traslado import SolicitudTraslado
+    from app.extensions import db
+    from app.services.connekta_gateway import connekta
+    s = SolicitudTraslado.query.get_or_404(id)
+    if s.estado not in ('EN_TRANSITO', 'ENTREGADA'):
+        return jsonify({'error': f'Solo se puede reintentar despacho en EN_TRANSITO o ENTREGADA (estado: {s.estado})'}), 400
+
+    items_payload = [
+        {
+            'codigo_siesa': item.producto_codigo_siesa,
+            'codigo': item.producto.codigo if item.producto else '',
+            'cantidad': item.cantidad_aprobada or item.cantidad_solicitada,
+            'unidad_medida': item.producto.unidad_medida if item.producto else '',
+            'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
+        }
+        for item in s.items if (item.cantidad_aprobada or item.cantidad_solicitada)
+    ]
+
+    try:
+        if s.modo_transferencia == 'EN_TRANSITO':
+            bodega_transito = s.bodega_transito_siesa or connekta.bodega_transito
+            res = connekta.transferencia_transito_salida(
+                bodega_origen=s.bodega_origen_siesa,
+                bodega_transito=bodega_transito,
+                items=items_payload,
+                codigo_solicitud=s.codigo,
+                consec_requisicion=s.siesa_requisicion_consec
+            )
+        else:
+            res = connekta.transferencia_directa(
+                bodega_origen=s.bodega_origen_siesa,
+                bodega_destino=s.bodega_destino_siesa,
+                items=items_payload,
+                codigo_solicitud=s.codigo
+            )
+        from app.services.traslado_service import TrasladoService
+        if not res.get('simulado') and not res.get('modo_ensayo'):
+            consec = TrasladoService._extraer_consec(res)
+            if consec:
+                s.siesa_salida_consec = consec
+        s.siesa_error = None
+        db.session.commit()
+        return jsonify({'ok': True, 'siesa_response': res, 'solicitud': s.to_dict()}), 200
+    except Exception as e:
+        s.siesa_error = f'Despacho Siesa: {str(e)}'
+        db.session.commit()
+        return jsonify({'error': str(e)}), 400
+
+
 @traslados_bp.route('/stock-disponible', methods=['GET'])
 @jwt_required()
 def stock_disponible():
