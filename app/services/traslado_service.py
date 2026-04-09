@@ -382,35 +382,55 @@ class TrasladoService:
     @staticmethod
     def get_stock_disponible(bodega_id: str = None):
         """
-        Consulta existencias en la bodega origen (NB1) para que la tienda
-        sepa qué puede pedir. Retorna lista de {codigo, nombre, disponible}.
+        Consulta stock disponible en el WMS local (PostgreSQL) para que la tienda
+        sepa qué puede pedir. No llama a Siesa — usa el inventario del WMS que se
+        sincroniza periódicamente. Respuesta inmediata sin dependencia de red.
         """
-        bod = bodega_id or BODEGA_ORIGEN_DEFAULT
-        try:
-            res = connekta.get_stock_bodega(bod)
-            if res.get('simulado'):
-                return {'simulado': True, 'items': [], 'bodega': bod}
+        from app.models.producto import Producto
+        from app.models.inventario import UbicacionProducto
+        from app.models.almacen import Almacen
 
-            rows = res.get('detalle', {}).get('Table', [])
-            items = []
-            for row in rows:
-                existencia = float(row.get('f400_cant_existencia_1', 0) or 0)
-                comprometido = float(row.get('f400_cant_comprometida_1', 0) or 0)
-                disponible = existencia - comprometido
-                if disponible <= 0:
-                    continue
-                items.append({
-                    'codigo_siesa': row.get('f120_referencia', '').strip(),
-                    'disponible': int(disponible),
-                    'existencia': int(existencia),
-                    'comprometido': int(comprometido),
-                    'lote': row.get('f400_id_lote', ''),
-                    'ubicacion': row.get('f400_id_ubicacion_aux', ''),
-                })
-            return {'items': items, 'bodega': bod, 'total': len(items)}
-        except Exception as e:
-            logger.error(f'[TRASLADO] Error stock {bod}: {e}')
-            raise
+        bod = bodega_id or BODEGA_ORIGEN_DEFAULT
+        almacen = Almacen.query.filter_by(bodega_siesa_id=bod).first()
+        if not almacen:
+            # Bodega no mapeada en WMS — devolver lista vacía en lugar de error
+            logger.warning(f'[TRASLADO] stock_disponible: no hay almacén WMS para bodega {bod}')
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms'}
+
+        # Una sola query: productos con stock disponible en la bodega origen
+        registros = (
+            db.session.query(
+                UbicacionProducto.producto_id,
+                db.func.sum(UbicacionProducto.cantidad).label('existencia'),
+                db.func.sum(UbicacionProducto.reservado).label('reservado'),
+            )
+            .filter(
+                UbicacionProducto.almacen_id == almacen.id,
+                UbicacionProducto.cantidad > 0,
+            )
+            .group_by(UbicacionProducto.producto_id)
+            .all()
+        )
+
+        items = []
+        for reg in registros:
+            disponible = int((reg.existencia or 0) - (reg.reservado or 0))
+            if disponible <= 0:
+                continue
+            prod = Producto.query.get(reg.producto_id)
+            if not prod or not prod.activo:
+                continue
+            items.append({
+                'codigo_siesa': prod.codigo_siesa or prod.codigo,
+                'nombre': prod.nombre,
+                'producto_id': prod.id,
+                'disponible': disponible,
+                'existencia': int(reg.existencia or 0),
+                'unidad_medida': prod.unidad_medida,
+            })
+
+        items.sort(key=lambda x: x['nombre'])
+        return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms'}
 
     @staticmethod
     def get_bodegas_disponibles():

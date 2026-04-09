@@ -4169,22 +4169,8 @@ async function tiendaCargarStock() {
   if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
   try {
     const d = await get('/api/traslados/stock-disponible');
-    if (d.simulado) {
-      _TIENDA_STOCK = [
-        { codigo_siesa: 'DEMO-001', nombre: 'Producto Demo A', disponible: 50 },
-        { codigo_siesa: 'DEMO-002', nombre: 'Producto Demo B', disponible: 30 },
-      ];
-    } else {
-      // Enriquecer con nombres de productos del WMS local
-      const prods = await get('/api/productos/?page=1&per_page=500');
-      const prodMap = {};
-      (prods.productos || []).forEach(p => { prodMap[p.codigo_siesa || p.codigo] = p; });
-      _TIENDA_STOCK = (d.items || []).map(item => ({
-        ...item,
-        nombre: prodMap[item.codigo_siesa]?.nombre || item.codigo_siesa,
-        producto_id: prodMap[item.codigo_siesa]?.id,
-      })).filter(i => i.producto_id);
-    }
+    // El backend ahora devuelve nombre y producto_id directo desde WMS local
+    _TIENDA_STOCK = (d.items || []).filter(i => i.producto_id && i.disponible > 0);
     _TIENDA_STOCK_ESTADO = 'listo';
   } catch (e) {
     _TIENDA_STOCK_ESTADO = 'error';
