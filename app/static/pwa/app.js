@@ -1336,8 +1336,8 @@ function recTab(tab) {
   const contDev = document.getElementById('contenido-devoluciones');
   if (!tabOcs || !tabDev) return;
 
-  const activo = 'border-bottom:2px solid #fff;color:#fff;';
-  const inactivo = 'border-bottom:2px solid transparent;color:#666;';
+  const activo = 'border-bottom:2px solid #1E9898;color:#1E9898;font-weight:600;';
+  const inactivo = 'border-bottom:2px solid transparent;color:#415A70;';
   tabOcs.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;${tab==='ocs' ? activo : inactivo}`;
   tabDev.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;position:relative;${tab==='dev' ? activo : inactivo}`;
   // re-append badge (se pierde al resetear cssText)
@@ -2664,8 +2664,8 @@ function rutasSubTab(nombre) {
   ['rutas','maestras','vehiculos','conductores'].forEach(k => {
     const btn = document.getElementById('rutas-subnav-' + k);
     if (btn) {
-      btn.style.background = k === nombre ? '#fff' : 'none';
-      btn.style.color      = k === nombre ? '#000' : '#666';
+      btn.style.background = k === nombre ? '#1E9898' : 'none';
+      btn.style.color      = k === nombre ? '#fff' : '#415A70';
     }
   });
   cargarRutas();
@@ -2945,8 +2945,8 @@ function rutasSeleccionarTipo(tipo) {
   RUTAS_TIPO_SEL = tipo;
   const btnU = document.getElementById('rutas-tipo-urbana');
   const btnM = document.getElementById('rutas-tipo-municipal');
-  if (btnU) { btnU.style.background = tipo === 'Urbana' ? '#1e3a5f' : '#1a1a1a'; btnU.style.color = tipo === 'Urbana' ? '#60a5fa' : '#666'; btnU.style.borderColor = tipo === 'Urbana' ? '#1e3a5f' : '#333'; }
-  if (btnM) { btnM.style.background = tipo === 'Municipal' ? '#1e3a5f' : '#1a1a1a'; btnM.style.color = tipo === 'Municipal' ? '#60a5fa' : '#666'; btnM.style.borderColor = tipo === 'Municipal' ? '#1e3a5f' : '#333'; }
+  if (btnU) { btnU.style.background = tipo === 'Urbana' ? '#0C3535' : '#0D1622'; btnU.style.color = tipo === 'Urbana' ? '#25BBBB' : '#415A70'; btnU.style.borderColor = tipo === 'Urbana' ? '#174848' : '#1C2B3A'; }
+  if (btnM) { btnM.style.background = tipo === 'Municipal' ? '#0C3535' : '#0D1622'; btnM.style.color = tipo === 'Municipal' ? '#25BBBB' : '#415A70'; btnM.style.borderColor = tipo === 'Municipal' ? '#174848' : '#1C2B3A'; }
 }
 
 async function rutasProgramar() {
@@ -3523,8 +3523,8 @@ function invSubtab(nombre) {
     const el = document.getElementById(id);
     if (!el) return;
     const activo = k === nombre;
-    el.style.background = activo ? '#fff' : 'transparent';
-    el.style.color = activo ? '#000' : '#666';
+    el.style.background = activo ? '#1E9898' : 'transparent';
+    el.style.color = activo ? '#fff' : '#415A70';
     el.style.fontWeight = activo ? '700' : '400';
   });
   Object.entries(panels).forEach(([k, id]) => {
@@ -3800,8 +3800,8 @@ function trasSubtab(nombre) {
     const el = document.getElementById(`tras-tab-${k}`);
     if (!el) return;
     const activo = k === nombre;
-    el.style.background = activo ? '#fff' : 'transparent';
-    el.style.color = activo ? '#000' : '#666';
+    el.style.background = activo ? '#1E9898' : 'transparent';
+    el.style.color = activo ? '#fff' : '#415A70';
     el.style.fontWeight = activo ? '700' : '400';
   });
   cargarTrasladosAdmin();
@@ -3941,8 +3941,9 @@ function tiendaSubtab(nombre) {
     const panel = document.getElementById(`tienda-panel-${k}`);
     const activo = k === nombre;
     if (tab) {
-      tab.style.color = activo ? '#fff' : '#666';
-      tab.style.borderBottomColor = activo ? '#fff' : 'transparent';
+      tab.style.color = activo ? '#1E9898' : '#415A70';
+      tab.style.fontWeight = activo ? '600' : '400';
+      tab.style.borderBottomColor = activo ? '#1E9898' : 'transparent';
     }
     if (panel) panel.style.display = activo ? 'block' : 'none';
   });

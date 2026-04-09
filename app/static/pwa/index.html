@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#1E9898">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <title>WMS Papelería</title>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>WMS · Papelería Medellín</title>
   <link rel="manifest" href="/static/pwa/manifest.json">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
@@ -35,82 +35,255 @@
     }
   </style>
   <style>
+    /* ═══════════════════════════════════════════════════════
+       PAPELERÍA MEDELLÍN — WMS Design System v2
+       Paleta: Teal #1E9898 · Navy oscuro · Tipografía limpia
+    ═══════════════════════════════════════════════════════ */
+    :root {
+      /* Marca */
+      --pm:           #1E9898;
+      --pm-light:     #25BBBB;
+      --pm-glow:      rgba(30,152,152,.18);
+      --pm-dim:       #0C3535;
+      --pm-border:    #174848;
+
+      /* Fondos */
+      --bg:           #0B1117;
+      --bg-s:         #121C26;
+      --bg-s2:        #18243480;
+      --bg-input:     #0D1622;
+
+      /* Bordes */
+      --brd:          #1C2B3A;
+      --brd-b:        #253A4A;
+
+      /* Texto */
+      --tx:           #E2EEF8;
+      --tx2:          #7A96B0;
+      --tx3:          #415A70;
+
+      /* Semáforo */
+      --green:        #22C55E; --gbg: #091F12; --gbrd: #14532D;
+      --red:          #F87171; --rbg: #1A0606; --rbrd: #7F1D1D;
+      --yellow:       #FACC15; --ybg: #1A1000; --ybrd: #78350F;
+      --blue:         #60A5FA; --bbg: #071424; --bbrd: #1E3A5F;
+      --purple:       #A78BFA; --pbg: #130D30; --pbrd: #2D1B69;
+      --orange:       #F59E0B; --obg: #1C1208; --obrd: #92400E;
+    }
+
+    /* ── Reset ── */
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #000; color: #fff; min-height: 100vh; max-width: 480px; margin: 0 auto; }
-    .header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #111; border-bottom: 1px solid #222; position: sticky; top: 0; z-index: 100; }
-    .header-logo { font-size: 18px; font-weight: 700; }
-    #pantalla-login { min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 24px; }
-    .login-logo { font-size: 72px; margin-bottom: 16px; }
-    .login-titulo { font-size: 28px; font-weight: 800; margin-bottom: 8px; text-align: center; }
-    .login-subtitulo { font-size: 16px; color: #666; margin-bottom: 40px; text-align: center; }
+    ::-webkit-scrollbar { display: none; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--tx);
+      min-height: 100vh;
+      max-width: 480px;
+      margin: 0 auto;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Header ── */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--bg-s);
+      border-bottom: 2px solid var(--pm-border);
+      position: sticky; top: 0; z-index: 100;
+    }
+    .header-logo { display: flex; align-items: center; }
+    .header-logo img { height: 30px; width: auto; display: block; }
+
+    /* ── Login ── */
+    #pantalla-login {
+      min-height: 100vh;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 40px 24px;
+      background: radial-gradient(ellipse at top, #0D2020 0%, var(--bg) 60%);
+    }
+    .login-logo { margin-bottom: 28px; }
+    .login-logo img { width: 200px; height: auto; display: block; }
+    .login-subtitulo { font-size: 14px; color: var(--tx3); margin-bottom: 40px; text-align: center; letter-spacing: .03em; }
     .login-form { width: 100%; max-width: 360px; }
     .input-group { margin-bottom: 16px; }
-    .input-label { display: block; font-size: 13px; color: #666; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
-    .input-field { width: 100%; padding: 16px; font-size: 20px; background: #111; border: 2px solid #333; border-radius: 12px; color: #fff; outline: none; transition: border-color 0.2s; }
-    .input-field:focus { border-color: #fff; }
-    .btn-primary { width: 100%; padding: 18px; font-size: 20px; font-weight: 700; background: #fff; color: #000; border: none; border-radius: 12px; cursor: pointer; margin-top: 8px; }
-    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+    .input-label {
+      display: block; font-size: 11px; color: var(--tx2); margin-bottom: 7px;
+      text-transform: uppercase; letter-spacing: .08em; font-weight: 600;
+    }
+    .input-field {
+      width: 100%; padding: 15px 16px; font-size: 16px;
+      background: var(--bg-input); border: 2px solid var(--brd);
+      border-radius: 12px; color: var(--tx); outline: none;
+      transition: border-color .2s, box-shadow .2s;
+    }
+    .input-field:focus { border-color: var(--pm); box-shadow: 0 0 0 3px var(--pm-glow); }
+    .btn-primary {
+      width: 100%; padding: 17px; font-size: 17px; font-weight: 700;
+      background: var(--pm); color: #fff; border: none; border-radius: 12px;
+      cursor: pointer; margin-top: 8px; letter-spacing: .02em;
+      transition: background .15s, transform .1s;
+    }
+    .btn-primary:active { background: var(--pm-light); transform: scale(.98); }
+    .btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── Pantallas base ── */
     #pantalla-operario { display: none; min-height: 100vh; }
-    #pantalla-admin { display: none; min-height: 100vh; }
+    #pantalla-admin    { display: none; min-height: 100vh; }
     #pantalla-recepcion { display: none; min-height: 100vh; }
-    .operario-bar { background: #111; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #222; }
-    .operario-nombre { font-size: 14px; font-weight: 600; }
-    .operario-rol { font-size: 12px; color: #666; }
-    .btn-logout { font-size: 13px; background: none; border: 1px solid #333; padding: 6px 12px; border-radius: 8px; cursor: pointer; color: #fff; }
-    .admin-nav { display: flex; background: #111; border-bottom: 1px solid #222; overflow-x: auto; }
-    .nav-tab { flex-shrink: 0; padding: 12px 16px; font-size: 13px; color: #666; cursor: pointer; border-bottom: 2px solid transparent; white-space: nowrap; }
-    .nav-tab.active { color: #fff; border-bottom-color: #fff; }
+
+    /* ── Barra de usuario ── */
+    .operario-bar {
+      background: var(--bg-s); padding: 10px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 1px solid var(--brd);
+    }
+    .operario-nombre { font-size: 14px; font-weight: 600; color: var(--tx); }
+    .operario-rol    { font-size: 12px; color: var(--tx3); margin-top: 1px; }
+
+    /* ── Logout button ── */
+    .btn-logout {
+      font-size: 12px; font-weight: 600;
+      background: none; border: 1px solid var(--brd-b);
+      padding: 6px 13px; border-radius: 8px; cursor: pointer; color: var(--tx2);
+      transition: border-color .15s, color .15s;
+    }
+    .btn-logout:hover { border-color: var(--pm); color: var(--pm); }
+
+    /* ── Admin nav tabs ── */
+    .admin-nav {
+      display: flex; background: var(--bg-s);
+      border-bottom: 1px solid var(--brd); overflow-x: auto;
+    }
+    .nav-tab {
+      flex-shrink: 0; padding: 11px 15px; font-size: 13px;
+      color: var(--tx3); cursor: pointer;
+      border-bottom: 2px solid transparent; white-space: nowrap;
+      transition: color .15s, border-color .15s;
+    }
+    .nav-tab:hover  { color: var(--tx2); }
+    .nav-tab.active { color: var(--pm); border-bottom-color: var(--pm); font-weight: 600; }
+
     .admin-content { padding: 16px; }
+
+    /* ── KPI grid ── */
     .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-    .kpi-card { background: #111; border-radius: 12px; padding: 14px; border: 1px solid #222; }
-    .kpi-valor { font-size: 36px; font-weight: 800; }
-    .kpi-label { font-size: 12px; color: #666; margin-top: 4px; }
-    .kpi-sub { font-size: 11px; color: #444; margin-top: 2px; }
-    .tabla-card { background: #111; border-radius: 12px; padding: 14px; border: 1px solid #222; margin-bottom: 12px; }
-    .tabla-titulo { font-size: 14px; font-weight: 600; margin-bottom: 12px; color: #fff; }
-    .tabla-fila { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #1a1a1a; }
+    .kpi-card {
+      background: var(--bg-s); border-radius: 14px; padding: 16px;
+      border: 1px solid var(--brd);
+    }
+    .kpi-valor { font-size: 34px; font-weight: 800; color: var(--tx); line-height: 1.1; }
+    .kpi-label { font-size: 12px; color: var(--tx2); margin-top: 5px; }
+    .kpi-sub   { font-size: 11px; color: var(--tx3); margin-top: 2px; }
+
+    /* ── Cards ── */
+    .tabla-card {
+      background: var(--bg-s); border-radius: 14px; padding: 16px;
+      border: 1px solid var(--brd); margin-bottom: 12px;
+    }
+    .tabla-titulo { font-size: 14px; font-weight: 700; margin-bottom: 12px; color: var(--tx); }
+    .tabla-fila {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 9px 0; border-bottom: 1px solid var(--brd);
+    }
     .tabla-fila:last-child { border-bottom: none; }
-    .tabla-nombre { font-size: 13px; color: #ccc; }
-    .badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
-    .badge-green { background: #14532d; color: #4ade80; }
-    .badge-yellow { background: #713f12; color: #facc15; }
-    .badge-red { background: #7f1d1d; color: #f87171; }
-    .badge-blue { background: #1e3a5f; color: #60a5fa; }
-    .rec-card { background: #111; border-radius: 16px; padding: 20px; margin-bottom: 12px; border: 1px solid #222; }
+    .tabla-nombre { font-size: 13px; color: var(--tx2); }
+
+    /* ── Badges ── */
+    .badge { font-size: 10px; padding: 3px 9px; border-radius: 20px; font-weight: 700; letter-spacing: .02em; }
+    .badge-green  { background: var(--gbg);  color: var(--green);  border: 1px solid var(--gbrd); }
+    .badge-yellow { background: var(--ybg);  color: var(--yellow); border: 1px solid var(--ybrd); }
+    .badge-red    { background: var(--rbg);  color: var(--red);    border: 1px solid var(--rbrd); }
+    .badge-blue   { background: var(--bbg);  color: var(--blue);   border: 1px solid var(--bbrd); }
+    .badge-teal   { background: var(--pm-dim); color: var(--pm-light); border: 1px solid var(--pm-border); }
+
+    /* ── Rec cards ── */
+    .rec-card {
+      background: var(--bg-s); border-radius: 16px; padding: 20px;
+      margin-bottom: 12px; border: 1px solid var(--brd);
+    }
     .rec-titulo { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
-    .rec-sub { font-size: 14px; color: #666; }
-    .chart-container { background: #111; border-radius: 12px; padding: 14px; border: 1px solid #222; margin-bottom: 12px; }
-    .chart-titulo { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+    .rec-sub    { font-size: 14px; color: var(--tx2); }
+
+    /* ── Chart container ── */
+    .chart-container {
+      background: var(--bg-s); border-radius: 14px; padding: 16px;
+      border: 1px solid var(--brd); margin-bottom: 12px;
+    }
+    .chart-titulo { font-size: 14px; font-weight: 700; margin-bottom: 12px; color: var(--tx); }
+
+    /* ── Scanner input (oculto) ── */
     #scanner-input { position: fixed; opacity: 0; width: 1px; height: 1px; top: -100px; left: -100px; }
-    .offline-badge { position: fixed; bottom: 20px; right: 16px; background: #d97706; color: #fff; padding: 8px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; display: none; z-index: 500; }
-    ::-webkit-scrollbar { display: none; }
-    /* ─── EMPACADOR HUD ─── */
+
+    /* ── Offline badge ── */
+    .offline-badge {
+      position: fixed; bottom: 20px; right: 16px;
+      background: var(--obg); color: var(--orange);
+      border: 1px solid var(--obrd);
+      padding: 8px 14px; border-radius: 20px; font-size: 13px; font-weight: 700;
+      display: none; z-index: 500;
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       EMPACADOR HUD
+    ═══════════════════════════════════════════════════════ */
     #pantalla-empacador { display: none; min-height: 100vh; }
-    .emp-header { background: #111; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #222; }
-    .emp-header-titulo { font-size: 16px; font-weight: 700; }
-    /* Lista de tareas packing */
+    .emp-header {
+      background: var(--bg-s); padding: 10px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+      border-bottom: 2px solid var(--pm-border);
+    }
+    .emp-header-titulo { font-size: 16px; font-weight: 700; color: var(--tx); }
+    .emp-header-logo img { height: 26px; width: auto; }
+
     #emp-lista { padding: 16px; }
-    .emp-task-card { background: #111; border-radius: 16px; padding: 20px; margin-bottom: 12px; border: 1px solid #222; cursor: pointer; }
-    .emp-task-pedido { font-size: 22px; font-weight: 800; }
-    .emp-task-sub { font-size: 14px; color: #666; margin-top: 4px; }
-    .emp-task-badge { display: inline-block; margin-top: 10px; font-size: 12px; padding: 4px 10px; border-radius: 10px; font-weight: 700; }
+    .emp-task-card {
+      background: var(--bg-s); border-radius: 16px; padding: 20px;
+      margin-bottom: 12px; border: 1px solid var(--brd); cursor: pointer;
+      transition: border-color .15s;
+    }
+    .emp-task-card:active { border-color: var(--pm); }
+    .emp-task-pedido { font-size: 22px; font-weight: 800; color: var(--tx); }
+    .emp-task-sub    { font-size: 14px; color: var(--tx2); margin-top: 4px; }
+    .emp-task-badge  { display: inline-block; margin-top: 10px; font-size: 12px; padding: 4px 10px; border-radius: 20px; font-weight: 700; }
+
     /* HUD de escaneo */
-    #emp-hud { display: none; position: fixed; inset: 0; background: #000; z-index: 200; flex-direction: column; align-items: center; justify-content: space-between; padding: 0; }
+    #emp-hud { display: none; position: fixed; inset: 0; background: var(--bg); z-index: 200; flex-direction: column; align-items: center; justify-content: space-between; padding: 0; }
     #emp-hud.activo { display: flex; }
     #emp-flash { position: absolute; inset: 0; opacity: 0; pointer-events: none; transition: opacity 0.08s; }
-    .emp-hud-top { width: 100%; padding: 16px 20px; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: space-between; z-index: 1; }
-    .emp-hud-pedido { font-size: 14px; font-weight: 700; color: #aaa; }
-    .emp-hud-cerrar { font-size: 13px; color: #666; background: none; border: 1px solid #333; padding: 6px 14px; border-radius: 8px; cursor: pointer; }
-    .emp-hud-centro { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1; gap: 16px; padding: 20px; }
-    .emp-hud-producto { font-size: 20px; font-weight: 700; color: #fff; text-align: center; max-width: 320px; line-height: 1.3; }
-    .emp-hud-contador { font-size: 96px; font-weight: 900; line-height: 1; letter-spacing: -4px; }
-    .emp-hud-de { font-size: 20px; color: #555; text-align: center; margin-top: -8px; }
-    .emp-hud-barra-wrap { width: 80%; background: #1a1a1a; border-radius: 12px; height: 12px; overflow: hidden; }
-    .emp-hud-barra { height: 100%; background: #4ade80; border-radius: 12px; transition: width 0.3s; }
-    .emp-hud-items { font-size: 13px; color: #555; text-align: center; }
+    .emp-hud-top {
+      width: 100%; padding: 14px 20px;
+      background: rgba(11,17,23,.9);
+      display: flex; align-items: center; justify-content: space-between; z-index: 1;
+      border-bottom: 1px solid var(--brd);
+    }
+    .emp-hud-pedido { font-size: 14px; font-weight: 700; color: var(--tx2); }
+    .emp-hud-cerrar {
+      font-size: 12px; color: var(--tx3);
+      background: none; border: 1px solid var(--brd); padding: 6px 14px;
+      border-radius: 8px; cursor: pointer;
+    }
+    .emp-hud-centro {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 1; gap: 16px; padding: 20px;
+    }
+    .emp-hud-producto { font-size: 20px; font-weight: 700; color: var(--tx); text-align: center; max-width: 320px; line-height: 1.3; }
+    .emp-hud-contador { font-size: 96px; font-weight: 900; line-height: 1; letter-spacing: -4px; color: var(--pm-light); }
+    .emp-hud-de   { font-size: 20px; color: var(--tx3); text-align: center; margin-top: -8px; }
+    .emp-hud-barra-wrap { width: 80%; background: var(--brd); border-radius: 12px; height: 10px; overflow: hidden; }
+    .emp-hud-barra { height: 100%; background: var(--pm); border-radius: 12px; transition: width .3s; }
+    .emp-hud-items { font-size: 13px; color: var(--tx3); text-align: center; }
     .emp-hud-bottom { width: 100%; padding: 20px; z-index: 1; }
-    #emp-btn-cerrar-caja { width: 100%; padding: 22px; font-size: 22px; font-weight: 800; background: #166534; color: #4ade80; border: 2px solid #166534; border-radius: 16px; cursor: pointer; display: none; }
-    #emp-btn-cerrar-caja:disabled { opacity: 0.4; cursor: not-allowed; }
+    #emp-btn-cerrar-caja {
+      width: 100%; padding: 22px; font-size: 20px; font-weight: 800;
+      background: var(--gbg); color: var(--green);
+      border: 2px solid var(--gbrd); border-radius: 16px; cursor: pointer; display: none;
+      transition: background .15s;
+    }
+    #emp-btn-cerrar-caja:active  { background: var(--gbrd); }
+    #emp-btn-cerrar-caja:disabled { opacity: .4; cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -119,9 +292,10 @@
 
   <!-- LOGIN -->
   <div id="pantalla-login">
-    <div class="login-logo">📦</div>
-    <div class="login-titulo">WMS Papelería</div>
-    <div class="login-subtitulo">Sistema de bodega</div>
+    <div class="login-logo">
+      <img src="/static/pwa/logo-v.png" alt="Papelería Medellín">
+    </div>
+    <div class="login-subtitulo">Sistema de Gestión de Bodega</div>
     <div class="login-form">
       <div class="input-group">
         <label class="input-label">Usuario (email)</label>
@@ -131,14 +305,14 @@
         <label class="input-label">Contraseña</label>
         <input id="login-password" class="input-field" type="password" placeholder="••••••" autocomplete="current-password" onkeydown="if(event.key==='Enter') login()">
       </div>
-      <button id="btn-login" class="btn-primary" onclick="login()">Entrar</button>
+      <button id="btn-login" class="btn-primary" onclick="login()">Entrar al sistema</button>
     </div>
   </div>
 
   <!-- OPERARIO -->
   <div id="pantalla-operario">
     <div class="header">
-      <div class="header-logo">📦 WMS</div>
+      <div class="header-logo"><img src="/static/pwa/logo-h.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:12px;">
         <span id="conexion-status" style="font-size:13px;color:#22c55e;">● Online</span>
         <button onclick="pedirTarea()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">↻</button>
@@ -159,7 +333,7 @@
   <!-- ADMIN -->
   <div id="pantalla-admin">
     <div class="header">
-      <div class="header-logo">📦 WMS Admin</div>
+      <div class="header-logo"><img src="/static/pwa/logo-h.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:12px;">
         <span id="conexion-status-admin" style="font-size:13px;color:#22c55e;">● Online</span>
         <button class="btn-logout" onclick="salir()">Salir</button>
@@ -199,7 +373,7 @@
         <div style="position:relative;height:200px;"><canvas id="chart-actividad"></canvas></div>
       </div>
       <!-- Auditorías Urgentes — Supervisor Guard -->
-      <div id="dashboard-auditorias-urgentes" style="display:none;background:#1a0505;border:1px solid #7f1d1d;border-radius:14px;padding:16px;margin-bottom:14px;">
+      <div id="dashboard-auditorias-urgentes" style="display:none;background:var(--rbg);border:1px solid var(--rbrd);border-radius:14px;padding:16px;margin-bottom:14px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
           <div>
             <div style="font-size:15px;font-weight:800;color:#f87171;">🚨 Auditorías Urgentes</div>
@@ -221,9 +395,9 @@
     <div id="tab-pedidos" class="admin-content" style="display:none;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div style="font-size:16px;font-weight:700;">Cola de picking</div>
-        <button onclick="cargarPedidos()" style="background:#222;border:1px solid #333;color:#fff;padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;">↻</button>
+        <button onclick="cargarPedidos()" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx2);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;">↻</button>
       </div>
-      <div style="background:#1a1a1a;border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:#666;">
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:var(--tx3);">
         Las tareas se asignan automáticamente cuando un operario queda libre. Cuando Connekta esté activo, los pedidos de Siesa aparecerán aquí solos.
       </div>
       <div id="lista-pedidos">Cargando...</div>
@@ -240,11 +414,11 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div style="font-size:16px;font-weight:700;">Gestión de usuarios</div>
         <button onclick="mostrarFormNuevoUsuario()"
-          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+          style="background:var(--pm);color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
           + Nuevo
         </button>
       </div>
-      <div id="form-nuevo-usuario" style="display:none;background:#111;border-radius:16px;padding:20px;border:1px solid #333;margin-bottom:16px;"></div>
+      <div id="form-nuevo-usuario" style="display:none;background:var(--bg-s);border-radius:16px;padding:20px;border:1px solid var(--brd);margin-bottom:16px;"></div>
       <div id="lista-usuarios">Cargando...</div>
     </div>
 
@@ -278,27 +452,27 @@
       </div>
 
       <!-- Ruta activa -->
-      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:12px;">
+      <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
         <div style="display:flex;gap:8px;align-items:center;">
           <select id="muelle-ruta-select" onchange="muelleSeleccionarRuta(this.value)"
             style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
             <option value="">— Sin ruta (solo registrar) —</option>
           </select>
-          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
+          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
         </div>
         <div id="muelle-ruta-info" style="font-size:11px;color:#555;margin-top:6px;min-height:16px;"></div>
       </div>
 
       <!-- Scan-to-Truck -->
-      <div style="background:#111;border:2px solid #333;border-radius:12px;padding:14px;margin-bottom:16px;">
+      <div style="background:var(--bg-s);border:2px solid var(--pm-border);border-radius:12px;padding:14px;margin-bottom:16px;">
         <div id="muelle-scan-label" style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Escanear caja al cargar vehículo</div>
         <div style="display:flex;gap:8px;">
           <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
             style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
             onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
             oninput="this.value=this.value.toUpperCase()">
-          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:#fff;color:#000;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;">✓</button>
+          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;">✓</button>
         </div>
         <div id="muelle-scan-feedback" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
       </div>
@@ -316,21 +490,21 @@
     <div id="tab-rutas" class="admin-content" style="display:none;">
 
       <!-- Sub-nav: Rutas | Maestras | Vehículos | Conductores -->
-      <div style="display:flex;background:#1a1a1a;border-radius:10px;margin-bottom:14px;padding:3px;gap:3px;">
+      <div style="display:flex;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;margin-bottom:14px;padding:3px;gap:3px;">
         <button id="rutas-subnav-rutas" onclick="rutasSubTab('rutas')"
-          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:#fff;color:#000;border:none;border-radius:8px;cursor:pointer;">
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:var(--pm);color:#fff;border:none;border-radius:8px;cursor:pointer;">
           Viajes
         </button>
         <button id="rutas-subnav-maestras" onclick="rutasSubTab('maestras')"
-          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:var(--tx3);border:none;border-radius:8px;cursor:pointer;">
           Maestras
         </button>
         <button id="rutas-subnav-vehiculos" onclick="rutasSubTab('vehiculos')"
-          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:var(--tx3);border:none;border-radius:8px;cursor:pointer;">
           Flota
         </button>
         <button id="rutas-subnav-conductores" onclick="rutasSubTab('conductores')"
-          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:#666;border:none;border-radius:8px;cursor:pointer;">
+          style="flex:1;padding:9px;font-size:12px;font-weight:600;background:none;color:var(--tx3);border:none;border-radius:8px;cursor:pointer;">
           Conductores
         </button>
       </div>
@@ -340,13 +514,13 @@
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
           <div style="font-size:16px;font-weight:700;">Rutas de despacho</div>
           <button onclick="rutasMostrarForm()"
-            style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="background:var(--pm);color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             + Nueva ruta
           </button>
         </div>
 
         <!-- Form programar viaje (oculto por defecto) -->
-        <div id="rutas-form" style="display:none;background:#111;border:1px solid #2d1b69;border-radius:14px;padding:18px;margin-bottom:14px;">
+        <div id="rutas-form" style="display:none;background:var(--bg-s);border:1px solid var(--pm-border);border-radius:14px;padding:18px;margin-bottom:14px;">
           <div style="font-size:14px;font-weight:700;margin-bottom:4px;">Programar viaje</div>
           <div style="font-size:11px;color:#555;margin-bottom:14px;">Selecciona la ruta, la fecha, el conductor y el vehículo</div>
           <div style="margin-bottom:12px;">
@@ -385,7 +559,7 @@
           <div id="rutas-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="rutasCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="rutasProgramar()" style="flex:2;padding:13px;background:#a78bfa;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Programar viaje →</button>
+            <button onclick="rutasProgramar()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Programar viaje →</button>
           </div>
         </div>
 
@@ -404,7 +578,7 @@
         </div>
 
         <!-- Form nuevo conductor -->
-        <div id="conductores-form" style="display:none;background:#111;border:1px solid #333;border-radius:14px;padding:18px;margin-bottom:14px;">
+        <div id="conductores-form" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:14px;padding:18px;margin-bottom:14px;">
           <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nuevo conductor</div>
           <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px;">
             <div>
@@ -435,7 +609,7 @@
           <div id="conductores-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="conductoresCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="conductoresCrear()" style="flex:2;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
+            <button onclick="conductoresCrear()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
           </div>
         </div>
 
@@ -450,13 +624,13 @@
             <div style="font-size:11px;color:#555;margin-top:2px;">Catálogo fijo de recorridos geográficos</div>
           </div>
           <button onclick="maestraMostrarForm()"
-            style="background:#a78bfa;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="background:var(--pm);color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             + Nueva
           </button>
         </div>
 
         <!-- Form nueva ruta maestra -->
-        <div id="maestras-form" style="display:none;background:#111;border:1px solid #2d1b69;border-radius:14px;padding:18px;margin-bottom:14px;">
+        <div id="maestras-form" style="display:none;background:var(--bg-s);border:1px solid var(--pm-border);border-radius:14px;padding:18px;margin-bottom:14px;">
           <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nueva ruta maestra</div>
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Nombre *</div>
@@ -467,12 +641,12 @@
             <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Tipo</div>
             <div style="display:flex;gap:8px;">
               <button id="rutas-tipo-urbana" onclick="rutasSeleccionarTipo('Urbana')"
-                style="flex:1;padding:11px;background:#1e3a5f;color:#60a5fa;border:2px solid #1e3a5f;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">
-                🏙️ Urbana
+                style="flex:1;padding:11px;background:var(--pm-dim);color:var(--pm-light);border:2px solid var(--pm-border);border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">
+                Urbana
               </button>
               <button id="rutas-tipo-municipal" onclick="rutasSeleccionarTipo('Municipal')"
-                style="flex:1;padding:11px;background:#1a1a1a;color:#666;border:2px solid #333;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">
-                🛣️ Municipal
+                style="flex:1;padding:11px;background:var(--bg-input);color:var(--tx3);border:2px solid var(--brd);border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;">
+                Municipal
               </button>
             </div>
           </div>
@@ -490,7 +664,7 @@
           <div id="maestras-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="maestraCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="maestrasCrear()" style="flex:2;padding:13px;background:#a78bfa;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar ruta →</button>
+            <button onclick="maestrasCrear()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar ruta →</button>
           </div>
         </div>
 
@@ -538,7 +712,7 @@
           <div id="vehiculos-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="vehiculosCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="vehiculosCrear()" style="flex:2;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
+            <button onclick="vehiculosCrear()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
           </div>
         </div>
 
@@ -551,13 +725,13 @@
     <div style="font-size:16px;font-weight:700;margin-bottom:14px;">📊 Inventario Cíclico</div>
 
     <!-- Sub-nav -->
-    <div style="display:flex;gap:0;background:#111;border:1px solid #222;border-radius:10px;overflow:hidden;margin-bottom:16px;">
+    <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;">
       <div id="inv-tab-conteos" onclick="invSubtab('conteos')"
-        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:#fff;color:#000;font-weight:700;">
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:var(--pm);color:#fff;font-weight:700;">
         Conteos
       </div>
       <div id="inv-tab-abc" onclick="invSubtab('abc')"
-        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:#666;">
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         ABC
       </div>
     </div>
@@ -628,7 +802,7 @@
           </button>
         </div>
         <button onclick="generarTodasClases()"
-          style="width:100%;padding:13px;background:#fff;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+          style="width:100%;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
           Generar A + B + C
         </button>
         <button onclick="ejecutarWatchdog()"
@@ -645,17 +819,17 @@
     <div style="font-size:16px;font-weight:700;margin-bottom:14px;">🏪 Traslados a Puntos de Venta</div>
 
     <!-- Sub-nav -->
-    <div style="display:flex;gap:0;background:#111;border:1px solid #222;border-radius:10px;overflow:hidden;margin-bottom:14px;">
+    <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:14px;">
       <div id="tras-tab-pendientes" onclick="trasSubtab('pendientes')"
-        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:#fff;color:#000;font-weight:700;">
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;background:var(--pm);color:#fff;font-weight:700;">
         Pendientes
       </div>
       <div id="tras-tab-transito" onclick="trasSubtab('transito')"
-        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:#666;">
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         En Tránsito
       </div>
       <div id="tras-tab-historial" onclick="trasSubtab('historial')"
-        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:#666;">
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         Historial
       </div>
     </div>
@@ -668,24 +842,24 @@
   </div><!-- /pantalla-admin -->
 
   <!-- TIENDA — Pantalla punto de venta -->
-  <div id="pantalla-tienda" style="display:none;min-height:100vh;background:#000;">
+  <div id="pantalla-tienda" style="display:none;min-height:100vh;background:var(--bg);">
     <div class="header">
-      <div class="header-logo">🏪 <span id="tienda-nombre">Punto de Venta</span></div>
+      <div class="header-logo"><img src="/static/pwa/logo-h.png" alt="Papelería Medellín WMS"></div>
       <button class="btn-logout" onclick="salir()">Salir</button>
     </div>
 
     <!-- Sub-nav tienda -->
-    <div style="display:flex;background:#111;border-bottom:1px solid #222;">
+    <div style="display:flex;background:var(--bg-s);border-bottom:1px solid var(--brd);">
       <div id="tienda-tab-solicitudes" onclick="tiendaSubtab('solicitudes')"
-        style="flex:1;padding:11px;font-size:13px;color:#fff;text-align:center;border-bottom:2px solid #fff;cursor:pointer;">
+        style="flex:1;padding:11px;font-size:13px;color:var(--pm);font-weight:600;text-align:center;border-bottom:2px solid var(--pm);cursor:pointer;">
         Mis Pedidos
       </div>
       <div id="tienda-tab-nueva" onclick="tiendaSubtab('nueva')"
-        style="flex:1;padding:11px;font-size:13px;color:#666;text-align:center;border-bottom:2px solid transparent;cursor:pointer;">
+        style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;">
         Pedir
       </div>
       <div id="tienda-tab-recibir" onclick="tiendaSubtab('recibir')"
-        style="flex:1;padding:11px;font-size:13px;color:#666;text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
+        style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
         Recibir
         <span id="badge-recibir" style="display:none;position:absolute;top:6px;right:14px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;"></span>
       </div>
@@ -701,11 +875,11 @@
     <!-- Panel: Nueva Solicitud -->
     <div id="tienda-panel-nueva" style="padding:14px;display:none;">
       <!-- Carrito -->
-      <div id="tienda-carrito-header" style="display:none;background:#111;border:1px solid #333;border-radius:12px;padding:14px;margin-bottom:12px;">
+      <div id="tienda-carrito-header" style="display:none;background:var(--bg-s);border:1px solid var(--pm-border);border-radius:14px;padding:14px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
           <div style="font-size:14px;font-weight:700;">Carrito</div>
           <button onclick="tiendaEnviarSolicitud()"
-            style="background:#4ade80;color:#000;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            style="background:var(--pm);color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             Enviar Pedido →
           </button>
         </div>
@@ -735,7 +909,7 @@
   <!-- RECEPCIÓN -->
   <div id="pantalla-recepcion">
     <div class="header">
-      <div class="header-logo">📦 Recepción</div>
+      <div class="header-logo"><img src="/static/pwa/logo-h.png" alt="Papelería Medellín WMS"></div>
       <button class="btn-logout" onclick="salir()">Salir</button>
     </div>
     <div class="operario-bar">
@@ -745,13 +919,13 @@
       </div>
     </div>
     <!-- Tabs recepcionista -->
-    <div style="display:flex;background:#111;border-bottom:1px solid #222;">
+    <div style="display:flex;background:var(--bg-s);border-bottom:1px solid var(--brd);">
       <div id="rec-tab-ocs" onclick="recTab('ocs')"
-        style="flex:1;padding:11px;font-size:13px;color:#fff;text-align:center;border-bottom:2px solid #fff;cursor:pointer;">
+        style="flex:1;padding:11px;font-size:13px;color:var(--pm);font-weight:600;text-align:center;border-bottom:2px solid var(--pm);cursor:pointer;">
         Recepciones
       </div>
       <div id="rec-tab-dev" onclick="recTab('dev')"
-        style="flex:1;padding:11px;font-size:13px;color:#666;text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
+        style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
         Devoluciones
         <span id="badge-dev" style="display:none;position:absolute;top:6px;right:18px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;"></span>
       </div>
@@ -765,9 +939,9 @@
   </div>
 
   <!-- CONDUCTOR -->
-  <div id="pantalla-conductor" style="display:none;min-height:100vh;background:#000;">
+  <div id="pantalla-conductor" style="display:none;min-height:100vh;background:var(--bg);">
     <div class="header">
-      <div class="header-logo">🚛 Conductor</div>
+      <div class="header-logo"><img src="/static/pwa/logo-h.png" alt="Papelería Medellín WMS"></div>
       <button class="btn-logout" onclick="salir()">Salir</button>
     </div>
     <div class="operario-bar">
@@ -788,7 +962,7 @@
   <!-- EMPACADOR -->
   <div id="pantalla-empacador">
     <div class="emp-header">
-      <div class="emp-header-titulo">📦 Empaque</div>
+      <div class="emp-header-logo"><img src="/static/pwa/logo-h.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="emp-nombre" style="font-size:13px;color:#666;"></span>
         <button class="btn-logout" onclick="salir()">Salir</button>
@@ -834,43 +1008,43 @@
   </div>
 
   <!-- MODAL BULTOS — declaración de piezas al cerrar packing -->
-  <div id="modal-bultos" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;align-items:center;justify-content:center;padding:20px;">
-    <div style="background:#111;border:1px solid #333;border-radius:16px;width:100%;max-width:420px;padding:24px;">
-      <div style="font-size:17px;font-weight:800;margin-bottom:4px;">📦 ¿Cuántas piezas armaste?</div>
-      <div id="modal-bultos-pedido" style="font-size:12px;color:#666;margin-bottom:20px;"></div>
+  <div id="modal-bultos" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.92);z-index:500;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd-b);border-radius:20px;width:100%;max-width:420px;padding:24px;">
+      <div style="font-size:17px;font-weight:800;margin-bottom:4px;color:var(--tx);">Cerrar caja — ¿cuántas piezas?</div>
+      <div id="modal-bultos-pedido" style="font-size:12px;color:var(--tx3);margin-bottom:20px;"></div>
 
       <div id="modal-bultos-lineas" style="margin-bottom:16px;"></div>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:20px;">
-        <button onclick="bultosAgregarLinea('Caja')"     style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;cursor:pointer;">+ Caja</button>
-        <button onclick="bultosAgregarLinea('Bolsa')"    style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;cursor:pointer;">+ Bolsa</button>
-        <button onclick="bultosAgregarLinea('Rollo')"    style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;cursor:pointer;">+ Rollo</button>
-        <button onclick="bultosAgregarLinea('Plancha')"  style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;cursor:pointer;">+ Plancha</button>
-        <button onclick="bultosAgregarLinea('Estiba')"   style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;cursor:pointer;">+ Estiba</button>
+        <button onclick="bultosAgregarLinea('Caja')"     style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx);border-radius:8px;cursor:pointer;font-size:13px;">+ Caja</button>
+        <button onclick="bultosAgregarLinea('Bolsa')"    style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx);border-radius:8px;cursor:pointer;font-size:13px;">+ Bolsa</button>
+        <button onclick="bultosAgregarLinea('Rollo')"    style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx);border-radius:8px;cursor:pointer;font-size:13px;">+ Rollo</button>
+        <button onclick="bultosAgregarLinea('Plancha')"  style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx);border-radius:8px;cursor:pointer;font-size:13px;">+ Plancha</button>
+        <button onclick="bultosAgregarLinea('Estiba')"   style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx);border-radius:8px;cursor:pointer;font-size:13px;">+ Estiba</button>
       </div>
 
-      <div id="modal-bultos-error" style="color:#ef4444;font-size:13px;min-height:20px;margin-bottom:12px;"></div>
+      <div id="modal-bultos-error" style="color:var(--red);font-size:13px;min-height:20px;margin-bottom:12px;"></div>
 
       <div style="display:flex;gap:10px;">
-        <button onclick="bultosCancelar()" style="flex:1;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;cursor:pointer;">Cancelar</button>
-        <button onclick="bultosConfirmar()" style="flex:2;padding:14px;background:#fff;color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">Cerrar Caja y Etiquetar →</button>
+        <button onclick="bultosCancelar()" style="flex:1;padding:14px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:12px;font-size:15px;cursor:pointer;">Cancelar</button>
+        <button onclick="bultosConfirmar()" style="flex:2;padding:14px;background:var(--pm);color:#fff;border:none;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;">Etiquetar y cerrar →</button>
       </div>
     </div>
   </div>
 
   <!-- MODAL ENTREGA — checklist de bultos al confirmar entrega -->
-  <div id="modal-entrega" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:600;overflow-y:auto;padding:20px;">
-    <div style="background:#111;border:1px solid #333;border-radius:16px;width:100%;max-width:480px;margin:0 auto;padding:24px;">
-      <div style="font-size:18px;font-weight:800;margin-bottom:4px;">✅ Confirmar Entrega</div>
-      <div id="modal-entrega-sub" style="font-size:12px;color:#666;margin-bottom:16px;"></div>
-      <div style="font-size:12px;color:#aaa;margin-bottom:12px;">
-        Todos los bultos están marcados como <span style="color:#4ade80;font-weight:700;">Entregado</span>. Toca los que fueron rechazados.
+  <div id="modal-entrega" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.93);z-index:600;overflow-y:auto;padding:20px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd-b);border-radius:20px;width:100%;max-width:480px;margin:0 auto;padding:24px;">
+      <div style="font-size:18px;font-weight:800;margin-bottom:4px;color:var(--tx);">Confirmar Entrega</div>
+      <div id="modal-entrega-sub" style="font-size:12px;color:var(--tx3);margin-bottom:16px;"></div>
+      <div style="font-size:12px;color:var(--tx2);margin-bottom:12px;">
+        Todos los bultos están marcados como <span style="color:var(--green);font-weight:700;">Entregado</span>. Toca los que fueron rechazados.
       </div>
       <div id="modal-entrega-lista" style="margin-bottom:20px;"></div>
-      <div id="modal-entrega-resumen" style="font-size:13px;color:#aaa;margin-bottom:16px;min-height:20px;"></div>
+      <div id="modal-entrega-resumen" style="font-size:13px;color:var(--tx2);margin-bottom:16px;min-height:20px;"></div>
       <div style="display:flex;gap:10px;">
-        <button onclick="cerrarModalEntrega()" style="flex:1;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;cursor:pointer;">Cancelar</button>
-        <button id="btn-confirmar-entrega" onclick="confirmarEntregaFinal()" style="flex:2;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">Confirmar Entrega →</button>
+        <button onclick="cerrarModalEntrega()" style="flex:1;padding:14px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:12px;font-size:15px;cursor:pointer;">Cancelar</button>
+        <button id="btn-confirmar-entrega" onclick="confirmarEntregaFinal()" style="flex:2;padding:14px;background:var(--gbg);color:var(--green);border:2px solid var(--gbrd);border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;">Confirmar Entrega →</button>
       </div>
     </div>
   </div>
