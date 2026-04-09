@@ -4099,10 +4099,14 @@ async function trasConfirmarRecepcion(id) {
 // ══════════════════════════════════════════════════════════════════
 
 let _TIENDA_SUBTAB = 'solicitudes';
-let _TIENDA_STOCK = [];   // cache del stock disponible en NB1
+let _TIENDA_STOCK = [];          // cache del stock disponible en NB1
+let _TIENDA_STOCK_ESTADO = 'cargando'; // 'cargando' | 'listo' | 'error'
 let _TIENDA_CARRITO = []; // [{producto_id, codigo_siesa, nombre, cantidad, disponible}]
 
 function tiendaIniciar() {
+  _TIENDA_STOCK = [];
+  _TIENDA_STOCK_ESTADO = 'cargando';
+  _TIENDA_CARRITO = [];
   tiendaSubtab('solicitudes');
   tiendaCargarStock();  // pre-carga stock en background
 }
@@ -4161,6 +4165,8 @@ async function tiendaCargarSolicitudes() {
 }
 
 async function tiendaCargarStock() {
+  _TIENDA_STOCK_ESTADO = 'cargando';
+  if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
   try {
     const d = await get('/api/traslados/stock-disponible');
     if (d.simulado) {
@@ -4179,8 +4185,11 @@ async function tiendaCargarStock() {
         producto_id: prodMap[item.codigo_siesa]?.id,
       })).filter(i => i.producto_id);
     }
-    if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
-  } catch (e) { /* silencioso */ }
+    _TIENDA_STOCK_ESTADO = 'listo';
+  } catch (e) {
+    _TIENDA_STOCK_ESTADO = 'error';
+  }
+  if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
 }
 
 let _TIENDA_FILTRO = '';
@@ -4192,8 +4201,25 @@ function tiendaFiltrarStock() {
 function tiendaRenderStock() {
   const el = document.getElementById('tienda-stock-lista');
   if (!el) return;
+  if (_TIENDA_STOCK_ESTADO === 'cargando') {
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:#555;">Consultando stock en bodega...</div>';
+    return;
+  }
+  if (_TIENDA_STOCK_ESTADO === 'error') {
+    el.innerHTML = `
+      <div style="text-align:center;padding:40px 20px;">
+        <div style="font-size:32px;margin-bottom:12px;">⚠️</div>
+        <div style="font-size:15px;font-weight:600;color:#f87171;margin-bottom:8px;">No se pudo cargar el stock</div>
+        <div style="font-size:13px;color:#555;margin-bottom:20px;">Verifica la conexión con Siesa o intenta de nuevo</div>
+        <button onclick="tiendaCargarStock()"
+          style="padding:12px 24px;background:#1d4ed8;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+          Reintentar
+        </button>
+      </div>`;
+    return;
+  }
   if (!_TIENDA_STOCK.length) {
-    el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando stock...</div>';
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin productos disponibles en bodega</div>';
     return;
   }
   const filtrado = _TIENDA_FILTRO
