@@ -97,24 +97,23 @@
       background: var(--bg-s);
       border-bottom: 2px solid var(--pm-border);
       position: sticky; top: 0; z-index: 100;
-      min-height: 68px;
+      min-height: 64px;
     }
-    /* Canvas 4501×4501 cuadrado: logo ocupa ~70% ancho, ~15% alto en el centro.
-       Técnica: render grande + absolute centered + overflow:hidden = zoom al logo */
+    /* Canvas 4501×4501: logo en top-left, ocupa ~83% ancho y ~15% alto.
+       Render 310px → logo content ≈ 257px ancho, 47px alto → cabe en el container. */
     .header-logo {
       position: relative;
       width: 260px;
-      height: 68px;
+      height: 50px;
       overflow: hidden;
       flex-shrink: 0;
     }
     .header-logo img {
       position: absolute;
-      top: 50%; left: 50%;
-      width: 420px; height: 420px;
+      top: 0; left: 0;
+      width: 310px; height: 310px;
       object-fit: contain;
-      object-position: center;
-      transform: translate(-50%, -50%);
+      object-position: left top;
     }
 
     /* ── Login ── */
@@ -124,21 +123,22 @@
       padding: 40px 24px;
       background: radial-gradient(ellipse at top, #0D2020 0%, var(--bg) 60%);
     }
+    /* Login: render 500px → logo ≈ 415px ancho, 75px alto.
+       Container min(430px,94vw) muestra el logo completo con espacio. */
     .login-logo {
       position: relative;
-      width: min(440px, 94vw);
-      height: 160px;
+      width: min(430px, 94vw);
+      height: 82px;
       overflow: hidden;
       align-self: center;
-      margin-bottom: 24px;
+      margin-bottom: 32px;
     }
     .login-logo img {
       position: absolute;
-      top: 50%; left: 50%;
-      width: 680px; height: 680px;
+      top: 0; left: 0;
+      width: 500px; height: 500px;
       object-fit: contain;
-      object-position: center;
-      transform: translate(-50%, -50%);
+      object-position: left top;
     }
     .login-subtitulo { font-size: 14px; color: var(--tx3); margin-bottom: 40px; text-align: center; letter-spacing: .03em; }
     .login-form { width: 100%; max-width: 360px; }
@@ -271,13 +271,12 @@
     }
     .emp-header-titulo { font-size: 16px; font-weight: 700; color: var(--tx); }
     .emp-header-logo {
-      position: relative; width: 260px; height: 68px; overflow: hidden; flex-shrink: 0;
+      position: relative; width: 260px; height: 50px; overflow: hidden; flex-shrink: 0;
     }
     .emp-header-logo img {
-      position: absolute; top: 50%; left: 50%;
-      width: 420px; height: 420px;
-      object-fit: contain; object-position: center;
-      transform: translate(-50%, -50%);
+      position: absolute; top: 0; left: 0;
+      width: 310px; height: 310px;
+      object-fit: contain; object-position: left top;
     }
 
     #emp-lista { padding: 16px; }
