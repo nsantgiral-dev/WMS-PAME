@@ -156,7 +156,7 @@ function scannerLaser() {
 
 async function get(url) {
   const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });
-  if (r.status === 401) { salir(); throw new Error('401'); }
+  if (r.status === 401) { salir(true); throw new Error('401'); }
   return r.json();
 }
 
@@ -166,7 +166,7 @@ async function post(url, body) {
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
     body: JSON.stringify(body)
   });
-  if (r.status === 401) { salir(); throw new Error('401'); }
+  if (r.status === 401) { salir(true); throw new Error('401'); }
   return r.json();
 }
 
@@ -176,7 +176,7 @@ async function put(url, body = {}) {
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
     body: JSON.stringify(body)
   });
-  if (r.status === 401) { salir(); throw new Error('401'); }
+  if (r.status === 401) { salir(true); throw new Error('401'); }
   return r.json();
 }
 
@@ -187,12 +187,17 @@ async function login() {
   const btn = document.getElementById('btn-login');
   btn.textContent = 'Entrando...';
   btn.disabled = true;
+  const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pass }) };
   try {
-    const r = await fetch(API + '/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: pass })
-    });
+    let r;
+    try {
+      r = await fetch(API + '/api/auth/login', opts);
+    } catch (_) {
+      // Servidor reiniciando o red inestable — esperar 2s y reintentar una vez
+      btn.textContent = 'Reintentando...';
+      await new Promise(res => setTimeout(res, 2000));
+      r = await fetch(API + '/api/auth/login', opts);
+    }
     const d = await r.json();
     if (r.ok) {
       TOKEN = d.token;
@@ -205,7 +210,7 @@ async function login() {
       alerta(d.error || 'Credenciales incorrectas', 'error');
     }
   } catch (e) {
-    alerta('Sin conexión', 'error');
+    alerta('Sin conexión — verifica tu red e intenta de nuevo', 'error');
   } finally {
     btn.textContent = 'Entrar';
     btn.disabled = false;
@@ -217,12 +222,13 @@ function actualizarUI(op) {
   ['op-rol','admin-rol'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.rol; });
 }
 
-function salir() {
+function salir(porExpiracion = false) {
   pararTimers();
   TOKEN = null; OPERARIO = null; TAREA_ACTUAL = null;
   localStorage.removeItem('wms_token');
   localStorage.removeItem('wms_operario');
   pantalla('pantalla-login');
+  if (porExpiracion) alerta('Sesión expirada — vuelve a ingresar', 'advertencia');
 }
 
 async function cargarAdmin() {
