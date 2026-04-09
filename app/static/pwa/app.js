@@ -189,28 +189,43 @@ async function login() {
   btn.disabled = true;
   const opts = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pass }) };
   try {
+    // Intento 1 — si falla por red (ECONNREFUSED, timeout), reintentar una vez
     let r;
-    try {
-      r = await fetch(API + '/api/auth/login', opts);
-    } catch (_) {
-      // Servidor reiniciando o red inestable — esperar 2s y reintentar una vez
-      btn.textContent = 'Reintentando...';
-      await new Promise(res => setTimeout(res, 2000));
-      r = await fetch(API + '/api/auth/login', opts);
+    for (let intento = 0; intento < 2; intento++) {
+      try {
+        r = await fetch(API + '/api/auth/login', opts);
+        break; // fetch conectó — salir del loop aunque sea 5xx
+      } catch (_) {
+        if (intento === 0) {
+          btn.textContent = 'Reintentando...';
+          await new Promise(res => setTimeout(res, 2000));
+        } else {
+          throw new Error('sin_red'); // ambos intentos fallaron por red
+        }
+      }
     }
+
+    // Verificar status ANTES de parsear JSON (un 502 devuelve HTML, no JSON)
+    if (!r.ok) {
+      if (r.status >= 500) {
+        alerta('Servidor no disponible — intenta en unos segundos', 'advertencia');
+      } else {
+        let msg = 'Credenciales incorrectas';
+        try { const e = await r.json(); msg = e.error || msg; } catch (_) {}
+        alerta(msg, 'error');
+      }
+      return;
+    }
+
     const d = await r.json();
-    if (r.ok) {
-      TOKEN = d.token;
-      OPERARIO = d.usuario;
-      localStorage.setItem('wms_token', TOKEN);
-      localStorage.setItem('wms_operario', JSON.stringify(OPERARIO));
-      actualizarUI(OPERARIO);
-      mostrarSegunRol(OPERARIO.rol);
-    } else {
-      alerta(d.error || 'Credenciales incorrectas', 'error');
-    }
+    TOKEN = d.token;
+    OPERARIO = d.usuario;
+    localStorage.setItem('wms_token', TOKEN);
+    localStorage.setItem('wms_operario', JSON.stringify(OPERARIO));
+    actualizarUI(OPERARIO);
+    mostrarSegunRol(OPERARIO.rol);
   } catch (e) {
-    alerta('Sin conexión — verifica tu red e intenta de nuevo', 'error');
+    alerta('Sin conexión — verifica tu red', 'error');
   } finally {
     btn.textContent = 'Entrar';
     btn.disabled = false;
