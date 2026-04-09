@@ -5,6 +5,13 @@ from app.models.usuario import Usuario
 
 auth_bp = Blueprint('auth', __name__)
 
+
+def _solo_admin():
+    """Devuelve el usuario actual si es admin, o None."""
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
+
 @auth_bp.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
@@ -37,6 +44,9 @@ def me():
 @auth_bp.route('/register', methods=['POST'])
 @jwt_required()
 def register():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo un administrador puede crear usuarios'}), 403
+
     data = request.get_json()
     if not data or not data.get('email') or not data.get('password') or not data.get('nombre'):
         return jsonify({'error': 'Nombre, email y password requeridos'}), 400
@@ -74,13 +84,20 @@ def listar_usuarios():
 @auth_bp.route('/usuarios/<int:uid>', methods=['PUT'])
 @jwt_required()
 def actualizar_usuario(uid):
-    """Actualiza nombre, rol, capacidades y almacén de un usuario."""
+    """Actualiza nombre, rol, capacidades y almacén de un usuario. Solo admin."""
+    admin = _solo_admin()
+    if not admin:
+        return jsonify({'error': 'Solo un administrador puede modificar usuarios'}), 403
+
     usuario = Usuario.query.get_or_404(uid)
     data = request.get_json() or {}
 
     if 'nombre' in data:
         usuario.nombre = data['nombre']
     if 'rol' in data:
+        # Nadie puede auto-escalarse — admin solo puede cambiar rol de otros
+        if uid == admin.id and data['rol'] != 'admin':
+            return jsonify({'error': 'No puedes cambiar tu propio rol'}), 400
         usuario.rol = data['rol']
     if 'almacen_id' in data:
         usuario.almacen_id = data['almacen_id']

@@ -178,13 +178,15 @@ def siguiente_tarea():
             'mensaje': 'Tienes una tarea en proceso'
         }), 200
 
+    # with_for_update() — lock pesimista a nivel de fila.
+    # Evita que dos operarios reciban la misma tarea si llaman simultáneamente.
     tarea = TareaPicking.query.filter_by(
         estado='PENDIENTE',
         operario_id=None
     ).order_by(
         TareaPicking.prioridad.desc(),
         TareaPicking.fecha_creacion.asc()
-    ).first()
+    ).with_for_update(skip_locked=True).first()
 
     if not tarea:
         return jsonify({

@@ -19,6 +19,7 @@ class UbicacionProducto(db.Model):
     __table_args__ = (
         db.CheckConstraint('cantidad >= 0', name='ck_cantidad_no_negativa'),
         db.CheckConstraint('reservado >= 0', name='ck_reservado_no_negativo'),
+        db.CheckConstraint('bloqueado >= 0', name='ck_bloqueado_no_negativo'),
         db.UniqueConstraint('ubicacion_id', 'producto_id', 'lote', name='uq_ubicacion_producto_lote'),
     )
 

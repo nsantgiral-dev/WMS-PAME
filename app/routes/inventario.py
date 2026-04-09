@@ -30,19 +30,31 @@ def ajuste_inventario():
     data = request.get_json()
     usuario_id = get_jwt_identity()
 
-    requeridos = ['producto_id', 'ubicacion_id', 'cantidad', 'tipo', 'motivo']
+    requeridos = ['producto_id', 'ubicacion_id', 'cantidad', 'tipo', 'motivo', 'idempotency_key']
     for campo in requeridos:
         if campo not in data:
             return jsonify({'error': f'Campo requerido: {campo}'}), 400
 
+    # Idempotencia real — si ya existe este key, devolver el movimiento original sin tocar stock
+    existente = MovimientoInventario.query.filter_by(
+        idempotency_key=data['idempotency_key']
+    ).first()
+    if existente:
+        return jsonify({
+            'mensaje': 'Ajuste ya aplicado (idempotente)',
+            'saldo_antes': existente.saldo_antes,
+            'saldo_despues': existente.saldo_despues,
+            'movimiento_id': existente.id
+        }), 200
+
     producto = Producto.query.get_or_404(data['producto_id'])
     ubicacion = Ubicacion.query.get_or_404(data['ubicacion_id'])
 
-    # Buscar o crear registro de ubicacion-producto
+    # Lock pesimista — evita ajuste concurrente sobre la misma ubicación-producto
     reg = UbicacionProducto.query.filter_by(
         producto_id=producto.id,
         ubicacion_id=ubicacion.id
-    ).first()
+    ).with_for_update().first()
 
     if not reg:
         reg = UbicacionProducto(
@@ -51,6 +63,7 @@ def ajuste_inventario():
             cantidad=0
         )
         db.session.add(reg)
+        db.session.flush()
 
     saldo_antes = reg.cantidad
     cantidad = int(data['cantidad'])
@@ -63,11 +76,12 @@ def ajuste_inventario():
         reg.cantidad -= cantidad
     elif data['tipo'] == 'AJUSTE':
         reg.cantidad = cantidad
+    else:
+        return jsonify({'error': f'Tipo inválido: {data["tipo"]}. Usar ENTRADA, SALIDA o AJUSTE'}), 400
 
     saldo_despues = reg.cantidad
     reg.row_version += 1
 
-    # Registrar movimiento
     movimiento = MovimientoInventario(
         producto_id=producto.id,
         ubicacion_id=ubicacion.id,
@@ -79,7 +93,7 @@ def ajuste_inventario():
         motivo=data['motivo'],
         numero_documento=data.get('numero_documento'),
         usuario_id=int(usuario_id),
-        idempotency_key=data.get('idempotency_key', str(uuid.uuid4()))
+        idempotency_key=data['idempotency_key']
     )
 
     db.session.add(movimiento)

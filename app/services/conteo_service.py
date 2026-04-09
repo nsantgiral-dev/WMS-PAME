@@ -268,6 +268,10 @@ class ConteoService:
         if not sesion:
             raise ValueError('Sesión no encontrada')
 
+        # Idempotencia — si Siesa ya procesó este ajuste, devolver sin repetir
+        if sesion.siesa_triggered:
+            return sesion
+
         if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']:
             raise ValueError(f'No se puede ajustar en estado {sesion.estado}')
 
@@ -287,8 +291,9 @@ class ConteoService:
         sesion.diferencia = diferencia
         sesion.motivo_codigo = motivo_codigo
 
-        # Idempotency key — garantiza exactamente-una-vez hacia Siesa
-        idem_key = f'ADJ-{sesion_id}-{int(datetime.utcnow().timestamp() * 1000)}'
+        # Idempotency key estable — basado solo en sesion_id, no en timestamp
+        # Así un reintento usa la misma key y Siesa puede deduplicar
+        idem_key = f'ADJ-{sesion_id}'
         sesion.idempotency_key = idem_key
         sesion.aprobador_id = supervisor_id
 

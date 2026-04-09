@@ -225,7 +225,8 @@ class PackingService:
         """
         from app.models.bulto import Bulto
 
-        tarea = TareaPacking.query.get(tarea_id)
+        # Lock pesimista — evita doble cierre concurrente (doble clic = doble remisión a Siesa)
+        tarea = TareaPacking.query.filter_by(id=tarea_id).with_for_update().first()
         if not tarea:
             raise ValueError('Tarea no encontrada')
         # Permitir retry si Siesa falló (VERIFICADO o DESPACHADO sin siesa_triggered)
