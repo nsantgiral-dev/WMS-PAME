@@ -170,16 +170,26 @@ class TrasladoService:
         if s.estado not in ('EN_PICKING', 'APROBADA'):
             raise ValueError(f'No se puede despachar en estado {s.estado}')
 
-        items_payload = [
-            {
+        # Usar cantidad_enviada si fue confirmada por picking; si no, caer a aprobada.
+        # Esto permite que el picking parcial (menos ítems de los aprobados) sea correcto.
+        items_payload = []
+        for item in s.items:
+            cantidad = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
+            if not cantidad or cantidad <= 0:
+                continue
+            items_payload.append({
                 'codigo_siesa': item.producto_codigo_siesa,
                 'codigo': item.producto.codigo if item.producto else '',
-                'cantidad': item.cantidad_aprobada or item.cantidad_solicitada,
+                'cantidad': cantidad,
                 'unidad_medida': item.producto.unidad_medida if item.producto else '',
                 'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
-            }
-            for item in s.items
-        ]
+            })
+            # Fijar cantidad_enviada para que confirmar_recepcion tenga referencia exacta.
+            if not item.cantidad_enviada:
+                item.cantidad_enviada = cantidad
+
+        if not items_payload:
+            raise ValueError('No hay ítems con cantidad para despachar')
 
         try:
             if s.modo_transferencia == 'EN_TRANSITO':
@@ -236,15 +246,16 @@ class TrasladoService:
         if s.estado not in ('EN_TRANSITO', 'DESPACHADA'):
             raise ValueError(f'No se puede confirmar recepción en estado {s.estado}')
 
-        # Actualizar cantidades recibidas
+        # Actualizar cantidades recibidas.
+        # Fallback: cantidad_enviada (lo que salió) > cantidad_aprobada > solicitada.
         if items_recibidos:
             recibidos_map = {i['id']: i['cantidad_recibida'] for i in items_recibidos}
             for item in s.items:
-                item.cantidad_recibida = recibidos_map.get(item.id,
-                                         item.cantidad_aprobada or item.cantidad_solicitada)
+                fallback = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
+                item.cantidad_recibida = recibidos_map.get(item.id, fallback)
         else:
             for item in s.items:
-                item.cantidad_recibida = item.cantidad_aprobada or item.cantidad_solicitada
+                item.cantidad_recibida = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
         db.session.flush()
 
         # ── Trigger Siesa: Entrada tránsito ──

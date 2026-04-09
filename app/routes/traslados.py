@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.traslado import SolicitudTraslado
@@ -5,6 +6,7 @@ from app.models.usuario import Usuario
 from app.services.traslado_service import TrasladoService
 
 traslados_bp = Blueprint('traslados', __name__)
+logger = logging.getLogger(__name__)
 
 
 @traslados_bp.route('/', methods=['GET'])
@@ -111,6 +113,79 @@ def rechazar_solicitud(id):
         return jsonify({'error': str(e)}), 400
 
 
+@traslados_bp.route('/<int:id>/cancelar', methods=['POST'])
+@jwt_required()
+def cancelar_solicitud(id):
+    """
+    Cancela una solicitud.
+    - Tienda: solo BORRADOR o ENVIADA, y solo las propias.
+    - Admin/supervisor: BORRADOR, ENVIADA o EN_PICKING.
+    EN_TRANSITO y ENTREGADA no se pueden cancelar — el camión ya salió.
+    """
+    from app.extensions import db
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    s = SolicitudTraslado.query.get_or_404(id)
+
+    if usuario.rol == 'tienda':
+        if s.solicitante_id != usuario_id:
+            return jsonify({'error': 'Solo puedes cancelar tus propias solicitudes'}), 403
+        permitidos = ('BORRADOR', 'ENVIADA')
+    elif usuario.rol in ('admin', 'supervisor'):
+        permitidos = ('BORRADOR', 'ENVIADA', 'EN_PICKING', 'APROBADA')
+    else:
+        return jsonify({'error': 'No autorizado'}), 403
+
+    if s.estado not in permitidos:
+        return jsonify({'error': f'No se puede cancelar en estado {s.estado}'}), 400
+
+    data = request.get_json() or {}
+    s.estado = 'CANCELADA'
+    s.motivo_rechazo = data.get('motivo', 'Cancelada por usuario')
+    db.session.commit()
+    logger.info(f'[TRASLADO] {s.codigo} → CANCELADA por usuario {usuario_id}')
+    return jsonify(s.to_dict()), 200
+
+
+@traslados_bp.route('/<int:id>/confirmar-picking', methods=['POST'])
+@jwt_required()
+def confirmar_picking(id):
+    """
+    Operario confirma que recogió los ítems físicamente.
+    Actualiza cantidad_enviada por ítem y habilita el botón Despachar.
+
+    Body opcional: {"items_confirmados": [{"id": 1, "cantidad_confirmada": 5}]}
+    Sin body: confirma las cantidades aprobadas en su totalidad.
+    """
+    from app.extensions import db
+    s = SolicitudTraslado.query.get_or_404(id)
+
+    if s.estado != 'EN_PICKING':
+        return jsonify({'error': f'Solo se confirma picking en EN_PICKING (estado: {s.estado})'}), 400
+
+    data = request.get_json() or {}
+    confirmados = data.get('items_confirmados')
+
+    if confirmados:
+        confirmados_map = {i['id']: i['cantidad_confirmada'] for i in confirmados}
+        for item in s.items:
+            cantidad = confirmados_map.get(item.id)
+            if cantidad is not None:
+                if cantidad < 0:
+                    return jsonify({'error': f'Cantidad negativa para ítem {item.id}'}), 400
+                item.cantidad_enviada = cantidad
+    else:
+        for item in s.items:
+            item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
+
+    db.session.commit()
+    return jsonify({
+        'ok': True,
+        'mensaje': 'Picking confirmado — listo para despachar',
+        'solicitud': s.to_dict(),
+    }), 200
+
+
 @traslados_bp.route('/<int:id>/despachar', methods=['POST'])
 @jwt_required()
 def despachar(id):
@@ -144,11 +219,23 @@ def confirmar_recepcion(id):
 @traslados_bp.route('/<int:id>/reintentar-siesa', methods=['POST'])
 @jwt_required()
 def reintentar_siesa(id):
-    """Admin: reintenta la llamada a Siesa 174646 sin volver a aprobar.
-    ?debug=true devuelve el payload sin llamar a Siesa."""
+    """
+    Admin: dispara/reintenta el conector 174646 (Requisición de traslado).
+    NOTA: 174646 NO forma parte del flujo normal del WMS — el flujo real usa
+    173076 al despachar y 173079 al recibir. Este endpoint es para casos en que
+    el consultor Siesa requiera una requisición formal previa a la transferencia.
+    Solo disponible en estados EN_PICKING o APROBADA.
+    ?debug=true devuelve el payload sin llamar a Siesa.
+    """
     from app.models.traslado import SolicitudTraslado
     from app.extensions import db
     s = SolicitudTraslado.query.get_or_404(id)
+
+    if s.estado not in ('EN_PICKING', 'APROBADA'):
+        return jsonify({
+            'error': f'174646 solo aplica en EN_PICKING o APROBADA (estado: {s.estado}). '
+                     f'Para reintentar el despacho usa /reintentar-despacho.'
+        }), 400
     body = request.get_json(silent=True) or {}
     debug = body.get('debug', False) or request.args.get('debug', '').lower() == 'true'
 
@@ -196,8 +283,8 @@ def reintentar_siesa(id):
                     'f441_id_bodega': s.bodega_origen_siesa,
                     'f441_id_motivo': connekta.motivo_traslado,
                     'f441_id_unidad_medida': item.get('unidad_medida') or '',
-                    'f441_cant_base': f'{abs(item.get("cantidad", 0)):020.4f}',
-                    'f441_cant_2': f'{0:020.4f}',
+                    'f441_cant_base': abs(item.get('cantidad', 0)),
+                    'f441_cant_2': 0,
                     'f441_fecha_entrega': fecha_hoy,
                     'f441_num_dias_entrega': 0,
                     'f441_id_co_movto': connekta.centro_op,
@@ -205,7 +292,7 @@ def reintentar_siesa(id):
                     'f441_id_proyecto': '',
                     'f441_notas': '',
                     'f441_id_un_movto': connekta.centro_op,
-                    'f441_precio_unitario': f'{0:020.4f}',
+                    'f441_precio_unitario': 0,
                     'f441_id_ubicacion_sal': '',
                     'f441_id_proy_etapa': '',
                     'f441_id_rubro_pof': '',
@@ -293,11 +380,37 @@ def reintentar_despacho(id):
 @traslados_bp.route('/stock-disponible', methods=['GET'])
 @jwt_required()
 def stock_disponible():
-    """Stock disponible en bodega principal para armar solicitud."""
+    """
+    Stock disponible en bodega principal para armar solicitud.
+    Soporta búsqueda (?q=texto) y paginación (?page=1&per_page=50).
+    """
     bodega = request.args.get('bodega')
+    q = request.args.get('q', '').strip().lower()
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 50, type=int), 200)
+
     try:
         resultado = TrasladoService.get_stock_disponible(bodega)
-        return jsonify(resultado), 200
+        items = resultado.get('items', [])
+
+        if q:
+            items = [
+                i for i in items
+                if q in i.get('codigo_siesa', '').lower()
+            ]
+
+        total = len(items)
+        start = (page - 1) * per_page
+        items_pagina = items[start:start + per_page]
+
+        return jsonify({
+            **resultado,
+            'items': items_pagina,
+            'total': total,
+            'page': page,
+            'per_page': per_page,
+            'pages': (total + per_page - 1) // per_page,
+        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

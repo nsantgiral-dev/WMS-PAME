@@ -2,8 +2,9 @@
 Traslados entre Bodega Principal y Puntos de Venta.
 
 Máquina de estados:
-  BORRADOR → ENVIADA → APROBADA → EN_PICKING → DESPACHADA → EN_TRANSITO → ENTREGADA
-                      → RECHAZADA
+  BORRADOR → ENVIADA → EN_PICKING → EN_TRANSITO → ENTREGADA
+                     ↘ RECHAZADA
+           ↘ CANCELADA  (tienda: BORRADOR/ENVIADA; admin: hasta EN_PICKING)
 """
 from datetime import datetime
 from app.extensions import db
@@ -57,6 +58,16 @@ class SolicitudTraslado(db.Model):
                             lazy=True, cascade='all, delete-orphan')
 
     def to_dict(self):
+        # El error de Siesa es relevante (requiere acción) solo cuando no hay
+        # consecutivo de cierre — significa que el movimiento nunca llegó a Siesa.
+        consec_cierre = (self.siesa_entrada_consec if self.modo_transferencia == 'EN_TRANSITO'
+                         else self.siesa_salida_consec)
+        estados_terminales = ('ENTREGADA', 'RECHAZADA', 'CANCELADA')
+        siesa_necesita_atencion = (
+            bool(self.siesa_error) and
+            not consec_cierre and
+            self.estado not in estados_terminales
+        )
         return {
             'id': self.id,
             'codigo': self.codigo,
@@ -73,7 +84,8 @@ class SolicitudTraslado(db.Model):
             'siesa_requisicion_consec': self.siesa_requisicion_consec,
             'siesa_salida_consec': self.siesa_salida_consec,
             'siesa_entrada_consec': self.siesa_entrada_consec,
-            'siesa_error': self.siesa_error,
+            'siesa_error': self.siesa_error if siesa_necesita_atencion else None,
+            'siesa_necesita_atencion': siesa_necesita_atencion,
             'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,
             'fecha_envio': self.fecha_envio.isoformat() if self.fecha_envio else None,
             'fecha_aprobacion': self.fecha_aprobacion.isoformat() if self.fecha_aprobacion else None,
