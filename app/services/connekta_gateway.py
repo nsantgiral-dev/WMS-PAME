@@ -58,9 +58,10 @@ class ConnektaGateway:
         self.tipo_docto_transito_salida = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_SALIDA', '')
         self.tipo_docto_transito_entrada = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', '')
         # Código del solicitante en requisiciones (Siesa: Inventarios → Solicitantes)
-        self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')
+        self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')[:5]
         # Bodega de tránsito (verificar si existe en Siesa — si no, usar TransferenciaDirecta)
         self.bodega_transito = os.getenv('SIESA_BODEGA_TRANSITO', '')
+        self.unidad_negocio = os.getenv('SIESA_UNIDAD_NEGOCIO', '001')
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
         self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
@@ -771,18 +772,18 @@ class ConnektaGateway:
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
-            'Inicial': [{'F_CIA': self.id_cia_siesa}],
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [
                 {
-                    'F_CIA': self.id_cia_siesa,
-                    'F_CONSEC_AUTO_REG': 0,
+                    'F_CIA': int(self.id_cia_siesa),
+                    'F_CONSEC_AUTO_REG': 1,
                     'f440_id_co': self.centro_op,
                     'f440_id_tipo_docto': self.tipo_docto_req_traslado,
                     'f440_consec_docto': 0,
                     'f440_fecha': fecha_hoy,
                     'f440_id_tercero': '',
-                    'f440_id_solicitante': self.req_solicitante,   # REQUIRED
-                    'f440_fecha_entrega': fecha_hoy,               # REQUIRED
+                    'f440_id_solicitante': self.req_solicitante,
+                    'f440_fecha_entrega': fecha_hoy,
                     'f440_num_dias_entrega': 0,
                     'f440_ind_estado': 1,
                     'f440_ind_impresion': 0,
@@ -798,36 +799,36 @@ class ConnektaGateway:
             ],
             'Movimientos': [
                 {
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': int(self.id_cia_siesa),
                     'f441_id_co': self.centro_op,
                     'f441_id_tipo_docto': self.tipo_docto_req_traslado,
                     'f441_consec_docto': 0,
                     'f441_nro_registro': idx + 1,
                     'f441_id_item': 0,
                     'f441_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f441_codigo_barras': ' ',
-                    'f441_id_ext1_detalle': ' ',
-                    'f441_id_ext2_detalle': ' ',
+                    'f441_codigo_barras': '',
+                    'f441_id_ext1_detalle': '',
+                    'f441_id_ext2_detalle': '',
                     'f441_id_bodega': bodega_origen,
-                    'f441_id_motivo': self.motivo_traslado,        # REQUIRED
-                    'f441_id_unidad_medida': item.get('unidad_medida') or 'UND',
-                    'f441_cant_base': f'{abs(item.get("cantidad", 0)):020.4f}',
-                    'f441_cant_2': f'{0:020.4f}',
-                    'f441_fecha_entrega': fecha_hoy,               # REQUIRED
+                    'f441_id_motivo': self.motivo_traslado,
+                    'f441_id_unidad_medida': '',
+                    'f441_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
+                    'f441_cant_2': 0,
+                    'f441_fecha_entrega': fecha_hoy,
                     'f441_num_dias_entrega': 0,
                     'f441_id_co_movto': self.centro_op,
-                    'f441_id_ccosto_movto': ' ',
-                    'f441_id_proyecto': ' ',
-                    'f441_notas': ' ',
-                    'f441_id_un_movto': item.get('unidad_negocio_id') or ' ',
-                    'f441_precio_unitario': f'{0:020.4f}',
-                    'f441_id_ubicacion_sal': ' ',
-                    'f441_id_proy_etapa': ' ',
-                    'f441_id_rubro_pof': ' ',
+                    'f441_id_ccosto_movto': '',
+                    'f441_id_proyecto': '',
+                    'f441_notas': '',
+                    'f441_id_un_movto': self.unidad_negocio,
+                    'f441_precio_unitario': 0,
+                    'f441_id_ubicacion_sal': '',
+                    'f441_id_proy_etapa': '',
+                    'f441_id_rubro_pof': '',
                 }
                 for idx, item in enumerate(items)
             ],
-            'Final': [{'F_CIA': self.id_cia_siesa}]
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
         logger.info(f'[CONNEKTA] Requisicion traslado {codigo_solicitud} '
@@ -847,11 +848,11 @@ class ConnektaGateway:
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
-            'Inicial': [{'F_CIA': self.id_cia_siesa}],
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [
                 {
                     # 13 keys obligatorias para f450 — tamaño exacto 826 bytes
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
@@ -869,7 +870,7 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     # 27 keys obligatorias para f470 — tamaño exacto 2700 bytes
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': int(self.id_cia_siesa),
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f470_consec_docto': 0,
@@ -894,12 +895,12 @@ class ConnektaGateway:
                     'f470_codigo_barras': '',
                     'f470_id_ext1_detalle': '',
                     'f470_id_ext2_detalle': '',
-                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
+                    'f470_id_un_movto': self.unidad_negocio,
                     'f470_rowid_movto': 0,
                 }
                 for idx, item in enumerate(items)
             ],
-            'Final': [{'F_CIA': self.id_cia_siesa}]
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
         logger.info(f'[CONNEKTA] Tránsito salida {codigo_solicitud} '
@@ -921,10 +922,10 @@ class ConnektaGateway:
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
-            'Inicial': [{'F_CIA': self.id_cia_siesa}],
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [
                 {
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 0,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
@@ -944,7 +945,7 @@ class ConnektaGateway:
             ],
             'Movimientos': [
                 {
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': int(self.id_cia_siesa),
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,  # REQUIRED
                     'f470_consec_docto': 0,
@@ -955,12 +956,12 @@ class ConnektaGateway:
                     'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
                     'f470_id_unidad_medida': item.get('unidad_medida') or '',
                     'f470_id_co_movto': self.centro_op,                      # REQUIRED
-                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
+                    'f470_id_un_movto': self.unidad_negocio,
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
             ],
-            'Final': [{'F_CIA': self.id_cia_siesa}]
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
         logger.info(f'[CONNEKTA] Tránsito entrada {codigo_solicitud} '
@@ -981,10 +982,10 @@ class ConnektaGateway:
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
-            'Inicial': [{'F_CIA': self.id_cia_siesa}],
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [
                 {
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 0,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
@@ -1003,7 +1004,7 @@ class ConnektaGateway:
             ],
             'Movimientos': [
                 {
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': int(self.id_cia_siesa),
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_traslado,
                     'f470_consec_docto': 0,
@@ -1014,12 +1015,12 @@ class ConnektaGateway:
                     'f470_cant_base': f'{abs(item.get("cantidad", 0)):015.4f}',
                     'f470_id_unidad_medida': item.get('unidad_medida') or '',
                     'f470_id_co_movto': self.centro_op,
-                    'f470_id_un_movto': item.get('unidad_negocio_id') or '',
+                    'f470_id_un_movto': self.unidad_negocio,
                     'f470_notas': '',
                 }
                 for idx, item in enumerate(items)
             ],
-            'Final': [{'F_CIA': self.id_cia_siesa}]
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
         logger.info(f'[CONNEKTA] Transferencia directa {codigo_solicitud} '
