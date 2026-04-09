@@ -49,6 +49,8 @@ def crear_almacen():
 def actualizar_almacen(id):
     almacen = Almacen.query.get_or_404(id)
     data = request.get_json() or {}
+    if 'codigo' in data:
+        almacen.codigo = data['codigo']
     if 'nombre' in data:
         almacen.nombre = data['nombre']
     if 'direccion' in data:
