@@ -14,6 +14,20 @@ from app.models.ruta_despacho import RutaDespacho
 rutas_bp = Blueprint('rutas', __name__)
 
 
+def _es_admin_o_jefe():
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol in ('admin', 'jefe_almacen') else None
+
+
+def _solo_admin():
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
+
+
 # ── Conductores ──────────────────────────────────────────────────
 
 @rutas_bp.route('/conductores', methods=['GET'])
@@ -29,6 +43,8 @@ def listar_conductores():
 @rutas_bp.route('/conductores', methods=['POST'])
 @jwt_required()
 def crear_conductor():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede registrar conductores'}), 403
     data = request.get_json()
     for campo in ['nombre', 'cedula']:
         if not data.get(campo):
@@ -49,6 +65,8 @@ def crear_conductor():
 @rutas_bp.route('/conductores/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_conductor(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede modificar conductores'}), 403
     from app.models.usuario import Usuario
     c = Conductor.query.get_or_404(id)
     data = request.get_json()
@@ -63,6 +81,8 @@ def actualizar_conductor(id):
 @rutas_bp.route('/conductores/<int:id>', methods=['DELETE'])
 @jwt_required()
 def desactivar_conductor(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede desactivar conductores'}), 403
     c = Conductor.query.get_or_404(id)
     c.activo = False
     db.session.commit()
@@ -84,6 +104,8 @@ def listar_vehiculos():
 @rutas_bp.route('/vehiculos', methods=['POST'])
 @jwt_required()
 def crear_vehiculo():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede registrar vehículos'}), 403
     data = request.get_json()
     for campo in ['placa', 'tipo']:
         if not data.get(campo):
@@ -101,6 +123,8 @@ def crear_vehiculo():
 @rutas_bp.route('/vehiculos/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_vehiculo(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede modificar vehículos'}), 403
     v = Vehiculo.query.get_or_404(id)
     data = request.get_json()
     if 'tipo'         in data: v.tipo         = data['tipo'].strip()
@@ -113,6 +137,8 @@ def actualizar_vehiculo(id):
 @rutas_bp.route('/vehiculos/<int:id>', methods=['DELETE'])
 @jwt_required()
 def desactivar_vehiculo(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede desactivar vehículos'}), 403
     v = Vehiculo.query.get_or_404(id)
     v.activo = False
     db.session.commit()
@@ -141,6 +167,8 @@ def obtener_maestra(id):
 @rutas_bp.route('/maestras', methods=['POST'])
 @jwt_required()
 def crear_maestra():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear rutas maestras'}), 403
     data = request.get_json()
     for campo in ['nombre', 'tipo_ruta']:
         if not data.get(campo):
@@ -170,6 +198,8 @@ def crear_maestra():
 @rutas_bp.route('/maestras/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_maestra(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede modificar rutas maestras'}), 403
     m = RutaMaestra.query.get_or_404(id)
     data = request.get_json()
     if 'nombre'    in data: m.nombre    = data['nombre'].strip()
@@ -196,6 +226,8 @@ def actualizar_maestra(id):
 @rutas_bp.route('/maestras/<int:id>', methods=['DELETE'])
 @jwt_required()
 def desactivar_maestra(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede desactivar rutas maestras'}), 403
     m = RutaMaestra.query.get_or_404(id)
     m.activa = False
     db.session.commit()
@@ -209,8 +241,10 @@ def desactivar_maestra(id):
 def programar_viaje():
     """
     Crea un RutaDespacho en estado PROGRAMADO a partir de una RutaMaestra.
-    Payload: {ruta_maestra_id, fecha_programada, conductor_id, vehiculo_id}
+    Solo admin o jefe de almacén.
     """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede programar viajes'}), 403
     data = request.get_json()
     for campo in ['ruta_maestra_id', 'fecha_programada', 'conductor_id', 'vehiculo_id']:
         if not data.get(campo):
@@ -276,7 +310,9 @@ def listar_rutas():
 @rutas_bp.route('/', methods=['POST'])
 @jwt_required()
 def crear_ruta():
-    """Crea una RutaDespacho ad-hoc (sin plantilla) directo en EN_CARGUE."""
+    """Crea una RutaDespacho ad-hoc (sin plantilla) directo en EN_CARGUE. Solo admin/jefe."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede crear rutas'}), 403
     data = request.get_json()
     for campo in ['conductor_id', 'vehiculo_id', 'tipo_ruta']:
         if not data.get(campo):
@@ -378,7 +414,9 @@ def sugeridos_ruta(id):
 @rutas_bp.route('/<int:id>/cerrar', methods=['POST'])
 @jwt_required()
 def cerrar_ruta(id):
-    """EN_CARGUE → EN_TRANSITO."""
+    """EN_CARGUE → EN_TRANSITO. Solo admin/jefe."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede cerrar rutas'}), 403
     from app.models.bulto import Bulto
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'EN_CARGUE':

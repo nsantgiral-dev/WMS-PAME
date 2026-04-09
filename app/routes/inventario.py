@@ -111,7 +111,7 @@ def ajuste_inventario():
 @jwt_required()
 def listar_movimientos():
     page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(request.args.get('per_page', 50, type=int), 200)
     producto_id = request.args.get('producto_id', type=int)
 
     query = MovimientoInventario.query.order_by(

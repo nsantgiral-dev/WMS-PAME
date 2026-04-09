@@ -1,15 +1,22 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.producto import Producto
 
 productos_bp = Blueprint('productos', __name__)
 
+
+def _solo_admin():
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
+
 @productos_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_productos():
     page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(request.args.get('per_page', 50, type=int), 200)
     buscar = request.args.get('q', '')
     categoria = request.args.get('categoria', '')
 
@@ -46,6 +53,8 @@ def obtener_producto(id):
 @productos_bp.route('/', methods=['POST'])
 @jwt_required()
 def crear_producto():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear productos'}), 403
     data = request.get_json()
     if not data or not data.get('codigo') or not data.get('nombre'):
         return jsonify({'error': 'Codigo y nombre requeridos'}), 400
@@ -77,6 +86,8 @@ def crear_producto():
 @productos_bp.route('/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_producto(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede modificar productos'}), 403
     producto = Producto.query.get_or_404(id)
     data = request.get_json()
 
@@ -93,6 +104,8 @@ def actualizar_producto(id):
 @productos_bp.route('/<int:id>', methods=['DELETE'])
 @jwt_required()
 def eliminar_producto(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede desactivar productos'}), 403
     producto = Producto.query.get_or_404(id)
     producto.activo = False
     db.session.commit()

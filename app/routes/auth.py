@@ -76,7 +76,9 @@ def register():
 @auth_bp.route('/usuarios', methods=['GET'])
 @jwt_required()
 def listar_usuarios():
-    """Lista todos los usuarios activos — para el panel de admin."""
+    """Lista todos los usuarios activos — solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo un administrador puede ver la lista de usuarios'}), 403
     usuarios = Usuario.query.filter_by(activo=True).order_by(Usuario.nombre).all()
     return jsonify({'usuarios': [u.to_dict() for u in usuarios]}), 200
 

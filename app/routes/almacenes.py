@@ -1,10 +1,17 @@
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.almacen import Almacen
 from app.models.ubicacion import Ubicacion
 
 almacenes_bp = Blueprint('almacenes', __name__)
+
+
+def _solo_admin():
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
 
 @almacenes_bp.route('/', methods=['GET'])
 @jwt_required()
@@ -23,6 +30,8 @@ def obtener_almacen(id):
 @almacenes_bp.route('/', methods=['POST'])
 @jwt_required()
 def crear_almacen():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear almacenes'}), 403
     data = request.get_json()
     if not data or not data.get('codigo') or not data.get('nombre'):
         return jsonify({'error': 'Codigo y nombre requeridos'}), 400
@@ -47,6 +56,8 @@ def crear_almacen():
 @almacenes_bp.route('/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_almacen(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede modificar almacenes'}), 403
     almacen = Almacen.query.get_or_404(id)
     data = request.get_json() or {}
     if 'codigo' in data:
@@ -81,6 +92,8 @@ def listar_ubicaciones(id):
 @almacenes_bp.route('/<int:id>/ubicaciones', methods=['POST'])
 @jwt_required()
 def crear_ubicacion(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear ubicaciones'}), 403
     almacen = Almacen.query.get_or_404(id)
     data = request.get_json()
 

@@ -1,13 +1,20 @@
 """
 CRUD administrable para la tabla siesa_mapeo_unidades.
-Solo accesible con JWT válido (cualquier rol por ahora — ajustar si se requiere rol admin).
+Escritura solo accesible para admin.
 """
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.siesa_mapeo_unidades import SiesaMapeоUnidades
 from app.extensions import db
 
 config_siesa_bp = Blueprint('config_siesa', __name__)
+
+
+def _solo_admin():
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
 
 
 @config_siesa_bp.route('/mapeo-unidades', methods=['GET'])
@@ -20,6 +27,8 @@ def listar_mapeos():
 @config_siesa_bp.route('/mapeo-unidades', methods=['POST'])
 @jwt_required()
 def crear_mapeo():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear mapeos'}), 403
     data = request.get_json() or {}
     tipo = (data.get('tipo_inv_siesa') or '').strip()
     unidad = (data.get('unidad_negocio_id') or '').strip()
@@ -40,6 +49,8 @@ def crear_mapeo():
 @config_siesa_bp.route('/mapeo-unidades/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_mapeo(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede modificar mapeos'}), 403
     m = SiesaMapeоUnidades.query.get_or_404(id)
     data = request.get_json() or {}
     if 'unidad_negocio_id' in data:
@@ -53,6 +64,8 @@ def actualizar_mapeo(id):
 @config_siesa_bp.route('/mapeo-unidades/<int:id>', methods=['DELETE'])
 @jwt_required()
 def eliminar_mapeo(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede eliminar mapeos'}), 403
     m = SiesaMapeоUnidades.query.get_or_404(id)
     db.session.delete(m)
     db.session.commit()

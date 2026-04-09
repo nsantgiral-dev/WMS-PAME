@@ -20,6 +20,15 @@ from app.services.recepcion_service import RecepcionService
 
 siesa_bp = Blueprint('siesa', __name__)
 
+
+def _solo_admin():
+    from flask_jwt_extended import get_jwt_identity
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
+
+
 # ──────────────────────────────────────────────
 # Sync manual (admin)
 # ──────────────────────────────────────────────
@@ -27,7 +36,9 @@ siesa_bp = Blueprint('siesa', __name__)
 @siesa_bp.route('/sync-pedidos', methods=['POST'])
 @jwt_required()
 def sync_pedidos():
-    """Dispara sync de pedidos Siesa → DB local en background."""
+    """Dispara sync de pedidos Siesa → DB local en background. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede disparar sync'}), 403
     from flask import current_app
     from app.services.pedidos_sync_service import iniciar_sync_background
     resultado = iniciar_sync_background(current_app._get_current_object(), forzar=True)
@@ -37,7 +48,9 @@ def sync_pedidos():
 @siesa_bp.route('/sync-pedidos-estado', methods=['GET'])
 @jwt_required()
 def sync_pedidos_estado():
-    """Estado del último sync de pedidos."""
+    """Estado del último sync de pedidos. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ver estado de sync'}), 403
     from app.services.pedidos_sync_service import estado_sync
     return jsonify(estado_sync()), 200
 
@@ -45,7 +58,9 @@ def sync_pedidos_estado():
 @siesa_bp.route('/sync-productos', methods=['POST'])
 @jwt_required()
 def sync_productos():
-    """Inicia el sync en background y retorna inmediatamente (evita timeout gunicorn)."""
+    """Inicia el sync en background y retorna inmediatamente. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede disparar sync'}), 403
     from flask import current_app
     from app.services.siesa_sync_service import iniciar_sync_background
     resultado = iniciar_sync_background(current_app._get_current_object(), forzar=True)
@@ -55,7 +70,9 @@ def sync_productos():
 @siesa_bp.route('/sync-estado', methods=['GET'])
 @jwt_required()
 def sync_estado():
-    """Retorna el estado del último sync (en_curso, resultado, error)."""
+    """Retorna el estado del último sync. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ver estado de sync'}), 403
     from app.services.siesa_sync_service import estado_sync
     return jsonify(estado_sync()), 200
 
@@ -63,7 +80,9 @@ def sync_estado():
 @siesa_bp.route('/cargar-inventario', methods=['POST'])
 @jwt_required()
 def cargar_inventario():
-    """Inicia la carga inicial de stock desde Siesa en background."""
+    """Inicia la carga inicial de stock desde Siesa en background. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede cargar inventario'}), 403
     from flask import current_app
     from app.services.inventario_siesa_service import iniciar_carga_inventario
     resultado = iniciar_carga_inventario(current_app._get_current_object())
@@ -73,7 +92,9 @@ def cargar_inventario():
 @siesa_bp.route('/carga-inventario-estado', methods=['GET'])
 @jwt_required()
 def carga_inventario_estado():
-    """Estado de la carga de inventario en curso."""
+    """Estado de la carga de inventario en curso. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ver estado de carga'}), 403
     from app.services.inventario_siesa_service import estado_carga_inventario
     return jsonify(estado_carga_inventario()), 200
 
@@ -81,7 +102,9 @@ def carga_inventario_estado():
 @siesa_bp.route('/setup-inicial', methods=['POST'])
 @jwt_required()
 def setup_inicial():
-    """Catálogo sync + carga de stock en una sola operación secuencial."""
+    """Catálogo sync + carga de stock en una sola operación. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ejecutar setup inicial'}), 403
     from flask import current_app
     from app.services.inventario_siesa_service import iniciar_setup_inicial
     resultado = iniciar_setup_inicial(current_app._get_current_object())
@@ -91,6 +114,8 @@ def setup_inicial():
 @siesa_bp.route('/setup-inicial-estado', methods=['GET'])
 @jwt_required()
 def setup_inicial_estado():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
     from app.services.inventario_siesa_service import estado_setup_inicial
     return jsonify(estado_setup_inicial()), 200
 
@@ -98,7 +123,9 @@ def setup_inicial_estado():
 @siesa_bp.route('/reconciliacion', methods=['POST'])
 @jwt_required()
 def reconciliacion_iniciar():
-    """Inicia la reconciliación en background (puede tardar 2+ min)."""
+    """Inicia la reconciliación en background (puede tardar 2+ min). Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ejecutar reconciliación'}), 403
     from flask import current_app
     from app.services.inventario_siesa_service import iniciar_reconciliacion
     resultado = iniciar_reconciliacion(current_app._get_current_object())
@@ -108,14 +135,69 @@ def reconciliacion_iniciar():
 @siesa_bp.route('/reconciliacion-estado', methods=['GET'])
 @jwt_required()
 def reconciliacion_estado():
-    """Retorna el estado de la reconciliación en curso o el último resultado."""
+    """Retorna el estado de la reconciliación en curso o el último resultado. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ver estado de reconciliación'}), 403
     from app.services.inventario_siesa_service import estado_reconciliacion
     return jsonify(estado_reconciliacion()), 200
+
+
+@siesa_bp.route('/monitor', methods=['GET'])
+@jwt_required()
+def monitor_sincronizacion():
+    """
+    Semáforo de integración Siesa — verde/rojo por módulo.
+    Permite al admin ver de un vistazo qué módulos están al día.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ver el monitor de sync'}), 403
+
+    try:
+        from app.services.siesa_sync_service import estado_sync as estado_productos
+        productos = estado_productos()
+    except Exception:
+        productos = {}
+
+    try:
+        from app.services.pedidos_sync_service import estado_sync as estado_pedidos
+        pedidos = estado_pedidos()
+    except Exception:
+        pedidos = {}
+
+    try:
+        from app.services.inventario_siesa_service import estado_reconciliacion, estado_carga_inventario
+        reconciliacion = estado_reconciliacion()
+        inventario = estado_carga_inventario()
+    except Exception:
+        reconciliacion = {}
+        inventario = {}
+
+    def semaforo(estado_dict):
+        """Verde si terminó sin error, amarillo si en curso, rojo si hay error."""
+        if estado_dict.get('en_curso'):
+            return 'AMARILLO'
+        if estado_dict.get('error'):
+            return 'ROJO'
+        if estado_dict.get('resultado') or estado_dict.get('ultima_sync'):
+            return 'VERDE'
+        return 'GRIS'
+
+    return jsonify({
+        'modulos': {
+            'productos':      {'estado': semaforo(productos),      'detalle': productos},
+            'pedidos':        {'estado': semaforo(pedidos),        'detalle': pedidos},
+            'inventario':     {'estado': semaforo(inventario),     'detalle': inventario},
+            'reconciliacion': {'estado': semaforo(reconciliacion), 'detalle': reconciliacion},
+        },
+        'connekta': connekta.estado(),
+    }), 200
 
 
 @siesa_bp.route('/debug-pedidos-raw', methods=['GET'])
 @jwt_required()
 def debug_pedidos_raw():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
     """
     Debug: devuelve hasta 50 filas de API_v2_Ventas_Pedidos sin filtrar por bodega/CO.
     ?sin_estado=true → incluye pedidos en cualquier estado (no solo aprobados).
@@ -212,6 +294,8 @@ def debug_clasificacion_raw():
     Devuelve las primeras 3 filas para mapear nombres de campos antes de activar
     el sync automático de ABC.
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
     resultado = connekta.get_clasificacion_items(pagina=1)
     tabla = resultado.get('detalle', {}).get('Table', [])
     return jsonify({
@@ -228,8 +312,9 @@ def debug_monitor_facturas():
     """
     Explora el response crudo de papeleriamedellin_monitos_facturas_wms.
     Acepta ?fecha=AAAAMMDD (default: hoy).
-    Devuelve campos disponibles + primeras 5 filas para mapear antes de construir el monitor.
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
     fecha = request.args.get('fecha')
     try:
         resultado = connekta.get_monitor_facturas_raw(fecha=fecha, pagina=1)
@@ -251,10 +336,11 @@ def debug_monitor_facturas():
 @jwt_required()
 def debug_inventario_raw():
     """
-    Descubrimiento: devuelve las primeras filas de API_v2_Inventarios_InvFecha
-    para bodega NB1 sin filtros adicionales.
+    Descubrimiento: devuelve las primeras filas de API_v2_Inventarios_InvFecha.
     Usar solo para identificar nombres reales de campos de existencias.
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
     api_inv = 'API_v2_Inventarios_InvFecha'
     resultado = connekta._get(api_inv, {
         'paginacion': 'numPag=1|tamPag=3'
@@ -350,7 +436,9 @@ def pedidos_aprobados():
 @siesa_bp.route('/debug-oc-raw', methods=['GET'])
 @jwt_required()
 def debug_oc_raw():
-    """Debug: devuelve el JSON crudo de Siesa sin procesar."""
+    """Debug: devuelve el JSON crudo de Siesa sin procesar. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
     sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
     parametros_custom = request.args.get('parametros')
     if parametros_custom:

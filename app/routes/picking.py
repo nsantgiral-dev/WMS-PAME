@@ -16,7 +16,7 @@ def listar_tareas():
     almacen_id = request.args.get('almacen_id', type=int)
     activas = request.args.get('activas', '').lower() == 'true'
     page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(request.args.get('per_page', 50, type=int), 200)
 
     query = TareaPicking.query.order_by(
         TareaPicking.prioridad.desc(),

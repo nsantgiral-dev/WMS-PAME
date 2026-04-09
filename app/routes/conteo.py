@@ -7,6 +7,13 @@ from app.services.abc_service import ABCService
 conteo_bp = Blueprint('conteo', __name__)
 
 
+def _solo_admin():
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
+
+
 @conteo_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_sesiones():
@@ -145,8 +152,10 @@ def auditorias_urgentes():
 def generar_tareas_abc():
     """
     Genera tareas de conteo cíclico automáticamente según clasificación ABC.
-    Por defecto genera para clase A (diario).
+    Por defecto genera para clase A (diario). Solo admin.
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede generar tareas de conteo ABC'}), 403
     data = request.get_json() or {}
 
     if 'almacen_id' not in data:
@@ -165,7 +174,9 @@ def generar_tareas_abc():
 @conteo_bp.route('/abc/generar-todas', methods=['POST'])
 @jwt_required()
 def generar_todas_las_clases():
-    """Genera tareas A+B+C en una sola llamada — usado por el botón admin."""
+    """Genera tareas A+B+C en una sola llamada — solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede generar tareas de conteo'}), 403
     data = request.get_json() or {}
     if 'almacen_id' not in data:
         return jsonify({'error': 'almacen_id es requerido'}), 400
@@ -180,11 +191,11 @@ def generar_todas_las_clases():
 @jwt_required()
 def sincronizar_abc():
     """
-    Sincroniza clasificación ABC desde Siesa.
-    Body opcional: {"api_abc": "API_custom_ABC_Rotacion"} — nombre del endpoint
-    custom del Gestor de Consultas de Connekta V2 que expone la clasificación.
-    Sin ese parámetro retorna pending=True (endpoint aún no mapeado).
+    Sincroniza clasificación ABC desde Siesa. Solo admin.
+    Body opcional: {"api_abc": "API_custom_ABC_Rotacion"}
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede sincronizar ABC'}), 403
     data = request.get_json() or {}
     try:
         resultado = ABCService.sincronizar_clasificacion_desde_siesa(
@@ -199,10 +210,11 @@ def sincronizar_abc():
 @jwt_required()
 def watchdog_anomalias():
     """
-    Ejecuta el AI Watchdog manualmente para un almacén.
+    Ejecuta el AI Watchdog manualmente para un almacén. Solo admin.
     Detecta productos B/C con alta rotación real y fuerza conteo inmediato.
-    Body: {"almacen_id": 1}
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ejecutar el watchdog'}), 403
     data = request.get_json() or {}
     if 'almacen_id' not in data:
         return jsonify({'error': 'almacen_id es requerido'}), 400
@@ -228,11 +240,10 @@ def resumen_abc():
 def cargar_csv_abc():
     """
     Recibe el CSV/Excel del reporte "Recalculo de rotación ABC" de Siesa
-    y actualiza clasificacion_abc en la tabla productos.
-
-    Form-data:
-        archivo  — el archivo CSV o Excel
+    y actualiza clasificacion_abc en la tabla productos. Solo admin.
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede cargar el CSV de ABC'}), 403
     if 'archivo' not in request.files:
         return jsonify({'error': 'Se requiere el campo "archivo" en el form'}), 400
 

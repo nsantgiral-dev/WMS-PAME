@@ -8,21 +8,45 @@ from app.services.connekta_gateway import connekta
 packing_bp = Blueprint('packing', __name__)
 
 
-def _enriquecer_picking_listo(tarea_dict, numero_pedido):
+def _solo_admin():
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol == 'admin' else None
+
+
+def _picking_listo_batch(numeros_pedido: list) -> dict:
     """
-    Determina si el picking está 100% completo para este pedido.
-    Si no hay tareas de picking asociadas, se asume que el packing
-    fue creado manualmente sin picking (picking_listo=True).
+    Consulta en UNA sola query si el picking está completo para cada pedido.
+    Devuelve {numero_pedido: bool}.
+    Evita el N+1 de _enriquecer_picking_listo que hacía 1 query por packing.
     """
+    if not numeros_pedido:
+        return {}
+
     pickings = TareaPicking.query.filter(
-        TareaPicking.referencia_documento == numero_pedido,
+        TareaPicking.referencia_documento.in_(numeros_pedido),
         TareaPicking.estado != 'CANCELADO'
     ).all()
-    if not pickings:
-        tarea_dict['picking_listo'] = True
-        return
-    completados = sum(1 for p in pickings if p.estado == 'COMPLETADO')
-    tarea_dict['picking_listo'] = completados == len(pickings)
+
+    # Agrupar por pedido
+    por_pedido = {}
+    for p in pickings:
+        num = p.referencia_documento
+        if num not in por_pedido:
+            por_pedido[num] = {'total': 0, 'completados': 0}
+        por_pedido[num]['total'] += 1
+        if p.estado == 'COMPLETADO':
+            por_pedido[num]['completados'] += 1
+
+    resultado = {}
+    for num in numeros_pedido:
+        datos = por_pedido.get(num)
+        if not datos:
+            resultado[num] = True   # sin picking = creado manual, listo
+        else:
+            resultado[num] = datos['completados'] == datos['total']
+    return resultado
 
 
 @packing_bp.route('/', methods=['GET'])
@@ -41,10 +65,14 @@ def listar_tareas():
 
     tareas = query.paginate(page=page, per_page=50, error_out=False)
 
+    # Una sola query para todos los pickings de la página — sin N+1
+    numeros = [t.numero_pedido_siesa for t in tareas.items]
+    picking_listo_map = _picking_listo_batch(numeros)
+
     items = []
     for t in tareas.items:
         d = t.to_dict()
-        _enriquecer_picking_listo(d, t.numero_pedido_siesa)
+        d['picking_listo'] = picking_listo_map.get(t.numero_pedido_siesa, True)
         items.append(d)
 
     return jsonify({
@@ -231,10 +259,11 @@ def resetear_siesa(id):
 @jwt_required()
 def forzar_retry_siesa(id):
     """
-    Admin: fuerza el retry de Siesa aunque siesa_triggered=True.
+    Fuerza el retry de Siesa aunque siesa_triggered=True. Solo admin.
     Útil cuando el packing se cerró en MODO_ENSAYO y nunca llegó a Siesa real.
-    Reutiliza los bultos existentes — no los borra.
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede forzar retry de Siesa'}), 403
     from app.models.packing import TareaPacking
     from app.extensions import db
     tarea = TareaPacking.query.get_or_404(id)
