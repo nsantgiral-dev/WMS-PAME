@@ -3984,8 +3984,11 @@ function _renderTrasladoCard(s) {
   if (s.estado === 'PREPARADO') {
     acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Despachar</button>`);
   }
-  if (['DESPACHADA','EN_TRANSITO'].includes(s.estado)) {
-    acciones.push(`<button onclick="trasConfirmarRecepcion(${s.id})" style="flex:1;padding:10px;background:#065f46;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Confirmar recepción</button>`);
+  // Confirmar recepción es exclusivo de la tienda (flujo tienda → /recibir).
+  // El admin NUNCA confirma recepción — haría entrar inventario sin verificación física.
+  // Si Siesa falló en el despacho (siesa_necesita_atencion), el admin puede reintentar.
+  if (s.siesa_necesita_atencion && s.estado === 'EN_TRANSITO') {
+    acciones.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="flex:1;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">⚠ Reintentar Siesa</button>`);
   }
 
   return `
@@ -4121,6 +4124,20 @@ async function trasConfirmarRecepcion(id) {
     const d = await r.json();
     if (r.ok) { alerta('Recepción confirmada — inventario en tienda', 'exito'); cargarTrasladosAdmin(); }
     else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function trasReintentarDespachoSiesa(id) {
+  if (!confirm('¿Reintentar notificación a Siesa del despacho? No mueve el estado.')) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/reintentar-despacho`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Siesa notificado — despacho registrado', 'exito'); cargarTrasladosAdmin(); }
+    else { alerta(d.error || 'Error al reintentar', 'error'); }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
