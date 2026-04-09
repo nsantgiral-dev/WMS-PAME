@@ -563,7 +563,6 @@ class ConnektaGateway:
         # Mapeo WMS → Siesa: concepto 0603 (Ajuste a inventario)
         # Motivo 01 = Entrada Ajuste (sobrante), 02 = Salida Ajuste (faltante)
         es_entrada = motivo_codigo == 'AJ-ENT'
-        siesa_concepto = '0603'
         siesa_motivo   = '01' if es_entrada else '02'
 
         fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
@@ -585,7 +584,6 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
-                    'f450_id_concepto': siesa_concepto,
                     'f450_id_bodega_salida': self.bodega if not es_entrada else '',
                     'f450_id_bodega_entrada': self.bodega if es_entrada else '',
                     'f450_docto_alterno': '',
@@ -610,13 +608,12 @@ class ConnektaGateway:
                 {
                     'F_CIA': self.id_compania,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': '',
+                    'f470_id_tipo_docto': self.tipo_docto_ajuste,
                     'f470_consec_docto': '',
                     'f470_nro_registro': '',
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': siesa_concepto,
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
