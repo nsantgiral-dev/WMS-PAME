@@ -78,6 +78,8 @@ class ConnektaGateway:
         self.bodega_averias = os.getenv('SIESA_BODEGA_AVERIAS', 'AV1')
         # NIT de la empresa — usado como f350_id_tercero en traslados internos
         self.nit_empresa = os.getenv('SIESA_NIT_EMPRESA', '')
+        # Tipo documento ajuste físico en Siesa (Inventarios → Tipos de documento)
+        self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
 
@@ -558,6 +560,12 @@ class ConnektaGateway:
         if motivo_codigo not in ['AJ-ENT', 'AJ-SAL']:
             raise ValueError(f'Motivo inválido: {motivo_codigo}')
 
+        # Mapeo WMS → Siesa: concepto 0603 (Ajuste a inventario)
+        # Motivo 01 = Entrada Ajuste (sobrante), 02 = Salida Ajuste (faltante)
+        es_entrada = motivo_codigo == 'AJ-ENT'
+        siesa_concepto = '0603'
+        siesa_motivo   = '01' if es_entrada else '02'
+
         fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
 
         payload = {
@@ -567,19 +575,19 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': self.id_compania,
-                    'F_CONSEC_AUTO_REG': '',
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': '',
-                    'f350_consec_docto': '',
+                    'f350_id_tipo_docto': self.tipo_docto_ajuste,
+                    'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': '',
                     'f350_id_clase_docto': '',
-                    'f350_ind_estado': '',
-                    'f350_ind_impresion': '',
+                    'f350_ind_estado': 1,
+                    'f350_ind_impresion': 0,
                     'f350_notas': referencia,
-                    'f450_id_concepto': motivo_codigo,
-                    'f450_id_bodega_salida': self.bodega if motivo_codigo == 'AJ-SAL' else '',
-                    'f450_id_bodega_entrada': self.bodega if motivo_codigo == 'AJ-ENT' else '',
+                    'f450_id_concepto': siesa_concepto,
+                    'f450_id_bodega_salida': self.bodega if not es_entrada else '',
+                    'f450_id_bodega_entrada': self.bodega if es_entrada else '',
                     'f450_docto_alterno': '',
                     'f350_id_co_base': '',
                     'f350_id_tipo_docto_base': '',
@@ -608,8 +616,8 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': '',
-                    'f470_id_motivo': '',
+                    'f470_id_concepto': siesa_concepto,
+                    'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',

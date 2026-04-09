@@ -99,10 +99,14 @@ def registrar_conteo(id):
 @jwt_required()
 def confirmar_ajuste(id):
     """
-    Supervisor confirma el ajuste después del segundo conteo.
-    Dispara POST a Siesa con motivo AJ-ENT o AJ-SAL.
+    Solo admin o supervisor pueden aprobar ajustes de inventario.
+    Dispara POST a Siesa con motivo 01 (entrada) o 02 (salida).
     """
+    from app.models.usuario import Usuario
     supervisor_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(supervisor_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor'):
+        return jsonify({'error': 'Solo un supervisor o admin puede aprobar ajustes de inventario'}), 403
     try:
         sesion = ConteoService.confirmar_ajuste(id, supervisor_id)
         return jsonify({
