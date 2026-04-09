@@ -87,7 +87,7 @@ def listar_tareas():
 def obtener_tarea(id):
     tarea = TareaPacking.query.get_or_404(id)
     d = tarea.to_dict()
-    _enriquecer_picking_listo(d, tarea.numero_pedido_siesa)
+    d['picking_listo'] = _picking_listo_batch([tarea.numero_pedido_siesa]).get(tarea.numero_pedido_siesa, True)
     return jsonify(d), 200
 
 
