@@ -389,6 +389,7 @@ class TrasladoService:
         from app.models.producto import Producto
         from app.models.inventario import UbicacionProducto
         from app.models.almacen import Almacen
+        from app.models.ubicacion import Ubicacion
 
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
         almacen = Almacen.query.filter_by(bodega_siesa_id=bod).first()
@@ -398,14 +399,16 @@ class TrasladoService:
 
         # 2 queries planas — sin N+1
         # Query 1: stock agrupado por producto en este almacén
+        # UbicacionProducto no tiene almacen_id directo — se llega vía JOIN con Ubicacion
         registros = (
             db.session.query(
                 UbicacionProducto.producto_id,
                 db.func.sum(UbicacionProducto.cantidad).label('existencia'),
                 db.func.sum(UbicacionProducto.reservado).label('reservado'),
             )
+            .join(Ubicacion, UbicacionProducto.ubicacion_id == Ubicacion.id)
             .filter(
-                UbicacionProducto.almacen_id == almacen.id,
+                Ubicacion.almacen_id == almacen.id,
                 UbicacionProducto.cantidad > 0,
             )
             .group_by(UbicacionProducto.producto_id)

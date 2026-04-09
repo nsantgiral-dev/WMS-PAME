@@ -154,10 +154,21 @@ function scannerLaser() {
   });
 }
 
+async function _checkResp(r) {
+  if (r.status === 401) { salir(true); throw new Error('401'); }
+  if (!r.ok) {
+    let msg = `Error del servidor (${r.status})`;
+    try { const d = await r.json(); msg = d.error || msg; } catch (_) {}
+    const err = new Error(msg);
+    err.status = r.status;
+    throw err;
+  }
+  return r.json();
+}
+
 async function get(url) {
   const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });
-  if (r.status === 401) { salir(true); throw new Error('401'); }
-  return r.json();
+  return _checkResp(r);
 }
 
 async function post(url, body) {
@@ -166,8 +177,7 @@ async function post(url, body) {
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
     body: JSON.stringify(body)
   });
-  if (r.status === 401) { salir(true); throw new Error('401'); }
-  return r.json();
+  return _checkResp(r);
 }
 
 async function put(url, body = {}) {
@@ -176,8 +186,7 @@ async function put(url, body = {}) {
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
     body: JSON.stringify(body)
   });
-  if (r.status === 401) { salir(true); throw new Error('401'); }
-  return r.json();
+  return _checkResp(r);
 }
 
 async function login() {
