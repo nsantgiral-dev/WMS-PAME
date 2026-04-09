@@ -103,6 +103,9 @@ def enviar_solicitud(id):
 @jwt_required()
 def aprobar_solicitud(id):
     usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+        return jsonify({'error': 'Solo administradores pueden aprobar solicitudes'}), 403
     data = request.get_json() or {}
     try:
         s = TrasladoService.aprobar_solicitud(
@@ -216,6 +219,10 @@ def confirmar_picking(id):
 @traslados_bp.route('/<int:id>/despachar', methods=['POST'])
 @jwt_required()
 def despachar(id):
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+        return jsonify({'error': 'Solo administradores pueden despachar traslados'}), 403
     try:
         s = TrasladoService.despachar(id)
         return jsonify(s.to_dict()), 200
@@ -229,6 +236,12 @@ def despachar(id):
 @jwt_required()
 def confirmar_recepcion(id):
     usuario_id = int(get_jwt_identity())
+    s = SolicitudTraslado.query.get_or_404(id)
+    usuario = Usuario.query.get(usuario_id)
+    # Tienda solo puede confirmar sus propias recepciones; admin puede confirmar cualquiera
+    es_admin = usuario and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+    if not es_admin and s.solicitante_id != usuario_id:
+        return jsonify({'error': 'Solo puedes confirmar la recepción de tus propios traslados'}), 403
     data = request.get_json() or {}
     try:
         s = TrasladoService.confirmar_recepcion(
@@ -355,6 +368,10 @@ def reintentar_siesa(id):
 @jwt_required()
 def reintentar_despacho(id):
     """Admin: reintenta el trigger Siesa de despacho (173066/173076) sin cambiar el estado."""
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+        return jsonify({'error': 'Solo administradores pueden reintentar despachos'}), 403
     from app.models.traslado import SolicitudTraslado
     from app.extensions import db
     from app.services.connekta_gateway import connekta
@@ -362,15 +379,17 @@ def reintentar_despacho(id):
     if s.estado not in ('EN_TRANSITO', 'ENTREGADA'):
         return jsonify({'error': f'Solo se puede reintentar despacho en EN_TRANSITO o ENTREGADA (estado: {s.estado})'}), 400
 
+    # Usar cantidad_enviada (lo que salió físicamente) para consistencia con el despacho original
     items_payload = [
         {
             'codigo_siesa': item.producto_codigo_siesa,
             'codigo': item.producto.codigo if item.producto else '',
-            'cantidad': item.cantidad_aprobada or item.cantidad_solicitada,
+            'cantidad': item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada,
             'unidad_medida': item.producto.unidad_medida if item.producto else '',
             'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
         }
-        for item in s.items if (item.cantidad_aprobada or item.cantidad_solicitada)
+        for item in s.items
+        if (item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada)
     ]
 
     try:

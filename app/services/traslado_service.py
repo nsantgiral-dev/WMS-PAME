@@ -171,7 +171,13 @@ class TrasladoService:
         # Esto permite que el picking parcial (menos ítems de los aprobados) sea correcto.
         items_payload = []
         for item in s.items:
-            cantidad = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
+            # cantidad_enviada=None → picking no corrió, usar fallback.
+            # cantidad_enviada=0   → operario confirmó 0 unidades, saltar el ítem.
+            if item.cantidad_enviada is not None:
+                cantidad = item.cantidad_enviada
+            else:
+                cantidad = item.cantidad_aprobada or item.cantidad_solicitada
+                item.cantidad_enviada = cantidad  # fijar para que recepción tenga referencia exacta
             if not cantidad or cantidad <= 0:
                 continue
             items_payload.append({
@@ -181,9 +187,6 @@ class TrasladoService:
                 'unidad_medida': item.producto.unidad_medida if item.producto else '',
                 'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
             })
-            # Fijar cantidad_enviada para que confirmar_recepcion tenga referencia exacta.
-            if not item.cantidad_enviada:
-                item.cantidad_enviada = cantidad
 
         if not items_payload:
             raise ValueError('No hay ítems con cantidad para despachar')
@@ -322,7 +325,9 @@ class TrasladoService:
             return
 
         for item in solicitud.items:
-            cantidad = item.cantidad_aprobada or item.cantidad_solicitada
+            # Usar la cantidad que el operario confirma haber enviado.
+            # Si picking no corrió (despacho directo), caer a cantidad_aprobada → solicitada.
+            cantidad = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
             if not cantidad or cantidad <= 0 or not item.producto_id:
                 continue
 
