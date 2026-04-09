@@ -124,23 +124,24 @@
       padding: 40px 24px;
       background: radial-gradient(ellipse at top, #0D2020 0%, var(--bg) 60%);
     }
-    /* Login: render 500px → logo ≈ 415px ancho, 75px alto.
-       Container min(430px,94vw) muestra el logo completo con espacio. */
+    /* Login: canvas 4501×4501 (cuadrado) — logo centrado, ~85% ancho, ~15% alto.
+       width:100% escala el canvas al ancho del contenedor sin corte horizontal.
+       translateY(-50%) centra el canvas verticalmente → logo queda centrado. */
     .login-logo {
       position: relative;
-      width: min(430px, 94vw);
-      height: 82px;
+      width: min(500px, 94vw);
+      height: 100px;
       overflow: hidden;
       align-self: center;
-      margin-bottom: 32px;
+      margin-bottom: 24px;
     }
     .login-logo img {
       position: absolute;
-      top: 50%; left: 50%;
-      width: 530px; height: 530px;
-      object-fit: contain;
-      object-position: center;
-      transform: translate(-50%, -50%);
+      top: 50%;
+      left: 0;
+      width: 100%;
+      height: auto;
+      transform: translateY(-50%);
     }
     .login-subtitulo { font-size: 14px; color: var(--tx3); margin-bottom: 40px; text-align: center; letter-spacing: .03em; }
     .login-form { width: 100%; max-width: 360px; }
