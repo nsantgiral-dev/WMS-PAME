@@ -1,7 +1,8 @@
 import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.models.traslado import SolicitudTraslado
+from sqlalchemy.orm import joinedload, subqueryload
+from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado
 from app.models.usuario import Usuario
 from app.services.traslado_service import TrasladoService
 
@@ -19,7 +20,15 @@ def listar_solicitudes():
     estado = request.args.get('estado')
     page = request.args.get('page', 1, type=int)
 
-    query = SolicitudTraslado.query.order_by(SolicitudTraslado.fecha_creacion.desc())
+    query = SolicitudTraslado.query\
+        .options(
+            joinedload(SolicitudTraslado.solicitante),
+            joinedload(SolicitudTraslado.aprobador),
+            joinedload(SolicitudTraslado.operario),
+            subqueryload(SolicitudTraslado.items)
+            .joinedload(ItemSolicitudTraslado.producto),
+        )\
+        .order_by(SolicitudTraslado.fecha_creacion.desc())
 
     if usuario and usuario.rol == 'tienda':
         query = query.filter_by(solicitante_id=usuario_id)
@@ -37,7 +46,15 @@ def listar_solicitudes():
 @traslados_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_solicitud(id):
-    s = SolicitudTraslado.query.get_or_404(id)
+    s = SolicitudTraslado.query\
+        .options(
+            joinedload(SolicitudTraslado.solicitante),
+            joinedload(SolicitudTraslado.aprobador),
+            joinedload(SolicitudTraslado.operario),
+            subqueryload(SolicitudTraslado.items)
+            .joinedload(ItemSolicitudTraslado.producto),
+        )\
+        .get_or_404(id)
     return jsonify(s.to_dict()), 200
 
 
@@ -392,10 +409,16 @@ def reintentar_despacho(id):
 def mis_traslados():
     """Operario: lista sus solicitudes de traslado asignadas en estado EN_PICKING."""
     operario_id = int(get_jwt_identity())
-    solicitudes = SolicitudTraslado.query.filter_by(
-        operario_id=operario_id,
-        estado='EN_PICKING'
-    ).order_by(SolicitudTraslado.fecha_aprobacion.desc()).all()
+    solicitudes = SolicitudTraslado.query\
+        .options(
+            joinedload(SolicitudTraslado.solicitante),
+            joinedload(SolicitudTraslado.aprobador),
+            joinedload(SolicitudTraslado.operario),
+            subqueryload(SolicitudTraslado.items)
+            .joinedload(ItemSolicitudTraslado.producto),
+        )\
+        .filter_by(operario_id=operario_id, estado='EN_PICKING')\
+        .order_by(SolicitudTraslado.fecha_aprobacion.desc()).all()
     return jsonify({'traslados': [s.to_dict() for s in solicitudes]}), 200
 
 
