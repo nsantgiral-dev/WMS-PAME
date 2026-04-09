@@ -100,7 +100,7 @@ function pararTimers() {
 function monitorRed() {
   const update = () => {
     const on = navigator.onLine;
-    ['conexion-status','conexion-status-admin'].forEach(id => {
+    ['conexion-status','conexion-status-admin','conexion-status-tienda'].forEach(id => {
       const el = document.getElementById(id);
       if (el) { el.textContent = on ? '● Online' : '● Offline'; el.style.color = on ? '#22c55e' : '#ef4444'; }
     });

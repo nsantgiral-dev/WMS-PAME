@@ -201,7 +201,7 @@ class ABCService:
         if overrides:
             logger.warning(
                 f'[ABC WATCHDOG] {len(overrides)} overrides en almacén {almacen_id}: '
-                + ', '.join(f"{o["producto_codigo"]} ({o["clase_actual"]}→A, {o["picks_7dias"]} picks)" for o in overrides)
+                + ', '.join(f"{o['producto_codigo']} ({o['clase_actual']}→A, {o['picks_7dias']} picks)" for o in overrides)
             )
         else:
             logger.info(f'[ABC WATCHDOG] Sin anomalías en almacén {almacen_id}')

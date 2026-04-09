@@ -891,7 +891,16 @@
   <div id="pantalla-tienda" style="display:none;min-height:100vh;background:var(--bg);">
     <div class="header">
       <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
-      <button class="btn-logout" onclick="salir()">Salir</button>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span id="conexion-status-tienda" style="font-size:13px;color:#22c55e;">● Online</span>
+        <button class="btn-logout" onclick="salir()">Salir</button>
+      </div>
+    </div>
+    <div class="operario-bar">
+      <div>
+        <div class="operario-nombre" id="tienda-nombre">—</div>
+        <div class="operario-rol">Punto de Venta</div>
+      </div>
     </div>
 
     <!-- Sub-nav tienda -->
