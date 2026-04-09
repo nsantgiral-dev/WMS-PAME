@@ -4208,10 +4208,20 @@ async function tiendaCargarStock() {
   if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
 }
 
+const _TIENDA_POR_PAGINA = 30;
 let _TIENDA_FILTRO = '';
+let _TIENDA_PAGINA = 1;
+
 function tiendaFiltrarStock() {
   _TIENDA_FILTRO = (document.getElementById('tienda-buscar')?.value || '').toLowerCase();
+  _TIENDA_PAGINA = 1; // reset al filtrar
   tiendaRenderStock();
+}
+
+function tiendaIrPagina(p) {
+  _TIENDA_PAGINA = p;
+  tiendaRenderStock();
+  document.getElementById('tienda-stock-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function tiendaRenderStock() {
@@ -4238,6 +4248,7 @@ function tiendaRenderStock() {
     el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin productos disponibles en bodega</div>';
     return;
   }
+
   const filtrado = _TIENDA_FILTRO
     ? _TIENDA_STOCK.filter(i =>
         (i.nombre || '').toLowerCase().includes(_TIENDA_FILTRO) ||
@@ -4245,29 +4256,61 @@ function tiendaRenderStock() {
     : _TIENDA_STOCK;
 
   if (!filtrado.length) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Sin resultados</div>';
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Sin resultados para "' + _TIENDA_FILTRO + '"</div>';
     return;
   }
 
-  el.innerHTML = filtrado.slice(0, 100).map(item => {
+  const totalPags = Math.ceil(filtrado.length / _TIENDA_POR_PAGINA);
+  _TIENDA_PAGINA = Math.max(1, Math.min(_TIENDA_PAGINA, totalPags));
+  const inicio = (_TIENDA_PAGINA - 1) * _TIENDA_POR_PAGINA;
+  const pagina = filtrado.slice(inicio, inicio + _TIENDA_POR_PAGINA);
+
+  // Paginación: muestra máximo 5 números de página centrados en la actual
+  const rango = 2;
+  const desde = Math.max(1, _TIENDA_PAGINA - rango);
+  const hasta = Math.min(totalPags, _TIENDA_PAGINA + rango);
+  const nums = [];
+  if (desde > 1) nums.push('<span style="color:#555;padding:0 4px;">…</span>');
+  for (let p = desde; p <= hasta; p++) {
+    const activo = p === _TIENDA_PAGINA;
+    nums.push(`<button onclick="tiendaIrPagina(${p})"
+      style="min-width:32px;padding:6px 8px;background:${activo?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${activo?'700':'400'};cursor:pointer;">${p}</button>`);
+  }
+  if (hasta < totalPags) nums.push('<span style="color:#555;padding:0 4px;">…</span>');
+
+  const navHtml = totalPags > 1 ? `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0 14px;flex-wrap:wrap;">
+      <button onclick="tiendaIrPagina(${_TIENDA_PAGINA - 1})" ${_TIENDA_PAGINA===1?'disabled':''}
+        style="padding:7px 14px;background:#222;color:${_TIENDA_PAGINA===1?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">← Ant</button>
+      <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;justify-content:center;">${nums.join('')}</div>
+      <button onclick="tiendaIrPagina(${_TIENDA_PAGINA + 1})" ${_TIENDA_PAGINA===totalPags?'disabled':''}
+        style="padding:7px 14px;background:#222;color:${_TIENDA_PAGINA===totalPags?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">Sig →</button>
+    </div>
+    <div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">
+      ${filtrado.length} productos · página ${_TIENDA_PAGINA} de ${totalPags}
+    </div>` : '';
+
+  el.innerHTML = navHtml + pagina.map(item => {
     const enCarrito = _TIENDA_CARRITO.find(c => c.codigo_siesa === item.codigo_siesa);
+    const qid = 'qty-' + (item.codigo_siesa || '').replace(/[^a-zA-Z0-9]/g, '-');
+    const nombreEsc = (item.nombre || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
     return `
     <div style="background:#111;border:1px solid ${enCarrito?'#4ade80':'#222'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
-      <div style="flex:1;">
-        <div style="font-size:13px;font-weight:600;">${item.nombre}</div>
-        <div style="font-size:11px;color:#666;">${item.codigo_siesa} · Disponible: <span style="color:#4ade80;font-weight:700;">${item.disponible}</span></div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.nombre || '—'}</div>
+        <div style="font-size:11px;color:#666;">${item.codigo_siesa || ''} · Disponible: <span style="color:#4ade80;font-weight:700;">${item.disponible}</span></div>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;">
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
         <input type="number" min="1" max="${item.disponible}" value="${enCarrito?.cantidad || 1}"
-          id="qty-${item.codigo_siesa.replace(/[^a-zA-Z0-9]/g,'-')}"
+          id="${qid}"
           style="width:56px;padding:7px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
-        <button onclick="tiendaAgregarCarrito('${item.codigo_siesa}','${item.nombre.replace(/'/g,"\\'")}',${item.disponible},${item.producto_id||'null'})"
+        <button onclick="tiendaAgregarCarrito('${item.codigo_siesa}','${nombreEsc}',${item.disponible},${item.producto_id||'null'})"
           style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
           ${enCarrito ? '✓' : '+'}
         </button>
       </div>
     </div>`;
-  }).join('');
+  }).join('') + navHtml;
 }
 
 function tiendaAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
