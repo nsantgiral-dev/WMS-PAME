@@ -1336,7 +1336,7 @@ function recTab(tab) {
   const contDev = document.getElementById('contenido-devoluciones');
   if (!tabOcs || !tabDev) return;
 
-  const activo = 'border-bottom:2px solid #1E9898;color:#1E9898;font-weight:600;';
+  const activo = 'border-bottom:2px solid #1E8395;color:#1E8395;font-weight:600;';
   const inactivo = 'border-bottom:2px solid transparent;color:#415A70;';
   tabOcs.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;${tab==='ocs' ? activo : inactivo}`;
   tabDev.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;position:relative;${tab==='dev' ? activo : inactivo}`;
@@ -2664,7 +2664,7 @@ function rutasSubTab(nombre) {
   ['rutas','maestras','vehiculos','conductores'].forEach(k => {
     const btn = document.getElementById('rutas-subnav-' + k);
     if (btn) {
-      btn.style.background = k === nombre ? '#1E9898' : 'none';
+      btn.style.background = k === nombre ? '#1E8395' : 'none';
       btn.style.color      = k === nombre ? '#fff' : '#415A70';
     }
   });
@@ -3523,7 +3523,7 @@ function invSubtab(nombre) {
     const el = document.getElementById(id);
     if (!el) return;
     const activo = k === nombre;
-    el.style.background = activo ? '#1E9898' : 'transparent';
+    el.style.background = activo ? '#1E8395' : 'transparent';
     el.style.color = activo ? '#fff' : '#415A70';
     el.style.fontWeight = activo ? '700' : '400';
   });
@@ -3800,7 +3800,7 @@ function trasSubtab(nombre) {
     const el = document.getElementById(`tras-tab-${k}`);
     if (!el) return;
     const activo = k === nombre;
-    el.style.background = activo ? '#1E9898' : 'transparent';
+    el.style.background = activo ? '#1E8395' : 'transparent';
     el.style.color = activo ? '#fff' : '#415A70';
     el.style.fontWeight = activo ? '700' : '400';
   });
@@ -3941,9 +3941,9 @@ function tiendaSubtab(nombre) {
     const panel = document.getElementById(`tienda-panel-${k}`);
     const activo = k === nombre;
     if (tab) {
-      tab.style.color = activo ? '#1E9898' : '#415A70';
+      tab.style.color = activo ? '#1E8395' : '#415A70';
       tab.style.fontWeight = activo ? '600' : '400';
-      tab.style.borderBottomColor = activo ? '#1E9898' : 'transparent';
+      tab.style.borderBottomColor = activo ? '#1E8395' : 'transparent';
     }
     if (panel) panel.style.display = activo ? 'block' : 'none';
   });
