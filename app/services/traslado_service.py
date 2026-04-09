@@ -95,11 +95,12 @@ class TrasladoService:
 
     @staticmethod
     def aprobar_solicitud(solicitud_id: int, aprobador_id: int,
-                          items_aprobados: list = None) -> SolicitudTraslado:
+                          items_aprobados: list = None,
+                          operario_id: int = None) -> SolicitudTraslado:
         """
-        Admin bodega aprueba (puede ajustar cantidades).
+        Admin bodega aprueba (puede ajustar cantidades) y asigna operario.
         items_aprobados: [{id, cantidad_aprobada}] — si None, aprueba cantidades solicitadas.
-        Dispara conector 174646 en Siesa y genera tareas de picking.
+        operario_id: usuario con rol operario que irá a recoger los ítems.
         """
         s = SolicitudTraslado.query.get_or_404(solicitud_id)
         if s.estado not in ('ENVIADA',):
@@ -114,8 +115,8 @@ class TrasladoService:
             for item in s.items:
                 item.cantidad_aprobada = item.cantidad_solicitada
 
-        s.estado = 'APROBADA'
         s.aprobador_id = aprobador_id
+        s.operario_id = operario_id
         s.fecha_aprobacion = datetime.utcnow()
         db.session.flush()
 
@@ -133,16 +134,12 @@ class TrasladoService:
             )
 
         # 174646 (Requisición de traslado) eliminado del flujo.
-        # El WMS es el único libro de estado (EN_PICKING, EMPACANDO).
+        # El WMS es el único libro de estado (EN_PICKING → PREPARADO → EN_TRANSITO).
         # Siesa solo recibe los movimientos reales: 173076 al despachar y 173079 al recibir.
         s.siesa_error = None
-
-        # ── Generar tareas de picking ──
-        TrasladoService._crear_picking_tasks(s)
-
         s.estado = 'EN_PICKING'
         db.session.commit()
-        logger.info(f'[TRASLADO] {s.codigo} → EN_PICKING (aprobado por {aprobador_id})')
+        logger.info(f'[TRASLADO] {s.codigo} → EN_PICKING (aprobado por {aprobador_id}, operario {operario_id})')
         return s
 
     @staticmethod
@@ -167,7 +164,7 @@ class TrasladoService:
         La solicitud puede estar EN_PICKING o APROBADA (si picking manual).
         """
         s = SolicitudTraslado.query.get_or_404(solicitud_id)
-        if s.estado not in ('EN_PICKING', 'APROBADA'):
+        if s.estado not in ('PREPARADO', 'EN_PICKING'):
             raise ValueError(f'No se puede despachar en estado {s.estado}')
 
         # Usar cantidad_enviada si fue confirmada por picking; si no, caer a aprobada.

@@ -674,11 +674,13 @@ async function pedirTarea() {
     if (!d || d.sin_tareas) {
       TAREA_ACTUAL = null;
       document.getElementById('contenido-tarea').innerHTML = `
-        <div style="text-align:center;padding:60px 20px;">
-          <div style="font-size:80px;">✓</div>
-          <div style="font-size:28px;font-weight:700;margin-top:16px;">Sin tareas</div>
-          <div style="font-size:16px;color:#666;margin-top:8px;">El sistema te asignará la próxima automáticamente</div>
-        </div>`;
+        <div style="text-align:center;padding:40px 20px 16px;">
+          <div style="font-size:60px;">✓</div>
+          <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin tareas de picking</div>
+          <div style="font-size:14px;color:#666;margin-top:6px;">El sistema te asignará la próxima automáticamente</div>
+        </div>
+        <div id="traslados-operario" style="padding:0 16px 16px;"></div>`;
+      cargarTrasladosOperario();
       return;
     }
     TAREA_ACTUAL = d;
@@ -686,6 +688,113 @@ async function pedirTarea() {
   } catch (e) {
     console.error('Error cargando tarea:', e);
   }
+}
+
+async function cargarTrasladosOperario() {
+  const contenedor = document.getElementById('traslados-operario');
+  if (!contenedor) return;
+  try {
+    const d = await get('/api/traslados/mis-traslados');
+    const traslados = d.traslados || [];
+    if (!traslados.length) {
+      contenedor.innerHTML = '';
+      return;
+    }
+    contenedor.innerHTML = `
+      <div style="font-size:12px;font-weight:700;color:#7c3aed;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">
+        Traslados asignados a ti (${traslados.length})
+      </div>
+      ${traslados.map(t => _renderTrasladoOperario(t)).join('')}`;
+  } catch (e) {
+    contenedor.innerHTML = '';
+  }
+}
+
+function _renderTrasladoOperario(t) {
+  const itemsHtml = (t.items || []).map(i => {
+    const cant = i.cantidad_aprobada || i.cantidad_solicitada;
+    return `<div style="font-size:12px;color:#aaa;">${i.producto_codigo} — <b style="color:#fff;">${cant} und</b></div>`;
+  }).join('');
+  return `
+    <div style="background:#0d0d1a;border:1px solid #7c3aed;border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:700;">${t.codigo}</div>
+        <span style="font-size:11px;color:#7c3aed;">${t.nombre_punto_venta || t.bodega_destino_siesa}</span>
+      </div>
+      <div style="margin-bottom:10px;">${itemsHtml}</div>
+      <button onclick="trasConfirmarRecogida(${t.id})"
+        style="width:100%;padding:12px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">
+        Confirmar recogida
+      </button>
+    </div>`;
+}
+
+async function trasConfirmarRecogida(id) {
+  let solicitud;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    solicitud = await r.json();
+  } catch (e) { alerta('Error de conexión', 'error'); return; }
+
+  const items = (solicitud.items || []).filter(i => (i.cantidad_aprobada || i.cantidad_solicitada) > 0);
+  const filas = items.map(i => {
+    const aprobada = i.cantidad_aprobada || i.cantidad_solicitada;
+    return `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <div style="flex:1;font-size:13px;">
+        <div style="font-weight:700;">${i.producto_codigo}</div>
+        <div style="color:#666;font-size:11px;">A recoger: ${aprobada} und</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <label style="font-size:11px;color:#999;">Recogí:</label>
+        <input type="number" id="rec-${i.id}" value="${aprobada}" min="0"
+          style="width:72px;padding:8px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:15px;text-align:center;">
+      </div>
+    </div>`;
+  }).join('');
+
+  const modal = document.createElement('div');
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.95);z-index:9999;display:flex;align-items:flex-end;justify-content:center;">
+      <div style="background:#111;border-radius:20px 20px 0 0;padding:24px;width:100%;max-width:480px;border-top:2px solid #7c3aed;max-height:80vh;overflow-y:auto;">
+        <div style="font-size:18px;font-weight:700;margin-bottom:4px;">Confirmar recogida</div>
+        <div style="font-size:12px;color:#666;margin-bottom:18px;">
+          ${solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa} · Ajusta si encontraste menos de lo esperado
+        </div>
+        ${filas}
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="btn-rec-ok"
+            style="flex:1;padding:14px;background:#7c3aed;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;">
+            Listo — entregué al admin
+          </button>
+          <button onclick="this.closest('[style*=fixed]').remove()"
+            style="padding:14px 18px;background:#222;color:#fff;border:none;border-radius:12px;font-size:14px;cursor:pointer;">
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  modal.querySelector('#btn-rec-ok').onclick = async () => {
+    const items_confirmados = items.map(i => ({
+      id: i.id,
+      cantidad_confirmada: Number(document.getElementById(`rec-${i.id}`).value) || 0
+    }));
+    modal.remove();
+    try {
+      const r = await fetch(API + `/api/traslados/${id}/confirmar-picking`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items_confirmados })
+      });
+      const d = await r.json();
+      if (r.ok) {
+        alerta('Recogida confirmada — el admin puede despachar', 'exito');
+        cargarTrasladosOperario();
+      } else { alerta(d.error || 'Error', 'error'); }
+    } catch (e) { alerta('Error de conexión', 'error'); }
+  };
 }
 
 function renderTarea(t) {
@@ -3785,13 +3894,14 @@ async function ajustarConteo(sesionId) {
 
 let _TRAS_SUBTAB = 'pendientes';
 const TRAS_ESTADO = {
-  pendientes: ['BORRADOR','ENVIADA','APROBADA','EN_PICKING'],
+  pendientes: ['BORRADOR','ENVIADA','EN_PICKING','PREPARADO'],
   transito:   ['DESPACHADA','EN_TRANSITO'],
-  historial:  ['ENTREGADA','RECHAZADA']
+  historial:  ['ENTREGADA','RECHAZADA','CANCELADA']
 };
 const TRAS_COL = {
-  BORRADOR:'#555', ENVIADA:'#1d4ed8', APROBADA:'#166534', EN_PICKING:'#7c3aed',
-  DESPACHADA:'#b45309', EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46', RECHAZADA:'#7f1d1d'
+  BORRADOR:'#555', ENVIADA:'#1d4ed8', EN_PICKING:'#7c3aed', PREPARADO:'#166534',
+  DESPACHADA:'#b45309', EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46',
+  RECHAZADA:'#7f1d1d', CANCELADA:'#374151'
 };
 
 function trasSubtab(nombre) {
@@ -3838,11 +3948,11 @@ function _renderTrasladoCard(s) {
 
   const acciones = [];
   if (s.estado === 'ENVIADA') {
-    acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Aprobar</button>`);
+    acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
     acciones.push(`<button onclick="trasRechazar(${s.id})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;">Rechazar</button>`);
   }
-  if (s.estado === 'EN_PICKING') {
-    acciones.push(`<button onclick="trasPreparar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Preparar y despachar</button>`);
+  if (s.estado === 'PREPARADO') {
+    acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Despachar</button>`);
   }
   if (['DESPACHADA','EN_TRANSITO'].includes(s.estado)) {
     acciones.push(`<button onclick="trasConfirmarRecepcion(${s.id})" style="flex:1;padding:10px;background:#065f46;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Confirmar recepción</button>`);
@@ -3858,42 +3968,60 @@ function _renderTrasladoCard(s) {
       <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;">${s.estado}</span>
     </div>
     <div style="margin-bottom:${acciones.length?'10px':'0'};">${itemsResumen}</div>
+    ${s.operario_nombre ? `<div style="font-size:11px;color:#7c3aed;margin-bottom:6px;">👷 ${s.operario_nombre}${s.estado==='PREPARADO'?' · Listo para despachar':' · Recogiendo'}</div>` : ''}
     ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
     ${acciones.length ? `<div style="display:flex;gap:8px;">${acciones.join('')}</div>` : ''}
   </div>`;
 }
 
 async function trasAprobar(id) {
-  // Cargar detalle de la solicitud para mostrar ítems con cantidades editables
-  let solicitud;
+  // Carga solicitud y operarios en paralelo
+  let solicitud, operariosData;
   try {
-    const r = await fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } });
-    solicitud = await r.json();
+    [solicitud, operariosData] = await Promise.all([
+      fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+      fetch(API + `/api/traslados/operarios-disponibles`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+    ]);
   } catch (e) { alerta('Error de conexión', 'error'); return; }
 
   const items = solicitud.items || [];
-  const filas = items.map(i => `
+  const operarios = operariosData.operarios || [];
+
+  const filasItems = items.map(i => `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
       <div style="flex:1;font-size:12px;">
         <div style="font-weight:600;">${i.producto_codigo}</div>
-        <div style="color:#666;font-size:11px;">Solicitado: ${i.cantidad_solicitada}</div>
+        <div style="color:#666;font-size:11px;">Solicitado: ${i.cantidad_solicitada} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;">
         <label style="font-size:11px;color:#999;">Aprobar:</label>
-        <input type="number" id="apr-${i.id}" value="${i.cantidad_solicitada}" min="0" max="${i.cantidad_solicitada}"
+        <input type="number" id="apr-${i.id}" value="${i.cantidad_solicitada}" min="0"
           style="width:70px;padding:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
       </div>
     </div>
   `).join('');
 
+  const opcioneOperarios = operarios.length
+    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('')
+    : `<option value="">No hay operarios disponibles</option>`;
+
   const modal = document.createElement('div');
   modal.innerHTML = `
     <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:420px;border:1px solid #166534;max-height:80vh;overflow-y:auto;">
-        <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Aprobar traslado</div>
-        <div style="font-size:12px;color:#666;margin-bottom:16px;">Ajusta las cantidades si el punto de venta pidió más de lo disponible.</div>
-        ${filas}
-        <div style="display:flex;gap:8px;margin-top:16px;">
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:440px;border:1px solid #166534;max-height:85vh;overflow-y:auto;">
+        <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Aprobar y asignar traslado</div>
+        <div style="font-size:12px;color:#666;margin-bottom:16px;">${solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa}</div>
+
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:#aaa;">CANTIDADES A ENVIAR</div>
+        ${filasItems}
+
+        <div style="font-size:12px;font-weight:600;margin-top:14px;margin-bottom:8px;color:#aaa;">OPERARIO QUE RECOGE</div>
+        <select id="apr-operario"
+          style="width:100%;padding:10px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;margin-bottom:16px;">
+          ${opcioneOperarios}
+        </select>
+
+        <div style="display:flex;gap:8px;">
           <button id="btn-apr-ok" style="flex:1;padding:12px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">Aprobar</button>
           <button onclick="this.closest('[style*=fixed]').parentElement.remove()" style="padding:12px 16px;background:#222;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">Cancelar</button>
         </div>
@@ -3906,16 +4034,18 @@ async function trasAprobar(id) {
       id: i.id,
       cantidad_aprobada: Number(document.getElementById(`apr-${i.id}`).value) || 0
     }));
+    const operario_id = document.getElementById('apr-operario').value
+      ? Number(document.getElementById('apr-operario').value) : null;
     modal.remove();
     try {
       const r = await fetch(API + `/api/traslados/${id}/aprobar`, {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items_aprobados })
+        body: JSON.stringify({ items_aprobados, operario_id })
       });
       const d = await r.json();
       if (r.ok) {
-        alerta('Solicitud aprobada — listo para preparar', 'exito');
+        alerta(operario_id ? 'Aprobado — operario notificado' : 'Aprobado — sin operario asignado', 'exito');
         cargarTrasladosAdmin();
       } else { alerta(d.error || 'Error', 'error'); }
     } catch (e) { alerta('Error de conexión', 'error'); }
@@ -3937,74 +4067,17 @@ async function trasRechazar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-async function trasPreparar(id) {
-  // Cargar detalle con las cantidades aprobadas para confirmar lo que realmente se pudo reunir
-  let solicitud;
+async function trasDespachar(id) {
+  if (!confirm('¿Confirmar despacho? El operario ya preparó los ítems. Se notificará a Siesa (salida de bodega).')) return;
   try {
-    const r = await fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } });
-    solicitud = await r.json();
-  } catch (e) { alerta('Error de conexión', 'error'); return; }
-
-  const items = (solicitud.items || []).filter(i => (i.cantidad_aprobada || i.cantidad_solicitada) > 0);
-  const filas = items.map(i => {
-    const aprobada = i.cantidad_aprobada || i.cantidad_solicitada;
-    return `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-      <div style="flex:1;font-size:12px;">
-        <div style="font-weight:600;">${i.producto_codigo}</div>
-        <div style="color:#666;font-size:11px;">Aprobado: ${aprobada}</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:4px;">
-        <label style="font-size:11px;color:#999;">A enviar:</label>
-        <input type="number" id="env-${i.id}" value="${aprobada}" min="0" max="${aprobada}"
-          style="width:70px;padding:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
-      </div>
-    </div>`;
-  }).join('');
-
-  const modal = document.createElement('div');
-  modal.innerHTML = `
-    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
-      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:420px;border:1px solid #b45309;max-height:80vh;overflow-y:auto;">
-        <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Preparar y despachar</div>
-        <div style="font-size:12px;color:#666;margin-bottom:16px;">Confirma las cantidades físicas reunidas. Si encontraste menos, ajusta antes de despachar.</div>
-        ${filas}
-        <div style="display:flex;gap:8px;margin-top:16px;">
-          <button id="btn-env-ok" style="flex:1;padding:12px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">Despachar</button>
-          <button onclick="this.closest('[style*=fixed]').parentElement.remove()" style="padding:12px 16px;background:#222;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">Cancelar</button>
-        </div>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
-
-  modal.querySelector('#btn-env-ok').onclick = async () => {
-    const items_confirmados = items.map(i => ({
-      id: i.id,
-      cantidad_confirmada: Number(document.getElementById(`env-${i.id}`).value) || 0
-    }));
-    modal.remove();
-    try {
-      // 1. Confirmar picking (registra cantidades reales a enviar)
-      const r1 = await fetch(API + `/api/traslados/${id}/confirmar-picking`, {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items_confirmados })
-      });
-      if (!r1.ok) {
-        const d1 = await r1.json();
-        alerta(d1.error || 'Error al confirmar preparación', 'error');
-        return;
-      }
-      // 2. Despachar (dispara Siesa)
-      const r2 = await fetch(API + `/api/traslados/${id}/despachar`, {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + TOKEN }
-      });
-      const d2 = await r2.json();
-      if (r2.ok) { alerta('Despachado — mercancía en tránsito', 'exito'); cargarTrasladosAdmin(); }
-      else { alerta(d2.error || 'Error al despachar', 'error'); }
-    } catch (e) { alerta('Error de conexión', 'error'); }
-  };
+    const r = await fetch(API + `/api/traslados/${id}/despachar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Despachado — mercancía en tránsito', 'exito'); cargarTrasladosAdmin(); }
+    else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function trasConfirmarRecepcion(id) {

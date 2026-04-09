@@ -91,7 +91,8 @@ def aprobar_solicitud(id):
         s = TrasladoService.aprobar_solicitud(
             solicitud_id=id,
             aprobador_id=usuario_id,
-            items_aprobados=data.get('items_aprobados')
+            items_aprobados=data.get('items_aprobados'),
+            operario_id=data.get('operario_id'),
         )
         return jsonify(s.to_dict()), 200
     except ValueError as e:
@@ -132,7 +133,7 @@ def cancelar_solicitud(id):
             return jsonify({'error': 'Solo puedes cancelar tus propias solicitudes'}), 403
         permitidos = ('BORRADOR', 'ENVIADA')
     elif usuario.rol in ('admin', 'supervisor'):
-        permitidos = ('BORRADOR', 'ENVIADA', 'EN_PICKING', 'APROBADA')
+        permitidos = ('BORRADOR', 'ENVIADA', 'EN_PICKING', 'PREPARADO')
     else:
         return jsonify({'error': 'No autorizado'}), 403
 
@@ -151,17 +152,24 @@ def cancelar_solicitud(id):
 @jwt_required()
 def confirmar_picking(id):
     """
-    Operario confirma que recogió los ítems físicamente.
-    Actualiza cantidad_enviada por ítem y habilita el botón Despachar.
+    Operario confirma que recogió físicamente los ítems y declara las cantidades reales.
+    Transiciona EN_PICKING → PREPARADO, habilitando el botón Despachar para el admin.
 
     Body opcional: {"items_confirmados": [{"id": 1, "cantidad_confirmada": 5}]}
-    Sin body: confirma las cantidades aprobadas en su totalidad.
+    Sin body: confirma cantidades aprobadas en su totalidad.
     """
     from app.extensions import db
+    usuario_id = int(get_jwt_identity())
     s = SolicitudTraslado.query.get_or_404(id)
 
     if s.estado != 'EN_PICKING':
-        return jsonify({'error': f'Solo se confirma picking en EN_PICKING (estado: {s.estado})'}), 400
+        return jsonify({'error': f'Solo se puede confirmar recogida en EN_PICKING (estado: {s.estado})'}), 400
+
+    # Verificar que el operario que confirma es el asignado (o un admin)
+    usuario = Usuario.query.get(usuario_id)
+    es_admin = usuario and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+    if not es_admin and s.operario_id and s.operario_id != usuario_id:
+        return jsonify({'error': 'Solo el operario asignado puede confirmar la recogida'}), 403
 
     data = request.get_json() or {}
     confirmados = data.get('items_confirmados')
@@ -178,10 +186,12 @@ def confirmar_picking(id):
         for item in s.items:
             item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
+    s.estado = 'PREPARADO'
     db.session.commit()
+    logger.info(f'[TRASLADO] {s.codigo} → PREPARADO (recogida confirmada por usuario {usuario_id})')
     return jsonify({
         'ok': True,
-        'mensaje': 'Picking confirmado — listo para despachar',
+        'mensaje': 'Recogida confirmada — el traslado está listo para despachar',
         'solicitud': s.to_dict(),
     }), 200
 
@@ -231,9 +241,9 @@ def reintentar_siesa(id):
     from app.extensions import db
     s = SolicitudTraslado.query.get_or_404(id)
 
-    if s.estado not in ('EN_PICKING', 'APROBADA'):
+    if s.estado not in ('EN_PICKING', 'PREPARADO'):
         return jsonify({
-            'error': f'174646 solo aplica en EN_PICKING o APROBADA (estado: {s.estado}). '
+            'error': f'174646 solo aplica en EN_PICKING o PREPARADO (estado: {s.estado}). '
                      f'Para reintentar el despacho usa /reintentar-despacho.'
         }), 400
     body = request.get_json(silent=True) or {}
@@ -375,6 +385,31 @@ def reintentar_despacho(id):
         s.siesa_error = f'Despacho Siesa: {str(e)}'
         db.session.commit()
         return jsonify({'error': str(e)}), 400
+
+
+@traslados_bp.route('/mis-traslados', methods=['GET'])
+@jwt_required()
+def mis_traslados():
+    """Operario: lista sus solicitudes de traslado asignadas en estado EN_PICKING."""
+    operario_id = int(get_jwt_identity())
+    solicitudes = SolicitudTraslado.query.filter_by(
+        operario_id=operario_id,
+        estado='EN_PICKING'
+    ).order_by(SolicitudTraslado.fecha_aprobacion.desc()).all()
+    return jsonify({'traslados': [s.to_dict() for s in solicitudes]}), 200
+
+
+@traslados_bp.route('/operarios-disponibles', methods=['GET'])
+@jwt_required()
+def operarios_disponibles():
+    """Admin: lista operarios activos para asignar a un traslado."""
+    operarios = Usuario.query.filter(
+        Usuario.activo == True,
+        Usuario.rol == 'operario',
+    ).order_by(Usuario.nombre).all()
+    return jsonify({
+        'operarios': [{'id': u.id, 'nombre': u.nombre} for u in operarios]
+    }), 200
 
 
 @traslados_bp.route('/stock-disponible', methods=['GET'])

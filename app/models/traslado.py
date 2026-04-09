@@ -2,9 +2,16 @@
 Traslados entre Bodega Principal y Puntos de Venta.
 
 Máquina de estados:
-  BORRADOR → ENVIADA → EN_PICKING → EN_TRANSITO → ENTREGADA
+  BORRADOR → ENVIADA → EN_PICKING → PREPARADO → EN_TRANSITO → ENTREGADA
                      ↘ RECHAZADA
-           ↘ CANCELADA  (tienda: BORRADOR/ENVIADA; admin: hasta EN_PICKING)
+           ↘ CANCELADA  (tienda: BORRADOR/ENVIADA; admin: hasta PREPARADO)
+
+  BORRADOR:   Tienda arma la solicitud
+  ENVIADA:    Tienda envía al admin bodega
+  EN_PICKING: Admin aprueba y asigna operario; operario recoge los ítems
+  PREPARADO:  Operario confirma recogida con cantidades reales; listo para despachar
+  EN_TRANSITO: Admin despacha; mercancía en camino al PV
+  ENTREGADA:  Tienda confirma recepción
 """
 from datetime import datetime
 from app.extensions import db
@@ -32,6 +39,7 @@ class SolicitudTraslado(db.Model):
     # Usuarios
     solicitante_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=False)
     aprobador_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    operario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
 
     # Siesa — consecutivos de los documentos creados
     siesa_requisicion_consec = db.Column(db.Integer)  # 174646
@@ -54,6 +62,8 @@ class SolicitudTraslado(db.Model):
                                   backref='solicitudes_traslado_creadas')
     aprobador = db.relationship('Usuario', foreign_keys=[aprobador_id],
                                 backref='solicitudes_traslado_aprobadas')
+    operario = db.relationship('Usuario', foreign_keys=[operario_id],
+                               backref='solicitudes_traslado_asignadas')
     items = db.relationship('ItemSolicitudTraslado', backref='solicitud',
                             lazy=True, cascade='all, delete-orphan')
 
@@ -81,6 +91,8 @@ class SolicitudTraslado(db.Model):
             'solicitante_nombre': self.solicitante.nombre if self.solicitante else None,
             'aprobador_id': self.aprobador_id,
             'aprobador_nombre': self.aprobador.nombre if self.aprobador else None,
+            'operario_id': self.operario_id,
+            'operario_nombre': self.operario.nombre if self.operario else None,
             'siesa_requisicion_consec': self.siesa_requisicion_consec,
             'siesa_salida_consec': self.siesa_salida_consec,
             'siesa_entrada_consec': self.siesa_entrada_consec,
