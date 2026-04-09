@@ -4239,7 +4239,9 @@ function tiendaRenderStock() {
     return;
   }
   const filtrado = _TIENDA_FILTRO
-    ? _TIENDA_STOCK.filter(i => i.nombre.toLowerCase().includes(_TIENDA_FILTRO) || i.codigo_siesa.toLowerCase().includes(_TIENDA_FILTRO))
+    ? _TIENDA_STOCK.filter(i =>
+        (i.nombre || '').toLowerCase().includes(_TIENDA_FILTRO) ||
+        (i.codigo_siesa || '').toLowerCase().includes(_TIENDA_FILTRO))
     : _TIENDA_STOCK;
 
   if (!filtrado.length) {

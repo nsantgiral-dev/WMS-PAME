@@ -458,36 +458,14 @@ def operarios_disponibles():
 @jwt_required()
 def stock_disponible():
     """
-    Stock disponible en bodega principal para armar solicitud.
-    Soporta búsqueda (?q=texto) y paginación (?page=1&per_page=50).
+    Stock disponible en bodega principal para armar solicitud de traslado.
+    Devuelve todos los productos con disponible > 0 sin paginar — el filtrado
+    es client-side en la tienda (buscador local sobre _TIENDA_STOCK).
     """
     bodega = request.args.get('bodega')
-    q = request.args.get('q', '').strip().lower()
-    page = request.args.get('page', 1, type=int)
-    per_page = min(request.args.get('per_page', 50, type=int), 200)
-
     try:
         resultado = TrasladoService.get_stock_disponible(bodega)
-        items = resultado.get('items', [])
-
-        if q:
-            items = [
-                i for i in items
-                if q in i.get('codigo_siesa', '').lower()
-            ]
-
-        total = len(items)
-        start = (page - 1) * per_page
-        items_pagina = items[start:start + per_page]
-
-        return jsonify({
-            **resultado,
-            'items': items_pagina,
-            'total': total,
-            'page': page,
-            'per_page': per_page,
-            'pages': (total + per_page - 1) // per_page,
-        }), 200
+        return jsonify(resultado), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
