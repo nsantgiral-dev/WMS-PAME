@@ -393,11 +393,11 @@ class TrasladoService:
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
         almacen = Almacen.query.filter_by(bodega_siesa_id=bod).first()
         if not almacen:
-            # Bodega no mapeada en WMS — devolver lista vacía en lugar de error
             logger.warning(f'[TRASLADO] stock_disponible: no hay almacén WMS para bodega {bod}')
             return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms'}
 
-        # Una sola query: productos con stock disponible en la bodega origen
+        # 2 queries planas — sin N+1
+        # Query 1: stock agrupado por producto en este almacén
         registros = (
             db.session.query(
                 UbicacionProducto.producto_id,
@@ -412,13 +412,26 @@ class TrasladoService:
             .all()
         )
 
+        if not registros:
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms'}
+
+        # Query 2: todos los productos en un solo IN (no 1 query por producto)
+        producto_ids = [r.producto_id for r in registros]
+        productos = {
+            p.id: p
+            for p in Producto.query.filter(
+                Producto.id.in_(producto_ids),
+                Producto.activo == True,
+            ).all()
+        }
+
         items = []
         for reg in registros:
+            prod = productos.get(reg.producto_id)
+            if not prod:
+                continue
             disponible = int((reg.existencia or 0) - (reg.reservado or 0))
             if disponible <= 0:
-                continue
-            prod = Producto.query.get(reg.producto_id)
-            if not prod or not prod.activo:
                 continue
             items.append({
                 'codigo_siesa': prod.codigo_siesa or prod.codigo,
