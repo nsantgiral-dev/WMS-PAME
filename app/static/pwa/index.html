@@ -1104,6 +1104,40 @@
     </div>
   </div>
 
+  <!-- Modal Editar Conductor -->
+  <div id="modal-conductor-edit" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.93);z-index:700;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#111;border:1px solid #2d1b69;border-radius:20px;width:100%;max-width:420px;padding:24px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+        <div style="font-size:16px;font-weight:800;">✏ Editar Conductor</div>
+        <button onclick="cerrarModalConductorEdit()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:14px;">
+        <div>
+          <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Nombre *</div>
+          <input id="cedit-nombre" type="text" placeholder="Nombre completo"
+            style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Teléfono</div>
+          <input id="cedit-telefono" type="tel" placeholder="3001234567"
+            style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#facc15;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Cuenta de acceso PWA</div>
+          <select id="cedit-usuario" style="width:100%;padding:12px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+            <option value="">Sin cuenta (solo flota)</option>
+          </select>
+          <div style="font-size:11px;color:#555;margin-top:4px;">Vincula un usuario con rol Conductor para que pueda confirmar entregas.</div>
+        </div>
+      </div>
+      <div id="cedit-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:12px;"></div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="cerrarModalConductorEdit()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
+        <button onclick="conductorEditarGuardar()" style="flex:2;padding:13px;background:#a78bfa;color:#000;border:none;border-radius:10px;font-size:14px;font-weight:800;cursor:pointer;">Guardar →</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Planilla de Cuadre -->
   <div id="modal-planilla" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.95);z-index:700;overflow-y:auto;padding:20px;">
     <div style="background:#111;border:1px solid #222;border-radius:20px;width:100%;max-width:520px;margin:0 auto;padding:24px;">
