@@ -131,15 +131,22 @@ function guardarOffline(datos) {
 function scannerLaser() {
   const inp = document.getElementById('scanner-input');
   if (!inp) return;
-  const focus = () => {
-    const a = document.activeElement;
-    const esForm = a && ['INPUT','TEXTAREA','SELECT'].includes(a.tagName);
-    const hayModal = document.getElementById('modal-problema');
-    if (!CAMARA_ACTIVA && !esForm && !hayModal) inp.focus();
-  };
-  document.addEventListener('click', focus);
-  document.addEventListener('touchend', focus);
-  setInterval(focus, 1000);
+
+  // En móvil NO auto-forzamos foco — evita que el teclado se abra al tocar cualquier cosa.
+  // El escáner Bluetooth en móvil escribe donde el usuario tocó deliberadamente.
+  const esMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+
+  if (!esMobile) {
+    const focus = () => {
+      const a = document.activeElement;
+      const esForm = a && ['INPUT','TEXTAREA','SELECT'].includes(a.tagName);
+      const hayModal = document.getElementById('modal-problema');
+      if (!CAMARA_ACTIVA && !esForm && !hayModal) inp.focus();
+    };
+    document.addEventListener('click', focus);
+    setInterval(focus, 1000);
+  }
+
   inp.addEventListener('keydown', e => {
     if (e.key === 'Enter') {
       const cod = SCANNER_BUFFER.trim();
@@ -1795,7 +1802,9 @@ async function empIniciarHUD(packingId) {
 
     empRenderHUDItem();
     document.getElementById('emp-hud').classList.add('activo');
-    document.getElementById('scanner-input').focus();
+    if (!/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+      document.getElementById('scanner-input').focus();
+    }
   } catch (e) { alerta('Error iniciando tarea', 'error'); }
 }
 
@@ -2439,6 +2448,43 @@ async function cargarRutaSelector() {
   } catch (e) {}
 }
 
+// ── UX móvil: campo de escaneo muelle ────────────────────────────
+// En desktop el input está siempre visible y con foco (escáner USB/serial).
+// En móvil mostramos un botón de "tocar para escanear" que activa el campo
+// solo cuando el usuario lo pide intencionalmente, evitando el teclado fantasma.
+
+(function initMuelleUXMobile() {
+  const esMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  if (!esMobile) return;
+  const btnActivar = document.getElementById('muelle-scan-activar');
+  const campo      = document.getElementById('muelle-scan-campo');
+  if (btnActivar) btnActivar.style.display = 'block';
+  if (campo)      campo.style.display      = 'none';
+})();
+
+function muelleActivarScan() {
+  const btnActivar = document.getElementById('muelle-scan-activar');
+  const campo      = document.getElementById('muelle-scan-campo');
+  const input      = document.getElementById('muelle-scan-input');
+  if (btnActivar) btnActivar.style.display = 'none';
+  if (campo)      campo.style.display      = 'flex';
+  if (input)      input.focus();
+}
+
+function muelleScanBlur() {
+  // Al perder el foco en móvil, volvemos al botón si el campo está vacío
+  const esMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+  if (!esMobile) return;
+  const input = document.getElementById('muelle-scan-input');
+  if (input && input.value.trim() !== '') return; // tiene texto, no ocultar
+  setTimeout(() => {
+    const btnActivar = document.getElementById('muelle-scan-activar');
+    const campo      = document.getElementById('muelle-scan-campo');
+    if (btnActivar) btnActivar.style.display = 'block';
+    if (campo)      campo.style.display      = 'none';
+  }, 200); // pequeño delay para no interferir con click en ✓
+}
+
 function muelleSeleccionarRuta(idStr) {
   RUTA_ACTIVA_ID = idStr ? parseInt(idStr) : null;
 
@@ -2770,6 +2816,14 @@ async function muelleCargarCaja() {
         if (navigator.vibrate) navigator.vibrate(50);
       }
       input.value = '';
+      // En móvil, después de escanear volvemos al botón para no dejar el teclado abierto
+      if (/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+        input.blur();
+        const btnActivar = document.getElementById('muelle-scan-activar');
+        const campo      = document.getElementById('muelle-scan-campo');
+        if (btnActivar) btnActivar.style.display = 'block';
+        if (campo)      campo.style.display      = 'none';
+      }
       await cargarMuelleConRuta(RUTA_ACTIVA_ID);
       await cargarRutaSelector();
     } else {
@@ -2781,7 +2835,8 @@ async function muelleCargarCaja() {
     feedback.style.color = '#ef4444';
     feedback.textContent = 'Error de conexión';
   }
-  input?.focus();
+  // Solo re-enfocar en desktop (donde hay escáner físico con cable)
+  if (!/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) input?.focus();
 }
 
 // ══════════════════════════════════════════════════════

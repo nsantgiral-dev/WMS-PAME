@@ -512,11 +512,17 @@
 
       <!-- Scan-to-Truck -->
       <div style="background:var(--bg-s);border:2px solid var(--pm-border);border-radius:12px;padding:14px;margin-bottom:16px;">
-        <div id="muelle-scan-label" style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Escanear caja al cargar vehículo</div>
-        <div style="display:flex;gap:8px;">
+        <div id="muelle-scan-label" style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
+        <!-- Botón visible en móvil que activa el campo de texto intencionalmente -->
+        <button id="muelle-scan-activar" onclick="muelleActivarScan()"
+          style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px;">
+          📷 Tocar aquí para escanear
+        </button>
+        <div id="muelle-scan-campo" style="display:flex;gap:8px;">
           <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
             style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
             onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
+            onblur="muelleScanBlur()"
             oninput="this.value=this.value.toUpperCase()">
           <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;">✓</button>
         </div>
