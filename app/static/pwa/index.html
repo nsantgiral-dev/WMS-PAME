@@ -1104,6 +1104,19 @@
     </div>
   </div>
 
+  <!-- Modal Planilla de Cuadre -->
+  <div id="modal-planilla" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.95);z-index:700;overflow-y:auto;padding:20px;">
+    <div style="background:#111;border:1px solid #222;border-radius:20px;width:100%;max-width:520px;margin:0 auto;padding:24px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:18px;font-weight:800;">💰 Planilla de Cuadre</div>
+        <button onclick="cerrarModalPlanilla()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+      </div>
+      <div id="modal-planilla-body">
+        <div style="text-align:center;padding:60px;color:#555;">Cargando...</div>
+      </div>
+    </div>
+  </div>
+
   <div class="offline-badge" id="offline-badge">⚡ <span id="offline-count">0</span> en cola</div>
 
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->

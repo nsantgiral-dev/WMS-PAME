@@ -17,6 +17,7 @@ class RutaDespacho(db.Model):
     tipo_ruta         = db.Column(db.String(20), nullable=False)   # Urbana | Municipal
     fecha_programada  = db.Column(db.Date, nullable=True)
     estado            = db.Column(db.String(20), default='EN_CARGUE')  # PROGRAMADO | EN_CARGUE | EN_TRANSITO | ENTREGADA
+    estado_financiero = db.Column(db.String(20), default='PENDIENTE')  # PENDIENTE | EN_LIQUIDACION | LIQUIDADA
     notas           = db.Column(db.Text)
     fecha_creacion  = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_cierre    = db.Column(db.DateTime)    # cuando pasa a EN_TRANSITO
@@ -39,6 +40,27 @@ class RutaDespacho(db.Model):
         """Lista de números de pedido únicos en esta ruta."""
         return list({b.tarea.numero_pedido_siesa for b in self.bultos if b.tarea})
 
+    def tareas_unicas(self):
+        """TareaPacking únicas en esta ruta (una por factura)."""
+        seen = set()
+        result = []
+        for b in self.bultos:
+            if b.tarea and b.tarea_id not in seen:
+                seen.add(b.tarea_id)
+                result.append(b.tarea)
+        return result
+
+    def paradas_gestionadas(self):
+        """Cantidad de tareas que ya tienen RecaudoEntrega."""
+        return sum(1 for t in self.tareas_unicas() if t.recaudo_entrega)
+
+    def total_recaudado(self):
+        """Suma de montos cobrados en todos los recaudos."""
+        return sum(
+            float(r.monto_cobrado or 0)
+            for r in self.recaudos
+        )
+
     def to_dict(self, include_bultos=False):
         c = self.conductor
         v = self.vehiculo
@@ -56,6 +78,7 @@ class RutaDespacho(db.Model):
             'fecha_programada':     self.fecha_programada.isoformat() if self.fecha_programada else None,
             'tipo_ruta':            self.tipo_ruta,
             'estado':             self.estado,
+            'estado_financiero':  self.estado_financiero or 'PENDIENTE',
             'notas':              self.notas or '',
             'total_bultos':       self.total_bultos(),
             'total_planificados': self.total_planificados(),

@@ -534,3 +534,251 @@ def bultos_rechazados():
               .order_by(Bulto.fecha_entrega.desc())
               .all())
     return jsonify({'bultos': [b.to_dict() for b in bultos], 'total': len(bultos)}), 200
+
+
+# ── Última Milla: paradas y recaudos ────────────────────────────────
+
+
+@rutas_bp.route('/<int:id>/paradas', methods=['GET'])
+@jwt_required()
+def listar_paradas(id):
+    """
+    Devuelve las facturas (TareaPacking) de la ruta con sus bultos y recaudo.
+    Accesible por admin/jefe y por el conductor dueño de la ruta.
+    """
+    from app.models.bulto import Bulto
+    from app.models.recaudo_entrega import RecaudoEntrega
+
+    ruta = RutaDespacho.query.get_or_404(id)
+    usuario_id = int(get_jwt_identity())
+
+    # Verificar acceso: admin/jefe o conductor vinculado
+    conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
+    es_admin = _es_admin_o_jefe()
+    if not es_admin and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
+        return jsonify({'error': 'Sin acceso a esta ruta'}), 403
+
+    # Agrupar bultos por tarea
+    tareas_map = {}
+    for b in ruta.bultos:
+        if not b.tarea:
+            continue
+        tid = b.tarea_id
+        if tid not in tareas_map:
+            t = b.tarea
+            tareas_map[tid] = {
+                'tarea_id':       tid,
+                'numero_pedido':  t.numero_pedido_siesa,
+                'cliente':        t.cliente or '',
+                'municipio':      t.municipio or '',
+                'bultos':         [],
+                'recaudo':        None,
+            }
+        tareas_map[tid]['bultos'].append({
+            'id':            b.id,
+            'codigo_barras': b.codigo_barras,
+            'tipo':          b.tipo,
+            'numero':        b.numero,
+            'total':         b.total,
+            'estado':        b.estado,
+        })
+
+    # Adjuntar recaudos
+    recaudos = RecaudoEntrega.query.filter_by(ruta_id=id).all()
+    for r in recaudos:
+        if r.tarea_id in tareas_map:
+            tareas_map[r.tarea_id]['recaudo'] = r.to_dict()
+
+    paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
+    return jsonify({
+        'paradas':             paradas,
+        'total_paradas':       len(paradas),
+        'paradas_gestionadas': sum(1 for p in paradas if p['recaudo']),
+    }), 200
+
+
+@rutas_bp.route('/<int:id>/paradas/<int:tarea_id>/confirmar', methods=['POST'])
+@jwt_required()
+def confirmar_parada(id, tarea_id):
+    """
+    Registra el resultado de entrega de una factura (parada).
+    Payload: {
+        estado_entrega: ENTREGADO|PARCIAL|RECHAZADO,
+        forma_pago: EFECTIVO|TRANSFERENCIA|CHEQUE|CREDITO|EXENTO,
+        monto_cobrado: 150000,
+        observaciones: '',
+        foto_entrega: 'base64...',   # opcional, máx ~800KB JPEG
+        bultos_rechazados: [id, ...] # requerido si PARCIAL o RECHAZADO
+    }
+    """
+    from app.models.bulto import Bulto
+    from app.models.packing import TareaPacking
+    from app.models.recaudo_entrega import RecaudoEntrega
+
+    ruta = RutaDespacho.query.get_or_404(id)
+    if ruta.estado != 'EN_TRANSITO':
+        return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
+
+    tarea = TareaPacking.query.get_or_404(tarea_id)
+
+    # Verificar que la tarea tiene bultos en esta ruta
+    bultos_tarea = Bulto.query.filter_by(tarea_id=tarea_id, ruta_despacho_id=id).all()
+    if not bultos_tarea:
+        return jsonify({'error': 'Esta factura no pertenece a la ruta'}), 404
+
+    # Acceso: admin/jefe o conductor dueño
+    usuario_id = int(get_jwt_identity())
+    conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
+    es_admin = _es_admin_o_jefe()
+    if not es_admin and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
+        return jsonify({'error': 'Sin acceso a esta ruta'}), 403
+
+    data = request.get_json() or {}
+    estado_entrega = data.get('estado_entrega', '').upper()
+    if estado_entrega not in ('ENTREGADO', 'PARCIAL', 'RECHAZADO'):
+        return jsonify({'error': 'estado_entrega debe ser ENTREGADO, PARCIAL o RECHAZADO'}), 400
+
+    forma_pago = data.get('forma_pago', '').upper() or None
+    if forma_pago and forma_pago not in ('EFECTIVO', 'TRANSFERENCIA', 'CHEQUE', 'CREDITO', 'EXENTO'):
+        return jsonify({'error': 'forma_pago inválido'}), 400
+
+    foto = data.get('foto_entrega', '') or None
+    if foto and len(foto) > 1_150_000:
+        return jsonify({'error': 'Foto demasiado grande. Máximo ~800KB JPEG.'}), 400
+
+    bultos_rechazados_ids = data.get('bultos_rechazados', [])
+    if estado_entrega in ('PARCIAL', 'RECHAZADO') and not bultos_rechazados_ids:
+        return jsonify({'error': 'Debes indicar qué bultos fueron rechazados'}), 400
+
+    ahora = datetime.utcnow()
+
+    # Actualizar estado de cada bulto — con SELECT FOR UPDATE para evitar concurrencia
+    ids_tarea = {b.id for b in bultos_tarea}
+    ids_rechazados_set = set(bultos_rechazados_ids)
+
+    for b in bultos_tarea:
+        if b.id in ids_rechazados_set:
+            b.estado = 'RECHAZADO'
+            b.motivo_rechazo = data.get('observaciones', 'Rechazado en entrega')[:100]
+            b.fecha_entrega = ahora
+        else:
+            b.estado = 'ENTREGADO'
+            b.fecha_entrega = ahora
+
+    # Crear o actualizar RecaudoEntrega
+    recaudo = RecaudoEntrega.query.filter_by(ruta_id=id, tarea_id=tarea_id).first()
+    es_edicion = recaudo is not None
+
+    if not recaudo:
+        recaudo = RecaudoEntrega(
+            ruta_id=id,
+            tarea_id=tarea_id,
+            fecha_creacion=ahora,
+            confirmado_por=usuario_id,
+        )
+        db.session.add(recaudo)
+    else:
+        # Edición — registrar audit trail
+        recaudo.editado_por = usuario_id
+        recaudo.editado_en = ahora
+
+    recaudo.estado_entrega        = estado_entrega
+    recaudo.forma_pago            = forma_pago
+    recaudo.monto_cobrado         = data.get('monto_cobrado', 0) or 0
+    recaudo.observaciones         = data.get('observaciones', '') or None
+    recaudo.foto_entrega          = foto
+    recaudo.bultos_rechazados_ids = list(ids_rechazados_set & ids_tarea)
+    recaudo.fecha_confirmacion    = ahora
+
+    db.session.commit()
+    return jsonify({
+        'ok':          True,
+        'recaudo':     recaudo.to_dict(),
+        'es_edicion':  es_edicion,
+    }), 200
+
+
+@rutas_bp.route('/<int:id>/planilla', methods=['GET'])
+@jwt_required()
+def planilla_ruta(id):
+    """
+    Vista de planilla completa para admin: todas las paradas con recaudos y totales.
+    """
+    from app.models.recaudo_entrega import RecaudoEntrega
+
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe puede ver la planilla'}), 403
+
+    ruta = RutaDespacho.query.get_or_404(id)
+    tareas = ruta.tareas_unicas()
+    recaudos_map = {r.tarea_id: r for r in ruta.recaudos}
+
+    paradas = []
+    totales = {'EFECTIVO': 0, 'TRANSFERENCIA': 0, 'CHEQUE': 0, 'CREDITO': 0, 'EXENTO': 0}
+    sin_gestionar = 0
+
+    for t in tareas:
+        r = recaudos_map.get(t.id)
+        bultos_t = [b for b in ruta.bultos if b.tarea_id == t.id]
+        parada = {
+            'tarea_id':       t.id,
+            'numero_pedido':  t.numero_pedido_siesa,
+            'cliente':        t.cliente or '',
+            'municipio':      t.municipio or '',
+            'bultos_total':   len(bultos_t),
+            'bultos_entregados': sum(1 for b in bultos_t if b.estado == 'ENTREGADO'),
+            'bultos_rechazados': sum(1 for b in bultos_t if b.estado == 'RECHAZADO'),
+            'recaudo':        r.to_dict() if r else None,
+        }
+        paradas.append(parada)
+        if r:
+            fp = (r.forma_pago or '').upper()
+            if fp in totales:
+                totales[fp] += float(r.monto_cobrado or 0)
+        else:
+            sin_gestionar += 1
+
+    return jsonify({
+        'ruta':            ruta.to_dict(),
+        'paradas':         sorted(paradas, key=lambda x: (x['municipio'], x['cliente'])),
+        'total_paradas':   len(paradas),
+        'sin_gestionar':   sin_gestionar,
+        'total_recaudado': ruta.total_recaudado(),
+        'totales_por_forma': totales,
+        'estado_financiero': ruta.estado_financiero or 'PENDIENTE',
+    }), 200
+
+
+@rutas_bp.route('/<int:id>/liquidar', methods=['POST'])
+@jwt_required()
+def liquidar_ruta(id):
+    """
+    Marca la ruta como LIQUIDADA financieramente.
+    Bloquea si hay paradas sin gestionar.
+    Solo admin.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede liquidar rutas'}), 403
+
+    ruta = RutaDespacho.query.get_or_404(id)
+    if ruta.estado not in ('EN_TRANSITO', 'ENTREGADA'):
+        return jsonify({'error': f'No se puede liquidar una ruta en estado {ruta.estado}'}), 400
+
+    tareas = ruta.tareas_unicas()
+    from app.models.recaudo_entrega import RecaudoEntrega
+    gestionadas = RecaudoEntrega.query.filter_by(ruta_id=id).count()
+    sin_gestionar = len(tareas) - gestionadas
+
+    if sin_gestionar > 0:
+        return jsonify({
+            'error': f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar antes de liquidar.'
+        }), 400
+
+    ruta.estado_financiero = 'LIQUIDADA'
+    db.session.commit()
+
+    return jsonify({
+        'ok':              True,
+        'total_recaudado': ruta.total_recaudado(),
+        'ruta':            ruta.to_dict(),
+    }), 200

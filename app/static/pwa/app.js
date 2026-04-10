@@ -2860,6 +2860,9 @@ function rutaCard(r) {
   const btnManifiesto = r.total_bultos > 0
     ? `<button onclick="rutaVerManifiesto(${r.id})" style="flex:1;padding:10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:13px;cursor:pointer;">📋 Ver</button>`
     : '';
+  const btnPlanilla = ['EN_TRANSITO','ENTREGADA'].includes(r.estado)
+    ? `<button onclick="rutaVerPlanilla(${r.id})" style="flex:1;padding:10px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">💰 Planilla${r.estado_financiero === 'LIQUIDADA' ? ' ✓' : ''}</button>`
+    : '';
 
   return `
     <div id="ruta-card-${r.id}" style="background:#111;border:1px solid ${r.estado === 'PROGRAMADO' ? '#2d1b69' : '#222'};border-radius:14px;padding:16px;margin-bottom:10px;">
@@ -2881,8 +2884,8 @@ function rutaCard(r) {
       </div>
       ${r.pedidos?.length ? `<div style="font-size:11px;color:#555;margin-bottom:10px;">Pedidos: ${r.pedidos.join(', ')}</div>` : ''}
       ${r.notas ? `<div style="font-size:12px;color:#666;font-style:italic;margin-bottom:10px;">"${r.notas}"</div>` : ''}
-      ${(btnIniciar || btnCerrar || btnEntregar || btnManifiesto)
-        ? `<div style="display:flex;gap:8px;">${btnIniciar}${btnCerrar}${btnEntregar}${btnManifiesto}</div>`
+      ${(btnIniciar || btnCerrar || btnEntregar || btnManifiesto || btnPlanilla)
+        ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">${btnIniciar}${btnCerrar}${btnEntregar}${btnManifiesto}${btnPlanilla}</div>`
         : ''}
     </div>`;
 }
@@ -3482,8 +3485,11 @@ async function conductorToggle(id, activar) {
 // ─────────────────────────────────────────────────────────────
 
 let _COND_RUTAS = [];
-let _COND_RUTA_ACTIVA = null;   // ruta en confirmación de parada
-let _COND_BULTOS = [];          // bultos de la ruta activa con estado local
+let _COND_RUTA_ACTIVA = null;   // ruta seleccionada
+let _COND_PARADAS = [];         // paradas de la ruta activa
+let _COND_PARADA_FORM = null;   // parada en formulario de confirmación
+
+// ── Lista de rutas del conductor ──────────────────────────────────
 
 async function cargarRutasConductor() {
   const el = document.getElementById('cond-contenido');
@@ -3503,26 +3509,16 @@ async function cargarRutasConductor() {
       return;
     }
 
-    el.innerHTML = _COND_RUTAS.map((r, i) => {
-      const totalBultos = (r.manifiesto || []).reduce((s, g) => s + g.bultos.length, 0);
-      const paradas = (r.manifiesto || []).length;
+    el.innerHTML = _COND_RUTAS.map((r) => {
+      const totalBultos = r.total_bultos || 0;
       return `
         <div style="background:#111;border:2px solid #1e3a5f;border-radius:16px;padding:20px;margin-bottom:12px;">
           <div style="font-size:18px;font-weight:800;color:#60a5fa;margin-bottom:4px;">🚛 Ruta #${r.id}</div>
           <div style="font-size:14px;color:#ccc;margin-bottom:12px;">${r.ruta_maestra_nombre || r.tipo_ruta} · ${r.vehiculo_placa || 'Sin vehículo'}</div>
-          <div style="display:flex;gap:16px;margin-bottom:16px;">
-            <div style="text-align:center;">
-              <div style="font-size:28px;font-weight:800;color:#fff;">${paradas}</div>
-              <div style="font-size:11px;color:#555;">PARADAS</div>
-            </div>
-            <div style="text-align:center;">
-              <div style="font-size:28px;font-weight:800;color:#fff;">${totalBultos}</div>
-              <div style="font-size:11px;color:#555;">BULTOS</div>
-            </div>
-          </div>
-          <button onclick="abrirEntregaConductor(${i})"
+          <div style="font-size:12px;color:#555;margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
+          <button onclick="condAbrirParadas(${r.id})"
             style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
-            📋 Confirmar Entregas
+            📦 Ver Paradas y Cobros
           </button>
         </div>`;
     }).join('');
@@ -3531,100 +3527,437 @@ async function cargarRutasConductor() {
   }
 }
 
-function abrirEntregaConductor(idx) {
-  const ruta = _COND_RUTAS[idx];
-  if (!ruta) return;
-  _COND_RUTA_ACTIVA = ruta;
+// ── Lista de paradas de la ruta ───────────────────────────────────
 
-  const bultos = (ruta.manifiesto || []).flatMap(g =>
-    g.bultos.map(b => ({ ...b, _destino: g.destino, entregado: true, motivo_rechazo: MOTIVOS_RECHAZO[0] }))
-  );
-  _COND_BULTOS = bultos;
-
-  _renderPantallaEntregaConductor();
+async function condAbrirParadas(rutaId) {
+  const el = document.getElementById('cond-contenido');
+  el.innerHTML = '<div style="text-align:center;padding:60px;color:#555;">Cargando paradas...</div>';
+  try {
+    const d = await get('/api/rutas/' + rutaId + '/paradas');
+    _COND_RUTA_ACTIVA = { id: rutaId };
+    _COND_PARADAS = d.paradas || [];
+    _condRenderParadas(d);
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando paradas.</div>';
+  }
 }
 
-function _renderPantallaEntregaConductor() {
+function _condRenderParadas(d) {
   const el = document.getElementById('cond-contenido');
-  if (!el || !_COND_RUTA_ACTIVA) return;
-
-  const ruta = _COND_RUTA_ACTIVA;
-  const rechazados = _COND_BULTOS.filter(b => !b.entregado).length;
-  const entregados = _COND_BULTOS.filter(b => b.entregado).length;
-
-  // Agrupar por destino
-  const porDestino = {};
-  _COND_BULTOS.forEach((b, i) => {
-    if (!porDestino[b._destino]) porDestino[b._destino] = [];
-    porDestino[b._destino].push({ ...b, _idx: i });
-  });
+  if (!el) return;
+  const paradas = _COND_PARADAS;
+  const gestionadas = d.paradas_gestionadas || paradas.filter(p => p.recaudo).length;
+  const total = paradas.length;
+  const todasGestionadas = gestionadas === total && total > 0;
 
   let html = `
-    <div style="margin-bottom:16px;">
-      <button onclick="_cerrarEntregaConductor()" style="background:none;border:none;color:#666;font-size:13px;cursor:pointer;padding:0;">← Volver</button>
+    <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+      <button onclick="cargarRutasConductor()" style="background:none;border:none;color:#666;font-size:14px;cursor:pointer;padding:0;">← Volver</button>
+      <span style="font-size:13px;color:#555;">${gestionadas}/${total} gestionadas</span>
     </div>
-    <div style="background:#111;border:1px solid #333;border-radius:14px;padding:16px;margin-bottom:16px;">
-      <div style="font-size:16px;font-weight:800;color:#60a5fa;">Ruta #${ruta.id}</div>
-      <div style="display:flex;gap:20px;margin-top:10px;">
-        <div><span style="font-size:22px;font-weight:800;color:#4ade80;">${entregados}</span><div style="font-size:11px;color:#555;">ENTREGADOS</div></div>
-        <div><span style="font-size:22px;font-weight:800;color:#f87171;">${rechazados}</span><div style="font-size:11px;color:#555;">RECHAZADOS</div></div>
+    <div style="background:#111;border:1px solid #1e3a5f;border-radius:14px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:14px;color:#aaa;">Ruta #${_COND_RUTA_ACTIVA.id} · <span style="color:${todasGestionadas ? '#4ade80' : '#facc15'};font-weight:700;">${todasGestionadas ? 'Lista para cerrar' : 'En curso'}</span></div>
+      <div style="display:flex;gap:16px;margin-top:10px;">
+        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#4ade80;">${gestionadas}</div><div style="font-size:10px;color:#555;">GESTIONADAS</div></div>
+        <div style="text-align:center;"><div style="font-size:24px;font-weight:800;color:#555;">${total - gestionadas}</div><div style="font-size:10px;color:#555;">PENDIENTES</div></div>
       </div>
     </div>`;
 
-  Object.entries(porDestino).forEach(([destino, bultos]) => {
-    const todoEntregado = bultos.every(b => b.entregado);
+  paradas.forEach((p, idx) => {
+    const r = p.recaudo;
+    const colorBorde = r
+      ? (r.estado_entrega === 'ENTREGADO' ? '#166534' : r.estado_entrega === 'PARCIAL' ? '#78350f' : '#7f1d1d')
+      : '#222';
+    const colorFondo = r
+      ? (r.estado_entrega === 'ENTREGADO' ? '#0d1a0d' : r.estado_entrega === 'PARCIAL' ? '#1a0d00' : '#1a0d0d')
+      : '#111';
+    const badge = r
+      ? (r.estado_entrega === 'ENTREGADO'
+          ? `<span style="background:#166534;color:#4ade80;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">ENTREGADO</span>`
+          : r.estado_entrega === 'PARCIAL'
+          ? `<span style="background:#78350f;color:#fbbf24;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">PARCIAL</span>`
+          : `<span style="background:#7f1d1d;color:#f87171;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">RECHAZADO</span>`)
+      : `<span style="background:#1a1a1a;color:#555;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">PENDIENTE</span>`;
+    const monto = r ? ` · $${Number(r.monto_cobrado || 0).toLocaleString('es-CO')}` : '';
+
     html += `
-      <div style="margin-bottom:8px;">
-        <div style="font-size:12px;font-weight:700;color:#aaa;padding:8px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">
-          📍 ${destino}
+      <div style="background:${colorFondo};border:1px solid ${colorBorde};border-radius:12px;padding:14px;margin-bottom:8px;cursor:pointer;"
+           onclick="condAbrirFormParada(${idx})">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:14px;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.cliente}</div>
+            <div style="font-size:12px;color:#666;margin-top:2px;">📍 ${p.municipio} · ${p.numero_pedido}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}${monto}</div>
+          </div>
+          <div style="margin-left:10px;flex-shrink:0;">${badge}</div>
         </div>
-        ${bultos.map(b => `
-          <div style="background:${b.entregado ? '#0d1a0d' : '#1a0d0d'};border:1px solid ${b.entregado ? '#166534' : '#7f1d1d'};border-radius:12px;padding:14px;margin-bottom:8px;">
-            <div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:2px;">${b.codigo_barras}</div>
-            <div style="font-size:12px;color:#666;margin-bottom:12px;">${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente || '—'}</div>
-            <div style="display:flex;gap:8px;">
-              <button onclick="_condToggleBulto(${b._idx}, true)"
-                style="flex:1;padding:14px 8px;background:${b.entregado ? '#166534' : '#1a1a1a'};color:${b.entregado ? '#4ade80' : '#555'};border:1px solid ${b.entregado ? '#166534' : '#333'};border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
-                ✓ Entregado
-              </button>
-              <button onclick="_condToggleBulto(${b._idx}, false)"
-                style="flex:1;padding:14px 8px;background:${!b.entregado ? '#7f1d1d' : '#1a1a1a'};color:${!b.entregado ? '#f87171' : '#555'};border:1px solid ${!b.entregado ? '#7f1d1d' : '#333'};border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
-                ✗ Rechazado
-              </button>
-            </div>
-            ${!b.entregado ? `<select onchange="_condSetMotivo(${b._idx}, this.value)"
-              style="width:100%;margin-top:10px;padding:10px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;font-size:13px;">
-              ${MOTIVOS_RECHAZO.map(m => `<option value="${m}" ${b.motivo_rechazo===m?'selected':''}>${m}</option>`).join('')}
-            </select>` : ''}
-          </div>`).join('')}
+        ${r ? `<div style="font-size:11px;color:#555;margin-top:6px;">${r.forma_pago || ''}${r.observaciones ? ' · ' + r.observaciones.substring(0,40) : ''}</div>` : ''}
       </div>`;
   });
 
-  const todosMarcados = _COND_BULTOS.length > 0;
-  html += `
-    <div style="position:sticky;bottom:16px;margin-top:8px;">
-      <button onclick="_condConfirmarEntrega()"
-        style="width:100%;padding:20px;background:${rechazados > 0 ? '#7f1d1d' : '#166534'};color:${rechazados > 0 ? '#f87171' : '#4ade80'};border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
-        ${rechazados > 0 ? `⚠ Cerrar ruta (${rechazados} rechazado${rechazados !== 1 ? 's' : ''})` : '✅ Cerrar ruta — Todo entregado'}
-      </button>
-    </div>`;
+  if (todasGestionadas) {
+    html += `
+      <div style="position:sticky;bottom:16px;margin-top:12px;">
+        <button onclick="condCerrarRuta()"
+          style="width:100%;padding:20px;background:#166534;color:#4ade80;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
+          ✅ Cerrar Ruta — Todo Gestionado
+        </button>
+      </div>`;
+  }
 
   el.innerHTML = html;
 }
 
-function _condToggleBulto(idx, entregado) {
-  _COND_BULTOS[idx].entregado = entregado;
-  _renderPantallaEntregaConductor();
+// ── Formulario de confirmación de parada ──────────────────────────
+
+function condAbrirFormParada(idx) {
+  _COND_PARADA_FORM = { ..._COND_PARADAS[idx], _idx: idx };
+  _condRenderFormParada();
 }
 
-function _condSetMotivo(idx, motivo) {
-  _COND_BULTOS[idx].motivo_rechazo = motivo;
+function _condRenderFormParada() {
+  const el = document.getElementById('cond-contenido');
+  const p = _COND_PARADA_FORM;
+  if (!el || !p) return;
+
+  const r = p.recaudo;
+  const estadoActual = r ? r.estado_entrega : 'ENTREGADO';
+  const formaActual  = r ? (r.forma_pago || '') : '';
+  const montoActual  = r ? (r.monto_cobrado || 0) : 0;
+  const obsActual    = r ? (r.observaciones || '') : '';
+  const rechazadosActuales = r ? (r.bultos_rechazados_ids || []) : [];
+
+  el.innerHTML = `
+    <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+      <button onclick="condVolverAParadas()" style="background:none;border:none;color:#666;font-size:14px;cursor:pointer;padding:0;">← Paradas</button>
+      ${r ? `<span style="font-size:11px;color:#555;">Editando confirmación</span>` : ''}
+    </div>
+
+    <div style="background:#111;border:1px solid #333;border-radius:14px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:16px;font-weight:800;color:#fff;">${p.cliente}</div>
+      <div style="font-size:13px;color:#aaa;margin-top:4px;">📍 ${p.municipio}</div>
+      <div style="font-size:12px;color:#555;margin-top:2px;">${p.numero_pedido} · ${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}</div>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">RESULTADO ENTREGA</label>
+      <div style="display:flex;gap:6px;" id="cond-estado-btns">
+        ${['ENTREGADO','PARCIAL','RECHAZADO'].map(e => `
+          <button onclick="condSelEstado('${e}')"
+            id="cond-estado-${e}"
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoActual ? (e==='ENTREGADO'?'#166534':e==='PARCIAL'?'#78350f':'#7f1d1d') : '#222'};background:${e===estadoActual ? (e==='ENTREGADO'?'#0d1a0d':e==='PARCIAL'?'#1a0d00':'#1a0d0d') : '#111'};color:${e===estadoActual ? (e==='ENTREGADO'?'#4ade80':e==='PARCIAL'?'#fbbf24':'#f87171') : '#555'};">
+            ${e === 'ENTREGADO' ? '✓ Entregado' : e === 'PARCIAL' ? '⚠ Parcial' : '✗ Rechazado'}
+          </button>`).join('')}
+      </div>
+    </div>
+
+    <div id="cond-bultos-rechazo" style="margin-bottom:14px;display:${estadoActual !== 'ENTREGADO' ? 'block' : 'none'};">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
+      ${p.bultos.map(b => `
+        <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#1a1a1a;border-radius:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" value="${b.id}" ${rechazadosActuales.includes(b.id) ? 'checked' : ''}
+            style="width:18px;height:18px;cursor:pointer;" id="chk-bulto-${b.id}">
+          <span style="font-size:13px;color:#ccc;">${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total}</span>
+        </label>`).join('')}
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
+      <select id="cond-forma-pago"
+        style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
+        <option value="">— Seleccionar —</option>
+        ${['EFECTIVO','TRANSFERENCIA','CHEQUE','CREDITO','EXENTO'].map(f =>
+          `<option value="${f}" ${f===formaActual?'selected':''}>${f.charAt(0)+f.slice(1).toLowerCase()}</option>`
+        ).join('')}
+      </select>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
+      <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
+        style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">OBSERVACIONES</label>
+      <textarea id="cond-obs" rows="2"
+        style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;resize:none;box-sizing:border-box;"
+        placeholder="Ej: Cliente solicitó factura electrónica...">${obsActual}</textarea>
+    </div>
+
+    <div style="margin-bottom:20px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span style="color:#555;font-weight:400;">(opcional)</span></label>
+      <input type="file" id="cond-foto" accept="image/*" capture="environment"
+        style="width:100%;padding:10px;background:#1a1a1a;border:1px dashed #333;color:#aaa;border-radius:10px;font-size:13px;box-sizing:border-box;">
+      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#4ade80;">✓ Foto guardada (subir nueva para reemplazar)</div>` : ''}
+    </div>
+
+    <div style="position:sticky;bottom:16px;">
+      <button onclick="condGuardarParada()"
+        style="width:100%;padding:20px;background:#1d4ed8;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
+        ${r ? '💾 Actualizar Confirmación' : '✓ Confirmar Parada'}
+      </button>
+    </div>`;
+
+  // Guardar estado seleccionado
+  el._estadoSel = estadoActual;
 }
 
-function _cerrarEntregaConductor() {
-  _COND_RUTA_ACTIVA = null;
-  _COND_BULTOS = [];
-  cargarRutasConductor();
+function condSelEstado(estado) {
+  const el = document.getElementById('cond-contenido');
+  if (!el) return;
+  el._estadoSel = estado;
+
+  ['ENTREGADO','PARCIAL','RECHAZADO'].forEach(e => {
+    const btn = document.getElementById('cond-estado-' + e);
+    if (!btn) return;
+    const activo = e === estado;
+    const colores = { ENTREGADO: ['#166534','#0d1a0d','#4ade80'], PARCIAL: ['#78350f','#1a0d00','#fbbf24'], RECHAZADO: ['#7f1d1d','#1a0d0d','#f87171'] };
+    const [borde, fondo, texto] = activo ? colores[e] : ['#222','#111','#555'];
+    btn.style.borderColor = borde;
+    btn.style.background  = fondo;
+    btn.style.color       = texto;
+  });
+
+  const divRechazo = document.getElementById('cond-bultos-rechazo');
+  if (divRechazo) divRechazo.style.display = estado !== 'ENTREGADO' ? 'block' : 'none';
+}
+
+async function condGuardarParada() {
+  const el = document.getElementById('cond-contenido');
+  const p = _COND_PARADA_FORM;
+  if (!el || !p) return;
+
+  const estadoEntrega = el._estadoSel || 'ENTREGADO';
+  const formaPago     = document.getElementById('cond-forma-pago')?.value || '';
+  const monto         = parseFloat(document.getElementById('cond-monto')?.value || 0) || 0;
+  const obs           = document.getElementById('cond-obs')?.value?.trim() || '';
+
+  // Bultos rechazados
+  const bultosRechazados = [];
+  if (estadoEntrega !== 'ENTREGADO') {
+    p.bultos.forEach(b => {
+      const chk = document.getElementById('chk-bulto-' + b.id);
+      if (chk && chk.checked) bultosRechazados.push(b.id);
+    });
+    if (!bultosRechazados.length) {
+      alerta('Selecciona al menos un bulto rechazado', 'error');
+      return;
+    }
+  }
+
+  // Foto (base64)
+  let fotoBase64 = '';
+  const fotoInput = document.getElementById('cond-foto');
+  if (fotoInput && fotoInput.files[0]) {
+    try {
+      fotoBase64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const b64 = e.target.result;
+          if (b64.length > 1_150_000) reject(new Error('grande'));
+          else resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(fotoInput.files[0]);
+      });
+    } catch (err) {
+      if (err.message === 'grande') { alerta('Foto demasiado grande. Máximo ~800KB.', 'error'); return; }
+    }
+  }
+
+  const btn = el.querySelector('button[onclick="condGuardarParada()"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
+
+  try {
+    const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/paradas/' + p.tarea_id + '/confirmar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({
+        estado_entrega:    estadoEntrega,
+        forma_pago:        formaPago || null,
+        monto_cobrado:     monto,
+        observaciones:     obs || null,
+        foto_entrega:      fotoBase64 || null,
+        bultos_rechazados: bultosRechazados,
+      }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(d.es_edicion ? 'Confirmación actualizada' : 'Parada confirmada ✓', 'exito');
+      condVolverAParadas(true);
+    } else {
+      alerta(d.error || 'Error al confirmar parada', 'error');
+      if (btn) { btn.disabled = false; btn.textContent = 'Confirmar Parada'; }
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar Parada'; }
+  }
+}
+
+async function condVolverAParadas(recargar = false) {
+  _COND_PARADA_FORM = null;
+  if (recargar && _COND_RUTA_ACTIVA) {
+    await condAbrirParadas(_COND_RUTA_ACTIVA.id);
+  } else if (_COND_RUTA_ACTIVA) {
+    await condAbrirParadas(_COND_RUTA_ACTIVA.id);
+  } else {
+    cargarRutasConductor();
+  }
+}
+
+async function condCerrarRuta() {
+  if (!_COND_RUTA_ACTIVA) return;
+  if (!confirm('¿Confirmar cierre de ruta? Ya no podrás agregar más confirmaciones de parada.')) return;
+  try {
+    const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/entregar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ bultos: [] }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta('Ruta cerrada — ¡Buen trabajo!', 'exito');
+      _COND_RUTA_ACTIVA = null;
+      _COND_PARADAS = [];
+      cargarRutasConductor();
+    } else {
+      alerta(d.error || 'Error al cerrar ruta', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// PLANILLA DE CUADRE — Admin
+// ══════════════════════════════════════════════════════════════════
+
+let _PLAN_RUTA_ID = null;
+
+async function rutaVerPlanilla(id) {
+  _PLAN_RUTA_ID = id;
+  const modal = document.getElementById('modal-planilla');
+  if (!modal) return;
+  document.getElementById('modal-planilla-body').innerHTML =
+    '<div style="text-align:center;padding:60px;color:#555;">Cargando planilla...</div>';
+  modal.style.display = 'flex';
+  await _cargarPlanilla(id);
+}
+
+async function _cargarPlanilla(id) {
+  try {
+    const d = await get('/api/rutas/' + id + '/planilla');
+    const body = document.getElementById('modal-planilla-body');
+    if (!body) return;
+
+    const ruta = d.ruta;
+    const finBadge = {
+      PENDIENTE:      '<span style="background:#1a1a1a;color:#555;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">PENDIENTE</span>',
+      EN_LIQUIDACION: '<span style="background:#78350f;color:#fbbf24;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">EN LIQUIDACIÓN</span>',
+      LIQUIDADA:      '<span style="background:#14532d;color:#4ade80;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">LIQUIDADA</span>',
+    }[d.estado_financiero] || d.estado_financiero;
+
+    const fmt = v => '$' + Number(v || 0).toLocaleString('es-CO');
+    const totales = d.totales_por_forma || {};
+    const total = d.total_recaudado || 0;
+
+    let html = `
+      <div style="margin-bottom:16px;">
+        <div style="font-size:16px;font-weight:800;">Ruta #${ruta.id} — ${ruta.conductor_nombre}</div>
+        <div style="font-size:13px;color:#aaa;margin-top:4px;">${ruta.ruta_maestra_nombre || ruta.tipo_ruta} · ${ruta.vehiculo_placa || ''}</div>
+        <div style="margin-top:8px;">${finBadge}</div>
+      </div>
+
+      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:16px;">
+        <div style="font-size:12px;color:#aaa;font-weight:700;margin-bottom:10px;">RESUMEN FINANCIERO</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          ${Object.entries(totales).filter(([,v]) => v > 0).map(([k,v]) => `
+            <div style="background:#1a1a1a;border-radius:8px;padding:10px;">
+              <div style="font-size:10px;color:#555;">${k}</div>
+              <div style="font-size:16px;font-weight:800;color:#fff;">${fmt(v)}</div>
+            </div>`).join('')}
+        </div>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #222;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:13px;color:#aaa;">Total recaudado</span>
+          <span style="font-size:22px;font-weight:800;color:#4ade80;">${fmt(total)}</span>
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:#aaa;font-weight:700;margin-bottom:10px;">
+        PARADAS (${d.total_paradas - d.sin_gestionar}/${d.total_paradas} gestionadas)
+      </div>`;
+
+    (d.paradas || []).forEach(p => {
+      const r = p.recaudo;
+      const colorBorde = r
+        ? (r.estado_entrega === 'ENTREGADO' ? '#166534' : r.estado_entrega === 'PARCIAL' ? '#78350f' : '#7f1d1d')
+        : '#333';
+      html += `
+        <div style="background:#111;border:1px solid ${colorBorde};border-radius:10px;padding:12px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div style="font-size:14px;font-weight:700;color:#fff;">${p.cliente}</div>
+              <div style="font-size:12px;color:#555;margin-top:2px;">📍 ${p.municipio} · ${p.numero_pedido}</div>
+            </div>
+            <div style="text-align:right;">
+              ${r
+                ? `<div style="font-size:13px;font-weight:700;color:${r.estado_entrega === 'ENTREGADO' ? '#4ade80' : r.estado_entrega === 'PARCIAL' ? '#fbbf24' : '#f87171'};">${r.estado_entrega}</div>
+                   <div style="font-size:12px;color:#aaa;">${fmt(r.monto_cobrado)}</div>
+                   <div style="font-size:11px;color:#555;">${r.forma_pago || '—'}</div>`
+                : `<div style="font-size:12px;color:#555;">Sin gestionar</div>`}
+            </div>
+          </div>
+          <div style="font-size:11px;color:#555;margin-top:6px;">
+            ${p.bultos_entregados} entregado${p.bultos_entregados !== 1 ? 's' : ''} · ${p.bultos_rechazados} rechazado${p.bultos_rechazados !== 1 ? 's' : ''}
+            ${r && r.observaciones ? ' · "' + r.observaciones.substring(0, 50) + '"' : ''}
+          </div>
+        </div>`;
+    });
+
+    if (d.sin_gestionar === 0 && d.estado_financiero !== 'LIQUIDADA') {
+      html += `
+        <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
+          <button onclick="rutaLiquidar(${ruta.id})"
+            style="width:100%;padding:18px;background:#14532d;color:#4ade80;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;">
+            ✅ Liquidar Ruta — ${fmt(total)}
+          </button>
+        </div>`;
+    } else if (d.sin_gestionar > 0) {
+      html += `
+        <div style="background:#1a1a0d;border:1px solid #78350f;border-radius:10px;padding:12px;margin-top:8px;text-align:center;color:#fbbf24;font-size:13px;">
+          ⚠ Faltan ${d.sin_gestionar} parada${d.sin_gestionar !== 1 ? 's' : ''} por gestionar
+        </div>`;
+    }
+
+    body.innerHTML = html;
+  } catch (e) {
+    const body = document.getElementById('modal-planilla-body');
+    if (body) body.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando planilla</div>';
+  }
+}
+
+async function rutaLiquidar(id) {
+  if (!confirm(`¿Liquidar Ruta #${id}? Esta acción confirma el cuadre financiero.`)) return;
+  try {
+    const r = await fetch(API + '/api/rutas/' + id + '/liquidar', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`Ruta liquidada — Total: $${Number(d.total_recaudado || 0).toLocaleString('es-CO')}`, 'exito');
+      await _cargarPlanilla(id);
+      await cargarListaRutas();
+    } else {
+      alerta(d.error || 'Error al liquidar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+function cerrarModalPlanilla() {
+  const modal = document.getElementById('modal-planilla');
+  if (modal) modal.style.display = 'none';
+  _PLAN_RUTA_ID = null;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4470,33 +4803,4 @@ async function tiendaRecibirSolicitud(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-async function _condConfirmarEntrega() {
-  if (!_COND_RUTA_ACTIVA) return;
-  const rechazados = _COND_BULTOS.filter(b => !b.entregado).length;
-  const msg = rechazados > 0
-    ? `¿Confirmar entrega?\n${rechazados} bulto${rechazados !== 1 ? 's' : ''} rechazado${rechazados !== 1 ? 's' : ''} — quedarán en Devoluciones`
-    : '¿Confirmar que todos los bultos fueron entregados?';
-  if (!confirm(msg)) return;
-
-  const payload = _COND_BULTOS.map(b => ({
-    id:             b.id,
-    entregado:      b.entregado,
-    motivo_rechazo: b.entregado ? null : b.motivo_rechazo
-  }));
-
-  try {
-    const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/entregar', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ bultos: payload })
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const rec = d.rechazados || 0;
-      alerta(rec > 0 ? `Ruta cerrada · ${rec} bulto${rec!==1?'s':''} devuelto${rec!==1?'s':''} al almacén` : 'Ruta cerrada — ¡Buen trabajo!', rec > 0 ? 'advertencia' : 'exito');
-      _cerrarEntregaConductor();
-    } else {
-      alerta(d.error || 'Error al confirmar entrega', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
-}
+// _condConfirmarEntrega eliminado — reemplazado por el flujo por parada
