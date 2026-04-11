@@ -209,19 +209,32 @@ class ABCService:
         return overrides
 
     @staticmethod
-    def generar_tareas_conteo_diario(almacen_id: int, clasificacion: str = 'A'):
+    def generar_tareas_conteo_diario(almacen_id: int, clasificacion: str = 'A',
+                                     forzar_todo: bool = False):
         """
-        Genera tareas de conteo cíclico respetando la frecuencia por clase.
-        Solo crea una tarea si el último conteo cerrado supera el umbral de días.
-        Esto evita inflar la cola con productos recién contados.
+        Genera tareas de conteo cíclico con lote diario proporcional.
+
+        Modo normal (forzar_todo=False — scheduler 6am o botón "Lote de hoy"):
+          Calcula cuántos productos hay en la clase y divide por la frecuencia
+          para generar solo la "dosis diaria":
+            A (15 días):  N_A ÷ 15   ≈  X productos/día
+            B (90 días):  N_B ÷ 90   ≈  X productos/día
+            C (180 días): N_C ÷ 180  ≈  X productos/día
+          Los candidatos se ordenan por "última vez contado" (nunca contados primero),
+          garantizando rotación equitativa del catálogo.
+
+        Modo completo (forzar_todo=True — botón "Forzar todo"):
+          Genera tarea para CADA producto elegible sin límite.
+          Útil para arranque inicial o revisión de emergencia.
         """
+        import math
         from app.models.inventario import UbicacionProducto
 
         frecuencia = FRECUENCIA_DIAS.get(clasificacion, 15)
         umbral = datetime.utcnow() - timedelta(days=frecuencia)
 
-        # Productos con clasificación ABC para ESTE almacén específico
-        productos = (
+        # Todos los productos de esta clase en este almacén
+        todos_productos = (
             Producto.query
             .join(ProductoClasificacionABC,
                   ProductoClasificacionABC.producto_id == Producto.id)
@@ -232,19 +245,26 @@ class ABCService:
             ).all()
         )
 
-        if not productos:
+        if not todos_productos:
             return {
                 'mensaje': f'No hay productos clase {clasificacion} para contar',
                 'tareas_creadas': 0,
                 'clasificacion': clasificacion,
                 'frecuencia_dias': frecuencia,
+                'batch_diario': 0,
+                'total_clase': 0,
             }
 
-        tareas_creadas = []
-        omitidos_por_frecuencia = 0
-        omitidos_por_pendiente = 0
+        total_clase = len(todos_productos)
+        # Lote diario: cubrir todo el catálogo en exactamente frecuencia_dias
+        batch_diario = max(1, math.ceil(total_clase / frecuencia)) if not forzar_todo else None
 
-        for producto in productos:
+        # Recopilar candidatos elegibles con su antigüedad de último conteo
+        candidatos = []
+        omitidos_por_pendiente = 0
+        omitidos_por_frecuencia = 0
+
+        for producto in todos_productos:
             registros = (
                 UbicacionProducto.query
                 .join(Ubicacion)
@@ -256,7 +276,7 @@ class ABCService:
             )
 
             for reg in registros:
-                # No crear si ya hay tarea activa para este producto+ubicación
+                # Saltar si ya hay tarea activa
                 pendiente = SesionConteo.query.filter(
                     SesionConteo.producto_id == producto.id,
                     SesionConteo.ubicacion_id == reg.ubicacion_id,
@@ -266,62 +286,90 @@ class ABCService:
                     omitidos_por_pendiente += 1
                     continue
 
-                # No crear si ya se contó dentro del período de frecuencia
-                conteo_reciente = SesionConteo.query.filter(
-                    SesionConteo.producto_id == producto.id,
-                    SesionConteo.ubicacion_id == reg.ubicacion_id,
-                    SesionConteo.estado.in_(['MATCH', 'AJUSTADO']),
-                    SesionConteo.fecha_cierre >= umbral
-                ).first()
-                if conteo_reciente:
+                # Obtener fecha del último conteo completado
+                ultimo = (SesionConteo.query
+                          .filter(
+                              SesionConteo.producto_id == producto.id,
+                              SesionConteo.ubicacion_id == reg.ubicacion_id,
+                              SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
+                          )
+                          .order_by(SesionConteo.fecha_cierre.desc())
+                          .first())
+
+                if ultimo and ultimo.fecha_cierre and ultimo.fecha_cierre >= umbral:
                     omitidos_por_frecuencia += 1
                     continue
 
-                codigo = (
-                    f'CC-{clasificacion}-'
-                    f'{datetime.utcnow().strftime("%Y%m%d")}-'
-                    f'{str(uuid.uuid4())[:6].upper()}'
-                )
-                sesion = SesionConteo(
-                    codigo=codigo,
-                    tipo='DIARIO_ABC',
-                    clasificacion_abc=clasificacion,
-                    ubicacion_id=reg.ubicacion_id,
-                    almacen_id=almacen_id,
-                    producto_id=producto.id,
-                    producto_codigo_siesa=producto.codigo_siesa,
-                    maneja_lote=bool(reg.lote),
-                    estado='PENDIENTE'
-                )
-                db.session.add(sesion)
-                tareas_creadas.append(sesion)
+                # Sort key: nunca contado → datetime mínimo (va primero)
+                sort_key = (ultimo.fecha_cierre
+                            if ultimo and ultimo.fecha_cierre
+                            else datetime(1970, 1, 1))
+                candidatos.append((sort_key, producto, reg))
+
+        # Ordenar: los que llevan más tiempo sin contar van primero
+        candidatos.sort(key=lambda x: x[0])
+
+        # Aplicar límite de lote diario
+        if batch_diario is not None:
+            candidatos = candidatos[:batch_diario]
+
+        # Crear tareas
+        tareas_creadas = []
+        for _, producto, reg in candidatos:
+            codigo = (
+                f'CC-{clasificacion}-'
+                f'{datetime.utcnow().strftime("%Y%m%d")}-'
+                f'{str(uuid.uuid4())[:6].upper()}'
+            )
+            sesion = SesionConteo(
+                codigo=codigo,
+                tipo='DIARIO_ABC',
+                clasificacion_abc=clasificacion,
+                ubicacion_id=reg.ubicacion_id,
+                almacen_id=almacen_id,
+                producto_id=producto.id,
+                producto_codigo_siesa=producto.codigo_siesa,
+                maneja_lote=bool(getattr(reg, 'lote', None)),
+                estado='PENDIENTE'
+            )
+            db.session.add(sesion)
+            tareas_creadas.append(sesion)
 
         db.session.commit()
 
+        dias_para_ciclo = math.ceil(total_clase / (batch_diario or 1)) if batch_diario else 1
+
         logger.info(
-            f'[ABC] Clase {clasificacion} · {len(tareas_creadas)} tareas creadas · '
+            f'[ABC] Clase {clasificacion} · {len(tareas_creadas)} tareas creadas '
+            f'(lote {batch_diario or "completo"} de {total_clase}) · '
             f'{omitidos_por_pendiente} ya activas · {omitidos_por_frecuencia} dentro de frecuencia'
         )
 
         return {
             'tareas_creadas': len(tareas_creadas),
+            'batch_diario': batch_diario,
+            'total_clase': total_clase,
+            'dias_para_ciclo_completo': dias_para_ciclo,
             'omitidos_por_pendiente': omitidos_por_pendiente,
             'omitidos_por_frecuencia': omitidos_por_frecuencia,
             'clasificacion': clasificacion,
             'frecuencia_dias': frecuencia,
             'almacen_id': almacen_id,
+            'modo': 'completo' if forzar_todo else 'lote_diario',
         }
 
     @staticmethod
-    def generar_todas_las_clases(almacen_id: int):
+    def generar_todas_las_clases(almacen_id: int, forzar_todo: bool = False):
         """
         Genera tareas para A, B y C + ejecuta Watchdog de anomalías.
-        Usado por el scheduler diario a las 6am.
+        Usado por el scheduler diario a las 6am (forzar_todo=False).
+        El admin puede pasar forzar_todo=True desde la UI para generar todo de una vez.
         """
         resultados = {}
         total = 0
         for clase in ['A', 'B', 'C']:
-            r = ABCService.generar_tareas_conteo_diario(almacen_id, clase)
+            r = ABCService.generar_tareas_conteo_diario(almacen_id, clase,
+                                                        forzar_todo=forzar_todo)
             resultados[clase] = r
             total += r['tareas_creadas']
 

@@ -4139,20 +4139,45 @@ function invSubtab(nombre) {
   else cargarResumenAbc();
 }
 
-async function cargarConteos() {
+let _CONTEO_PAGE = 1;
+
+function conteosFiltrar() {
+  _CONTEO_PAGE = 1;  // resetear a página 1 cuando cambian los filtros
+  cargarConteos();
+}
+
+async function cargarConteos(page) {
+  if (page !== undefined) _CONTEO_PAGE = page;
   const lista = document.getElementById('inv-conteos-lista');
+  const pag   = document.getElementById('inv-conteos-paginacion');
   if (!lista) return;
+
   const estado = document.getElementById('inv-filtro-estado')?.value || '';
-  lista.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+  const marca  = document.getElementById('inv-filtro-marca')?.value?.trim() || '';
+  const clase  = document.getElementById('inv-filtro-clase')?.value || '';
+
+  // Solo mostrar "Cargando" en primera carga — no en refresh de fondo
+  const esVacia = !lista.innerHTML.trim() || lista.innerHTML.includes('Cargando');
+  if (esVacia) lista.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
+
   try {
-    const qs = estado ? `?estado=${estado}` : '';
-    const r = await fetch(API + '/api/conteo/' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    const qs = new URLSearchParams({ page: _CONTEO_PAGE });
+    if (estado) qs.set('estado', estado);
+    if (marca)  qs.set('marca', marca);
+    if (clase)  qs.set('clasificacion', clase);
+
+    const r = await fetch(API + '/api/conteo/?' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
     const d = await r.json();
     const sesiones = d.sesiones || [];
+    const total = d.total || 0;
+    const totalPag = d.total_paginas || 1;
+
     if (!sesiones.length) {
       lista.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">No hay conteos con este filtro</div>';
+      if (pag) pag.innerHTML = '';
       return;
     }
+
     const colEstado = {
       PENDIENTE: '#555', EN_PROCESO: '#1d4ed8', SEGUNDO_CONTEO: '#7c3aed',
       DESCUADRE: '#b45309', MATCH: '#166534', AJUSTADO: '#065f46'
@@ -4161,32 +4186,90 @@ async function cargarConteos() {
       const col = colEstado[s.estado] || '#333';
       const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : s.diferencia) : '—';
       const difCol = s.diferencia > 0 ? '#4ade80' : s.diferencia < 0 ? '#f87171' : '#aaa';
+      const tipoTag = s.tipo === 'MANUAL'
+        ? `<span style="background:#1a1a2a;color:#a78bfa;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;">MANUAL</span>`
+        : s.tipo === 'EXCEPCION_PICKING'
+        ? `<span style="background:#1a0a0a;color:#f87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;">PICKING</span>`
+        : '';
       return `
       <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-          <div>
-            <div style="font-size:13px;font-weight:700;">${s.producto_codigo || '—'}</div>
-            <div style="font-size:11px;color:#666;">${s.producto_nombre || ''}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_codigo || '—'}</div>
+            <div style="font-size:11px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
           </div>
-          <div style="display:flex;gap:6px;align-items:center;">
-            ${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:10px;font-weight:700;padding:2px 7px;border-radius:8px;">ABC-${s.clasificacion_abc}</span>` : ''}
+          <div style="display:flex;gap:4px;align-items:center;flex-shrink:0;margin-left:8px;">
+            ${tipoTag}
+            ${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:10px;font-weight:700;padding:2px 6px;border-radius:8px;">ABC-${s.clasificacion_abc}</span>` : ''}
             <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
           </div>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:11px;color:#666;">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#666;">
           <span>📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}</span>
-          <span>Diferencia: <span style="color:${difCol};font-weight:700;">${dif}</span></span>
+          <span>Δ <span style="color:${difCol};font-weight:700;">${dif}</span></span>
           ${s.estado === 'DESCUADRE' ? `<button onclick="ajustarConteo(${s.id})"
             style="background:#b45309;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
-            Ajustar →
-          </button>` : ''}
+            Ajustar →</button>` : ''}
         </div>
-        ${s.operario_nombre ? `<div style="font-size:11px;color:#555;margin-top:4px;">Operario: ${s.operario_nombre}</div>` : ''}
+        ${s.operario_nombre ? `<div style="font-size:11px;color:#555;margin-top:3px;">👤 ${s.operario_nombre}</div>` : ''}
       </div>`;
     }).join('');
+
+    // Paginación
+    if (pag) {
+      pag.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;width:100%;padding:4px 0;">
+          <button onclick="cargarConteos(${_CONTEO_PAGE - 1})" ${_CONTEO_PAGE <= 1 ? 'disabled' : ''}
+            style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_CONTEO_PAGE <= 1 ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_CONTEO_PAGE <= 1 ? 'default' : 'pointer'};">
+            ← Anterior
+          </button>
+          <span style="font-size:12px;color:#555;">${total.toLocaleString()} conteos · Pág ${_CONTEO_PAGE}/${totalPag}</span>
+          <button onclick="cargarConteos(${_CONTEO_PAGE + 1})" ${_CONTEO_PAGE >= totalPag ? 'disabled' : ''}
+            style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_CONTEO_PAGE >= totalPag ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_CONTEO_PAGE >= totalPag ? 'default' : 'pointer'};">
+            Siguiente →
+          </button>
+        </div>`;
+    }
   } catch (e) {
     lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando conteos</div>';
   }
+}
+
+function conteosMostrarFormManual() {
+  document.getElementById('conteo-form-manual').style.display = 'block';
+  document.getElementById('conteo-manual-codigo').focus();
+}
+function conteosOcultarFormManual() {
+  document.getElementById('conteo-form-manual').style.display = 'none';
+  document.getElementById('conteo-manual-codigo').value = '';
+  document.getElementById('conteo-manual-error').textContent = '';
+}
+async function crearConteoManual() {
+  const almacenId = document.getElementById('inv-abc-almacen')?.value || _INV_ALMACENES[0]?.id;
+  const codigo = document.getElementById('conteo-manual-codigo')?.value.trim().toUpperCase();
+  const errorEl = document.getElementById('conteo-manual-error');
+  errorEl.textContent = '';
+  if (!codigo) { errorEl.textContent = 'Ingresa el código del producto'; return; }
+  if (!almacenId) { errorEl.textContent = 'Selecciona un almacén en la pestaña ABC'; return; }
+  try {
+    const r = await fetch(API + '/api/conteo/manual', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ almacen_id: parseInt(almacenId), producto_codigo: codigo }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      if (d.tareas_creadas === 0) {
+        errorEl.textContent = d.omitidas_ya_activas > 0 ? 'Ya existe un conteo activo para este producto' : 'Producto sin stock en este almacén';
+      } else {
+        alerta(`Conteo creado para ${d.producto_nombre || codigo}`, 'exito');
+        conteosOcultarFormManual();
+        await cargarConteos(1);
+      }
+    } else {
+      errorEl.textContent = d.error || 'Error al crear conteo';
+    }
+  } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
 async function cargarResumenAbc() {
@@ -4224,7 +4307,7 @@ async function cargarResumenAbc() {
   }
 }
 
-async function generarAbc(clase) {
+async function generarAbc(clase, forzarTodo = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
   const res = document.getElementById('inv-abc-resultado');
@@ -4233,14 +4316,15 @@ async function generarAbc(clase) {
     const r = await fetch(API + '/api/conteo/abc/generar-tareas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId), clasificacion: clase })
+      body: JSON.stringify({ almacen_id: parseInt(almacenId), clasificacion: clase, forzar_todo: forzarTodo })
     });
     const d = await r.json();
     if (r.ok) {
-      const msg = `Clase ${clase}: ${d.tareas_creadas} tareas nuevas · ${d.omitidos_por_frecuencia} ya contados · ${d.omitidos_por_pendiente} activos`;
+      const loteInfo = d.batch_diario ? ` (lote ${d.batch_diario}/día de ${d.total_clase})` : ' (todo)';
+      const msg = `Clase ${clase}: ${d.tareas_creadas} tareas${loteInfo}`;
       if (res) res.textContent = msg;
-      alerta(msg, 'exito');
-      await cargarConteos();
+      alerta(msg, d.tareas_creadas > 0 ? 'exito' : 'advertencia');
+      await cargarConteos(1);
     } else {
       if (res) res.textContent = '';
       alerta(d.error || 'Error generando tareas', 'error');
@@ -4251,26 +4335,26 @@ async function generarAbc(clase) {
   }
 }
 
-async function generarTodasClases() {
+async function generarTodasClases(forzarTodo = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  if (forzarTodo && !confirm('¿Generar tareas para TODOS los productos elegibles sin límite de lote? Puede crear miles de conteos.')) return;
   const res = document.getElementById('inv-abc-resultado');
-  if (res) res.textContent = 'Generando A+B+C...';
+  if (res) res.textContent = forzarTodo ? 'Forzando todo...' : 'Generando lote del día...';
   try {
     const r = await fetch(API + '/api/conteo/abc/generar-todas', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ almacen_id: parseInt(almacenId) })
+      body: JSON.stringify({ almacen_id: parseInt(almacenId), forzar_todo: forzarTodo })
     });
     const d = await r.json();
     if (r.ok) {
       const watchdog = d.por_clase?.watchdog;
-      const wdMsg = watchdog?.overrides > 0
-        ? ` · 🤖 Watchdog: ${watchdog.overrides} override(s)` : '';
-      const msg = `Total: ${d.total_tareas_creadas} tareas nuevas${wdMsg}`;
+      const wdMsg = watchdog?.overrides > 0 ? ` · 🤖 ${watchdog.overrides} watchdog` : '';
+      const msg = `${d.total_tareas_creadas} tareas nuevas${wdMsg}`;
       if (res) res.textContent = msg;
-      alerta(msg, 'exito');
-      await cargarConteos();
+      alerta(msg, d.total_tareas_creadas > 0 ? 'exito' : 'advertencia');
+      await cargarConteos(1);
     } else {
       if (res) res.textContent = '';
       alerta(d.error || 'Error generando tareas', 'error');
@@ -4279,6 +4363,33 @@ async function generarTodasClases() {
     if (res) res.textContent = '';
     alerta('Error de conexión', 'error');
   }
+}
+
+async function limpiarPendientesAbc() {
+  const almacenId = document.getElementById('inv-abc-almacen')?.value;
+  if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
+  const clase = prompt('¿Qué clase limpiar? Escribe A, B, C o deja vacío para TODAS (esto eliminará TODAS las tareas PENDIENTE de la clase):');
+  if (clase === null) return; // canceló
+  const claseUpper = clase.trim().toUpperCase();
+  if (claseUpper && !['A','B','C'].includes(claseUpper)) {
+    alerta('Clase inválida. Usa A, B, C o deja vacío.', 'error'); return;
+  }
+  const etiqueta = claseUpper || 'todas las clases';
+  if (!confirm(`¿Eliminar TODAS las tareas PENDIENTE de ${etiqueta}? Esta acción no se puede deshacer.`)) return;
+  try {
+    const r = await fetch(API + '/api/conteo/abc/limpiar-pendientes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ almacen_id: parseInt(almacenId), clasificacion: claseUpper || null }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`${d.eliminadas} tareas eliminadas (${etiqueta})`, 'exito');
+      await cargarConteos(1);
+    } else {
+      alerta(d.error || 'Error limpiando cola', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function subirCsvAbc(input) {

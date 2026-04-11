@@ -1,5 +1,8 @@
+import uuid
+from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.services.conteo_service import ConteoService
 from app.services.abc_service import ABCService
@@ -21,6 +24,7 @@ def listar_sesiones():
     almacen_id = request.args.get('almacen_id', type=int)
     clasificacion = request.args.get('clasificacion')
     operario_id = request.args.get('operario_id', type=int)
+    marca = request.args.get('marca', '').strip()
     page = request.args.get('page', 1, type=int)
 
     query = SesionConteo.query.order_by(SesionConteo.fecha_creacion.desc())
@@ -33,13 +37,20 @@ def listar_sesiones():
         query = query.filter_by(clasificacion_abc=clasificacion)
     if operario_id:
         query = query.filter_by(operario_id=operario_id)
+    if marca:
+        from app.models.producto import Producto
+        query = (query
+                 .join(Producto, SesionConteo.producto_id == Producto.id)
+                 .filter(Producto.marca.ilike(f'%{marca}%')))
 
-    sesiones = query.paginate(page=page, per_page=50, error_out=False)
+    sesiones = query.paginate(page=page, per_page=30, error_out=False)
 
     return jsonify({
         'sesiones': [s.to_dict() for s in sesiones.items],
         'total': sesiones.total,
-        'pagina_actual': page
+        'pagina_actual': page,
+        'total_paginas': sesiones.pages,
+        'por_pagina': 30,
     }), 200
 
 
@@ -151,8 +162,9 @@ def auditorias_urgentes():
 @jwt_required()
 def generar_tareas_abc():
     """
-    Genera tareas de conteo cíclico automáticamente según clasificación ABC.
-    Por defecto genera para clase A (diario). Solo admin.
+    Genera el lote diario de conteo para una clase.
+    forzar_todo=true genera para todos los elegibles sin límite de batch.
+    Solo admin.
     """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede generar tareas de conteo ABC'}), 403
@@ -164,7 +176,8 @@ def generar_tareas_abc():
     try:
         resultado = ABCService.generar_tareas_conteo_diario(
             almacen_id=data['almacen_id'],
-            clasificacion=data.get('clasificacion', 'A')
+            clasificacion=data.get('clasificacion', 'A'),
+            forzar_todo=bool(data.get('forzar_todo', False)),
         )
         return jsonify(resultado), 201
     except Exception as e:
@@ -181,10 +194,121 @@ def generar_todas_las_clases():
     if 'almacen_id' not in data:
         return jsonify({'error': 'almacen_id es requerido'}), 400
     try:
-        resultado = ABCService.generar_todas_las_clases(almacen_id=data['almacen_id'])
+        resultado = ABCService.generar_todas_las_clases(
+            almacen_id=data['almacen_id'],
+            forzar_todo=bool(data.get('forzar_todo', False)),
+        )
         return jsonify(resultado), 201
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@conteo_bp.route('/abc/limpiar-pendientes', methods=['POST'])
+@jwt_required()
+def limpiar_pendientes_abc():
+    """
+    Elimina tareas PENDIENTE para reiniciar el ciclo de conteo de una clase.
+    Útil cuando se generó todo de golpe y se quiere empezar gradualmente.
+    Solo admin.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede limpiar la cola de conteo'}), 403
+    data = request.get_json() or {}
+    almacen_id = data.get('almacen_id')
+    clasificacion = data.get('clasificacion')  # A, B, C o None (todas)
+    if not almacen_id:
+        return jsonify({'error': 'almacen_id es requerido'}), 400
+
+    query = SesionConteo.query.filter_by(estado='PENDIENTE', almacen_id=almacen_id)
+    if clasificacion and clasificacion in ('A', 'B', 'C'):
+        query = query.filter_by(clasificacion_abc=clasificacion)
+
+    count = query.count()
+    query.delete(synchronize_session=False)
+    db.session.commit()
+    return jsonify({
+        'eliminadas': count,
+        'almacen_id': almacen_id,
+        'clasificacion': clasificacion or 'todas',
+    }), 200
+
+
+@conteo_bp.route('/manual', methods=['POST'])
+@jwt_required()
+def crear_conteo_manual():
+    """
+    Admin crea una tarea de conteo manual por código de producto.
+    Útil para verificar un producto específico o generar conteos por marca
+    antes de una OC.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear conteos manuales'}), 403
+    data = request.get_json() or {}
+
+    almacen_id = data.get('almacen_id')
+    producto_codigo = (data.get('producto_codigo') or '').strip().upper()
+    if not almacen_id or not producto_codigo:
+        return jsonify({'error': 'almacen_id y producto_codigo son requeridos'}), 400
+
+    from app.models.producto import Producto
+    from app.models.inventario import UbicacionProducto
+    from app.models.ubicacion import Ubicacion
+
+    producto = Producto.query.filter(
+        db.or_(
+            Producto.codigo_siesa == producto_codigo,
+            Producto.codigo == producto_codigo
+        )
+    ).first()
+    if not producto:
+        return jsonify({'error': f'Producto {producto_codigo} no encontrado'}), 404
+
+    registros = (
+        UbicacionProducto.query
+        .join(Ubicacion)
+        .filter(
+            UbicacionProducto.producto_id == producto.id,
+            Ubicacion.almacen_id == almacen_id
+        ).all()
+    )
+    if not registros:
+        return jsonify({'error': 'El producto no tiene stock registrado en este almacén'}), 404
+
+    creadas = []
+    omitidas = 0
+    for reg in registros:
+        ya = SesionConteo.query.filter(
+            SesionConteo.producto_id == producto.id,
+            SesionConteo.ubicacion_id == reg.ubicacion_id,
+            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+        ).first()
+        if ya:
+            omitidas += 1
+            continue
+
+        codigo = f'CC-MANUAL-{datetime.utcnow().strftime("%Y%m%d")}-{str(uuid.uuid4())[:6].upper()}'
+        sesion = SesionConteo(
+            codigo=codigo,
+            tipo='MANUAL',
+            clasificacion_abc=producto.clasificacion_abc or 'C',
+            ubicacion_id=reg.ubicacion_id,
+            almacen_id=almacen_id,
+            producto_id=producto.id,
+            producto_codigo_siesa=producto.codigo_siesa,
+            maneja_lote=False,
+            estado='PENDIENTE'
+        )
+        db.session.add(sesion)
+        creadas.append(codigo)
+
+    db.session.commit()
+    return jsonify({
+        'tareas_creadas': len(creadas),
+        'omitidas_ya_activas': omitidas,
+        'producto': producto_codigo,
+        'producto_nombre': producto.nombre or '',
+        'codigos': creadas,
+    }), 201
 
 
 @conteo_bp.route('/abc/sincronizar', methods=['POST'])
