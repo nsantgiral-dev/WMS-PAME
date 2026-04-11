@@ -155,28 +155,51 @@ class MobileService:
         # ── Task Interleaving ────────────────────────────────────────────────────
         # El picker va a la ubicación X. Si hay un conteo pendiente ahí, lo
         # asignamos ahora para que lo haga al terminar el picking — sin viaje extra.
+        # Respetar capacidad_diaria_conteo del operario (0 = sin límite).
         conteo_intercalado = None
         if tarea.ubicacion_id:
-            conteo_mismo_lugar = SesionConteo.query.filter_by(
-                ubicacion_id=tarea.ubicacion_id,
-                estado='PENDIENTE',
-                operario_id=None
-            ).first()
-            if conteo_mismo_lugar:
-                conteo_mismo_lugar.operario_id = operario_id
-                # No cambia a EN_PROCESO aún — el operario primero hace el picking
-                db.session.flush()
-                conteo_intercalado = {
-                    'id':              conteo_mismo_lugar.id,
-                    'codigo':          conteo_mismo_lugar.codigo,
-                    'producto_codigo': conteo_mismo_lugar.producto.codigo if conteo_mismo_lugar.producto else '',
-                    'producto_nombre': conteo_mismo_lugar.producto.nombre if conteo_mismo_lugar.producto else '',
-                    'clasificacion':   conteo_mismo_lugar.clasificacion_abc or '?',
-                }
-                logger.info(
-                    f'[INTERLEAVING] Conteo {conteo_mismo_lugar.codigo} '
-                    f'inyectado junto al picking {tarea.codigo} — ubicación {tarea.ubicacion_id}'
-                )
+            from app.models.usuario import Usuario
+            op_usuario = Usuario.query.get(operario_id)
+            capacidad = (op_usuario.capacidad_diaria_conteo
+                         if op_usuario and op_usuario.capacidad_diaria_conteo is not None
+                         else 15)
+
+            bajo_tope = True
+            if capacidad > 0:
+                hoy = datetime.utcnow().date()
+                conteos_hoy = SesionConteo.query.filter(
+                    SesionConteo.operario_id == operario_id,
+                    db.func.date(SesionConteo.fecha_inicio) == hoy
+                ).count()
+                bajo_tope = conteos_hoy < capacidad
+                if not bajo_tope:
+                    logger.info(
+                        f'[INTERLEAVING] Operario {operario_id} alcanzó tope diario '
+                        f'({conteos_hoy}/{capacidad}) — no se inyecta conteo'
+                    )
+
+            if bajo_tope:
+                conteo_mismo_lugar = SesionConteo.query.filter_by(
+                    ubicacion_id=tarea.ubicacion_id,
+                    estado='PENDIENTE',
+                    operario_id=None
+                ).first()
+                if conteo_mismo_lugar:
+                    conteo_mismo_lugar.operario_id = operario_id
+                    # No cambia a EN_PROCESO aún — el operario primero hace el picking
+                    db.session.flush()
+                    conteo_intercalado = {
+                        'id':              conteo_mismo_lugar.id,
+                        'codigo':          conteo_mismo_lugar.codigo,
+                        'producto_codigo': conteo_mismo_lugar.producto.codigo if conteo_mismo_lugar.producto else '',
+                        'producto_nombre': conteo_mismo_lugar.producto.nombre if conteo_mismo_lugar.producto else '',
+                        'clasificacion':   conteo_mismo_lugar.clasificacion_abc or '?',
+                    }
+                    logger.info(
+                        f'[INTERLEAVING] Conteo {conteo_mismo_lugar.codigo} '
+                        f'inyectado junto al picking {tarea.codigo} — ubicación {tarea.ubicacion_id} '
+                        f'({conteos_hoy + 1 if capacidad > 0 else "∞"}/{capacidad or "∞"})'
+                    )
 
         # Asignar picking al operario
         tarea.operario_id = operario_id

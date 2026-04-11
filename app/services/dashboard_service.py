@@ -163,6 +163,12 @@ class DashboardService:
                 SesionConteo.fecha_cierre >= fecha_inicio
             ).count()
 
+            hoy = datetime.utcnow().date()
+            conteos_hoy = SesionConteo.query.filter(
+                SesionConteo.operario_id == operario.id,
+                db.func.date(SesionConteo.fecha_inicio) == hoy
+            ).count()
+
             resultado.append({
                 'operario_id': operario.id,
                 'nombre': operario.nombre,
@@ -170,6 +176,8 @@ class DashboardService:
                 'pickings_completados': pickings,
                 'packings_completados': packings,
                 'conteos_completados': conteos,
+                'conteos_hoy': conteos_hoy,
+                'capacidad_diaria_conteo': operario.capacidad_diaria_conteo if operario.capacidad_diaria_conteo is not None else 15,
                 'total_tareas': pickings + packings + conteos
             })
 

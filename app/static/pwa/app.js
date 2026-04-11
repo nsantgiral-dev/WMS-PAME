@@ -446,7 +446,7 @@ async function cargarOperarios() {
       get('/api/auth/usuarios')
     ]);
     const metricas = {};
-    (prod.operarios || []).forEach(op => { metricas[op.id] = op; });
+    (prod.operarios || []).forEach(op => { metricas[op.operario_id || op.id] = op; });
 
     // Todos los usuarios activos (operarios/jefe), con métricas si las tienen
     const todos = (usuariosData.usuarios || []).filter(u => u.activo);
@@ -467,6 +467,18 @@ async function cargarOperarios() {
             <div style="font-size:14px;font-weight:600;">${u.nombre}</div>
             <div style="font-size:11px;color:#555;margin-bottom:2px;">${u.rol} ${badges}</div>
             <div style="font-size:11px;color:#444;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Conteos:${op.conteos_completados}</div>
+            ${u.puede_picar && u.capacidad_diaria_conteo != null ? (() => {
+              const cap = u.capacidad_diaria_conteo;
+              const hoy = op.conteos_hoy || 0;
+              const pct = cap > 0 ? Math.min(100, Math.round(hoy / cap * 100)) : 0;
+              const col = pct >= 100 ? '#ef4444' : pct >= 70 ? '#f59e0b' : '#4ade80';
+              return `<div style="margin-top:4px;">
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:#555;margin-bottom:2px;">
+                  <span>Conteos hoy</span><span style="color:${col};font-weight:600;">${hoy}/${cap > 0 ? cap : '∞'}</span>
+                </div>
+                ${cap > 0 ? `<div style="background:#222;border-radius:3px;height:3px;overflow:hidden;"><div style="background:${col};width:${pct}%;height:100%;border-radius:3px;transition:width .3s;"></div></div>` : ''}
+              </div>`;
+            })() : ''}
           </div>
           <div style="text-align:right;">
             <div style="font-size:28px;font-weight:800;color:${color}">${op.total_tareas}</div>
@@ -2260,6 +2272,13 @@ function _formUsuario(u = {}) {
             <div style="font-size:11px;color:#555;">Verifica y cierra cajas en mesa de empaque</div>
           </div>
         </label>
+        <div style="margin-top:14px;padding-top:14px;border-top:1px solid #222;">
+          <label style="font-size:12px;color:#888;display:block;margin-bottom:6px;">Conteos cíclicos por día (0 = sin límite)</label>
+          <input id="u-capacidad-conteo" type="number" min="0" max="200" step="1"
+            value="${u.capacidad_diaria_conteo ?? 15}"
+            style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;color:#fff;border-radius:8px;font-size:14px;box-sizing:border-box;">
+          <div style="font-size:11px;color:#555;margin-top:4px;">Máximo de conteos intercalados que el sistema le asigna en un turno. Recomendado: 15–25.</div>
+        </div>
       </div>
       <div style="display:flex;gap:8px;">
         <button onclick="_guardarUsuario(${u.id || 'null'})"
@@ -2306,6 +2325,7 @@ async function _guardarUsuario(uid) {
   const rol    = document.getElementById('u-rol')?.value;
   const puedePicar   = document.getElementById('u-puede-picar')?.checked;
   const puedeEmpacar = document.getElementById('u-puede-empacar')?.checked;
+  const capacidadConteo = parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10);
 
   if (!nombre) { alerta('El nombre es requerido', 'error'); return; }
 
@@ -2314,6 +2334,7 @@ async function _guardarUsuario(uid) {
 
   const payload = {
     nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
+    capacidad_diaria_conteo: isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo),
     bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv
   };
   if (pass) payload.password = pass;

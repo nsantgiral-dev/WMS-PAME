@@ -62,6 +62,7 @@ def register():
         puede_usar_camara=data.get('puede_usar_camara', False),
         puede_picar=data.get('puede_picar', True),
         puede_empacar=data.get('puede_empacar', False),
+        capacidad_diaria_conteo=int(data.get('capacidad_diaria_conteo', 15)),
         bodega_siesa_id=data.get('bodega_siesa_id'),
         nombre_punto_venta=data.get('nombre_punto_venta'),
     )
@@ -109,6 +110,9 @@ def actualizar_usuario(uid):
         usuario.puede_picar = bool(data['puede_picar'])
     if 'puede_empacar' in data:
         usuario.puede_empacar = bool(data['puede_empacar'])
+    if 'capacidad_diaria_conteo' in data:
+        cap = data['capacidad_diaria_conteo']
+        usuario.capacidad_diaria_conteo = max(0, int(cap)) if cap is not None else 15
     if 'activo' in data:
         usuario.activo = bool(data['activo'])
     if 'bodega_siesa_id' in data:
