@@ -4207,11 +4207,17 @@ async function cargarConteos(page) {
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#666;">
           <span>📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}</span>
           <span>Δ <span style="color:${difCol};font-weight:700;">${dif}</span></span>
-          ${s.estado === 'DESCUADRE' ? `<button onclick="ajustarConteo(${s.id})"
-            style="background:#b45309;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
-            Ajustar →</button>` : ''}
+          <div style="display:flex;gap:4px;">
+            ${s.estado === 'DESCUADRE' || s.estado === 'SEGUNDO_CONTEO' ? `<button onclick="ajustarConteo(${s.id})"
+              style="background:#b45309;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
+              Ajustar →</button>` : ''}
+            ${s.estado !== 'AJUSTADO' && s.estado !== 'CANCELADO' ? `<button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
+              style="background:#1e293b;color:#94a3b8;border:1px solid #334155;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
+              ✏ Editar</button>` : ''}
+          </div>
         </div>
-        ${s.operario_nombre ? `<div style="font-size:11px;color:#555;margin-top:3px;">👤 ${s.operario_nombre}</div>` : ''}
+        ${s.operario_id ? `<div style="font-size:11px;color:#555;margin-top:3px;">👤 Op #${s.operario_id}</div>` : ''}
+        ${s.editado_en ? `<div style="font-size:10px;color:#78350f;margin-top:2px;">✏ Editado por ${s.editado_por_nombre || '#'+s.editado_por} — ${s.motivo_edicion}</div>` : ''}
       </div>`;
     }).join('');
 
@@ -4388,6 +4394,79 @@ async function limpiarPendientesAbc() {
       await cargarConteos(1);
     } else {
       alerta(d.error || 'Error limpiando cola', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+// ─── Edición de conteos (admin) ────────────────────────────────────────────
+
+let _CONTEO_EDICION_ID = null;
+
+function conteoAbrirEdicion(s) {
+  _CONTEO_EDICION_ID = s.id;
+  const m = document.getElementById('modal-conteo-edicion');
+  if (!m) return;
+
+  const bloqueado = s.estado === 'AJUSTADO' || s.estado === 'CANCELADO';
+  const cantInput = document.getElementById('conteo-edit-cantidad');
+  const estadoBadge = document.getElementById('conteo-edit-estado');
+
+  if (cantInput) {
+    cantInput.value = s.cantidad_fisica ?? '';
+    cantInput.disabled = bloqueado;
+  }
+  if (estadoBadge) estadoBadge.textContent = s.estado;
+
+  const infoDiv = document.getElementById('conteo-edit-info');
+  if (infoDiv) {
+    infoDiv.innerHTML = `
+      <div style="font-size:12px;color:#888;margin-bottom:10px;">
+        <b>${s.producto_codigo || '—'}</b> · ${s.producto_nombre || ''}<br>
+        📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'} · ABC-${s.clasificacion_abc || '?'}<br>
+        ${s.existencia_siesa != null ? `Siesa: <b>${s.existencia_siesa}</b> uds` : 'Sin ref. Siesa'}
+        ${s.editado_en ? `<br><span style="color:#f59e0b;">Última edición: ${s.motivo_edicion}</span>` : ''}
+      </div>`;
+  }
+  const motivoInput = document.getElementById('conteo-edit-motivo');
+  if (motivoInput) motivoInput.value = '';
+
+  m.style.display = 'flex';
+}
+
+function conteosCerrarEdicion() {
+  const m = document.getElementById('modal-conteo-edicion');
+  if (m) m.style.display = 'none';
+  _CONTEO_EDICION_ID = null;
+}
+
+async function conteoGuardarEdicion() {
+  if (!_CONTEO_EDICION_ID) return;
+  const cantRaw = document.getElementById('conteo-edit-cantidad')?.value;
+  const motivo  = document.getElementById('conteo-edit-motivo')?.value?.trim();
+
+  if (!motivo) { alerta('El motivo de edición es obligatorio', 'error'); return; }
+
+  const body = { motivo_edicion: motivo };
+  const cantEl = document.getElementById('conteo-edit-cantidad');
+  if (cantEl && !cantEl.disabled && cantRaw !== '') {
+    const cant = parseInt(cantRaw, 10);
+    if (isNaN(cant) || cant < 0) { alerta('Cantidad inválida', 'error'); return; }
+    body.cantidad_fisica = cant;
+  }
+
+  try {
+    const r = await fetch(API + `/api/conteo/${_CONTEO_EDICION_ID}/editar`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta('Conteo actualizado · ' + (d.cambios || []).join(', '), 'exito');
+      conteosCerrarEdicion();
+      await cargarConteos(_CONTEO_PAGE);
+    } else {
+      alerta(d.error || 'Error actualizando conteo', 'error');
     }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }

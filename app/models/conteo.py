@@ -60,6 +60,11 @@ class SesionConteo(db.Model):
     fecha_inicio = db.Column(db.DateTime)
     fecha_cierre = db.Column(db.DateTime)
 
+    # Auditoría de edición admin
+    editado_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    editado_en = db.Column(db.DateTime)
+    motivo_edicion = db.Column(db.Text)
+
     # Relaciones
     ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)
     producto = db.relationship('Producto', backref='sesiones_conteo', lazy=True)
@@ -69,6 +74,8 @@ class SesionConteo(db.Model):
                                        backref='segundos_conteos', lazy=True)
     aprobador = db.relationship('Usuario', foreign_keys=[aprobador_id],
                                 backref='ajustes_aprobados', lazy=True)
+    editor = db.relationship('Usuario', foreign_keys=[editado_por],
+                             backref='conteos_editados', lazy=True)
 
     def to_dict_operario(self):
         """Vista para el operario — SIN cantidad esperada (conteo ciego)."""
@@ -115,5 +122,9 @@ class SesionConteo(db.Model):
             'idempotency_key':   self.idempotency_key,
             'fecha_creacion': self.fecha_creacion.isoformat(),
             'fecha_inicio': self.fecha_inicio.isoformat() if self.fecha_inicio else None,
-            'fecha_cierre': self.fecha_cierre.isoformat() if self.fecha_cierre else None
+            'fecha_cierre': self.fecha_cierre.isoformat() if self.fecha_cierre else None,
+            'editado_por': self.editado_por,
+            'editado_por_nombre': self.editor.nombre if self.editor else None,
+            'editado_en': self.editado_en.isoformat() if self.editado_en else None,
+            'motivo_edicion': self.motivo_edicion,
         }

@@ -1207,6 +1207,41 @@
     </div>
   </div>
 
+  <!-- Modal Edición Conteo (admin) -->
+  <div id="modal-conteo-edicion" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.95);z-index:750;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#111;border:1px solid #2d1b69;border-radius:20px;width:100%;max-width:420px;padding:24px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:16px;font-weight:800;">✏ Editar Conteo
+          <span id="conteo-edit-estado" style="font-size:11px;font-weight:600;background:#1e293b;color:#94a3b8;padding:2px 8px;border-radius:8px;margin-left:6px;"></span>
+        </div>
+        <button onclick="conteosCerrarEdicion()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+      </div>
+      <div id="conteo-edit-info"></div>
+      <div style="margin-bottom:12px;">
+        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">Cantidad física corregida</label>
+        <input id="conteo-edit-cantidad" type="number" min="0" step="1"
+          style="width:100%;background:#0d0d0d;border:1px solid #333;color:#fff;border-radius:8px;padding:10px;font-size:16px;box-sizing:border-box;"
+          placeholder="Cantidad contada">
+      </div>
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">Motivo de edición <span style="color:#ef4444;">*</span></label>
+        <textarea id="conteo-edit-motivo" rows="3"
+          style="width:100%;background:#0d0d0d;border:1px solid #333;color:#fff;border-radius:8px;padding:10px;font-size:13px;box-sizing:border-box;resize:vertical;"
+          placeholder="Ej: Error de digitación — operario ingresó 12 en lugar de 21"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button onclick="conteosCerrarEdicion()"
+          style="flex:1;padding:12px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:10px;font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+        <button onclick="conteoGuardarEdicion()"
+          style="flex:2;padding:12px;background:#4f46e5;border:none;color:#fff;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+          Guardar cambios
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div class="offline-badge" id="offline-badge">⚡ <span id="offline-count">0</span> en cola</div>
 
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->

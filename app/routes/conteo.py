@@ -63,10 +63,16 @@ def mis_tareas():
     """
     operario_id = int(get_jwt_identity())
 
+    from sqlalchemy import case as sa_case
+    prioridad_abc = sa_case(
+        {'A': 1, 'B': 2, 'C': 3},
+        value=SesionConteo.clasificacion_abc,
+        else_=4
+    )
     tareas = SesionConteo.query.filter(
         SesionConteo.operario_id == operario_id,
         SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-    ).order_by(SesionConteo.fecha_creacion.asc()).all()
+    ).order_by(prioridad_abc, SesionConteo.fecha_creacion.asc()).all()
 
     return jsonify({
         'tareas': [t.to_dict_operario() for t in tareas],
@@ -386,3 +392,80 @@ def cargar_csv_abc():
     except Exception as e:
         current_app.logger.error(f'[ABC CSV] Error procesando archivo: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@conteo_bp.route('/<int:id>/editar', methods=['PUT'])
+@jwt_required()
+def editar_conteo(id):
+    """
+    Admin corrige datos de un conteo (cantidad_fisica, operario_id).
+    Requiere motivo_edicion obligatorio — queda en auditoría.
+    No aplica a conteos AJUSTADOS (Siesa ya procesó el ajuste).
+    """
+    from app.models.usuario import Usuario
+    editor_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(editor_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor'):
+        return jsonify({'error': 'Solo admin o supervisor puede editar conteos'}), 403
+
+    sesion = SesionConteo.query.get(id)
+    if not sesion:
+        return jsonify({'error': 'Conteo no encontrado'}), 404
+
+    if sesion.estado == 'AJUSTADO':
+        return jsonify({'error': 'No se puede editar un conteo ya ajustado en Siesa'}), 409
+
+    data = request.get_json() or {}
+    motivo = (data.get('motivo_edicion') or '').strip()
+    if not motivo:
+        return jsonify({'error': 'motivo_edicion es obligatorio'}), 400
+
+    cambios = []
+
+    # Corregir cantidad_fisica — dispara re-conciliación si ya tiene existencia_siesa
+    if 'cantidad_fisica' in data:
+        nueva_cantidad = data['cantidad_fisica']
+        if not isinstance(nueva_cantidad, int) or nueva_cantidad < 0:
+            return jsonify({'error': 'cantidad_fisica debe ser un entero >= 0'}), 400
+        sesion.cantidad_fisica = nueva_cantidad
+        cambios.append(f'cantidad_fisica → {nueva_cantidad}')
+
+        # Re-conciliar si ya tenemos referencia Siesa
+        if sesion.existencia_siesa is not None:
+            diferencia = nueva_cantidad - sesion.existencia_siesa
+            sesion.diferencia = diferencia
+            if diferencia == 0:
+                sesion.estado = 'MATCH'
+                sesion.fecha_cierre = datetime.utcnow()
+                cambios.append('estado → MATCH')
+            else:
+                # Si estaba en MATCH pero ahora no cuadra, volver a DESCUADRE
+                if sesion.estado == 'MATCH':
+                    sesion.estado = 'DESCUADRE'
+                    sesion.fecha_cierre = None
+                    cambios.append(f'estado → DESCUADRE (dif={diferencia})')
+
+    # Reasignar operario
+    if 'operario_id' in data:
+        nuevo_op = data['operario_id']
+        if nuevo_op is not None:
+            op_usr = Usuario.query.get(nuevo_op)
+            if not op_usr:
+                return jsonify({'error': f'Operario {nuevo_op} no encontrado'}), 404
+        sesion.operario_id = nuevo_op
+        cambios.append(f'operario_id → {nuevo_op}')
+        if sesion.estado == 'PENDIENTE' and nuevo_op:
+            sesion.estado = 'PENDIENTE'  # mantener — asignación no cambia estado
+
+    if not cambios:
+        return jsonify({'error': 'No se enviaron campos a modificar'}), 400
+
+    sesion.editado_por = editor_id
+    sesion.editado_en = datetime.utcnow()
+    sesion.motivo_edicion = motivo
+
+    db.session.commit()
+    current_app.logger.info(
+        f'[CONTEO EDIT] #{id} editado por usuario #{editor_id}: {"; ".join(cambios)}. Motivo: {motivo}'
+    )
+    return jsonify({'mensaje': 'Conteo actualizado', 'cambios': cambios, 'sesion': sesion.to_dict()}), 200
