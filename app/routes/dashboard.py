@@ -77,7 +77,7 @@ def resumen_completo():
         movimientos  = DashboardService.movimientos_recientes(almacen_id, limite=10)
 
         auditorias_urgentes = (SesionConteo.query
-            .filter_by(tipo='EXCEPCION_PICKING')
+            .filter_by(tipo='EXCEPCION_PICKING', almacen_id=almacen_id)
             .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
             .count())
 

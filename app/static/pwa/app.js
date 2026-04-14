@@ -1043,9 +1043,27 @@ async function confirmar() {
       if (btn) { btn.textContent = '✓ Confirmar'; btn.disabled = false; }
       return;
     }
-    alerta('¡Tarea completada!', 'exito');
     TAREA_ACTUAL = null;
-    setTimeout(pedirTarea, 1500);
+    // Conteos: mostrar resultado MATCH vs SEGUNDO_CONTEO antes de pedir siguiente tarea
+    if (r.resultado === 'MATCH' || r.resultado === 'SEGUNDO_CONTEO') {
+      const esMatch = r.resultado === 'MATCH';
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;';
+      overlay.style.background = esMatch ? '#052e16' : '#1c1400';
+      overlay.innerHTML = `
+        <div style="font-size:80px;">${esMatch ? '✅' : '⚠️'}</div>
+        <div style="font-size:28px;font-weight:900;color:${esMatch ? '#4ade80' : '#fbbf24'};text-align:center;padding:0 20px;">
+          ${esMatch ? 'Inventario correcto' : 'Diferencia detectada'}
+        </div>
+        <div style="font-size:15px;color:${esMatch ? '#166534' : '#92400e'};text-align:center;padding:0 30px;line-height:1.5;">
+          ${esMatch ? 'El conteo cuadra con el sistema.' : 'Se asignó un segundo conteo\npara verificación.'}
+        </div>`;
+      document.body.appendChild(overlay);
+      setTimeout(() => { overlay.remove(); pedirTarea(); }, esMatch ? 2000 : 3000);
+    } else {
+      alerta('¡Tarea completada!', 'exito');
+      setTimeout(pedirTarea, 1500);
+    }
   } catch (e) {
     guardarOffline(payload);
     TAREA_ACTUAL = null;
@@ -1153,7 +1171,7 @@ async function cargarAuditoriasUrgentes() {
   const el = document.getElementById('lista-auditorias-urgentes');
   if (!el) return;
   try {
-    const d = await get('/api/conteo/auditorias-urgentes');
+    const d = await get('/api/conteo/auditorias-urgentes?almacen_id=' + ALMACEN_ID);
     const auds = d.auditorias || [];
     if (!auds.length) {
       el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:20px;font-size:13px;">✓ Sin auditorías pendientes</div>';

@@ -153,11 +153,13 @@ def auditorias_urgentes():
     Auditorías EXCEPCION_PICKING pendientes de resolución.
     Solo visibles para admin/supervisor — aparecen en "Auditorías Urgentes".
     """
-    sesiones = (SesionConteo.query
-                .filter_by(tipo='EXCEPCION_PICKING')
-                .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
-                .order_by(SesionConteo.fecha_creacion.asc())
-                .all())
+    almacen_id = request.args.get('almacen_id', type=int)
+    q = (SesionConteo.query
+         .filter_by(tipo='EXCEPCION_PICKING')
+         .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE'])))
+    if almacen_id:
+        q = q.filter_by(almacen_id=almacen_id)
+    sesiones = q.order_by(SesionConteo.fecha_creacion.asc()).all()
     return jsonify({
         'auditorias': [s.to_dict() for s in sesiones],
         'total': len(sesiones),
