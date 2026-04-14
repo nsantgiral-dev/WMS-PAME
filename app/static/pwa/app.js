@@ -305,8 +305,15 @@ async function cargarDashboard() {
       audEl.style.display = nAud > 0 ? 'block' : 'none';
       const badge = document.getElementById('aud-urgentes-count');
       if (badge) badge.textContent = nAud;
-      // Cargar la lista de detalle automáticamente — antes quedaba en "Cargando..."
       if (nAud > 0) cargarAuditoriasUrgentes();
+    }
+    // Tareas de picking bloqueadas — pedidos del cliente sin resolver
+    const nBloq = d.tareas_bloqueadas || 0;
+    const bloqEl = document.getElementById('dashboard-tareas-bloqueadas');
+    if (bloqEl) {
+      bloqEl.style.display = nBloq > 0 ? 'block' : 'none';
+      const bloqBadge = document.getElementById('bloq-count');
+      if (bloqBadge) bloqBadge.textContent = nBloq;
     }
   } catch (e) {}
 }
@@ -339,6 +346,32 @@ function movimientos(lista) {
     const doc = m.numero_documento ? `<div style="font-size:10px;color:#444;">${m.numero_documento}</div>` : '';
     return `<div class="tabla-fila"><div><div class="tabla-nombre">${m.tipo}</div><div style="font-size:11px;color:#555;">${h}</div>${doc}</div><div style="color:${c};font-weight:700;">${s}${m.cantidad}</div></div>`;
   }).join('');
+}
+
+async function reabrirTareaPicking(id) {
+  if (!confirm('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.')) return;
+  try {
+    const r = await fetch(API + `/api/picking/${id}/reabrir`, { method: 'PUT', headers: { Authorization: 'Bearer ' + TOKEN } });
+    const d = await r.json();
+    if (r.ok) { alerta('Tarea reabierta al pool ✓', 'exito'); await cargarPedidos(); }
+    else alerta(d.error || 'Error al reabrir', 'error');
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function cancelarTareaPicking(id) {
+  const motivo = prompt('Motivo de cancelación (obligatorio):');
+  if (!motivo || !motivo.trim()) return;
+  if (!confirm(`¿Cancelar esta tarea de picking? El pedido del cliente quedará incompleto.`)) return;
+  try {
+    const r = await fetch(API + `/api/picking/${id}/cancelar`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ motivo })
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Tarea cancelada', 'advertencia'); await cargarPedidos(); }
+    else alerta(d.error || 'Error al cancelar', 'error');
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function cargarPedidos() {
@@ -416,19 +449,31 @@ async function cargarPedidos() {
 
     if (db.tareas && db.tareas.length) {
       html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin:10px 0 8px;">TAREAS EN BODEGA</div>`;
+      const MOTIVO_LABEL = { UBICACION_VACIA:'📦 Ubicación vacía', FALTANTE:'📉 Faltante parcial', MERCANCIA_AVERIADA:'🚫 Mercancía averiada', PRODUCTO_INCORRECTO:'❌ Producto incorrecto' };
       html += db.tareas.map(t => `
-        <div class="tabla-card">
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <div>
+        <div class="tabla-card" style="${t.estado==='BLOQUEADO'?'border-color:#7f1d1d;background:#110a0a;':''}">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+            <div style="flex:1;min-width:0;">
               <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
               <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
-              <div style="font-size:11px;color:#444;margin-top:2px;">${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado' : '⏳ En cola'}</div>
+              <div style="font-size:11px;color:#444;margin-top:2px;">${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada') : '⏳ En cola'}</div>
             </div>
-            <div style="text-align:right;">
+            <div style="text-align:right;flex-shrink:0;">
               <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='COMPLETADO'?'badge-green':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
-              <div style="font-size:22px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
+              <div style="font-size:20px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
             </div>
           </div>
+          ${t.estado === 'BLOQUEADO' ? `
+          <div style="display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
+            <button onclick="reabrirTareaPicking(${t.id})"
+              style="flex:1;padding:9px;background:#1e3a1e;color:#4ade80;border:1px solid #166534;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+              ↩ Reabrir al pool
+            </button>
+            <button onclick="cancelarTareaPicking(${t.id})"
+              style="flex:1;padding:9px;background:#1a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+              ✕ Cancelar tarea
+            </button>
+          </div>` : ''}
         </div>`).join('');
     }
 
@@ -2942,6 +2987,9 @@ function rutaCard(r) {
   const btnPlanilla = ['EN_TRANSITO','ENTREGADA'].includes(r.estado)
     ? `<button onclick="rutaVerPlanilla(${r.id})" style="flex:1;padding:10px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">💰 Planilla${r.estado_financiero === 'LIQUIDADA' ? ' ✓' : ''}</button>`
     : '';
+  const btnForzarCierre = r.estado === 'EN_TRANSITO'
+    ? `<button onclick="rutaForzarCierre(${r.id})" style="flex:1;padding:10px;background:#110a00;color:#f59e0b;border:1px solid #78350f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">⚡ Forzar cierre</button>`
+    : '';
 
   return `
     <div id="ruta-card-${r.id}" style="background:#111;border:1px solid ${r.estado === 'PROGRAMADO' ? '#2d1b69' : '#222'};border-radius:14px;padding:16px;margin-bottom:10px;">
@@ -2963,8 +3011,8 @@ function rutaCard(r) {
       </div>
       ${r.pedidos?.length ? `<div style="font-size:11px;color:#555;margin-bottom:10px;">Pedidos: ${r.pedidos.join(', ')}</div>` : ''}
       ${r.notas ? `<div style="font-size:12px;color:#666;font-style:italic;margin-bottom:10px;">"${r.notas}"</div>` : ''}
-      ${(btnIniciar || btnCerrar || btnEntregar || btnManifiesto || btnPlanilla)
-        ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">${btnIniciar}${btnCerrar}${btnEntregar}${btnManifiesto}${btnPlanilla}</div>`
+      ${(btnIniciar || btnCerrar || btnEntregar || btnManifiesto || btnPlanilla || btnForzarCierre)
+        ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">${btnIniciar}${btnCerrar}${btnEntregar}${btnManifiesto}${btnPlanilla}${btnForzarCierre}</div>`
         : ''}
     </div>`;
 }
@@ -3848,11 +3896,15 @@ function _condRenderFormParada() {
       ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#4ade80;">✓ Foto guardada (subir nueva para reemplazar)</div>` : ''}
     </div>
 
-    <div style="position:sticky;bottom:16px;">
+    <div style="position:sticky;bottom:16px;display:flex;flex-direction:column;gap:8px;">
       <button onclick="condGuardarParada()"
         style="width:100%;padding:20px;background:#1d4ed8;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
         ${r ? '💾 Actualizar Confirmación' : '✓ Confirmar Parada'}
       </button>
+      ${!r ? `<button onclick="condNoSePudoEntregar()"
+        style="width:100%;padding:14px;background:#1a0d0d;color:#f87171;border:1px solid #7f1d1d;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;">
+        🚫 No se pudo entregar
+      </button>` : ''}
     </div>`;
 
   // Guardar estado seleccionado
@@ -3896,8 +3948,10 @@ async function condGuardarParada() {
       const chk = document.getElementById('chk-bulto-' + b.id);
       if (chk && chk.checked) bultosRechazados.push(b.id);
     });
-    if (!bultosRechazados.length) {
-      alerta('Selecciona al menos un bulto rechazado', 'error');
+    // RECHAZADO total: el backend auto-selecciona todos los bultos — no bloquear aquí
+    // PARCIAL sí requiere selección explícita
+    if (estadoEntrega === 'PARCIAL' && !bultosRechazados.length) {
+      alerta('Para entrega parcial selecciona qué bultos fueron rechazados', 'error');
       return;
     }
   }
@@ -3963,6 +4017,33 @@ async function condVolverAParadas(recargar = false) {
   }
 }
 
+async function condNoSePudoEntregar() {
+  const p = _COND_PARADA_FORM;
+  if (!p) return;
+  const obs = prompt('Motivo (opcional):', 'Cliente no disponible');
+  if (obs === null) return; // canceló
+  try {
+    const r = await fetch(API + `/api/rutas/${_COND_RUTA_ACTIVA.id}/paradas/${p.tarea_id}/confirmar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({
+        estado_entrega: 'RECHAZADO',
+        forma_pago: 'EXENTO',
+        monto_cobrado: 0,
+        observaciones: obs || 'Cliente no disponible',
+        bultos_rechazados: [],  // backend auto-rechaza todos
+      })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta('Registrado como no entregado', 'advertencia');
+      await condAbrirParadas(_COND_RUTA_ACTIVA.id);
+    } else {
+      alerta(d.error || 'Error al registrar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
 async function condCerrarRuta() {
   if (!_COND_RUTA_ACTIVA) return;
   if (!confirm('¿Confirmar cierre de ruta? Ya no podrás agregar más confirmaciones de parada.')) return;
@@ -3989,6 +4070,23 @@ async function condCerrarRuta() {
 // ══════════════════════════════════════════════════════════════════
 
 let _PLAN_RUTA_ID = null;
+
+async function rutaForzarCierre(id) {
+  if (!confirm('¿Forzar el cierre de esta ruta?\n\nLas paradas sin gestionar quedarán registradas como RECHAZADAS automáticamente.\nEsta acción es irreversible.')) return;
+  try {
+    const r = await fetch(API + `/api/rutas/${id}/forzar-cierre`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`Ruta cerrada — ${d.paradas_auto_cerradas} parada(s) auto-rechazadas`, 'advertencia');
+      await cargarRutas();
+    } else {
+      alerta(d.error || 'Error al forzar cierre', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
 
 async function rutaVerPlanilla(id) {
   _PLAN_RUTA_ID = id;

@@ -210,7 +210,7 @@ class PickingService:
 
     @staticmethod
     def cancelar_picking(tarea_id: int, motivo: str = None):
-        """Cancela una tarea y libera la reserva."""
+        """Cancela una tarea y libera la reserva (y el bloqueado si aplica)."""
         tarea = TareaPicking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
@@ -218,14 +218,45 @@ class PickingService:
         if tarea.estado == 'COMPLETADO':
             raise ValueError('No se puede cancelar una tarea completada')
 
-        # Liberar reserva
         reg = UbicacionProducto.query.filter_by(
             ubicacion_id=tarea.ubicacion_id,
             producto_id=tarea.producto_id
         ).with_for_update().first()
         if reg:
             reg.reservado = max(0, reg.reservado - tarea.cantidad_solicitada)
+            # Si estaba bloqueada, liberar también el inventario congelado
+            if tarea.estado == 'BLOQUEADO':
+                cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
+                reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
 
         tarea.estado = 'CANCELADO'
+        db.session.commit()
+        return tarea
+
+    @staticmethod
+    def reabrir_picking(tarea_id: int):
+        """
+        Reabre una tarea BLOQUEADA → PENDIENTE.
+        Libera el inventario congelado por el bloqueo y la devuelve al pool.
+        """
+        tarea = TareaPicking.query.get(tarea_id)
+        if not tarea:
+            raise ValueError('Tarea no encontrada')
+
+        if tarea.estado != 'BLOQUEADO':
+            raise ValueError(f'Solo se pueden reabrir tareas BLOQUEADAS (estado actual: {tarea.estado})')
+
+        reg = UbicacionProducto.query.filter_by(
+            ubicacion_id=tarea.ubicacion_id,
+            producto_id=tarea.producto_id
+        ).with_for_update().first()
+        if reg:
+            cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
+            reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
+
+        tarea.estado = 'PENDIENTE'
+        tarea.operario_id = None
+        tarea.cantidad_recogida = 0
+        tarea.motivo_bloqueo = None
         db.session.commit()
         return tarea

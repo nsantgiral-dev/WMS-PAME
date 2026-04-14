@@ -142,6 +142,26 @@ def cancelar_tarea(id):
         return jsonify({'error': str(e)}), 400
 
 
+@picking_bp.route('/<int:id>/reabrir', methods=['PUT'])
+@jwt_required()
+def reabrir_tarea(id):
+    """
+    Admin reabre una tarea BLOQUEADA → PENDIENTE.
+    Libera el inventario congelado y la devuelve al pool sin operario.
+    Solo admin o supervisor.
+    """
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin, supervisor o jefe puede reabrir tareas'}), 403
+    try:
+        tarea = PickingService.reabrir_picking(tarea_id=id)
+        return jsonify({'mensaje': 'Tarea reabierta — vuelve al pool de picking', 'tarea': tarea.to_dict()}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @picking_bp.route('/fefo', methods=['POST'])
 @jwt_required()
 def calcular_fefo():
@@ -280,9 +300,10 @@ def reportar_problema(id):
             idempotency_key=f'SP-{tarea.id}-{int(_dt.utcnow().timestamp()*1000)}',
         ))
 
-    # 3. Bloquear la tarea
+    # 3. Bloquear la tarea y registrar el motivo
     tarea.estado = 'BLOQUEADO'
     tarea.operario_id = None
+    tarea.motivo_bloqueo = motivo
 
     # 4. Crear auditoría urgente para CUALQUIER motivo que deje un faltante
     # MERCANCIA_AVERIADA y PRODUCTO_INCORRECTO también necesitan conteo físico

@@ -647,8 +647,12 @@ def confirmar_parada(id, tarea_id):
         return jsonify({'error': 'Foto demasiado grande. Máximo ~800KB JPEG.'}), 400
 
     bultos_rechazados_ids = data.get('bultos_rechazados', [])
-    if estado_entrega in ('PARCIAL', 'RECHAZADO') and not bultos_rechazados_ids:
-        return jsonify({'error': 'Debes indicar qué bultos fueron rechazados'}), 400
+    # RECHAZADO total: si no se especifican bultos, se rechazan TODOS automáticamente
+    if estado_entrega == 'RECHAZADO' and not bultos_rechazados_ids:
+        bultos_rechazados_ids = [b.id for b in bultos_tarea]
+    # PARCIAL sí requiere selección explícita de qué bultos no pudieron entregarse
+    if estado_entrega == 'PARCIAL' and not bultos_rechazados_ids:
+        return jsonify({'error': 'Para entrega parcial debes indicar cuáles bultos fueron rechazados'}), 400
 
     ahora = datetime.utcnow()
 
@@ -781,4 +785,64 @@ def liquidar_ruta(id):
         'ok':              True,
         'total_recaudado': ruta.total_recaudado(),
         'ruta':            ruta.to_dict(),
+    }), 200
+
+
+@rutas_bp.route('/<int:id>/forzar-cierre', methods=['POST'])
+@jwt_required()
+def forzar_cierre_ruta(id):
+    """
+    Admin fuerza el cierre de una ruta EN_TRANSITO aunque queden paradas sin gestionar.
+    Las paradas sin recaudo quedan registradas con RECHAZADO automático (motivo: cierre forzado).
+    Útil cuando el conductor tiene paradas inaccesibles o el sistema de pago falló.
+    Solo admin.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede forzar el cierre de rutas'}), 403
+
+    ruta = RutaDespacho.query.get_or_404(id)
+    if ruta.estado != 'EN_TRANSITO':
+        return jsonify({'error': f'La ruta debe estar EN_TRANSITO para forzar cierre (estado: {ruta.estado})'}), 400
+
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.packing import TareaPacking
+    from app.models.bulto import Bulto
+
+    admin_id = int(get_jwt_identity())
+    tareas = ruta.tareas_unicas()
+    recaudos_existentes = {r.tarea_id for r in RecaudoEntrega.query.filter_by(ruta_id=id).all()}
+    pendientes = [t for t in tareas if t not in recaudos_existentes]
+    ahora = datetime.utcnow()
+    auto_cerradas = 0
+
+    for tarea_id in pendientes:
+        bultos_tarea = Bulto.query.filter_by(tarea_id=tarea_id, ruta_despacho_id=id).all()
+        for b in bultos_tarea:
+            b.estado = 'RECHAZADO'
+            b.motivo_rechazo = 'Cierre forzado por admin'
+            b.fecha_entrega = ahora
+
+        recaudo = RecaudoEntrega(
+            ruta_id=id,
+            tarea_id=tarea_id,
+            estado_entrega='RECHAZADO',
+            forma_pago=None,
+            monto_cobrado=0,
+            observaciones='Cierre forzado por administrador — parada no gestionada',
+            confirmado_por=admin_id,
+            fecha_creacion=ahora,
+        )
+        db.session.add(recaudo)
+        auto_cerradas += 1
+
+    ruta.estado = 'ENTREGADA'
+    ruta.estado_financiero = 'LIQUIDADA'
+    ruta.fecha_cierre = ahora
+    db.session.commit()
+
+    return jsonify({
+        'ok': True,
+        'paradas_auto_cerradas': auto_cerradas,
+        'mensaje': f'Ruta cerrada. {auto_cerradas} parada(s) registradas como rechazadas automáticamente.',
+        'ruta': ruta.to_dict(),
     }), 200

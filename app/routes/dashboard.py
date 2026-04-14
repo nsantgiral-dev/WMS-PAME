@@ -81,12 +81,16 @@ def resumen_completo():
             .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
             .count())
 
+        from app.models.picking import TareaPicking
+        tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO').count()
+
         return jsonify({
             'kpis': kpis,
             'productividad': productividad,
             'alertas_stock': alertas,
             'movimientos_recientes': movimientos,
             'auditorias_urgentes': auditorias_urgentes,
+            'tareas_bloqueadas': tareas_bloqueadas,
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
