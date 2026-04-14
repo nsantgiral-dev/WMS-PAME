@@ -304,6 +304,7 @@ def reportar_problema(id):
     tarea.estado = 'BLOQUEADO'
     tarea.operario_id = None
     tarea.motivo_bloqueo = motivo
+    tarea.observaciones_bloqueo = data.get('observaciones', '') or None
 
     # 4. Crear auditoría urgente para CUALQUIER motivo que deje un faltante
     # MERCANCIA_AVERIADA y PRODUCTO_INCORRECTO también necesitan conteo físico

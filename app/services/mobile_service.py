@@ -39,6 +39,14 @@ class MobileService:
 
         tareas = []
 
+        # Lookup cliente names for all pedidos referenced in pickings
+        from app.models.pedido_siesa import PedidoSiesa
+        referencias = {p.referencia_documento for p in pickings if p.referencia_documento}
+        pedidos_map = {}
+        if referencias:
+            pedidos = PedidoSiesa.query.filter(PedidoSiesa.numero_pedido.in_(referencias)).all()
+            pedidos_map = {ped.numero_pedido: ped.cliente for ped in pedidos}
+
         for p in pickings:
             tareas.append({
                 'id': p.id,
@@ -51,6 +59,7 @@ class MobileService:
                 'cantidad_escaneada': p.cantidad_recogida,
                 'estado': p.estado,
                 'referencia': p.referencia_documento,
+                'cliente': pedidos_map.get(p.referencia_documento),
                 'lote': p.lote
             })
 

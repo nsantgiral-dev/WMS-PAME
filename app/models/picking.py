@@ -33,6 +33,7 @@ class TareaPicking(db.Model):
     estado = db.Column(db.String(20), default='PENDIENTE', nullable=False)
     prioridad = db.Column(db.Integer, default=1)
     motivo_bloqueo = db.Column(db.String(50))  # UBICACION_VACIA|FALTANTE|MERCANCIA_AVERIADA|PRODUCTO_INCORRECTO
+    observaciones_bloqueo = db.Column(db.Text)
 
     # Referencia origen
     referencia_documento = db.Column(db.String(50))
@@ -68,6 +69,7 @@ class TareaPicking(db.Model):
             'referencia_documento': self.referencia_documento,
             'tipo_documento': self.tipo_documento,
             'motivo_bloqueo': self.motivo_bloqueo,
+            'observaciones_bloqueo': self.observaciones_bloqueo,
             'fecha_creacion': self.fecha_creacion.isoformat(),
             'fecha_inicio': self.fecha_inicio.isoformat() if self.fecha_inicio else None,
             'fecha_completado': self.fecha_completado.isoformat() if self.fecha_completado else None

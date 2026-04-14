@@ -457,6 +457,7 @@ async function cargarPedidos() {
               <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
               <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
               <div style="font-size:11px;color:#444;margin-top:2px;">${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada') : '⏳ En cola'}</div>
+              ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>` : ''}
             </div>
             <div style="text-align:right;flex-shrink:0;">
               <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='COMPLETADO'?'badge-green':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
@@ -954,7 +955,14 @@ function renderTarea(t) {
         ⚠ Reportar problema
       </button>
 
-      ${t.referencia ? `<div style="text-align:center;margin-top:10px;font-size:12px;color:#555;">Ref: ${t.referencia}</div>` : ''}
+      ${(t.cliente || t.referencia) ? `
+      <div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:12px;padding:10px 14px;margin-top:8px;display:flex;align-items:center;gap:10px;">
+        <span style="font-size:18px;">🏪</span>
+        <div>
+          ${t.cliente ? `<div style="font-size:14px;font-weight:700;color:#60a5fa;">${t.cliente}</div>` : ''}
+          ${t.referencia ? `<div style="font-size:11px;color:#3b82f6;">Pedido ${t.referencia}</div>` : ''}
+        </div>
+      </div>` : ''}
 
       ${t.conteo_intercalado ? `
       <div style="background:#1c1a0a;border:1px solid #b45309;border-radius:12px;padding:14px;margin-top:12px;">
@@ -1127,6 +1135,12 @@ async function reportarProblema(tareaId) {
           </button>
         </div>
 
+        <div style="margin-top:4px;margin-bottom:8px;">
+          <div style="font-size:11px;color:#555;margin-bottom:4px;">Observaciones (opcional)</div>
+          <textarea id="obs-problema" rows="2" placeholder="Describe lo que encontraste..."
+            style="width:100%;padding:10px;background:#000;border:1px solid #333;border-radius:8px;color:#ccc;font-size:14px;resize:none;box-sizing:border-box;"></textarea>
+        </div>
+
         <button onclick="document.getElementById('modal-problema').remove()"
           style="width:100%;padding:12px;font-size:14px;background:#222;color:#666;border:none;border-radius:10px;cursor:pointer;margin-top:4px;">
           Cancelar
@@ -1147,12 +1161,14 @@ async function confirmarShortPick(tareaId) {
 }
 
 async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
+  const observaciones = document.getElementById('obs-problema')?.value?.trim() || '';
   const modal = document.getElementById('modal-problema');
   if (modal) modal.remove();
   try {
     await post('/api/picking/' + tareaId + '/reportar-problema', {
       motivo,
       cantidad_encontrada: cantidadEncontrada || 0,
+      observaciones: observaciones || undefined,
     });
     const msg = cantidadEncontrada > 0
       ? `Short-pick: ${cantidadEncontrada} unidades registradas. Auditoría creada.`
