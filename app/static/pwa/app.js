@@ -305,6 +305,8 @@ async function cargarDashboard() {
       audEl.style.display = nAud > 0 ? 'block' : 'none';
       const badge = document.getElementById('aud-urgentes-count');
       if (badge) badge.textContent = nAud;
+      // Cargar la lista de detalle automáticamente — antes quedaba en "Cargando..."
+      if (nAud > 0) cargarAuditoriasUrgentes();
     }
   } catch (e) {}
 }
@@ -1124,6 +1126,7 @@ async function cargarAuditoriasUrgentes() {
               <div style="font-size:13px;font-weight:700;color:#f87171;">${a.codigo}</div>
               <div style="font-size:11px;color:#555;margin-top:2px;">${a.producto_nombre || ''} · ${a.ubicacion_codigo || ''}</div>
               ${a.tarea_picking_id ? `<div style="font-size:10px;color:#444;margin-top:1px;">Originó: tarea picking #${a.tarea_picking_id}</div>` : ''}
+              ${a.motivo_codigo && !['AJ-ENT','AJ-SAL'].includes(a.motivo_codigo) ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${({'UBICACION_VACIA':'📦 Ubicación vacía','FALTANTE':'📉 Faltante parcial','MERCANCIA_AVERIADA':'🚫 Mercancía averiada','PRODUCTO_INCORRECTO':'❌ Producto incorrecto'})[a.motivo_codigo] || a.motivo_codigo}</div>` : ''}
             </div>
             <span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">${a.estado}</span>
           </div>

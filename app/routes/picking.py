@@ -284,15 +284,18 @@ def reportar_problema(id):
     tarea.estado = 'BLOQUEADO'
     tarea.operario_id = None
 
-    # 4. Crear auditoría urgente solo para faltantes reales
+    # 4. Crear auditoría urgente para CUALQUIER motivo que deje un faltante
+    # MERCANCIA_AVERIADA y PRODUCTO_INCORRECTO también necesitan conteo físico
+    # para determinar qué hay realmente en esa ubicación.
     auditoria_id = None
-    if motivo in ('UBICACION_VACIA', 'FALTANTE') and cantidad_faltante > 0:
+    if cantidad_faltante > 0:
         sesion = ConteoService.generar_auditoria_por_excepcion(
             tarea_picking_id=tarea.id,
             ubicacion_id=tarea.ubicacion_id,
             producto_id=tarea.producto_id,
             almacen_id=tarea.almacen_id,
         )
+        sesion.motivo_codigo = motivo  # guardar el motivo original para contexto
         auditoria_id = sesion.id
 
     db.session.commit()
