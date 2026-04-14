@@ -45,6 +45,11 @@ def listar_tareas():
 @jwt_required()
 def purgar_picks_cero():
     """Elimina tareas COMPLETADO con cantidad_recogida=0 (registros basura de confirms fallidos)."""
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+        return jsonify({'error': 'Sin permiso'}), 403
     referencia = request.args.get('referencia')
     query = TareaPicking.query.filter(
         TareaPicking.estado == 'COMPLETADO',

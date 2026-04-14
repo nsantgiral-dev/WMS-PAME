@@ -1020,7 +1020,8 @@ async function procesarScan(codigo) {
       codigo,
       cantidad: 1
     });
-    if (r.error) { alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+    if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+    beepOk();
     const contador = document.getElementById('contador');
     if (contador) {
       contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
@@ -1051,6 +1052,7 @@ async function confirmar() {
       if (btn) { btn.textContent = '✓ Confirmar'; btn.disabled = false; }
       return;
     }
+    beepDone();
     TAREA_ACTUAL = null;
     // Conteos: mostrar resultado MATCH vs SEGUNDO_CONTEO antes de pedir siguiente tarea
     if (r.resultado === 'MATCH' || r.resultado === 'SEGUNDO_CONTEO') {
@@ -1288,6 +1290,30 @@ function flash() {
 }
 
 function vibrar() { if (navigator.vibrate) navigator.vibrate(40); }
+
+// ── Feedback auditivo (Web Audio API — sin dependencias) ─────
+let _audioCtx = null;
+function _getAudioCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return _audioCtx;
+}
+function _tono(frecuencia, duracion, tipo = 'sine', ganancia = 0.35) {
+  try {
+    const ctx = _getAudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = tipo;
+    osc.frequency.setValueAtTime(frecuencia, ctx.currentTime);
+    gain.gain.setValueAtTime(ganancia, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duracion);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + duracion);
+  } catch (_) {}
+}
+function beepOk()    { _tono(880, 0.12); }                                   // agudo corto — scan OK
+function beepError() { _tono(220, 0.18, 'square', 0.3); setTimeout(() => _tono(180, 0.18, 'square', 0.3), 200); } // grave doble — error
+function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); setTimeout(() => _tono(784, 0.25), 240); } // fanfarria — tarea completa
 
 // ─────────────────────────────────────────────────────────────
 // ADMIN — Despacho desde Siesa
@@ -3990,24 +4016,34 @@ async function condGuardarParada() {
     }
   }
 
-  // Foto (base64)
+  // Foto (base64 comprimida — máx 800×600 @ JPEG 0.65)
   let fotoBase64 = '';
   const fotoInput = document.getElementById('cond-foto');
   if (fotoInput && fotoInput.files[0]) {
     try {
       fotoBase64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = e => {
-          const b64 = e.target.result;
-          if (b64.length > 1_150_000) reject(new Error('grande'));
-          else resolve(b64);
-        };
         reader.onerror = reject;
+        reader.onload = ev => {
+          const img = new Image();
+          img.onerror = reject;
+          img.onload = () => {
+            const MAX_W = 800, MAX_H = 600;
+            let w = img.width, h = img.height;
+            if (w > MAX_W || h > MAX_H) {
+              const ratio = Math.min(MAX_W / w, MAX_H / h);
+              w = Math.round(w * ratio); h = Math.round(h * ratio);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.65));
+          };
+          img.src = ev.target.result;
+        };
         reader.readAsDataURL(fotoInput.files[0]);
       });
-    } catch (err) {
-      if (err.message === 'grande') { alerta('Foto demasiado grande. Máximo ~800KB.', 'error'); return; }
-    }
+    } catch (_) { alerta('Error procesando la foto', 'error'); return; }
   }
 
   const btn = el.querySelector('button[onclick="condGuardarParada()"]');

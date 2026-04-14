@@ -19,7 +19,18 @@ def create_app():
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-    cors.init_app(app, resources={r"/api/*": {"origins": "*"}})
+    allowed_origin = os.getenv('APP_URL', '*')
+    cors.init_app(app, resources={r"/api/*": {"origins": allowed_origin}})
+
+    from flask import jsonify
+
+    @app.errorhandler(500)
+    def error_500(e):
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+    @app.errorhandler(404)
+    def error_404(e):
+        return jsonify({'error': 'Recurso no encontrado'}), 404
 
     from app.routes import register_routes
     register_routes(app)
