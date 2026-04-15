@@ -74,9 +74,16 @@ def _run_sync(app):
                             sin_producto += 1
                             continue
 
+                        # Preferir EAN real (todo dígitos, 8+ caracteres) sobre código interno.
+                        # Un producto puede tener múltiples entradas en ItemsBarras;
+                        # si ya tiene un EAN real guardado, no lo sobreescribir con un código interno.
+                        es_ean_real = codigo_barras.isdigit() and len(codigo_barras) >= 8
+                        tiene_ean_actual = (prod.codigo_barras or '').isdigit() and len(prod.codigo_barras or '') >= 8
+
                         if prod.codigo_barras != codigo_barras:
-                            prod.codigo_barras = codigo_barras
-                            actualizados += 1
+                            if es_ean_real or not tiene_ean_actual:
+                                prod.codigo_barras = codigo_barras
+                                actualizados += 1
 
                     except Exception as e:
                         logger.warning(f'[BARCODE SYNC] Fila inválida: {e}')
