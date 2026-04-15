@@ -330,6 +330,207 @@
     }
     #emp-btn-cerrar-caja:active  { background: var(--gbrd); }
     #emp-btn-cerrar-caja:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ═══════════════════════════════════════════════════════
+       RESPONSIVE SYSTEM — Tablet (≥768px) · Desktop (≥1024px)
+       Filosofía: Mobile-first. Desktop es capa aditiva.
+       Sin cambios a JS, IDs ni lógica existente.
+    ═══════════════════════════════════════════════════════ */
+
+    /* ── Tablet (768px+): más espacio, mismo flujo ── */
+    @media (min-width: 768px) {
+      body { max-width: 768px; }
+      .admin-content { padding: 20px 24px; }
+      .kpi-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+      .kpi-valor { font-size: 32px; }
+      .tabla-card { padding: 18px 20px; }
+    }
+
+    /* ═══════════════════════════════════════════════════════
+       DESKTOP (≥1024px): Sidebar + Grid layout
+    ═══════════════════════════════════════════════════════ */
+    @media (min-width: 1024px) {
+
+      /* ── Body full-width ── */
+      body { max-width: 100%; overflow: hidden; height: 100vh; }
+
+      /* ── Login: centrado elegante ── */
+      #pantalla-login {
+        background: radial-gradient(ellipse at 30% 20%, #0D2838 0%, var(--bg) 55%),
+                    radial-gradient(ellipse at 80% 80%, #08151E 0%, transparent 60%);
+        padding: 60px 40px;
+      }
+      .login-logo { width: min(560px, 42vw); height: 112px; }
+      .login-subtitulo { font-size: 16px; letter-spacing: .06em; }
+      .login-form { max-width: 420px; }
+      .input-field { padding: 15px 20px; font-size: 15px; border-radius: 14px; }
+      .btn-primary { padding: 18px; font-size: 16px; border-radius: 14px; }
+
+      /* ── Operario / Recepcionista: centrar y limitar ancho ── */
+      #pantalla-operario,
+      #pantalla-recepcion { max-width: 760px; margin: 0 auto; overflow-y: auto; height: 100vh; }
+
+      /* ── Empacador: centrado ── */
+      #pantalla-empacador { max-width: 800px; margin: 0 auto; }
+
+      /* ══════════════════════════════════════════════
+         ADMIN — CSS Grid: sidebar izquierdo + contenido
+         Sin tocar HTML ni JS.
+      ══════════════════════════════════════════════ */
+      #pantalla-admin {
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        grid-template-columns: 236px 1fr;
+        height: 100vh;
+        overflow: hidden;
+        max-width: 100%;
+        min-height: 0;
+      }
+
+      /* Header — fila 1, ambas columnas */
+      #pantalla-admin > .header {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding: 0 28px;
+        border-bottom: 1px solid var(--brd);
+      }
+
+      /* Barra de usuario — fila 2, ambas columnas */
+      #pantalla-admin > .operario-bar {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        padding: 10px 28px;
+        border-bottom: 1px solid var(--brd);
+      }
+
+      /* ── Sidebar ── */
+      .admin-nav {
+        grid-column: 1;
+        grid-row: 3;
+        flex-direction: column;
+        align-items: stretch;
+        overflow-y: auto;
+        overflow-x: hidden;
+        border-right: 1px solid var(--brd);
+        border-bottom: none;
+        padding: 16px 10px 24px;
+        background: var(--bg-s);
+        width: 236px;
+        gap: 2px;
+      }
+
+      /* Scrollbar sidebar — sutil */
+      .admin-nav::-webkit-scrollbar { display: block; width: 3px; }
+      .admin-nav::-webkit-scrollbar-track { background: transparent; }
+      .admin-nav::-webkit-scrollbar-thumb { background: var(--brd-b); border-radius: 4px; }
+
+      /* Tabs verticales */
+      .nav-tab {
+        border-bottom: none;
+        border-left: 3px solid transparent;
+        border-radius: 10px;
+        padding: 11px 15px;
+        font-size: 13.5px;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: block;
+        transition: background .12s, color .12s, border-color .12s;
+        margin-bottom: 1px;
+      }
+
+      .nav-tab.active {
+        border-left-color: var(--pm);
+        border-bottom-color: transparent;
+        background: linear-gradient(90deg, rgba(30,131,149,.22) 0%, rgba(30,131,149,.04) 100%);
+        color: var(--pm-light);
+        font-weight: 700;
+      }
+
+      .nav-tab:hover:not(.active) {
+        background: rgba(255,255,255,.05);
+        color: var(--tx);
+        border-left-color: var(--brd-b);
+      }
+
+      /* Separador visual en sidebar */
+      .admin-nav::before {
+        content: 'MENÚ';
+        display: block;
+        font-size: 10px;
+        font-weight: 700;
+        color: var(--tx3);
+        letter-spacing: .12em;
+        padding: 0 15px 10px;
+        text-transform: uppercase;
+      }
+
+      /* ── Área de contenido — fila 3, columna 2 ── */
+      .admin-content {
+        grid-column: 2;
+        grid-row: 3;
+        overflow-y: auto;
+        overflow-x: hidden;
+        padding: 28px 36px 40px;
+        min-height: 0;
+      }
+
+      /* Scrollbar contenido — sutil */
+      .admin-content::-webkit-scrollbar { display: block; width: 5px; }
+      .admin-content::-webkit-scrollbar-track { background: transparent; }
+      .admin-content::-webkit-scrollbar-thumb { background: var(--brd-b); border-radius: 6px; }
+      .admin-content::-webkit-scrollbar-thumb:hover { background: var(--pm-border); }
+
+      /* ── KPI: 4 columnas ── */
+      .kpi-grid {
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .kpi-card { padding: 22px 24px; border-radius: 16px; }
+      .kpi-valor { font-size: 40px; }
+      .kpi-label { font-size: 13px; }
+      .kpi-sub   { font-size: 12px; }
+
+      /* ── Cards ── */
+      .tabla-card { padding: 20px 24px; border-radius: 16px; }
+      .tabla-titulo { font-size: 15px; }
+
+      /* ── Header logo más grande ── */
+      .header-logo { width: 280px; height: 56px; }
+      .header-logo img { width: 340px; height: 340px; }
+
+      /* ── Rec cards ── */
+      .rec-card { padding: 24px 26px; }
+      .rec-titulo { font-size: 24px; }
+
+      /* ── Chart container ── */
+      .chart-container { padding: 20px 24px; border-radius: 16px; }
+      .chart-titulo { font-size: 15px; }
+
+      /* ── Inputs más cómodos en desktop ── */
+      .input-field { font-size: 15px; }
+
+      /* ── Botón logout ── */
+      .btn-logout { padding: 7px 16px; font-size: 13px; border-radius: 9px; }
+
+      /* ── Operario bar ── */
+      .operario-nombre { font-size: 15px; }
+      .operario-rol { font-size: 13px; }
+
+      /* ── Badges ── */
+      .badge { font-size: 11px; padding: 4px 11px; }
+    }
+
+    /* ── Extra wide (≥1440px): más respiración ── */
+    @media (min-width: 1440px) {
+      .admin-content { padding: 32px 48px 48px; }
+      .kpi-card { padding: 26px 28px; }
+      .kpi-valor { font-size: 44px; }
+      #pantalla-admin { grid-template-columns: 256px 1fr; }
+      .admin-nav { width: 256px; }
+    }
   </style>
 </head>
 <body>
