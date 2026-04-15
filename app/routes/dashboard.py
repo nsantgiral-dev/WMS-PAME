@@ -84,6 +84,9 @@ def resumen_completo():
         from app.models.picking import TareaPicking
         tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO').count()
 
+        from app.services.traslado_monitor_service import get_resumen_alertas
+        traslados_riesgo = get_resumen_alertas()
+
         return jsonify({
             'kpis': kpis,
             'productividad': productividad,
@@ -91,6 +94,7 @@ def resumen_completo():
             'movimientos_recientes': movimientos,
             'auditorias_urgentes': auditorias_urgentes,
             'tareas_bloqueadas': tareas_bloqueadas,
+            'traslados_en_riesgo': traslados_riesgo,
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

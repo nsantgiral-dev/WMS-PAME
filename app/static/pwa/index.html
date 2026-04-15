@@ -655,6 +655,26 @@
         <button onclick="cargarAuditoriasUrgentes()" style="width:100%;margin-top:8px;padding:8px;background:#111;border:1px solid #333;color:#666;border-radius:8px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
       </div>
 
+      <!-- Traslados en riesgo — Monitor latencia logística -->
+      <div id="dashboard-traslados-riesgo" style="display:none;background:#0a0e11;border:1px solid #1e3a5f;border-radius:14px;padding:14px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div>
+            <div style="font-size:14px;font-weight:800;color:#60a5fa;">🚛 Traslados Estancados</div>
+            <div style="font-size:11px;color:#1e3a5f;margin-top:2px;">Mercancía EN_TRANSITO que supera el tiempo esperado — verificar con logística</div>
+          </div>
+          <div style="text-align:right;">
+            <span id="traslados-criticos-count" style="background:#7c2d12;color:#fb923c;font-size:16px;font-weight:800;padding:3px 10px;border-radius:8px;margin-right:6px;">0</span>
+            <span style="font-size:10px;color:#60a5fa;">+24h</span>
+            <span id="traslados-alerta-count" style="background:#1e3a5f;color:#93c5fd;font-size:16px;font-weight:800;padding:3px 10px;border-radius:8px;margin-left:8px;">0</span>
+            <span style="font-size:10px;color:#60a5fa;">+12h</span>
+          </div>
+        </div>
+        <div id="traslados-riesgo-lista" style="font-size:12px;color:#475569;"></div>
+        <button onclick="tab('tab-traslados')" style="width:100%;margin-top:10px;padding:9px;background:#0d1b2a;border:1px solid #1e3a5f;color:#60a5fa;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+          Ver traslados →
+        </button>
+      </div>
+
       <div class="tabla-card" id="movimientos-recientes">
         <div class="tabla-titulo">Últimos movimientos</div>
         <div style="color:#555;font-size:13px;">Cargando...</div>

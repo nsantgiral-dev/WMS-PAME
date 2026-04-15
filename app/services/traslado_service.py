@@ -138,6 +138,18 @@ class TrasladoService:
         # Siesa solo recibe los movimientos reales: 173076 al despachar y 173079 al recibir.
         s.siesa_error = None
         s.estado = 'EN_PICKING'
+        db.session.flush()  # necesario antes de crear tareas (s.id ya existe)
+
+        # ── Reserva dura FEFO: crea TareaPicking prioridad 10 ──
+        # Bloquea el stock en PostgreSQL. Pedidos de venta no pueden "robar" estas unidades.
+        # Si no hay stock en WMS (arranque sin inventario mapeado), degradar a picking manual.
+        tareas_sin_stock = TrasladoService._crear_picking_tasks(s)
+        if tareas_sin_stock:
+            logger.warning(
+                f'[TRASLADO] {s.codigo}: {len(tareas_sin_stock)} ítems sin stock WMS '
+                f'({tareas_sin_stock}) — picking manual requerido para esos ítems'
+            )
+
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → EN_PICKING (aprobado por {aprobador_id}, operario {operario_id})')
         return s
@@ -295,16 +307,73 @@ class TrasladoService:
         return s
 
     @staticmethod
-    def _crear_picking_tasks(solicitud: SolicitudTraslado):
+    def _crear_picking_tasks(solicitud: SolicitudTraslado) -> list:
         """
-        Registra la solicitud como tarea de picking visible.
-        TareaPicking requiere ubicacion_id (nullable=False) — por ahora el estado
-        EN_PICKING de la solicitud es suficiente para que el jefe de almacén
-        dirija al equipo. En una versión posterior se asignará la ubicación
-        una vez el inventario WMS tenga las posiciones mapeadas.
+        Crea TareaPicking (prioridad=10) con FEFO para cada ítem aprobado.
+        Bloquea el stock en UbicacionProducto.reservado para que pedidos de venta
+        no puedan tomar esas unidades mientras el traslado está en picking.
+
+        Retorna lista de códigos_siesa que NO tuvieron stock suficiente en WMS
+        (degradación graceful — esos ítems requieren picking manual).
         """
-        logger.info(f'[TRASLADO] Solicitud {solicitud.codigo} en cola de picking — '
-                    f'{len(solicitud.items)} ítems por recoger')
+        from app.services.picking_service import PickingService
+
+        almacen = Almacen.query.filter_by(
+            bodega_siesa_id=solicitud.bodega_origen_siesa
+        ).first()
+        if not almacen:
+            logger.warning(
+                f'[TRASLADO] No hay almacen WMS para bodega {solicitud.bodega_origen_siesa} '
+                f'— picking manual para toda la solicitud {solicitud.codigo}'
+            )
+            return [item.producto_codigo_siesa for item in solicitud.items]
+
+        sin_stock = []
+        for item in solicitud.items:
+            cantidad = item.cantidad_aprobada or item.cantidad_solicitada
+            if not cantidad or cantidad <= 0 or not item.producto_id:
+                continue
+            try:
+                PickingService.crear_tareas(
+                    producto_id=item.producto_id,
+                    cantidad=cantidad,
+                    almacen_id=almacen.id,
+                    referencia_documento=solicitud.codigo,
+                    tipo_documento='TRASLADO',
+                    operario_id=solicitud.operario_id,
+                    prioridad=10,
+                )
+            except ValueError as e:
+                # Stock insuficiente en WMS para este ítem — picking manual
+                sin_stock.append(item.producto_codigo_siesa)
+                logger.warning(
+                    f'[TRASLADO] Sin stock WMS para {item.producto_codigo_siesa} '
+                    f'en {solicitud.codigo}: {e}'
+                )
+        return sin_stock
+
+    @staticmethod
+    def _liberar_reservas_traslado(solicitud: SolicitudTraslado):
+        """
+        Cancela las TareaPicking pendientes de un traslado y libera el campo
+        reservado en UbicacionProducto. Se llama al cancelar/rechazar en EN_PICKING.
+        """
+        from app.models.picking import TareaPicking
+
+        tareas = TareaPicking.query.filter_by(
+            referencia_documento=solicitud.codigo,
+            tipo_documento='TRASLADO',
+        ).filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).all()
+
+        for t in tareas:
+            reg = UbicacionProducto.query.filter_by(
+                ubicacion_id=t.ubicacion_id,
+                producto_id=t.producto_id,
+            ).first()
+            if reg:
+                reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
+            t.estado = 'CANCELADO'
+            logger.info(f'[TRASLADO] Tarea {t.codigo} cancelada por cancelación de {solicitud.codigo}')
 
     @staticmethod
     def _descontar_inventario_wms(solicitud: SolicitudTraslado):
@@ -313,7 +382,39 @@ class TrasladoService:
         un MovimientoInventario de tipo SALIDA_TRASLADO.
         Solo opera sobre la bodega origen (NB1 en WMS); la bodega destino es un
         punto de venta externo no gestionado por este WMS.
+
+        Si existe TareaPicking para este traslado, PickingService.confirmar_picking
+        ya decrementó 'cantidad' al confirmar cada ítem — solo se cancelan las
+        tareas pendientes (liberando reservas) y se retorna para evitar doble descuento.
         """
+        from app.models.picking import TareaPicking
+
+        # ── Anti-double-decrement: detectar si picking ya corrió ──
+        tareas_traslado = TareaPicking.query.filter_by(
+            referencia_documento=solicitud.codigo,
+            tipo_documento='TRASLADO',
+        ).all()
+
+        if tareas_traslado:
+            # Picking formal creó tareas. PickingService.confirmar_picking ya
+            # decrementó 'cantidad'. Solo cancelar las que quedaron pendientes
+            # (items no recogidos — el operario no llegó, o picking parcial).
+            for t in tareas_traslado:
+                if t.estado in ('PENDIENTE', 'EN_PROCESO'):
+                    reg = UbicacionProducto.query.filter_by(
+                        ubicacion_id=t.ubicacion_id,
+                        producto_id=t.producto_id,
+                    ).first()
+                    if reg:
+                        reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
+                    t.estado = 'CANCELADO'
+            logger.info(
+                f'[TRASLADO] {solicitud.codigo}: stock descontado vía picking formal '
+                f'({len(tareas_traslado)} tareas). _descontar_inventario_wms omitido.'
+            )
+            return
+
+        # ── Fallback: no hubo picking formal → descontar manualmente ──
         almacen = Almacen.query.filter_by(
             bodega_siesa_id=solicitud.bodega_origen_siesa
         ).first()
@@ -453,9 +554,25 @@ class TrasladoService:
         items.sort(key=lambda x: x['nombre'])
         return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms'}
 
+    # Cache de bodegas — proceso-nivel, TTL 1 hora. Evita llamar a Siesa en cada request.
+    _bodegas_cache: dict = {'data': None, 'ts': 0.0}
+    _BODEGAS_TTL = 3600.0
+
     @staticmethod
-    def get_bodegas_disponibles():
-        """Lista las bodegas de Siesa para seleccionar punto de venta destino."""
+    def get_bodegas_disponibles(forzar_refresh: bool = False):
+        """
+        Lista las bodegas de Siesa para seleccionar punto de venta destino.
+        Cachea el resultado 1 hora en memoria para no saturar el Gateway de Connekta.
+        """
+        import time
+        cache = TrasladoService._bodegas_cache
+        ahora = time.time()
+
+        if (not forzar_refresh
+                and cache['data'] is not None
+                and (ahora - cache['ts']) < TrasladoService._BODEGAS_TTL):
+            return cache['data']
+
         try:
             res = connekta.get_bodegas_siesa()
             if res.get('simulado'):
@@ -469,7 +586,14 @@ class TrasladoService:
                 }
                 for row in rows if row.get('f150_id')
             ]
-            return {'bodegas': bodegas}
+            resultado = {'bodegas': bodegas}
+            cache['data'] = resultado
+            cache['ts'] = ahora
+            return resultado
         except Exception as e:
             logger.error(f'[TRASLADO] Error bodegas Siesa: {e}')
+            # Si hay cache viejo, devolver en lugar de fallar
+            if cache['data']:
+                logger.warning('[TRASLADO] Usando cache de bodegas expirado como fallback')
+                return cache['data']
             raise

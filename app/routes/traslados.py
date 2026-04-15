@@ -161,6 +161,10 @@ def cancelar_solicitud(id):
         return jsonify({'error': f'No se puede cancelar en estado {s.estado}'}), 400
 
     data = request.get_json() or {}
+    # Liberar reservas de picking antes de cancelar
+    if s.estado in ('EN_PICKING', 'PREPARADO'):
+        from app.services.traslado_service import TrasladoService
+        TrasladoService._liberar_reservas_traslado(s)
     s.estado = 'CANCELADA'
     s.motivo_rechazo = data.get('motivo', 'Cancelada por usuario')
     db.session.commit()

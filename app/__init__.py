@@ -83,5 +83,11 @@ def create_app():
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f'[BARCODE_SCHEDULER] No se pudo iniciar: {e}')
+        try:
+            from app.services.traslado_monitor_service import init_scheduler as init_traslado_monitor
+            init_traslado_monitor(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[TRASLADO_MONITOR] No se pudo iniciar: {e}')
 
     return app

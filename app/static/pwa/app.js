@@ -318,6 +318,28 @@ async function cargarDashboard() {
       const bloqBadge = document.getElementById('bloq-count');
       if (bloqBadge) bloqBadge.textContent = nBloq;
     }
+    // Traslados estancados EN_TRANSITO
+    const tr = d.traslados_en_riesgo || {};
+    const nCriticos = tr.total_critico || 0;
+    const nAlertas = tr.total_alerta || 0;
+    const trEl = document.getElementById('dashboard-traslados-riesgo');
+    if (trEl) {
+      trEl.style.display = (nCriticos + nAlertas) > 0 ? 'block' : 'none';
+      const elCrit = document.getElementById('traslados-criticos-count');
+      const elAlerta = document.getElementById('traslados-alerta-count');
+      if (elCrit) elCrit.textContent = nCriticos;
+      if (elAlerta) elAlerta.textContent = nAlertas;
+      const lista = document.getElementById('traslados-riesgo-lista');
+      if (lista) {
+        const todos = [...(tr.criticos || []), ...(tr.alertas || [])];
+        lista.innerHTML = todos.slice(0, 5).map(t =>
+          `<div style="padding:6px 0;border-bottom:1px solid #1e3a5f;display:flex;justify-content:space-between;">
+            <span style="color:#cbd5e1;">${t.codigo} → ${t.nombre_punto_venta || t.bodega_destino}</span>
+            <span style="color:${t.horas_en_transito > 24 ? '#fb923c' : '#60a5fa'};font-weight:700;">${t.horas_en_transito}h</span>
+          </div>`
+        ).join('');
+      }
+    }
   } catch (e) {}
 }
 
