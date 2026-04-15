@@ -107,6 +107,27 @@ class SolicitudTraslado(db.Model):
             'motivo_rechazo': self.motivo_rechazo,
             'items': [i.to_dict() for i in self.items],
             'total_items': len(self.items),
+            'picking_progreso': self._picking_progreso(),
+        }
+
+    def _picking_progreso(self):
+        """Progreso de TareasPicking — solo relevante en EN_PICKING/PREPARADO."""
+        if self.estado not in ('EN_PICKING', 'PREPARADO'):
+            return None
+        from app.models.picking import TareaPicking
+        base = TareaPicking.query.filter_by(
+            referencia_documento=self.codigo,
+            tipo_documento='TRASLADO',
+        )
+        total = base.count()
+        if total == 0:
+            return {'total': 0, 'completadas': 0, 'sin_tareas': True}
+        completadas = base.filter_by(estado='COMPLETADO').count()
+        return {
+            'total': total,
+            'completadas': completadas,
+            'sin_tareas': False,
+            'porcentaje': round(completadas / total * 100),
         }
 
 

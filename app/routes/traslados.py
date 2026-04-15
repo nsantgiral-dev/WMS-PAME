@@ -220,6 +220,43 @@ def confirmar_picking(id):
     }), 200
 
 
+@traslados_bp.route('/<int:id>/reasignar-operario', methods=['POST'])
+@jwt_required()
+def reasignar_operario(id):
+    """Admin cambia el operario asignado a un traslado EN_PICKING."""
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+        return jsonify({'error': 'Solo administradores pueden reasignar operarios'}), 403
+
+    s = SolicitudTraslado.query.get_or_404(id)
+    if s.estado != 'EN_PICKING':
+        return jsonify({'error': 'Solo se puede reasignar en estado EN_PICKING'}), 400
+
+    data = request.get_json() or {}
+    nuevo_operario_id = data.get('operario_id')
+    if not nuevo_operario_id:
+        return jsonify({'error': 'operario_id es requerido'}), 400
+
+    nuevo_op = Usuario.query.get(nuevo_operario_id)
+    if not nuevo_op:
+        return jsonify({'error': 'Operario no encontrado'}), 404
+
+    from app.models.picking import TareaPicking
+    # Reasignar solo tareas PENDIENTES (las EN_PROCESO o COMPLETADO se dejan)
+    TareaPicking.query.filter_by(
+        referencia_documento=s.codigo,
+        tipo_documento='TRASLADO',
+        estado='PENDIENTE',
+    ).update({'operario_id': nuevo_operario_id}, synchronize_session=False)
+
+    s.operario_id = nuevo_operario_id
+    from app.extensions import db
+    db.session.commit()
+    logger.info(f'[TRASLADO] {s.codigo} → operario reasignado a {nuevo_op.nombre} por {usuario_id}')
+    return jsonify({'ok': True, 'solicitud': s.to_dict()}), 200
+
+
 @traslados_bp.route('/<int:id>/despachar', methods=['POST'])
 @jwt_required()
 def despachar(id):

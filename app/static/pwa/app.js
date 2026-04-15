@@ -5002,12 +5002,12 @@ async function ajustarConteo(sesionId) {
 let _TRAS_SUBTAB = 'pendientes';
 const TRAS_ESTADO = {
   pendientes: ['BORRADOR','ENVIADA','EN_PICKING','PREPARADO'],
-  transito:   ['DESPACHADA','EN_TRANSITO'],
+  transito:   ['EN_TRANSITO'],
   historial:  ['ENTREGADA','RECHAZADA','CANCELADA']
 };
 const TRAS_COL = {
-  BORRADOR:'#555', ENVIADA:'#1d4ed8', EN_PICKING:'#7c3aed', PREPARADO:'#166534',
-  DESPACHADA:'#b45309', EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46',
+  BORRADOR:'#374151', ENVIADA:'#1d4ed8', EN_PICKING:'#7c3aed', PREPARADO:'#166534',
+  EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46',
   RECHAZADA:'#7f1d1d', CANCELADA:'#374151'
 };
 
@@ -5048,40 +5048,148 @@ async function cargarTrasladosAdmin() {
 
 function _renderTrasladoCard(s) {
   const col = TRAS_COL[s.estado] || '#333';
-  const fecha = s.fecha_creacion ? new Date(s.fecha_creacion).toLocaleDateString('es-CO') : '';
-  const itemsResumen = (s.items || []).map(i =>
-    `<div style="font-size:11px;color:#666;">${i.producto_codigo} · ${i.cantidad_solicitada} und${i.cantidad_aprobada && i.cantidad_aprobada !== i.cantidad_solicitada ? ` <span style="color:#f59e0b">(aprobado: ${i.cantidad_aprobada})</span>` : ''}</div>`
-  ).join('');
+  const fechaCreacion = s.fecha_creacion ? new Date(s.fecha_creacion) : null;
+  const fecha = fechaCreacion ? fechaCreacion.toLocaleDateString('es-CO') : '';
+
+  // Antigüedad — alertar si lleva demasiado tiempo en estados activos
+  let alertaAntiguedad = '';
+  if (fechaCreacion && ['EN_PICKING','PREPARADO','ENVIADA'].includes(s.estado)) {
+    const diasTranscurridos = Math.floor((Date.now() - fechaCreacion) / 86400000);
+    if (diasTranscurridos >= 3) {
+      alertaAntiguedad = `<span style="color:#ef4444;font-weight:700;font-size:10px;">⚠ ${diasTranscurridos}d sin avanzar</span>`;
+    } else if (diasTranscurridos >= 1) {
+      alertaAntiguedad = `<span style="color:#f59e0b;font-size:10px;">${diasTranscurridos}d</span>`;
+    }
+  }
+
+  const itemsResumen = (s.items || []).map(i => {
+    const aprobado = i.cantidad_aprobada && i.cantidad_aprobada !== i.cantidad_solicitada
+      ? ` <span style="color:#f59e0b;">(aprobado: ${i.cantidad_aprobada})</span>` : '';
+    const enviado = i.cantidad_enviada > 0
+      ? ` <span style="color:#4ade80;">→ enviado: ${i.cantidad_enviada}</span>` : '';
+    return `<div style="font-size:11px;color:#666;">${i.producto_codigo || i.producto_nombre} · ${i.cantidad_solicitada} und${aprobado}${enviado}</div>`;
+  }).join('');
+
+  // Barra de progreso picking
+  let pickingInfo = '';
+  const pp = s.picking_progreso;
+  if (pp && !pp.sin_tareas && pp.total > 0) {
+    const pct = pp.porcentaje || 0;
+    const barColor = pct === 100 ? '#4ade80' : pct > 50 ? '#f59e0b' : '#7c3aed';
+    pickingInfo = `
+      <div style="margin:8px 0 4px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+          <span style="font-size:10px;color:#888;">Picking: ${pp.completadas}/${pp.total} tareas</span>
+          <span style="font-size:10px;color:${barColor};font-weight:700;">${pct}%</span>
+        </div>
+        <div style="height:4px;background:#222;border-radius:4px;overflow:hidden;">
+          <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px;transition:width .3s;"></div>
+        </div>
+      </div>`;
+  } else if (pp && pp.sin_tareas && s.estado === 'EN_PICKING') {
+    pickingInfo = `<div style="font-size:10px;color:#f59e0b;margin:6px 0;">⚠ Sin tareas de picking — picking manual requerido</div>`;
+  }
 
   const acciones = [];
+
   if (s.estado === 'ENVIADA') {
     acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
     acciones.push(`<button onclick="trasRechazar(${s.id})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;">Rechazar</button>`);
   }
-  if (s.estado === 'PREPARADO') {
-    acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Despachar</button>`);
+
+  if (s.estado === 'EN_PICKING') {
+    const pickingCompleto = pp && !pp.sin_tareas && pp.completadas === pp.total && pp.total > 0;
+    if (pickingCompleto) {
+      // Picking formal completo → confirmar y avanzar a PREPARADO
+      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✅ Confirmar recogida</button>`);
+    } else {
+      // Picking en proceso o manual → forzar confirmación o despachar directo
+      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:1px solid #1e3a5f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Confirmar recogida manual</button>`);
+    }
+    acciones.push(`<button onclick="trasDespacharDirecto(${s.id})" style="padding:10px 10px;background:#78350f;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Despachar ⚡</button>`);
+    acciones.push(`<button onclick="trasReasignarOperario(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:11px;cursor:pointer;">↺ Operario</button>`);
   }
-  // Confirmar recepción es exclusivo de la tienda (flujo tienda → /recibir).
-  // El admin NUNCA confirma recepción — haría entrar inventario sin verificación física.
-  // Si Siesa falló en el despacho (siesa_necesita_atencion), el admin puede reintentar.
+
+  if (s.estado === 'PREPARADO') {
+    acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
+  }
+
   if (s.siesa_necesita_atencion && s.estado === 'EN_TRANSITO') {
     acciones.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="flex:1;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">⚠ Reintentar Siesa</button>`);
   }
 
+  const operarioTag = s.operario_nombre
+    ? `<div style="font-size:11px;color:#7c3aed;margin-bottom:6px;">👷 ${s.operario_nombre}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
+    : (s.estado === 'EN_PICKING' ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:6px;">⚠ Sin operario asignado</div>` : '');
+
   return `
-  <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
+  <div style="background:#111;border:1px solid ${s.estado==='EN_PICKING' && pp?.sin_tareas ? '#78350f' : '#222'};border-radius:12px;padding:14px;margin-bottom:10px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
       <div>
         <div style="font-size:13px;font-weight:700;">${s.codigo}</div>
-        <div style="font-size:11px;color:#666;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha}</div>
+        <div style="font-size:11px;color:#555;margin-top:2px;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha} ${alertaAntiguedad}</div>
       </div>
-      <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;">${s.estado}</span>
+      <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado}</span>
     </div>
-    <div style="margin-bottom:${acciones.length?'10px':'0'};">${itemsResumen}</div>
-    ${s.operario_nombre ? `<div style="font-size:11px;color:#7c3aed;margin-bottom:6px;">👷 ${s.operario_nombre}${s.estado==='PREPARADO'?' · Listo para despachar':' · Recogiendo'}</div>` : ''}
+    <div style="margin-bottom:6px;">${itemsResumen}</div>
+    ${pickingInfo}
+    ${operarioTag}
     ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
-    ${acciones.length ? `<div style="display:flex;gap:8px;">${acciones.join('')}</div>` : ''}
+    ${acciones.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">${acciones.join('')}</div>` : ''}
   </div>`;
+}
+
+async function trasConfirmarRecogida(id) {
+  if (!confirm('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrás despacharlo.')) return;
+  try {
+    await put(`/api/traslados/${id}/confirmar-picking`, {});
+    alerta('Recogida confirmada — listo para despachar', 'exito');
+    cargarTrasladosAdmin();
+  } catch (e) { alerta(e.message || 'Error', 'error'); }
+}
+
+async function trasDespacharDirecto(id) {
+  if (!confirm('¿Despachar directamente sin confirmar picking? Se usarán las cantidades aprobadas como enviadas.')) return;
+  try {
+    await post(`/api/traslados/${id}/despachar`, {});
+    alerta('Despachado — mercancía en tránsito', 'exito');
+    cargarTrasladosAdmin();
+  } catch (e) { alerta(e.message || 'Error', 'error'); }
+}
+
+async function trasReasignarOperario(id) {
+  let operariosData;
+  try {
+    operariosData = await get('/api/traslados/operarios-disponibles');
+  } catch (e) { alerta('Error cargando operarios', 'error'); return; }
+
+  const operarios = operariosData.operarios || [];
+  if (!operarios.length) { alerta('No hay operarios disponibles', 'advertencia'); return; }
+
+  const opciones = operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('');
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:900;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML = `
+    <div style="background:#111;border:1px solid #333;border-radius:16px;padding:24px;width:320px;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:16px;">↺ Reasignar operario</div>
+      <select id="modal-nuevo-operario" style="width:100%;padding:10px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;margin-bottom:16px;">
+        ${opciones}
+      </select>
+      <div style="display:flex;gap:8px;">
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="flex:1;padding:10px;background:#222;color:#aaa;border:1px solid #333;border-radius:8px;cursor:pointer;">Cancelar</button>
+        <button id="btn-confirmar-reasignar" style="flex:1;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-weight:700;cursor:pointer;">Confirmar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.querySelector('#btn-confirmar-reasignar').onclick = async () => {
+    const nuevo_id = parseInt(modal.querySelector('#modal-nuevo-operario').value);
+    modal.remove();
+    try {
+      await put(`/api/traslados/${id}/reasignar-operario`, { operario_id: nuevo_id });
+      alerta('Operario reasignado', 'exito');
+      cargarTrasladosAdmin();
+    } catch (e) { alerta(e.message || 'Error', 'error'); }
+  };
 }
 
 async function trasAprobar(id) {
