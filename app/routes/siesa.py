@@ -354,9 +354,10 @@ def debug_inventario_raw():
 
 
 def _buscar_producto(codigo):
-    """Busca un producto por código WMS o código Siesa."""
+    """Busca un producto por código WMS, código Siesa o código de barras EAN."""
     return (Producto.query.filter_by(codigo=codigo).first() or
-            Producto.query.filter_by(codigo_siesa=codigo).first())
+            Producto.query.filter_by(codigo_siesa=codigo).first() or
+            Producto.query.filter_by(codigo_barras=codigo).first())
 
 
 # ──────────────────────────────────────────────
@@ -431,6 +432,30 @@ def pedidos_aprobados():
 
     lista = sorted(pedidos.values(), key=lambda x: x['fecha_entrega'] or '', reverse=True)
     return jsonify({'pedidos': lista, 'total': len(lista)}), 200
+
+
+@siesa_bp.route('/debug-barras-raw', methods=['GET'])
+@jwt_required()
+def debug_barras_raw():
+    """
+    Debug: prueba API_v2_ItemsBarras con un código de barras específico.
+    GET /api/siesa/debug-barras-raw?codigo=49218787
+    Sin código: muestra los primeros 5 registros del conector completo.
+    Solo admin.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
+    codigo = request.args.get('codigo', '').strip()
+    if codigo:
+        resultado = connekta._get(connekta.api_barras, {
+            'paginacion': 'numPag=1|tamPag=5',
+            'parametros': f'f178_id="{codigo}"'
+        })
+    else:
+        resultado = connekta._get(connekta.api_barras, {
+            'paginacion': 'numPag=1|tamPag=5'
+        })
+    return jsonify(resultado), 200
 
 
 @siesa_bp.route('/debug-oc-raw', methods=['GET'])

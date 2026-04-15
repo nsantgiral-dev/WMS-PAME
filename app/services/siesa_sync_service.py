@@ -58,6 +58,10 @@ def _run_sync(app):
                         unidad_medida = (row.get('f120_id_unidad_medida_inventario') or '').strip() or None
                         tipo_inv = (row.get('f120_id_tipo_inv_serv') or '').strip()
                         unidad_negocio = mapeo_unidades.get(tipo_inv) if tipo_inv else None
+                        # Código de barras EAN — campo puede variar según conector Siesa
+                        codigo_barras = (row.get('f120_codigo_barras') or
+                                        row.get('f120_id_barras') or
+                                        row.get('f120_barras') or '').strip() or None
 
                         if tipo_inv and unidad_negocio is None:
                             tipos_sin_mapeo.add(tipo_inv)
@@ -88,6 +92,9 @@ def _run_sync(app):
                             if unidad_negocio and prod.unidad_negocio_id != unidad_negocio:
                                 prod.unidad_negocio_id = unidad_negocio
                                 changed = True
+                            if codigo_barras and prod.codigo_barras != codigo_barras:
+                                prod.codigo_barras = codigo_barras
+                                changed = True
                             if changed:
                                 actualizados += 1
                         else:
@@ -99,6 +106,7 @@ def _run_sync(app):
                                 clasificacion_abc='C',
                                 unidad_medida=unidad_medida or 'UND',
                                 unidad_negocio_id=unidad_negocio,
+                                codigo_barras=codigo_barras,
                             )
                             db.session.add(prod)
                             creados += 1
