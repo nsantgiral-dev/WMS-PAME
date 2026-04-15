@@ -374,39 +374,42 @@
       #pantalla-empacador { max-width: 800px; margin: 0 auto; }
 
       /* ══════════════════════════════════════════════
-         ADMIN — CSS Grid: sidebar izquierdo + contenido
-         Sin tocar HTML ni JS.
+         ADMIN — Flex layout: sidebar fijo + contenido scrollable
+         Usa :not([style*="display: none"]) para no pelear con pantalla()
       ══════════════════════════════════════════════ */
-      #pantalla-admin {
-        display: grid;
-        grid-template-rows: auto auto 1fr;
-        grid-template-columns: 236px 1fr;
+      #pantalla-admin:not([style*="display: none"]) {
+        display: flex !important;
+        flex-direction: column;
         height: 100vh;
-        overflow: hidden;
         max-width: 100%;
-        min-height: 0;
+        overflow: hidden;
       }
 
-      /* Header — fila 1, ambas columnas */
       #pantalla-admin > .header {
-        grid-column: 1 / -1;
-        grid-row: 1;
+        flex-shrink: 0;
         padding: 0 28px;
         border-bottom: 1px solid var(--brd);
       }
 
-      /* Barra de usuario — fila 2, ambas columnas */
       #pantalla-admin > .operario-bar {
-        grid-column: 1 / -1;
-        grid-row: 2;
+        flex-shrink: 0;
         padding: 10px 28px;
         border-bottom: 1px solid var(--brd);
       }
 
+      /* Wrapper horizontal: sidebar + contenido */
+      .admin-body {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+        min-height: 0;
+      }
+
       /* ── Sidebar ── */
       .admin-nav {
-        grid-column: 1;
-        grid-row: 3;
+        width: 236px;
+        flex-shrink: 0;
+        display: flex;
         flex-direction: column;
         align-items: stretch;
         overflow-y: auto;
@@ -415,7 +418,6 @@
         border-bottom: none;
         padding: 16px 10px 24px;
         background: var(--bg-s);
-        width: 236px;
         gap: 2px;
       }
 
@@ -466,21 +468,23 @@
         text-transform: uppercase;
       }
 
-      /* ── Área de contenido — fila 3, columna 2 ── */
-      .admin-content {
-        grid-column: 2;
-        grid-row: 3;
+      /* ── Área scrollable de contenido ── */
+      .admin-main {
+        flex: 1;
         overflow-y: auto;
         overflow-x: hidden;
-        padding: 28px 36px 40px;
         min-height: 0;
       }
 
       /* Scrollbar contenido — sutil */
-      .admin-content::-webkit-scrollbar { display: block; width: 5px; }
-      .admin-content::-webkit-scrollbar-track { background: transparent; }
-      .admin-content::-webkit-scrollbar-thumb { background: var(--brd-b); border-radius: 6px; }
-      .admin-content::-webkit-scrollbar-thumb:hover { background: var(--pm-border); }
+      .admin-main::-webkit-scrollbar { display: block; width: 5px; }
+      .admin-main::-webkit-scrollbar-track { background: transparent; }
+      .admin-main::-webkit-scrollbar-thumb { background: var(--brd-b); border-radius: 6px; }
+      .admin-main::-webkit-scrollbar-thumb:hover { background: var(--pm-border); }
+
+      .admin-content {
+        padding: 28px 36px 40px;
+      }
 
       /* ── KPI: 4 columnas ── */
       .kpi-grid {
@@ -528,7 +532,6 @@
       .admin-content { padding: 32px 48px 48px; }
       .kpi-card { padding: 26px 28px; }
       .kpi-valor { font-size: 44px; }
-      #pantalla-admin { grid-template-columns: 256px 1fr; }
       .admin-nav { width: 256px; }
     }
   </style>
@@ -578,7 +581,7 @@
   </div>
 
   <!-- ADMIN -->
-  <div id="pantalla-admin">
+  <div id="pantalla-admin" style="display:none;">
     <div class="header">
       <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:12px;">
@@ -593,6 +596,9 @@
       </div>
     </div>
 
+    <!-- Admin body: sidebar + contenido -->
+    <div class="admin-body">
+
     <!-- Tabs -->
     <div class="admin-nav">
       <div class="nav-tab active" onclick="tab('tab-dashboard')">Dashboard</div>
@@ -606,6 +612,9 @@
       <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
       <div class="nav-tab" onclick="tab('tab-traslados')">🏪 Traslados</div>
     </div>
+
+    <!-- Contenido principal scrollable -->
+    <div class="admin-main">
 
     <!-- Dashboard -->
     <div id="tab-dashboard" class="admin-content">
@@ -1163,6 +1172,8 @@
     </div>
   </div>
 
+    </div><!-- /admin-main -->
+    </div><!-- /admin-body -->
   </div><!-- /pantalla-admin -->
 
   <!-- TIENDA — Pantalla punto de venta -->
