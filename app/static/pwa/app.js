@@ -654,6 +654,20 @@ async function cargarConnekta() {
       </div>
       <div id="panel-reconciliacion" style="margin-top:8px;"></div>
 
+      <!-- Diagnóstico barcodes Siesa -->
+      <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:8px;">🔍 Diagnóstico códigos de barras</div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <input id="debug-barras-input" type="text" placeholder="EAN a probar (ej: 49218787)"
+            style="flex:1;padding:10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+          <button onclick="testBarras()"
+            style="padding:10px 14px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Probar
+          </button>
+        </div>
+        <div id="debug-barras-resultado" style="font-size:12px;color:#666;min-height:20px;white-space:pre-wrap;word-break:break-all;"></div>
+      </div>
+
       ${d.modo_ensayo ? `
       <div style="background:#1a0f00;border:1px solid #7c2d12;border-radius:10px;padding:12px;margin-top:8px;font-size:12px;color:#fb923c;line-height:1.6;">
         <strong>MODO ENSAYO activo</strong><br>
@@ -716,6 +730,30 @@ async function setupInicial() {
     res.textContent = 'Error: ' + (e.message || e);
     btn.disabled = false;
     btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
+  }
+}
+
+async function testBarras() {
+  const inp = document.getElementById('debug-barras-input');
+  const res = document.getElementById('debug-barras-resultado');
+  if (!res) return;
+  const codigo = (inp ? inp.value.trim() : '');
+  res.style.color = '#93c5fd';
+  res.textContent = '⏳ Consultando Siesa...';
+  try {
+    const url = '/api/siesa/debug-barras-raw' + (codigo ? '?codigo=' + encodeURIComponent(codigo) : '');
+    const d = await get(url);
+    const tabla = d?.detalle?.Table || d?.Table || [];
+    if (!tabla.length) {
+      res.style.color = '#ef4444';
+      res.textContent = '✗ Sin resultados — Siesa no tiene barcode "' + (codigo || '(sin filtro)') + '" en API_v2_ItemsBarras.\nEl escaneo por EAN físico no funcionará hasta configurar barcodes en Siesa.';
+    } else {
+      res.style.color = '#4ade80';
+      res.textContent = '✓ Siesa SÍ tiene barcodes.\nPrimeros resultados:\n' + JSON.stringify(tabla.slice(0, 3), null, 2);
+    }
+  } catch (e) {
+    res.style.color = '#ef4444';
+    res.textContent = 'Error: ' + (e.message || e) + '\n(puede que el conector API_v2_ItemsBarras no esté configurado en Connekta)';
   }
 }
 
