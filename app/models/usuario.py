@@ -13,7 +13,7 @@ class Usuario(db.Model):
     rol = db.Column(db.String(50), default='operario')
     activo = db.Column(db.Boolean, default=True)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=True)
-    puede_usar_camara = db.Column(db.Boolean, default=False)
+    puede_usar_camara = db.Column(db.Boolean, default=True)
     # Capacidades operativas — independientes del rol base
     puede_picar = db.Column(db.Boolean, default=True)
     puede_empacar = db.Column(db.Boolean, default=False)
@@ -40,7 +40,7 @@ class Usuario(db.Model):
             'rol': self.rol,
             'activo': self.activo,
             'almacen_id': self.almacen_id,
-            'puede_usar_camara': self.puede_usar_camara or False,
+            'puede_usar_camara': self.puede_usar_camara if self.puede_usar_camara is not None else True,
             'puede_picar': self.puede_picar if self.puede_picar is not None else True,
             'puede_empacar': self.puede_empacar or False,
             'capacidad_diaria_conteo': self.capacidad_diaria_conteo if self.capacidad_diaria_conteo is not None else 15,

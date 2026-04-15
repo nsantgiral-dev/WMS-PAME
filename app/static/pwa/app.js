@@ -974,25 +974,25 @@ function renderTarea(t) {
     </div>`;
 }
 
-async function abrirCamara() {
-  const box = document.getElementById('camara-box');
+async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box') {
+  const box = document.getElementById(boxDivId);
   if (box) box.style.display = 'block';
   CAMARA_ACTIVA = true;
   if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
-  HTML5QR = new Html5Qrcode('lector-qr');
+  HTML5QR = new Html5Qrcode(lectorDivId);
   try {
     await HTML5QR.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 150 } },
       cod => procesarScan(cod), () => {});
   } catch (e) {
     alerta('No se pudo activar la cámara', 'error');
-    cerrarCamara();
+    cerrarCamara(boxDivId);
   }
 }
 
-async function cerrarCamara() {
+async function cerrarCamara(boxDivId = 'camara-box') {
   if (HTML5QR) { try { await HTML5QR.stop(); } catch(e) {} HTML5QR = null; }
   CAMARA_ACTIVA = false;
-  const box = document.getElementById('camara-box');
+  const box = document.getElementById(boxDivId);
   if (box) box.style.display = 'none';
 }
 
@@ -1467,8 +1467,23 @@ function renderEscaneoRecepcion(rec) {
         </div>
       </div>
 
-      <div style="background:#111;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#666;text-align:center;">
-        Apunta el escáner — 1 beep = 1 unidad
+      <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea cada producto — 1 escaneo = 1 unidad</div>
+        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec')"
+          style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+          📷 Escanear con cámara
+        </button>
+        <div id="camara-box-rec" style="display:none;margin-bottom:8px;">
+          <div id="lector-qr-rec" style="border-radius:10px;overflow:hidden;"></div>
+          <button onclick="cerrarCamara('camara-box-rec')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <input id="rec-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
+            style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+            onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ procesarScan(v); this.value=''; } }">
+          <button onclick="const v=document.getElementById('rec-codigo-manual').value.trim();if(v){procesarScan(v);document.getElementById('rec-codigo-manual').value='';}"
+            style="padding:10px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+        </div>
       </div>
 
       <div id="items-rec-list" style="margin-bottom:14px;">
@@ -2373,11 +2388,18 @@ function _formUsuario(u = {}) {
             <div style="font-size:11px;color:#555;">Puede recoger productos del almacén</div>
           </div>
         </label>
-        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
           <input type="checkbox" id="u-puede-empacar" ${u.puede_empacar?'checked':''} style="width:20px;height:20px;accent-color:#c084fc;">
           <div>
             <div style="font-size:14px;font-weight:600;color:#c084fc;">Empacador / Auditor</div>
             <div style="font-size:11px;color:#555;">Verifica y cierra cajas en mesa de empaque</div>
+          </div>
+        </label>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
+          <input type="checkbox" id="u-puede-camara" ${u.puede_usar_camara!==false?'checked':''} style="width:20px;height:20px;accent-color:#34d399;">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:#34d399;">📷 Usar cámara para escanear</div>
+            <div style="font-size:11px;color:#555;">Muestra botón de cámara en picking y recepción</div>
           </div>
         </label>
         <div style="margin-top:14px;padding-top:14px;border-top:1px solid #222;">
@@ -2433,6 +2455,7 @@ async function _guardarUsuario(uid) {
   const rol    = document.getElementById('u-rol')?.value;
   const puedePicar   = document.getElementById('u-puede-picar')?.checked;
   const puedeEmpacar = document.getElementById('u-puede-empacar')?.checked;
+  const puedeCamara  = document.getElementById('u-puede-camara')?.checked ?? true;
   const capacidadConteo = parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10);
 
   if (!nombre) { alerta('El nombre es requerido', 'error'); return; }
@@ -2441,7 +2464,7 @@ async function _guardarUsuario(uid) {
   const nombrePv = document.getElementById('u-nombre-pv')?.value.trim() || null;
 
   const payload = {
-    nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
+    nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar, puede_usar_camara: puedeCamara,
     capacidad_diaria_conteo: isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo),
     bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv
   };
