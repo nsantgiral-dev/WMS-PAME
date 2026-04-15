@@ -5142,7 +5142,7 @@ function _renderTrasladoCard(s) {
 async function trasConfirmarRecogida(id) {
   if (!confirm('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrás despacharlo.')) return;
   try {
-    await put(`/api/traslados/${id}/confirmar-picking`, {});
+    await post(`/api/traslados/${id}/confirmar-picking`, {});
     alerta('Recogida confirmada — listo para despachar', 'exito');
     cargarTrasladosAdmin();
   } catch (e) { alerta(e.message || 'Error', 'error'); }
