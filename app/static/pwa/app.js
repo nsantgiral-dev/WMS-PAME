@@ -43,29 +43,36 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function mostrarSegunRol(rol) {
   pararTimers();
-  if (OPERARIO) actualizarUI(OPERARIO);
   const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
   const esTienda = rol === 'tienda';
   const puedeEmpacar = OPERARIO?.puede_empacar || false;
   const puedePicar   = OPERARIO?.puede_picar !== false; // default true
+
+  // pantalla() SIEMPRE primero — garantiza que el panel correcto es visible
+  // antes de cualquier actualización del DOM. Evita que actualizarUI
+  // popule el header de admin mientras ese panel aún pueda estar visible.
   if (esTienda) {
     pantalla('pantalla-tienda');
+    if (OPERARIO) actualizarUI(OPERARIO);
     document.getElementById('tienda-nombre').textContent =
       OPERARIO.nombre_punto_venta || OPERARIO.nombre || 'Punto de Venta';
     tiendaIniciar();
   } else if (esConductor) {
     pantalla('pantalla-conductor');
+    if (OPERARIO) actualizarUI(OPERARIO);
     document.getElementById('cond-nombre').textContent = OPERARIO.nombre || '—';
     cargarRutasConductor();
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {
     pantalla('pantalla-admin');
+    if (OPERARIO) actualizarUI(OPERARIO);
     cargarAdmin();
     TIMER_ADMIN = setInterval(cargarAdmin, 30000);
   } else if (esRecepcion) {
     pantalla('pantalla-recepcion');
+    if (OPERARIO) actualizarUI(OPERARIO);
     cargarRecepciones();
     cargarDevoluciones();
     TIMER_REC = setInterval(() => {
@@ -77,17 +84,20 @@ function mostrarSegunRol(rol) {
   } else if (puedeEmpacar && !puedePicar) {
     // Empacador puro → directo al HUD de packing
     pantalla('pantalla-empacador');
+    if (OPERARIO) actualizarUI(OPERARIO);
     document.getElementById('emp-nombre').textContent = OPERARIO.nombre;
     empCargarTareas();
     TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
   } else if (puedeEmpacar && puedePicar) {
     // Rol dual: picker + empacador → picker por defecto con acceso a packing
     pantalla('pantalla-operario');
+    if (OPERARIO) actualizarUI(OPERARIO);
     pedirTarea();
     TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   } else {
     // Picker puro (o operario sin flags)
     pantalla('pantalla-operario');
+    if (OPERARIO) actualizarUI(OPERARIO);
     pedirTarea();
     TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   }
