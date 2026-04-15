@@ -48,9 +48,12 @@ def escanear():
         )
         return jsonify(resultado), 200
     except ValueError as e:
-        return jsonify({'error': str(e), 'tipo': 'VALIDACION'}), 400
+        msg = e.args[0]
+        if isinstance(msg, dict):
+            msg = msg.get('mensaje', str(msg))
+        return jsonify({'error': msg}), 400
     except Exception as e:
-        return jsonify({'error': str(e), 'tipo': 'ERROR'}), 500
+        return jsonify({'error': str(e)}), 500
 
 
 @mobile_bp.route('/confirmar', methods=['POST'])

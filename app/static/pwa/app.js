@@ -1050,7 +1050,7 @@ async function procesarScan(codigo) {
       if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#16a34a'; }
       alerta(r.mensaje || '¡Listo!', 'exito');
     }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
 async function confirmar() {
