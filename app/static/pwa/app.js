@@ -974,15 +974,28 @@ function renderTarea(t) {
     </div>`;
 }
 
+function _camaraParams() {
+  // Formatos de código de barras soportados (1D + QR)
+  const f = window.Html5QrcodeSupportedFormats;
+  const formatos = f ? [
+    f.QR_CODE, f.EAN_13, f.EAN_8,
+    f.CODE_128, f.CODE_39, f.UPC_A, f.UPC_E, f.ITF
+  ] : undefined;
+  return {
+    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+    scan:  { fps: 15, qrbox: { width: 300, height: 100 }, ...(formatos && { formatsToSupport: formatos }) }
+  };
+}
+
 async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box') {
   const box = document.getElementById(boxDivId);
   if (box) box.style.display = 'block';
   CAMARA_ACTIVA = true;
   if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
-  HTML5QR = new Html5Qrcode(lectorDivId);
+  HTML5QR = new Html5Qrcode(lectorDivId, { verbose: false });
   try {
-    await HTML5QR.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 150 } },
-      cod => procesarScan(cod), () => {});
+    const { video, scan } = _camaraParams();
+    await HTML5QR.start(video, scan, cod => procesarScan(cod), () => {});
   } catch (e) {
     alerta('No se pudo activar la cámara', 'error');
     cerrarCamara(boxDivId);
@@ -2639,14 +2652,14 @@ async function abrirCamaraMuelle() {
   if (box) box.style.display = 'block';
   CAMARA_ACTIVA = true;
   if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
-  HTML5QR = new Html5Qrcode('lector-qr-muelle');
+  HTML5QR = new Html5Qrcode('lector-qr-muelle', { verbose: false });
   try {
-    await HTML5QR.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 150 } },
+    const { video, scan } = _camaraParams();
+    await HTML5QR.start(video, scan,
       async cod => {
         await cerrarCamara('camara-box-muelle');
         const input = document.getElementById('muelle-scan-input');
         if (input) { input.value = cod.toUpperCase(); }
-        // mostrar campo de texto y ejecutar carga
         const campo = document.getElementById('muelle-scan-campo');
         if (campo) campo.style.display = 'flex';
         await muelleCargarCaja();
