@@ -1748,6 +1748,17 @@ function renderEscaneoDevolucion(tarea) {
     <div style="background:#0d1f0d;border:1px solid #1a3a1a;border-radius:12px;padding:16px;margin-bottom:16px;">
       <div style="font-size:14px;font-weight:700;color:#4ade80;margin-bottom:8px;">FLUJO 1 — Mercancía en buen estado</div>
       <div style="font-size:12px;color:#666;margin-bottom:12px;">Escanea el código de barras de la ubicación/estante donde vas a poner la mercancía</div>
+      <button onclick="abrirCamara('lector-qr-dev','camara-box-dev')"
+        style="width:100%;padding:13px;background:#111;border:1px solid #2a5a2a;border-radius:8px;color:#4ade80;font-size:15px;cursor:pointer;margin-bottom:8px;">
+        📷 Escanear ubicación con cámara
+      </button>
+      <div id="camara-box-dev" style="display:none;margin-bottom:8px;">
+        <div id="lector-qr-dev" style="border-radius:10px;overflow:hidden;"></div>
+        <button onclick="cerrarCamara('camara-box-dev')"
+          style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">
+          Cerrar cámara
+        </button>
+      </div>
       <div style="display:flex;gap:8px;">
         <input id="input-ubicacion-dev" type="text" placeholder="Código ubicación (ej: A-01-02)"
           style="flex:1;padding:12px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:16px;"
@@ -2621,6 +2632,29 @@ function muelleActivarScan() {
   if (btnActivar) btnActivar.style.display = 'none';
   if (campo)      campo.style.display      = 'flex';
   if (input)      input.focus();
+}
+
+async function abrirCamaraMuelle() {
+  const box = document.getElementById('camara-box-muelle');
+  if (box) box.style.display = 'block';
+  CAMARA_ACTIVA = true;
+  if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
+  HTML5QR = new Html5Qrcode('lector-qr-muelle');
+  try {
+    await HTML5QR.start({ facingMode: 'environment' }, { fps: 10, qrbox: { width: 250, height: 150 } },
+      async cod => {
+        await cerrarCamara('camara-box-muelle');
+        const input = document.getElementById('muelle-scan-input');
+        if (input) { input.value = cod.toUpperCase(); }
+        // mostrar campo de texto y ejecutar carga
+        const campo = document.getElementById('muelle-scan-campo');
+        if (campo) campo.style.display = 'flex';
+        await muelleCargarCaja();
+      }, () => {});
+  } catch (e) {
+    alerta('No se pudo activar la cámara', 'error');
+    cerrarCamara('camara-box-muelle');
+  }
 }
 
 function muelleScanBlur() {

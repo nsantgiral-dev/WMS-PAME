@@ -527,11 +527,18 @@
       <!-- Scan-to-Truck -->
       <div style="background:var(--bg-s);border:2px solid var(--pm-border);border-radius:12px;padding:14px;margin-bottom:16px;">
         <div id="muelle-scan-label" style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
-        <!-- Botón visible en móvil que activa el campo de texto intencionalmente -->
-        <button id="muelle-scan-activar" onclick="muelleActivarScan()"
+        <!-- Botón cámara visible en móvil -->
+        <button id="muelle-scan-activar" onclick="abrirCamaraMuelle()"
           style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px;">
-          📷 Tocar aquí para escanear
+          📷 Escanear con cámara
         </button>
+        <div id="camara-box-muelle" style="display:none;margin-bottom:8px;">
+          <div id="lector-qr-muelle" style="border-radius:10px;overflow:hidden;"></div>
+          <button onclick="cerrarCamara('camara-box-muelle')"
+            style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">
+            Cerrar cámara
+          </button>
+        </div>
         <div id="muelle-scan-campo" style="display:flex;gap:8px;">
           <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
             style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
@@ -1114,7 +1121,19 @@
         <div class="emp-hud-items" id="emp-hud-items">Ítem 1 de 1</div>
       </div>
       <div class="emp-hud-bottom">
-        <!-- Entrada manual para pruebas sin escáner físico -->
+        <!-- Cámara para packing -->
+        <button onclick="abrirCamara('lector-qr-emp','camara-box-emp')"
+          style="width:100%;padding:13px;background:#1a1a1a;border:1px solid #444;border-radius:10px;color:#fff;font-size:15px;cursor:pointer;margin-bottom:8px;">
+          📷 Escanear con cámara
+        </button>
+        <div id="camara-box-emp" style="display:none;margin-bottom:8px;">
+          <div id="lector-qr-emp" style="border-radius:10px;overflow:hidden;"></div>
+          <button onclick="cerrarCamara('camara-box-emp')"
+            style="width:100%;margin-top:6px;padding:10px;background:#222;border:1px solid #444;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">
+            Cerrar cámara
+          </button>
+        </div>
+        <!-- Entrada manual -->
         <div style="display:flex;gap:8px;margin-bottom:12px;">
           <input id="emp-input-manual" type="text" placeholder="Código del producto (sin escáner)"
             autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
