@@ -38,6 +38,17 @@ def _run_sync(app):
         campo_barras = None   # se detecta en la primera fila válida
 
         try:
+            # Cargar todos los productos en memoria una sola vez → evita N+1 queries
+            # (28k productos × 2 queries/fila = 56k queries sin esto)
+            prods_por_siesa = {}
+            prods_por_codigo = {}
+            for p in Producto.query.all():
+                if p.codigo_siesa:
+                    prods_por_siesa[p.codigo_siesa] = p
+                if p.codigo:
+                    prods_por_codigo[p.codigo] = p
+            logger.info(f'[BARCODE SYNC] Productos en memoria: {len(prods_por_siesa)} (por siesa), {len(prods_por_codigo)} (por codigo)')
+
             for pag in range(1, 2001):   # hasta 200 000 barcodes (100/pág)
                 resp = connekta._get(connekta.api_barras, {
                     'paginacion': f'numPag={pag}|tamPag=100'
@@ -67,8 +78,7 @@ def _run_sync(app):
                         if not codigo_barras or not codigo_siesa:
                             continue
 
-                        prod = (Producto.query.filter_by(codigo_siesa=codigo_siesa).first() or
-                                Producto.query.filter_by(codigo=codigo_siesa).first())
+                        prod = prods_por_siesa.get(codigo_siesa) or prods_por_codigo.get(codigo_siesa)
 
                         if not prod:
                             sin_producto += 1
