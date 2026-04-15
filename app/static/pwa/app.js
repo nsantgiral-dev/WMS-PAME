@@ -61,6 +61,7 @@ function mostrarSegunRol(rol) {
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {
     pantalla('pantalla-admin');
+    if (OPERARIO) actualizarUI(OPERARIO);
     cargarAdmin();
     TIMER_ADMIN = setInterval(cargarAdmin, 30000);
   } else if (esRecepcion) {
@@ -2671,29 +2672,24 @@ async function _guardarUsuario(uid) {
   if (pass) payload.password = pass;
 
   try {
-    let r;
+    let data;
     if (uid) {
-      r = await fetch(API + `/api/auth/usuarios/${uid}`, {
-        method: 'PUT',
-        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      data = await put(`/api/auth/usuarios/${uid}`, payload);
+      if (uid === OPERARIO?.id) {
+        OPERARIO = { ...OPERARIO, ...data };
+        localStorage.setItem('wms_operario', JSON.stringify(OPERARIO));
+        actualizarUI(OPERARIO);
+      }
     } else {
       if (!email) { alerta('El email es requerido', 'error'); return; }
       if (!pass)  { alerta('La contraseña es requerida', 'error'); return; }
       payload.email = email;
-      r = await fetch(API + '/api/auth/register', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      data = await post('/api/auth/register', payload);
     }
-    const data = await r.json();
-    if (!r.ok) { alerta(data.error || 'Error guardando usuario', 'error'); return; }
     alerta(uid ? 'Usuario actualizado' : 'Usuario creado', 'exito');
     ocultarFormUsuario();
     cargarUsuarios();
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) { if (e.status !== 401) alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 // ─── MONITOR DE MUELLE ────────────────────────────────────────────────────────
