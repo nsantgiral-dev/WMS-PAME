@@ -570,19 +570,13 @@ def buscar_producto(codigo):
     """
     prod = _buscar_producto(codigo)
 
-    # Si no lo encontramos localmente y Connekta está activo, intentar por barras
-    if not prod and not connekta.modo_simulacion:
-        try:
-            resp = connekta.get_item_por_barras(codigo)
-            tabla = resp.get('detalle', {}).get('Table', [])
-            if tabla:
-                codigo_siesa = tabla[0].get('f120_referencia', '').strip()
-                prod = Producto.query.filter_by(codigo_siesa=codigo_siesa).first()
-        except Exception:
-            pass
-
+    # Arquitectura Single Source of Truth: consulta SOLO DB local.
+    # Los barcodes se mantienen actualizados por el sync nocturno (02:00).
+    # No se consulta Connekta en tiempo real — evita timeouts de 30s durante operación.
     if not prod:
-        return jsonify({'error': f"Producto '{codigo}' no encontrado en WMS"}), 404
+        return jsonify({
+            'error': f"Código '{codigo}' no encontrado. Si es un EAN nuevo, ejecuta Sync EAN en Admin → Siesa."
+        }), 404
 
     return jsonify({
         'producto_id': prod.id,
