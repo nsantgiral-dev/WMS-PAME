@@ -370,8 +370,14 @@
       #pantalla-operario,
       #pantalla-recepcion { max-width: 760px; margin: 0 auto; overflow-y: auto; height: 100vh; }
 
-      /* ── Empacador: centrado ── */
-      #pantalla-empacador { max-width: 800px; margin: 0 auto; }
+      /* ── Empacador: centrado + scroll propio ── */
+      #pantalla-empacador { max-width: 800px; margin: 0 auto; overflow-y: auto; height: 100vh; }
+
+      /* ── Tienda (punto de venta): centrado + scroll propio ── */
+      #pantalla-tienda { max-width: 760px; margin: 0 auto; overflow-y: auto; height: 100vh; }
+
+      /* ── Conductor: centrado + scroll propio ── */
+      #pantalla-conductor { max-width: 760px; margin: 0 auto; overflow-y: auto; height: 100vh; }
 
       /* ══════════════════════════════════════════════
          ADMIN — Flex layout: sidebar fijo + contenido scrollable
@@ -1519,7 +1525,8 @@
       const badge = document.getElementById('offline-badge');
       const count = document.getElementById('offline-count');
       if (badge && count) {
-        badge.style.display = cola.length > 0 ? 'block' : 'none';
+        const esTienda = typeof OPERARIO !== 'undefined' && OPERARIO?.rol === 'tienda';
+        badge.style.display = (cola.length > 0 && esTienda) ? 'block' : 'none';
         count.textContent = cola.length;
       }
     }, 2000);

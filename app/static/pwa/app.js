@@ -43,6 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function mostrarSegunRol(rol) {
   pararTimers();
+  if (OPERARIO) actualizarUI(OPERARIO);
   const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
@@ -61,7 +62,6 @@ function mostrarSegunRol(rol) {
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {
     pantalla('pantalla-admin');
-    if (OPERARIO) actualizarUI(OPERARIO);
     cargarAdmin();
     TIMER_ADMIN = setInterval(cargarAdmin, 30000);
   } else if (esRecepcion) {
