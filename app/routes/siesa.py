@@ -449,7 +449,7 @@ def debug_barras_raw():
     if codigo:
         resultado = connekta._get(connekta.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f'f178_id="{codigo}"'
+            'parametros': f"f131_id = ''{codigo}''"
         })
     else:
         resultado = connekta._get(connekta.api_barras, {

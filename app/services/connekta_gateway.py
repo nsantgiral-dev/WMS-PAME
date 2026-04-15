@@ -279,10 +279,12 @@ class ConnektaGateway:
         })
 
     def get_item_por_barras(self, codigo_barras: str):
-        """API_v2_ItemsBarras — traduce EAN del escáner al código Siesa."""
+        """API_v2_ItemsBarras — traduce EAN del escáner al código Siesa.
+        Campo correcto: f131_id. Sintaxis filtro Connekta: ''valor'' (doble comilla simple).
+        """
         return self._get(self.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f'f178_id="{codigo_barras}"'
+            'parametros': f"f131_id = ''{codigo_barras}''"
         })
 
     def get_items_catalogo(self, pagina: int = 1):
