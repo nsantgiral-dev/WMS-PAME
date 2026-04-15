@@ -427,7 +427,7 @@
           </div>
           <span id="bloq-count" style="background:#7f1d1d;color:#fca5a5;font-size:20px;font-weight:800;padding:4px 14px;border-radius:10px;">0</span>
         </div>
-        <button onclick="cambiarTab('tab-pedidos')" style="width:100%;margin-top:10px;padding:9px;background:#1a0505;border:1px solid #7f1d1d;color:#f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+        <button onclick="tab('tab-pedidos'); setTimeout(()=>{ const el=document.getElementById('lista-pedidos'); if(el) el.scrollIntoView({behavior:'smooth'}); },400);" style="width:100%;margin-top:10px;padding:9px;background:#1a0505;border:1px solid #7f1d1d;color:#f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
           Ver tareas bloqueadas →
         </button>
       </div>
