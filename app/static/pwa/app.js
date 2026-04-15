@@ -8,7 +8,10 @@ let COLA_OFFLINE = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
 let SCANNER_BUFFER = '';
 let SCANNER_TIMER = null;
 let CAMARA_ACTIVA = false;
-let HTML5QR = null;
+let HTML5QR = null;          // legacy — ya no se usa, conservado por si acaso
+let _QUAGGA_BOX  = null;    // boxDivId activo
+let _QUAGGA_CB   = null;    // callback del scan activo
+let _SCAN_LAST_TS = 0;      // debounce: ms del último scan registrado
 let CHART = null;
 let TAB = 'tab-dashboard';
 let ALMACEN_ID = 1;
@@ -974,39 +977,86 @@ function renderTarea(t) {
     </div>`;
 }
 
-function _camaraParams() {
-  // Formatos de código de barras soportados (1D + QR)
-  const f = window.Html5QrcodeSupportedFormats;
-  const formatos = f ? [
-    f.QR_CODE, f.EAN_13, f.EAN_8,
-    f.CODE_128, f.CODE_39, f.UPC_A, f.UPC_E, f.ITF
-  ] : undefined;
-  return {
-    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-    scan:  { fps: 15, qrbox: { width: 300, height: 100 }, ...(formatos && { formatsToSupport: formatos }) }
-  };
+// ─── Quagga2 — debounce interno ───────────────────────────────────────────────
+function _onQuaggaDetect(result) {
+  const code = result && result.codeResult && result.codeResult.code;
+  if (!code) return;
+  const now = Date.now();
+  if (now - _SCAN_LAST_TS < 900) return;   // 900 ms cooldown entre scans
+  _SCAN_LAST_TS = now;
+  if (_QUAGGA_CB) _QUAGGA_CB(code);
 }
 
-async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box') {
-  const box = document.getElementById(boxDivId);
-  if (box) box.style.display = 'block';
+async function _quaggaStop() {
+  if (!window.Quagga) return;
+  try { Quagga.offDetected(_onQuaggaDetect); } catch (_) {}
+  try { Quagga.stop(); } catch (_) {}
+}
+
+async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', onScan = null) {
+  // Cerrar cámara previa si hay alguna
+  if (_QUAGGA_BOX) await cerrarCamara(_QUAGGA_BOX);
+
+  const box    = document.getElementById(boxDivId);
+  const target = document.getElementById(lectorDivId);
+  if (!box || !target) return;
+
+  box.style.display = 'block';
   CAMARA_ACTIVA = true;
-  if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
-  HTML5QR = new Html5Qrcode(lectorDivId, { verbose: false });
-  try {
-    const { video, scan } = _camaraParams();
-    await HTML5QR.start(video, scan, cod => procesarScan(cod), () => {});
-  } catch (e) {
-    alerta('No se pudo activar la cámara', 'error');
-    cerrarCamara(boxDivId);
+  _QUAGGA_BOX = boxDivId;
+  _QUAGGA_CB  = onScan || procesarScan;
+  _SCAN_LAST_TS = 0;
+
+  if (!window.Quagga) {
+    await loadScript('https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.2/dist/quagga.min.js');
   }
+
+  await new Promise(resolve => {
+    Quagga.init({
+      inputStream: {
+        type: 'LiveStream',
+        target,
+        constraints: {
+          facingMode: 'environment',
+          width:  { min: 640, ideal: 1280 },
+          height: { min: 480, ideal: 720  }
+        }
+      },
+      decoder: {
+        readers: [
+          'ean_reader', 'ean_8_reader',
+          'code_128_reader', 'code_39_reader',
+          'upc_reader', 'upc_e_reader'
+        ]
+      },
+      locate: true,
+      numOfWorkers: 0,   // sin web-workers → funciona desde CDN en cualquier browser
+      frequency: 10
+    }, err => {
+      if (err) {
+        console.error('Quagga init:', err);
+        alerta('No se pudo activar la cámara', 'error');
+        cerrarCamara(boxDivId);
+        resolve(); return;
+      }
+      Quagga.onDetected(_onQuaggaDetect);
+      Quagga.start();
+      resolve();
+    });
+  });
 }
 
 async function cerrarCamara(boxDivId = 'camara-box') {
-  if (HTML5QR) { try { await HTML5QR.stop(); } catch(e) {} HTML5QR = null; }
+  await _quaggaStop();
   CAMARA_ACTIVA = false;
+  _QUAGGA_BOX = null;
+  _QUAGGA_CB  = null;
   const box = document.getElementById(boxDivId);
-  if (box) box.style.display = 'none';
+  if (box) {
+    box.style.display = 'none';
+    // Quagga inserta <video> y <canvas> en el target — limpiar para el próximo uso
+    box.querySelectorAll('video, canvas').forEach(el => el.remove());
+  }
 }
 
 function loadScript(src) {
@@ -2648,26 +2698,14 @@ function muelleActivarScan() {
 }
 
 async function abrirCamaraMuelle() {
-  const box = document.getElementById('camara-box-muelle');
-  if (box) box.style.display = 'block';
-  CAMARA_ACTIVA = true;
-  if (!window.Html5Qrcode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js');
-  HTML5QR = new Html5Qrcode('lector-qr-muelle', { verbose: false });
-  try {
-    const { video, scan } = _camaraParams();
-    await HTML5QR.start(video, scan,
-      async cod => {
-        await cerrarCamara('camara-box-muelle');
-        const input = document.getElementById('muelle-scan-input');
-        if (input) { input.value = cod.toUpperCase(); }
-        const campo = document.getElementById('muelle-scan-campo');
-        if (campo) campo.style.display = 'flex';
-        await muelleCargarCaja();
-      }, () => {});
-  } catch (e) {
-    alerta('No se pudo activar la cámara', 'error');
-    cerrarCamara('camara-box-muelle');
-  }
+  await abrirCamara('lector-qr-muelle', 'camara-box-muelle', async cod => {
+    await cerrarCamara('camara-box-muelle');
+    const input = document.getElementById('muelle-scan-input');
+    if (input) input.value = cod.toUpperCase();
+    const campo = document.getElementById('muelle-scan-campo');
+    if (campo) campo.style.display = 'flex';
+    await muelleCargarCaja();
+  });
 }
 
 function muelleScanBlur() {
