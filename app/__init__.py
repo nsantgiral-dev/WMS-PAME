@@ -77,5 +77,11 @@ def create_app():
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}')
+        try:
+            from app.services.siesa_barcode_sync_service import init_scheduler as init_barcode_scheduler
+            init_barcode_scheduler(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[BARCODE_SCHEDULER] No se pudo iniciar: {e}')
 
     return app

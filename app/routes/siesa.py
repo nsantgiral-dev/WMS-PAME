@@ -458,6 +458,31 @@ def debug_barras_raw():
     return jsonify(resultado), 200
 
 
+@siesa_bp.route('/sync-barcodes', methods=['POST'])
+@jwt_required()
+def sync_barcodes():
+    """Dispara sync manual de barcodes EAN Siesa → DB local. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from flask import current_app
+    from app.services.siesa_barcode_sync_service import ejecutar_sync, get_estado
+    estado = get_estado()
+    if estado['en_curso']:
+        return jsonify({'mensaje': 'Sync ya en curso', 'estado': estado}), 200
+    ejecutar_sync(current_app._get_current_object())
+    return jsonify({'mensaje': 'Sync iniciado en background', 'estado': get_estado()}), 200
+
+
+@siesa_bp.route('/sync-barcodes-estado', methods=['GET'])
+@jwt_required()
+def sync_barcodes_estado():
+    """Estado del último sync de barcodes. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.services.siesa_barcode_sync_service import get_estado
+    return jsonify(get_estado()), 200
+
+
 @siesa_bp.route('/debug-oc-raw', methods=['GET'])
 @jwt_required()
 def debug_oc_raw():

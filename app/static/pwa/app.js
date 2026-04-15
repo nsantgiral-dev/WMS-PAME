@@ -654,6 +654,17 @@ async function cargarConnekta() {
       </div>
       <div id="panel-reconciliacion" style="margin-top:8px;"></div>
 
+      <!-- Sync barcodes EAN -->
+      <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:4px;">📦 Sync códigos de barras EAN</div>
+        <div style="font-size:11px;color:#666;margin-bottom:10px;">Vuelca todos los barcodes de Siesa a la DB local. Corre automático a las 2am; este botón lo fuerza ahora.</div>
+        <button onclick="syncBarcodes()"
+          style="width:100%;padding:12px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;">
+          ↻ Sincronizar barcodes ahora
+        </button>
+        <div id="sync-barras-resultado" style="margin-top:8px;font-size:12px;color:#666;min-height:16px;"></div>
+      </div>
+
       <!-- Diagnóstico barcodes Siesa -->
       <div style="border-top:1px solid #222;margin-top:16px;padding-top:16px;">
         <div style="font-size:13px;font-weight:700;margin-bottom:8px;">🔍 Diagnóstico códigos de barras</div>
@@ -730,6 +741,36 @@ async function setupInicial() {
     res.textContent = 'Error: ' + (e.message || e);
     btn.disabled = false;
     btn.textContent = '↻ Sincronizar catálogo + cargar stock inicial';
+  }
+}
+
+async function syncBarcodes() {
+  const res = document.getElementById('sync-barras-resultado');
+  if (!res) return;
+  res.style.color = '#93c5fd';
+  res.textContent = '⏳ Iniciando sync... (corre en background, puede tardar varios minutos)';
+  try {
+    await post('/api/siesa/sync-barcodes', {});
+    res.textContent = '✓ Sync iniciado. Consulta el estado en unos minutos con "Probar" (sin código) para ver cuántos barcodes se cargaron.';
+    res.style.color = '#4ade80';
+    // Polling estado cada 10s hasta que termine
+    const intervalo = setInterval(async () => {
+      try {
+        const e = await get('/api/siesa/sync-barcodes-estado');
+        if (!e.en_curso && e.ultimo_resultado) {
+          clearInterval(intervalo);
+          const r = e.ultimo_resultado;
+          res.textContent = `✓ Sync completado — campo: ${r.campo_detectado || '?'} · actualizados: ${r.actualizados} · sin producto local: ${r.sin_producto_local} · errores: ${r.errores}`;
+        } else if (!e.en_curso && e.ultimo_error) {
+          clearInterval(intervalo);
+          res.style.color = '#ef4444';
+          res.textContent = `✗ Error: ${e.ultimo_error}`;
+        }
+      } catch (_) {}
+    }, 10000);
+  } catch (e) {
+    res.style.color = '#ef4444';
+    res.textContent = 'Error al iniciar: ' + (e.message || e);
   }
 }
 
