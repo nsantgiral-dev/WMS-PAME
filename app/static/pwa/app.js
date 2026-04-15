@@ -5185,7 +5185,7 @@ async function trasReasignarOperario(id) {
     const nuevo_id = parseInt(modal.querySelector('#modal-nuevo-operario').value);
     modal.remove();
     try {
-      await put(`/api/traslados/${id}/reasignar-operario`, { operario_id: nuevo_id });
+      await post(`/api/traslados/${id}/reasignar-operario`, { operario_id: nuevo_id });
       alerta('Operario reasignado', 'exito');
       cargarTrasladosAdmin();
     } catch (e) { alerta(e.message || 'Error', 'error'); }
