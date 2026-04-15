@@ -1041,6 +1041,31 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
       }
       Quagga.onDetected(_onQuaggaDetect);
       Quagga.start();
+
+      // Estilar video insertado por Quagga + agregar visor rectangular
+      const video = target.querySelector('video');
+      if (video) {
+        video.style.cssText = 'width:100%;height:260px;object-fit:cover;display:block;border-radius:10px;';
+      }
+      const cvs = target.querySelector('canvas');
+      if (cvs) cvs.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;';
+      target.style.position = 'relative';
+      target.style.overflow = 'hidden';
+      target.style.borderRadius = '10px';
+
+      // Rectángulo de enfoque sobre el video
+      const ov = document.createElement('div');
+      ov.className = '_scan-overlay';
+      ov.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;';
+      ov.innerHTML = `
+        <div style="width:260px;height:80px;border:2px solid #00e5ff;border-radius:4px;
+          box-shadow:0 0 0 9999px rgba(0,0,0,.45);position:relative;">
+          <span style="position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);
+            color:#00e5ff;font-size:11px;font-weight:600;white-space:nowrap;
+            text-shadow:0 1px 4px rgba(0,0,0,.9);">Centra el barcode aquí</span>
+        </div>`;
+      target.appendChild(ov);
+
       resolve();
     });
   });
@@ -1054,8 +1079,8 @@ async function cerrarCamara(boxDivId = 'camara-box') {
   const box = document.getElementById(boxDivId);
   if (box) {
     box.style.display = 'none';
-    // Quagga inserta <video> y <canvas> en el target — limpiar para el próximo uso
-    box.querySelectorAll('video, canvas').forEach(el => el.remove());
+    // Limpiar todo lo que Quagga insertó (video, canvas, overlay)
+    box.querySelectorAll('[id^="lector-qr"]').forEach(el => { el.innerHTML = ''; });
   }
 }
 
@@ -1631,7 +1656,7 @@ async function procesarScanRecepcion(codigo) {
       btn.style.cursor = 'pointer';
       alerta('Todo escaneado — confirma la recepción', 'exito');
     }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
 async function confirmarRecepcionActiva() {
