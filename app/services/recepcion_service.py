@@ -240,6 +240,9 @@ class RecepcionService:
         recepcion = RecepcionMercancia.query.get(recepcion_id)
         if not recepcion:
             raise ValueError('Recepción no encontrada')
+        # Idempotente: si ya fue confirmada devolver los datos sin error
+        if recepcion.estado == 'CONFIRMADA':
+            return recepcion
         if recepcion.estado != 'EN_PROCESO':
             raise ValueError(f'No se puede confirmar en estado {recepcion.estado}')
 
@@ -335,8 +338,11 @@ class RecepcionService:
             logger.error(f'[RECEPCION] Error triggering Siesa: {str(e)}')
             recepcion.siesa_triggered = False
             recepcion.siesa_response = str(e)
-            db.session.commit()
-            raise Exception(f'Recepción confirmada en WMS pero error al comunicar con Siesa: {str(e)}')
+            # NO hacemos commit aquí — el estado permanece EN_PROCESO para que el
+            # operario pueda reintentar. El inventario se confirma solo cuando Siesa
+            # responde correctamente (o en modo simulación).
+            db.session.rollback()
+            raise Exception(f'Error al comunicar con Siesa: {str(e)}. La recepción NO fue confirmada — reintenta.')
 
         db.session.commit()
         return recepcion

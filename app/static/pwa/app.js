@@ -1920,7 +1920,7 @@ async function confirmarRecepcionActiva() {
     RECEPCION_ACTUAL = null;
     setTimeout(cargarRecepciones, 1500);
   } catch (e) {
-    alerta('Error confirmando', 'error');
+    alerta(e.message || 'Error confirmando', 'error');
     if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
   }
 }
