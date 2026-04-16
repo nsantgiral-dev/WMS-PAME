@@ -73,6 +73,9 @@ class ConnektaGateway:
         # Motivo de ventas en Siesa — campo requerido f470_id_motivo (pos 131, ancho 2)
         # Verificar en Siesa: Ventas → Motivos → código del motivo para ventas/remisiones
         self.motivo_ventas = os.getenv('SIESA_ID_MOTIVO_VENTAS', '')
+        # Motivo de compras en Siesa — campo requerido f470_id_motivo en entradas de OC (pos 131, ancho 2)
+        # Verificar en Siesa: Compras → Motivos → código del motivo para entradas de OC
+        self.motivo_compras = os.getenv('SIESA_ID_MOTIVO_COMPRAS', '')
         # Lista de precio en Siesa — campo requerido f470_id_lista_precio (pos 169, ancho 3)
         # Verificar en Siesa: Ventas → Listas de precio → código de la lista activa
         self.lista_precio = os.getenv('SIESA_LISTA_PRECIO', '')
@@ -527,12 +530,16 @@ class ConnektaGateway:
                 {
                     'F_CIA': cia,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': None,
+                    'f470_id_tipo_docto': 'EA',          # EA = Entrada Almacén (compras)
                     'f470_consec_docto': 0,
                     'f470_nro_registro': 0,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
+                    'f470_id_motivo': self.motivo_compras or None,  # SIESA_ID_MOTIVO_COMPRAS (pos 131, ancho 2)
+                    'f470_id_co_movto': self.centro_op,
+                    'f470_id_ccosto_movto': None,
+                    'f470_id_proyecto': None,
                     'f470_id_unidad_medida': None,
                     'f421_fecha_entrega': fecha_hoy,
                     'f470_cant_base': i.get('cantidad_recibida'),
@@ -543,8 +550,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
-                    'f470_id_ccosto_movto': None,
-                    'f470_id_proyecto': None,
+                    'f470_id_un_movto': self.unidad_negocio,
                     'f470_rowid': 0
                 }
                 for i in items
