@@ -485,25 +485,25 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': cia,
-                    'F_CONSEC_AUTO_REG': 0,      # 0 = Siesa auto-asigna el consecutivo
+                    'F_CONSEC_AUTO_REG': 0,       # int: Siesa auto-asigna
                     'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': None,
-                    'f350_consec_docto': 0,      # 0 = Siesa auto-asigna
-                    'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': None,
-                    'f350_ind_estado': None,
-                    'f350_ind_impresion': None,
+                    'f350_id_tipo_docto': None,   # str opcional
+                    'f350_consec_docto': 0,       # int: Siesa auto-asigna
+                    'f350_fecha': fecha_hoy,      # YYYYMMDD
+                    'f350_id_tercero': None,      # str opcional
+                    'f350_ind_estado': 0,         # int: 0=activo
+                    'f350_ind_impresion': 0,      # int: 0=no impreso
                     'f350_notas': None,
                     'f451_id_sucursal_prov': None,
                     'f451_id_tercero_comprador': None,
                     'f451_num_docto_referencia': None,
                     'f451_id_moneda_docto': None,
                     'f451_id_moneda_conv': None,
-                    'f451_tasa_conv': None,
+                    'f451_tasa_conv': 0.0,        # decimal
                     'f451_id_moneda_local': None,
-                    'f451_tasa_local': None,
-                    'f451_tasa_dscto_global1': None,
-                    'f451_tasa_dscto_global2': None,
+                    'f451_tasa_local': 0.0,       # decimal
+                    'f451_tasa_dscto_global1': 0.0,
+                    'f451_tasa_dscto_global2': 0.0,
                     'f462_id_vehiculo': None,
                     'f462_id_tercero_transp': None,
                     'f462_id_sucursal_transp': None,
@@ -511,16 +511,16 @@ class ConnektaGateway:
                     'f462_nombre_conductor': None,
                     'f462_identif_conductor': None,
                     'f462_numero_guia': None,
-                    'f462_cajas': None,
-                    'f462_peso': None,
-                    'f462_volumen': None,
-                    'f462_valor_seguros': None,
+                    'f462_cajas': 0,              # int
+                    'f462_peso': 0.0,             # decimal
+                    'f462_volumen': 0.0,          # decimal
+                    'f462_valor_seguros': 0.0,    # decimal
                     'f462_notas': None,
-                    'f451_ind_consignacion': None,
+                    'f451_ind_consignacion': 0,   # int
                     'f420_id_co_docto': id_co_oc,
                     'f420_id_tipo_docto': tipo_docto_oc,
                     'f420_consec_docto': consec_docto_oc,
-                    'f420_ind_modo_sobrecosto': None
+                    'f420_ind_modo_sobrecosto': 0  # int
                 }
             ],
             'Movimientos': [
@@ -536,7 +536,7 @@ class ConnektaGateway:
                     'f470_id_unidad_medida': None,
                     'f421_fecha_entrega': fecha_hoy,
                     'f470_cant_base': i.get('cantidad_recibida'),
-                    'f470_cant_2': None,
+                    'f470_cant_2': 0.0,
                     'f470_notas': None,
                     'f470_id_item': None,
                     'f470_referencia_item': i.get('producto_codigo'),
@@ -545,7 +545,7 @@ class ConnektaGateway:
                     'f470_id_ext2_detalle': None,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
-                    'f470_rowid': None
+                    'f470_rowid': 0
                 }
                 for i in items
             ],
