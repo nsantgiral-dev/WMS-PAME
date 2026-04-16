@@ -1218,9 +1218,19 @@ function renderTarea(t) {
 function _onQuaggaDetect(result) {
   const code = result && result.codeResult && result.codeResult.code;
   if (!code) return;
+
+  // Filtro de confianza: descartar lecturas con demasiados errores
+  const codes = result.codeResult.decodedCodes || [];
+  const errores = codes.filter(c => c.error !== undefined).map(c => c.error);
+  if (errores.length > 0) {
+    const errorProm = errores.reduce((s, e) => s + e, 0) / errores.length;
+    if (errorProm > 0.25) return; // lectura dudosa — ignorar
+  }
+
   const now = Date.now();
-  if (now - _SCAN_LAST_TS < 900) return;   // 900 ms cooldown entre scans
+  if (now - _SCAN_LAST_TS < 900) return;
   _SCAN_LAST_TS = now;
+  vibrar();
   if (_QUAGGA_CB) _QUAGGA_CB(code);
 }
 
@@ -1248,6 +1258,8 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
     await loadScript('https://cdn.jsdelivr.net/npm/@ericblade/quagga2@1.8.2/dist/quagga.min.js');
   }
 
+  const esMobil = /Mobi|Android|iPhone/i.test(navigator.userAgent);
+
   await new Promise(resolve => {
     Quagga.init({
       inputStream: {
@@ -1255,8 +1267,8 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
         target,
         constraints: {
           facingMode: 'environment',
-          width:  { min: 640, ideal: 1280 },
-          height: { min: 480, ideal: 720  }
+          width:  { min: 320, ideal: esMobil ? 640 : 1280 },
+          height: { min: 240, ideal: esMobil ? 480 : 720  }
         }
       },
       decoder: {
@@ -1264,11 +1276,13 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
           'ean_reader', 'ean_8_reader',
           'code_128_reader', 'code_39_reader',
           'upc_reader', 'upc_e_reader'
-        ]
+        ],
+        multiple: false
       },
-      locate: true,
-      numOfWorkers: 0,   // sin web-workers → funciona desde CDN en cualquier browser
-      frequency: 10
+      locate: !esMobil,   // en móvil apagar locate — muy pesado, usar visor fijo
+      numOfWorkers: 0,
+      frequency: esMobil ? 5 : 10,
+      halfSample: esMobil  // en móvil: procesar a mitad de resolución → más rápido
     }, err => {
       if (err) {
         console.error('Quagga init:', err);
@@ -1834,7 +1848,7 @@ function renderEscaneoRecepcion(rec) {
 
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
         <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea cada producto — 1 escaneo = 1 unidad</div>
-        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec')"
+        <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', cod => { cerrarCamara('camara-box-rec'); procesarScanRecepcion(cod); })"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
