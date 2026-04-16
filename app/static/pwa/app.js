@@ -1,5 +1,20 @@
 'use strict';
 
+// ── Tema (dark/light) — aplica antes de cualquier render ─────────────────────
+(function () {
+  if (localStorage.getItem('wms_theme') === 'light') {
+    document.body.classList.add('light');
+  }
+})();
+
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light');
+  localStorage.setItem('wms_theme', isLight ? 'light' : 'dark');
+  const btn = document.getElementById('btn-theme');
+  if (btn) btn.textContent = isLight ? '☀️' : '🌙';
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const API = window.location.origin;
 let TOKEN = localStorage.getItem('wms_token');
 let OPERARIO = JSON.parse(localStorage.getItem('wms_operario') || 'null');
@@ -32,6 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/pwa/sw.js').catch(() => {});
   }
+  // Sync theme icon with stored preference
+  const btnTheme = document.getElementById('btn-theme');
+  if (btnTheme) btnTheme.textContent = document.body.classList.contains('light') ? '☀️' : '🌙';
   monitorRed();
   scannerLaser();
   if (TOKEN && OPERARIO) {
