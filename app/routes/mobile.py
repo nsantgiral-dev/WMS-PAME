@@ -118,3 +118,128 @@ def sync_offline():
         'fallidos': len([r for r in resultados if not r['exito']]),
         'resultados': resultados
     }), 200
+
+
+@mobile_bp.route('/reportar-problema', methods=['POST'])
+@jwt_required()
+def reportar_problema():
+    """
+    Endpoint unificado para reportar problemas desde la pantalla del operario.
+    Maneja PICKING, CONTEO y PACKING según el campo `tipo`.
+
+    Payload: { tarea_id, tipo, motivo, cantidad_encontrada (opcional) }
+    Motivos: UBICACION_VACIA | FALTANTE | MERCANCIA_AVERIADA | PRODUCTO_INCORRECTO
+    """
+    from app.extensions import db
+    from app.models.inventario import UbicacionProducto, MovimientoInventario
+    from app.models.picking import TareaPicking
+    from app.models.conteo import SesionConteo
+    from app.services.conteo_service import ConteoService
+    from datetime import datetime as _dt
+    import uuid as _uuid
+
+    operario_id = int(get_jwt_identity())
+    data = request.get_json() or {}
+
+    tarea_id = data.get('tarea_id')
+    tipo = data.get('tipo', 'PICKING')
+    motivo = data.get('motivo', 'UBICACION_VACIA')
+    cantidad_encontrada = int(data.get('cantidad_encontrada', 0))
+    observaciones = data.get('observaciones') or None
+
+    if not tarea_id:
+        return jsonify({'error': 'tarea_id es requerido'}), 400
+
+    # ── PICKING ──────────────────────────────────────────────────
+    if tipo == 'PICKING':
+        tarea = TareaPicking.query.get(tarea_id)
+        if not tarea:
+            return jsonify({'error': f'Tarea picking {tarea_id} no encontrada'}), 404
+        if tarea.operario_id != operario_id:
+            return jsonify({'error': 'Esta tarea no te pertenece'}), 403
+
+        cantidad_faltante = max(0, tarea.cantidad_solicitada - cantidad_encontrada)
+
+        inv = (UbicacionProducto.query
+               .filter_by(ubicacion_id=tarea.ubicacion_id, producto_id=tarea.producto_id)
+               .with_for_update().first())
+
+        if inv and cantidad_faltante > 0:
+            inv.bloqueado = inv.bloqueado + cantidad_faltante
+
+        if cantidad_encontrada > 0:
+            tarea.cantidad_recogida = cantidad_encontrada
+            if inv:
+                inv.cantidad = max(0, inv.cantidad - cantidad_encontrada)
+                inv.reservado = max(0, inv.reservado - cantidad_encontrada)
+            db.session.add(MovimientoInventario(
+                producto_id=tarea.producto_id,
+                ubicacion_id=tarea.ubicacion_id,
+                almacen_id=tarea.almacen_id,
+                tipo='SHORT_PICK',
+                cantidad=cantidad_encontrada,
+                motivo=f'Short-pick — tarea {tarea.codigo} — faltó {cantidad_faltante}',
+                numero_documento=tarea.referencia_documento,
+                usuario_id=operario_id,
+                idempotency_key=f'SP-{tarea.id}-{int(_dt.utcnow().timestamp()*1000)}',
+            ))
+
+        tarea.estado = 'BLOQUEADO'
+        tarea.operario_id = None
+        tarea.motivo_bloqueo = motivo
+        tarea.observaciones_bloqueo = observaciones
+
+        auditoria_id = None
+        if cantidad_faltante > 0:
+            sesion = ConteoService.generar_auditoria_por_excepcion(
+                tarea_picking_id=tarea.id,
+                ubicacion_id=tarea.ubicacion_id,
+                producto_id=tarea.producto_id,
+                almacen_id=tarea.almacen_id,
+            )
+            sesion.motivo_codigo = motivo
+            auditoria_id = sesion.id
+
+        db.session.commit()
+        return jsonify({
+            'ok': True,
+            'mensaje': 'Problema reportado — el jefe de almacén lo resolverá',
+            'motivo': motivo,
+            'tarea_id': tarea_id,
+            'auditoria_id': auditoria_id,
+        }), 200
+
+    # ── CONTEO ───────────────────────────────────────────────────
+    if tipo == 'CONTEO':
+        sesion = SesionConteo.query.get(tarea_id)
+        if not sesion:
+            return jsonify({'error': f'Sesión de conteo {tarea_id} no encontrada'}), 404
+
+        sesion.estado = 'BLOQUEADO'
+        sesion.notas = f'[{motivo}] {observaciones or ""}'.strip()
+        db.session.commit()
+        return jsonify({
+            'ok': True,
+            'mensaje': 'Problema de conteo reportado — el jefe revisará la ubicación',
+            'motivo': motivo,
+            'tarea_id': tarea_id,
+        }), 200
+
+    # ── PACKING ──────────────────────────────────────────────────
+    if tipo == 'PACKING':
+        from app.models.packing import TareaPacking
+        tarea = TareaPacking.query.get(tarea_id)
+        if not tarea:
+            return jsonify({'error': f'Tarea packing {tarea_id} no encontrada'}), 404
+
+        tarea.estado = 'BLOQUEADO'
+        tarea.notas = f'[{motivo}] {observaciones or ""}'.strip()
+        db.session.commit()
+        return jsonify({
+            'ok': True,
+            'mensaje': 'Problema de packing reportado',
+            'motivo': motivo,
+            'tarea_id': tarea_id,
+        }), 200
+
+    return jsonify({'error': f'Tipo de tarea no reconocido: {tipo}'}), 400

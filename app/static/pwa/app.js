@@ -1491,8 +1491,11 @@ async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
   const observaciones = document.getElementById('obs-problema')?.value?.trim() || '';
   const modal = document.getElementById('modal-problema');
   if (modal) modal.remove();
+  const tipo = TAREA_ACTUAL?.tipo || 'PICKING';
   try {
-    await post('/api/picking/' + tareaId + '/reportar-problema', {
+    await post('/api/mobile/reportar-problema', {
+      tarea_id: tareaId,
+      tipo,
       motivo,
       cantidad_encontrada: cantidadEncontrada || 0,
       observaciones: observaciones || undefined,
@@ -1504,7 +1507,7 @@ async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
     TAREA_ACTUAL = null;
     setTimeout(pedirTarea, 1500);
   } catch (e) {
-    alerta('Error reportando problema', 'error');
+    alerta(e.message || 'Error reportando problema', 'error');
   }
 }
 
