@@ -413,12 +413,14 @@ class MobileService:
 
         elif tipo == 'CONTEO':
             sesion = SesionConteo.query.get(tarea_id)
-            if not sesion or sesion.cantidad_fisica is None:
-                raise ValueError('No hay cantidad registrada para confirmar')
+            if not sesion:
+                raise ValueError('Sesión de conteo no encontrada')
+            # cantidad_fisica None significa que no escaneó nada → conteo = 0 (ubicación vacía)
+            cantidad = sesion.cantidad_fisica if sesion.cantidad_fisica is not None else 0
             return ConteoService.registrar_conteo(
                 sesion_id=tarea_id,
                 operario_id=operario_id,
-                cantidad_fisica=sesion.cantidad_fisica
+                cantidad_fisica=cantidad
             )
 
         raise ValueError(f'Tipo desconocido: {tipo}')

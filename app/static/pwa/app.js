@@ -1400,9 +1400,16 @@ async function confirmar() {
       setTimeout(pedirTarea, 1500);
     }
   } catch (e) {
-    guardarOffline(payload);
-    TAREA_ACTUAL = null;
-    setTimeout(pedirTarea, 2000);
+    if (e.status) {
+      // Error del servidor (400/500) — mostrar mensaje real, no guardar offline
+      alerta(e.message || 'Error al confirmar', 'error');
+      if (btn) { btn.textContent = '✓ Confirmar'; btn.disabled = false; }
+    } else {
+      // Error de red real — guardar para sincronizar cuando haya WiFi
+      guardarOffline(payload);
+      TAREA_ACTUAL = null;
+      setTimeout(pedirTarea, 2000);
+    }
   }
 }
 
