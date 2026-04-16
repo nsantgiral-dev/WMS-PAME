@@ -192,6 +192,24 @@ async function get(url) {
   return _checkResp(r);
 }
 
+/** Ejecuta fn() dando feedback visual al botón que disparó el evento. */
+async function _refreshBtn(event, fn) {
+  const btn = event.currentTarget || event.target;
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.style.opacity = '0.5';
+  btn.innerHTML = '⟳';
+  try {
+    await fn();
+  } catch (e) {
+    if (e.status !== 401) alerta(e.message || 'Error al actualizar', 'error');
+  } finally {
+    btn.innerHTML = orig;
+    btn.disabled = false;
+    btn.style.opacity = '';
+  }
+}
+
 async function post(url, body) {
   const r = await fetch(API + url, {
     method: 'POST',
@@ -1601,7 +1619,7 @@ function renderListaRecepciones(siesa, dbRecs) {
     html = `<div style="text-align:center;padding:50px 20px;">
       <div style="font-size:50px;">✓</div>
       <div style="font-size:22px;font-weight:700;margin-top:12px;">Sin recepciones</div>
-      <button onclick="cargarRecepciones()" style="margin-top:20px;padding:12px 24px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Actualizar</button>
+      <button onclick="_refreshBtn(event, cargarRecepciones)" style="margin-top:20px;padding:12px 24px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Actualizar</button>
     </div>`;
   }
 
@@ -2069,7 +2087,7 @@ async function empCargarTareas() {
     if (!tareas.length) {
       el.innerHTML = `<div style="text-align:center;padding:60px 20px;color:#555;">
         Sin tareas de empaque pendientes ✓<br>
-        <button onclick="empCargarTareas()" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
+        <button onclick="_refreshBtn(event, empCargarTareas)" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
       </div>`;
       return;
     }

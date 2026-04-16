@@ -571,7 +571,7 @@
       <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
       <div style="display:flex;align-items:center;gap:12px;">
         <span id="conexion-status" style="font-size:13px;color:#22c55e;">● Online</span>
-        <button onclick="pedirTarea()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">↻</button>
+        <button onclick="_refreshBtn(event, pedirTarea)" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;">↻</button>
       </div>
     </div>
     <div class="operario-bar">
@@ -658,7 +658,7 @@
           <span id="aud-urgentes-count" style="background:#7f1d1d;color:#fca5a5;font-size:20px;font-weight:800;padding:4px 14px;border-radius:10px;">0</span>
         </div>
         <div id="lista-auditorias-urgentes"><div style="color:#555;font-size:12px;">Cargando...</div></div>
-        <button onclick="cargarAuditoriasUrgentes()" style="width:100%;margin-top:8px;padding:8px;background:#111;border:1px solid #333;color:#666;border-radius:8px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
+        <button onclick="_refreshBtn(event, cargarAuditoriasUrgentes)" style="width:100%;margin-top:8px;padding:8px;background:#111;border:1px solid #333;color:#666;border-radius:8px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
       </div>
 
       <!-- Traslados en riesgo — Monitor latencia logística -->
@@ -691,7 +691,7 @@
     <div id="tab-pedidos" class="admin-content" style="display:none;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div style="font-size:16px;font-weight:700;">Cola de picking</div>
-        <button onclick="cargarPedidos()" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx2);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;">↻</button>
+        <button onclick="_refreshBtn(event, cargarPedidos)" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx2);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;">↻</button>
       </div>
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:var(--tx3);">
         Las tareas se asignan automáticamente cuando un operario queda libre. Cuando Connekta esté activo, los pedidos de Siesa aparecerán aquí solos.
