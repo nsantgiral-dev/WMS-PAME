@@ -205,6 +205,15 @@
 
     .admin-content { padding: 16px; }
 
+    /* ── Semáforo módulos ── */
+    .sem-item { display:flex;align-items:center;gap:6px;padding:6px 8px;background:#111;border-radius:8px;border:1px solid #1a1a1a; }
+    .sem-dot  { font-size:14px;line-height:1; }
+    .sem-lbl  { font-size:11px;color:#666;font-weight:600; }
+    .sem-verde  .sem-dot { color:#22c55e; } .sem-verde  .sem-lbl { color:#4ade80; }
+    .sem-amarillo .sem-dot { color:#facc15; } .sem-amarillo .sem-lbl { color:#fde047; }
+    .sem-rojo   .sem-dot { color:#f87171; } .sem-rojo   .sem-lbl { color:#fca5a5; }
+    .sem-gris   .sem-dot { color:#444; }    .sem-gris   .sem-lbl { color:#555; }
+
     /* ── KPI grid ── */
     .kpi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
     .kpi-card {
@@ -624,32 +633,78 @@
 
     <!-- Dashboard -->
     <div id="tab-dashboard" class="admin-content">
-      <div class="kpi-grid">
-        <div class="kpi-card"><div class="kpi-valor" id="kpi-pick-pend">—</div><div class="kpi-label">Picking pendiente</div></div>
-        <div class="kpi-card"><div class="kpi-valor" id="kpi-pack-hoy">—</div><div class="kpi-label">Facturas hoy</div><div class="kpi-sub">via Siesa automático</div></div>
-        <div class="kpi-card"><div class="kpi-valor" id="kpi-rec-hoy">—</div><div class="kpi-label">Recepciones hoy</div></div>
-        <div class="kpi-card"><div class="kpi-valor" id="kpi-alertas">—</div><div class="kpi-label">Alertas stock</div></div>
+
+      <!-- Fila 1: KPIs principales (6 tarjetas) -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
+        <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-pedidos')">
+          <div class="kpi-valor" id="kpi-pick-pend">—</div>
+          <div class="kpi-label">Picking en cola</div>
+        </div>
+        <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-pedidos')">
+          <div class="kpi-valor" id="kpi-pack-hoy">—</div>
+          <div class="kpi-label">Facturas hoy</div>
+          <div class="kpi-sub">via Siesa</div>
+        </div>
+        <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-traslados')">
+          <div class="kpi-valor" id="kpi-tras-activos">—</div>
+          <div class="kpi-label">Traslados activos</div>
+          <div class="kpi-sub" id="kpi-tras-sub">—</div>
+        </div>
+        <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-rutas')">
+          <div class="kpi-valor" id="kpi-rutas-activas">—</div>
+          <div class="kpi-label">Rutas en marcha</div>
+          <div class="kpi-sub" id="kpi-rutas-sub">—</div>
+        </div>
+        <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-inventario')">
+          <div class="kpi-valor" id="kpi-conteos-desc">—</div>
+          <div class="kpi-label">Conteos descuadre</div>
+        </div>
+        <div class="kpi-card" id="kpi-card-auditorias" style="cursor:pointer;" onclick="tab('tab-inventario')">
+          <div class="kpi-valor" id="kpi-auditorias">—</div>
+          <div class="kpi-label">Auditorías urgentes</div>
+        </div>
       </div>
-      <div class="chart-container">
-        <div class="chart-titulo">Actividad de hoy</div>
-        <div style="position:relative;height:200px;"><canvas id="chart-actividad"></canvas></div>
+
+      <!-- Semáforo de módulos -->
+      <div style="background:#0d0d0d;border:1px solid #1a1a1a;border-radius:14px;padding:14px;margin-bottom:14px;">
+        <div style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">Estado de módulos</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;" id="semaforo-modulos">
+          <div class="sem-item" id="sem-picking"><span class="sem-dot">●</span><span class="sem-lbl">Picking</span></div>
+          <div class="sem-item" id="sem-traslados"><span class="sem-dot">●</span><span class="sem-lbl">Traslados</span></div>
+          <div class="sem-item" id="sem-rutas"><span class="sem-dot">●</span><span class="sem-lbl">Rutas</span></div>
+          <div class="sem-item" id="sem-conteos"><span class="sem-dot">●</span><span class="sem-lbl">Conteos</span></div>
+          <div class="sem-item" id="sem-recepciones"><span class="sem-dot">●</span><span class="sem-lbl">Recepción</span></div>
+          <div class="sem-item" id="sem-siesa"><span class="sem-dot">●</span><span class="sem-lbl">Siesa</span></div>
+        </div>
       </div>
-      <!-- Tareas de picking bloqueadas -->
-      <div id="dashboard-tareas-bloqueadas" style="display:none;background:#110a0a;border:1px solid #7f1d1d;border-radius:14px;padding:14px;margin-bottom:14px;">
+
+      <!-- Gráfica de tendencia 7 días -->
+      <div class="chart-container" style="margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <div class="chart-titulo" style="margin-bottom:0;">Tendencia 7 días</div>
+          <div style="display:flex;gap:12px;font-size:11px;">
+            <span style="color:#3b82f6;">● Picking</span>
+            <span style="color:#10b981;">● Conteos</span>
+            <span style="color:#f59e0b;">● Traslados</span>
+            <span style="color:#8b5cf6;">● Rutas</span>
+          </div>
+        </div>
+        <div style="position:relative;height:180px;"><canvas id="chart-tendencia"></canvas></div>
+      </div>
+
+      <!-- Alertas activas (colapsadas, solo cuando hay datos) -->
+      <div id="dashboard-tareas-bloqueadas" style="display:none;background:#110a0a;border:1px solid #7f1d1d;border-radius:14px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <div>
             <div style="font-size:14px;font-weight:800;color:#f87171;">🔴 Pedidos Bloqueados</div>
-            <div style="font-size:11px;color:#7f1d1d;margin-top:2px;">El operario reportó una novedad — requieren decisión del jefe</div>
+            <div style="font-size:11px;color:#7f1d1d;margin-top:2px;">Operario reportó novedad — requieren decisión del jefe</div>
           </div>
           <span id="bloq-count" style="background:#7f1d1d;color:#fca5a5;font-size:20px;font-weight:800;padding:4px 14px;border-radius:10px;">0</span>
         </div>
-        <button onclick="tab('tab-pedidos'); setTimeout(()=>{ const el=document.getElementById('lista-pedidos'); if(el) el.scrollIntoView({behavior:'smooth'}); },400);" style="width:100%;margin-top:10px;padding:9px;background:#1a0505;border:1px solid #7f1d1d;color:#f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-          Ver tareas bloqueadas →
-        </button>
+        <button onclick="tab('tab-pedidos')" style="width:100%;margin-top:10px;padding:9px;background:#1a0505;border:1px solid #7f1d1d;color:#f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Ver tareas bloqueadas →</button>
       </div>
 
-      <!-- Auditorías Urgentes — Supervisor Guard -->
-      <div id="dashboard-auditorias-urgentes" style="display:none;background:var(--rbg);border:1px solid var(--rbrd);border-radius:14px;padding:16px;margin-bottom:14px;">
+      <div id="dashboard-auditorias-urgentes" style="display:none;background:var(--rbg);border:1px solid var(--rbrd);border-radius:14px;padding:16px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
           <div>
             <div style="font-size:15px;font-weight:800;color:#f87171;">🚨 Auditorías Urgentes</div>
@@ -661,24 +716,27 @@
         <button onclick="_refreshBtn(event, cargarAuditoriasUrgentes)" style="width:100%;margin-top:8px;padding:8px;background:#111;border:1px solid #333;color:#666;border-radius:8px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
       </div>
 
-      <!-- Traslados en riesgo — Monitor latencia logística -->
-      <div id="dashboard-traslados-riesgo" style="display:none;background:#0a0e11;border:1px solid #1e3a5f;border-radius:14px;padding:14px;margin-bottom:14px;">
+      <div id="dashboard-traslados-riesgo" style="display:none;background:#0a0e11;border:1px solid #1e3a5f;border-radius:14px;padding:14px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
           <div>
             <div style="font-size:14px;font-weight:800;color:#60a5fa;">🚛 Traslados Estancados</div>
-            <div style="font-size:11px;color:#1e3a5f;margin-top:2px;">Mercancía EN_TRANSITO que supera el tiempo esperado — verificar con logística</div>
+            <div style="font-size:11px;color:#1e3a5f;margin-top:2px;">EN_TRANSITO fuera de tiempo — verificar con logística</div>
           </div>
           <div style="text-align:right;">
-            <span id="traslados-criticos-count" style="background:#7c2d12;color:#fb923c;font-size:16px;font-weight:800;padding:3px 10px;border-radius:8px;margin-right:6px;">0</span>
-            <span style="font-size:10px;color:#60a5fa;">+24h</span>
-            <span id="traslados-alerta-count" style="background:#1e3a5f;color:#93c5fd;font-size:16px;font-weight:800;padding:3px 10px;border-radius:8px;margin-left:8px;">0</span>
-            <span style="font-size:10px;color:#60a5fa;">+12h</span>
+            <span id="traslados-criticos-count" style="background:#7c2d12;color:#fb923c;font-size:16px;font-weight:800;padding:3px 10px;border-radius:8px;margin-right:4px;">0</span>
+            <span style="font-size:10px;color:#fb923c;">+24h</span>
+            <span id="traslados-alerta-count" style="background:#1e3a5f;color:#93c5fd;font-size:16px;font-weight:800;padding:3px 10px;border-radius:8px;margin-left:6px;">0</span>
+            <span style="font-size:10px;color:#93c5fd;">+12h</span>
           </div>
         </div>
         <div id="traslados-riesgo-lista" style="font-size:12px;color:#475569;"></div>
-        <button onclick="tab('tab-traslados')" style="width:100%;margin-top:10px;padding:9px;background:#0d1b2a;border:1px solid #1e3a5f;color:#60a5fa;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-          Ver traslados →
-        </button>
+        <button onclick="tab('tab-traslados')" style="width:100%;margin-top:10px;padding:9px;background:#0d1b2a;border:1px solid #1e3a5f;color:#60a5fa;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Ver traslados →</button>
+      </div>
+
+      <!-- Productividad operarios -->
+      <div style="background:#0d0d0d;border:1px solid #1a1a1a;border-radius:14px;padding:14px;margin-bottom:10px;">
+        <div style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;">Productividad 7 días</div>
+        <div id="dash-productividad" style="font-size:12px;color:#555;">Cargando...</div>
       </div>
 
       <div class="tabla-card" id="movimientos-recientes">

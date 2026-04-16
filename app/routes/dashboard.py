@@ -70,7 +70,14 @@ def resumen_completo():
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
     try:
+        from datetime import datetime, timedelta
         from app.models.conteo import SesionConteo
+        from app.models.picking import TareaPicking
+        from app.models.traslado import SolicitudTraslado
+        from app.models.ruta_despacho import RutaDespacho
+        from app.services.traslado_monitor_service import get_resumen_alertas
+        from app.services.dashboard_service import _tendencia_7d
+
         kpis         = DashboardService.kpis_operativos(almacen_id)
         productividad = DashboardService.productividad_operarios(almacen_id, dias=7)
         alertas      = DashboardService.alertas_stock(almacen_id)
@@ -81,11 +88,38 @@ def resumen_completo():
             .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
             .count())
 
-        from app.models.picking import TareaPicking
         tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO').count()
+        traslados_riesgo  = get_resumen_alertas()
 
-        from app.services.traslado_monitor_service import get_resumen_alertas
-        traslados_riesgo = get_resumen_alertas()
+        # ── Traslados KPIs ──────────────────────────────────────────
+        hoy = datetime.utcnow().date()
+        inicio_hoy = datetime.combine(hoy, datetime.min.time())
+        traslados_kpis = {
+            'en_picking':     SolicitudTraslado.query.filter_by(estado='EN_PICKING').count(),
+            'preparado':      SolicitudTraslado.query.filter_by(estado='PREPARADO').count(),
+            'en_transito':    SolicitudTraslado.query.filter_by(estado='EN_TRANSITO').count(),
+            'entregadas_hoy': SolicitudTraslado.query.filter(
+                SolicitudTraslado.estado == 'ENTREGADA',
+                SolicitudTraslado.fecha_entrega >= inicio_hoy
+            ).count(),
+        }
+        traslados_kpis['total_activos'] = (
+            traslados_kpis['en_picking'] +
+            traslados_kpis['preparado'] +
+            traslados_kpis['en_transito']
+        )
+
+        # ── Rutas KPIs ──────────────────────────────────────────────
+        rutas_kpis = {
+            'en_cargue':      RutaDespacho.query.filter_by(estado='EN_CARGUE').count(),
+            'en_transito':    RutaDespacho.query.filter_by(estado='EN_TRANSITO').count(),
+            'entregadas_hoy': RutaDespacho.query.filter(
+                RutaDespacho.estado == 'ENTREGADA',
+                RutaDespacho.fecha_entregada >= inicio_hoy
+            ).count(),
+        }
+
+        tendencia_7d = _tendencia_7d()
 
         return jsonify({
             'kpis': kpis,
@@ -95,6 +129,9 @@ def resumen_completo():
             'auditorias_urgentes': auditorias_urgentes,
             'tareas_bloqueadas': tareas_bloqueadas,
             'traslados_en_riesgo': traslados_riesgo,
+            'traslados': traslados_kpis,
+            'rutas': rutas_kpis,
+            'tendencia_7d': tendencia_7d,
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500

@@ -19,6 +19,42 @@ from app.services.connekta_gateway import connekta
 logger = logging.getLogger(__name__)
 
 
+def _tendencia_7d():
+    """Actividad diaria de los últimos 7 días para gráfica de tendencias."""
+    from app.models.traslado import SolicitudTraslado
+    from app.models.ruta_despacho import RutaDespacho
+    hoy = datetime.utcnow().date()
+    dias = []
+    for i in range(6, -1, -1):
+        dia = hoy - timedelta(days=i)
+        inicio = datetime.combine(dia, datetime.min.time())
+        fin    = datetime.combine(dia, datetime.max.time())
+        picking = TareaPicking.query.filter(
+            TareaPicking.estado == 'COMPLETADO',
+            TareaPicking.fecha_completado.between(inicio, fin)
+        ).count()
+        conteos = SesionConteo.query.filter(
+            SesionConteo.estado.in_(['MATCH', 'AJUSTADO']),
+            SesionConteo.fecha_cierre.between(inicio, fin)
+        ).count()
+        traslados = SolicitudTraslado.query.filter(
+            SolicitudTraslado.estado == 'ENTREGADA',
+            SolicitudTraslado.fecha_entrega.between(inicio, fin)
+        ).count()
+        rutas = RutaDespacho.query.filter(
+            RutaDespacho.estado == 'ENTREGADA',
+            RutaDespacho.fecha_entregada.between(inicio, fin)
+        ).count()
+        dias.append({
+            'fecha': dia.strftime('%d/%m'),
+            'picking': picking,
+            'conteos': conteos,
+            'traslados': traslados,
+            'rutas': rutas,
+        })
+    return dias
+
+
 class DashboardService:
 
     @staticmethod

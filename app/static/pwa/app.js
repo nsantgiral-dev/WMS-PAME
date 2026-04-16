@@ -324,14 +324,86 @@ async function cargarDashboard() {
   try {
     const d = await get('/api/dashboard/resumen-completo?almacen_id=' + ALMACEN_ID);
     const k = d.kpis;
+    const tras = d.traslados || {};
+    const rutas = d.rutas || {};
+
+    // ── KPIs fila 1 ────────────────────────────────────────────────
     set('kpi-pick-pend', k.picking.total_activo);
     set('kpi-pack-hoy', k.packing.facturas_generadas_hoy);
-    set('kpi-rec-hoy', k.recepcion.confirmadas_hoy);
-    set('kpi-alertas', k.alertas.productos_bajo_minimo);
-    graficaActividad(k);
-    movimientos(d.movimientos_recientes.movimientos);
-    // Auditorías urgentes — Supervisor Guard
+
+    set('kpi-tras-activos', tras.total_activos ?? '—');
+    const trasSub = document.getElementById('kpi-tras-sub');
+    if (trasSub) trasSub.textContent = `Pick:${tras.en_picking||0} Prep:${tras.preparado||0} Trans:${tras.en_transito||0}`;
+
+    const rutasActivas = (rutas.en_cargue || 0) + (rutas.en_transito || 0);
+    set('kpi-rutas-activas', rutasActivas);
+    const rutasSub = document.getElementById('kpi-rutas-sub');
+    if (rutasSub) rutasSub.textContent = `Cargue:${rutas.en_cargue||0} Tránsito:${rutas.en_transito||0}`;
+
+    set('kpi-conteos-desc', k.conteo.en_descuadre || 0);
+
     const nAud = d.auditorias_urgentes || 0;
+    set('kpi-auditorias', nAud);
+    const cardAud = document.getElementById('kpi-card-auditorias');
+    if (cardAud) cardAud.style.borderColor = nAud > 0 ? '#7f1d1d' : '';
+
+    // ── Semáforo de módulos ────────────────────────────────────────
+    _semaforo('sem-picking',
+      k.picking.total_activo > 0 ? 'verde' : 'gris',
+      k.picking.total_activo + ' tareas');
+    _semaforo('sem-traslados',
+      (tras.total_activos > 0) ? ((tras.en_transito || 0) > 0 ? 'amarillo' : 'verde') : 'gris',
+      tras.total_activos + ' activos');
+    _semaforo('sem-rutas',
+      rutasActivas > 0 ? 'amarillo' : (rutas.entregadas_hoy > 0 ? 'verde' : 'gris'),
+      rutasActivas + ' en marcha');
+    _semaforo('sem-conteos',
+      k.conteo.en_descuadre > 0 ? 'rojo' : (k.conteo.pendientes > 0 ? 'verde' : 'gris'),
+      k.conteo.en_descuadre > 0 ? k.conteo.en_descuadre + ' descuadres' : k.conteo.pendientes + ' pendientes');
+    _semaforo('sem-recepciones',
+      k.recepcion.confirmadas_hoy > 0 ? 'verde' : 'gris',
+      k.recepcion.confirmadas_hoy + ' hoy');
+    const siesa = k.connekta || {};
+    _semaforo('sem-siesa',
+      siesa.modo_simulacion ? 'gris' : (siesa.modo_ensayo ? 'amarillo' : 'verde'),
+      siesa.modo_simulacion ? 'Simulación' : (siesa.modo_ensayo ? 'Ensayo' : 'Conectado'));
+
+    // ── Gráfica tendencia 7 días ───────────────────────────────────
+    graficaTendencia(d.tendencia_7d || []);
+
+    // ── Productividad ──────────────────────────────────────────────
+    const prodEl = document.getElementById('dash-productividad');
+    if (prodEl && d.productividad && d.productividad.operarios) {
+      const ops = d.productividad.operarios.filter(o => o.total_tareas > 0);
+      if (!ops.length) {
+        prodEl.innerHTML = '<div style="color:#444;font-size:12px;">Sin actividad en los últimos 7 días</div>';
+      } else {
+        prodEl.innerHTML = ops.slice(0, 5).map(o => {
+          const pct = Math.min(100, Math.round(o.total_tareas / Math.max(...ops.map(x => x.total_tareas)) * 100));
+          return `<div style="margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+              <span style="color:#aaa;font-size:12px;">${o.nombre}</span>
+              <span style="color:#666;font-size:11px;">Pick:${o.pickings_completados} · Pack:${o.packings_completados} · Cont:${o.conteos_completados}</span>
+            </div>
+            <div style="background:#1a1a1a;border-radius:4px;height:5px;">
+              <div style="background:#3b82f6;width:${pct}%;height:5px;border-radius:4px;"></div>
+            </div>
+          </div>`;
+        }).join('');
+      }
+    }
+
+    // ── Movimientos recientes ──────────────────────────────────────
+    movimientos(d.movimientos_recientes.movimientos);
+
+    // ── Alertas (solo si hay datos) ────────────────────────────────
+    const nBloq = d.tareas_bloqueadas || 0;
+    const bloqEl = document.getElementById('dashboard-tareas-bloqueadas');
+    if (bloqEl) {
+      bloqEl.style.display = nBloq > 0 ? 'block' : 'none';
+      const b = document.getElementById('bloq-count');
+      if (b) b.textContent = nBloq;
+    }
     const audEl = document.getElementById('dashboard-auditorias-urgentes');
     if (audEl) {
       audEl.style.display = nAud > 0 ? 'block' : 'none';
@@ -339,25 +411,16 @@ async function cargarDashboard() {
       if (badge) badge.textContent = nAud;
       if (nAud > 0) cargarAuditoriasUrgentes();
     }
-    // Tareas de picking bloqueadas — pedidos del cliente sin resolver
-    const nBloq = d.tareas_bloqueadas || 0;
-    const bloqEl = document.getElementById('dashboard-tareas-bloqueadas');
-    if (bloqEl) {
-      bloqEl.style.display = nBloq > 0 ? 'block' : 'none';
-      const bloqBadge = document.getElementById('bloq-count');
-      if (bloqBadge) bloqBadge.textContent = nBloq;
-    }
-    // Traslados estancados EN_TRANSITO
     const tr = d.traslados_en_riesgo || {};
     const nCriticos = tr.total_critico || 0;
-    const nAlertas = tr.total_alerta || 0;
+    const nAlertas  = tr.total_alerta  || 0;
     const trEl = document.getElementById('dashboard-traslados-riesgo');
     if (trEl) {
       trEl.style.display = (nCriticos + nAlertas) > 0 ? 'block' : 'none';
-      const elCrit = document.getElementById('traslados-criticos-count');
-      const elAlerta = document.getElementById('traslados-alerta-count');
-      if (elCrit) elCrit.textContent = nCriticos;
-      if (elAlerta) elAlerta.textContent = nAlertas;
+      const elC = document.getElementById('traslados-criticos-count');
+      const elA = document.getElementById('traslados-alerta-count');
+      if (elC) elC.textContent = nCriticos;
+      if (elA) elA.textContent = nAlertas;
       const lista = document.getElementById('traslados-riesgo-lista');
       if (lista) {
         const todos = [...(tr.criticos || []), ...(tr.alertas || [])];
@@ -369,20 +432,46 @@ async function cargarDashboard() {
         ).join('');
       }
     }
-  } catch (e) {}
+  } catch (e) { console.error('[Dashboard]', e); }
 }
 
-function graficaActividad(k) {
-  const ctx = document.getElementById('chart-actividad');
+function _semaforo(id, color, texto) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = `sem-item sem-${color}`;
+  const lbl = el.querySelector('.sem-lbl');
+  if (lbl) lbl.textContent = el.querySelector('.sem-lbl').textContent.split('\n')[0].split(':')[0] + ': ' + texto;
+}
+
+function graficaTendencia(dias) {
+  const ctx = document.getElementById('chart-tendencia');
   if (!ctx || !window.Chart) return;
   if (CHART) CHART.destroy();
+  const labels   = dias.map(d => d.fecha);
+  const picking  = dias.map(d => d.picking);
+  const conteos  = dias.map(d => d.conteos);
+  const trasl    = dias.map(d => d.traslados);
+  const rutasD   = dias.map(d => d.rutas);
+  const lineOpts = (color) => ({ borderColor: color, backgroundColor: color + '22', tension: 0.35, pointRadius: 3, pointHoverRadius: 5, fill: true, borderWidth: 2 });
   CHART = new Chart(ctx, {
-    type: 'bar',
+    type: 'line',
     data: {
-      labels: ['Picking', 'Pick hoy', 'Pack hoy', 'Facturas', 'Conteos'],
-      datasets: [{ data: [k.picking.total_activo, k.picking.completado_hoy, k.packing.completado_hoy, k.packing.facturas_generadas_hoy, k.conteo.match_hoy], backgroundColor: ['#1e3a5f','#14532d','#14532d','#065f46','#713f12'], borderRadius: 6 }]
+      labels,
+      datasets: [
+        { label: 'Picking',    data: picking, ...lineOpts('#3b82f6') },
+        { label: 'Conteos',    data: conteos, ...lineOpts('#10b981') },
+        { label: 'Traslados',  data: trasl,   ...lineOpts('#f59e0b') },
+        { label: 'Rutas',      data: rutasD,  ...lineOpts('#8b5cf6') },
+      ]
     },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { ticks: { color: '#666' }, grid: { color: '#1a1a1a' } }, y: { ticks: { color: '#666' }, grid: { color: '#1a1a1a' }, beginAtZero: true } } }
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#111' } },
+        y: { ticks: { color: '#555', font: { size: 10 } }, grid: { color: '#111' }, beginAtZero: true }
+      }
+    }
   });
 }
 
