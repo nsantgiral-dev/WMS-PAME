@@ -253,12 +253,31 @@ class MobileService:
         }
 
     @staticmethod
+    def _normalizar(codigo: str) -> str:
+        """Limpia ruido del lector (saltos de línea, espacios, mayúsculas)."""
+        return str(codigo or '').strip().upper()
+
+    @staticmethod
+    def _codigos_validos(producto) -> set:
+        """Conjunto de todos los códigos aceptables para un producto."""
+        validos = {
+            MobileService._normalizar(producto.codigo),
+            MobileService._normalizar(producto.codigo_siesa or ''),
+            MobileService._normalizar(producto.codigo_barras or ''),
+        }
+        validos.discard('')
+        return validos
+
+    @staticmethod
     def procesar_escaneo(operario_id: int, tarea_id: int,
                          tipo: str, codigo: str, cantidad: int = 1):
         """
         Procesa un escaneo — funciona con cámara o láser Bluetooth.
         Valida que el código escaneado corresponde al producto de la tarea.
+        Acepta: referencia interna, código Siesa, o código de barras EAN.
         """
+        codigo_limpio = MobileService._normalizar(codigo)
+
         if tipo == 'PICKING':
             tarea = TareaPicking.query.get(tarea_id)
             if not tarea:
@@ -268,12 +287,12 @@ class MobileService:
             if not producto:
                 raise ValueError('Producto no encontrado en la tarea')
 
-            if codigo not in [producto.codigo, producto.codigo_siesa or '']:
+            if codigo_limpio not in MobileService._codigos_validos(producto):
                 raise ValueError({
                     'tipo': 'PRODUCTO_INCORRECTO',
-                    'mensaje': f'Escaneaste {codigo} pero la tarea pide {producto.codigo}',
+                    'mensaje': f'Escaneaste {codigo_limpio} pero la tarea pide {producto.codigo}',
                     'esperado': producto.codigo,
-                    'escaneado': codigo
+                    'escaneado': codigo_limpio
                 })
 
             nueva_cantidad = tarea.cantidad_recogida + cantidad
@@ -310,9 +329,13 @@ class MobileService:
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 
-            producto = Producto.query.filter_by(codigo=codigo).first()
+            producto = (
+                Producto.query.filter(db.func.upper(Producto.codigo) == codigo_limpio).first() or
+                Producto.query.filter(db.func.upper(Producto.codigo_siesa) == codigo_limpio).first() or
+                Producto.query.filter(db.func.upper(Producto.codigo_barras) == codigo_limpio).first()
+            )
             if not producto:
-                raise ValueError(f'Producto {codigo} no encontrado')
+                raise ValueError(f'Producto {codigo_limpio} no encontrado')
 
             item = ItemPacking.query.filter_by(
                 tarea_id=tarea_id,
@@ -348,7 +371,7 @@ class MobileService:
                 raise ValueError('Sesión de conteo no encontrada')
 
             producto = sesion.producto
-            if codigo not in [producto.codigo, producto.codigo_siesa or '']:
+            if codigo_limpio not in MobileService._codigos_validos(producto):
                 raise ValueError(f'Producto incorrecto — escanea {producto.codigo}')
 
             if not sesion.cantidad_fisica:
