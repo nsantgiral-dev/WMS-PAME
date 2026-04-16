@@ -2436,24 +2436,20 @@ async function empProcesarEscaneo(codigo) {
       return;
     }
 
-    // Actualizar estado local del ítem
+    // Actualizar estado local del ítem — match por producto_id (más confiable que barcode vs código)
     const item = EMP_ITEMS.find(i =>
-      i.producto_codigo === codigo ||
-      (r.codigo_escaneado && i.producto_codigo === r.codigo_escaneado)
+      (r.producto_id && i.producto_id === r.producto_id) ||
+      (r.producto_codigo && i.producto_codigo === r.producto_codigo) ||
+      i.producto_codigo === codigo
     );
     if (item) {
       item.cantidad_real = r.cantidad_actual;
       item.verificado = r.item_completado;
     }
 
-    if (r.item_completado) {
-      empFlash('verde', null);
-    } else {
-      // Ítem parcialmente escaneado — actualizar contador
-      if (item) {
-        document.getElementById('emp-hud-contador').textContent = r.cantidad_actual;
-      }
-      empFlash('verde', null);
+    empFlash('verde', null);
+    if (!r.item_completado && item) {
+      document.getElementById('emp-hud-contador').textContent = r.cantidad_actual;
     }
 
     // Si todos los ítems están listos

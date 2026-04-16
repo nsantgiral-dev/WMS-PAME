@@ -355,6 +355,8 @@ class MobileService:
                 'exito': True,
                 'tipo': 'PACKING',
                 'codigo_escaneado': codigo,
+                'producto_id': producto.id,
+                'producto_codigo': producto.codigo,
                 'producto_nombre': producto.nombre,
                 'cantidad_actual': item.cantidad_real,
                 'cantidad_requerida': item.cantidad_esperada,
