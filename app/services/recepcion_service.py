@@ -327,7 +327,8 @@ class RecepcionService:
                 tipo_docto_oc=recepcion.tipo_docto_oc_siesa or '',
                 consec_docto_oc=recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
                 items=items_payload,
-                es_parcial=tiene_faltantes
+                es_parcial=tiene_faltantes,
+                proveedor_id=recepcion.proveedor_codigo or ''
             )
             recepcion.siesa_triggered = True
             recepcion.siesa_response = json.dumps(respuesta_siesa)
