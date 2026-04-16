@@ -76,6 +76,9 @@ class ConnektaGateway:
         # Motivo de compras en Siesa — campo requerido f470_id_motivo en entradas de OC (pos 131, ancho 2)
         # '01' = Entrada por compras (Concepto 401). Verificar en Siesa: Compras → Maestros → Conceptos y Motivos
         self.motivo_compras = os.getenv('SIESA_ID_MOTIVO_COMPRAS', '01')
+        # Condición de pago para entradas de OC — campo f451_id_cond_pago (pos 324, ancho 3/4)
+        # Verificar en Siesa: Cartera → Condiciones de pago → código usado en OCs
+        self.cond_pago_compras = os.getenv('SIESA_COND_PAGO_COMPRAS', '')
         # Lista de precio en Siesa — campo requerido f470_id_lista_precio (pos 169, ancho 3)
         # Verificar en Siesa: Ventas → Listas de precio → código de la lista activa
         self.lista_precio = os.getenv('SIESA_LISTA_PRECIO', '')
@@ -471,7 +474,8 @@ class ConnektaGateway:
     def confirmar_entrada_compras(self, id_co_oc: str, tipo_docto_oc: str,
                                    consec_docto_oc: str, items: list,
                                    es_parcial: bool = False,
-                                   proveedor_id: str = None):
+                                   proveedor_id: str = None,
+                                   cond_pago: str = None):
         """
         142948 → API_v1_Compras_Comercial_EntradaOC
         Genera entrada desde OC — debita cuenta 1435.
@@ -498,8 +502,9 @@ class ConnektaGateway:
                     'f350_ind_estado': 0,         # int: 0=activo
                     'f350_ind_impresion': 0,      # int: 0=no impreso
                     'f350_notas': None,
-                    'f451_id_co': self.centro_op[:3],           # pos 24-27, largo 3 — CO del doc
-                    'f451_id_tercero': (proveedor_id or '')[:15],  # pos 43-58, largo 15 — NIT proveedor
+                    'f451_id_co': self.centro_op[:3],                       # pos 24-27, largo 3 — CO del doc
+                    'f451_id_tercero': (proveedor_id or '')[:15],              # pos 43-58, largo 15 — NIT proveedor
+                    'f451_id_cond_pago': (cond_pago or self.cond_pago_compras or '')[:4],  # pos 324-327 — condición pago
                     'f451_id_sucursal_prov': None,
                     'f451_id_tercero_comprador': None,
                     'f451_num_docto_referencia': None,
@@ -539,6 +544,7 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
+                    'f470_id_concepto': 401,                        # 401 = Entradas por compras y sobrecostos
                     'f470_id_motivo': self.motivo_compras or None,  # SIESA_ID_MOTIVO_COMPRAS (pos 131, ancho 2)
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
