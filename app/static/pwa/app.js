@@ -95,8 +95,8 @@ function mostrarSegunRol(rol) {
     cargarDevoluciones();
     TIMER_REC = setInterval(() => {
       if (!RECEPCION_ACTUAL && !DEVOLUCION_ACTUAL) {
-        cargarRecepciones();
-        cargarDevoluciones();
+        cargarRecepciones(true);
+        cargarDevoluciones(true);
       }
     }, 30000);
   } else if (puedeEmpacar && !puedePicar) {
@@ -1571,11 +1571,14 @@ async function aprobarAjusteConteo(sesionId) {
   } catch (e) { alert('Error de conexión'); }
 }
 
-async function cargarRecepciones() {
+async function cargarRecepciones(silencioso = false) {
   if (RECEPCION_ACTUAL) return;
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
-  el.innerHTML = '<div style="text-align:center;padding:40px;color:#666;">Cargando...</div>';
+  // Solo muestra spinner en carga inicial, no en polling automático
+  if (!silencioso) {
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:#666;">Cargando...</div>';
+  }
   try {
     const [siesa, db] = await Promise.all([
       get('/api/siesa/ordenes-compra').catch(() => ({ ordenes: [] })),
@@ -1583,7 +1586,9 @@ async function cargarRecepciones() {
     ]);
     SIESA_OCS = siesa.ordenes || [];
     renderListaRecepciones(siesa, db.recepciones || []);
-  } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error cargando</div>'; }
+  } catch (e) {
+    if (!silencioso) el.innerHTML = '<div style="color:#ef4444;">Error cargando</div>';
+  }
 }
 
 function pantalla(id) {
@@ -1958,7 +1963,7 @@ function recTab(tab) {
 // RECEPCIONISTA — Lista de Devoluciones
 // ─────────────────────────────────────────────────────────────
 
-async function cargarDevoluciones() {
+async function cargarDevoluciones(silencioso = false) {
   if (DEVOLUCION_ACTUAL) return;
   const el = document.getElementById('contenido-devoluciones');
   const badge = document.getElementById('badge-dev');
