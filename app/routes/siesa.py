@@ -557,6 +557,17 @@ def ordenes_compra():
         except (ValueError, TypeError):
             continue
 
+    # Enriquecer con estado WMS — evita mostrar OCs ya confirmadas como pendientes
+    from app.models.recepcion import RecepcionMercancia
+    numeros_oc = list(ordenes.keys())
+    recepciones_wms = RecepcionMercancia.query.filter(
+        RecepcionMercancia.numero_oc_siesa.in_(numeros_oc)
+    ).filter(RecepcionMercancia.estado.notin_(['CANCELADA'])).all()
+    estado_por_oc = {r.numero_oc_siesa: r.estado for r in recepciones_wms}
+
+    for numero_oc, oc in ordenes.items():
+        oc['recepcion_wms_estado'] = estado_por_oc.get(numero_oc)
+
     lista = list(ordenes.values())
     return jsonify({'ordenes': lista, 'total': len(lista)}), 200
 

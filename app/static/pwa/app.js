@@ -1697,6 +1697,31 @@ function renderListaRecepciones(siesa, dbRecs) {
     html += SIESA_OCS.map((oc, i) => {
       const sinProd = oc.items.filter(it => !it.producto_id).length;
       const totalUds = oc.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
+      const wmsEstado = oc.recepcion_wms_estado;
+
+      if (wmsEstado === 'CONFIRMADA') {
+        return `
+          <div class="rec-card" style="opacity:0.6;">
+            <div class="rec-titulo">OC: ${oc.numero_oc}</div>
+            <div class="rec-sub">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+            <div style="margin-top:10px;padding:10px;background:#0d1a0d;border-radius:8px;font-size:14px;font-weight:700;color:#4ade80;text-align:center;">
+              ✓ Recepcionada en WMS — pendiente actualización en Siesa
+            </div>
+          </div>`;
+      }
+
+      if (wmsEstado === 'EN_PROCESO') {
+        return `
+          <div class="rec-card">
+            <div class="rec-titulo">OC: ${oc.numero_oc}</div>
+            <div class="rec-sub">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+            <button onclick="crearRecepcionDesdeSiesa(${i})"
+              style="width:100%;margin-top:12px;padding:14px;font-size:17px;font-weight:700;background:#1d4ed8;color:#fff;border:none;border-radius:10px;cursor:pointer;">
+              Continuar recepción
+            </button>
+          </div>`;
+      }
+
       return `
         <div class="rec-card">
           <div class="rec-titulo">OC: ${oc.numero_oc}</div>
