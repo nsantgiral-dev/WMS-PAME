@@ -183,6 +183,14 @@ def _run_carga_inicial(app):
                     if movimiento_existente:
                         continue  # Ya se cargó hoy
 
+                    # Zero-ar TODAS las otras ubicaciones del mismo producto antes de
+                    # escribir en la nueva — evita acumulación cuando Siesa cambia
+                    # la ubicacion_aux entre corridas de días distintos.
+                    UbicacionProducto.query.filter(
+                        UbicacionProducto.producto_id == prod.id,
+                        UbicacionProducto.ubicacion_id != ub.id
+                    ).update({'cantidad': 0}, synchronize_session=False)
+
                     saldo_antes = reg.cantidad if reg else 0
 
                     if reg:
@@ -305,6 +313,21 @@ def _run_reconciliacion(app):
             stock_wms = {row.producto_id: int(row.total) for row in stock_wms_rows}
             productos_ids = set(stock_wms.keys())
 
+            # Guard: si el WMS no tiene ningún producto mapeado, la carga inicial
+            # no se ha ejecutado — la reconciliación no tiene sentido y generaría
+            # miles de devoluciones falsas (todo Siesa aparecería como SIESA_MAYOR).
+            if not stock_wms:
+                _estado_reconciliacion['ultimo_resultado'] = {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'abortado': True,
+                    'motivo': 'WMS sin stock mapeado — ejecuta la Carga Inicial primero',
+                    'total_discrepancias': 0,
+                    'discrepancias': [],
+                }
+                _estado_reconciliacion['en_curso'] = False
+                logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
+                return
+
             inventario_siesa = _descargar_inventario_siesa()
 
             codigos_siesa = list(inventario_siesa.keys())
@@ -369,18 +392,33 @@ def _run_reconciliacion(app):
             ts = datetime.utcnow().isoformat()
 
             # Disparar creación automática de tareas de logística inversa
+            # Solo si WMS tiene cobertura suficiente: >= 20% de los productos de Siesa.
+            # Si la cobertura es baja, la reconciliación es informativa únicamente —
+            # no creamos devoluciones porque casi todo aparecería como SIESA_MAYOR.
+            productos_wms_con_stock = len(stock_wms)
+            productos_siesa = len(inventario_siesa)
+            cobertura_pct = (productos_wms_con_stock / productos_siesa * 100) if productos_siesa else 0
+
             try:
                 from app.services.devolucion_service import crear_tareas_desde_discrepancias
                 almacen = _get_almacen()
-                if almacen:
+                if almacen and cobertura_pct >= 20:
                     resumen_dev = crear_tareas_desde_discrepancias(discrepancias, almacen.id, ts)
                     logger.info(f'[RECONCILIACION] Tareas devolución: {resumen_dev}')
+                elif almacen:
+                    logger.warning(
+                        f'[RECONCILIACION] Cobertura WMS={cobertura_pct:.1f}% (<20%) — '
+                        f'devoluciones automáticas desactivadas para evitar falsos positivos'
+                    )
             except Exception as e_dev:
                 logger.warning(f'[RECONCILIACION] Error creando tareas devolución: {e_dev}')
 
             _estado_reconciliacion['ultimo_resultado'] = {
                 'timestamp': ts,
-                'total_productos_siesa': len(inventario_siesa),
+                'total_productos_siesa': productos_siesa,
+                'total_productos_wms': productos_wms_con_stock,
+                'cobertura_pct': round(cobertura_pct, 1),
+                'devoluciones_activas': cobertura_pct >= 20,
                 'total_discrepancias': len(discrepancias),
                 'discrepancias': discrepancias[:100]
             }
