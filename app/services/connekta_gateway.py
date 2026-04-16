@@ -472,7 +472,8 @@ class ConnektaGateway:
         142948 → API_v1_Compras_Comercial_EntradaOC
         Genera entrada desde OC — debita cuenta 1435.
         """
-        fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+        # Siesa espera fecha sin guiones: YYYYMMDD (8 chars)
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         # F_CIA en cuerpo del documento = código interno Siesa (max 3 chars), NO el id Connekta
         cia = self.id_cia_siesa
@@ -484,10 +485,10 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': cia,
-                    'F_CONSEC_AUTO_REG': None,   # numérico auto — Siesa lo genera
+                    'F_CONSEC_AUTO_REG': 0,      # 0 = Siesa auto-asigna el consecutivo
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': None,
-                    'f350_consec_docto': None,   # numérico auto — Siesa lo genera
+                    'f350_consec_docto': 0,      # 0 = Siesa auto-asigna
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': None,
                     'f350_ind_estado': None,
@@ -527,8 +528,8 @@ class ConnektaGateway:
                     'F_CIA': cia,
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': None,
-                    'f470_consec_docto': None,
-                    'f470_nro_registro': None,
+                    'f470_consec_docto': 0,
+                    'f470_nro_registro': 0,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
