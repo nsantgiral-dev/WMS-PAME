@@ -713,6 +713,29 @@ def iniciar_recepcion():
     if not items_validos:
         return jsonify({'error': 'Ningún producto de la OC está registrado en el WMS'}), 400
 
+    # Idempotente: si ya existe una recepción activa para esta OC, redirigir a ella
+    from app.models.recepcion import RecepcionMercancia
+    existente = RecepcionMercancia.query.filter_by(
+        numero_oc_siesa=data['numero_oc']
+    ).filter(RecepcionMercancia.estado.notin_(['CANCELADA'])).first()
+
+    if existente:
+        if existente.estado == 'EN_PROCESO':
+            return jsonify({
+                'mensaje': 'Recepción ya en proceso — continuando escaneo',
+                'recepcion': existente.to_dict()
+            }), 200
+        if existente.estado == 'CONFIRMADA':
+            return jsonify({
+                'error': f'La OC {data["numero_oc"]} ya fue recepcionada y confirmada (recepción {existente.codigo}). Si necesitas una corrección, cancela la recepción desde Admin.'
+            }), 409
+        if existente.estado == 'ABIERTA':
+            existente = RecepcionService.iniciar(existente.id, recepcionista_id)
+            return jsonify({
+                'mensaje': 'Recepción retomada — listo para escanear',
+                'recepcion': existente.to_dict()
+            }), 200
+
     items_recepcion = [{
         'producto_id': i['producto_id'],
         'cantidad_ordenada': int(i['cantidad_ordenada']),

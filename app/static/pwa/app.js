@@ -1755,7 +1755,7 @@ async function crearRecepcionDesdeSiesa(idx) {
     if (r.error) { alerta(r.error, 'error'); cargarRecepciones(); return; }
     RECEPCION_ACTUAL = r.recepcion;
     renderEscaneoRecepcion(r.recepcion);
-  } catch (e) { alerta('Error creando recepción', 'error'); cargarRecepciones(); }
+  } catch (e) { alerta(e.message || 'Error creando recepción', 'error'); cargarRecepciones(); }
 }
 
 async function continuarRecepcion(id) {
