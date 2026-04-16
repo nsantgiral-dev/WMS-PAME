@@ -474,79 +474,82 @@ class ConnektaGateway:
         """
         fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
 
+        # F_CIA en cuerpo del documento = código interno Siesa (max 3 chars), NO el id Connekta
+        cia = self.id_cia_siesa
+
         payload = {
             'Inicial': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': cia}
             ],
             'Documentos': [
                 {
-                    'F_CIA': self.id_compania,
-                    'F_CONSEC_AUTO_REG': '',
+                    'F_CIA': cia,
+                    'F_CONSEC_AUTO_REG': None,   # numérico auto — Siesa lo genera
                     'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': '',
-                    'f350_consec_docto': '',
+                    'f350_id_tipo_docto': None,
+                    'f350_consec_docto': None,   # numérico auto — Siesa lo genera
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': '',
-                    'f350_ind_estado': '',
-                    'f350_ind_impresion': '',
-                    'f350_notas': '',
-                    'f451_id_sucursal_prov': '',
-                    'f451_id_tercero_comprador': '',
-                    'f451_num_docto_referencia': '',
-                    'f451_id_moneda_docto': '',
-                    'f451_id_moneda_conv': '',
-                    'f451_tasa_conv': '',
-                    'f451_id_moneda_local': '',
-                    'f451_tasa_local': '',
-                    'f451_tasa_dscto_global1': '',
-                    'f451_tasa_dscto_global2': '',
-                    'f462_id_vehiculo': '',
-                    'f462_id_tercero_transp': '',
-                    'f462_id_sucursal_transp': '',
-                    'f462_id_tercero_conductor': '',
-                    'f462_nombre_conductor': '',
-                    'f462_identif_conductor': '',
-                    'f462_numero_guia': '',
-                    'f462_cajas': '',
-                    'f462_peso': '',
-                    'f462_volumen': '',
-                    'f462_valor_seguros': '',
-                    'f462_notas': '',
-                    'f451_ind_consignacion': '',
+                    'f350_id_tercero': None,
+                    'f350_ind_estado': None,
+                    'f350_ind_impresion': None,
+                    'f350_notas': None,
+                    'f451_id_sucursal_prov': None,
+                    'f451_id_tercero_comprador': None,
+                    'f451_num_docto_referencia': None,
+                    'f451_id_moneda_docto': None,
+                    'f451_id_moneda_conv': None,
+                    'f451_tasa_conv': None,
+                    'f451_id_moneda_local': None,
+                    'f451_tasa_local': None,
+                    'f451_tasa_dscto_global1': None,
+                    'f451_tasa_dscto_global2': None,
+                    'f462_id_vehiculo': None,
+                    'f462_id_tercero_transp': None,
+                    'f462_id_sucursal_transp': None,
+                    'f462_id_tercero_conductor': None,
+                    'f462_nombre_conductor': None,
+                    'f462_identif_conductor': None,
+                    'f462_numero_guia': None,
+                    'f462_cajas': None,
+                    'f462_peso': None,
+                    'f462_volumen': None,
+                    'f462_valor_seguros': None,
+                    'f462_notas': None,
+                    'f451_ind_consignacion': None,
                     'f420_id_co_docto': id_co_oc,
                     'f420_id_tipo_docto': tipo_docto_oc,
                     'f420_consec_docto': consec_docto_oc,
-                    'f420_ind_modo_sobrecosto': ''
+                    'f420_ind_modo_sobrecosto': None
                 }
             ],
             'Movimientos': [
                 {
-                    'F_CIA': self.id_compania,
+                    'F_CIA': cia,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': '',
-                    'f470_consec_docto': '',
-                    'f470_nro_registro': '',
+                    'f470_id_tipo_docto': None,
+                    'f470_consec_docto': None,
+                    'f470_nro_registro': None,
                     'f470_id_bodega': self.bodega,
-                    'f470_id_ubicacion_aux': '',
-                    'f470_id_lote': '',
-                    'f470_id_unidad_medida': '',
+                    'f470_id_ubicacion_aux': None,
+                    'f470_id_lote': None,
+                    'f470_id_unidad_medida': None,
                     'f421_fecha_entrega': fecha_hoy,
                     'f470_cant_base': i.get('cantidad_recibida'),
-                    'f470_cant_2': '',
-                    'f470_notas': '',
-                    'f470_id_item': '',
+                    'f470_cant_2': None,
+                    'f470_notas': None,
+                    'f470_id_item': None,
                     'f470_referencia_item': i.get('producto_codigo'),
-                    'f470_codigo_barras': '',
-                    'f470_id_ext1_detalle': '',
-                    'f470_id_ext2_detalle': '',
-                    'f470_id_ccosto_movto': '',
-                    'f470_id_proyecto': '',
-                    'f470_rowid': ''
+                    'f470_codigo_barras': None,
+                    'f470_id_ext1_detalle': None,
+                    'f470_id_ext2_detalle': None,
+                    'f470_id_ccosto_movto': None,
+                    'f470_id_proyecto': None,
+                    'f470_rowid': None
                 }
                 for i in items
             ],
             'Final': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': cia}
             ]
         }
 
