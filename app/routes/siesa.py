@@ -764,7 +764,8 @@ def iniciar_recepcion():
             items=items_recepcion,
             co_oc_siesa=data.get('co', ''),
             tipo_docto_oc_siesa=data['tipo_docto'],
-            consec_docto_oc_siesa=data['consec_docto']
+            consec_docto_oc_siesa=data['consec_docto'],
+            cond_pago_siesa=data.get('cond_pago', '')
         )
         recepcion = RecepcionService.iniciar(recepcion.id, recepcionista_id)
         return jsonify({

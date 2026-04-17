@@ -1804,6 +1804,7 @@ async function crearRecepcionDesdeSiesa(idx) {
       co: oc.co,
       proveedor: oc.proveedor,
       proveedor_codigo: oc.proveedor_codigo || '',
+      cond_pago: oc.cond_pago || '',
       almacen_id: ALMACEN_ID,
       items: itemsValidos
     });

@@ -16,6 +16,7 @@ class RecepcionMercancia(db.Model):
     consec_docto_oc_siesa = db.Column(db.String(30))
     proveedor_codigo = db.Column(db.String(50))
     proveedor_nombre = db.Column(db.String(200))
+    cond_pago_siesa = db.Column(db.String(20))
 
     # Almacén y recepcionista
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
@@ -65,6 +66,7 @@ class RecepcionMercancia(db.Model):
             'consec_docto_oc_siesa': self.consec_docto_oc_siesa,
             'proveedor_codigo': self.proveedor_codigo,
             'proveedor_nombre': self.proveedor_nombre,
+            'cond_pago_siesa': self.cond_pago_siesa,
             'almacen_id': self.almacen_id,
             'recepcionista_id': self.recepcionista_id,
             'estado': self.estado,
