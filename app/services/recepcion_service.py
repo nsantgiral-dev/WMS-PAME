@@ -315,6 +315,29 @@ class RecepcionService:
         recepcion.fecha_confirmacion = datetime.utcnow()
 
         # Trigger a Siesa — genera entrada contable automáticamente
+
+        # Fallback: si proveedor o sucursal están vacíos (recepción creada antes del fix),
+        # consultar Siesa en vivo para no tener que cancelar la recepción.
+        proveedor_id = recepcion.proveedor_codigo or ''
+        sucursal_prov = recepcion.sucursal_prov_siesa or ''
+        if not proveedor_id or not sucursal_prov:
+            try:
+                consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
+                resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
+                rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
+                for row in rows_oc:
+                    if str(row.get('f420_consec_docto', '')).strip() == str(consec).strip():
+                        proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
+                        sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
+                        if proveedor_id:
+                            recepcion.proveedor_codigo = proveedor_id
+                        if sucursal_prov:
+                            recepcion.sucursal_prov_siesa = sucursal_prov
+                        break
+                logger.info(f'[RECEPCION] Lookup OC en vivo: proveedor={proveedor_id!r} sucursal={sucursal_prov!r}')
+            except Exception as lookup_err:
+                logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
+
         items_payload = [{
             'producto_codigo': i.producto.codigo,
             'cantidad_recibida': i.cantidad_recibida,
@@ -331,8 +354,8 @@ class RecepcionService:
                 consec_docto_oc=recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
                 items=items_payload,
                 es_parcial=tiene_faltantes,
-                proveedor_id=recepcion.proveedor_codigo or '',
-                sucursal_prov=recepcion.sucursal_prov_siesa or '',
+                proveedor_id=proveedor_id,
+                sucursal_prov=sucursal_prov,
                 cond_pago=recepcion.cond_pago_siesa or ''
             )
             recepcion.siesa_triggered = True
