@@ -481,6 +481,13 @@ class ConnektaGateway:
                                    es_parcial: bool = False,
                                    proveedor_id: str = None,
                                    sucursal_prov: str = None,
+                                   tercero_comprador: str = None,
+                                   sucursal_comprador: str = None,
+                                   moneda_docto: str = None,
+                                   moneda_conv: str = None,
+                                   moneda_local: str = None,
+                                   tasa_conv: float = 0.0,
+                                   tasa_local: float = 0.0,
                                    cond_pago: str = None):
         """
         142948 → API_v1_Compras_Comercial_EntradaOC
@@ -517,13 +524,14 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
-                    'f451_id_tercero_comprador': self.nit_empresa or None,           # NIT comprador = Papelería Medellín (pos 327-342)
+                    'f451_id_tercero_comprador': tercero_comprador or self.nit_empresa or None,  # comprador exacto de la OC
+                    'f451_id_sucursal_comprador': sucursal_comprador or None,
                     'f451_num_docto_referencia': None,
-                    'f451_id_moneda_docto': None,
-                    'f451_id_moneda_conv': None,
-                    'f451_tasa_conv': 0.0,
-                    'f451_id_moneda_local': None,
-                    'f451_tasa_local': 0.0,
+                    'f451_id_moneda_docto': moneda_docto,
+                    'f451_id_moneda_conv': moneda_conv,
+                    'f451_tasa_conv': tasa_conv,
+                    'f451_id_moneda_local': moneda_local,
+                    'f451_tasa_local': tasa_local,
                     'f451_tasa_dscto_global1': 0.0,
                     'f451_tasa_dscto_global2': 0.0,
                     'f462_id_vehiculo': None,
@@ -576,7 +584,7 @@ class ConnektaGateway:
             ]
         }
 
-        logger.info(f'[CONNEKTA] EntradaOC co={id_co_oc!r} tipo={tipo_docto_oc!r} consec={consec_docto_oc!r} proveedor={proveedor_id!r} sucursal={sucursal_prov_fmt!r} cond_pago={cond_pago!r}')
+        logger.info(f'[CONNEKTA] EntradaOC co={id_co_oc!r} tipo={tipo_docto_oc!r} consec={consec_docto_oc!r} proveedor={proveedor_id!r} sucursal={sucursal_prov_fmt!r} comprador={tercero_comprador!r} moneda={moneda_docto!r} cond_pago={cond_pago!r}')
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,

@@ -320,23 +320,39 @@ class RecepcionService:
         # consultar Siesa en vivo para no tener que cancelar la recepción.
         proveedor_id = recepcion.proveedor_codigo or ''
         sucursal_prov = recepcion.sucursal_prov_siesa or ''
-        if not proveedor_id or not sucursal_prov:
-            try:
-                consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
-                resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
-                rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
-                for row in rows_oc:
-                    if str(row.get('f420_consec_docto', '')).strip() == str(consec).strip():
-                        proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
-                        sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
-                        if proveedor_id:
-                            recepcion.proveedor_codigo = proveedor_id
-                        if sucursal_prov:
-                            recepcion.sucursal_prov_siesa = sucursal_prov
-                        break
-                logger.info(f'[RECEPCION] Lookup OC en vivo: proveedor={proveedor_id!r} sucursal={sucursal_prov!r}')
-            except Exception as lookup_err:
-                logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
+        moneda_docto = None
+        moneda_conv = None
+        moneda_local = None
+        tasa_conv = 0.0
+        tasa_local = 0.0
+        tercero_comprador = None
+        sucursal_comprador = None
+        try:
+            consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
+            resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
+            rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
+            for row in rows_oc:
+                if str(row.get('f420_consec_docto', '')).strip() == str(consec).strip():
+                    proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
+                    sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
+                    moneda_docto = row.get('f420_id_moneda_docto') or None
+                    moneda_conv = row.get('f420_id_moneda_conv') or None
+                    moneda_local = row.get('f420_id_moneda_local') or None
+                    tasa_conv = float(row.get('f420_tasa_conv') or 0.0)
+                    tasa_local = float(row.get('f420_tasa_local') or 0.0)
+                    tercero_comprador = (row.get('f200_nit_comprador') or row.get('f200_id_comprador') or '').strip() or None
+                    sucursal_comprador = row.get('f202_id_sucursal_comprador', '').strip() or None
+                    if proveedor_id:
+                        recepcion.proveedor_codigo = proveedor_id
+                    if sucursal_prov:
+                        recepcion.sucursal_prov_siesa = sucursal_prov
+                    break
+            logger.info(
+                f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} sucursal={sucursal_prov!r} '
+                f'moneda={moneda_docto!r} comprador={tercero_comprador!r}'
+            )
+        except Exception as lookup_err:
+            logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
 
         items_payload = [{
             'producto_codigo': i.producto.codigo,
@@ -356,6 +372,13 @@ class RecepcionService:
                 es_parcial=tiene_faltantes,
                 proveedor_id=proveedor_id,
                 sucursal_prov=sucursal_prov,
+                tercero_comprador=tercero_comprador,
+                sucursal_comprador=sucursal_comprador,
+                moneda_docto=moneda_docto,
+                moneda_conv=moneda_conv,
+                moneda_local=moneda_local,
+                tasa_conv=tasa_conv,
+                tasa_local=tasa_local,
                 cond_pago=recepcion.cond_pago_siesa or ''
             )
             recepcion.siesa_triggered = True
