@@ -100,11 +100,130 @@
     body.light .input-field { color: var(--tx); }
     body.light .kpi-card { box-shadow: 0 1px 4px rgba(0,0,0,.06); }
     body.light .tabla-card { box-shadow: 0 1px 4px rgba(0,0,0,.06); }
-    body.light .sem-item { background: #F8FAFC; }
-    body.light .sem-gris .sem-dot { color: #94A3B8; }
-    body.light .sem-gris .sem-lbl { color: #94A3B8; }
     body.light .nav-tab { color: #4A6580; }
     body.light .nav-tab.active { color: var(--pm); border-bottom-color: var(--pm); }
+
+    /* ── Semáforo en claro ── */
+    body.light .sem-item { background: var(--bg-s); border-color: var(--brd); }
+    body.light .sem-lbl  { color: var(--tx2); }
+    body.light .sem-verde    .sem-dot, body.light .sem-verde    .sem-lbl { color: var(--green) !important; }
+    body.light .sem-amarillo .sem-dot, body.light .sem-amarillo .sem-lbl { color: var(--yellow) !important; }
+    body.light .sem-rojo     .sem-dot, body.light .sem-rojo     .sem-lbl { color: var(--red) !important; }
+    body.light .sem-gris     .sem-dot, body.light .sem-gris     .sem-lbl { color: var(--tx3) !important; }
+
+    /* ══════════════════════════════════════════════════════════
+       MODO CLARO — neutralizar inline styles dark del JS
+       Usa attribute selectors para sobrescribir los 115+ colores
+       hardcodeados en template literals sin tocar el dark mode.
+    ══════════════════════════════════════════════════════════ */
+
+    /* 1. Fondos de tarjetas / contenedores oscuros → blanco */
+    body.light [style*="background:#111"],
+    body.light [style*="background:#0d0d0d"],
+    body.light [style*="background:#0a0a0a"],
+    body.light [style*="background:#000"] {
+      background-color: var(--bg-s) !important;
+      border-color: var(--brd) !important;
+    }
+
+    /* 2. Fondos de inputs / secundarios oscuros → gris claro */
+    body.light [style*="background:#1a1a1a"],
+    body.light [style*="background:#1e293b"],
+    body.light [style*="background:#0d1622"] {
+      background-color: var(--bg-input) !important;
+      border-color: var(--brd) !important;
+      color: var(--tx) !important;
+    }
+
+    /* 3. Gris medio → muy claro */
+    body.light [style*="background:#222"],
+    body.light [style*="background:#333"] {
+      background-color: var(--bg-s2) !important;
+      border-color: var(--brd) !important;
+    }
+
+    /* 4. Texto para fondos oscuros → legible en claro */
+    body.light [style*="color:#ccc"] { color: var(--tx)  !important; }
+    body.light [style*="color:#ddd"] { color: var(--tx)  !important; }
+    body.light [style*="color:#aaa"] { color: var(--tx2) !important; }
+    body.light [style*="color:#999"] { color: var(--tx2) !important; }
+    body.light [style*="color:#888"] { color: var(--tx2) !important; }
+    body.light [style*="color:#666"] { color: var(--tx3) !important; }
+    body.light [style*="color:#555"] { color: var(--tx3) !important; }
+
+    /* 5. Estado VERDE */
+    body.light [style*="background:#14532d"],
+    body.light [style*="background:#166534"],
+    body.light [style*="background:#065f46"],
+    body.light [style*="background:#0d1a0d"],
+    body.light [style*="background:#0a1a0a"] {
+      background-color: var(--gbg) !important;
+      color: var(--green) !important;
+      border-color: var(--gbrd) !important;
+    }
+
+    /* 6. Estado ROJO */
+    body.light [style*="background:#3f1515"],
+    body.light [style*="background:#7f1d1d"],
+    body.light [style*="background:#2d0a0a"],
+    body.light [style*="background:#1a0a0a"],
+    body.light [style*="background:#7c2d12"] {
+      background-color: var(--rbg) !important;
+      color: var(--red) !important;
+      border-color: var(--rbrd) !important;
+    }
+
+    /* 7. Estado MORADO */
+    body.light [style*="background:#2d1b69"],
+    body.light [style*="background:#1a0a2e"],
+    body.light [style*="background:#0d0d1a"],
+    body.light [style*="background:#7c3aed"],
+    body.light [style*="background:#6b21a8"],
+    body.light [style*="background:#1a1a2a"] {
+      background-color: var(--pbg) !important;
+      color: var(--purple) !important;
+      border-color: var(--pbrd) !important;
+    }
+
+    /* 8. Estado AZUL */
+    body.light [style*="background:#1e3a5f"],
+    body.light [style*="background:#0a1628"],
+    body.light [style*="background:#1e40af"],
+    body.light [style*="background:#1d4ed8"] {
+      background-color: var(--bbg) !important;
+      color: var(--blue) !important;
+      border-color: var(--bbrd) !important;
+    }
+
+    /* 9. Estado ÁMBAR / NARANJA */
+    body.light [style*="background:#78350f"],
+    body.light [style*="background:#b45309"],
+    body.light [style*="background:#713f12"],
+    body.light [style*="background:#9a3412"],
+    body.light [style*="background:#1a0f00"],
+    body.light [style*="background:#1c1400"],
+    body.light [style*="background:#1a1a00"],
+    body.light [style*="background:#110a00"],
+    body.light [style*="background:#1c1a0a"],
+    body.light [style*="background:#92400e"] {
+      background-color: var(--ybg) !important;
+      color: var(--yellow) !important;
+      border-color: var(--ybrd) !important;
+    }
+
+    /* 10. Estado GRIS NEUTRO (BORRADOR, CANCELADA) */
+    body.light [style*="background:#374151"] {
+      background-color: var(--bg-s2) !important;
+      color: var(--tx2) !important;
+      border-color: var(--brd) !important;
+    }
+
+    /* 11. Track de barras de progreso (mayor especificidad que regla 3) */
+    body.light [style*="background:#222"][style*="border-radius:4px"],
+    body.light [style*="background:#333"][style*="border-radius:4px"] {
+      background-color: var(--brd) !important;
+      color: inherit !important;
+    }
 
     /* ── Reset ── */
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -236,9 +355,9 @@
     .admin-content { padding: 16px; }
 
     /* ── Semáforo módulos ── */
-    .sem-item { display:flex;align-items:center;gap:6px;padding:6px 8px;background:#111;border-radius:8px;border:1px solid #1a1a1a; }
+    .sem-item { display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg-s);border-radius:8px;border:1px solid var(--brd); }
     .sem-dot  { font-size:14px;line-height:1; }
-    .sem-lbl  { font-size:11px;color:#666;font-weight:600; }
+    .sem-lbl  { font-size:11px;color:var(--tx2);font-weight:600; }
     .sem-verde  .sem-dot { color:#22c55e; } .sem-verde  .sem-lbl { color:#4ade80; }
     .sem-amarillo .sem-dot { color:#facc15; } .sem-amarillo .sem-lbl { color:#fde047; }
     .sem-rojo   .sem-dot { color:#f87171; } .sem-rojo   .sem-lbl { color:#fca5a5; }
