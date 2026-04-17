@@ -23,7 +23,7 @@ class RecepcionService:
                         proveedor_codigo: str, proveedor_nombre: str,
                         items: list, co_oc_siesa: str = '',
                         tipo_docto_oc_siesa: str = '', consec_docto_oc_siesa: str = '',
-                        cond_pago_siesa: str = ''):
+                        cond_pago_siesa: str = '', sucursal_prov_siesa: str = ''):
         """
         Crea una recepción a partir de una OC de Siesa.
         items: [{'producto_id', 'cantidad_ordenada', 'tolerancia_exceso_pct'}]
@@ -47,6 +47,7 @@ class RecepcionService:
             proveedor_codigo=proveedor_codigo,
             proveedor_nombre=proveedor_nombre,
             cond_pago_siesa=cond_pago_siesa or '',
+            sucursal_prov_siesa=sucursal_prov_siesa or '',
             almacen_id=almacen_id,
             estado='ABIERTA'
         )
@@ -331,6 +332,7 @@ class RecepcionService:
                 items=items_payload,
                 es_parcial=tiene_faltantes,
                 proveedor_id=recepcion.proveedor_codigo or '',
+                sucursal_prov=recepcion.sucursal_prov_siesa or '',
                 cond_pago=recepcion.cond_pago_siesa or ''
             )
             recepcion.siesa_triggered = True

@@ -545,6 +545,7 @@ def ordenes_compra():
                     'co': row.get('f420_id_co', '').strip(),
                     'proveedor': row.get('f200_razon_social_prov', ''),
                     'proveedor_codigo': (row.get('f420_id_tercero', '') or row.get('f350_id_tercero', '') or row.get('f200_nit_prov', '')).strip(),  # NIT proveedor
+                    'sucursal_prov': (row.get('f420_id_sucursal_prov', '') or row.get('f451_id_sucursal_prov', '')).strip(),  # sucursal proveedor (pos 324-327)
                     'cond_pago': row.get('f420_id_cond_pago', '').strip(),        # Condición de pago
                     'items': []
                 }
@@ -749,6 +750,13 @@ def iniciar_recepcion():
                 'recepcion': existente.to_dict()
             }), 200
 
+    # Validación pre-vuelo: advertir si falta NIT o sucursal del proveedor
+    advertencias = []
+    if not data.get('proveedor_codigo', '').strip():
+        advertencias.append('proveedor_codigo vacío — Siesa rechazará la EntradaOC (f350_id_tercero obligatorio)')
+    if not data.get('sucursal_prov', '').strip():
+        advertencias.append('sucursal_prov vacío — Siesa rechazará la EntradaOC (f451_id_sucursal_prov obligatorio)')
+
     items_recepcion = [{
         'producto_id': i['producto_id'],
         'cantidad_ordenada': int(i['cantidad_ordenada']),
@@ -765,12 +773,16 @@ def iniciar_recepcion():
             co_oc_siesa=data.get('co', ''),
             tipo_docto_oc_siesa=data['tipo_docto'],
             consec_docto_oc_siesa=data['consec_docto'],
-            cond_pago_siesa=data.get('cond_pago', '')
+            cond_pago_siesa=data.get('cond_pago', ''),
+            sucursal_prov_siesa=data.get('sucursal_prov', '')
         )
         recepcion = RecepcionService.iniciar(recepcion.id, recepcionista_id)
-        return jsonify({
+        respuesta = {
             'mensaje': 'Recepción iniciada — listo para escanear',
             'recepcion': recepcion.to_dict()
-        }), 201
+        }
+        if advertencias:
+            respuesta['advertencias'] = advertencias
+        return jsonify(respuesta), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

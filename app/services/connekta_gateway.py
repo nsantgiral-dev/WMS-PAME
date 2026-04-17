@@ -480,6 +480,7 @@ class ConnektaGateway:
                                    consec_docto_oc: str, items: list,
                                    es_parcial: bool = False,
                                    proveedor_id: str = None,
+                                   sucursal_prov: str = None,
                                    cond_pago: str = None):
         """
         142948 → API_v1_Compras_Comercial_EntradaOC
@@ -490,6 +491,14 @@ class ConnektaGateway:
 
         # F_CIA debe ser entero según especificación Siesa/Connekta
         cia = int(self.id_cia_siesa)
+
+        # Siesa exige sucursal de 3 chars (ej. '1' → '001'). Sin NIT+sucursal, rechaza.
+        sucursal_prov_fmt = sucursal_prov.strip().zfill(3) if sucursal_prov and sucursal_prov.strip() else None
+        if not proveedor_id or not sucursal_prov_fmt:
+            logger.warning(
+                f'[CONNEKTA] EntradaOC — proveedor_id={proveedor_id!r} sucursal_prov={sucursal_prov!r}: '
+                'campos obligatorios vacíos, Siesa rechazará el documento (pos 43-58 y 324-327)'
+            )
 
         payload = {
             'Inicial': [
@@ -507,7 +516,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 0,
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
-                    'f451_id_sucursal_prov': None,                                   # sucursal proveedor (pos 324-327)
+                    'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
                     'f451_id_tercero_comprador': self.nit_empresa or None,           # NIT comprador = Papelería Medellín (pos 327-342)
                     'f451_num_docto_referencia': None,
                     'f451_id_moneda_docto': None,
@@ -567,7 +576,7 @@ class ConnektaGateway:
             ]
         }
 
-        logger.info(f'[CONNEKTA] EntradaOC co={id_co_oc!r} tipo={tipo_docto_oc!r} consec={consec_docto_oc!r} proveedor={proveedor_id!r} cond_pago={cond_pago!r}')
+        logger.info(f'[CONNEKTA] EntradaOC co={id_co_oc!r} tipo={tipo_docto_oc!r} consec={consec_docto_oc!r} proveedor={proveedor_id!r} sucursal={sucursal_prov_fmt!r} cond_pago={cond_pago!r}')
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
