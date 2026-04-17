@@ -774,7 +774,8 @@ def iniciar_recepcion():
             tipo_docto_oc_siesa=data['tipo_docto'],
             consec_docto_oc_siesa=data['consec_docto'],
             cond_pago_siesa=data.get('cond_pago', ''),
-            sucursal_prov_siesa=data.get('sucursal_prov', '')
+            sucursal_prov_siesa=data.get('sucursal_prov', ''),
+            num_remision_prov=data.get('num_remision_prov', '')
         )
         recepcion = RecepcionService.iniciar(recepcion.id, recepcionista_id)
         respuesta = {

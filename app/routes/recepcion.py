@@ -111,7 +111,8 @@ def confirmar_recepcion(id):
     try:
         recepcion = RecepcionService.confirmar_recepcion(
             recepcion_id=id,
-            observaciones=data.get('observaciones')
+            observaciones=data.get('observaciones'),
+            num_remision_prov=data.get('num_remision_prov', '')
         )
         return jsonify({
             'mensaje': 'Recepción confirmada — Siesa está generando entrada contable',

@@ -18,6 +18,7 @@ class RecepcionMercancia(db.Model):
     proveedor_nombre = db.Column(db.String(200))
     cond_pago_siesa = db.Column(db.String(20))
     sucursal_prov_siesa = db.Column(db.String(10))
+    num_remision_prov = db.Column(db.String(12))
 
     # Almacén y recepcionista
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
@@ -69,6 +70,7 @@ class RecepcionMercancia(db.Model):
             'proveedor_nombre': self.proveedor_nombre,
             'cond_pago_siesa': self.cond_pago_siesa,
             'sucursal_prov_siesa': self.sucursal_prov_siesa,
+            'num_remision_prov': self.num_remision_prov,
             'almacen_id': self.almacen_id,
             'recepcionista_id': self.recepcionista_id,
             'estado': self.estado,

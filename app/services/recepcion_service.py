@@ -16,6 +16,13 @@ from app.services.connekta_gateway import connekta
 logger = logging.getLogger(__name__)
 
 
+def _limpiar_remision(valor: str) -> str:
+    """Elimina caracteres especiales y trunca a 12 chars según spec conector 142948."""
+    import re
+    limpio = re.sub(r'[^A-Za-z0-9]', '', (valor or ''))
+    return limpio[:12]
+
+
 class RecepcionService:
 
     @staticmethod
@@ -23,7 +30,8 @@ class RecepcionService:
                         proveedor_codigo: str, proveedor_nombre: str,
                         items: list, co_oc_siesa: str = '',
                         tipo_docto_oc_siesa: str = '', consec_docto_oc_siesa: str = '',
-                        cond_pago_siesa: str = '', sucursal_prov_siesa: str = ''):
+                        cond_pago_siesa: str = '', sucursal_prov_siesa: str = '',
+                        num_remision_prov: str = ''):
         """
         Crea una recepción a partir de una OC de Siesa.
         items: [{'producto_id', 'cantidad_ordenada', 'tolerancia_exceso_pct'}]
@@ -48,6 +56,7 @@ class RecepcionService:
             proveedor_nombre=proveedor_nombre,
             cond_pago_siesa=cond_pago_siesa or '',
             sucursal_prov_siesa=sucursal_prov_siesa or '',
+            num_remision_prov=_limpiar_remision(num_remision_prov),
             almacen_id=almacen_id,
             estado='ABIERTA'
         )
@@ -235,7 +244,8 @@ class RecepcionService:
         return ubicacion
 
     @staticmethod
-    def confirmar_recepcion(recepcion_id: int, observaciones: str = None):
+    def confirmar_recepcion(recepcion_id: int, observaciones: str = None,
+                            num_remision_prov: str = None):
         """
         Confirma la recepción e ingresa todo al inventario.
         Dispara Siesa automáticamente para generar entrada contable.
@@ -316,8 +326,12 @@ class RecepcionService:
 
         # Trigger a Siesa — genera entrada contable automáticamente
 
-        # Fallback: si proveedor o sucursal están vacíos (recepción creada antes del fix),
-        # consultar Siesa en vivo para no tener que cancelar la recepción.
+        # Remisión del proveedor: capturada al iniciar recepción o pasada al confirmar (fallback rec. #8)
+        remision = _limpiar_remision(num_remision_prov or recepcion.num_remision_prov or '')
+        if remision and not recepcion.num_remision_prov:
+            recepcion.num_remision_prov = remision
+
+        # Lookup en vivo a Siesa: proveedor, sucursal y moneda (no persisten en BD aún)
         proveedor_id = recepcion.proveedor_codigo or ''
         sucursal_prov = recepcion.sucursal_prov_siesa or ''
         moneda_docto = None
@@ -327,7 +341,6 @@ class RecepcionService:
         tasa_local = 0.0
         tercero_comprador = None
         sucursal_comprador = None
-        num_docto_referencia = None
         try:
             consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
             resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
@@ -343,11 +356,6 @@ class RecepcionService:
                     tasa_local = float(row.get('f420_tasa_local') or 0.0)
                     tercero_comprador = (row.get('f200_nit_comprador') or row.get('f200_id_comprador') or '').strip() or None
                     sucursal_comprador = row.get('f202_id_sucursal_comprador', '').strip() or None
-                    num_docto_referencia = (
-                        row.get('f420_num_docto_referencia', '').strip()
-                        or str(row.get('f420_consec_docto', '')).strip()
-                        or recepcion.consec_docto_oc_siesa
-                    )
                     if proveedor_id:
                         recepcion.proveedor_codigo = proveedor_id
                     if sucursal_prov:
@@ -355,10 +363,13 @@ class RecepcionService:
                     break
             logger.warning(
                 f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} sucursal={sucursal_prov!r} '
-                f'moneda={moneda_docto!r} comprador={tercero_comprador!r} ref={num_docto_referencia!r}'
+                f'moneda={moneda_docto!r} comprador={tercero_comprador!r} remision={remision!r}'
             )
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
+
+        if not remision:
+            raise ValueError('Número de remisión del proveedor requerido para confirmar la recepción.')
 
         items_payload = [{
             'producto_codigo': i.producto.codigo,
@@ -385,7 +396,7 @@ class RecepcionService:
                 moneda_local=moneda_local,
                 tasa_conv=tasa_conv,
                 tasa_local=tasa_local,
-                num_docto_referencia=num_docto_referencia,
+                num_docto_referencia=remision or None,
                 cond_pago=recepcion.cond_pago_siesa or ''
             )
             recepcion.siesa_triggered = True
