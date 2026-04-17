@@ -327,6 +327,7 @@ class RecepcionService:
         tasa_local = 0.0
         tercero_comprador = None
         sucursal_comprador = None
+        num_docto_referencia = None
         try:
             consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
             resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
@@ -342,6 +343,7 @@ class RecepcionService:
                     tasa_local = float(row.get('f420_tasa_local') or 0.0)
                     tercero_comprador = (row.get('f200_nit_comprador') or row.get('f200_id_comprador') or '').strip() or None
                     sucursal_comprador = row.get('f202_id_sucursal_comprador', '').strip() or None
+                    num_docto_referencia = row.get('f420_num_docto_referencia', '').strip() or recepcion.numero_oc_siesa
                     if proveedor_id:
                         recepcion.proveedor_codigo = proveedor_id
                     if sucursal_prov:
@@ -379,6 +381,7 @@ class RecepcionService:
                 moneda_local=moneda_local,
                 tasa_conv=tasa_conv,
                 tasa_local=tasa_local,
+                num_docto_referencia=num_docto_referencia,
                 cond_pago=recepcion.cond_pago_siesa or ''
             )
             recepcion.siesa_triggered = True

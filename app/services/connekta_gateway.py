@@ -488,6 +488,7 @@ class ConnektaGateway:
                                    moneda_local: str = None,
                                    tasa_conv: float = 0.0,
                                    tasa_local: float = 0.0,
+                                   num_docto_referencia: str = None,
                                    cond_pago: str = None):
         """
         142948 → API_v1_Compras_Comercial_EntradaOC
@@ -526,7 +527,7 @@ class ConnektaGateway:
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
                     'f451_id_tercero_comprador': tercero_comprador or self.nit_empresa or None,  # comprador exacto de la OC
                     'f451_id_sucursal_comprador': sucursal_comprador or None,
-                    'f451_num_docto_referencia': None,
+                    'f451_num_docto_referencia': num_docto_referencia,
                     'f451_id_moneda_docto': moneda_docto,
                     'f451_id_moneda_conv': moneda_conv,
                     'f451_tasa_conv': tasa_conv,
