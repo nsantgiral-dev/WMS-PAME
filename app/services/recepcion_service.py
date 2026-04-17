@@ -353,7 +353,7 @@ class RecepcionService:
                     if sucursal_prov:
                         recepcion.sucursal_prov_siesa = sucursal_prov
                     break
-            logger.info(
+            logger.warning(
                 f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} sucursal={sucursal_prov!r} '
                 f'moneda={moneda_docto!r} comprador={tercero_comprador!r} ref={num_docto_referencia!r}'
             )
