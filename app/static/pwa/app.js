@@ -8,7 +8,7 @@
 })();
 
 function _actualizarLogo(isLight) {
-  const src = isLight ? '/static/pwa/logo-c.png' : '/static/pwa/logo-white.png';
+  const src = isLight ? '/static/pwa/logo-h.png' : '/static/pwa/logo-white.png';
   document.querySelectorAll('.header-logo img, .login-logo img').forEach(img => { img.src = src; });
 }
 
