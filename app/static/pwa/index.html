@@ -46,13 +46,13 @@
     ═══════════════════════════════════════════════════════ */
     :root {
       /* Marca — colores oficiales del Manual de Identidad Visual */
-      --pm:           #1E8395;  /* Azul Cerceta — PANTONE P 123-6 U */
+      --pm:           #1E8395;
       --pm-light:     #2BAAB8;
       --pm-glow:      rgba(30,131,149,.18);
       --pm-dim:       #0B3038;
       --pm-border:    #164F5A;
 
-      /* Fondos */
+      /* Fondos — OSCURO (default) */
       --bg:           #0B1117;
       --bg-s:         #121C26;
       --bg-s2:        #18243480;
@@ -75,6 +75,36 @@
       --purple:       #A78BFA; --pbg: #130D30; --pbrd: #2D1B69;
       --orange:       #F59E0B; --obg: #1C1208; --obrd: #92400E;
     }
+
+    /* ── MODO CLARO ── */
+    body.light {
+      --bg:           #F0F4F8;
+      --bg-s:         #FFFFFF;
+      --bg-s2:        #E8EFF5;
+      --bg-input:     #F8FAFC;
+      --brd:          #D1DCE8;
+      --brd-b:        #B8C9D9;
+      --tx:           #0F1C2A;
+      --tx2:          #4A6580;
+      --tx3:          #7A96B0;
+      --pm-dim:       #D0EEF2;
+      --pm-border:    #7EC8D4;
+      --pm-glow:      rgba(30,131,149,.12);
+      --green:        #16A34A; --gbg: #F0FDF4; --gbrd: #BBF7D0;
+      --red:          #DC2626; --rbg: #FEF2F2; --rbrd: #FECACA;
+      --yellow:       #D97706; --ybg: #FFFBEB; --ybrd: #FDE68A;
+      --blue:         #2563EB; --bbg: #EFF6FF; --bbrd: #BFDBFE;
+      --purple:       #7C3AED; --pbg: #F5F3FF; --pbrd: #DDD6FE;
+      --orange:       #EA580C; --obg: #FFF7ED; --obrd: #FED7AA;
+    }
+    body.light .input-field { color: var(--tx); }
+    body.light .kpi-card { box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    body.light .tabla-card { box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+    body.light .sem-item { background: #F8FAFC; }
+    body.light .sem-gris .sem-dot { color: #94A3B8; }
+    body.light .sem-gris .sem-lbl { color: #94A3B8; }
+    body.light .nav-tab { color: #4A6580; }
+    body.light .nav-tab.active { color: var(--pm); border-bottom-color: var(--pm); }
 
     /* ── Reset ── */
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
@@ -599,8 +629,9 @@
   <div id="pantalla-admin" style="display: none;">
     <div class="header">
       <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
-      <div style="display:flex;align-items:center;gap:12px;">
+      <div style="display:flex;align-items:center;gap:10px;">
         <span id="conexion-status-admin" style="font-size:13px;color:#22c55e;">● Online</span>
+        <button id="btn-theme" onclick="toggleTheme()" title="Cambiar tema" style="background:none;border:1px solid var(--brd-b,#4a5568);color:var(--tx,#e2e8f0);font-size:18px;width:36px;height:36px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0;">🌙</button>
         <button class="btn-logout" onclick="salir()">Salir</button>
       </div>
     </div>
