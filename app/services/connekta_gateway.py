@@ -493,26 +493,23 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': cia,
-                    'F_CONSEC_AUTO_REG': 0,       # int: Siesa auto-asigna
+                    'F_CONSEC_AUTO_REG': 0,
                     'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': None,   # str opcional
-                    'f350_consec_docto': 0,       # int: Siesa auto-asigna
-                    'f350_fecha': fecha_hoy,      # YYYYMMDD
-                    'f350_id_tercero': None,      # str opcional
-                    'f350_ind_estado': 0,         # int: 0=activo
-                    'f350_ind_impresion': 0,      # int: 0=no impreso
+                    'f350_id_tipo_docto': None,
+                    'f350_consec_docto': 0,
+                    'f350_fecha': fecha_hoy,
+                    'f350_id_tercero': (proveedor_id or '') or None,
+                    'f350_ind_estado': 0,
+                    'f350_ind_impresion': 0,
                     'f350_notas': None,
-                    'f451_id_co': self.centro_op[:3],                       # pos 24-27, largo 3 — CO del doc
-                    'f451_id_tercero': (proveedor_id or '')[:15],              # pos 43-58, largo 15 — NIT proveedor
-                    'f451_id_cond_pago': (cond_pago or self.cond_pago_compras or '')[:4],  # pos 324-327 — condición pago
                     'f451_id_sucursal_prov': None,
                     'f451_id_tercero_comprador': None,
                     'f451_num_docto_referencia': None,
                     'f451_id_moneda_docto': None,
                     'f451_id_moneda_conv': None,
-                    'f451_tasa_conv': 0.0,        # decimal
+                    'f451_tasa_conv': 0.0,
                     'f451_id_moneda_local': None,
-                    'f451_tasa_local': 0.0,       # decimal
+                    'f451_tasa_local': 0.0,
                     'f451_tasa_dscto_global1': 0.0,
                     'f451_tasa_dscto_global2': 0.0,
                     'f462_id_vehiculo': None,
@@ -522,33 +519,28 @@ class ConnektaGateway:
                     'f462_nombre_conductor': None,
                     'f462_identif_conductor': None,
                     'f462_numero_guia': None,
-                    'f462_cajas': 0,              # int
-                    'f462_peso': 0.0,             # decimal
-                    'f462_volumen': 0.0,          # decimal
-                    'f462_valor_seguros': 0.0,    # decimal
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
                     'f462_notas': None,
-                    'f451_ind_consignacion': 0,   # int
+                    'f451_ind_consignacion': 0,
                     'f420_id_co_docto': id_co_oc,
                     'f420_id_tipo_docto': tipo_docto_oc,
                     'f420_consec_docto': consec_docto_oc,
-                    'f420_ind_modo_sobrecosto': 0  # int
+                    'f420_ind_modo_sobrecosto': 0
                 }
             ],
             'Movimientos': [
                 {
                     'F_CIA': cia,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': 'EA',          # EA = Entrada Almacén (compras)
+                    'f470_id_tipo_docto': None,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': 0,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
-                    'f470_id_lote': None,
-                    'f470_id_concepto': 401,                        # 401 = Entradas por compras y sobrecostos
-                    'f470_id_motivo': self.motivo_compras or None,  # SIESA_ID_MOTIVO_COMPRAS (pos 131, ancho 2)
-                    'f470_id_co_movto': self.centro_op,
-                    'f470_id_ccosto_movto': None,
-                    'f470_id_proyecto': None,
+                    'f470_id_lote': i.get('lote') or None,
                     'f470_id_unidad_medida': None,
                     'f421_fecha_entrega': fecha_hoy,
                     'f470_cant_base': i.get('cantidad_recibida'),
@@ -559,7 +551,8 @@ class ConnektaGateway:
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
-                    'f470_id_un_movto': self.unidad_negocio,
+                    'f470_id_ccosto_movto': None,
+                    'f470_id_proyecto': None,
                     'f470_rowid': 0
                 }
                 for i in items
@@ -569,11 +562,7 @@ class ConnektaGateway:
             ]
         }
 
-        logger.error(
-            f'[CONNEKTA DEBUG] centro_op={self.centro_op!r} proveedor={proveedor_id!r} '
-            f'cond_pago={cond_pago!r} motivo={self.motivo_compras!r} '
-            f'cond_pago_env={self.cond_pago_compras!r}'
-        )
+        logger.info(f'[CONNEKTA] EntradaOC {id_co_oc}/{tipo_docto_oc}/{consec_docto_oc}')
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
