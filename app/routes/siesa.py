@@ -544,8 +544,8 @@ def ordenes_compra():
                     'consec_docto': consec_docto,
                     'co': row.get('f420_id_co', '').strip(),
                     'proveedor': row.get('f200_razon_social_prov', ''),
-                    'proveedor_codigo': (row.get('f420_id_tercero', '') or row.get('f350_id_tercero', '') or row.get('f200_nit_prov', '')).strip(),  # NIT proveedor
-                    'sucursal_prov': (row.get('f420_id_sucursal_prov', '') or row.get('f451_id_sucursal_prov', '')).strip(),  # sucursal proveedor (pos 324-327)
+                    'proveedor_codigo': (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip(),  # NIT proveedor (campo oficial API_v2_Compras_Ordenes)
+                    'sucursal_prov': row.get('f202_id_sucursal_prov', '').strip(),  # sucursal proveedor (campo oficial API_v2_Compras_Ordenes)
                     'cond_pago': row.get('f420_id_cond_pago', '').strip(),        # Condición de pago
                     'items': []
                 }
