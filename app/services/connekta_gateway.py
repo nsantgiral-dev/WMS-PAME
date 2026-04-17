@@ -83,8 +83,13 @@ class ConnektaGateway:
         # Verificar en Siesa: Ventas → Listas de precio → código de la lista activa
         self.lista_precio = os.getenv('SIESA_LISTA_PRECIO', '')
         self.bodega_averias = os.getenv('SIESA_BODEGA_AVERIAS', 'AV1')
-        # NIT de la empresa — usado como f350_id_tercero en traslados internos
+        # NIT de la empresa — usado como f451_id_tercero_comprador (comprador) en EntradaOC
         self.nit_empresa = os.getenv('SIESA_NIT_EMPRESA', '')
+        # Tipo documento para EntradaOC (f350_id_tipo_docto y f470_id_tipo_docto)
+        # Verificar en Siesa: Compras → Tipos de documento → código del tipo Entrada OC
+        self.tipo_docto_entrada_oc = os.getenv('SIESA_TIPO_DOCTO_ENTRADA_OC', '')
+        # Unidad de medida por defecto para movimientos de inventario
+        self.uom_default = os.getenv('SIESA_UOM_DEFAULT', 'UND')
         # Tipo documento ajuste físico en Siesa (Inventarios → Tipos de documento)
         self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
@@ -493,20 +498,17 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': cia,
-                    'F_CONSEC_AUTO_REG': 0,
-                    'f350_id_co': self.centro_op,
-                    'f350_id_tipo_docto': None,
+                    'F_CONSEC_AUTO_REG': 1,                                          # 1 = Siesa auto-asigna consecutivo
+                    'f350_id_co': self.centro_op,                                    # CO del documento
+                    'f350_id_tipo_docto': self.tipo_docto_entrada_oc or None,        # tipo doc entrada OC (SIESA_TIPO_DOCTO_ENTRADA_OC)
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': proveedor_id or None,
+                    'f350_id_tercero': proveedor_id or None,                         # NIT proveedor (pos 43-58)
                     'f350_ind_estado': 0,
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
-                    'f451_id_co': self.centro_op,
-                    'f451_id_tercero': proveedor_id or None,
-                    'f451_id_cond_pago': (cond_pago or self.cond_pago_compras) or None,
-                    'f451_id_sucursal_prov': None,
-                    'f451_id_tercero_comprador': None,
+                    'f451_id_sucursal_prov': None,                                   # sucursal proveedor (pos 324-327)
+                    'f451_id_tercero_comprador': self.nit_empresa or None,           # NIT comprador = Papelería Medellín (pos 327-342)
                     'f451_num_docto_referencia': None,
                     'f451_id_moneda_docto': None,
                     'f451_id_moneda_conv': None,
@@ -538,14 +540,13 @@ class ConnektaGateway:
                 {
                     'F_CIA': cia,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': None,
+                    'f470_id_tipo_docto': self.tipo_docto_entrada_oc or None,        # tipo doc movimiento (pos 22-25)
                     'f470_consec_docto': 0,
-                    'f470_nro_registro': 0,
+                    'f470_nro_registro': idx + 1,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_unidad_medida': None,
-                    'f470_id_motivo': self.motivo_compras or None,
+                    'f470_id_unidad_medida': i.get('unidad_medida') or self.uom_default,  # UOM obligatoria (pos 128-132)
                     'f421_fecha_entrega': fecha_hoy,
                     'f470_cant_base': i.get('cantidad_recibida'),
                     'f470_cant_2': 0.0,
@@ -559,7 +560,7 @@ class ConnektaGateway:
                     'f470_id_proyecto': None,
                     'f470_rowid': 0
                 }
-                for i in items
+                for idx, i in enumerate(items)
             ],
             'Final': [
                 {'F_CIA': cia}
