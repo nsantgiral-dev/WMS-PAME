@@ -544,7 +544,7 @@ def ordenes_compra():
                     'consec_docto': consec_docto,
                     'co': row.get('f420_id_co', '').strip(),
                     'proveedor': row.get('f200_razon_social_prov', ''),
-                    'proveedor_codigo': (row.get('f420_id_tercero', '') or row.get('f350_id_tercero', '')).strip(),  # NIT proveedor
+                    'proveedor_codigo': (row.get('f420_id_tercero', '') or row.get('f350_id_tercero', '') or row.get('f200_nit_prov', '')).strip(),  # NIT proveedor
                     'cond_pago': row.get('f420_id_cond_pago', '').strip(),        # Condición de pago
                     'items': []
                 }
