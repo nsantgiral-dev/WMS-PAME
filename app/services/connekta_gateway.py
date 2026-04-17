@@ -483,8 +483,8 @@ class ConnektaGateway:
         # Siesa espera fecha sin guiones: YYYYMMDD (8 chars)
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
-        # F_CIA en cuerpo del documento = código interno Siesa (max 3 chars), NO el id Connekta
-        cia = self.id_cia_siesa
+        # F_CIA debe ser entero según especificación Siesa/Connekta
+        cia = int(self.id_cia_siesa)
 
         payload = {
             'Inicial': [
@@ -498,10 +498,13 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': None,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': (proveedor_id or '') or None,
+                    'f350_id_tercero': proveedor_id or None,
                     'f350_ind_estado': 0,
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
+                    'f451_id_co': self.centro_op,
+                    'f451_id_tercero': proveedor_id or None,
+                    'f451_id_cond_pago': (cond_pago or self.cond_pago_compras) or None,
                     'f451_id_sucursal_prov': None,
                     'f451_id_tercero_comprador': None,
                     'f451_num_docto_referencia': None,
@@ -542,6 +545,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
                     'f470_id_unidad_medida': None,
+                    'f470_id_motivo': self.motivo_compras or None,
                     'f421_fecha_entrega': fecha_hoy,
                     'f470_cant_base': i.get('cantidad_recibida'),
                     'f470_cant_2': 0.0,
@@ -562,9 +566,7 @@ class ConnektaGateway:
             ]
         }
 
-        logger.error(
-            f'[CONNEKTA] EntradaOC ref-OC: co={id_co_oc!r} tipo={tipo_docto_oc!r} consec={consec_docto_oc!r}'
-        )
+        logger.info(f'[CONNEKTA] EntradaOC co={id_co_oc!r} tipo={tipo_docto_oc!r} consec={consec_docto_oc!r} proveedor={proveedor_id!r} cond_pago={cond_pago!r}')
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
