@@ -343,7 +343,11 @@ class RecepcionService:
                     tasa_local = float(row.get('f420_tasa_local') or 0.0)
                     tercero_comprador = (row.get('f200_nit_comprador') or row.get('f200_id_comprador') or '').strip() or None
                     sucursal_comprador = row.get('f202_id_sucursal_comprador', '').strip() or None
-                    num_docto_referencia = row.get('f420_num_docto_referencia', '').strip() or recepcion.numero_oc_siesa
+                    num_docto_referencia = (
+                        row.get('f420_num_docto_referencia', '').strip()
+                        or str(row.get('f420_consec_docto', '')).strip()
+                        or recepcion.consec_docto_oc_siesa
+                    )
                     if proveedor_id:
                         recepcion.proveedor_codigo = proveedor_id
                     if sucursal_prov:
@@ -351,7 +355,7 @@ class RecepcionService:
                     break
             logger.info(
                 f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} sucursal={sucursal_prov!r} '
-                f'moneda={moneda_docto!r} comprador={tercero_comprador!r}'
+                f'moneda={moneda_docto!r} comprador={tercero_comprador!r} ref={num_docto_referencia!r}'
             )
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
