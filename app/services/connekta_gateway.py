@@ -569,7 +569,11 @@ class ConnektaGateway:
             ]
         }
 
-        logger.info(f'[CONNEKTA] Entrada OC {id_co_oc}/{tipo_docto_oc}/{consec_docto_oc}')
+        logger.info(
+            f'[CONNEKTA] Entrada OC {id_co_oc}/{tipo_docto_oc}/{consec_docto_oc} | '
+            f'centro_op={self.centro_op!r} proveedor={proveedor_id!r} '
+            f'cond_pago={cond_pago!r} motivo={self.motivo_compras!r}'
+        )
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
