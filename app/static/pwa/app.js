@@ -7,11 +7,17 @@
   }
 })();
 
+function _actualizarLogo(isLight) {
+  const src = isLight ? '/static/pwa/logo-c.png' : '/static/pwa/logo-white.png';
+  document.querySelectorAll('.header-logo img, .login-logo img').forEach(img => { img.src = src; });
+}
+
 function toggleTheme() {
   const isLight = document.body.classList.toggle('light');
   localStorage.setItem('wms_theme', isLight ? 'light' : 'dark');
   const btn = document.getElementById('btn-theme');
   if (btn) btn.textContent = isLight ? '☀️' : '🌙';
+  _actualizarLogo(isLight);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -47,9 +53,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/static/pwa/sw.js').catch(() => {});
   }
-  // Sync theme icon with stored preference
+  // Sync theme icon + logo with stored preference
+  const isLight = document.body.classList.contains('light');
   const btnTheme = document.getElementById('btn-theme');
-  if (btnTheme) btnTheme.textContent = document.body.classList.contains('light') ? '☀️' : '🌙';
+  if (btnTheme) btnTheme.textContent = isLight ? '☀️' : '🌙';
+  _actualizarLogo(isLight);
   monitorRed();
   scannerLaser();
   if (TOKEN && OPERARIO) {
