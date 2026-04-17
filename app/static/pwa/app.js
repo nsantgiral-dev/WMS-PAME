@@ -1879,6 +1879,13 @@ function renderEscaneoRecepcion(rec) {
         ${renderItemsRecepcion(rec.items)}
       </div>
 
+      <div style="margin-bottom:10px;">
+        <label style="display:block;font-size:12px;color:#aaa;margin-bottom:4px;">N° Remisión o Factura del proveedor *</label>
+        <input id="input-remision-prov" type="text" maxlength="12" placeholder="Ej: REM001234"
+          style="width:100%;padding:12px;font-size:16px;background:#111;border:2px solid #333;border-radius:10px;color:#fff;box-sizing:border-box;"
+          oninput="this.value=this.value.replace(/[^A-Za-z0-9]/g,'').toUpperCase()">
+      </div>
+
       <button id="btn-confirmar-rec" onclick="confirmarRecepcionActiva()" ${btnActivo ? '' : 'disabled'}
         style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${btnActivo ? btnColor : '#222'};color:#fff;border:none;border-radius:14px;cursor:${btnActivo ? 'pointer' : 'default'};margin-bottom:10px;">
         ${btnTexto}
@@ -1967,11 +1974,20 @@ async function confirmarRecepcionActiva() {
     const ok = confirm('Hay ítems sin completar. ¿Confirmar como recepción parcial?');
     if (!ok) return;
   }
+
+  // Capturar número de remisión o factura del proveedor (obligatorio para Siesa)
+  const remision = (document.getElementById('input-remision-prov')?.value || '').trim();
+  if (!remision) {
+    alerta('Ingresa el número de remisión o factura del proveedor antes de confirmar', 'error');
+    document.getElementById('input-remision-prov')?.focus();
+    return;
+  }
+
   const btn = document.getElementById('btn-confirmar-rec');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
 
   try {
-    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/confirmar');
+    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/confirmar', { num_remision_prov: remision });
     if (r.error) {
       alerta(r.error, 'error');
       if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
