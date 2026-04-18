@@ -562,7 +562,7 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_concepto': 401,                                          # Concepto 401 = Entrada por compras
-                    'f470_id_motivo': self.id_motivo_compras or '01',                # Motivo 01 = Entrada por compras
+                    'f470_id_motivo': self.motivo_compras or '01',                   # Motivo 01 = Entrada por compras
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
