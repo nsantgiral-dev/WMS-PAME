@@ -526,13 +526,12 @@ class ConnektaGateway:
                     'f350_notas': None,
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
                     'f451_id_tercero_comprador': tercero_comprador or self.nit_empresa or None,  # comprador exacto de la OC
-                    'f451_id_sucursal_comprador': sucursal_comprador or None,
                     'f451_num_docto_referencia': num_docto_referencia,
                     'f451_id_moneda_docto': moneda_docto,
                     'f451_id_moneda_conv': moneda_conv,
-                    'f451_tasa_conv': tasa_conv,
+                    'f451_tasa_conv': tasa_conv if tasa_conv else 1.0,
                     'f451_id_moneda_local': moneda_local,
-                    'f451_tasa_local': tasa_local,
+                    'f451_tasa_local': tasa_local if tasa_local else 1.0,
                     'f451_tasa_dscto_global1': 0.0,
                     'f451_tasa_dscto_global2': 0.0,
                     'f462_id_vehiculo': None,
@@ -561,8 +560,6 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_entrada_oc or None,        # tipo doc movimiento (pos 22-25)
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_concepto': 401,                                          # Concepto 401 = Entrada por compras
-                    'f470_id_motivo': self.motivo_compras or '01',                   # Motivo 01 = Entrada por compras
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
