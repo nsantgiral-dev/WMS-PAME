@@ -386,9 +386,6 @@ class RecepcionService:
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
 
-        if not remision:
-            raise ValueError('Número de remisión del proveedor requerido para confirmar la recepción.')
-
         items_payload = [{
             'producto_codigo': i.producto.codigo,
             'cantidad_recibida': i.cantidad_recibida,

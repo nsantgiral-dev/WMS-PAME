@@ -750,36 +750,6 @@ def iniciar_recepcion():
                 'recepcion': existente.to_dict()
             }), 200
 
-    # Validación del NIT confirmado por el operario
-    nit_confirmado = (data.get('nit_confirmado') or '').strip()
-    nit_oc = (data.get('proveedor_codigo') or '').strip()
-    advertencias = []
-
-    if nit_confirmado and nit_oc and nit_confirmado != nit_oc:
-        return jsonify({
-            'error': (
-                f'El NIT ingresado ({nit_confirmado}) no coincide con el proveedor de la OC en Siesa ({nit_oc}). '
-                'Verifica el papel físico o contacta al administrador.'
-            )
-        }), 422
-
-    # Usar el NIT confirmado por el operario (más confiable que el de la OC si difieren)
-    nit_final = nit_confirmado or nit_oc
-
-    # Validar tipo_proveedor en Siesa antes de crear la recepción
-    if nit_final:
-        val = connekta.validar_tipo_proveedor(nit_final)
-        if val['configurado'] is False:
-            return jsonify({'error': val['mensaje']}), 422
-        if val['configurado'] is True and val.get('tipo_proveedor'):
-            pass  # todo OK
-        # val['configurado'] is None → NIT no encontrado en OCs activas, dejar pasar con advertencia
-
-    if not nit_final:
-        advertencias.append('proveedor_codigo vacío — Siesa rechazará la EntradaOC (f350_id_tercero obligatorio)')
-    if not data.get('sucursal_prov', '').strip():
-        advertencias.append('sucursal_prov vacío — Siesa rechazará la EntradaOC (f451_id_sucursal_prov obligatorio)')
-
     items_recepcion = [{
         'producto_id': i['producto_id'],
         'cantidad_ordenada': int(i['cantidad_ordenada']),
@@ -790,7 +760,7 @@ def iniciar_recepcion():
         recepcion = RecepcionService.crear_recepcion(
             numero_oc_siesa=data['numero_oc'],
             almacen_id=data['almacen_id'],
-            proveedor_codigo=nit_final,
+            proveedor_codigo=(data.get('proveedor_codigo') or '').strip(),
             proveedor_nombre=data.get('proveedor', ''),
             items=items_recepcion,
             co_oc_siesa=data.get('co', ''),
@@ -801,12 +771,9 @@ def iniciar_recepcion():
             num_remision_prov=data.get('num_remision_prov', '')
         )
         recepcion = RecepcionService.iniciar(recepcion.id, recepcionista_id)
-        respuesta = {
+        return jsonify({
             'mensaje': 'Recepción iniciada — listo para escanear',
             'recepcion': recepcion.to_dict()
-        }
-        if advertencias:
-            respuesta['advertencias'] = advertencias
-        return jsonify(respuesta), 201
+        }), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

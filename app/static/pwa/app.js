@@ -42,7 +42,6 @@ let RECEPCION_ACTUAL = null;   // recepción en escaneo activo (pantalla recepci
 let DEVOLUCION_ACTUAL = null;  // tarea de devolución en flujo activo
 let REC_TAB_ACTIVO = 'ocs';   // tab activo en pantalla recepcionista
 let TIMER_REC = null;          // polling recepcionista (30 seg)
-let _RECEPCION_EN_CONFIRMACION = false; // pausa el polling mientras el operario confirma el NIT
 let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
 let SIESA_OCS = [];            // OCs cargadas desde Siesa (pantalla recepcionista)
 let RUTA_ACTIVA_ID = null;     // ruta EN_CARGUE seleccionada en tab-muelle
@@ -103,7 +102,7 @@ function mostrarSegunRol(rol) {
     cargarRecepciones();
     cargarDevoluciones();
     TIMER_REC = setInterval(() => {
-      if (!RECEPCION_ACTUAL && !DEVOLUCION_ACTUAL && !_RECEPCION_EN_CONFIRMACION) {
+      if (!RECEPCION_ACTUAL && !DEVOLUCION_ACTUAL) {
         cargarRecepciones(true);
         cargarDevoluciones(true);
       }
@@ -1612,7 +1611,7 @@ async function aprobarAjusteConteo(sesionId) {
 }
 
 async function cargarRecepciones(silencioso = false) {
-  if (RECEPCION_ACTUAL || _RECEPCION_EN_CONFIRMACION) return;
+  if (RECEPCION_ACTUAL) return;
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
   // Solo muestra spinner en carga inicial, no en polling automático
@@ -1626,7 +1625,7 @@ async function cargarRecepciones(silencioso = false) {
     ]);
     SIESA_OCS = siesa.ordenes || [];
     // Guard post-await: el operario pudo haber entrado a escaneo mientras las APIs respondían
-    if (RECEPCION_ACTUAL || _RECEPCION_EN_CONFIRMACION) return;
+    if (RECEPCION_ACTUAL) return;
     renderListaRecepciones(siesa, db.recepciones || []);
   } catch (e) {
     if (!silencioso) el.innerHTML = '<div style="color:#ef4444;">Error cargando</div>';
@@ -1805,78 +1804,14 @@ function renderListaRecepciones(siesa, dbRecs) {
   el.innerHTML = html;
 }
 
-function crearRecepcionDesdeSiesa(idx) {
+async function crearRecepcionDesdeSiesa(idx) {
   const oc = SIESA_OCS[idx];
   if (!oc) return;
   const itemsValidos = oc.items.filter(it => it.producto_id);
   if (!itemsValidos.length) { alerta('Ningún producto de la OC está en el WMS', 'error'); return; }
-  // Paso intermedio: el operario confirma el NIT del papel físico antes de escanear
-  _mostrarConfirmacionNIT(idx, oc, itemsValidos);
-}
-
-function _mostrarConfirmacionNIT(idx, oc, itemsValidos) {
-  _RECEPCION_EN_CONFIRMACION = true;
-  const el = document.getElementById('contenido-recepcion');
-  if (!el) return;
-  const nitEsperado = (oc.proveedor_codigo || '').trim();
-  el.innerHTML = `
-    <div style="padding:16px;">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
-        <button onclick="_cancelarConfirmacionNIT()"
-          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
-          ← Volver
-        </button>
-        <div>
-          <div style="font-size:16px;font-weight:800;">OC: ${oc.numero_oc}</div>
-          <div style="font-size:12px;color:#666;">${oc.proveedor || 'Sin proveedor'}</div>
-        </div>
-      </div>
-
-      <div style="background:#111;border-radius:12px;padding:16px;margin-bottom:16px;">
-        <div style="font-size:13px;color:#aaa;margin-bottom:12px;">
-          Antes de escanear, confirma el NIT del proveedor en el <strong style="color:#fff;">papel físico</strong> que llegó con el camión.
-        </div>
-        <label style="display:block;font-size:12px;color:#aaa;margin-bottom:4px;">NIT del proveedor *</label>
-        <input id="input-nit-prov" type="text" inputmode="numeric" placeholder="Ej: 1001196008"
-          style="width:100%;padding:14px;font-size:18px;background:#0d0d0d;border:2px solid #333;border-radius:10px;color:#fff;box-sizing:border-box;letter-spacing:1px;"
-          oninput="this.value=this.value.replace(/[^0-9]/g,'')"
-          onkeydown="if(event.key==='Enter') _confirmarNITEIniciar(${idx})">
-        <div id="nit-feedback" style="min-height:20px;margin-top:8px;font-size:12px;"></div>
-      </div>
-
-      <button onclick="_confirmarNITEIniciar(${idx})"
-        style="width:100%;padding:18px;font-size:18px;font-weight:700;background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">
-        Confirmar NIT e iniciar escaneo →
-      </button>
-    </div>`;
-  setTimeout(() => document.getElementById('input-nit-prov')?.focus(), 100);
-}
-
-function _cancelarConfirmacionNIT() {
-  _RECEPCION_EN_CONFIRMACION = false;
-  cargarRecepciones();
-}
-
-async function _confirmarNITEIniciar(idx) {
-  const oc = SIESA_OCS[idx];
-  if (!oc) return;
-  const itemsValidos = oc.items.filter(it => it.producto_id);
-
-  const nit = (document.getElementById('input-nit-prov')?.value || '').trim();
-  if (!nit) {
-    document.getElementById('nit-feedback').innerHTML = '<span style="color:#ef4444;">Ingresa el NIT del proveedor del papel físico.</span>';
-    return;
-  }
-
-  const nitEsperado = (oc.proveedor_codigo || '').trim();
-  if (nitEsperado && nit !== nitEsperado) {
-    document.getElementById('nit-feedback').innerHTML =
-      `<span style="color:#ef4444;">⚠ El NIT ingresado (<strong>${nit}</strong>) no coincide con la OC en Siesa (<strong>${nitEsperado}</strong>). Verifica el papel.</span>`;
-    return;
-  }
 
   const el = document.getElementById('contenido-recepcion');
-  if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#666;">Validando proveedor en Siesa...</div>';
+  if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#666;">Iniciando recepción...</div>';
 
   try {
     const r = await post('/api/siesa/iniciar-recepcion', {
@@ -1885,19 +1820,17 @@ async function _confirmarNITEIniciar(idx) {
       consec_docto: oc.consec_docto,
       co: oc.co,
       proveedor: oc.proveedor,
-      proveedor_codigo: nit,
+      proveedor_codigo: oc.proveedor_codigo || '',
       sucursal_prov: oc.sucursal_prov || '',
       cond_pago: oc.cond_pago || '',
       almacen_id: ALMACEN_ID,
-      items: itemsValidos,
-      nit_confirmado: nit
+      items: itemsValidos
     });
-    if (r.error) { alerta(r.error, 'error'); _RECEPCION_EN_CONFIRMACION = false; cargarRecepciones(); return; }
+    if (r.error) { alerta(r.error, 'error'); cargarRecepciones(); return; }
     if (r.advertencias?.length) r.advertencias.forEach(a => alerta(a, 'advertencia'));
-    _RECEPCION_EN_CONFIRMACION = false;
     RECEPCION_ACTUAL = r.recepcion;
     renderEscaneoRecepcion(r.recepcion);
-  } catch (e) { alerta(e.message || 'Error iniciando recepción', 'error'); _RECEPCION_EN_CONFIRMACION = false; cargarRecepciones(); }
+  } catch (e) { alerta(e.message || 'Error iniciando recepción', 'error'); cargarRecepciones(); }
 }
 
 async function continuarRecepcion(id) {
@@ -1955,14 +1888,6 @@ function renderEscaneoRecepcion(rec) {
 
       <div id="items-rec-list" style="margin-bottom:14px;">
         ${renderItemsRecepcion(rec.items)}
-      </div>
-
-      <div style="margin-bottom:10px;">
-        <label style="display:block;font-size:12px;color:#aaa;margin-bottom:4px;">N° Remisión o Factura del proveedor *</label>
-        <input id="input-remision-prov" type="text" maxlength="12" placeholder="Ej: REM001234"
-          style="width:100%;padding:12px;font-size:16px;background:#111;border:2px solid #333;border-radius:10px;color:#fff;box-sizing:border-box;"
-          oninput="this.value=this.value.replace(/[^A-Za-z0-9]/g,'').toUpperCase()"
-          onkeydown="_remisionKeyDown(event, this)">
       </div>
 
       <button id="btn-confirmar-rec" onclick="confirmarRecepcionActiva()" ${btnActivo ? '' : 'disabled'}
@@ -2054,19 +1979,11 @@ async function confirmarRecepcionActiva() {
     if (!ok) return;
   }
 
-  // Capturar número de remisión o factura del proveedor (obligatorio para Siesa)
-  const remision = (document.getElementById('input-remision-prov')?.value || '').trim();
-  if (!remision) {
-    alerta('Ingresa el número de remisión o factura del proveedor antes de confirmar', 'error');
-    document.getElementById('input-remision-prov')?.focus();
-    return;
-  }
-
   const btn = document.getElementById('btn-confirmar-rec');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
 
   try {
-    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/confirmar', { num_remision_prov: remision });
+    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/confirmar', {});
     if (r.error) {
       alerta(r.error, 'error');
       if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
