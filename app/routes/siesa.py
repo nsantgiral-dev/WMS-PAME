@@ -530,6 +530,45 @@ def debug_oc_raw():
     return jsonify(resultado), 200
 
 
+@siesa_bp.route('/debug-empaques-raw', methods=['GET'])
+@jwt_required()
+def debug_empaques_raw():
+    """
+    Debug: muestra los campos exactos que devuelven las queries de empaques.
+    GET /api/siesa/debug-empaques-raw?query=35   → API_v2_ItemsUnidadesMedida
+    GET /api/siesa/debug-empaques-raw?query=28   → API_v2_ItemsBarras
+    Retorna las primeras 3 filas con todos sus campos para mapeo.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
+
+    query = request.args.get('query', '35')
+
+    if query == '35':
+        resp = connekta.get_items_unidades_medida(1)
+        rows = resp.get('detalle', {}).get('Table', [])
+        return jsonify({
+            'query': 'API_v2_ItemsUnidadesMedida (35)',
+            'total_filas_pagina_1': len(rows),
+            'campos_disponibles': list(rows[0].keys()) if rows else [],
+            'muestra_3_filas': rows[:3],
+            'respuesta_completa_raw': resp,
+        }), 200
+
+    if query == '28':
+        resp = connekta._get(connekta.api_barras, {'paginacion': 'numPag=1|tamPag=3'})
+        rows = resp.get('detalle', {}).get('Table', [])
+        return jsonify({
+            'query': 'API_v2_ItemsBarras (28)',
+            'total_filas_pagina_1': len(rows),
+            'campos_disponibles': list(rows[0].keys()) if rows else [],
+            'muestra_3_filas': rows[:3],
+            'respuesta_completa_raw': resp,
+        }), 200
+
+    return jsonify({'error': 'query debe ser 28 o 35'}), 400
+
+
 @siesa_bp.route('/ordenes-compra', methods=['GET'])
 @jwt_required()
 def ordenes_compra():
