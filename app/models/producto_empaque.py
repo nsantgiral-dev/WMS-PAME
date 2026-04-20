@@ -52,6 +52,8 @@ class ProductoEmpaque(db.Model):
         return {
             'id': self.id,
             'producto_id': self.producto_id,
+            'producto_codigo': self.producto.codigo if self.producto else self.referencia_item,
+            'producto_nombre': self.producto.nombre if self.producto else None,
             'referencia_item': self.referencia_item,
             'codigo_barras': self.codigo_barras,
             'unidad_medida': self.unidad_medida,

@@ -1451,28 +1451,36 @@ async function _procesarScanPicking(codigo) {
   const tipo = scan.tipo || 'NO_ENCONTRADO';
 
   if (tipo === 'GS1_AMBIGUO') {
-    // Mismo código → múltiples empaques → operario debe elegir
     _modalAmbiguedadPicking(codigo, scan.ambiguos || []);
     return;
   }
 
-  // Calcular cantidad a registrar según tipo de código
+  // Resolver código de producto y cantidad según tipo de código escaneado.
+  // El backend PICKING valida por producto.codigo / codigo_siesa / codigo_barras —
+  // nunca acepta un DUN-14 o código LPN directamente.
+  let codigoParaBackend = codigo;  // default: código de producto base (EAN-13 en productos.codigo_barras)
   let cantidad = 1;
   let etiqueta = '';
-  if (tipo === 'GS1_UNICO') {
-    cantidad = scan.factor_conversion || 1;
-    etiqueta = cantidad > 1 ? ` (+${cantidad} und — ${scan.unidad_medida || 'EMPAQUE'})` : '';
-  } else if (tipo === 'LPN') {
-    cantidad = scan.cantidad_actual || 1;
+
+  if ((tipo === 'GS1_UNICO' || tipo === 'EAN_BASE') && scan.producto?.codigo) {
+    codigoParaBackend = scan.producto.codigo;
+    cantidad = scan.factor || 1;
+    if (cantidad > 1) {
+      const unidad = scan.empaque?.unidad_medida || 'EMPAQUE';
+      etiqueta = ` (+${cantidad} und — ${unidad})`;
+    }
+  } else if (tipo === 'LPN' && scan.producto?.codigo) {
+    codigoParaBackend = scan.producto.codigo;
+    cantidad = scan.factor || 1;  // scan.factor = lpn.cantidad_actual
     etiqueta = ` (LPN: ${cantidad} und)`;
   }
-  // EAN_BASE o NO_ENCONTRADO → cantidad = 1
+  // NO_ENCONTRADO → enviar codigo original, el backend dará error descriptivo
 
   try {
     const r = await post('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
       tipo: 'PICKING',
-      codigo,
+      codigo: codigoParaBackend,
       cantidad
     });
     if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
@@ -1501,8 +1509,9 @@ function _actualizarContadorPicking(r) {
 }
 
 function _modalAmbiguedadPicking(codigo, empaques) {
+  // empaques: array de ProductoEmpaque.to_dict() — incluye producto_codigo
   const opciones = empaques.map(e => `
-    <button onclick="_elegirEmpaquePicking('${codigo}', ${e.factor_conversion}, '${e.unidad_medida}', this.closest('.modal-ambig'))"
+    <button onclick="_elegirEmpaquePicking('${e.producto_codigo || e.referencia_item}', ${e.factor_conversion}, '${e.unidad_medida}', this.closest('.modal-ambig'))"
       style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
       ${e.unidad_medida} — ${e.factor_conversion} und
       <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${e.producto_nombre || ''}</div>
@@ -1524,13 +1533,14 @@ function _modalAmbiguedadPicking(codigo, empaques) {
   document.body.appendChild(modal);
 }
 
-async function _elegirEmpaquePicking(codigo, factor, unidad, modal) {
+async function _elegirEmpaquePicking(productoCodigo, factor, unidad, modal) {
+  // productoCodigo ya es el código del producto (no el DUN-14) — el backend lo acepta
   if (modal) modal.remove();
   try {
     const r = await post('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
       tipo: 'PICKING',
-      codigo,
+      codigo: productoCodigo,
       cantidad: factor
     });
     if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
