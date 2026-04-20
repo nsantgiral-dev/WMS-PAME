@@ -156,5 +156,7 @@ class ItemRecepcion(db.Model):
             'ubicacion_cross_dock_id': self.ubicacion_cross_dock_id,
             'ingresado_inventario': self.ingresado_inventario,
             'lote': self.lote,
-            'fecha_vencimiento': self.fecha_vencimiento.isoformat() if self.fecha_vencimiento else None
+            'fecha_vencimiento': self.fecha_vencimiento.isoformat() if self.fecha_vencimiento else None,
+            'factor_conversion': (self.producto.factor_conversion or 1) if self.producto else 1,
+            'unidad_empaque': (self.producto.unidad_empaque or '') if self.producto else '',
         }

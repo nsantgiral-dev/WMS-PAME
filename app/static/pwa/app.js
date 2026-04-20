@@ -2121,7 +2121,9 @@ async function procesarScanRecepcion(codigo) {
         alerta('Código no reconocido: ' + codigo + ' — usa búsqueda manual', 'error');
         return;
       }
-      await _registrarEscaneoRecepcion(prod.producto_id, 1, false, null);
+      const esEmp = prod.es_empaque || false;
+      await _registrarEscaneoRecepcion(prod.producto_id, 1, esEmp, null);
+      if (esEmp && prod.factor_conversion > 1) alerta(`Empaque escaneado → +${prod.factor_conversion} UND`, 'info');
       return;
     }
 
@@ -2140,11 +2142,13 @@ async function procesarScanRecepcion(codigo) {
     }
 
     // GS1_UNICO o EAN_BASE — escaneo caja a caja, factor ya calculado
-    const flash_msg = factor > 1
+    const esEmpaqueScan = factor > 1;
+    const flash_msg = esEmpaqueScan
       ? `${unidad} escaneada → +${factor} UND`
       : null;
 
-    await _registrarEscaneoRecepcion(productoId, factor, false, unidad);
+    // Enviamos cantidad=1 y es_empaque=true; el backend multiplica por factor_conversion
+    await _registrarEscaneoRecepcion(productoId, 1, esEmpaqueScan, unidad);
     if (flash_msg) alerta(flash_msg, 'info');
 
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
