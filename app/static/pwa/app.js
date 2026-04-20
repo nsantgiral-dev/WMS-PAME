@@ -42,6 +42,7 @@ let RECEPCION_ACTUAL = null;   // recepción en escaneo activo (pantalla recepci
 let DEVOLUCION_ACTUAL = null;  // tarea de devolución en flujo activo
 let REC_TAB_ACTIVO = 'ocs';   // tab activo en pantalla recepcionista
 let TIMER_REC = null;          // polling recepcionista (30 seg)
+let _RECEPCION_EN_CONFIRMACION = false; // pausa el polling mientras el operario confirma el NIT
 let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
 let SIESA_OCS = [];            // OCs cargadas desde Siesa (pantalla recepcionista)
 let RUTA_ACTIVA_ID = null;     // ruta EN_CARGUE seleccionada en tab-muelle
@@ -102,7 +103,7 @@ function mostrarSegunRol(rol) {
     cargarRecepciones();
     cargarDevoluciones();
     TIMER_REC = setInterval(() => {
-      if (!RECEPCION_ACTUAL && !DEVOLUCION_ACTUAL) {
+      if (!RECEPCION_ACTUAL && !DEVOLUCION_ACTUAL && !_RECEPCION_EN_CONFIRMACION) {
         cargarRecepciones(true);
         cargarDevoluciones(true);
       }
@@ -1611,7 +1612,7 @@ async function aprobarAjusteConteo(sesionId) {
 }
 
 async function cargarRecepciones(silencioso = false) {
-  if (RECEPCION_ACTUAL) return;
+  if (RECEPCION_ACTUAL || _RECEPCION_EN_CONFIRMACION) return;
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
   // Solo muestra spinner en carga inicial, no en polling automático
@@ -1812,13 +1813,14 @@ function crearRecepcionDesdeSiesa(idx) {
 }
 
 function _mostrarConfirmacionNIT(idx, oc, itemsValidos) {
+  _RECEPCION_EN_CONFIRMACION = true;
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
   const nitEsperado = (oc.proveedor_codigo || '').trim();
   el.innerHTML = `
     <div style="padding:16px;">
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
-        <button onclick="cargarRecepciones()"
+        <button onclick="_cancelarConfirmacionNIT()"
           style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
           ← Volver
         </button>
@@ -1846,6 +1848,11 @@ function _mostrarConfirmacionNIT(idx, oc, itemsValidos) {
       </button>
     </div>`;
   setTimeout(() => document.getElementById('input-nit-prov')?.focus(), 100);
+}
+
+function _cancelarConfirmacionNIT() {
+  _RECEPCION_EN_CONFIRMACION = false;
+  cargarRecepciones();
 }
 
 async function _confirmarNITEIniciar(idx) {
@@ -1883,11 +1890,12 @@ async function _confirmarNITEIniciar(idx) {
       items: itemsValidos,
       nit_confirmado: nit
     });
-    if (r.error) { alerta(r.error, 'error'); cargarRecepciones(); return; }
+    if (r.error) { alerta(r.error, 'error'); _RECEPCION_EN_CONFIRMACION = false; cargarRecepciones(); return; }
     if (r.advertencias?.length) r.advertencias.forEach(a => alerta(a, 'advertencia'));
+    _RECEPCION_EN_CONFIRMACION = false;
     RECEPCION_ACTUAL = r.recepcion;
     renderEscaneoRecepcion(r.recepcion);
-  } catch (e) { alerta(e.message || 'Error iniciando recepción', 'error'); cargarRecepciones(); }
+  } catch (e) { alerta(e.message || 'Error iniciando recepción', 'error'); _RECEPCION_EN_CONFIRMACION = false; cargarRecepciones(); }
 }
 
 async function continuarRecepcion(id) {
