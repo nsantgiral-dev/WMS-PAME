@@ -624,6 +624,7 @@ def ordenes_compra():
                 'producto_nombre_wms': prod.nombre if prod else None,
                 'cantidad_ordenada': cant_pedida,
                 'cantidad_pendiente': cant_pendiente,
+                'factor_conversion': int(float(row.get('f421_factor') or 1)),
             })
         except (ValueError, TypeError):
             continue
@@ -823,6 +824,17 @@ def iniciar_recepcion():
                 'mensaje': 'Recepción retomada — listo para escanear',
                 'recepcion': existente.to_dict()
             }), 200
+
+    # Actualizar factor_conversion desde f421_factor de la OC (fuente de verdad Siesa)
+    from app.models.producto import Producto as _Prod
+    for i in items_validos:
+        fc = int(float(i.get('factor_conversion') or 1))
+        if fc > 1 and i.get('producto_id'):
+            prod = _Prod.query.get(i['producto_id'])
+            if prod and (prod.factor_conversion or 1) != fc:
+                prod.factor_conversion = fc
+    from app.extensions import db as _db
+    _db.session.flush()
 
     items_recepcion = [{
         'producto_id': i['producto_id'],
