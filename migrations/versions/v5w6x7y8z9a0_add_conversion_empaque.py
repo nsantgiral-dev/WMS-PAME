@@ -1,13 +1,13 @@
 """add conversion empaque a productos e items_recepcion
 
-Revision ID: v5w6x7y8z9a0
+Revision ID: w6x7y8z9a0b1
 Revises: u4v5w6x7y8z9
 Create Date: 2026-04-20
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = 'v5w6x7y8z9a0'
+revision = 'w6x7y8z9a0b1'
 down_revision = 'u4v5w6x7y8z9'
 branch_labels = None
 depends_on = None
