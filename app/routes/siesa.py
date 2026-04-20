@@ -9,6 +9,7 @@ POST /api/siesa/confirmar-despacho    → dispara RemisionPedido (142945) a Sies
 POST /api/siesa/iniciar-recepcion     → crea e inicia una recepción desde una OC
 """
 import json
+import os
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -325,7 +326,7 @@ def debug_items_raw():
     campos = list(tabla[0].keys())
     campos_factor = [c for c in campos if 'factor' in c.lower() or 'unidad_emp' in c.lower() or 'empaque' in c.lower()]
     return jsonify({
-        'api': connekta.api_items if hasattr(connekta, 'api_items') else 'API_v2_Items',
+        'api': connekta.api_items if hasattr(connekta, 'api_items') else os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items'),
         'total_filas_pagina': len(tabla),
         'campos_relevantes_empaque': campos_factor,
         'todos_los_campos': campos,
