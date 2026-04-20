@@ -243,6 +243,18 @@ class TrasladoService:
         # Se hace independientemente del resultado de Siesa — el camión ya salió.
         TrasladoService._descontar_inventario_wms(s)
 
+        # ── Confirmar LPNs → EN_TRANSITO ──────────────────────────────────────
+        # Los LPNs que el operario vinculó durante el picking ya deberían estar
+        # EN_TRANSITO; esto cubre el caso de LPNs que quedaron en ACTIVO por
+        # algún fallo intermedio.
+        try:
+            from app.models.lpn import LPN
+            LPN.query.filter_by(traslado_id=s.id, estado='ACTIVO').update(
+                {'estado': 'EN_TRANSITO'}, synchronize_session=False
+            )
+        except Exception as e_lpn:
+            logger.warning(f'[TRASLADO] Error confirmando LPNs EN_TRANSITO para {s.codigo}: {e_lpn}')
+
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → {nuevo_estado}')
         return s
@@ -299,6 +311,18 @@ class TrasladoService:
             except Exception as e:
                 s.siesa_error = f'173079: {str(e)}'
                 logger.error(f'[TRASLADO] Error entrada Siesa {s.codigo}: {e}')
+
+        # ── Consumir LPNs que llegaron ─────────────────────────────────────────
+        # Las pacas físicas viajaron y se recibieron en el punto de venta.
+        # Se marcan CONSUMIDO porque al ingresar al PV se abren (no tienen LPN propio allá).
+        try:
+            from app.models.lpn import LPN
+            now_utc = datetime.utcnow()
+            for lpn in LPN.query.filter_by(traslado_id=s.id, estado='EN_TRANSITO').all():
+                lpn.estado = 'CONSUMIDO'
+                lpn.fecha_consumo = now_utc
+        except Exception as e_lpn:
+            logger.warning(f'[TRASLADO] Error consumiendo LPNs para {s.codigo}: {e_lpn}')
 
         s.estado = 'ENTREGADA'
         s.fecha_entrega = datetime.utcnow()

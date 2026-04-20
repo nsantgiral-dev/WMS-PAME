@@ -1476,13 +1476,12 @@ async function _procesarScanPicking(codigo) {
   }
   // NO_ENCONTRADO → enviar codigo original, el backend dará error descriptivo
 
+  // Incluir lpn_codigo cuando es un LPN — el backend lo vincula al traslado si aplica
+  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad };
+  if (tipo === 'LPN') payload.lpn_codigo = codigo;  // 'LPN-XXXXXXX' original
+
   try {
-    const r = await post('/api/mobile/escanear', {
-      tarea_id: TAREA_ACTUAL.id,
-      tipo: 'PICKING',
-      codigo: codigoParaBackend,
-      cantidad
-    });
+    const r = await post('/api/mobile/escanear', payload);
     if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
     beepOk();
     if (etiqueta) alerta(`Registrado${etiqueta}`, 'exito');
@@ -5756,8 +5755,12 @@ function _renderTrasladoCard(s) {
 
   if (s.estado === 'PREPARADO') {
     acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
+    acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs</button>`);
   }
 
+  if (s.estado === 'EN_TRANSITO') {
+    acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs en ruta</button>`);
+  }
   if (s.siesa_necesita_atencion && s.estado === 'EN_TRANSITO') {
     acciones.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="flex:1;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">⚠ Reintentar Siesa</button>`);
   }
@@ -5927,6 +5930,41 @@ async function trasRechazar(id) {
     if (r.ok) { alerta('Solicitud rechazada', 'advertencia'); cargarTrasladosAdmin(); }
     else { alerta(d.error || 'Error', 'error'); }
   } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function trasVerLPNs(id) {
+  let data;
+  try {
+    data = await get(`/api/traslados/${id}/lpns`);
+  } catch (e) { alerta('Error cargando LPNs', 'error'); return; }
+
+  const lpns = data.lpns || [];
+  const estadoColor = { ACTIVO: '#4ade80', EN_TRANSITO: '#f59e0b', CONSUMIDO: '#6b7280' };
+
+  const filas = lpns.length
+    ? lpns.map(l => `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #1a1a1a;">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#a78bfa;">${l.codigo}</div>
+            <div style="font-size:11px;color:#666;">${l.producto_codigo} — ${l.cantidad_actual} und</div>
+          </div>
+          <span style="font-size:10px;font-weight:700;color:${estadoColor[l.estado]||'#fff'};">${l.estado}</span>
+        </div>`).join('')
+    : '<div style="color:#555;text-align:center;padding:20px;">Sin LPNs vinculados a este traslado</div>';
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.9);display:flex;align-items:flex-end;';
+  modal.innerHTML = `
+    <div style="background:#0a0a0a;border-top:2px solid #7c3aed;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:75vh;overflow-y:auto;">
+      <div style="font-size:16px;font-weight:700;color:#a78bfa;margin-bottom:4px;">📦 LPNs — Traslado #${id}</div>
+      <div style="font-size:12px;color:#555;margin-bottom:16px;">${lpns.length} paca(s)/caja(s) vinculadas</div>
+      ${filas}
+      <button onclick="this.closest('[style*=fixed]').remove()"
+        style="width:100%;padding:14px;margin-top:16px;background:#111;color:#666;border:1px solid #222;border-radius:10px;cursor:pointer;font-size:14px;">
+        Cerrar
+      </button>
+    </div>`;
+  document.body.appendChild(modal);
 }
 
 async function trasDespachar(id) {

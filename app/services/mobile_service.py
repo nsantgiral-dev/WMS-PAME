@@ -274,11 +274,15 @@ class MobileService:
 
     @staticmethod
     def procesar_escaneo(operario_id: int, tarea_id: int,
-                         tipo: str, codigo: str, cantidad: int = 1):
+                         tipo: str, codigo: str, cantidad: int = 1,
+                         lpn_codigo: str = None):
         """
         Procesa un escaneo — funciona con cámara o láser Bluetooth.
         Valida que el código escaneado corresponde al producto de la tarea.
         Acepta: referencia interna, código Siesa, o código de barras EAN.
+
+        lpn_codigo: si se provee y la tarea es de TRASLADO, vincula el LPN
+                    automáticamente al traslado y lo marca EN_TRANSITO.
         """
         codigo_limpio = MobileService._normalizar(codigo)
 
@@ -313,6 +317,28 @@ class MobileService:
                 tarea.estado = 'EN_PROCESO'
                 tarea.operario_id = operario_id
                 tarea.fecha_inicio = datetime.utcnow()
+
+            # ── Vincular LPN al traslado si aplica ───────────────────────────
+            # Cuando el operario escanea un LPN durante el picking de un traslado,
+            # lo marcamos EN_TRANSITO y lo asociamos a la solicitud. Esto permite
+            # rastrear qué pacas físicas van en cada envío.
+            if lpn_codigo and tarea.tipo_documento == 'TRASLADO' and tarea.referencia_documento:
+                try:
+                    from app.models.lpn import LPN
+                    from app.models.traslado import SolicitudTraslado
+                    lpn = LPN.query.filter_by(codigo=lpn_codigo, estado='ACTIVO').first()
+                    if lpn and lpn.producto_id == producto.id:
+                        traslado = SolicitudTraslado.query.filter_by(
+                            codigo=tarea.referencia_documento
+                        ).first()
+                        if traslado:
+                            lpn.traslado_id = traslado.id
+                            lpn.estado = 'EN_TRANSITO'
+                            logger.info(
+                                f'[TRASLADO] LPN {lpn_codigo} vinculado a {traslado.codigo} → EN_TRANSITO'
+                            )
+                except Exception as e_lpn:
+                    logger.warning(f'[TRASLADO] No se pudo vincular LPN {lpn_codigo}: {e_lpn}')
 
             db.session.commit()
             completado = nueva_cantidad >= tarea.cantidad_solicitada

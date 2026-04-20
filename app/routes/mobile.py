@@ -44,7 +44,8 @@ def escanear():
             tarea_id=data['tarea_id'],
             tipo=data['tipo'],
             codigo=data['codigo'],
-            cantidad=data.get('cantidad', 1)
+            cantidad=data.get('cantidad', 1),
+            lpn_codigo=data.get('lpn_codigo'),
         )
         return jsonify(resultado), 200
     except ValueError as e:

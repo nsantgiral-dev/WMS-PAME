@@ -297,6 +297,18 @@ def confirmar_recepcion(id):
         return jsonify({'error': str(e)}), 500
 
 
+@traslados_bp.route('/<int:id>/lpns', methods=['GET'])
+@jwt_required()
+def listar_lpns_traslado(id):
+    """Lista los LPNs (pacas/cajas) vinculados a este traslado."""
+    from app.models.lpn import LPN
+    lpns = LPN.query.filter_by(traslado_id=id).order_by(LPN.id).all()
+    return jsonify({
+        'lpns': [l.to_dict() for l in lpns],
+        'total': len(lpns),
+    }), 200
+
+
 @traslados_bp.route('/<int:id>/reintentar-siesa', methods=['POST'])
 @jwt_required()
 def reintentar_siesa(id):
