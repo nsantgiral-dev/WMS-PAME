@@ -101,7 +101,8 @@ class ItemRecepcion(db.Model):
     tolerancia_exceso_pct = db.Column(db.Float, default=0.0)
 
     # Lo que escaneó el recepcionista (recepción ciega)
-    cantidad_recibida = db.Column(db.Integer, default=0)
+    cantidad_recibida = db.Column(db.Integer, default=0)   # siempre en unidades sueltas
+    empaques_escaneados = db.Column(db.Integer, default=0) # cajas/pacas contadas
 
     # Decisión de ubicación
     # INVENTARIO, CROSS_DOCK, BLOQUEADO
@@ -144,6 +145,7 @@ class ItemRecepcion(db.Model):
             'clasificacion_abc': self.producto.clasificacion_abc if self.producto else None,
             'cantidad_ordenada': self.cantidad_ordenada,
             'cantidad_recibida': self.cantidad_recibida,
+            'empaques_escaneados': self.empaques_escaneados or 0,
             'cantidad_maxima_permitida': self.cantidad_maxima_permitida(),
             'tolerancia_exceso_pct': self.tolerancia_exceso_pct,
             'es_exceso': self.es_exceso(),

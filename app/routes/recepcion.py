@@ -94,7 +94,8 @@ def escanear_producto(id):
             producto_id=data['producto_id'],
             cantidad=data['cantidad'],
             lote=data.get('lote'),
-            fecha_vencimiento=data.get('fecha_vencimiento')
+            fecha_vencimiento=data.get('fecha_vencimiento'),
+            es_empaque=data.get('es_empaque', False)
         )
         return jsonify(resultado), 200
     except ValueError as e:

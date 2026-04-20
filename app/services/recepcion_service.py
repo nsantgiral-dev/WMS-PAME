@@ -93,7 +93,7 @@ class RecepcionService:
     @staticmethod
     def escanear_producto(recepcion_id: int, producto_id: int,
                           cantidad: int, lote: str = None,
-                          fecha_vencimiento=None):
+                          fecha_vencimiento=None, es_empaque: bool = False):
         """
         Recepción ciega — el operario escanea sin ver cantidades esperadas.
         El sistema valida excesos en tiempo real y bloquea si supera tolerancia.
@@ -115,8 +115,17 @@ class RecepcionService:
                 f'Verificar con el proveedor — posible error de despacho.'
             )
 
+        # Conversión de empaque: si escanearon la caja/paca, multiplicar por factor
+        if es_empaque and item.producto and (item.producto.factor_conversion or 1) > 1:
+            factor = item.producto.factor_conversion
+            unidades_este_scan = cantidad * factor
+            nuevos_empaques = (item.empaques_escaneados or 0) + cantidad
+        else:
+            unidades_este_scan = cantidad
+            nuevos_empaques = item.empaques_escaneados or 0
+
         # Calcular nueva cantidad
-        nueva_cantidad = item.cantidad_recibida + cantidad
+        nueva_cantidad = item.cantidad_recibida + unidades_este_scan
         maxima_permitida = item.cantidad_maxima_permitida()
 
         # BLOQUEO DE EXCESO
@@ -135,6 +144,7 @@ class RecepcionService:
             })
 
         item.cantidad_recibida = nueva_cantidad
+        item.empaques_escaneados = nuevos_empaques
         if lote:
             item.lote = lote
         if fecha_vencimiento:

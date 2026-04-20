@@ -1906,6 +1906,12 @@ function renderItemsRecepcion(items) {
   return items.map(it => {
     const pct = it.cantidad_ordenada > 0 ? Math.min((it.cantidad_recibida / it.cantidad_ordenada) * 100, 100) : 0;
     const completo = it.cantidad_recibida >= it.cantidad_ordenada;
+    const factor = it.factor_conversion || 1;
+    const tieneEmpaque = factor > 1 && (it.empaques_escaneados || 0) > 0;
+    const unidadEmpaque = it.unidad_empaque || 'emp';
+    const conteoEmpaque = tieneEmpaque
+      ? `<div style="font-size:12px;color:#facc15;margin-top:2px;">${it.empaques_escaneados} ${unidadEmpaque} / ${it.cantidad_recibida} und</div>`
+      : '';
     return `
       <div id="item-rec-${it.producto_id}"
         style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
@@ -1913,10 +1919,12 @@ function renderItemsRecepcion(items) {
           <div style="min-width:0;">
             <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${it.producto_nombre || it.producto_codigo}</div>
             <div style="font-size:11px;color:#555;">${it.producto_codigo}</div>
+            ${conteoEmpaque}
             ${it.destino === 'CROSS_DOCK' ? '<div style="font-size:11px;color:#60a5fa;margin-top:4px;">↔ CROSS-DOCK</div>' : ''}
           </div>
           <div style="text-align:right;flex-shrink:0;padding-left:8px;">
             <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${it.cantidad_recibida}/${it.cantidad_ordenada}</div>
+            ${factor > 1 ? `<div style="font-size:10px;color:#6b7280;">×${factor} und/${unidadEmpaque}</div>` : ''}
           </div>
         </div>
         <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
@@ -1935,10 +1943,11 @@ async function procesarScanRecepcion(codigo) {
     const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
     if (prod.error) { alerta('Producto no encontrado: ' + codigo, 'error'); return; }
 
-    // 2. Registrar en la recepción (cantidad 1 por escaneo)
+    // 2. Registrar en la recepción — si es empaque el backend aplica el factor
     const r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
       producto_id: prod.producto_id,
-      cantidad: 1
+      cantidad: 1,
+      es_empaque: prod.es_empaque || false
     });
     if (r.error) {
       const msg = typeof r.error === 'object' ? r.error.mensaje : r.error;

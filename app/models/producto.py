@@ -19,7 +19,10 @@ class Producto(db.Model):
     punto_pedido = db.Column(db.Integer, default=0)
     clasificacion_abc = db.Column(db.String(1))
     codigo_siesa = db.Column(db.String(50))
-    codigo_barras = db.Column(db.String(100))      # EAN/UPC del producto (para escaneo con cámara)
+    codigo_barras = db.Column(db.String(100))      # EAN/UPC de la unidad suelta
+    codigo_barras_empaque = db.Column(db.String(100))  # EAN de la caja/paca/paquete
+    unidad_empaque = db.Column(db.String(20))     # ej. 'CJA', 'PAC', 'PQT'
+    factor_conversion = db.Column(db.Integer, default=1)  # unidades por empaque
     unidad_negocio_id = db.Column(db.String(10))  # Unidad de negocio Siesa p.ej. '001'=PAPELERIA
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -55,6 +58,9 @@ class Producto(db.Model):
             'clasificacion_abc': self.clasificacion_abc,
             'codigo_siesa': self.codigo_siesa,
             'codigo_barras': self.codigo_barras,
+            'codigo_barras_empaque': self.codigo_barras_empaque,
+            'unidad_empaque': self.unidad_empaque,
+            'factor_conversion': self.factor_conversion or 1,
             'unidad_negocio_id': self.unidad_negocio_id,
             'stock_total': self.stock_total,
             'stock_disponible': self.stock_disponible,

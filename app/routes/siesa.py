@@ -354,10 +354,11 @@ def debug_inventario_raw():
 
 
 def _buscar_producto(codigo):
-    """Busca un producto por código WMS, código Siesa o código de barras EAN."""
+    """Busca un producto por código WMS, código Siesa, barcode de unidad o barcode de empaque."""
     return (Producto.query.filter_by(codigo=codigo).first() or
             Producto.query.filter_by(codigo_siesa=codigo).first() or
-            Producto.query.filter_by(codigo_barras=codigo).first())
+            Producto.query.filter_by(codigo_barras=codigo).first() or
+            Producto.query.filter_by(codigo_barras_empaque=codigo).first())
 
 
 # ──────────────────────────────────────────────
@@ -592,12 +593,18 @@ def buscar_producto(codigo):
             'error': f"Código '{codigo}' no encontrado. Si es un EAN nuevo, ejecuta Sync EAN en Admin → Siesa."
         }), 404
 
+    es_empaque = bool(prod.codigo_barras_empaque and codigo == prod.codigo_barras_empaque)
+    factor = prod.factor_conversion or 1
+
     return jsonify({
         'producto_id': prod.id,
         'codigo': prod.codigo,
         'nombre': prod.nombre,
         'codigo_siesa': prod.codigo_siesa,
-        'clasificacion_abc': prod.clasificacion_abc
+        'clasificacion_abc': prod.clasificacion_abc,
+        'es_empaque': es_empaque,
+        'factor_conversion': factor,
+        'unidad_empaque': prod.unidad_empaque or None,
     }), 200
 
 
