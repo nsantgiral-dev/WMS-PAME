@@ -143,7 +143,7 @@ def _run_sync(app):
                     try:
                         # Auto-detectar campos en primera fila válida
                         if campo_factor is None:
-                            for candidato in ('f120_factor', 'factor', 'f122_factor', 'f120_cant_paquete'):
+                            for candidato in ('f122_factor', 'f120_factor', 'factor', 'f120_cant_paquete'):
                                 if row.get(candidato) is not None:
                                     campo_factor = candidato
                                     break
@@ -159,8 +159,7 @@ def _run_sync(app):
                             break
 
                         referencia = (row.get('f120_referencia') or '').strip()
-                        unidad     = (row.get('f120_id_unidad_medida') or
-                                      row.get('f120_id_unidad') or '').strip()
+                        unidad     = (row.get('f122_id_unidad') or '').strip()
                         try:
                             factor = int(float(row.get(campo_factor) or 1))
                         except (ValueError, TypeError):
