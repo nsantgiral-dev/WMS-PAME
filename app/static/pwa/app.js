@@ -1868,7 +1868,7 @@ function renderEscaneoRecepcion(rec) {
       </div>
 
       <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea cada producto — 1 escaneo = 1 unidad</div>
+        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
         <button onclick="abrirCamara('lector-qr-rec','camara-box-rec', cod => { cerrarCamara('camara-box-rec'); procesarScanRecepcion(cod); })"
           style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
@@ -1877,13 +1877,17 @@ function renderEscaneoRecepcion(rec) {
           <div id="lector-qr-rec" style="border-radius:10px;overflow:hidden;"></div>
           <button onclick="cerrarCamara('camara-box-rec')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
         </div>
-        <div style="display:flex;gap:8px;">
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
           <input id="rec-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
             style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
-            onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ procesarScan(v); this.value=''; } }">
-          <button onclick="const v=document.getElementById('rec-codigo-manual').value.trim();if(v){procesarScan(v);document.getElementById('rec-codigo-manual').value='';}"
+            onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ procesarScanRecepcion(v); this.value=''; } }">
+          <button onclick="const v=document.getElementById('rec-codigo-manual').value.trim();if(v){procesarScanRecepcion(v);document.getElementById('rec-codigo-manual').value='';}"
             style="padding:10px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
         </div>
+        <button onclick="abrirBusquedaManualRecepcion()"
+          style="width:100%;padding:10px;font-size:14px;background:#1a1a1a;color:#9ca3af;border:1px solid #333;border-radius:8px;cursor:pointer;">
+          📦 Sin código — buscar producto manualmente
+        </button>
       </div>
 
       <div id="items-rec-list" style="margin-bottom:14px;">
@@ -1945,45 +1949,186 @@ async function procesarScanRecepcion(codigo) {
   vibrar(); flash();
 
   try {
-    // 1. Traducir código de barras → producto_id
-    const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
-    if (prod.error) { alerta('Producto no encontrado: ' + codigo, 'error'); return; }
+    // 1. Resolver barcode contra producto_empaques (nuevo sistema)
+    const scan = await get('/api/empaques/scan/' + encodeURIComponent(codigo) +
+      '?almacen_id=' + (RECEPCION_ACTUAL.almacen_id || ''));
 
-    // 2. Registrar en la recepción — si es empaque el backend aplica el factor
-    const r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
-      producto_id: prod.producto_id,
-      cantidad: 1,
-      es_empaque: prod.es_empaque || false
-    });
-    if (r.error) {
-      const msg = typeof r.error === 'object' ? r.error.mensaje : r.error;
-      alerta(msg, 'error');
+    if (scan.tipo === 'GS1_AMBIGUO') {
+      // Mismo código en múltiples empaques → operario decide cuál es
+      _modalAmbiguedadRecepcion(codigo, scan.ambiguos);
       return;
     }
 
-    // 3. Actualizar estado local
-    const idx = RECEPCION_ACTUAL.items.findIndex(it => it.producto_id === prod.producto_id);
-    if (idx >= 0) RECEPCION_ACTUAL.items[idx] = r.item;
-
-    // 4. Re-renderizar items
-    const lista = document.getElementById('items-rec-list');
-    if (lista) lista.innerHTML = renderItemsRecepcion(RECEPCION_ACTUAL.items);
-
-    if (r.alerta) {
-      const tipo = r.alerta.includes('EXCESO') ? 'error' : r.alerta.includes('CROSS') ? 'advertencia' : 'info';
-      alerta(r.alerta, tipo);
+    if (scan.tipo === 'NO_ENCONTRADO') {
+      // No está en producto_empaques → intentar lookup clásico (codigo_barras en productos)
+      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+      if (prod.error || !prod.producto_id) {
+        alerta('Código no reconocido: ' + codigo + ' — usa búsqueda manual', 'error');
+        return;
+      }
+      await _registrarEscaneoRecepcion(prod.producto_id, 1, false, null);
+      return;
     }
 
-    // 5. Habilitar confirmar si todo está listo
-    const todoCompleto = RECEPCION_ACTUAL.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
-    const btn = document.getElementById('btn-confirmar-rec');
-    if (btn && todoCompleto) {
-      btn.disabled = false;
-      btn.style.background = '#16a34a';
-      btn.style.cursor = 'pointer';
-      alerta('Todo escaneado — confirma la recepción', 'exito');
+    // GS1_UNICO, EAN_BASE o LPN — producto y factor conocidos
+    const productoId = scan.producto ? scan.producto.id : null;
+    if (!productoId) { alerta('Producto no identificado', 'error'); return; }
+
+    const factor = scan.factor || 1;
+    const unidad = scan.empaque ? scan.empaque.unidad_medida : 'UND';
+
+    if (scan.tipo === 'LPN') {
+      // LPN ya registrado — registrar el contenido completo
+      await _registrarEscaneoRecepcion(productoId, scan.lpn.cantidad_actual, false, unidad);
+      alerta(`LPN ${codigo} → +${scan.lpn.cantidad_actual} UND`, 'exito');
+      return;
     }
+
+    // GS1_UNICO o EAN_BASE — escaneo caja a caja, factor ya calculado
+    const flash_msg = factor > 1
+      ? `${unidad} escaneada → +${factor} UND`
+      : null;
+
+    await _registrarEscaneoRecepcion(productoId, factor, false, unidad);
+    if (flash_msg) alerta(flash_msg, 'info');
+
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+}
+
+async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad) {
+  const r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
+    producto_id: productoId,
+    cantidad: cantidad,
+    es_empaque: esEmpaque
+  });
+  if (r.error) {
+    const msg = typeof r.error === 'object' ? r.error.mensaje : r.error;
+    alerta(msg, 'error');
+    return;
+  }
+
+  // Actualizar estado local
+  const idx = RECEPCION_ACTUAL.items.findIndex(it => it.producto_id === productoId);
+  if (idx >= 0) RECEPCION_ACTUAL.items[idx] = r.item;
+
+  const lista = document.getElementById('items-rec-list');
+  if (lista) lista.innerHTML = renderItemsRecepcion(RECEPCION_ACTUAL.items);
+
+  if (r.alerta) {
+    const tipo = r.alerta.includes('EXCESO') ? 'error' : r.alerta.includes('CROSS') ? 'advertencia' : 'info';
+    alerta(r.alerta, tipo);
+  }
+
+  const todoCompleto = RECEPCION_ACTUAL.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+  const btn = document.getElementById('btn-confirmar-rec');
+  if (btn && todoCompleto) {
+    btn.disabled = false;
+    btn.style.background = '#16a34a';
+    btn.style.cursor = 'pointer';
+    alerta('Todo escaneado — confirma la recepción', 'exito');
+  }
+}
+
+function _modalAmbiguedadRecepcion(codigo, ambiguos) {
+  // El mismo código de barras corresponde a múltiples niveles de empaque
+  // El operario debe decir qué está escaneando
+  const opciones = ambiguos.map((e, i) => `
+    <button onclick="_elegirEmpaque('${codigo}',${e.producto_id},${e.factor_conversion},'${e.unidad_medida}',this.closest('.modal-rec'))"
+      style="width:100%;padding:14px;margin-bottom:8px;background:#1a1a1a;border:1px solid #333;
+             color:#fff;border-radius:10px;cursor:pointer;font-size:15px;text-align:left;">
+      <span style="font-size:22px;font-weight:900;">${e.factor_conversion}</span>
+      <span style="color:#9ca3af;margin-left:6px;">${e.unidad_medida}</span>
+      <span style="color:#6b7280;font-size:12px;margin-left:8px;">(×${e.factor_conversion} und)</span>
+    </button>`).join('');
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-rec';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:flex-end;padding:16px;';
+  modal.innerHTML = `
+    <div style="background:#111;border-radius:16px;padding:20px;width:100%;max-width:480px;margin:auto;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:6px;">⚠️ Código ambiguo</div>
+      <div style="font-size:13px;color:#9ca3af;margin-bottom:16px;">${codigo} — ¿Qué estás escaneando?</div>
+      ${opciones}
+      <button onclick="this.closest('.modal-rec').remove()"
+        style="width:100%;padding:12px;background:#0d0d0d;color:#6b7280;border:1px solid #222;border-radius:8px;cursor:pointer;margin-top:4px;">
+        Cancelar
+      </button>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function _elegirEmpaque(codigo, productoId, factor, unidad, modal) {
+  if (modal) modal.remove();
+  await _registrarEscaneoRecepcion(productoId, factor, false, unidad);
+  alerta(`${unidad} × ${factor} UND registrada`, 'exito');
+}
+
+async function abrirBusquedaManualRecepcion() {
+  // Busca producto por texto para pacas sin ningún código
+  const modal = document.createElement('div');
+  modal.className = 'modal-rec';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:flex-start;padding:16px;padding-top:60px;';
+  modal.innerHTML = `
+    <div style="background:#111;border-radius:16px;padding:20px;width:100%;max-width:480px;margin:auto;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:14px;">📦 Buscar producto manualmente</div>
+      <input id="modal-buscar-input" type="text" placeholder="Nombre o código del producto..."
+        style="width:100%;box-sizing:border-box;padding:12px;background:#0d0d0d;border:1px solid #444;border-radius:8px;color:#fff;font-size:15px;margin-bottom:10px;"
+        oninput="_buscarProductoModal(this.value)">
+      <div id="modal-buscar-resultados" style="max-height:280px;overflow-y:auto;"></div>
+      <button onclick="this.closest('.modal-rec').remove()"
+        style="width:100%;padding:12px;background:#0d0d0d;color:#6b7280;border:1px solid #222;border-radius:8px;cursor:pointer;margin-top:10px;">
+        Cancelar
+      </button>
+    </div>`;
+  document.body.appendChild(modal);
+  setTimeout(() => { const i = document.getElementById('modal-buscar-input'); if(i) i.focus(); }, 100);
+}
+
+let _buscarModalTimer;
+async function _buscarProductoModal(q) {
+  clearTimeout(_buscarModalTimer);
+  if (q.length < 2) { document.getElementById('modal-buscar-resultados').innerHTML = ''; return; }
+  _buscarModalTimer = setTimeout(async () => {
+    const res = await get('/api/productos/?q=' + encodeURIComponent(q) + '&limit=8').catch(() => ({ productos: [] }));
+    const productos = res.productos || [];
+    const el = document.getElementById('modal-buscar-resultados');
+    if (!el) return;
+    if (!productos.length) { el.innerHTML = '<div style="color:#6b7280;padding:10px;font-size:13px;">Sin resultados</div>'; return; }
+    el.innerHTML = productos.map(p => `
+      <button onclick="_seleccionarProductoManual(${p.id},'${(p.nombre||'').replace(/'/g,"\\'")}',this.closest('.modal-rec'))"
+        style="width:100%;padding:12px;margin-bottom:6px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:8px;cursor:pointer;text-align:left;">
+        <div style="font-size:14px;font-weight:600;">${p.nombre}</div>
+        <div style="font-size:11px;color:#6b7280;">${p.codigo}</div>
+      </button>`).join('');
+  }, 350);
+}
+
+async function _seleccionarProductoManual(productoId, nombre, modal) {
+  // Producto seleccionado sin código → preguntar cantidad y generar LPN
+  const cant = prompt(`¿Cuántas unidades tiene esta paca de "${nombre}"?\n(Deja vacío si es 1 unidad suelta)`);
+  if (cant === null) return; // canceló
+  const cantidad = parseInt(cant) || 1;
+
+  if (modal) modal.remove();
+
+  if (cantidad > 1) {
+    // Es una paca → generar LPN
+    try {
+      const lpnRes = await post('/api/empaques/lpn/generar', {
+        producto_id: productoId,
+        cantidad_actual: cantidad,
+        almacen_id: RECEPCION_ACTUAL.almacen_id,
+        recepcion_id: RECEPCION_ACTUAL.id,
+        notas: 'Generado en recepción manual'
+      });
+      if (lpnRes.error) { alerta(lpnRes.error, 'error'); return; }
+      alerta(`LPN ${lpnRes.lpn.codigo} generado — imprime la etiqueta y pégala en la paca`, 'exito');
+      await _registrarEscaneoRecepcion(productoId, cantidad, false, 'PACA');
+    } catch(e) { alerta('Error generando LPN', 'error'); }
+  } else {
+    // Unidad suelta
+    await _registrarEscaneoRecepcion(productoId, 1, false, 'UND');
+  }
 }
 
 async function confirmarRecepcionActiva() {
