@@ -85,33 +85,27 @@ def _run_sync(app):
                             continue
 
                         changed = False
-
-                        # Preferir EAN real (todo dígitos, 8+ caracteres) sobre código interno.
                         es_ean_real = codigo_barras.isdigit() and len(codigo_barras) >= 8
-                        tiene_ean_actual = (prod.codigo_barras or '').isdigit() and len(prod.codigo_barras or '') >= 8
 
-                        if prod.codigo_barras != codigo_barras:
-                            if es_ean_real or not tiene_ean_actual:
-                                prod.codigo_barras = codigo_barras
-                                changed = True
+                        # Clasificar si es barcode de unidad suelta o de empaque
+                        # Si la unidad del barcode difiere de la unidad de inventario → es empaque
+                        unidad_barra = (row.get('f131_id_unidad_medida') or '').strip()
+                        unidad_inv   = (prod.unidad_medida or 'UND').strip()
+                        es_empaque_barcode = bool(unidad_barra and unidad_barra != unidad_inv)
 
-                        # Factor de conversión y unidad de empaque desde ItemsBarras
-                        # f131_cant_interna_1 = unidades del inventario que contiene este empaque
-                        unidad_barra = (row.get('f131_id_unidad_medida') or '').strip() or None
-                        try:
-                            factor_barra = int(float(row.get('f131_cant_interna_1') or 1))
-                        except (ValueError, TypeError):
-                            factor_barra = 1
-                        if factor_barra < 1:
-                            factor_barra = 1
-
-                        if factor_barra > 1:
-                            if prod.factor_conversion != factor_barra:
-                                prod.factor_conversion = factor_barra
-                                changed = True
-                            if unidad_barra and prod.unidad_empaque != unidad_barra:
+                        if es_empaque_barcode:
+                            # Guardar en codigo_barras_empaque — el scan aplicará factor
+                            if prod.codigo_barras_empaque != codigo_barras and es_ean_real:
+                                prod.codigo_barras_empaque = codigo_barras
                                 prod.unidad_empaque = unidad_barra
                                 changed = True
+                        else:
+                            # Barcode de unidad suelta — preferir EAN real
+                            tiene_ean_actual = (prod.codigo_barras or '').isdigit() and len(prod.codigo_barras or '') >= 8
+                            if prod.codigo_barras != codigo_barras:
+                                if es_ean_real or not tiene_ean_actual:
+                                    prod.codigo_barras = codigo_barras
+                                    changed = True
 
                         if changed:
                             actualizados += 1

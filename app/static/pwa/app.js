@@ -1907,25 +1907,31 @@ function renderItemsRecepcion(items) {
     const pct = it.cantidad_ordenada > 0 ? Math.min((it.cantidad_recibida / it.cantidad_ordenada) * 100, 100) : 0;
     const completo = it.cantidad_recibida >= it.cantidad_ordenada;
     const factor = it.factor_conversion || 1;
-    const tieneEmpaque = factor > 1 && (it.empaques_escaneados || 0) > 0;
-    const unidadEmpaque = it.unidad_empaque || 'emp';
-    const conteoEmpaque = tieneEmpaque
-      ? `<div style="font-size:12px;color:#facc15;margin-top:2px;">${it.empaques_escaneados} ${unidadEmpaque} / ${it.cantidad_recibida} und</div>`
-      : '';
+    const empaques = it.empaques_escaneados || 0;
+    const unidadEmpaque = (it.unidad_empaque || '').trim() || 'emp';
+    const modoEmpaque = factor > 1;
+
+    // Modo empaque: número grande = paquetes, fracción mediana = unidades
+    const contadorDerecha = modoEmpaque ? `
+      <div style="text-align:right;flex-shrink:0;padding-left:8px;">
+        <div style="font-size:42px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${empaques}</div>
+        <div style="font-size:13px;font-weight:700;color:${completo ? '#4ade80' : '#facc15'};">${it.cantidad_recibida}/${it.cantidad_ordenada} und</div>
+        <div style="font-size:10px;color:#6b7280;">${unidadEmpaque} · ×${factor}</div>
+      </div>` : `
+      <div style="text-align:right;flex-shrink:0;padding-left:8px;">
+        <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${it.cantidad_recibida}/${it.cantidad_ordenada}</div>
+      </div>`;
+
     return `
       <div id="item-rec-${it.producto_id}"
         style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
         <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div style="min-width:0;">
+          <div style="min-width:0;flex:1;">
             <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${it.producto_nombre || it.producto_codigo}</div>
             <div style="font-size:11px;color:#555;">${it.producto_codigo}</div>
-            ${conteoEmpaque}
             ${it.destino === 'CROSS_DOCK' ? '<div style="font-size:11px;color:#60a5fa;margin-top:4px;">↔ CROSS-DOCK</div>' : ''}
           </div>
-          <div style="text-align:right;flex-shrink:0;padding-left:8px;">
-            <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${it.cantidad_recibida}/${it.cantidad_ordenada}</div>
-            ${factor > 1 ? `<div style="font-size:10px;color:#6b7280;">×${factor} und/${unidadEmpaque}</div>` : ''}
-          </div>
+          ${contadorDerecha}
         </div>
         <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
           <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.3s;"></div>
