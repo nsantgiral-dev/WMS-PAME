@@ -63,6 +63,19 @@ def _run_sync(app):
                                         row.get('f120_id_barras') or
                                         row.get('f120_barras') or '').strip() or None
 
+                        # Unidad de empaque y factor de conversión
+                        # Siesa puede exponer el factor bajo distintos alias — probamos en orden
+                        unidad_empaque = (row.get('f120_id_unidad_empaque') or '').strip() or None
+                        factor_raw = (row.get('f421_factor') or
+                                      row.get('f121_factor') or
+                                      row.get('factor') or None)
+                        try:
+                            factor_conversion = int(float(factor_raw)) if factor_raw else 1
+                        except (ValueError, TypeError):
+                            factor_conversion = 1
+                        if factor_conversion < 1:
+                            factor_conversion = 1
+
                         if tipo_inv and unidad_negocio is None:
                             tipos_sin_mapeo.add(tipo_inv)
 
@@ -95,6 +108,12 @@ def _run_sync(app):
                             if codigo_barras and prod.codigo_barras != codigo_barras:
                                 prod.codigo_barras = codigo_barras
                                 changed = True
+                            if unidad_empaque and prod.unidad_empaque != unidad_empaque:
+                                prod.unidad_empaque = unidad_empaque
+                                changed = True
+                            if factor_conversion > 1 and prod.factor_conversion != factor_conversion:
+                                prod.factor_conversion = factor_conversion
+                                changed = True
                             if changed:
                                 actualizados += 1
                         else:
@@ -107,6 +126,8 @@ def _run_sync(app):
                                 unidad_medida=unidad_medida or 'UND',
                                 unidad_negocio_id=unidad_negocio,
                                 codigo_barras=codigo_barras,
+                                unidad_empaque=unidad_empaque,
+                                factor_conversion=factor_conversion,
                             )
                             db.session.add(prod)
                             creados += 1

@@ -306,6 +306,33 @@ def debug_clasificacion_raw():
     }), 200
 
 
+@siesa_bp.route('/debug-items-raw', methods=['GET'])
+@jwt_required()
+def debug_items_raw():
+    """
+    Inspecciona los campos reales que devuelve API_v2_Items.
+    Úsalo para confirmar el nombre exacto del factor de conversión
+    (f421_factor, f121_factor, factor u otro alias Connekta).
+    Acepta ?pagina=1 (default: 1).
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    pagina = request.args.get('pagina', 1, type=int)
+    resultado = connekta.get_items_catalogo(pagina)
+    tabla = resultado.get('detalle', {}).get('Table', [])
+    if not tabla:
+        return jsonify({'error': 'Sin datos — verifica credenciales Connekta', 'raw': resultado}), 200
+    campos = list(tabla[0].keys())
+    campos_factor = [c for c in campos if 'factor' in c.lower() or 'unidad_emp' in c.lower() or 'empaque' in c.lower()]
+    return jsonify({
+        'api': connekta.api_items if hasattr(connekta, 'api_items') else 'API_v2_Items',
+        'total_filas_pagina': len(tabla),
+        'campos_relevantes_empaque': campos_factor,
+        'todos_los_campos': campos,
+        'muestra_primeros_3': tabla[:3]
+    }), 200
+
+
 @siesa_bp.route('/debug-monitor-facturas', methods=['GET'])
 @jwt_required()
 def debug_monitor_facturas():
