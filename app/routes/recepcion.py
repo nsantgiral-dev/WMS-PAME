@@ -128,6 +128,23 @@ def confirmar_recepcion(id):
         return jsonify({'error': str(e)}), 500
 
 
+@recepcion_bp.route('/<int:id>/reiniciar-conteo', methods=['PUT'])
+@jwt_required()
+def reiniciar_conteo(id):
+    from app.extensions import db
+    from app.models.recepcion import ItemRecepcion
+    recepcion = RecepcionMercancia.query.get_or_404(id)
+    if recepcion.estado not in ('EN_PROCESO', 'ABIERTA'):
+        return jsonify({'error': 'Solo se puede reiniciar una recepción en proceso'}), 400
+    for item in recepcion.items:
+        item.cantidad_recibida = 0
+        item.empaques_escaneados = 0
+        item.destino = None
+        item.ubicacion_id = None
+    db.session.commit()
+    return jsonify({'mensaje': 'Conteo reiniciado', 'recepcion': recepcion.to_dict()}), 200
+
+
 @recepcion_bp.route('/<int:id>/cancelar', methods=['PUT'])
 @jwt_required()
 def cancelar_recepcion(id):

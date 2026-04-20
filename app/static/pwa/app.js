@@ -2107,6 +2107,11 @@ function renderEscaneoRecepcion(rec) {
         ${btnTexto}
       </button>
 
+      <button onclick="reiniciarConteoRecepcion()"
+        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#ef4444;border:1px solid #7f1d1d;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+        🔄 Reiniciar conteo
+      </button>
+
       <button onclick="volverListaRecepciones()"
         style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
         Guardar y salir (continuar más tarde)
@@ -2372,6 +2377,18 @@ async function confirmarRecepcionActiva() {
     alerta(e.message || 'Error confirmando', 'error');
     if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
   }
+}
+
+async function reiniciarConteoRecepcion() {
+  if (!RECEPCION_ACTUAL) return;
+  if (!confirm('¿Reiniciar el conteo? Se borrará todo lo escaneado en esta recepción.')) return;
+  try {
+    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/reiniciar-conteo', {});
+    if (r.error) { alerta(r.error, 'error'); return; }
+    RECEPCION_ACTUAL = r.recepcion;
+    renderEscaneoRecepcion(r.recepcion);
+    alerta('Conteo reiniciado — vuelve a escanear', 'info');
+  } catch (e) { alerta('Error reiniciando conteo', 'error'); }
 }
 
 function volverListaRecepciones() {
