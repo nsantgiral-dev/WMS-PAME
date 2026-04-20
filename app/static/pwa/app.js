@@ -1625,6 +1625,8 @@ async function cargarRecepciones(silencioso = false) {
       get('/api/recepcion/?estado=EN_PROCESO').catch(() => ({ recepciones: [] }))
     ]);
     SIESA_OCS = siesa.ordenes || [];
+    // Guard post-await: el operario pudo haber entrado a escaneo mientras las APIs respondían
+    if (RECEPCION_ACTUAL || _RECEPCION_EN_CONFIRMACION) return;
     renderListaRecepciones(siesa, db.recepciones || []);
   } catch (e) {
     if (!silencioso) el.innerHTML = '<div style="color:#ef4444;">Error cargando</div>';
