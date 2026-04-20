@@ -567,11 +567,12 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_entrada_oc or None,        # tipo doc movimiento (pos 22-25)
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': self.bodega,
+                    'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_unidad_medida': i.get('unidad_medida') or self.uom_default,  # UOM obligatoria (pos 128-132)
-                    'f421_fecha_entrega': fecha_hoy,
+                    # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
+                    'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
+                    'f421_fecha_entrega': i.get('fecha_entrega') or fecha_hoy,
                     'f470_cant_base': round(float(i.get('cantidad_recibida') or 0), 4),  # 4 decimales spec Siesa
                     'f470_cant_2': 0.0,
                     'f470_notas': None,

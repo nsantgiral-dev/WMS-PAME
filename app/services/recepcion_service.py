@@ -341,12 +341,19 @@ class RecepcionService:
         tasa_local = 0.0
         tercero_comprador = None
         sucursal_comprador = None
+        # items_oc: mapa por código de ítem → {bodega, uom, fecha_entrega} leídos de la OC real.
+        # Siesa exige que estos 3 campos coincidan exactamente con los movimientos de la OC original.
+        items_oc = {}
         try:
             consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
             resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
             rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
+            header_leido = False
             for row in rows_oc:
-                if str(row.get('f420_consec_docto', '')).strip() == str(consec).strip():
+                if str(row.get('f420_consec_docto', '')).strip() != str(consec).strip():
+                    continue
+                # Header: solo la primera fila de esta OC
+                if not header_leido:
                     proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
                     sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
                     moneda_docto = row.get('f420_id_moneda_docto') or None
@@ -360,10 +367,21 @@ class RecepcionService:
                         recepcion.proveedor_codigo = proveedor_id
                     if sucursal_prov:
                         recepcion.sucursal_prov_siesa = sucursal_prov
-                    break
+                    header_leido = True
+                    # Log campos disponibles para identificar nombres de UOM y fecha_entrega
+                    logger.warning(f'[RECEPCION] Campos OC row: {list(row.keys())}')
+                # Por ítem: bodega, UOM y fecha_entrega que Siesa exige en los Movimientos
+                ref = row.get('f120_referencia', '').strip()
+                if ref:
+                    items_oc[ref] = {
+                        'bodega': row.get('f150_id', '').strip() or None,
+                        'uom': (row.get('f421_id_unidad_medida') or row.get('f120_id_unidad_medida_inventario') or '').strip() or None,
+                        'fecha_entrega': row.get('f421_fecha_entrega', '').strip() or None,
+                    }
             logger.warning(
                 f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} sucursal={sucursal_prov!r} '
-                f'moneda={moneda_docto!r} comprador={tercero_comprador!r} remision={remision!r}'
+                f'moneda={moneda_docto!r} comprador={tercero_comprador!r} remision={remision!r} '
+                f'items_oc={items_oc!r}'
             )
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
@@ -377,7 +395,11 @@ class RecepcionService:
             'cantidad_ordenada': i.cantidad_ordenada,
             'lote': i.lote,
             'es_parcial': i.es_faltante(),
-            'destino': i.destino
+            'destino': i.destino,
+            # Buscar por código WMS primero, luego por código Siesa
+            'bodega': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('bodega'),
+            'uom': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('uom'),
+            'fecha_entrega': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('fecha_entrega'),
         } for i in recepcion.items]
 
         try:
