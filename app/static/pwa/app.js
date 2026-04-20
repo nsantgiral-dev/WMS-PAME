@@ -1177,6 +1177,9 @@ function renderTarea(t) {
         <div style="font-size:12px;color:#4ade80;font-weight:700;margin-bottom:6px;letter-spacing:1px;">EMPAQUE SUGERIDO</div>
         <div id="descomp-texto" style="font-size:22px;font-weight:800;color:#fff;">Calculando...</div>
         <div id="descomp-hint" style="font-size:12px;color:#166534;margin-top:4px;"></div>
+        <button id="btn-generar-lpn-picking" onclick="_generarLPNEnPicking()" style="display:none;margin-top:10px;width:100%;padding:10px;font-size:13px;font-weight:700;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:10px;cursor:pointer;">
+          📦 Paca sin etiqueta — Generar LPN e imprimir
+        </button>
       </div>` : ''}
 
       ${!esConteo ? `
@@ -1245,6 +1248,7 @@ function renderTarea(t) {
 async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
   const cardTexto = document.getElementById('descomp-texto');
   const cardHint  = document.getElementById('descomp-hint');
+  const btnLPN    = document.getElementById('btn-generar-lpn-picking');
   if (!cardTexto) return;
   try {
     const d = await post('/api/empaques/descomponer', {
@@ -1252,14 +1256,13 @@ async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
       almacen_id: almacenId || null,
       cantidad_solicitada: cantidad
     });
-    if (!cardTexto) return; // operario ya avanzó
+    if (!cardTexto) return; // operario ya avanzó a otra tarea
     if (!d || d.factor_empaque <= 1) {
-      // Sin empaques configurados — mostrar solo unidades
       cardTexto.textContent = `${cantidad} UND`;
       cardHint.textContent  = 'Recoger unidad por unidad';
       return;
     }
-    const lpns   = d.lpns || 0;
+    const lpns    = d.lpns || 0;
     const sueltas = d.sueltas || 0;
     const unidad  = d.unidad_empaque || 'PACA';
     let texto = '';
@@ -1272,12 +1275,62 @@ async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
     }
     cardTexto.textContent = texto;
     cardHint.textContent  = `Escanea ${unidad.toLowerCase()} por ${unidad.toLowerCase()} — cada scan = ${d.factor_empaque} und`;
+
+    // Lazy labeling: si hay pacas pero el producto no tiene LPNs activos,
+    // mostrar el botón para que el picker genere la etiqueta en el momento.
+    if (btnLPN && lpns > 0) {
+      // Verificar si ya existen LPNs activos para este producto en bodega
+      try {
+        const lpnsActivos = await get(`/api/empaques/lpn/producto/${productoId}?almacen_id=${almacenId || ''}`);
+        const hayLPNs = (lpnsActivos.lpns || []).length > 0;
+        if (!hayLPNs) {
+          btnLPN.style.display = 'block';
+          // Guardar contexto para el generador
+          btnLPN._productoId = productoId;
+          btnLPN._almacenId  = almacenId;
+          btnLPN._factor     = d.factor_empaque;
+          btnLPN._unidad     = unidad;
+        }
+      } catch (_) { /* no bloquear el flujo si falla */ }
+    }
   } catch (_) {
     if (cardTexto) {
       cardTexto.textContent = `${cantidad} UND`;
       cardHint.textContent  = '';
     }
   }
+}
+
+async function _generarLPNEnPicking() {
+  const btn = document.getElementById('btn-generar-lpn-picking');
+  if (!btn || !TAREA_ACTUAL) return;
+
+  const productoId = btn._productoId;
+  const almacenId  = btn._almacenId;
+  const factor     = btn._factor || 1;
+  const unidad     = btn._unidad || 'PACA';
+
+  const cantStr = prompt(
+    `Paca sin etiqueta detectada.\n` +
+    `¿Cuántas unidades tiene esta ${unidad}?\n` +
+    `(Factor estándar: ${factor} und)`
+  );
+  if (cantStr === null) return;
+  const cantidad = parseInt(cantStr) || factor;
+
+  try {
+    const r = await post('/api/empaques/lpn/generar', {
+      producto_id: productoId,
+      cantidad_actual: cantidad,
+      almacen_id: almacenId || null,
+      notas: `Etiquetado en picking — tarea ${TAREA_ACTUAL.id}`
+    });
+    if (r.error) { alerta(r.error, 'error'); return; }
+    alerta(`LPN ${r.lpn.codigo} generado — imprimiendo etiqueta...`, 'exito');
+    imprimirEtiquetaLPN(r.lpn, TAREA_ACTUAL.producto_nombre);
+    // Ocultar el botón — ya tiene etiqueta
+    btn.style.display = 'none';
+  } catch (e) { alerta('Error generando LPN', 'error'); }
 }
 
 // ─── Quagga2 — debounce interno ───────────────────────────────────────────────
@@ -2281,7 +2334,8 @@ async function _seleccionarProductoManual(productoId, nombre, modal) {
         notas: 'Generado en recepción manual'
       });
       if (lpnRes.error) { alerta(lpnRes.error, 'error'); return; }
-      alerta(`LPN ${lpnRes.lpn.codigo} generado — imprime la etiqueta y pégala en la paca`, 'exito');
+      alerta(`LPN ${lpnRes.lpn.codigo} generado — imprimiendo etiqueta...`, 'exito');
+      imprimirEtiquetaLPN(lpnRes.lpn, nombre);
       await _registrarEscaneoRecepcion(productoId, cantidad, false, 'PACA');
     } catch(e) { alerta('Error generando LPN', 'error'); }
   } else {
@@ -3126,6 +3180,41 @@ async function bultosConfirmar() {
     errEl.textContent = 'Error de conexión';
     if (btnConf) { btnConf.disabled = false; btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
   }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ETIQUETA LPN — imprime la etiqueta de una paca/caja física
+// Se llama desde recepción (manual y DUN-14) y desde picking
+// (lazy labeling de inventario heredado sin etiqueta).
+// ─────────────────────────────────────────────────────────────
+
+function imprimirEtiquetaLPN(lpn, productoNombre) {
+  const area = document.getElementById('print-area');
+  if (!area) return;
+
+  const hoy = new Date().toLocaleDateString('es-CO');
+  const uid = `lpn-bc-${lpn.id || Date.now()}`;
+
+  area.innerHTML = `
+    <div class="etiqueta-lpn">
+      <div class="el-titulo">BODEGA — PACA / CAJA</div>
+      <svg id="${uid}"></svg>
+      <div class="el-codigo">${lpn.codigo}</div>
+      <div class="el-producto">${productoNombre || lpn.producto_nombre || ''}</div>
+      <div class="el-cantidad">${lpn.cantidad_actual} UND</div>
+      <div class="el-fecha">${hoy}</div>
+    </div>`;
+
+  try {
+    JsBarcode(`#${uid}`, lpn.codigo, {
+      format: 'CODE128', displayValue: false, height: 55, margin: 0
+    });
+  } catch (_) {}
+
+  setTimeout(() => {
+    window.print();
+    setTimeout(() => { area.innerHTML = ''; }, 1000);
+  }, 300);
 }
 
 function empImprimirEtiquetas(bultos, meta) {
