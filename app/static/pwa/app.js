@@ -1153,6 +1153,7 @@ function renderTarea(t) {
   const colores = { PICKING: '#1d4ed8', PACKING: '#7c3aed', CONTEO: '#b45309' };
   const color = colores[t.tipo] || '#333';
   const esConteo = t.tipo === 'CONTEO';
+  const esPicking = t.tipo === 'PICKING';
   const pct = t.cantidad_requerida ? Math.min((t.cantidad_escaneada / t.cantidad_requerida) * 100, 100) : 0;
   const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
 
@@ -1170,6 +1171,13 @@ function renderTarea(t) {
         <div style="font-size:26px;font-weight:700;">${t.producto_codigo}</div>
         <div style="font-size:15px;color:#aaa;">${t.producto_nombre}</div>
       </div>
+
+      ${esPicking && t.producto_id ? `
+      <div id="card-descomposicion" style="background:#0a1a0a;border:2px solid #166534;border-radius:16px;padding:16px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:12px;color:#4ade80;font-weight:700;margin-bottom:6px;letter-spacing:1px;">EMPAQUE SUGERIDO</div>
+        <div id="descomp-texto" style="font-size:22px;font-weight:800;color:#fff;">Calculando...</div>
+        <div id="descomp-hint" style="font-size:12px;color:#166534;margin-top:4px;"></div>
+      </div>` : ''}
 
       ${!esConteo ? `
       <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
@@ -1227,6 +1235,49 @@ function renderTarea(t) {
         <div style="font-size:11px;color:#78350f;margin-top:4px;">Clase ${t.conteo_intercalado.clasificacion} · Hazlo al terminar el picking</div>
       </div>` : ''}
     </div>`;
+
+  // Cargar descomposición de empaques en segundo plano
+  if (esPicking && t.producto_id) {
+    _cargarDescomposicionPicking(t.producto_id, t.almacen_id, t.cantidad_requerida);
+  }
+}
+
+async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
+  const cardTexto = document.getElementById('descomp-texto');
+  const cardHint  = document.getElementById('descomp-hint');
+  if (!cardTexto) return;
+  try {
+    const d = await post('/api/empaques/descomponer', {
+      producto_id: productoId,
+      almacen_id: almacenId || null,
+      cantidad_solicitada: cantidad
+    });
+    if (!cardTexto) return; // operario ya avanzó
+    if (!d || d.factor_empaque <= 1) {
+      // Sin empaques configurados — mostrar solo unidades
+      cardTexto.textContent = `${cantidad} UND`;
+      cardHint.textContent  = 'Recoger unidad por unidad';
+      return;
+    }
+    const lpns   = d.lpns || 0;
+    const sueltas = d.sueltas || 0;
+    const unidad  = d.unidad_empaque || 'PACA';
+    let texto = '';
+    if (lpns > 0 && sueltas > 0) {
+      texto = `${lpns} ${unidad} + ${sueltas} UND`;
+    } else if (lpns > 0) {
+      texto = `${lpns} ${unidad}`;
+    } else {
+      texto = `${sueltas} UND sueltas`;
+    }
+    cardTexto.textContent = texto;
+    cardHint.textContent  = `Escanea ${unidad.toLowerCase()} por ${unidad.toLowerCase()} — cada scan = ${d.factor_empaque} und`;
+  } catch (_) {
+    if (cardTexto) {
+      cardTexto.textContent = `${cantidad} UND`;
+      cardHint.textContent  = '';
+    }
+  }
 }
 
 // ─── Quagga2 — debounce interno ───────────────────────────────────────────────
@@ -1367,6 +1418,14 @@ async function procesarScan(codigo) {
   }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
+
+  // ── Picking: resolver empaque antes de registrar escaneo ─────────────────
+  if (TAREA_ACTUAL.tipo === 'PICKING') {
+    await _procesarScanPicking(codigo);
+    return;
+  }
+
+  // Otros tipos (CONTEO, PACKING) — flujo original
   try {
     const r = await post('/api/mobile/escanear', {
       tarea_id: TAREA_ACTUAL.id,
@@ -1376,21 +1435,108 @@ async function procesarScan(codigo) {
     });
     if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
     beepOk();
-    const contador = document.getElementById('contador');
-    if (contador) {
-      contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
-        ? r.cantidad_contada
-        : r.cantidad_actual + '/' + r.cantidad_requerida;
-    }
-    const barra = document.getElementById('barra');
-    if (barra && r.cantidad_requerida) {
-      barra.style.width = Math.min((r.cantidad_actual / r.cantidad_requerida) * 100, 100) + '%';
-    }
-    if (r.puede_confirmar) {
-      const btn = document.getElementById('btn-ok');
-      if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#16a34a'; }
-      alerta(r.mensaje || '¡Listo!', 'exito');
-    }
+    _actualizarContadorPicking(r);
+  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+}
+
+async function _procesarScanPicking(codigo) {
+  // 1. Preguntar al sistema qué es este código
+  let scan;
+  try {
+    scan = await get(`/api/empaques/scan/${encodeURIComponent(codigo)}`);
+  } catch (_) {
+    scan = { tipo: 'NO_ENCONTRADO' };
+  }
+
+  const tipo = scan.tipo || 'NO_ENCONTRADO';
+
+  if (tipo === 'GS1_AMBIGUO') {
+    // Mismo código → múltiples empaques → operario debe elegir
+    _modalAmbiguedadPicking(codigo, scan.empaques || []);
+    return;
+  }
+
+  // Calcular cantidad a registrar según tipo de código
+  let cantidad = 1;
+  let etiqueta = '';
+  if (tipo === 'GS1_UNICO') {
+    cantidad = scan.factor_conversion || 1;
+    etiqueta = cantidad > 1 ? ` (+${cantidad} und — ${scan.unidad_medida || 'EMPAQUE'})` : '';
+  } else if (tipo === 'LPN') {
+    cantidad = scan.cantidad_actual || 1;
+    etiqueta = ` (LPN: ${cantidad} und)`;
+  }
+  // EAN_BASE o NO_ENCONTRADO → cantidad = 1
+
+  try {
+    const r = await post('/api/mobile/escanear', {
+      tarea_id: TAREA_ACTUAL.id,
+      tipo: 'PICKING',
+      codigo,
+      cantidad
+    });
+    if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+    beepOk();
+    if (etiqueta) alerta(`Registrado${etiqueta}`, 'exito');
+    _actualizarContadorPicking(r);
+  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+}
+
+function _actualizarContadorPicking(r) {
+  const contador = document.getElementById('contador');
+  if (contador) {
+    contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
+      ? r.cantidad_contada
+      : r.cantidad_actual + '/' + r.cantidad_requerida;
+  }
+  const barra = document.getElementById('barra');
+  if (barra && r.cantidad_requerida) {
+    barra.style.width = Math.min((r.cantidad_actual / r.cantidad_requerida) * 100, 100) + '%';
+  }
+  if (r.puede_confirmar) {
+    const btn = document.getElementById('btn-ok');
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#16a34a'; }
+    alerta(r.mensaje || '¡Listo!', 'exito');
+  }
+}
+
+function _modalAmbiguedadPicking(codigo, empaques) {
+  const opciones = empaques.map(e => `
+    <button onclick="_elegirEmpaquePicking('${codigo}', ${e.factor_conversion}, '${e.unidad_medida}', this.closest('.modal-ambig'))"
+      style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
+      ${e.unidad_medida} — ${e.factor_conversion} und
+      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${e.producto_nombre || ''}</div>
+    </button>`).join('');
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-ambig';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:flex-end;';
+  modal.innerHTML = `
+    <div style="background:#0a0a0a;border-top:2px solid #1d4ed8;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
+      <div style="font-size:16px;font-weight:700;color:#60a5fa;margin-bottom:4px;">Código en múltiples empaques</div>
+      <div style="font-size:13px;color:#666;margin-bottom:16px;">${codigo} — ¿Cuál estás recogiendo?</div>
+      ${opciones}
+      <button onclick="this.closest('.modal-ambig').remove()"
+        style="width:100%;padding:12px;font-size:14px;background:#111;color:#666;border:1px solid #222;border-radius:10px;cursor:pointer;margin-top:4px;">
+        Cancelar
+      </button>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function _elegirEmpaquePicking(codigo, factor, unidad, modal) {
+  if (modal) modal.remove();
+  try {
+    const r = await post('/api/mobile/escanear', {
+      tarea_id: TAREA_ACTUAL.id,
+      tipo: 'PICKING',
+      codigo,
+      cantidad: factor
+    });
+    if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+    beepOk();
+    alerta(`+${factor} und — ${unidad}`, 'exito');
+    _actualizarContadorPicking(r);
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
