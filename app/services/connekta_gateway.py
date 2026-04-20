@@ -121,6 +121,14 @@ class ConnektaGateway:
             'ConniToken': self.itoken
         }
 
+    @staticmethod
+    def _fmt_fecha(valor: str) -> str:
+        """Normaliza cualquier formato de fecha Siesa a YYYYMMDD (8 dígitos, sin separadores)."""
+        if not valor:
+            return ''
+        solo_digitos = ''.join(c for c in str(valor) if c.isdigit())
+        return solo_digitos[:8] if len(solo_digitos) >= 8 else ''
+
     def _simular(self, operacion: str, payload: dict = None):
         logger.info(f'[CONNEKTA SIMULADO] {operacion}')
         return {
@@ -572,7 +580,7 @@ class ConnektaGateway:
                     'f470_id_lote': i.get('lote') or None,
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
-                    'f421_fecha_entrega': i.get('fecha_entrega') or fecha_hoy,
+                    'f421_fecha_entrega': self._fmt_fecha(i.get('fecha_entrega')) or fecha_hoy,
                     'f470_cant_base': round(float(i.get('cantidad_recibida') or 0), 4),  # 4 decimales spec Siesa
                     'f470_cant_2': 0.0,
                     'f470_notas': None,
