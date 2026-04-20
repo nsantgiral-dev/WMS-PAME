@@ -661,8 +661,12 @@ def buscar_producto(codigo):
             'error': f"Código '{codigo}' no encontrado. Si es un EAN nuevo, ejecuta Sync EAN en Admin → Siesa."
         }), 404
 
-    es_empaque = bool(prod.codigo_barras_empaque and codigo == prod.codigo_barras_empaque)
     factor = prod.factor_conversion or 1
+    # es_empaque = barcode explícito de empaque, O factor>1 (la OC ya cargó el factor)
+    es_empaque = bool(
+        (prod.codigo_barras_empaque and codigo == prod.codigo_barras_empaque)
+        or factor > 1
+    )
 
     return jsonify({
         'producto_id': prod.id,
