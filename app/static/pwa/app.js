@@ -1452,7 +1452,7 @@ async function _procesarScanPicking(codigo) {
 
   if (tipo === 'GS1_AMBIGUO') {
     // Mismo código → múltiples empaques → operario debe elegir
-    _modalAmbiguedadPicking(codigo, scan.empaques || []);
+    _modalAmbiguedadPicking(codigo, scan.ambiguos || []);
     return;
   }
 
@@ -2558,6 +2558,7 @@ function volverListaDevoluciones() {
 let EMP_TAREA = null;       // TareaPacking activa en el HUD
 let EMP_ITEMS = [];         // ItemPacking[] con progreso actual
 let EMP_ITEM_IDX = 0;       // índice del ítem que se está escaneando
+let EMP_EMPAQUES = {};      // producto_id → { factor, unidad } — cargado al iniciar HUD
 
 // ─────────────────────────────────────────────────────────────
 // EMPACADOR — Lista de tareas
@@ -2653,6 +2654,22 @@ async function empIniciarHUD(packingId) {
     EMP_ITEM_IDX = EMP_ITEMS.findIndex(i => !i.verificado);
     if (EMP_ITEM_IDX < 0) EMP_ITEM_IDX = 0;
 
+    // Cargar empaques de todos los ítems en paralelo (para mostrar en piezas)
+    EMP_EMPAQUES = {};
+    const almacenId = t.almacen_id || null;
+    await Promise.allSettled(EMP_ITEMS.map(async item => {
+      try {
+        const d = await post('/api/empaques/descomponer', {
+          producto_id: item.producto_id,
+          almacen_id: almacenId,
+          cantidad_solicitada: item.cantidad_esperada
+        });
+        if (d && d.factor_empaque > 1) {
+          EMP_EMPAQUES[item.producto_id] = { factor: d.factor_empaque, unidad: d.unidad_empaque || 'PIEZA' };
+        }
+      } catch (_) {}
+    }));
+
     empRenderHUDItem();
     document.getElementById('emp-hud').classList.add('activo');
     if (!/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
@@ -2723,6 +2740,7 @@ function empCerrarHUD() {
   EMP_TAREA = null;
   EMP_ITEMS = [];
   EMP_ITEM_IDX = 0;
+  EMP_EMPAQUES = {};
   empCargarTareas();
 }
 
@@ -2738,10 +2756,28 @@ function empRenderHUDItem() {
   const pendientes = EMP_ITEMS.filter(i => !i.verificado);
   const item = pendientes[0] || EMP_ITEMS[EMP_ITEM_IDX] || EMP_ITEMS[0];
 
+  // Calcular display en piezas si el producto tiene empaque
+  const emp = EMP_EMPAQUES[item.producto_id];
+  const factor = emp ? emp.factor : 1;
+  const unidad = emp ? emp.unidad : 'und';
+  const cantReal    = item.cantidad_real || 0;
+  const cantEsp     = item.cantidad_esperada || 0;
+  const piezasReal  = factor > 1 ? Math.floor(cantReal / factor) : cantReal;
+  const piezasEsp   = factor > 1 ? Math.ceil(cantEsp / factor)   : cantEsp;
+  const sueltas     = factor > 1 ? cantReal % factor : 0;
+
   document.getElementById('emp-hud-pedido').textContent = EMP_TAREA.numero_pedido_siesa;
   document.getElementById('emp-hud-producto').textContent = item.producto_nombre || item.producto_codigo || '—';
-  document.getElementById('emp-hud-contador').textContent = item.cantidad_real || 0;
-  document.getElementById('emp-hud-de').textContent = `de ${item.cantidad_esperada}`;
+
+  if (factor > 1) {
+    // Mostrar en piezas de empaque
+    document.getElementById('emp-hud-contador').textContent = piezasReal;
+    document.getElementById('emp-hud-de').textContent =
+      `de ${piezasEsp} ${unidad}${sueltas > 0 ? ` (+${sueltas} sueltas)` : ''}`;
+  } else {
+    document.getElementById('emp-hud-contador').textContent = cantReal;
+    document.getElementById('emp-hud-de').textContent = `de ${cantEsp}`;
+  }
   document.getElementById('emp-hud-items').textContent = `${verificados} de ${total} ítems verificados`;
 
   const pct = total ? Math.round(verificados / total * 100) : 0;
@@ -2765,12 +2801,42 @@ function empRenderHUDItem() {
 async function empProcesarEscaneo(codigo) {
   if (!EMP_TAREA) return;
 
+  // ── Resolver empaque antes de registrar ───────────────────────────────────
+  // Si el operario escanea un DUN-14 (caja/paca), necesitamos:
+  //   1. Identificar el producto real (no el barcode de la caja)
+  //   2. Enviar cantidad = factor (no 1) al backend
+  let codigoParaBackend = codigo;
+  let cantidadParaBackend = 1;
+  let etiquetaEmpaque = '';
+
+  try {
+    const scan = await get(`/api/empaques/scan/${encodeURIComponent(codigo)}`);
+    const tipo = scan.tipo || 'NO_ENCONTRADO';
+
+    if (tipo === 'GS1_UNICO' && scan.producto && scan.factor > 1) {
+      // Barcode de empaque → enviar código de producto y factor como cantidad
+      codigoParaBackend = scan.producto.codigo;
+      cantidadParaBackend = scan.factor;
+      etiquetaEmpaque = `${scan.empaque?.unidad_medida || 'PIEZA'} completa — ${scan.factor} und`;
+    } else if (tipo === 'LPN' && scan.producto) {
+      codigoParaBackend = scan.producto.codigo;
+      cantidadParaBackend = scan.factor || 1;
+      etiquetaEmpaque = `LPN — ${cantidadParaBackend} und`;
+    } else if (tipo === 'GS1_AMBIGUO') {
+      _modalAmbiguedadPackingEmp(codigo, scan.ambiguos || []);
+      return;
+    }
+    // EAN_BASE o NO_ENCONTRADO → flujo original (codigoParaBackend = codigo, cantidad = 1)
+  } catch (_) {
+    // Si /api/empaques/scan falla, continuar con flujo original
+  }
+
   try {
     const r = await post('/api/mobile/escanear', {
       tarea_id: EMP_TAREA.id,
       tipo: 'PACKING',
-      codigo: codigo,
-      cantidad: 1
+      codigo: codigoParaBackend,
+      cantidad: cantidadParaBackend
     });
 
     if (r.error) {
@@ -2778,25 +2844,20 @@ async function empProcesarEscaneo(codigo) {
       return;
     }
 
-    // Actualizar estado local del ítem — match por producto_id (más confiable que barcode vs código)
+    // Actualizar estado local del ítem
     const item = EMP_ITEMS.find(i =>
       (r.producto_id && i.producto_id === r.producto_id) ||
-      (r.producto_codigo && i.producto_codigo === r.producto_codigo) ||
-      i.producto_codigo === codigo
+      (r.producto_codigo && i.producto_codigo === r.producto_codigo)
     );
     if (item) {
       item.cantidad_real = r.cantidad_actual;
       item.verificado = r.item_completado;
     }
 
-    empFlash('verde', null);
-    if (!r.item_completado && item) {
-      document.getElementById('emp-hud-contador').textContent = r.cantidad_actual;
-    }
+    empFlash('verde', etiquetaEmpaque || null);
 
     // Si todos los ítems están listos
     if (r.todos_completados) {
-      // Recargar estado real del servidor
       const detalle = await get(`/api/packing/${EMP_TAREA.id}`);
       EMP_ITEMS = detalle.items || EMP_ITEMS;
     }
@@ -2820,11 +2881,19 @@ function empFlash(color, mensaje) {
   flash.style.background = esVerde ? '#15803d' : '#991b1b';
   flash.style.opacity = '0.7';
 
-  if (!esVerde && mensaje) {
-    // Sonido de error: oscilación roja con mensaje
+  const msgEl = document.getElementById('emp-hud-producto');
+  const prevText = msgEl ? msgEl.textContent : '';
+
+  if (esVerde && mensaje && msgEl) {
+    // Mostrar brevemente qué se registró (ej. "CAJA completa — 24 und")
+    msgEl.style.color = '#4ade80';
+    msgEl.textContent = mensaje;
+    setTimeout(() => {
+      msgEl.style.color = '#fff';
+      msgEl.textContent = prevText;
+    }, 900);
+  } else if (!esVerde && mensaje && msgEl) {
     hud.style.background = '#1a0000';
-    const msgEl = document.getElementById('emp-hud-producto');
-    const prevText = msgEl.textContent;
     msgEl.style.color = '#f87171';
     msgEl.textContent = '⚠ ' + mensaje;
     setTimeout(() => {
@@ -2838,6 +2907,58 @@ function empFlash(color, mensaje) {
     flash.style.opacity = '0';
     if (esVerde) hud.style.background = '#000';
   }, esVerde ? 150 : 300);
+}
+
+// ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// EMPACADOR — Modal ambigüedad de empaque en packing
+// ─────────────────────────────────────────────────────────────
+
+function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
+  // ambiguos: array de ProductoEmpaque.to_dict()
+  const opciones = ambiguos.map(e => `
+    <button onclick="_elegirEmpaquePacking('${codigo}', '${e.producto_codigo || ''}', ${e.factor_conversion}, '${e.unidad_medida}', this.closest('.modal-ambig-emp'))"
+      style="width:100%;padding:16px;font-size:18px;font-weight:700;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;margin-bottom:8px;">
+      ${e.unidad_medida} — ${e.factor_conversion} und
+      <div style="font-size:12px;color:#666;font-weight:400;margin-top:2px;">${e.producto_nombre || e.referencia_item || ''}</div>
+    </button>`).join('');
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-ambig-emp';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:flex-end;';
+  modal.innerHTML = `
+    <div style="background:#0a0a0a;border-top:2px solid #7c3aed;border-radius:20px 20px 0 0;padding:24px;width:100%;max-height:70vh;overflow-y:auto;">
+      <div style="font-size:16px;font-weight:700;color:#a78bfa;margin-bottom:4px;">Código en múltiples empaques</div>
+      <div style="font-size:13px;color:#666;margin-bottom:16px;">${codigo} — ¿Cuál estás empacando?</div>
+      ${opciones}
+      <button onclick="this.closest('.modal-ambig-emp').remove()"
+        style="width:100%;padding:12px;font-size:14px;background:#111;color:#666;border:1px solid #222;border-radius:10px;cursor:pointer;margin-top:4px;">
+        Cancelar
+      </button>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+async function _elegirEmpaquePacking(codigoBarras, productoCodigo, factor, unidad, modal) {
+  if (modal) modal.remove();
+  if (!EMP_TAREA) return;
+  try {
+    const r = await post('/api/mobile/escanear', {
+      tarea_id: EMP_TAREA.id,
+      tipo: 'PACKING',
+      codigo: productoCodigo || codigoBarras,
+      cantidad: factor
+    });
+    if (r.error) { empFlash('rojo', r.error); return; }
+    const item = EMP_ITEMS.find(i => r.producto_id && i.producto_id === r.producto_id);
+    if (item) { item.cantidad_real = r.cantidad_actual; item.verificado = r.item_completado; }
+    empFlash('verde', `${unidad} — ${factor} und`);
+    if (r.todos_completados) {
+      const detalle = await get(`/api/packing/${EMP_TAREA.id}`);
+      EMP_ITEMS = detalle.items || EMP_ITEMS;
+    }
+    empRenderHUDItem();
+  } catch (e) { empFlash('rojo', 'Error de conexión'); }
 }
 
 // ─────────────────────────────────────────────────────────────
