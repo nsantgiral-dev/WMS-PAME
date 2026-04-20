@@ -837,6 +837,78 @@ class ConnektaGateway:
             'paginacion': 'numPag=1|tamPag=200'
         })
 
+    def get_ubicaciones_siesa(self, bodega_id: str = None, pagina: int = 1):
+        """
+        API_v2_Ubicaciones (ID 43) — maestro de ubicaciones físicas de una bodega.
+
+        Campos esperados (verificar contra raw en /api/siesa/debug-ubicaciones-raw):
+          f152_id_bodega      → código de bodega  (ej. 'NB1')
+          f152_id             → código ubicación  (ej. 'PIK-01-A', 'RES-02')
+          f152_descripcion    → nombre largo      (opcional)
+          f152_cant_minima    → stock mínimo (UNDs)
+          f152_cant_maxima    → stock máximo / capacidad (UNDs)
+          f152_ind_estado     → 1=activo, 0=inactivo
+          f152_secuencia      → orden para ruteo (menor = más cerca de salida)
+
+        El tipo_zona lo deducimos del prefijo del código:
+          PIK* → PICKING   |   RES* → RESERVA   |   todo lo demás → GENERAL
+        """
+        api_name = os.getenv('CONNEKTA_API_UBICACIONES', 'API_v2_Ubicaciones')
+        params: dict = {'paginacion': f'numPag={pagina}|tamPag=200'}
+        if bodega_id:
+            params['parametros'] = f"f152_id_bodega = ''{bodega_id}''"
+        return self._get(api_name, params)
+
+    def transferir_entre_ubicaciones(self, bodega_id: str, ubicacion_origen: str,
+                                      ubicacion_destino: str, referencia_item: str,
+                                      cantidad: int, nota: str = ''):
+        """
+        Conector 173076 (TransitoSalida) — traslado interno entre ubicaciones
+        dentro de la MISMA bodega (RESERVA → PICKING).
+
+        Siesa requiere que la bodega tenga "Maneja multi ubicaciones" activo.
+        Campos clave:
+          f470_id_ubicacion_aux     → ubicación origen  (ej. 'RES-01-A')
+          f470_id_ubicacion_aux_ent → ubicación destino (ej. 'PIK-01-B')
+        """
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+
+        payload = {
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
+            'Documentos': [{
+                'F_CIA': int(self.id_cia_siesa),
+                'F_CONSEC_AUTO_REG': 1,
+                'f470_id_co': self.centro_op,
+                'f470_id_tipo_docto': self.tipo_docto_transito_salida or 'TS',
+                'f470_consec_docto': 0,
+                'f470_fecha': fecha_hoy,
+                'f470_id_bodega': bodega_id,
+                'f470_notas': nota[:200] if nota else '',
+            }],
+            'Movimientos': [{
+                'F_CIA': int(self.id_cia_siesa),
+                'F_CONSEC_AUTO_REG': 1,
+                'f470_referencia_item': referencia_item,
+                'f470_cant_base': cantidad,
+                'f470_id_bodega': bodega_id,
+                'f470_id_ubicacion_aux': ubicacion_origen,
+                'f470_id_ubicacion_aux_ent': ubicacion_destino,
+                'f470_id_motivo': 0,
+                'f470_id_concepto': 0,
+                'f470_ind_obsequio': 0,
+                'f470_ind_naturaleza': 0,
+                'f470_ind_solo_valor': 0,
+                'f470_ind_impto_asumido': 0,
+            }],
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}],
+        }
+
+        return self._post(
+            self.conector_transito_salida,
+            'TransitoSalidaUbicaciones',
+            payload,
+        )
+
     def get_stock_bodega(self, bodega_id: str):
         """API_v2_Inventarios_InvFecha — existencia real en una bodega específica.
         Tienda consulta disponibilidad en NB1 antes de armar su solicitud."""

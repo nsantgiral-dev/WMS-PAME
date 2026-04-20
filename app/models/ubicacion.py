@@ -1,6 +1,7 @@
 from datetime import datetime
 from app.extensions import db
 
+
 class Ubicacion(db.Model):
     __tablename__ = 'ubicaciones'
 
@@ -12,12 +13,31 @@ class Ubicacion(db.Model):
     estante = db.Column(db.String(10))
     nivel = db.Column(db.String(10))
     tipo = db.Column(db.String(30), default='estanteria')
+
+    # ── Campos maestros sincronizados desde Siesa (API_v2_Ubicaciones ID 43) ──
+    # Siesa es el dueño — el WMS solo obedece. No editar manualmente.
+    tipo_zona = db.Column(db.String(10), nullable=False, default='GENERAL')
+    # PICKING = piso, unidades sueltas | RESERVA = alto, LPNs sellados | GENERAL = sin rol especial
+    stock_minimo = db.Column(db.Integer, nullable=True)   # f152_cant_minima en Siesa
+    stock_maximo = db.Column(db.Integer, nullable=True)   # f152_cant_maxima en Siesa
+    secuencia_ruteo = db.Column(db.Integer, nullable=True)  # f152_secuencia — menor = primero
+
+    # capacidad_maxima se mantiene por retrocompatibilidad; stock_maximo es el campo canónico
     capacidad_maxima = db.Column(db.Integer)
+
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relaciones
     productos = db.relationship('UbicacionProducto', backref='ubicacion', lazy=True)
+
+    @property
+    def es_picking(self):
+        return self.tipo_zona == 'PICKING'
+
+    @property
+    def es_reserva(self):
+        return self.tipo_zona == 'RESERVA'
 
     def to_dict(self):
         return {
@@ -29,6 +49,10 @@ class Ubicacion(db.Model):
             'estante': self.estante,
             'nivel': self.nivel,
             'tipo': self.tipo,
+            'tipo_zona': self.tipo_zona,
+            'stock_minimo': self.stock_minimo,
+            'stock_maximo': self.stock_maximo,
+            'secuencia_ruteo': self.secuencia_ruteo,
             'capacidad_maxima': self.capacidad_maxima,
-            'activo': self.activo
+            'activo': self.activo,
         }

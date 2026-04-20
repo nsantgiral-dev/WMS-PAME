@@ -133,14 +133,25 @@ class MobileService:
                 'lote': tarea_activa.lote
             }
 
-        # Tomar siguiente tarea de la cola global — más prioritaria y más antigua
-        tarea = TareaPicking.query.filter_by(
-            estado='PENDIENTE',
-            operario_id=None
-        ).order_by(
-            TareaPicking.prioridad.desc(),
-            TareaPicking.fecha_creacion.asc()
-        ).first()
+        # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
+        # REGLA ESTRICTA: el picker solo puede ir a ubicaciones tipo_zona = PICKING o GENERAL.
+        # Las zonas RESERVA (pacas selladas en alto) son exclusivas del Abastecedor.
+        from app.models.ubicacion import Ubicacion
+        tarea = (
+            TareaPicking.query
+            .join(Ubicacion, Ubicacion.id == TareaPicking.ubicacion_id, isouter=True)
+            .filter(
+                TareaPicking.estado == 'PENDIENTE',
+                TareaPicking.operario_id.is_(None),
+                # Permitir PICKING, GENERAL, y tareas sin ubicación asignada todavía
+                db.or_(
+                    Ubicacion.id.is_(None),
+                    Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL']),
+                ),
+            )
+            .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc())
+            .first()
+        )
 
         if not tarea:
             # Sin picking pendiente — buscar conteo sin asignar
@@ -431,13 +442,22 @@ class MobileService:
             tarea = TareaPicking.query.get(tarea_id)
             if not tarea:
                 raise ValueError('Tarea no encontrada')
+            almacen_id = tarea.almacen_id
             # cantidad_manual: confirmación sin escáner (operario contó físicamente)
             cantidad = cantidad_manual if cantidad_manual is not None else tarea.cantidad_recogida
-            return PickingService.confirmar_picking(
+            resultado = PickingService.confirmar_picking(
                 tarea_id=tarea_id,
                 cantidad_recogida=cantidad,
                 usuario_id=operario_id
             ).to_dict()
+            # Disparar verificación de stock en background — puede generar TareaReposicion
+            try:
+                import threading as _t
+                from app.services.reposicion_service import verificar_stock_picking as _vsp
+                _t.Thread(target=_vsp, args=(almacen_id,), daemon=True).start()
+            except Exception as _e:
+                logger.warning(f'[MOBILE] verificar_stock_picking falló silenciosamente: {_e}')
+            return resultado
 
         elif tipo == 'PACKING':
             resultado = PackingService.confirmar_packing(tarea_id=tarea_id)
