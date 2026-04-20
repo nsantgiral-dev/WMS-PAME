@@ -205,7 +205,14 @@ async function _checkResp(r) {
   if (r.status === 401) { salir(true); throw new Error('401'); }
   if (!r.ok) {
     let msg = `Error del servidor (${r.status})`;
-    try { const d = await r.json(); msg = d.error || msg; } catch (_) {}
+    try {
+      const d = await r.json();
+      if (typeof d.error === 'object' && d.error !== null) {
+        msg = d.error.mensaje || d.error.message || JSON.stringify(d.error);
+      } else {
+        msg = d.error || msg;
+      }
+    } catch (_) {}
     const err = new Error(msg);
     err.status = r.status;
     throw err;
@@ -1795,14 +1802,72 @@ function renderListaRecepciones(siesa, dbRecs) {
   el.innerHTML = html;
 }
 
-async function crearRecepcionDesdeSiesa(idx) {
+function crearRecepcionDesdeSiesa(idx) {
   const oc = SIESA_OCS[idx];
   if (!oc) return;
   const itemsValidos = oc.items.filter(it => it.producto_id);
   if (!itemsValidos.length) { alerta('Ningún producto de la OC está en el WMS', 'error'); return; }
+  // Paso intermedio: el operario confirma el NIT del papel físico antes de escanear
+  _mostrarConfirmacionNIT(idx, oc, itemsValidos);
+}
+
+function _mostrarConfirmacionNIT(idx, oc, itemsValidos) {
+  const el = document.getElementById('contenido-recepcion');
+  if (!el) return;
+  const nitEsperado = (oc.proveedor_codigo || '').trim();
+  el.innerHTML = `
+    <div style="padding:16px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+        <button onclick="cargarRecepciones()"
+          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
+          ← Volver
+        </button>
+        <div>
+          <div style="font-size:16px;font-weight:800;">OC: ${oc.numero_oc}</div>
+          <div style="font-size:12px;color:#666;">${oc.proveedor || 'Sin proveedor'}</div>
+        </div>
+      </div>
+
+      <div style="background:#111;border-radius:12px;padding:16px;margin-bottom:16px;">
+        <div style="font-size:13px;color:#aaa;margin-bottom:12px;">
+          Antes de escanear, confirma el NIT del proveedor en el <strong style="color:#fff;">papel físico</strong> que llegó con el camión.
+        </div>
+        <label style="display:block;font-size:12px;color:#aaa;margin-bottom:4px;">NIT del proveedor *</label>
+        <input id="input-nit-prov" type="text" inputmode="numeric" placeholder="Ej: 1001196008"
+          style="width:100%;padding:14px;font-size:18px;background:#0d0d0d;border:2px solid #333;border-radius:10px;color:#fff;box-sizing:border-box;letter-spacing:1px;"
+          oninput="this.value=this.value.replace(/[^0-9]/g,'')"
+          onkeydown="if(event.key==='Enter') _confirmarNITEIniciar(${idx})">
+        <div id="nit-feedback" style="min-height:20px;margin-top:8px;font-size:12px;"></div>
+      </div>
+
+      <button onclick="_confirmarNITEIniciar(${idx})"
+        style="width:100%;padding:18px;font-size:18px;font-weight:700;background:#fff;color:#000;border:none;border-radius:12px;cursor:pointer;">
+        Confirmar NIT e iniciar escaneo →
+      </button>
+    </div>`;
+  setTimeout(() => document.getElementById('input-nit-prov')?.focus(), 100);
+}
+
+async function _confirmarNITEIniciar(idx) {
+  const oc = SIESA_OCS[idx];
+  if (!oc) return;
+  const itemsValidos = oc.items.filter(it => it.producto_id);
+
+  const nit = (document.getElementById('input-nit-prov')?.value || '').trim();
+  if (!nit) {
+    document.getElementById('nit-feedback').innerHTML = '<span style="color:#ef4444;">Ingresa el NIT del proveedor del papel físico.</span>';
+    return;
+  }
+
+  const nitEsperado = (oc.proveedor_codigo || '').trim();
+  if (nitEsperado && nit !== nitEsperado) {
+    document.getElementById('nit-feedback').innerHTML =
+      `<span style="color:#ef4444;">⚠ El NIT ingresado (<strong>${nit}</strong>) no coincide con la OC en Siesa (<strong>${nitEsperado}</strong>). Verifica el papel.</span>`;
+    return;
+  }
 
   const el = document.getElementById('contenido-recepcion');
-  if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#666;">Creando recepción...</div>';
+  if (el) el.innerHTML = '<div style="text-align:center;padding:60px;color:#666;">Validando proveedor en Siesa...</div>';
 
   try {
     const r = await post('/api/siesa/iniciar-recepcion', {
@@ -1811,15 +1876,18 @@ async function crearRecepcionDesdeSiesa(idx) {
       consec_docto: oc.consec_docto,
       co: oc.co,
       proveedor: oc.proveedor,
-      proveedor_codigo: oc.proveedor_codigo || '',
+      proveedor_codigo: nit,
+      sucursal_prov: oc.sucursal_prov || '',
       cond_pago: oc.cond_pago || '',
       almacen_id: ALMACEN_ID,
-      items: itemsValidos
+      items: itemsValidos,
+      nit_confirmado: nit
     });
     if (r.error) { alerta(r.error, 'error'); cargarRecepciones(); return; }
+    if (r.advertencias?.length) r.advertencias.forEach(a => alerta(a, 'advertencia'));
     RECEPCION_ACTUAL = r.recepcion;
     renderEscaneoRecepcion(r.recepcion);
-  } catch (e) { alerta(e.message || 'Error creando recepción', 'error'); cargarRecepciones(); }
+  } catch (e) { alerta(e.message || 'Error iniciando recepción', 'error'); cargarRecepciones(); }
 }
 
 async function continuarRecepcion(id) {
@@ -1883,7 +1951,8 @@ function renderEscaneoRecepcion(rec) {
         <label style="display:block;font-size:12px;color:#aaa;margin-bottom:4px;">N° Remisión o Factura del proveedor *</label>
         <input id="input-remision-prov" type="text" maxlength="12" placeholder="Ej: REM001234"
           style="width:100%;padding:12px;font-size:16px;background:#111;border:2px solid #333;border-radius:10px;color:#fff;box-sizing:border-box;"
-          oninput="this.value=this.value.replace(/[^A-Za-z0-9]/g,'').toUpperCase()">
+          oninput="this.value=this.value.replace(/[^A-Za-z0-9]/g,'').toUpperCase()"
+          onkeydown="_remisionKeyDown(event, this)">
       </div>
 
       <button id="btn-confirmar-rec" onclick="confirmarRecepcionActiva()" ${btnActivo ? '' : 'disabled'}

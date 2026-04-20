@@ -297,6 +297,41 @@ class ConnektaGateway:
                 break
         return {'detalle': {'Table': todos}}
 
+    def validar_tipo_proveedor(self, nit: str) -> dict:
+        """
+        Verifica que el NIT tenga tipo_proveedor configurado en el maestro de Siesa.
+        Usa las OCs activas para inferirlo — si el proveedor aparece en alguna OC
+        y tiene f200_id_tipo_prov, el resultado es positivo.
+        Retorna: {configurado: bool, tipo_proveedor: str|None, mensaje: str}
+        """
+        if self.modo_simulacion:
+            return {'configurado': True, 'tipo_proveedor': '0001', 'mensaje': 'simulado'}
+        try:
+            resultado = self.get_ordenes_compra_aprobadas(sin_filtros=True)
+            rows = resultado.get('detalle', {}).get('Table', [])
+            for row in rows:
+                nit_row = (row.get('f200_nit_prov') or row.get('f200_id_prov') or '').strip()
+                if nit_row == nit.strip():
+                    tipo = (row.get('f200_id_tipo_prov') or '').strip()
+                    if tipo:
+                        return {'configurado': True, 'tipo_proveedor': tipo, 'mensaje': ''}
+                    # NIT encontrado pero sin tipo_proveedor
+                    return {
+                        'configurado': False,
+                        'tipo_proveedor': None,
+                        'mensaje': (
+                            f'El proveedor NIT {nit} no tiene Tipo de Proveedor asignado en Siesa. '
+                            'Ve a Maestros → Terceros → [este NIT] → pestaña Compras → '
+                            'campo "Tipo de Proveedor" → asignar 0001 (Nacionales).'
+                        )
+                    }
+            # NIT no aparece en ninguna OC activa — probablemente es correcto pero no podemos verificar
+            logger.warning(f'[CONNEKTA] validar_tipo_proveedor: NIT {nit!r} no encontrado en OCs activas')
+            return {'configurado': None, 'tipo_proveedor': None, 'mensaje': ''}
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] validar_tipo_proveedor falló: {e}')
+            return {'configurado': None, 'tipo_proveedor': None, 'mensaje': ''}
+
     def get_inventario_fecha(self, item_codigo: str):
         """API_v2_Inventarios_InvFecha — existencia real para conteo cíclico."""
         return self._get(self.api_inventario, {
