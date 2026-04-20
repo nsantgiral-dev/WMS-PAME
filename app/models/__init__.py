@@ -14,3 +14,5 @@ from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho
 from app.models.producto_clasificacion_abc import ProductoClasificacionABC
+from app.models.producto_empaque import ProductoEmpaque
+from app.models.lpn import LPN

@@ -89,5 +89,11 @@ def create_app():
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f'[TRASLADO_MONITOR] No se pudo iniciar: {e}')
+        try:
+            from app.services.empaques_sync_service import init_scheduler as init_empaques_scheduler
+            init_empaques_scheduler(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[EMPAQUES_SCHEDULER] No se pudo iniciar: {e}')
 
     return app

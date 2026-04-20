@@ -41,6 +41,7 @@ class ConnektaGateway:
         self.api_ordenes = os.getenv('CONNEKTA_API_ORDENES', 'API_v2_Compras_Ordenes')
         self.api_inventario = os.getenv('CONNEKTA_API_INVENTARIO', 'API_v2_Inventarios_InvFecha')
         self.api_barras = os.getenv('CONNEKTA_API_BARRAS', 'API_v2_ItemsBarras')
+        self.api_unidades_medida = os.getenv('CONNEKTA_API_UNIDADES_MEDIDA', 'API_v2_ItemsUnidadesMedida')
 
         self.conector_factura  = os.getenv('CONNEKTA_CONECTOR_FACTURA',  '238925')  # FacturaPedido (reemplaza 142945)
         self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')  # RemisionPedido (legacy — no usar)
@@ -352,6 +353,15 @@ class ConnektaGateway:
         """API_v2_Items — catálogo completo de productos Siesa (para sync)."""
         api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
         return self._get(api_items, {
+            'paginacion': f'numPag={pagina}|tamPag=100'
+        })
+
+    def get_items_unidades_medida(self, pagina: int = 1):
+        """API_v2_ItemsUnidadesMedida — factores de conversión de empaques por ítem.
+        Campos esperados: f120_referencia, f120_id_unidad_medida, factor (o f120_factor),
+        f121_id (código de barras del empaque). Verificar nombres exactos en Paso 0.
+        """
+        return self._get(self.api_unidades_medida, {
             'paginacion': f'numPag={pagina}|tamPag=100'
         })
 
