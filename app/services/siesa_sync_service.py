@@ -244,14 +244,14 @@ def init_scheduler(app):
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     scheduler.add_job(
         func=ejecutar_sync,
-        trigger=CronTrigger(hour='7-20', minute='*/5', timezone='America/Bogota'),
+        trigger=CronTrigger(hour='7-20', minute='*/30', timezone='America/Bogota'),
         kwargs={'app': app},
         id='sync_productos_siesa',
-        name='Sync catálogo Siesa → WMS cada 5 min',
+        name='Sync catálogo Siesa → WMS cada 30 min',
         replace_existing=True,
         max_instances=1,
-        misfire_grace_time=60
+        misfire_grace_time=300
     )
     scheduler.start()
-    logger.info('[SYNC] Scheduler iniciado — sync cada 5 min 7am–8pm (Bogotá)')
+    logger.info('[SYNC] Scheduler iniciado — sync cada 30 min 7am–8pm (Bogotá)')
     return scheduler
