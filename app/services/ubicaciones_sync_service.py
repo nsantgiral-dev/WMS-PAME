@@ -1,14 +1,18 @@
 """
 Sincronización de ubicaciones Siesa → WMS  (ID 43: API_v2_Ubicaciones).
 
-Siesa Enterprise es el dueño de la data maestra de ubicaciones:
-  - Nomenclatura  (PIK-01-A, RES-02-B, ...)
-  - Stock mínimo  (f152_cant_minima)
-  - Stock máximo  (f152_cant_maxima)
-  - Secuencia de ruteo (f152_secuencia)
+Siesa Enterprise es el dueño de la nomenclatura de ubicaciones.
+El WMS sincroniza cada noche:
+  - Código     (f155_id)
+  - Descripción (f155_descripcion)
+  - Estado     (f155_ind_estado → activo/inactivo)
 
-El WMS es un espejo: lee cada noche y obedece.
-El tipo_zona se deduce del prefijo del código de ubicación:
+Lo que Siesa NO expone (la API solo tiene 5 campos):
+  - stock_minimo / stock_maximo → se configuran en el WMS directamente
+    vía endpoint admin PATCH /api/reposicion/ubicacion/<id>/limites
+  - secuencia_ruteo → idem, configuración local WMS
+
+El tipo_zona se deduce del prefijo del código:
   PIK* → PICKING   |   RES* → RESERVA   |   resto → GENERAL
 
 El worker nocturno llama a sync_ubicaciones_desde_siesa().
@@ -87,39 +91,14 @@ def _run_sync(app, bodega_id: str = None):
 
                     for row in rows:
                         try:
-                            codigo = (
-                                row.get('f152_id') or
-                                row.get('f152_codigo') or
-                                row.get('codigo') or ''
-                            ).strip()
+                            # Campos certificados por PDF oficial API_v2_Ubicaciones:
+                            # f150_id, f155_id_cia, f155_id, f155_descripcion, f155_ind_estado
+                            codigo = (row.get('f155_id') or '').strip()
                             if not codigo:
                                 continue
 
-                            activo = str(row.get('f152_ind_estado', '1')) in ('1', 'true', 'True')
-
-                            # Capacidades — Siesa puede usar distintos aliases
-                            def _int_or_none(v):
-                                try:
-                                    return int(float(v)) if v not in (None, '', 'null') else None
-                                except (ValueError, TypeError):
-                                    return None
-
-                            stock_minimo = _int_or_none(
-                                row.get('f152_cant_minima') or row.get('cant_minima')
-                            )
-                            stock_maximo = _int_or_none(
-                                row.get('f152_cant_maxima') or
-                                row.get('f152_capacidad_maxima') or
-                                row.get('cant_maxima')
-                            )
-                            secuencia = _int_or_none(
-                                row.get('f152_secuencia') or row.get('secuencia')
-                            )
-                            descripcion = (
-                                row.get('f152_descripcion') or
-                                row.get('descripcion') or ''
-                            ).strip() or None
-
+                            activo = int(row.get('f155_ind_estado', 1)) == 1
+                            descripcion = (row.get('f155_descripcion') or '').strip() or None
                             tipo_zona = _inferir_tipo_zona(codigo)
 
                             ub = Ubicacion.query.filter_by(
@@ -127,29 +106,25 @@ def _run_sync(app, bodega_id: str = None):
                             ).first()
 
                             if ub:
-                                # Actualizar campos que Siesa puede cambiar
+                                # Siesa manda nomenclatura y estado — solo eso actualizamos.
+                                # stock_minimo / stock_maximo / secuencia_ruteo son configuración
+                                # local del WMS — NO los tocamos en el sync.
                                 ub.tipo_zona = tipo_zona
-                                ub.stock_minimo = stock_minimo
-                                ub.stock_maximo = stock_maximo
                                 ub.activo = activo
                                 if descripcion and not ub.zona:
                                     ub.zona = descripcion
-                                if secuencia is not None:
-                                    ub.secuencia_ruteo = secuencia
                                 actualizadas += 1
                             else:
                                 ub = Ubicacion(
                                     codigo=codigo,
                                     almacen_id=almacen_id,
                                     tipo_zona=tipo_zona,
-                                    stock_minimo=stock_minimo,
-                                    stock_maximo=stock_maximo,
                                     activo=activo,
                                     zona=descripcion,
                                     tipo='estanteria',
+                                    # stock_minimo / stock_maximo: el jefe los configura
+                                    # en el WMS admin tras el primer sync
                                 )
-                                if secuencia is not None:
-                                    ub.secuencia_ruteo = secuencia
                                 db.session.add(ub)
                                 creadas += 1
 

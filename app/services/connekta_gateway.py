@@ -839,24 +839,25 @@ class ConnektaGateway:
 
     def get_ubicaciones_siesa(self, bodega_id: str = None, pagina: int = 1):
         """
-        API_v2_Ubicaciones (ID 43) — maestro de ubicaciones físicas de una bodega.
+        API_v2_Ubicaciones (ID 43) — maestro de ubicaciones auxiliares de una bodega.
 
-        Campos esperados (verificar contra raw en /api/siesa/debug-ubicaciones-raw):
-          f152_id_bodega      → código de bodega  (ej. 'NB1')
-          f152_id             → código ubicación  (ej. 'PIK-01-A', 'RES-02')
-          f152_descripcion    → nombre largo      (opcional)
-          f152_cant_minima    → stock mínimo (UNDs)
-          f152_cant_maxima    → stock máximo / capacidad (UNDs)
-          f152_ind_estado     → 1=activo, 0=inactivo
-          f152_secuencia      → orden para ruteo (menor = más cerca de salida)
+        Campos certificados (PDF oficial Connekta):
+          f150_id          → código de bodega           (string, ej. 'NB1')
+          f155_id_cia      → id empresa ERP             (number)
+          f155_id          → código de la ubicación     (string, ej. 'PIK-01-A')
+          f155_descripcion → descripción de la ubicación (string)
+          f155_ind_estado  → 0=Inactivo, 1=Activo       (number)
 
-        El tipo_zona lo deducimos del prefijo del código:
-          PIK* → PICKING   |   RES* → RESERVA   |   todo lo demás → GENERAL
+        IMPORTANTE: La API no expone stock_minimo/stock_maximo — esos campos
+        se configuran directamente en el WMS (tabla ubicaciones).
+
+        El tipo_zona se deduce del prefijo del código:
+          PIK* → PICKING   |   RES* → RESERVA   |   resto → GENERAL
         """
         api_name = os.getenv('CONNEKTA_API_UBICACIONES', 'API_v2_Ubicaciones')
-        params: dict = {'paginacion': f'numPag={pagina}|tamPag=200'}
+        params: dict = {'paginacion': f'numPag={pagina}|tamPag=100'}
         if bodega_id:
-            params['parametros'] = f"f152_id_bodega = ''{bodega_id}''"
+            params['parametros'] = f"f150_id = ''{bodega_id}''"
         return self._get(api_name, params)
 
     def transferir_entre_ubicaciones(self, bodega_id: str, ubicacion_origen: str,

@@ -155,6 +155,71 @@ def sync_ubicaciones_estado():
     return jsonify(get_estado()), 200
 
 
+@reposicion_bp.route('/ubicacion/<int:ubicacion_id>/limites', methods=['PATCH'])
+@jwt_required()
+def configurar_limites(ubicacion_id):
+    """
+    Configura stock_minimo, stock_maximo y secuencia_ruteo de una ubicación PICKING.
+
+    Siesa solo expone código + descripción + estado en la API.
+    Los límites de reabastecimiento son configuración local del WMS.
+    El jefe de bodega los ajusta aquí.
+
+    Payload: { stock_minimo, stock_maximo, secuencia_ruteo (opcional) }
+    """
+    from app.extensions import db
+    from app.models.ubicacion import Ubicacion
+
+    ub = Ubicacion.query.get(ubicacion_id)
+    if not ub:
+        return jsonify({'error': f'Ubicación {ubicacion_id} no encontrada'}), 404
+
+    data = request.get_json() or {}
+    if 'stock_minimo' in data:
+        ub.stock_minimo = int(data['stock_minimo']) if data['stock_minimo'] is not None else None
+    if 'stock_maximo' in data:
+        ub.stock_maximo = int(data['stock_maximo']) if data['stock_maximo'] is not None else None
+    if 'secuencia_ruteo' in data:
+        ub.secuencia_ruteo = int(data['secuencia_ruteo']) if data['secuencia_ruteo'] is not None else None
+
+    db.session.commit()
+    return jsonify({'ok': True, 'ubicacion': ub.to_dict()}), 200
+
+
+@reposicion_bp.route('/ubicaciones', methods=['GET'])
+@jwt_required()
+def listar_ubicaciones_picking():
+    """
+    Lista ubicaciones PICKING con sus límites configurados.
+    El admin ve aquí qué zonas tienen min/max y cuáles faltan por configurar.
+    """
+    from app.models.ubicacion import Ubicacion
+    from app.models.inventario import UbicacionProducto
+
+    almacen_id = request.args.get('almacen_id', type=int)
+    q = Ubicacion.query.filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True)
+    if almacen_id:
+        q = q.filter(Ubicacion.almacen_id == almacen_id)
+
+    ubicaciones = q.order_by(Ubicacion.codigo).all()
+
+    resultado = []
+    for ub in ubicaciones:
+        inv_count = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).count()
+        d = ub.to_dict()
+        d['productos_count'] = inv_count
+        d['limites_configurados'] = ub.stock_minimo is not None and ub.stock_maximo is not None
+        resultado.append(d)
+
+    sin_limites = sum(1 for u in resultado if not u['limites_configurados'])
+    return jsonify({
+        'ubicaciones': resultado,
+        'total': len(resultado),
+        'sin_limites': sin_limites,
+        'advertencia': f'{sin_limites} ubicaciones PICKING sin límites — no generarán tareas de reposición' if sin_limites else None,
+    }), 200
+
+
 @reposicion_bp.route('/debug-ubicaciones-raw', methods=['GET'])
 @jwt_required()
 def debug_ubicaciones_raw():
