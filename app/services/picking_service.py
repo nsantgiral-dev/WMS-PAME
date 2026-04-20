@@ -84,6 +84,21 @@ class PickingService:
         if not producto:
             raise ValueError(f'Producto {producto_id} no encontrado')
 
+        # ── Reposición Predictiva ──────────────────────────────────────────────
+        # Antes de crear las tareas de picking, verificamos si el stock de la
+        # zona PICKING es suficiente para toda la demanda. Si no, pre-disparamos
+        # TareaReposicion al Abastecedor ANTES de que el picker empiece a caminar.
+        try:
+            from app.services.ola_predictiva_service import pre_verificar_ola
+            pre_verificar_ola(
+                items=[{'producto_id': producto_id, 'cantidad': cantidad}],
+                almacen_id=almacen_id,
+            )
+        except Exception as _e:
+            import logging as _log
+            _log.getLogger(__name__).warning(f'[PICKING] Ola predictiva falló silenciosamente: {_e}')
+        # ──────────────────────────────────────────────────────────────────────
+
         fefo = PickingService.calcular_fefo(producto_id, cantidad, almacen_id)
 
         if not fefo['completo']:

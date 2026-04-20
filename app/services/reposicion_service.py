@@ -17,7 +17,6 @@ Reglas:
 """
 
 import logging
-import threading
 from datetime import datetime
 from app.extensions import db
 from app.models.ubicacion import Ubicacion
@@ -244,8 +243,8 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
 
     db.session.commit()
 
-    # f) Job Siesa async — no bloquea el operario
-    _disparar_siesa_async(tarea, lpn, unidades)
+    # f) Encolar job Siesa en la DLQ — reintentos automáticos, alerta si falla 3 veces
+    _encolar_siesa_job(tarea, lpn, unidades)
 
     # g) Re-evaluar stock (puede haber otra tarea necesaria)
     try:
@@ -261,64 +260,36 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4. Job Siesa asíncrono
+# 4. Job Siesa — encolar en DLQ (reintentos automáticos, alerta si falla 3 veces)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _disparar_siesa_async(tarea: TareaReposicion, lpn: LPN, unidades: int):
+def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
     """
-    Dispara conector 173076 (TransitoSalida) en hilo separado.
-    Registra el resultado en tarea.siesa_job_id / tarea.siesa_enviado.
-
-    El conector 173076 mueve inventario entre ubicaciones dentro de la misma
-    bodega usando f470_id_ubicacion_aux (origen) y f470_id_ubicacion_aux_ent (destino).
+    Encola la transferencia de ubicaciones en la Dead Letter Queue.
+    El scheduler la ejecuta en los próximos 5 min.
+    Si falla, reintenta con backoff exponencial (5→15→45 min).
+    Tras 3 fallos: alerta roja en dashboard admin.
     """
-    def _job():
-        # Necesitamos un app_context fresco — lo obtenemos del proxy de Flask
-        try:
-            from flask import current_app
-            app = current_app._get_current_object()
-        except RuntimeError:
-            logger.warning('[REPOSICION SIESA] Sin app context en hilo — job cancelado')
-            return
+    from app.services.siesa_job_service import encolar_transferencia_ubicaciones
+    from app.models.ubicacion import Ubicacion as _Ub
 
-        with app.app_context():
-            try:
-                ub_reserva = Ubicacion.query.get(tarea.ubicacion_reserva_id)
-                ub_picking = Ubicacion.query.get(tarea.ubicacion_picking_id)
-                producto = tarea.producto
+    ub_reserva = _Ub.query.get(tarea.ubicacion_reserva_id)
+    ub_picking = _Ub.query.get(tarea.ubicacion_picking_id)
+    producto = tarea.producto
 
-                if not ub_reserva or not ub_picking or not producto:
-                    logger.error(f'[REPOSICION SIESA] Datos incompletos — job cancelado')
-                    return
+    if not ub_reserva or not ub_picking or not producto:
+        logger.error(f'[REPOSICION DLQ] Datos incompletos para job — no se encola')
+        return
 
-                resultado = connekta.transferir_entre_ubicaciones(
-                    bodega_id=connekta.bodega,
-                    ubicacion_origen=ub_reserva.codigo,
-                    ubicacion_destino=ub_picking.codigo,
-                    referencia_item=producto.codigo_siesa or producto.codigo,
-                    cantidad=unidades,
-                    nota=f'Reposición WMS {tarea.codigo} — LPN {lpn.codigo}',
-                )
-
-                # Guardar resultado
-                tarea_db = TareaReposicion.query.get(tarea.id)
-                if tarea_db:
-                    tarea_db.siesa_enviado = True
-                    tarea_db.siesa_job_id = str(resultado.get('consecutivo') or resultado.get('id') or '')
-                    tarea_db.notas = (tarea_db.notas or '') + f' | Siesa OK: {tarea_db.siesa_job_id}'
-                    db.session.commit()
-
-                logger.info(f'[REPOSICION SIESA] {tarea.codigo} enviado a Siesa — {resultado}')
-
-            except Exception as e:
-                logger.error(f'[REPOSICION SIESA] Error enviando {tarea.codigo}: {e}')
-                try:
-                    tarea_db = TareaReposicion.query.get(tarea.id)
-                    if tarea_db:
-                        tarea_db.notas = (tarea_db.notas or '') + f' | Siesa ERROR: {e}'
-                        db.session.commit()
-                except Exception:
-                    pass
-
-    t = threading.Thread(target=_job, daemon=True)
-    t.start()
+    job = encolar_transferencia_ubicaciones(
+        bodega_id=connekta.bodega,
+        ubicacion_origen=ub_reserva.codigo,
+        ubicacion_destino=ub_picking.codigo,
+        referencia_item=getattr(producto, 'codigo_siesa', None) or producto.codigo,
+        cantidad=unidades,
+        nota=f'Reposición WMS {tarea.codigo} — LPN {lpn.codigo}',
+        referencia_tipo='TareaReposicion',
+        referencia_id=tarea.id,
+    )
+    db.session.commit()
+    logger.info(f'[REPOSICION DLQ] Job {job.id} encolado para {tarea.codigo}')

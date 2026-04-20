@@ -220,6 +220,81 @@ def listar_ubicaciones_picking():
     }), 200
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Dead Letter Queue — admin
+# ──────────────────────────────────────────────────────────────────────────────
+
+@reposicion_bp.route('/siesa-jobs/fallidos', methods=['GET'])
+@jwt_required()
+def jobs_fallidos():
+    """
+    Alerta roja — jobs que fallaron 3 veces y necesitan intervención manual.
+    El admin verifica el periodo contable en Siesa y luego reintenta.
+    """
+    from app.services.siesa_job_service import get_jobs_fallidos
+    jobs = get_jobs_fallidos()
+    return jsonify({
+        'total': len(jobs),
+        'jobs': [j.to_dict() for j in jobs],
+        'alerta': f'{len(jobs)} jobs fallidos — verificar periodo contable en Siesa' if jobs else None,
+    }), 200
+
+
+@reposicion_bp.route('/siesa-jobs/<int:job_id>/reintentar', methods=['POST'])
+@jwt_required()
+def reintentar_job(job_id):
+    """Admin fuerza un reintento de un job FALLIDO."""
+    from app.services.siesa_job_service import reintentar_job as _reintentar
+    try:
+        resultado = _reintentar(job_id)
+        return jsonify({'ok': True, 'job': resultado}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@reposicion_bp.route('/siesa-jobs', methods=['GET'])
+@jwt_required()
+def listar_jobs():
+    """Lista todos los jobs (filtrable por estado)."""
+    from app.models.siesa_job import SiesaJob
+    estado = request.args.get('estado')
+    q = SiesaJob.query.order_by(SiesaJob.fecha_creacion.desc())
+    if estado:
+        q = q.filter(SiesaJob.estado == estado.upper())
+    jobs = q.limit(100).all()
+    return jsonify({'jobs': [j.to_dict() for j in jobs], 'total': len(jobs)}), 200
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ola Predictiva — admin / endpoint de pre-verificación manual
+# ──────────────────────────────────────────────────────────────────────────────
+
+@reposicion_bp.route('/pre-verificar-ola', methods=['POST'])
+@jwt_required()
+def pre_verificar_ola():
+    """
+    Pre-verificación de ola — cruza demanda vs stock PICKING y pre-dispara reposición.
+
+    Útil para llamar manualmente antes de liberar una ola de pedidos grande.
+    PickingService.crear_tareas() lo llama automáticamente en cada tarea.
+
+    Payload: { almacen_id, items: [{ producto_id, cantidad }, ...] }
+    """
+    from app.services.ola_predictiva_service import pre_verificar_ola as _verificar
+    data = request.get_json() or {}
+    items = data.get('items', [])
+    almacen_id = data.get('almacen_id')
+
+    if not items or not almacen_id:
+        return jsonify({'error': 'items y almacen_id son requeridos'}), 400
+
+    try:
+        resultado = _verificar(items=items, almacen_id=almacen_id)
+        return jsonify(resultado), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @reposicion_bp.route('/debug-ubicaciones-raw', methods=['GET'])
 @jwt_required()
 def debug_ubicaciones_raw():

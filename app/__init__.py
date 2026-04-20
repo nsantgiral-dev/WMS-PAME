@@ -101,5 +101,11 @@ def create_app():
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f'[UBICACIONES_SCHEDULER] No se pudo iniciar: {e}')
+        try:
+            from app.services.siesa_job_service import init_scheduler as init_dlq_scheduler
+            init_dlq_scheduler(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[DLQ_SCHEDULER] No se pudo iniciar: {e}')
 
     return app
