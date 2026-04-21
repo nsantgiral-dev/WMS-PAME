@@ -278,12 +278,18 @@ class ConnektaGateway:
             'items': items_pendientes
         }
 
-    def get_ordenes_compra_aprobadas(self, sin_filtros: bool = False):
+    def get_ordenes_compra_aprobadas(self, sin_filtros: bool = False, consec: str = None):
         """API_v2_Compras_Ordenes — muelle de recepción ciega.
-        Pagina automáticamente (tamPag=100) hasta agotar los registros,
-        porque la API no acepta filtros por CO/bodega.
+        Pagina automáticamente (tamPag=100) hasta agotar los registros.
+        Si se pasa consec, filtra por f420_consec_docto (number, sin comillas)
+        para traer solo las líneas de esa OC y evitar timeouts.
         """
-        base_params = {} if sin_filtros else {'parametros': 'f420_ind_estado=1'}
+        if consec:
+            base_params = {'parametros': f'f420_consec_docto={consec}'}
+        elif sin_filtros:
+            base_params = {}
+        else:
+            base_params = {'parametros': 'f420_ind_estado=1'}
         todos = []
         for pag in range(1, 6):  # máximo 5 páginas = 500 items
             params = {**base_params, 'paginacion': f'numPag={pag}|tamPag=100'}

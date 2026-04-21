@@ -373,12 +373,10 @@ class RecepcionService:
         oc_fallback = {}
         try:
             consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
-            resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
+            resultado_oc = connekta.get_ordenes_compra_aprobadas(consec=consec)
             rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
             header_leido = False
             for row in rows_oc:
-                if str(row.get('f420_consec_docto', '')).strip() != str(consec).strip():
-                    continue
                 if not header_leido:
                     proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
                     sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
@@ -423,7 +421,26 @@ class RecepcionService:
         for i in recepcion.items:
             if i.cantidad_recibida <= 0:
                 continue
-            # Lookup normalizado: probar código WMS, código Siesa e ID numérico — todo en UPPER
+
+            if i.tipo == 'BONIFICACION':
+                # Obsequio/bonificación: usa su propio código, bodega y uom del fallback de la OC.
+                # Precio $0, motivo 04 — nunca debe heredar la referencia de otro ítem.
+                items_payload.append({
+                    'producto_codigo': i.producto.codigo_siesa or i.producto.codigo,
+                    'cantidad_recibida': i.cantidad_recibida,
+                    'cantidad_ordenada': 0,
+                    'lote': i.lote,
+                    'es_parcial': False,
+                    'destino': i.destino,
+                    'tipo': i.tipo,
+                    'motivo_siesa': i.motivo_siesa,
+                    'bodega': oc_fallback.get('bodega'),
+                    'uom': oc_fallback.get('uom'),
+                    'fecha_entrega': oc_fallback.get('fecha_entrega'),
+                })
+                continue
+
+            # Ítems de OC: lookup normalizado por código WMS, código Siesa e ID numérico
             oc_data = (
                 items_oc.get((i.producto.codigo or '').strip().upper()) or
                 items_oc.get((i.producto.codigo_siesa or '').strip().upper()) or
