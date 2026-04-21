@@ -415,20 +415,29 @@ class RecepcionService:
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
 
-        items_payload = [{
-            'producto_codigo': i.producto.codigo,
-            'cantidad_recibida': i.cantidad_recibida,
-            'cantidad_ordenada': i.cantidad_ordenada,
-            'lote': i.lote,
-            'es_parcial': i.es_faltante(),
-            'destino': i.destino,
-            'tipo': i.tipo,
-            'motivo_siesa': i.motivo_siesa,
-            # Buscar por código WMS primero, luego por código Siesa
-            'bodega': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('bodega'),
-            'uom': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('uom'),
-            'fecha_entrega': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('fecha_entrega'),
-        } for i in recepcion.items if i.cantidad_recibida > 0]
+        logger.warning(f'[RECEPCION] items_oc keys: {list(items_oc.keys())}')
+        items_payload = []
+        for i in recepcion.items:
+            if i.cantidad_recibida <= 0:
+                continue
+            oc_data = items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}
+            logger.warning(
+                f'[RECEPCION] item {i.producto.codigo!r} / siesa={i.producto.codigo_siesa!r} '
+                f'→ oc_data={oc_data!r}'
+            )
+            items_payload.append({
+                'producto_codigo': i.producto.codigo,
+                'cantidad_recibida': i.cantidad_recibida,
+                'cantidad_ordenada': i.cantidad_ordenada,
+                'lote': i.lote,
+                'es_parcial': i.es_faltante(),
+                'destino': i.destino,
+                'tipo': i.tipo,
+                'motivo_siesa': i.motivo_siesa,
+                'bodega': oc_data.get('bodega'),
+                'uom': oc_data.get('uom'),
+                'fecha_entrega': oc_data.get('fecha_entrega'),
+            })
 
         try:
             respuesta_siesa = connekta.confirmar_entrada_compras(
