@@ -5,94 +5,90 @@ Cron diario a las 06:00 Bogotá. Revisa la tabla ubicaciones_huerfanas
 y envía un email al Jefe de Bodega si hay códigos Siesa sin prefijo válido.
 
 Variables de entorno requeridas (Railway):
+  RESEND_API_KEY      → API key de resend.com (ej. re_xxxxxxxxxxxxxxxx)
   ALERTA_EMAIL_DEST   → destinatario(s), separados por coma
                         ej. "jefe@papeleria.com,bodega@papeleria.com"
-  SMTP_HOST           → servidor SMTP (ej. smtp.gmail.com)
-  SMTP_PORT           → puerto (587 para TLS, 465 para SSL, 25 sin cifrado)
-  SMTP_USER           → usuario / dirección remitente
-  SMTP_PASS           → contraseña o App Password
-  SMTP_FROM           → dirección "De:" (opcional, usa SMTP_USER si no se define)
+  ALERTA_EMAIL_FROM   → dirección remitente verificada en Resend
+                        ej. "WMS Papelería <wms@papeleriamedellin.com.co>"
+                        Si no se define usa: "WMS Papelería <onboarding@resend.dev>"
+
+Railway bloquea todo SMTP saliente (puertos 25/465/587).
+Resend usa HTTPS (puerto 443) — nunca bloqueado.
 
 Si las variables no están configuradas el cron corre en silencio (solo log).
-Eso permite desplegarlo en Railway sin romper nada — se activa cuando
-el jefe de infraestructura agrega las variables.
 """
 import logging
 import os
-import smtplib
-import ssl
+import urllib.request
+import urllib.error
+import json
 from datetime import datetime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 logger = logging.getLogger(__name__)
 
 
-# ── Envío de email ────────────────────────────────────────────────────────────
+# ── Envío de email via Resend API ─────────────────────────────────────────────
 
-def _config_smtp() -> dict | None:
-    """Lee env vars de SMTP. Retorna None si no están configuradas."""
-    host = os.getenv('SMTP_HOST', '').strip()
-    user = os.getenv('SMTP_USER', '').strip()
-    password = os.getenv('SMTP_PASS', '').strip()
-    dest = os.getenv('ALERTA_EMAIL_DEST', '').strip()
+def _config_resend() -> dict | None:
+    """Lee env vars de Resend. Retorna None si no están configuradas."""
+    api_key = os.getenv('RESEND_API_KEY', '').strip()
+    dest    = os.getenv('ALERTA_EMAIL_DEST', '').strip()
 
-    if not all([host, user, password, dest]):
+    if not all([api_key, dest]):
         return None
 
+    from_addr = os.getenv(
+        'ALERTA_EMAIL_FROM',
+        'WMS Papelería <onboarding@resend.dev>'
+    ).strip()
+
     return {
-        'host': host,
-        'port': int(os.getenv('SMTP_PORT', '587')),
-        'user': user,
-        'password': password,
-        'from': os.getenv('SMTP_FROM', user).strip(),
-        'dest': [d.strip() for d in dest.split(',') if d.strip()],
+        'api_key': api_key,
+        'from':    from_addr,
+        'dest':    [d.strip() for d in dest.split(',') if d.strip()],
     }
 
 
 def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
     """
-    Envía un email via SMTP.
-    Detecta automáticamente el modo según el puerto:
-      465 → SSL directo (cPanel/Banahosting)
-      587 → STARTTLS (Gmail, Outlook)
-      25  → sin cifrado (solo redes internas)
+    Envía un email via Resend API (HTTPS — no SMTP).
     Retorna True si se envió, False si faltó config o hubo error.
     """
-    cfg = _config_smtp()
+    cfg = _config_resend()
     if not cfg:
-        logger.warning('[ALERTAS] SMTP no configurado — email omitido. '
-                       'Agrega SMTP_HOST, SMTP_USER, SMTP_PASS, ALERTA_EMAIL_DEST en Railway.')
+        logger.warning('[ALERTAS] Resend no configurado — email omitido. '
+                       'Agrega RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.')
         return False
 
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = asunto
-    msg['From'] = cfg['from']
-    msg['To'] = ', '.join(cfg['dest'])
+    payload = json.dumps({
+        'from':    cfg['from'],
+        'to':      cfg['dest'],
+        'subject': asunto,
+        'html':    cuerpo_html,
+        'text':    cuerpo_texto,
+    }).encode('utf-8')
 
-    msg.attach(MIMEText(cuerpo_texto, 'plain', 'utf-8'))
-    msg.attach(MIMEText(cuerpo_html,  'html',  'utf-8'))
+    req = urllib.request.Request(
+        'https://api.resend.com/emails',
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {cfg["api_key"]}',
+            'Content-Type':  'application/json',
+        },
+        method='POST',
+    )
 
     try:
-        context = ssl.create_default_context()
-        if cfg['port'] == 465:
-            # SSL directo — cPanel/Banahosting
-            with smtplib.SMTP_SSL(cfg['host'], cfg['port'], context=context, timeout=15) as srv:
-                srv.login(cfg['user'], cfg['password'])
-                srv.sendmail(cfg['from'], cfg['dest'], msg.as_string())
-        else:
-            # STARTTLS — puerto 587 (Gmail, Outlook) o 25
-            with smtplib.SMTP(cfg['host'], cfg['port'], timeout=15) as srv:
-                srv.ehlo()
-                if cfg['port'] != 25:
-                    srv.starttls(context=context)
-                srv.login(cfg['user'], cfg['password'])
-                srv.sendmail(cfg['from'], cfg['dest'], msg.as_string())
-
-        logger.info(f'[ALERTAS] Email enviado a {cfg["dest"]}: {asunto}')
-        return True
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = json.loads(resp.read())
+            logger.info(f'[ALERTAS] Email enviado a {cfg["dest"]} — id={body.get("id")}: {asunto}')
+            return True
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8', errors='replace')
+        logger.error(f'[ALERTAS] Resend HTTP {e.code}: {error_body}')
+        return False
     except Exception as e:
-        logger.error(f'[ALERTAS] Error enviando email (host={cfg["host"]} port={cfg["port"]}): {e}')
+        logger.error(f'[ALERTAS] Error enviando email via Resend: {e}')
         return False
 
 

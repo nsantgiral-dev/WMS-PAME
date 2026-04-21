@@ -405,36 +405,17 @@ def test_alerta_email():
 @reposicion_bp.route('/alertas/smtp-check', methods=['GET'])
 @jwt_required()
 def smtp_check():
-    """Diagnóstico de conectividad SMTP — no envía email."""
-    import os, socket
-    host = os.getenv('SMTP_HOST', '')
-    port = int(os.getenv('SMTP_PORT', '465'))
-    user = os.getenv('SMTP_USER', '')
-    dest = os.getenv('ALERTA_EMAIL_DEST', '')
-    has_pass = bool(os.getenv('SMTP_PASS', ''))
+    """Diagnóstico de configuración Resend — no envía email."""
+    import os
+    api_key = os.getenv('RESEND_API_KEY', '')
+    dest    = os.getenv('ALERTA_EMAIL_DEST', '')
+    from_   = os.getenv('ALERTA_EMAIL_FROM', 'WMS Papelería <onboarding@resend.dev>')
 
-    resultado = {
+    return jsonify({
         'vars': {
-            'SMTP_HOST': host or '❌ no configurado',
-            'SMTP_PORT': port,
-            'SMTP_USER': user or '❌ no configurado',
-            'SMTP_PASS': '✅ configurado' if has_pass else '❌ no configurado',
+            'RESEND_API_KEY':    '✅ configurado' if api_key else '❌ no configurado',
             'ALERTA_EMAIL_DEST': dest or '❌ no configurado',
+            'ALERTA_EMAIL_FROM': from_,
         },
-        'tcp_connect': None,
-        'error': None,
-    }
-
-    if not host:
-        resultado['error'] = 'SMTP_HOST no configurado'
-        return jsonify(resultado), 200
-
-    try:
-        sock = socket.create_connection((host, port), timeout=10)
-        sock.close()
-        resultado['tcp_connect'] = f'✅ OK — {host}:{port} accesible desde Railway'
-    except Exception as e:
-        resultado['tcp_connect'] = f'❌ FALLO — {e}'
-        resultado['error'] = str(e)
-
-    return jsonify(resultado), 200
+        'listo': bool(api_key and dest),
+    }), 200
