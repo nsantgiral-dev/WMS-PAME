@@ -415,12 +415,45 @@ class RecepcionService:
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
 
+        # Índice normalizado (sin espacios, mayúsculas) para manejar diferencias de formato
+        items_oc_norm = {k.upper().replace(' ', '').replace('-', ''): v for k, v in items_oc.items()}
         logger.warning(f'[RECEPCION] items_oc keys: {list(items_oc.keys())}')
+
+        def _lookup_oc(producto):
+            """Busca los datos de OC para un producto. Varios intentos de matching."""
+            codigo = (producto.codigo or '').strip()
+            codigo_siesa = (producto.codigo_siesa or '').strip()
+            # 1. Exacto por codigo_siesa (el más confiable — mismo f120_referencia)
+            if codigo_siesa and codigo_siesa in items_oc:
+                return items_oc[codigo_siesa]
+            # 2. Exacto por codigo WMS
+            if codigo and codigo in items_oc:
+                return items_oc[codigo]
+            # 3. Normalizado (ignora espacios y guiones)
+            norm_siesa = codigo_siesa.upper().replace(' ', '').replace('-', '')
+            norm_codigo = codigo.upper().replace(' ', '').replace('-', '')
+            if norm_siesa and norm_siesa in items_oc_norm:
+                return items_oc_norm[norm_siesa]
+            if norm_codigo and norm_codigo in items_oc_norm:
+                return items_oc_norm[norm_codigo]
+            # 4. Si la OC tiene exactamente UN ítem, lo empareja directamente
+            if len(items_oc) == 1:
+                logger.warning(
+                    f'[RECEPCION] UOM lookup: código {codigo!r}/siesa {codigo_siesa!r} '
+                    f'no match en items_oc {list(items_oc.keys())} — usando único ítem OC'
+                )
+                return next(iter(items_oc.values()))
+            logger.warning(
+                f'[RECEPCION] UOM lookup FALLIDO: código {codigo!r}/siesa {codigo_siesa!r} '
+                f'no match en items_oc {list(items_oc.keys())}'
+            )
+            return {}
+
         items_payload = []
         for i in recepcion.items:
             if i.cantidad_recibida <= 0:
                 continue
-            oc_data = items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}
+            oc_data = _lookup_oc(i.producto)
             logger.warning(
                 f'[RECEPCION] item {i.producto.codigo!r} / siesa={i.producto.codigo_siesa!r} '
                 f'→ oc_data={oc_data!r}'
