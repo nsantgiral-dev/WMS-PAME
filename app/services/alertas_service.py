@@ -52,7 +52,11 @@ def _config_smtp() -> dict | None:
 
 def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
     """
-    Envía un email via SMTP con TLS.
+    Envía un email via SMTP.
+    Detecta automáticamente el modo según el puerto:
+      465 → SSL directo (cPanel/Banahosting)
+      587 → STARTTLS (Gmail, Outlook)
+      25  → sin cifrado (solo redes internas)
     Retorna True si se envió, False si faltó config o hubo error.
     """
     cfg = _config_smtp()
@@ -71,15 +75,24 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
 
     try:
         context = ssl.create_default_context()
-        with smtplib.SMTP(cfg['host'], cfg['port']) as srv:
-            srv.ehlo()
-            srv.starttls(context=context)
-            srv.login(cfg['user'], cfg['password'])
-            srv.sendmail(cfg['from'], cfg['dest'], msg.as_string())
+        if cfg['port'] == 465:
+            # SSL directo — cPanel/Banahosting
+            with smtplib.SMTP_SSL(cfg['host'], cfg['port'], context=context) as srv:
+                srv.login(cfg['user'], cfg['password'])
+                srv.sendmail(cfg['from'], cfg['dest'], msg.as_string())
+        else:
+            # STARTTLS — puerto 587 (Gmail, Outlook) o 25
+            with smtplib.SMTP(cfg['host'], cfg['port']) as srv:
+                srv.ehlo()
+                if cfg['port'] != 25:
+                    srv.starttls(context=context)
+                srv.login(cfg['user'], cfg['password'])
+                srv.sendmail(cfg['from'], cfg['dest'], msg.as_string())
+
         logger.info(f'[ALERTAS] Email enviado a {cfg["dest"]}: {asunto}')
         return True
     except Exception as e:
-        logger.error(f'[ALERTAS] Error enviando email: {e}')
+        logger.error(f'[ALERTAS] Error enviando email (host={cfg["host"]} port={cfg["port"]}): {e}')
         return False
 
 
