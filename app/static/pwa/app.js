@@ -2112,6 +2112,11 @@ function renderEscaneoRecepcion(rec) {
         ${btnTexto}
       </button>
 
+      <button onclick="modalObsequio()"
+        style="width:100%;padding:13px;font-size:15px;font-weight:600;background:#1a1a2e;color:#a78bfa;border:1px solid #4c1d95;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+        🎁 Registrar Obsequio / Bonificación
+      </button>
+
       <button onclick="reiniciarConteoRecepcion()"
         style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#ef4444;border:1px solid #7f1d1d;border-radius:10px;cursor:pointer;margin-bottom:8px;">
         🔄 Reiniciar conteo
@@ -2126,6 +2131,28 @@ function renderEscaneoRecepcion(rec) {
 
 function renderItemsRecepcion(items) {
   return items.map(it => {
+    const esBono = it.tipo === 'BONIFICACION';
+
+    if (esBono) {
+      return `
+        <div id="item-rec-${it.producto_id}"
+          style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:12px;padding:14px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="min-width:0;flex:1;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="background:#4c1d95;color:#a78bfa;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;">🎁 BONO</span>
+                <div style="font-size:14px;font-weight:600;color:#a78bfa;">${it.producto_nombre || it.producto_codigo}</div>
+              </div>
+              <div style="font-size:11px;color:#555;margin-top:2px;">${it.producto_codigo}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;padding-left:8px;">
+              <div style="font-size:28px;font-weight:900;color:#a78bfa;">${it.cantidad_recibida}</div>
+              <div style="font-size:10px;color:#6b7280;">und recibidas</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
     const pct = it.cantidad_ordenada > 0 ? Math.min((it.cantidad_recibida / it.cantidad_ordenada) * 100, 100) : 0;
     const completo = it.cantidad_recibida >= it.cantidad_ordenada;
     const factor = it.factor_conversion || 1;
@@ -2133,7 +2160,6 @@ function renderItemsRecepcion(items) {
     const unidadEmpaque = (it.unidad_empaque || '').trim() || 'emp';
     const modoEmpaque = factor > 1;
 
-    // Modo empaque: número grande = paquetes, fracción mediana = unidades
     const contadorDerecha = modoEmpaque ? `
       <div style="text-align:right;flex-shrink:0;padding-left:8px;">
         <div style="font-size:42px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${empaques}</div>
@@ -2217,21 +2243,39 @@ async function procesarScanRecepcion(codigo) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
-async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad) {
+async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, esBonificacion = false) {
   const r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
     producto_id: productoId,
     cantidad: cantidad,
-    es_empaque: esEmpaque
+    es_empaque: esEmpaque,
+    es_bonificacion: esBonificacion
   });
+
+  // Producto no está en la OC y no se indicó bonificación → ofrecer registrarlo como bono
+  if (r.tipo === 'PRODUCTO_NO_EN_OC' && !esBonificacion) {
+    const confirmar = await _confirmarModal(
+      '⚠ Producto fuera de OC',
+      'Este producto no está en la orden de compra.<br><br>¿Es un <strong>obsequio o bonificación</strong> del proveedor?',
+      'Sí, registrar como bonificación',
+      'No, cancelar'
+    );
+    if (confirmar) await _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, true);
+    return;
+  }
+
   if (r.error) {
     const msg = typeof r.error === 'object' ? r.error.mensaje : r.error;
     alerta(msg, 'error');
     return;
   }
 
-  // Actualizar estado local
+  // Ítem nuevo (bonificación recién creada) → agregarlo al array local
   const idx = RECEPCION_ACTUAL.items.findIndex(it => it.producto_id === productoId);
-  if (idx >= 0) RECEPCION_ACTUAL.items[idx] = r.item;
+  if (idx >= 0) {
+    RECEPCION_ACTUAL.items[idx] = r.item;
+  } else {
+    RECEPCION_ACTUAL.items.push(r.item);
+  }
 
   const lista = document.getElementById('items-rec-list');
   if (lista) lista.innerHTML = renderItemsRecepcion(RECEPCION_ACTUAL.items);
@@ -2241,14 +2285,124 @@ async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unida
     alerta(r.alerta, tipo);
   }
 
-  const todoCompleto = RECEPCION_ACTUAL.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+  const itemsOC = RECEPCION_ACTUAL.items.filter(it => it.tipo !== 'BONIFICACION');
+  const todoCompleto = itemsOC.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
   const btn = document.getElementById('btn-confirmar-rec');
-  if (btn && todoCompleto) {
+  if (btn && todoCompleto && itemsOC.length > 0) {
     btn.disabled = false;
     btn.style.background = '#16a34a';
     btn.style.cursor = 'pointer';
     alerta('Todo escaneado — confirma la recepción', 'exito');
   }
+}
+
+// Muestra aviso y abre flujo de escaneo para obsequios/bonificaciones
+function modalObsequio() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
+  overlay.innerHTML = `
+    <div style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:16px;padding:28px;max-width:360px;width:100%;text-align:center;">
+      <div style="font-size:40px;margin-bottom:12px;">🎁</div>
+      <div style="font-size:18px;font-weight:800;color:#a78bfa;margin-bottom:10px;">¿Hay obsequios o bonificaciones?</div>
+      <div style="font-size:14px;color:#9ca3af;margin-bottom:24px;">¿El proveedor envió productos adicionales que <strong style="color:#fff;">no están en la OC</strong>?</div>
+      <button id="btn-bono-si" style="width:100%;padding:15px;font-size:16px;font-weight:700;background:#4c1d95;color:#fff;border:none;border-radius:10px;cursor:pointer;margin-bottom:10px;">
+        Sí — escanear obsequio
+      </button>
+      <button id="btn-bono-no" style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        No, cancelar
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#btn-bono-no').onclick = () => overlay.remove();
+  overlay.querySelector('#btn-bono-si').onclick = () => {
+    overlay.remove();
+    _panelScanBonificacion();
+  };
+}
+
+// Panel de escaneo exclusivo para bonificaciones
+function _panelScanBonificacion() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
+  overlay.innerHTML = `
+    <div style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:16px;padding:24px;max-width:380px;width:100%;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:16px;font-weight:800;color:#a78bfa;">🎁 Escanear Obsequio / Bonificación</div>
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+      </div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:14px;">Escanea el producto que el proveedor envió de más — entrará a inventario a $0.</div>
+      <div id="camara-box-bono" style="display:none;margin-bottom:8px;">
+        <div id="lector-qr-bono" style="border-radius:10px;overflow:hidden;"></div>
+        <button onclick="cerrarCamara('camara-box-bono')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
+      </div>
+      <button onclick="abrirCamara('lector-qr-bono','camara-box-bono', cod => { cerrarCamara('camara-box-bono'); _escanearBono(cod, this.closest('div[style*=fixed]')); })"
+        style="width:100%;padding:13px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+        📷 Escanear con cámara
+      </button>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input id="bono-codigo-manual" type="text" placeholder="O escribe / pega el código"
+          style="flex:1;padding:10px;background:#0a0a0a;border:1px solid #4c1d95;border-radius:8px;color:#fff;font-size:14px;"
+          onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ _escanearBono(v, this.closest('div[style*=fixed]')); this.value=''; } }">
+        <button onclick="const v=document.getElementById('bono-codigo-manual').value.trim();if(v){_escanearBono(v,this.closest('div[style*=fixed]'));document.getElementById('bono-codigo-manual').value='';}"
+          style="padding:10px 14px;background:#4c1d95;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+      </div>
+      <button onclick="abrirBusquedaManualBono(this.closest('div[style*=fixed]'))"
+        style="width:100%;padding:10px;font-size:14px;background:#1a1a1a;color:#9ca3af;border:1px solid #333;border-radius:8px;cursor:pointer;">
+        📦 Sin código — buscar producto manualmente
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function _escanearBono(codigo, panelEl) {
+  vibrar(); flash();
+  try {
+    const scan = await get('/api/empaques/scan/' + encodeURIComponent(codigo) +
+      '?almacen_id=' + (RECEPCION_ACTUAL.almacen_id || ''));
+    let productoId, cantidad, esEmpaque;
+    if (scan.tipo === 'NO_ENCONTRADO') {
+      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+      if (prod.error || !prod.producto_id) { alerta('Código no reconocido — usa búsqueda manual', 'error'); return; }
+      productoId = prod.producto_id; cantidad = 1; esEmpaque = false;
+    } else if (scan.tipo === 'GS1_AMBIGUO') {
+      alerta('Código ambiguo — usa búsqueda manual', 'advertencia'); return;
+    } else {
+      productoId = scan.producto ? scan.producto.id : null;
+      if (!productoId) { alerta('Producto no identificado', 'error'); return; }
+      cantidad = 1; esEmpaque = (scan.factor || 1) > 1;
+    }
+    await _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, null, true);
+    if (panelEl) panelEl.remove();
+  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+}
+
+async function abrirBusquedaManualBono(panelEl) {
+  const codigo = prompt('Ingresa el código WMS del producto:');
+  if (!codigo) return;
+  const prod = await get('/api/productos/?search=' + encodeURIComponent(codigo));
+  if (!prod || !prod.productos || prod.productos.length === 0) { alerta('Producto no encontrado', 'error'); return; }
+  const p = prod.productos[0];
+  await _registrarEscaneoRecepcion(p.id, 1, false, null, true);
+  if (panelEl) panelEl.remove();
+}
+
+// Helper: modal de confirmación reutilizable — devuelve Promise<boolean>
+function _confirmarModal(titulo, cuerpoHtml, txtSi, txtNo) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9500;display:flex;align-items:center;justify-content:center;padding:24px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border:1px solid #333;border-radius:16px;padding:28px;max-width:340px;width:100%;text-align:center;">
+        <div style="font-size:17px;font-weight:800;color:#fff;margin-bottom:12px;">${titulo}</div>
+        <div style="font-size:14px;color:#9ca3af;margin-bottom:24px;">${cuerpoHtml}</div>
+        <button id="_cm-si" style="width:100%;padding:14px;font-size:15px;font-weight:700;background:#4c1d95;color:#fff;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px;">${txtSi}</button>
+        <button id="_cm-no" style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">${txtNo}</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#_cm-si').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.querySelector('#_cm-no').onclick = () => { overlay.remove(); resolve(false); };
+  });
 }
 
 function _modalAmbiguedadRecepcion(codigo, ambiguos) {
