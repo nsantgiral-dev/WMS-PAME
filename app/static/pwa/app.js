@@ -2510,17 +2510,30 @@ async function _seleccionarProductoManual(productoId, nombre, modal) {
 
 async function confirmarRecepcionActiva() {
   if (!RECEPCION_ACTUAL) return;
-  const todoCompleto = RECEPCION_ACTUAL.items.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+
+  const todoCompleto = RECEPCION_ACTUAL.items
+    .filter(it => it.tipo !== 'BONIFICACION')
+    .every(it => it.cantidad_recibida >= it.cantidad_ordenada);
   if (!todoCompleto) {
-    const ok = confirm('Hay ítems sin completar. ¿Confirmar como recepción parcial?');
+    const ok = await _confirmarModal(
+      '⚠ Recepción incompleta',
+      'Hay ítems sin completar. ¿Confirmar como <strong>recepción parcial</strong>?',
+      'Sí, confirmar parcial', 'Cancelar'
+    );
     if (!ok) return;
   }
+
+  // Pedir número de remisión del proveedor — Siesa lo exige obligatorio
+  const remision = await _pedirRemision();
+  if (remision === null) return; // operario canceló
 
   const btn = document.getElementById('btn-confirmar-rec');
   if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
 
   try {
-    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/confirmar', {});
+    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/confirmar', {
+      num_remision_prov: remision
+    });
     if (r.error) {
       alerta(r.error, 'error');
       if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
@@ -2536,6 +2549,38 @@ async function confirmarRecepcionActiva() {
     alerta(e.message || 'Error confirmando', 'error');
     if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
   }
+}
+
+function _pedirRemision() {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9500;display:flex;align-items:center;justify-content:center;padding:24px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border:1px solid #333;border-radius:16px;padding:28px;max-width:360px;width:100%;">
+        <div style="font-size:17px;font-weight:800;color:#fff;margin-bottom:6px;">📄 Remisión del proveedor</div>
+        <div style="font-size:13px;color:#9ca3af;margin-bottom:18px;">Ingresa el número de remisión o factura física que llegó con el camión. Siesa lo requiere para cerrar la entrada.</div>
+        <input id="_rem-input" type="text" placeholder="Ej: 00123456"
+          style="width:100%;box-sizing:border-box;padding:13px;background:#0d0d0d;border:1px solid #555;border-radius:10px;color:#fff;font-size:18px;font-weight:700;margin-bottom:16px;letter-spacing:1px;"
+          onkeydown="if(event.key==='Enter') document.getElementById('_rem-ok').click()">
+        <button id="_rem-ok"
+          style="width:100%;padding:15px;font-size:16px;font-weight:700;background:#16a34a;color:#fff;border:none;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+          Confirmar recepción
+        </button>
+        <button id="_rem-cancel"
+          style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>`;
+    document.body.appendChild(overlay);
+    setTimeout(() => overlay.querySelector('#_rem-input').focus(), 100);
+    overlay.querySelector('#_rem-cancel').onclick = () => { overlay.remove(); resolve(null); };
+    overlay.querySelector('#_rem-ok').onclick = () => {
+      const val = overlay.querySelector('#_rem-input').value.trim();
+      if (!val) { overlay.querySelector('#_rem-input').style.border = '1px solid #ef4444'; return; }
+      overlay.remove();
+      resolve(val);
+    };
+  });
 }
 
 async function reiniciarConteoRecepcion() {
