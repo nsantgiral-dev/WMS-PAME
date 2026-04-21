@@ -18,3 +18,4 @@ from app.models.producto_empaque import ProductoEmpaque
 from app.models.lpn import LPN
 from app.models.tarea_reposicion import TareaReposicion
 from app.models.siesa_job import SiesaJob
+from app.models.ubicacion_huerfana import UbicacionHuerfana

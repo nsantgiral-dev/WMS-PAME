@@ -864,49 +864,56 @@ class ConnektaGateway:
                                       ubicacion_destino: str, referencia_item: str,
                                       cantidad: int, nota: str = ''):
         """
-        Conector 173076 (TransitoSalida) — traslado interno entre ubicaciones
-        dentro de la MISMA bodega (RESERVA → PICKING).
+        Conector 173066 (TransferenciaDirecta) — traslado interno en UN SOLO PASO
+        entre ubicaciones dentro de la MISMA bodega (RESERVA → PICKING).
 
+        Reemplaza al 173076 (TransitoSalida) que requería dos pasos y bodega de tránsito.
         Siesa requiere que la bodega tenga "Maneja multi ubicaciones" activo.
-        Campos clave:
-          f470_id_ubicacion_aux     → ubicación origen  (ej. 'RES-01-A')
-          f470_id_ubicacion_aux_ent → ubicación destino (ej. 'PIK-01-B')
+
+        Schema certificado (docx oficial 173066):
+          Documentos: f350_* + f450_id_bodega_salida/entrada (misma bodega)
+          Movimientos: f470_id_ubicacion_aux (origen) + f470_id_ubicacion_aux_ent (destino)
+          Sin f450_docto_alterno (eso es exclusivo de 173076).
         """
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        tipo_docto = self.tipo_docto_traslado or 'TRA'
 
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [{
                 'F_CIA': int(self.id_cia_siesa),
                 'F_CONSEC_AUTO_REG': 1,
-                'f470_id_co': self.centro_op,
-                'f470_id_tipo_docto': self.tipo_docto_transito_salida or 'TS',
-                'f470_consec_docto': 0,
-                'f470_fecha': fecha_hoy,
-                'f470_id_bodega': bodega_id,
-                'f470_notas': nota[:200] if nota else '',
+                'f350_id_co': self.centro_op,
+                'f350_id_tipo_docto': tipo_docto,
+                'f350_consec_docto': 0,
+                'f350_fecha': fecha_hoy,
+                'f350_id_tercero': self.nit_empresa,
+                'f350_ind_estado': 1,
+                'f350_ind_impresion': 1,
+                'f350_notas': nota[:200] if nota else '',
+                'f450_id_bodega_salida': bodega_id,
+                'f450_id_bodega_entrada': bodega_id,  # misma bodega — traslado interno
             }],
             'Movimientos': [{
                 'F_CIA': int(self.id_cia_siesa),
-                'F_CONSEC_AUTO_REG': 1,
+                'f470_id_co': self.centro_op,
+                'f470_id_tipo_docto': tipo_docto,
+                'f470_id_bodega': bodega_id,
+                'f470_id_ubicacion_aux': ubicacion_origen,      # origen  (ej. RES-01-A)
+                'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
                 'f470_referencia_item': referencia_item,
                 'f470_cant_base': cantidad,
-                'f470_id_bodega': bodega_id,
-                'f470_id_ubicacion_aux': ubicacion_origen,
-                'f470_id_ubicacion_aux_ent': ubicacion_destino,
-                'f470_id_motivo': 0,
-                'f470_id_concepto': 0,
-                'f470_ind_obsequio': 0,
-                'f470_ind_naturaleza': 0,
-                'f470_ind_solo_valor': 0,
-                'f470_ind_impto_asumido': 0,
+                'f470_id_motivo': self.motivo_traslado or '01',
+                'f470_id_co_movto': self.centro_op,
+                'f470_id_unidad_medida': self.uom_default or 'UND',
+                'f470_id_un_movto': self.uom_default or 'UND',
             }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }
 
         return self._post(
-            self.conector_transito_salida,
-            'TransitoSalidaUbicaciones',
+            self.conector_transferencia_directa,
+            'API_v1_Inventarios_Comercial_TransferenciaDirecta',
             payload,
         )
 

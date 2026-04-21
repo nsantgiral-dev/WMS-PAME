@@ -12,19 +12,26 @@ Lo que Siesa NO expone (la API solo tiene 5 campos):
     vía endpoint admin PATCH /api/reposicion/ubicacion/<id>/limites
   - secuencia_ruteo → idem, configuración local WMS
 
-El tipo_zona se deduce del prefijo del código:
-  PIK* → PICKING   |   RES* → RESERVA   |   resto → GENERAL
+El tipo_zona se deduce del prefijo del código (Fail-Fast):
+  PIK-* → PICKING | RES-* → RESERVA | AVE-* → AVERIAS
+  Cualquier otro prefijo → cuarentena en ubicaciones_huerfanas (NUNCA GENERAL)
 
 El worker nocturno llama a sync_ubicaciones_desde_siesa().
 """
 
 import logging
+import re
 import threading
 from datetime import datetime, timezone
 from app.extensions import db
 from app.models.ubicacion import Ubicacion
+from app.models.ubicacion_huerfana import UbicacionHuerfana
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
+
+# Prefijos válidos — cualquier código Siesa que no arranque así va a cuarentena.
+# Regla Fail-Fast: nunca auto-clasificar ubicaciones desconocidas como GENERAL.
+_PREFIJO_VALIDO = re.compile(r'^(PIK|RES|AVE)-', re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +46,46 @@ _sync_estado = {
 def _inferir_tipo_zona(codigo: str) -> str:
     """
     Deduce el tipo de zona del prefijo del código Siesa.
-    El jefe de bodega controla el tipo simplemente nombrando:
-      PIK-... → zona de picking (floor level, unidades sueltas)
-      RES-... → zona de reserva (alto, pacas/LPNs sellados)
-      todo lo demás → GENERAL
+    El jefe de bodega controla el tipo simplemente nombrando la ubicación:
+      PIK-... → PICKING  (piso, unidades sueltas)
+      RES-... → RESERVA  (alto, pacas/LPNs sellados)
+      AVE-... → AVERIAS  (productos dañados/en revisión)
+    Solo se llama cuando el código ya pasó la validación _PREFIJO_VALIDO.
     """
     c = (codigo or '').upper()
     if c.startswith('PIK'):
         return 'PICKING'
     if c.startswith('RES'):
         return 'RESERVA'
-    return 'GENERAL'
+    if c.startswith('AVE'):
+        return 'AVERIAS'
+    return 'GENERAL'  # fallback defensivo — no debería llegar aquí
+
+
+def _quarantine(codigo: str, bodega_id: str, descripcion: str, activo: bool):
+    """
+    Inserta o actualiza una ubicación huérfana en cuarentena.
+    Loguea CRITICAL para que Railway lo envíe a los alertas de infraestructura.
+    """
+    logger.critical(
+        f'[UBICACIONES SYNC] FAIL-FAST: código "{codigo}" en bodega "{bodega_id}" '
+        f'no tiene prefijo válido (PIK-|RES-|AVE-). '
+        f'Colocado en cuarentena. Corregir el nombre en Siesa Enterprise.'
+    )
+    existing = UbicacionHuerfana.query.filter_by(
+        codigo_siesa=codigo, bodega_id=bodega_id
+    ).first()
+    if existing:
+        existing.fecha_ultima_vez = datetime.utcnow()
+        existing.veces_detectada += 1
+        existing.activo_siesa = activo
+    else:
+        db.session.add(UbicacionHuerfana(
+            codigo_siesa=codigo,
+            bodega_id=bodega_id,
+            descripcion=descripcion,
+            activo_siesa=activo,
+        ))
 
 
 def _run_sync(app, bodega_id: str = None):
@@ -89,6 +125,7 @@ def _run_sync(app, bodega_id: str = None):
                     if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
                         break
 
+                    huerfanas_lote = 0
                     for row in rows:
                         try:
                             # Campos certificados por PDF oficial API_v2_Ubicaciones:
@@ -99,6 +136,13 @@ def _run_sync(app, bodega_id: str = None):
 
                             activo = int(row.get('f155_ind_estado', 1)) == 1
                             descripcion = (row.get('f155_descripcion') or '').strip() or None
+
+                            # ── Fail-Fast: validar prefijo antes de tocar ubicaciones ──
+                            if not _PREFIJO_VALIDO.match(codigo):
+                                _quarantine(codigo, bid, descripcion or '', activo)
+                                huerfanas_lote += 1
+                                continue
+
                             tipo_zona = _inferir_tipo_zona(codigo)
 
                             ub = Ubicacion.query.filter_by(
@@ -131,6 +175,12 @@ def _run_sync(app, bodega_id: str = None):
                         except Exception as e:
                             logger.error(f'[UBICACIONES SYNC] Fila {row}: {e}')
                             errores += 1
+
+                    if huerfanas_lote:
+                        logger.warning(
+                            f'[UBICACIONES SYNC] {huerfanas_lote} ubicaciones huérfanas '
+                            f'en bodega {bid} — revisar tabla ubicaciones_huerfanas'
+                        )
 
                     db.session.commit()
 

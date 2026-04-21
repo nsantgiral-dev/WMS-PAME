@@ -17,6 +17,7 @@ class Usuario(db.Model):
     # Capacidades operativas — independientes del rol base
     puede_picar = db.Column(db.Boolean, default=True)
     puede_empacar = db.Column(db.Boolean, default=False)
+    puede_abastecer = db.Column(db.Boolean, default=False)  # abastecedor RESERVA→PICKING
     # Límite de conteos cíclicos intercalados por día (0 = sin límite)
     capacidad_diaria_conteo = db.Column(db.Integer, default=15, nullable=False)
 
@@ -43,6 +44,7 @@ class Usuario(db.Model):
             'puede_usar_camara': self.puede_usar_camara if self.puede_usar_camara is not None else True,
             'puede_picar': self.puede_picar if self.puede_picar is not None else True,
             'puede_empacar': self.puede_empacar or False,
+            'puede_abastecer': self.puede_abastecer or False,
             'capacidad_diaria_conteo': self.capacidad_diaria_conteo if self.capacidad_diaria_conteo is not None else 15,
             'bodega_siesa_id': self.bodega_siesa_id,
             'siesa_co_id': self.siesa_co_id,

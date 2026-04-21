@@ -17,7 +17,8 @@ class Ubicacion(db.Model):
     # ── Campos maestros sincronizados desde Siesa (API_v2_Ubicaciones ID 43) ──
     # Siesa es el dueño — el WMS solo obedece. No editar manualmente.
     tipo_zona = db.Column(db.String(10), nullable=False, default='GENERAL')
-    # PICKING = piso, unidades sueltas | RESERVA = alto, LPNs sellados | GENERAL = sin rol especial
+    # PICKING = piso, unidades sueltas | RESERVA = alto, LPNs sellados
+    # AVERIAS = productos dañados/en revisión | GENERAL = sin rol especial (legado)
     stock_minimo = db.Column(db.Integer, nullable=True)   # f152_cant_minima en Siesa
     stock_maximo = db.Column(db.Integer, nullable=True)   # f152_cant_maxima en Siesa
     secuencia_ruteo = db.Column(db.Integer, nullable=True)  # f152_secuencia — menor = primero
