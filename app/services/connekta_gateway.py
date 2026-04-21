@@ -191,7 +191,7 @@ class ConnektaGateway:
                 headers=self.headers,
                 params=params,
                 json=payload,
-                timeout=(10, 90),  # connect=10s, read=90s — corta antes del worker timeout de Gunicorn
+                timeout=(10, 30),  # connect=10s, read=30s — falla rápido; gunicorn timeout=120s
             )
             if not r.ok:
                 try:
@@ -202,8 +202,8 @@ class ConnektaGateway:
                 raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
             return r.json()
         except requests.exceptions.Timeout:
-            logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 90s')
-            raise Exception('Siesa no respondió en 90s — la recepción quedó EN_PROCESO, reintenta confirmar')
+            logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
+            raise Exception('Siesa no respondió en 30s — la recepción quedó EN_PROCESO, reintenta confirmar')
         except requests.exceptions.RequestException as e:
             logger.error(f'[CONNEKTA] POST {id_conector}: {e}')
             raise Exception(f'Error inyectando en Siesa: {e}')
