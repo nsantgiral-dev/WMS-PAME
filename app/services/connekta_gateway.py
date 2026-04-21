@@ -587,7 +587,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': proveedor_id or None,                         # NIT proveedor (pos 43-58)
-                    'f350_ind_estado': 0,
+                    'f350_ind_estado': 1,                                            # 1 = Aprobado — afecta inventario y genera asiento contable inmediatamente
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
