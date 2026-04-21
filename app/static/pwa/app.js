@@ -6733,10 +6733,12 @@ async function repCargarUbicaciones() {
     }
 
     el.innerHTML = ubs.map(u => {
-      const actual   = u.stock_actual ?? 0;
-      const minimo   = u.stock_minimo;
-      const maximo   = u.stock_maximo;
+      const actual    = u.stock_actual ?? 0;
+      const minimo    = u.stock_minimo;
+      const maximo    = u.stock_maximo;
       const sinLimite = minimo == null;
+      const sku       = u.sku_asignado;
+      const skuLabel  = sku ? `${sku.codigo} — ${sku.nombre}` : null;
 
       // Semáforo
       let color, label, pct = 0;
@@ -6753,19 +6755,21 @@ async function repCargarUbicaciones() {
         pct = maximo ? Math.min(100, Math.round((actual / maximo) * 100)) : 80;
       }
 
-      const barW = sinLimite ? 0 : pct;
-      const barColor = color;
+      const skuEsc = skuLabel ? skuLabel.replace(/'/g, "\\'") : '';
 
       return `
         <div class="tabla-card" style="margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div>
               <div style="font-size:16px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
-              <div style="font-size:11px;color:var(--tx3);margin-top:2px;">${u.zona || ''}</div>
+              ${skuLabel
+                ? `<div style="font-size:11px;color:#60a5fa;margin-top:3px;font-weight:600;">📦 ${skuLabel}</div>`
+                : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin producto asignado</div>`
+              }
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${label}</span>
-              <button onclick="repAbrirModal(${u.id}, '${u.codigo}', ${minimo ?? ''}, ${maximo ?? ''}, ${u.secuencia_ruteo ?? ''})"
+              <button onclick="repAbrirModal(${u.id}, '${u.codigo}', ${minimo ?? ''}, ${maximo ?? ''}, ${u.secuencia_ruteo ?? ''}, '${skuEsc}')"
                 style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
                 Configurar
               </button>
@@ -6775,7 +6779,7 @@ async function repCargarUbicaciones() {
           <!-- Barra de stock -->
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
             <div style="flex:1;background:var(--brd);border-radius:6px;height:8px;overflow:hidden;">
-              <div style="width:${barW}%;height:100%;background:${barColor};border-radius:6px;transition:width .3s;"></div>
+              <div style="width:${sinLimite ? 0 : pct}%;height:100%;background:${color};border-radius:6px;transition:width .3s;"></div>
             </div>
             <div style="font-size:13px;font-weight:700;color:var(--tx);min-width:36px;text-align:right;">${actual}</div>
           </div>
@@ -6783,11 +6787,11 @@ async function repCargarUbicaciones() {
           <!-- Límites -->
           <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);">
             ${sinLimite
-              ? `<span style="color:#555;">Sin mínimo/máximo configurado — toca "Configurar"</span>`
+              ? `<span style="color:#f59e0b;">⚠ Sin mínimo/máximo — toca "Configurar" para activar reposición</span>`
               : `<span>Mín <strong style="color:var(--tx);">${minimo}</strong></span>
                  <span>Máx <strong style="color:var(--tx);">${maximo ?? '—'}</strong></span>
                  ${u.secuencia_ruteo != null ? `<span>Seq <strong style="color:var(--tx);">${u.secuencia_ruteo}</strong></span>` : ''}
-                 <span>Configurado <strong style="color:#22c55e;">✓</strong></span>`
+                 <span style="color:#22c55e;">✓ Motor activo</span>`
             }
           </div>
         </div>`;
@@ -6798,7 +6802,7 @@ async function repCargarUbicaciones() {
 }
 
 // Modal configurar límites
-function repAbrirModal(ubId, codigo, min, max, seq) {
+function repAbrirModal(ubId, codigo, min, max, seq, sku) {
   _repModalUbId = ubId;
   const m = document.getElementById('modal-rep-limites');
   if (!m) return;
@@ -6806,6 +6810,8 @@ function repAbrirModal(ubId, codigo, min, max, seq) {
   document.getElementById('rep-modal-min').value = min !== '' ? min : '';
   document.getElementById('rep-modal-max').value = max !== '' ? max : '';
   document.getElementById('rep-modal-seq').value = seq !== '' ? seq : '';
+  const skuEl = document.getElementById('rep-modal-sku');
+  if (skuEl) skuEl.textContent = sku || 'Sin producto (vacía)';
   m.style.display = 'flex';
 }
 

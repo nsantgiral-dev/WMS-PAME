@@ -210,6 +210,7 @@ def listar_ubicaciones_picking():
 
     ubicaciones = q.order_by(Ubicacion.codigo).all()
 
+    from app.models.producto import Producto
     resultado = []
     for ub in ubicaciones:
         inventarios = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).all()
@@ -218,6 +219,19 @@ def listar_ubicaciones_picking():
         d['stock_actual'] = stock_actual
         d['productos_count'] = len(inventarios)
         d['limites_configurados'] = ub.stock_minimo is not None and ub.stock_maximo is not None
+
+        # SKU dominante (el que tiene más stock en esta ubicación)
+        if inventarios:
+            inv_top = max(inventarios, key=lambda i: i.cantidad or 0)
+            prod = Producto.query.get(inv_top.producto_id)
+            d['sku_asignado'] = {
+                'id': inv_top.producto_id,
+                'codigo': prod.codigo if prod else None,
+                'nombre': prod.nombre if prod else None,
+            }
+        else:
+            d['sku_asignado'] = None
+
         resultado.append(d)
 
     sin_limites = sum(1 for u in resultado if not u['limites_configurados'])
