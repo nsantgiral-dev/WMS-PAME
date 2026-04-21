@@ -7091,3 +7091,26 @@ async function repReintentar(jobId) {
     else alerta(d.error || 'Error', 'error');
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
+
+async function repTestEmail() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Enviando...';
+  try {
+    const r = await fetch(API + '/api/reposicion/alertas/test-email', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      alerta('Email enviado — revisa la bandeja de wms@papeleriamedellin.com.co', 'ok');
+    } else {
+      alerta(d.error || 'Error al enviar — revisa las variables SMTP en Railway', 'error');
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Enviar email de prueba ahora';
+  }
+}
