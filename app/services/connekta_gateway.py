@@ -616,7 +616,7 @@ class ConnektaGateway:
                     'f420_id_co_docto': id_co_oc,
                     'f420_id_tipo_docto': tipo_docto_oc,
                     'f420_consec_docto': consec_docto_oc,
-                    'f420_ind_modo_sobrecosto': 0
+                    'f420_ind_modo_sobrecosto': 1                                        # 1=Asume costo de la OC — requerido cuando se referencia una OC
                 }
             ],
             'Movimientos': [
