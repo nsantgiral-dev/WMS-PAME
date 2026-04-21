@@ -836,6 +836,26 @@ def iniciar_recepcion():
     if not items_validos:
         return jsonify({'error': 'Ningún producto de la OC está registrado en el WMS'}), 400
 
+    # Validar tipo de proveedor antes de crear la recepción.
+    # Solo 0001 (Nacionales) y 0002 (Extranjero) tienen Aux. Pasivo Estimado
+    # configurado en Siesa — cualquier otro tipo revienta el conector 142948.
+    nit_proveedor = (data.get('proveedor_codigo') or '').strip()
+    if nit_proveedor:
+        val = connekta.validar_tipo_proveedor(nit_proveedor)
+        if val.get('configurado') is False:
+            return jsonify({'error': val['mensaje']}), 422
+        tipo = val.get('tipo_proveedor') or ''
+        if tipo and tipo not in ('0001', '0002'):
+            return jsonify({
+                'error': (
+                    f'El proveedor NIT {nit_proveedor} tiene Tipo de Proveedor {tipo} '
+                    f'({tipo}), el cual no tiene cuenta de Pasivo Estimado configurada. '
+                    f'Solo los tipos 0001 (Nacionales) y 0002 (Extranjero) pueden '
+                    f'generar entradas de inventario. Corrige en Siesa: Maestros → '
+                    f'Terceros → [este NIT] → pestaña Compras → Tipo de Proveedor.'
+                )
+            }), 422
+
     # Idempotente: si ya existe una recepción activa para esta OC, redirigir a ella
     from app.models.recepcion import RecepcionMercancia
     existente = RecepcionMercancia.query.filter_by(

@@ -252,15 +252,11 @@ class RecepcionService:
         Clase A: zona de alta rotación (cerca de despacho)
         Clase B/C: zonas normales
         """
-        zona_preferida = {
-            'A': 'A',
-            'B': 'B',
-            'C': 'C'
-        }.get(clasificacion_abc, 'B')
+        tipo_zona_preferida = 'PICKING' if clasificacion_abc == 'A' else 'RESERVA'
 
         ubicacion = Ubicacion.query.filter_by(
             almacen_id=almacen_id,
-            zona=zona_preferida,
+            tipo_zona=tipo_zona_preferida,
             activo=True
         ).first()
 
