@@ -95,11 +95,18 @@ def verificar_stock():
 @reposicion_bp.route('/pendientes', methods=['GET'])
 @jwt_required()
 def pendientes():
-    """Lista tareas PENDIENTE + EN_PROCESO (admin / jefe de almacén)."""
+    """Lista tareas filtradas por estado (admin / jefe de almacén)."""
     from app.models.tarea_reposicion import TareaReposicion
-    tareas = TareaReposicion.query.filter(
-        TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-    ).order_by(TareaReposicion.fecha_creacion.asc()).all()
+    estado = request.args.get('estado', '').upper()
+    estados_validos = {'PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'CANCELADA'}
+
+    if estado in estados_validos:
+        q = TareaReposicion.query.filter(TareaReposicion.estado == estado)
+    else:
+        q = TareaReposicion.query.filter(
+            TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+        )
+    tareas = q.order_by(TareaReposicion.fecha_creacion.desc()).limit(100).all()
     return jsonify({'tareas': [t.to_dict() for t in tareas], 'total': len(tareas)}), 200
 
 
@@ -205,9 +212,11 @@ def listar_ubicaciones_picking():
 
     resultado = []
     for ub in ubicaciones:
-        inv_count = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).count()
+        inventarios = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).all()
+        stock_actual = sum((i.cantidad or 0) for i in inventarios)
         d = ub.to_dict()
-        d['productos_count'] = inv_count
+        d['stock_actual'] = stock_actual
+        d['productos_count'] = len(inventarios)
         d['limites_configurados'] = ub.stock_minimo is not None and ub.stock_maximo is not None
         resultado.append(d)
 
@@ -218,6 +227,22 @@ def listar_ubicaciones_picking():
         'sin_limites': sin_limites,
         'advertencia': f'{sin_limites} ubicaciones PICKING sin límites — no generarán tareas de reposición' if sin_limites else None,
     }), 200
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Ubicaciones Huérfanas — cuarentena Fail-Fast
+# ──────────────────────────────────────────────────────────────────────────────
+
+@reposicion_bp.route('/ubicaciones-huerfanas', methods=['GET'])
+@jwt_required()
+def ubicaciones_huerfanas():
+    """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync Siesa)."""
+    from app.models.ubicacion_huerfana import UbicacionHuerfana
+    items = UbicacionHuerfana.query.order_by(
+        UbicacionHuerfana.veces_detectada.desc(),
+        UbicacionHuerfana.fecha_ultima_vez.desc(),
+    ).all()
+    return jsonify({'huerfanas': [h.to_dict() for h in items], 'total': len(items)}), 200
 
 
 # ──────────────────────────────────────────────────────────────────────────────
