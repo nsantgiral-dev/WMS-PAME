@@ -7092,10 +7092,8 @@ async function repReintentar(jobId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-async function repTestEmail() {
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = 'Enviando...';
+async function repTestEmail(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
     const r = await fetch(API + '/api/reposicion/alertas/test-email', {
       method: 'POST',
@@ -7105,12 +7103,11 @@ async function repTestEmail() {
     if (r.ok && d.ok) {
       alerta('Email enviado — revisa la bandeja de wms@papeleriamedellin.com.co', 'ok');
     } else {
-      alerta(d.error || 'Error al enviar — revisa las variables SMTP en Railway', 'error');
+      alerta(d.error || 'Error SMTP — revisa las variables en Railway', 'error');
     }
   } catch (e) {
-    alerta('Error de conexión', 'error');
+    alerta(`Error: ${e.message || 'no se pudo conectar al servidor'}`, 'error');
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Enviar email de prueba ahora';
+    if (btn) { btn.disabled = false; btn.textContent = 'Enviar email de prueba ahora'; }
   }
 }
