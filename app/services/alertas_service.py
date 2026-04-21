@@ -19,8 +19,6 @@ Si las variables no están configuradas el cron corre en silencio (solo log).
 """
 import logging
 import os
-import urllib.request
-import urllib.error
 import json
 from datetime import datetime
 
@@ -60,33 +58,31 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
                        'Agrega RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.')
         return False
 
-    payload = json.dumps({
+    import requests as _requests
+
+    payload = {
         'from':    cfg['from'],
         'to':      cfg['dest'],
         'subject': asunto,
         'html':    cuerpo_html,
         'text':    cuerpo_texto,
-    }).encode('utf-8')
-
-    req = urllib.request.Request(
-        'https://api.resend.com/emails',
-        data=payload,
-        headers={
-            'Authorization': f'Bearer {cfg["api_key"]}',
-            'Content-Type':  'application/json',
-        },
-        method='POST',
-    )
+    }
 
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body = json.loads(resp.read())
-            logger.info(f'[ALERTAS] Email enviado a {cfg["dest"]} — id={body.get("id")}: {asunto}')
+        resp = _requests.post(
+            'https://api.resend.com/emails',
+            json=payload,
+            headers={'Authorization': f'Bearer {cfg["api_key"]}'},
+            timeout=15,
+        )
+        logger.info(f'[ALERTAS] Resend status={resp.status_code} body={resp.text[:300]}')
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            logger.info(f'[ALERTAS] Email enviado — id={data.get("id")}: {asunto}')
             return True
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8', errors='replace')
-        logger.error(f'[ALERTAS] Resend HTTP {e.code}: {error_body}')
-        raise RuntimeError(f'Resend HTTP {e.code}: {error_body}')
+        raise RuntimeError(f'Resend {resp.status_code}: {resp.text}')
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error(f'[ALERTAS] Error enviando email via Resend: {e}')
         raise
