@@ -349,57 +349,51 @@ def debug_ubicaciones_raw():
 @reposicion_bp.route('/alertas/test-email', methods=['POST'])
 @jwt_required()
 def test_alerta_email():
-    """
-    Envía un email de prueba SIEMPRE, sin importar si hay huérfanas o no.
-    Útil para verificar que SMTP está configurado correctamente en Railway.
-    """
-    from app.services.alertas_service import enviar_email
+    """Envía un email de prueba via Resend. Muestra el error real si falla."""
+    from app.services.alertas_service import enviar_email, _config_resend
     from app.models.ubicacion_huerfana import UbicacionHuerfana
     from datetime import datetime
 
-    # Usar huérfanas reales si las hay, si no usar datos ficticios de ejemplo
-    huerfanas_reales = UbicacionHuerfana.query.limit(3).all()
+    if not _config_resend():
+        return jsonify({'ok': False, 'error': 'Resend no configurado — agrega RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway'}), 400
 
+    # Usar huérfanas reales si las hay
+    huerfanas_reales = UbicacionHuerfana.query.limit(3).all()
     if huerfanas_reales:
         from app.services.alertas_service import _enviar_alerta_huerfanas
         try:
             _enviar_alerta_huerfanas(huerfanas_reales)
-            return jsonify({'ok': True, 'mensaje': f'Email enviado con {len(huerfanas_reales)} huérfana(s) real(es) — revisa wms@papeleriamedellin.com.co'}), 200
+            return jsonify({'ok': True, 'mensaje': f'Email enviado con {len(huerfanas_reales)} huérfana(s) real(es)'}), 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return jsonify({'ok': False, 'error': str(e)}), 500
 
-    # Sin huérfanas reales → email de prueba con datos ficticios
-    asunto = '✅ WMS Papelería Medellín — Email de prueba (SMTP configurado correctamente)'
+    # Sin huérfanas → email de prueba
+    asunto = '✅ WMS Papelería Medellín — Email de prueba'
     cuerpo_texto = (
         'Este es un email de prueba del WMS de Papelería Medellín.\n\n'
-        'Si recibes este mensaje, el SMTP está configurado correctamente en Railway.\n\n'
-        'El cron de alertas corre todos los días a las 06:00 y solo enviará '
-        'email real cuando haya ubicaciones con prefijo inválido en Siesa.'
+        'Si recibes este mensaje, Resend está configurado correctamente.\n\n'
+        'El cron de alertas corre todos los días a las 06:00 Bogotá.'
     )
     cuerpo_html = f"""<!DOCTYPE html>
 <html><body style="font-family:system-ui,sans-serif;background:#0f0f0f;color:#e5e7eb;padding:24px;">
   <div style="max-width:560px;margin:0 auto;background:#1c1c1c;border:1px solid #333;
               border-radius:12px;padding:24px;border-left:4px solid #22c55e;">
     <div style="font-size:11px;color:#4ade80;font-weight:700;text-transform:uppercase;
-                letter-spacing:0.08em;margin-bottom:8px;">WMS Papelería Medellín · Prueba SMTP · {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
+                letter-spacing:0.08em;margin-bottom:8px;">WMS Papelería Medellín · {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
     <div style="font-size:22px;font-weight:800;margin-bottom:12px;">✅ Email de prueba recibido</div>
     <div style="font-size:14px;color:#9ca3af;line-height:1.6;">
-      El servidor SMTP está configurado correctamente en Railway.<br><br>
-      El cron de alertas corre todos los días a las <strong style="color:#fff;">06:00 hora Bogotá</strong>
-      y solo enviará email cuando haya ubicaciones con prefijo inválido en Siesa Enterprise
-      (<code style="color:#f59e0b;">veces_detectada &gt; 1</code>).
+      Resend está configurado correctamente en Railway.<br><br>
+      El cron corre todos los días a las <strong style="color:#fff;">06:00 hora Bogotá</strong>
+      y enviará alertas cuando haya ubicaciones con prefijo inválido en Siesa.
     </div>
   </div>
 </body></html>"""
 
     try:
-        enviado = enviar_email(asunto, cuerpo_html, cuerpo_texto)
-        if enviado:
-            return jsonify({'ok': True, 'mensaje': 'Email de prueba enviado — revisa wms@papeleriamedellin.com.co'}), 200
-        else:
-            return jsonify({'ok': False, 'error': 'SMTP no configurado — revisa las variables SMTP_HOST, SMTP_USER, SMTP_PASS, ALERTA_EMAIL_DEST en Railway'}), 500
+        enviar_email(asunto, cuerpo_html, cuerpo_texto)
+        return jsonify({'ok': True, 'mensaje': 'Email de prueba enviado — revisa la bandeja'}), 200
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 
 @reposicion_bp.route('/alertas/smtp-check', methods=['GET'])

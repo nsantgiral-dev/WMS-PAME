@@ -86,10 +86,10 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='replace')
         logger.error(f'[ALERTAS] Resend HTTP {e.code}: {error_body}')
-        return False
+        raise RuntimeError(f'Resend HTTP {e.code}: {error_body}')
     except Exception as e:
         logger.error(f'[ALERTAS] Error enviando email via Resend: {e}')
-        return False
+        raise
 
 
 # ── Alerta de ubicaciones huérfanas ──────────────────────────────────────────
