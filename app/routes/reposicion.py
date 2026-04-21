@@ -340,3 +340,22 @@ def debug_ubicaciones_raw():
         }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Alertas — admin
+# ──────────────────────────────────────────────────────────────────────────────
+
+@reposicion_bp.route('/alertas/test-email', methods=['POST'])
+@jwt_required()
+def test_alerta_email():
+    """
+    Dispara manualmente la alerta de ubicaciones huérfanas por email.
+    Útil para verificar que SMTP está configurado correctamente en Railway.
+    """
+    from app.services.alertas_service import verificar_y_alertar_huerfanas
+    try:
+        verificar_y_alertar_huerfanas(app=current_app._get_current_object())
+        return jsonify({'ok': True, 'mensaje': 'Alerta ejecutada — revisa logs y bandeja de entrada'}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

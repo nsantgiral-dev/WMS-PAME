@@ -107,5 +107,11 @@ def create_app():
         except Exception as e:
             import logging
             logging.getLogger(__name__).error(f'[DLQ_SCHEDULER] No se pudo iniciar: {e}')
+        try:
+            from app.services.alertas_service import init_scheduler as init_alertas_scheduler
+            init_alertas_scheduler(app)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'[ALERTAS_SCHEDULER] No se pudo iniciar: {e}')
 
     return app
