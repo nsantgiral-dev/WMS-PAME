@@ -77,12 +77,12 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
         context = ssl.create_default_context()
         if cfg['port'] == 465:
             # SSL directo — cPanel/Banahosting
-            with smtplib.SMTP_SSL(cfg['host'], cfg['port'], context=context) as srv:
+            with smtplib.SMTP_SSL(cfg['host'], cfg['port'], context=context, timeout=15) as srv:
                 srv.login(cfg['user'], cfg['password'])
                 srv.sendmail(cfg['from'], cfg['dest'], msg.as_string())
         else:
             # STARTTLS — puerto 587 (Gmail, Outlook) o 25
-            with smtplib.SMTP(cfg['host'], cfg['port']) as srv:
+            with smtplib.SMTP(cfg['host'], cfg['port'], timeout=15) as srv:
                 srv.ehlo()
                 if cfg['port'] != 25:
                     srv.starttls(context=context)
