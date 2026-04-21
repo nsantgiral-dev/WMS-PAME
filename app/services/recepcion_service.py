@@ -93,11 +93,15 @@ class RecepcionService:
     @staticmethod
     def escanear_producto(recepcion_id: int, producto_id: int,
                           cantidad: int, lote: str = None,
-                          fecha_vencimiento=None, es_empaque: bool = False):
+                          fecha_vencimiento=None, es_empaque: bool = False,
+                          es_bonificacion: bool = False):
         """
         Recepción ciega — el operario escanea sin ver cantidades esperadas.
         El sistema valida excesos en tiempo real y bloquea si supera tolerancia.
+        Si es_bonificacion=True y el producto no está en la OC, se registra como
+        ítem adicional con motivo 04 (Obsequio/Bonificación, $0, no afecta costo promedio).
         """
+        import os
         recepcion = RecepcionMercancia.query.get(recepcion_id)
         if not recepcion:
             raise ValueError('Recepción no encontrada')
@@ -110,10 +114,25 @@ class RecepcionService:
         ).first()
 
         if not item:
-            raise ValueError(
-                f'Producto no pertenece a esta OC. '
-                f'Verificar con el proveedor — posible error de despacho.'
+            if not es_bonificacion:
+                raise ValueError({
+                    'tipo': 'PRODUCTO_NO_EN_OC',
+                    'mensaje': 'Producto no está en esta OC. '
+                               'Si es bonificación u obsequio del proveedor, confirma para registrarlo.',
+                    'producto_id': producto_id,
+                    'requiere_confirmacion': True
+                })
+            motivo_codigo = os.environ.get('SIESA_MOTIVO_OBSEQUIO', '04')
+            item = ItemRecepcion(
+                recepcion_id=recepcion_id,
+                producto_id=producto_id,
+                cantidad_ordenada=0,
+                tolerancia_exceso_pct=0.0,
+                tipo='BONIFICACION',
+                motivo_siesa=motivo_codigo
             )
+            db.session.add(item)
+            db.session.flush()
 
         # Conversión de empaque: si escanearon la caja/paca, multiplicar por factor
         if es_empaque and item.producto and (item.producto.factor_conversion or 1) > 1:
@@ -403,11 +422,13 @@ class RecepcionService:
             'lote': i.lote,
             'es_parcial': i.es_faltante(),
             'destino': i.destino,
+            'tipo': i.tipo,
+            'motivo_siesa': i.motivo_siesa,
             # Buscar por código WMS primero, luego por código Siesa
             'bodega': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('bodega'),
             'uom': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('uom'),
             'fecha_entrega': (items_oc.get(i.producto.codigo) or items_oc.get(i.producto.codigo_siesa) or {}).get('fecha_entrega'),
-        } for i in recepcion.items]
+        } for i in recepcion.items if i.cantidad_recibida > 0]
 
         try:
             respuesta_siesa = connekta.confirmar_entrada_compras(

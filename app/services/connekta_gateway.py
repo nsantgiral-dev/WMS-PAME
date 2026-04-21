@@ -623,6 +623,8 @@ class ConnektaGateway:
                     'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
+                    # Bonificación/Obsequio: motivo 04 — Solo Cantidad, $0, no afecta costo promedio
+                    'f470_id_motivo': i.get('motivo_siesa') if i.get('tipo') == 'BONIFICACION' else None,
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
                     'f421_fecha_entrega': self._fmt_fecha(i.get('fecha_entrega')) or fecha_hoy,

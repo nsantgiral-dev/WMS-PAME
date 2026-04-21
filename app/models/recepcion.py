@@ -113,6 +113,10 @@ class ItemRecepcion(db.Model):
     # Estado del ítem
     ingresado_inventario = db.Column(db.Boolean, default=False)
 
+    # Tipo de ítem: OC = viene en la orden | BONIFICACION = adicional del proveedor ($0)
+    tipo = db.Column(db.String(20), default='OC', nullable=False)
+    motivo_siesa = db.Column(db.String(10))  # código motivo Siesa, ej. '04'
+
     # Lote y vencimiento
     lote = db.Column(db.String(50))
     fecha_vencimiento = db.Column(db.Date)
@@ -124,15 +128,23 @@ class ItemRecepcion(db.Model):
                                            foreign_keys=[ubicacion_cross_dock_id], lazy=True)
 
     def cantidad_maxima_permitida(self):
+        if self.tipo == 'BONIFICACION':
+            return 999999
         return int(self.cantidad_ordenada * (1 + self.tolerancia_exceso_pct / 100))
 
     def es_exceso(self):
+        if self.tipo == 'BONIFICACION':
+            return False
         return self.cantidad_recibida > self.cantidad_maxima_permitida()
 
     def es_faltante(self):
+        if self.tipo == 'BONIFICACION':
+            return False
         return self.cantidad_recibida < self.cantidad_ordenada
 
     def diferencia(self):
+        if self.tipo == 'BONIFICACION':
+            return 0
         return self.cantidad_recibida - self.cantidad_ordenada
 
     def to_dict(self):
@@ -157,6 +169,8 @@ class ItemRecepcion(db.Model):
             'ingresado_inventario': self.ingresado_inventario,
             'lote': self.lote,
             'fecha_vencimiento': self.fecha_vencimiento.isoformat() if self.fecha_vencimiento else None,
+            'tipo': self.tipo,
+            'motivo_siesa': self.motivo_siesa,
             'factor_conversion': (self.producto.factor_conversion or 1) if self.producto else 1,
             'unidad_empaque': (self.producto.unidad_empaque or '') if self.producto else '',
         }
