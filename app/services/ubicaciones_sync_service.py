@@ -63,7 +63,7 @@ def _run_sync(app, bodega_id: str = None):
 
         try:
             # Necesitamos mapear bodega_id (Siesa) → almacen_id (WMS)
-            almacenes = {a.codigo_siesa: a.id for a in Almacen.query.all() if a.codigo_siesa}
+            almacenes = {a.bodega_siesa_id: a.id for a in Almacen.query.all() if a.bodega_siesa_id}
             if not almacenes:
                 logger.warning('[UBICACIONES SYNC] No hay almacenes con codigo_siesa — abortando')
                 _sync_estado['ultimo_error'] = 'Sin almacenes con codigo_siesa'

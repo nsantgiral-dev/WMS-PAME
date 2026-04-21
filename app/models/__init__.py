@@ -16,3 +16,5 @@ from app.models.ruta_despacho import RutaDespacho
 from app.models.producto_clasificacion_abc import ProductoClasificacionABC
 from app.models.producto_empaque import ProductoEmpaque
 from app.models.lpn import LPN
+from app.models.tarea_reposicion import TareaReposicion
+from app.models.siesa_job import SiesaJob

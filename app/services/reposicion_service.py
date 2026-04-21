@@ -209,7 +209,6 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
         inv_picking = UbicacionProducto(
             ubicacion_id=tarea.ubicacion_picking_id,
             producto_id=tarea.producto_id,
-            almacen_id=tarea.almacen_id,
             cantidad=unidades,
             reservado=0,
             bloqueado=0,

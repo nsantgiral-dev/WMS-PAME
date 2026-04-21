@@ -62,13 +62,18 @@ def procesar_jobs_pendientes(app=None):
     with _app.app_context():
         ahora = datetime.utcnow()
 
-        jobs = SiesaJob.query.filter(
+        q = SiesaJob.query.filter(
             SiesaJob.estado == 'PENDIENTE',
             db.or_(
                 SiesaJob.proximo_intento.is_(None),
                 SiesaJob.proximo_intento <= ahora,
             )
-        ).with_for_update(skip_locked=True).limit(20).all()
+        ).limit(20)
+        # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
+        try:
+            jobs = q.with_for_update(skip_locked=True).all()
+        except Exception:
+            jobs = q.all()
 
         if not jobs:
             return 0
