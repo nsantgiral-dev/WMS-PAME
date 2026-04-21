@@ -73,8 +73,9 @@ function mostrarSegunRol(rol) {
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
   const esTienda = rol === 'tienda';
-  const puedeEmpacar = OPERARIO?.puede_empacar || false;
-  const puedePicar   = OPERARIO?.puede_picar !== false; // default true
+  const puedeEmpacar    = OPERARIO?.puede_empacar    || false;
+  const puedePicar      = OPERARIO?.puede_picar      !== false; // default true
+  const puedeAbastecer  = OPERARIO?.puede_abastecer  || false;
 
   // pantalla() SIEMPRE primero — garantiza que el panel correcto es visible
   // antes de cualquier actualización del DOM. Evita que actualizarUI
@@ -107,21 +108,23 @@ function mostrarSegunRol(rol) {
         cargarDevoluciones(true);
       }
     }, 30000);
-  } else if (puedeEmpacar && !puedePicar) {
+  } else if (puedeAbastecer && !puedePicar && !puedeEmpacar) {
+    // Abastecedor puro → directo al HUD de reposición
+    abastIniciar();
+  } else if (puedeEmpacar && !puedePicar && !puedeAbastecer) {
     // Empacador puro → directo al HUD de packing
     pantalla('pantalla-empacador');
     if (OPERARIO) actualizarUI(OPERARIO);
-    document.getElementById('emp-nombre').textContent = OPERARIO.nombre;
     empCargarTareas();
     TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
-  } else if (puedeEmpacar && puedePicar) {
-    // Rol dual: picker + empacador → picker por defecto con acceso a packing
+  } else if (puedeAbastecer && (puedePicar || puedeEmpacar)) {
+    // Rol dual: picker/empacador + abastecedor → picker por defecto, botón para cambiar
     pantalla('pantalla-operario');
     if (OPERARIO) actualizarUI(OPERARIO);
     pedirTarea();
     TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   } else {
-    // Picker puro (o operario sin flags)
+    // Picker puro, empacador+picker, o operario sin flags especiales
     pantalla('pantalla-operario');
     if (OPERARIO) actualizarUI(OPERARIO);
     pedirTarea();
@@ -314,7 +317,7 @@ async function login() {
 }
 
 function actualizarUI(op) {
-  ['op-nombre','admin-nombre','rec-nombre'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.nombre; });
+  ['op-nombre','admin-nombre','rec-nombre','abast-nombre','emp-nombre'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.nombre; });
   ['op-rol','admin-rol'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.rol; });
 }
 
@@ -682,7 +685,8 @@ async function cargarOperarios() {
     el.innerHTML = todos.map((u, i) => {
       const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0 };
       const badges = [u.puede_picar && '<span style="background:#1e40af;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Picker</span>',
-                      u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>'].filter(Boolean).join(' ');
+                      u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>',
+                      u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>'].filter(Boolean).join(' ');
       const color = op.total_tareas > 0 ? (i === 0 ? '#4ade80' : '#fff') : '#555';
       return `
       <div class="tabla-card">
@@ -1841,7 +1845,7 @@ async function cargarRecepciones(silencioso = false) {
 }
 
 function pantalla(id) {
-  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador','pantalla-conductor','pantalla-tienda'].forEach(p => {
+  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador','pantalla-conductor','pantalla-tienda','pantalla-abastecedor'].forEach(p => {
     const el = document.getElementById(p);
     if (el) el.style.display = p === id ? 'block' : 'none';
   });
@@ -3292,6 +3296,7 @@ async function cargarUsuarios() {
               <span style="font-size:11px;font-weight:600;color:${rolColor};background:#1a1a1a;padding:2px 8px;border-radius:8px;">${u.rol}</span>
               ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
               ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
+              ${u.puede_abastecer ? `<span style="font-size:11px;font-weight:600;color:#fed7aa;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
             </div>
           </div>
           <button onclick="editarUsuario(${u.id})"
@@ -3349,10 +3354,17 @@ function _formUsuario(u = {}) {
             <div style="font-size:11px;color:#555;">Verifica y cierra cajas en mesa de empaque</div>
           </div>
         </label>
+        <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
+          <input type="checkbox" id="u-puede-abastecer" ${u.puede_abastecer?'checked':''} style="width:20px;height:20px;accent-color:#f97316;">
+          <div>
+            <div style="font-size:14px;font-weight:600;color:#f97316;">Abastecedor</div>
+            <div style="font-size:11px;color:#555;">Puede mover pacas de zona RESERVA a zona PICKING</div>
+          </div>
+        </label>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;">
           <input type="checkbox" id="u-puede-camara" ${u.puede_usar_camara!==false?'checked':''} style="width:20px;height:20px;accent-color:#34d399;">
           <div>
-            <div style="font-size:14px;font-weight:600;color:#34d399;">📷 Usar cámara para escanear</div>
+            <div style="font-size:14px;font-weight:600;color:#34d399;">Usar cámara para escanear</div>
             <div style="font-size:11px;color:#555;">Muestra botón de cámara en picking y recepción</div>
           </div>
         </label>
@@ -3407,9 +3419,10 @@ async function _guardarUsuario(uid) {
   const email  = document.getElementById('u-email')?.value.trim();
   const pass   = document.getElementById('u-password')?.value;
   const rol    = document.getElementById('u-rol')?.value;
-  const puedePicar   = document.getElementById('u-puede-picar')?.checked;
-  const puedeEmpacar = document.getElementById('u-puede-empacar')?.checked;
-  const puedeCamara  = document.getElementById('u-puede-camara')?.checked ?? true;
+  const puedePicar      = document.getElementById('u-puede-picar')?.checked;
+  const puedeEmpacar    = document.getElementById('u-puede-empacar')?.checked;
+  const puedeAbastecer  = document.getElementById('u-puede-abastecer')?.checked || false;
+  const puedeCamara     = document.getElementById('u-puede-camara')?.checked ?? true;
   const capacidadConteo = parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10);
 
   if (!nombre) { alerta('El nombre es requerido', 'error'); return; }
@@ -3418,7 +3431,8 @@ async function _guardarUsuario(uid) {
   const nombrePv = document.getElementById('u-nombre-pv')?.value.trim() || null;
 
   const payload = {
-    nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar, puede_usar_camara: puedeCamara,
+    nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
+    puede_abastecer: puedeAbastecer, puede_usar_camara: puedeCamara,
     capacidad_diaria_conteo: isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo),
     bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv
   };
@@ -6448,3 +6462,203 @@ async function tiendaRecibirSolicitud(id) {
 }
 
 // _condConfirmarEntrega eliminado — reemplazado por el flujo por parada
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MÓDULO ABASTECEDOR — Reposición RESERVA → PICKING
+// ══════════════════════════════════════════════════════════════════════════════
+
+let ABAST_TAREA = null;       // tarea activa del abastecedor
+let ABAST_TIMER = null;       // polling automático
+
+function abastIniciar() {
+  pantalla('pantalla-abastecedor');
+  if (OPERARIO) actualizarUI(OPERARIO);
+
+  // Mostrar botón "Cambiar a Picker" si el usuario también puede picar
+  const btnPicker = document.getElementById('abast-badge-picker');
+  if (btnPicker) btnPicker.style.display = (OPERARIO?.puede_picar !== false) ? 'inline' : 'none';
+
+  abastCargarTarea();
+  ABAST_TIMER = setInterval(() => {
+    if (!ABAST_TAREA) abastCargarTarea();
+  }, 8000);
+}
+
+async function abastCargarTarea() {
+  const cont = document.getElementById('abast-contenido');
+  try {
+    const d = await get('/api/reposicion/tarea-actual');
+
+    if (d.sin_tareas) {
+      ABAST_TAREA = null;
+      if (cont) cont.innerHTML = `
+        <div style="text-align:center;padding:60px 20px;">
+          <div style="font-size:48px;margin-bottom:16px;opacity:0.3;">📦</div>
+          <div style="font-size:18px;font-weight:700;color:#555;">Sin tareas de reposición</div>
+          <div style="font-size:13px;color:#444;margin-top:8px;">El stock está en niveles correctos.</div>
+          <div style="font-size:12px;color:#333;margin-top:24px;">Revisando automáticamente...</div>
+        </div>`;
+      // Si tiene capacidad de picker, ofrecer cambio de modo
+      if (OPERARIO?.puede_picar !== false) {
+        if (cont) cont.innerHTML += `
+          <div style="padding:0 16px 24px;">
+            <button onclick="abastCambiarAModo('picker')"
+              style="width:100%;padding:14px;background:#1e3a5f;border:1px solid #1e40af;border-radius:12px;color:#60a5fa;font-size:14px;font-weight:700;cursor:pointer;">
+              Cambiar a modo Picker
+            </button>
+          </div>`;
+      }
+      return;
+    }
+
+    ABAST_TAREA = d;
+    abastMostrarHUD(d);
+
+  } catch (e) {
+    if (cont) cont.innerHTML = `<div style="text-align:center;padding:40px;color:#ef4444;">Error de conexión</div>`;
+  }
+}
+
+function abastMostrarHUD(tarea) {
+  const hud = document.getElementById('abast-hud');
+  const cont = document.getElementById('abast-contenido');
+  if (!hud) return;
+
+  // Ocultar lista, mostrar HUD
+  if (cont) cont.style.display = 'none';
+  hud.style.display = 'flex';
+
+  // Paso e instrucción
+  document.getElementById('abast-hud-paso').textContent = 'Tarea de reposición';
+  document.getElementById('abast-hud-instruccion').textContent =
+    'Busca la paca en la zona de reserva';
+  document.getElementById('abast-hud-sub').textContent =
+    `${tarea.producto_nombre || tarea.producto_codigo || '—'} · ${tarea.cantidad_unidades || '—'} uds`;
+
+  // Tarjetas de ubicación
+  document.getElementById('abast-ubicacion-origen').textContent = tarea.ubicacion_reserva || '—';
+  document.getElementById('abast-lpn-codigo').textContent = `LPN: ${tarea.lpn_codigo || '—'}`;
+  document.getElementById('abast-ubicacion-destino').textContent = tarea.ubicacion_picking || '—';
+  document.getElementById('abast-cantidad').textContent =
+    tarea.cantidad_unidades ? `${tarea.cantidad_unidades} unidades` : '';
+
+  // Limpiar input
+  const inp = document.getElementById('abast-input-lpn');
+  if (inp) { inp.value = ''; inp.focus(); }
+
+  // Configurar cámara para abastecedor
+  if (typeof Html5Qrcode !== 'undefined') {
+    const camId = 'lector-qr-abast';
+    const boxId = 'camara-box-abast';
+    // Reusar la función genérica de cámara del sistema
+    document.getElementById(camId + '-callback') && null;
+  }
+}
+
+function abastCerrarHUD() {
+  const hud = document.getElementById('abast-hud');
+  const cont = document.getElementById('abast-contenido');
+  if (hud) hud.style.display = 'none';
+  if (cont) cont.style.display = 'block';
+  ABAST_TAREA = null;
+  abastCargarTarea();
+}
+
+async function abastConfirmarScan() {
+  if (!ABAST_TAREA) return;
+
+  const inp = document.getElementById('abast-input-lpn');
+  const lpn_escaneado = (inp?.value || '').trim().toUpperCase();
+
+  if (!lpn_escaneado) {
+    alerta('Escanea el código LPN primero', 'error');
+    return;
+  }
+
+  const btn = document.getElementById('abast-btn-confirmar');
+  if (btn) { btn.disabled = true; btn.textContent = 'Confirmando...'; }
+
+  try {
+    const r = await fetch(API + '/api/reposicion/confirmar', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tarea_id: ABAST_TAREA.id,
+        lpn_codigo_escaneado: lpn_escaneado,
+      }),
+    });
+    const d = await r.json();
+
+    if (r.ok && d.ok) {
+      // Flash verde de éxito
+      _abastFlash('#166534');
+      alerta(`Reposición completada — ${d.unidades_movidas || ''} uds a ${ABAST_TAREA.ubicacion_picking}`, 'ok');
+      ABAST_TAREA = null;
+      setTimeout(abastCerrarHUD, 800);
+    } else {
+      _abastFlash('#7f1d1d');
+      alerta(d.error || 'LPN incorrecto — verifica el código', 'error');
+      if (inp) { inp.value = ''; inp.focus(); }
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar entrega'; }
+  }
+}
+
+function _abastFlash(color) {
+  const f = document.getElementById('abast-flash');
+  if (!f) return;
+  f.style.background = color + '66';
+  setTimeout(() => { f.style.background = 'transparent'; }, 300);
+}
+
+function abastCambiarAModo(modo) {
+  clearInterval(ABAST_TIMER);
+  ABAST_TAREA = null;
+  const hud = document.getElementById('abast-hud');
+  if (hud) hud.style.display = 'none';
+
+  if (modo === 'picker') {
+    pantalla('pantalla-operario');
+    if (OPERARIO) actualizarUI(OPERARIO);
+    pedirTarea();
+    TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
+  }
+}
+
+// Hook en pantalla-operario: si el usuario puede abastecer y no tiene tareas
+// de picking, mostrar el botón flotante de cambio de modo.
+function abastVerificarBotonModo() {
+  const contenido = document.getElementById('contenido-tarea');
+  if (!contenido || !OPERARIO?.puede_abastecer) return;
+
+  // Si ya hay tarea activa de picking, no mostrar el botón
+  if (TAREA_ACTUAL) {
+    const btn = document.getElementById('btn-modo-abastecedor');
+    if (btn) btn.remove();
+    return;
+  }
+
+  // Si no hay tarea, mostrar el botón de cambio de modo
+  if (!document.getElementById('btn-modo-abastecedor')) {
+    const btn = document.createElement('button');
+    btn.id = 'btn-modo-abastecedor';
+    btn.textContent = 'Cambiar a modo Abastecedor';
+    btn.style.cssText = `
+      position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+      padding:12px 24px;background:#1c2a1c;border:1px solid #166534;
+      border-radius:24px;color:#4ade80;font-size:13px;font-weight:700;
+      cursor:pointer;z-index:50;box-shadow:0 4px 20px #00000066;
+      white-space:nowrap;
+    `;
+    btn.onclick = () => {
+      clearInterval(TIMER_OPERARIO);
+      TAREA_ACTUAL = null;
+      abastIniciar();
+    };
+    document.body.appendChild(btn);
+  }
+}

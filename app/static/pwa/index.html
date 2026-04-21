@@ -1744,6 +1744,115 @@
     </div>
   </div>
 
+  <!-- ══════════════════════════════════════════════════════════════════
+       PANTALLA ABASTECEDOR — Reposición RESERVA → PICKING
+       Diseño: escanear LPN en zona alta → confirmar entrega en piso
+       ══════════════════════════════════════════════════════════════════ -->
+  <div id="pantalla-abastecedor" style="display:none;min-height:100vh;background:#0a0a0a;display:none;flex-direction:column;">
+
+    <!-- Header -->
+    <div class="emp-header" style="background:#0a0a0a;border-bottom:1px solid #1c2a1c;">
+      <div class="emp-header-logo"><img src="/static/pwa/logo-white.png" alt="WMS"></div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span id="abast-nombre" style="font-size:13px;color:#666;"></span>
+        <button onclick="salir()" class="btn-logout">Salir</button>
+      </div>
+    </div>
+
+    <!-- Badge de modo -->
+    <div style="background:#1c2a1c;padding:6px 16px;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:11px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:0.08em;">Modo Abastecedor</span>
+      <span id="abast-badge-picker" style="display:none;">
+        <button onclick="abastCambiarAModo('picker')"
+          style="font-size:11px;padding:2px 10px;background:none;border:1px solid #1e3a5f;color:#60a5fa;border-radius:20px;cursor:pointer;">
+          Cambiar a Picker
+        </button>
+      </span>
+    </div>
+
+    <!-- Contenido principal -->
+    <div id="abast-contenido" style="flex:1;padding:16px;overflow-y:auto;">
+      <div style="text-align:center;padding:60px 20px;color:#555;">Buscando tareas...</div>
+    </div>
+
+    <!-- HUD de escaneo — cubre toda la pantalla cuando hay tarea activa -->
+    <div id="abast-hud" style="display:none;position:fixed;inset:0;background:#0a0a0a;z-index:100;flex-direction:column;justify-content:space-between;">
+
+      <!-- Flash de feedback -->
+      <div id="abast-flash" style="position:absolute;inset:0;background:transparent;pointer-events:none;transition:background .15s;z-index:1;"></div>
+
+      <!-- Top: instrucción actual -->
+      <div style="padding:20px 16px 0;position:relative;z-index:2;">
+        <div id="abast-hud-paso" style="font-size:11px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:6px;">Paso 1 de 2</div>
+        <div id="abast-hud-instruccion" style="font-size:22px;font-weight:800;color:#fff;line-height:1.25;"></div>
+        <div id="abast-hud-sub" style="font-size:14px;color:#555;margin-top:6px;"></div>
+      </div>
+
+      <!-- Centro: zona de destino y LPN -->
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;position:relative;z-index:2;">
+        <!-- Tarjeta de ubicación origen -->
+        <div id="abast-card-origen" style="width:100%;max-width:340px;background:#111;border:2px solid #166534;border-radius:16px;padding:20px;text-align:center;margin-bottom:16px;">
+          <div style="font-size:11px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Ve a la zona</div>
+          <div id="abast-ubicacion-origen" style="font-size:36px;font-weight:900;color:#4ade80;letter-spacing:2px;font-family:monospace;"></div>
+          <div id="abast-lpn-codigo" style="font-size:14px;color:#555;margin-top:8px;font-family:monospace;"></div>
+        </div>
+
+        <!-- Flecha -->
+        <div style="font-size:28px;color:#333;margin-bottom:16px;">↓</div>
+
+        <!-- Tarjeta de destino -->
+        <div style="width:100%;max-width:340px;background:#111;border:2px solid #1e3a5f;border-radius:16px;padding:16px;text-align:center;">
+          <div style="font-size:11px;font-weight:700;color:#60a5fa;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Lleva a</div>
+          <div id="abast-ubicacion-destino" style="font-size:30px;font-weight:900;color:#60a5fa;letter-spacing:2px;font-family:monospace;"></div>
+          <div id="abast-cantidad" style="font-size:13px;color:#555;margin-top:6px;"></div>
+        </div>
+      </div>
+
+      <!-- Bottom: escanear LPN -->
+      <div style="padding:16px;position:relative;z-index:2;">
+        <div id="abast-scan-box">
+          <div style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">Escanea el LPN para confirmar</div>
+
+          <!-- Cámara QR -->
+          <button onclick="abrirCamara('lector-qr-abast','camara-box-abast')"
+            style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:10px;color:#aaa;font-size:14px;cursor:pointer;margin-bottom:8px;">
+            Escanear con cámara
+          </button>
+          <div id="camara-box-abast" style="display:none;margin-bottom:8px;">
+            <div id="lector-qr-abast" style="border-radius:10px;overflow:hidden;"></div>
+            <button onclick="cerrarCamara('camara-box-abast')"
+              style="width:100%;margin-top:6px;padding:10px;background:#222;border:1px solid #444;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">
+              Cerrar cámara
+            </button>
+          </div>
+
+          <!-- Input manual / pistola -->
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <input id="abast-input-lpn" type="text" placeholder="Código LPN (pistola o manual)"
+              autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false"
+              style="flex:1;padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;color:#fff;font-size:16px;font-family:monospace;"
+              onkeydown="if(event.key==='Enter'){ abastConfirmarScan(); event.preventDefault(); }">
+            <button onclick="abastConfirmarScan()"
+              style="padding:14px 18px;background:#222;border:1px solid #444;color:#fff;border-radius:10px;font-size:16px;cursor:pointer;">↵</button>
+          </div>
+
+          <!-- Botón principal -->
+          <button id="abast-btn-confirmar" onclick="abastConfirmarScan()"
+            style="width:100%;padding:18px;background:#166534;border:none;border-radius:14px;color:#4ade80;font-size:17px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
+            Confirmar entrega
+          </button>
+        </div>
+
+        <!-- Botón cancelar / pausa -->
+        <button onclick="abastCerrarHUD()"
+          style="width:100%;padding:12px;background:none;border:none;color:#444;font-size:13px;cursor:pointer;margin-top:8px;">
+          Pausar tarea
+        </button>
+      </div>
+    </div>
+
+  </div><!-- /pantalla-abastecedor -->
+
   <div class="offline-badge" id="offline-badge">⚡ <span id="offline-count">0</span> en cola</div>
 
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
