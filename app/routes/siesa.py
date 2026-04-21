@@ -569,6 +569,36 @@ def debug_empaques_raw():
     return jsonify({'error': 'query debe ser 28 o 35'}), 400
 
 
+@siesa_bp.route('/debug-pedidos-compromisos-raw', methods=['GET'])
+@jwt_required()
+def debug_pedidos_compromisos_raw():
+    """
+    Auditoría del JSON crudo de API_v2_Ventas_Pedidos_Compromisos (ID 103).
+    Permite ver exactamente qué campos expone Connekta antes de construir
+    el motor dinámico de reposición.
+
+    Parámetros opcionales:
+      ?pagina=1           → página de resultados (default 1)
+      ?tam=5              → registros por página (default 5, max 50)
+      ?parametros=...     → filtros Connekta crudos (ej. "f461_id_co=001")
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
+
+    pagina  = request.args.get('pagina', '1')
+    tam     = min(int(request.args.get('tam', '5')), 50)
+    params_custom = request.args.get('parametros', '')
+
+    params = {
+        'paginacion': f'numPag={pagina}|tamPag={tam}',
+    }
+    if params_custom:
+        params['parametros'] = params_custom
+
+    resultado = connekta._get('API_v2_Ventas_Pedidos_Compromisos', params)
+    return jsonify(resultado), 200
+
+
 @siesa_bp.route('/ordenes-compra', methods=['GET'])
 @jwt_required()
 def ordenes_compra():
