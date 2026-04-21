@@ -370,9 +370,11 @@ class RecepcionService:
         tasa_local = 0.0
         tercero_comprador = None
         sucursal_comprador = None
-        # items_oc: mapa por código de ítem → {bodega, uom, fecha_entrega} leídos de la OC real.
-        # Siesa exige que estos 3 campos coincidan exactamente con los movimientos de la OC original.
+        # items_oc: mapa normalizado UPPER+strip → {ref_siesa, bodega, uom, fecha_entrega}
+        # Siesa exige que bodega/uom/fecha_entrega coincidan exactamente con la OC original.
+        # oc_fallback: valores de la primera línea real — usado cuando falla el match por código.
         items_oc = {}
+        oc_fallback = {}
         try:
             consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
             resultado_oc = connekta.get_ordenes_compra_aprobadas(sin_filtros=True)
@@ -381,7 +383,6 @@ class RecepcionService:
             for row in rows_oc:
                 if str(row.get('f420_consec_docto', '')).strip() != str(consec).strip():
                     continue
-                # Header: solo la primera fila de esta OC
                 if not header_leido:
                     proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
                     sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
@@ -397,69 +398,48 @@ class RecepcionService:
                     if sucursal_prov:
                         recepcion.sucursal_prov_siesa = sucursal_prov
                     header_leido = True
-                    # Log campos disponibles para identificar nombres de UOM y fecha_entrega
-                    logger.warning(f'[RECEPCION] Campos OC row: {list(row.keys())}')
-                # Por ítem: bodega, UOM y fecha_entrega que Siesa exige en los Movimientos
-                ref = row.get('f120_referencia', '').strip()
-                if ref:
-                    items_oc[ref] = {
-                        'bodega': row.get('f150_id', '').strip() or None,
-                        'uom': (row.get('f421_id_unidad_medida') or row.get('f120_id_unidad_medida_inventario') or '').strip() or None,
-                        'fecha_entrega': row.get('f421_fecha_entrega', '').strip() or None,
-                    }
+
+                ref_siesa = (row.get('f120_referencia', '') or '').strip()
+                item_data = {
+                    'ref_siesa': ref_siesa,
+                    'bodega': (row.get('f150_id', '') or '').strip() or None,
+                    'uom': (row.get('f421_id_unidad_medida', '') or '').strip() or None,
+                    'fecha_entrega': (row.get('f421_fecha_entrega', '') or '').strip() or None,
+                }
+                # Primer registro real de la OC como fallback universal
+                if not oc_fallback and item_data['bodega']:
+                    oc_fallback = item_data
+                # Indexar por referencia normalizada (UPPER) y por ID numérico de Siesa
+                if ref_siesa:
+                    items_oc[ref_siesa.upper()] = item_data
+                id_siesa = str(row.get('f120_id', '') or '').strip()
+                if id_siesa:
+                    items_oc[id_siesa] = item_data
+
             logger.warning(
-                f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} sucursal={sucursal_prov!r} '
-                f'moneda={moneda_docto!r} comprador={tercero_comprador!r} remision={remision!r} '
-                f'items_oc={items_oc!r}'
+                f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} '
+                f'items_oc keys={list(items_oc.keys())} fallback={oc_fallback!r}'
             )
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
-
-        # Índice normalizado (sin espacios, mayúsculas) para manejar diferencias de formato
-        items_oc_norm = {k.upper().replace(' ', '').replace('-', ''): v for k, v in items_oc.items()}
-        logger.warning(f'[RECEPCION] items_oc keys: {list(items_oc.keys())}')
-
-        def _lookup_oc(producto):
-            """Busca los datos de OC para un producto. Varios intentos de matching."""
-            codigo = (producto.codigo or '').strip()
-            codigo_siesa = (producto.codigo_siesa or '').strip()
-            # 1. Exacto por codigo_siesa (el más confiable — mismo f120_referencia)
-            if codigo_siesa and codigo_siesa in items_oc:
-                return items_oc[codigo_siesa]
-            # 2. Exacto por codigo WMS
-            if codigo and codigo in items_oc:
-                return items_oc[codigo]
-            # 3. Normalizado (ignora espacios y guiones)
-            norm_siesa = codigo_siesa.upper().replace(' ', '').replace('-', '')
-            norm_codigo = codigo.upper().replace(' ', '').replace('-', '')
-            if norm_siesa and norm_siesa in items_oc_norm:
-                return items_oc_norm[norm_siesa]
-            if norm_codigo and norm_codigo in items_oc_norm:
-                return items_oc_norm[norm_codigo]
-            # 4. Si la OC tiene exactamente UN ítem, lo empareja directamente
-            if len(items_oc) == 1:
-                logger.warning(
-                    f'[RECEPCION] UOM lookup: código {codigo!r}/siesa {codigo_siesa!r} '
-                    f'no match en items_oc {list(items_oc.keys())} — usando único ítem OC'
-                )
-                return next(iter(items_oc.values()))
-            logger.warning(
-                f'[RECEPCION] UOM lookup FALLIDO: código {codigo!r}/siesa {codigo_siesa!r} '
-                f'no match en items_oc {list(items_oc.keys())}'
-            )
-            return {}
 
         items_payload = []
         for i in recepcion.items:
             if i.cantidad_recibida <= 0:
                 continue
-            oc_data = _lookup_oc(i.producto)
+            # Lookup normalizado: probar código WMS, código Siesa e ID numérico — todo en UPPER
+            oc_data = (
+                items_oc.get((i.producto.codigo or '').strip().upper()) or
+                items_oc.get((i.producto.codigo_siesa or '').strip().upper()) or
+                items_oc.get(str(i.producto.id)) or
+                oc_fallback
+            )
             logger.warning(
-                f'[RECEPCION] item {i.producto.codigo!r} / siesa={i.producto.codigo_siesa!r} '
-                f'→ oc_data={oc_data!r}'
+                f'[RECEPCION] item {i.producto.codigo!r} → ref_siesa={oc_data.get("ref_siesa")!r} '
+                f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r} fecha={oc_data.get("fecha_entrega")!r}'
             )
             items_payload.append({
-                'producto_codigo': i.producto.codigo,
+                'producto_codigo': oc_data.get('ref_siesa') or i.producto.codigo,
                 'cantidad_recibida': i.cantidad_recibida,
                 'cantidad_ordenada': i.cantidad_ordenada,
                 'lote': i.lote,
