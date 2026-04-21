@@ -653,7 +653,8 @@ class ConnektaGateway:
             ]
         }
 
-        logger.info(f'[CONNEKTA] EntradaOC co={id_co_oc!r} tipo={tipo_docto_oc!r} consec={consec_docto_oc!r} proveedor={proveedor_id!r} sucursal={sucursal_prov_fmt!r} comprador={tercero_comprador!r} moneda={moneda_docto!r} cond_pago={cond_pago!r}')
+        import json as _json
+        logger.warning(f'[CONNEKTA][DEBUG] EntradaOC payload completo: {_json.dumps(payload, default=str)}')
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
