@@ -150,15 +150,18 @@ def _post_completado(job: SiesaJob):
 
 def _crear_alerta_admin(job: SiesaJob):
     """
-    Registra el job fallido en el log de alertas críticas.
-    El dashboard del admin consulta SiesaJob con estado=FALLIDO.
-    No se envía email ni SMS aquí — el admin lo ve en /api/siesa-jobs/fallidos.
+    Log crítico + email inmediato cuando un job alcanza estado=FALLIDO.
     """
     logger.critical(
         f'[ALERTA ADMIN] Job Siesa FALLIDO — id={job.id} tipo={job.tipo} '
         f'ref={job.referencia_tipo}:{job.referencia_id} '
         f'error="{job.error_ultimo}" — Verificar periodo contable en Siesa.'
     )
+    try:
+        from app.services.alertas_service import alertar_job_fallido
+        alertar_job_fallido(job)
+    except Exception as e:
+        logger.error(f'[ALERTAS] No se pudo enviar email de job fallido: {e}')
 
 
 def get_jobs_fallidos():
