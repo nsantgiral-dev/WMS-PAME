@@ -1,2 +1,2 @@
 release: flask db upgrade
-web: gunicorn wsgi:app --workers=1 --threads=4 --timeout=150
+web: gunicorn wsgi:app --workers=2 --threads=2 --timeout=120
