@@ -322,16 +322,8 @@ class ConnektaGateway:
                     tipo = (row.get('f200_id_tipo_prov') or '').strip()
                     if tipo:
                         return {'configurado': True, 'tipo_proveedor': tipo, 'mensaje': ''}
-                    # NIT encontrado pero sin tipo_proveedor
-                    return {
-                        'configurado': False,
-                        'tipo_proveedor': None,
-                        'mensaje': (
-                            f'El proveedor NIT {nit} no tiene Tipo de Proveedor asignado en Siesa. '
-                            'Ve a Maestros → Terceros → [este NIT] → pestaña Compras → '
-                            'campo "Tipo de Proveedor" → asignar 0001 (Nacionales).'
-                        )
-                    }
+                    # f200_id_tipo_prov no viene en API_v2_Compras_Ordenes — no verificable
+                    return {'configurado': None, 'tipo_proveedor': None, 'mensaje': ''}
             # NIT no aparece en ninguna OC activa — probablemente es correcto pero no podemos verificar
             logger.warning(f'[CONNEKTA] validar_tipo_proveedor: NIT {nit!r} no encontrado en OCs activas')
             return {'configurado': None, 'tipo_proveedor': None, 'mensaje': ''}
