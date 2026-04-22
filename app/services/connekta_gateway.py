@@ -579,7 +579,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': proveedor_id or None,                         # NIT proveedor (pos 43-58)
-                    'f350_ind_estado': 0,                                            # 0 = En elaboración — afecta inventario y cruza OC sin requerir auxiliar de pasivo estimado (26059501)
+                    'f350_ind_estado': 1,                                            # 1 = Aprobado — contabiliza automáticamente contra pasivo estimado (26059501 configurado en tipo EA/CO003)
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
