@@ -399,6 +399,7 @@ class RecepcionService:
                     'bodega': (row.get('f150_id', '') or '').strip() or None,
                     'uom': (row.get('f421_id_unidad_medida', '') or '').strip() or None,
                     'fecha_entrega': (row.get('f421_fecha_entrega', '') or '').strip() or None,
+                    'motivo': (row.get('f421_id_motivo', '') or '').strip() or None,
                 }
                 # Primer registro real de la OC como fallback universal
                 if not oc_fallback and item_data['bodega']:
@@ -459,7 +460,7 @@ class RecepcionService:
                 'es_parcial': i.es_faltante(),
                 'destino': i.destino,
                 'tipo': i.tipo,
-                'motivo_siesa': i.motivo_siesa,
+                'motivo_siesa': i.motivo_siesa or oc_data.get('motivo'),
                 'bodega': oc_data.get('bodega'),
                 'uom': oc_data.get('uom'),
                 'fecha_entrega': oc_data.get('fecha_entrega'),
