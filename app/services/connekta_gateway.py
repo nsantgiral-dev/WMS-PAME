@@ -587,7 +587,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': proveedor_id or None,                         # NIT proveedor (pos 43-58)
-                    'f350_ind_estado': 1,                                            # 1 = Aprobado — afecta inventario y genera asiento contable inmediatamente
+                    'f350_ind_estado': 0,                                            # 0 = En elaboración — afecta inventario y cruza OC sin requerir auxiliar de pasivo estimado (26059501)
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
@@ -616,7 +616,7 @@ class ConnektaGateway:
                     'f420_id_co_docto': id_co_oc,
                     'f420_id_tipo_docto': tipo_docto_oc,
                     'f420_consec_docto': consec_docto_oc,
-                    'f420_ind_modo_sobrecosto': 1                                        # 1=Asume costo de la OC — requerido cuando se referencia una OC
+                    'f420_ind_modo_sobrecosto': 0                                        # 0=No liquida — evita posteo a pasivo estimado (26059501 no tiene flag Proveedor habilitado)
                 }
             ],
             'Movimientos': [
