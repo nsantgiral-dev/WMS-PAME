@@ -208,16 +208,18 @@ async function _checkResp(r) {
   if (r.status === 401) { salir(true); throw new Error('401'); }
   if (!r.ok) {
     let msg = `Error del servidor (${r.status})`;
+    let body = null;
     try {
-      const d = await r.json();
-      if (typeof d.error === 'object' && d.error !== null) {
-        msg = d.error.mensaje || d.error.message || JSON.stringify(d.error);
+      body = await r.json();
+      if (typeof body.error === 'object' && body.error !== null) {
+        msg = body.error.mensaje || body.error.message || JSON.stringify(body.error);
       } else {
-        msg = d.error || msg;
+        msg = body.error || body.mensaje || msg;
       }
     } catch (_) {}
     const err = new Error(msg);
     err.status = r.status;
+    err.body = body;
     throw err;
   }
   return r.json();
@@ -2244,12 +2246,29 @@ async function procesarScanRecepcion(codigo) {
 }
 
 async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, esBonificacion = false) {
-  const r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
-    producto_id: productoId,
-    cantidad: cantidad,
-    es_empaque: esEmpaque,
-    es_bonificacion: esBonificacion
-  });
+  let r;
+  try {
+    r = await post('/api/recepcion/' + RECEPCION_ACTUAL.id + '/escanear', {
+      producto_id: productoId,
+      cantidad: cantidad,
+      es_empaque: esEmpaque,
+      es_bonificacion: esBonificacion
+    });
+  } catch (e) {
+    const body = e.body || {};
+    if (e.status === 409 && body.tipo === 'PRODUCTO_NO_EN_OC' && !esBonificacion) {
+      const ok = await _confirmarModal(
+        '⚠ Producto fuera de OC',
+        'Este producto no está en la orden de compra.<br><br>¿Es un <strong>obsequio o bonificación</strong> del proveedor?',
+        'Sí, registrar como bonificación', 'No, cancelar'
+      );
+      if (ok) await _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, true);
+      return;
+    }
+    beepError();
+    alerta(e.message, 'error');
+    return;
+  }
 
   // Producto no está en la OC y no se indicó bonificación → ofrecer registrarlo como bono
   if (r.tipo === 'PRODUCTO_NO_EN_OC' && !esBonificacion) {
