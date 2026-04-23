@@ -153,8 +153,13 @@ class PackingService:
         if not item:
             raise ValueError(f'Producto {producto_id} no pertenece a esta tarea de packing')
 
+        if cantidad_real > item.cantidad_esperada:
+            raise ValueError(
+                f'Exceso: la cantidad ({cantidad_real}) supera lo recogido en picking ({item.cantidad_esperada})'
+            )
+
         item.cantidad_real = cantidad_real
-        item.verificado = True
+        item.verificado = item.cantidad_real >= item.cantidad_esperada
         if lote:
             item.lote = lote
 
