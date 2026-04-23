@@ -35,6 +35,10 @@ def create_app():
     from app.routes import register_routes
     register_routes(app)
 
+    @app.route('/health')
+    def health():
+        return jsonify({'status': 'ok'}), 200
+
     @app.route('/static/pwa/<path:filename>')
     def pwa_files(filename):
         pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
