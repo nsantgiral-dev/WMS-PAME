@@ -1307,8 +1307,8 @@ async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
     });
     if (!cardTexto) return; // operario ya avanzó a otra tarea
     if (!d || d.factor_empaque <= 1) {
-      cardTexto.textContent = `${cantidad} UND`;
-      cardHint.textContent  = 'Recoger unidad por unidad';
+      const card = document.getElementById('card-descomposicion');
+      if (card) card.style.display = 'none';
       return;
     }
     const lpns    = d.lpns || 0;
