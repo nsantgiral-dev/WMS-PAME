@@ -3177,14 +3177,16 @@ function empRenderHUDItem() {
   document.getElementById('emp-hud-pedido').textContent = EMP_TAREA.numero_pedido_siesa;
   document.getElementById('emp-hud-producto').textContent = item.producto_nombre || item.producto_codigo || '—';
 
+  const undEl = document.getElementById('emp-hud-und');
   if (factor > 1) {
-    // Mostrar en piezas de empaque
     document.getElementById('emp-hud-contador').textContent = piezasReal;
     document.getElementById('emp-hud-de').textContent =
       `de ${piezasEsp} ${unidad}${sueltas > 0 ? ` (+${sueltas} sueltas)` : ''}`;
+    if (undEl) undEl.textContent = `${cantReal} / ${cantEsp} und`;
   } else {
     document.getElementById('emp-hud-contador').textContent = cantReal;
     document.getElementById('emp-hud-de').textContent = `de ${cantEsp}`;
+    if (undEl) undEl.textContent = '';
   }
   document.getElementById('emp-hud-items').textContent = `${verificados} de ${total} ítems verificados`;
 
