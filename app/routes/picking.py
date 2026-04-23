@@ -336,3 +336,26 @@ def reportar_problema(id):
         'cantidad_faltante': cantidad_faltante,
         'auditoria_id': auditoria_id,
     }), 200
+
+
+@picking_bp.route('/<int:id>/reiniciar-conteo', methods=['PUT'])
+@jwt_required()
+def reiniciar_conteo(id):
+    """Resetea cantidad_recogida a 0 para que el operario vuelva a escanear desde cero."""
+    operario_id = int(get_jwt_identity())
+    tarea = TareaPicking.query.get_or_404(id)
+
+    if tarea.operario_id != operario_id:
+        return jsonify({'error': 'Esta tarea no te pertenece'}), 403
+    if tarea.estado != 'EN_PROCESO':
+        return jsonify({'error': 'Solo se puede reiniciar una tarea en proceso'}), 400
+
+    tarea.cantidad_recogida = 0
+    db.session.commit()
+
+    return jsonify({
+        'ok': True,
+        'cantidad_actual': 0,
+        'cantidad_requerida': tarea.cantidad_solicitada,
+        'puede_confirmar': False,
+    }), 200

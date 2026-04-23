@@ -1257,6 +1257,12 @@ function renderTarea(t) {
         ✓ Confirmar cantidad completa (manual)
       </button>` : ''}
 
+      ${esPicking ? `
+      <button onclick="reiniciarConteoPicking(${t.id})"
+        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a1200;color:#facc15;border:1px solid #713f12;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+        🔄 Reiniciar conteo
+      </button>` : ''}
+
       <button onclick="reportarProblema(${t.id})"
         style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:12px;cursor:pointer;">
         ⚠ Reportar problema
@@ -2650,6 +2656,21 @@ function _pedirRemision() {
       resolve(val);
     };
   });
+}
+
+async function reiniciarConteoPicking(tareaId) {
+  if (!confirm('¿Reiniciar el conteo? Volverás a 0 y deberás escanear todo de nuevo.')) return;
+  try {
+    const r = await put('/api/picking/' + tareaId + '/reiniciar-conteo', {});
+    if (r.error) { alerta(r.error, 'error'); return; }
+    const contador = document.getElementById('contador');
+    if (contador) contador.textContent = '0/' + r.cantidad_requerida;
+    const barra = document.getElementById('barra');
+    if (barra) barra.style.width = '0%';
+    const btnOk = document.getElementById('btn-ok');
+    if (btnOk) { btnOk.disabled = true; btnOk.style.opacity = '0.3'; btnOk.style.background = '#000'; }
+    alerta('Conteo reiniciado — vuelve a escanear desde cero', 'info');
+  } catch (e) { alerta('Error reiniciando conteo', 'error'); }
 }
 
 async function reiniciarConteoRecepcion() {
