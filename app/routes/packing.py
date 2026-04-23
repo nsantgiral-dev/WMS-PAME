@@ -248,7 +248,7 @@ def cancelar_tarea(id):
 @jwt_required()
 def reiniciar_conteo(id):
     """Resetea todos los items del packing a 0 — el empacador vuelve a escanear desde cero."""
-    from app.models.packing import TareaPacking, ItemPacking
+    from app.extensions import db
     tarea = TareaPacking.query.get_or_404(id)
     if tarea.estado not in ('EN_PROCESO', 'PENDIENTE'):
         return jsonify({'error': 'Solo se puede reiniciar una tarea en proceso'}), 400
