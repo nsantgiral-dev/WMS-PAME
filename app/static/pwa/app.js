@@ -3052,21 +3052,17 @@ async function empIniciarHUD(packingId) {
     EMP_ITEM_IDX = EMP_ITEMS.findIndex(i => !i.verificado);
     if (EMP_ITEM_IDX < 0) EMP_ITEM_IDX = 0;
 
-    // Cargar empaques de todos los ítems en paralelo (para mostrar en piezas)
+    // Poblar empaques directamente desde factor_conversion del producto (fuente de verdad)
     EMP_EMPAQUES = {};
-    const almacenId = t.almacen_id || null;
-    await Promise.allSettled(EMP_ITEMS.map(async item => {
-      try {
-        const d = await post('/api/empaques/descomponer', {
-          producto_id: item.producto_id,
-          almacen_id: almacenId,
-          cantidad_solicitada: item.cantidad_esperada
-        });
-        if (d && d.factor_empaque > 1) {
-          EMP_EMPAQUES[item.producto_id] = { factor: d.factor_empaque, unidad: d.unidad_empaque || 'PIEZA' };
-        }
-      } catch (_) {}
-    }));
+    for (const item of EMP_ITEMS) {
+      const fc = item.factor_conversion || 1;
+      if (fc > 1) {
+        EMP_EMPAQUES[item.producto_id] = {
+          factor: fc,
+          unidad: item.unidad_empaque || 'PIEZA'
+        };
+      }
+    }
 
     empRenderHUDItem();
     document.getElementById('emp-hud').classList.add('activo');

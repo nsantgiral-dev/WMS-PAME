@@ -115,12 +115,15 @@ class ItemPacking(db.Model):
         return self.cantidad_real - self.cantidad_esperada
 
     def to_dict(self):
+        p = self.producto
         return {
             'id': self.id,
             'tarea_id': self.tarea_id,
             'producto_id': self.producto_id,
-            'producto_codigo': self.producto.codigo if self.producto else None,
-            'producto_nombre': self.producto.nombre if self.producto else None,
+            'producto_codigo': p.codigo if p else None,
+            'producto_nombre': p.nombre if p else None,
+            'factor_conversion': (p.factor_conversion or 1) if p else 1,
+            'unidad_empaque': (p.unidad_empaque or 'und') if p else 'und',
             'cantidad_esperada': self.cantidad_esperada,
             'cantidad_real': self.cantidad_real,
             'verificado': self.verificado,
