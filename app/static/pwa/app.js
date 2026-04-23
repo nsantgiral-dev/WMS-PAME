@@ -1046,6 +1046,16 @@ async function pedirTarea() {
     renderTarea(d);
   } catch (e) {
     console.error('Error cargando tarea:', e);
+    const el = document.getElementById('contenido-tarea');
+    if (el) el.innerHTML = `
+      <div style="text-align:center;padding:40px 20px;">
+        <div style="font-size:40px;">⚠️</div>
+        <div style="font-size:16px;font-weight:700;color:#f87171;margin-top:12px;">Error al cargar tareas</div>
+        <div style="font-size:13px;color:#666;margin-top:6px;">${e.message || 'Error de conexión'}</div>
+        <button onclick="pedirTarea()" style="margin-top:16px;padding:12px 24px;background:#1e3a5f;color:#93c5fd;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+          🔄 Reintentar
+        </button>
+      </div>`;
   }
 }
 
