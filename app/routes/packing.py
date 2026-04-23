@@ -247,14 +247,17 @@ def cancelar_tarea(id):
 @packing_bp.route('/<int:id>/reiniciar-conteo', methods=['PUT'])
 @jwt_required()
 def reiniciar_conteo(id):
-    """Resetea todos los items del packing a 0 — el empacador vuelve a escanear desde cero."""
+    """Resetea todos los items a 0 y vuelve el estado a EN_PROCESO."""
     from app.extensions import db
     tarea = TareaPacking.query.get_or_404(id)
-    if tarea.estado not in ('EN_PROCESO', 'PENDIENTE'):
-        return jsonify({'error': 'Solo se puede reiniciar una tarea en proceso'}), 400
+    if tarea.estado not in ('EN_PROCESO', 'PENDIENTE', 'VERIFICADO'):
+        return jsonify({'error': 'No se puede reiniciar una tarea en este estado'}), 400
     for item in tarea.items:
         item.cantidad_real = 0
         item.verificado = False
+    tarea.estado = 'EN_PROCESO'
+    tarea.verificacion_exitosa = False
+    tarea.fecha_verificado = None
     db.session.commit()
     return jsonify({'ok': True, 'mensaje': 'Conteo reiniciado', 'tarea': tarea.to_dict()}), 200
 
