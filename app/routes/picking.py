@@ -351,11 +351,13 @@ def reiniciar_conteo(id):
         return jsonify({'error': 'Solo se puede reiniciar una tarea en proceso'}), 400
 
     tarea.cantidad_recogida = 0
+    tarea.empaques_escaneados = 0
     db.session.commit()
 
     return jsonify({
         'ok': True,
         'cantidad_actual': 0,
+        'empaques_escaneados': 0,
         'cantidad_requerida': tarea.cantidad_solicitada,
         'puede_confirmar': False,
     }), 200

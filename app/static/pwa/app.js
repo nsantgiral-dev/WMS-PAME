@@ -2663,8 +2663,15 @@ async function reiniciarConteoPicking(tareaId) {
   try {
     const r = await put('/api/picking/' + tareaId + '/reiniciar-conteo', {});
     if (r.error) { alerta(r.error, 'error'); return; }
+    // Modo empaque (PQ): número grande + "X/Y und"
+    const pkgEl = document.getElementById('contador-pkg');
+    if (pkgEl) pkgEl.textContent = '0';
+    const undEl = document.getElementById('contador-und');
+    if (undEl) undEl.textContent = '0/' + r.cantidad_requerida + ' und';
+    // Modo unidad simple
     const contador = document.getElementById('contador');
     if (contador) contador.textContent = '0/' + r.cantidad_requerida;
+    // Barra y botón confirmar
     const barra = document.getElementById('barra');
     if (barra) barra.style.width = '0%';
     const btnOk = document.getElementById('btn-ok');
