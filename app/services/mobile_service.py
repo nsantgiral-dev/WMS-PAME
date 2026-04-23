@@ -413,23 +413,27 @@ class MobileService:
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 
-            producto = (
-                Producto.query.filter(db.func.upper(Producto.codigo) == codigo_limpio).first() or
-                Producto.query.filter(db.func.upper(Producto.codigo_siesa) == codigo_limpio).first() or
-                Producto.query.filter(db.func.upper(Producto.codigo_barras) == codigo_limpio).first()
-            )
-            if not producto:
-                raise ValueError(f'Producto {codigo_limpio} no encontrado')
+            # Buscar dentro de los ítems de la tarea — acepta codigo, codigo_siesa,
+            # codigo_barras Y codigo_barras_empaque sin necesidad de query global.
+            producto = None
+            item = None
+            for it in tarea.items:
+                p = it.producto
+                if p and codigo_limpio in MobileService._codigos_validos(p):
+                    producto = p
+                    item = it
+                    break
 
-            item = ItemPacking.query.filter_by(
-                tarea_id=tarea_id,
-                producto_id=producto.id
-            ).first()
+            if not producto or not item:
+                raise ValueError(f'Producto {codigo_limpio} no pertenece a este pedido')
 
-            if not item:
-                raise ValueError(f'Producto {codigo} no pertenece a este pedido')
+            # Si el código escaneado es el del empaque y el front no lo resolvió antes,
+            # aplicar el factor aquí para no sumar solo 1 unidad.
+            es_empaque = MobileService._es_escaneo_empaque(producto, codigo_limpio)
+            factor = producto.factor_conversion or 1
+            unidades = cantidad * factor if es_empaque else cantidad
 
-            item.cantidad_real = (item.cantidad_real or 0) + cantidad
+            item.cantidad_real = (item.cantidad_real or 0) + unidades
             item.verificado = item.cantidad_real >= item.cantidad_esperada
             db.session.commit()
 
