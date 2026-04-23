@@ -3089,7 +3089,7 @@ async function empReiniciarConteo(packingId) {
     const r = await put('/api/packing/' + packingId + '/reiniciar-conteo', {});
     if (r.error) { alerta(r.error, 'error'); return; }
     alerta('Conteo reiniciado — todos los productos vuelven a 0', 'info');
-    empCargarTareas();
+    empCerrarHUD();
   } catch (e) { alerta('Error reiniciando conteo', 'error'); }
 }
 
