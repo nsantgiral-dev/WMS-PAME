@@ -244,6 +244,21 @@ def cancelar_tarea(id):
         return jsonify({'error': str(e)}), 400
 
 
+@packing_bp.route('/<int:id>/reiniciar-conteo', methods=['PUT'])
+@jwt_required()
+def reiniciar_conteo(id):
+    """Resetea todos los items del packing a 0 — el empacador vuelve a escanear desde cero."""
+    from app.models.packing import TareaPacking, ItemPacking
+    tarea = TareaPacking.query.get_or_404(id)
+    if tarea.estado not in ('EN_PROCESO', 'PENDIENTE'):
+        return jsonify({'error': 'Solo se puede reiniciar una tarea en proceso'}), 400
+    for item in tarea.items:
+        item.cantidad_real = 0
+        item.verificado = False
+    db.session.commit()
+    return jsonify({'ok': True, 'mensaje': 'Conteo reiniciado', 'tarea': tarea.to_dict()}), 200
+
+
 @packing_bp.route('/<int:id>/resetear-siesa', methods=['POST'])
 @jwt_required()
 def resetear_siesa(id):

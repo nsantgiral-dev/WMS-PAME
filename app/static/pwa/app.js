@@ -2985,6 +2985,11 @@ async function empCargarTareas() {
             style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
             🗑 Limpiar bultos y redeclarar piezas
           </button>` : '';
+        const reiniciarBtn = enProceso ? `
+          <button onclick="event.stopPropagation();empReiniciarConteo(${t.id})"
+            style="margin-top:8px;width:100%;padding:8px;background:#1a1200;border:1px solid #713f12;color:#facc15;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;">
+            🔄 Reiniciar conteo
+          </button>` : '';
         return `
         <div class="emp-task-card" onclick="${bloqueado ? '' : `empIniciarHUD(${t.id})`}"
           style="${bloqueado ? 'opacity:0.5;cursor:default;' : 'cursor:pointer;'}">
@@ -2995,6 +3000,7 @@ async function empCargarTareas() {
           </div>` : ''}
           <span class="emp-task-badge" style="background:${bg};color:${color};">${label}</span>
           ${limpiarBtn}
+          ${reiniciarBtn}
         </div>`;
       }).join('')}`;
   } catch (e) {
@@ -3075,6 +3081,16 @@ async function empLimpiarSiesa(packingId) {
     alerta('Listo — declara las piezas de nuevo al abrir la tarea', 'exito');
     empCargarTareas();
   } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function empReiniciarConteo(packingId) {
+  if (!confirm('¿Reiniciar el conteo? Se borrará todo lo escaneado en esta tarea y deberás volver a escanear todos los productos.')) return;
+  try {
+    const r = await put('/api/packing/' + packingId + '/reiniciar-conteo', {});
+    if (r.error) { alerta(r.error, 'error'); return; }
+    alerta('Conteo reiniciado — todos los productos vuelven a 0', 'info');
+    empCargarTareas();
+  } catch (e) { alerta('Error reiniciando conteo', 'error'); }
 }
 
 async function empReintentarSiesa(t) {
