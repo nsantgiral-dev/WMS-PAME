@@ -1181,6 +1181,8 @@ function renderTarea(t) {
   const pkgs         = t.empaques_escaneados || 0;
   const unds         = t.cantidad_escaneada || 0;
   const req          = t.cantidad_requerida || 0;
+  const pkgsReq      = factor > 1 ? Math.ceil(req / factor) : req;
+  const sueltas      = factor > 1 ? unds % factor : 0;
 
   const htmlContador = tieneEmpaque
     ? `<div style="background:#1a1a1a;border-radius:16px;padding:16px 20px;margin-bottom:12px;">
@@ -1188,8 +1190,8 @@ function renderTarea(t) {
           <div style="font-size:12px;color:#555;padding-top:6px;letter-spacing:1px;">CANTIDAD</div>
           <div style="text-align:right;">
             <div id="contador-pkg" style="font-size:80px;font-weight:900;color:#22c55e;line-height:1;">${pkgs}</div>
-            <div id="contador-und" style="font-size:20px;font-weight:700;color:#22c55e;margin-top:2px;">${unds}/${req} und</div>
-            <div id="contador-factor" style="font-size:11px;color:#555;margin-top:2px;">${unidadLabel} ×${factor}</div>
+            <div id="contador-und" style="font-size:20px;font-weight:700;color:#22c55e;margin-top:2px;">de ${pkgsReq} ${unidadLabel}${sueltas > 0 ? ` +${sueltas} und` : ''}</div>
+            <div id="contador-factor" style="font-size:12px;color:#555;margin-top:4px;">${unds}/${req} und totales</div>
           </div>
         </div>
         <div style="height:8px;background:#333;border-radius:4px;margin-top:12px;">
@@ -1594,13 +1596,18 @@ function _actualizarContadorPicking(r) {
   const undEl = document.getElementById('contador-und');
 
   if (pkgEl && undEl) {
-    // Vista de empaque: número grande (paquetes) + unidades debajo
-    pkgEl.textContent = r.empaques_escaneados || 0;
-    undEl.textContent = `${r.cantidad_actual}/${r.cantidad_requerida} und`;
-    if (r.puede_confirmar) {
-      pkgEl.style.color = '#4ade80';
-      undEl.style.color = '#4ade80';
-    }
+    const factor   = TAREA_ACTUAL.factor_conversion || 1;
+    const unidad   = (TAREA_ACTUAL.unidad_empaque || 'PKG').toUpperCase();
+    const pkgs     = r.empaques_escaneados || 0;
+    const unds     = r.cantidad_actual || 0;
+    const req      = r.cantidad_requerida || 0;
+    const pkgsReq  = factor > 1 ? Math.ceil(req / factor) : req;
+    const sueltas  = factor > 1 ? unds % factor : 0;
+    pkgEl.textContent = pkgs;
+    undEl.textContent = `de ${pkgsReq} ${unidad}${sueltas > 0 ? ` +${sueltas} und` : ''}`;
+    const factorEl = document.getElementById('contador-factor');
+    if (factorEl) factorEl.textContent = `${unds}/${req} und totales`;
+    if (r.puede_confirmar) { pkgEl.style.color = '#4ade80'; undEl.style.color = '#4ade80'; }
   } else {
     // Vista simple (unidades sueltas o conteo)
     const contador = document.getElementById('contador');

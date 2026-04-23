@@ -1,11 +1,19 @@
 import os
+import sys
 import click
+import logging
 from datetime import timedelta
 from flask import Flask, send_from_directory
 from dotenv import load_dotenv
 from app.extensions import db, migrate, jwt, cors
 
 load_dotenv()
+
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+)
 
 def create_app():
     app = Flask(__name__)
@@ -26,6 +34,10 @@ def create_app():
 
     @app.errorhandler(500)
     def error_500(e):
+        import traceback
+        logging.getLogger(__name__).error(
+            'ERROR 500:\n' + traceback.format_exc()
+        )
         return jsonify({'error': 'Error interno del servidor'}), 500
 
     @app.errorhandler(404)
