@@ -429,7 +429,7 @@ class MobileService:
             if not item:
                 raise ValueError(f'Producto {codigo} no pertenece a este pedido')
 
-            item.cantidad_real += cantidad
+            item.cantidad_real = (item.cantidad_real or 0) + cantidad
             item.verificado = item.cantidad_real >= item.cantidad_esperada
             db.session.commit()
 

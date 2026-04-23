@@ -3275,7 +3275,7 @@ async function empProcesarEscaneo(codigo) {
     empRenderHUDItem();
 
   } catch (e) {
-    empFlash('rojo', 'Error de conexión');
+    empFlash('rojo', e.message && e.message !== '401' ? e.message : 'Error de conexión');
   }
 }
 
@@ -3368,7 +3368,7 @@ async function _elegirEmpaquePacking(codigoBarras, productoCodigo, factor, unida
       EMP_ITEMS = detalle.items || EMP_ITEMS;
     }
     empRenderHUDItem();
-  } catch (e) { empFlash('rojo', 'Error de conexión'); }
+  } catch (e) { empFlash('rojo', e.message && e.message !== '401' ? e.message : 'Error de conexión'); }
 }
 
 // ─────────────────────────────────────────────────────────────
