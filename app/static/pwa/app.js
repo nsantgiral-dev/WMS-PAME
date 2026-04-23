@@ -1164,6 +1164,42 @@ function renderTarea(t) {
   const pct = t.cantidad_requerida ? Math.min((t.cantidad_escaneada / t.cantidad_requerida) * 100, 100) : 0;
   const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
 
+  // Empaque
+  const factor       = t.factor_conversion || 1;
+  const tieneEmpaque = esPicking && factor > 1;
+  const unidadLabel  = (t.unidad_empaque || 'PKG').toUpperCase();
+  const pkgs         = t.empaques_escaneados || 0;
+  const unds         = t.cantidad_escaneada || 0;
+  const req          = t.cantidad_requerida || 0;
+
+  const htmlContador = tieneEmpaque
+    ? `<div style="background:#1a1a1a;border-radius:16px;padding:16px 20px;margin-bottom:12px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div style="font-size:12px;color:#555;padding-top:6px;letter-spacing:1px;">CANTIDAD</div>
+          <div style="text-align:right;">
+            <div id="contador-pkg" style="font-size:80px;font-weight:900;color:#22c55e;line-height:1;">${pkgs}</div>
+            <div id="contador-und" style="font-size:20px;font-weight:700;color:#22c55e;margin-top:2px;">${unds}/${req} und</div>
+            <div id="contador-factor" style="font-size:11px;color:#555;margin-top:2px;">${unidadLabel} ×${factor}</div>
+          </div>
+        </div>
+        <div style="height:8px;background:#333;border-radius:4px;margin-top:12px;">
+          <div id="barra" style="height:100%;background:#22c55e;border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
+        </div>
+      </div>`
+    : esConteo
+      ? `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+          <div style="font-size:13px;color:#666;">CONTEO CIEGO</div>
+          <div id="contador" style="font-size:64px;font-weight:900;">0</div>
+          <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
+        </div>`
+      : `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+          <div style="font-size:13px;color:#666;">CANTIDAD</div>
+          <div id="contador" style="font-size:64px;font-weight:900;">${unds}/${req}</div>
+          <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;">
+            <div id="barra" style="height:100%;background:#22c55e;border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
+          </div>
+        </div>`;
+
   document.getElementById('contenido-tarea').innerHTML = `
     <div style="padding:16px;">
       <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;">${t.tipo}</div>
@@ -1189,19 +1225,7 @@ function renderTarea(t) {
         </button>
       </div>` : ''}
 
-      ${!esConteo ? `
-      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:13px;color:#666;">CANTIDAD</div>
-        <div id="contador" style="font-size:64px;font-weight:900;">${t.cantidad_escaneada}/${t.cantidad_requerida}</div>
-        <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;">
-          <div id="barra" style="height:100%;background:#22c55e;border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
-        </div>
-      </div>` : `
-      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:13px;color:#666;">CONTEO CIEGO</div>
-        <div id="contador" style="font-size:64px;font-weight:900;">0</div>
-        <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
-      </div>`}
+      ${htmlContador}
 
       ${puedeCamara ? `
       <button onclick="abrirCamara()" style="width:100%;padding:14px;font-size:17px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
@@ -1550,16 +1574,32 @@ async function _procesarScanPicking(codigo) {
 }
 
 function _actualizarContadorPicking(r) {
-  const contador = document.getElementById('contador');
-  if (contador) {
-    contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
-      ? r.cantidad_contada
-      : r.cantidad_actual + '/' + r.cantidad_requerida;
+  const pkgEl = document.getElementById('contador-pkg');
+  const undEl = document.getElementById('contador-und');
+
+  if (pkgEl && undEl) {
+    // Vista de empaque: número grande (paquetes) + unidades debajo
+    pkgEl.textContent = r.empaques_escaneados || 0;
+    undEl.textContent = `${r.cantidad_actual}/${r.cantidad_requerida} und`;
+    if (r.puede_confirmar) {
+      pkgEl.style.color = '#4ade80';
+      undEl.style.color = '#4ade80';
+    }
+  } else {
+    // Vista simple (unidades sueltas o conteo)
+    const contador = document.getElementById('contador');
+    if (contador) {
+      contador.textContent = TAREA_ACTUAL.tipo === 'CONTEO'
+        ? r.cantidad_contada
+        : `${r.cantidad_actual}/${r.cantidad_requerida}`;
+    }
   }
+
   const barra = document.getElementById('barra');
   if (barra && r.cantidad_requerida) {
     barra.style.width = Math.min((r.cantidad_actual / r.cantidad_requerida) * 100, 100) + '%';
   }
+
   if (r.puede_confirmar) {
     const btn = document.getElementById('btn-ok');
     if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.background = '#16a34a'; }

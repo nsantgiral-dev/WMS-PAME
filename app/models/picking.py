@@ -29,6 +29,9 @@ class TareaPicking(db.Model):
     # A quién
     operario_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
 
+    # Conteo de empaques escaneados (cajas/pacas) — las unidades van en cantidad_recogida
+    empaques_escaneados = db.Column(db.Integer, default=0)
+
     # Estado
     estado = db.Column(db.String(20), default='PENDIENTE', nullable=False)
     prioridad = db.Column(db.Integer, default=1)
@@ -58,6 +61,9 @@ class TareaPicking(db.Model):
             'producto_codigo': self.producto.codigo if self.producto else None,
             'cantidad_solicitada': self.cantidad_solicitada,
             'cantidad_recogida': self.cantidad_recogida,
+            'empaques_escaneados': self.empaques_escaneados or 0,
+            'factor_conversion': self.producto.factor_conversion or 1 if self.producto else 1,
+            'unidad_empaque': self.producto.unidad_empaque or '' if self.producto else '',
             'ubicacion_id': self.ubicacion_id,
             'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
             'almacen_id': self.almacen_id,

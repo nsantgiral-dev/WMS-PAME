@@ -128,6 +128,9 @@ class MobileService:
                 'producto_nombre': tarea_activa.producto.nombre if tarea_activa.producto else '',
                 'cantidad_requerida': tarea_activa.cantidad_solicitada,
                 'cantidad_escaneada': tarea_activa.cantidad_recogida,
+                'empaques_escaneados': tarea_activa.empaques_escaneados or 0,
+                'factor_conversion': tarea_activa.producto.factor_conversion or 1 if tarea_activa.producto else 1,
+                'unidad_empaque': (tarea_activa.producto.unidad_empaque or '').upper() if tarea_activa.producto else '',
                 'estado': tarea_activa.estado,
                 'referencia': tarea_activa.referencia_documento,
                 'lote': tarea_activa.lote
@@ -242,10 +245,13 @@ class MobileService:
             'producto_nombre': tarea.producto.nombre if tarea.producto else '',
             'cantidad_requerida': tarea.cantidad_solicitada,
             'cantidad_escaneada': tarea.cantidad_recogida,
+            'empaques_escaneados': tarea.empaques_escaneados or 0,
+            'factor_conversion': tarea.producto.factor_conversion or 1 if tarea.producto else 1,
+            'unidad_empaque': (tarea.producto.unidad_empaque or '').upper() if tarea.producto else '',
             'estado': tarea.estado,
             'referencia': tarea.referencia_documento,
             'lote': tarea.lote,
-            'conteo_intercalado': conteo_intercalado,  # None si no hay conteo en este pasillo
+            'conteo_intercalado': conteo_intercalado,
         }
         return resultado
 
@@ -274,14 +280,22 @@ class MobileService:
 
     @staticmethod
     def _codigos_validos(producto) -> set:
-        """Conjunto de todos los códigos aceptables para un producto."""
+        """Conjunto de todos los códigos aceptables (unidad suelta y empaque)."""
         validos = {
             MobileService._normalizar(producto.codigo),
             MobileService._normalizar(producto.codigo_siesa or ''),
             MobileService._normalizar(producto.codigo_barras or ''),
+            MobileService._normalizar(producto.codigo_barras_empaque or ''),
         }
         validos.discard('')
         return validos
+
+    @staticmethod
+    def _es_escaneo_empaque(producto, codigo_limpio: str) -> bool:
+        """True si el código escaneado es el EAN del empaque y el factor > 1."""
+        if not producto.codigo_barras_empaque or (producto.factor_conversion or 1) <= 1:
+            return False
+        return codigo_limpio == MobileService._normalizar(producto.codigo_barras_empaque)
 
     @staticmethod
     def procesar_escaneo(operario_id: int, tarea_id: int,
@@ -290,7 +304,10 @@ class MobileService:
         """
         Procesa un escaneo — funciona con cámara o láser Bluetooth.
         Valida que el código escaneado corresponde al producto de la tarea.
-        Acepta: referencia interna, código Siesa, o código de barras EAN.
+        Acepta: referencia interna, código Siesa, código de barras EAN (unidad o empaque).
+
+        Si el código coincide con codigo_barras_empaque y factor_conversion > 1,
+        cada scan suma factor_conversion unidades y acumula empaques_escaneados.
 
         lpn_codigo: si se provee y la tarea es de TRASLADO, vincula el LPN
                     automáticamente al traslado y lo marca EN_TRANSITO.
@@ -314,16 +331,29 @@ class MobileService:
                     'escaneado': codigo_limpio
                 })
 
-            nueva_cantidad = tarea.cantidad_recogida + cantidad
+            # Detectar si escanearon el empaque (caja/paca) o la unidad suelta
+            es_empaque = MobileService._es_escaneo_empaque(producto, codigo_limpio)
+            factor = producto.factor_conversion or 1
+            unidades_este_scan = cantidad * factor if es_empaque else cantidad
+
+            nueva_cantidad = tarea.cantidad_recogida + unidades_este_scan
             if nueva_cantidad > tarea.cantidad_solicitada:
                 raise ValueError({
                     'tipo': 'EXCESO',
-                    'mensaje': f'Ya tienes {tarea.cantidad_recogida} de {tarea.cantidad_solicitada}',
+                    'mensaje': (
+                        f'Ya tienes {tarea.cantidad_recogida} de {tarea.cantidad_solicitada}. '
+                        f'{"Este empaque tiene " + str(factor) + " UND — " if es_empaque else ""}'
+                        f'no caben {unidades_este_scan} más.'
+                    ),
                     'cantidad_actual': tarea.cantidad_recogida,
-                    'cantidad_maxima': tarea.cantidad_solicitada
+                    'cantidad_maxima': tarea.cantidad_solicitada,
+                    'unidades_este_scan': unidades_este_scan,
                 })
 
             tarea.cantidad_recogida = nueva_cantidad
+            if es_empaque:
+                tarea.empaques_escaneados = (tarea.empaques_escaneados or 0) + cantidad
+
             if tarea.estado == 'PENDIENTE':
                 tarea.estado = 'EN_PROCESO'
                 tarea.operario_id = operario_id
@@ -353,16 +383,29 @@ class MobileService:
 
             db.session.commit()
             completado = nueva_cantidad >= tarea.cantidad_solicitada
+            unidad_label = (producto.unidad_empaque or 'PKG').upper()
+
+            if completado:
+                mensaje = '¡Completo! Presiona confirmar'
+            elif es_empaque:
+                mensaje = f'{cantidad} {unidad_label} = {unidades_este_scan} und  →  {nueva_cantidad}/{tarea.cantidad_solicitada}'
+            else:
+                mensaje = f'{nueva_cantidad} de {tarea.cantidad_solicitada}'
 
             return {
                 'exito': True,
                 'tipo': 'PICKING',
                 'codigo_escaneado': codigo,
+                'es_empaque': es_empaque,
+                'unidades_este_scan': unidades_este_scan,
+                'empaques_escaneados': tarea.empaques_escaneados or 0,
+                'factor_conversion': factor,
+                'unidad_empaque': unidad_label,
                 'cantidad_actual': nueva_cantidad,
                 'cantidad_requerida': tarea.cantidad_solicitada,
                 'completado': completado,
                 'puede_confirmar': completado,
-                'mensaje': '¡Completo! Presiona confirmar' if completado else f'{nueva_cantidad} de {tarea.cantidad_solicitada}'
+                'mensaje': mensaje,
             }
 
         elif tipo == 'PACKING':
