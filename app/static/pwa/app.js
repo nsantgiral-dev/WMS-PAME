@@ -1248,8 +1248,8 @@ function renderTarea(t) {
         <button onclick="cerrarCamara()" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
       </div>` : ''}
 
-      <button id="btn-ok" onclick="confirmar()" ${esConteo ? '' : 'disabled'}
-        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:#000;color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${esConteo?1:0.3};margin-bottom:10px;">
+      <button id="btn-ok" onclick="confirmar()" ${(esConteo || (req > 0 && unds >= req)) ? '' : 'disabled'}
+        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:${(esConteo || (req > 0 && unds >= req)) ? '#16a34a' : '#000'};color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${(esConteo || (req > 0 && unds >= req)) ? 1 : 0.3};margin-bottom:10px;">
         ✓ Confirmar
       </button>
 
