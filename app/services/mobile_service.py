@@ -433,7 +433,16 @@ class MobileService:
             factor = producto.factor_conversion or 1
             unidades = cantidad * factor if es_empaque else cantidad
 
-            item.cantidad_real = (item.cantidad_real or 0) + unidades
+            actual = item.cantidad_real or 0
+            nueva = actual + unidades
+            if nueva > item.cantidad_esperada:
+                raise ValueError(
+                    f'Exceso: ya tienes {actual} de {item.cantidad_esperada} — '
+                    f'{"esta caja tiene " + str(unidades) + " und — " if unidades > 1 else ""}'
+                    f'no caben {unidades} más'
+                )
+
+            item.cantidad_real = nueva
             item.verificado = item.cantidad_real >= item.cantidad_esperada
             db.session.commit()
 
