@@ -220,6 +220,8 @@ class PickingService:
         tarea.estado = 'EN_PROCESO'
         tarea.operario_id = operario_id
         tarea.fecha_inicio = datetime.utcnow()
+        tarea.cantidad_recogida = 0
+        tarea.empaques_escaneados = 0
         db.session.commit()
         return tarea
 
