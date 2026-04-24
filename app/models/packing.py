@@ -31,6 +31,10 @@ class TareaPacking(db.Model):
     siesa_response = db.Column(db.Text)
     siesa_triggered_at = db.Column(db.DateTime)
 
+    # Alerta: pedido anulado en Siesa mientras el WMS lo procesaba
+    pedido_anulado_siesa = db.Column(db.Boolean, default=False)
+    pedido_estado_siesa_detectado = db.Column(db.String(10))
+
     # Destino — copiado de PedidoSiesa al crear la tarea
     cliente    = db.Column(db.String(200))
     municipio  = db.Column(db.String(100))
@@ -83,7 +87,9 @@ class TareaPacking(db.Model):
             'fecha_cargado': self.fecha_cargado.isoformat() if self.fecha_cargado else None,
             'items': [i.to_dict() for i in self.items],
             'bultos': [{'id': b.id, 'codigo_barras': b.codigo_barras, 'tipo': b.tipo, 'numero': b.numero, 'total': b.total} for b in self.bultos],
-            'siesa_response': self.siesa_response or ''
+            'siesa_response': self.siesa_response or '',
+            'pedido_anulado_siesa': bool(self.pedido_anulado_siesa),
+            'pedido_estado_siesa_detectado': self.pedido_estado_siesa_detectado,
         }
 
 

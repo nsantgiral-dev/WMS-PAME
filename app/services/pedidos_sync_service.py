@@ -129,6 +129,60 @@ def _run_sync(app):
                     db.session.add(reg)
                 upserts += 1
 
+            # ── Detectar packings/pickings activos cuyo pedido desapareció de Siesa ──
+            # Si un pedido que el WMS está procesando activamente ya no aparece como
+            # Comprometido (estado=3) en Siesa, significa que fue Anulado (9) o Cumplido
+            # externamente. Se marca el packing con pedido_anulado_siesa=True para que
+            # el dashboard muestre la alerta en el próximo ciclo.
+            try:
+                from app.models.packing import TareaPacking
+                from app.models.picking import TareaPicking
+
+                numeros_activos_wms = set()
+                # Packings no terminados
+                packings_vivos = TareaPacking.query.filter(
+                    TareaPacking.estado.notin_(['CANCELADO', 'DESPACHADO']),
+                    TareaPacking.siesa_triggered == False,
+                ).all()
+                for pk in packings_vivos:
+                    numeros_activos_wms.add(pk.numero_pedido_siesa)
+
+                # numeros que el sync NB1 sigue viendo como comprometidos
+                numeros_comprometidos_siesa = {
+                    f"{d['tipo_docto']}{d['consec_docto']}"
+                    for d in items_nb1
+                }
+
+                anulados_detectados = []
+                for pk in packings_vivos:
+                    if pk.numero_pedido_siesa not in numeros_comprometidos_siesa:
+                        # Verificar el estado real en Siesa para este pedido puntual
+                        estado_real = connekta.get_estado_pedido(
+                            pk.tipo_docto_pedido_siesa or '',
+                            pk.consec_docto_pedido_siesa or pk.numero_pedido_siesa
+                        )
+                        if estado_real is not None and str(estado_real) not in ('3',):
+                            if not getattr(pk, 'pedido_anulado_siesa', False):
+                                pk.pedido_anulado_siesa = True
+                                pk.pedido_estado_siesa_detectado = str(estado_real)
+                                anulados_detectados.append(
+                                    f'{pk.numero_pedido_siesa} (estado={estado_real})'
+                                )
+                                logger.warning(
+                                    f'[PEDIDOS_SYNC] ⚠ PEDIDO ANULADO EN SIESA: '
+                                    f'{pk.numero_pedido_siesa} estado={estado_real} '
+                                    f'— packing id={pk.id} marcado para alerta'
+                                )
+
+                if anulados_detectados:
+                    logger.warning(
+                        f'[PEDIDOS_SYNC] {len(anulados_detectados)} packing(s) con pedido '
+                        f'anulado/no comprometido en Siesa: {anulados_detectados}'
+                    )
+            except Exception as _e:
+                logger.warning(f'[PEDIDOS_SYNC] Detección anulados falló silenciosamente: {_e}')
+            # ────────────────────────────────────────────────────────────────────
+
             # Eliminar pedidos que ya no tienen pendiente (remisionados o anulados)
             todos = PedidoSiesa.query.all()
             for reg in todos:

@@ -2980,13 +2980,26 @@ async function empCargarTareas() {
         const verificados = t.items_verificados || 0;
         const total = t.total_items || 0;
         const pct = total ? Math.round(verificados / total * 100) : 0;
-        const pickingListo = t.picking_listo !== false;  // true si no hay picking o ya terminó
-        const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered;
+        const pickingListo = t.picking_listo !== false;
+        const pedidoAnulado = t.pedido_anulado_siesa === true;
+        const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered && !pedidoAnulado;
         const enProceso = t.estado === 'EN_PROCESO';
-        const bloqueado = !pickingListo && t.estado === 'PENDIENTE';
-        const color = bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
-        const bg    = bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
-        const label = bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
+        const bloqueado = (!pickingListo && t.estado === 'PENDIENTE') || pedidoAnulado;
+        const color = pedidoAnulado ? '#fca5a5' : bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
+        const bg    = pedidoAnulado ? '#7f1d1d'  : bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
+        const label = pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
+        const anulado_banner = pedidoAnulado ? `
+          <div style="margin-top:10px;background:#1a0505;border:1px solid #7f1d1d;border-radius:8px;padding:10px 12px;">
+            <div style="font-size:12px;font-weight:700;color:#ef4444;margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${t.pedido_estado_siesa_detectado || '9'})</div>
+            <div style="font-size:11px;color:#fca5a5;line-height:1.4;">
+              El área comercial anuló este pedido en el ERP.<br>
+              <strong>Acción:</strong> Cancelar este packing y esperar el nuevo pedido clonado.
+            </div>
+            <button onclick="event.stopPropagation();empCancelarPacking(${t.id})"
+              style="margin-top:8px;width:100%;padding:8px;background:#7f1d1d;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">
+              Cancelar packing
+            </button>
+          </div>` : '';
         const limpiarBtn = siesaFallo ? `
           <button onclick="event.stopPropagation();empLimpiarSiesa(${t.id})"
             style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
@@ -2998,14 +3011,15 @@ async function empCargarTareas() {
             🔄 Reiniciar conteo
           </button>` : '';
         return `
-        <div class="emp-task-card" onclick="${bloqueado ? '' : `empIniciarHUD(${t.id})`}"
-          style="${bloqueado ? 'opacity:0.5;cursor:default;' : 'cursor:pointer;'}">
+        <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${t.id})`}"
+          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border-color:#7f1d1d;background:#110505;' : ''}">
           <div class="emp-task-pedido">${t.numero_pedido_siesa}</div>
           <div class="emp-task-sub">${total} producto(s) · ${t.items_verificados || 0}/${total} verificados</div>
           ${total > 0 ? `<div style="margin-top:10px;background:#1a1a1a;border-radius:8px;height:6px;overflow:hidden;">
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>
           </div>` : ''}
           <span class="emp-task-badge" style="background:${bg};color:${color};">${label}</span>
+          ${anulado_banner}
           ${limpiarBtn}
           ${reiniciarBtn}
         </div>`;
@@ -3070,6 +3084,21 @@ async function empIniciarHUD(packingId) {
       document.getElementById('scanner-input').focus();
     }
   } catch (e) { alerta('Error iniciando tarea', 'error'); }
+}
+
+async function empCancelarPacking(packingId) {
+  if (!confirm('¿Cancelar este packing? El pedido fue anulado en Siesa. La mercancía que ya fue pickeada debe devolverse a la ubicación o esperar el nuevo pedido.')) return;
+  try {
+    const r = await fetch(`/api/packing/${packingId}/cancelar`, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo: 'Pedido anulado en Siesa ERP — cancelado desde WMS' })
+    });
+    const data = await r.json();
+    if (!r.ok) { alerta(data.error || 'Error al cancelar', 'error'); return; }
+    alerta('Packing cancelado — avisa al jefe de almacén para devolver la mercancía', 'info');
+    empCargarTareas();
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function empLimpiarSiesa(packingId) {
