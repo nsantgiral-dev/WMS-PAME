@@ -272,6 +272,7 @@ class PickingService:
         tarea.estado = 'PENDIENTE'
         tarea.operario_id = None
         tarea.cantidad_recogida = 0
+        tarea.empaques_escaneados = 0
         tarea.motivo_bloqueo = None
         db.session.commit()
         return tarea
