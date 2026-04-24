@@ -664,15 +664,16 @@ class ConnektaGateway:
         es_entrada = motivo_codigo == 'AJ-ENT'
         siesa_motivo   = '01' if es_entrada else '02'
 
-        fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        cia = int(self.id_cia_siesa)
 
         payload = {
             'Inicial': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': cia}
             ],
             'Documentos': [
                 {
-                    'F_CIA': self.id_compania,
+                    'F_CIA': cia,
                     'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_ajuste,
@@ -705,7 +706,7 @@ class ConnektaGateway:
             ],
             'Movimientos': [
                 {
-                    'F_CIA': self.id_compania,
+                    'F_CIA': cia,
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_ajuste,
                     'f470_consec_docto': '',
@@ -736,7 +737,7 @@ class ConnektaGateway:
                 }
             ],
             'Final': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': cia}
             ]
         }
 
@@ -750,15 +751,16 @@ class ConnektaGateway:
         Usa SIESA_TIPO_DOCTO_TRASLADO (TRA) y SIESA_MOTIVO_TRASLADO (01).
         Siesa mueve el stock entre bodegas — vendedores ya no ven las unidades averiadas.
         """
-        fecha_hoy = datetime.utcnow().strftime('%Y-%m-%d')
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        cia_averias = int(self.id_cia_siesa)
 
         payload = {
             'Inicial': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': cia_averias}
             ],
             'Documentos': [
                 {
-                    'F_CIA': self.id_compania,
+                    'F_CIA': cia_averias,
                     'F_CONSEC_AUTO_REG': '',
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
@@ -792,7 +794,7 @@ class ConnektaGateway:
             ],
             'Movimientos': [
                 {
-                    'F_CIA': self.id_compania,
+                    'F_CIA': cia_averias,
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': '',
                     'f470_consec_docto': '',
@@ -824,7 +826,7 @@ class ConnektaGateway:
                 }
             ],
             'Final': [
-                {'F_CIA': self.id_compania}
+                {'F_CIA': cia_averias}
             ]
         }
 

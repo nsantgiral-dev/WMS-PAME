@@ -516,8 +516,10 @@ class MobileService:
             return resultado
 
         elif tipo == 'PACKING':
-            resultado = PackingService.confirmar_packing(tarea_id=tarea_id)
-            return resultado.to_dict()
+            PackingService.confirmar_packing(tarea_id=tarea_id)
+            from app.models.packing import TareaPacking
+            tarea = TareaPacking.query.get(tarea_id)
+            return tarea.to_dict()
 
         elif tipo == 'CONTEO':
             sesion = SesionConteo.query.get(tarea_id)
