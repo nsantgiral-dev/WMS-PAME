@@ -300,10 +300,18 @@ class PackingService:
             tarea.fecha_despachado = datetime.utcnow()
             logger.info(f'[PACKING] Siesa triggered para {tarea.numero_pedido_siesa} — {total} bultos')
         except Exception as e:
-            logger.error(f'[PACKING] Error Siesa al cerrar: {str(e)}')
-            tarea.siesa_response = str(e)
+            error_str = str(e)
+            logger.error(f'[PACKING] Error Siesa al cerrar: {error_str}')
+            tarea.siesa_response = error_str
             db.session.commit()
-            raise Exception(str(e))
+            if 'comprometido' in error_str.lower():
+                raise Exception(
+                    f'El pedido {tarea.numero_pedido_siesa} ya no está en estado '
+                    f'Comprometido en Siesa. Alguien lo puede haber modificado en el ERP. '
+                    f'Ir a Ventas → Pedidos → buscar {tarea.numero_pedido_siesa} → '
+                    f'Comprometer pedido y luego reintentar el cierre aquí.'
+                )
+            raise Exception(error_str)
 
         db.session.commit()
         return bultos_existentes

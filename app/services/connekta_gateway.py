@@ -528,7 +528,11 @@ class ConnektaGateway:
             }]
         }
 
-        logger.info(f'[CONNEKTA] Factura desde pedido {consec_docto_pedido}')
+        logger.info(
+            f'[CONNEKTA] Factura desde pedido {tipo_docto_pedido}{consec_docto_pedido} '
+            f'F430_ID_TIPO_DOCTO={payload["Docto_ventas_comercial"][0].get("F430_ID_TIPO_DOCTO")} '
+            f'F430_CONSEC_DOCTO={payload["Docto_ventas_comercial"][0].get("F430_CONSEC_DOCTO")}'
+        )
         return self._post(
             self.conector_factura, 'FACTURA_DESDE_PEDIDO', payload,
             url=self.url_post_dinamico,
