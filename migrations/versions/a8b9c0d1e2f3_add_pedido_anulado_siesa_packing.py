@@ -1,7 +1,7 @@
 """add pedido_anulado_siesa to tareas_packing
 
 Revision ID: a8b9c0d1e2f3
-Revises: z7a8b9c0d1e2
+Revises: b0c1d2e3f4g5
 Create Date: 2026-04-24
 
 """
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = 'a8b9c0d1e2f3'
-down_revision = 'z7a8b9c0d1e2'
+down_revision = 'b0c1d2e3f4g5'
 branch_labels = None
 depends_on = None
 
