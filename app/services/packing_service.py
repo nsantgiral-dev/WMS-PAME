@@ -255,12 +255,27 @@ class PackingService:
                 tarea.consec_docto_pedido_siesa
             )
             if estado_siesa is not None and str(estado_siesa) != '3':
-                ESTADOS = {'0': 'Ingresado', '1': 'Aprobado', '2': 'Aprobado',
-                           '4': 'Cumplido', '5': 'Anulado'}
-                nombre_estado = ESTADOS.get(str(estado_siesa), f'estado {estado_siesa}')
+                ESTADOS = {
+                    '0': 'Ingresado (sin aprobar)',
+                    '1': 'Aprobado',
+                    '2': 'Aprobado',
+                    '4': 'Cumplido',
+                    '5': 'Anulado',
+                    '9': 'Anulado / ya procesado en Siesa',
+                }
+                nombre_estado = ESTADOS.get(str(estado_siesa), f'desconocido (código {estado_siesa})')
+                terminal = str(estado_siesa) in ('4', '5', '9')
+                if terminal:
+                    raise ValueError(
+                        f'El pedido {tarea.numero_pedido_siesa} está en estado '
+                        f'"{nombre_estado}" en Siesa y no se puede facturar desde el WMS. '
+                        f'Verificar en Siesa si el pedido fue anulado o ya fue procesado manualmente. '
+                        f'Si fue anulado, cancelar este packing. '
+                        f'Si ya fue facturado en Siesa, marcar como despachado manualmente.'
+                    )
                 raise ValueError(
                     f'El pedido {tarea.numero_pedido_siesa} está en estado '
-                    f'"{nombre_estado}" en Siesa — debe estar Comprometido. '
+                    f'"{nombre_estado}" en Siesa — debe estar Comprometido (estado 3). '
                     f'Ir a Ventas → Pedidos → Comprometer pedido y reintentar.'
                 )
             elif estado_siesa is None:
