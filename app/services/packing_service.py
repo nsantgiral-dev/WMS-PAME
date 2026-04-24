@@ -246,6 +246,29 @@ class PackingService:
         if total < 1:
             raise ValueError('Total de piezas debe ser al menos 1')
 
+        # Pre-verificar que el pedido sigue Comprometido en Siesa antes de crear bultos.
+        # Si falla aquí, el empacador no queda con bultos huérfanos ni tiene que resetear.
+        # Solo se verifica si hay tipo_docto y consec válidos (pedido real de Siesa).
+        if tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+            estado_siesa = connekta.get_estado_pedido(
+                tarea.tipo_docto_pedido_siesa,
+                tarea.consec_docto_pedido_siesa
+            )
+            if estado_siesa is not None and str(estado_siesa) != '3':
+                ESTADOS = {'0': 'Ingresado', '1': 'Aprobado', '2': 'Aprobado',
+                           '4': 'Cumplido', '5': 'Anulado'}
+                nombre_estado = ESTADOS.get(str(estado_siesa), f'estado {estado_siesa}')
+                raise ValueError(
+                    f'El pedido {tarea.numero_pedido_siesa} está en estado '
+                    f'"{nombre_estado}" en Siesa — debe estar Comprometido. '
+                    f'Ir a Ventas → Pedidos → Comprometer pedido y reintentar.'
+                )
+            elif estado_siesa is None:
+                logger.warning(
+                    f'[PACKING] No se pudo verificar estado de {tarea.numero_pedido_siesa} '
+                    f'en Siesa — continuando de todas formas'
+                )
+
         # Crear bultos solo si no existen aún (idempotente en caso de reintento)
         bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
         if not bultos_existentes:

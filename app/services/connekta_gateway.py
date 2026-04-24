@@ -212,6 +212,33 @@ class ConnektaGateway:
     # GETs
     # ==========================================
 
+    def get_estado_pedido(self, tipo_docto: str, consec_docto) -> int | None:
+        """
+        Consulta el ind_estado actual de un pedido específico en Siesa.
+        Retorna el entero (3=Comprometido, 2=Aprobado, 4=Cumplido…) o None si no se encuentra.
+        Se usa como pre-check en cerrar_packing para detectar pedidos que perdieron
+        el estado Comprometido antes de crear bultos o disparar el trigger.
+        """
+        if self.modo_simulacion:
+            return 3  # simulación asume siempre comprometido
+
+        try:
+            consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+            res = self._get(self.api_pedidos, {
+                'paginacion': 'numPag=1|tamPag=1',
+                'parametros': (
+                    f"f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"AND f430_consec_docto = {consec_int}"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            if not rows:
+                return None
+            return rows[0].get('f430_ind_estado')
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] get_estado_pedido falló silenciosamente: {e}')
+            return None  # si falla el GET, no bloqueamos — el POST revelará el error
+
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
         Cola viva de picking: filtra por CO y estado directo en Connekta.
