@@ -250,33 +250,45 @@ class PackingService:
         # Si falla aquí, el empacador no queda con bultos huérfanos ni tiene que resetear.
         # Solo se verifica si hay tipo_docto y consec válidos (pedido real de Siesa).
         if tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+            logger.info(
+                f'[PACKING] Pre-check Siesa para {tarea.numero_pedido_siesa} '
+                f'(tipo={tarea.tipo_docto_pedido_siesa} consec={tarea.consec_docto_pedido_siesa})'
+            )
             estado_siesa = connekta.get_estado_pedido(
                 tarea.tipo_docto_pedido_siesa,
                 tarea.consec_docto_pedido_siesa
             )
-            if estado_siesa is not None and str(estado_siesa) != '3':
+            logger.info(
+                f'[PACKING] Pre-check resultado: {tarea.numero_pedido_siesa} → estado_siesa={estado_siesa}'
+            )
+            if estado_siesa is not None and str(estado_siesa) not in ('3', '4'):
+                # Solo bloqueamos estados definitivamente muertos (Anulado).
+                # Estado 4 (Cumplido) puede seguir siendo facturable en Siesa —
+                # dejamos que trigger_factura lo intente y Siesa decide.
                 ESTADOS = {
                     '0': 'Ingresado (sin aprobar)',
                     '1': 'Aprobado',
                     '2': 'Aprobado',
-                    '4': 'Cumplido',
                     '5': 'Anulado',
                     '9': 'Anulado / ya procesado en Siesa',
                 }
                 nombre_estado = ESTADOS.get(str(estado_siesa), f'desconocido (código {estado_siesa})')
-                terminal = str(estado_siesa) in ('4', '5', '9')
-                if terminal:
-                    raise ValueError(
-                        f'El pedido {tarea.numero_pedido_siesa} está en estado '
-                        f'"{nombre_estado}" en Siesa y no se puede facturar desde el WMS. '
-                        f'Verificar en Siesa si el pedido fue anulado o ya fue procesado manualmente. '
-                        f'Si fue anulado, cancelar este packing. '
-                        f'Si ya fue facturado en Siesa, marcar como despachado manualmente.'
+                anulado = str(estado_siesa) in ('5', '9')
+                if anulado:
+                    logger.error(
+                        f'[PACKING] ⛔ PRE-CHECK BLOQUEÓ cierre de {tarea.numero_pedido_siesa}: '
+                        f'estado_siesa={estado_siesa} ({nombre_estado}) — '
+                        f'trigger_factura NO fue enviado a Siesa'
                     )
-                raise ValueError(
-                    f'El pedido {tarea.numero_pedido_siesa} está en estado '
-                    f'"{nombre_estado}" en Siesa — debe estar Comprometido (estado 3). '
-                    f'Ir a Ventas → Pedidos → Comprometer pedido y reintentar.'
+                    raise ValueError(
+                        f'El pedido {tarea.numero_pedido_siesa} está Anulado en Siesa '
+                        f'(estado {estado_siesa}) — no se puede facturar. '
+                        f'Cancelar este packing y esperar el pedido clonado del área comercial.'
+                    )
+                # Estado desconocido o Aprobado (1/2): advertir pero intentar
+                logger.warning(
+                    f'[PACKING] ⚠ Pedido {tarea.numero_pedido_siesa} en estado '
+                    f'"{nombre_estado}" ({estado_siesa}) — se intenta trigger_factura de todas formas'
                 )
             elif estado_siesa is None:
                 logger.warning(
@@ -325,10 +337,19 @@ class PackingService:
             })
 
         # TRIGGER A SIESA — 238925 FacturaPedido → factura FE + remisión automática
+        consec_para_siesa = tarea.consec_docto_pedido_siesa or tarea.numero_pedido_siesa
+        logger.info(
+            f'[PACKING] ▶ Enviando trigger_factura a Siesa: '
+            f'pedido={tarea.numero_pedido_siesa} '
+            f'tipo_docto={tarea.tipo_docto_pedido_siesa!r} '
+            f'consec={consec_para_siesa!r} '
+            f'items={len(items_payload)} '
+            f'bultos={total}'
+        )
         try:
             respuesta_siesa = connekta.trigger_factura(
                 tipo_docto_pedido=tarea.tipo_docto_pedido_siesa or '',
-                consec_docto_pedido=tarea.consec_docto_pedido_siesa or tarea.numero_pedido_siesa,
+                consec_docto_pedido=consec_para_siesa,
                 items=items_payload
             )
             tarea.siesa_triggered = True
@@ -336,10 +357,15 @@ class PackingService:
             tarea.siesa_triggered_at = datetime.utcnow()
             tarea.estado = 'DESPACHADO'
             tarea.fecha_despachado = datetime.utcnow()
-            logger.info(f'[PACKING] Siesa triggered para {tarea.numero_pedido_siesa} — {total} bultos')
+            logger.info(
+                f'[PACKING] ✅ Siesa OK para {tarea.numero_pedido_siesa} — '
+                f'{total} bultos — respuesta: {str(respuesta_siesa)[:200]}'
+            )
         except Exception as e:
             error_str = str(e)
-            logger.error(f'[PACKING] Error Siesa al cerrar: {error_str}')
+            logger.error(
+                f'[PACKING] ❌ Siesa FALLÓ para {tarea.numero_pedido_siesa}: {error_str}'
+            )
             tarea.siesa_response = error_str
             db.session.commit()
             if 'comprometido' in error_str.lower():

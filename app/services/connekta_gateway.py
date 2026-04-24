@@ -185,6 +185,7 @@ class ConnektaGateway:
         if extra_params:
             params.update(extra_params)
 
+        logger.info(f'[CONNEKTA] POST → conector={id_conector} nombre={nombre_conector} url={url or self.url_post}')
         try:
             r = requests.post(
                 url or self.url_post,
@@ -200,7 +201,9 @@ class ConnektaGateway:
                     detalle = r.text
                 logger.error(f'[CONNEKTA] POST {id_conector} HTTP {r.status_code}: {detalle}')
                 raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
-            return r.json()
+            resp_json = r.json()
+            logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
+            return resp_json
         except requests.exceptions.Timeout:
             logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
             raise Exception('Siesa no respondió en 30s — la recepción quedó EN_PROCESO, reintenta confirmar')
