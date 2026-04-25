@@ -5,6 +5,7 @@ from app.extensions import db
 class EstadoPacking:
     PENDIENTE   = 'PENDIENTE'
     EN_PROCESO  = 'EN_PROCESO'
+    BLOQUEADO   = 'BLOQUEADO'
     VERIFICADO  = 'VERIFICADO'
     DESPACHADO  = 'DESPACHADO'
     CANCELADO   = 'CANCELADO'

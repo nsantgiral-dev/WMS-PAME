@@ -213,6 +213,9 @@ def debug_pedidos_raw():
     params = {'paginacion': f'numPag={num_pag}|tamPag={tam_pag}'}
 
     if params_raw:
+        # Validación básica: evitar inyección de múltiples sentencias SQL
+        if len(params_raw) > 500 or ';' in params_raw or '--' in params_raw:
+            return jsonify({'error': 'params_raw inválido — usa filtros simples tipo campo=valor'}), 400
         params['parametros'] = params_raw
     elif consec:
         filtros = [f'f430_consec_docto={consec}']

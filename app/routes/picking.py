@@ -12,6 +12,11 @@ picking_bp = Blueprint('picking', __name__)
 @picking_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_tareas():
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso para listar tareas de picking'}), 403
     estado = request.args.get('estado')
     operario_id = request.args.get('operario_id', type=int)
     almacen_id = request.args.get('almacen_id', type=int)

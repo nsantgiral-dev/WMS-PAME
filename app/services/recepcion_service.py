@@ -418,6 +418,13 @@ class RecepcionService:
         except Exception as lookup_err:
             logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
 
+        # Siesa requiere proveedor_id — fallar rápido antes de crear SiesaJob
+        if not proveedor_id:
+            raise ValueError(
+                f'No se pudo obtener el proveedor de la OC {recepcion.numero_oc_siesa} en Siesa. '
+                'Verifica que la OC exista en SIESA o asigna el código de proveedor manualmente.'
+            )
+
         items_payload = []
         for i in recepcion.items:
             if i.cantidad_recibida <= 0:

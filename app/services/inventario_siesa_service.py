@@ -603,7 +603,14 @@ def _run_setup_inicial(app):
         _run_sync(app)
 
         _estado_setup['fase'] = 'stock'
-        _run_carga_inicial(app)
+        # Marcar _estado_carga como en curso para que iniciar_carga_inicial()
+        # concurrente no lance un segundo hilo mientras el setup ejecuta la carga.
+        _estado_carga['en_curso'] = True
+        _estado_carga['ultimo_inicio'] = datetime.now(timezone.utc)
+        try:
+            _run_carga_inicial(app)
+        finally:
+            _estado_carga['en_curso'] = False
 
         _estado_setup['fase'] = 'completado'
         _estado_setup['ultimo_error'] = None

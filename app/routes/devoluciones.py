@@ -8,6 +8,7 @@ POST /api/devoluciones/<id>/descartar → descarta la tarea (diferencial era err
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.devolucion_service import listar_pendientes, confirmar_ubicacion, descartar
+from app.routes._auth_helpers import Roles
 
 devoluciones_bp = Blueprint('devoluciones', __name__)
 
@@ -22,7 +23,11 @@ def listar():
 @devoluciones_bp.route('/<int:tarea_id>/ubicar', methods=['POST'])
 @jwt_required()
 def ubicar(tarea_id):
+    from app.models.usuario import Usuario
     recepcionista_id = int(get_jwt_identity())
+    u = Usuario.query.get(recepcionista_id)
+    if not u or u.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Sin permiso para confirmar devoluciones'}), 403
     data = request.get_json()
     ubicacion_codigo = data.get('ubicacion_codigo', '').strip()
     es_averiado = data.get('es_averiado', False)
@@ -46,7 +51,11 @@ def ubicar(tarea_id):
 @devoluciones_bp.route('/<int:tarea_id>/descartar', methods=['POST'])
 @jwt_required()
 def descartar_tarea(tarea_id):
+    from app.models.usuario import Usuario
     recepcionista_id = int(get_jwt_identity())
+    u = Usuario.query.get(recepcionista_id)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso para descartar devoluciones'}), 403
     data = request.get_json() or {}
     motivo = data.get('motivo', 'Descartado por recepcionista')
     try:

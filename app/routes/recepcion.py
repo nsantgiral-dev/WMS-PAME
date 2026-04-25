@@ -15,7 +15,7 @@ def _es_recepcion_autorizado():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol in ('admin', 'jefe_almacen', 'recepcionista') else None
+    return u if u and u.rol in Roles.RECEPCION_ROLES else None
 
 
 @recepcion_bp.route('/', methods=['GET'])

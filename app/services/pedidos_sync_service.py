@@ -161,7 +161,9 @@ def _run_sync(app):
                             pk.tipo_docto_pedido_siesa or '',
                             pk.consec_docto_pedido_siesa or pk.numero_pedido_siesa
                         )
-                        if estado_real is not None and str(estado_real) not in ('3', '4'):
+                        # 1=En elaboración, 2=Aprobado, 3=Comprometido, 4=Cumplido: NO anular
+                        # Solo marcar anulado para estado=9 (Anulado) u otros desconocidos
+                        if estado_real is not None and str(estado_real) not in ('1', '2', '3', '4'):
                             if not getattr(pk, 'pedido_anulado_siesa', False):
                                 pk.pedido_anulado_siesa = True
                                 pk.pedido_estado_siesa_detectado = str(estado_real)

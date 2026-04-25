@@ -197,6 +197,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'siesa_triggered — revisar manualmente tarea {tarea.id}. Error: {_e}'
                 )
                 db.session.rollback()
+                # Emergency: persistir SOLO el flag idempotencia para bloquear re-despacho
+                try:
+                    tarea.siesa_triggered = True
+                    tarea.siesa_triggered_at = _dt.utcnow()
+                    db.session.commit()
+                except Exception as _e2:
+                    logger.critical(
+                        f'[DLQ] DESPACHO_F470 job={job.id}: DOBLE FALLO — '
+                        f'siesa_triggered no persiste: {_e2}. Tarea {tarea.id} en riesgo de duplicado.'
+                    )
         return resultado
 
     if job.tipo == 'ENTRADA_OC':
@@ -262,8 +272,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         )
         # Marcar triggered para que futuros reintentos no dupliquen
         if tarea_dev:
-            tarea_dev.siesa_triggered = True
-            db.session.commit()
+            try:
+                tarea_dev.siesa_triggered = True
+                tarea_dev.siesa_triggered_at = datetime.utcnow()
+                db.session.commit()
+            except Exception as _e:
+                logger.critical(
+                    f'[DLQ] TRASLADO_AVERIAS job={job.id}: Siesa OK pero fallo al guardar '
+                    f'siesa_triggered — revisar manualmente tarea_dev {tarea_dev.id}. Error: {_e}'
+                )
+                db.session.rollback()
         return resultado
 
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')

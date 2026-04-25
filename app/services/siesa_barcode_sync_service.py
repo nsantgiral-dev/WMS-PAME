@@ -131,6 +131,10 @@ def _run_sync(app):
         except Exception as e:
             _sync_estado['ultimo_error'] = str(e)
             logger.error(f'[BARCODE SYNC] Error fatal: {e}')
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
         finally:
             _sync_estado['en_curso'] = False
 

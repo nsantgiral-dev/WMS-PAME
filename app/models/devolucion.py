@@ -10,6 +10,13 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoDevolucion:
+    PENDIENTE   = 'PENDIENTE'
+    EN_PROCESO  = 'EN_PROCESO'
+    COMPLETADO  = 'COMPLETADO'
+    DESCARTADO  = 'DESCARTADO'
+
+
 class TareaDevolucion(db.Model):
     __tablename__ = 'tareas_devolucion'
 

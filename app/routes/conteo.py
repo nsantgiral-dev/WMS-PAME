@@ -17,6 +17,11 @@ from app.routes._auth_helpers import _solo_admin
 @conteo_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_sesiones():
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso para listar sesiones de conteo'}), 403
     estado = request.args.get('estado')
     almacen_id = request.args.get('almacen_id', type=int)
     clasificacion = request.args.get('clasificacion')

@@ -5,6 +5,7 @@ from app.extensions import db
 class EstadoConteo:
     PENDIENTE       = 'PENDIENTE'
     EN_PROCESO      = 'EN_PROCESO'
+    BLOQUEADO       = 'BLOQUEADO'
     MATCH           = 'MATCH'
     DESCUADRE       = 'DESCUADRE'
     SEGUNDO_CONTEO  = 'SEGUNDO_CONTEO'

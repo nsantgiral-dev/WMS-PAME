@@ -2,6 +2,20 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoBulto:
+    PENDIENTE  = 'PENDIENTE'
+    CARGADO    = 'CARGADO'
+    ENTREGADO  = 'ENTREGADO'
+    RECHAZADO  = 'RECHAZADO'
+
+
+class EstadoRuta:
+    PROGRAMADO  = 'PROGRAMADO'
+    EN_CARGUE   = 'EN_CARGUE'
+    EN_TRANSITO = 'EN_TRANSITO'
+    ENTREGADA   = 'ENTREGADA'
+
+
 class Bulto(db.Model):
     """
     Pieza física de un pedido empacado.

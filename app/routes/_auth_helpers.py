@@ -52,3 +52,11 @@ def _es_gestion():
         return None
     u = Usuario.query.get(uid)
     return u if u and u.rol in Roles.GESTION else None
+
+
+def _get_uid():
+    """Convierte get_jwt_identity() a int de forma segura. Retorna None si falla."""
+    try:
+        return int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None

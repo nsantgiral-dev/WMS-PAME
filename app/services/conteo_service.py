@@ -195,7 +195,8 @@ class ConteoService:
             if not tabla:
                 return 0
             fila = tabla[0]
-            return float(fila.get('cantidad_disponible', fila.get('f470_cant_base', 0)))
+            # API_v2_Inventarios_InvFecha — campo correcto: f400_cant_existencia_1
+            return float(fila.get('f400_cant_existencia_1', 0))
 
         except Exception as e:
             # Timeout o error de red: fallback a stock local para no bloquear al operario

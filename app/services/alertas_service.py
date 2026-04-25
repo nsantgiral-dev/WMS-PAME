@@ -608,7 +608,7 @@ Generado: {hoy}
                   {'border-color:#7c2d12;' if alerta_jobs else ''}">
         <div style="font-size:12px;color:#6b7280;margin-bottom:6px;">Jobs Siesa</div>
         <div>{_stat(jobs_ok)} <span style="font-size:13px;color:#6b7280;">OK</span>
-        {'&nbsp;&nbsp;' + _stat(jobs_fallidos, alerta=True) + ' <span style="font-size:13px;color:#ef4444;">fallidos</span>' if jobs_fallidos else ''}</div>
+        {'&nbsp;&nbsp;' + _stat(jobs_fallidos, alerta=True) + ' <span style="font-size:13px;color:#ef4444;">fallidos</span>' if isinstance(jobs_fallidos, int) and jobs_fallidos > 0 else ''}</div>
       </div>
     </div>
     <div style="text-align:center;font-size:11px;color:#4b5563;padding:8px;">

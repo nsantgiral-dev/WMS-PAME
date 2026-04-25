@@ -113,7 +113,7 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     4. Marca tarea como COMPLETADO.
     5. Elimina la idempotency_key para que si vuelve a haber diferencia se cree nueva tarea.
     """
-    tarea = TareaDevolucion.query.get(tarea_id)
+    tarea = TareaDevolucion.query.filter_by(id=tarea_id).with_for_update().first()
     if not tarea:
         raise ValueError(f'Tarea {tarea_id} no existe')
     if tarea.estado == 'COMPLETADO':
@@ -195,7 +195,8 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     job_dlq = None
     if es_averiado and not connekta.modo_simulacion:
         from app.models.siesa_job import SiesaJob
-        item_codigo_dlq = tarea.producto.codigo_siesa or tarea.producto.codigo
+        # Capturar antes del commit (expire_on_commit haría lazy load ineficiente después)
+        _item_codigo = tarea.producto.codigo_siesa or tarea.producto.codigo
         job_dlq = SiesaJob.encolar(
             tipo='TRASLADO_AVERIAS',
             payload={
@@ -214,9 +215,8 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     # Disparar traslado NB1 → AV1 en Siesa para que vendedores no vean unidades dañadas
     if job_dlq is not None:
         try:
-            item_codigo = tarea.producto.codigo_siesa or tarea.producto.codigo
             connekta.transferir_a_averias(
-                item_codigo=item_codigo,
+                item_codigo=_item_codigo,
                 cantidad=tarea.cantidad_diferencia,
                 referencia=tarea.codigo
             )

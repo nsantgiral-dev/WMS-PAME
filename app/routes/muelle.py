@@ -2,7 +2,7 @@
 Monitor de Muelle — lectura exclusiva desde DB local, cero peticiones a Connekta.
 Flujo: siesa_triggered → bultos PENDIENTE aparecen en muelle → scan-to-truck → CARGADO.
 """
-from datetime import datetime
+from datetime import datetime, date
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
@@ -193,11 +193,12 @@ def cargar_bulto(codigo_barras):
 @muelle_bp.route('/manifiesto', methods=['GET'])
 @jwt_required()
 def manifiesto():
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Sin permiso para ver el manifiesto'}), 403
     """
     Manifiesto de ruta: todos los bultos cargados hoy, agrupados por municipio.
     El conductor lleva esto impreso — listado exacto de piezas por cliente.
     """
-    from datetime import date
     from sqlalchemy import func
 
     hoy = date.today()
@@ -255,6 +256,8 @@ def manifiesto():
 @jwt_required()
 def historial():
     """Últimos 100 bultos cargados, para auditoría."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Sin permiso para ver historial de muelle'}), 403
     bultos = (
         Bulto.query
         .filter_by(estado='CARGADO')

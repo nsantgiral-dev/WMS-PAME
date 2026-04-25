@@ -439,6 +439,8 @@ def iniciar_ruta(id):
     PROGRAMADO → EN_CARGUE.
     Devuelve además los bultos sugeridos por municipio de la ruta maestra.
     """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede iniciar el cargue'}), 403
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'PROGRAMADO':
         return jsonify({'error': f'La ruta debe estar PROGRAMADO, está {ruta.estado}'}), 400
@@ -536,6 +538,11 @@ def entregar_ruta(id):
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'EN_TRANSITO':
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
+
+    usuario_id = int(get_jwt_identity())
+    conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
+    if not _es_admin_o_jefe() and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
+        return jsonify({'error': 'Sin acceso a esta ruta'}), 403
 
     data = request.get_json() or {}
     ahora = datetime.utcnow()

@@ -49,6 +49,11 @@ def _picking_listo_batch(numeros_pedido: list) -> dict:
 @packing_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_tareas():
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.PACKING_ROLES:
+        return jsonify({'error': 'Sin permiso para listar tareas de packing'}), 403
     estado = request.args.get('estado')
     almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
