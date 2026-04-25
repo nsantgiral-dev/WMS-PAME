@@ -276,8 +276,9 @@ def _run_carga_inicial(app):
                 f'{len(_mapa_ubicaciones)} ubicaciones · {len(_mapa_up)} registros UP'
             )
 
-            # [M5] Bulk zero ANTES del loop — reemplaza los N UPDATEs individuales por producto.
-            # Excluye: (a) ubicaciones con ajuste manual reciente, (b) productos ya cargados hoy.
+            # Precalcular sets para el bulk zero diferido (se ejecuta AL FINAL del loop)
+            # El zero se mueve al final para evitar que un reinicio de Railway deje
+            # productos en 0 cuando solo se commiteó el primer lote y el proceso murió.
             _ubs_almacen_ids = {ub.id for ub in _mapa_ubicaciones.values()}
             _excluir_ub_ids = {uid for ubs in _ajustes_recientes.values() for uid in ubs}
             _ubs_a_zero = _ubs_almacen_ids - _excluir_ub_ids
@@ -287,30 +288,8 @@ def _run_carga_inicial(app):
                     _prod_ids_ya_hoy.add(int(_ikey.split('-')[2]))
                 except (IndexError, ValueError):
                     pass
-            if _ubs_a_zero:
-                _q_zero = UbicacionProducto.query.filter(
-                    UbicacionProducto.ubicacion_id.in_(_ubs_a_zero),
-                    UbicacionProducto.lote.is_(None),
-                )
-                # Excluir productos ya cargados hoy Y productos con operaciones activas
-                _excl_prods = _prod_ids_ya_hoy | _prod_ids_activos
-                if _excl_prods:
-                    _q_zero = _q_zero.filter(
-                        ~UbicacionProducto.producto_id.in_(_excl_prods)
-                    )
-                _q_zero.update({'cantidad': 0}, synchronize_session=False)
-                db.session.flush()
-                # synchronize_session=False no actualiza los objetos Python en memoria.
-                # Los registros de _mapa_up siguen con la cantidad pre-zero.
-                # Actualizamos el mapa para que saldo_antes sea correcto en MovimientoInventario.
-                _ubs_a_zero_set = set(_ubs_a_zero)
-                for (_ub_id, _prod_id), _reg in _mapa_up.items():
-                    if _ub_id in _ubs_a_zero_set and _prod_id not in _excl_prods:
-                        _reg.cantidad = 0
-                logger.info(
-                    f'[INV-SIESA] Bulk zero OK: {len(_ubs_a_zero)} ubicaciones '
-                    f'(excluidos {len(_prod_ids_activos)} productos con operaciones activas)'
-                )
+            # Productos actualizados en este sync — se excluyen del bulk zero final
+            _prod_ids_actualizados: set = set()
 
             for codigo, datos in inventario_siesa.items():
                 existencia_siesa = int(round(datos['existencia']))
@@ -380,6 +359,7 @@ def _run_carga_inicial(app):
                     # Solo añadir al set después del savepoint exitoso —
                     # evita marcar como procesado un producto que falló y fue revertido
                     ikeys_hoy.add(ikey)
+                    _prod_ids_actualizados.add(prod.id)
 
                     # Commit cada 200 productos para no acumular transacciones enormes
                     if (cargados + actualizados) % 200 == 0:
@@ -390,6 +370,27 @@ def _run_carga_inicial(app):
                     logger.warning(f'[INV-SIESA] Error en producto {codigo}: {e}')
                     _savepoint.rollback()  # solo revierte este producto, no los anteriores
                     errores += 1
+
+            # [M5] Bulk zero DIFERIDO — se ejecuta DESPUÉS del loop, no antes.
+            # Antes estaba al inicio junto al primer lote: si Railway reiniciaba después del
+            # commit 200 pero antes del commit 400, los productos 201-5000 quedaban en 0.
+            # Ahora solo zeroeamos productos que Siesa NO reportó en este sync — los que
+            # ya se procesaron retienen su cantidad real.
+            if _ubs_a_zero:
+                _excl_prods = _prod_ids_ya_hoy | _prod_ids_activos | _prod_ids_actualizados
+                _q_zero = UbicacionProducto.query.filter(
+                    UbicacionProducto.ubicacion_id.in_(_ubs_a_zero),
+                    UbicacionProducto.lote.is_(None),
+                )
+                if _excl_prods:
+                    _q_zero = _q_zero.filter(
+                        ~UbicacionProducto.producto_id.in_(_excl_prods)
+                    )
+                _q_zero.update({'cantidad': 0}, synchronize_session=False)
+                logger.info(
+                    f'[INV-SIESA] Bulk zero diferido OK: {len(_prod_ids_actualizados)} productos '
+                    f'actualizados, {len(_excl_prods)} excluidos del zero'
+                )
 
             db.session.commit()
 
