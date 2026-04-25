@@ -52,7 +52,7 @@ def create_app():
             u = Usuario.query.get(int(uid))
             return u is None or not u.activo
         except Exception:
-            return False  # en caso de error de DB, no bloquear (fail-open)
+            return True   # en caso de error de DB, bloquear (fail-closed — preferir seguridad sobre disponibilidad)
 
     @_jwt.revoked_token_loader
     def _revoked_token_response(jwt_header, jwt_payload):

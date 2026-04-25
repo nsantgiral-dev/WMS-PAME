@@ -162,6 +162,10 @@ class ConnektaGateway:
         target_url = url or self.url_get
         try:
             r = requests.get(target_url, headers=self.headers, params=params, timeout=timeout)
+            if r.status_code == 429:
+                retry_after = r.headers.get('Retry-After', '300')
+                logger.warning(f'[CONNEKTA] GET {nombre_api}: rate-limit (429) — Retry-After={retry_after}s')
+                raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
             r.raise_for_status()
             return r.json()
         except requests.exceptions.Timeout:
@@ -206,6 +210,13 @@ class ConnektaGateway:
                 json=payload,
                 timeout=(10, 30),  # connect=10s, read=30s — falla rápido; gunicorn timeout=120s
             )
+            if r.status_code == 429:
+                retry_after = r.headers.get('Retry-After', '300')
+                logger.warning(
+                    f'[CONNEKTA] POST {id_conector}: rate-limit (429) — '
+                    f'Retry-After={retry_after}s — DLQ reintentará con backoff'
+                )
+                raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
             if not r.ok:
                 try:
                     detalle = r.json()
@@ -769,6 +780,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
+                    'f450_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega if not es_entrada else None,
                     'f450_id_bodega_entrada': self.bodega if es_entrada else None,
                     'f450_docto_alterno': '',
@@ -799,12 +811,13 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
+                    'f470_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
                     'f470_id_unidad_medida': self.uom_default,
-                    'f470_cant_base': abs(cantidad),
+                    'f470_cant_base': round(float(abs(cantidad)), 4),
                     'f470_cant_2': 0.0,
                     'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
@@ -856,7 +869,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia or f'Avería detectada por WMS · {item_codigo}',
-                    'f450_id_concepto': self.motivo_traslado,
+                    'f450_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega,
                     'f450_id_bodega_entrada': self.bodega_averias,
                     'f450_docto_alterno': '',
@@ -887,13 +900,13 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': '',
-                    'f470_id_motivo': '',
+                    'f470_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
+                    'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
-                    'f470_id_unidad_medida': 'UND',
-                    'f470_cant_base': abs(cantidad),
+                    'f470_id_unidad_medida': self.uom_default,
+                    'f470_cant_base': round(float(abs(cantidad)), 4),
                     'f470_cant_2': 0.0,
                     'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
@@ -990,11 +1003,11 @@ class ConnektaGateway:
                 'f470_id_ubicacion_aux': ubicacion_origen,      # origen  (ej. RES-01-A)
                 'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
                 'f470_referencia_item': referencia_item,
-                'f470_cant_base': cantidad,
+                'f470_cant_base': round(float(cantidad), 4),
                 'f470_id_motivo': self.motivo_traslado or '01',
                 'f470_id_co_movto': self.centro_op,
                 'f470_id_unidad_medida': self.uom_default or 'UND',
-                'f470_id_un_movto': self.uom_default or 'UND',
+                'f470_id_un_movto': self.unidad_negocio or self.centro_op,
             }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }
@@ -1147,7 +1160,7 @@ class ConnektaGateway:
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_cant_2': 0,
                     'f470_costo_prom_uni': 0,
                     'f470_notas': None,
@@ -1217,7 +1230,7 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_un_movto': self.unidad_negocio,
@@ -1274,7 +1287,7 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_un_movto': self.unidad_negocio,

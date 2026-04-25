@@ -384,23 +384,51 @@ class ConteoService:
             return sesion
 
         if sesion.estado == 'AJUSTANDO':
-            # Verificar si el DLQ tiene un job activo para esta sesión
             from app.models.siesa_job import SiesaJob as _SJ
             job_activo = _SJ.query.filter_by(
                 referencia_tipo='SesionConteo',
                 referencia_id=sesion.id,
             ).filter(_SJ.estado.in_(['PENDIENTE', 'REINTENTANDO', 'PROCESANDO'])).first()
             if job_activo:
-                # En vuelo — la DLQ lo procesará
+                return sesion  # En vuelo — la DLQ lo procesará
+
+            job_completado = _SJ.query.filter_by(
+                referencia_tipo='SesionConteo',
+                referencia_id=sesion.id,
+                estado='COMPLETADO',
+            ).first()
+            if job_completado:
+                # Siesa ya procesó el ajuste — recuperar marcando AJUSTADO con triggered=True
+                logger.warning(
+                    f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO — job COMPLETADO encontrado → marcando AJUSTADO'
+                )
+                sesion.estado = 'AJUSTADO'
+                sesion.siesa_triggered = True
+                sesion.fecha_cierre = sesion.fecha_cierre or datetime.utcnow()
+                db.session.commit()
                 return sesion
-            # Sin job activo: sesión stuck (crash post-commit). Recuperar marcando AJUSTADO.
-            logger.warning(
-                f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO sin job DLQ activo — recuperando'
+
+            # Sin job activo ni completado: crash antes de crear el job o job FALLIDO.
+            # Re-encolar para que Siesa reciba el ajuste real.
+            logger.error(
+                f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO sin job DLQ — re-encolando ajuste a Siesa'
             )
-            sesion.estado = 'AJUSTADO'
-            sesion.fecha_cierre = sesion.fecha_cierre or datetime.utcnow()
-            if not sesion.siesa_response:
-                sesion.siesa_response = '{"recuperado": true, "motivo": "stuck_ajustando_sin_job"}'
+            diferencia_reenc = (sesion.cantidad_fisica or 0) - (sesion.existencia_siesa or 0)
+            motivo_reenc = 'AJ-ENT' if diferencia_reenc > 0 else 'AJ-SAL'
+            payload_reenc = {
+                'sesion_id': sesion.id,
+                'motivo_codigo': motivo_reenc,
+                'item_codigo': sesion.producto_codigo_siesa or '',
+                'cantidad': abs(diferencia_reenc),
+                'referencia': sesion.codigo,
+                'tarea_picking_id': sesion.tarea_picking_id,
+                'ubicacion_id': sesion.ubicacion_id,
+                'producto_id': sesion.producto_id,
+            }
+            from app.models.siesa_job import SiesaJob as _SJ2
+            _SJ2.encolar('AJUSTE_CONTEO', payload_reenc,
+                         referencia_tipo='SesionConteo', referencia_id=sesion.id,
+                         creado_por_id=supervisor_id)
             db.session.commit()
             return sesion
         if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']:
