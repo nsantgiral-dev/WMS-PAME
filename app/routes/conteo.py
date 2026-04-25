@@ -163,7 +163,10 @@ def auditorias_urgentes():
     Solo visibles para admin/supervisor — aparecen en "Auditorías Urgentes".
     """
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(uid)
     if not usuario or usuario.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo admin o supervisor puede ver las auditorías urgentes'}), 403
@@ -370,7 +373,10 @@ def editar_conteo(id):
     No aplica a conteos AJUSTADOS (Siesa ya procesó el ajuste).
     """
     from app.models.usuario import Usuario
-    editor_id = int(get_jwt_identity())
+    try:
+        editor_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(editor_id)
     if not usuario or usuario.rol not in Roles.LEAD:
         return jsonify({'error': 'Solo admin o supervisor puede editar conteos'}), 403

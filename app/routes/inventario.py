@@ -115,6 +115,11 @@ def ajuste_inventario():
 @inventario_bp.route('/movimientos', methods=['GET'])
 @jwt_required()
 def listar_movimientos():
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso para ver historial de movimientos'}), 403
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
     producto_id = request.args.get('producto_id', type=int)

@@ -257,7 +257,7 @@ def estado_sync():
 
 
 def init_scheduler(app):
-    """Scheduler cada 5 min entre 7am y 8pm hora Bogotá."""
+    """Scheduler cada 2 min entre 7am y 8pm hora Bogotá."""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
@@ -275,4 +275,4 @@ def init_scheduler(app):
         misfire_grace_time=60,
     )
     scheduler.start()
-    logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 5 min entre 7am y 8pm')
+    logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 2 min entre 7am y 8pm')

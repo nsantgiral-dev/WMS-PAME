@@ -29,7 +29,7 @@ def listos():
             TareaPacking.siesa_triggered == True,
             TareaPacking.estado != 'CANCELADO',
             Bulto.estado == 'PENDIENTE',
-            Bulto.ruta_despacho_id == None
+            Bulto.ruta_despacho_id.is_(None)
         )
         .order_by(TareaPacking.fecha_despachado.asc(), Bulto.numero.asc())
         .all()

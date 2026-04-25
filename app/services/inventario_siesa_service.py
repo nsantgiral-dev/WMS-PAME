@@ -24,7 +24,7 @@ Regla de oro: funciona en producción con 5000+ productos y 200 pedidos/día.
 """
 import logging
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 from app.extensions import db
 from app.models.producto import Producto
@@ -253,12 +253,26 @@ def _run_carga_inicial(app):
                         _savepoint.commit()
                         continue  # Ya se cargó hoy
 
-                    # Zero-ar TODAS las otras ubicaciones del mismo producto antes de
-                    # escribir en la nueva — evita acumulación cuando Siesa cambia
-                    # la ubicacion_aux entre corridas de días distintos.
+                    # Zero-ar otras ubicaciones del mismo producto para evitar
+                    # acumulación cuando Siesa cambia ubicacion_aux entre días.
+                    # EXCEPCIÓN P10: no tocar ubicaciones con ajuste manual reciente
+                    # (últimas 12h) — el operario puede haber movido stock a mano.
+                    _corte_12h = datetime.utcnow() - timedelta(hours=12)
+                    _ubs_con_ajuste_reciente = {
+                        row.ubicacion_id
+                        for row in db.session.query(MovimientoInventario.ubicacion_id)
+                        .filter(
+                            MovimientoInventario.producto_id == prod.id,
+                            MovimientoInventario.tipo != 'CARGA_INICIAL_SIESA',
+                            MovimientoInventario.fecha >= _corte_12h,
+                        )
+                        .distinct()
+                        .all()
+                    }
                     UbicacionProducto.query.filter(
                         UbicacionProducto.producto_id == prod.id,
-                        UbicacionProducto.ubicacion_id != ub.id
+                        UbicacionProducto.ubicacion_id != ub.id,
+                        ~UbicacionProducto.ubicacion_id.in_(_ubs_con_ajuste_reciente)
                     ).update({'cantidad': 0}, synchronize_session=False)
 
                     saldo_antes = reg.cantidad if reg else 0

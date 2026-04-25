@@ -178,16 +178,25 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             consec_docto_pedido=payload['consec_docto_pedido'],
             items=payload.get('items', []),
         )
-        # Marcar la tarea como despachada si el reintento funcionó
+        # Siesa procesó el despacho — persistir flag ANTES de retornar para que
+        # un posible reintento no genere documento duplicado.
+        # Commit en bloque propio: si falla, el job igual se marca COMPLETADO
+        # (evita que la excepción del commit fuerce un reintento → duplicado).
         if tarea and not tarea.siesa_triggered:
-            from datetime import datetime as _dt
-            tarea.siesa_triggered = True
-            tarea.siesa_response = _json.dumps(resultado)
-            tarea.siesa_triggered_at = _dt.utcnow()
-            tarea.estado = 'DESPACHADO'
-            tarea.fecha_despachado = _dt.utcnow()
-            from app.extensions import db as _db
-            _db.session.commit()
+            try:
+                from datetime import datetime as _dt
+                tarea.siesa_triggered = True
+                tarea.siesa_response = _json.dumps(resultado)
+                tarea.siesa_triggered_at = _dt.utcnow()
+                tarea.estado = 'DESPACHADO'
+                tarea.fecha_despachado = _dt.utcnow()
+                db.session.commit()
+            except Exception as _e:
+                logger.critical(
+                    f'[DLQ] DESPACHO_F470 job={job.id}: Siesa OK pero fallo al guardar '
+                    f'siesa_triggered — revisar manualmente tarea {tarea.id}. Error: {_e}'
+                )
+                db.session.rollback()
         return resultado
 
     if job.tipo == 'ENTRADA_OC':
@@ -220,33 +229,42 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             num_docto_referencia=payload.get('num_docto_referencia'),
             cond_pago=payload.get('cond_pago', ''),
         )
-        # Marcar la recepción como siesa_triggered si el reintento funcionó
+        # Persistir flag con commit propio — misma protección que DESPACHO_F470
         if rec and not rec.siesa_triggered:
-            from datetime import datetime as _dt
-            rec.siesa_triggered = True
-            rec.siesa_response = _json.dumps(resultado)
-            rec.siesa_triggered_at = _dt.utcnow()
-            from app.extensions import db as _db
-            _db.session.commit()
+            try:
+                from datetime import datetime as _dt
+                rec.siesa_triggered = True
+                rec.siesa_response = _json.dumps(resultado)
+                rec.siesa_triggered_at = _dt.utcnow()
+                db.session.commit()
+            except Exception as _e:
+                logger.critical(
+                    f'[DLQ] ENTRADA_OC job={job.id}: Siesa OK pero fallo al guardar '
+                    f'siesa_triggered — revisar manualmente recepción {rec.id}. Error: {_e}'
+                )
+                db.session.rollback()
         return resultado
 
     if job.tipo == 'TRASLADO_AVERIAS':
-        # Idempotencia parcial: verificar si la TareaDevolucion ya está en estado
-        # que indica que el traslado fue procesado exitosamente en una corrida anterior.
-        if job.intentos > 0:
-            from app.models.devolucion import TareaDevolucion as _TareaDev
-            tarea_dev = _TareaDev.query.get(payload.get('tarea_id'))
-            if tarea_dev and tarea_dev.estado == 'COMPLETADO':
-                logger.warning(
-                    f'[DLQ] TRASLADO_AVERIAS job={job.id} intento={job.intentos + 1}: '
-                    f'TareaDevolucion {tarea_dev.id} ya está COMPLETADO — '
-                    f'verificar manualmente en Siesa si el traslado NB1→AV1 fue duplicado.'
-                )
-        return connekta.transferir_a_averias(
+        from app.models.devolucion import TareaDevolucion as _TareaDev
+        tarea_dev = _TareaDev.query.get(payload.get('tarea_id'))
+        # P4: si siesa_triggered=True, Siesa ya recibió el traslado — no reenviar
+        if tarea_dev and tarea_dev.siesa_triggered:
+            logger.info(
+                f'[DLQ] TRASLADO_AVERIAS job={job.id}: tarea {tarea_dev.id} ya tiene '
+                f'siesa_triggered=True — omitiendo llamada (idempotencia P4)'
+            )
+            return {'idempotente': True, 'tarea_id': tarea_dev.id}
+        resultado = connekta.transferir_a_averias(
             item_codigo=payload['item_codigo'],
             cantidad=payload['cantidad'],
             referencia=payload.get('referencia', ''),
         )
+        # Marcar triggered para que futuros reintentos no dupliquen
+        if tarea_dev:
+            tarea_dev.siesa_triggered = True
+            db.session.commit()
+        return resultado
 
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
 

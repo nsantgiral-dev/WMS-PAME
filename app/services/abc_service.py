@@ -113,6 +113,7 @@ class ABCService:
             return {'productos_actualizados': actualizados}
 
         except Exception as e:
+            db.session.rollback()
             logger.error(f'[ABC] Error sincronizando desde Siesa: {e}')
             raise
 
@@ -174,22 +175,32 @@ class ABCService:
             )
             picks_por_producto = {pid: cnt for pid, cnt in picks_rows}
 
+            # Pre-cargar UbicacionProducto solo para productos que superan el umbral
+            ids_sobre_umbral = [
+                p.id for p in productos_clase
+                if picks_por_producto.get(p.id, 0) >= umbral
+            ]
+            if not ids_sobre_umbral:
+                continue
+            registros_por_prod: dict = {}
+            for reg in (
+                UbicacionProducto.query
+                .join(Ubicacion)
+                .filter(
+                    UbicacionProducto.producto_id.in_(ids_sobre_umbral),
+                    UbicacionProducto.cantidad > 0,
+                    Ubicacion.almacen_id == almacen_id
+                ).all()
+            ):
+                registros_por_prod.setdefault(reg.producto_id, []).append(reg)
+
             for producto in productos_clase:
                 picks = picks_por_producto.get(producto.id, 0)
 
                 if picks < umbral:
                     continue
 
-                # Buscar ubicaciones del producto en este almacén
-                registros = (
-                    UbicacionProducto.query
-                    .join(Ubicacion)
-                    .filter(
-                        UbicacionProducto.producto_id == producto.id,
-                        UbicacionProducto.cantidad > 0,
-                        Ubicacion.almacen_id == almacen_id
-                    ).all()
-                )
+                registros = registros_por_prod.get(producto.id, [])
 
                 for reg in registros:
                     # No duplicar si ya hay conteo activo — usa el set pre-cargado
@@ -518,24 +529,26 @@ class ABCService:
         from app.extensions import db as database
         from sqlalchemy import func
 
-        resumen = {}
-        for clasificacion in ['A', 'B', 'C']:
-            total = (
-                database.session.query(func.count(ProductoClasificacionABC.id))
-                .filter(
-                    ProductoClasificacionABC.almacen_id == almacen_id,
-                    ProductoClasificacionABC.clasificacion == clasificacion,
-                )
-                .scalar()
+        # Una sola query GROUP BY en lugar de 3 COUNTs separados
+        counts_rows = (
+            database.session.query(
+                ProductoClasificacionABC.clasificacion,
+                func.count(ProductoClasificacionABC.id)
             )
-            resumen[clasificacion] = {
-                'total_productos': total,
-                'descripcion': {
-                    'A': 'Alta rotación — contar semanalmente',
-                    'B': 'Rotación media — contar mensualmente',
-                    'C': 'Baja rotación — contar trimestralmente'
-                }.get(clasificacion)
-            }
+            .filter(ProductoClasificacionABC.almacen_id == almacen_id)
+            .group_by(ProductoClasificacionABC.clasificacion)
+            .all()
+        )
+        counts_map = {clase: cnt for clase, cnt in counts_rows}
+        descripciones = {
+            'A': 'Alta rotación — contar semanalmente',
+            'B': 'Rotación media — contar mensualmente',
+            'C': 'Baja rotación — contar trimestralmente',
+        }
+        resumen = {
+            cls: {'total_productos': counts_map.get(cls, 0), 'descripcion': descripciones[cls]}
+            for cls in ['A', 'B', 'C']
+        }
 
         return {
             'almacen_id': almacen_id,
@@ -679,17 +692,21 @@ class ABCService:
             lote = datos[i:i + LOTE]
             refs = [r for r, _ in lote]
 
-            # Mapa referencia → Producto
-            existentes = {
-                p.codigo_siesa or p.codigo: p
-                for p in Producto.query.filter(
-                    db.or_(
-                        Producto.codigo_siesa.in_(refs),
-                        Producto.codigo.in_(refs)
-                    ),
-                    Producto.activo == True
-                ).all()
-            }
+            # Mapa referencia → Producto (prioridad: codigo_siesa sobre codigo para evitar colisiones)
+            _prods_lote = Producto.query.filter(
+                db.or_(
+                    Producto.codigo_siesa.in_(refs),
+                    Producto.codigo.in_(refs)
+                ),
+                Producto.activo == True
+            ).all()
+            existentes: dict = {}
+            for _p in _prods_lote:
+                # Indexar por codigo_siesa primero; fallback a codigo
+                if _p.codigo_siesa and _p.codigo_siesa not in existentes:
+                    existentes[_p.codigo_siesa] = _p
+                if _p.codigo and _p.codigo not in existentes:
+                    existentes[_p.codigo] = _p
 
             # Pre-cargar registros ABC existentes para el lote completo
             ids_lote = [existentes[r].id for r, _ in lote if existentes.get(r)]
@@ -730,7 +747,12 @@ class ABCService:
 
                 actualizados += 1
 
-            db.session.commit()
+            try:
+                db.session.commit()
+            except Exception as _commit_err:
+                db.session.rollback()
+                logger.error(f'[ABC CSV] Error en commit de lote {i}-{i+LOTE}: {_commit_err}')
+                raise
 
         logger.info(
             f'[ABC CSV] almacen={almacen_id} · {actualizados} upserted · '

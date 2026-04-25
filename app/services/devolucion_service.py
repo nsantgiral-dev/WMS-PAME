@@ -220,6 +220,7 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
                 cantidad=tarea.cantidad_diferencia,
                 referencia=tarea.codigo
             )
+            tarea.siesa_triggered = True
             job_dlq.marcar_completado({'ok': True})
             db.session.commit()
             logger.info(f'[DEV] Traslado Siesa NB1→AV1 OK para {item_codigo}')

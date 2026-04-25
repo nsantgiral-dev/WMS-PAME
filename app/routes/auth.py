@@ -30,8 +30,11 @@ def login():
 @auth_bp.route('/me', methods=['GET'])
 @jwt_required()
 def me():
-    usuario_id = get_jwt_identity()
-    usuario = Usuario.query.get(int(usuario_id))
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
     if not usuario:
         return jsonify({'error': 'Usuario no encontrado'}), 404
     return jsonify(usuario.to_dict()), 200
@@ -118,7 +121,10 @@ def actualizar_usuario(uid):
         usuario.puede_abastecer = bool(data['puede_abastecer'])
     if 'capacidad_diaria_conteo' in data:
         cap = data['capacidad_diaria_conteo']
-        usuario.capacidad_diaria_conteo = max(0, int(cap)) if cap is not None else 15
+        try:
+            usuario.capacidad_diaria_conteo = max(0, int(cap)) if cap is not None else 15
+        except (TypeError, ValueError):
+            return jsonify({'error': 'capacidad_diaria_conteo debe ser un número entero'}), 400
     if 'activo' in data:
         usuario.activo = bool(data['activo'])
     if 'bodega_siesa_id' in data:

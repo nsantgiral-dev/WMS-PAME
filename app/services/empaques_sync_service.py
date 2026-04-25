@@ -43,6 +43,7 @@ from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
 
+_sync_lock = threading.Lock()
 _sync_estado = {
     'en_curso': False,
     'ultimo_inicio': None,
@@ -222,11 +223,12 @@ def _run_sync(app):
 
 def ejecutar_sync(app):
     global _sync_estado
-    if _sync_estado['en_curso']:
-        logger.info('[EMPAQUES SYNC] Ya hay un sync en curso, se omite')
-        return
-    _sync_estado['en_curso'] = True
-    _sync_estado['ultimo_inicio'] = datetime.utcnow().isoformat()
+    with _sync_lock:
+        if _sync_estado['en_curso']:
+            logger.info('[EMPAQUES SYNC] Ya hay un sync en curso, se omite')
+            return
+        _sync_estado['en_curso'] = True
+        _sync_estado['ultimo_inicio'] = datetime.utcnow().isoformat()
     t = threading.Thread(target=_run_sync, args=(app,), daemon=True)
     t.start()
 

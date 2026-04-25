@@ -41,6 +41,9 @@ class TareaDevolucion(db.Model):
     # Observaciones del recepcionista
     observaciones = db.Column(db.Text)
 
+    # Idempotencia con Siesa — P4: evita traslado NB1→AV1 duplicado en reintento DLQ
+    siesa_triggered = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
+
     # Tiempos
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_completado = db.Column(db.DateTime)

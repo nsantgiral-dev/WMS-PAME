@@ -193,6 +193,9 @@ def sync_ubicaciones():
 @reposicion_bp.route('/sync-ubicaciones/estado', methods=['GET'])
 @jwt_required()
 def sync_ubicaciones_estado():
+    u = Usuario.query.get(int(get_jwt_identity()))
+    if not u or u.rol not in Roles.ALMACEN:
+        return jsonify({'error': 'Sin permiso'}), 403
     return jsonify(get_estado()), 200
 
 
@@ -380,6 +383,9 @@ def debug_ubicaciones_raw():
     Descarga la primera página de API_v2_Ubicaciones sin procesar.
     Usar para certificar nombres exactos de campos antes del primer sync real.
     """
+    u = Usuario.query.get(int(get_jwt_identity()))
+    if not u or u.rol not in Roles.ALMACEN:
+        return jsonify({'error': 'Sin permiso — solo admin/jefe_almacen'}), 403
     bodega_id = request.args.get('bodega_id', connekta.bodega)
     try:
         resp = connekta.get_ubicaciones_siesa(bodega_id=bodega_id, pagina=1)

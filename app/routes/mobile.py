@@ -11,7 +11,7 @@ mobile_bp = Blueprint('mobile', __name__)
 def _operario_id():
     """Retorna el id del operario como int, o None si el token es inválido."""
     try:
-        return _operario_id()
+        return int(get_jwt_identity())
     except (TypeError, ValueError):
         return None
 

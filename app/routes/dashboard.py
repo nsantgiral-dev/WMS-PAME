@@ -80,39 +80,51 @@ def resumen_completo():
     almacen_id = request.args.get('almacen_id', type=int)
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
+    from app.models.conteo import SesionConteo
+    from app.models.picking import TareaPicking
+    from app.services.traslado_monitor_service import get_resumen_alertas
+    from app.services.dashboard_service import _tendencia_7d
+    import logging as _log
+    _logger = _log.getLogger(__name__)
+
+    def _safe(fn, *args, **kwargs):
+        """Llama fn y retorna None si falla — evita que un módulo deje el dashboard en blanco."""
+        try:
+            return fn(*args, **kwargs)
+        except Exception as _e:
+            _logger.error(f'[DASHBOARD] {fn.__name__} falló: {_e}')
+            return None
+
+    kpis            = _safe(DashboardService.kpis_operativos, almacen_id)
+    productividad   = _safe(DashboardService.productividad_operarios, almacen_id, dias=7)
+    alertas         = _safe(DashboardService.alertas_stock, almacen_id)
+    movimientos     = _safe(DashboardService.movimientos_recientes, almacen_id, limite=10)
+    traslados_rutas = _safe(DashboardService.kpis_traslados_rutas) or {'traslados': {}, 'rutas': {}}
+    tendencia_7d    = _safe(_tendencia_7d)
+    traslados_riesgo = _safe(get_resumen_alertas)
+
     try:
-        from app.models.conteo import SesionConteo
-        from app.models.picking import TareaPicking
-        from app.services.traslado_monitor_service import get_resumen_alertas
-        from app.services.dashboard_service import _tendencia_7d
-
-        kpis         = DashboardService.kpis_operativos(almacen_id)
-        productividad = DashboardService.productividad_operarios(almacen_id, dias=7)
-        alertas      = DashboardService.alertas_stock(almacen_id)
-        movimientos  = DashboardService.movimientos_recientes(almacen_id, limite=10)
-        traslados_rutas = DashboardService.kpis_traslados_rutas()
-
         auditorias_urgentes = (SesionConteo.query
             .filter_by(tipo='EXCEPCION_PICKING', almacen_id=almacen_id)
             .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
             .count())
+    except Exception:
+        auditorias_urgentes = None
 
+    try:
         tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO').count()
-        traslados_riesgo  = get_resumen_alertas()
+    except Exception:
+        tareas_bloqueadas = None
 
-        tendencia_7d = _tendencia_7d()
-
-        return jsonify({
-            'kpis': kpis,
-            'productividad': productividad,
-            'alertas_stock': alertas,
-            'movimientos_recientes': movimientos,
-            'auditorias_urgentes': auditorias_urgentes,
-            'tareas_bloqueadas': tareas_bloqueadas,
-            'traslados_en_riesgo': traslados_riesgo,
-            'traslados': traslados_rutas['traslados'],
-            'rutas': traslados_rutas['rutas'],
-            'tendencia_7d': tendencia_7d,
-        }), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    return jsonify({
+        'kpis': kpis,
+        'productividad': productividad,
+        'alertas_stock': alertas,
+        'movimientos_recientes': movimientos,
+        'auditorias_urgentes': auditorias_urgentes,
+        'tareas_bloqueadas': tareas_bloqueadas,
+        'traslados_en_riesgo': traslados_riesgo,
+        'traslados': traslados_rutas['traslados'],
+        'rutas': traslados_rutas['rutas'],
+        'tendencia_7d': tendencia_7d,
+    }), 200

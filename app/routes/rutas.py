@@ -18,6 +18,22 @@ from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin
 rutas_bp = Blueprint('rutas', __name__)
 
 
+class EstadoEntrega:
+    ENTREGADO = 'ENTREGADO'
+    PARCIAL   = 'PARCIAL'
+    RECHAZADO = 'RECHAZADO'
+    VALIDOS   = (ENTREGADO, PARCIAL, RECHAZADO)
+
+
+class FormaPago:
+    EFECTIVO     = 'EFECTIVO'
+    TRANSFERENCIA = 'TRANSFERENCIA'
+    CHEQUE       = 'CHEQUE'
+    CREDITO      = 'CREDITO'
+    EXENTO       = 'EXENTO'
+    VALIDOS      = (EFECTIVO, TRANSFERENCIA, CHEQUE, CREDITO, EXENTO)
+
+
 def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
     """Lógica de bultos y recaudo extraída de confirmar_parada para testabilidad."""
     bultos_tarea = Bulto.query.filter_by(tarea_id=tarea_id, ruta_despacho_id=ruta_id).all()
@@ -25,12 +41,12 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
         raise ValueError('Esta factura no pertenece a la ruta')
 
     estado_entrega = data.get('estado_entrega', '').upper()
-    if estado_entrega not in ('ENTREGADO', 'PARCIAL', 'RECHAZADO'):
-        raise ValueError('estado_entrega debe ser ENTREGADO, PARCIAL o RECHAZADO')
+    if estado_entrega not in EstadoEntrega.VALIDOS:
+        raise ValueError(f'estado_entrega debe ser {", ".join(EstadoEntrega.VALIDOS)}')
 
     forma_pago = data.get('forma_pago', '').upper() or None
-    if forma_pago and forma_pago not in ('EFECTIVO', 'TRANSFERENCIA', 'CHEQUE', 'CREDITO', 'EXENTO'):
-        raise ValueError('forma_pago inválido')
+    if forma_pago and forma_pago not in FormaPago.VALIDOS:
+        raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
 
     foto = data.get('foto_entrega', '') or None
     if foto and len(foto) > 1_150_000:
@@ -38,9 +54,9 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
 
     ids_tarea = {b.id for b in bultos_tarea}
     bultos_rechazados_ids = data.get('bultos_rechazados', [])
-    if estado_entrega == 'RECHAZADO' and not bultos_rechazados_ids:
+    if estado_entrega == EstadoEntrega.RECHAZADO and not bultos_rechazados_ids:
         bultos_rechazados_ids = [b.id for b in bultos_tarea]
-    if estado_entrega == 'PARCIAL' and not bultos_rechazados_ids:
+    if estado_entrega == EstadoEntrega.PARCIAL and not bultos_rechazados_ids:
         raise ValueError('Para entrega parcial debes indicar cuáles bultos fueron rechazados')
 
     ahora = datetime.utcnow()
