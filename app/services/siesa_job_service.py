@@ -203,6 +203,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     tarea.siesa_triggered_at = _dt.utcnow()
                     db.session.commit()
                 except Exception as _e2:
+                    db.session.rollback()
                     logger.critical(
                         f'[DLQ] DESPACHO_F470 job={job.id}: DOBLE FALLO — '
                         f'siesa_triggered no persiste: {_e2}. Tarea {tarea.id} en riesgo de duplicado.'
