@@ -184,13 +184,45 @@ def _run_carga_inicial(app):
                     f'Stock reservado puede quedar desactualizado.'
                 )
 
-            # [45] Pre-cargar idempotency keys del día en un SET para evitar N+1 en el loop
+            # ── Pre-cargar los 3 mapas en memoria — elimina N+1 del loop ──────────
+            # Sin esto: hasta 3 queries × N productos (≈15.000 queries en catálogo de 5k)
+            # Con esto: 3 queries bulk + 1 SET query, independiente del tamaño del catálogo
+
+            # Mapa 1: Productos por codigo_siesa y por codigo (fallback)
+            _todos_prods = Producto.query.all()
+            _mapa_siesa = {p.codigo_siesa: p for p in _todos_prods if p.codigo_siesa}
+            _mapa_codigo = {p.codigo: p for p in _todos_prods}
+
+            # Mapa 2: Ubicaciones del almacén por código
+            _mapa_ubicaciones = {
+                ub.codigo: ub
+                for ub in Ubicacion.query.filter_by(almacen_id=almacen.id).all()
+            }
+
+            # Mapa 3: Registros UbicacionProducto existentes (ubicacion_id, producto_id) → reg
+            # Solo los sin lote, que son los que crea/actualiza la carga inicial
+            _mapa_up = {
+                (r.ubicacion_id, r.producto_id): r
+                for r in (UbicacionProducto.query
+                          .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+                          .filter(
+                              Ubicacion.almacen_id == almacen.id,
+                              UbicacionProducto.lote.is_(None)
+                          ).all())
+            }
+
+            # SET de idempotency keys del día — evita reprocesar lo ya cargado hoy
             ikeys_hoy = {
                 row.idempotency_key
                 for row in MovimientoInventario.query.filter(
                     MovimientoInventario.idempotency_key.like(f'SIESA-INI-%-{fecha_hoy}')
                 ).with_entities(MovimientoInventario.idempotency_key).all()
             }
+
+            logger.info(
+                f'[INV-SIESA] Mapas cargados: {len(_todos_prods)} productos · '
+                f'{len(_mapa_ubicaciones)} ubicaciones · {len(_mapa_up)} registros UP'
+            )
 
             for codigo, datos in inventario_siesa.items():
                 existencia_siesa = int(round(datos['existencia']))
@@ -199,24 +231,20 @@ def _run_carga_inicial(app):
 
                 _savepoint = db.session.begin_nested()
                 try:
-                    prod = (Producto.query.filter_by(codigo_siesa=codigo).first()
-                            or Producto.query.filter_by(codigo=codigo).first())
+                    # Lookup O(1) en vez de query individual
+                    prod = _mapa_siesa.get(codigo) or _mapa_codigo.get(codigo)
 
                     if not prod:
                         sin_producto_wms += 1
                         _savepoint.commit()
                         continue
 
-                    # Intentar usar la ubicación real de Siesa si existe en WMS
+                    # Lookup O(1) de ubicación — fallback a ub_general si no existe en WMS
                     codigo_ub = datos.get('ubicacion_aux') or _CODIGO_UBICACION_GENERAL
-                    ub = (Ubicacion.query.filter_by(codigo=codigo_ub, almacen_id=almacen.id).first()
-                          or ub_general)
+                    ub = _mapa_ubicaciones.get(codigo_ub) or ub_general
 
-                    reg = UbicacionProducto.query.filter_by(
-                        ubicacion_id=ub.id,
-                        producto_id=prod.id,
-                        lote=None
-                    ).first()
+                    # Lookup O(1) del registro existente
+                    reg = _mapa_up.get((ub.id, prod.id))
 
                     # Idempotencia: clave única por producto + día
                     ikey = f'SIESA-INI-{prod.id}-{fecha_hoy}'
@@ -248,6 +276,10 @@ def _run_carga_inicial(app):
                         )
                         db.session.add(reg)
                         db.session.flush()
+                        # Registrar en el mapa para que futuras iteraciones encuentren
+                        # este registro sin ir a la DB (el producto puede aparecer
+                        # dos veces en Siesa con distintos códigos)
+                        _mapa_up[(ub.id, prod.id)] = reg
                         cargados += 1
 
                     movimiento = MovimientoInventario(
