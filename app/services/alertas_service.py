@@ -349,10 +349,7 @@ Ref interna: {ref}
   </div>
 </body></html>"""
 
-    try:
-        enviar_email(asunto, cuerpo_html, cuerpo_texto)
-    except Exception as e:
-        logger.error(f'[ALERTAS] No se pudo enviar alerta job fallido: {e}')
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, f'job_fallido_{job.tipo}_{job.id}')
 
 
 # ── Alerta: Stock crítico sin reserva ─────────────────────────────────────────
@@ -561,7 +558,8 @@ def enviar_resumen_diario(app=None):
                     PedidoPicking.fecha_completado >= ayer_inicio,
                     PedidoPicking.fecha_completado < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.warning(f'[RESUMEN] No se pudo calcular pedidos_despachados: {_e}')
                 pedidos_despachados = 'N/D'
 
             # Bultos empacados ayer
@@ -571,7 +569,8 @@ def enviar_resumen_diario(app=None):
                     Bulto.fecha_creacion >= ayer_inicio,
                     Bulto.fecha_creacion < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.warning(f'[RESUMEN] No se pudo calcular bultos_empacados: {_e}')
                 bultos_empacados = 'N/D'
 
             # Tareas reposición completadas ayer
@@ -582,10 +581,11 @@ def enviar_resumen_diario(app=None):
                     TareaReposicion.fecha_completada >= ayer_inicio,
                     TareaReposicion.fecha_completada < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.warning(f'[RESUMEN] No se pudo calcular tareas_reposicion: {_e}')
                 tareas_ok = 'N/D'
 
-            # Jobs Siesa ayer
+            # Jobs Siesa ayer — crítico: jobs_fallidos='N/D' oculta movimientos que no llegaron al ERP
             try:
                 from app.models.siesa_job import SiesaJob
                 jobs_ok      = SiesaJob.query.filter(
@@ -598,7 +598,8 @@ def enviar_resumen_diario(app=None):
                     SiesaJob.fecha_creacion >= ayer_inicio,
                     SiesaJob.fecha_creacion < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.error(f'[RESUMEN] No se pudo calcular jobs Siesa: {_e}', exc_info=True)
                 jobs_ok = jobs_fallidos = 'N/D'
 
             ayer_str = (date.today() - timedelta(days=1)).strftime('%d/%m/%Y')
