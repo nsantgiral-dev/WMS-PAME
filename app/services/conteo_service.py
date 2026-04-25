@@ -384,8 +384,24 @@ class ConteoService:
             return sesion
 
         if sesion.estado == 'AJUSTANDO':
-            # Ajuste en vuelo — la DLQ lo está procesando (o fallo y DLQ reintentará).
-            # Retornar idempotente para que el supervisor no vea un error confuso.
+            # Verificar si el DLQ tiene un job activo para esta sesión
+            from app.models.siesa_job import SiesaJob as _SJ
+            job_activo = _SJ.query.filter_by(
+                referencia_tipo='SesionConteo',
+                referencia_id=sesion.id,
+            ).filter(_SJ.estado.in_(['PENDIENTE', 'REINTENTANDO', 'PROCESANDO'])).first()
+            if job_activo:
+                # En vuelo — la DLQ lo procesará
+                return sesion
+            # Sin job activo: sesión stuck (crash post-commit). Recuperar marcando AJUSTADO.
+            logger.warning(
+                f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO sin job DLQ activo — recuperando'
+            )
+            sesion.estado = 'AJUSTADO'
+            sesion.fecha_cierre = sesion.fecha_cierre or datetime.utcnow()
+            if not sesion.siesa_response:
+                sesion.siesa_response = '{"recuperado": true, "motivo": "stuck_ajustando_sin_job"}'
+            db.session.commit()
             return sesion
         if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']:
             raise ValueError(f'No se puede ajustar en estado {sesion.estado}')

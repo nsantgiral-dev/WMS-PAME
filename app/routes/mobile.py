@@ -116,7 +116,10 @@ def confirmar_tarea():
         )
         return jsonify(resultado), 200
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        msg = str(e)
+        if 'Conectando con Siesa' in msg or 'Siesa aún no respondió' in msg:
+            return jsonify({'error': msg, 'retry_after': 3}), 503
+        return jsonify({'error': msg}), 400
     except Exception as e:
         current_app.logger.error(f'[MOBILE] /confirmar error inesperado: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
@@ -214,6 +217,10 @@ def reportar_problema():
             return jsonify({'error': str(e)}), 403
         except ValueError as e:
             return jsonify({'error': str(e)}), 404
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f'[MOBILE] reportar_problema PICKING error: {e}', exc_info=True)
+            return jsonify({'error': 'Error interno al reportar problema'}), 500
 
     # ── CONTEO ───────────────────────────────────────────────────
     if tipo == 'CONTEO':

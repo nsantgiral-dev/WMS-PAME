@@ -285,9 +285,24 @@ def listar_ubicaciones_picking():
 
     ubicaciones = q.order_by(Ubicacion.codigo).all()
 
+    # Pre-cargar inventario y productos en 2 queries — evita N+1 por ubicación
+    ub_ids = [u.id for u in ubicaciones]
+    inv_map = {}
+    if ub_ids:
+        from sqlalchemy import and_
+        for inv in UbicacionProducto.query.filter(
+            UbicacionProducto.ubicacion_id.in_(ub_ids)
+        ).all():
+            inv_map.setdefault(inv.ubicacion_id, []).append(inv)
+
+    prod_ids = {inv.producto_id for invs in inv_map.values() for inv in invs}
+    prods_map = {}
+    if prod_ids:
+        prods_map = {p.id: p for p in Producto.query.filter(Producto.id.in_(prod_ids)).all()}
+
     resultado = []
     for ub in ubicaciones:
-        inventarios = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).all()
+        inventarios = inv_map.get(ub.id, [])
         stock_actual = sum((i.cantidad or 0) for i in inventarios)
         d = ub.to_dict()
         d['stock_actual'] = stock_actual
@@ -297,7 +312,7 @@ def listar_ubicaciones_picking():
         # SKU dominante (el que tiene más stock en esta ubicación)
         if inventarios:
             inv_top = max(inventarios, key=lambda i: i.cantidad or 0)
-            prod = Producto.query.get(inv_top.producto_id)
+            prod = prods_map.get(inv_top.producto_id)
             d['sku_asignado'] = {
                 'id': inv_top.producto_id,
                 'codigo': prod.codigo if prod else None,

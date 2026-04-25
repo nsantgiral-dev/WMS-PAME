@@ -40,7 +40,12 @@ class FormaPago:
 
 def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
     """Lógica de bultos y recaudo extraída de confirmar_parada para testabilidad."""
-    bultos_tarea = Bulto.query.filter_by(tarea_id=tarea_id, ruta_despacho_id=ruta_id).all()
+    # Lock pesimista — evita double-submit del conductor o reintento de red
+    # que podría crear dos RecaudoEntrega para la misma parada
+    bultos_tarea = (Bulto.query
+                    .filter_by(tarea_id=tarea_id, ruta_despacho_id=ruta_id)
+                    .with_for_update()
+                    .all())
     if not bultos_tarea:
         raise ValueError('Esta factura no pertenece a la ruta')
 
@@ -499,6 +504,7 @@ def iniciar_ruta(id):
         municipios = {p.municipio.lower() for p in ruta.ruta_maestra.paradas}
         from app.models.packing import TareaPacking
         bultos_libres = (Bulto.query
+            .options(_sl(Bulto.tarea))
             .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
             .filter(
                 TareaPacking.siesa_triggered == True,
@@ -535,6 +541,7 @@ def sugeridos_ruta(id):
 
     municipios = {p.municipio.lower() for p in ruta.ruta_maestra.paradas}
     bultos_libres = (Bulto.query
+        .options(_sl(Bulto.tarea))
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
             TareaPacking.siesa_triggered == True,
@@ -555,7 +562,9 @@ def cerrar_ruta(id):
     """EN_CARGUE → EN_TRANSITO. Solo admin/jefe."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén puede cerrar rutas'}), 403
-    ruta = RutaDespacho.query.get_or_404(id)
+    ruta = (RutaDespacho.query
+            .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+            .get_or_404(id))
     if ruta.estado != EstadoRutaDespacho.EN_CARGUE:
         return jsonify({'error': f'La ruta ya está en estado {ruta.estado}'}), 400
     if not ruta.bultos:
