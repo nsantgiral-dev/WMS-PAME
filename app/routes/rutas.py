@@ -184,10 +184,12 @@ def crear_maestra():
 
     paradas = data.get('paradas', [])
     for i, municipio in enumerate(paradas):
-        if municipio.strip():
+        nombre = municipio['municipio'] if isinstance(municipio, dict) else municipio
+        nombre = (nombre or '').strip()
+        if nombre:
             db.session.add(RutaMaestraParada(
                 ruta_maestra_id=m.id,
-                municipio=municipio.strip(),
+                municipio=nombre,
                 orden=i + 1
             ))
 
@@ -212,10 +214,12 @@ def actualizar_maestra(id):
             db.session.delete(p)
         db.session.flush()
         for i, municipio in enumerate(data['paradas']):
-            if municipio.strip():
+            nombre = municipio['municipio'] if isinstance(municipio, dict) else municipio
+            nombre = (nombre or '').strip()
+            if nombre:
                 db.session.add(RutaMaestraParada(
                     ruta_maestra_id=m.id,
-                    municipio=municipio.strip(),
+                    municipio=nombre,
                     orden=i + 1
                 ))
 
