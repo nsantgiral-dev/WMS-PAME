@@ -213,9 +213,24 @@ def debug_pedidos_raw():
     params = {'paginacion': f'numPag={num_pag}|tamPag={tam_pag}'}
 
     if params_raw:
-        # Validación básica: evitar inyección de múltiples sentencias SQL
-        if len(params_raw) > 500 or ';' in params_raw or '--' in params_raw:
-            return jsonify({'error': 'params_raw inválido — usa filtros simples tipo campo=valor'}), 400
+        # Allowlist: params_raw debe ser tokens tipo campo=valor separados por AND.
+        # campo: convención Siesa f<nnn>_<nombre> (ej. f430_id_co).
+        # valor: número, ''texto'' (Connekta), o identificador simple.
+        import re as _re
+        _TOKEN_RE = _re.compile(
+            r'^[a-zA-Z][a-zA-Z0-9_]{2,40}='  # campo
+            r"(''[^']*''|'[^']*'|\"[^\"]*\"|-?\d+(\.\d+)?|[a-zA-Z0-9_\-\.]+)$"
+        )
+        if len(params_raw) > 500:
+            return jsonify({'error': 'params_raw demasiado largo (máx 500 chars)'}), 400
+        tokens = [t.strip() for t in _re.split(r'\bAND\b', params_raw, flags=_re.IGNORECASE)]
+        invalidos = [t for t in tokens if t and not _TOKEN_RE.match(t)]
+        if invalidos:
+            return jsonify({
+                'error': 'params_raw contiene tokens inválidos',
+                'invalidos': invalidos,
+                'formato': 'campo=valor [AND campo=valor] — valor: número, \'\'texto\'\' o identificador',
+            }), 400
         params['parametros'] = params_raw
     elif consec:
         filtros = [f'f430_consec_docto={consec}']
