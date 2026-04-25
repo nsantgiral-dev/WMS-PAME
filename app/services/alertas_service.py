@@ -370,18 +370,23 @@ def verificar_y_alertar_stock_critico(app=None):
                 logger.info('[ALERTAS] Sin stock crítico sin reserva — no se envía email.')
                 return
 
-            # Productos con LPN en RESERVA (una sola query)
+            # Productos con LPN en RESERVA — una sola query para todos los candidatos
             candidatos_almacen = {(ub.almacen_id, prod_id) for ub, prod_id, _ in candidatos}
-            lpns_en_reserva = set()
-            for almacen_id, prod_id in candidatos_almacen:
-                existe = LPN.query.join(Ubicacion, Ubicacion.id == LPN.ubicacion_id).filter(
-                    LPN.producto_id == prod_id,
-                    LPN.almacen_id == almacen_id,
+            almacen_ids_cands = list({a for a, _ in candidatos_almacen})
+            prod_ids_cands = list({p for _, p in candidatos_almacen})
+            lpns_reserva_rows = (
+                LPN.query
+                .join(Ubicacion, Ubicacion.id == LPN.ubicacion_id)
+                .filter(
+                    LPN.producto_id.in_(prod_ids_cands),
+                    LPN.almacen_id.in_(almacen_ids_cands),
                     LPN.estado == 'ACTIVO',
                     Ubicacion.tipo_zona == 'RESERVA',
-                ).first()
-                if existe:
-                    lpns_en_reserva.add((almacen_id, prod_id))
+                )
+                .with_entities(LPN.almacen_id, LPN.producto_id)
+                .all()
+            )
+            lpns_en_reserva = {(a, p) for a, p in lpns_reserva_rows}
 
             # Pre-cargar productos en bulk
             prod_ids = list({prod_id for _, prod_id, _ in candidatos})

@@ -90,6 +90,8 @@ def obtener_tarea(id):
 @packing_bp.route('/crear-desde-picking', methods=['POST'])
 @jwt_required()
 def crear_desde_picking():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear tareas de packing'}), 403
     data = request.get_json()
     requeridos = ['tareas_picking_ids', 'numero_pedido_siesa', 'almacen_id']
     for campo in requeridos:
@@ -115,6 +117,8 @@ def crear_desde_picking():
 @packing_bp.route('/crear-manual', methods=['POST'])
 @jwt_required()
 def crear_manual():
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear tareas de packing'}), 403
     data = request.get_json()
     requeridos = ['numero_pedido_siesa', 'almacen_id', 'items']
     for campo in requeridos:
@@ -237,6 +241,11 @@ def cerrar_packing(id):
 @packing_bp.route('/<int:id>/cancelar', methods=['PUT'])
 @jwt_required()
 def cancelar_tarea(id):
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    usuario = Usuario.query.get(int(uid))
+    if not usuario or usuario.rol not in ('admin', 'supervisor'):
+        return jsonify({'error': 'No autorizado — se requiere rol admin o supervisor'}), 403
     data = request.get_json() or {}
     try:
         tarea = PackingService.cancelar(id, motivo=data.get('motivo'))
@@ -250,6 +259,11 @@ def cancelar_tarea(id):
 def reiniciar_conteo(id):
     """Resetea todos los items a 0 y vuelve el estado a EN_PROCESO."""
     from app.extensions import db
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    usuario = Usuario.query.get(int(uid))
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+        return jsonify({'error': 'No autorizado'}), 403
     tarea = TareaPacking.query.get_or_404(id)
     if tarea.estado not in ('EN_PROCESO', 'PENDIENTE', 'VERIFICADO'):
         return jsonify({'error': 'No se puede reiniciar una tarea en este estado'}), 400
@@ -267,6 +281,8 @@ def reiniciar_conteo(id):
 @jwt_required()
 def resetear_siesa(id):
     """Elimina bultos y vuelve a VERIFICADO para reintentar Siesa desde cero."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede resetear el estado de Siesa'}), 403
     try:
         tarea = PackingService.resetear_siesa(id)
         return jsonify({'ok': True, 'mensaje': 'Packing reseteado — declara las piezas de nuevo', 'tarea': tarea.to_dict()}), 200

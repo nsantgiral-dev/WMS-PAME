@@ -81,12 +81,25 @@ class ABCService:
                 if not rows:
                     break
 
+                # Pre-cargar todos los productos de la página en un solo query
+                codigos_pagina = list({
+                    (r.get('f120_referencia') or '').strip()
+                    for r in rows
+                    if (r.get('f120_referencia') or '').strip()
+                })
+                productos_mapa = {
+                    p.codigo_siesa: p
+                    for p in Producto.query.filter(
+                        Producto.codigo_siesa.in_(codigos_pagina)
+                    ).all()
+                }
+
                 for row in rows:
                     codigo = (row.get('f120_referencia') or '').strip()
                     clasificacion = (row.get('clasificacion_abc') or '').strip().upper()
                     if not codigo or clasificacion not in ('A', 'B', 'C'):
                         continue
-                    producto = Producto.query.filter_by(codigo_siesa=codigo).first()
+                    producto = productos_mapa.get(codigo)
                     if producto and producto.clasificacion_abc != clasificacion:
                         producto.clasificacion_abc = clasificacion
                         actualizados += 1
@@ -653,6 +666,19 @@ class ABCService:
                 ).all()
             }
 
+            # Pre-cargar registros ABC existentes para el lote completo
+            ids_lote = [existentes[r].id for r, _ in lote if existentes.get(r)]
+            if almacen_id and ids_lote:
+                abc_existentes = {
+                    reg.producto_id: reg
+                    for reg in ProductoClasificacionABC.query.filter(
+                        ProductoClasificacionABC.producto_id.in_(ids_lote),
+                        ProductoClasificacionABC.almacen_id == almacen_id
+                    ).all()
+                }
+            else:
+                abc_existentes = {}
+
             for referencia, clasificacion in lote:
                 producto = existentes.get(referencia)
                 if not producto:
@@ -660,20 +686,19 @@ class ABCService:
                     continue
 
                 if almacen_id:
-                    # Upsert por (producto_id, almacen_id)
-                    registro = ProductoClasificacionABC.query.filter_by(
-                        producto_id=producto.id,
-                        almacen_id=almacen_id
-                    ).first()
+                    # Upsert por (producto_id, almacen_id) usando el mapa pre-cargado
+                    registro = abc_existentes.get(producto.id)
                     if registro:
                         registro.clasificacion = clasificacion
                         registro.updated_at = datetime.utcnow()
                     else:
-                        db.session.add(ProductoClasificacionABC(
+                        nuevo = ProductoClasificacionABC(
                             producto_id=producto.id,
                             almacen_id=almacen_id,
                             clasificacion=clasificacion
-                        ))
+                        )
+                        db.session.add(nuevo)
+                        abc_existentes[producto.id] = nuevo  # evita duplicados dentro del lote
                 else:
                     # Fallback legacy: actualizar campo global
                     producto.clasificacion_abc = clasificacion

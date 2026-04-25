@@ -186,11 +186,29 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     # Liberar idempotency_key para que futuras diferencias puedan generar nueva tarea
     tarea.idempotency_key = f'DEV-COMPLETADO-{tarea.id}'
 
+    # [P8] Si es averiado, crear SiesaJob ANTES del commit — atómico con el estado del WMS.
+    # Si Siesa falla, el job ya está en DB como PENDIENTE para el DLQ.
+    job_dlq = None
+    if es_averiado and not connekta.modo_simulacion:
+        from app.models.siesa_job import SiesaJob
+        item_codigo_dlq = tarea.producto.codigo_siesa or tarea.producto.codigo
+        job_dlq = SiesaJob.encolar(
+            tipo='TRASLADO_AVERIAS',
+            payload={
+                'tarea_id': tarea.id,
+                'item_codigo': item_codigo_dlq,
+                'cantidad': tarea.cantidad_diferencia,
+                'referencia': tarea.codigo,
+            },
+            referencia_tipo='TareaDevolucion',
+            referencia_id=tarea.id,
+        )
+
     db.session.commit()
     logger.info(f'[DEV] Tarea {tarea.codigo} completada · ubicación {codigo_ub} · averiado={es_averiado}')
 
     # Disparar traslado NB1 → AV1 en Siesa para que vendedores no vean unidades dañadas
-    if es_averiado and not connekta.modo_simulacion:
+    if job_dlq is not None:
         try:
             item_codigo = tarea.producto.codigo_siesa or tarea.producto.codigo
             connekta.transferir_a_averias(
@@ -198,22 +216,12 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
                 cantidad=tarea.cantidad_diferencia,
                 referencia=tarea.codigo
             )
+            job_dlq.marcar_completado({'ok': True})
+            db.session.commit()
             logger.info(f'[DEV] Traslado Siesa NB1→AV1 OK para {item_codigo}')
         except Exception as e:
-            # [12] No revertir el WMS — crear SiesaJob para reintento automático vía DLQ
-            logger.error(f'[DEV] Error disparando traslado Siesa: {e} — encolando SiesaJob TRASLADO_AVERIAS')
-            from app.models.siesa_job import SiesaJob
-            SiesaJob.encolar(
-                tipo='TRASLADO_AVERIAS',
-                payload={
-                    'tarea_id': tarea.id,
-                    'item_codigo': tarea.producto.codigo_siesa or tarea.producto.codigo,
-                    'cantidad': tarea.cantidad_diferencia,
-                    'referencia': tarea.codigo,
-                },
-                referencia_tipo='TareaDevolucion',
-                referencia_id=tarea.id,
-            )
+            # El job_dlq ya está en DB como PENDIENTE — DLQ lo reintentará en 5 min
+            logger.error(f'[DEV] Error disparando traslado Siesa: {e} — DLQ reintentará')
             db.session.commit()
 
     return tarea

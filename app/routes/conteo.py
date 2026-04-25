@@ -20,7 +20,7 @@ def listar_sesiones():
     almacen_id = request.args.get('almacen_id', type=int)
     clasificacion = request.args.get('clasificacion')
     operario_id = request.args.get('operario_id', type=int)
-    marca = request.args.get('marca', '').strip()
+    categoria = request.args.get('categoria', request.args.get('marca', '')).strip()
     page = request.args.get('page', 1, type=int)
 
     query = SesionConteo.query.order_by(SesionConteo.fecha_creacion.desc())
@@ -33,11 +33,11 @@ def listar_sesiones():
         query = query.filter_by(clasificacion_abc=clasificacion)
     if operario_id:
         query = query.filter_by(operario_id=operario_id)
-    if marca:
+    if categoria:
         from app.models.producto import Producto
         query = (query
                  .join(Producto, SesionConteo.producto_id == Producto.id)
-                 .filter(Producto.marca.ilike(f'%{marca}%')))
+                 .filter(Producto.categoria.ilike(f'%{categoria}%')))
 
     sesiones = query.paginate(page=page, per_page=30, error_out=False)
 

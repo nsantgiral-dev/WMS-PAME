@@ -823,12 +823,13 @@ def forzar_cierre_ruta(id):
     admin_id = int(get_jwt_identity())
     tareas = ruta.tareas_unicas()
     recaudos_existentes = {r.tarea_id for r in RecaudoEntrega.query.filter_by(ruta_id=id).all()}
-    pendientes = [t for t in tareas if t not in recaudos_existentes]
+    # Comparar t.id (int) contra el set de tarea_id (int) — evita comparar objeto vs int
+    pendientes = [t for t in tareas if t.id not in recaudos_existentes]
     ahora = datetime.utcnow()
     auto_cerradas = 0
 
-    for tarea_id in pendientes:
-        bultos_tarea = Bulto.query.filter_by(tarea_id=tarea_id, ruta_despacho_id=id).all()
+    for tarea in pendientes:
+        bultos_tarea = Bulto.query.filter_by(tarea_id=tarea.id, ruta_despacho_id=id).all()
         for b in bultos_tarea:
             b.estado = 'RECHAZADO'
             b.motivo_rechazo = 'Cierre forzado por admin'
@@ -836,7 +837,7 @@ def forzar_cierre_ruta(id):
 
         recaudo = RecaudoEntrega(
             ruta_id=id,
-            tarea_id=tarea_id,
+            tarea_id=tarea.id,
             estado_entrega='RECHAZADO',
             forma_pago=None,
             monto_cobrado=0,

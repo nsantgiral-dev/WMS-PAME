@@ -355,7 +355,23 @@ class PackingService:
             f'items={len(items_payload)} '
             f'bultos={total}'
         )
-        # Commit bultos antes del trigger Siesa — si falla, el SiesaJob (creado abajo) reintenta
+
+        # [P8] Crear SiesaJob de respaldo ANTES del commit — atómico con los bultos.
+        # Si el commit falla, ni los bultos ni el job persisten (sin pérdida silenciosa).
+        # Si Siesa falla después, el job ya está en DB como PENDIENTE para DLQ.
+        job_dlq = _SiesaJob.encolar(
+            tipo='DESPACHO_F470',
+            payload={
+                'tarea_id': tarea_id,
+                'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
+                'consec_docto_pedido': consec_para_siesa,
+                'items': items_payload,
+                'numero_pedido_siesa': tarea.numero_pedido_siesa,
+            },
+            referencia_tipo='TareaPacking',
+            referencia_id=tarea_id,
+        )
+        # Commit bultos + SiesaJob en una sola transacción
         db.session.commit()
 
         try:
@@ -369,6 +385,8 @@ class PackingService:
             tarea.siesa_triggered_at = datetime.utcnow()
             tarea.estado = 'DESPACHADO'
             tarea.fecha_despachado = datetime.utcnow()
+            # Siesa respondió OK — marcar el job de respaldo como completado
+            job_dlq.marcar_completado(respuesta_siesa)
             logger.info(
                 f'[PACKING] ✅ Siesa OK para {tarea.numero_pedido_siesa} — '
                 f'{total} bultos — respuesta: {str(respuesta_siesa)[:200]}'
@@ -379,19 +397,7 @@ class PackingService:
                 f'[PACKING] ❌ Siesa FALLÓ para {tarea.numero_pedido_siesa}: {error_str}'
             )
             tarea.siesa_response = error_str
-            # [09/11] Crear SiesaJob PENDIENTE para reintento automático vía DLQ
-            _SiesaJob.encolar(
-                tipo='DESPACHO_F470',
-                payload={
-                    'tarea_id': tarea_id,
-                    'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
-                    'consec_docto_pedido': consec_para_siesa,
-                    'items': items_payload,
-                    'numero_pedido_siesa': tarea.numero_pedido_siesa,
-                },
-                referencia_tipo='TareaPacking',
-                referencia_id=tarea_id,
-            )
+            # El job_dlq ya está en DB como PENDIENTE — DLQ lo reintentará en 5 min
             db.session.commit()
             if 'comprometido' in error_str.lower():
                 raise Exception(

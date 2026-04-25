@@ -22,7 +22,10 @@ class ConteoService:
         Devuelve la tarea al operario — SIN cantidad esperada.
         Solo: ubicacion, producto, descripcion.
         """
-        sesion = SesionConteo.query.get(sesion_id)
+        sesion = (SesionConteo.query
+                  .filter_by(id=sesion_id)
+                  .with_for_update()
+                  .first())
         if not sesion:
             raise ValueError('Sesión no encontrada')
 
@@ -55,7 +58,10 @@ class ConteoService:
         2. Consulta existencia real en Siesa en tiempo real.
         3. Compara y decide: MATCH o SEGUNDO_CONTEO.
         """
-        sesion = SesionConteo.query.get(sesion_id)
+        sesion = (SesionConteo.query
+                  .filter_by(id=sesion_id)
+                  .with_for_update()
+                  .first())
         if not sesion:
             raise ValueError('Sesión no encontrada')
 
@@ -294,7 +300,10 @@ class ConteoService:
         Después del segundo conteo confirma el descuadre y dispara ajuste a Siesa.
         Siesa actualiza contabilidad automáticamente con el motivo correcto.
         """
-        sesion = SesionConteo.query.get(sesion_id)
+        sesion = (SesionConteo.query
+                  .filter_by(id=sesion_id)
+                  .with_for_update()
+                  .first())
         if not sesion:
             raise ValueError('Sesión no encontrada')
 
@@ -348,6 +357,7 @@ class ConteoService:
 
         # Trigger a Siesa
         tipo_ajuste = 'ENTRADA' if diferencia > 0 else 'SALIDA'
+        siesa_llamado = False  # distingue fallo Siesa vs fallo commit
 
         try:
             respuesta = connekta.enviar_ajuste_inventario(
@@ -356,6 +366,7 @@ class ConteoService:
                 cantidad=cantidad_ajuste,
                 referencia=sesion.codigo
             )
+            siesa_llamado = True
             sesion.siesa_triggered = True
             sesion.siesa_response = json.dumps(respuesta)
             sesion.siesa_triggered_at = datetime.utcnow()
@@ -386,10 +397,26 @@ class ConteoService:
 
         except Exception as e:
             db.session.rollback()
-            logger.error(f'[CONTEO] Error enviando ajuste a Siesa: {str(e)}')
-            sesion.siesa_triggered = False
-            sesion.siesa_response = str(e)
-            db.session.commit()
-            raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
+            if siesa_llamado:
+                # Siesa YA procesó el ajuste — guardar siesa_triggered=True para
+                # que el idempotency check evite un segundo envío en el reintento.
+                logger.error(
+                    f'[CONTEO] Siesa procesó el ajuste pero el commit WMS falló: {e} '
+                    f'— marcando siesa_triggered=True para evitar duplicado'
+                )
+                try:
+                    sesion.siesa_triggered = True
+                    sesion.siesa_response = json.dumps(respuesta)
+                    sesion.estado = 'AJUSTADO'
+                    db.session.commit()
+                except Exception as commit_err:
+                    logger.error(f'[CONTEO] No se pudo persistir siesa_triggered=True: {commit_err}')
+                raise Exception(f'Ajuste enviado a Siesa pero error guardando en WMS: {e}')
+            else:
+                logger.error(f'[CONTEO] Error enviando ajuste a Siesa: {str(e)}')
+                sesion.siesa_triggered = False
+                sesion.siesa_response = str(e)
+                db.session.commit()
+                raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
 
         return sesion

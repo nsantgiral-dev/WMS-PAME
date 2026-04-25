@@ -219,7 +219,17 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         return resultado
 
     if job.tipo == 'TRASLADO_AVERIAS':
-        # Reintento de transferir_a_averias para una devolución averiada
+        # Idempotencia parcial: verificar si la TareaDevolucion ya está en estado
+        # que indica que el traslado fue procesado exitosamente en una corrida anterior.
+        if job.intentos > 0:
+            from app.models.devolucion import TareaDevolucion as _TareaDev
+            tarea_dev = _TareaDev.query.get(payload.get('tarea_id'))
+            if tarea_dev and tarea_dev.estado == 'COMPLETADO':
+                logger.warning(
+                    f'[DLQ] TRASLADO_AVERIAS job={job.id} intento={job.intentos + 1}: '
+                    f'TareaDevolucion {tarea_dev.id} ya está COMPLETADO — '
+                    f'verificar manualmente en Siesa si el traslado NB1→AV1 fue duplicado.'
+                )
         return connekta.transferir_a_averias(
             item_codigo=payload['item_codigo'],
             cantidad=payload['cantidad'],
