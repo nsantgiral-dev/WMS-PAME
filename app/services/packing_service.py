@@ -243,7 +243,7 @@ class PackingService:
         # Lock pesimista — evita doble cierre concurrente (doble clic = doble remisión a Siesa)
         from sqlalchemy.orm import selectinload
         tarea = (TareaPacking.query
-                 .options(selectinload(TareaPacking.items).selectinload('producto'))
+                 .options(selectinload(TareaPacking.items).selectinload(ItemPacking.producto))
                  .filter_by(id=tarea_id)
                  .with_for_update()
                  .first())
