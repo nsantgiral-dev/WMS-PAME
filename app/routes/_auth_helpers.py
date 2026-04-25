@@ -3,6 +3,23 @@ from flask_jwt_extended import get_jwt_identity
 from app.models.usuario import Usuario
 
 
+class Roles:
+    ADMIN          = 'admin'
+    SUPERVISOR     = 'supervisor'
+    JEFE_ALMACEN   = 'jefe_almacen'
+    GERENTE        = 'gerente'
+    OPERARIO       = 'operario'
+    EMPACADOR      = 'empacador'
+    RECEPCIONISTA  = 'recepcionista'
+    TIENDA         = 'tienda'
+    CONDUCTOR      = 'conductor'
+
+    # Grupos reutilizables
+    GESTION        = (ADMIN, SUPERVISOR, JEFE_ALMACEN, GERENTE)
+    ALMACEN        = (ADMIN, JEFE_ALMACEN)
+    DESPACHO       = (ADMIN, SUPERVISOR, GERENTE, JEFE_ALMACEN)
+
+
 def _solo_admin():
     """Devuelve el usuario actual si es admin, o None."""
     try:
@@ -10,7 +27,7 @@ def _solo_admin():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol == 'admin' else None
+    return u if u and u.rol == Roles.ADMIN else None
 
 
 def _es_admin_o_jefe():
@@ -20,4 +37,4 @@ def _es_admin_o_jefe():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol in ('admin', 'jefe_almacen') else None
+    return u if u and u.rol in Roles.ALMACEN else None

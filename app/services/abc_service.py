@@ -30,7 +30,7 @@ from app.services.connekta_gateway import connekta
 logger = logging.getLogger(__name__)
 
 # Días mínimos entre conteos por clase
-FRECUENCIA_DIAS = {'A': 30, 'B': 90, 'C': 180}
+FRECUENCIA_DIAS = {'A': 15, 'B': 90, 'C': 180}
 
 # Watchdog: picks en 7 días que disparan override a clase A
 WATCHDOG_UMBRAL = {'B': 25, 'C': 10}
@@ -266,6 +266,7 @@ class ABCService:
         umbral = datetime.utcnow() - timedelta(days=frecuencia)
 
         # Solo productos con stock > 0 en este almacén — sin stock no hay nada que contar
+        # Fetch solo columnas necesarias para reducir footprint de memoria
         todos_productos = (
             Producto.query
             .join(ProductoClasificacionABC,
@@ -281,6 +282,7 @@ class ABCService:
                 Ubicacion.almacen_id == almacen_id,
                 UbicacionProducto.cantidad > 0,
             )
+            .with_entities(Producto.id, Producto.codigo_siesa)
             .distinct()
             .all()
         )

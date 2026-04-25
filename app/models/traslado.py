@@ -15,6 +15,7 @@ Máquina de estados:
 """
 from datetime import datetime
 from app.extensions import db
+from app.models.picking import TareaPicking
 
 
 class SolicitudTraslado(db.Model):
@@ -114,7 +115,6 @@ class SolicitudTraslado(db.Model):
         """Progreso de TareasPicking — solo relevante en EN_PICKING/PREPARADO."""
         if self.estado not in ('EN_PICKING', 'PREPARADO'):
             return None
-        from app.models.picking import TareaPicking
         base = TareaPicking.query.filter_by(
             referencia_documento=self.codigo,
             tipo_documento='TRASLADO',

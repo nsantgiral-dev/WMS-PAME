@@ -148,12 +148,7 @@ def reportar_problema():
     Motivos: UBICACION_VACIA | FALTANTE | MERCANCIA_AVERIADA | PRODUCTO_INCORRECTO
     """
     from app.extensions import db
-    from app.models.inventario import UbicacionProducto, MovimientoInventario
-    from app.models.picking import TareaPicking
     from app.models.conteo import SesionConteo
-    from app.services.conteo_service import ConteoService
-    from datetime import datetime as _dt
-    import uuid as _uuid
 
     operario_id = _operario_id()
     data = request.get_json() or {}

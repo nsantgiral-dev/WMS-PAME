@@ -332,3 +332,37 @@ class DashboardService:
             'total_alertas': len(alertas),
             'alertas': alertas
         }
+
+    @staticmethod
+    def kpis_traslados_rutas():
+        """KPIs de traslados y rutas para el resumen completo del dashboard."""
+        from datetime import datetime, timedelta
+        from app.models.traslado import SolicitudTraslado
+        from app.models.ruta_despacho import RutaDespacho
+
+        hoy = datetime.utcnow().date()
+        inicio_hoy = datetime.combine(hoy, datetime.min.time())
+
+        traslados = {
+            'en_picking':     SolicitudTraslado.query.filter_by(estado='EN_PICKING').count(),
+            'preparado':      SolicitudTraslado.query.filter_by(estado='PREPARADO').count(),
+            'en_transito':    SolicitudTraslado.query.filter_by(estado='EN_TRANSITO').count(),
+            'entregadas_hoy': SolicitudTraslado.query.filter(
+                SolicitudTraslado.estado == 'ENTREGADA',
+                SolicitudTraslado.fecha_entrega >= inicio_hoy
+            ).count(),
+        }
+        traslados['total_activos'] = (
+            traslados['en_picking'] + traslados['preparado'] + traslados['en_transito']
+        )
+
+        rutas = {
+            'en_cargue':      RutaDespacho.query.filter_by(estado='EN_CARGUE').count(),
+            'en_transito':    RutaDespacho.query.filter_by(estado='EN_TRANSITO').count(),
+            'entregadas_hoy': RutaDespacho.query.filter(
+                RutaDespacho.estado == 'ENTREGADA',
+                RutaDespacho.fecha_entregada >= inicio_hoy
+            ).count(),
+        }
+
+        return {'traslados': traslados, 'rutas': rutas}

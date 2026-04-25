@@ -33,6 +33,7 @@ class PedidoSiesa(db.Model):
 
     # Enriquecimiento WMS
     producto_id = db.Column(db.Integer, db.ForeignKey('productos.id'), nullable=True)
+    producto = db.relationship('Producto', lazy='joined', foreign_keys=[producto_id])
 
     # Control de sync
     sync_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -43,8 +44,7 @@ class PedidoSiesa(db.Model):
     )
 
     def to_dict(self):
-        from app.models.producto import Producto
-        prod = Producto.query.get(self.producto_id) if self.producto_id else None
+        prod = self.producto
         return {
             'numero_pedido':      self.numero_pedido,
             'tipo_docto':         self.tipo_docto,

@@ -218,11 +218,14 @@ class MobileService:
                     )
 
             if bajo_tope:
-                conteo_mismo_lugar = SesionConteo.query.filter_by(
-                    ubicacion_id=tarea.ubicacion_id,
-                    estado='PENDIENTE',
-                    operario_id=None
-                ).first()
+                from sqlalchemy.orm import joinedload as _jl_cm
+                conteo_mismo_lugar = (SesionConteo.query
+                    .options(_jl_cm(SesionConteo.producto))
+                    .filter_by(
+                        ubicacion_id=tarea.ubicacion_id,
+                        estado='PENDIENTE',
+                        operario_id=None
+                    ).first())
                 if conteo_mismo_lugar:
                     conteo_mismo_lugar.operario_id = operario_id
                     # No cambia a EN_PROCESO aún — el operario primero hace el picking

@@ -92,6 +92,13 @@ def crear_solicitud():
 @traslados_bp.route('/<int:id>/enviar', methods=['POST'])
 @jwt_required()
 def enviar_solicitud(id):
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario:
+        return jsonify({'error': 'Usuario no encontrado'}), 401
+    s = SolicitudTraslado.query.get_or_404(id)
+    if usuario.rol == 'tienda' and s.solicitante_id != usuario_id:
+        return jsonify({'error': 'Solo puedes enviar tus propias solicitudes'}), 403
     try:
         s = TrasladoService.enviar_solicitud(id)
         return jsonify(s.to_dict()), 200

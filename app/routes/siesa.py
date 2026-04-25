@@ -79,9 +79,10 @@ def cargar_inventario():
     """Inicia la carga inicial de stock desde Siesa en background. Solo admin."""
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede cargar inventario'}), 403
-    from flask import current_app
+    from flask import current_app, request as _req
     from app.services.inventario_siesa_service import iniciar_carga_inventario
-    resultado = iniciar_carga_inventario(current_app._get_current_object())
+    forzar = _req.args.get('forzar', 'false').lower() == 'true'
+    resultado = iniciar_carga_inventario(current_app._get_current_object(), forzar=forzar)
     return jsonify(resultado), 202
 
 

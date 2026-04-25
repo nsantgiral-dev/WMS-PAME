@@ -301,7 +301,7 @@ def _run_carga_inicial(app):
         _estado_carga['en_curso'] = False
 
 
-def iniciar_carga_inventario(app):
+def iniciar_carga_inventario(app, forzar: bool = False):
     """Arranca la carga inicial en background. Retorna estado inmediatamente."""
     global _estado_carga
 
@@ -310,6 +310,25 @@ def iniciar_carga_inventario(app):
 
     if connekta.modo_simulacion:
         return {'simulado': True, 'mensaje': 'Modo simulación — conecta credenciales Siesa'}
+
+    # Guard: no sobrescribir stock si hay operaciones activas (a menos que se fuerce)
+    if not forzar:
+        with app.app_context():
+            from app.models.picking import TareaPicking as _TP
+            from app.models.packing import TareaPacking as _TP2
+            picks_activos = _TP.query.filter(_TP.estado.in_(['PENDIENTE', 'EN_PROCESO'])).count()
+            packs_activos = _TP2.query.filter(_TP2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])).count()
+            if picks_activos or packs_activos:
+                return {
+                    'abortado': True,
+                    'mensaje': (
+                        f'Carga abortada: hay {picks_activos} picking(s) y {packs_activos} packing(s) activos. '
+                        f'La carga sobreescribiría el stock reservado. '
+                        f'Usa ?forzar=true solo si estás seguro.'
+                    ),
+                    'picks_activos': picks_activos,
+                    'packs_activos': packs_activos,
+                }
 
     _estado_carga['en_curso'] = True
     _estado_carga['ultimo_inicio'] = datetime.now(timezone.utc)
@@ -482,7 +501,8 @@ def _run_reconciliacion(app):
             _estado_reconciliacion['ultimo_error'] = str(e)
             _estado_reconciliacion['ultimo_resultado'] = None
 
-        _estado_reconciliacion['en_curso'] = False
+        finally:
+            _estado_reconciliacion['en_curso'] = False
 
 
 def iniciar_reconciliacion(app):

@@ -140,7 +140,7 @@ class ConnektaGateway:
             'payload': payload or {}
         }
 
-    def _get(self, nombre_api: str, params_extra: dict = None, timeout: int = 30):
+    def _get(self, nombre_api: str, params_extra: dict = None, timeout: int = 30, url: str = None):
         if self.modo_simulacion:
             return self._simular(f'GET_{nombre_api}', params_extra)
 
@@ -148,8 +148,9 @@ class ConnektaGateway:
         if params_extra:
             params.update(params_extra)
 
+        target_url = url or self.url_get
         try:
-            r = requests.get(self.url_get, headers=self.headers, params=params, timeout=timeout)
+            r = requests.get(target_url, headers=self.headers, params=params, timeout=timeout)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.Timeout:
@@ -415,24 +416,11 @@ class ConnektaGateway:
         if not fecha:
             fecha = datetime.utcnow().strftime('%Y%m%d')
 
-        if self.modo_simulacion:
-            return self._simular('GET_monitor_facturas', {'fecha': fecha})
-
-        import requests as _req
-        params = {
-            'idCompania': self.id_compania,
-            'descripcion': 'papeleriamedellin_monitos_facturas_wms',
-            'paginacion': f'numPag={pagina}|tamPag=100',
-        }
-        try:
-            r = _req.get(self.url_get_dinamico, headers=self.headers, params=params, timeout=30)
-            r.raise_for_status()
-            return r.json()
-        except _req.exceptions.Timeout:
-            raise Exception('Connekta no respondió — reintenta')
-        except _req.exceptions.RequestException as e:
-            logger.error(f'[CONNEKTA] GET monitor_facturas: {e}')
-            raise Exception(f'Error consultando monitor facturas: {e}')
+        return self._get(
+            'papeleriamedellin_monitos_facturas_wms',
+            params_extra={'paginacion': f'numPag={pagina}|tamPag=100'},
+            url=self.url_get_dinamico,
+        )
 
     # ==========================================
     # POSTs — Bodies oficiales desde Ver Guía
