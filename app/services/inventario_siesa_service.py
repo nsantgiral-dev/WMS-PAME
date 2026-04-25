@@ -296,6 +296,13 @@ def _run_carga_inicial(app):
                     )
                 _q_zero.update({'cantidad': 0}, synchronize_session=False)
                 db.session.flush()
+                # synchronize_session=False no actualiza los objetos Python en memoria.
+                # Los registros de _mapa_up siguen con la cantidad pre-zero.
+                # Actualizamos el mapa para que saldo_antes sea correcto en MovimientoInventario.
+                _ubs_a_zero_set = set(_ubs_a_zero)
+                for (_ub_id, _prod_id), _reg in _mapa_up.items():
+                    if _ub_id in _ubs_a_zero_set and _prod_id not in _excl_prods:
+                        _reg.cantidad = 0
                 logger.info(
                     f'[INV-SIESA] Bulk zero OK: {len(_ubs_a_zero)} ubicaciones '
                     f'(excluidos {len(_prod_ids_activos)} productos con operaciones activas)'

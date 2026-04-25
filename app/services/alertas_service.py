@@ -99,6 +99,11 @@ def verificar_y_alertar_huerfanas(app=None):
     ctx_app = app or _app._get_current_object()
 
     with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2004)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] verificar_y_alertar_huerfanas omitida — otro worker ya la ejecuta')
+            return
         try:
             from app.models.ubicacion_huerfana import UbicacionHuerfana
 
@@ -118,6 +123,9 @@ def verificar_y_alertar_huerfanas(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_huerfanas: {e}', exc_info=True)
+        finally:
+            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2004)'))
+            _db.session.commit()
 
 
 def _enviar_alerta_huerfanas(huerfanas: list):
@@ -332,6 +340,11 @@ def verificar_y_alertar_stock_critico(app=None):
     ctx_app = app or _app._get_current_object()
 
     with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2005)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] verificar_y_alertar_stock_critico omitida — otro worker ya la ejecuta')
+            return
         try:
             from app.models.ubicacion import Ubicacion
             from app.models.inventario import UbicacionProducto
@@ -414,6 +427,9 @@ def verificar_y_alertar_stock_critico(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_stock_critico: {e}', exc_info=True)
+        finally:
+            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2005)'))
+            _db.session.commit()
 
 
 def _enviar_alerta_stock_critico(criticos: list):
@@ -496,6 +512,11 @@ def enviar_resumen_diario(app=None):
     ctx_app = app or _app._get_current_object()
 
     with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2006)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] enviar_resumen_diario omitido — otro worker ya lo ejecuta')
+            return
         try:
             from datetime import date, timedelta
             from app.extensions import db
@@ -559,6 +580,9 @@ def enviar_resumen_diario(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en enviar_resumen_diario: {e}', exc_info=True)
+        finally:
+            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2006)'))
+            _db.session.commit()
 
 
 def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fallidos):

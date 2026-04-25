@@ -203,8 +203,19 @@ class ABCService:
                 registros = registros_por_prod.get(producto.id, [])
 
                 for reg in registros:
-                    # No duplicar si ya hay conteo activo — usa el set pre-cargado
+                    # Verificación en memoria (evita duplicar dentro de la misma corrida)
                     if (producto.id, reg.ubicacion_id) in conteos_activos:
+                        continue
+
+                    # Verificación en DB justo antes del insert — reduce ventana de race condition
+                    # entre dos workers que hayan pasado simultáneamente el check en memoria.
+                    ya_existe = SesionConteo.query.filter(
+                        SesionConteo.producto_id == producto.id,
+                        SesionConteo.ubicacion_id == reg.ubicacion_id,
+                        SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                    ).first()
+                    if ya_existe:
+                        conteos_activos.add((producto.id, reg.ubicacion_id))
                         continue
 
                     codigo = (
@@ -492,23 +503,36 @@ class ABCService:
 
         def _job():
             with app.app_context():
-                from app.models.almacen import Almacen
-                from datetime import datetime as _dt
-                almacenes = Almacen.query.filter_by(activo=True).all()
-                logger.info(f'[ABC] Job iniciado — {len(almacenes)} almacén(es)')
-                completados = []
-                fallidos = []
-                for a in almacenes:
-                    try:
-                        ABCService.generar_todas_las_clases(a.id)
-                        completados.append(a.id)
-                        logger.info(f'[ABC] Almacén {a.id} completado')
-                    except Exception as ex:
-                        fallidos.append(a.id)
-                        logger.error(f'[ABC] Error almacén {a.id}: {ex}')
-                logger.info(
-                    f'[ABC] Job finalizado — OK: {completados} | FALLIDOS: {fallidos}'
-                )
+                from app.extensions import db as _db
+                # Advisory lock 2003 — garantiza que solo un worker Gunicorn ejecuta
+                # este job a la vez. Si el lock no está disponible (otro worker ganó),
+                # salir silenciosamente en vez de generar tareas duplicadas.
+                lock_acquired = _db.session.execute(
+                    _db.text('SELECT pg_try_advisory_lock(2003)')
+                ).scalar()
+                if not lock_acquired:
+                    logger.info('[ABC] Job omitido — otro worker ya lo está ejecutando')
+                    return
+                try:
+                    from app.models.almacen import Almacen
+                    almacenes = Almacen.query.filter_by(activo=True).all()
+                    logger.info(f'[ABC] Job iniciado — {len(almacenes)} almacén(es)')
+                    completados = []
+                    fallidos = []
+                    for a in almacenes:
+                        try:
+                            ABCService.generar_todas_las_clases(a.id)
+                            completados.append(a.id)
+                            logger.info(f'[ABC] Almacén {a.id} completado')
+                        except Exception as ex:
+                            fallidos.append(a.id)
+                            logger.error(f'[ABC] Error almacén {a.id}: {ex}')
+                    logger.info(
+                        f'[ABC] Job finalizado — OK: {completados} | FALLIDOS: {fallidos}'
+                    )
+                finally:
+                    _db.session.execute(_db.text('SELECT pg_advisory_unlock(2003)'))
+                    _db.session.commit()
 
         scheduler = BackgroundScheduler(timezone='America/Bogota')
         scheduler.add_job(
