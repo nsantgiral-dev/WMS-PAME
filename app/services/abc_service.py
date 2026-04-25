@@ -204,7 +204,12 @@ class ABCService:
                         'sesion_codigo': codigo,
                     })
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'[ABC WATCHDOG] Error guardando overrides: {e}')
+            raise
 
         if overrides:
             logger.warning(
@@ -372,7 +377,12 @@ class ABCService:
             db.session.add(sesion)
             tareas_creadas.append(sesion)
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'[ABC] Error guardando tareas de conteo: {e}')
+            raise
 
         dias_para_ciclo = math.ceil(total_clase / (batch_diario or 1)) if batch_diario else 1
 

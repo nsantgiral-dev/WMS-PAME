@@ -140,7 +140,7 @@ class ConnektaGateway:
             'payload': payload or {}
         }
 
-    def _get(self, nombre_api: str, params_extra: dict = None):
+    def _get(self, nombre_api: str, params_extra: dict = None, timeout: int = 30):
         if self.modo_simulacion:
             return self._simular(f'GET_{nombre_api}', params_extra)
 
@@ -149,7 +149,7 @@ class ConnektaGateway:
             params.update(params_extra)
 
         try:
-            r = requests.get(self.url_get, headers=self.headers, params=params, timeout=30)
+            r = requests.get(self.url_get, headers=self.headers, params=params, timeout=timeout)
             r.raise_for_status()
             return r.json()
         except requests.exceptions.Timeout:
@@ -362,11 +362,13 @@ class ConnektaGateway:
             return {'configurado': None, 'tipo_proveedor': None, 'mensaje': ''}
 
     def get_inventario_fecha(self, item_codigo: str):
-        """API_v2_Inventarios_InvFecha — existencia real para conteo cíclico."""
+        """API_v2_Inventarios_InvFecha — existencia real para conteo cíclico.
+        Timeout reducido a 8s: es user-facing, no puede bloquear un worker Gunicorn.
+        """
         return self._get(self.api_inventario, {
             'paginacion': 'numPag=1|tamPag=10',
-            'parametros': f'f120_referencia="{item_codigo}" AND f150_id="{self.bodega}"'
-        })
+            'parametros': f"f120_referencia = ''{item_codigo}'' AND f150_id = ''{self.bodega}''"
+        }, timeout=8)
 
     def get_item_por_barras(self, codigo_barras: str):
         """API_v2_ItemsBarras — traduce EAN del escáner al código Siesa.

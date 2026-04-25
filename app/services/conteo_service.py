@@ -192,8 +192,23 @@ class ConteoService:
             return float(fila.get('cantidad_disponible', fila.get('f470_cant_base', 0)))
 
         except Exception as e:
-            logger.error(f'[CONTEO] Error consultando Siesa: {str(e)}')
-            raise Exception(f'Error consultando existencia en Siesa: {str(e)}')
+            # Timeout o error de red: fallback a stock local para no bloquear al operario
+            logger.warning(f'[CONTEO] Siesa no disponible ({e}) — usando stock local como referencia')
+            from app.models.inventario import UbicacionProducto
+            from app.models.producto import Producto
+            from app.models.ubicacion import Ubicacion
+            producto = (Producto.query
+                        .filter(Producto.codigo_siesa == producto_codigo_siesa)
+                        .first())
+            if not producto:
+                return 0
+            ubicacion = Ubicacion.query.filter_by(codigo=ubicacion_codigo).first()
+            if not ubicacion:
+                return 0
+            reg = UbicacionProducto.query.filter_by(
+                producto_id=producto.id, ubicacion_id=ubicacion.id
+            ).first()
+            return reg.cantidad if reg else 0
 
     @staticmethod
     def _crear_segundo_conteo(sesion_origen: SesionConteo, operario_excluido: int):
@@ -367,13 +382,14 @@ class ConteoService:
                 f'— {cantidad_ajuste} unidades de {producto_ref.codigo if producto_ref else item_codigo} '
                 f'— idempotency_key: {idem_key}'
             )
+            db.session.commit()
 
         except Exception as e:
+            db.session.rollback()
             logger.error(f'[CONTEO] Error enviando ajuste a Siesa: {str(e)}')
             sesion.siesa_triggered = False
             sesion.siesa_response = str(e)
             db.session.commit()
             raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
 
-        db.session.commit()
         return sesion

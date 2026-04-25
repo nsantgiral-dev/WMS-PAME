@@ -110,6 +110,8 @@ def asignar_a_ruta():
 @jwt_required()
 def desasignar_de_ruta(id):
     """Quita un bulto de la planificación de una ruta."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'No autorizado'}), 403
     bulto = Bulto.query.get_or_404(id)
     if bulto.estado == 'CARGADO':
         return jsonify({'error': 'No se puede desasignar un bulto que ya fue cargado físicamente'}), 400

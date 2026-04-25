@@ -22,12 +22,7 @@ from app.services.recepcion_service import RecepcionService
 siesa_bp = Blueprint('siesa', __name__)
 
 
-def _solo_admin():
-    from flask_jwt_extended import get_jwt_identity
-    from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    u = Usuario.query.get(int(uid))
-    return u if u and u.rol == 'admin' else None
+from app.routes._auth_helpers import _solo_admin
 
 
 # ──────────────────────────────────────────────
@@ -731,6 +726,8 @@ def iniciar_despacho():
     Los campos tipo_docto y consec_docto se guardan en el packing
     para que trigger_despacho los inyecte en Connekta al confirmar.
     """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede iniciar despacho'}), 403
     data = request.get_json()
     for campo in ['numero_pedido', 'tipo_docto', 'consec_docto', 'almacen_id', 'items']:
         if campo not in data:

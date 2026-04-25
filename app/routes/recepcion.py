@@ -109,6 +109,11 @@ def escanear_producto(id):
 @recepcion_bp.route('/<int:id>/confirmar', methods=['PUT'])
 @jwt_required()
 def confirmar_recepcion(id):
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    usuario = Usuario.query.get(int(uid))
+    if not usuario or usuario.rol not in ('admin', 'jefe_almacen', 'recepcionista'):
+        return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}
     try:
         recepcion = RecepcionService.confirmar_recepcion(

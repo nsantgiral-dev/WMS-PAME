@@ -10,11 +10,7 @@ from app.services.abc_service import ABCService
 conteo_bp = Blueprint('conteo', __name__)
 
 
-def _solo_admin():
-    from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    u = Usuario.query.get(int(uid))
-    return u if u and u.rol == 'admin' else None
+from app.routes._auth_helpers import _solo_admin
 
 
 @conteo_bp.route('/', methods=['GET'])

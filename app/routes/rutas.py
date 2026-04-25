@@ -21,11 +21,7 @@ def _es_admin_o_jefe():
     return u if u and u.rol in ('admin', 'jefe_almacen') else None
 
 
-def _solo_admin():
-    from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    u = Usuario.query.get(int(uid))
-    return u if u and u.rol == 'admin' else None
+from app.routes._auth_helpers import _solo_admin
 
 
 # ── Conductores ──────────────────────────────────────────────────

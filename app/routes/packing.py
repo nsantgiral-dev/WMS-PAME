@@ -8,11 +8,7 @@ from app.services.connekta_gateway import connekta
 packing_bp = Blueprint('packing', __name__)
 
 
-def _solo_admin():
-    from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    u = Usuario.query.get(int(uid))
-    return u if u and u.rol == 'admin' else None
+from app.routes._auth_helpers import _solo_admin
 
 
 def _picking_listo_batch(numeros_pedido: list) -> dict:
@@ -206,6 +202,11 @@ def cerrar_packing(id):
     Paso 2: declara bultos físicos, genera códigos de barras y dispara Siesa.
     Body: {"bultos": [{"tipo": "Caja", "cantidad": 2}, {"tipo": "Bolsa", "cantidad": 1}]}
     """
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    usuario = Usuario.query.get(int(uid))
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+        return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}
     bultos_data = data.get('bultos', [])
     # Permitir bultos_data vacío solo si ya existen bultos (retry Siesa)

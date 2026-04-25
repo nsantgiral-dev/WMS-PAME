@@ -6,11 +6,7 @@ from app.models.usuario import Usuario
 auth_bp = Blueprint('auth', __name__)
 
 
-def _solo_admin():
-    """Devuelve el usuario actual si es admin, o None."""
-    uid = get_jwt_identity()
-    u = Usuario.query.get(int(uid))
-    return u if u and u.rol == 'admin' else None
+from app.routes._auth_helpers import _solo_admin  # noqa: F401
 
 @auth_bp.route('/login', methods=['POST'])
 def login():

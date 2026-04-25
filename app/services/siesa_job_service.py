@@ -150,16 +150,23 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         )
 
     if job.tipo == 'DESPACHO_F470':
-        # Reintento de trigger_factura para un packing cuyo Siesa falló
+        # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),
+        # no volver a llamar — evita crear remisión duplicada.
         from app.models.packing import TareaPacking
         import json as _json
+        tarea = TareaPacking.query.get(payload.get('tarea_id'))
+        if tarea and tarea.siesa_triggered:
+            logger.info(
+                f'[DLQ] DESPACHO_F470 job={job.id}: tarea {tarea.id} ya tiene '
+                f'siesa_triggered=True — omitiendo llamada a Siesa (idempotencia)'
+            )
+            return {'idempotente': True, 'tarea_id': tarea.id}
         resultado = connekta.trigger_factura(
             tipo_docto_pedido=payload['tipo_docto_pedido'],
             consec_docto_pedido=payload['consec_docto_pedido'],
             items=payload.get('items', []),
         )
         # Marcar la tarea como despachada si el reintento funcionó
-        tarea = TareaPacking.query.get(payload.get('tarea_id'))
         if tarea and not tarea.siesa_triggered:
             from datetime import datetime as _dt
             tarea.siesa_triggered = True
@@ -172,7 +179,17 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         return resultado
 
     if job.tipo == 'ENTRADA_OC':
-        # Reintento de confirmar_entrada_compras para una recepción cuyo Siesa falló
+        # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),
+        # no volver a llamar — evita crear entrada contable duplicada.
+        from app.models.recepcion import RecepcionMercancia
+        import json as _json
+        rec = RecepcionMercancia.query.get(payload.get('recepcion_id'))
+        if rec and rec.siesa_triggered:
+            logger.info(
+                f'[DLQ] ENTRADA_OC job={job.id}: recepción {rec.id} ya tiene '
+                f'siesa_triggered=True — omitiendo llamada a Siesa (idempotencia)'
+            )
+            return {'idempotente': True, 'recepcion_id': rec.id}
         resultado = connekta.confirmar_entrada_compras(
             id_co_oc=payload.get('id_co_oc', connekta.centro_op),
             tipo_docto_oc=payload.get('tipo_docto_oc', ''),
@@ -192,9 +209,6 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             cond_pago=payload.get('cond_pago', ''),
         )
         # Marcar la recepción como siesa_triggered si el reintento funcionó
-        from app.models.recepcion import RecepcionMercancia
-        import json as _json
-        rec = RecepcionMercancia.query.get(payload.get('recepcion_id'))
         if rec and not rec.siesa_triggered:
             from datetime import datetime as _dt
             rec.siesa_triggered = True
