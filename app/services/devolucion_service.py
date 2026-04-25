@@ -250,18 +250,26 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     if es_averiado and not connekta.modo_simulacion:
         from app.models.siesa_job import SiesaJob
         # Capturar antes del commit (expire_on_commit haría lazy load ineficiente después)
-        _item_codigo = tarea.producto.codigo_siesa or tarea.producto.codigo
-        job_dlq = SiesaJob.encolar(
-            tipo='TRASLADO_AVERIAS',
-            payload={
-                'tarea_id': tarea.id,
-                'item_codigo': _item_codigo,
-                'cantidad': tarea.cantidad_diferencia,
-                'referencia': tarea.codigo,
-            },
-            referencia_tipo='TareaDevolucion',
-            referencia_id=tarea.id,
-        )
+        _item_codigo = (tarea.producto.codigo_siesa or tarea.producto.codigo) if tarea.producto else None
+        # [C6] Guard: sin código Siesa el DLQ quedaría en FALLIDO permanente (no reintentable).
+        # Omitir el job y loguear — el admin puede corregir el catálogo y disparar manualmente.
+        if not _item_codigo:
+            logger.error(
+                f'[DEV] Tarea {tarea.codigo}: producto_id={tarea.producto_id} sin codigo_siesa ni codigo '
+                f'— TRASLADO_AVERIAS no encolado. Corregir el producto en el catálogo.'
+            )
+        else:
+            job_dlq = SiesaJob.encolar(
+                tipo='TRASLADO_AVERIAS',
+                payload={
+                    'tarea_id': tarea.id,
+                    'item_codigo': _item_codigo,
+                    'cantidad': tarea.cantidad_diferencia,
+                    'referencia': tarea.codigo,
+                },
+                referencia_tipo='TareaDevolucion',
+                referencia_id=tarea.id,
+            )
         # NO ponemos siesa_triggered=True aquí — el DLQ handler lo pondrá
         # sólo cuando Siesa responda HTTP 200 (semántica exacta de idempotencia).
         # El loop de reconciliación se suprime consultando SiesaJob activo (ver abajo).

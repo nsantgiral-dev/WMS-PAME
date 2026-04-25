@@ -388,7 +388,9 @@ class MobileService:
                     return _res_cache
 
         if tipo == 'PICKING':
-            tarea = TareaPicking.query.get(tarea_id)
+            # [C5] SELECT FOR UPDATE — evita lost-update cuando dos workers (red inestable)
+            # leen cantidad_recogida al mismo tiempo y ambos suman sobre el mismo valor base.
+            tarea = TareaPicking.query.filter_by(id=tarea_id).with_for_update().first()
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 

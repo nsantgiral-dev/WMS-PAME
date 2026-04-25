@@ -392,11 +392,13 @@ class PackingService:
         # Si el commit falla, ni los bultos ni el job persisten (sin pérdida silenciosa).
         # Si Siesa falla después, el job ya está en DB como PENDIENTE para DLQ.
         # En reintento (siesa_pendiente=True) puede existir ya un job activo — reutilizarlo.
+        # [C3] Incluir PROCESANDO en la deduplicación — si el worker DLQ ya tomó el job
+        # y está ejecutándolo, crear uno nuevo causaría doble envío a Siesa.
         job_dlq = _SiesaJob.query.filter(
             _SiesaJob.tipo == 'DESPACHO_F470',
             _SiesaJob.referencia_tipo == 'TareaPacking',
             _SiesaJob.referencia_id == tarea_id,
-            _SiesaJob.estado.in_(['PENDIENTE', 'REINTENTANDO']),
+            _SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO']),
         ).first()
         if not job_dlq:
             job_dlq = _SiesaJob.encolar(
@@ -430,11 +432,25 @@ class PackingService:
     def cancelar(tarea_id: int, motivo: str = None):
         """Cancela una tarea de packing."""
         from app.models.bulto import Bulto
+        from app.models.siesa_job import SiesaJob as _SJ
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
         if tarea.estado == 'DESPACHADO' and tarea.siesa_triggered:
             raise ValueError('No se puede cancelar — Siesa ya generó la remisión')
+
+        # [C2] Bloquear cancelación si hay un SiesaJob activo (PENDIENTE/PROCESANDO/REINTENTANDO).
+        # Cancelar mientras Siesa está procesando podría dejar la remisión creada en Siesa
+        # sin reflejo en el WMS — inconsistencia imposible de detectar automáticamente.
+        job_activo = _SJ.query.filter_by(
+            referencia_tipo='TareaPacking',
+            referencia_id=tarea_id,
+        ).filter(_SJ.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO'])).first()
+        if job_activo:
+            raise ValueError(
+                f'No se puede cancelar — hay un job Siesa {job_activo.estado} (id={job_activo.id}). '
+                'Espera a que termine o falle definitivamente antes de cancelar.'
+            )
 
         # Si tiene bultos sin cargar, eliminarlos antes de cancelar
         Bulto.query.filter_by(tarea_id=tarea_id, estado='PENDIENTE').delete()

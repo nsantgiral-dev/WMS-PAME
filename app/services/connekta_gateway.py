@@ -988,9 +988,9 @@ class ConnektaGateway:
                 'f350_id_tipo_docto': tipo_docto,
                 'f350_consec_docto': 0,
                 'f350_fecha': fecha_hoy,
-                'f350_id_tercero': self.nit_empresa,
+                'f350_id_tercero': self.nit_empresa or None,  # [C4] None en vez de '' — spec 173066
                 'f350_ind_estado': 1,
-                'f350_ind_impresion': 1,
+                'f350_ind_impresion': 0,  # [M1] consistente con transferencia_directa (mismo conector)
                 'f350_notas': nota[:200] if nota else '',
                 'f450_id_bodega_salida': bodega_id,
                 'f450_id_bodega_entrada': bodega_id,  # misma bodega — traslado interno
@@ -999,8 +999,10 @@ class ConnektaGateway:
                 'F_CIA': int(self.id_cia_siesa),
                 'f470_id_co': self.centro_op,
                 'f470_id_tipo_docto': tipo_docto,
+                'f470_consec_docto': 0,                          # [C4] obligatorio spec 173066
+                'f470_nro_registro': 1,                          # [C4] obligatorio spec 173066
                 'f470_id_bodega': bodega_id,
-                'f470_id_ubicacion_aux': ubicacion_origen,      # origen  (ej. RES-01-A)
+                'f470_id_ubicacion_aux': ubicacion_origen,       # origen  (ej. RES-01-A)
                 'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
                 'f470_referencia_item': referencia_item,
                 'f470_cant_base': round(float(cantidad), 4),

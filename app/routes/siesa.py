@@ -869,10 +869,17 @@ def iniciar_recepcion():
     con los tres campos del documento origen (co, tipo_docto, consec_docto) y la inicia
     de inmediato. La PWA pasa directamente a la pantalla de escaneo ciego.
     """
+    # [C1] Solo recepcionistas, jefe_almacen y admin pueden crear recepciones.
+    # Sin este check cualquier usuario autenticado (ej. conductor, tienda) podría
+    # crear entradas de inventario en Siesa — riesgo crítico de integridad.
+    from app.models.usuario import Usuario as _Usr
     try:
         recepcionista_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    _usr = _Usr.query.get(recepcionista_id)
+    if not _usr or _usr.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Sin permiso — se requiere rol recepcionista, jefe_almacen o admin'}), 403
     data = request.get_json()
 
     for campo in ['numero_oc', 'tipo_docto', 'consec_docto', 'almacen_id', 'items']:
