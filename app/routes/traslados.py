@@ -215,7 +215,12 @@ def cancelar_solicitud(id):
             return jsonify({'error': f'Error liberando reservas de picking: {_e}'}), 500
     s.estado = 'CANCELADA'
     s.motivo_rechazo = data.get('motivo', 'Cancelada por usuario')
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[TRASLADO] Error cancelando solicitud {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error cancelando traslado — reintenta'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → CANCELADA por usuario {usuario_id}')
     return jsonify(s.to_dict()), 200
 
@@ -311,7 +316,12 @@ def reasignar_operario(id):
 
     s.operario_id = nuevo_operario_id
     from app.extensions import db
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[TRASLADO] Error reasignando operario en {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error reasignando operario — reintenta'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → operario reasignado a {nuevo_op.nombre} por {usuario_id}')
     return jsonify({'ok': True, 'solicitud': s.to_dict()}), 200
 

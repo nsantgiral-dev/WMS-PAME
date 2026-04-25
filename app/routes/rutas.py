@@ -623,7 +623,7 @@ def entregar_ruta(id):
     confirmaciones = data.get('bultos', [])
     if confirmaciones:
         ids_payload = {c['id'] for c in confirmaciones}
-        bultos_ruta = Bulto.query.filter_by(ruta_despacho_id=id).all()
+        bultos_ruta = Bulto.query.filter_by(ruta_despacho_id=id).with_for_update().all()
 
         for bulto in bultos_ruta:
             conf = next((c for c in confirmaciones if c['id'] == bulto.id), None)
@@ -640,7 +640,12 @@ def entregar_ruta(id):
 
     ruta.estado = EstadoRutaDespacho.ENTREGADA
     ruta.fecha_entregada = ahora
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[RUTAS] Error en entregar_ruta {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error registrando entrega de ruta — reintenta'}), 500
 
     return jsonify({
         'ok': True,

@@ -143,7 +143,7 @@ def cargar_bulto(codigo_barras):
     except (ValueError, TypeError):
         return jsonify({'error': 'ruta_id debe ser un número entero válido'}), 400
 
-    bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).first()
+    bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).with_for_update().first()
 
     if not bulto:
         return jsonify({'error': f'Bulto {codigo_barras} no encontrado'}), 404

@@ -402,7 +402,7 @@ class TrasladoService:
             reg = UbicacionProducto.query.filter_by(
                 ubicacion_id=t.ubicacion_id,
                 producto_id=t.producto_id,
-            ).first()
+            ).with_for_update().first()
             if reg:
                 reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
             t.estado = 'CANCELADO'
@@ -437,7 +437,7 @@ class TrasladoService:
                     reg = UbicacionProducto.query.filter_by(
                         ubicacion_id=t.ubicacion_id,
                         producto_id=t.producto_id,
-                    ).first()
+                    ).with_for_update().first()
                     if reg:
                         reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
                     t.estado = 'CANCELADO'
