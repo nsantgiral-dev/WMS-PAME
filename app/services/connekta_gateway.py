@@ -204,6 +204,18 @@ class ConnektaGateway:
                 raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
             resp_json = r.json()
             logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
+            # Connekta V2: HTTP 200 no garantiza éxito — verificar codigo==0 en body
+            codigo = resp_json.get('codigo')
+            if codigo != 0:
+                mensaje = resp_json.get('mensaje', 'Sin mensaje')
+                detalle = resp_json.get('detalle', '')
+                logger.error(
+                    f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
+                    f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
+                )
+                raise Exception(
+                    f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
+                )
             return resp_json
         except requests.exceptions.Timeout:
             logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
@@ -486,7 +498,7 @@ class ConnektaGateway:
                     'f470_id_lista_precio': self.lista_precio or None,  # SIESA_LISTA_PRECIO (pos 169, ancho 3)
                     'f470_id_unidad_precio': i.get('unidad_medida') or None,
                     'f470_id_unidad_medida': i.get('unidad_medida') or None,
-                    'f470_cant_base': i.get('cantidad_empacada'),
+                    'f470_cant_base': float(i.get('cantidad_empacada') or 0),
                     'f470_cant_2': None,
                     'f470_vlr_bruto': None,
                     'f470_ind_naturaleza': 2,                         # 2 = Salida/Venta
@@ -751,8 +763,8 @@ class ConnektaGateway:
                     'F_CIA': cia,
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_ajuste,
-                    'f470_consec_docto': '',
-                    'f470_nro_registro': '',
+                    'f470_consec_docto': 0,
+                    'f470_nro_registro': 1,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
@@ -803,15 +815,15 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': cia_averias,
-                    'F_CONSEC_AUTO_REG': '',
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
-                    'f350_consec_docto': '',
+                    'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': '',
                     'f350_id_clase_docto': '',
-                    'f350_ind_estado': '',
-                    'f350_ind_impresion': '',
+                    'f350_ind_estado': 1,
+                    'f350_ind_impresion': 0,
                     'f350_notas': referencia or f'Avería detectada por WMS · {item_codigo}',
                     'f450_id_concepto': self.motivo_traslado,
                     'f450_id_bodega_salida': self.bodega,
@@ -838,9 +850,9 @@ class ConnektaGateway:
                 {
                     'F_CIA': cia_averias,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': '',
-                    'f470_consec_docto': '',
-                    'f470_nro_registro': '',
+                    'f470_id_tipo_docto': self.tipo_docto_traslado,
+                    'f470_consec_docto': 0,
+                    'f470_nro_registro': 1,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',

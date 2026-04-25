@@ -327,6 +327,88 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     )
         return resultado
 
+    if job.tipo == 'AJUSTE_CONTEO':
+        from app.models.conteo import SesionConteo as _SesionConteo
+        from app.models.inventario import UbicacionProducto as _UbicProd
+        sesion_id = payload.get('sesion_id')
+        sesion_cteo = _SesionConteo.query.get(sesion_id)
+
+        if sesion_cteo is None:
+            logger.warning(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion_id={sesion_id} '
+                f'no existe en DB — omitiendo para evitar ajuste sin clave'
+            )
+            return {'idempotente': True, 'sin_sesion': True}
+
+        # P4: idempotencia — si siesa_triggered, no reenviar
+        if sesion_cteo.siesa_triggered:
+            logger.info(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} ya tiene '
+                f'siesa_triggered=True — omitiendo llamada (idempotencia P4)'
+            )
+            return {'idempotente': True, 'sesion_id': sesion_id}
+
+        item_codigo = payload.get('item_codigo')
+        if not item_codigo:
+            raise ValueError(
+                f'AJUSTE_CONTEO job={job.id}: item_codigo faltante en payload'
+            )
+
+        resultado = connekta.enviar_ajuste_inventario(
+            motivo_codigo=payload['motivo_codigo'],
+            item_codigo=item_codigo,
+            cantidad=payload['cantidad'],
+            referencia=payload.get('referencia', ''),
+        )
+
+        # Siesa procesó el ajuste — persistir en WMS
+        try:
+            sesion_cteo = _SesionConteo.query.get(sesion_id)
+            sesion_cteo.siesa_triggered = True
+            sesion_cteo.siesa_response = json.dumps(resultado)
+            sesion_cteo.siesa_triggered_at = datetime.utcnow()
+            sesion_cteo.estado = 'AJUSTADO'
+            sesion_cteo.fecha_cierre = datetime.utcnow()
+
+            # Desbloquear inventario si vino de excepción de picking
+            tarea_picking_id = payload.get('tarea_picking_id')
+            if tarea_picking_id:
+                motivo_codigo = payload['motivo_codigo']
+                cantidad_ajuste = payload['cantidad']
+                inv = (_UbicProd.query
+                       .filter_by(
+                           ubicacion_id=payload.get('ubicacion_id'),
+                           producto_id=payload.get('producto_id')
+                       ).with_for_update().first())
+                if inv:
+                    inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
+                    if motivo_codigo == 'AJ-SAL':
+                        inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
+                    else:
+                        inv.cantidad += cantidad_ajuste
+
+            db.session.commit()
+        except Exception as _e:
+            logger.critical(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: Siesa OK pero fallo al guardar '
+                f'siesa_triggered — revisar manualmente sesion {sesion_id}. Error: {_e}'
+            )
+            db.session.rollback()
+            # Emergency: persistir SOLO el flag idempotencia para bloquear re-ajuste duplicado
+            try:
+                sesion_cteo = _SesionConteo.query.get(sesion_id)
+                sesion_cteo.siesa_triggered = True
+                sesion_cteo.siesa_triggered_at = datetime.utcnow()
+                db.session.commit()
+            except Exception as _e2:
+                db.session.rollback()
+                logger.critical(
+                    f'[DLQ] AJUSTE_CONTEO job={job.id}: DOBLE FALLO — '
+                    f'siesa_triggered no persiste: {_e2}. '
+                    f'Sesion {sesion_id} en riesgo de ajuste de inventario duplicado.'
+                )
+        return resultado
+
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
 
 

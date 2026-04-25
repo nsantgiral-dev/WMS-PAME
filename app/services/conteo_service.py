@@ -144,29 +144,20 @@ class ConteoService:
             # DESCUADRE — generar segundo conteo por operario diferente
             sesion.estado = 'SEGUNDO_CONTEO'
             sesion.diferencia = diferencia
-            try:
-                db.session.commit()
-            except Exception as e_commit:
-                db.session.rollback()
-                logger.error(f'[CONTEO] Error al guardar SEGUNDO_CONTEO para sesión {sesion_id}: {e_commit}')
-                raise
 
+            # Commit único: SEGUNDO_CONTEO + hijo atómicos.
+            # Si el proceso muere entre ambas escrituras, el padre queda en SEGUNDO_CONTEO
+            # sin hijo, dejando al operario atascado. Con un solo commit, ambas son
+            # todo-o-nada — Railway restart no puede dejar estado intermedio inválido.
             try:
                 segundo_conteo = ConteoService._crear_segundo_conteo(
                     sesion_origen=sesion,
                     operario_excluido=operario_id
                 )
+                db.session.commit()
             except Exception as e_segundo:
-                # Si no se pudo crear el segundo conteo, revertir estado a EN_PROCESO
-                # para que el operario pueda reintentar — evita quedar atascado en SEGUNDO_CONTEO
-                # sin ningún conteo hijo asociado
-                try:
-                    sesion_fix = SesionConteo.query.filter_by(id=sesion_id).first()
-                    if sesion_fix:
-                        sesion_fix.estado = 'EN_PROCESO'
-                        db.session.commit()
-                except Exception:
-                    pass
+                db.session.rollback()
+                logger.error(f'[CONTEO] Error al crear segundo conteo para sesión {sesion_id}: {e_segundo}')
                 raise ValueError(f'Error al crear segundo conteo: {e_segundo}')
 
             logger.warning(
@@ -329,12 +320,8 @@ class ConteoService:
             segundo.operario_id = otro_operario.id
 
         db.session.add(segundo)
-        try:
-            db.session.commit()
-        except Exception as e_commit:
-            db.session.rollback()
-            logger.error(f'[CONTEO] Error al guardar segundo conteo para sesión {sesion_origen.id}: {e_commit}')
-            raise
+        # No commit aquí — el caller (registrar_conteo) hace un único commit
+        # que incluye tanto el estado SEGUNDO_CONTEO del padre como este hijo.
         return segundo
 
     @staticmethod
@@ -430,112 +417,42 @@ class ConteoService:
         tarea_picking_id = sesion.tarea_picking_id
         producto_codigo_log = producto_ref.codigo if producto_ref else item_codigo
 
-        # Payload para Siesa
-        payload_siesa = {
-            'centro_operacion': '001',
-            'bodega': sesion.ubicacion.almacen.codigo if sesion.ubicacion and sesion.ubicacion.almacen else '',
-            'item_id': item_codigo,
-            'ubicacion': sesion.ubicacion.codigo if sesion.ubicacion else '',
-            'cantidad': cantidad_ajuste,
+        # Payload para la DLQ — incluye todos los campos que el worker necesita
+        # para llamar Siesa Y actualizar el estado local tras completar.
+        payload_dlq = {
+            'sesion_id': sesion_id,
             'motivo_codigo': motivo_codigo,
-            'lote': sesion.lote_id,
+            'item_codigo': item_codigo,
+            'cantidad': cantidad_ajuste,
             'referencia': sesion_codigo,
-            'fecha': datetime.utcnow().isoformat(),
-            'origen': 'WMS_CONTEO_CICLICO'
+            'tarea_picking_id': tarea_picking_id,
+            'ubicacion_id': ubicacion_id,
+            'producto_id': producto_id,
         }
 
-        # Commit: libera el row lock con estado=AJUSTANDO en DB.
-        # Cualquier request concurrente que llegue ahora verá AJUSTANDO y será rechazado
-        # en el guard `if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']`.
+        # Commit único: AJUSTANDO + SiesaJob son atómicos.
+        # Si Railway reinicia después de este commit, el job DLQ se procesa al volver.
+        # Si reinicia antes de este commit, el estado vuelve a SEGUNDO_CONTEO (no hubo cambio).
+        # En ambos casos no hay estado intermedio inválido ni Siesa se llama dos veces.
+        from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar(
+            'AJUSTE_CONTEO',
+            payload_dlq,
+            referencia_tipo='SesionConteo',
+            referencia_id=sesion_id,
+            creado_por_id=supervisor_id,
+        )
         try:
             db.session.commit()
         except Exception as e_lock_release:
             db.session.rollback()
             raise ValueError(f'Error al registrar estado de conteo: {e_lock_release}') from e_lock_release
 
-        # Trigger a Siesa
-        siesa_llamado = False  # distingue fallo Siesa vs fallo commit
-        respuesta = None
-
-        try:
-            respuesta = connekta.enviar_ajuste_inventario(
-                motivo_codigo=motivo_codigo,
-                item_codigo=item_codigo,
-                cantidad=cantidad_ajuste,
-                referencia=sesion_codigo
-            )
-            siesa_llamado = True
-
-            # Re-fetch con lock para el update final (objeto expirado tras commit previo)
-            sesion = (SesionConteo.query
-                      .filter_by(id=sesion_id)
-                      .with_for_update()
-                      .first())
-            sesion.siesa_triggered = True
-            sesion.siesa_response = json.dumps(respuesta)
-            sesion.siesa_triggered_at = datetime.utcnow()
-            sesion.estado = 'AJUSTADO'
-            sesion.fecha_cierre = datetime.utcnow()
-
-            # Desbloquear inventario si vino de una excepción de picking
-            if tarea_picking_id:
-                from app.models.inventario import UbicacionProducto
-                inv = (UbicacionProducto.query
-                       .filter_by(ubicacion_id=ubicacion_id,
-                                  producto_id=producto_id)
-                       .with_for_update().first())
-                if inv:
-                    inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
-                    # Ajustar stock local para consistencia con Siesa
-                    if motivo_codigo == 'AJ-SAL':
-                        inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
-                    else:
-                        inv.cantidad += cantidad_ajuste
-
-            logger.info(
-                f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} aprobado por usuario #{supervisor_id} '
-                f'— {cantidad_ajuste} unidades de {producto_codigo_log} '
-                f'— idempotency_key: {idem_key}'
-            )
-            db.session.commit()
-
-        except Exception as e:
-            db.session.rollback()
-            if siesa_llamado:
-                # Siesa YA procesó el ajuste — guardar siesa_triggered=True para
-                # que el idempotency check evite un segundo envío en el reintento.
-                logger.error(
-                    f'[CONTEO] Siesa procesó el ajuste pero el commit WMS falló: {e} '
-                    f'— marcando siesa_triggered=True para evitar duplicado'
-                )
-                try:
-                    sesion = SesionConteo.query.filter_by(id=sesion_id).first()
-                    sesion.siesa_triggered = True
-                    sesion.siesa_response = json.dumps(respuesta)
-                    sesion.estado = 'AJUSTADO'
-                    db.session.commit()
-                except Exception as commit_err:
-                    logger.critical(
-                        f'[CONTEO CRÍTICO] Siesa YA procesó ajuste sesion={sesion_id} '
-                        f'pero siesa_triggered NO se persistió. Estado queda AJUSTANDO en DB. '
-                        f'NO resetear estado manualmente sin verificar logs de Siesa primero — '
-                        f'resetear puede provocar un segundo envío del mismo ajuste. '
-                        f'Error: {commit_err}'
-                    )
-                raise Exception(f'Ajuste enviado a Siesa pero error guardando en WMS: {e}')
-            else:
-                # Siesa NO fue llamado — restaurar estado a SEGUNDO_CONTEO para que
-                # el supervisor pueda reintentar (AJUSTANDO quedaría bloqueado para siempre)
-                logger.error(f'[CONTEO] Error enviando ajuste a Siesa: {str(e)}')
-                try:
-                    sesion = SesionConteo.query.filter_by(id=sesion_id).first()
-                    sesion.estado = 'SEGUNDO_CONTEO'
-                    sesion.siesa_triggered = False
-                    sesion.siesa_response = str(e)
-                    db.session.commit()
-                except Exception as commit_err:
-                    logger.error(f'[CONTEO] No se pudo restaurar estado SEGUNDO_CONTEO: {commit_err}')
-                raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
+        logger.info(
+            f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} encolado en DLQ por usuario #{supervisor_id} '
+            f'— {cantidad_ajuste} unidades de {producto_codigo_log} '
+            f'— idempotency_key: {idem_key}'
+        )
 
         return sesion
 
