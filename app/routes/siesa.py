@@ -817,7 +817,7 @@ def iniciar_despacho():
                 prioridad=2
             )
             tareas_picking_ids.extend([t.id for t in tareas])
-        except ValueError as e:
+        except (ValueError, TypeError) as e:
             errores.append(str(e))
 
     if not tareas_picking_ids:

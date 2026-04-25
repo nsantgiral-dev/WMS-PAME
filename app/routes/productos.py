@@ -21,10 +21,11 @@ def listar_productos():
     query = Producto.query.filter_by(activo=True)
 
     if buscar:
+        buscar_safe = buscar.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         query = query.filter(
             db.or_(
-                Producto.nombre.ilike(f'%{buscar}%'),
-                Producto.codigo.ilike(f'%{buscar}%')
+                Producto.nombre.ilike(f'%{buscar_safe}%', escape='\\'),
+                Producto.codigo.ilike(f'%{buscar_safe}%', escape='\\')
             )
         )
 

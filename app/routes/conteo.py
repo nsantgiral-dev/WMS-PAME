@@ -53,9 +53,10 @@ def listar_sesiones():
         query = query.filter_by(operario_id=operario_id)
     if categoria:
         from app.models.producto import Producto
+        categoria_safe = categoria.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         query = (query
                  .join(Producto, SesionConteo.producto_id == Producto.id)
-                 .filter(Producto.categoria.ilike(f'%{categoria}%')))
+                 .filter(Producto.categoria.ilike(f'%{categoria_safe}%', escape='\\')))
 
     sesiones = query.paginate(page=page, per_page=30, error_out=False)
 
@@ -131,10 +132,15 @@ def registrar_conteo(id):
         return jsonify({'error': 'cantidad_fisica es requerida'}), 400
 
     try:
+        cantidad_fisica = int(data['cantidad_fisica'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'cantidad_fisica debe ser un entero válido'}), 400
+
+    try:
         resultado = ConteoService.registrar_conteo(
             sesion_id=id,
             operario_id=operario_id,
-            cantidad_fisica=data['cantidad_fisica'],
+            cantidad_fisica=cantidad_fisica,
             lote_id=data.get('lote_id')
         )
         return jsonify(resultado), 200
