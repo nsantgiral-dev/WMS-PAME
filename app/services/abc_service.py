@@ -132,6 +132,16 @@ class ABCService:
         from app.models.picking import TareaPicking
         from app.models.inventario import UbicacionProducto
 
+        # [A3] Advisory lock por almacén — evita ejecuciones concurrentes (scheduler + API manual).
+        # Clave: 3000 + almacen_id (distinto de 2003 del scheduler general para no bloquear entre sí).
+        _lock_key = 3000 + almacen_id
+        _lock_acquired = db.session.execute(
+            db.text(f'SELECT pg_try_advisory_lock({_lock_key})')
+        ).scalar()
+        if not _lock_acquired:
+            logger.info(f'[ABC WATCHDOG] Almacén {almacen_id} — lock no disponible, omitiendo ejecución concurrente')
+            return []
+
         ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
         overrides = []
 
@@ -251,6 +261,9 @@ class ABCService:
             db.session.rollback()
             logger.error(f'[ABC WATCHDOG] Error guardando overrides: {e}')
             raise
+        finally:
+            db.session.execute(db.text(f'SELECT pg_advisory_unlock({_lock_key})'))
+            db.session.commit()
 
         if overrides:
             logger.warning(

@@ -287,7 +287,7 @@ class RecepcionService:
             job_existente = SiesaJob.query.filter_by(
                 referencia_tipo='RecepcionMercancia',
                 referencia_id=recepcion.id,
-            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'REINTENTANDO', 'FALLIDO'])).first()
+            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO'])).first()
             if job_existente:
                 if job_existente.estado == 'FALLIDO':
                     # Rescatar el job caído — DLQ lo procesará en el próximo ciclo
@@ -300,11 +300,48 @@ class RecepcionService:
                         f'para recepcion={recepcion.id} (CONFIRMADA sin siesa_triggered)'
                     )
                 return recepcion
-            # Sin job alguno — situación crítica, intervención manual necesaria
-            logger.critical(
-                f'[RECEPCION] recepcion={recepcion.id} CONFIRMADA pero siesa_triggered=False '
-                f'y sin SiesaJob en DLQ. Intervención manual requerida para generar EntradaOC en Siesa.'
+            # Sin job alguno — re-encolar con los datos disponibles en el registro.
+            # El inventario ya fue ingresado; solo falta crear la entrada contable en Siesa.
+            logger.warning(
+                f'[RECEPCION] recepcion={recepcion.id} CONFIRMADA sin SiesaJob — re-encolando ENTRADA_OC'
             )
+            _items_rec = []
+            for _ir in recepcion.items:
+                if (_ir.cantidad_recibida or 0) <= 0:
+                    continue
+                _cod = (_ir.producto.codigo_siesa or _ir.producto.codigo) if _ir.producto else None
+                if not _cod:
+                    continue
+                _items_rec.append({
+                    'producto_codigo': _cod,
+                    'cantidad_recibida': _ir.cantidad_recibida,
+                    'cantidad_ordenada': _ir.cantidad_ordenada,
+                    'lote': _ir.lote,
+                    'es_parcial': _ir.es_faltante(),
+                    'tipo': _ir.tipo or 'NORMAL',
+                })
+            _job_rec = SiesaJob.encolar(
+                tipo='ENTRADA_OC',
+                payload={
+                    'recepcion_id': recepcion.id,
+                    'numero_oc_siesa': recepcion.numero_oc_siesa,
+                    'id_co_oc': recepcion.co_oc_siesa or '',
+                    'tipo_docto_oc': recepcion.tipo_docto_oc_siesa or '',
+                    'consec_docto_oc': recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
+                    'items': _items_rec,
+                    'es_parcial': recepcion.es_parcial,
+                    'proveedor_id': recepcion.proveedor_codigo or '',
+                    'sucursal_prov': recepcion.sucursal_prov_siesa or '',
+                    'cond_pago': recepcion.cond_pago_siesa or '',
+                    'num_docto_referencia': recepcion.num_remision_prov or None,
+                },
+                referencia_tipo='RecepcionMercancia',
+                referencia_id=recepcion.id,
+            )
+            db.session.commit()
+            from app.services.siesa_job_service import disparar_dlq_inmediato
+            disparar_dlq_inmediato()
+            logger.info(f'[RECEPCION] Job {_job_rec.id} encolado para recepcion={recepcion.id}')
             return recepcion
         if recepcion.estado != 'EN_PROCESO':
             raise ValueError(f'No se puede confirmar en estado {recepcion.estado}')
