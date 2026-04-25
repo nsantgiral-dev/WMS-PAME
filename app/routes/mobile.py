@@ -183,7 +183,7 @@ def reportar_problema():
     Motivos: UBICACION_VACIA | FALTANTE | MERCANCIA_AVERIADA | PRODUCTO_INCORRECTO
     """
     from app.extensions import db
-    from app.models.conteo import SesionConteo
+    from app.models.conteo import SesionConteo, EstadoConteo
 
     operario_id = _operario_id()
     data = request.get_json() or {}
@@ -223,7 +223,7 @@ def reportar_problema():
         if sesion.operario_id != operario_id:
             return jsonify({'error': 'Esta sesión de conteo no te está asignada'}), 403
 
-        sesion.estado = 'BLOQUEADO'
+        sesion.estado = EstadoConteo.BLOQUEADO
         sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
         db.session.commit()
         return jsonify({
@@ -235,7 +235,7 @@ def reportar_problema():
 
     # ── PACKING ──────────────────────────────────────────────────
     if tipo == 'PACKING':
-        from app.models.packing import TareaPacking
+        from app.models.packing import TareaPacking, EstadoPacking
         from app.models.usuario import Usuario
         from app.routes._auth_helpers import _puede_empacar
         u = Usuario.query.get(operario_id)
@@ -245,7 +245,7 @@ def reportar_problema():
         if not tarea:
             return jsonify({'error': f'Tarea packing {tarea_id} no encontrada'}), 404
 
-        tarea.estado = 'BLOQUEADO'
+        tarea.estado = EstadoPacking.BLOQUEADO
         tarea.observaciones = f'[{motivo}] {observaciones or ""}'.strip()
         db.session.commit()
         return jsonify({

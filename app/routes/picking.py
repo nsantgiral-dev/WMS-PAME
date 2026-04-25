@@ -292,6 +292,7 @@ def siguiente_tarea():
             'mensaje': 'No hay tareas pendientes en la cola'
         }), 200
 
+    tarea_id = tarea.id
     tarea.operario_id = operario_id
     tarea.estado = EstadoPicking.EN_PROCESO
     tarea.fecha_inicio = datetime.utcnow()
@@ -299,6 +300,8 @@ def siguiente_tarea():
     tarea.empaques_escaneados = 0
     db.session.commit()
 
+    # Recargar después del commit — expire_on_commit invalida los atributos del objeto
+    tarea = TareaPicking.query.get(tarea_id)
     return jsonify({
         'tarea': tarea.to_dict(),
         'mensaje': 'Tarea asignada automáticamente'

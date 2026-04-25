@@ -130,6 +130,17 @@ class ConnektaGateway:
         solo_digitos = ''.join(c for c in str(valor) if c.isdigit())
         return solo_digitos[:8] if len(solo_digitos) >= 8 else ''
 
+    @staticmethod
+    def _fmt_fecha_iso(valor: str) -> str:
+        """Normaliza cualquier formato de fecha a YYYY-MM-DD (con guiones). Usado en f421_fecha_entrega."""
+        if not valor:
+            return ''
+        solo_digitos = ''.join(c for c in str(valor) if c.isdigit())
+        if len(solo_digitos) >= 8:
+            d = solo_digitos[:8]
+            return f'{d[:4]}-{d[4:6]}-{d[6:8]}'
+        return ''
+
     def _simular(self, operacion: str, payload: dict = None):
         logger.info(f'[CONNEKTA SIMULADO] {operacion}')
         return {
@@ -612,8 +623,9 @@ class ConnektaGateway:
                 'SIESA_TIPO_DOCTO_ENTRADA_OC no está configurado en variables de entorno. '
                 'Agrega la variable en Railway con el código de tipo de documento de entrada OC en Siesa.'
             )
-        # Siesa espera fecha sin guiones: YYYYMMDD (8 chars)
+        # Siesa espera fecha sin guiones: YYYYMMDD (8 chars). f421_fecha_entrega usa YYYY-MM-DD.
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy_iso = datetime.utcnow().strftime('%Y-%m-%d')
 
         # F_CIA debe ser entero según especificación Siesa/Connekta
         cia = int(self.id_cia_siesa)
@@ -685,7 +697,7 @@ class ConnektaGateway:
                     'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
-                    'f421_fecha_entrega': self._fmt_fecha(i.get('fecha_entrega')) or fecha_hoy,
+                    'f421_fecha_entrega': self._fmt_fecha_iso(i.get('fecha_entrega')) or fecha_hoy_iso,
                     'f470_cant_base': round(float(i.get('cantidad_recibida') or 0), 4),  # 4 decimales spec Siesa
                     'f470_cant_2': 0.0,
                     'f470_notas': None,

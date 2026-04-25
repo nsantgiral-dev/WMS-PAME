@@ -371,18 +371,26 @@ class PackingService:
         # [P8] Crear SiesaJob de respaldo ANTES del commit — atómico con los bultos.
         # Si el commit falla, ni los bultos ni el job persisten (sin pérdida silenciosa).
         # Si Siesa falla después, el job ya está en DB como PENDIENTE para DLQ.
-        job_dlq = _SiesaJob.encolar(
-            tipo='DESPACHO_F470',
-            payload={
-                'tarea_id': tarea_id,
-                'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
-                'consec_docto_pedido': consec_para_siesa,
-                'items': items_payload,
-                'numero_pedido_siesa': tarea.numero_pedido_siesa,
-            },
-            referencia_tipo='TareaPacking',
-            referencia_id=tarea_id,
-        )
+        # En reintento (siesa_pendiente=True) puede existir ya un job activo — reutilizarlo.
+        job_dlq = _SiesaJob.query.filter(
+            _SiesaJob.tipo == 'DESPACHO_F470',
+            _SiesaJob.referencia_tipo == 'TareaPacking',
+            _SiesaJob.referencia_id == tarea_id,
+            _SiesaJob.estado.in_(['PENDIENTE', 'REINTENTANDO']),
+        ).first()
+        if not job_dlq:
+            job_dlq = _SiesaJob.encolar(
+                tipo='DESPACHO_F470',
+                payload={
+                    'tarea_id': tarea_id,
+                    'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
+                    'consec_docto_pedido': consec_para_siesa,
+                    'items': items_payload,
+                    'numero_pedido_siesa': tarea.numero_pedido_siesa,
+                },
+                referencia_tipo='TareaPacking',
+                referencia_id=tarea_id,
+            )
         # Commit bultos + SiesaJob en una sola transacción
         db.session.commit()
 

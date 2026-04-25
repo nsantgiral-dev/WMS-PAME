@@ -261,36 +261,57 @@ class ConteoService:
                     logger.info(f'[CONTEO] existencia_siesa desde caché para {producto_codigo_siesa}')
                     return _val
 
-        try:
-            response = connekta.get_inventario_fecha(producto_codigo_siesa)
-            tabla = response.get('detalle', {}).get('Table', [])
-            if not tabla:
-                return 0
-            fila = tabla[0]
-            # API_v2_Inventarios_InvFecha — campo correcto: f400_cant_existencia_1
-            existencia = float(fila.get('f400_cant_existencia_1', 0))
-            with _existencia_cache_lock:
-                _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
-            return existencia
+        # Cache miss — devolver stock local inmediatamente para no bloquear el request (~10s HTTP).
+        # Disparar thread de fondo para refrescar cache; el siguiente conteo del mismo producto
+        # ya tendrá el valor real de Siesa.
+        stock_local = ConteoService._stock_local(producto_codigo_siesa, ubicacion_codigo)
+        ConteoService._refrescar_cache_en_background(producto_codigo_siesa, ubicacion_codigo, lote_id)
+        return stock_local
 
-        except Exception as e:
-            # Timeout o error de red: fallback a stock local para no bloquear al operario
-            logger.warning(f'[CONTEO] Siesa no disponible ({e}) — usando stock local como referencia')
-            from app.models.inventario import UbicacionProducto
-            from app.models.producto import Producto
-            from app.models.ubicacion import Ubicacion
-            producto = (Producto.query
-                        .filter(Producto.codigo_siesa == producto_codigo_siesa)
-                        .first())
-            if not producto:
-                return 0
-            ubicacion = Ubicacion.query.filter_by(codigo=ubicacion_codigo).first()
-            if not ubicacion:
-                return 0
-            reg = UbicacionProducto.query.filter_by(
-                producto_id=producto.id, ubicacion_id=ubicacion.id
-            ).first()
-            return reg.cantidad if reg else 0
+    @staticmethod
+    def _stock_local(producto_codigo_siesa: str, ubicacion_codigo: str) -> float:
+        """Retorna stock local WMS como fallback cuando Siesa no está disponible."""
+        from app.models.inventario import UbicacionProducto
+        from app.models.producto import Producto
+        from app.models.ubicacion import Ubicacion
+        producto = Producto.query.filter(
+            Producto.codigo_siesa == producto_codigo_siesa
+        ).first()
+        if not producto:
+            return 0
+        ubicacion = Ubicacion.query.filter_by(codigo=ubicacion_codigo).first()
+        if not ubicacion:
+            return 0
+        reg = UbicacionProducto.query.filter_by(
+            producto_id=producto.id, ubicacion_id=ubicacion.id
+        ).first()
+        return float(reg.cantidad) if reg else 0
+
+    @staticmethod
+    def _refrescar_cache_en_background(producto_codigo_siesa: str, ubicacion_codigo: str, lote_id: str = None):
+        """Dispara thread de fondo para actualizar cache de existencia Siesa (fire-and-forget)."""
+        from flask import current_app
+        try:
+            app = current_app._get_current_object()
+        except RuntimeError:
+            return  # fuera de contexto Flask, no hay nada que hacer
+
+        _cache_key = (producto_codigo_siesa, ubicacion_codigo, lote_id)
+
+        def _worker():
+            with app.app_context():
+                try:
+                    response = connekta.get_inventario_fecha(producto_codigo_siesa)
+                    tabla = response.get('detalle', {}).get('Table', [])
+                    existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
+                    with _existencia_cache_lock:
+                        _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
+                    logger.info(f'[CONTEO] Cache Siesa actualizado para {producto_codigo_siesa}: {existencia}')
+                except Exception as e:
+                    logger.warning(f'[CONTEO] Refresco cache background falló para {producto_codigo_siesa}: {e}')
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
 
     @staticmethod
     def _crear_segundo_conteo(sesion_origen: SesionConteo, operario_excluido: int):
