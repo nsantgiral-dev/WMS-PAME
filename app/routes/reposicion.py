@@ -240,7 +240,9 @@ def listar_ubicaciones_picking():
     Lista ubicaciones PICKING con sus límites configurados.
     El admin ve aquí qué zonas tienen min/max y cuáles faltan por configurar.
     """
-
+    u = Usuario.query.get(int(get_jwt_identity()))
+    if not u or u.rol not in Roles.ALMACEN:
+        return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     q = Ubicacion.query.filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True)
     if almacen_id:
@@ -288,6 +290,9 @@ def listar_ubicaciones_picking():
 @jwt_required()
 def ubicaciones_huerfanas():
     """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync Siesa)."""
+    u = Usuario.query.get(int(get_jwt_identity()))
+    if not u or u.rol not in Roles.ALMACEN:
+        return jsonify({'error': 'Sin permiso'}), 403
     items = UbicacionHuerfana.query.order_by(
         UbicacionHuerfana.veces_detectada.desc(),
         UbicacionHuerfana.fecha_ultima_vez.desc(),

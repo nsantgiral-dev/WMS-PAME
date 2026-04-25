@@ -13,7 +13,10 @@ picking_bp = Blueprint('picking', __name__)
 @jwt_required()
 def listar_tareas():
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso para listar tareas de picking'}), 403
@@ -52,7 +55,10 @@ def listar_tareas():
 def purgar_picks_cero():
     """Elimina tareas COMPLETADO con cantidad_recogida=0 (registros basura de confirms fallidos)."""
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
@@ -83,7 +89,10 @@ def obtener_tarea(id):
 def crear_tarea():
     # [42] Solo admin, supervisor o jefe_almacen pueden crear tareas de picking manualmente
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — se requiere rol admin, supervisor o jefe_almacen'}), 403
@@ -115,7 +124,10 @@ def crear_tarea():
 @jwt_required()
 def iniciar_tarea(id):
     from app.models.usuario import Usuario
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(usuario_id)
     if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
         return jsonify({'error': 'Sin permiso para iniciar tareas de picking'}), 403
@@ -130,7 +142,10 @@ def iniciar_tarea(id):
 @jwt_required()
 def confirmar_tarea(id):
     from app.models.usuario import Usuario
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(usuario_id)
     if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
         return jsonify({'error': 'Sin permiso para confirmar picking'}), 403
@@ -155,7 +170,10 @@ def confirmar_tarea(id):
 @jwt_required()
 def cancelar_tarea(id):
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — se requiere rol admin, supervisor o jefe_almacen'}), 403
@@ -182,7 +200,10 @@ def reabrir_tarea(id):
     Solo admin o supervisor.
     """
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo admin, supervisor o jefe puede reabrir tareas'}), 403
@@ -217,7 +238,10 @@ def siguiente_tarea():
     Nunca espera asignación manual.
     """
     from app.models.usuario import Usuario
-    operario_id = int(get_jwt_identity())
+    try:
+        operario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(operario_id)
     if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
         return jsonify({'error': 'Sin permiso para recibir tareas de picking'}), 403
@@ -266,7 +290,10 @@ def siguiente_tarea():
 @jwt_required()
 def mis_tareas_activas():
     """Tareas activas del operario actual."""
-    operario_id = int(get_jwt_identity())
+    try:
+        operario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     tareas = TareaPicking.query.filter(
         TareaPicking.operario_id == operario_id,
         TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO])
@@ -310,7 +337,10 @@ def reportar_problema(id):
 @jwt_required()
 def reiniciar_conteo(id):
     """Resetea cantidad_recogida a 0 para que el operario vuelva a escanear desde cero."""
-    operario_id = int(get_jwt_identity())
+    try:
+        operario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     tarea = TareaPicking.query.get_or_404(id)
 
     if tarea.operario_id != operario_id:

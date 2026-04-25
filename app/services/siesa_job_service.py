@@ -184,12 +184,12 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # (evita que la excepción del commit fuerce un reintento → duplicado).
         if tarea and not tarea.siesa_triggered:
             try:
-                from datetime import datetime as _dt
+
                 tarea.siesa_triggered = True
                 tarea.siesa_response = _json.dumps(resultado)
-                tarea.siesa_triggered_at = _dt.utcnow()
+                tarea.siesa_triggered_at = datetime.utcnow()
                 tarea.estado = 'DESPACHADO'
-                tarea.fecha_despachado = _dt.utcnow()
+                tarea.fecha_despachado = datetime.utcnow()
                 db.session.commit()
             except Exception as _e:
                 logger.critical(
@@ -200,7 +200,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 # Emergency: persistir SOLO el flag idempotencia para bloquear re-despacho
                 try:
                     tarea.siesa_triggered = True
-                    tarea.siesa_triggered_at = _dt.utcnow()
+                    tarea.siesa_triggered_at = datetime.utcnow()
                     db.session.commit()
                 except Exception as _e2:
                     db.session.rollback()
@@ -243,10 +243,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Persistir flag con commit propio — misma protección que DESPACHO_F470
         if rec and not rec.siesa_triggered:
             try:
-                from datetime import datetime as _dt
+
                 rec.siesa_triggered = True
                 rec.siesa_response = _json.dumps(resultado)
-                rec.siesa_triggered_at = _dt.utcnow()
+                rec.siesa_triggered_at = datetime.utcnow()
                 db.session.commit()
             except Exception as _e:
                 logger.critical(

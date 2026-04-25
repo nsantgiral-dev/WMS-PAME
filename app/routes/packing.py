@@ -50,7 +50,10 @@ def _picking_listo_batch(numeros_pedido: list) -> dict:
 @jwt_required()
 def listar_tareas():
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'Sin permiso para listar tareas de packing'}), 403
@@ -151,7 +154,10 @@ def crear_manual():
 @jwt_required()
 def iniciar_tarea(id):
     from app.models.usuario import Usuario
-    empacador_id = int(get_jwt_identity())
+    try:
+        empacador_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(empacador_id)
     if not usuario or usuario.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
@@ -166,7 +172,10 @@ def iniciar_tarea(id):
 @jwt_required()
 def escanear_item(id):
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(uid)
     if not usuario or usuario.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
@@ -193,7 +202,10 @@ def escanear_item(id):
 def confirmar_packing(id):
     """Paso 1: verifica ítems → estado VERIFICADO. NO dispara Siesa."""
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'Sin permiso para confirmar packing'}), 403
