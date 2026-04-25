@@ -49,10 +49,20 @@ def _run_sync(app):
                     prods_por_codigo[p.codigo] = p
             logger.info(f'[BARCODE SYNC] Productos en memoria: {len(prods_por_siesa)} (por siesa), {len(prods_por_codigo)} (por codigo)')
 
+            errores_consecutivos = 0
             for pag in range(1, 2001):   # hasta 200 000 barcodes (100/pág)
-                resp = connekta._get(connekta.api_barras, {
-                    'paginacion': f'numPag={pag}|tamPag=100'
-                })
+                try:
+                    resp = connekta._get(connekta.api_barras, {
+                        'paginacion': f'numPag={pag}|tamPag=100'
+                    })
+                    errores_consecutivos = 0
+                except Exception as _e:
+                    errores_consecutivos += 1
+                    logger.warning(f'[BARCODE SYNC] Error en pág {pag}: {_e} (consecutivos: {errores_consecutivos})')
+                    if errores_consecutivos >= 3:
+                        logger.error('[BARCODE SYNC] 3 errores consecutivos — abortando sync')
+                        break
+                    continue
                 rows = resp.get('detalle', {}).get('Table', [])
 
                 if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):

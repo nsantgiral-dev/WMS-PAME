@@ -59,8 +59,18 @@ def _cargar_factores_q35():
     """
     factores = {}
     total_filas = 0
+    _errores_q35 = 0
     for pag in range(1, 2001):
-        resp = connekta.get_items_unidades_medida(pag)
+        try:
+            resp = connekta.get_items_unidades_medida(pag)
+            _errores_q35 = 0
+        except Exception as _e:
+            _errores_q35 += 1
+            logger.warning(f'[EMPAQUES SYNC] Error q35 pág {pag}: {_e} (consecutivos: {_errores_q35})')
+            if _errores_q35 >= 3:
+                logger.error('[EMPAQUES SYNC] 3 errores consecutivos en q35 — abortando')
+                break
+            continue
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
             break
@@ -146,10 +156,20 @@ def _run_sync(app):
             #   f120_referencia        → código Siesa
             #   f131_id                → código de barras
             #   f131_id_unidad_medida  → tipo de unidad (JOIN key con q35)
+            _errores_q28 = 0
             for pag in range(1, 2001):
-                resp = connekta._get(connekta.api_barras, {
-                    'paginacion': f'numPag={pag}|tamPag=100'
-                })
+                try:
+                    resp = connekta._get(connekta.api_barras, {
+                        'paginacion': f'numPag={pag}|tamPag=100'
+                    })
+                    _errores_q28 = 0
+                except Exception as _e:
+                    _errores_q28 += 1
+                    logger.warning(f'[EMPAQUES SYNC] Error q28 pág {pag}: {_e} (consecutivos: {_errores_q28})')
+                    if _errores_q28 >= 3:
+                        logger.error('[EMPAQUES SYNC] 3 errores consecutivos en q28 — abortando')
+                        break
+                    continue
                 rows = resp.get('detalle', {}).get('Table', [])
                 if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
                     break

@@ -90,7 +90,21 @@ def _procesar_jobs_pendientes_interno(_app):
 
 def _run_dlq_jobs():
     """Procesa hasta 20 jobs elegibles. Llamado solo cuando el advisory lock está tomado."""
+    from datetime import timedelta
     ahora = datetime.utcnow()
+
+    # Recuperar jobs atascados en PROCESANDO por más de 10 min (worker colgado / crash)
+    _stuck_cutoff = ahora - timedelta(minutes=10)
+    _stuck = SiesaJob.query.filter(
+        SiesaJob.estado == 'PROCESANDO',
+        SiesaJob.fecha_creacion <= _stuck_cutoff,
+    ).all()
+    if _stuck:
+        for j in _stuck:
+            j.estado = 'PENDIENTE'
+            j.intentos = (j.intentos or 0) + 1
+            logger.warning(f'[DLQ] Job {j.id} stuck PROCESANDO >10min — reset a PENDIENTE (intento {j.intentos})')
+        db.session.commit()
 
     q = SiesaJob.query.filter(
         SiesaJob.estado == 'PENDIENTE',

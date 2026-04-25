@@ -262,7 +262,12 @@ def confirmar_picking(id):
             item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
     s.estado = 'PREPARADO'
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[TRASLADO] Error al confirmar picking {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error interno al confirmar recogida — reintenta'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → PREPARADO (recogida confirmada por usuario {usuario_id})')
     return jsonify({
         'ok': True,
