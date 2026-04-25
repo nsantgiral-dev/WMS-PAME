@@ -42,7 +42,11 @@ reposicion_bp = Blueprint('reposicion', __name__)
 @jwt_required()
 def tarea_actual():
     """Próxima tarea de reposición para el abastecedor."""
+    from app.models.usuario import Usuario
     abastecedor_id = int(get_jwt_identity())
+    u = Usuario.query.get(abastecedor_id)
+    if not u or (not u.puede_abastecer and u.rol not in ('admin', 'supervisor', 'jefe_almacen')):
+        return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
     tarea = get_tarea_abastecedor(abastecedor_id)
     if not tarea:
         return jsonify({'sin_tareas': True, 'mensaje': 'No hay reposiciones pendientes'}), 200
@@ -53,7 +57,11 @@ def tarea_actual():
 @jwt_required()
 def mis_tareas():
     """Todas las tareas activas del abastecedor."""
+    from app.models.usuario import Usuario
     abastecedor_id = int(get_jwt_identity())
+    u = Usuario.query.get(abastecedor_id)
+    if not u or (not u.puede_abastecer and u.rol not in ('admin', 'supervisor', 'jefe_almacen')):
+        return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
     tareas = get_tareas_abastecedor(abastecedor_id)
     return jsonify({'tareas': tareas, 'total': len(tareas)}), 200
 
@@ -66,7 +74,11 @@ def confirmar():
 
     Payload: { tarea_id, lpn_codigo (opcional — para validar escaneo) }
     """
+    from app.models.usuario import Usuario
     abastecedor_id = int(get_jwt_identity())
+    u = Usuario.query.get(abastecedor_id)
+    if not u or (not u.puede_abastecer and u.rol not in ('admin', 'supervisor', 'jefe_almacen')):
+        return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
     data = request.get_json() or {}
 
     tarea_id = data.get('tarea_id')
@@ -291,6 +303,11 @@ def jobs_fallidos():
     Alerta roja — jobs que fallaron 3 veces y necesitan intervención manual.
     El admin verifica el periodo contable en Siesa y luego reintenta.
     """
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+        return jsonify({'error': 'Sin permiso'}), 403
     jobs = get_jobs_fallidos()
     return jsonify({
         'total': len(jobs),
@@ -303,6 +320,11 @@ def jobs_fallidos():
 @jwt_required()
 def reintentar_job(job_id):
     """Admin fuerza un reintento de un job FALLIDO."""
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+        return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen puede reintentar jobs'}), 403
     try:
         resultado = _reintentar(job_id)
         return jsonify({'ok': True, 'job': resultado}), 200

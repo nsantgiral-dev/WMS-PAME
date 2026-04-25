@@ -23,6 +23,7 @@ Retorna:
 """
 
 import logging
+from sqlalchemy import func
 from app.extensions import db
 from app.models.ubicacion import Ubicacion
 from app.models.inventario import UbicacionProducto
@@ -45,12 +46,31 @@ def pre_verificar_ola(items: list, almacen_id: int) -> dict:
     items_con_alerta = []
     reposiciones_generadas = 0
 
+    # Pre-cargar stock de PICKING para todos los productos en una sola query
+    producto_ids = [item['producto_id'] for item in items]
+    stock_rows = (
+        db.session.query(
+            UbicacionProducto.producto_id,
+            func.sum(UbicacionProducto.cantidad - func.coalesce(UbicacionProducto.reservado, 0)).label('disponible')
+        )
+        .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+        .filter(
+            UbicacionProducto.producto_id.in_(producto_ids),
+            Ubicacion.almacen_id == almacen_id,
+            Ubicacion.tipo_zona == 'PICKING',
+            Ubicacion.activo == True,
+        )
+        .group_by(UbicacionProducto.producto_id)
+        .all()
+    )
+    _stock_map = {row.producto_id: max(0, int(row.disponible or 0)) for row in stock_rows}
+
     for item in items:
         producto_id = item['producto_id']
         cantidad_demandada = item['cantidad']
 
-        # Stock disponible SOLO en zonas PICKING
-        stock_picking = _stock_disponible_picking(producto_id, almacen_id)
+        # Stock disponible SOLO en zonas PICKING (sin query adicional por item)
+        stock_picking = _stock_map.get(producto_id, 0)
 
         if stock_picking >= cantidad_demandada:
             items_ok.append({

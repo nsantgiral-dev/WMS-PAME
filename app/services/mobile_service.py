@@ -120,11 +120,12 @@ class MobileService:
         Si ya tiene una tarea en proceso la devuelve.
         Si no, toma la siguiente de la cola global.
         """
-        # Verificar si ya tiene tarea activa
-        tarea_activa = TareaPicking.query.filter_by(
-            operario_id=operario_id,
-            estado='EN_PROCESO'
-        ).first()
+        # Verificar si ya tiene tarea activa — eager-load relaciones para evitar lazy queries
+        from sqlalchemy.orm import joinedload as _jl
+        tarea_activa = (TareaPicking.query
+                        .options(_jl(TareaPicking.producto), _jl(TareaPicking.ubicacion))
+                        .filter_by(operario_id=operario_id, estado='EN_PROCESO')
+                        .first())
 
         if tarea_activa:
             return {

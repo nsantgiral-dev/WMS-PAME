@@ -140,6 +140,11 @@ def confirmar_tarea(id):
 @picking_bp.route('/<int:id>/cancelar', methods=['PUT'])
 @jwt_required()
 def cancelar_tarea(id):
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+        return jsonify({'error': 'Sin permiso — se requiere rol admin, supervisor o jefe_almacen'}), 403
     data = request.get_json() or {}
     try:
         tarea = PickingService.cancelar_picking(

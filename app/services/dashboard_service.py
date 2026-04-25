@@ -80,41 +80,36 @@ class DashboardService:
         hoy = datetime.utcnow().date()
         inicio_hoy = datetime.combine(hoy, datetime.min.time())
 
-        # --- PICKING ---
-        picking_pendiente = TareaPicking.query.filter_by(
-            almacen_id=almacen_id, estado='PENDIENTE'
-        ).count()
+        # --- PICKING — 3 counts en 1 query con aggregación condicional ---
+        p_row = db.session.query(
+            func.count(TareaPicking.id).filter(TareaPicking.estado == 'PENDIENTE').label('pendiente'),
+            func.count(TareaPicking.id).filter(TareaPicking.estado == 'EN_PROCESO').label('en_proceso'),
+            func.count(TareaPicking.id).filter(
+                TareaPicking.estado == 'COMPLETADO',
+                TareaPicking.fecha_completado >= inicio_hoy
+            ).label('completado_hoy'),
+        ).filter(TareaPicking.almacen_id == almacen_id).one()
+        picking_pendiente      = p_row.pendiente
+        picking_en_proceso     = p_row.en_proceso
+        picking_completado_hoy = p_row.completado_hoy
 
-        picking_en_proceso = TareaPicking.query.filter_by(
-            almacen_id=almacen_id, estado='EN_PROCESO'
-        ).count()
-
-        picking_completado_hoy = TareaPicking.query.filter(
-            TareaPicking.almacen_id == almacen_id,
-            TareaPicking.estado == 'COMPLETADO',
-            TareaPicking.fecha_completado >= inicio_hoy
-        ).count()
-
-        # --- PACKING ---
-        packing_pendiente = TareaPacking.query.filter_by(
-            almacen_id=almacen_id, estado='PENDIENTE'
-        ).count()
-
-        packing_en_proceso = TareaPacking.query.filter_by(
-            almacen_id=almacen_id, estado='EN_PROCESO'
-        ).count()
-
-        packing_completado_hoy = TareaPacking.query.filter(
-            TareaPacking.almacen_id == almacen_id,
-            TareaPacking.estado == 'VERIFICADO',
-            TareaPacking.fecha_verificado >= inicio_hoy
-        ).count()
-
-        siesa_triggers_hoy = TareaPacking.query.filter(
-            TareaPacking.almacen_id == almacen_id,
-            TareaPacking.siesa_triggered == True,
-            TareaPacking.siesa_triggered_at >= inicio_hoy
-        ).count()
+        # --- PACKING — 3 counts en 1 query ---
+        pk_row = db.session.query(
+            func.count(TareaPacking.id).filter(TareaPacking.estado == 'PENDIENTE').label('pendiente'),
+            func.count(TareaPacking.id).filter(TareaPacking.estado == 'EN_PROCESO').label('en_proceso'),
+            func.count(TareaPacking.id).filter(
+                TareaPacking.estado == 'VERIFICADO',
+                TareaPacking.fecha_verificado >= inicio_hoy
+            ).label('completado_hoy'),
+            func.count(TareaPacking.id).filter(
+                TareaPacking.siesa_triggered == True,
+                TareaPacking.siesa_triggered_at >= inicio_hoy
+            ).label('siesa_hoy'),
+        ).filter(TareaPacking.almacen_id == almacen_id).one()
+        packing_pendiente      = pk_row.pendiente
+        packing_en_proceso     = pk_row.en_proceso
+        packing_completado_hoy = pk_row.completado_hoy
+        siesa_triggers_hoy     = pk_row.siesa_hoy
 
         # --- RECEPCIÓN ---
         recepciones_hoy = RecepcionMercancia.query.filter(
@@ -122,20 +117,18 @@ class DashboardService:
             RecepcionMercancia.fecha_confirmacion >= inicio_hoy
         ).count()
 
-        # --- CONTEO CÍCLICO ---
-        conteos_pendientes = SesionConteo.query.filter_by(
-            almacen_id=almacen_id, estado='PENDIENTE'
-        ).count()
-
-        conteos_descuadre = SesionConteo.query.filter_by(
-            almacen_id=almacen_id, estado='SEGUNDO_CONTEO'
-        ).count()
-
-        conteos_match_hoy = SesionConteo.query.filter(
-            SesionConteo.almacen_id == almacen_id,
-            SesionConteo.estado == 'MATCH',
-            SesionConteo.fecha_cierre >= inicio_hoy
-        ).count()
+        # --- CONTEO CÍCLICO — 3 counts en 1 query ---
+        c_row = db.session.query(
+            func.count(SesionConteo.id).filter(SesionConteo.estado == 'PENDIENTE').label('pendientes'),
+            func.count(SesionConteo.id).filter(SesionConteo.estado == 'SEGUNDO_CONTEO').label('descuadre'),
+            func.count(SesionConteo.id).filter(
+                SesionConteo.estado == 'MATCH',
+                SesionConteo.fecha_cierre >= inicio_hoy
+            ).label('match_hoy'),
+        ).filter(SesionConteo.almacen_id == almacen_id).one()
+        conteos_pendientes = c_row.pendientes
+        conteos_descuadre  = c_row.descuadre
+        conteos_match_hoy  = c_row.match_hoy
 
         # --- ALERTAS DE STOCK — misma lógica que alertas_stock() ---
         stock_sub = db.session.query(
@@ -335,34 +328,46 @@ class DashboardService:
 
     @staticmethod
     def kpis_traslados_rutas():
-        """KPIs de traslados y rutas para el resumen completo del dashboard."""
-        from datetime import datetime, timedelta
+        """KPIs de traslados y rutas — 4 counts en 2 queries con agregación condicional."""
         from app.models.traslado import SolicitudTraslado
         from app.models.ruta_despacho import RutaDespacho
 
         hoy = datetime.utcnow().date()
         inicio_hoy = datetime.combine(hoy, datetime.min.time())
 
-        traslados = {
-            'en_picking':     SolicitudTraslado.query.filter_by(estado='EN_PICKING').count(),
-            'preparado':      SolicitudTraslado.query.filter_by(estado='PREPARADO').count(),
-            'en_transito':    SolicitudTraslado.query.filter_by(estado='EN_TRANSITO').count(),
-            'entregadas_hoy': SolicitudTraslado.query.filter(
+        t_row = db.session.query(
+            func.count(SolicitudTraslado.id).filter(SolicitudTraslado.estado == 'EN_PICKING').label('en_picking'),
+            func.count(SolicitudTraslado.id).filter(SolicitudTraslado.estado == 'PREPARADO').label('preparado'),
+            func.count(SolicitudTraslado.id).filter(SolicitudTraslado.estado == 'EN_TRANSITO').label('en_transito'),
+            func.count(SolicitudTraslado.id).filter(
                 SolicitudTraslado.estado == 'ENTREGADA',
                 SolicitudTraslado.fecha_entrega >= inicio_hoy
-            ).count(),
+            ).label('entregadas_hoy'),
+        ).one()
+
+        r_row = db.session.query(
+            func.count(RutaDespacho.id).filter(RutaDespacho.estado == 'EN_CARGUE').label('en_cargue'),
+            func.count(RutaDespacho.id).filter(RutaDespacho.estado == 'EN_TRANSITO').label('en_transito'),
+            func.count(RutaDespacho.id).filter(
+                RutaDespacho.estado == 'ENTREGADA',
+                RutaDespacho.fecha_entregada >= inicio_hoy
+            ).label('entregadas_hoy'),
+        ).one()
+
+        traslados = {
+            'en_picking':     t_row.en_picking,
+            'preparado':      t_row.preparado,
+            'en_transito':    t_row.en_transito,
+            'entregadas_hoy': t_row.entregadas_hoy,
         }
         traslados['total_activos'] = (
             traslados['en_picking'] + traslados['preparado'] + traslados['en_transito']
         )
 
         rutas = {
-            'en_cargue':      RutaDespacho.query.filter_by(estado='EN_CARGUE').count(),
-            'en_transito':    RutaDespacho.query.filter_by(estado='EN_TRANSITO').count(),
-            'entregadas_hoy': RutaDespacho.query.filter(
-                RutaDespacho.estado == 'ENTREGADA',
-                RutaDespacho.fecha_entregada >= inicio_hoy
-            ).count(),
+            'en_cargue':      r_row.en_cargue,
+            'en_transito':    r_row.en_transito,
+            'entregadas_hoy': r_row.entregadas_hoy,
         }
 
         return {'traslados': traslados, 'rutas': rutas}

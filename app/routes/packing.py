@@ -144,7 +144,11 @@ def crear_manual():
 @packing_bp.route('/<int:id>/iniciar', methods=['PUT'])
 @jwt_required()
 def iniciar_tarea(id):
+    from app.models.usuario import Usuario
     empacador_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(empacador_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+        return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
     try:
         tarea = PackingService.iniciar(id, empacador_id)
         return jsonify(tarea.to_dict()), 200
@@ -155,6 +159,11 @@ def iniciar_tarea(id):
 @packing_bp.route('/<int:id>/escanear', methods=['POST'])
 @jwt_required()
 def escanear_item(id):
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    usuario = Usuario.query.get(uid)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+        return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad_real']
     for campo in requeridos:

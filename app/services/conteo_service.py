@@ -336,10 +336,15 @@ class ConteoService:
         sesion.idempotency_key = idem_key
         sesion.aprobador_id = supervisor_id
 
-        # Capturar referencia al producto ANTES del try para evitar doble ajuste si
-        # el objeto queda en estado inválido tras una excepción parcial
+        # Capturar referencias a atributos ANTES del commit intermedio
+        # (expire_on_commit=True invalida el objeto tras cada commit)
         producto_ref = sesion.producto
         item_codigo = sesion.producto_codigo_siesa or (producto_ref.codigo if producto_ref else '')
+        sesion_codigo = sesion.codigo
+        ubicacion_id = sesion.ubicacion_id
+        producto_id = sesion.producto_id
+        tarea_picking_id = sesion.tarea_picking_id
+        producto_codigo_log = producto_ref.codigo if producto_ref else item_codigo
 
         # Payload para Siesa
         payload_siesa = {
@@ -350,23 +355,35 @@ class ConteoService:
             'cantidad': cantidad_ajuste,
             'motivo_codigo': motivo_codigo,
             'lote': sesion.lote_id,
-            'referencia': sesion.codigo,
+            'referencia': sesion_codigo,
             'fecha': datetime.utcnow().isoformat(),
             'origen': 'WMS_CONTEO_CICLICO'
         }
 
+        # Liberar el row lock ANTES de la llamada HTTP a Siesa.
+        # with_for_update() mantiene el lock hasta el commit — si lo dejamos
+        # activo durante la llamada HTTP (hasta 30s timeout) bloqueamos
+        # cualquier otra operación sobre esta sesión.
+        db.session.commit()
+
         # Trigger a Siesa
-        tipo_ajuste = 'ENTRADA' if diferencia > 0 else 'SALIDA'
         siesa_llamado = False  # distingue fallo Siesa vs fallo commit
+        respuesta = None
 
         try:
             respuesta = connekta.enviar_ajuste_inventario(
                 motivo_codigo=motivo_codigo,
                 item_codigo=item_codigo,
                 cantidad=cantidad_ajuste,
-                referencia=sesion.codigo
+                referencia=sesion_codigo
             )
             siesa_llamado = True
+
+            # Re-fetch con lock para el update final (objeto expirado tras commit previo)
+            sesion = (SesionConteo.query
+                      .filter_by(id=sesion_id)
+                      .with_for_update()
+                      .first())
             sesion.siesa_triggered = True
             sesion.siesa_response = json.dumps(respuesta)
             sesion.siesa_triggered_at = datetime.utcnow()
@@ -374,11 +391,11 @@ class ConteoService:
             sesion.fecha_cierre = datetime.utcnow()
 
             # Desbloquear inventario si vino de una excepción de picking
-            if sesion.tarea_picking_id:
+            if tarea_picking_id:
                 from app.models.inventario import UbicacionProducto
                 inv = (UbicacionProducto.query
-                       .filter_by(ubicacion_id=sesion.ubicacion_id,
-                                  producto_id=sesion.producto_id)
+                       .filter_by(ubicacion_id=ubicacion_id,
+                                  producto_id=producto_id)
                        .with_for_update().first())
                 if inv:
                     inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
@@ -390,7 +407,7 @@ class ConteoService:
 
             logger.info(
                 f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} aprobado por usuario #{supervisor_id} '
-                f'— {cantidad_ajuste} unidades de {producto_ref.codigo if producto_ref else item_codigo} '
+                f'— {cantidad_ajuste} unidades de {producto_codigo_log} '
                 f'— idempotency_key: {idem_key}'
             )
             db.session.commit()
@@ -405,6 +422,7 @@ class ConteoService:
                     f'— marcando siesa_triggered=True para evitar duplicado'
                 )
                 try:
+                    sesion = SesionConteo.query.filter_by(id=sesion_id).first()
                     sesion.siesa_triggered = True
                     sesion.siesa_response = json.dumps(respuesta)
                     sesion.estado = 'AJUSTADO'
@@ -414,9 +432,13 @@ class ConteoService:
                 raise Exception(f'Ajuste enviado a Siesa pero error guardando en WMS: {e}')
             else:
                 logger.error(f'[CONTEO] Error enviando ajuste a Siesa: {str(e)}')
-                sesion.siesa_triggered = False
-                sesion.siesa_response = str(e)
-                db.session.commit()
+                try:
+                    sesion = SesionConteo.query.filter_by(id=sesion_id).first()
+                    sesion.siesa_triggered = False
+                    sesion.siesa_response = str(e)
+                    db.session.commit()
+                except Exception as commit_err:
+                    logger.error(f'[CONTEO] No se pudo actualizar siesa_response: {commit_err}')
                 raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
 
         return sesion

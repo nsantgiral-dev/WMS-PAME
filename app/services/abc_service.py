@@ -334,17 +334,24 @@ class ABCService:
             ).all()
             activos_set = {(s.ubicacion_id, s.producto_id) for s in sesiones_activas}
 
-            # Pre-cargar último conteo completado por (producto_id, ubicacion_id)
-            sesiones_completadas = SesionConteo.query.filter(
-                SesionConteo.producto_id.in_(producto_ids),
-                SesionConteo.ubicacion_id.in_(ubic_ids_all),
-                SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
-            ).order_by(SesionConteo.fecha_cierre.desc()).all()
-            ultimo_por_par = {}
-            for s in sesiones_completadas:
-                key = (s.producto_id, s.ubicacion_id)
-                if key not in ultimo_por_par:
-                    ultimo_por_par[key] = s.fecha_cierre
+            # Pre-cargar fecha del último conteo completado por (producto_id, ubicacion_id)
+            # GROUP BY en SQL evita cargar todas las filas históricas en memoria
+            from sqlalchemy import func as _func
+            ultimo_rows = (
+                db.session.query(
+                    SesionConteo.producto_id,
+                    SesionConteo.ubicacion_id,
+                    _func.max(SesionConteo.fecha_cierre).label('ultima')
+                )
+                .filter(
+                    SesionConteo.producto_id.in_(producto_ids),
+                    SesionConteo.ubicacion_id.in_(ubic_ids_all),
+                    SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
+                )
+                .group_by(SesionConteo.producto_id, SesionConteo.ubicacion_id)
+                .all()
+            )
+            ultimo_por_par = {(r.producto_id, r.ubicacion_id): r.ultima for r in ultimo_rows}
         else:
             activos_set = set()
             ultimo_por_par = {}
