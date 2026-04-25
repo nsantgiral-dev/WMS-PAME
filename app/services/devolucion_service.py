@@ -20,6 +20,7 @@ from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.ubicacion import Ubicacion
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
+from sqlalchemy.exc import IntegrityError as _IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,24 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             fecha_ingreso=datetime.utcnow()
         )
         db.session.add(reg)
-        db.session.flush()
+        try:
+            db.session.flush()
+        except _IntegrityError:
+            # Race condition: otro worker insertó la fila entre el SELECT y el INSERT.
+            # Releer con lock y sumar.
+            db.session.rollback()
+            reg = (UbicacionProducto.query.filter_by(
+                ubicacion_id=ub.id,
+                producto_id=tarea.producto_id,
+                lote=None
+            ).with_for_update().first())
+            if reg:
+                reg.cantidad += tarea.cantidad_diferencia
+                reg.row_version += 1
+            else:
+                raise ValueError(
+                    f'No se pudo obtener/crear UbicacionProducto para ubicación {ub.codigo}'
+                )
 
     # Movimiento de inventario
     mov = MovimientoInventario(

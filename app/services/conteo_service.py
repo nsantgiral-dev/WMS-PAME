@@ -282,6 +282,14 @@ class ConteoService:
                 try:
                     response = connekta.get_inventario_fecha(producto_codigo_siesa)
                     tabla = response.get('detalle', {}).get('Table', [])
+                    if not tabla:
+                        # Siesa devolvió tabla vacía: producto sin registros en Siesa o
+                        # posible error parcial del API. Se cachea 0.0 — si el operario
+                        # cuenta unidades, se generará AJ-ENT. Verificar en Siesa si es correcto.
+                        logger.warning(
+                            f'[CONTEO] Siesa devolvió Table vacío para {producto_codigo_siesa} '
+                            f'— cacheando existencia=0.0. Verificar si el producto existe en Siesa.'
+                        )
                     existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
                     with _existencia_cache_lock:
                         _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
