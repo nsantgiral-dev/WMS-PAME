@@ -538,5 +538,36 @@ class RecepcionService:
             db.session.commit()
             raise Exception(f'Error al comunicar con Siesa: {str(e)}. La recepción fue confirmada en WMS — Siesa se reintentará automáticamente.')
 
-        db.session.commit()
+        # [P8] Emergency commit — si este commit falla, persiste solo siesa_triggered para que
+        # el DLQ no reintente una EntradaOC que Siesa ya procesó
+        _recepcion_id = recepcion.id
+        _job_dlq_id = job_dlq.id
+        _respuesta = recepcion.siesa_response
+        try:
+            db.session.commit()
+        except Exception as e_commit:
+            db.session.rollback()
+            logger.critical(
+                f'[RECEPCION] Siesa OK pero commit principal falló para recepcion={_recepcion_id}: {e_commit}. '
+                f'Intentando emergency commit para evitar DLQ duplicado.'
+            )
+            try:
+                from app.models.recepcion import RecepcionMercancia
+                from app.models.siesa_job import SiesaJob
+                r_emerg = RecepcionMercancia.query.get(_recepcion_id)
+                j_emerg = SiesaJob.query.get(_job_dlq_id)
+                if r_emerg:
+                    r_emerg.siesa_triggered = True
+                    r_emerg.siesa_triggered_at = datetime.utcnow()
+                    r_emerg.siesa_response = _respuesta
+                if j_emerg:
+                    j_emerg.marcar_completado({'emergency': True})
+                db.session.commit()
+                logger.info(f'[RECEPCION] Emergency commit OK para recepcion={_recepcion_id}')
+            except Exception as e_emerg:
+                db.session.rollback()
+                logger.critical(
+                    f'[RECEPCION] DOBLE FALLO — siesa_triggered NO persiste para recepcion={_recepcion_id}. '
+                    f'DLQ puede duplicar EntradaOC. Error: {e_emerg}'
+                )
         return recepcion

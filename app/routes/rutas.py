@@ -64,11 +64,11 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
 
     for b in bultos_tarea:
         if b.id in ids_rechazados_set:
-            b.estado = 'RECHAZADO'
+            b.estado = EstadoBulto.RECHAZADO
             b.motivo_rechazo = data.get('observaciones', 'Rechazado en entrega')[:100]
             b.fecha_entrega = ahora
         else:
-            b.estado = 'ENTREGADO'
+            b.estado = EstadoBulto.ENTREGADO
             b.fecha_entrega = ahora
 
     recaudo = RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id).first()
@@ -598,7 +598,7 @@ def entregar_ruta(id):
                 bulto.motivo_rechazo = conf.get('motivo_rechazo', 'Sin especificar') if conf else 'Sin especificar'
                 rechazados += 1
 
-    ruta.estado = 'ENTREGADA'
+    ruta.estado = EstadoRutaDespacho.ENTREGADA
     ruta.fecha_entregada = ahora
     db.session.commit()
 
@@ -652,7 +652,7 @@ def usuarios_conductores():
 def bultos_rechazados():
     """Bultos rechazados en entrega — aparecen en panel recepcionista para re-ingresar."""
     bultos = (Bulto.query
-              .filter_by(estado='RECHAZADO')
+              .filter_by(estado=EstadoBulto.RECHAZADO)
               .order_by(Bulto.fecha_entrega.desc())
               .all())
     return jsonify({'bultos': [b.to_dict() for b in bultos], 'total': len(bultos)}), 200
@@ -788,8 +788,8 @@ def planilla_ruta(id):
             'cliente':        t.cliente or '',
             'municipio':      t.municipio or '',
             'bultos_total':   len(bultos_t),
-            'bultos_entregados': sum(1 for b in bultos_t if b.estado == 'ENTREGADO'),
-            'bultos_rechazados': sum(1 for b in bultos_t if b.estado == 'RECHAZADO'),
+            'bultos_entregados': sum(1 for b in bultos_t if b.estado == EstadoBulto.ENTREGADO),
+            'bultos_rechazados': sum(1 for b in bultos_t if b.estado == EstadoBulto.RECHAZADO),
             'recaudo':        r.to_dict() if r else None,
         }
         paradas.append(parada)
@@ -876,14 +876,14 @@ def forzar_cierre_ruta(id):
     for tarea in pendientes:
         bultos_tarea = Bulto.query.filter_by(tarea_id=tarea.id, ruta_despacho_id=id).all()
         for b in bultos_tarea:
-            b.estado = 'RECHAZADO'
+            b.estado = EstadoBulto.RECHAZADO
             b.motivo_rechazo = 'Cierre forzado por admin'
             b.fecha_entrega = ahora
 
         recaudo = RecaudoEntrega(
             ruta_id=id,
             tarea_id=tarea.id,
-            estado_entrega='RECHAZADO',
+            estado_entrega=EstadoEntrega.RECHAZADO,
             forma_pago=None,
             monto_cobrado=0,
             observaciones='Cierre forzado por administrador — parada no gestionada',
@@ -893,7 +893,7 @@ def forzar_cierre_ruta(id):
         db.session.add(recaudo)
         auto_cerradas += 1
 
-    ruta.estado = 'ENTREGADA'
+    ruta.estado = EstadoRutaDespacho.ENTREGADA
     ruta.estado_financiero = 'LIQUIDADA'
     ruta.fecha_cierre = ahora
     db.session.commit()

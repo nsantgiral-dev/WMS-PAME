@@ -160,8 +160,24 @@ def _run_sync(app):
                     for d in items_nb1
                 }
 
+                # Limitar a 10 verificaciones por ciclo — evita que el job tarde
+                # 20+ minutos con 50 packings no comprometidos (N × 30s timeout)
+                _MAX_VERIFICAR = 10
+                _pendientes_verificar = [
+                    pk for pk in packings_vivos
+                    if pk.numero_pedido_siesa not in numeros_comprometidos_siesa
+                ][:_MAX_VERIFICAR]
+                if len(_pendientes_verificar) < sum(
+                    1 for pk in packings_vivos
+                    if pk.numero_pedido_siesa not in numeros_comprometidos_siesa
+                ):
+                    logger.warning(
+                        f'[PEDIDOS_SYNC] Verificación de anulados limitada a {_MAX_VERIFICAR} '
+                        f'por ciclo para proteger el scheduler. Habrá más en el próximo ciclo.'
+                    )
+
                 anulados_detectados = []
-                for pk in packings_vivos:
+                for pk in _pendientes_verificar:
                     if pk.numero_pedido_siesa not in numeros_comprometidos_siesa:
                         # Verificar el estado real en Siesa para este pedido puntual
                         estado_real = connekta.get_estado_pedido(

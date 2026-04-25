@@ -388,7 +388,15 @@ def reintentar_job(job_id):
 @reposicion_bp.route('/siesa-jobs', methods=['GET'])
 @jwt_required()
 def listar_jobs():
-    """Lista todos los jobs (filtrable por estado)."""
+    """Lista todos los jobs (filtrable por estado). Solo supervisores y admin."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen'}), 403
     estado = request.args.get('estado')
     q = SiesaJob.query.order_by(SiesaJob.fecha_creacion.desc())
     if estado:

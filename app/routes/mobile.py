@@ -184,6 +184,9 @@ def reportar_problema():
         sesion = SesionConteo.query.get(tarea_id)
         if not sesion:
             return jsonify({'error': f'Sesión de conteo {tarea_id} no encontrada'}), 404
+        # Solo el operario asignado puede reportar problema en su propio conteo
+        if sesion.operario_id != operario_id:
+            return jsonify({'error': 'Esta sesión de conteo no te está asignada'}), 403
 
         sesion.estado = 'BLOQUEADO'
         sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
@@ -198,6 +201,10 @@ def reportar_problema():
     # ── PACKING ──────────────────────────────────────────────────
     if tipo == 'PACKING':
         from app.models.packing import TareaPacking
+        from app.models.usuario import Usuario
+        u = Usuario.query.get(operario_id)
+        if not u or u.rol not in ('admin', 'supervisor', 'empacador') and not getattr(u, 'puede_empacar', False):
+            return jsonify({'error': 'Sin permiso para reportar problemas de packing'}), 403
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             return jsonify({'error': f'Tarea packing {tarea_id} no encontrada'}), 404

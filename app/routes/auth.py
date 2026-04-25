@@ -71,6 +71,7 @@ def register():
         puede_abastecer=data.get('puede_abastecer', False),
         capacidad_diaria_conteo=_cap,
         bodega_siesa_id=data.get('bodega_siesa_id'),
+        siesa_co_id=data.get('siesa_co_id'),
         nombre_punto_venta=data.get('nombre_punto_venta'),
     )
     usuario.set_password(data['password'])

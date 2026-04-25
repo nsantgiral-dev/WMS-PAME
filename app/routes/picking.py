@@ -80,7 +80,18 @@ def purgar_picks_cero():
 @picking_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_tarea(id):
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u:
+        return jsonify({'error': 'Usuario no encontrado'}), 401
     tarea = TareaPicking.query.get_or_404(id)
+    # Operarios solo ven sus propias tareas; supervisores/admin ven todo
+    if u.rol not in Roles.SUPERVISION and tarea.operario_id != uid:
+        return jsonify({'error': 'Sin permiso para ver esta tarea'}), 403
     return jsonify(tarea.to_dict()), 200
 
 

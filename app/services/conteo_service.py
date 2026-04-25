@@ -6,12 +6,20 @@ La conciliación se hace en tiempo real contra Siesa.
 import uuid
 import json
 import logging
+import threading
 from datetime import datetime
 from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
+
+# Caché de existencias Siesa: evita llamadas HTTP duplicadas cuando varios
+# operarios cuentan el mismo producto en la misma ventana de ~90s.
+# El conteo cíclico no necesita exactitud al segundo — 90s es irrelevante operativamente.
+_existencia_cache: dict = {}   # {(codigo, ubicacion, lote): (existencia, ts)}
+_existencia_cache_lock = threading.Lock()
+_CACHE_TTL_SEGUNDOS = 90
 
 
 class ConteoService:
@@ -203,6 +211,17 @@ class ConteoService:
 
             return reg.cantidad if reg else 0
 
+        # Caché de 90s — reduce llamadas HTTP cuando varios operarios
+        # cuentan el mismo producto en una ventana corta
+        _cache_key = (producto_codigo_siesa, ubicacion_codigo, lote_id)
+        with _existencia_cache_lock:
+            _cached = _existencia_cache.get(_cache_key)
+            if _cached:
+                _val, _ts = _cached
+                if (datetime.utcnow() - _ts).total_seconds() < _CACHE_TTL_SEGUNDOS:
+                    logger.info(f'[CONTEO] existencia_siesa desde caché para {producto_codigo_siesa}')
+                    return _val
+
         try:
             response = connekta.get_inventario_fecha(producto_codigo_siesa)
             tabla = response.get('detalle', {}).get('Table', [])
@@ -210,7 +229,10 @@ class ConteoService:
                 return 0
             fila = tabla[0]
             # API_v2_Inventarios_InvFecha — campo correcto: f400_cant_existencia_1
-            return float(fila.get('f400_cant_existencia_1', 0))
+            existencia = float(fila.get('f400_cant_existencia_1', 0))
+            with _existencia_cache_lock:
+                _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
+            return existencia
 
         except Exception as e:
             # Timeout o error de red: fallback a stock local para no bloquear al operario
@@ -451,7 +473,13 @@ class ConteoService:
                     sesion.estado = 'AJUSTADO'
                     db.session.commit()
                 except Exception as commit_err:
-                    logger.error(f'[CONTEO] No se pudo persistir siesa_triggered=True: {commit_err}')
+                    logger.critical(
+                        f'[CONTEO CRÍTICO] Siesa YA procesó ajuste sesion={sesion_id} '
+                        f'pero siesa_triggered NO se persistió. Estado queda AJUSTANDO en DB. '
+                        f'NO resetear estado manualmente sin verificar logs de Siesa primero — '
+                        f'resetear puede provocar un segundo envío del mismo ajuste. '
+                        f'Error: {commit_err}'
+                    )
                 raise Exception(f'Ajuste enviado a Siesa pero error guardando en WMS: {e}')
             else:
                 # Siesa NO fue llamado — restaurar estado a SEGUNDO_CONTEO para que

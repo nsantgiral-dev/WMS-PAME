@@ -132,6 +132,14 @@ def consumir(codigo):
 
     Retorna las unidades liberadas para que el frontend actualice el inventario.
     """
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Solo recepcionistas pueden consumir LPNs'}), 403
     try:
         lpn, unidades = consumir_lpn(codigo.upper())
         db.session.commit()
