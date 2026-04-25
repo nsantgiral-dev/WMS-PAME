@@ -839,7 +839,10 @@ def iniciar_recepcion():
     con los tres campos del documento origen (co, tipo_docto, consec_docto) y la inicia
     de inmediato. La PWA pasa directamente a la pantalla de escaneo ciego.
     """
-    recepcionista_id = int(get_jwt_identity())
+    try:
+        recepcionista_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     data = request.get_json()
 
     for campo in ['numero_oc', 'tipo_docto', 'consec_docto', 'almacen_id', 'items']:
