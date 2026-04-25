@@ -237,8 +237,9 @@ def reportar_problema():
     if tipo == 'PACKING':
         from app.models.packing import TareaPacking
         from app.models.usuario import Usuario
+        from app.routes._auth_helpers import _puede_empacar
         u = Usuario.query.get(operario_id)
-        if not u or u.rol not in ('admin', 'supervisor', 'empacador') and not getattr(u, 'puede_empacar', False):
+        if not u or not _puede_empacar(u):
             return jsonify({'error': 'Sin permiso para reportar problemas de packing'}), 403
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:

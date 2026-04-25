@@ -387,7 +387,7 @@ def cargar_csv_abc():
         resultado = ABCService.procesar_csv_abc(f, ext, almacen_id=almacen_id)
         return jsonify(resultado), 200
     except Exception as e:
-        current_app.logger.error(f'[ABC CSV] Error procesando archivo: {e}')
+        logger.exception('[ABC CSV] Error procesando archivo')
         return jsonify({'error': str(e)}), 500
 
 

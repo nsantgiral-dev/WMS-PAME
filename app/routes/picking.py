@@ -229,6 +229,13 @@ def reabrir_tarea(id):
 @picking_bp.route('/fefo', methods=['POST'])
 @jwt_required()
 def calcular_fefo():
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in (Roles.OPERARIO, Roles.JEFE_ALMACEN, Roles.ADMIN, Roles.SUPERVISOR):
+        return jsonify({'error': 'Sin permiso para calcular FEFO'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad', 'almacen_id']
     for campo in requeridos:

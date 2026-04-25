@@ -504,7 +504,11 @@ class MobileService:
             }
 
         elif tipo == 'CONTEO':
-            sesion = SesionConteo.query.get(tarea_id)
+            # WITH FOR UPDATE previene que dos workers procesen el mismo escaneo simultáneamente.
+            # Nota: el escaneo no es totalmente idempotente frente a retries del operario
+            # (pérdida de conexión + reintento duplica la cantidad). Para full idempotencia
+            # el cliente debe enviar el total acumulado y el servidor usar SET en vez de +=.
+            sesion = SesionConteo.query.filter_by(id=tarea_id).with_for_update().first()
             if not sesion:
                 raise ValueError('Sesión de conteo no encontrada')
 

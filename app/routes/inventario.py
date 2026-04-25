@@ -4,13 +4,15 @@ from app.extensions import db
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
-from app.routes._auth_helpers import Roles
+from app.routes._auth_helpers import Roles, _es_gestion
 
 inventario_bp = Blueprint('inventario', __name__)
 
 @inventario_bp.route('/stock/<int:producto_id>', methods=['GET'])
 @jwt_required()
 def stock_producto(producto_id):
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para consultar stock por ubicación'}), 403
     producto = Producto.query.get_or_404(producto_id)
     registros = UbicacionProducto.query.filter_by(
         producto_id=producto_id

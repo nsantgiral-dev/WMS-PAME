@@ -513,6 +513,13 @@ def iniciar_ruta(id):
 def sugeridos_ruta(id):
     """Bultos sin asignar que coinciden con los municipios de la ruta maestra."""
     ruta = RutaDespacho.query.get_or_404(id)
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
+    if not _es_admin_o_jefe() and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
+        return jsonify({'error': 'Sin acceso a los sugeridos de esta ruta'}), 403
 
     if not ruta.ruta_maestra:
         return jsonify({'sugeridos': [], 'total': 0}), 200
@@ -598,10 +605,10 @@ def entregar_ruta(id):
             entregado = conf.get('entregado', True) if conf else True
 
             if entregado:
-                bulto.estado = 'ENTREGADO'
+                bulto.estado = EstadoBulto.ENTREGADO
                 bulto.fecha_entrega = ahora
             else:
-                bulto.estado = 'RECHAZADO'
+                bulto.estado = EstadoBulto.RECHAZADO
                 bulto.fecha_entrega = ahora
                 bulto.motivo_rechazo = conf.get('motivo_rechazo', 'Sin especificar') if conf else 'Sin especificar'
                 rechazados += 1

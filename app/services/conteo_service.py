@@ -179,15 +179,20 @@ class ConteoService:
         Corre en un hilo daemon — no bloquea al caller.
         Llamar después de generar sesiones de conteo ABC para evitar HTTP sync en el turno.
         """
-        def _worker(items):
-            for codigo_siesa, ub_codigo in items:
-                try:
-                    ConteoService._consultar_existencia_siesa(
-                        producto_codigo_siesa=codigo_siesa,
-                        ubicacion_codigo=ub_codigo or '',
-                    )
-                except Exception:
-                    logger.warning(f'[PREWARM] Fallo pre-calentando caché para {codigo_siesa}/{ub_codigo}')
+        from flask import current_app
+
+        def _worker(items, app):
+            # Thread daemon no hereda el app context de Flask — debe crearse explícitamente.
+            # Sin esto, las queries de modo_simulacion fallan con RuntimeError (no app context).
+            with app.app_context():
+                for codigo_siesa, ub_codigo in items:
+                    try:
+                        ConteoService._consultar_existencia_siesa(
+                            producto_codigo_siesa=codigo_siesa,
+                            ubicacion_codigo=ub_codigo or '',
+                        )
+                    except Exception:
+                        logger.warning(f'[PREWARM] Fallo pre-calentando caché para {codigo_siesa}/{ub_codigo}')
 
         pares = []
         for s in sesiones:
@@ -197,7 +202,8 @@ class ConteoService:
                 pares.append((s.producto_codigo_siesa, ub_codigo))
 
         if pares:
-            t = threading.Thread(target=_worker, args=(pares,), daemon=True)
+            app = current_app._get_current_object()
+            t = threading.Thread(target=_worker, args=(pares, app), daemon=True)
             t.start()
             logger.info(f'[CONTEO] Pre-warm existencia_siesa iniciado para {len(pares)} productos')
 
