@@ -231,9 +231,14 @@ def reportar_problema():
         if sesion.operario_id != operario_id:
             return jsonify({'error': 'Esta sesión de conteo no te está asignada'}), 403
 
-        sesion.estado = EstadoConteo.BLOQUEADO
-        sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
-        db.session.commit()
+        try:
+            sesion.estado = EstadoConteo.BLOQUEADO
+            sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f'[MOBILE] reportar_problema CONTEO error: {e}', exc_info=True)
+            return jsonify({'error': 'Error al bloquear sesión de conteo — reintenta'}), 500
         return jsonify({
             'ok': True,
             'mensaje': 'Problema de conteo reportado — el jefe revisará la ubicación',
@@ -253,9 +258,14 @@ def reportar_problema():
         if not tarea:
             return jsonify({'error': f'Tarea packing {tarea_id} no encontrada'}), 404
 
-        tarea.estado = EstadoPacking.BLOQUEADO
-        tarea.observaciones = f'[{motivo}] {observaciones or ""}'.strip()
-        db.session.commit()
+        try:
+            tarea.estado = EstadoPacking.BLOQUEADO
+            tarea.observaciones = f'[{motivo}] {observaciones or ""}'.strip()
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f'[MOBILE] reportar_problema PACKING error: {e}', exc_info=True)
+            return jsonify({'error': 'Error al bloquear tarea de packing — reintenta'}), 500
         return jsonify({
             'ok': True,
             'mensaje': 'Problema de packing reportado',

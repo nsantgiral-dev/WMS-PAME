@@ -148,7 +148,7 @@ class MobileService:
                 'cantidad_requerida': tarea_activa.cantidad_solicitada,
                 'cantidad_escaneada': tarea_activa.cantidad_recogida,
                 'empaques_escaneados': tarea_activa.empaques_escaneados or 0,
-                'factor_conversion': tarea_activa.producto.factor_conversion or 1 if tarea_activa.producto else 1,
+                'factor_conversion': (tarea_activa.producto.factor_conversion or 1) if tarea_activa.producto else 1,
                 'unidad_empaque': (tarea_activa.producto.unidad_empaque or '').upper() if tarea_activa.producto else '',
                 'estado': tarea_activa.estado,
                 'referencia': tarea_activa.referencia_documento,

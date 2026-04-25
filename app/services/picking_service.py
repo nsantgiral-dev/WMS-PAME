@@ -295,6 +295,11 @@ class PickingService:
             raise ValueError(f'Tarea picking {tarea_id} no encontrada')
         if tarea.operario_id != operario_id:
             raise PermissionError('Esta tarea no te pertenece')
+        if tarea.estado not in (EstadoPicking.EN_PROCESO, EstadoPicking.PENDIENTE):
+            raise ValueError(
+                f'Solo se puede reportar problema en tareas EN_PROCESO o PENDIENTE '
+                f'(estado actual: {tarea.estado})'
+            )
 
         cantidad_faltante = max(0, tarea.cantidad_solicitada - cantidad_encontrada)
 

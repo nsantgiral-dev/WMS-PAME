@@ -605,7 +605,10 @@ def debug_pedidos_compromisos_raw():
         return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
 
     pagina  = request.args.get('pagina', '1')
-    tam     = min(int(request.args.get('tam', '5')), 50)
+    try:
+        tam = min(int(request.args.get('tam', '5')), 50)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'tam debe ser un número entero'}), 400
     params_custom = request.args.get('parametros', '')
 
     params = {
