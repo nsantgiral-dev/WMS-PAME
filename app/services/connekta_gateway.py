@@ -872,7 +872,7 @@ class ConnektaGateway:
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
-                    'f470_id_unidad_medida': '',
+                    'f470_id_unidad_medida': 'UND',
                     'f470_cant_base': abs(cantidad),
                     'f470_cant_2': 0.0,
                     'f470_costo_prom_uni': 0.0,
@@ -887,7 +887,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': '',
                     'f470_id_ext1_detalle': '',
                     'f470_id_ext2_detalle': '',
-                    'f470_id_un_movto': self.centro_op
+                    'f470_id_un_movto': self.unidad_negocio
                 }
             ],
             'Final': [
@@ -1126,7 +1126,7 @@ class ConnektaGateway:
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
-                    'f470_id_unidad_medida': item.get('unidad_medida') or None,
+                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_cant_base': abs(item.get('cantidad', 0)),
                     'f470_cant_2': 0,
                     'f470_costo_prom_uni': 0,
@@ -1170,7 +1170,7 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'F_CONSEC_AUTO_REG': 0,
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
@@ -1184,7 +1184,7 @@ class ConnektaGateway:
                     # Referencia obligatoria al doc 173076 de salida
                     'f350_id_co_base': self.centro_op if consec_salida else '',
                     'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else '',
-                    'f350_consec_docto_base': consec_salida or '',
+                    'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                 }
             ],
             'Movimientos': [
@@ -1198,7 +1198,7 @@ class ConnektaGateway:
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': abs(item.get('cantidad', 0)),
-                    'f470_id_unidad_medida': item.get('unidad_medida') or None,
+                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_un_movto': self.unidad_negocio,
                     'f470_notas': None,
@@ -1230,7 +1230,7 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'F_CONSEC_AUTO_REG': 0,
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
                     'f350_consec_docto': 0,
@@ -1240,10 +1240,8 @@ class ConnektaGateway:
                     'f350_notas': f'WMS Transferencia directa {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_destino,
-                    'f450_docto_alterno': codigo_solicitud,
-                    'f350_id_co_base': '',
-                    'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': '',
+                    # f450_docto_alterno, f350_id_co_base, f350_id_tipo_docto_base,
+                    # f350_consec_docto_base no existen en el spec 173066 — omitidos
                 }
             ],
             'Movimientos': [
@@ -1257,7 +1255,7 @@ class ConnektaGateway:
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': abs(item.get('cantidad', 0)),
-                    'f470_id_unidad_medida': item.get('unidad_medida') or None,
+                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_un_movto': self.unidad_negocio,
                     'f470_notas': None,
