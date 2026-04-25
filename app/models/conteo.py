@@ -9,6 +9,7 @@ class EstadoConteo:
     MATCH           = 'MATCH'
     DESCUADRE       = 'DESCUADRE'
     SEGUNDO_CONTEO  = 'SEGUNDO_CONTEO'
+    AJUSTANDO       = 'AJUSTANDO'   # transición: lock liberado, Siesa en vuelo
     AJUSTADO        = 'AJUSTADO'
     CANCELADO       = 'CANCELADO'
 

@@ -59,9 +59,32 @@ class ConteoService:
         """
         Registra el conteo físico del operario.
         1. Valida lote si el producto lo requiere.
-        2. Consulta existencia real en Siesa en tiempo real.
-        3. Compara y decide: MATCH o SEGUNDO_CONTEO.
+        2. Consulta existencia real en Siesa en tiempo real (FUERA del row-lock).
+        3. Adquiere lock, re-valida estado y guarda.
+        4. Decide: MATCH o SEGUNDO_CONTEO.
+
+        La llamada HTTP a Siesa ocurre ANTES de with_for_update() para no mantener
+        el row-lock de PostgreSQL durante los ~10s de timeout de red.
         """
+        # Lectura previa sin lock — solo para obtener datos necesarios para Siesa
+        sesion_pre = SesionConteo.query.filter_by(id=sesion_id).first()
+        if not sesion_pre:
+            raise ValueError('Sesión no encontrada')
+        if sesion_pre.estado not in ['PENDIENTE', 'EN_PROCESO']:
+            raise ValueError(f'No se puede registrar conteo en estado {sesion_pre.estado}')
+        if sesion_pre.operario_id and sesion_pre.operario_id != operario_id:
+            raise ValueError('Esta tarea no está asignada a ti')
+        if sesion_pre.maneja_lote and not lote_id:
+            raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
+
+        # Consultar Siesa ANTES del lock — puede tardar hasta 10s (timeout de red)
+        existencia_siesa = ConteoService._consultar_existencia_siesa(
+            producto_codigo_siesa=sesion_pre.producto_codigo_siesa,
+            ubicacion_codigo=sesion_pre.ubicacion.codigo if sesion_pre.ubicacion else None,
+            lote_id=lote_id
+        )
+
+        # Ahora adquirir el lock pesimista para el update atómico
         sesion = (SesionConteo.query
                   .filter_by(id=sesion_id)
                   .with_for_update()
@@ -69,25 +92,12 @@ class ConteoService:
         if not sesion:
             raise ValueError('Sesión no encontrada')
 
+        # Re-validar estado bajo lock (pudo cambiar mientras esperábamos Siesa)
         if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'No se puede registrar conteo en estado {sesion.estado}')
 
         if sesion.operario_id and sesion.operario_id != operario_id:
             raise ValueError('Esta tarea no está asignada a ti')
-
-        # Validar lote obligatorio
-        if sesion.maneja_lote and not lote_id:
-            raise ValueError(
-                f'Este producto maneja lotes. '
-                f'El campo lote_id es obligatorio.'
-            )
-
-        # Consultar existencia en Siesa en tiempo real
-        existencia_siesa = ConteoService._consultar_existencia_siesa(
-            producto_codigo_siesa=sesion.producto_codigo_siesa,
-            ubicacion_codigo=sesion.ubicacion.codigo if sesion.ubicacion else None,
-            lote_id=lote_id
-        )
 
         # Guardar conteo
         sesion.operario_id = operario_id
@@ -336,13 +346,18 @@ class ConteoService:
         sesion.motivo_codigo = motivo_codigo
 
         # Idempotency key estable — basado solo en sesion_id, no en timestamp
-        # Así un reintento usa la misma key y Siesa puede deduplicar
         idem_key = f'ADJ-{sesion_id}'
         sesion.idempotency_key = idem_key
         sesion.aprobador_id = supervisor_id
 
-        # Capturar referencias a atributos ANTES del commit intermedio
-        # (expire_on_commit=True invalida el objeto tras cada commit)
+        # CRÍTICO: marcar AJUSTANDO antes de liberar el lock.
+        # Esto bloquea requests concurrentes (doble-tap del supervisor) que llegarían
+        # tras el commit y verían siesa_triggered=False — sin este estado, ambas
+        # requests pasarían el guard y llamarían a Siesa → doble ajuste de inventario.
+        sesion.estado = 'AJUSTANDO'
+
+        # Capturar referencias a atributos ANTES del commit
+        # (expire_on_commit invalida el objeto tras el commit)
         producto_ref = sesion.producto
         item_codigo = sesion.producto_codigo_siesa or (producto_ref.codigo if producto_ref else '')
         sesion_codigo = sesion.codigo
@@ -365,10 +380,9 @@ class ConteoService:
             'origen': 'WMS_CONTEO_CICLICO'
         }
 
-        # Liberar el row lock ANTES de la llamada HTTP a Siesa.
-        # with_for_update() mantiene el lock hasta el commit — si lo dejamos
-        # activo durante la llamada HTTP (hasta 30s timeout) bloqueamos
-        # cualquier otra operación sobre esta sesión.
+        # Commit: libera el row lock con estado=AJUSTANDO en DB.
+        # Cualquier request concurrente que llegue ahora verá AJUSTANDO y será rechazado
+        # en el guard `if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']`.
         try:
             db.session.commit()
         except Exception as e_lock_release:
@@ -440,14 +454,17 @@ class ConteoService:
                     logger.error(f'[CONTEO] No se pudo persistir siesa_triggered=True: {commit_err}')
                 raise Exception(f'Ajuste enviado a Siesa pero error guardando en WMS: {e}')
             else:
+                # Siesa NO fue llamado — restaurar estado a SEGUNDO_CONTEO para que
+                # el supervisor pueda reintentar (AJUSTANDO quedaría bloqueado para siempre)
                 logger.error(f'[CONTEO] Error enviando ajuste a Siesa: {str(e)}')
                 try:
                     sesion = SesionConteo.query.filter_by(id=sesion_id).first()
+                    sesion.estado = 'SEGUNDO_CONTEO'
                     sesion.siesa_triggered = False
                     sesion.siesa_response = str(e)
                     db.session.commit()
                 except Exception as commit_err:
-                    logger.error(f'[CONTEO] No se pudo actualizar siesa_response: {commit_err}')
+                    logger.error(f'[CONTEO] No se pudo restaurar estado SEGUNDO_CONTEO: {commit_err}')
                 raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
 
         return sesion

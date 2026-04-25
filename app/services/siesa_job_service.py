@@ -240,10 +240,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             num_docto_referencia=payload.get('num_docto_referencia'),
             cond_pago=payload.get('cond_pago', ''),
         )
-        # Persistir flag con commit propio — misma protección que DESPACHO_F470
+        # Persistir flag — misma protección que DESPACHO_F470 (emergency block)
         if rec and not rec.siesa_triggered:
             try:
-
                 rec.siesa_triggered = True
                 rec.siesa_response = _json.dumps(resultado)
                 rec.siesa_triggered_at = datetime.utcnow()
@@ -254,6 +253,20 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'siesa_triggered — revisar manualmente recepción {rec.id}. Error: {_e}'
                 )
                 db.session.rollback()
+                # Emergency: persistir SOLO el flag de idempotencia para bloquear
+                # el reintento de la DLQ — sin esto la próxima ejecución llamará a
+                # Siesa de nuevo y creará una entrada contable duplicada (cuenta 1435).
+                try:
+                    rec.siesa_triggered = True
+                    rec.siesa_triggered_at = datetime.utcnow()
+                    db.session.commit()
+                except Exception as _e2:
+                    db.session.rollback()
+                    logger.critical(
+                        f'[DLQ] ENTRADA_OC job={job.id}: DOBLE FALLO — '
+                        f'siesa_triggered no persiste: {_e2}. '
+                        f'Recepción {rec.id} en riesgo de duplicado contable.'
+                    )
         return resultado
 
     if job.tipo == 'TRASLADO_AVERIAS':
@@ -287,7 +300,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             cantidad=payload['cantidad'],
             referencia=payload.get('referencia', ''),
         )
-        # Marcar triggered para que futuros reintentos no dupliquen
+        # Marcar triggered — emergency block para bloquear reintento duplicado
         if tarea_dev:
             try:
                 tarea_dev.siesa_triggered = True
@@ -299,6 +312,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'siesa_triggered — revisar manualmente tarea_dev {tarea_dev.id}. Error: {_e}'
                 )
                 db.session.rollback()
+                # Emergency: sin este commit la DLQ reintentará y el traslado NB1→AV1
+                # se duplicará — el saldo de NB1 puede quedar negativo en Siesa.
+                try:
+                    tarea_dev.siesa_triggered = True
+                    tarea_dev.siesa_triggered_at = datetime.utcnow()
+                    db.session.commit()
+                except Exception as _e2:
+                    db.session.rollback()
+                    logger.critical(
+                        f'[DLQ] TRASLADO_AVERIAS job={job.id}: DOBLE FALLO — '
+                        f'siesa_triggered no persiste: {_e2}. '
+                        f'Tarea_dev {tarea_dev.id} en riesgo de traslado duplicado (NB1 puede quedar negativo).'
+                    )
         return resultado
 
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
