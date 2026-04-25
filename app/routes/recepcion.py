@@ -21,6 +21,8 @@ def _es_recepcion_autorizado():
 @recepcion_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_recepciones():
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'Sin permiso para listar recepciones'}), 403
     estado = request.args.get('estado')
     almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
@@ -45,6 +47,8 @@ def listar_recepciones():
 @recepcion_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_recepcion(id):
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'Sin permiso para ver recepciones'}), 403
     recepcion = RecepcionMercancia.query.get_or_404(id)
     return jsonify(recepcion.to_dict()), 200
 
@@ -96,6 +100,8 @@ def iniciar_recepcion(id):
 @recepcion_bp.route('/<int:id>/escanear', methods=['POST'])
 @jwt_required()
 def escanear_producto(id):
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'Sin permiso para escanear productos en recepción'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad']
     for campo in requeridos:

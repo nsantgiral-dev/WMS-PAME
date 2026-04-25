@@ -395,11 +395,17 @@ def _buscar_producto(codigo):
 @siesa_bp.route('/pedidos', methods=['GET'])
 @jwt_required()
 def pedidos_aprobados():
-    """
-    Cola de despacho: Read Model local enriquecido con estado del picking WMS.
-    Respuesta instantánea — nunca toca Connekta en tiempo real.
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.DESPACHO:
+        return jsonify({'error': 'Sin permiso para ver la cola de despacho'}), 403
 
-    Estado por pedido:
+    # Cola de despacho: Read Model local enriquecido con estado del picking WMS.
+    # Estado por pedido:
       picking_iniciado=False                         → mostrar botón "Despachar"
       picking_iniciado=True, completado=False        → picking en curso (progreso X/Y)
       picking_iniciado=True, completado=True,

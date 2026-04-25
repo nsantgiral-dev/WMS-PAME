@@ -88,6 +88,9 @@ def crear_lpn():
         usuario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(usuario_id)
+    if not u or u.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Sin permiso para generar LPNs'}), 403
 
     try:
         lpn = generar_lpn(

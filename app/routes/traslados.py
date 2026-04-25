@@ -333,6 +333,11 @@ def reintentar_siesa(id):
     Solo disponible en estados EN_PICKING o APROBADA.
     ?debug=true devuelve el payload sin llamar a Siesa.
     """
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in Roles.DESPACHO:
+        return jsonify({'error': 'Solo admin/jefe puede disparar conectores Siesa de traslado'}), 403
+
     from app.models.traslado import SolicitudTraslado
     from app.extensions import db
     s = SolicitudTraslado.query.get_or_404(id)
