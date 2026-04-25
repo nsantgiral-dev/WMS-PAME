@@ -4,8 +4,16 @@ Dispensador automático de tareas — el operario pide trabajo, el sistema asign
 """
 
 import logging
+import threading
 from datetime import datetime, date, time as dtime
 from app.extensions import db
+
+# Debounce de scans: evita doble-conteo cuando la red cae después del commit
+# y la PWA reintenta el mismo scan. Cache por (tarea_id, tipo, codigo) → (ts, resultado).
+# Scope: por proceso/worker. No requiere migración. TTL 5s cubre el 95% de retries de red.
+_SCAN_DEBOUNCE: dict = {}
+_SCAN_DEBOUNCE_LOCK = threading.Lock()
+_SCAN_DEBOUNCE_TTL = 5  # segundos
 from app.models.picking import TareaPicking
 from app.models.packing import TareaPacking, ItemPacking
 from app.models.conteo import SesionConteo
@@ -349,6 +357,21 @@ class MobileService:
         """
         codigo_limpio = MobileService._normalizar(codigo)
 
+        # Debounce: si el mismo scan llega dos veces en < 5s (retry por red),
+        # devolver el resultado cacheado sin incrementar la cantidad.
+        _db_key = (tarea_id, tipo, codigo_limpio)
+        _ahora = datetime.utcnow().timestamp()
+        with _SCAN_DEBOUNCE_LOCK:
+            _cached = _SCAN_DEBOUNCE.get(_db_key)
+            if _cached:
+                _ts_cache, _res_cache = _cached
+                if _ahora - _ts_cache < _SCAN_DEBOUNCE_TTL:
+                    logger.info(
+                        f'[SCAN DEBOUNCE] Scan duplicado ignorado: tarea={tarea_id} '
+                        f'tipo={tipo} codigo={codigo_limpio} (delta={_ahora - _ts_cache:.1f}s)'
+                    )
+                    return _res_cache
+
         if tipo == 'PICKING':
             tarea = TareaPicking.query.get(tarea_id)
             if not tarea:
@@ -427,7 +450,7 @@ class MobileService:
             else:
                 mensaje = f'{nueva_cantidad} de {tarea.cantidad_solicitada}'
 
-            return {
+            _resultado_picking = {
                 'exito': True,
                 'tipo': 'PICKING',
                 'codigo_escaneado': codigo,
@@ -442,6 +465,9 @@ class MobileService:
                 'puede_confirmar': completado,
                 'mensaje': mensaje,
             }
+            with _SCAN_DEBOUNCE_LOCK:
+                _SCAN_DEBOUNCE[_db_key] = (datetime.utcnow().timestamp(), _resultado_picking)
+            return _resultado_picking
 
         elif tipo == 'PACKING':
             from sqlalchemy.orm import selectinload as _sl
