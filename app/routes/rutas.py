@@ -813,7 +813,10 @@ def planilla_ruta(id):
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe puede ver la planilla'}), 403
 
-    ruta = RutaDespacho.query.get_or_404(id)
+    ruta = (RutaDespacho.query
+            .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea),
+                     _sl(RutaDespacho.recaudos))
+            .get_or_404(id))
     tareas = ruta.tareas_unicas()
     recaudos_map = {r.tarea_id: r for r in ruta.recaudos}
 
@@ -915,8 +918,13 @@ def forzar_cierre_ruta(id):
     ahora = datetime.utcnow()
     auto_cerradas = 0
 
+    # Pre-cargar todos los bultos de la ruta para evitar N+1 dentro del bucle
+    bultos_por_tarea: dict = {}
+    for b in Bulto.query.filter_by(ruta_despacho_id=id).all():
+        bultos_por_tarea.setdefault(b.tarea_id, []).append(b)
+
     for tarea in pendientes:
-        bultos_tarea = Bulto.query.filter_by(tarea_id=tarea.id, ruta_despacho_id=id).all()
+        bultos_tarea = bultos_por_tarea.get(tarea.id, [])
         for b in bultos_tarea:
             b.estado = EstadoBulto.RECHAZADO
             b.motivo_rechazo = 'Cierre forzado por admin'

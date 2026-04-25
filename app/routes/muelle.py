@@ -5,6 +5,7 @@ Flujo: siesa_triggered → bultos PENDIENTE aparecen en muelle → scan-to-truck
 from datetime import datetime, date
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy.orm import selectinload
 from app.extensions import db
 from app.models.bulto import Bulto, EstadoBulto
 from app.models.packing import TareaPacking, EstadoPacking
@@ -33,6 +34,7 @@ def listos():
             Bulto.estado == EstadoBulto.PENDIENTE,
             Bulto.ruta_despacho_id.is_(None)
         )
+        .options(selectinload(Bulto.tarea))
         .order_by(TareaPacking.fecha_despachado.asc(), Bulto.numero.asc())
         .all()
     )

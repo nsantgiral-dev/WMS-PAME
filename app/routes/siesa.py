@@ -451,21 +451,31 @@ def pedidos_aprobados():
             }
         pedidos[num]['items'].append(row.to_dict())
 
-    # Enriquecer con estado del picking/packing en WMS
-    for num, pedido in pedidos.items():
-        packing = TareaPacking.query.filter(
-            TareaPacking.numero_pedido_siesa == num,
+    # Enriquecer con estado del picking/packing en WMS — bulk-load en 2 queries (evita N+1)
+    nums = list(pedidos.keys())
+    packings_map = {}
+    if nums:
+        for pk in TareaPacking.query.filter(
+            TareaPacking.numero_pedido_siesa.in_(nums),
             TareaPacking.estado != 'CANCELADO'
-        ).first()
+        ).all():
+            packings_map.setdefault(pk.numero_pedido_siesa, pk)  # primer activo por pedido
+
+        pickings_por_pedido: dict = {}
+        for p in TareaPicking.query.filter(
+            TareaPicking.referencia_documento.in_(nums),
+            TareaPicking.estado != 'CANCELADO'
+        ).all():
+            pickings_por_pedido.setdefault(p.referencia_documento, []).append(p)
+
+    for num, pedido in pedidos.items():
+        packing = packings_map.get(num)
 
         if not packing:
             pedido.update({'picking_iniciado': False, 'picking_completado': False,
                            'picking_progreso': '0/0', 'packing_id': None, 'siesa_triggered': False})
         else:
-            pickings = TareaPicking.query.filter(
-                TareaPicking.referencia_documento == num,
-                TareaPicking.estado != 'CANCELADO'
-            ).all()
+            pickings = pickings_por_pedido.get(num, [])
             total = len(pickings)
             completados = sum(1 for p in pickings if p.estado == 'COMPLETADO')
             pedido.update({
