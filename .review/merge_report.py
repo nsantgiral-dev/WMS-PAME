@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 WMS-PAME Review Report Merger v2
-Combina los resultados de 5 agentes, deduplica issues cross-agente
+Combina los resultados de 9 agentes, deduplica issues cross-agente
 y genera un reporte HTML ejecutivo.
 """
 import json
@@ -41,6 +41,10 @@ def agent_icon(name):
         "performance": "⚡",
         "siesa_logic": "🔗",
         "tech_debt":   "🏗️",
+        "siesa_spec":  "📋",
+        "patterns":    "🔎",
+        "resilience":  "💥",
+        "invariants":  "⚖️",
     }.get(name, "🤖")
 
 def agent_label(name):
@@ -50,6 +54,10 @@ def agent_label(name):
         "performance": "Performance Analyst",
         "siesa_logic": "SIESA Logic Validator",
         "tech_debt":   "Tech Debt Detector",
+        "siesa_spec":  "SIESA Spec Validator",
+        "patterns":    "Pattern Auditor",
+        "resilience":  "Resilience Analyst",
+        "invariants":  "Invariants & Observability",
     }.get(name, name.title())
 
 def score_color(score):
@@ -82,10 +90,14 @@ def load_json(path):
 # Prioridad de agente cuando dos reportan el mismo issue (0 = mayor prioridad)
 AGENT_PRIORITY = {
     "siesa_logic": 0,   # integración es lo más crítico para este negocio
-    "bugs":        1,
-    "security":    2,
-    "performance": 3,
-    "tech_debt":   4,
+    "siesa_spec":  1,   # conformidad contractual Connekta
+    "bugs":        2,
+    "resilience":  3,
+    "invariants":  4,
+    "security":    5,
+    "patterns":    6,
+    "performance": 7,
+    "tech_debt":   8,
 }
 
 def _dedup_key(issue):
@@ -222,6 +234,110 @@ def generate_html(all_agents, args, prev_data=None):
                 f'<div class="issue-field">'
                 f'<span class="field-label">⏱️ Esfuerzo</span>'
                 f'<span class="field-value">{issue["effort_to_fix"]}</span>'
+                f'</div>'
+            )
+        if issue.get("connector_id"):
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">🔌 Conector</span>'
+                f'<span class="field-value">{issue["connector_id"]}</span>'
+                f'</div>'
+            )
+        if issue.get("produccion_impacto"):
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">🏭 Impacto producción</span>'
+                f'<span class="field-value">{issue["produccion_impacto"]}</span>'
+                f'</div>'
+            )
+        if issue.get("pattern_id"):
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">🔎 Patrón</span>'
+                f'<span class="field-value" style="font-family:monospace">{issue["pattern_id"]}</span>'
+                f'</div>'
+            )
+        if issue.get("missing_in"):
+            missing_list = issue["missing_in"] if isinstance(issue["missing_in"], list) else [issue["missing_in"]]
+            missing_html = ", ".join(f'<code style="font-size:11px">{m}</code>' for m in missing_list)
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">📍 Falta en</span>'
+                f'<span class="field-value">{missing_html}</span>'
+                f'</div>'
+            )
+        if issue.get("recovery_posible") is not None:
+            recovery_val = issue["recovery_posible"]
+            recovery_str = "Sí" if recovery_val else "No"
+            recovery_color = "#3fb950" if recovery_val else "#f85149"
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">🔄 Recovery posible</span>'
+                f'<span class="field-value" style="color:{recovery_color};font-weight:600">{recovery_str}</span>'
+                f'</div>'
+            )
+        if issue.get("tiempo_deteccion"):
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">⏰ Tiempo detección</span>'
+                f'<span class="field-value">{issue["tiempo_deteccion"]}</span>'
+                f'</div>'
+            )
+        if issue.get("datos_en_riesgo"):
+            riesgo = issue["datos_en_riesgo"]
+            riesgo_color = "#f85149" if riesgo in ("fiscal", "ambos") else "#db6d28" if riesgo == "inventario" else "#8b949e"
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">⚠️ Datos en riesgo</span>'
+                f'<span class="field-value" style="color:{riesgo_color};font-weight:600">{riesgo}</span>'
+                f'</div>'
+            )
+        if issue.get("estado_sistema_post_fallo"):
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">💾 Estado post-fallo</span>'
+                f'<span class="field-value">{issue["estado_sistema_post_fallo"]}</span>'
+                f'</div>'
+            )
+        if issue.get("tipo"):
+            tipo_labels = {"invariant_violation": "Violación de invariante", "silent_failure": "Fallo silencioso"}
+            tipo_colors = {"invariant_violation": "#D97706", "silent_failure": "#DC2626"}
+            tipo_val = issue["tipo"]
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">🏷️ Tipo</span>'
+                f'<span class="field-value" style="color:{tipo_colors.get(tipo_val, "#8b949e")}">'
+                f'{tipo_labels.get(tipo_val, tipo_val)}</span>'
+                f'</div>'
+            )
+        if issue.get("detectable_en"):
+            det = issue["detectable_en"]
+            det_color = "#f85149" if det == "nunca" else "#db6d28" if det == "horas" else "#3fb950"
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">🔭 Detectable en</span>'
+                f'<span class="field-value" style="color:{det_color};font-weight:600">{det}</span>'
+                f'</div>'
+            )
+        if issue.get("enforcement_actual"):
+            enf_labels = {
+                "solo_app_code": "Solo app code (insuficiente)",
+                "solo_db": "Solo DB constraint",
+                "ambos": "App code + DB constraint",
+                "ninguno": "Sin enforcement",
+            }
+            enf_colors = {
+                "solo_app_code": "#db6d28",
+                "solo_db": "#d29922",
+                "ambos": "#3fb950",
+                "ninguno": "#f85149",
+            }
+            enf_val = issue["enforcement_actual"]
+            extra_fields += (
+                f'<div class="issue-field">'
+                f'<span class="field-label">🛡️ Enforcement actual</span>'
+                f'<span class="field-value" style="color:{enf_colors.get(enf_val, "#8b949e")}">'
+                f'{enf_labels.get(enf_val, enf_val)}</span>'
                 f'</div>'
             )
         if also:

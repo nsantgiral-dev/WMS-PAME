@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # WMS-PAME Review Agents Orchestrator v2
-# 5 agentes especializados en paralelo → reporte HTML ejecutivo
+# 9 agentes especializados en paralelo → reporte HTML ejecutivo
 # ============================================================
 
 set -euo pipefail
@@ -292,7 +292,7 @@ run_agent() {
 
 # ── Ejecutar todos los agentes en PARALELO ───────────────────
 echo ""
-log "Ejecutando ${BOLD}5 agentes en paralelo${NC}..."
+log "Ejecutando ${BOLD}9 agentes en paralelo${NC}..."
 echo ""
 
 run_agent "bugs"        "$PROMPTS_DIR/01_bugs.md"        "$CTX_BUGS"     &
@@ -310,8 +310,20 @@ PID_SIESA=$!
 run_agent "tech_debt"   "$PROMPTS_DIR/05_tech_debt.md"   "$CTX_DEBT"     &
 PID_DEBT=$!
 
+run_agent "siesa_spec"   "$PROMPTS_DIR/05_siesa_spec.md"   "$CTX_SIESA"    &
+PID_SIESA_SPEC=$!
+
+run_agent "patterns"     "$PROMPTS_DIR/06_patterns.md"     "$CTX_DEBT"     &
+PID_PATTERNS=$!
+
+run_agent "resilience"   "$PROMPTS_DIR/07_resilience.md"   "$CTX_PERF"     &
+PID_RESILIENCE=$!
+
+run_agent "invariants"   "$PROMPTS_DIR/08_invariants.md"   "$CTX_BUGS"     &
+PID_INVARIANTS=$!
+
 # Esperar a que todos terminen
-wait $PID_BUGS $PID_SECURITY $PID_PERF $PID_SIESA $PID_DEBT
+wait $PID_BUGS $PID_SECURITY $PID_PERF $PID_SIESA $PID_DEBT $PID_SIESA_SPEC $PID_PATTERNS $PID_RESILIENCE $PID_INVARIANTS
 
 echo ""
 log "Todos los agentes completados. Generando reporte..."
@@ -333,6 +345,10 @@ python3 "$REVIEW_DIR/merge_report.py" \
     --performance "$TEMP_DIR/performance.json" \
     --siesa       "$TEMP_DIR/siesa_logic.json" \
     --debt        "$TEMP_DIR/tech_debt.json" \
+    --siesa-spec  "$TEMP_DIR/siesa_spec.json" \
+    --patterns    "$TEMP_DIR/patterns.json" \
+    --resilience  "$TEMP_DIR/resilience.json" \
+    --invariants  "$TEMP_DIR/invariants.json" \
     --output-html "$REPORTE_HTML" \
     --output-json "$REPORTE_JSON" \
     --proyecto    "WMS-PAME-1" \
