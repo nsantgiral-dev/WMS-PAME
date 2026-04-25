@@ -43,7 +43,10 @@ reposicion_bp = Blueprint('reposicion', __name__)
 def tarea_actual():
     """Próxima tarea de reposición para el abastecedor."""
     from app.models.usuario import Usuario
-    abastecedor_id = int(get_jwt_identity())
+    try:
+        abastecedor_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(abastecedor_id)
     if not u or (not u.puede_abastecer and u.rol not in Roles.SUPERVISION):
         return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
@@ -58,7 +61,10 @@ def tarea_actual():
 def mis_tareas():
     """Todas las tareas activas del abastecedor."""
     from app.models.usuario import Usuario
-    abastecedor_id = int(get_jwt_identity())
+    try:
+        abastecedor_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(abastecedor_id)
     if not u or (not u.puede_abastecer and u.rol not in Roles.SUPERVISION):
         return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
@@ -75,7 +81,10 @@ def confirmar():
     Payload: { tarea_id, lpn_codigo (opcional — para validar escaneo) }
     """
     from app.models.usuario import Usuario
-    abastecedor_id = int(get_jwt_identity())
+    try:
+        abastecedor_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(abastecedor_id)
     if not u or (not u.puede_abastecer and u.rol not in Roles.SUPERVISION):
         return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
@@ -106,7 +115,10 @@ def confirmar():
 @jwt_required()
 def verificar_stock():
     """Fuerza una verificación de stock en todas las zonas PICKING."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede verificar stock'}), 403
@@ -123,7 +135,10 @@ def verificar_stock():
 @jwt_required()
 def pendientes():
     """Lista tareas filtradas por estado (admin / jefe de almacén)."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
@@ -144,7 +159,10 @@ def pendientes():
 @jwt_required()
 def cancelar(tarea_id):
     """Cancela una tarea de reposición (admin)."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede cancelar tareas'}), 403
@@ -173,7 +191,10 @@ def sync_ubicaciones():
     Dispara la sincronización de ubicaciones desde Siesa (API_v2_Ubicaciones ID 43).
     Corre en hilo de fondo — retorna inmediatamente.
     """
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede disparar el sync de ubicaciones'}), 403
@@ -312,7 +333,10 @@ def jobs_fallidos():
     El admin verifica el periodo contable en Siesa y luego reintenta.
     """
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
@@ -329,7 +353,10 @@ def jobs_fallidos():
 def reintentar_job(job_id):
     """Admin fuerza un reintento de un job FALLIDO."""
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen puede reintentar jobs'}), 403
@@ -413,7 +440,10 @@ def debug_ubicaciones_raw():
 @jwt_required()
 def test_alerta_email():
     """Envía un email de prueba via Resend. Muestra el error real si falla."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede enviar emails de prueba'}), 403

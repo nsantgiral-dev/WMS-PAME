@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 @jwt_required()
 def listar_solicitudes():
     """Lista solicitudes — admin ve todas, tienda solo las suyas."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
 
     estado = request.args.get('estado')
@@ -63,7 +66,10 @@ def obtener_solicitud(id):
 @jwt_required()
 def crear_solicitud():
     """Tienda crea solicitud en BORRADOR."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO + (Roles.TIENDA,):
         return jsonify({'error': 'Sin permiso para crear solicitudes de traslado'}), 403
@@ -95,7 +101,10 @@ def crear_solicitud():
 @traslados_bp.route('/<int:id>/enviar', methods=['POST'])
 @jwt_required()
 def enviar_solicitud(id):
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario:
         return jsonify({'error': 'Usuario no encontrado'}), 401
@@ -112,7 +121,10 @@ def enviar_solicitud(id):
 @traslados_bp.route('/<int:id>/aprobar', methods=['POST'])
 @jwt_required()
 def aprobar_solicitud(id):
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden aprobar solicitudes'}), 403
@@ -134,7 +146,10 @@ def aprobar_solicitud(id):
 @traslados_bp.route('/<int:id>/rechazar', methods=['POST'])
 @jwt_required()
 def rechazar_solicitud(id):
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden rechazar solicitudes de traslado'}), 403
@@ -157,7 +172,10 @@ def cancelar_solicitud(id):
     EN_TRANSITO y ENTREGADA no se pueden cancelar — el camión ya salió.
     """
     from app.extensions import db
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     s = SolicitudTraslado.query.get_or_404(id)
 
@@ -196,7 +214,10 @@ def confirmar_picking(id):
     Sin body: confirma cantidades aprobadas en su totalidad.
     """
     from app.extensions import db
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     s = SolicitudTraslado.query.get_or_404(id)
 
     if s.estado != 'EN_PICKING':
@@ -237,7 +258,10 @@ def confirmar_picking(id):
 @jwt_required()
 def reasignar_operario(id):
     """Admin cambia el operario asignado a un traslado EN_PICKING."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden reasignar operarios'}), 403
@@ -273,7 +297,10 @@ def reasignar_operario(id):
 @traslados_bp.route('/<int:id>/despachar', methods=['POST'])
 @jwt_required()
 def despachar(id):
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden despachar traslados'}), 403
@@ -289,7 +316,10 @@ def despachar(id):
 @traslados_bp.route('/<int:id>/recibir', methods=['POST'])
 @jwt_required()
 def confirmar_recepcion(id):
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     s = SolicitudTraslado.query.get_or_404(id)
     usuario = Usuario.query.get(usuario_id)
     # Tienda solo puede confirmar sus propias recepciones; admin puede confirmar cualquiera
@@ -333,7 +363,10 @@ def reintentar_siesa(id):
     Solo disponible en estados EN_PICKING o APROBADA.
     ?debug=true devuelve el payload sin llamar a Siesa.
     """
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo admin/jefe puede disparar conectores Siesa de traslado'}), 403
@@ -439,7 +472,10 @@ def reintentar_siesa(id):
 @jwt_required()
 def reintentar_despacho(id):
     """Admin: reintenta el trigger Siesa de despacho (173066/173076) sin cambiar el estado."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden reintentar despachos'}), 403
@@ -498,7 +534,10 @@ def reintentar_despacho(id):
 @jwt_required()
 def mis_traslados():
     """Operario: lista sus solicitudes de traslado asignadas en estado EN_PICKING."""
-    operario_id = int(get_jwt_identity())
+    try:
+        operario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     solicitudes = SolicitudTraslado.query\
         .options(
             joinedload(SolicitudTraslado.solicitante),
@@ -516,7 +555,10 @@ def mis_traslados():
 @jwt_required()
 def operarios_disponibles():
     """Admin: lista operarios activos para asignar a un traslado."""
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Sin permiso'}), 403
@@ -537,7 +579,10 @@ def stock_disponible():
     Devuelve todos los productos con disponible > 0 sin paginar — el filtrado
     es client-side en la tienda (buscador local sobre _TIENDA_STOCK).
     """
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO + (Roles.TIENDA,):
         return jsonify({'error': 'Sin permiso para ver stock disponible'}), 403

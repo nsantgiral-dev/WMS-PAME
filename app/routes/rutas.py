@@ -539,7 +539,10 @@ def entregar_ruta(id):
     if ruta.estado != 'EN_TRANSITO':
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
 
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
     if not _es_admin_o_jefe() and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
         return jsonify({'error': 'Sin acceso a esta ruta'}), 403
@@ -585,7 +588,10 @@ def mis_rutas():
     Para el conductor autenticado: devuelve sus rutas EN_TRANSITO.
     Usa la vinculación Conductor.usuario_id → JWT identity.
     """
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     conductor = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
     if not conductor:
         return jsonify({'error': 'Tu cuenta no está vinculada a ningún conductor'}), 404
@@ -635,7 +641,10 @@ def listar_paradas(id):
     """
 
     ruta = RutaDespacho.query.get_or_404(id)
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
 
     # Verificar acceso: admin/jefe o conductor vinculado
     conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
@@ -702,7 +711,10 @@ def confirmar_parada(id, tarea_id):
 
     TareaPacking.query.get_or_404(tarea_id)
 
-    usuario_id = int(get_jwt_identity())
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
     if not _es_admin_o_jefe() and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
         return jsonify({'error': 'Sin acceso a esta ruta'}), 403
@@ -821,7 +833,10 @@ def forzar_cierre_ruta(id):
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO para forzar cierre (estado: {ruta.estado})'}), 400
 
 
-    admin_id = int(get_jwt_identity())
+    try:
+        admin_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     tareas = ruta.tareas_unicas()
     recaudos_existentes = {r.tarea_id for r in RecaudoEntrega.query.filter_by(ruta_id=id).all()}
     # Comparar t.id (int) contra el set de tarea_id (int) — evita comparar objeto vs int

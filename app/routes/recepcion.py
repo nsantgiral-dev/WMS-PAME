@@ -86,7 +86,10 @@ def crear_recepcion():
 @recepcion_bp.route('/<int:id>/iniciar', methods=['PUT'])
 @jwt_required()
 def iniciar_recepcion(id):
-    recepcionista_id = int(get_jwt_identity())
+    try:
+        recepcionista_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     try:
         recepcion = RecepcionService.iniciar(id, recepcionista_id)
         return jsonify({
