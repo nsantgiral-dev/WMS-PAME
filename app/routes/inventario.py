@@ -116,7 +116,10 @@ def ajuste_inventario():
 @jwt_required()
 def listar_movimientos():
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso para ver historial de movimientos'}), 403

@@ -18,7 +18,10 @@ from app.routes._auth_helpers import _solo_admin
 @jwt_required()
 def listar_sesiones():
     from app.models.usuario import Usuario
-    uid = int(get_jwt_identity())
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso para listar sesiones de conteo'}), 403
