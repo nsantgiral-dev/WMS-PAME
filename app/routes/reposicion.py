@@ -150,10 +150,14 @@ def pendientes():
     estado = request.args.get('estado', '').upper()
     estados_validos = {'PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'CANCELADA'}
 
+    from sqlalchemy.orm import selectinload as _sl
+    opts = [_sl(TareaReposicion.producto),
+            _sl(TareaReposicion.ubicacion_reserva),
+            _sl(TareaReposicion.ubicacion_picking)]
     if estado in estados_validos:
-        q = TareaReposicion.query.filter(TareaReposicion.estado == estado)
+        q = TareaReposicion.query.options(*opts).filter(TareaReposicion.estado == estado)
     else:
-        q = TareaReposicion.query.filter(
+        q = TareaReposicion.query.options(*opts).filter(
             TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO'])
         )
     tareas = q.order_by(TareaReposicion.fecha_creacion.desc()).limit(100).all()

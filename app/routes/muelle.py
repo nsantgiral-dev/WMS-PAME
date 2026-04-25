@@ -214,6 +214,7 @@ def manifiesto():
     hoy = date.today()
     bultos = (
         Bulto.query
+        .options(selectinload(Bulto.tarea))
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
             Bulto.estado == EstadoBulto.CARGADO,
@@ -270,6 +271,7 @@ def historial():
         return jsonify({'error': 'Sin permiso para ver historial de muelle'}), 403
     bultos = (
         Bulto.query
+        .options(selectinload(Bulto.tarea))
         .filter_by(estado=EstadoBulto.CARGADO)
         .order_by(Bulto.fecha_cargado.desc())
         .limit(100).all()

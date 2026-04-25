@@ -14,6 +14,10 @@ from app.extensions import db
 _SCAN_DEBOUNCE: dict = {}
 _SCAN_DEBOUNCE_LOCK = threading.Lock()
 _SCAN_DEBOUNCE_TTL = 5  # segundos
+
+# Limitar threads de verificación de stock — evita colapsar el pool de conexiones DB
+# bajo carga alta (10-30 operarios pickeando simultáneamente en apertura de turno).
+_STOCK_VERIF_SEMAPHORE = threading.Semaphore(2)
 from app.models.picking import TareaPicking
 from app.models.packing import TareaPacking, ItemPacking
 from app.models.conteo import SesionConteo
@@ -605,11 +609,20 @@ class MobileService:
                 cantidad_recogida=cantidad,
                 usuario_id=operario_id
             ).to_dict()
-            # Disparar verificación de stock en background — puede generar TareaReposicion
+            # Disparar verificación de stock en background — throttled a 2 threads concurrentes
+            # para no colapsar el connection pool DB durante apertura de turno (N operarios simultáneos)
             try:
-                import threading as _t
                 from app.services.reposicion_service import verificar_stock_picking as _vsp
-                _t.Thread(target=_vsp, args=(almacen_id,), daemon=True).start()
+
+                def _run_vsp(aid):
+                    if _STOCK_VERIF_SEMAPHORE.acquire(blocking=False):
+                        try:
+                            _vsp(aid)
+                        finally:
+                            _STOCK_VERIF_SEMAPHORE.release()
+
+                import threading as _t
+                _t.Thread(target=_run_vsp, args=(almacen_id,), daemon=True).start()
             except Exception as _e:
                 logger.warning(f'[MOBILE] verificar_stock_picking falló silenciosamente: {_e}')
             return resultado
