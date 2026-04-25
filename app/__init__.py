@@ -37,6 +37,28 @@ def create_app():
     allowed_origin = os.getenv('APP_URL', '*')
     cors.init_app(app, resources={r"/api/*": {"origins": allowed_origin}})
 
+    # Revocación de tokens: si el usuario se desactiva (activo=False),
+    # sus tokens existentes se tratan como revocados inmediatamente.
+    # Flask-JWT-Extended llama esto en cada @jwt_required() antes de continuar.
+    from app.extensions import jwt as _jwt
+
+    @_jwt.token_in_blocklist_loader
+    def _check_usuario_activo(jwt_header, jwt_payload):
+        uid = jwt_payload.get('sub')
+        if not uid:
+            return True   # token inválido — revocar
+        try:
+            from app.models.usuario import Usuario
+            u = Usuario.query.get(int(uid))
+            return u is None or not u.activo
+        except Exception:
+            return False  # en caso de error de DB, no bloquear (fail-open)
+
+    @_jwt.revoked_token_loader
+    def _revoked_token_response(jwt_header, jwt_payload):
+        from flask import jsonify
+        return jsonify({'error': 'Usuario desactivado o sesión revocada'}), 401
+
     from flask import jsonify
 
     @app.errorhandler(500)
