@@ -10,7 +10,7 @@ import threading
 from datetime import datetime, timezone
 from app.extensions import db
 from app.models.producto import Producto
-from app.models.siesa_mapeo_unidades import SiesaMapeоUnidades
+from app.models.siesa_mapeo_unidades import SiesaMapeoUnidades
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ def _run_sync(app):
             # Cargar tabla de mapeo en memoria para evitar N queries por item
             mapeo_unidades = {
                 m.tipo_inv_siesa: m.unidad_negocio_id
-                for m in SiesaMapeоUnidades.query.all()
+                for m in SiesaMapeoUnidades.query.all()
             }
             tipos_sin_mapeo = set()  # tipos que Siesa devuelve pero no están en nuestra tabla
 
@@ -159,9 +159,9 @@ def _run_sync(app):
             # Auto-insertar tipos desconocidos con unidad_negocio_id=NULL
             # El admin los verá en /api/config/mapeo-unidades y los completa con un click
             for tipo in lista:
-                existe = SiesaMapeоUnidades.query.filter_by(tipo_inv_siesa=tipo).first()
+                existe = SiesaMapeoUnidades.query.filter_by(tipo_inv_siesa=tipo).first()
                 if not existe:
-                    db.session.add(SiesaMapeоUnidades(
+                    db.session.add(SiesaMapeoUnidades(
                         tipo_inv_siesa=tipo,
                         unidad_negocio_id='',  # vacío — admin debe completar
                         descripcion='Auto-descubierto por sync — asignar Unidad de Negocio'

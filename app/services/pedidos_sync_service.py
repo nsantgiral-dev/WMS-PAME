@@ -92,23 +92,29 @@ def _run_sync(app):
                 except (ValueError, TypeError):
                     continue
 
+            # ── Pre-cargar todos los productos en memoria para el upsert — elimina N+1 ──
+            # Sin esto: 2 queries × N items (potencialmente 2000 queries para 1000 items)
+            _todos_prods = Producto.query.all()
+            _mapa_prod_siesa = {p.codigo_siesa: p for p in _todos_prods if p.codigo_siesa}
+            _mapa_prod_codigo = {p.codigo: p for p in _todos_prods}
+
+            # ── Pre-cargar todos los PedidoSiesa activos en memoria ──────────────────
+            # Evita 1 query por item durante el upsert
+            _pedidos_existentes = {
+                (r.tipo_docto, r.consec_docto, r.centro_op, r.bodega, r.item_codigo): r
+                for r in PedidoSiesa.query.all()
+            }
+
             # Upsert en DB local
             claves_activas = set()
             for d in items_nb1:
                 clave = (d['tipo_docto'], d['consec_docto'], d['centro_op'], d['bodega'], d['item_codigo'])
                 claves_activas.add(clave)
 
-                reg = PedidoSiesa.query.filter_by(
-                    tipo_docto=d['tipo_docto'],
-                    consec_docto=d['consec_docto'],
-                    centro_op=d['centro_op'],
-                    bodega=d['bodega'],
-                    item_codigo=d['item_codigo']
-                ).first()
+                reg = _pedidos_existentes.get(clave)
 
-                # Enriquecer con producto_id
-                prod = (Producto.query.filter_by(codigo_siesa=d['item_codigo']).first()
-                        or Producto.query.filter_by(codigo=d['item_codigo']).first())
+                # Enriquecer con producto_id (O(1) lookup en vez de 2 queries)
+                prod = _mapa_prod_siesa.get(d['item_codigo']) or _mapa_prod_codigo.get(d['item_codigo'])
 
                 if reg:
                     reg.cantidad_pedida      = d['cantidad_pedida']
@@ -127,6 +133,7 @@ def _run_sync(app):
                         sync_at=datetime.utcnow()
                     )
                     db.session.add(reg)
+                    _pedidos_existentes[clave] = reg  # evita duplicar si misma clave aparece dos veces
                 upserts += 1
 
             # ── Detectar packings/pickings activos cuyo pedido desapareció de Siesa ──

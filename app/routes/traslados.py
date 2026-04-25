@@ -205,7 +205,7 @@ def confirmar_picking(id):
     # Verificar que el operario que confirma es el asignado (o un admin)
     usuario = Usuario.query.get(usuario_id)
     es_admin = usuario and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen')
-    if not es_admin and s.operario_id and s.operario_id != usuario_id:
+    if not es_admin and s.operario_id != usuario_id:
         return jsonify({'error': 'Solo el operario asignado puede confirmar la recogida'}), 403
 
     data = request.get_json() or {}
@@ -516,6 +516,10 @@ def mis_traslados():
 @jwt_required()
 def operarios_disponibles():
     """Admin: lista operarios activos para asignar a un traslado."""
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in Roles.DESPACHO:
+        return jsonify({'error': 'Sin permiso'}), 403
     operarios = Usuario.query.filter(
         Usuario.activo == True,
         Usuario.rol == 'operario',
@@ -533,6 +537,10 @@ def stock_disponible():
     Devuelve todos los productos con disponible > 0 sin paginar — el filtrado
     es client-side en la tienda (buscador local sobre _TIENDA_STOCK).
     """
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in Roles.DESPACHO + (Roles.TIENDA,):
+        return jsonify({'error': 'Sin permiso para ver stock disponible'}), 403
     bodega = request.args.get('bodega')
     try:
         resultado = TrasladoService.get_stock_disponible(bodega)

@@ -553,6 +553,7 @@ def _run_reconciliacion(app):
 
         except Exception as e:
             logger.error(f'[RECONCILIACION] Error: {e}')
+            db.session.rollback()
             _estado_reconciliacion['ultimo_error'] = str(e)
             _estado_reconciliacion['ultimo_resultado'] = None
 

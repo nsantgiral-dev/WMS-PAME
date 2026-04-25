@@ -244,31 +244,48 @@ class MobileService:
                         f'({conteos_hoy + 1 if capacidad > 0 else "∞"}/{capacidad or "∞"})'
                     )
 
+        # Capturar atributos antes del commit — expire_on_commit los invalida después
+        _tarea_id = tarea.id
+        _tarea_codigo = tarea.codigo
+        _tarea_prioridad = tarea.prioridad
+        _tarea_ubicacion = tarea.ubicacion.codigo if tarea.ubicacion else ''
+        _tarea_producto_id = tarea.producto_id
+        _tarea_almacen_id = tarea.almacen_id
+        _tarea_producto_codigo = tarea.producto.codigo if tarea.producto else ''
+        _tarea_producto_nombre = tarea.producto.nombre if tarea.producto else ''
+        _tarea_cantidad_requerida = tarea.cantidad_solicitada
+        _tarea_cantidad_escaneada = tarea.cantidad_recogida
+        _tarea_empaques_escaneados = tarea.empaques_escaneados or 0
+        _tarea_factor = tarea.producto.factor_conversion or 1 if tarea.producto else 1
+        _tarea_unidad_empaque = (tarea.producto.unidad_empaque or '').upper() if tarea.producto else ''
+        _tarea_referencia = tarea.referencia_documento
+        _tarea_lote = tarea.lote
+
         # Asignar picking al operario
         tarea.operario_id = operario_id
         tarea.estado = 'EN_PROCESO'
         tarea.fecha_inicio = datetime.utcnow()
         db.session.commit()
 
-        logger.info(f'[MOBILE] Picking {tarea.codigo} asignado a operario {operario_id}')
+        logger.info(f'[MOBILE] Picking {_tarea_codigo} asignado a operario {operario_id}')
 
         resultado = {
-            'id': tarea.id,
+            'id': _tarea_id,
             'tipo': 'PICKING',
-            'prioridad': tarea.prioridad,
-            'ubicacion': tarea.ubicacion.codigo if tarea.ubicacion else '',
-            'producto_id': tarea.producto_id,
-            'almacen_id': tarea.almacen_id,
-            'producto_codigo': tarea.producto.codigo if tarea.producto else '',
-            'producto_nombre': tarea.producto.nombre if tarea.producto else '',
-            'cantidad_requerida': tarea.cantidad_solicitada,
-            'cantidad_escaneada': tarea.cantidad_recogida,
-            'empaques_escaneados': tarea.empaques_escaneados or 0,
-            'factor_conversion': tarea.producto.factor_conversion or 1 if tarea.producto else 1,
-            'unidad_empaque': (tarea.producto.unidad_empaque or '').upper() if tarea.producto else '',
-            'estado': tarea.estado,
-            'referencia': tarea.referencia_documento,
-            'lote': tarea.lote,
+            'prioridad': _tarea_prioridad,
+            'ubicacion': _tarea_ubicacion,
+            'producto_id': _tarea_producto_id,
+            'almacen_id': _tarea_almacen_id,
+            'producto_codigo': _tarea_producto_codigo,
+            'producto_nombre': _tarea_producto_nombre,
+            'cantidad_requerida': _tarea_cantidad_requerida,
+            'cantidad_escaneada': _tarea_cantidad_escaneada,
+            'empaques_escaneados': _tarea_empaques_escaneados,
+            'factor_conversion': _tarea_factor,
+            'unidad_empaque': _tarea_unidad_empaque,
+            'estado': 'EN_PROCESO',
+            'referencia': _tarea_referencia,
+            'lote': _tarea_lote,
             'conteo_intercalado': conteo_intercalado,
         }
         return resultado

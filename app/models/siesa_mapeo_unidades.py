@@ -1,7 +1,7 @@
 from app.extensions import db
 
 
-class SiesaMapeоUnidades(db.Model):
+class SiesaMapeoUnidades(db.Model):
     """
     Tabla de configuración administrable que mapea el Tipo de Inventario
     de Siesa (f120_id_tipo_inv_serv) a la Unidad de Negocio (f441_id_un_movto).

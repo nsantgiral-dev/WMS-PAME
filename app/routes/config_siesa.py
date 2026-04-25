@@ -4,7 +4,7 @@ Escritura solo accesible para admin.
 """
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
-from app.models.siesa_mapeo_unidades import SiesaMapeоUnidades
+from app.models.siesa_mapeo_unidades import SiesaMapeoUnidades
 from app.extensions import db
 
 config_siesa_bp = Blueprint('config_siesa', __name__)
@@ -16,7 +16,7 @@ from app.routes._auth_helpers import _solo_admin
 @config_siesa_bp.route('/mapeo-unidades', methods=['GET'])
 @jwt_required()
 def listar_mapeos():
-    mapeos = SiesaMapeоUnidades.query.order_by(SiesaMapeоUnidades.tipo_inv_siesa).all()
+    mapeos = SiesaMapeoUnidades.query.order_by(SiesaMapeoUnidades.tipo_inv_siesa).all()
     return jsonify([m.to_dict() for m in mapeos]), 200
 
 
@@ -30,9 +30,9 @@ def crear_mapeo():
     unidad = (data.get('unidad_negocio_id') or '').strip()
     if not tipo or not unidad:
         return jsonify({'error': 'tipo_inv_siesa y unidad_negocio_id son requeridos'}), 400
-    if SiesaMapeоUnidades.query.filter_by(tipo_inv_siesa=tipo).first():
+    if SiesaMapeoUnidades.query.filter_by(tipo_inv_siesa=tipo).first():
         return jsonify({'error': f'Ya existe mapeo para {tipo}'}), 409
-    m = SiesaMapeоUnidades(
+    m = SiesaMapeoUnidades(
         tipo_inv_siesa=tipo,
         unidad_negocio_id=unidad,
         descripcion=data.get('descripcion', ''),
@@ -47,7 +47,7 @@ def crear_mapeo():
 def actualizar_mapeo(id):
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede modificar mapeos'}), 403
-    m = SiesaMapeоUnidades.query.get_or_404(id)
+    m = SiesaMapeoUnidades.query.get_or_404(id)
     data = request.get_json() or {}
     if 'unidad_negocio_id' in data:
         m.unidad_negocio_id = data['unidad_negocio_id'].strip()
@@ -62,7 +62,7 @@ def actualizar_mapeo(id):
 def eliminar_mapeo(id):
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede eliminar mapeos'}), 403
-    m = SiesaMapeоUnidades.query.get_or_404(id)
+    m = SiesaMapeoUnidades.query.get_or_404(id)
     db.session.delete(m)
     db.session.commit()
     return jsonify({'ok': True}), 200
