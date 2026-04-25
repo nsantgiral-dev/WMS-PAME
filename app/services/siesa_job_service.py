@@ -138,14 +138,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
     payload = job.get_payload()
 
     if job.tipo == 'TRANSFERENCIA_UBICACIONES':
-        # [57] TODO: riesgo de duplicado — Siesa puede haber procesado el primer intento
-        # sin retornar éxito (timeout de red). Verificar en Siesa si el traslado ya existe
-        # antes de reenviar para evitar doble movimiento de inventario.
+        # P4: transferencias no son idempotentes en Siesa. Si el primer intento llegó
+        # (timeout de red) y reintentamos, creamos un doble movimiento de inventario.
+        # Solución conservadora: abortar el reintento y dejar que la reconciliación nocturna
+        # detecte la discrepancia, en lugar de arriesgar duplicar el traslado en Siesa.
         if job.intentos > 0:
             logger.warning(
-                f'[DLQ] REINTENTO TRANSFERENCIA_UBICACIONES job={job.id} intento={job.intentos + 1} '
-                f'— riesgo de duplicado si el primer intento llegó a Siesa sin confirmación. '
-                f'Verificar manualmente en Siesa si el traslado ya fue registrado.'
+                f'[DLQ] TRANSFERENCIA_UBICACIONES job={job.id} intento={job.intentos + 1} '
+                f'abortado por riesgo de duplicado — la reconciliación nocturna detectará '
+                f'la discrepancia si el primer intento falló realmente.'
+            )
+            job.max_intentos = job.intentos  # fuerza FALLIDO en el ciclo siguiente
+            raise Exception(
+                'Reintento abortado: transferencia no idempotente — revisar manualmente en Siesa'
             )
         return connekta.transferir_entre_ubicaciones(
             bodega_id=payload['bodega_id'],

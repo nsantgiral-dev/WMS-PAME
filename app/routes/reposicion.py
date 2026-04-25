@@ -15,6 +15,21 @@ Rutas de Reposición — Abastecedor + Admin.
 
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.extensions import db
+from app.models.inventario import UbicacionProducto
+from app.models.producto import Producto
+from app.models.siesa_job import SiesaJob
+from app.models.tarea_reposicion import TareaReposicion
+from app.models.ubicacion import Ubicacion
+from app.models.ubicacion_huerfana import UbicacionHuerfana
+from app.models.usuario import Usuario
+from app.routes._auth_helpers import _es_admin_o_jefe
+from app.services.alertas_service import enviar_email, _config_resend
+from app.services.connekta_gateway import connekta
+from app.services.ola_predictiva_service import pre_verificar_ola as _verificar
+from app.services.reposicion_service import confirmar_reposicion, get_tarea_abastecedor, get_tareas_abastecedor, verificar_stock_picking
+from app.services.siesa_job_service import get_jobs_fallidos, reintentar_job as _reintentar
+from app.services.ubicaciones_sync_service import get_estado, sync_ubicaciones_desde_siesa
 
 reposicion_bp = Blueprint('reposicion', __name__)
 
@@ -27,7 +42,6 @@ reposicion_bp = Blueprint('reposicion', __name__)
 @jwt_required()
 def tarea_actual():
     """Próxima tarea de reposición para el abastecedor."""
-    from app.services.reposicion_service import get_tarea_abastecedor
     abastecedor_id = int(get_jwt_identity())
     tarea = get_tarea_abastecedor(abastecedor_id)
     if not tarea:
@@ -39,7 +53,6 @@ def tarea_actual():
 @jwt_required()
 def mis_tareas():
     """Todas las tareas activas del abastecedor."""
-    from app.services.reposicion_service import get_tareas_abastecedor
     abastecedor_id = int(get_jwt_identity())
     tareas = get_tareas_abastecedor(abastecedor_id)
     return jsonify({'tareas': tareas, 'total': len(tareas)}), 200
@@ -53,7 +66,6 @@ def confirmar():
 
     Payload: { tarea_id, lpn_codigo (opcional — para validar escaneo) }
     """
-    from app.services.reposicion_service import confirmar_reposicion
     abastecedor_id = int(get_jwt_identity())
     data = request.get_json() or {}
 
@@ -82,12 +94,10 @@ def confirmar():
 @jwt_required()
 def verificar_stock():
     """Fuerza una verificación de stock en todas las zonas PICKING."""
-    from app.models.usuario import Usuario
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
         return jsonify({'error': 'Solo admin o jefe de almacén puede verificar stock'}), 403
-    from app.services.reposicion_service import verificar_stock_picking
     data = request.get_json() or {}
     almacen_id = data.get('almacen_id')
     try:
@@ -101,12 +111,10 @@ def verificar_stock():
 @jwt_required()
 def pendientes():
     """Lista tareas filtradas por estado (admin / jefe de almacén)."""
-    from app.models.usuario import Usuario
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
-    from app.models.tarea_reposicion import TareaReposicion
     estado = request.args.get('estado', '').upper()
     estados_validos = {'PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'CANCELADA'}
 
@@ -124,13 +132,10 @@ def pendientes():
 @jwt_required()
 def cancelar(tarea_id):
     """Cancela una tarea de reposición (admin)."""
-    from app.models.usuario import Usuario
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
         return jsonify({'error': 'Solo admin o jefe de almacén puede cancelar tareas'}), 403
-    from app.extensions import db
-    from app.models.tarea_reposicion import TareaReposicion
     data = request.get_json() or {}
 
     tarea = TareaReposicion.query.get(tarea_id)
@@ -156,12 +161,10 @@ def sync_ubicaciones():
     Dispara la sincronización de ubicaciones desde Siesa (API_v2_Ubicaciones ID 43).
     Corre en hilo de fondo — retorna inmediatamente.
     """
-    from app.models.usuario import Usuario
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
         return jsonify({'error': 'Solo admin o jefe de almacén puede disparar el sync de ubicaciones'}), 403
-    from app.services.ubicaciones_sync_service import sync_ubicaciones_desde_siesa
     data = request.get_json() or {}
     bodega_id = data.get('bodega_id')
     try:
@@ -178,7 +181,6 @@ def sync_ubicaciones():
 @reposicion_bp.route('/sync-ubicaciones/estado', methods=['GET'])
 @jwt_required()
 def sync_ubicaciones_estado():
-    from app.services.ubicaciones_sync_service import get_estado
     return jsonify(get_estado()), 200
 
 
@@ -194,20 +196,23 @@ def configurar_limites(ubicacion_id):
 
     Payload: { stock_minimo, stock_maximo, secuencia_ruteo (opcional) }
     """
-    from app.extensions import db
-    from app.models.ubicacion import Ubicacion
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén pueden configurar límites'}), 403
 
     ub = Ubicacion.query.get(ubicacion_id)
     if not ub:
         return jsonify({'error': f'Ubicación {ubicacion_id} no encontrada'}), 404
 
     data = request.get_json() or {}
-    if 'stock_minimo' in data:
-        ub.stock_minimo = int(data['stock_minimo']) if data['stock_minimo'] is not None else None
-    if 'stock_maximo' in data:
-        ub.stock_maximo = int(data['stock_maximo']) if data['stock_maximo'] is not None else None
-    if 'secuencia_ruteo' in data:
-        ub.secuencia_ruteo = int(data['secuencia_ruteo']) if data['secuencia_ruteo'] is not None else None
+    try:
+        if 'stock_minimo' in data:
+            ub.stock_minimo = int(data['stock_minimo']) if data['stock_minimo'] is not None else None
+        if 'stock_maximo' in data:
+            ub.stock_maximo = int(data['stock_maximo']) if data['stock_maximo'] is not None else None
+        if 'secuencia_ruteo' in data:
+            ub.secuencia_ruteo = int(data['secuencia_ruteo']) if data['secuencia_ruteo'] is not None else None
+    except (TypeError, ValueError) as e:
+        return jsonify({'error': f'Valor numérico inválido: {e}'}), 400
 
     db.session.commit()
     return jsonify({'ok': True, 'ubicacion': ub.to_dict()}), 200
@@ -220,8 +225,6 @@ def listar_ubicaciones_picking():
     Lista ubicaciones PICKING con sus límites configurados.
     El admin ve aquí qué zonas tienen min/max y cuáles faltan por configurar.
     """
-    from app.models.ubicacion import Ubicacion
-    from app.models.inventario import UbicacionProducto
 
     almacen_id = request.args.get('almacen_id', type=int)
     q = Ubicacion.query.filter(Ubicacion.tipo_zona == 'PICKING', Ubicacion.activo == True)
@@ -230,7 +233,6 @@ def listar_ubicaciones_picking():
 
     ubicaciones = q.order_by(Ubicacion.codigo).all()
 
-    from app.models.producto import Producto
     resultado = []
     for ub in ubicaciones:
         inventarios = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).all()
@@ -271,7 +273,6 @@ def listar_ubicaciones_picking():
 @jwt_required()
 def ubicaciones_huerfanas():
     """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync Siesa)."""
-    from app.models.ubicacion_huerfana import UbicacionHuerfana
     items = UbicacionHuerfana.query.order_by(
         UbicacionHuerfana.veces_detectada.desc(),
         UbicacionHuerfana.fecha_ultima_vez.desc(),
@@ -290,7 +291,6 @@ def jobs_fallidos():
     Alerta roja — jobs que fallaron 3 veces y necesitan intervención manual.
     El admin verifica el periodo contable en Siesa y luego reintenta.
     """
-    from app.services.siesa_job_service import get_jobs_fallidos
     jobs = get_jobs_fallidos()
     return jsonify({
         'total': len(jobs),
@@ -303,7 +303,6 @@ def jobs_fallidos():
 @jwt_required()
 def reintentar_job(job_id):
     """Admin fuerza un reintento de un job FALLIDO."""
-    from app.services.siesa_job_service import reintentar_job as _reintentar
     try:
         resultado = _reintentar(job_id)
         return jsonify({'ok': True, 'job': resultado}), 200
@@ -315,7 +314,6 @@ def reintentar_job(job_id):
 @jwt_required()
 def listar_jobs():
     """Lista todos los jobs (filtrable por estado)."""
-    from app.models.siesa_job import SiesaJob
     estado = request.args.get('estado')
     q = SiesaJob.query.order_by(SiesaJob.fecha_creacion.desc())
     if estado:
@@ -339,7 +337,6 @@ def pre_verificar_ola():
 
     Payload: { almacen_id, items: [{ producto_id, cantidad }, ...] }
     """
-    from app.services.ola_predictiva_service import pre_verificar_ola as _verificar
     data = request.get_json() or {}
     items = data.get('items', [])
     almacen_id = data.get('almacen_id')
@@ -361,7 +358,6 @@ def debug_ubicaciones_raw():
     Descarga la primera página de API_v2_Ubicaciones sin procesar.
     Usar para certificar nombres exactos de campos antes del primer sync real.
     """
-    from app.services.connekta_gateway import connekta
     bodega_id = request.args.get('bodega_id', connekta.bodega)
     try:
         resp = connekta.get_ubicaciones_siesa(bodega_id=bodega_id, pagina=1)
@@ -384,13 +380,10 @@ def debug_ubicaciones_raw():
 @jwt_required()
 def test_alerta_email():
     """Envía un email de prueba via Resend. Muestra el error real si falla."""
-    from app.models.usuario import Usuario
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
         return jsonify({'error': 'Solo admin o jefe de almacén puede enviar emails de prueba'}), 403
-    from app.services.alertas_service import enviar_email, _config_resend
-    from app.models.ubicacion_huerfana import UbicacionHuerfana
     from datetime import datetime
 
     if not _config_resend():

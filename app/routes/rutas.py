@@ -6,18 +6,80 @@ from datetime import datetime, date
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
+from app.models.bulto import Bulto
 from app.models.conductor import Conductor
+from app.models.packing import TareaPacking
+from app.models.recaudo_entrega import RecaudoEntrega
 from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho
+from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin
 
 rutas_bp = Blueprint('rutas', __name__)
 
 
-from app.routes._auth_helpers import _es_admin_o_jefe
+def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
+    """Lógica de bultos y recaudo extraída de confirmar_parada para testabilidad."""
+    bultos_tarea = Bulto.query.filter_by(tarea_id=tarea_id, ruta_despacho_id=ruta_id).all()
+    if not bultos_tarea:
+        raise ValueError('Esta factura no pertenece a la ruta')
 
+    estado_entrega = data.get('estado_entrega', '').upper()
+    if estado_entrega not in ('ENTREGADO', 'PARCIAL', 'RECHAZADO'):
+        raise ValueError('estado_entrega debe ser ENTREGADO, PARCIAL o RECHAZADO')
 
-from app.routes._auth_helpers import _solo_admin
+    forma_pago = data.get('forma_pago', '').upper() or None
+    if forma_pago and forma_pago not in ('EFECTIVO', 'TRANSFERENCIA', 'CHEQUE', 'CREDITO', 'EXENTO'):
+        raise ValueError('forma_pago inválido')
+
+    foto = data.get('foto_entrega', '') or None
+    if foto and len(foto) > 1_150_000:
+        raise ValueError('Foto demasiado grande. Máximo ~800KB JPEG.')
+
+    ids_tarea = {b.id for b in bultos_tarea}
+    bultos_rechazados_ids = data.get('bultos_rechazados', [])
+    if estado_entrega == 'RECHAZADO' and not bultos_rechazados_ids:
+        bultos_rechazados_ids = [b.id for b in bultos_tarea]
+    if estado_entrega == 'PARCIAL' and not bultos_rechazados_ids:
+        raise ValueError('Para entrega parcial debes indicar cuáles bultos fueron rechazados')
+
+    ahora = datetime.utcnow()
+    ids_rechazados_set = set(bultos_rechazados_ids)
+
+    for b in bultos_tarea:
+        if b.id in ids_rechazados_set:
+            b.estado = 'RECHAZADO'
+            b.motivo_rechazo = data.get('observaciones', 'Rechazado en entrega')[:100]
+            b.fecha_entrega = ahora
+        else:
+            b.estado = 'ENTREGADO'
+            b.fecha_entrega = ahora
+
+    recaudo = RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id).first()
+    es_edicion = recaudo is not None
+
+    if not recaudo:
+        recaudo = RecaudoEntrega(
+            ruta_id=ruta_id,
+            tarea_id=tarea_id,
+            fecha_creacion=ahora,
+            confirmado_por=usuario_id,
+        )
+        db.session.add(recaudo)
+    else:
+        recaudo.editado_por = usuario_id
+        recaudo.editado_en = ahora
+
+    recaudo.estado_entrega        = estado_entrega
+    recaudo.forma_pago            = forma_pago
+    recaudo.monto_cobrado         = data.get('monto_cobrado', 0) or 0
+    recaudo.observaciones         = data.get('observaciones', '') or None
+    recaudo.foto_entrega          = foto
+    recaudo.bultos_rechazados_ids = list(ids_rechazados_set & ids_tarea)
+    recaudo.fecha_confirmacion    = ahora
+
+    db.session.commit()
+    return recaudo, es_edicion
 
 
 # ── Conductores ──────────────────────────────────────────────────
@@ -361,7 +423,6 @@ def iniciar_ruta(id):
     PROGRAMADO → EN_CARGUE.
     Devuelve además los bultos sugeridos por municipio de la ruta maestra.
     """
-    from app.models.bulto import Bulto
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'PROGRAMADO':
         return jsonify({'error': f'La ruta debe estar PROGRAMADO, está {ruta.estado}'}), 400
@@ -396,8 +457,6 @@ def iniciar_ruta(id):
 @jwt_required()
 def sugeridos_ruta(id):
     """Bultos sin asignar que coinciden con los municipios de la ruta maestra."""
-    from app.models.bulto import Bulto
-    from app.models.packing import TareaPacking
     ruta = RutaDespacho.query.get_or_404(id)
 
     if not ruta.ruta_maestra:
@@ -425,7 +484,6 @@ def cerrar_ruta(id):
     """EN_CARGUE → EN_TRANSITO. Solo admin/jefe."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén puede cerrar rutas'}), 403
-    from app.models.bulto import Bulto
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'EN_CARGUE':
         return jsonify({'error': f'La ruta ya está en estado {ruta.estado}'}), 400
@@ -458,7 +516,6 @@ def entregar_ruta(id):
     - Si no se manda payload (flujo legacy sin bultos): cierra directo.
     - Ruta → ENTREGADA al final.
     """
-    from app.models.bulto import Bulto
 
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'EN_TRANSITO':
@@ -536,7 +593,6 @@ def usuarios_conductores():
 @jwt_required()
 def bultos_rechazados():
     """Bultos rechazados en entrega — aparecen en panel recepcionista para re-ingresar."""
-    from app.models.bulto import Bulto
     bultos = (Bulto.query
               .filter_by(estado='RECHAZADO')
               .order_by(Bulto.fecha_entrega.desc())
@@ -554,8 +610,6 @@ def listar_paradas(id):
     Devuelve las facturas (TareaPacking) de la ruta con sus bultos y recaudo.
     Accesible por admin/jefe y por el conductor dueño de la ruta.
     """
-    from app.models.bulto import Bulto
-    from app.models.recaudo_entrega import RecaudoEntrega
 
     ruta = RutaDespacho.query.get_or_404(id)
     usuario_id = int(get_jwt_identity())
@@ -619,94 +673,27 @@ def confirmar_parada(id, tarea_id):
         bultos_rechazados: [id, ...] # requerido si PARCIAL o RECHAZADO
     }
     """
-    from app.models.bulto import Bulto
-    from app.models.packing import TareaPacking
-    from app.models.recaudo_entrega import RecaudoEntrega
-
     ruta = RutaDespacho.query.get_or_404(id)
     if ruta.estado != 'EN_TRANSITO':
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
 
-    tarea = TareaPacking.query.get_or_404(tarea_id)
+    TareaPacking.query.get_or_404(tarea_id)
 
-    # Verificar que la tarea tiene bultos en esta ruta
-    bultos_tarea = Bulto.query.filter_by(tarea_id=tarea_id, ruta_despacho_id=id).all()
-    if not bultos_tarea:
-        return jsonify({'error': 'Esta factura no pertenece a la ruta'}), 404
-
-    # Acceso: admin/jefe o conductor dueño
     usuario_id = int(get_jwt_identity())
     conductor_ruta = Conductor.query.filter_by(usuario_id=usuario_id, activo=True).first()
-    es_admin = _es_admin_o_jefe()
-    if not es_admin and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
+    if not _es_admin_o_jefe() and (not conductor_ruta or conductor_ruta.id != ruta.conductor_id):
         return jsonify({'error': 'Sin acceso a esta ruta'}), 403
 
     data = request.get_json() or {}
-    estado_entrega = data.get('estado_entrega', '').upper()
-    if estado_entrega not in ('ENTREGADO', 'PARCIAL', 'RECHAZADO'):
-        return jsonify({'error': 'estado_entrega debe ser ENTREGADO, PARCIAL o RECHAZADO'}), 400
+    try:
+        recaudo, es_edicion = _procesar_confirmacion_parada(id, tarea_id, usuario_id, data)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
-    forma_pago = data.get('forma_pago', '').upper() or None
-    if forma_pago and forma_pago not in ('EFECTIVO', 'TRANSFERENCIA', 'CHEQUE', 'CREDITO', 'EXENTO'):
-        return jsonify({'error': 'forma_pago inválido'}), 400
-
-    foto = data.get('foto_entrega', '') or None
-    if foto and len(foto) > 1_150_000:
-        return jsonify({'error': 'Foto demasiado grande. Máximo ~800KB JPEG.'}), 400
-
-    bultos_rechazados_ids = data.get('bultos_rechazados', [])
-    # RECHAZADO total: si no se especifican bultos, se rechazan TODOS automáticamente
-    if estado_entrega == 'RECHAZADO' and not bultos_rechazados_ids:
-        bultos_rechazados_ids = [b.id for b in bultos_tarea]
-    # PARCIAL sí requiere selección explícita de qué bultos no pudieron entregarse
-    if estado_entrega == 'PARCIAL' and not bultos_rechazados_ids:
-        return jsonify({'error': 'Para entrega parcial debes indicar cuáles bultos fueron rechazados'}), 400
-
-    ahora = datetime.utcnow()
-
-    # Actualizar estado de cada bulto — con SELECT FOR UPDATE para evitar concurrencia
-    ids_tarea = {b.id for b in bultos_tarea}
-    ids_rechazados_set = set(bultos_rechazados_ids)
-
-    for b in bultos_tarea:
-        if b.id in ids_rechazados_set:
-            b.estado = 'RECHAZADO'
-            b.motivo_rechazo = data.get('observaciones', 'Rechazado en entrega')[:100]
-            b.fecha_entrega = ahora
-        else:
-            b.estado = 'ENTREGADO'
-            b.fecha_entrega = ahora
-
-    # Crear o actualizar RecaudoEntrega
-    recaudo = RecaudoEntrega.query.filter_by(ruta_id=id, tarea_id=tarea_id).first()
-    es_edicion = recaudo is not None
-
-    if not recaudo:
-        recaudo = RecaudoEntrega(
-            ruta_id=id,
-            tarea_id=tarea_id,
-            fecha_creacion=ahora,
-            confirmado_por=usuario_id,
-        )
-        db.session.add(recaudo)
-    else:
-        # Edición — registrar audit trail
-        recaudo.editado_por = usuario_id
-        recaudo.editado_en = ahora
-
-    recaudo.estado_entrega        = estado_entrega
-    recaudo.forma_pago            = forma_pago
-    recaudo.monto_cobrado         = data.get('monto_cobrado', 0) or 0
-    recaudo.observaciones         = data.get('observaciones', '') or None
-    recaudo.foto_entrega          = foto
-    recaudo.bultos_rechazados_ids = list(ids_rechazados_set & ids_tarea)
-    recaudo.fecha_confirmacion    = ahora
-
-    db.session.commit()
     return jsonify({
-        'ok':          True,
-        'recaudo':     recaudo.to_dict(),
-        'es_edicion':  es_edicion,
+        'ok':         True,
+        'recaudo':    recaudo.to_dict(),
+        'es_edicion': es_edicion,
     }), 200
 
 
@@ -716,7 +703,6 @@ def planilla_ruta(id):
     """
     Vista de planilla completa para admin: todas las paradas con recaudos y totales.
     """
-    from app.models.recaudo_entrega import RecaudoEntrega
 
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe puede ver la planilla'}), 403
@@ -777,7 +763,6 @@ def liquidar_ruta(id):
         return jsonify({'error': f'No se puede liquidar una ruta en estado {ruta.estado}'}), 400
 
     tareas = ruta.tareas_unicas()
-    from app.models.recaudo_entrega import RecaudoEntrega
     gestionadas = RecaudoEntrega.query.filter_by(ruta_id=id).count()
     sin_gestionar = len(tareas) - gestionadas
 
@@ -812,9 +797,6 @@ def forzar_cierre_ruta(id):
     if ruta.estado != 'EN_TRANSITO':
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO para forzar cierre (estado: {ruta.estado})'}), 400
 
-    from app.models.recaudo_entrega import RecaudoEntrega
-    from app.models.packing import TareaPacking
-    from app.models.bulto import Bulto
 
     admin_id = int(get_jwt_identity())
     tareas = ruta.tareas_unicas()
