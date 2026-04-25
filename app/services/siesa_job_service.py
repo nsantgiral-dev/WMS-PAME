@@ -363,10 +363,49 @@ def _ejecutar_job(job: SiesaJob) -> dict:
 
         # P4: idempotencia — si siesa_triggered, no reenviar
         if sesion_cteo.siesa_triggered:
-            logger.info(
-                f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} ya tiene '
-                f'siesa_triggered=True — omitiendo llamada (idempotencia P4)'
-            )
+            # Si la sesión quedó atascada en AJUSTANDO (crash entre mini-commit y full-commit),
+            # recuperar el estado final sin volver a llamar a Siesa.
+            if sesion_cteo.estado == 'AJUSTANDO':
+                logger.warning(
+                    f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} atascada en '
+                    f'AJUSTANDO con siesa_triggered=True — recuperando estado AJUSTADO'
+                )
+                try:
+                    _now_rec = datetime.utcnow()
+                    sesion_cteo.estado = 'AJUSTADO'
+                    sesion_cteo.fecha_cierre = sesion_cteo.fecha_cierre or _now_rec
+                    if not sesion_cteo.siesa_response:
+                        sesion_cteo.siesa_response = json.dumps({'recuperado_dlq': True, 'job_id': job.id})
+                    # Reaplicar cambio de inventario si había una excepción de picking
+                    _tpid = payload.get('tarea_picking_id')
+                    if _tpid:
+                        _mc = payload.get('motivo_codigo')
+                        _cant = payload.get('cantidad', 0)
+                        _inv = (_UbicProd.query
+                                .filter_by(
+                                    ubicacion_id=payload.get('ubicacion_id'),
+                                    producto_id=payload.get('producto_id')
+                                ).with_for_update().first())
+                        if _inv:
+                            _inv.bloqueado = max(0, _inv.bloqueado - _cant)
+                            if _mc == 'AJ-SAL':
+                                _inv.cantidad = max(0, _inv.cantidad - _cant)
+                            else:
+                                _inv.cantidad += _cant
+                    db.session.commit()
+                    logger.info(
+                        f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} recuperada → AJUSTADO'
+                    )
+                except Exception as _e_rec:
+                    db.session.rollback()
+                    logger.error(
+                        f'[DLQ] AJUSTE_CONTEO job={job.id}: fallo al recuperar sesion {sesion_id}: {_e_rec}'
+                    )
+            else:
+                logger.info(
+                    f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} ya tiene '
+                    f'siesa_triggered=True — omitiendo llamada (idempotencia P4)'
+                )
             return {'idempotente': True, 'sesion_id': sesion_id}
 
         item_codigo = payload.get('item_codigo')
