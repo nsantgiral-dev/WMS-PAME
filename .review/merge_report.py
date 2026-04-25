@@ -779,6 +779,10 @@ def main():
     parser.add_argument("--performance")
     parser.add_argument("--siesa")
     parser.add_argument("--debt")
+    parser.add_argument("--siesa-spec")
+    parser.add_argument("--patterns")
+    parser.add_argument("--resilience")
+    parser.add_argument("--invariants")
     parser.add_argument("--output-html", required=True)
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--proyecto",    default="WMS-PAME")
@@ -795,6 +799,10 @@ def main():
         "performance": load_json(args.performance),
         "siesa_logic": load_json(args.siesa),
         "tech_debt":   load_json(args.debt),
+        "siesa_spec":  load_json(args.siesa_spec),
+        "patterns":    load_json(args.patterns),
+        "resilience":  load_json(args.resilience),
+        "invariants":  load_json(args.invariants),
     }
 
     # Reporte anterior para detectar issues nuevos
