@@ -406,12 +406,11 @@ def pedidos_aprobados():
 
     # Cola de despacho: Read Model local enriquecido con estado del picking WMS.
     # Estado por pedido:
-      picking_iniciado=False                         → mostrar botón "Despachar"
-      picking_iniciado=True, completado=False        → picking en curso (progreso X/Y)
-      picking_iniciado=True, completado=True,
-        siesa_triggered=False                        → mostrar botón "Confirmar en Siesa"
-      siesa_triggered=True                           → despachado ✓
-    """
+    #   picking_iniciado=False                        → mostrar botón "Despachar"
+    #   picking_iniciado=True, completado=False       → picking en curso (progreso X/Y)
+    #   picking_iniciado=True, completado=True,
+    #     siesa_triggered=False                       → mostrar botón "Confirmar en Siesa"
+    #   siesa_triggered=True                          → despachado ✓
     from app.models.pedido_siesa import PedidoSiesa
     from app.models.picking import TareaPicking
     from app.models.packing import TareaPacking
