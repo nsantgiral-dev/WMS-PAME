@@ -16,8 +16,11 @@ depends_on = None
 
 def upgrade():
     op.execute(
-        'ALTER TABLE ubicaciones_productos '
-        'ADD CONSTRAINT ck_cantidad_no_negativa CHECK (cantidad >= 0)'
+        "DO $$ BEGIN "
+        "IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_cantidad_no_negativa') THEN "
+        "ALTER TABLE ubicaciones_productos ADD CONSTRAINT ck_cantidad_no_negativa CHECK (cantidad >= 0); "
+        "END IF; "
+        "END $$;"
     )
 
 

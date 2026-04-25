@@ -14,7 +14,9 @@ depends_on = None
 
 
 def upgrade():
-    op.create_index('ix_productos_codigo_siesa', 'productos', ['codigo_siesa'])
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS ix_productos_codigo_siesa ON productos (codigo_siesa)"
+    )
 
 
 def downgrade():
