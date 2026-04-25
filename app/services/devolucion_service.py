@@ -55,13 +55,28 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
             ).first()
 
             if existente:
-                # Si existe pero la cantidad cambió, actualizarla
-                if existente.cantidad_diferencia != cantidad:
-                    existente.cantidad_diferencia = cantidad
+                # COMPLETADO sin Siesa: el recepcionista cerró la tarea físicamente
+                # pero el ajuste no llegó a Siesa — la discrepancia persiste.
+                # Creamos una nueva tarea para que el flujo de Siesa se complete.
+                if existente.estado == 'COMPLETADO' and not existente.siesa_triggered:
+                    logger.warning(
+                        f'[DEV] TareaDevolucion {existente.id} COMPLETADO sin Siesa '
+                        f'para prod {producto_id} — creando nueva tarea'
+                    )
+                    # Invalidar la ikey del completado para que no bloquee la nueva tarea
+                    existente.idempotency_key = f'DEV-{producto_id}-SIN-SIESA-{existente.id}'
                     db.session.flush()
-                ya_existian += 1
-                savepoint.commit()
-                continue
+                    # Caer al bloque de creación abajo (no hacer continue)
+                elif existente.estado in ('PENDIENTE', 'EN_PROCESO', 'COMPLETADO'):
+                    # COMPLETADO con Siesa OK: discrepancia ya resuelta
+                    # PENDIENTE / EN_PROCESO: ya está siendo atendida
+                    if existente.cantidad_diferencia != cantidad:
+                        existente.cantidad_diferencia = cantidad
+                        db.session.flush()
+                    ya_existian += 1
+                    savepoint.commit()
+                    continue
+                # CANCELADO u otro: recrear la tarea
 
             codigo = f'DEV-{producto_id}-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}'
             tarea = TareaDevolucion(

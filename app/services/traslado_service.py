@@ -462,6 +462,7 @@ class TrasladoService:
                 .filter_by(producto_id=item.producto_id)
                 .filter(UbicacionProducto.cantidad > 0)
                 .order_by(UbicacionProducto.cantidad.asc())  # FIFO: vaciar las más pequeñas primero
+                .with_for_update()
                 .all()
             )
             saldo_antes = sum(u.cantidad for u in ubicaciones)
