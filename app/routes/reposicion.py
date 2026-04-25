@@ -214,7 +214,11 @@ def sync_ubicaciones():
 @reposicion_bp.route('/sync-ubicaciones/estado', methods=['GET'])
 @jwt_required()
 def sync_ubicaciones_estado():
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso'}), 403
     return jsonify(get_estado()), 200
@@ -261,7 +265,11 @@ def listar_ubicaciones_picking():
     Lista ubicaciones PICKING con sus límites configurados.
     El admin ve aquí qué zonas tienen min/max y cuáles faltan por configurar.
     """
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
@@ -311,7 +319,11 @@ def listar_ubicaciones_picking():
 @jwt_required()
 def ubicaciones_huerfanas():
     """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync Siesa)."""
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso'}), 403
     items = UbicacionHuerfana.query.order_by(
@@ -415,7 +427,11 @@ def debug_ubicaciones_raw():
     Descarga la primera página de API_v2_Ubicaciones sin procesar.
     Usar para certificar nombres exactos de campos antes del primer sync real.
     """
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso — solo admin/jefe_almacen'}), 403
     bodega_id = request.args.get('bodega_id', connekta.bodega)
