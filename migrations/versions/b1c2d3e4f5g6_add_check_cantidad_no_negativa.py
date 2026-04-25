@@ -1,4 +1,4 @@
-"""add check constraint cantidad >= 0 on ubicacion_productos
+"""add check constraint cantidad >= 0 on ubicaciones_productos
 
 Revision ID: b1c2d3e4f5g6
 Revises: 5bdcedc43de0
@@ -16,13 +16,13 @@ depends_on = None
 
 def upgrade():
     op.execute(
-        'ALTER TABLE ubicacion_productos '
+        'ALTER TABLE ubicaciones_productos '
         'ADD CONSTRAINT ck_cantidad_no_negativa CHECK (cantidad >= 0)'
     )
 
 
 def downgrade():
     op.execute(
-        'ALTER TABLE ubicacion_productos '
+        'ALTER TABLE ubicaciones_productos '
         'DROP CONSTRAINT IF EXISTS ck_cantidad_no_negativa'
     )
