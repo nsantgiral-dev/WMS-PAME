@@ -423,6 +423,11 @@ class ABCService:
             logger.error(f'[ABC] Error guardando tareas de conteo: {e}')
             raise
 
+        # Pre-calentar caché de existencia Siesa en background — evita HTTP sync en el turno
+        if tareas_creadas:
+            from app.services.conteo_service import ConteoService
+            ConteoService.prewarm_existencia_cache(tareas_creadas)
+
         dias_para_ciclo = math.ceil(total_clase / (batch_diario or 1)) if batch_diario else 1
 
         logger.info(

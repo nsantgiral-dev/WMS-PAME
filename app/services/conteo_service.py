@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # El conteo cíclico no necesita exactitud al segundo — 90s es irrelevante operativamente.
 _existencia_cache: dict = {}   # {(codigo, ubicacion, lote): (existencia, ts)}
 _existencia_cache_lock = threading.Lock()
-_CACHE_TTL_SEGUNDOS = 90
+_CACHE_TTL_SEGUNDOS = 300  # 5 min — reduce llamadas HTTP en turno; pre-warm al generar sesiones
 
 
 class ConteoService:
@@ -180,6 +180,35 @@ class ConteoService:
                 'sesion_id': sesion.id,
                 'segundo_conteo_id': segundo_conteo.id
             }
+
+    @staticmethod
+    def prewarm_existencia_cache(sesiones: list):
+        """
+        Pre-calienta el caché de existencia Siesa para una lista de SesionConteo.
+        Corre en un hilo daemon — no bloquea al caller.
+        Llamar después de generar sesiones de conteo ABC para evitar HTTP sync en el turno.
+        """
+        def _worker(items):
+            for codigo_siesa, ub_codigo in items:
+                try:
+                    ConteoService._consultar_existencia_siesa(
+                        producto_codigo_siesa=codigo_siesa,
+                        ubicacion_codigo=ub_codigo or '',
+                    )
+                except Exception:
+                    pass
+
+        pares = []
+        for s in sesiones:
+            if getattr(s, 'producto_codigo_siesa', None):
+                ub = getattr(s, 'ubicacion', None)
+                ub_codigo = ub.codigo if ub else ''
+                pares.append((s.producto_codigo_siesa, ub_codigo))
+
+        if pares:
+            t = threading.Thread(target=_worker, args=(pares,), daemon=True)
+            t.start()
+            logger.info(f'[CONTEO] Pre-warm existencia_siesa iniciado para {len(pares)} productos')
 
     @staticmethod
     def _consultar_existencia_siesa(

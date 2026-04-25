@@ -389,6 +389,7 @@ class PackingService:
         # Capturar antes del try — usadas en el emergency commit si el commit de éxito falla
         _tarea_id_log = tarea_id
         _pedido_log = tarea.numero_pedido_siesa
+        _job_dlq_id = job_dlq.id   # capturar antes del rollback potencial
         _respuesta_siesa = None
 
         try:
@@ -438,16 +439,21 @@ class PackingService:
             # vea el flag y no reintente → evita factura electrónica duplicada.
             try:
                 from app.models.packing import TareaPacking as _TP
+                from app.models.siesa_job import SiesaJob as _SJ
                 t_emergency = _TP.query.get(_tarea_id_log)
+                j_emergency = _SJ.query.get(_job_dlq_id)
                 if t_emergency:
                     t_emergency.siesa_triggered = True
                     t_emergency.siesa_triggered_at = datetime.utcnow()
                     t_emergency.siesa_response = json.dumps(_respuesta_siesa)
-                    db.session.commit()
-                    logger.critical(
-                        f'[PACKING] ⚠ Emergency commit siesa_triggered=True OK para tarea {_tarea_id_log} '
-                        f'({_pedido_log}) — estado DESPACHADO no se actualizó, revisar manualmente'
-                    )
+                if j_emergency:
+                    j_emergency.marcar_completado({'emergency': True})
+                db.session.commit()
+                logger.critical(
+                    f'[PACKING] ⚠ Emergency commit OK para tarea {_tarea_id_log} '
+                    f'({_pedido_log}) — siesa_triggered=True + job COMPLETADO — '
+                    f'estado DESPACHADO no se actualizó, revisar manualmente'
+                )
             except Exception as e_emergency:
                 db.session.rollback()
                 logger.critical(

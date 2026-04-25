@@ -193,13 +193,28 @@ def _run_carga_inicial(app):
             packs_activos = _TareaPacking2.query.filter(
                 _TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
             ).count()
+            # Productos con operaciones activas — sus ubicaciones se excluirán del bulk zero
+            _prod_ids_activos: set = set()
             if picks_activos or packs_activos:
                 logger.warning(
                     f'[INV-SIESA] ATENCIÓN: carga inicial con operaciones activas — '
                     f'{picks_activos} picking(s) y {packs_activos} packing(s) en curso. '
-                    f'El stock manual de las ubicaciones WMS será sobrescrito con datos de Siesa. '
-                    f'Stock reservado puede quedar desactualizado.'
+                    f'Sus productos serán excluidos del bulk zero para proteger el stock reservado.'
                 )
+                # Recopilar product_ids activos para excluirlos del bulk zero
+                _picks_prods = _TareaPicking.query.filter(
+                    _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+                ).with_entities(_TareaPicking.producto_id).all()
+                _prod_ids_activos |= {r.producto_id for r in _picks_prods if r.producto_id}
+                from app.models.packing import ItemPacking as _ItemPacking
+                _pack_prods = (
+                    _ItemPacking.query
+                    .join(_TareaPacking2, _ItemPacking.tarea_id == _TareaPacking2.id)
+                    .filter(_TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO']))
+                    .with_entities(_ItemPacking.producto_id).all()
+                )
+                _prod_ids_activos |= {r.producto_id for r in _pack_prods if r.producto_id}
+                logger.info(f'[INV-SIESA] {len(_prod_ids_activos)} productos excluidos del bulk zero por operaciones activas')
 
             # ── Pre-cargar los 3 mapas en memoria — elimina N+1 del loop ──────────
             # Sin esto: hasta 3 queries × N productos (≈15.000 queries en catálogo de 5k)
@@ -273,13 +288,18 @@ def _run_carga_inicial(app):
                     UbicacionProducto.ubicacion_id.in_(_ubs_a_zero),
                     UbicacionProducto.lote.is_(None),
                 )
-                if _prod_ids_ya_hoy:
+                # Excluir productos ya cargados hoy Y productos con operaciones activas
+                _excl_prods = _prod_ids_ya_hoy | _prod_ids_activos
+                if _excl_prods:
                     _q_zero = _q_zero.filter(
-                        ~UbicacionProducto.producto_id.in_(_prod_ids_ya_hoy)
+                        ~UbicacionProducto.producto_id.in_(_excl_prods)
                     )
                 _q_zero.update({'cantidad': 0}, synchronize_session=False)
                 db.session.flush()
-                logger.info(f'[INV-SIESA] Bulk zero OK: {len(_ubs_a_zero)} ubicaciones')
+                logger.info(
+                    f'[INV-SIESA] Bulk zero OK: {len(_ubs_a_zero)} ubicaciones '
+                    f'(excluidos {len(_prod_ids_activos)} productos con operaciones activas)'
+                )
 
             for codigo, datos in inventario_siesa.items():
                 existencia_siesa = int(round(datos['existencia']))
