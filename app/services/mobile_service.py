@@ -22,12 +22,17 @@ class MobileService:
     @staticmethod
     def get_tareas_operario(operario_id: int):
         """Todas las tareas activas del operario."""
-        pickings = TareaPicking.query.filter(
-            TareaPicking.operario_id == operario_id,
-            TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-        ).order_by(TareaPicking.prioridad.desc()).all()
-
         from sqlalchemy.orm import joinedload as _jl
+        from app.models.producto import Producto as _Prod
+        from app.models.ubicacion import Ubicacion as _Ub
+
+        pickings = (TareaPicking.query
+                    .options(_jl(TareaPicking.producto), _jl(TareaPicking.ubicacion))
+                    .filter(
+                        TareaPicking.operario_id == operario_id,
+                        TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+                    ).order_by(TareaPicking.prioridad.desc()).all())
+
         packings = TareaPacking.query.options(
             _jl(TareaPacking.items).joinedload(ItemPacking.producto)
         ).filter(
@@ -35,10 +40,12 @@ class MobileService:
             TareaPacking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
         ).all()
 
-        conteos = SesionConteo.query.filter(
-            SesionConteo.operario_id == operario_id,
-            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-        ).all()
+        conteos = (SesionConteo.query
+                   .options(_jl(SesionConteo.producto), _jl(SesionConteo.ubicacion))
+                   .filter(
+                       SesionConteo.operario_id == operario_id,
+                       SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+                   ).all())
 
         tareas = []
 

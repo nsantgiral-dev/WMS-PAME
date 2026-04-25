@@ -134,6 +134,16 @@ class ABCService:
         ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
         overrides = []
 
+        # Pre-cargar todos los conteos activos del almacén en un set (producto_id, ubicacion_id)
+        # para evitar N+1 en el check de duplicados dentro del loop
+        conteos_activos = {
+            (sc.producto_id, sc.ubicacion_id)
+            for sc in SesionConteo.query.filter(
+                SesionConteo.almacen_id == almacen_id,
+                SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+            ).with_entities(SesionConteo.producto_id, SesionConteo.ubicacion_id).all()
+        }
+
         # Clases susceptibles de override — consulta por almacén
         for clase, umbral in WATCHDOG_UMBRAL.items():
             productos_clase = (
@@ -182,13 +192,8 @@ class ABCService:
                 )
 
                 for reg in registros:
-                    # No duplicar si ya hay conteo activo
-                    activo = SesionConteo.query.filter(
-                        SesionConteo.producto_id == producto.id,
-                        SesionConteo.ubicacion_id == reg.ubicacion_id,
-                        SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
-                    ).first()
-                    if activo:
+                    # No duplicar si ya hay conteo activo — usa el set pre-cargado
+                    if (producto.id, reg.ubicacion_id) in conteos_activos:
                         continue
 
                     codigo = (
@@ -208,6 +213,7 @@ class ABCService:
                         estado='PENDIENTE'
                     )
                     db.session.add(sesion)
+                    conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
                     overrides.append({
                         'producto_id': producto.id,
                         'producto_codigo': producto.codigo_siesa or producto.codigo,

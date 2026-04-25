@@ -2,8 +2,20 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.recepcion import RecepcionMercancia
 from app.services.recepcion_service import RecepcionService
+from app.routes._auth_helpers import _solo_admin
 
 recepcion_bp = Blueprint('recepcion', __name__)
+
+
+def _es_recepcion_autorizado():
+    """Retorna el usuario si puede gestionar recepciones, None si no."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    return u if u and u.rol in ('admin', 'jefe_almacen', 'recepcionista') else None
 
 
 @recepcion_bp.route('/', methods=['GET'])
@@ -40,6 +52,8 @@ def obtener_recepcion(id):
 @recepcion_bp.route('/crear', methods=['POST'])
 @jwt_required()
 def crear_recepcion():
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'No autorizado — se requiere rol admin, jefe_almacen o recepcionista'}), 403
     data = request.get_json()
     requeridos = ['numero_oc_siesa', 'almacen_id', 'items']
     for campo in requeridos:
@@ -137,6 +151,8 @@ def confirmar_recepcion(id):
 @recepcion_bp.route('/<int:id>/reiniciar-conteo', methods=['PUT'])
 @jwt_required()
 def reiniciar_conteo(id):
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'No autorizado'}), 403
     from app.extensions import db
     from app.models.recepcion import ItemRecepcion
     recepcion = RecepcionMercancia.query.get_or_404(id)
@@ -154,6 +170,8 @@ def reiniciar_conteo(id):
 @recepcion_bp.route('/<int:id>/cancelar', methods=['PUT'])
 @jwt_required()
 def cancelar_recepcion(id):
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede cancelar recepciones'}), 403
     data = request.get_json() or {}
     recepcion = RecepcionMercancia.query.get_or_404(id)
     if recepcion.estado == 'CONFIRMADA':

@@ -7,6 +7,7 @@ class EstadoPicking:
     EN_PROCESO = 'EN_PROCESO'
     COMPLETADO = 'COMPLETADO'
     CANCELADO = 'CANCELADO'
+    BLOQUEADO = 'BLOQUEADO'
 
 
 class TareaPicking(db.Model):

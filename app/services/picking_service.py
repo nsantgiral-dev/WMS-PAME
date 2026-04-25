@@ -5,7 +5,7 @@ Servicio de Picking con lógica FEFO
 from datetime import datetime
 import uuid
 from app.extensions import db
-from app.models.picking import TareaPicking
+from app.models.picking import TareaPicking, EstadoPicking
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
@@ -121,7 +121,7 @@ class PickingService:
                 lote=asig['lote'],
                 fecha_vencimiento=asig['fecha_vencimiento'],
                 operario_id=operario_id,
-                estado='PENDIENTE',
+                estado=EstadoPicking.PENDIENTE,
                 prioridad=prioridad,
                 referencia_documento=referencia_documento,
                 tipo_documento=tipo_documento
@@ -157,10 +157,10 @@ class PickingService:
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
-        if tarea.estado == 'COMPLETADO':
+        if tarea.estado == EstadoPicking.COMPLETADO:
             raise ValueError('Tarea ya completada')
 
-        if tarea.estado == 'CANCELADO':
+        if tarea.estado == EstadoPicking.CANCELADO:
             raise ValueError('Tarea cancelada')
 
         if cantidad_recogida > tarea.cantidad_solicitada:
@@ -197,7 +197,7 @@ class PickingService:
 
         # Actualizar tarea
         tarea.cantidad_recogida = cantidad_recogida
-        tarea.estado = 'COMPLETADO'
+        tarea.estado = EstadoPicking.COMPLETADO
         tarea.fecha_completado = datetime.utcnow()
         if not tarea.fecha_inicio:
             tarea.fecha_inicio = datetime.utcnow()
@@ -214,10 +214,10 @@ class PickingService:
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
-        if tarea.estado != 'PENDIENTE':
+        if tarea.estado != EstadoPicking.PENDIENTE:
             raise ValueError(f'No se puede iniciar una tarea en estado {tarea.estado}')
 
-        tarea.estado = 'EN_PROCESO'
+        tarea.estado = EstadoPicking.EN_PROCESO
         tarea.operario_id = operario_id
         tarea.fecha_inicio = datetime.utcnow()
         tarea.cantidad_recogida = 0
@@ -232,7 +232,7 @@ class PickingService:
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
-        if tarea.estado == 'COMPLETADO':
+        if tarea.estado == EstadoPicking.COMPLETADO:
             raise ValueError('No se puede cancelar una tarea completada')
 
         reg = UbicacionProducto.query.filter_by(
@@ -242,11 +242,11 @@ class PickingService:
         if reg:
             reg.reservado = max(0, reg.reservado - tarea.cantidad_solicitada)
             # Si estaba bloqueada, liberar también el inventario congelado
-            if tarea.estado == 'BLOQUEADO':
+            if tarea.estado == EstadoPicking.BLOQUEADO:
                 cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
                 reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
 
-        tarea.estado = 'CANCELADO'
+        tarea.estado = EstadoPicking.CANCELADO
         db.session.commit()
         return tarea
 
@@ -260,7 +260,7 @@ class PickingService:
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
-        if tarea.estado != 'BLOQUEADO':
+        if tarea.estado != EstadoPicking.BLOQUEADO:
             raise ValueError(f'Solo se pueden reabrir tareas BLOQUEADAS (estado actual: {tarea.estado})')
 
         reg = UbicacionProducto.query.filter_by(
@@ -271,10 +271,80 @@ class PickingService:
             cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
             reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
 
-        tarea.estado = 'PENDIENTE'
+        tarea.estado = EstadoPicking.PENDIENTE
         tarea.operario_id = None
         tarea.cantidad_recogida = 0
         tarea.empaques_escaneados = 0
         tarea.motivo_bloqueo = None
         db.session.commit()
         return tarea
+
+    @staticmethod
+    def reportar_problema(tarea_id: int, operario_id: int, motivo: str,
+                           cantidad_encontrada: int = 0, observaciones: str = None) -> dict:
+        """
+        Lógica compartida entre /picking/<id>/reportar-problema y /mobile/reportar-problema.
+        Bloquea la tarea, registra short-pick si aplica, genera auditoría urgente.
+        """
+        from app.models.inventario import UbicacionProducto, MovimientoInventario
+        from app.services.conteo_service import ConteoService
+        from datetime import datetime as _dt
+
+        tarea = TareaPicking.query.get(tarea_id)
+        if not tarea:
+            raise ValueError(f'Tarea picking {tarea_id} no encontrada')
+        if tarea.operario_id != operario_id:
+            raise PermissionError('Esta tarea no te pertenece')
+
+        cantidad_faltante = max(0, tarea.cantidad_solicitada - cantidad_encontrada)
+
+        inv = (UbicacionProducto.query
+               .filter_by(ubicacion_id=tarea.ubicacion_id, producto_id=tarea.producto_id)
+               .with_for_update().first())
+
+        if inv and cantidad_faltante > 0:
+            inv.bloqueado = inv.bloqueado + cantidad_faltante
+
+        if cantidad_encontrada > 0:
+            tarea.cantidad_recogida = cantidad_encontrada
+            if inv:
+                inv.cantidad = max(0, inv.cantidad - cantidad_encontrada)
+                inv.reservado = max(0, inv.reservado - cantidad_encontrada)
+            db.session.add(MovimientoInventario(
+                producto_id=tarea.producto_id,
+                ubicacion_id=tarea.ubicacion_id,
+                almacen_id=tarea.almacen_id,
+                tipo='SHORT_PICK',
+                cantidad=cantidad_encontrada,
+                motivo=f'Short-pick — tarea {tarea.codigo} — faltó {cantidad_faltante}',
+                numero_documento=tarea.referencia_documento,
+                usuario_id=operario_id,
+                idempotency_key=f'SP-{tarea.id}-{int(_dt.utcnow().timestamp()*1000)}',
+            ))
+
+        tarea.estado = EstadoPicking.BLOQUEADO
+        tarea.operario_id = None
+        tarea.motivo_bloqueo = motivo
+        tarea.observaciones_bloqueo = observaciones
+
+        auditoria_id = None
+        if cantidad_faltante > 0:
+            sesion = ConteoService.generar_auditoria_por_excepcion(
+                tarea_picking_id=tarea.id,
+                ubicacion_id=tarea.ubicacion_id,
+                producto_id=tarea.producto_id,
+                almacen_id=tarea.almacen_id,
+            )
+            sesion.motivo_codigo = motivo
+            auditoria_id = sesion.id
+
+        db.session.commit()
+        return {
+            'ok': True,
+            'mensaje': 'Problema reportado — el jefe de almacén lo resolverá',
+            'motivo': motivo,
+            'tarea_id': tarea_id,
+            'cantidad_encontrada': cantidad_encontrada,
+            'cantidad_faltante': cantidad_faltante,
+            'auditoria_id': auditoria_id,
+        }

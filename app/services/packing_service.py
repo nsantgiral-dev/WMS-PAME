@@ -142,7 +142,11 @@ class PackingService:
         El empacador escanea un ítem y registra la cantidad real.
         Este es el corazón del proceso de verificación.
         """
-        tarea = TareaPacking.query.get(tarea_id)
+        from sqlalchemy.orm import joinedload as _jl
+        from app.models.producto import Producto as _Prod
+        tarea = (TareaPacking.query
+                 .options(_jl(TareaPacking.items).joinedload(ItemPacking.producto))
+                 .filter_by(id=tarea_id).first())
         if not tarea:
             raise ValueError('Tarea no encontrada')
         if tarea.estado not in ['EN_PROCESO', 'PENDIENTE']:
@@ -190,7 +194,10 @@ class PackingService:
         Paso 1: Verifica que todos los ítems fueron escaneados y guarda estado VERIFICADO.
         NO dispara Siesa — eso ocurre en cerrar_packing() después de declarar los bultos.
         """
-        tarea = TareaPacking.query.get(tarea_id)
+        from sqlalchemy.orm import joinedload as _jl
+        tarea = (TareaPacking.query
+                 .options(_jl(TareaPacking.items).joinedload(ItemPacking.producto))
+                 .filter_by(id=tarea_id).first())
         if not tarea:
             raise ValueError('Tarea no encontrada')
 

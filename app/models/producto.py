@@ -29,7 +29,7 @@ class Producto(db.Model):
     fecha_actualizacion = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relaciones
-    ubicaciones = db.relationship('UbicacionProducto', backref='producto', lazy=True)
+    ubicaciones = db.relationship('UbicacionProducto', backref='producto', lazy='subquery')
     movimientos = db.relationship('MovimientoInventario', backref='producto', lazy=True)
 
     @property

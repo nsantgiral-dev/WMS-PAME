@@ -47,6 +47,8 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
         # Idempotencia: clave única producto + estado PENDIENTE
         ikey = f'DEV-{producto_id}-PENDIENTE'
 
+        # Savepoint por item — el rollback solo deshace este item, no los anteriores
+        savepoint = db.session.begin_nested()
         try:
             existente = TareaDevolucion.query.filter_by(
                 idempotency_key=ikey
@@ -58,6 +60,7 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
                     existente.cantidad_diferencia = cantidad
                     db.session.flush()
                 ya_existian += 1
+                savepoint.commit()
                 continue
 
             codigo = f'DEV-{producto_id}-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}'
@@ -72,12 +75,13 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
             )
             db.session.add(tarea)
             db.session.flush()
+            savepoint.commit()
             creadas += 1
             logger.info(f'[DEV] Tarea creada: {codigo} · prod {producto_id} · {cantidad} uds')
 
         except Exception as e:
             logger.warning(f'[DEV] Error creando tarea para producto {producto_id}: {e}')
-            db.session.rollback()
+            savepoint.rollback()  # solo revierte este item, no los anteriores
             errores += 1
 
     try:

@@ -12,12 +12,7 @@ from app.models.packing import TareaPacking
 muelle_bp = Blueprint('muelle', __name__)
 
 
-def _es_admin_o_jefe():
-    """Retorna el usuario si tiene rol admin o jefe_almacen, None en caso contrario."""
-    from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    u = Usuario.query.get(int(uid))
-    return u if u and u.rol in ('admin', 'jefe_almacen') else None
+from app.routes._auth_helpers import _es_admin_o_jefe
 
 
 @muelle_bp.route('/listos', methods=['GET'])

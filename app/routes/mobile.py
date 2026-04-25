@@ -8,11 +8,19 @@ logger = logging.getLogger(__name__)
 mobile_bp = Blueprint('mobile', __name__)
 
 
+def _operario_id():
+    """Retorna el id del operario como int, o None si el token es inválido."""
+    try:
+        return _operario_id()
+    except (TypeError, ValueError):
+        return None
+
+
 @mobile_bp.route('/mis-tareas', methods=['GET'])
 @jwt_required()
 def mis_tareas():
     """Todas las tareas activas del operario — optimizado para tablet."""
-    operario_id = int(get_jwt_identity())
+    operario_id = _operario_id()
     resultado = MobileService.get_tareas_operario(operario_id)
     return jsonify(resultado), 200
 
@@ -21,7 +29,7 @@ def mis_tareas():
 @jwt_required()
 def tarea_actual():
     """La tarea más prioritaria del operario ahora mismo."""
-    operario_id = int(get_jwt_identity())
+    operario_id = _operario_id()
     resultado = MobileService.get_tarea_actual(operario_id)
     if not resultado:
         return jsonify({'sin_tareas': True, 'mensaje': 'No tienes tareas pendientes'}), 200
@@ -35,7 +43,7 @@ def escanear():
     El escáner láser dispara este endpoint.
     Recibe el código escaneado y lo procesa según el tipo de tarea.
     """
-    operario_id = int(get_jwt_identity())
+    operario_id = _operario_id()
     data = request.get_json()
 
     if 'codigo' not in data or 'tarea_id' not in data or 'tipo' not in data:
@@ -65,7 +73,7 @@ def escanear():
 @jwt_required()
 def confirmar_tarea():
     """Confirma la tarea actual completa."""
-    operario_id = int(get_jwt_identity())
+    operario_id = _operario_id()
     data = request.get_json()
 
     if 'tarea_id' not in data or 'tipo' not in data:
@@ -94,7 +102,7 @@ def sync_offline():
     Sincroniza tareas completadas offline.
     El Service Worker llama esto cuando recupera WiFi.
     """
-    operario_id = int(get_jwt_identity())
+    operario_id = _operario_id()
     data = request.get_json()
     cola = data.get('cola', [])
 
@@ -147,7 +155,7 @@ def reportar_problema():
     from datetime import datetime as _dt
     import uuid as _uuid
 
-    operario_id = int(get_jwt_identity())
+    operario_id = _operario_id()
     data = request.get_json() or {}
 
     tarea_id = data.get('tarea_id')
@@ -161,62 +169,20 @@ def reportar_problema():
 
     # ── PICKING ──────────────────────────────────────────────────
     if tipo == 'PICKING':
-        tarea = TareaPicking.query.get(tarea_id)
-        if not tarea:
-            return jsonify({'error': f'Tarea picking {tarea_id} no encontrada'}), 404
-        if tarea.operario_id != operario_id:
-            return jsonify({'error': 'Esta tarea no te pertenece'}), 403
-
-        cantidad_faltante = max(0, tarea.cantidad_solicitada - cantidad_encontrada)
-
-        inv = (UbicacionProducto.query
-               .filter_by(ubicacion_id=tarea.ubicacion_id, producto_id=tarea.producto_id)
-               .with_for_update().first())
-
-        if inv and cantidad_faltante > 0:
-            inv.bloqueado = inv.bloqueado + cantidad_faltante
-
-        if cantidad_encontrada > 0:
-            tarea.cantidad_recogida = cantidad_encontrada
-            if inv:
-                inv.cantidad = max(0, inv.cantidad - cantidad_encontrada)
-                inv.reservado = max(0, inv.reservado - cantidad_encontrada)
-            db.session.add(MovimientoInventario(
-                producto_id=tarea.producto_id,
-                ubicacion_id=tarea.ubicacion_id,
-                almacen_id=tarea.almacen_id,
-                tipo='SHORT_PICK',
-                cantidad=cantidad_encontrada,
-                motivo=f'Short-pick — tarea {tarea.codigo} — faltó {cantidad_faltante}',
-                numero_documento=tarea.referencia_documento,
-                usuario_id=operario_id,
-                idempotency_key=f'SP-{tarea.id}-{int(_dt.utcnow().timestamp()*1000)}',
-            ))
-
-        tarea.estado = 'BLOQUEADO'
-        tarea.operario_id = None
-        tarea.motivo_bloqueo = motivo
-        tarea.observaciones_bloqueo = observaciones
-
-        auditoria_id = None
-        if cantidad_faltante > 0:
-            sesion = ConteoService.generar_auditoria_por_excepcion(
-                tarea_picking_id=tarea.id,
-                ubicacion_id=tarea.ubicacion_id,
-                producto_id=tarea.producto_id,
-                almacen_id=tarea.almacen_id,
+        from app.services.picking_service import PickingService
+        try:
+            resultado = PickingService.reportar_problema(
+                tarea_id=tarea_id,
+                operario_id=operario_id,
+                motivo=motivo,
+                cantidad_encontrada=cantidad_encontrada,
+                observaciones=observaciones,
             )
-            sesion.motivo_codigo = motivo
-            auditoria_id = sesion.id
-
-        db.session.commit()
-        return jsonify({
-            'ok': True,
-            'mensaje': 'Problema reportado — el jefe de almacén lo resolverá',
-            'motivo': motivo,
-            'tarea_id': tarea_id,
-            'auditoria_id': auditoria_id,
-        }), 200
+            return jsonify(resultado), 200
+        except PermissionError as e:
+            return jsonify({'error': str(e)}), 403
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 404
 
     # ── CONTEO ───────────────────────────────────────────────────
     if tipo == 'CONTEO':

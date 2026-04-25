@@ -78,6 +78,10 @@ def _get_o_crear_ubicacion_general(almacen_id: int) -> Ubicacion:
     return ub
 
 
+_cache_inventario_siesa = {'data': None, 'ts': None}
+_CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
+
+
 def _descargar_inventario_siesa():
     """
     Descarga existencias de Siesa SIN filtro en la API (el API rechaza f150_id
@@ -86,7 +90,16 @@ def _descargar_inventario_siesa():
     Retorna dict {codigo_producto: {existencia, comprometido, ubicacion_aux}}
     agregado por producto (un producto puede aparecer en múltiples lotes/ubicaciones).
     Cubre catálogos de hasta 50 000 filas de inventario.
+    Cachea el resultado 1 hora para evitar 500 requests HTTP duplicados.
     """
+    global _cache_inventario_siesa
+    ahora = datetime.utcnow()
+    if (_cache_inventario_siesa['data'] is not None
+            and _cache_inventario_siesa['ts'] is not None
+            and (ahora - _cache_inventario_siesa['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
+        logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h)')
+        return _cache_inventario_siesa['data']
+
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
     bodega = connekta.bodega  # filtro Python
@@ -122,6 +135,8 @@ def _descargar_inventario_siesa():
             break
 
     logger.info(f'[INV-SIESA] Total descargado: {len(inventario)} productos en bodega {connekta.bodega}')
+    _cache_inventario_siesa['data'] = inventario
+    _cache_inventario_siesa['ts'] = datetime.utcnow()
     return inventario
 
 
@@ -182,12 +197,14 @@ def _run_carga_inicial(app):
                 if existencia_siesa <= 0:
                     continue
 
+                _savepoint = db.session.begin_nested()
                 try:
                     prod = (Producto.query.filter_by(codigo_siesa=codigo).first()
                             or Producto.query.filter_by(codigo=codigo).first())
 
                     if not prod:
                         sin_producto_wms += 1
+                        _savepoint.commit()
                         continue
 
                     # Intentar usar la ubicación real de Siesa si existe en WMS
@@ -205,6 +222,7 @@ def _run_carga_inicial(app):
                     ikey = f'SIESA-INI-{prod.id}-{fecha_hoy}'
                     # [45] Usar el SET pre-cargado en vez de hacer query individual
                     if ikey in ikeys_hoy:
+                        _savepoint.commit()
                         continue  # Ya se cargó hoy
 
                     # Zero-ar TODAS las otras ubicaciones del mismo producto antes de
@@ -245,7 +263,10 @@ def _run_carga_inicial(app):
                         idempotency_key=ikey
                     )
                     db.session.add(movimiento)
-                    ikeys_hoy.add(ikey)  # Actualizar el SET en memoria para idempotencia en esta corrida
+                    _savepoint.commit()
+                    # Solo añadir al set después del savepoint exitoso —
+                    # evita marcar como procesado un producto que falló y fue revertido
+                    ikeys_hoy.add(ikey)
 
                     # Commit cada 200 productos para no acumular transacciones enormes
                     if (cargados + actualizados) % 200 == 0:
@@ -254,7 +275,7 @@ def _run_carga_inicial(app):
 
                 except Exception as e:
                     logger.warning(f'[INV-SIESA] Error en producto {codigo}: {e}')
-                    db.session.rollback()
+                    _savepoint.rollback()  # solo revierte este producto, no los anteriores
                     errores += 1
 
             db.session.commit()

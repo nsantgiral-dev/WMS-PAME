@@ -99,8 +99,15 @@ def _procesar_jobs_pendientes_interno(_app):
                 logger.info(f'[DLQ] Job {job.id} ({job.tipo}) completado — intento {job.intentos + 1}')
                 procesados += 1
 
-                # Actualizar referencia si aplica
-                _post_completado(job)
+                # Actualizar referencia si aplica — aislado para que un fallo aquí
+                # no marque el job como FALLIDO (Siesa ya procesó el trabajo)
+                try:
+                    _post_completado(job)
+                except Exception as post_err:
+                    logger.warning(
+                        f'[DLQ] Job {job.id} ({job.tipo}) completado en Siesa pero '
+                        f'_post_completado falló: {post_err} — revisar referencia manualmente'
+                    )
 
             except Exception as e:
                 error_msg = str(e)

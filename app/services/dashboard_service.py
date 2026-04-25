@@ -20,37 +20,54 @@ logger = logging.getLogger(__name__)
 
 
 def _tendencia_7d():
-    """Actividad diaria de los últimos 7 días para gráfica de tendencias."""
+    """Actividad diaria de los últimos 7 días para gráfica de tendencias.
+    4 queries GROUP BY en lugar de 28 queries individuales.
+    """
     from app.models.traslado import SolicitudTraslado
     from app.models.ruta_despacho import RutaDespacho
+    from app.extensions import db
+    from sqlalchemy import func, cast, Date
+
     hoy = datetime.utcnow().date()
+    inicio_ventana = datetime.combine(hoy - timedelta(days=6), datetime.min.time())
+
+    # Una query por modelo, agrupada por día
+    picking_rows = (
+        db.session.query(cast(TareaPicking.fecha_completado, Date), func.count(TareaPicking.id))
+        .filter(TareaPicking.estado == 'COMPLETADO', TareaPicking.fecha_completado >= inicio_ventana)
+        .group_by(cast(TareaPicking.fecha_completado, Date)).all()
+    )
+    conteo_rows = (
+        db.session.query(cast(SesionConteo.fecha_cierre, Date), func.count(SesionConteo.id))
+        .filter(SesionConteo.estado.in_(['MATCH', 'AJUSTADO']), SesionConteo.fecha_cierre >= inicio_ventana)
+        .group_by(cast(SesionConteo.fecha_cierre, Date)).all()
+    )
+    traslado_rows = (
+        db.session.query(cast(SolicitudTraslado.fecha_entrega, Date), func.count(SolicitudTraslado.id))
+        .filter(SolicitudTraslado.estado == 'ENTREGADA', SolicitudTraslado.fecha_entrega >= inicio_ventana)
+        .group_by(cast(SolicitudTraslado.fecha_entrega, Date)).all()
+    )
+    ruta_rows = (
+        db.session.query(cast(RutaDespacho.fecha_entregada, Date), func.count(RutaDespacho.id))
+        .filter(RutaDespacho.estado == 'ENTREGADA', RutaDespacho.fecha_entregada >= inicio_ventana)
+        .group_by(cast(RutaDespacho.fecha_entregada, Date)).all()
+    )
+
+    picking_map   = {str(d): c for d, c in picking_rows}
+    conteo_map    = {str(d): c for d, c in conteo_rows}
+    traslado_map  = {str(d): c for d, c in traslado_rows}
+    ruta_map      = {str(d): c for d, c in ruta_rows}
+
     dias = []
     for i in range(6, -1, -1):
         dia = hoy - timedelta(days=i)
-        inicio = datetime.combine(dia, datetime.min.time())
-        fin    = datetime.combine(dia, datetime.max.time())
-        picking = TareaPicking.query.filter(
-            TareaPicking.estado == 'COMPLETADO',
-            TareaPicking.fecha_completado.between(inicio, fin)
-        ).count()
-        conteos = SesionConteo.query.filter(
-            SesionConteo.estado.in_(['MATCH', 'AJUSTADO']),
-            SesionConteo.fecha_cierre.between(inicio, fin)
-        ).count()
-        traslados = SolicitudTraslado.query.filter(
-            SolicitudTraslado.estado == 'ENTREGADA',
-            SolicitudTraslado.fecha_entrega.between(inicio, fin)
-        ).count()
-        rutas = RutaDespacho.query.filter(
-            RutaDespacho.estado == 'ENTREGADA',
-            RutaDespacho.fecha_entregada.between(inicio, fin)
-        ).count()
+        key = str(dia)
         dias.append({
-            'fecha': dia.strftime('%d/%m'),
-            'picking': picking,
-            'conteos': conteos,
-            'traslados': traslados,
-            'rutas': rutas,
+            'fecha':     dia.strftime('%d/%m'),
+            'picking':   picking_map.get(key, 0),
+            'conteos':   conteo_map.get(key, 0),
+            'traslados': traslado_map.get(key, 0),
+            'rutas':     ruta_map.get(key, 0),
         })
     return dias
 

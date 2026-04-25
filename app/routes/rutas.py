@@ -14,11 +14,7 @@ from app.models.ruta_despacho import RutaDespacho
 rutas_bp = Blueprint('rutas', __name__)
 
 
-def _es_admin_o_jefe():
-    from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    u = Usuario.query.get(int(uid))
-    return u if u and u.rol in ('admin', 'jefe_almacen') else None
+from app.routes._auth_helpers import _es_admin_o_jefe
 
 
 from app.routes._auth_helpers import _solo_admin
