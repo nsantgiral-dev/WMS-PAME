@@ -34,7 +34,14 @@ def listar_sesiones():
     categoria = request.args.get('categoria', request.args.get('marca', '')).strip()
     page = request.args.get('page', 1, type=int)
 
-    query = SesionConteo.query.order_by(SesionConteo.fecha_creacion.desc())
+    from sqlalchemy.orm import joinedload as _jl
+    query = (SesionConteo.query
+             .options(
+                 _jl(SesionConteo.producto),
+                 _jl(SesionConteo.ubicacion),
+                 _jl(SesionConteo.operario),
+             )
+             .order_by(SesionConteo.fecha_creacion.desc()))
 
     if estado:
         query = query.filter_by(estado=estado)

@@ -63,7 +63,14 @@ def listar_tareas():
     almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
 
-    query = TareaPacking.query.order_by(TareaPacking.fecha_creacion.desc())
+    from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
+    query = (TareaPacking.query
+             .options(
+                 _sl(TareaPacking.items),
+                 _sl(TareaPacking.bultos),
+                 _jl(TareaPacking.usuario),
+             )
+             .order_by(TareaPacking.fecha_creacion.desc()))
 
     if estado:
         query = query.filter_by(estado=estado)
@@ -92,6 +99,14 @@ def listar_tareas():
 @packing_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_tarea(id):
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or not _puede_empacar(u):
+        return jsonify({'error': 'Sin permiso para ver tareas de packing'}), 403
     tarea = TareaPacking.query.get_or_404(id)
     d = tarea.to_dict()
     d['picking_listo'] = _picking_listo_batch([tarea.numero_pedido_siesa]).get(tarea.numero_pedido_siesa, True)

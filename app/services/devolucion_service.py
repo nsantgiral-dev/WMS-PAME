@@ -214,7 +214,12 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             referencia_id=tarea.id,
         )
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e_commit:
+        db.session.rollback()
+        logger.error(f'[DEV] Error al confirmar ubicación tarea {tarea_id}: {e_commit}')
+        raise ValueError(f'Error al guardar confirmación de devolución: {e_commit}') from e_commit
     logger.info(f'[DEV] Tarea {tarea.codigo} completada · ubicación {codigo_ub} · averiado={es_averiado}')
     # Si hay job_dlq, el DLQ worker lo disparará async (TRASLADO_AVERIAS) — no bloqueamos la request.
 

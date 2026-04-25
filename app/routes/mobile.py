@@ -2,10 +2,14 @@ import logging
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.mobile_service import MobileService
+from app.routes._auth_helpers import Roles
 
 logger = logging.getLogger(__name__)
 
 mobile_bp = Blueprint('mobile', __name__)
+
+# Tipos de tarea que solo deben ejecutar roles de almacén (no conductores)
+_TIPOS_ALMACEN = {'PICKING', 'PACKING', 'CONTEO', 'REPOSICION'}
 
 
 def _operario_id():
@@ -14,6 +18,20 @@ def _operario_id():
         return int(get_jwt_identity())
     except (TypeError, ValueError):
         return None
+
+
+def _verificar_rol_para_tipo(operario_id: int, tipo: str):
+    """
+    Devuelve None si el usuario tiene permiso para el tipo de tarea,
+    o una tupla (mensaje, status) si debe ser rechazado.
+    """
+    if tipo not in _TIPOS_ALMACEN:
+        return None  # Tipos de despacho/entrega — sin restricción adicional
+    from app.models.usuario import Usuario
+    u = Usuario.query.get(operario_id)
+    if not u or u.rol == Roles.CONDUCTOR:
+        return jsonify({'error': f'Conductores no pueden ejecutar tareas de tipo {tipo}'}), 403
+    return None
 
 
 @mobile_bp.route('/mis-tareas', methods=['GET'])
@@ -49,6 +67,10 @@ def escanear():
     if 'codigo' not in data or 'tarea_id' not in data or 'tipo' not in data:
         return jsonify({'error': 'codigo, tarea_id y tipo son requeridos'}), 400
 
+    rechazo = _verificar_rol_para_tipo(operario_id, data['tipo'])
+    if rechazo:
+        return rechazo
+
     try:
         resultado = MobileService.procesar_escaneo(
             operario_id=operario_id,
@@ -78,6 +100,10 @@ def confirmar_tarea():
 
     if 'tarea_id' not in data or 'tipo' not in data:
         return jsonify({'error': 'tarea_id y tipo son requeridos'}), 400
+
+    rechazo = _verificar_rol_para_tipo(operario_id, data['tipo'])
+    if rechazo:
+        return rechazo
 
     try:
         resultado = MobileService.confirmar_tarea(
@@ -109,6 +135,15 @@ def sync_offline():
     resultados = []
     for item in cola:
         try:
+            rechazo = _verificar_rol_para_tipo(operario_id, item.get('tipo', ''))
+            if rechazo:
+                resp_body, status_code = rechazo
+                resultados.append({
+                    'tarea_id': item.get('tarea_id'),
+                    'exito': False,
+                    'error': f'Sin permiso para tipo {item.get("tipo")}'
+                })
+                continue
             resultado = MobileService.confirmar_tarea(
                 operario_id=operario_id,
                 tarea_id=item['tarea_id'],

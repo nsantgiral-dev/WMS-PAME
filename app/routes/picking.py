@@ -5,6 +5,7 @@ from app.extensions import db
 from app.models.picking import TareaPicking, EstadoPicking
 from app.services.picking_service import PickingService
 from app.routes._auth_helpers import Roles
+from app.models.usuario import Usuario
 
 picking_bp = Blueprint('picking', __name__)
 
@@ -328,6 +329,9 @@ def reportar_problema(id):
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in (Roles.OPERARIO, Roles.JEFE_ALMACEN, Roles.ADMIN, Roles.SUPERVISOR):
+        return jsonify({'error': 'Sin permiso para reportar problemas en picking'}), 403
     data = request.get_json() or {}
     try:
         resultado = PickingService.reportar_problema(

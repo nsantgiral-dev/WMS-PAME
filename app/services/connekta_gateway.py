@@ -442,9 +442,20 @@ class ConnektaGateway:
                           items: list):
         """
         142945 → API_v1_Ventas_Comercial_RemisionPedido
+        LEGACY — preferir trigger_factura (conector 238925).
         Genera remisión desde pedido — descarga inventario cuenta 14.
-        Siesa factura automáticamente. El WMS solo inyecta el documento.
         """
+        if not self.modo_simulacion:
+            if not self.tipo_docto_remision:
+                raise ValueError(
+                    'SIESA_TIPO_DOCTO_REMISION no está configurado. '
+                    'Si se usa trigger_despacho, agrega la variable en Railway.'
+                )
+            if not self.motivo_ventas:
+                raise ValueError(
+                    'SIESA_ID_MOTIVO_VENTAS no está configurado. '
+                    'Es obligatorio (pos 131, ancho 2) en connector 142945.'
+                )
         # Siesa: fecha en formato YYYYMMDD (8 chars max)
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
@@ -490,7 +501,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
                     'f470_id_concepto': 501,                          # 501 = Ventas (maestro Siesa)
-                    'f470_id_motivo': self.motivo_ventas or None,     # SIESA_ID_MOTIVO_VENTAS (pos 131, ancho 2)
+                    'f470_id_motivo': self.motivo_ventas or None,     # SIESA_ID_MOTIVO_VENTAS (pos 131, ancho 2) — DEBE configurarse en Railway
                     'f470_ind_obsequio': 0,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
@@ -751,10 +762,10 @@ class ConnektaGateway:
                     'f462_nombre_conductor': '',
                     'f462_identif_conductor': '',
                     'f462_numero_guia': '',
-                    'f462_cajas': '',
-                    'f462_peso': '',
-                    'f462_volumen': '',
-                    'f462_valor_seguros': '',
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
                     'f462_notas': ''
                 }
             ],
@@ -774,8 +785,8 @@ class ConnektaGateway:
                     'f470_id_proyecto': '',
                     'f470_id_unidad_medida': '',
                     'f470_cant_base': abs(cantidad),
-                    'f470_cant_2': '',
-                    'f470_costo_prom_uni': '',
+                    'f470_cant_2': 0.0,
+                    'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
                     'f470_desc_varible': '',
                     'F_DESC_ITEM': '',
@@ -839,10 +850,10 @@ class ConnektaGateway:
                     'f462_nombre_conductor': '',
                     'f462_identif_conductor': '',
                     'f462_numero_guia': '',
-                    'f462_cajas': '',
-                    'f462_peso': '',
-                    'f462_volumen': '',
-                    'f462_valor_seguros': '',
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
                     'f462_notas': ''
                 }
             ],
@@ -863,8 +874,8 @@ class ConnektaGateway:
                     'f470_id_proyecto': '',
                     'f470_id_unidad_medida': '',
                     'f470_cant_base': abs(cantidad),
-                    'f470_cant_2': '',
-                    'f470_costo_prom_uni': '',
+                    'f470_cant_2': 0.0,
+                    'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
                     'f470_desc_varible': '',
                     'F_DESC_ITEM': '',

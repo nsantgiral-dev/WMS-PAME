@@ -187,7 +187,7 @@ class ConteoService:
                         ubicacion_codigo=ub_codigo or '',
                     )
                 except Exception:
-                    pass
+                    logger.warning(f'[PREWARM] Fallo pre-calentando caché para {codigo_siesa}/{ub_codigo}')
 
         pares = []
         for s in sesiones:

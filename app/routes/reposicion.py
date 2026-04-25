@@ -420,6 +420,8 @@ def pre_verificar_ola():
 
     Payload: { almacen_id, items: [{ producto_id, cantidad }, ...] }
     """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede disparar pre-verificación de ola'}), 403
     data = request.get_json() or {}
     items = data.get('items', [])
     almacen_id = data.get('almacen_id')

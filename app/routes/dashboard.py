@@ -1,9 +1,11 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from app.routes._auth_helpers import _es_admin_o_jefe, _es_gestion
 from app.services.dashboard_service import DashboardService
 
 dashboard_bp = Blueprint('dashboard', __name__)
+logger = logging.getLogger(__name__)
 
 
 @dashboard_bp.route('/kpis', methods=['GET'])
@@ -18,6 +20,7 @@ def kpis_operativos():
         resultado = DashboardService.kpis_operativos(almacen_id)
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(f'[DASHBOARD] kpis_operativos almacen={almacen_id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -34,6 +37,7 @@ def productividad():
         resultado = DashboardService.productividad_operarios(almacen_id, dias)
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(f'[DASHBOARD] productividad almacen={almacen_id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -50,6 +54,7 @@ def movimientos_recientes():
         resultado = DashboardService.movimientos_recientes(almacen_id, limite)
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(f'[DASHBOARD] movimientos_recientes almacen={almacen_id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -65,6 +70,7 @@ def alertas_stock():
         resultado = DashboardService.alertas_stock(almacen_id)
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(f'[DASHBOARD] alertas_stock almacen={almacen_id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -109,11 +115,13 @@ def resumen_completo():
             .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']))
             .count())
     except Exception:
+        logger.exception('[DASHBOARD] auditorias_urgentes query falló')
         auditorias_urgentes = None
 
     try:
         tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO').count()
     except Exception:
+        logger.exception('[DASHBOARD] tareas_bloqueadas query falló')
         tareas_bloqueadas = None
 
     return jsonify({
