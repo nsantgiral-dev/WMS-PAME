@@ -18,7 +18,7 @@ class Producto(db.Model):
     stock_maximo = db.Column(db.Integer, default=0)
     punto_pedido = db.Column(db.Integer, default=0)
     clasificacion_abc = db.Column(db.String(1))
-    codigo_siesa = db.Column(db.String(50))
+    codigo_siesa = db.Column(db.String(50), index=True)
     codigo_barras = db.Column(db.String(100))      # EAN/UPC de la unidad suelta
     codigo_barras_empaque = db.Column(db.String(100))  # EAN de la caja/paca/paquete
     unidad_empaque = db.Column(db.String(20))     # ej. 'CJA', 'PAC', 'PQT'

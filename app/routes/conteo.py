@@ -139,7 +139,11 @@ def registrar_conteo(id):
         )
         return jsonify(resultado), 200
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        msg = str(e)
+        # Cache miss de Siesa → 503 reintentable, no error permanente del cliente
+        if 'Conectando con Siesa' in msg or 'Siesa aún no respondió' in msg:
+            return jsonify({'error': msg, 'retry_after': 3}), 503
+        return jsonify({'error': msg}), 400
     except Exception as e:
         logger.exception(f'[CONTEO] Error inesperado en registrar_conteo sesion={id}')
         return jsonify({'error': str(e)}), 500

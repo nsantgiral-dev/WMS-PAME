@@ -514,7 +514,12 @@ class MobileService:
 
             # Releer cantidad_real desde el objeto bloqueado (valor fresco post-lock)
             actual = item.cantidad_real or 0
-            nueva = actual + unidades
+            if total_acumulado is not None:
+                # Modo idempotente: el cliente lleva el contador — reintento seguro
+                nueva = total_acumulado
+            else:
+                # Modo legacy: += (protegido por debounce TTL 5s)
+                nueva = actual + unidades
             if nueva > item.cantidad_esperada:
                 raise ValueError(
                     f'Exceso: ya tienes {actual} de {item.cantidad_esperada} — '

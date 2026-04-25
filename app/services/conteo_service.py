@@ -410,6 +410,10 @@ class ConteoService:
         if sesion.siesa_triggered:
             return sesion
 
+        if sesion.estado == 'AJUSTANDO':
+            # Ajuste en vuelo — la DLQ lo está procesando (o fallo y DLQ reintentará).
+            # Retornar idempotente para que el supervisor no vea un error confuso.
+            return sesion
         if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']:
             raise ValueError(f'No se puede ajustar en estado {sesion.estado}')
 
