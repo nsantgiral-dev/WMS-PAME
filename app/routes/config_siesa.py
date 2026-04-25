@@ -16,6 +16,10 @@ from app.routes._auth_helpers import _solo_admin
 @config_siesa_bp.route('/mapeo-unidades', methods=['GET'])
 @jwt_required()
 def listar_mapeos():
+    # [M3] Configuración Siesa es información interna — solo gestión puede leerla.
+    from app.routes._auth_helpers import _es_gestion
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para ver configuración Siesa'}), 403
     mapeos = SiesaMapeoUnidades.query.order_by(SiesaMapeoUnidades.tipo_inv_siesa).all()
     return jsonify([m.to_dict() for m in mapeos]), 200
 

@@ -30,8 +30,9 @@ def listar_recepciones():
     page = request.args.get('page', 1, type=int)
 
     from sqlalchemy.orm import selectinload as _sl
+    from app.models.recepcion import ItemRecepcion as _IR
     query = (RecepcionMercancia.query
-             .options(_sl(RecepcionMercancia.items))
+             .options(_sl(RecepcionMercancia.items).selectinload(_IR.producto))
              .order_by(RecepcionMercancia.fecha_creacion.desc()))
     if estado:
         query = query.filter_by(estado=estado)

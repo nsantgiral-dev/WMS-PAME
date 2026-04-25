@@ -673,6 +673,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,                                            # 1 = Aprobado — contabiliza automáticamente contra pasivo estimado (26059501 configurado en tipo EA/CO003)
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
+                    'f451_id_cond_pago': cond_pago or self.cond_pago_compras or None,  # [A2] condición pago — obligatorio spec 142948 pos 324
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
                     'f451_id_tercero_comprador': tercero_comprador or self.nit_empresa or None,  # comprador exacto de la OC
                     'f451_num_docto_referencia': num_docto_referencia,
@@ -821,7 +822,7 @@ class ConnektaGateway:
                     'f470_cant_2': 0.0,
                     'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
-                    'f470_desc_varible': '',
+                    'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': self.uom_default,
                     'f470_id_ubicacion_aux_ent': '',
@@ -910,7 +911,7 @@ class ConnektaGateway:
                     'f470_cant_2': 0.0,
                     'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
-                    'f470_desc_varible': '',
+                    'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': '',
                     'f470_id_ubicacion_aux_ent': '',

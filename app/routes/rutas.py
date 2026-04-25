@@ -398,6 +398,13 @@ def listar_rutas():
     usuario = Usuario.query.get(uid)
     if not usuario:
         return jsonify({'error': 'Usuario no encontrado'}), 401
+    # [M2] Conductores pueden ver sus propias rutas (filtrado abajo).
+    # Roles de gestión pueden ver todas. Otros roles (operario, empacador, tienda) no tienen
+    # acceso a información de despacho — podrían correlacionar pedidos con clientes.
+    from app.routes._auth_helpers import Roles as _R
+    _roles_permitidos = _R.GESTION + (_R.CONDUCTOR,)
+    if usuario.rol not in _roles_permitidos:
+        return jsonify({'error': 'Sin permiso para listar rutas de despacho'}), 403
 
     fecha     = request.args.get('fecha')
     cond_id   = request.args.get('conductor_id', type=int)

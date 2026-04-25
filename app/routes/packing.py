@@ -275,6 +275,13 @@ def cerrar_packing(id):
     usuario = Usuario.query.get(uid)
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
+    # [A1] Ownership check: empacador solo puede cerrar su propia tarea.
+    # Supervisión puede cerrar cualquier tarea.
+    from app.models.packing import TareaPacking as _TP
+    _tarea_chk = _TP.query.get(id)
+    if _tarea_chk and _tarea_chk.empacador_id and _tarea_chk.empacador_id != uid:
+        if usuario.rol not in Roles.SUPERVISION:
+            return jsonify({'error': 'No puedes cerrar una tarea asignada a otro empacador'}), 403
     data = request.get_json() or {}
     bultos_data = data.get('bultos', [])
     # Permitir bultos_data vacío solo si ya existen bultos (retry Siesa)
