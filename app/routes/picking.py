@@ -114,7 +114,11 @@ def crear_tarea():
 @picking_bp.route('/<int:id>/iniciar', methods=['PUT'])
 @jwt_required()
 def iniciar_tarea(id):
+    from app.models.usuario import Usuario
     usuario_id = int(get_jwt_identity())
+    u = Usuario.query.get(usuario_id)
+    if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
+        return jsonify({'error': 'Sin permiso para iniciar tareas de picking'}), 403
     try:
         tarea = PickingService.iniciar_picking(id, usuario_id)
         return jsonify(tarea.to_dict()), 200
@@ -125,7 +129,11 @@ def iniciar_tarea(id):
 @picking_bp.route('/<int:id>/confirmar', methods=['PUT'])
 @jwt_required()
 def confirmar_tarea(id):
+    from app.models.usuario import Usuario
     usuario_id = int(get_jwt_identity())
+    u = Usuario.query.get(usuario_id)
+    if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
+        return jsonify({'error': 'Sin permiso para confirmar picking'}), 403
     data = request.get_json()
     if 'cantidad_recogida' not in data:
         return jsonify({'error': 'cantidad_recogida requerida'}), 400
@@ -208,7 +216,11 @@ def siguiente_tarea():
     Dispensador automático — el operario pide trabajo, el sistema asigna.
     Nunca espera asignación manual.
     """
+    from app.models.usuario import Usuario
     operario_id = int(get_jwt_identity())
+    u = Usuario.query.get(operario_id)
+    if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
+        return jsonify({'error': 'Sin permiso para recibir tareas de picking'}), 403
 
     tarea_activa = TareaPicking.query.filter_by(
         operario_id=operario_id,

@@ -192,6 +192,11 @@ def escanear_item(id):
 @jwt_required()
 def confirmar_packing(id):
     """Paso 1: verifica ítems → estado VERIFICADO. NO dispara Siesa."""
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.PACKING_ROLES:
+        return jsonify({'error': 'Sin permiso para confirmar packing'}), 403
     data = request.get_json() or {}
     try:
         PackingService.confirmar_packing(

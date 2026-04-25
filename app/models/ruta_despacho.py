@@ -2,6 +2,13 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoRutaDespacho:
+    PROGRAMADO  = 'PROGRAMADO'
+    EN_CARGUE   = 'EN_CARGUE'
+    EN_TRANSITO = 'EN_TRANSITO'
+    ENTREGADA   = 'ENTREGADA'
+
+
 class RutaDespacho(db.Model):
     """
     Manifiesto de cargue: agrupa los bultos que salen en un mismo vehículo.

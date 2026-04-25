@@ -24,7 +24,10 @@ def listar():
 @jwt_required()
 def ubicar(tarea_id):
     from app.models.usuario import Usuario
-    recepcionista_id = int(get_jwt_identity())
+    try:
+        recepcionista_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(recepcionista_id)
     if not u or u.rol not in Roles.RECEPCION_ROLES:
         return jsonify({'error': 'Sin permiso para confirmar devoluciones'}), 403
@@ -52,7 +55,10 @@ def ubicar(tarea_id):
 @jwt_required()
 def descartar_tarea(tarea_id):
     from app.models.usuario import Usuario
-    recepcionista_id = int(get_jwt_identity())
+    try:
+        recepcionista_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(recepcionista_id)
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso para descartar devoluciones'}), 403

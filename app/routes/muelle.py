@@ -22,6 +22,8 @@ def listos():
     Bultos físicos pendientes de cargue, agrupados por municipio (destino).
     Orden LIFO dentro de cada grupo: el primer bulto creado va al fondo del camión.
     """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Sin permiso para ver bultos listos en muelle'}), 403
     bultos = (
         Bulto.query
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)

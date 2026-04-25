@@ -84,7 +84,10 @@ def crear_lpn():
     if not all([producto_id, cantidad, almacen_id]):
         return jsonify({'error': 'producto_id, cantidad_actual y almacen_id son requeridos'}), 400
 
-    usuario_id = get_jwt_identity()
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
 
     try:
         lpn = generar_lpn(
@@ -153,7 +156,10 @@ def lpns_por_producto(producto_id):
 @jwt_required()
 def trigger_sync():
     """Trigger manual del sync de empaques (solo admin)."""
-    usuario_id = get_jwt_identity()
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.LEAD:
         return jsonify({'error': 'Solo admin puede disparar el sync'}), 403

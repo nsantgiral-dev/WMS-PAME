@@ -258,15 +258,31 @@ def _ejecutar_job(job: SiesaJob) -> dict:
     if job.tipo == 'TRASLADO_AVERIAS':
         from app.models.devolucion import TareaDevolucion as _TareaDev
         tarea_dev = _TareaDev.query.get(payload.get('tarea_id'))
-        # P4: si siesa_triggered=True, Siesa ya recibió el traslado — no reenviar
-        if tarea_dev and tarea_dev.siesa_triggered:
+
+        # P4: idempotencia — si tarea_dev no existe o ya tiene triggered, no reenviar
+        if tarea_dev is None:
+            logger.warning(
+                f'[DLQ] TRASLADO_AVERIAS job={job.id}: tarea_id={payload.get("tarea_id")} '
+                f'no existe en DB — omitiendo llamada a Siesa para evitar duplicado sin clave'
+            )
+            return {'idempotente': True, 'sin_tarea': True}
+
+        if tarea_dev.siesa_triggered:
             logger.info(
                 f'[DLQ] TRASLADO_AVERIAS job={job.id}: tarea {tarea_dev.id} ya tiene '
                 f'siesa_triggered=True — omitiendo llamada (idempotencia P4)'
             )
             return {'idempotente': True, 'tarea_id': tarea_dev.id}
+
+        item_codigo = payload.get('item_codigo')
+        if not item_codigo:
+            raise ValueError(
+                f'TRASLADO_AVERIAS job={job.id}: item_codigo faltante en payload — '
+                f'no se puede enviar a Siesa sin referencia del ítem'
+            )
+
         resultado = connekta.transferir_a_averias(
-            item_codigo=payload['item_codigo'],
+            item_codigo=item_codigo,
             cantidad=payload['cantidad'],
             referencia=payload.get('referencia', ''),
         )

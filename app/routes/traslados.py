@@ -64,9 +64,11 @@ def obtener_solicitud(id):
 def crear_solicitud():
     """Tienda crea solicitud en BORRADOR."""
     usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in Roles.DESPACHO + (Roles.TIENDA,):
+        return jsonify({'error': 'Sin permiso para crear solicitudes de traslado'}), 403
     data = request.get_json() or {}
 
-    usuario = Usuario.query.get(usuario_id)
     bodega_destino = data.get('bodega_destino_siesa') or (usuario.bodega_siesa_id if usuario else None)
     nombre_pv = data.get('nombre_punto_venta') or (usuario.nombre_punto_venta if usuario else None)
 

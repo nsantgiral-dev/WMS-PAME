@@ -40,7 +40,11 @@ class ConteoService:
             sesion.operario_id = operario_id
             sesion.estado = 'EN_PROCESO'
             sesion.fecha_inicio = datetime.utcnow()
-            db.session.commit()
+            try:
+                db.session.commit()
+            except Exception as e_commit:
+                db.session.rollback()
+                raise ValueError(f'Error al asignar sesión de conteo: {e_commit}') from e_commit
 
         # Retornar SOLO vista ciega — sin cantidad esperada
         return sesion.to_dict_operario()
@@ -365,7 +369,11 @@ class ConteoService:
         # with_for_update() mantiene el lock hasta el commit — si lo dejamos
         # activo durante la llamada HTTP (hasta 30s timeout) bloqueamos
         # cualquier otra operación sobre esta sesión.
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as e_lock_release:
+            db.session.rollback()
+            raise ValueError(f'Error al registrar estado de conteo: {e_lock_release}') from e_lock_release
 
         # Trigger a Siesa
         siesa_llamado = False  # distingue fallo Siesa vs fallo commit
@@ -506,7 +514,12 @@ class ConteoService:
             db.session.add(sesion)
             creadas.append(sesion_codigo)
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as e_commit:
+            db.session.rollback()
+            raise ValueError(f'Error al crear sesiones de conteo manual: {e_commit}') from e_commit
+
         return {
             'tareas_creadas': len(creadas),
             'omitidas_ya_activas': omitidas,

@@ -219,6 +219,22 @@ def _run_carga_inicial(app):
                 ).with_entities(MovimientoInventario.idempotency_key).all()
             }
 
+            # Mapa 4: ubicaciones con ajuste manual en últimas 12h por producto_id
+            # Pre-cargado UNA VEZ aquí — evita N+1 dentro del loop de 5000 productos (P10).
+            _corte_12h = datetime.utcnow() - timedelta(hours=12)
+            _ajustes_recientes: dict[int, set] = {}  # producto_id → {ubicacion_id, ...}
+            for row in (
+                db.session.query(MovimientoInventario.producto_id, MovimientoInventario.ubicacion_id)
+                .filter(
+                    MovimientoInventario.tipo != 'CARGA_INICIAL_SIESA',
+                    MovimientoInventario.fecha >= _corte_12h,
+                    MovimientoInventario.ubicacion_id.isnot(None),
+                )
+                .distinct()
+                .all()
+            ):
+                _ajustes_recientes.setdefault(row.producto_id, set()).add(row.ubicacion_id)
+
             logger.info(
                 f'[INV-SIESA] Mapas cargados: {len(_todos_prods)} productos · '
                 f'{len(_mapa_ubicaciones)} ubicaciones · {len(_mapa_up)} registros UP'
@@ -255,25 +271,18 @@ def _run_carga_inicial(app):
 
                     # Zero-ar otras ubicaciones del mismo producto para evitar
                     # acumulación cuando Siesa cambia ubicacion_aux entre días.
-                    # EXCEPCIÓN P10: no tocar ubicaciones con ajuste manual reciente
-                    # (últimas 12h) — el operario puede haber movido stock a mano.
-                    _corte_12h = datetime.utcnow() - timedelta(hours=12)
-                    _ubs_con_ajuste_reciente = {
-                        row.ubicacion_id
-                        for row in db.session.query(MovimientoInventario.ubicacion_id)
-                        .filter(
-                            MovimientoInventario.producto_id == prod.id,
-                            MovimientoInventario.tipo != 'CARGA_INICIAL_SIESA',
-                            MovimientoInventario.fecha >= _corte_12h,
-                        )
-                        .distinct()
-                        .all()
-                    }
-                    UbicacionProducto.query.filter(
+                    # EXCEPCIÓN P10: no tocar ubicaciones con ajuste manual reciente (12h).
+                    # _ajustes_recientes pre-cargado una vez antes del loop — sin N+1.
+                    _ubs_protegidas = _ajustes_recientes.get(prod.id, set())
+                    _filtro_zero = UbicacionProducto.query.filter(
                         UbicacionProducto.producto_id == prod.id,
                         UbicacionProducto.ubicacion_id != ub.id,
-                        ~UbicacionProducto.ubicacion_id.in_(_ubs_con_ajuste_reciente)
-                    ).update({'cantidad': 0}, synchronize_session=False)
+                    )
+                    if _ubs_protegidas:
+                        _filtro_zero = _filtro_zero.filter(
+                            ~UbicacionProducto.ubicacion_id.in_(_ubs_protegidas)
+                        )
+                    _filtro_zero.update({'cantidad': 0}, synchronize_session=False)
 
                     saldo_antes = reg.cantidad if reg else 0
 
