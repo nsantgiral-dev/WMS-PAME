@@ -73,7 +73,10 @@ def ajuste_inventario():
         db.session.flush()
 
     saldo_antes = reg.cantidad
-    cantidad = int(data['cantidad'])
+    try:
+        cantidad = int(data['cantidad'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'cantidad debe ser un entero válido'}), 400
 
     if data['tipo'] == 'ENTRADA':
         reg.cantidad += cantidad

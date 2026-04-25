@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy.exc import IntegrityError
 from app.extensions import db
 from app.models.almacen import Almacen
 from app.models.ubicacion import Ubicacion
@@ -49,7 +50,11 @@ def crear_almacen():
     )
 
     db.session.add(almacen)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'El código de almacén ya existe'}), 409
     return jsonify(almacen.to_dict()), 201
 
 

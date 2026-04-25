@@ -15,6 +15,7 @@ from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
 from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
+from sqlalchemy.exc import IntegrityError as _IntegrityError
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin
 
 logger = logging.getLogger(__name__)
@@ -286,7 +287,11 @@ def crear_maestra():
                 orden=i + 1
             ))
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except _IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Ya existe una ruta maestra con ese nombre'}), 409
     db.session.refresh(m)   # recarga paradas expiradas por expire_on_commit
     return jsonify({'maestra': m.to_dict()}), 201
 
