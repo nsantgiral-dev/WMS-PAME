@@ -357,6 +357,13 @@ class PackingService:
                 'unidad_medida': i.producto.unidad_medida or ''
             })
 
+        # Validar datos Siesa antes de crear job — un payload inválido causaría DLQ permanente
+        if not tarea.tipo_docto_pedido_siesa:
+            raise ValueError(
+                f'Tarea {tarea_id} no tiene tipo_docto_pedido_siesa — '
+                'el pedido no tiene datos Siesa válidos. Contacta al administrador.'
+            )
+
         # TRIGGER A SIESA — 238925 FacturaPedido → factura FE + remisión automática
         consec_para_siesa = tarea.consec_docto_pedido_siesa or tarea.numero_pedido_siesa
         logger.info(

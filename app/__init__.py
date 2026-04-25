@@ -99,13 +99,13 @@ def create_app():
                 _mod = _il.import_module(_mod_path)
                 getattr(_mod, _fn_name)(app)
             except Exception as e:
-                _app_logger.error(f'{_tag} No se pudo iniciar: {e}')
+                _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
 
         # ABCService tiene una interfaz diferente (método de clase en vez de función suelta)
         try:
             from app.services.abc_service import ABCService
             ABCService.init_scheduler(app)
         except Exception as e:
-            logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}')
+            logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}', exc_info=True)
 
     return app

@@ -29,9 +29,10 @@ def listar_recepciones():
     almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
 
-    query = RecepcionMercancia.query.order_by(
-        RecepcionMercancia.fecha_creacion.desc()
-    )
+    from sqlalchemy.orm import selectinload as _sl
+    query = (RecepcionMercancia.query
+             .options(_sl(RecepcionMercancia.items))
+             .order_by(RecepcionMercancia.fecha_creacion.desc()))
     if estado:
         query = query.filter_by(estado=estado)
     if almacen_id:

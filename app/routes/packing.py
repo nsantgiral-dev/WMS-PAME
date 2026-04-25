@@ -6,6 +6,7 @@ from app.models.picking import TareaPicking
 from app.services.packing_service import PackingService
 from app.services.connekta_gateway import connekta
 from app.routes._auth_helpers import Roles, _puede_empacar
+from app.models.packing import EstadoPacking
 
 packing_bp = Blueprint('packing', __name__)
 logger = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ def listar_tareas():
              .options(
                  _sl(TareaPacking.items),
                  _sl(TareaPacking.bultos),
-                 _jl(TareaPacking.usuario),
+                 _jl(TareaPacking.empacador),
              )
              .order_by(TareaPacking.fecha_creacion.desc()))
 
@@ -316,12 +317,16 @@ def reiniciar_conteo(id):
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
     tarea = TareaPacking.query.get_or_404(id)
-    if tarea.estado not in ('EN_PROCESO', 'PENDIENTE', 'VERIFICADO'):
+    if tarea.estado not in (EstadoPacking.EN_PROCESO, EstadoPacking.PENDIENTE, EstadoPacking.VERIFICADO):
         return jsonify({'error': 'No se puede reiniciar una tarea en este estado'}), 400
+    # Solo el empacador asignado o un supervisor/admin puede reiniciar
+    if (tarea.empacador_id and tarea.empacador_id != usuario.id
+            and usuario.rol not in Roles.SUPERVISION):
+        return jsonify({'error': 'Solo el empacador asignado puede reiniciar esta tarea'}), 403
     for item in tarea.items:
         item.cantidad_real = 0
         item.verificado = False
-    tarea.estado = 'EN_PROCESO'
+    tarea.estado = EstadoPacking.EN_PROCESO
     tarea.verificacion_exitosa = False
     tarea.fecha_verificado = None
     db.session.commit()

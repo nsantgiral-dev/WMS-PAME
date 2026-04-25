@@ -28,10 +28,10 @@ def listar_tareas():
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
 
-    query = TareaPicking.query.order_by(
-        TareaPicking.prioridad.desc(),
-        TareaPicking.fecha_creacion.asc()
-    )
+    from sqlalchemy.orm import selectinload as _sl
+    query = (TareaPicking.query
+             .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
+             .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc()))
 
     if activas:
         query = query.filter(TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO, EstadoPicking.BLOQUEADO]))

@@ -141,6 +141,7 @@ def crear_conductor():
     )
     db.session.add(c)
     db.session.commit()
+    db.session.refresh(c)   # recarga relaciones (usuario) expiradas por expire_on_commit
     return jsonify({'conductor': c.to_dict()}), 201
 
 
@@ -157,6 +158,7 @@ def actualizar_conductor(id):
     if 'activo'     in data: c.activo     = bool(data['activo'])
     if 'usuario_id' in data: c.usuario_id = data['usuario_id'] or None
     db.session.commit()
+    db.session.refresh(c)
     return jsonify({'conductor': c.to_dict()}), 200
 
 
@@ -276,6 +278,7 @@ def crear_maestra():
             ))
 
     db.session.commit()
+    db.session.refresh(m)   # recarga paradas expiradas por expire_on_commit
     return jsonify({'maestra': m.to_dict()}), 201
 
 
@@ -306,6 +309,7 @@ def actualizar_maestra(id):
                 ))
 
     db.session.commit()
+    db.session.refresh(m)
     return jsonify({'maestra': m.to_dict()}), 200
 
 
