@@ -441,7 +441,10 @@ class RecepcionService:
                 f'items_oc keys={list(items_oc.keys())} fallback={oc_fallback!r}'
             )
         except Exception as lookup_err:
-            logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
+            logger.error(
+                f'[RECEPCION] Lookup OC falló para {recepcion.numero_oc_siesa}: {lookup_err}',
+                exc_info=True
+            )
 
         # Siesa requiere proveedor_id — fallar rápido antes de crear SiesaJob
         if not proveedor_id:
@@ -496,6 +499,20 @@ class RecepcionService:
                 'uom': oc_data.get('uom'),
                 'fecha_entrega': oc_data.get('fecha_entrega'),
             })
+
+        # Validar que tenemos datos de bodega/uom para al menos los items de OC (no BONIFICACION).
+        # Si el lookup OC falló Y recepcion no tenía bodega en BD, el payload sería inválido
+        # y el job quedaría en DLQ permanente sin posibilidad de reintento exitoso.
+        items_sin_bodega = [
+            item['producto_codigo'] for item in items_payload
+            if item.get('tipo') != 'BONIFICACION' and not item.get('bodega')
+        ]
+        if items_sin_bodega:
+            raise ValueError(
+                f'No se pudo obtener bodega/UOM para {len(items_sin_bodega)} ítem(s) de la OC '
+                f'{recepcion.numero_oc_siesa} en Siesa: {items_sin_bodega[:3]}. '
+                'Verifica que la OC exista en Siesa y tenga líneas activas.'
+            )
 
         # [P8] Crear SiesaJob ANTES de llamar a Siesa — atómico con el inventario.
         # Si el commit falla, ni el inventario ni el job persisten (consistente).
