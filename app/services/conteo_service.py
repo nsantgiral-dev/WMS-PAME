@@ -136,7 +136,7 @@ class ConteoService:
 
             logger.info(
                 f'[CONTEO] MATCH en {sesion.codigo} — '
-                f'producto {sesion.producto.codigo}'
+                f'producto {sesion.producto.codigo} — operario_id={operario_id}'
             )
 
             return {

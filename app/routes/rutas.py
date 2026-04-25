@@ -2,6 +2,7 @@
 Módulo de Rutas y Manifiestos — trazabilidad Milla Cero.
 Conductores + Vehículos + RutaMaestra (plantilla) + RutaDespacho (instancia/viaje)
 """
+import logging
 from datetime import datetime, date
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -13,8 +14,10 @@ from app.models.recaudo_entrega import RecaudoEntrega
 from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
-from sqlalchemy.orm import selectinload as _sl
+from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin
+
+logger = logging.getLogger(__name__)
 
 rutas_bp = Blueprint('rutas', __name__)
 
@@ -154,8 +157,8 @@ def actualizar_conductor(id):
     from app.models.usuario import Usuario
     c = Conductor.query.get_or_404(id)
     data = request.get_json()
-    if 'nombre'     in data: c.nombre     = data['nombre'].strip()
-    if 'telefono'   in data: c.telefono   = data['telefono'].strip() or None
+    if 'nombre'     in data: c.nombre     = (data['nombre'] or '').strip()
+    if 'telefono'   in data: c.telefono   = (data['telefono'] or '').strip() or None
     if 'activo'     in data: c.activo     = bool(data['activo'])
     if 'usuario_id' in data: c.usuario_id = data['usuario_id'] or None
     db.session.commit()
@@ -392,13 +395,12 @@ def listar_rutas():
     estado    = request.args.get('estado')
     page      = request.args.get('page', 1, type=int)
 
-    from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
     q = (RutaDespacho.query
          .options(
              _jl(RutaDespacho.conductor),
              _jl(RutaDespacho.vehiculo),
              _jl(RutaDespacho.ruta_maestra),
-             _sl(RutaDespacho.bultos),
+             _sl(RutaDespacho.bultos).joinedload(Bulto.tarea),
          )
          .order_by(RutaDespacho.fecha_creacion.desc()))
 
@@ -464,7 +466,9 @@ def obtener_ruta(id):
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
-    ruta = RutaDespacho.query.get_or_404(id)
+    ruta = (RutaDespacho.query
+            .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+            .get_or_404(id))
     # Conductores solo pueden ver sus propias rutas
     usuario = Usuario.query.get(uid)
     if usuario and usuario.rol == 'conductor':
@@ -564,9 +568,11 @@ def cerrar_ruta(id):
                      f'Escanéalos en el muelle antes de cerrar la ruta.'
         }), 400
 
+    _n_bultos = len(ruta.bultos)  # capturar antes del commit
     ruta.estado = EstadoRutaDespacho.EN_TRANSITO
     ruta.fecha_cierre = datetime.utcnow()
     db.session.commit()
+    logger.info(f'[RUTAS] Ruta {ruta.id} EN_CARGUE → EN_TRANSITO ({_n_bultos} bultos)')
     return jsonify({'ok': True, 'ruta': ruta.to_dict(include_bultos=True)}), 200
 
 
@@ -646,6 +652,7 @@ def mis_rutas():
         return jsonify({'error': 'Tu cuenta no está vinculada a ningún conductor'}), 404
 
     rutas = (RutaDespacho.query
+             .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
              .filter_by(conductor_id=conductor.id, estado=EstadoRutaDespacho.EN_TRANSITO)
              .order_by(RutaDespacho.fecha_cierre.desc())
              .all())
@@ -693,7 +700,9 @@ def listar_paradas(id):
     Accesible por admin/jefe y por el conductor dueño de la ruta.
     """
 
-    ruta = RutaDespacho.query.get_or_404(id)
+    ruta = (RutaDespacho.query
+            .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+            .get_or_404(id))
     try:
         usuario_id = int(get_jwt_identity())
     except (TypeError, ValueError):

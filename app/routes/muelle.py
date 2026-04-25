@@ -131,10 +131,15 @@ def cargar_bulto(codigo_barras):
 
     from app.models.ruta_despacho import RutaDespacho
     data = request.get_json(silent=True) or {}
-    ruta_id = data.get('ruta_id')
+    ruta_id_raw = data.get('ruta_id')
 
-    if not ruta_id:
+    if not ruta_id_raw:
         return jsonify({'error': 'ruta_id es requerido para verificación'}), 400
+
+    try:
+        ruta_id = int(ruta_id_raw)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'ruta_id debe ser un número entero válido'}), 400
 
     bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).first()
 
