@@ -88,6 +88,33 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
         raise
 
 
+def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str, tipo_alerta: str):
+    """
+    Wrapper sobre enviar_email que encola un SiesaJob(ALERTA_EMAIL) cuando Resend falla.
+    El job queda visible en la queue del WMS y dispara logger.critical en el próximo DLQ run,
+    evitando que la falla de alertas pase completamente desapercibida (SF_JOB_SILENCIOSO).
+    """
+    try:
+        enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    except Exception as e:
+        logger.critical(
+            f'[ALERTAS] enviar_email falló para "{tipo_alerta}" — encolando en DLQ: {e}'
+        )
+        try:
+            from app.models.siesa_job import SiesaJob as _SJ
+            from app.extensions import db as _db
+            _SJ.encolar(
+                'ALERTA_EMAIL',
+                {'tipo_alerta': tipo_alerta, 'asunto': asunto, 'error': str(e)},
+            )
+            _db.session.commit()
+        except Exception as e2:
+            logger.critical(
+                f'[ALERTAS] DLQ también falló — alerta "{tipo_alerta}" perdida: {e2}. '
+                'Revisar RESEND_API_KEY y conexión BD.'
+            )
+
+
 # ── Alerta de ubicaciones huérfanas ──────────────────────────────────────────
 
 def verificar_y_alertar_huerfanas(app=None):
@@ -252,7 +279,7 @@ Si tienes dudas escribe a sistemas o abre un ticket.
 </body>
 </html>"""
 
-    enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'huerfanas')
 
 
 # ── Alerta: Job Siesa FALLIDO ─────────────────────────────────────────────────
@@ -498,7 +525,7 @@ Compras debe ordenar o trasladar mercancía para estos SKUs.
   </div>
 </body></html>"""
 
-    enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'stock_critico')
 
 
 # ── Resumen operativo diario ──────────────────────────────────────────────────
@@ -641,7 +668,7 @@ Generado: {hoy}
   </div>
 </body></html>"""
 
-    enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'resumen_diario')
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────

@@ -430,6 +430,16 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 )
         return resultado
 
+    if job.tipo == 'ALERTA_EMAIL':
+        tipo_alerta = payload.get('tipo_alerta', 'desconocido')
+        asunto = payload.get('asunto', 'sin asunto')
+        error_original = payload.get('error', '')
+        logger.critical(
+            f'[ALERTA_EMAIL] Email de alerta "{tipo_alerta}" ({asunto}) no fue enviado: '
+            f'{error_original}. Verificar RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.'
+        )
+        return {'procesado': True, 'tipo_alerta': tipo_alerta, 'nota': 'ver logs CRITICAL'}
+
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
 
 
