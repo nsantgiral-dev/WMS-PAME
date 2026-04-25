@@ -24,6 +24,11 @@ class Roles:
     LEAD           = (ADMIN, SUPERVISOR)
 
 
+def _puede_empacar(usuario) -> bool:
+    """Autorizado para operaciones de packing: rol en PACKING_ROLES O flag puede_empacar=True."""
+    return usuario.rol in Roles.PACKING_ROLES or bool(usuario.puede_empacar)
+
+
 def _solo_admin():
     """Devuelve el usuario actual si es admin, o None."""
     try:

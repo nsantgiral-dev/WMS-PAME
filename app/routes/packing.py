@@ -4,7 +4,7 @@ from app.models.packing import TareaPacking
 from app.models.picking import TareaPicking
 from app.services.packing_service import PackingService
 from app.services.connekta_gateway import connekta
-from app.routes._auth_helpers import Roles
+from app.routes._auth_helpers import Roles, _puede_empacar
 
 packing_bp = Blueprint('packing', __name__)
 
@@ -55,7 +55,7 @@ def listar_tareas():
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.PACKING_ROLES:
+    if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para listar tareas de packing'}), 403
     estado = request.args.get('estado')
     almacen_id = request.args.get('almacen_id', type=int)
@@ -159,7 +159,7 @@ def iniciar_tarea(id):
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(empacador_id)
-    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
+    if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
     try:
         tarea = PackingService.iniciar(id, empacador_id)
@@ -177,7 +177,7 @@ def escanear_item(id):
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(uid)
-    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
+    if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad_real']
@@ -207,7 +207,7 @@ def confirmar_packing(id):
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.PACKING_ROLES:
+    if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para confirmar packing'}), 403
     data = request.get_json() or {}
     try:
@@ -241,7 +241,7 @@ def cerrar_packing(id):
     from app.models.usuario import Usuario
     uid = get_jwt_identity()
     usuario = Usuario.query.get(int(uid))
-    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
+    if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}
     bultos_data = data.get('bultos', [])
@@ -294,7 +294,7 @@ def reiniciar_conteo(id):
     from app.models.usuario import Usuario
     uid = get_jwt_identity()
     usuario = Usuario.query.get(int(uid))
-    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
+    if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
     tarea = TareaPacking.query.get_or_404(id)
     if tarea.estado not in ('EN_PROCESO', 'PENDIENTE', 'VERIFICADO'):
