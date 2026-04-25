@@ -4,6 +4,7 @@ from app.models.packing import TareaPacking
 from app.models.picking import TareaPicking
 from app.services.packing_service import PackingService
 from app.services.connekta_gateway import connekta
+from app.routes._auth_helpers import Roles
 
 packing_bp = Blueprint('packing', __name__)
 
@@ -147,7 +148,7 @@ def iniciar_tarea(id):
     from app.models.usuario import Usuario
     empacador_id = int(get_jwt_identity())
     usuario = Usuario.query.get(empacador_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
     try:
         tarea = PackingService.iniciar(id, empacador_id)
@@ -162,7 +163,7 @@ def escanear_item(id):
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     usuario = Usuario.query.get(uid)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad_real']
@@ -218,7 +219,7 @@ def cerrar_packing(id):
     from app.models.usuario import Usuario
     uid = get_jwt_identity()
     usuario = Usuario.query.get(int(uid))
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}
     bultos_data = data.get('bultos', [])
@@ -253,7 +254,7 @@ def cancelar_tarea(id):
     from app.models.usuario import Usuario
     uid = get_jwt_identity()
     usuario = Usuario.query.get(int(uid))
-    if not usuario or usuario.rol not in ('admin', 'supervisor'):
+    if not usuario or usuario.rol not in Roles.LEAD:
         return jsonify({'error': 'No autorizado — se requiere rol admin o supervisor'}), 403
     data = request.get_json() or {}
     try:
@@ -271,7 +272,7 @@ def reiniciar_conteo(id):
     from app.models.usuario import Usuario
     uid = get_jwt_identity()
     usuario = Usuario.query.get(int(uid))
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'empacador'):
+    if not usuario or usuario.rol not in Roles.PACKING_ROLES:
         return jsonify({'error': 'No autorizado'}), 403
     tarea = TareaPacking.query.get_or_404(id)
     if tarea.estado not in ('EN_PROCESO', 'PENDIENTE', 'VERIFICADO'):

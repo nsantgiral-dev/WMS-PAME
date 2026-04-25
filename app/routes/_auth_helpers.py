@@ -18,6 +18,10 @@ class Roles:
     GESTION        = (ADMIN, SUPERVISOR, JEFE_ALMACEN, GERENTE)
     ALMACEN        = (ADMIN, JEFE_ALMACEN)
     DESPACHO       = (ADMIN, SUPERVISOR, GERENTE, JEFE_ALMACEN)
+    SUPERVISION    = (ADMIN, SUPERVISOR, JEFE_ALMACEN)
+    PACKING_ROLES  = (ADMIN, SUPERVISOR, EMPACADOR)
+    RECEPCION_ROLES = (ADMIN, JEFE_ALMACEN, RECEPCIONISTA)
+    LEAD           = (ADMIN, SUPERVISOR)
 
 
 def _solo_admin():
@@ -38,3 +42,13 @@ def _es_admin_o_jefe():
         return None
     u = Usuario.query.get(uid)
     return u if u and u.rol in Roles.ALMACEN else None
+
+
+def _es_gestion():
+    """Retorna el usuario si tiene rol de gestión (admin/supervisor/jefe_almacen/gerente)."""
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    return u if u and u.rol in Roles.GESTION else None

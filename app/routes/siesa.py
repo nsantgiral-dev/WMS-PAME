@@ -22,7 +22,7 @@ from app.services.recepcion_service import RecepcionService
 siesa_bp = Blueprint('siesa', __name__)
 
 
-from app.routes._auth_helpers import _solo_admin
+from app.routes._auth_helpers import _solo_admin, Roles
 
 
 # ──────────────────────────────────────────────
@@ -606,7 +606,7 @@ def ordenes_compra():
     from app.models.usuario import Usuario
     _uid = get_jwt_identity()
     _u = Usuario.query.get(int(_uid))
-    if not _u or _u.rol not in ('admin', 'jefe_almacen'):
+    if not _u or _u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
 
     sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'

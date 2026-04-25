@@ -442,3 +442,74 @@ class ConteoService:
                 raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
 
         return sesion
+
+    @staticmethod
+    def crear_conteo_manual(almacen_id: int, producto_codigo: str) -> dict:
+        """
+        Crea sesiones de conteo manual para todas las ubicaciones donde hay stock
+        del producto en el almacén. Omite ubicaciones con conteo activo.
+        Retorna dict con tareas_creadas, omitidas_ya_activas, producto_nombre, codigos.
+        """
+        from app.models.producto import Producto
+        from app.models.inventario import UbicacionProducto
+        from app.models.ubicacion import Ubicacion
+
+        codigo = producto_codigo.strip().upper()
+        producto = Producto.query.filter(
+            db.or_(Producto.codigo_siesa == codigo, Producto.codigo == codigo)
+        ).first()
+        if not producto:
+            raise ValueError(f'Producto {codigo} no encontrado')
+
+        registros = (
+            UbicacionProducto.query
+            .join(Ubicacion)
+            .filter(
+                UbicacionProducto.producto_id == producto.id,
+                Ubicacion.almacen_id == almacen_id
+            ).all()
+        )
+        if not registros:
+            raise ValueError('El producto no tiene stock registrado en este almacén')
+
+        # Pre-cargar sesiones activas en una sola query — evita N+1 en el loop
+        ubicacion_ids = [r.ubicacion_id for r in registros]
+        activos_set = {
+            s.ubicacion_id
+            for s in SesionConteo.query.filter(
+                SesionConteo.producto_id == producto.id,
+                SesionConteo.ubicacion_id.in_(ubicacion_ids),
+                SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+            ).all()
+        }
+
+        creadas = []
+        omitidas = 0
+        hoy = datetime.utcnow().strftime('%Y%m%d')
+        for reg in registros:
+            if reg.ubicacion_id in activos_set:
+                omitidas += 1
+                continue
+            sesion_codigo = f'CC-MANUAL-{hoy}-{str(uuid.uuid4())[:6].upper()}'
+            sesion = SesionConteo(
+                codigo=sesion_codigo,
+                tipo='MANUAL',
+                clasificacion_abc=producto.clasificacion_abc or 'C',
+                ubicacion_id=reg.ubicacion_id,
+                almacen_id=almacen_id,
+                producto_id=producto.id,
+                producto_codigo_siesa=producto.codigo_siesa,
+                maneja_lote=False,
+                estado='PENDIENTE'
+            )
+            db.session.add(sesion)
+            creadas.append(sesion_codigo)
+
+        db.session.commit()
+        return {
+            'tareas_creadas': len(creadas),
+            'omitidas_ya_activas': omitidas,
+            'producto': codigo,
+            'producto_nombre': producto.nombre or '',
+            'codigos': creadas,
+        }

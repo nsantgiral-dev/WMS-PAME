@@ -2,6 +2,16 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoConteo:
+    PENDIENTE       = 'PENDIENTE'
+    EN_PROCESO      = 'EN_PROCESO'
+    MATCH           = 'MATCH'
+    DESCUADRE       = 'DESCUADRE'
+    SEGUNDO_CONTEO  = 'SEGUNDO_CONTEO'
+    AJUSTADO        = 'AJUSTADO'
+    CANCELADO       = 'CANCELADO'
+
+
 class SesionConteo(db.Model):
     __tablename__ = 'sesiones_conteo'
 

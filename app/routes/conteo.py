@@ -6,6 +6,7 @@ from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.services.conteo_service import ConteoService
 from app.services.abc_service import ABCService
+from app.routes._auth_helpers import Roles
 
 conteo_bp = Blueprint('conteo', __name__)
 
@@ -137,7 +138,7 @@ def confirmar_ajuste(id):
     except (ValueError, TypeError):
         return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
     usuario = Usuario.query.get(supervisor_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor'):
+    if not usuario or usuario.rol not in Roles.LEAD:
         return jsonify({'error': 'Solo un supervisor o admin puede aprobar ajustes de inventario'}), 403
     try:
         sesion = ConteoService.confirmar_ajuste(id, supervisor_id)
@@ -164,7 +165,7 @@ def auditorias_urgentes():
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     usuario = Usuario.query.get(uid)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo admin o supervisor puede ver las auditorías urgentes'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     q = (SesionConteo.query
@@ -267,69 +268,15 @@ def crear_conteo_manual():
     data = request.get_json() or {}
 
     almacen_id = data.get('almacen_id')
-    producto_codigo = (data.get('producto_codigo') or '').strip().upper()
+    producto_codigo = (data.get('producto_codigo') or '').strip()
     if not almacen_id or not producto_codigo:
         return jsonify({'error': 'almacen_id y producto_codigo son requeridos'}), 400
 
-    from app.models.producto import Producto
-    from app.models.inventario import UbicacionProducto
-    from app.models.ubicacion import Ubicacion
-
-    producto = Producto.query.filter(
-        db.or_(
-            Producto.codigo_siesa == producto_codigo,
-            Producto.codigo == producto_codigo
-        )
-    ).first()
-    if not producto:
-        return jsonify({'error': f'Producto {producto_codigo} no encontrado'}), 404
-
-    registros = (
-        UbicacionProducto.query
-        .join(Ubicacion)
-        .filter(
-            UbicacionProducto.producto_id == producto.id,
-            Ubicacion.almacen_id == almacen_id
-        ).all()
-    )
-    if not registros:
-        return jsonify({'error': 'El producto no tiene stock registrado en este almacén'}), 404
-
-    creadas = []
-    omitidas = 0
-    for reg in registros:
-        ya = SesionConteo.query.filter(
-            SesionConteo.producto_id == producto.id,
-            SesionConteo.ubicacion_id == reg.ubicacion_id,
-            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
-        ).first()
-        if ya:
-            omitidas += 1
-            continue
-
-        codigo = f'CC-MANUAL-{datetime.utcnow().strftime("%Y%m%d")}-{str(uuid.uuid4())[:6].upper()}'
-        sesion = SesionConteo(
-            codigo=codigo,
-            tipo='MANUAL',
-            clasificacion_abc=producto.clasificacion_abc or 'C',
-            ubicacion_id=reg.ubicacion_id,
-            almacen_id=almacen_id,
-            producto_id=producto.id,
-            producto_codigo_siesa=producto.codigo_siesa,
-            maneja_lote=False,
-            estado='PENDIENTE'
-        )
-        db.session.add(sesion)
-        creadas.append(codigo)
-
-    db.session.commit()
-    return jsonify({
-        'tareas_creadas': len(creadas),
-        'omitidas_ya_activas': omitidas,
-        'producto': producto_codigo,
-        'producto_nombre': producto.nombre or '',
-        'codigos': creadas,
-    }), 201
+    try:
+        resultado = ConteoService.crear_conteo_manual(almacen_id, producto_codigo)
+        return jsonify(resultado), 201
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
 
 
 @conteo_bp.route('/abc/sincronizar', methods=['POST'])
@@ -425,7 +372,7 @@ def editar_conteo(id):
     from app.models.usuario import Usuario
     editor_id = int(get_jwt_identity())
     usuario = Usuario.query.get(editor_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor'):
+    if not usuario or usuario.rol not in Roles.LEAD:
         return jsonify({'error': 'Solo admin o supervisor puede editar conteos'}), 403
 
     sesion = SesionConteo.query.get(id)

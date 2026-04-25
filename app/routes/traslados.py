@@ -4,6 +4,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload, subqueryload
 from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado
 from app.models.usuario import Usuario
+from app.routes._auth_helpers import Roles
 from app.services.traslado_service import TrasladoService
 
 traslados_bp = Blueprint('traslados', __name__)
@@ -111,7 +112,7 @@ def enviar_solicitud(id):
 def aprobar_solicitud(id):
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden aprobar solicitudes'}), 403
     data = request.get_json() or {}
     try:
@@ -133,7 +134,7 @@ def aprobar_solicitud(id):
 def rechazar_solicitud(id):
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden rechazar solicitudes de traslado'}), 403
     data = request.get_json() or {}
     motivo = data.get('motivo', 'Sin motivo especificado')
@@ -236,7 +237,7 @@ def reasignar_operario(id):
     """Admin cambia el operario asignado a un traslado EN_PICKING."""
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden reasignar operarios'}), 403
 
     s = SolicitudTraslado.query.get_or_404(id)
@@ -272,7 +273,7 @@ def reasignar_operario(id):
 def despachar(id):
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden despachar traslados'}), 403
     try:
         s = TrasladoService.despachar(id)
@@ -433,7 +434,7 @@ def reintentar_despacho(id):
     """Admin: reintenta el trigger Siesa de despacho (173066/173076) sin cambiar el estado."""
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.DESPACHO:
         return jsonify({'error': 'Solo administradores pueden reintentar despachos'}), 403
     from app.models.traslado import SolicitudTraslado
     from app.extensions import db

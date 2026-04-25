@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.recepcion import RecepcionMercancia
 from app.services.recepcion_service import RecepcionService
-from app.routes._auth_helpers import _solo_admin
+from app.routes._auth_helpers import _solo_admin, Roles
 
 recepcion_bp = Blueprint('recepcion', __name__)
 
@@ -126,7 +126,7 @@ def confirmar_recepcion(id):
     from app.models.usuario import Usuario
     uid = get_jwt_identity()
     usuario = Usuario.query.get(int(uid))
-    if not usuario or usuario.rol not in ('admin', 'jefe_almacen', 'recepcionista'):
+    if not usuario or usuario.rol not in Roles.RECEPCION_ROLES:
         return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}
     try:

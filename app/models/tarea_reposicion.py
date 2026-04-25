@@ -2,6 +2,13 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoReposicion:
+    PENDIENTE  = 'PENDIENTE'
+    EN_PROCESO = 'EN_PROCESO'
+    COMPLETADA = 'COMPLETADA'
+    CANCELADA  = 'CANCELADA'
+
+
 class TareaReposicion(db.Model):
     """
     Cola de reabastecimiento RESERVA → PICKING.

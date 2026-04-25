@@ -4,6 +4,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.picking import TareaPicking, EstadoPicking
 from app.services.picking_service import PickingService
+from app.routes._auth_helpers import Roles
 
 picking_bp = Blueprint('picking', __name__)
 
@@ -48,7 +49,7 @@ def purgar_picks_cero():
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     u = Usuario.query.get(uid)
-    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+    if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
     referencia = request.args.get('referencia')
     query = TareaPicking.query.filter(
@@ -79,7 +80,7 @@ def crear_tarea():
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     u = Usuario.query.get(uid)
-    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+    if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — se requiere rol admin, supervisor o jefe_almacen'}), 403
 
     data = request.get_json()
@@ -143,7 +144,7 @@ def cancelar_tarea(id):
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     u = Usuario.query.get(uid)
-    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+    if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — se requiere rol admin, supervisor o jefe_almacen'}), 403
     data = request.get_json() or {}
     try:
@@ -170,7 +171,7 @@ def reabrir_tarea(id):
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     u = Usuario.query.get(uid)
-    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+    if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo admin, supervisor o jefe puede reabrir tareas'}), 403
     try:
         tarea = PickingService.reabrir_picking(tarea_id=id)

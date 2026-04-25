@@ -2,6 +2,13 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoRecepcion:
+    ABIERTA    = 'ABIERTA'
+    EN_PROCESO = 'EN_PROCESO'
+    CONFIRMADA = 'CONFIRMADA'
+    CANCELADA  = 'CANCELADA'
+
+
 class RecepcionMercancia(db.Model):
     __tablename__ = 'recepciones'
 

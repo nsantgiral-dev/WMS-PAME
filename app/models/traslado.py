@@ -18,6 +18,17 @@ from app.extensions import db
 from app.models.picking import TareaPicking
 
 
+class EstadoTraslado:
+    BORRADOR    = 'BORRADOR'
+    ENVIADA     = 'ENVIADA'
+    EN_PICKING  = 'EN_PICKING'
+    PREPARADO   = 'PREPARADO'
+    EN_TRANSITO = 'EN_TRANSITO'
+    ENTREGADA   = 'ENTREGADA'
+    RECHAZADA   = 'RECHAZADA'
+    CANCELADA   = 'CANCELADA'
+
+
 class SolicitudTraslado(db.Model):
     __tablename__ = 'solicitudes_traslado'
 

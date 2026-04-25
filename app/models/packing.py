@@ -2,6 +2,14 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoPacking:
+    PENDIENTE   = 'PENDIENTE'
+    EN_PROCESO  = 'EN_PROCESO'
+    VERIFICADO  = 'VERIFICADO'
+    DESPACHADO  = 'DESPACHADO'
+    CANCELADO   = 'CANCELADO'
+
+
 class TareaPacking(db.Model):
     __tablename__ = 'tareas_packing'
 

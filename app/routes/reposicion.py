@@ -23,7 +23,7 @@ from app.models.tarea_reposicion import TareaReposicion
 from app.models.ubicacion import Ubicacion
 from app.models.ubicacion_huerfana import UbicacionHuerfana
 from app.models.usuario import Usuario
-from app.routes._auth_helpers import _es_admin_o_jefe
+from app.routes._auth_helpers import _es_admin_o_jefe, Roles
 from app.services.alertas_service import enviar_email, _config_resend
 from app.services.connekta_gateway import connekta
 from app.services.ola_predictiva_service import pre_verificar_ola as _verificar
@@ -45,7 +45,7 @@ def tarea_actual():
     from app.models.usuario import Usuario
     abastecedor_id = int(get_jwt_identity())
     u = Usuario.query.get(abastecedor_id)
-    if not u or (not u.puede_abastecer and u.rol not in ('admin', 'supervisor', 'jefe_almacen')):
+    if not u or (not u.puede_abastecer and u.rol not in Roles.SUPERVISION):
         return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
     tarea = get_tarea_abastecedor(abastecedor_id)
     if not tarea:
@@ -60,7 +60,7 @@ def mis_tareas():
     from app.models.usuario import Usuario
     abastecedor_id = int(get_jwt_identity())
     u = Usuario.query.get(abastecedor_id)
-    if not u or (not u.puede_abastecer and u.rol not in ('admin', 'supervisor', 'jefe_almacen')):
+    if not u or (not u.puede_abastecer and u.rol not in Roles.SUPERVISION):
         return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
     tareas = get_tareas_abastecedor(abastecedor_id)
     return jsonify({'tareas': tareas, 'total': len(tareas)}), 200
@@ -77,7 +77,7 @@ def confirmar():
     from app.models.usuario import Usuario
     abastecedor_id = int(get_jwt_identity())
     u = Usuario.query.get(abastecedor_id)
-    if not u or (not u.puede_abastecer and u.rol not in ('admin', 'supervisor', 'jefe_almacen')):
+    if not u or (not u.puede_abastecer and u.rol not in Roles.SUPERVISION):
         return jsonify({'error': 'Sin permiso — se requiere permiso de abastecedor'}), 403
     data = request.get_json() or {}
 
@@ -108,7 +108,7 @@ def verificar_stock():
     """Fuerza una verificación de stock en todas las zonas PICKING."""
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede verificar stock'}), 403
     data = request.get_json() or {}
     almacen_id = data.get('almacen_id')
@@ -125,7 +125,7 @@ def pendientes():
     """Lista tareas filtradas por estado (admin / jefe de almacén)."""
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
     estado = request.args.get('estado', '').upper()
     estados_validos = {'PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'CANCELADA'}
@@ -146,7 +146,7 @@ def cancelar(tarea_id):
     """Cancela una tarea de reposición (admin)."""
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede cancelar tareas'}), 403
     data = request.get_json() or {}
 
@@ -175,7 +175,7 @@ def sync_ubicaciones():
     """
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede disparar el sync de ubicaciones'}), 403
     data = request.get_json() or {}
     bodega_id = data.get('bodega_id')
@@ -306,7 +306,7 @@ def jobs_fallidos():
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     u = Usuario.query.get(uid)
-    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+    if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso'}), 403
     jobs = get_jobs_fallidos()
     return jsonify({
@@ -323,7 +323,7 @@ def reintentar_job(job_id):
     from app.models.usuario import Usuario
     uid = int(get_jwt_identity())
     u = Usuario.query.get(uid)
-    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+    if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen puede reintentar jobs'}), 403
     try:
         resultado = _reintentar(job_id)
@@ -404,7 +404,7 @@ def test_alerta_email():
     """Envía un email de prueba via Resend. Muestra el error real si falla."""
     usuario_id = int(get_jwt_identity())
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+    if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede enviar emails de prueba'}), 403
     from datetime import datetime
 

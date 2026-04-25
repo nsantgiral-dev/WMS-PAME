@@ -1,26 +1,15 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
-from app.routes._auth_helpers import _es_admin_o_jefe, Roles
+from app.routes._auth_helpers import _es_admin_o_jefe, _es_gestion
 from app.services.dashboard_service import DashboardService
 
 dashboard_bp = Blueprint('dashboard', __name__)
 
 
-def _autorizado():
-    from flask_jwt_extended import get_jwt_identity
-    from app.models.usuario import Usuario
-    try:
-        uid = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return None
-    u = Usuario.query.get(uid)
-    return u if u and u.rol in Roles.GESTION else None
-
-
 @dashboard_bp.route('/kpis', methods=['GET'])
 @jwt_required()
 def kpis_operativos():
-    if not _autorizado():
+    if not _es_gestion():
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     if not almacen_id:
@@ -35,7 +24,7 @@ def kpis_operativos():
 @dashboard_bp.route('/productividad', methods=['GET'])
 @jwt_required()
 def productividad():
-    if not _autorizado():
+    if not _es_gestion():
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     dias = request.args.get('dias', 7, type=int)
@@ -51,7 +40,7 @@ def productividad():
 @dashboard_bp.route('/movimientos', methods=['GET'])
 @jwt_required()
 def movimientos_recientes():
-    if not _autorizado():
+    if not _es_gestion():
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     limite = request.args.get('limite', 20, type=int)
@@ -67,7 +56,7 @@ def movimientos_recientes():
 @dashboard_bp.route('/alertas-stock', methods=['GET'])
 @jwt_required()
 def alertas_stock():
-    if not _autorizado():
+    if not _es_gestion():
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     if not almacen_id:
@@ -86,7 +75,7 @@ def resumen_completo():
     Endpoint único que consolida todos los KPIs.
     Ideal para la pantalla principal del dashboard.
     """
-    if not _autorizado():
+    if not _es_gestion():
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     if not almacen_id:
