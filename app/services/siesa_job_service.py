@@ -66,67 +66,88 @@ def procesar_jobs_pendientes(app=None):
         logger.error(f'[DLQ] Error inesperado en procesar_jobs_pendientes: {e}', exc_info=True)
 
 
+_ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
+
+
 def _procesar_jobs_pendientes_interno(_app):
     """Lógica interna de procesamiento — separada para permitir captura de errores DB externos."""
     with _app.app_context():
-        ahora = datetime.utcnow()
-
-        q = SiesaJob.query.filter(
-            SiesaJob.estado == 'PENDIENTE',
-            db.or_(
-                SiesaJob.proximo_intento.is_(None),
-                SiesaJob.proximo_intento <= ahora,
-            )
-        ).limit(20)
-        # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
-        try:
-            jobs = q.with_for_update(skip_locked=True).all()
-        except Exception:
-            jobs = q.all()
-
-        if not jobs:
+        # Advisory lock: solo un worker procesa la DLQ a la vez.
+        # Sin esto, cuando Siesa se recupera y hay 100 jobs acumulados, N workers
+        # los atacan simultáneamente saturando la API de Connekta.
+        from sqlalchemy import text as _text
+        lock = db.session.execute(_text('SELECT pg_try_advisory_lock(:k)'), {'k': _ADVISORY_LOCK_DLQ}).scalar()
+        if not lock:
+            logger.info('[DLQ] Otro worker ya procesa jobs — omitido')
             return 0
 
-        procesados = 0
-        for job in jobs:
-            job.estado = 'PROCESANDO'
-            db.session.commit()  # lock en el registro
+        try:
+            return _run_dlq_jobs()
+        finally:
+            db.session.execute(_text('SELECT pg_advisory_unlock(:k)'), {'k': _ADVISORY_LOCK_DLQ})
+            db.session.commit()
 
+
+def _run_dlq_jobs():
+    """Procesa hasta 20 jobs elegibles. Llamado solo cuando el advisory lock está tomado."""
+    ahora = datetime.utcnow()
+
+    q = SiesaJob.query.filter(
+        SiesaJob.estado == 'PENDIENTE',
+        db.or_(
+            SiesaJob.proximo_intento.is_(None),
+            SiesaJob.proximo_intento <= ahora,
+        )
+    ).limit(20)
+    # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
+    try:
+        jobs = q.with_for_update(skip_locked=True).all()
+    except Exception:
+        jobs = q.all()
+
+    if not jobs:
+        return 0
+
+    procesados = 0
+    for job in jobs:
+        job.estado = 'PROCESANDO'
+        db.session.commit()  # lock en el registro
+
+        try:
+            resultado = _ejecutar_job(job)
+            job.marcar_completado(resultado)
+            db.session.commit()
+            logger.info(f'[DLQ] Job {job.id} ({job.tipo}) completado — intento {job.intentos + 1}')
+            procesados += 1
+
+            # Actualizar referencia si aplica — aislado para que un fallo aquí
+            # no marque el job como FALLIDO (Siesa ya procesó el trabajo)
             try:
-                resultado = _ejecutar_job(job)
-                job.marcar_completado(resultado)
-                db.session.commit()
-                logger.info(f'[DLQ] Job {job.id} ({job.tipo}) completado — intento {job.intentos + 1}')
-                procesados += 1
+                _post_completado(job)
+            except Exception as post_err:
+                logger.warning(
+                    f'[DLQ] Job {job.id} ({job.tipo}) completado en Siesa pero '
+                    f'_post_completado falló: {post_err} — revisar referencia manualmente'
+                )
 
-                # Actualizar referencia si aplica — aislado para que un fallo aquí
-                # no marque el job como FALLIDO (Siesa ya procesó el trabajo)
-                try:
-                    _post_completado(job)
-                except Exception as post_err:
-                    logger.warning(
-                        f'[DLQ] Job {job.id} ({job.tipo}) completado en Siesa pero '
-                        f'_post_completado falló: {post_err} — revisar referencia manualmente'
-                    )
+        except Exception as e:
+            error_msg = str(e)
+            job.marcar_fallo(error_msg)
+            db.session.commit()
 
-            except Exception as e:
-                error_msg = str(e)
-                job.marcar_fallo(error_msg)
-                db.session.commit()
+            if job.estado == 'FALLIDO':
+                logger.error(
+                    f'[DLQ] Job {job.id} ({job.tipo}) FALLIDO tras {job.intentos} intentos: {error_msg}'
+                )
+                _crear_alerta_admin(job)
+            else:
+                logger.warning(
+                    f'[DLQ] Job {job.id} ({job.tipo}) falló (intento {job.intentos}/'
+                    f'{job.max_intentos}) — reintento en '
+                    f'{_BACKOFF_LABELS[min(job.intentos - 1, 2)]}: {error_msg}'
+                )
 
-                if job.estado == 'FALLIDO':
-                    logger.error(
-                        f'[DLQ] Job {job.id} ({job.tipo}) FALLIDO tras {job.intentos} intentos: {error_msg}'
-                    )
-                    _crear_alerta_admin(job)
-                else:
-                    logger.warning(
-                        f'[DLQ] Job {job.id} ({job.tipo}) falló (intento {job.intentos}/'
-                        f'{job.max_intentos}) — reintento en '
-                        f'{_BACKOFF_LABELS[min(job.intentos - 1, 2)]}: {error_msg}'
-                    )
-
-        return procesados
+    return procesados
 
 
 _BACKOFF_LABELS = ['5 min', '15 min', '45 min']

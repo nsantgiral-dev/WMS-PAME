@@ -82,7 +82,7 @@ _cache_inventario_siesa = {'data': None, 'ts': None}
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
 
 
-def _descargar_inventario_siesa():
+def _descargar_inventario_siesa(forzar=False):
     """
     Descarga existencias de Siesa SIN filtro en la API (el API rechaza f150_id
     como parámetro igual que en OCs). Filtra por bodega en Python.
@@ -91,10 +91,14 @@ def _descargar_inventario_siesa():
     agregado por producto (un producto puede aparecer en múltiples lotes/ubicaciones).
     Cubre catálogos de hasta 50 000 filas de inventario.
     Cachea el resultado 1 hora para evitar 500 requests HTTP duplicados.
+
+    forzar=True: ignora el cache y descarga datos frescos (usado en reconciliación
+    para evitar comparar contra datos de la carga inicial y generar TareaDevolucion falsas).
     """
     global _cache_inventario_siesa
     ahora = datetime.utcnow()
-    if (_cache_inventario_siesa['data'] is not None
+    if (not forzar
+            and _cache_inventario_siesa['data'] is not None
             and _cache_inventario_siesa['ts'] is not None
             and (ahora - _cache_inventario_siesa['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
         logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h)')
@@ -511,7 +515,11 @@ def _run_reconciliacion(app):
                 logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
                 return
 
-            inventario_siesa = _descargar_inventario_siesa()
+            # forzar=True: descarga datos frescos de Siesa ignorando el cache de la carga inicial.
+            # Sin esto, si la carga inicial corrió hace <1h, la reconciliación compararía
+            # el WMS (ya actualizado) contra los mismos datos Siesa → falsos negativos Y
+            # si el WMS tiene picks intermedios → TareaDevolucion falsas.
+            inventario_siesa = _descargar_inventario_siesa(forzar=True)
 
             codigos_siesa = list(inventario_siesa.keys())
             prods_siesa = (

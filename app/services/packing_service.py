@@ -499,6 +499,17 @@ class PackingService:
         if tarea.estado not in ['VERIFICADO', 'DESPACHADO']:
             raise ValueError('Solo se puede resetear una tarea VERIFICADA o con error Siesa')
 
+        # Bloquear reset si hay bultos ya entregados al cliente —
+        # borrarlos eliminaría el registro de la entrega.
+        bultos_entregados = Bulto.query.filter_by(
+            tarea_id=tarea_id, estado='ENTREGADO'
+        ).count()
+        if bultos_entregados:
+            raise ValueError(
+                f'No se puede resetear: {bultos_entregados} bulto(s) ya entregados al cliente. '
+                'Usa el retry de Siesa en su lugar.'
+            )
+
         Bulto.query.filter_by(tarea_id=tarea_id).delete()
         tarea.estado = 'VERIFICADO'
         tarea.siesa_response = None
