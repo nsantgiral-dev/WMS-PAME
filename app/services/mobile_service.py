@@ -450,16 +450,19 @@ class MobileService:
                 except Exception as e_lpn:
                     logger.warning(f'[TRASLADO] No se pudo vincular LPN {lpn_codigo}: {e_lpn}')
 
+            # Capturar antes del commit — expire_on_commit invalida los atributos post-commit
+            _cantidad_solicitada = tarea.cantidad_solicitada
+            _unidad_empaque = producto.unidad_empaque
             db.session.commit()
-            completado = nueva_cantidad >= tarea.cantidad_solicitada
-            unidad_label = (producto.unidad_empaque or 'PKG').upper()
+            completado = nueva_cantidad >= _cantidad_solicitada
+            unidad_label = (_unidad_empaque or 'PKG').upper()
 
             if completado:
                 mensaje = '¡Completo! Presiona confirmar'
             elif es_empaque:
-                mensaje = f'{cantidad} {unidad_label} = {unidades_este_scan} und  →  {nueva_cantidad}/{tarea.cantidad_solicitada}'
+                mensaje = f'{cantidad} {unidad_label} = {unidades_este_scan} und  →  {nueva_cantidad}/{_cantidad_solicitada}'
             else:
-                mensaje = f'{nueva_cantidad} de {tarea.cantidad_solicitada}'
+                mensaje = f'{nueva_cantidad} de {_cantidad_solicitada}'
 
             _resultado_picking = {
                 'exito': True,

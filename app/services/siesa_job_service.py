@@ -561,6 +561,7 @@ def disparar_dlq_inmediato(app=None):
 
     t = threading.Thread(target=_run, daemon=True, name='dlq-inmediato')
     t.start()
+    logger.debug('[DLQ] disparar_dlq_inmediato: hilo daemon lanzado')
 
 
 def init_scheduler(app):

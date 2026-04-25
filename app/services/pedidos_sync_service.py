@@ -40,6 +40,7 @@ def _run_sync(app):
         upserts = 0
         eliminados = 0
         paginas_leidas = 0
+        anulados_detectados = []
 
         try:
             # estado=3 → Comprometido: inventario físicamente reservado en Siesa
@@ -241,6 +242,7 @@ def _run_sync(app):
                 'items_nb1_pendientes': len(items_nb1),
                 'upserts': upserts,
                 'eliminados': eliminados,
+                'anulados_detectados': len(anulados_detectados),
             }
             logger.info(f'[PEDIDOS_SYNC] OK: {resultado}')
             _sync_estado['ultimo_resultado'] = resultado

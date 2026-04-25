@@ -223,37 +223,8 @@ class ConteoService:
         En modo simulación usa el stock local del WMS.
         """
         if connekta.modo_simulacion:
-            # Simulación: usar stock local como referencia
-            from app.models.inventario import UbicacionProducto
-            from app.models.producto import Producto
-            from app.models.ubicacion import Ubicacion
-
-            producto = Producto.query.filter_by(
-                codigo_siesa=producto_codigo_siesa
-            ).first()
-
-            if not producto:
-                # Si no tiene codigo_siesa buscar por codigo normal
-                producto = Producto.query.filter_by(
-                    codigo=producto_codigo_siesa
-                ).first()
-
-            if not producto:
-                return 0
-
-            ubicacion = Ubicacion.query.filter_by(
-                codigo=ubicacion_codigo
-            ).first()
-
-            if not ubicacion:
-                return 0
-
-            reg = UbicacionProducto.query.filter_by(
-                producto_id=producto.id,
-                ubicacion_id=ubicacion.id
-            ).first()
-
-            return reg.cantidad if reg else 0
+            # Simulación: devolver stock WMS local como si fuera Siesa
+            return ConteoService._stock_local(producto_codigo_siesa, ubicacion_codigo)
 
         # Caché de 90s — reduce llamadas HTTP cuando varios operarios
         # cuentan el mismo producto en una ventana corta
@@ -276,13 +247,15 @@ class ConteoService:
 
     @staticmethod
     def _stock_local(producto_codigo_siesa: str, ubicacion_codigo: str) -> float:
-        """Retorna stock local WMS como fallback cuando Siesa no está disponible."""
+        """Retorna stock local WMS. Prueba codigo_siesa primero, luego codigo como fallback."""
         from app.models.inventario import UbicacionProducto
         from app.models.producto import Producto
         from app.models.ubicacion import Ubicacion
         producto = Producto.query.filter(
             Producto.codigo_siesa == producto_codigo_siesa
         ).first()
+        if not producto:
+            producto = Producto.query.filter_by(codigo=producto_codigo_siesa).first()
         if not producto:
             return 0
         ubicacion = Ubicacion.query.filter_by(codigo=ubicacion_codigo).first()
