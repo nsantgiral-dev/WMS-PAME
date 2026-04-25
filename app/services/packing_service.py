@@ -174,10 +174,11 @@ class PackingService:
         alerta = None
         if item.tiene_diferencia():
             diferencia = item.diferencia()
+            _nombre = item.producto.nombre if item.producto else f'Producto {item.producto_id}'
             if diferencia > 0:
-                alerta = f'SOBRANTE: hay {diferencia} unidad(es) de más de {item.producto.nombre}'
+                alerta = f'SOBRANTE: hay {diferencia} unidad(es) de más de {_nombre}'
             else:
-                alerta = f'FALTANTE: faltan {abs(diferencia)} unidad(es) de {item.producto.nombre}'
+                alerta = f'FALTANTE: faltan {abs(diferencia)} unidad(es) de {_nombre}'
             logger.warning(f'[PACKING] {alerta} en tarea {tarea.codigo}')
 
         db.session.commit()
@@ -208,13 +209,16 @@ class PackingService:
 
         items_sin_verificar = [i for i in tarea.items if not i.verificado]
         if items_sin_verificar:
-            nombres = [i.producto.nombre for i in items_sin_verificar[:3]]
+            nombres = [
+                (i.producto.nombre if i.producto else f'ID {i.producto_id}')
+                for i in items_sin_verificar[:3]
+            ]
             raise ValueError(f'Faltan por escanear: {", ".join(nombres)}')
 
         items_con_diferencia = [i for i in tarea.items if i.tiene_diferencia()]
         if items_con_diferencia and not forzar:
             diferencias = [{
-                'producto': i.producto.nombre,
+                'producto': (i.producto.nombre if i.producto else f'Producto {i.producto_id}'),
                 'esperado': i.cantidad_esperada,
                 'real': i.cantidad_real,
                 'diferencia': i.diferencia()
@@ -239,9 +243,69 @@ class PackingService:
         bultos_data: [{'tipo': 'Caja', 'cantidad': 2}, {'tipo': 'Bolsa', 'cantidad': 1}]
         """
         from app.models.bulto import Bulto
-
-        # Lock pesimista — evita doble cierre concurrente (doble clic = doble remisión a Siesa)
         from sqlalchemy.orm import selectinload
+
+        # Lectura previa SIN lock — solo para obtener datos del pre-check Siesa.
+        # El HTTP a Siesa puede tardar hasta 30s; retener el lock ese tiempo bloquearía
+        # cualquier otro worker que intente cerrar un packing simultáneamente.
+        tarea_pre = TareaPacking.query.filter_by(id=tarea_id).first()
+        if not tarea_pre:
+            raise ValueError('Tarea no encontrada')
+
+        # Validaciones rápidas antes del HTTP (evita llamadas inútiles a Siesa)
+        if not bultos_data:
+            raise ValueError('Debes declarar al menos una pieza')
+        total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
+        if total < 1:
+            raise ValueError('Total de piezas debe ser al menos 1')
+
+        # Pre-verificar estado en Siesa ANTES de adquirir el lock de fila.
+        # Solo se verifica si hay tipo_docto y consec válidos (pedido real de Siesa).
+        if tarea_pre.tipo_docto_pedido_siesa and tarea_pre.consec_docto_pedido_siesa:
+            logger.info(
+                f'[PACKING] Pre-check Siesa para {tarea_pre.numero_pedido_siesa} '
+                f'(tipo={tarea_pre.tipo_docto_pedido_siesa} consec={tarea_pre.consec_docto_pedido_siesa})'
+            )
+            estado_siesa = connekta.get_estado_pedido(
+                tarea_pre.tipo_docto_pedido_siesa,
+                tarea_pre.consec_docto_pedido_siesa
+            )
+            logger.info(
+                f'[PACKING] Pre-check resultado: {tarea_pre.numero_pedido_siesa} → estado_siesa={estado_siesa}'
+            )
+            if estado_siesa is not None and str(estado_siesa) not in ('3', '4'):
+                ESTADOS = {
+                    '0': 'Ingresado (sin aprobar)',
+                    '1': 'Aprobado',
+                    '2': 'Aprobado',
+                    '5': 'Anulado',
+                    '9': 'Anulado / ya procesado en Siesa',
+                }
+                nombre_estado = ESTADOS.get(str(estado_siesa), f'desconocido (código {estado_siesa})')
+                anulado = str(estado_siesa) in ('5', '9')
+                if anulado:
+                    logger.error(
+                        f'[PACKING] ⛔ PRE-CHECK BLOQUEÓ cierre de {tarea_pre.numero_pedido_siesa}: '
+                        f'estado_siesa={estado_siesa} ({nombre_estado}) — '
+                        f'trigger_factura NO fue enviado a Siesa'
+                    )
+                    raise ValueError(
+                        f'El pedido {tarea_pre.numero_pedido_siesa} está Anulado en Siesa '
+                        f'(estado {estado_siesa}) — no se puede facturar. '
+                        f'Cancelar este packing y esperar el pedido clonado del área comercial.'
+                    )
+                logger.warning(
+                    f'[PACKING] ⚠ Pedido {tarea_pre.numero_pedido_siesa} en estado '
+                    f'"{nombre_estado}" ({estado_siesa}) — se intenta trigger_factura de todas formas'
+                )
+            elif estado_siesa is None:
+                logger.warning(
+                    f'[PACKING] No se pudo verificar estado de {tarea_pre.numero_pedido_siesa} '
+                    f'en Siesa — continuando de todas formas'
+                )
+
+        # Ahora sí — adquirir lock pesimista para el resto de la transacción.
+        # El pre-check ya terminó; el lock solo cubre el tiempo de escritura en DB (<1s).
         tarea = (TareaPacking.query
                  .options(selectinload(TareaPacking.items).selectinload(ItemPacking.producto))
                  .filter_by(id=tarea_id)
@@ -256,63 +320,6 @@ class PackingService:
         siesa_pendiente = tarea.estado == 'DESPACHADO' and not tarea.siesa_triggered
         if tarea.estado not in ['VERIFICADO'] and not siesa_pendiente:
             raise ValueError('El packing debe estar VERIFICADO antes de cerrar')
-        if not bultos_data:
-            raise ValueError('Debes declarar al menos una pieza')
-
-        # Total de piezas
-        total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
-        if total < 1:
-            raise ValueError('Total de piezas debe ser al menos 1')
-
-        # Pre-verificar que el pedido sigue Comprometido en Siesa antes de crear bultos.
-        # Si falla aquí, el empacador no queda con bultos huérfanos ni tiene que resetear.
-        # Solo se verifica si hay tipo_docto y consec válidos (pedido real de Siesa).
-        if tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
-            logger.info(
-                f'[PACKING] Pre-check Siesa para {tarea.numero_pedido_siesa} '
-                f'(tipo={tarea.tipo_docto_pedido_siesa} consec={tarea.consec_docto_pedido_siesa})'
-            )
-            estado_siesa = connekta.get_estado_pedido(
-                tarea.tipo_docto_pedido_siesa,
-                tarea.consec_docto_pedido_siesa
-            )
-            logger.info(
-                f'[PACKING] Pre-check resultado: {tarea.numero_pedido_siesa} → estado_siesa={estado_siesa}'
-            )
-            if estado_siesa is not None and str(estado_siesa) not in ('3', '4'):
-                # Solo bloqueamos estados definitivamente muertos (Anulado).
-                # Estado 4 (Cumplido) puede seguir siendo facturable en Siesa —
-                # dejamos que trigger_factura lo intente y Siesa decide.
-                ESTADOS = {
-                    '0': 'Ingresado (sin aprobar)',
-                    '1': 'Aprobado',
-                    '2': 'Aprobado',
-                    '5': 'Anulado',
-                    '9': 'Anulado / ya procesado en Siesa',
-                }
-                nombre_estado = ESTADOS.get(str(estado_siesa), f'desconocido (código {estado_siesa})')
-                anulado = str(estado_siesa) in ('5', '9')
-                if anulado:
-                    logger.error(
-                        f'[PACKING] ⛔ PRE-CHECK BLOQUEÓ cierre de {tarea.numero_pedido_siesa}: '
-                        f'estado_siesa={estado_siesa} ({nombre_estado}) — '
-                        f'trigger_factura NO fue enviado a Siesa'
-                    )
-                    raise ValueError(
-                        f'El pedido {tarea.numero_pedido_siesa} está Anulado en Siesa '
-                        f'(estado {estado_siesa}) — no se puede facturar. '
-                        f'Cancelar este packing y esperar el pedido clonado del área comercial.'
-                    )
-                # Estado desconocido o Aprobado (1/2): advertir pero intentar
-                logger.warning(
-                    f'[PACKING] ⚠ Pedido {tarea.numero_pedido_siesa} en estado '
-                    f'"{nombre_estado}" ({estado_siesa}) — se intenta trigger_factura de todas formas'
-                )
-            elif estado_siesa is None:
-                logger.warning(
-                    f'[PACKING] No se pudo verificar estado de {tarea.numero_pedido_siesa} '
-                    f'en Siesa — continuando de todas formas'
-                )
 
         # Crear bultos solo si no existen aún (idempotente en caso de reintento)
         bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
@@ -348,6 +355,9 @@ class PackingService:
 
         items_payload = []
         for i in tarea.items:
+            if not i.producto:
+                logger.error(f'[PACKING] ItemPacking {i.id} sin producto (producto_id={i.producto_id}) — saltando del payload Siesa')
+                continue
             codigo = i.producto.codigo_siesa or i.producto.codigo
             # Buscar el ID interno de Siesa para este producto en este pedido
             reg_siesa = regs_siesa_map.get(codigo)

@@ -138,8 +138,11 @@ def escanear_producto(id):
 @jwt_required()
 def confirmar_recepcion(id):
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or usuario.rol not in Roles.RECEPCION_ROLES:
         return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}

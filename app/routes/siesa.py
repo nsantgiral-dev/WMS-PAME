@@ -640,8 +640,11 @@ def ordenes_compra():
     """
     # [41] NIT de proveedores solo visible para admin y jefe_almacen
     from app.models.usuario import Usuario
-    _uid = get_jwt_identity()
-    _u = Usuario.query.get(int(_uid))
+    try:
+        _uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    _u = Usuario.query.get(_uid)
     if not _u or _u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
 

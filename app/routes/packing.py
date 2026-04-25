@@ -268,8 +268,11 @@ def cerrar_packing(id):
     Body: {"bultos": [{"tipo": "Caja", "cantidad": 2}, {"tipo": "Bolsa", "cantidad": 1}]}
     """
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}
@@ -308,8 +311,11 @@ def cerrar_packing(id):
 @jwt_required()
 def cancelar_tarea(id):
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or usuario.rol not in Roles.LEAD:
         return jsonify({'error': 'No autorizado — se requiere rol admin o supervisor'}), 403
     data = request.get_json() or {}
@@ -326,8 +332,11 @@ def reiniciar_conteo(id):
     """Resetea todos los items a 0 y vuelve el estado a EN_PROCESO."""
     from app.extensions import db
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
     tarea = TareaPacking.query.get_or_404(id)

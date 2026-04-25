@@ -30,10 +30,13 @@ def stock_producto(producto_id):
 @jwt_required()
 def ajuste_inventario():
     data = request.get_json()
-    usuario_id = get_jwt_identity()
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
 
     from app.models.usuario import Usuario
-    usuario = Usuario.query.get(int(usuario_id))
+    usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede realizar ajustes de inventario'}), 403
 
