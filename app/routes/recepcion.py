@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.recepcion import RecepcionMercancia
@@ -5,6 +6,7 @@ from app.services.recepcion_service import RecepcionService
 from app.routes._auth_helpers import _solo_admin, Roles
 
 recepcion_bp = Blueprint('recepcion', __name__)
+logger = logging.getLogger(__name__)
 
 
 def _es_recepcion_autorizado():
@@ -156,6 +158,7 @@ def confirmar_recepcion(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(f'[RECEPCION] Error inesperado en confirmar_recepcion id={id}')
         return jsonify({'error': str(e)}), 500
 
 

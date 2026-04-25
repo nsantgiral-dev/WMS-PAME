@@ -216,53 +216,7 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
 
     db.session.commit()
     logger.info(f'[DEV] Tarea {tarea.codigo} completada · ubicación {codigo_ub} · averiado={es_averiado}')
-
-    # Disparar traslado NB1 → AV1 en Siesa para que vendedores no vean unidades dañadas
-    if job_dlq is not None:
-        _tarea_id = tarea.id
-        _job_dlq_id = job_dlq.id
-        try:
-            connekta.transferir_a_averias(
-                item_codigo=_item_codigo,
-                cantidad=tarea.cantidad_diferencia,
-                referencia=tarea.codigo
-            )
-            tarea.siesa_triggered = True
-            job_dlq.marcar_completado({'ok': True})
-            logger.info(f'[DEV] Traslado Siesa NB1→AV1 OK para {_item_codigo}')
-        except Exception as e:
-            # El job_dlq ya está en DB como PENDIENTE — DLQ lo reintentará en 5 min
-            db.session.rollback()
-            logger.error(f'[DEV] Error disparando traslado Siesa: {e} — DLQ reintentará')
-            return tarea
-
-        # [P8] Emergency commit — si falla, persiste solo siesa_triggered para evitar traslado duplicado
-        try:
-            db.session.commit()
-        except Exception as e_commit:
-            db.session.rollback()
-            logger.critical(
-                f'[DEV] Siesa OK pero commit principal falló para tarea={_tarea_id}: {e_commit}. '
-                f'Intentando emergency commit para evitar DLQ duplicado NB1→AV1.'
-            )
-            try:
-                from app.models.devolucion import TareaDevolucion
-                from app.models.siesa_job import SiesaJob
-                t_emerg = TareaDevolucion.query.get(_tarea_id)
-                j_emerg = SiesaJob.query.get(_job_dlq_id)
-                if t_emerg:
-                    t_emerg.siesa_triggered = True
-                    t_emerg.siesa_triggered_at = datetime.utcnow()
-                if j_emerg:
-                    j_emerg.marcar_completado({'emergency': True})
-                db.session.commit()
-                logger.info(f'[DEV] Emergency commit OK para tarea={_tarea_id}')
-            except Exception as e_emerg:
-                db.session.rollback()
-                logger.critical(
-                    f'[DEV] DOBLE FALLO — siesa_triggered NO persiste para tarea={_tarea_id}. '
-                    f'DLQ puede duplicar traslado NB1→AV1. Error: {e_emerg}'
-                )
+    # Si hay job_dlq, el DLQ worker lo disparará async (TRASLADO_AVERIAS) — no bloqueamos la request.
 
     return tarea
 

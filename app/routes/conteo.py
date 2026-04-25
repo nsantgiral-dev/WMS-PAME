@@ -1,4 +1,5 @@
 import uuid
+import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -9,6 +10,7 @@ from app.services.abc_service import ABCService
 from app.routes._auth_helpers import Roles
 
 conteo_bp = Blueprint('conteo', __name__)
+logger = logging.getLogger(__name__)
 
 
 from app.routes._auth_helpers import _solo_admin
@@ -130,6 +132,7 @@ def registrar_conteo(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(f'[CONTEO] Error inesperado en registrar_conteo sesion={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -160,6 +163,7 @@ def confirmar_ajuste(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(f'[CONTEO] Error inesperado en confirmar_ajuste sesion={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -331,6 +335,14 @@ def watchdog_anomalias():
 @conteo_bp.route('/abc/resumen', methods=['GET'])
 @jwt_required()
 def resumen_abc():
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso — se requiere admin, supervisor o jefe_almacen'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400

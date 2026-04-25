@@ -387,7 +387,15 @@ def listar_rutas():
     estado    = request.args.get('estado')
     page      = request.args.get('page', 1, type=int)
 
-    q = RutaDespacho.query.order_by(RutaDespacho.fecha_creacion.desc())
+    from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
+    q = (RutaDespacho.query
+         .options(
+             _jl(RutaDespacho.conductor),
+             _jl(RutaDespacho.vehiculo),
+             _jl(RutaDespacho.ruta_maestra),
+             _sl(RutaDespacho.bultos),
+         )
+         .order_by(RutaDespacho.fecha_creacion.desc()))
 
     # Conductores solo ven sus propias rutas
     if usuario.rol == 'conductor':
@@ -638,7 +646,9 @@ def mis_rutas():
 @rutas_bp.route('/usuarios-conductores', methods=['GET'])
 @jwt_required()
 def usuarios_conductores():
-    """Lista de usuarios con rol conductor — para vincular al registro de flota."""
+    """Lista de usuarios con rol conductor — solo para admin/jefe_almacen al registrar flota."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Sin permiso — se requiere admin o jefe_almacen'}), 403
     from app.models.usuario import Usuario
     usuarios = (Usuario.query
                 .filter_by(rol='conductor', activo=True)
@@ -650,7 +660,9 @@ def usuarios_conductores():
 @rutas_bp.route('/bultos-rechazados', methods=['GET'])
 @jwt_required()
 def bultos_rechazados():
-    """Bultos rechazados en entrega — aparecen en panel recepcionista para re-ingresar."""
+    """Bultos rechazados en entrega — auditoría para admin/jefe_almacen."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Sin permiso — se requiere admin o jefe_almacen'}), 403
     bultos = (Bulto.query
               .filter_by(estado=EstadoBulto.RECHAZADO)
               .order_by(Bulto.fecha_entrega.desc())

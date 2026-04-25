@@ -257,6 +257,30 @@ def _run_carga_inicial(app):
                 f'{len(_mapa_ubicaciones)} ubicaciones · {len(_mapa_up)} registros UP'
             )
 
+            # [M5] Bulk zero ANTES del loop — reemplaza los N UPDATEs individuales por producto.
+            # Excluye: (a) ubicaciones con ajuste manual reciente, (b) productos ya cargados hoy.
+            _ubs_almacen_ids = {ub.id for ub in _mapa_ubicaciones.values()}
+            _excluir_ub_ids = {uid for ubs in _ajustes_recientes.values() for uid in ubs}
+            _ubs_a_zero = _ubs_almacen_ids - _excluir_ub_ids
+            _prod_ids_ya_hoy: set = set()
+            for _ikey in ikeys_hoy:
+                try:
+                    _prod_ids_ya_hoy.add(int(_ikey.split('-')[2]))
+                except (IndexError, ValueError):
+                    pass
+            if _ubs_a_zero:
+                _q_zero = UbicacionProducto.query.filter(
+                    UbicacionProducto.ubicacion_id.in_(_ubs_a_zero),
+                    UbicacionProducto.lote.is_(None),
+                )
+                if _prod_ids_ya_hoy:
+                    _q_zero = _q_zero.filter(
+                        ~UbicacionProducto.producto_id.in_(_prod_ids_ya_hoy)
+                    )
+                _q_zero.update({'cantidad': 0}, synchronize_session=False)
+                db.session.flush()
+                logger.info(f'[INV-SIESA] Bulk zero OK: {len(_ubs_a_zero)} ubicaciones')
+
             for codigo, datos in inventario_siesa.items():
                 existencia_siesa = int(round(datos['existencia']))
                 if existencia_siesa <= 0:
@@ -286,21 +310,7 @@ def _run_carga_inicial(app):
                         _savepoint.commit()
                         continue  # Ya se cargó hoy
 
-                    # Zero-ar otras ubicaciones del mismo producto para evitar
-                    # acumulación cuando Siesa cambia ubicacion_aux entre días.
-                    # EXCEPCIÓN P10: no tocar ubicaciones con ajuste manual reciente (12h).
-                    # _ajustes_recientes pre-cargado una vez antes del loop — sin N+1.
-                    _ubs_protegidas = _ajustes_recientes.get(prod.id, set())
-                    _filtro_zero = UbicacionProducto.query.filter(
-                        UbicacionProducto.producto_id == prod.id,
-                        UbicacionProducto.ubicacion_id != ub.id,
-                    )
-                    if _ubs_protegidas:
-                        _filtro_zero = _filtro_zero.filter(
-                            ~UbicacionProducto.ubicacion_id.in_(_ubs_protegidas)
-                        )
-                    _filtro_zero.update({'cantidad': 0}, synchronize_session=False)
-
+                    # El zero de otras ubicaciones se hizo en bulk antes del loop (M5)
                     saldo_antes = reg.cantidad if reg else 0
 
                     if reg:

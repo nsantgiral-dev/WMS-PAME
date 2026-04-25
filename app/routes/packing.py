@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.packing import TareaPacking
@@ -7,6 +8,7 @@ from app.services.connekta_gateway import connekta
 from app.routes._auth_helpers import Roles, _puede_empacar
 
 packing_bp = Blueprint('packing', __name__)
+logger = logging.getLogger(__name__)
 
 
 from app.routes._auth_helpers import _solo_admin
@@ -228,6 +230,7 @@ def confirmar_packing(id):
             return jsonify(error), 409
         return jsonify({'error': error}), 400
     except Exception as e:
+        logger.exception(f'[PACKING] Error inesperado en confirmar_packing id={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -267,6 +270,7 @@ def cerrar_packing(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(f'[PACKING] Error inesperado en cerrar_packing id={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -353,6 +357,7 @@ def forzar_retry_siesa(id):
             'bultos': [b.to_dict() for b in bultos]
         }), 200
     except Exception as e:
+        logger.exception(f'[PACKING] Error inesperado en forzar_retry_siesa id={id}')
         return jsonify({'error': str(e)}), 500
 
 

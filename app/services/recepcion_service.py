@@ -278,8 +278,33 @@ class RecepcionService:
         recepcion = RecepcionMercancia.query.get(recepcion_id)
         if not recepcion:
             raise ValueError('Recepción no encontrada')
-        # Idempotente: si ya fue confirmada devolver los datos sin error
+        # Idempotente: si ya fue confirmada, verificar que Siesa también fue disparado
         if recepcion.estado == 'CONFIRMADA':
+            if recepcion.siesa_triggered:
+                return recepcion
+            # CONFIRMADA pero Siesa nunca se disparó — verificar job en DLQ
+            from app.models.siesa_job import SiesaJob
+            job_existente = SiesaJob.query.filter_by(
+                referencia_tipo='RecepcionMercancia',
+                referencia_id=recepcion.id,
+            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'REINTENTANDO', 'FALLIDO'])).first()
+            if job_existente:
+                if job_existente.estado == 'FALLIDO':
+                    # Rescatar el job caído — DLQ lo procesará en el próximo ciclo
+                    job_existente.estado = 'PENDIENTE'
+                    job_existente.intentos = 0
+                    job_existente.error_mensaje = None
+                    db.session.commit()
+                    logger.warning(
+                        f'[RECEPCION] Job {job_existente.id} rescatado a PENDIENTE '
+                        f'para recepcion={recepcion.id} (CONFIRMADA sin siesa_triggered)'
+                    )
+                return recepcion
+            # Sin job alguno — situación crítica, intervención manual necesaria
+            logger.critical(
+                f'[RECEPCION] recepcion={recepcion.id} CONFIRMADA pero siesa_triggered=False '
+                f'y sin SiesaJob en DLQ. Intervención manual requerida para generar EntradaOC en Siesa.'
+            )
             return recepcion
         if recepcion.estado != 'EN_PROCESO':
             raise ValueError(f'No se puede confirmar en estado {recepcion.estado}')

@@ -151,10 +151,23 @@ class ConteoService:
                 logger.error(f'[CONTEO] Error al guardar SEGUNDO_CONTEO para sesión {sesion_id}: {e_commit}')
                 raise
 
-            segundo_conteo = ConteoService._crear_segundo_conteo(
-                sesion_origen=sesion,
-                operario_excluido=operario_id
-            )
+            try:
+                segundo_conteo = ConteoService._crear_segundo_conteo(
+                    sesion_origen=sesion,
+                    operario_excluido=operario_id
+                )
+            except Exception as e_segundo:
+                # Si no se pudo crear el segundo conteo, revertir estado a EN_PROCESO
+                # para que el operario pueda reintentar — evita quedar atascado en SEGUNDO_CONTEO
+                # sin ningún conteo hijo asociado
+                try:
+                    sesion_fix = SesionConteo.query.filter_by(id=sesion_id).first()
+                    if sesion_fix:
+                        sesion_fix.estado = 'EN_PROCESO'
+                        db.session.commit()
+                except Exception:
+                    pass
+                raise ValueError(f'Error al crear segundo conteo: {e_segundo}')
 
             logger.warning(
                 f'[CONTEO] DESCUADRE en {sesion.codigo} — '
