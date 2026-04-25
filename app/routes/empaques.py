@@ -154,7 +154,7 @@ def trigger_sync():
     """Trigger manual del sync de empaques (solo admin)."""
     usuario_id = get_jwt_identity()
     usuario = Usuario.query.get(usuario_id)
-    if not usuario or usuario.rol not in ('ADMIN', 'SUPERVISOR'):
+    if not usuario or usuario.rol not in ('admin', 'supervisor'):
         return jsonify({'error': 'Solo admin puede disparar el sync'}), 403
 
     empaques_sync_service.ejecutar_sync(current_app._get_current_object())

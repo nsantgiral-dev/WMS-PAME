@@ -59,6 +59,15 @@ def procesar_jobs_pendientes(app=None):
     from flask import current_app
     _app = app or current_app._get_current_object()
 
+    # [46] Envolver todo el cuerpo en try/except para que un fallo de DB no paralice la DLQ
+    try:
+        _procesar_jobs_pendientes_interno(_app)
+    except Exception as e:
+        logger.error(f'[DLQ] Error inesperado en procesar_jobs_pendientes: {e}', exc_info=True)
+
+
+def _procesar_jobs_pendientes_interno(_app):
+    """Lógica interna de procesamiento — separada para permitir captura de errores DB externos."""
     with _app.app_context():
         ahora = datetime.utcnow()
 
@@ -122,6 +131,15 @@ def _ejecutar_job(job: SiesaJob) -> dict:
     payload = job.get_payload()
 
     if job.tipo == 'TRANSFERENCIA_UBICACIONES':
+        # [57] TODO: riesgo de duplicado — Siesa puede haber procesado el primer intento
+        # sin retornar éxito (timeout de red). Verificar en Siesa si el traslado ya existe
+        # antes de reenviar para evitar doble movimiento de inventario.
+        if job.intentos > 0:
+            logger.warning(
+                f'[DLQ] REINTENTO TRANSFERENCIA_UBICACIONES job={job.id} intento={job.intentos + 1} '
+                f'— riesgo de duplicado si el primer intento llegó a Siesa sin confirmación. '
+                f'Verificar manualmente en Siesa si el traslado ya fue registrado.'
+            )
         return connekta.transferir_entre_ubicaciones(
             bodega_id=payload['bodega_id'],
             ubicacion_origen=payload['ubicacion_origen'],
@@ -129,6 +147,69 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             referencia_item=payload['referencia_item'],
             cantidad=payload['cantidad'],
             nota=payload.get('nota', ''),
+        )
+
+    if job.tipo == 'DESPACHO_F470':
+        # Reintento de trigger_factura para un packing cuyo Siesa falló
+        from app.models.packing import TareaPacking
+        import json as _json
+        resultado = connekta.trigger_factura(
+            tipo_docto_pedido=payload['tipo_docto_pedido'],
+            consec_docto_pedido=payload['consec_docto_pedido'],
+            items=payload.get('items', []),
+        )
+        # Marcar la tarea como despachada si el reintento funcionó
+        tarea = TareaPacking.query.get(payload.get('tarea_id'))
+        if tarea and not tarea.siesa_triggered:
+            from datetime import datetime as _dt
+            tarea.siesa_triggered = True
+            tarea.siesa_response = _json.dumps(resultado)
+            tarea.siesa_triggered_at = _dt.utcnow()
+            tarea.estado = 'DESPACHADO'
+            tarea.fecha_despachado = _dt.utcnow()
+            from app.extensions import db as _db
+            _db.session.commit()
+        return resultado
+
+    if job.tipo == 'ENTRADA_OC':
+        # Reintento de confirmar_entrada_compras para una recepción cuyo Siesa falló
+        resultado = connekta.confirmar_entrada_compras(
+            id_co_oc=payload.get('id_co_oc', connekta.centro_op),
+            tipo_docto_oc=payload.get('tipo_docto_oc', ''),
+            consec_docto_oc=payload.get('consec_docto_oc', ''),
+            items=payload.get('items', []),
+            es_parcial=payload.get('es_parcial', False),
+            proveedor_id=payload.get('proveedor_id', ''),
+            sucursal_prov=payload.get('sucursal_prov', ''),
+            tercero_comprador=payload.get('tercero_comprador'),
+            sucursal_comprador=payload.get('sucursal_comprador'),
+            moneda_docto=payload.get('moneda_docto'),
+            moneda_conv=payload.get('moneda_conv'),
+            moneda_local=payload.get('moneda_local'),
+            tasa_conv=payload.get('tasa_conv', 0.0),
+            tasa_local=payload.get('tasa_local', 0.0),
+            num_docto_referencia=payload.get('num_docto_referencia'),
+            cond_pago=payload.get('cond_pago', ''),
+        )
+        # Marcar la recepción como siesa_triggered si el reintento funcionó
+        from app.models.recepcion import RecepcionMercancia
+        import json as _json
+        rec = RecepcionMercancia.query.get(payload.get('recepcion_id'))
+        if rec and not rec.siesa_triggered:
+            from datetime import datetime as _dt
+            rec.siesa_triggered = True
+            rec.siesa_response = _json.dumps(resultado)
+            rec.siesa_triggered_at = _dt.utcnow()
+            from app.extensions import db as _db
+            _db.session.commit()
+        return resultado
+
+    if job.tipo == 'TRASLADO_AVERIAS':
+        # Reintento de transferir_a_averias para una devolución averiada
+        return connekta.transferir_a_averias(
+            item_codigo=payload['item_codigo'],
+            cantidad=payload['cantidad'],
+            referencia=payload.get('referencia', ''),
         )
 
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')

@@ -37,7 +37,19 @@ def listar_conductores():
     q = Conductor.query.order_by(Conductor.nombre)
     if solo_activos:
         q = q.filter_by(activo=True)
-    return jsonify({'conductores': [c.to_dict() for c in q.all()]}), 200
+
+    # [23] Cédulas y teléfonos solo visibles para admin/jefe_almacen
+    puede_ver_datos_personales = bool(_es_admin_o_jefe())
+
+    def _conductor_safe(c):
+        d = c.to_dict()
+        if not puede_ver_datos_personales:
+            d.pop('cedula', None)
+            d.pop('telefono', None)
+            d.pop('usuario_email', None)
+        return d
+
+    return jsonify({'conductores': [_conductor_safe(c) for c in q.all()]}), 200
 
 
 @rutas_bp.route('/conductores', methods=['POST'])

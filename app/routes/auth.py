@@ -54,6 +54,13 @@ def register():
     if Usuario.query.filter_by(email=data['email']).first():
         return jsonify({'error': 'El email ya existe'}), 409
 
+    # [40] Validar campos numéricos antes de convertir para evitar ValueError/500
+    _cap_raw = data.get('capacidad_diaria_conteo', 15)
+    try:
+        _cap = max(0, int(_cap_raw)) if _cap_raw is not None else 15
+    except (ValueError, TypeError):
+        return jsonify({'error': 'capacidad_diaria_conteo debe ser un número entero'}), 400
+
     usuario = Usuario(
         nombre=data['nombre'],
         email=data['email'],
@@ -63,7 +70,7 @@ def register():
         puede_picar=data.get('puede_picar', True),
         puede_empacar=data.get('puede_empacar', False),
         puede_abastecer=data.get('puede_abastecer', False),
-        capacidad_diaria_conteo=int(data.get('capacidad_diaria_conteo', 15)),
+        capacidad_diaria_conteo=_cap,
         bodega_siesa_id=data.get('bodega_siesa_id'),
         nombre_punto_venta=data.get('nombre_punto_venta'),
     )

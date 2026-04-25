@@ -75,6 +75,13 @@ def obtener_tarea(id):
 @picking_bp.route('/crear', methods=['POST'])
 @jwt_required()
 def crear_tarea():
+    # [42] Solo admin, supervisor o jefe_almacen pueden crear tareas de picking manualmente
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+        return jsonify({'error': 'Sin permiso — se requiere rol admin, supervisor o jefe_almacen'}), 403
+
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad', 'almacen_id']
     for campo in requeridos:

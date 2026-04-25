@@ -61,7 +61,10 @@ def mis_tareas():
     Endpoint para operario — devuelve sus tareas pendientes.
     Vista ciega — sin cantidades esperadas.
     """
-    operario_id = int(get_jwt_identity())
+    try:
+        operario_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
 
     from sqlalchemy import case as sa_case
     prioridad_abc = sa_case(
@@ -84,7 +87,10 @@ def mis_tareas():
 @jwt_required()
 def obtener_tarea(id):
     """Vista ciega de una tarea específica para el operario."""
-    operario_id = int(get_jwt_identity())
+    try:
+        operario_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
     try:
         tarea = ConteoService.obtener_tarea_operario(id, operario_id)
         return jsonify(tarea), 200
@@ -99,7 +105,10 @@ def registrar_conteo(id):
     Operario registra su conteo físico.
     Dispara conciliación en tiempo real contra Siesa.
     """
-    operario_id = int(get_jwt_identity())
+    try:
+        operario_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
     data = request.get_json()
 
     if 'cantidad_fisica' not in data:
@@ -127,7 +136,10 @@ def confirmar_ajuste(id):
     Dispara POST a Siesa con motivo 01 (entrada) o 02 (salida).
     """
     from app.models.usuario import Usuario
-    supervisor_id = int(get_jwt_identity())
+    try:
+        supervisor_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Identidad de usuario inválida en el token'}), 422
     usuario = Usuario.query.get(supervisor_id)
     if not usuario or usuario.rol not in ('admin', 'supervisor'):
         return jsonify({'error': 'Solo un supervisor o admin puede aprobar ajustes de inventario'}), 403
@@ -153,6 +165,11 @@ def auditorias_urgentes():
     Auditorías EXCEPCION_PICKING pendientes de resolución.
     Solo visibles para admin/supervisor — aparecen en "Auditorías Urgentes".
     """
+    from app.models.usuario import Usuario
+    uid = int(get_jwt_identity())
+    usuario = Usuario.query.get(uid)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin o supervisor puede ver las auditorías urgentes'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     q = (SesionConteo.query
          .filter_by(tipo='EXCEPCION_PICKING')
@@ -383,7 +400,12 @@ def cargar_csv_abc():
     if not f.filename:
         return jsonify({'error': 'Archivo vacío'}), 400
 
-    ext = f.filename.rsplit('.', 1)[-1].lower()
+    from werkzeug.utils import secure_filename
+    safe_name = secure_filename(f.filename)
+    if not safe_name:
+        return jsonify({'error': 'Nombre de archivo inválido'}), 400
+
+    ext = safe_name.rsplit('.', 1)[-1].lower() if '.' in safe_name else ''
     if ext not in ('csv', 'xlsx', 'xls', 'txt'):
         return jsonify({'error': f'Formato no soportado: {ext}. Usar CSV o Excel.'}), 400
 

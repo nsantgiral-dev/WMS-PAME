@@ -494,11 +494,37 @@ class RecepcionService:
             logger.error(f'[RECEPCION] Error triggering Siesa: {str(e)}')
             recepcion.siesa_triggered = False
             recepcion.siesa_response = str(e)
-            # NO hacemos commit aquí — el estado permanece EN_PROCESO para que el
-            # operario pueda reintentar. El inventario se confirma solo cuando Siesa
-            # responde correctamente (o en modo simulación).
-            db.session.rollback()
-            raise Exception(f'Error al comunicar con Siesa: {str(e)}. La recepción NO fue confirmada — reintenta.')
+            # [10] Crear SiesaJob PENDIENTE para reintento automático vía DLQ.
+            # El inventario WMS ya fue actualizado en esta sesión — rollback lo perdería.
+            # Hacemos commit del estado CONFIRMADA + SiesaJob para no perder la recepción.
+            from app.models.siesa_job import SiesaJob
+            SiesaJob.encolar(
+                tipo='ENTRADA_OC',
+                payload={
+                    'recepcion_id': recepcion.id,
+                    'numero_oc_siesa': recepcion.numero_oc_siesa,
+                    'id_co_oc': recepcion.co_oc_siesa or connekta.centro_op,
+                    'tipo_docto_oc': recepcion.tipo_docto_oc_siesa or '',
+                    'consec_docto_oc': recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
+                    'items': items_payload,
+                    'es_parcial': tiene_faltantes,
+                    'proveedor_id': proveedor_id,
+                    'sucursal_prov': sucursal_prov,
+                    'tercero_comprador': tercero_comprador,
+                    'sucursal_comprador': sucursal_comprador,
+                    'moneda_docto': moneda_docto,
+                    'moneda_conv': moneda_conv,
+                    'moneda_local': moneda_local,
+                    'tasa_conv': tasa_conv,
+                    'tasa_local': tasa_local,
+                    'num_docto_referencia': remision or None,
+                    'cond_pago': recepcion.cond_pago_siesa or '',
+                },
+                referencia_tipo='RecepcionMercancia',
+                referencia_id=recepcion.id,
+            )
+            db.session.commit()
+            raise Exception(f'Error al comunicar con Siesa: {str(e)}. La recepción fue confirmada en WMS — Siesa se reintentará automáticamente.')
 
         db.session.commit()
         return recepcion

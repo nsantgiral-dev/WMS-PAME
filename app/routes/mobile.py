@@ -1,6 +1,9 @@
-from flask import Blueprint, request, jsonify
+import logging
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.mobile_service import MobileService
+
+logger = logging.getLogger(__name__)
 
 mobile_bp = Blueprint('mobile', __name__)
 
@@ -54,6 +57,7 @@ def escanear():
             msg = msg.get('mensaje', str(msg))
         return jsonify({'error': msg}), 400
     except Exception as e:
+        current_app.logger.error(f'[MOBILE] /escanear error inesperado: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -79,6 +83,7 @@ def confirmar_tarea():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        current_app.logger.error(f'[MOBILE] /confirmar error inesperado: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -108,6 +113,9 @@ def sync_offline():
                 'resultado': resultado
             })
         except Exception as e:
+            current_app.logger.error(
+                f'[MOBILE] /sync error en tarea {item.get("tarea_id")}: {e}', exc_info=True
+            )
             resultados.append({
                 'tarea_id': item['tarea_id'],
                 'exito': False,
@@ -217,7 +225,7 @@ def reportar_problema():
             return jsonify({'error': f'Sesión de conteo {tarea_id} no encontrada'}), 404
 
         sesion.estado = 'BLOQUEADO'
-        sesion.notas = f'[{motivo}] {observaciones or ""}'.strip()
+        sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
         db.session.commit()
         return jsonify({
             'ok': True,
@@ -234,7 +242,7 @@ def reportar_problema():
             return jsonify({'error': f'Tarea packing {tarea_id} no encontrada'}), 404
 
         tarea.estado = 'BLOQUEADO'
-        tarea.notas = f'[{motivo}] {observaciones or ""}'.strip()
+        tarea.observaciones = f'[{motivo}] {observaciones or ""}'.strip()
         db.session.commit()
         return jsonify({
             'ok': True,

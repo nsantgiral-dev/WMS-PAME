@@ -82,6 +82,11 @@ def confirmar():
 @jwt_required()
 def verificar_stock():
     """Fuerza una verificación de stock en todas las zonas PICKING."""
+    from app.models.usuario import Usuario
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin o jefe de almacén puede verificar stock'}), 403
     from app.services.reposicion_service import verificar_stock_picking
     data = request.get_json() or {}
     almacen_id = data.get('almacen_id')
@@ -96,6 +101,11 @@ def verificar_stock():
 @jwt_required()
 def pendientes():
     """Lista tareas filtradas por estado (admin / jefe de almacén)."""
+    from app.models.usuario import Usuario
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
     from app.models.tarea_reposicion import TareaReposicion
     estado = request.args.get('estado', '').upper()
     estados_validos = {'PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'CANCELADA'}
@@ -114,6 +124,11 @@ def pendientes():
 @jwt_required()
 def cancelar(tarea_id):
     """Cancela una tarea de reposición (admin)."""
+    from app.models.usuario import Usuario
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin o jefe de almacén puede cancelar tareas'}), 403
     from app.extensions import db
     from app.models.tarea_reposicion import TareaReposicion
     data = request.get_json() or {}
@@ -141,6 +156,11 @@ def sync_ubicaciones():
     Dispara la sincronización de ubicaciones desde Siesa (API_v2_Ubicaciones ID 43).
     Corre en hilo de fondo — retorna inmediatamente.
     """
+    from app.models.usuario import Usuario
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin o jefe de almacén puede disparar el sync de ubicaciones'}), 403
     from app.services.ubicaciones_sync_service import sync_ubicaciones_desde_siesa
     data = request.get_json() or {}
     bodega_id = data.get('bodega_id')
@@ -364,6 +384,11 @@ def debug_ubicaciones_raw():
 @jwt_required()
 def test_alerta_email():
     """Envía un email de prueba via Resend. Muestra el error real si falla."""
+    from app.models.usuario import Usuario
+    usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin o jefe de almacén puede enviar emails de prueba'}), 403
     from app.services.alertas_service import enviar_email, _config_resend
     from app.models.ubicacion_huerfana import UbicacionHuerfana
     from datetime import datetime

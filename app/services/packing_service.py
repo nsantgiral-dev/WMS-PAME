@@ -124,6 +124,9 @@ class PackingService:
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
+        # [29] Verificar que el pedido no fue anulado en Siesa antes de iniciar
+        if getattr(tarea, 'pedido_anulado_siesa', False):
+            raise ValueError('Pedido anulado en Siesa — no se puede iniciar packing')
         if tarea.estado != 'PENDIENTE':
             raise ValueError(f'No se puede iniciar una tarea en estado {tarea.estado}')
 
@@ -313,20 +316,26 @@ class PackingService:
                     )
                     db.session.add(bulto)
                     numero += 1
-            # Commit bultos antes del trigger — así el retry no los pierde
-            db.session.commit()
-            bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
+
+        # [11] Commit bultos + SiesaJob de respaldo en la MISMA transacción antes de llamar a Siesa.
+        # Así, si Siesa falla, el SiesaJob queda PENDIENTE para reintento automático (DLQ).
+        from app.models.siesa_job import SiesaJob as _SiesaJob
+        db.session.flush()  # obtener IDs de bultos antes del commit
+        bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
 
         # Construir payload para Siesa — incluir item_id_siesa y unidad_medida
         from app.models.pedido_siesa import PedidoSiesa
+        # [25] Pre-cargar todos los registros PedidoSiesa del pedido en un dict (evita N+1 en loop)
+        regs_siesa_qs = PedidoSiesa.query.filter_by(
+            numero_pedido=tarea.numero_pedido_siesa
+        ).all()
+        regs_siesa_map = {r.item_codigo: r for r in regs_siesa_qs}
+
         items_payload = []
         for i in tarea.items:
             codigo = i.producto.codigo_siesa or i.producto.codigo
             # Buscar el ID interno de Siesa para este producto en este pedido
-            reg_siesa = PedidoSiesa.query.filter_by(
-                numero_pedido=tarea.numero_pedido_siesa,
-                item_codigo=codigo
-            ).first()
+            reg_siesa = regs_siesa_map.get(codigo)
             items_payload.append({
                 'producto_codigo': codigo,
                 'cantidad_empacada': i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada,
@@ -346,6 +355,9 @@ class PackingService:
             f'items={len(items_payload)} '
             f'bultos={total}'
         )
+        # Commit bultos antes del trigger Siesa — si falla, el SiesaJob (creado abajo) reintenta
+        db.session.commit()
+
         try:
             respuesta_siesa = connekta.trigger_factura(
                 tipo_docto_pedido=tarea.tipo_docto_pedido_siesa or '',
@@ -367,6 +379,19 @@ class PackingService:
                 f'[PACKING] ❌ Siesa FALLÓ para {tarea.numero_pedido_siesa}: {error_str}'
             )
             tarea.siesa_response = error_str
+            # [09/11] Crear SiesaJob PENDIENTE para reintento automático vía DLQ
+            _SiesaJob.encolar(
+                tipo='DESPACHO_F470',
+                payload={
+                    'tarea_id': tarea_id,
+                    'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
+                    'consec_docto_pedido': consec_para_siesa,
+                    'items': items_payload,
+                    'numero_pedido_siesa': tarea.numero_pedido_siesa,
+                },
+                referencia_tipo='TareaPacking',
+                referencia_id=tarea_id,
+            )
             db.session.commit()
             if 'comprometido' in error_str.lower():
                 raise Exception(

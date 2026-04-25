@@ -139,12 +139,12 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
         db.session.add(ub)
         db.session.flush()
 
-    # Actualizar stock en esa ubicación
+    # [36] Actualizar stock con SELECT FOR UPDATE para evitar race condition
     reg = UbicacionProducto.query.filter_by(
         ubicacion_id=ub.id,
         producto_id=tarea.producto_id,
         lote=None
-    ).first()
+    ).with_for_update().first()
 
     saldo_antes = reg.cantidad if reg else 0
 
@@ -200,8 +200,21 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             )
             logger.info(f'[DEV] Traslado Siesa NB1→AV1 OK para {item_codigo}')
         except Exception as e:
-            # No revertir el WMS — el traslado Siesa puede hacerse manualmente
-            logger.error(f'[DEV] Error disparando traslado Siesa: {e} — WMS actualizado, Siesa pendiente manual')
+            # [12] No revertir el WMS — crear SiesaJob para reintento automático vía DLQ
+            logger.error(f'[DEV] Error disparando traslado Siesa: {e} — encolando SiesaJob TRASLADO_AVERIAS')
+            from app.models.siesa_job import SiesaJob
+            SiesaJob.encolar(
+                tipo='TRASLADO_AVERIAS',
+                payload={
+                    'tarea_id': tarea.id,
+                    'item_codigo': tarea.producto.codigo_siesa or tarea.producto.codigo,
+                    'cantidad': tarea.cantidad_diferencia,
+                    'referencia': tarea.codigo,
+                },
+                referencia_tipo='TareaDevolucion',
+                referencia_id=tarea.id,
+            )
+            db.session.commit()
 
     return tarea
 

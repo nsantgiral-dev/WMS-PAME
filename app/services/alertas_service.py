@@ -337,37 +337,68 @@ def verificar_y_alertar_stock_critico(app=None):
             from app.models.inventario import UbicacionProducto
             from app.models.lpn import LPN
             from app.models.producto import Producto
+            from sqlalchemy import func as _func
 
+            # [27] Consolidar en queries bulk para evitar N+1 triple anidado
             picking_ubs = Ubicacion.query.filter(
                 Ubicacion.tipo_zona == 'PICKING',
                 Ubicacion.stock_minimo.isnot(None),
                 Ubicacion.activo == True,
             ).all()
 
+            if not picking_ubs:
+                logger.info('[ALERTAS] Sin ubicaciones PICKING con stock mínimo configurado.')
+                return
+
+            picking_ub_ids = [ub.id for ub in picking_ubs]
+            picking_ub_map = {ub.id: ub for ub in picking_ubs}
+
+            # Stock disponible por (ubicacion_id, producto_id) en una sola query
+            inv_rows = UbicacionProducto.query.filter(
+                UbicacionProducto.ubicacion_id.in_(picking_ub_ids)
+            ).all()
+
+            # Candidatos bajo mínimo
+            candidatos = []
+            for i in inv_rows:
+                ub = picking_ub_map[i.ubicacion_id]
+                stock = (i.cantidad or 0) - (getattr(i, 'reservado', 0) or 0)
+                if stock < ub.stock_minimo:
+                    candidatos.append((ub, i.producto_id, stock))
+
+            if not candidatos:
+                logger.info('[ALERTAS] Sin stock crítico sin reserva — no se envía email.')
+                return
+
+            # Productos con LPN en RESERVA (una sola query)
+            candidatos_almacen = {(ub.almacen_id, prod_id) for ub, prod_id, _ in candidatos}
+            lpns_en_reserva = set()
+            for almacen_id, prod_id in candidatos_almacen:
+                existe = LPN.query.join(Ubicacion, Ubicacion.id == LPN.ubicacion_id).filter(
+                    LPN.producto_id == prod_id,
+                    LPN.almacen_id == almacen_id,
+                    LPN.estado == 'ACTIVO',
+                    Ubicacion.tipo_zona == 'RESERVA',
+                ).first()
+                if existe:
+                    lpns_en_reserva.add((almacen_id, prod_id))
+
+            # Pre-cargar productos en bulk
+            prod_ids = list({prod_id for _, prod_id, _ in candidatos})
+            prods_map = {p.id: p for p in Producto.query.filter(Producto.id.in_(prod_ids)).all()}
+
             criticos = []
-            for ub in picking_ubs:
-                inv = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).all()
-                for i in inv:
-                    stock = (i.cantidad or 0) - (i.reservado or 0)
-                    if stock >= ub.stock_minimo:
-                        continue
-                    # Bajo mínimo — ¿hay LPN en RESERVA?
-                    lpn = LPN.query.join(Ubicacion, Ubicacion.id == LPN.ubicacion_id).filter(
-                        LPN.producto_id == i.producto_id,
-                        LPN.almacen_id == ub.almacen_id,
-                        LPN.estado == 'ACTIVO',
-                        Ubicacion.tipo_zona == 'RESERVA',
-                    ).first()
-                    if lpn:
-                        continue  # Motor puede actuar — no alertar
-                    prod = Producto.query.get(i.producto_id)
-                    criticos.append({
-                        'ubicacion': ub.codigo,
-                        'producto_codigo': prod.codigo if prod else str(i.producto_id),
-                        'producto_nombre': prod.nombre if prod else '—',
-                        'stock_actual': stock,
-                        'stock_minimo': ub.stock_minimo,
-                    })
+            for ub, prod_id, stock in candidatos:
+                if (ub.almacen_id, prod_id) in lpns_en_reserva:
+                    continue  # Motor puede actuar — no alertar
+                prod = prods_map.get(prod_id)
+                criticos.append({
+                    'ubicacion': ub.codigo,
+                    'producto_codigo': prod.codigo if prod else str(prod_id),
+                    'producto_nombre': prod.nombre if prod else '—',
+                    'stock_actual': stock,
+                    'stock_minimo': ub.stock_minimo,
+                })
 
             if not criticos:
                 logger.info('[ALERTAS] Sin stock crítico sin reserva — no se envía email.')

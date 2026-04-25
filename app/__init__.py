@@ -18,10 +18,17 @@ logging.basicConfig(
 def create_app():
     app = Flask(__name__)
 
+    secret_key = os.getenv('SECRET_KEY')
+    if not secret_key:
+        raise RuntimeError(
+            'SECRET_KEY no está configurada en las variables de entorno. '
+            'Agrega SECRET_KEY en Railway (o en tu .env local) antes de arrancar la app.'
+        )
+
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['JWT_SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
-    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
+    app.config['JWT_SECRET_KEY'] = secret_key
+    app.config['SECRET_KEY'] = secret_key
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
 
     db.init_app(app)
@@ -75,59 +82,30 @@ def create_app():
 
     # ── Scheduler: sync automático cada hora 7am–8pm (Bogotá) ─────────────
     if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
-        try:
-            from app.services.siesa_sync_service import init_scheduler
-            init_scheduler(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[SCHEDULER] No se pudo iniciar: {e}')
-        try:
-            from app.services.pedidos_sync_service import init_scheduler as init_pedidos_scheduler
-            init_pedidos_scheduler(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[PEDIDOS_SCHEDULER] No se pudo iniciar: {e}')
+        _scheduler_modules = [
+            ('app.services.siesa_sync_service',         'init_scheduler',          '[SCHEDULER]'),
+            ('app.services.pedidos_sync_service',       'init_scheduler',          '[PEDIDOS_SCHEDULER]'),
+            ('app.services.siesa_barcode_sync_service', 'init_scheduler',          '[BARCODE_SCHEDULER]'),
+            ('app.services.traslado_monitor_service',   'init_scheduler',          '[TRASLADO_MONITOR]'),
+            ('app.services.empaques_sync_service',      'init_scheduler',          '[EMPAQUES_SCHEDULER]'),
+            ('app.services.ubicaciones_sync_service',   'init_scheduler',          '[UBICACIONES_SCHEDULER]'),
+            ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
+            ('app.services.alertas_service',            'init_scheduler',          '[ALERTAS_SCHEDULER]'),
+        ]
+        _app_logger = logging.getLogger(__name__)
+        for _mod_path, _fn_name, _tag in _scheduler_modules:
+            try:
+                import importlib as _il
+                _mod = _il.import_module(_mod_path)
+                getattr(_mod, _fn_name)(app)
+            except Exception as e:
+                _app_logger.error(f'{_tag} No se pudo iniciar: {e}')
+
+        # ABCService tiene una interfaz diferente (método de clase en vez de función suelta)
         try:
             from app.services.abc_service import ABCService
             ABCService.init_scheduler(app)
         except Exception as e:
-            import logging
             logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}')
-        try:
-            from app.services.siesa_barcode_sync_service import init_scheduler as init_barcode_scheduler
-            init_barcode_scheduler(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[BARCODE_SCHEDULER] No se pudo iniciar: {e}')
-        try:
-            from app.services.traslado_monitor_service import init_scheduler as init_traslado_monitor
-            init_traslado_monitor(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[TRASLADO_MONITOR] No se pudo iniciar: {e}')
-        try:
-            from app.services.empaques_sync_service import init_scheduler as init_empaques_scheduler
-            init_empaques_scheduler(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[EMPAQUES_SCHEDULER] No se pudo iniciar: {e}')
-        try:
-            from app.services.ubicaciones_sync_service import init_scheduler as init_ubicaciones_scheduler
-            init_ubicaciones_scheduler(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[UBICACIONES_SCHEDULER] No se pudo iniciar: {e}')
-        try:
-            from app.services.siesa_job_service import init_scheduler as init_dlq_scheduler
-            init_dlq_scheduler(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[DLQ_SCHEDULER] No se pudo iniciar: {e}')
-        try:
-            from app.services.alertas_service import init_scheduler as init_alertas_scheduler
-            init_alertas_scheduler(app)
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).error(f'[ALERTAS_SCHEDULER] No se pudo iniciar: {e}')
 
     return app

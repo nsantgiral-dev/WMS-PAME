@@ -606,6 +606,13 @@ def ordenes_compra():
     Cola de recepción: OCs aprobadas en Siesa con cantidad pendiente > 0.
     Enriquece con producto_id interno y agrupa por número de OC.
     """
+    # [41] NIT de proveedores solo visible para admin y jefe_almacen
+    from app.models.usuario import Usuario
+    _uid = get_jwt_identity()
+    _u = Usuario.query.get(int(_uid))
+    if not _u or _u.rol not in ('admin', 'jefe_almacen'):
+        return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
+
     sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
     resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
 

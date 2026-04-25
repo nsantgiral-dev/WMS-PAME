@@ -196,10 +196,14 @@ def generar_lpn(producto_id: int, cantidad_actual: int, almacen_id: int,
         fecha_creacion=datetime.utcnow(),
     )
 
+    # [17] Guardar referencia_item con None-check para evitar AttributeError si producto no existe
+    _prod_ref = Producto.query.get(producto_id)
+    _ref_item = (_prod_ref.codigo_siesa or _prod_ref.codigo) if _prod_ref else ''
+
     # Crear el empaque en producto_empaques con origen WMS_LPN para que sea escaneable
     empaque_lpn = ProductoEmpaque(
         producto_id=producto_id,
-        referencia_item=Producto.query.get(producto_id).codigo_siesa or '',
+        referencia_item=_ref_item,
         codigo_barras=codigo,
         unidad_medida='PACA',
         factor_conversion=cantidad_actual,

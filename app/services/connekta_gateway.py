@@ -532,6 +532,13 @@ class ConnektaGateway:
         Siesa toma los ítems del pedido original — no se envían líneas de detalle.
         La automatización 'Factura → Remisión' descarga el inventario automáticamente.
         """
+        # [48] Validar tipo_docto antes de enviar (solo en modo producción real)
+        # Un valor vacío causaría rechazo silencioso en Siesa sin mensaje de error claro.
+        if not self.modo_simulacion and (not tipo_docto_pedido or not str(tipo_docto_pedido).strip()):
+            raise ValueError(
+                'tipo_docto_pedido está vacío — configura SIESA_TIPO_DOCTO_FACTURA '
+                'o verifica que el pedido tenga tipo de documento asignado'
+            )
         from datetime import timedelta
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         consec_int = int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido

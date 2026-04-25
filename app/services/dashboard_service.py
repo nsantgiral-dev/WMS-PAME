@@ -179,32 +179,64 @@ class DashboardService:
             Usuario.activo == True
         ).all()
 
-        resultado = []
-        for operario in operarios:
-            pickings = TareaPicking.query.filter(
-                TareaPicking.operario_id == operario.id,
+        operario_ids = [o.id for o in operarios]
+
+        # [28] Consolidar los 4 COUNT queries por operario en queries batch con GROUP BY
+        hoy = datetime.utcnow().date()
+
+        pickings_por_op = {
+            row.operario_id: row.cnt
+            for row in db.session.query(
+                TareaPicking.operario_id,
+                func.count(TareaPicking.id).label('cnt')
+            ).filter(
+                TareaPicking.operario_id.in_(operario_ids),
                 TareaPicking.estado == 'COMPLETADO',
                 TareaPicking.fecha_completado >= fecha_inicio
-            ).count()
+            ).group_by(TareaPicking.operario_id).all()
+        }
 
-            packings = TareaPacking.query.filter(
-                TareaPacking.empacador_id == operario.id,
+        packings_por_op = {
+            row.empacador_id: row.cnt
+            for row in db.session.query(
+                TareaPacking.empacador_id,
+                func.count(TareaPacking.id).label('cnt')
+            ).filter(
+                TareaPacking.empacador_id.in_(operario_ids),
                 TareaPacking.estado == 'VERIFICADO',
                 TareaPacking.fecha_verificado >= fecha_inicio
-            ).count()
+            ).group_by(TareaPacking.empacador_id).all()
+        }
 
-            conteos = SesionConteo.query.filter(
-                SesionConteo.operario_id == operario.id,
+        conteos_por_op = {
+            row.operario_id: row.cnt
+            for row in db.session.query(
+                SesionConteo.operario_id,
+                func.count(SesionConteo.id).label('cnt')
+            ).filter(
+                SesionConteo.operario_id.in_(operario_ids),
                 SesionConteo.estado.in_(['MATCH', 'AJUSTADO']),
                 SesionConteo.fecha_cierre >= fecha_inicio
-            ).count()
+            ).group_by(SesionConteo.operario_id).all()
+        }
 
-            hoy = datetime.utcnow().date()
-            conteos_hoy = SesionConteo.query.filter(
-                SesionConteo.operario_id == operario.id,
+        conteos_hoy_por_op = {
+            row.operario_id: row.cnt
+            for row in db.session.query(
+                SesionConteo.operario_id,
+                func.count(SesionConteo.id).label('cnt')
+            ).filter(
+                SesionConteo.operario_id.in_(operario_ids),
                 db.func.date(SesionConteo.fecha_inicio) == hoy
-            ).count()
+            ).group_by(SesionConteo.operario_id).all()
+        }
 
+        resultado = []
+        for operario in operarios:
+            pickings = pickings_por_op.get(operario.id, 0)
+            packings = packings_por_op.get(operario.id, 0)
+            conteos = conteos_por_op.get(operario.id, 0)
+            conteos_hoy = conteos_hoy_por_op.get(operario.id, 0)
             resultado.append({
                 'operario_id': operario.id,
                 'nombre': operario.nombre,
@@ -249,7 +281,8 @@ class DashboardService:
             Ubicacion.almacen_id == almacen_id
         ).group_by(UbicacionProducto.producto_id).subquery()
 
-        productos_alerta = db.session.query(Producto).join(
+        # [07] Incluir stock_total en el SELECT principal para evitar N+1 por producto
+        productos_alerta = db.session.query(Producto, stock_sub.c.stock_total).join(
             stock_sub,
             Producto.id == stock_sub.c.producto_id
         ).filter(
@@ -259,14 +292,8 @@ class DashboardService:
         ).all()
 
         alertas = []
-        for p in productos_alerta:
-            stock_actual = db.session.query(
-                func.sum(UbicacionProducto.cantidad)
-            ).join(Ubicacion).filter(
-                UbicacionProducto.producto_id == p.id,
-                Ubicacion.almacen_id == almacen_id
-            ).scalar() or 0
-
+        for p, stock_actual in productos_alerta:
+            stock_actual = stock_actual or 0
             alertas.append({
                 'producto_id': p.id,
                 'codigo': p.codigo,

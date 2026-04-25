@@ -4,7 +4,7 @@ Dispensador automático de tareas — el operario pide trabajo, el sistema asign
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, date, time as dtime
 from app.extensions import db
 from app.models.picking import TareaPicking
 from app.models.packing import TareaPacking, ItemPacking
@@ -27,7 +27,10 @@ class MobileService:
             TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
         ).order_by(TareaPicking.prioridad.desc()).all()
 
-        packings = TareaPacking.query.filter(
+        from sqlalchemy.orm import joinedload as _jl
+        packings = TareaPacking.query.options(
+            _jl(TareaPacking.items).joinedload(ItemPacking.producto)
+        ).filter(
             TareaPacking.empacador_id == operario_id,
             TareaPacking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
         ).all()
@@ -153,6 +156,7 @@ class MobileService:
                 ),
             )
             .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc())
+            .with_for_update(skip_locked=True)
             .first()
         )
 
@@ -192,9 +196,12 @@ class MobileService:
             bajo_tope = True
             if capacidad > 0:
                 hoy = datetime.utcnow().date()
+                inicio_hoy = datetime.combine(hoy, dtime.min)
+                fin_hoy = datetime.combine(hoy, dtime.max)
                 conteos_hoy = SesionConteo.query.filter(
                     SesionConteo.operario_id == operario_id,
-                    db.func.date(SesionConteo.fecha_inicio) == hoy
+                    SesionConteo.fecha_inicio >= inicio_hoy,
+                    SesionConteo.fecha_inicio <= fin_hoy,
                 ).count()
                 bajo_tope = conteos_hoy < capacidad
                 if not bajo_tope:

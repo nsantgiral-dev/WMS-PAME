@@ -183,13 +183,23 @@ def _run_sync(app):
                 logger.warning(f'[PEDIDOS_SYNC] Detección anulados falló silenciosamente: {_e}')
             # ────────────────────────────────────────────────────────────────────
 
-            # Eliminar pedidos que ya no tienen pendiente (remisionados o anulados)
-            todos = PedidoSiesa.query.all()
-            for reg in todos:
-                clave = (reg.tipo_docto, reg.consec_docto, reg.centro_op, reg.bodega, reg.item_codigo)
-                if clave not in claves_activas:
-                    db.session.delete(reg)
-                    eliminados += 1
+            # [08] Eliminar pedidos que ya no tienen pendiente — bulk delete por IDs conocidos
+            # evita cargar todos los registros en memoria con .all()
+            todos_ids = db.session.query(
+                PedidoSiesa.id,
+                PedidoSiesa.tipo_docto,
+                PedidoSiesa.consec_docto,
+                PedidoSiesa.centro_op,
+                PedidoSiesa.bodega,
+                PedidoSiesa.item_codigo,
+            ).all()
+            ids_a_borrar = [
+                r.id for r in todos_ids
+                if (r.tipo_docto, r.consec_docto, r.centro_op, r.bodega, r.item_codigo) not in claves_activas
+            ]
+            if ids_a_borrar:
+                PedidoSiesa.query.filter(PedidoSiesa.id.in_(ids_a_borrar)).delete(synchronize_session=False)
+                eliminados = len(ids_a_borrar)
 
             db.session.commit()
 
@@ -260,7 +270,9 @@ def init_scheduler(app):
         func=lambda: iniciar_sync_background(app),
         trigger=CronTrigger(minute='*/2', hour='7-20', timezone='America/Bogota'),
         id='pedidos_siesa_sync',
-        replace_existing=True
+        replace_existing=True,
+        max_instances=1,        # [44] Evita ejecuciones concurrentes del sync
+        misfire_grace_time=60,
     )
     scheduler.start()
     logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 5 min entre 7am y 8pm')

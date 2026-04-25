@@ -4,12 +4,20 @@ Flujo: siesa_triggered → bultos PENDIENTE aparecen en muelle → scan-to-truck
 """
 from datetime import datetime
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.bulto import Bulto
 from app.models.packing import TareaPacking
 
 muelle_bp = Blueprint('muelle', __name__)
+
+
+def _es_admin_o_jefe():
+    """Retorna el usuario si tiene rol admin o jefe_almacen, None en caso contrario."""
+    from app.models.usuario import Usuario
+    uid = get_jwt_identity()
+    u = Usuario.query.get(int(uid))
+    return u if u and u.rol in ('admin', 'jefe_almacen') else None
 
 
 @muelle_bp.route('/listos', methods=['GET'])
@@ -58,6 +66,10 @@ def asignar_a_ruta():
     Planificación: asigna bultos o un pedido completo a una ruta.
     Payload: {"ruta_id": 1, "bultos_ids": [10, 11]} O {"ruta_id": 1, "pedido_siesa": "PD1126"}
     """
+    # [21] Solo admin o jefe_almacen pueden asignar bultos a rutas
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
+
     from app.models.ruta_despacho import RutaDespacho
     data = request.get_json()
     ruta_id = data.get('ruta_id')
@@ -114,6 +126,10 @@ def cargar_bulto(codigo_barras):
     Verificación de Cargue: el operario escanea el bulto físico.
     Requiere ruta_id en el body para validar que el bulto pertenece a esa ruta.
     """
+    # [21] Solo admin o jefe_almacen pueden registrar el cargue de bultos
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
+
     from app.models.ruta_despacho import RutaDespacho
     data = request.get_json(silent=True) or {}
     ruta_id = data.get('ruta_id')

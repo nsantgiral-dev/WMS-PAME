@@ -134,17 +134,25 @@ class ABCService:
                 ).all()
             )
 
-            for producto in productos_clase:
-                # Contar picks completados en ventana de 7 días
-                picks = (
-                    db.session.query(func.count(TareaPicking.id))
-                    .filter(
-                        TareaPicking.producto_id == producto.id,
-                        TareaPicking.estado == 'COMPLETADA',
-                        TareaPicking.fecha_completado >= ventana
-                    )
-                    .scalar() or 0
+            if not productos_clase:
+                continue
+
+            # Pre-cargar todos los counts de picks en un solo query GROUP BY
+            producto_ids_clase = [p.id for p in productos_clase]
+            picks_rows = (
+                db.session.query(TareaPicking.producto_id, func.count(TareaPicking.id))
+                .filter(
+                    TareaPicking.producto_id.in_(producto_ids_clase),
+                    TareaPicking.estado == 'COMPLETADA',
+                    TareaPicking.fecha_completado >= ventana
                 )
+                .group_by(TareaPicking.producto_id)
+                .all()
+            )
+            picks_por_producto = {pid: cnt for pid, cnt in picks_rows}
+
+            for producto in productos_clase:
+                picks = picks_por_producto.get(producto.id, 0)
 
                 if picks < umbral:
                     continue
@@ -272,46 +280,67 @@ class ABCService:
         omitidos_por_pendiente = 0
         omitidos_por_frecuencia = 0
 
+        # Pre-cargar todos los UbicacionProducto relevantes en un solo query
+        producto_ids = [p.id for p in todos_productos]
+        todos_registros = (
+            UbicacionProducto.query
+            .join(Ubicacion)
+            .filter(
+                UbicacionProducto.producto_id.in_(producto_ids),
+                UbicacionProducto.cantidad > 0,
+                Ubicacion.almacen_id == almacen_id
+            ).all()
+        )
+        # Agrupar por producto_id
+        from collections import defaultdict
+        registros_por_producto = defaultdict(list)
+        for r in todos_registros:
+            registros_por_producto[r.producto_id].append(r)
+
+        # Pre-cargar conteos activos (PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO)
+        pares_ubic_prod = [(r.ubicacion_id, r.producto_id) for r in todos_registros]
+        if pares_ubic_prod:
+            ubic_ids_all = [x[0] for x in pares_ubic_prod]
+            sesiones_activas = SesionConteo.query.filter(
+                SesionConteo.producto_id.in_(producto_ids),
+                SesionConteo.ubicacion_id.in_(ubic_ids_all),
+                SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+            ).all()
+            activos_set = {(s.ubicacion_id, s.producto_id) for s in sesiones_activas}
+
+            # Pre-cargar último conteo completado por (producto_id, ubicacion_id)
+            sesiones_completadas = SesionConteo.query.filter(
+                SesionConteo.producto_id.in_(producto_ids),
+                SesionConteo.ubicacion_id.in_(ubic_ids_all),
+                SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
+            ).order_by(SesionConteo.fecha_cierre.desc()).all()
+            ultimo_por_par = {}
+            for s in sesiones_completadas:
+                key = (s.producto_id, s.ubicacion_id)
+                if key not in ultimo_por_par:
+                    ultimo_por_par[key] = s.fecha_cierre
+        else:
+            activos_set = set()
+            ultimo_por_par = {}
+
         for producto in todos_productos:
-            registros = (
-                UbicacionProducto.query
-                .join(Ubicacion)
-                .filter(
-                    UbicacionProducto.producto_id == producto.id,
-                    UbicacionProducto.cantidad > 0,
-                    Ubicacion.almacen_id == almacen_id
-                ).all()
-            )
+            registros = registros_por_producto.get(producto.id, [])
 
             for reg in registros:
                 # Saltar si ya hay tarea activa
-                pendiente = SesionConteo.query.filter(
-                    SesionConteo.producto_id == producto.id,
-                    SesionConteo.ubicacion_id == reg.ubicacion_id,
-                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
-                ).first()
-                if pendiente:
+                if (reg.ubicacion_id, producto.id) in activos_set:
                     omitidos_por_pendiente += 1
                     continue
 
                 # Obtener fecha del último conteo completado
-                ultimo = (SesionConteo.query
-                          .filter(
-                              SesionConteo.producto_id == producto.id,
-                              SesionConteo.ubicacion_id == reg.ubicacion_id,
-                              SesionConteo.estado.in_(['MATCH', 'AJUSTADO'])
-                          )
-                          .order_by(SesionConteo.fecha_cierre.desc())
-                          .first())
+                ultimo_fecha = ultimo_por_par.get((producto.id, reg.ubicacion_id))
 
-                if ultimo and ultimo.fecha_cierre and ultimo.fecha_cierre >= umbral:
+                if ultimo_fecha and ultimo_fecha >= umbral:
                     omitidos_por_frecuencia += 1
                     continue
 
                 # Sort key: nunca contado → datetime mínimo (va primero)
-                sort_key = (ultimo.fecha_cierre
-                            if ultimo and ultimo.fecha_cierre
-                            else datetime(1970, 1, 1))
+                sort_key = ultimo_fecha if ultimo_fecha else datetime(1970, 1, 1)
                 candidatos.append((sort_key, producto, reg))
 
         # Ordenar: los que llevan más tiempo sin contar van primero
@@ -422,7 +451,10 @@ class ABCService:
             func=_job,
             trigger=CronTrigger(hour=6, minute=0, timezone='America/Bogota'),
             id='abc_conteo_diario',
-            name='Generar tareas conteo cíclico ABC — 6am Bogotá'
+            name='Generar tareas conteo cíclico ABC — 6am Bogotá',
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=3600,
         )
         scheduler.start()
         atexit.register(lambda: scheduler.shutdown(wait=False))

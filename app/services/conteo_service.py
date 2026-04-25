@@ -94,7 +94,12 @@ class ConteoService:
             sesion.estado = 'MATCH'
             sesion.diferencia = 0
             sesion.fecha_cierre = datetime.utcnow()
-            db.session.commit()
+            try:
+                db.session.commit()
+            except Exception as e_commit:
+                db.session.rollback()
+                logger.error(f'[CONTEO] Error al guardar MATCH para sesión {sesion_id}: {e_commit}')
+                raise
 
             logger.info(
                 f'[CONTEO] MATCH en {sesion.codigo} — '
@@ -111,7 +116,12 @@ class ConteoService:
             # DESCUADRE — generar segundo conteo por operario diferente
             sesion.estado = 'SEGUNDO_CONTEO'
             sesion.diferencia = diferencia
-            db.session.commit()
+            try:
+                db.session.commit()
+            except Exception as e_commit:
+                db.session.rollback()
+                logger.error(f'[CONTEO] Error al guardar SEGUNDO_CONTEO para sesión {sesion_id}: {e_commit}')
+                raise
 
             segundo_conteo = ConteoService._crear_segundo_conteo(
                 sesion_origen=sesion,
@@ -219,7 +229,12 @@ class ConteoService:
             segundo.operario_id = otro_operario.id
 
         db.session.add(segundo)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as e_commit:
+            db.session.rollback()
+            logger.error(f'[CONTEO] Error al guardar segundo conteo para sesión {sesion_origen.id}: {e_commit}')
+            raise
         return segundo
 
     @staticmethod
@@ -297,11 +312,16 @@ class ConteoService:
         sesion.idempotency_key = idem_key
         sesion.aprobador_id = supervisor_id
 
+        # Capturar referencia al producto ANTES del try para evitar doble ajuste si
+        # el objeto queda en estado inválido tras una excepción parcial
+        producto_ref = sesion.producto
+        item_codigo = sesion.producto_codigo_siesa or (producto_ref.codigo if producto_ref else '')
+
         # Payload para Siesa
         payload_siesa = {
             'centro_operacion': '001',
             'bodega': sesion.ubicacion.almacen.codigo if sesion.ubicacion and sesion.ubicacion.almacen else '',
-            'item_id': sesion.producto_codigo_siesa or sesion.producto.codigo,
+            'item_id': item_codigo,
             'ubicacion': sesion.ubicacion.codigo if sesion.ubicacion else '',
             'cantidad': cantidad_ajuste,
             'motivo_codigo': motivo_codigo,
@@ -317,7 +337,7 @@ class ConteoService:
         try:
             respuesta = connekta.enviar_ajuste_inventario(
                 motivo_codigo=motivo_codigo,
-                item_codigo=sesion.producto_codigo_siesa or sesion.producto.codigo,
+                item_codigo=item_codigo,
                 cantidad=cantidad_ajuste,
                 referencia=sesion.codigo
             )
@@ -344,7 +364,7 @@ class ConteoService:
 
             logger.info(
                 f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} aprobado por usuario #{supervisor_id} '
-                f'— {cantidad_ajuste} unidades de {sesion.producto.codigo} '
+                f'— {cantidad_ajuste} unidades de {producto_ref.codigo if producto_ref else item_codigo} '
                 f'— idempotency_key: {idem_key}'
             )
 

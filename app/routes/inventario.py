@@ -4,7 +4,6 @@ from app.extensions import db
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
-import uuid
 
 inventario_bp = Blueprint('inventario', __name__)
 
@@ -29,6 +28,11 @@ def stock_producto(producto_id):
 def ajuste_inventario():
     data = request.get_json()
     usuario_id = get_jwt_identity()
+
+    from app.models.usuario import Usuario
+    usuario = Usuario.query.get(int(usuario_id))
+    if not usuario or usuario.rol not in ('admin', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin o jefe de almacén puede realizar ajustes de inventario'}), 403
 
     requeridos = ['producto_id', 'ubicacion_id', 'cantidad', 'tipo', 'motivo', 'idempotency_key']
     for campo in requeridos:

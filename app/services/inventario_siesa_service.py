@@ -150,6 +150,33 @@ def _run_carga_inicial(app):
 
             inventario_siesa = _descargar_inventario_siesa()
 
+            # [30] Advertencia: la carga inicial sobrescribe cantidades en ubicaciones WMS manuales.
+            # Si hay picking/packing activo, el stock reservado puede quedar incorrecto.
+            # Revisar tareas activas antes de ejecutar en producción con operaciones en curso.
+            from app.models.picking import TareaPicking as _TareaPicking
+            from app.models.packing import TareaPacking as _TareaPacking2
+            picks_activos = _TareaPicking.query.filter(
+                _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+            ).count()
+            packs_activos = _TareaPacking2.query.filter(
+                _TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
+            ).count()
+            if picks_activos or packs_activos:
+                logger.warning(
+                    f'[INV-SIESA] ATENCIÓN: carga inicial con operaciones activas — '
+                    f'{picks_activos} picking(s) y {packs_activos} packing(s) en curso. '
+                    f'El stock manual de las ubicaciones WMS será sobrescrito con datos de Siesa. '
+                    f'Stock reservado puede quedar desactualizado.'
+                )
+
+            # [45] Pre-cargar idempotency keys del día en un SET para evitar N+1 en el loop
+            ikeys_hoy = {
+                row.idempotency_key
+                for row in MovimientoInventario.query.filter(
+                    MovimientoInventario.idempotency_key.like(f'SIESA-INI-%-{fecha_hoy}')
+                ).with_entities(MovimientoInventario.idempotency_key).all()
+            }
+
             for codigo, datos in inventario_siesa.items():
                 existencia_siesa = int(round(datos['existencia']))
                 if existencia_siesa <= 0:
@@ -176,11 +203,8 @@ def _run_carga_inicial(app):
 
                     # Idempotencia: clave única por producto + día
                     ikey = f'SIESA-INI-{prod.id}-{fecha_hoy}'
-                    movimiento_existente = MovimientoInventario.query.filter_by(
-                        idempotency_key=ikey
-                    ).first()
-
-                    if movimiento_existente:
+                    # [45] Usar el SET pre-cargado en vez de hacer query individual
+                    if ikey in ikeys_hoy:
                         continue  # Ya se cargó hoy
 
                     # Zero-ar TODAS las otras ubicaciones del mismo producto antes de
@@ -221,6 +245,7 @@ def _run_carga_inicial(app):
                         idempotency_key=ikey
                     )
                     db.session.add(movimiento)
+                    ikeys_hoy.add(ikey)  # Actualizar el SET en memoria para idempotencia en esta corrida
 
                     # Commit cada 200 productos para no acumular transacciones enormes
                     if (cargados + actualizados) % 200 == 0:
@@ -369,11 +394,18 @@ def _run_reconciliacion(app):
                     })
                 productos_ids.discard(prod.id)
 
+            # [53] Pre-cargar productos SOLO_WMS en dict antes del loop (evita N+1)
+            solo_wms_ids = [pid for pid in productos_ids if stock_wms.get(pid, 0) > 0]
+            solo_wms_prods = {
+                p.id: p
+                for p in Producto.query.filter(Producto.id.in_(solo_wms_ids)).all()
+            } if solo_wms_ids else {}
+
             for prod_id in productos_ids:
                 total_wms = stock_wms.get(prod_id, 0)
                 if total_wms == 0:
                     continue
-                prod = Producto.query.get(prod_id)
+                prod = solo_wms_prods.get(prod_id)
                 if not prod:
                     continue
                 discrepancias.append({

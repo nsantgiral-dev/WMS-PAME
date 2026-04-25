@@ -125,6 +125,9 @@ def aprobar_solicitud(id):
 @jwt_required()
 def rechazar_solicitud(id):
     usuario_id = int(get_jwt_identity())
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+        return jsonify({'error': 'Solo administradores pueden rechazar solicitudes de traslado'}), 403
     data = request.get_json() or {}
     motivo = data.get('motivo', 'Sin motivo especificado')
     try:
