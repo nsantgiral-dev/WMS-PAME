@@ -86,6 +86,8 @@ def crear_recepcion():
 @recepcion_bp.route('/<int:id>/iniciar', methods=['PUT'])
 @jwt_required()
 def iniciar_recepcion(id):
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'Sin permiso para iniciar recepciones'}), 403
     try:
         recepcionista_id = int(get_jwt_identity())
     except (TypeError, ValueError):

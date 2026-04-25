@@ -9,7 +9,10 @@ Rutas de empaques y LPN.
 /api/empaques/sync                  POST — trigger manual del sync nocturno (solo admin)
 /api/empaques/sync/estado           GET  — estado del último sync
 """
+import logging
 from flask import Blueprint, request, jsonify, current_app
+
+logger = logging.getLogger(__name__)
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.lpn import LPN
@@ -106,6 +109,7 @@ def crear_lpn():
         return jsonify({'lpn': lpn.to_dict(), 'mensaje': f'LPN {lpn.codigo} generado'}), 201
     except Exception as e:
         db.session.rollback()
+        logger.exception('Error generando LPN')
         return jsonify({'error': str(e)}), 500
 
 
@@ -140,6 +144,7 @@ def consumir(codigo):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
+        logger.exception('Error consumiendo LPN')
         return jsonify({'error': str(e)}), 500
 
 

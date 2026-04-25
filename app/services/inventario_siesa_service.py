@@ -144,6 +144,9 @@ def _descargar_inventario_siesa():
 # 1. CARGA INICIAL
 # ─────────────────────────────────────────────
 
+_ADVISORY_LOCK_INV_SIESA = 2002  # clave única para pg_advisory_lock
+
+
 def _run_carga_inicial(app):
     """Lógica real de la carga inicial — corre en hilo de fondo."""
     global _estado_carga
@@ -154,6 +157,20 @@ def _run_carga_inicial(app):
         actualizados = 0
         sin_producto_wms = 0
         errores = 0
+
+        # Advisory lock de PostgreSQL — protege contra carga simultánea entre workers Gunicorn
+        from sqlalchemy import text as _text
+        lock_adquirido = False
+        try:
+            lock_adquirido = db.session.execute(
+                _text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
+            ).scalar()
+            if not lock_adquirido:
+                logger.warning('[INV-SIESA] Otro worker ya ejecuta la carga — omitido')
+                _estado_carga['en_curso'] = False
+                return
+        except Exception as e:
+            logger.warning(f'[INV-SIESA] Advisory lock no disponible: {e} — continuando sin él')
 
         try:
             almacen = _get_almacen()
@@ -341,6 +358,15 @@ def _run_carga_inicial(app):
             _estado_carga['ultimo_error'] = str(e)
             _estado_carga['en_curso'] = False
             return
+        finally:
+            if lock_adquirido:
+                try:
+                    db.session.execute(
+                        _text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
+                    )
+                    db.session.commit()
+                except Exception:
+                    pass
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),

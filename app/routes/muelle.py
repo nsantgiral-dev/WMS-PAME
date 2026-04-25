@@ -6,7 +6,7 @@ from datetime import datetime, date
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
-from app.models.bulto import Bulto
+from app.models.bulto import Bulto, EstadoBulto
 from app.models.packing import TareaPacking
 
 muelle_bp = Blueprint('muelle', __name__)
@@ -30,7 +30,7 @@ def listos():
         .filter(
             TareaPacking.siesa_triggered == True,
             TareaPacking.estado != 'CANCELADO',
-            Bulto.estado == 'PENDIENTE',
+            Bulto.estado == EstadoBulto.PENDIENTE,
             Bulto.ruta_despacho_id.is_(None)
         )
         .order_by(TareaPacking.fecha_despachado.asc(), Bulto.numero.asc())
@@ -110,7 +110,7 @@ def desasignar_de_ruta(id):
     if not _es_admin_o_jefe():
         return jsonify({'error': 'No autorizado'}), 403
     bulto = Bulto.query.get_or_404(id)
-    if bulto.estado == 'CARGADO':
+    if bulto.estado == EstadoBulto.CARGADO:
         return jsonify({'error': 'No se puede desasignar un bulto que ya fue cargado físicamente'}), 400
 
     bulto.ruta_despacho_id = None
@@ -150,7 +150,7 @@ def cargar_bulto(codigo_barras):
         else:
             return jsonify({'error': f'Bulto no ha sido asignado a ninguna ruta. Asígnalo manualmente primero.'}), 400
 
-    if bulto.estado == 'CARGADO':
+    if bulto.estado == EstadoBulto.CARGADO:
         return jsonify({
             'mensaje': 'Bulto ya fue verificado y cargado',
             'codigo_barras': codigo_barras,
@@ -164,7 +164,7 @@ def cargar_bulto(codigo_barras):
     if ruta.estado != 'EN_CARGUE':
         return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
 
-    bulto.estado = 'CARGADO'
+    bulto.estado = EstadoBulto.CARGADO
     bulto.fecha_cargado = datetime.utcnow()
     db.session.commit()
 
@@ -208,7 +208,7 @@ def manifiesto():
         Bulto.query
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
-            Bulto.estado == 'CARGADO',
+            Bulto.estado == EstadoBulto.CARGADO,
             func.date(Bulto.fecha_cargado) == hoy
         )
         .order_by(TareaPacking.municipio, TareaPacking.cliente, Bulto.numero)
@@ -262,7 +262,7 @@ def historial():
         return jsonify({'error': 'Sin permiso para ver historial de muelle'}), 403
     bultos = (
         Bulto.query
-        .filter_by(estado='CARGADO')
+        .filter_by(estado=EstadoBulto.CARGADO)
         .order_by(Bulto.fecha_cargado.desc())
         .limit(100).all()
     )

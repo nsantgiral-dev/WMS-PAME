@@ -452,7 +452,6 @@ class RecepcionService:
             oc_data = (
                 items_oc.get((i.producto.codigo or '').strip().upper()) or
                 items_oc.get((i.producto.codigo_siesa or '').strip().upper()) or
-                items_oc.get(str(i.producto.id)) or
                 oc_fallback
             )
             logger.warning(

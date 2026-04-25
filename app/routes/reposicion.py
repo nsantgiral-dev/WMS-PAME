@@ -13,7 +13,10 @@ Rutas de Reposición — Abastecedor + Admin.
 /api/siesa/debug-ubicaciones-raw      GET   → raw de la API 43 para certificar campos
 """
 
+import logging
 from flask import Blueprint, request, jsonify, current_app
+
+logger = logging.getLogger(__name__)
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.inventario import UbicacionProducto
@@ -104,6 +107,7 @@ def confirmar():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception('Error confirmando reposición')
         return jsonify({'error': str(e)}), 500
 
 
@@ -128,6 +132,7 @@ def verificar_stock():
         generadas = verificar_stock_picking(almacen_id=almacen_id)
         return jsonify({'ok': True, 'tareas_generadas': generadas}), 200
     except Exception as e:
+        logger.exception('Error verificando stock picking')
         return jsonify({'error': str(e)}), 500
 
 
@@ -208,6 +213,7 @@ def sync_ubicaciones():
         )
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception('Error disparando sync de ubicaciones')
         return jsonify({'error': str(e)}), 500
 
 

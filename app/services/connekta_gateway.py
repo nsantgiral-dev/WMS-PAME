@@ -584,6 +584,11 @@ class ConnektaGateway:
         142948 → API_v1_Compras_Comercial_EntradaOC
         Genera entrada desde OC — debita cuenta 1435.
         """
+        if not self.tipo_docto_entrada_oc:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_ENTRADA_OC no está configurado en variables de entorno. '
+                'Agrega la variable en Railway con el código de tipo de documento de entrada OC en Siesa.'
+            )
         # Siesa espera fecha sin guiones: YYYYMMDD (8 chars)
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
@@ -688,6 +693,11 @@ class ConnektaGateway:
         Ajuste físico tras conteo cíclico double-blind.
         AJ-ENT: sobrante. AJ-SAL: faltante. Cantidad siempre positiva.
         """
+        if not self.tipo_docto_ajuste:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_AJUSTE no está configurado en variables de entorno. '
+                'Agrega la variable en Railway con el código de tipo de documento de ajuste en Siesa.'
+            )
         if motivo_codigo not in ['AJ-ENT', 'AJ-SAL']:
             raise ValueError(f'Motivo inválido: {motivo_codigo}')
 

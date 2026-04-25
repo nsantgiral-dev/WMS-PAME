@@ -86,6 +86,9 @@ def _cargar_factores_q35():
     return factores
 
 
+_ADVISORY_LOCK_EMPAQUES = 2001  # clave única para pg_advisory_lock
+
+
 def _run_sync(app):
     global _sync_estado
     with app.app_context():
@@ -94,6 +97,20 @@ def _run_sync(app):
         sin_producto = 0
         sin_factor = 0
         errores = 0
+
+        # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
+        from sqlalchemy import text as _text
+        lock_adquirido = False
+        try:
+            lock_adquirido = db.session.execute(
+                _text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_EMPAQUES}
+            ).scalar()
+            if not lock_adquirido:
+                logger.info('[EMPAQUES SYNC] Otro worker ya ejecuta el sync — omitido')
+                _sync_estado['en_curso'] = False
+                return
+        except Exception as e:
+            logger.warning(f'[EMPAQUES SYNC] Advisory lock no disponible: {e} — continuando sin él')
 
         try:
             # ── Paso A: cargar productos en memoria ────────────────────────────
@@ -219,6 +236,14 @@ def _run_sync(app):
             logger.error(f'[EMPAQUES SYNC] Error fatal: {e}')
         finally:
             _sync_estado['en_curso'] = False
+            if lock_adquirido:
+                try:
+                    db.session.execute(
+                        _text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK_EMPAQUES}
+                    )
+                    db.session.commit()
+                except Exception:
+                    pass
 
 
 def ejecutar_sync(app):

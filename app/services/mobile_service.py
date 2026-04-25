@@ -444,7 +444,11 @@ class MobileService:
             }
 
         elif tipo == 'PACKING':
-            tarea = TareaPacking.query.get(tarea_id)
+            from sqlalchemy.orm import selectinload as _sl
+            tarea = (TareaPacking.query
+                     .options(_sl(TareaPacking.items).selectinload(ItemPacking.producto))
+                     .filter_by(id=tarea_id)
+                     .first())
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 

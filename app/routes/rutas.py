@@ -6,13 +6,13 @@ from datetime import datetime, date
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
-from app.models.bulto import Bulto
+from app.models.bulto import Bulto, EstadoBulto
 from app.models.conductor import Conductor
 from app.models.packing import TareaPacking
 from app.models.recaudo_entrega import RecaudoEntrega
 from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
-from app.models.ruta_despacho import RutaDespacho
+from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin
 
 rutas_bp = Blueprint('rutas', __name__)
@@ -360,7 +360,7 @@ def programar_viaje():
         tipo_ruta=maestra.tipo_ruta,
         fecha_programada=fecha,
         notas=data.get('notas', '').strip() or None,
-        estado='PROGRAMADO',
+        estado=EstadoRutaDespacho.PROGRAMADO,
     )
     db.session.add(ruta)
     db.session.commit()
@@ -372,6 +372,15 @@ def programar_viaje():
 @rutas_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_rutas():
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
+    if not usuario:
+        return jsonify({'error': 'Usuario no encontrado'}), 401
+
     fecha     = request.args.get('fecha')
     cond_id   = request.args.get('conductor_id', type=int)
     veh_id    = request.args.get('vehiculo_id', type=int)
@@ -379,10 +388,19 @@ def listar_rutas():
     page      = request.args.get('page', 1, type=int)
 
     q = RutaDespacho.query.order_by(RutaDespacho.fecha_creacion.desc())
+
+    # Conductores solo ven sus propias rutas
+    if usuario.rol == 'conductor':
+        conductor = Conductor.query.filter_by(usuario_id=uid).first()
+        if not conductor:
+            return jsonify({'rutas': [], 'total': 0}), 200
+        q = q.filter_by(conductor_id=conductor.id)
+    else:
+        if cond_id:
+            q = q.filter_by(conductor_id=cond_id)
+
     if estado:
         q = q.filter_by(estado=estado)
-    if cond_id:
-        q = q.filter_by(conductor_id=cond_id)
     if veh_id:
         q = q.filter_by(vehiculo_id=veh_id)
     if fecha:
@@ -418,7 +436,7 @@ def crear_ruta():
         vehiculo_id=data['vehiculo_id'],
         tipo_ruta=data['tipo_ruta'],
         notas=data.get('notas', '').strip() or None,
-        estado='EN_CARGUE',
+        estado=EstadoRutaDespacho.EN_CARGUE,
     )
     db.session.add(ruta)
     db.session.commit()
@@ -428,7 +446,18 @@ def crear_ruta():
 @rutas_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_ruta(id):
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
     ruta = RutaDespacho.query.get_or_404(id)
+    # Conductores solo pueden ver sus propias rutas
+    usuario = Usuario.query.get(uid)
+    if usuario and usuario.rol == 'conductor':
+        conductor = Conductor.query.filter_by(usuario_id=uid).first()
+        if not conductor or ruta.conductor_id != conductor.id:
+            return jsonify({'error': 'Sin permiso para ver esta ruta'}), 403
     return jsonify({'ruta': ruta.to_dict(include_bultos=True)}), 200
 
 
@@ -442,10 +471,10 @@ def iniciar_ruta(id):
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén puede iniciar el cargue'}), 403
     ruta = RutaDespacho.query.get_or_404(id)
-    if ruta.estado != 'PROGRAMADO':
+    if ruta.estado != EstadoRutaDespacho.PROGRAMADO:
         return jsonify({'error': f'La ruta debe estar PROGRAMADO, está {ruta.estado}'}), 400
 
-    ruta.estado = 'EN_CARGUE'
+    ruta.estado = EstadoRutaDespacho.EN_CARGUE
     db.session.commit()
 
     sugeridos_ids = []
@@ -457,7 +486,7 @@ def iniciar_ruta(id):
             .filter(
                 TareaPacking.siesa_triggered == True,
                 TareaPacking.estado != 'CANCELADO',
-                Bulto.estado == 'PENDIENTE',
+                Bulto.estado == EstadoBulto.PENDIENTE,
                 Bulto.ruta_despacho_id == None,
             ).all())
         sugeridos_ids = [b.id for b in bultos_libres
@@ -486,7 +515,7 @@ def sugeridos_ruta(id):
         .filter(
             TareaPacking.siesa_triggered == True,
             TareaPacking.estado != 'CANCELADO',
-            Bulto.estado == 'PENDIENTE',
+            Bulto.estado == EstadoBulto.PENDIENTE,
             Bulto.ruta_despacho_id == None,
         ).all())
 
@@ -503,19 +532,19 @@ def cerrar_ruta(id):
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén puede cerrar rutas'}), 403
     ruta = RutaDespacho.query.get_or_404(id)
-    if ruta.estado != 'EN_CARGUE':
+    if ruta.estado != EstadoRutaDespacho.EN_CARGUE:
         return jsonify({'error': f'La ruta ya está en estado {ruta.estado}'}), 400
     if not ruta.bultos:
         return jsonify({'error': 'No hay bultos asignados a esta ruta'}), 400
 
-    sin_confirmar = Bulto.query.filter_by(ruta_despacho_id=ruta.id, estado='PENDIENTE').count()
+    sin_confirmar = Bulto.query.filter_by(ruta_despacho_id=ruta.id, estado=EstadoBulto.PENDIENTE).count()
     if sin_confirmar > 0:
         return jsonify({
             'error': f'Faltan {sin_confirmar} bulto{"s" if sin_confirmar != 1 else ""} por confirmar. '
                      f'Escanéalos en el muelle antes de cerrar la ruta.'
         }), 400
 
-    ruta.estado = 'EN_TRANSITO'
+    ruta.estado = EstadoRutaDespacho.EN_TRANSITO
     ruta.fecha_cierre = datetime.utcnow()
     db.session.commit()
     return jsonify({'ok': True, 'ruta': ruta.to_dict(include_bultos=True)}), 200
@@ -536,7 +565,7 @@ def entregar_ruta(id):
     """
 
     ruta = RutaDespacho.query.get_or_404(id)
-    if ruta.estado != 'EN_TRANSITO':
+    if ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
 
     try:
@@ -597,7 +626,7 @@ def mis_rutas():
         return jsonify({'error': 'Tu cuenta no está vinculada a ningún conductor'}), 404
 
     rutas = (RutaDespacho.query
-             .filter_by(conductor_id=conductor.id, estado='EN_TRANSITO')
+             .filter_by(conductor_id=conductor.id, estado=EstadoRutaDespacho.EN_TRANSITO)
              .order_by(RutaDespacho.fecha_cierre.desc())
              .all())
     return jsonify({
@@ -706,7 +735,7 @@ def confirmar_parada(id, tarea_id):
     }
     """
     ruta = RutaDespacho.query.get_or_404(id)
-    if ruta.estado != 'EN_TRANSITO':
+    if ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO, está {ruta.estado}'}), 400
 
     TareaPacking.query.get_or_404(tarea_id)
@@ -794,7 +823,7 @@ def liquidar_ruta(id):
         return jsonify({'error': 'Solo admin puede liquidar rutas'}), 403
 
     ruta = RutaDespacho.query.get_or_404(id)
-    if ruta.estado not in ('EN_TRANSITO', 'ENTREGADA'):
+    if ruta.estado not in (EstadoRutaDespacho.EN_TRANSITO, EstadoRutaDespacho.ENTREGADA):
         return jsonify({'error': f'No se puede liquidar una ruta en estado {ruta.estado}'}), 400
 
     tareas = ruta.tareas_unicas()
@@ -829,7 +858,7 @@ def forzar_cierre_ruta(id):
         return jsonify({'error': 'Solo admin puede forzar el cierre de rutas'}), 403
 
     ruta = RutaDespacho.query.get_or_404(id)
-    if ruta.estado != 'EN_TRANSITO':
+    if ruta.estado != EstadoRutaDespacho.EN_TRANSITO:
         return jsonify({'error': f'La ruta debe estar EN_TRANSITO para forzar cierre (estado: {ruta.estado})'}), 400
 
 
