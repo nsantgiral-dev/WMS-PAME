@@ -382,14 +382,31 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             referencia=payload.get('referencia', ''),
         )
 
-        # Siesa procesó el ajuste — persistir en WMS
+        # CRÍTICO: commit mínimo de siesa_triggered=True ANTES del commit completo.
+        # Si Railway mata el proceso después de este commit, el retry verá
+        # siesa_triggered=True en el guard de idempotencia y no llamará Siesa de nuevo.
+        # Sin esto, un crash entre el HTTP 200 de Siesa y el commit completo
+        # deja siesa_triggered=False → el retry genera un doble ajuste de inventario.
+        _now = datetime.utcnow()
         try:
             sesion_cteo = _SesionConteo.query.get(sesion_id)
             sesion_cteo.siesa_triggered = True
+            sesion_cteo.siesa_triggered_at = _now
+            db.session.commit()
+        except Exception as _e_flag:
+            db.session.rollback()
+            logger.critical(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: no se pudo persistir siesa_triggered '
+                f'para sesion {sesion_id}: {_e_flag} — abortando para no dejar estado ambiguo'
+            )
+            raise
+
+        # Commit completo: estado + respuesta + inventario
+        try:
+            sesion_cteo = _SesionConteo.query.get(sesion_id)
             sesion_cteo.siesa_response = json.dumps(resultado)
-            sesion_cteo.siesa_triggered_at = datetime.utcnow()
             sesion_cteo.estado = 'AJUSTADO'
-            sesion_cteo.fecha_cierre = datetime.utcnow()
+            sesion_cteo.fecha_cierre = _now
 
             # Desbloquear inventario si vino de excepción de picking
             tarea_picking_id = payload.get('tarea_picking_id')
@@ -410,24 +427,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
 
             db.session.commit()
         except Exception as _e:
-            logger.critical(
-                f'[DLQ] AJUSTE_CONTEO job={job.id}: Siesa OK pero fallo al guardar '
-                f'siesa_triggered — revisar manualmente sesion {sesion_id}. Error: {_e}'
-            )
             db.session.rollback()
-            # Emergency: persistir SOLO el flag idempotencia para bloquear re-ajuste duplicado
-            try:
-                sesion_cteo = _SesionConteo.query.get(sesion_id)
-                sesion_cteo.siesa_triggered = True
-                sesion_cteo.siesa_triggered_at = datetime.utcnow()
-                db.session.commit()
-            except Exception as _e2:
-                db.session.rollback()
-                logger.critical(
-                    f'[DLQ] AJUSTE_CONTEO job={job.id}: DOBLE FALLO — '
-                    f'siesa_triggered no persiste: {_e2}. '
-                    f'Sesion {sesion_id} en riesgo de ajuste de inventario duplicado.'
-                )
+            # siesa_triggered=True ya persistido — no hay riesgo de doble ajuste.
+            # Solo logueamos que el estado/respuesta no se guardaron (no crítico).
+            logger.error(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: siesa_triggered OK pero '
+                f'fallo guardando estado/respuesta para sesion {sesion_id}: {_e}'
+            )
         return resultado
 
     if job.tipo == 'ALERTA_EMAIL':
@@ -491,6 +497,31 @@ def reintentar_job(job_id: int) -> dict:
     job.error_ultimo = None
     db.session.commit()
     return job.to_dict()
+
+
+def disparar_dlq_inmediato(app=None):
+    """
+    Lanza procesar_jobs_pendientes() en un hilo daemon para procesar jobs recién encolados
+    sin bloquear el worker de Gunicorn. El advisory lock (pg_try_advisory_lock) garantiza que
+    a lo sumo un hilo corre la DLQ simultáneamente — si el scheduler ya está corriendo, el hilo
+    sale en <1ms sin hacer nada.
+
+    Uso: llamar inmediatamente después de commit() que encola un SiesaJob PENDIENTE.
+    El hilo procesa el job en segundos en vez de esperar el cron de 5 minutos.
+    """
+    import threading
+    from flask import current_app
+
+    _app = app or current_app._get_current_object()
+
+    def _run():
+        try:
+            procesar_jobs_pendientes(app=_app)
+        except Exception as _e:
+            logger.error(f'[DLQ] disparar_dlq_inmediato hilo error: {_e}')
+
+    t = threading.Thread(target=_run, daemon=True, name='dlq-inmediato')
+    t.start()
 
 
 def init_scheduler(app):

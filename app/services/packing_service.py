@@ -249,6 +249,9 @@ class PackingService:
                  .first())
         if not tarea:
             raise ValueError('Tarea no encontrada')
+        # Guard de idempotencia: si Siesa ya confirmó, bloquear sin importar el estado
+        if tarea.siesa_triggered:
+            raise ValueError('Siesa ya procesó este despacho — verificar en ERP antes de reintentar')
         # Permitir retry si Siesa falló (VERIFICADO o DESPACHADO sin siesa_triggered)
         siesa_pendiente = tarea.estado == 'DESPACHADO' and not tarea.siesa_triggered
         if tarea.estado not in ['VERIFICADO'] and not siesa_pendiente:
@@ -401,84 +404,16 @@ class PackingService:
         # Commit bultos + SiesaJob en una sola transacción
         db.session.commit()
 
-        # Capturar antes del try — usadas en el emergency commit si el commit de éxito falla
-        _tarea_id_log = tarea_id
-        _pedido_log = tarea.numero_pedido_siesa
-        _job_dlq_id = job_dlq.id   # capturar antes del rollback potencial
-        _respuesta_siesa = None
+        # Disparar DLQ en hilo daemon — procesa el job recién encolado sin bloquear el worker.
+        # Si Siesa falla, el job queda PENDIENTE para reintento automático cada 5 min.
+        # El advisory lock en procesar_jobs_pendientes evita ejecuciones concurrentes.
+        from app.services.siesa_job_service import disparar_dlq_inmediato
+        disparar_dlq_inmediato()
 
-        try:
-            respuesta_siesa = connekta.trigger_factura(
-                tipo_docto_pedido=tarea.tipo_docto_pedido_siesa or '',
-                consec_docto_pedido=consec_para_siesa,
-                items=items_payload
-            )
-            _respuesta_siesa = respuesta_siesa  # para el emergency commit
-            tarea.siesa_triggered = True
-            tarea.siesa_response = json.dumps(respuesta_siesa)
-            tarea.siesa_triggered_at = datetime.utcnow()
-            tarea.estado = 'DESPACHADO'
-            tarea.fecha_despachado = datetime.utcnow()
-            # Siesa respondió OK — marcar el job de respaldo como completado
-            job_dlq.marcar_completado(respuesta_siesa)
-            logger.info(
-                f'[PACKING] ✅ Siesa OK para {tarea.numero_pedido_siesa} — '
-                f'{total} bultos — respuesta: {str(respuesta_siesa)[:200]}'
-            )
-        except Exception as e:
-            error_str = str(e)
-            logger.error(
-                f'[PACKING] ❌ Siesa FALLÓ para {tarea.numero_pedido_siesa}: {error_str}'
-            )
-            tarea.siesa_response = error_str
-            # El job_dlq ya está en DB como PENDIENTE — DLQ lo reintentará en 5 min
-            db.session.commit()
-            if 'comprometido' in error_str.lower():
-                raise Exception(
-                    f'El pedido {tarea.numero_pedido_siesa} ya no está en estado '
-                    f'Comprometido en Siesa. Alguien lo puede haber modificado en el ERP. '
-                    f'Ir a Ventas → Pedidos → buscar {tarea.numero_pedido_siesa} → '
-                    f'Comprometer pedido y luego reintentar el cierre aquí.'
-                )
-            raise Exception(error_str)
-
-        try:
-            db.session.commit()
-        except Exception as e_commit:
-            db.session.rollback()
-            logger.critical(
-                f'[PACKING] ❌ Siesa OK pero commit WMS falló para {_pedido_log}: {e_commit} '
-                f'— intentando emergency commit de siesa_triggered para bloquear re-despacho'
-            )
-            # Emergency: persistir SOLO siesa_triggered=True para que el job_dlq
-            # vea el flag y no reintente → evita factura electrónica duplicada.
-            try:
-                from app.models.packing import TareaPacking as _TP
-                from app.models.siesa_job import SiesaJob as _SJ
-                t_emergency = _TP.query.get(_tarea_id_log)
-                j_emergency = _SJ.query.get(_job_dlq_id)
-                if t_emergency:
-                    t_emergency.siesa_triggered = True
-                    t_emergency.siesa_triggered_at = datetime.utcnow()
-                    t_emergency.siesa_response = json.dumps(_respuesta_siesa)
-                if j_emergency:
-                    j_emergency.marcar_completado({'emergency': True})
-                db.session.commit()
-                logger.critical(
-                    f'[PACKING] ⚠ Emergency commit OK para tarea {_tarea_id_log} '
-                    f'({_pedido_log}) — siesa_triggered=True + job COMPLETADO — '
-                    f'estado DESPACHADO no se actualizó, revisar manualmente'
-                )
-            except Exception as e_emergency:
-                db.session.rollback()
-                logger.critical(
-                    f'[PACKING] 🔴 DOBLE FALLO — siesa_triggered no persiste para tarea {_tarea_id_log} '
-                    f'({_pedido_log}): {e_emergency}. RIESGO DE FACTURA DUPLICADA — verificar en Siesa.'
-                )
-            raise Exception(
-                f'Siesa generó la remisión pero error guardando en WMS: {e_commit}. '
-                f'El pedido {_pedido_log} fue despachado — verificar en Siesa antes de reintentar.'
-            )
+        logger.info(
+            f'[PACKING] bultos={total} pedido={tarea.numero_pedido_siesa} — '
+            f'job_dlq={job_dlq.id} encolado, DLQ disparado async'
+        )
         return bultos_existentes
 
     @staticmethod

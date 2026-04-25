@@ -286,7 +286,11 @@ def cerrar_packing(id):
         tarea = TareaPacking.query.get(id)
         return jsonify({
             'ok': True,
-            'mensaje': f'{len(bultos)} pieza(s) registradas — Siesa generó la remisión',
+            'mensaje': (
+                f'{len(bultos)} pieza(s) registradas — Siesa confirmó la remisión'
+                if tarea.siesa_triggered else
+                f'{len(bultos)} pieza(s) registradas — Siesa procesando (se confirma en segundos)'
+            ),
             'siesa_triggered': tarea.siesa_triggered,
             'numero_pedido': tarea.numero_pedido_siesa,
             'cliente': tarea.cliente or '',

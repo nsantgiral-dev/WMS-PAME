@@ -543,73 +543,16 @@ class RecepcionService:
             referencia_tipo='RecepcionMercancia',
             referencia_id=recepcion.id,
         )
-        # Commit inventario + SiesaJob en una sola transacción antes de llamar a Siesa
+        # Commit inventario + SiesaJob en una sola transacción
         db.session.commit()
 
-        try:
-            respuesta_siesa = connekta.confirmar_entrada_compras(
-                id_co_oc=recepcion.co_oc_siesa or connekta.centro_op,
-                tipo_docto_oc=recepcion.tipo_docto_oc_siesa or '',
-                consec_docto_oc=recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
-                items=items_payload,
-                es_parcial=tiene_faltantes,
-                proveedor_id=proveedor_id,
-                sucursal_prov=sucursal_prov,
-                tercero_comprador=tercero_comprador,
-                sucursal_comprador=sucursal_comprador,
-                moneda_docto=moneda_docto,
-                moneda_conv=moneda_conv,
-                moneda_local=moneda_local,
-                tasa_conv=tasa_conv,
-                tasa_local=tasa_local,
-                num_docto_referencia=remision or None,
-                cond_pago=recepcion.cond_pago_siesa or ''
-            )
-            recepcion.siesa_triggered = True
-            recepcion.siesa_response = json.dumps(respuesta_siesa)
-            recepcion.siesa_triggered_at = datetime.utcnow()
-            # Siesa respondió OK — marcar el job de respaldo como completado
-            job_dlq.marcar_completado(respuesta_siesa)
-            logger.info(f'[RECEPCION] Siesa triggered para OC {recepcion.numero_oc_siesa}')
+        # Disparar DLQ en hilo daemon — procesa el job recién encolado sin bloquear el worker.
+        # Si Siesa falla, el job queda PENDIENTE para reintento automático cada 5 min.
+        from app.services.siesa_job_service import disparar_dlq_inmediato
+        disparar_dlq_inmediato()
 
-        except Exception as e:
-            logger.error(f'[RECEPCION] Error triggering Siesa: {str(e)}')
-            recepcion.siesa_triggered = False
-            recepcion.siesa_response = str(e)
-            # job_dlq ya está PENDIENTE en DB — DLQ lo reintentará automáticamente
-            db.session.commit()
-            raise Exception(f'Error al comunicar con Siesa: {str(e)}. La recepción fue confirmada en WMS — Siesa se reintentará automáticamente.')
-
-        # [P8] Emergency commit — si este commit falla, persiste solo siesa_triggered para que
-        # el DLQ no reintente una EntradaOC que Siesa ya procesó
-        _recepcion_id = recepcion.id
-        _job_dlq_id = job_dlq.id
-        _respuesta = recepcion.siesa_response
-        try:
-            db.session.commit()
-        except Exception as e_commit:
-            db.session.rollback()
-            logger.critical(
-                f'[RECEPCION] Siesa OK pero commit principal falló para recepcion={_recepcion_id}: {e_commit}. '
-                f'Intentando emergency commit para evitar DLQ duplicado.'
-            )
-            try:
-                from app.models.recepcion import RecepcionMercancia
-                from app.models.siesa_job import SiesaJob
-                r_emerg = RecepcionMercancia.query.get(_recepcion_id)
-                j_emerg = SiesaJob.query.get(_job_dlq_id)
-                if r_emerg:
-                    r_emerg.siesa_triggered = True
-                    r_emerg.siesa_triggered_at = datetime.utcnow()
-                    r_emerg.siesa_response = _respuesta
-                if j_emerg:
-                    j_emerg.marcar_completado({'emergency': True})
-                db.session.commit()
-                logger.info(f'[RECEPCION] Emergency commit OK para recepcion={_recepcion_id}')
-            except Exception as e_emerg:
-                db.session.rollback()
-                logger.critical(
-                    f'[RECEPCION] DOBLE FALLO — siesa_triggered NO persiste para recepcion={_recepcion_id}. '
-                    f'DLQ puede duplicar EntradaOC. Error: {e_emerg}'
-                )
+        logger.info(
+            f'[RECEPCION] recepcion={recepcion.id} OC={recepcion.numero_oc_siesa} — '
+            f'job_dlq={job_dlq.id} encolado, DLQ disparado async'
+        )
         return recepcion
