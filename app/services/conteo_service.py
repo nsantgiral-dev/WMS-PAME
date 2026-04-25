@@ -107,6 +107,11 @@ class ConteoService:
         if sesion.operario_id and sesion.operario_id != operario_id:
             raise ValueError('Esta tarea no está asignada a ti')
 
+        if existencia_siesa is None:
+            # Cache miss: Siesa no respondió aún. El refresco de fondo ya está en vuelo.
+            # Error reintentable — en 3-5s el caché tendrá el valor real.
+            raise ValueError('Conectando con Siesa — reintenta en unos segundos')
+
         # Guardar conteo
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = cantidad_fisica
@@ -261,12 +266,13 @@ class ConteoService:
                     logger.info(f'[CONTEO] existencia_siesa desde caché para {producto_codigo_siesa}')
                     return _val
 
-        # Cache miss — devolver stock local inmediatamente para no bloquear el request (~10s HTTP).
-        # Disparar thread de fondo para refrescar cache; el siguiente conteo del mismo producto
-        # ya tendrá el valor real de Siesa.
-        stock_local = ConteoService._stock_local(producto_codigo_siesa, ubicacion_codigo)
+        # Cache miss — disparar refresco de fondo y retornar None.
+        # Retornar stock WMS local como fallback es INCORRECTO: si WMS y Siesa difieren
+        # (que es el punto del conteo), el operador ve un diferencial falso.
+        # El caller debe manejar None lanzando un error reintentable (~3s más tarde el
+        # caché ya tiene el valor real de Siesa).
         ConteoService._refrescar_cache_en_background(producto_codigo_siesa, ubicacion_codigo, lote_id)
-        return stock_local
+        return None
 
     @staticmethod
     def _stock_local(producto_codigo_siesa: str, ubicacion_codigo: str) -> float:
@@ -407,8 +413,19 @@ class ConteoService:
         if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']:
             raise ValueError(f'No se puede ajustar en estado {sesion.estado}')
 
-        if sesion.cantidad_fisica is None or sesion.existencia_siesa is None:
+        if sesion.cantidad_fisica is None:
             raise ValueError('Faltan datos del conteo para generar ajuste')
+
+        if sesion.existencia_siesa is None:
+            # Sesión creada con cache miss — re-fetch desde Siesa (el caché ya debe estar caliente)
+            existencia_refetch = ConteoService._consultar_existencia_siesa(
+                producto_codigo_siesa=sesion.producto_codigo_siesa,
+                ubicacion_codigo=sesion.ubicacion.codigo if sesion.ubicacion else None,
+                lote_id=sesion.lote_id,
+            )
+            if existencia_refetch is None:
+                raise ValueError('Siesa aún no respondió — reintenta el ajuste en unos segundos')
+            sesion.existencia_siesa = existencia_refetch
 
         diferencia = sesion.cantidad_fisica - sesion.existencia_siesa
 

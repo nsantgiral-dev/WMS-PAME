@@ -79,6 +79,7 @@ def escanear():
             codigo=data['codigo'],
             cantidad=data.get('cantidad', 1),
             lpn_codigo=data.get('lpn_codigo'),
+            total_acumulado=data.get('total_acumulado'),  # idempotencia conteo
         )
         return jsonify(resultado), 200
     except ValueError as e:

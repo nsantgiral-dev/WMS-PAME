@@ -353,7 +353,8 @@ class MobileService:
     @staticmethod
     def procesar_escaneo(operario_id: int, tarea_id: int,
                          tipo: str, codigo: str, cantidad: int = 1,
-                         lpn_codigo: str = None):
+                         lpn_codigo: str = None,
+                         total_acumulado: int = None):
         """
         Procesa un escaneo — funciona con cámara o láser Bluetooth.
         Valida que el código escaneado corresponde al producto de la tarea.
@@ -481,9 +482,12 @@ class MobileService:
 
         elif tipo == 'PACKING':
             from sqlalchemy.orm import selectinload as _sl
+            # with_for_update() previene lost-update cuando dos workers del mismo operario
+            # (retry por conexión móvil inestable) leen item.cantidad_real simultáneamente.
             tarea = (TareaPacking.query
                      .options(_sl(TareaPacking.items).selectinload(ItemPacking.producto))
                      .filter_by(id=tarea_id)
+                     .with_for_update()
                      .first())
             if not tarea:
                 raise ValueError('Tarea no encontrada')
@@ -508,6 +512,7 @@ class MobileService:
             factor = producto.factor_conversion or 1
             unidades = cantidad * factor if es_empaque else cantidad
 
+            # Releer cantidad_real desde el objeto bloqueado (valor fresco post-lock)
             actual = item.cantidad_real or 0
             nueva = actual + unidades
             if nueva > item.cantidad_esperada:
@@ -541,9 +546,8 @@ class MobileService:
 
         elif tipo == 'CONTEO':
             # WITH FOR UPDATE previene que dos workers procesen el mismo escaneo simultáneamente.
-            # Nota: el escaneo no es totalmente idempotente frente a retries del operario
-            # (pérdida de conexión + reintento duplica la cantidad). Para full idempotencia
-            # el cliente debe enviar el total acumulado y el servidor usar SET en vez de +=.
+            # Idempotencia: el cliente envía total_acumulado → servidor usa SET en vez de +=.
+            # Sin total_acumulado (legacy), el debounce de 5s cubre retries rápidos de red.
             from sqlalchemy.orm import selectinload as _sl_conteo
             sesion = (SesionConteo.query
                       .options(_sl_conteo(SesionConteo.producto))
@@ -557,9 +561,12 @@ class MobileService:
             if codigo_limpio not in MobileService._codigos_validos(producto):
                 raise ValueError(f'Producto incorrecto — escanea {producto.codigo}')
 
-            if not sesion.cantidad_fisica:
-                sesion.cantidad_fisica = 0
-            sesion.cantidad_fisica += cantidad
+            if total_acumulado is not None:
+                # Modo idempotente: el cliente lleva el contador — reintento seguro
+                sesion.cantidad_fisica = total_acumulado
+            else:
+                # Modo legacy: += (protegido por debounce TTL 5s)
+                sesion.cantidad_fisica = (sesion.cantidad_fisica or 0) + cantidad
             db.session.commit()
 
             return {
