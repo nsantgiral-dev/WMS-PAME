@@ -197,6 +197,11 @@ def escanear_item(id):
     usuario = Usuario.query.get(uid)
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
+    # Ownership: empacador solo opera su propia tarea; supervisores/admin pueden cualquiera
+    if usuario.rol not in (Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN):
+        tarea_chk = TareaPacking.query.get(id)
+        if tarea_chk and tarea_chk.empacador_id and tarea_chk.empacador_id != uid:
+            return jsonify({'error': 'Esta tarea pertenece a otro empacador'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad_real']
     for campo in requeridos:
@@ -227,6 +232,11 @@ def confirmar_packing(id):
     u = Usuario.query.get(uid)
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para confirmar packing'}), 403
+    # Ownership: empacador solo confirma su propia tarea; supervisores/admin pueden cualquiera
+    if u.rol not in (Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN):
+        tarea_chk = TareaPacking.query.get(id)
+        if tarea_chk and tarea_chk.empacador_id and tarea_chk.empacador_id != uid:
+            return jsonify({'error': 'Esta tarea pertenece a otro empacador'}), 403
     data = request.get_json() or {}
     try:
         PackingService.confirmar_packing(
@@ -385,4 +395,12 @@ def forzar_retry_siesa(id):
 @jwt_required()
 def estado_connekta():
     """Verifica el estado de la integración con Siesa/Connekta."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in (Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN):
+        return jsonify({'error': 'Sin permiso para ver estado de Connekta'}), 403
     return jsonify(connekta.estado()), 200

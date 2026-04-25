@@ -139,6 +139,17 @@ def _descargar_inventario_siesa(forzar=False):
             break
 
     logger.info(f'[INV-SIESA] Total descargado: {len(inventario)} productos en bodega {connekta.bodega}')
+
+    # Guard: respuesta parcial de Siesa (red cortada a mitad de paginación).
+    # Si descargamos < 70% de los productos del cache anterior, rechazamos
+    # para evitar que reconciliación genere cientos de SIESA_MAYOR falsos.
+    _prev_count = len(_cache_inventario_siesa['data']) if _cache_inventario_siesa['data'] else 0
+    if _prev_count and len(inventario) < _prev_count * 0.70:
+        raise ValueError(
+            f'Respuesta parcial de Siesa: {len(inventario)} productos recibidos, '
+            f'{_prev_count} esperados (< 70%) — abortando para evitar falsos positivos'
+        )
+
     _cache_inventario_siesa['data'] = inventario
     _cache_inventario_siesa['ts'] = datetime.utcnow()
     return inventario

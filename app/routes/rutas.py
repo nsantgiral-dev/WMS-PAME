@@ -8,11 +8,12 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.bulto import Bulto, EstadoBulto
 from app.models.conductor import Conductor
-from app.models.packing import TareaPacking
+from app.models.packing import TareaPacking, EstadoPacking
 from app.models.recaudo_entrega import RecaudoEntrega
 from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
+from sqlalchemy.orm import selectinload as _sl
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin
 
 rutas_bp = Blueprint('rutas', __name__)
@@ -235,7 +236,7 @@ def desactivar_vehiculo(id):
 @jwt_required()
 def listar_maestras():
     solo_activas = request.args.get('activas', 'true').lower() == 'true'
-    q = RutaMaestra.query.order_by(RutaMaestra.nombre)
+    q = RutaMaestra.query.options(_sl(RutaMaestra.paradas)).order_by(RutaMaestra.nombre)
     if solo_activas:
         q = q.filter_by(activa=True)
     return jsonify({'maestras': [m.to_dict() for m in q.all()]}), 200
@@ -497,7 +498,7 @@ def iniciar_ruta(id):
             .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
             .filter(
                 TareaPacking.siesa_triggered == True,
-                TareaPacking.estado != 'CANCELADO',
+                TareaPacking.estado != EstadoPacking.CANCELADO,
                 Bulto.estado == EstadoBulto.PENDIENTE,
                 Bulto.ruta_despacho_id == None,
             ).all())

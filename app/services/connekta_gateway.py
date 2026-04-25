@@ -245,9 +245,17 @@ class ConnektaGateway:
         Retorna el entero (3=Comprometido, 2=Aprobado, 4=Cumplido…) o None si no se encuentra.
         Se usa como pre-check en cerrar_packing para detectar pedidos que perdieron
         el estado Comprometido antes de crear bultos o disparar el trigger.
+        Retorna None si tipo_docto está vacío — el caller decide si bloquear o no.
         """
         if self.modo_simulacion:
             return 3  # simulación asume siempre comprometido
+
+        if not tipo_docto or not str(tipo_docto).strip():
+            logger.warning(
+                '[CONNEKTA] get_estado_pedido: tipo_docto vacío — '
+                'no se puede verificar estado en Siesa (consec=%s)', consec_docto
+            )
+            return None
 
         try:
             consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
@@ -523,7 +531,7 @@ class ConnektaGateway:
                     'f470_cant_base': float(i.get('cantidad_empacada') or 0),
                     'f470_cant_2': None,
                     'f470_vlr_bruto': None,
-                    'f470_ind_naturaleza': 2,                         # 2 = Salida/Venta
+                    'f470_ind_naturaleza': 1,                         # 1 = Salida (spec: 0=Entrada, 1=Salida)
                     'f470_ind_solo_valor': 0,
                     'f470_ind_impto_asumido': 0,
                     'f470_notas': None,
@@ -795,14 +803,14 @@ class ConnektaGateway:
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
-                    'f470_id_unidad_medida': '',
+                    'f470_id_unidad_medida': self.uom_default,
                     'f470_cant_base': abs(cantidad),
                     'f470_cant_2': 0.0,
                     'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
                     'f470_desc_varible': '',
                     'F_DESC_ITEM': '',
-                    'F_ID_UM_INVENTARIO': '',
+                    'F_ID_UM_INVENTARIO': self.uom_default,
                     'f470_id_ubicacion_aux_ent': '',
                     'f470_id_lote_ent': '',
                     'f470_id_item': '',

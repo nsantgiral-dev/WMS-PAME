@@ -121,6 +121,8 @@ def crear_lpn():
 @jwt_required()
 def get_lpn(codigo):
     """Info de un LPN específico."""
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para consultar LPNs'}), 403
     lpn = LPN.query.filter_by(codigo=codigo.upper()).first()
     if not lpn:
         return jsonify({'error': f'LPN {codigo} no encontrado'}), 404

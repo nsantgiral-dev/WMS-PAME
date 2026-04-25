@@ -57,10 +57,17 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
             if existente:
                 # COMPLETADO sin Siesa: el recepcionista cerró la tarea físicamente
                 # pero el ajuste no llegó a Siesa — la discrepancia persiste.
-                # Creamos una nueva tarea para que el flujo de Siesa se complete.
+                # Solo recrear si era averiada (requería TRASLADO_AVERIAS).
+                # Las devoluciones normales (no averiadas) no disparan Siesa —
+                # siesa_triggered=False es correcto ahí, no indica fallo.
                 if existente.estado == 'COMPLETADO' and not existente.siesa_triggered:
+                    if not existente.es_averiado:
+                        # Devolución normal: no necesita Siesa — siesa_triggered=False es correcto
+                        ya_existian += 1
+                        savepoint.commit()
+                        continue
                     logger.warning(
-                        f'[DEV] TareaDevolucion {existente.id} COMPLETADO sin Siesa '
+                        f'[DEV] TareaDevolucion {existente.id} COMPLETADO sin Siesa (averiado) '
                         f'para prod {producto_id} — creando nueva tarea'
                     )
                     # Invalidar la ikey del completado para que no bloquee la nueva tarea
@@ -228,6 +235,7 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             referencia_tipo='TareaDevolucion',
             referencia_id=tarea.id,
         )
+        tarea.siesa_triggered = True  # evita loop infinito en reconciliación
 
     try:
         db.session.commit()
@@ -254,5 +262,10 @@ def descartar(tarea_id: int, recepcionista_id: int, motivo: str = None) -> Tarea
     tarea.observaciones = motivo
     tarea.fecha_completado = datetime.utcnow()
     tarea.idempotency_key = f'DEV-DESCARTADO-{tarea.id}'
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e_commit:
+        db.session.rollback()
+        logger.error(f'[DEV] Error al descartar tarea {tarea_id}: {e_commit}')
+        raise ValueError(f'Error al descartar tarea: {e_commit}') from e_commit
     return tarea

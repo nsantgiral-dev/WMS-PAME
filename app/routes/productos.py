@@ -6,11 +6,13 @@ from app.models.producto import Producto
 productos_bp = Blueprint('productos', __name__)
 
 
-from app.routes._auth_helpers import _solo_admin
+from app.routes._auth_helpers import _solo_admin, _es_personal_almacen
 
 @productos_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_productos():
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para listar productos'}), 403
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
     buscar = request.args.get('q', '')
@@ -42,6 +44,8 @@ def listar_productos():
 @productos_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_producto(id):
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para consultar productos'}), 403
     producto = Producto.query.get_or_404(id)
     return jsonify(producto.to_dict()), 200
 

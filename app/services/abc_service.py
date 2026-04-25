@@ -537,16 +537,16 @@ class ABCService:
         scheduler = BackgroundScheduler(timezone='America/Bogota')
         scheduler.add_job(
             func=_job,
-            trigger=CronTrigger(hour=6, minute=0, timezone='America/Bogota'),
+            trigger=CronTrigger(hour=2, minute=0, timezone='America/Bogota'),
             id='abc_conteo_diario',
-            name='Generar tareas conteo cíclico ABC — 6am Bogotá',
+            name='Generar tareas conteo cíclico ABC — 2am Bogotá',
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,
         )
         scheduler.start()
         atexit.register(lambda: scheduler.shutdown(wait=False))
-        logger.info('[ABC] Scheduler configurado — corre a las 6am hora Bogotá')
+        logger.info('[ABC] Scheduler configurado — corre a las 2am hora Bogotá (fuera de horario operativo)')
         return scheduler
 
     @staticmethod
@@ -776,12 +776,16 @@ class ABCService:
 
                 actualizados += 1
 
-            try:
-                db.session.commit()
-            except Exception as _commit_err:
-                db.session.rollback()
-                logger.error(f'[ABC CSV] Error en commit de lote {i}-{i+LOTE}: {_commit_err}')
-                raise
+            # flush sin commit — la transacción completa se confirma al final
+            # para que un Railway restart no deje clasificaciones parcialmente actualizadas
+            db.session.flush()
+
+        try:
+            db.session.commit()
+        except Exception as _commit_err:
+            db.session.rollback()
+            logger.error(f'[ABC CSV] Error en commit final: {_commit_err}')
+            raise
 
         logger.info(
             f'[ABC CSV] almacen={almacen_id} · {actualizados} upserted · '

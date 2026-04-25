@@ -7,7 +7,7 @@ from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.services.conteo_service import ConteoService
 from app.services.abc_service import ABCService
-from app.routes._auth_helpers import Roles
+from app.routes._auth_helpers import Roles, _es_personal_almacen
 
 conteo_bp = Blueprint('conteo', __name__)
 logger = logging.getLogger(__name__)
@@ -119,6 +119,8 @@ def registrar_conteo(id):
     Operario registra su conteo físico.
     Dispara conciliación en tiempo real contra Siesa.
     """
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para registrar conteos'}), 403
     try:
         operario_id = int(get_jwt_identity())
     except (ValueError, TypeError):

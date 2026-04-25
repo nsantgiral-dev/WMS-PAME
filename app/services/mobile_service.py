@@ -178,10 +178,12 @@ class MobileService:
 
         if not tarea:
             # Sin picking pendiente — buscar conteo sin asignar
-            conteo = SesionConteo.query.filter_by(
-                estado='PENDIENTE',
-                operario_id=None
-            ).order_by(SesionConteo.fecha_creacion.asc()).first()
+            # with_for_update(skip_locked=True) evita que dos workers tomen el mismo conteo
+            conteo = (SesionConteo.query
+                      .filter_by(estado='PENDIENTE', operario_id=None)
+                      .order_by(SesionConteo.fecha_creacion.asc())
+                      .with_for_update(skip_locked=True)
+                      .first())
 
             if conteo:
                 conteo.operario_id = operario_id
@@ -203,22 +205,30 @@ class MobileService:
         # Respetar capacidad_diaria_conteo del operario (0 = sin límite).
         conteo_intercalado = None
         if tarea.ubicacion_id:
-            from app.models.usuario import Usuario
-            op_usuario = Usuario.query.get(operario_id)
-            capacidad = (op_usuario.capacidad_diaria_conteo
-                         if op_usuario and op_usuario.capacidad_diaria_conteo is not None
-                         else 15)
+            # Una sola query: capacidad del operario + conteos de hoy juntos
+            from sqlalchemy import text as _text
+            hoy = datetime.utcnow().date()
+            inicio_hoy = datetime.combine(hoy, dtime.min)
+            fin_hoy = datetime.combine(hoy, dtime.max)
+            _row = db.session.execute(
+                _text("""
+                    SELECT u.capacidad_diaria_conteo,
+                           COUNT(sc.id) AS conteos_hoy
+                    FROM usuarios u
+                    LEFT JOIN sesiones_conteo sc
+                        ON sc.operario_id = u.id
+                        AND sc.fecha_inicio >= :inicio
+                        AND sc.fecha_inicio <= :fin
+                    WHERE u.id = :uid
+                    GROUP BY u.capacidad_diaria_conteo
+                """),
+                {'uid': operario_id, 'inicio': inicio_hoy, 'fin': fin_hoy}
+            ).first()
+            capacidad = (_row.capacidad_diaria_conteo if _row and _row.capacidad_diaria_conteo is not None else 15)
+            conteos_hoy = int(_row.conteos_hoy) if _row else 0
 
             bajo_tope = True
             if capacidad > 0:
-                hoy = datetime.utcnow().date()
-                inicio_hoy = datetime.combine(hoy, dtime.min)
-                fin_hoy = datetime.combine(hoy, dtime.max)
-                conteos_hoy = SesionConteo.query.filter(
-                    SesionConteo.operario_id == operario_id,
-                    SesionConteo.fecha_inicio >= inicio_hoy,
-                    SesionConteo.fecha_inicio <= fin_hoy,
-                ).count()
                 bajo_tope = conteos_hoy < capacidad
                 if not bajo_tope:
                     logger.info(
@@ -534,7 +544,12 @@ class MobileService:
             # Nota: el escaneo no es totalmente idempotente frente a retries del operario
             # (pérdida de conexión + reintento duplica la cantidad). Para full idempotencia
             # el cliente debe enviar el total acumulado y el servidor usar SET en vez de +=.
-            sesion = SesionConteo.query.filter_by(id=tarea_id).with_for_update().first()
+            from sqlalchemy.orm import selectinload as _sl_conteo
+            sesion = (SesionConteo.query
+                      .options(_sl_conteo(SesionConteo.producto))
+                      .filter_by(id=tarea_id)
+                      .with_for_update()
+                      .first())
             if not sesion:
                 raise ValueError('Sesión de conteo no encontrada')
 

@@ -7,7 +7,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.bulto import Bulto, EstadoBulto
-from app.models.packing import TareaPacking
+from app.models.packing import TareaPacking, EstadoPacking
 
 muelle_bp = Blueprint('muelle', __name__)
 
@@ -29,7 +29,7 @@ def listos():
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
             TareaPacking.siesa_triggered == True,
-            TareaPacking.estado != 'CANCELADO',
+            TareaPacking.estado != EstadoPacking.CANCELADO,
             Bulto.estado == EstadoBulto.PENDIENTE,
             Bulto.ruta_despacho_id.is_(None)
         )
@@ -164,17 +164,18 @@ def cargar_bulto(codigo_barras):
     if ruta.estado != 'EN_CARGUE':
         return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
 
+    _tarea_id = bulto.tarea_id  # capturar antes del commit — expire_on_commit invalida relaciones
     bulto.estado = EstadoBulto.CARGADO
     bulto.fecha_cargado = datetime.utcnow()
     db.session.commit()
 
-    tarea = bulto.tarea
     # Pendientes de la misma tarea EN LA MISMA RUTA
     pendientes_ruta = Bulto.query.filter_by(
-        tarea_id=tarea.id, 
+        tarea_id=_tarea_id,
         ruta_despacho_id=ruta_id,
         estado='PENDIENTE'
     ).count()
+    tarea = TareaPacking.query.get(_tarea_id)
 
     return jsonify({
         'ok': True,
@@ -183,9 +184,9 @@ def cargar_bulto(codigo_barras):
         'tipo': bulto.tipo,
         'numero': bulto.numero,
         'total': bulto.total,
-        'numero_pedido_siesa': tarea.numero_pedido_siesa,
-        'cliente': tarea.cliente or '',
-        'municipio': tarea.municipio or '',
+        'numero_pedido_siesa': tarea.numero_pedido_siesa if tarea else None,
+        'cliente': tarea.cliente or '' if tarea else '',
+        'municipio': tarea.municipio or '' if tarea else '',
         'ruta_despacho_id': bulto.ruta_despacho_id,
         'pedido_completo_en_ruta': pendientes_ruta == 0,
         'bultos_pendientes_pedido_ruta': pendientes_ruta

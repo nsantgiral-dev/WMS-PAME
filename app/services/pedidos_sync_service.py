@@ -180,8 +180,14 @@ def _run_sync(app):
                 for pk in _pendientes_verificar:
                     if pk.numero_pedido_siesa not in numeros_comprometidos_siesa:
                         # Verificar el estado real en Siesa para este pedido puntual
+                        if not pk.tipo_docto_pedido_siesa:
+                            logger.warning(
+                                f'[PEDIDOS_SYNC] Packing {pk.id} ({pk.numero_pedido_siesa}) '
+                                f'sin tipo_docto_pedido_siesa — no se puede verificar estado en Siesa'
+                            )
+                            continue
                         estado_real = connekta.get_estado_pedido(
-                            pk.tipo_docto_pedido_siesa or '',
+                            pk.tipo_docto_pedido_siesa,
                             pk.consec_docto_pedido_siesa or pk.numero_pedido_siesa
                         )
                         # 1=En elaboración, 2=Aprobado, 3=Comprometido, 4=Cumplido: NO anular
