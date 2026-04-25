@@ -24,3 +24,6 @@ build/
 
 # Migraciones compiladas
 migrations/versions/__pycache__/
+
+# Review agent reports (generados localmente)
+.review/reports/
