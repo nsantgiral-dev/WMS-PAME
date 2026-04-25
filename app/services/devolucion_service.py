@@ -55,28 +55,37 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
             ).first()
 
             if existente:
-                # COMPLETADO sin Siesa: el recepcionista cerró la tarea físicamente
-                # pero el ajuste no llegó a Siesa — la discrepancia persiste.
-                # Solo recrear si era averiada (requería TRASLADO_AVERIAS).
-                # Las devoluciones normales (no averiadas) no disparan Siesa —
-                # siesa_triggered=False es correcto ahí, no indica fallo.
-                if existente.estado == 'COMPLETADO' and not existente.siesa_triggered:
+                if existente.estado == 'COMPLETADO':
                     if not existente.es_averiado:
-                        # Devolución normal: no necesita Siesa — siesa_triggered=False es correcto
+                        # Devolución normal: no necesita Siesa — ya resuelta físicamente
                         ya_existian += 1
                         savepoint.commit()
                         continue
+                    # Averiado: verificar si existe SiesaJob activo o ya completado.
+                    # NO usamos siesa_triggered aquí porque ese flag sólo lo pone el DLQ
+                    # handler después del HTTP 200 de Siesa — consultamos directamente la tabla.
+                    from app.models.siesa_job import SiesaJob as _SiesaJob
+                    job_activo = _SiesaJob.query.filter_by(
+                        referencia_tipo='TareaDevolucion',
+                        referencia_id=existente.id,
+                    ).filter(_SiesaJob.estado.in_(
+                        ['PENDIENTE', 'REINTENTANDO', 'PROCESANDO', 'COMPLETADO']
+                    )).first()
+                    if job_activo:
+                        # Job en vuelo o Siesa ya confirmó — no recrear
+                        ya_existian += 1
+                        savepoint.commit()
+                        continue
+                    # Sin SiesaJob confirmado: averiado completado pero Siesa nunca fue notificada
                     logger.warning(
-                        f'[DEV] TareaDevolucion {existente.id} COMPLETADO sin Siesa (averiado) '
+                        f'[DEV] TareaDevolucion {existente.id} COMPLETADO sin SiesaJob (averiado) '
                         f'para prod {producto_id} — creando nueva tarea'
                     )
-                    # Invalidar la ikey del completado para que no bloquee la nueva tarea
                     existente.idempotency_key = f'DEV-{producto_id}-SIN-SIESA-{existente.id}'
                     db.session.flush()
                     # Caer al bloque de creación abajo (no hacer continue)
-                elif existente.estado in ('PENDIENTE', 'EN_PROCESO', 'COMPLETADO'):
-                    # COMPLETADO con Siesa OK: discrepancia ya resuelta
-                    # PENDIENTE / EN_PROCESO: ya está siendo atendida
+                elif existente.estado in ('PENDIENTE', 'EN_PROCESO'):
+                    # Ya está siendo atendida
                     if existente.cantidad_diferencia != cantidad:
                         existente.cantidad_diferencia = cantidad
                         db.session.flush()
@@ -235,7 +244,9 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             referencia_tipo='TareaDevolucion',
             referencia_id=tarea.id,
         )
-        tarea.siesa_triggered = True  # evita loop infinito en reconciliación
+        # NO ponemos siesa_triggered=True aquí — el DLQ handler lo pondrá
+        # sólo cuando Siesa responda HTTP 200 (semántica exacta de idempotencia).
+        # El loop de reconciliación se suprime consultando SiesaJob activo (ver abajo).
 
     try:
         db.session.commit()
