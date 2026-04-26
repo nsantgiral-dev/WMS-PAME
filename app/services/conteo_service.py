@@ -208,7 +208,23 @@ class ConteoService:
 
         if pares:
             app = current_app._get_current_object()
-            t = threading.Thread(target=_worker, args=(pares, app), daemon=True)
+            # Limitar a 1 prewarm concurrente — evita colapsar el pool de conexiones HTTP
+            # cuando el scheduler lanza prewarm para múltiples almacenes a la vez.
+            _prewarm_sem = getattr(ConteoService, '_prewarm_semaphore', None)
+            if _prewarm_sem is None:
+                ConteoService._prewarm_semaphore = threading.Semaphore(1)
+                _prewarm_sem = ConteoService._prewarm_semaphore
+
+            def _guarded_worker(items, _app, _sem):
+                if not _sem.acquire(blocking=False):
+                    logger.info('[PREWARM] Otro prewarm en curso — omitiendo para evitar sobrecarga')
+                    return
+                try:
+                    _worker(items, _app)
+                finally:
+                    _sem.release()
+
+            t = threading.Thread(target=_guarded_worker, args=(pares, app, _prewarm_sem), daemon=True)
             t.start()
             logger.info(f'[CONTEO] Pre-warm existencia_siesa iniciado para {len(pares)} productos')
 
