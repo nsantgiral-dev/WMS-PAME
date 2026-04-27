@@ -394,6 +394,22 @@ class MobileService:
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 
+            # [P5] Bloquear picking si el pedido fue anulado en Siesa.
+            # TareaPacking lleva el flag pedido_anulado_siesa; TareaPicking usa
+            # referencia_documento (= numero_pedido_siesa) para enlazarlo.
+            if tarea.referencia_documento:
+                from app.models.packing import TareaPacking as _TP
+                _pk_anulado = _TP.query.filter_by(
+                    numero_pedido_siesa=tarea.referencia_documento,
+                    pedido_anulado_siesa=True,
+                ).first()
+                if _pk_anulado:
+                    raise ValueError(
+                        f'Pedido {tarea.referencia_documento} fue anulado en Siesa '
+                        f'(estado={_pk_anulado.pedido_estado_siesa_detectado or "?"}). '
+                        f'Detén el picking y contacta a tu supervisor.'
+                    )
+
             producto = tarea.producto
             if not producto:
                 raise ValueError('Producto no encontrado en la tarea')

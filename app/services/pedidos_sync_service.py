@@ -48,7 +48,17 @@ def _run_sync(app):
             parametros = f"f430_id_co = ''{connekta.centro_op}'' AND f430_ind_estado = 3"
 
             all_items = []
+            _sync_inicio = datetime.utcnow()
+            _MAX_MINUTOS_PAGINACION = 5  # cota temporal: evita bloquear el scheduler >5 min
             for pag in range(1, 200):
+                # [M3] Cota temporal: si Siesa tarda mucho por página, no bloquear el scheduler
+                _elapsed = (datetime.utcnow() - _sync_inicio).total_seconds()
+                if _elapsed > _MAX_MINUTOS_PAGINACION * 60:
+                    logger.warning(
+                        f'[PEDIDOS_SYNC] Paginación abortada tras {_elapsed:.0f}s '
+                        f'({pag} páginas) — cota temporal alcanzada'
+                    )
+                    break
                 try:
                     res = connekta._get(connekta.api_pedidos, {
                         'paginacion': f'numPag={pag}|tamPag={TAM_PAG}',

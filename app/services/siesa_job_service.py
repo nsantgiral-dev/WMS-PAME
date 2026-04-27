@@ -123,9 +123,23 @@ def _run_dlq_jobs():
         return 0
 
     procesados = 0
+    # FM_SIESA_UNREACHABLE: si hay muchos jobs pendientes (recuperación tras outage),
+    # añadir pausa entre ejecuciones para no inundar Siesa con ráfaga de llamadas.
+    _total_pendientes = SiesaJob.query.filter(SiesaJob.estado == 'PENDIENTE').count()
+    _inter_job_delay = 1.0 if _total_pendientes > 10 else 0.0
+    if _inter_job_delay:
+        logger.info(
+            f'[DLQ] {_total_pendientes} jobs pendientes — aplicando delay {_inter_job_delay}s '
+            f'entre jobs para evitar ráfaga sobre Siesa (thundering herd)'
+        )
+
     for job in jobs:
         job.estado = 'PROCESANDO'
         db.session.commit()  # lock en el registro
+
+        if _inter_job_delay and procesados > 0:
+            import time
+            time.sleep(_inter_job_delay)
 
         try:
             resultado = _ejecutar_job(job)
