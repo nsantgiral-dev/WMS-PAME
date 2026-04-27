@@ -22,7 +22,7 @@ from app.extensions import db
 from app.models.inventario import UbicacionProducto
 from app.models.producto import Producto
 from app.models.siesa_job import SiesaJob
-from app.models.tarea_reposicion import TareaReposicion
+from app.models.tarea_reposicion import TareaReposicion, EstadoReposicion
 from app.models.ubicacion import Ubicacion
 from app.models.ubicacion_huerfana import UbicacionHuerfana
 from app.models.usuario import Usuario
@@ -148,7 +148,10 @@ def pendientes():
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
     estado = request.args.get('estado', '').upper()
-    estados_validos = {'PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'CANCELADA'}
+    estados_validos = {
+        EstadoReposicion.PENDIENTE, EstadoReposicion.EN_PROCESO,
+        EstadoReposicion.COMPLETADA, EstadoReposicion.CANCELADA,
+    }
 
     from sqlalchemy.orm import selectinload as _sl
     opts = [_sl(TareaReposicion.producto),
@@ -158,7 +161,7 @@ def pendientes():
         q = TareaReposicion.query.options(*opts).filter(TareaReposicion.estado == estado)
     else:
         q = TareaReposicion.query.options(*opts).filter(
-            TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+            TareaReposicion.estado.in_([EstadoReposicion.PENDIENTE, EstadoReposicion.EN_PROCESO])
         )
     tareas = q.order_by(TareaReposicion.fecha_creacion.desc()).limit(100).all()
     return jsonify({'tareas': [t.to_dict() for t in tareas], 'total': len(tareas)}), 200
@@ -180,10 +183,10 @@ def cancelar(tarea_id):
     tarea = TareaReposicion.query.get(tarea_id)
     if not tarea:
         return jsonify({'error': f'Tarea {tarea_id} no encontrada'}), 404
-    if tarea.estado in ('COMPLETADA', 'CANCELADA'):
+    if tarea.estado in (EstadoReposicion.COMPLETADA, EstadoReposicion.CANCELADA):
         return jsonify({'error': f'Tarea ya está en estado {tarea.estado}'}), 400
 
-    tarea.estado = 'CANCELADA'
+    tarea.estado = EstadoReposicion.CANCELADA
     tarea.notas = (tarea.notas or '') + f' | Cancelada: {data.get("motivo", "sin motivo")}'
     db.session.commit()
     return jsonify({'ok': True, 'tarea': tarea.to_dict()}), 200

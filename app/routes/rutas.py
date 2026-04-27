@@ -13,7 +13,7 @@ from app.models.packing import TareaPacking, EstadoPacking
 from app.models.recaudo_entrega import RecaudoEntrega
 from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
-from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
+from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
 from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
 from sqlalchemy.exc import IntegrityError as _IntegrityError
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin
@@ -869,7 +869,7 @@ def planilla_ruta(id):
         'sin_gestionar':   sin_gestionar,
         'total_recaudado': ruta.total_recaudado(),
         'totales_por_forma': totales,
-        'estado_financiero': ruta.estado_financiero or 'PENDIENTE',
+        'estado_financiero': ruta.estado_financiero or EstadoFinancieroRuta.PENDIENTE,
     }), 200
 
 
@@ -897,7 +897,7 @@ def liquidar_ruta(id):
             'error': f'Faltan {sin_gestionar} parada{"s" if sin_gestionar != 1 else ""} por gestionar antes de liquidar.'
         }), 400
 
-    ruta.estado_financiero = 'LIQUIDADA'
+    ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
     db.session.commit()
 
     return jsonify({
@@ -961,7 +961,7 @@ def forzar_cierre_ruta(id):
         auto_cerradas += 1
 
     ruta.estado = EstadoRutaDespacho.ENTREGADA
-    ruta.estado_financiero = 'LIQUIDADA'
+    ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
     ruta.fecha_cierre = ahora
     db.session.commit()
 
