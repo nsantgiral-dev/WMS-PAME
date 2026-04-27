@@ -563,6 +563,25 @@ class ABCService:
                     logger.info(
                         f'[ABC] Job finalizado — OK: {completados} | FALLIDOS: {fallidos}'
                     )
+                    if fallidos:
+                        # SF_JOB_SILENCIOSO: almacenes fallidos quedan sin tareas de conteo hoy.
+                        # Enviar alerta para que ops pueda disparar manualmente.
+                        try:
+                            from app.services.alertas_service import enviar_email, _config_resend
+                            if _config_resend():
+                                enviar_email(
+                                    asunto=f'[WMS ALERTA] ABC scheduler: {len(fallidos)} almacén(es) fallaron',
+                                    cuerpo_texto=(
+                                        f'El scheduler ABC (2am Bogotá) falló en {len(fallidos)} almacén(es):\n'
+                                        f'FALLIDOS: {fallidos}\n'
+                                        f'COMPLETADOS: {completados}\n\n'
+                                        'Las tareas de conteo cíclico no se generaron para esos almacenes. '
+                                        'Usa /api/abc/generar para disparar manualmente.'
+                                    ),
+                                    cuerpo_html=None,
+                                )
+                        except Exception:
+                            pass
                 finally:
                     _db.session.execute(_db.text('SELECT pg_advisory_unlock(2003)'))
                     _db.session.commit()

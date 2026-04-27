@@ -375,6 +375,24 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'idempotente': True, 'sin_sesion': True}
 
+        # Guard: detectar estado inconsistente (AJUSTADO + siesa_triggered=False).
+        # Siesa ya registró el ajuste pero el mini-commit de siesa_triggered falló.
+        # Corregir siesa_triggered para que auditorías no muestren "sin Siesa".
+        if sesion_cteo.estado == 'AJUSTADO' and not sesion_cteo.siesa_triggered:
+            logger.critical(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} AJUSTADO '
+                f'pero siesa_triggered=False — inconsistencia detectada. '
+                f'Siesa pudo haberlo procesado. Corrigiendo flag.'
+            )
+            try:
+                sesion_cteo.siesa_triggered = True
+                sesion_cteo.siesa_triggered_at = sesion_cteo.fecha_cierre or datetime.utcnow()
+                db.session.commit()
+            except Exception as _e_fix:
+                db.session.rollback()
+                logger.error(f'[DLQ] No se pudo corregir siesa_triggered para sesion {sesion_id}: {_e_fix}')
+            return {'idempotente': True, 'sesion_id': sesion_id, 'estado_corregido': True}
+
         # P4: idempotencia — si siesa_triggered, no reenviar
         if sesion_cteo.siesa_triggered:
             # Si la sesión quedó atascada en AJUSTANDO (crash entre mini-commit y full-commit),

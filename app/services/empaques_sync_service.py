@@ -281,7 +281,23 @@ def _run_sync(app):
         except Exception as e:
             db.session.rollback()
             _sync_estado['ultimo_error'] = str(e)
-            logger.error(f'[EMPAQUES SYNC] Error fatal: {e}')
+            logger.error(f'[EMPAQUES SYNC] Error fatal: {e}', exc_info=True)
+            # SF_JOB_SILENCIOSO: _sync_estado se pierde en restart de Railway.
+            # Enviar email para que ops sepa que los empaques no están actualizados.
+            try:
+                from app.services.alertas_service import enviar_email, _config_resend
+                if _config_resend():
+                    enviar_email(
+                        asunto='[WMS ALERTA] Sync empaques/barcodes Siesa falló',
+                        cuerpo_texto=(
+                            f'El sync de empaques/barcodes de Siesa falló con error:\n{e}\n\n'
+                            'Los empaques y factores de conversión pueden estar desactualizados. '
+                            'Usa POST /api/empaques/sync para disparar manualmente.'
+                        ),
+                        cuerpo_html=None,
+                    )
+            except Exception:
+                pass
         finally:
             _sync_estado['en_curso'] = False
             if lock_adquirido:
