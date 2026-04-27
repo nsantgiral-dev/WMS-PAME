@@ -686,6 +686,7 @@ class ConnektaGateway:
                     'f451_id_cond_pago': cond_pago or self.cond_pago_compras or None,  # [A2] condición pago — obligatorio spec 142948 pos 324
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
                     'f451_id_tercero_comprador': tercero_comprador or self.nit_empresa or None,  # comprador exacto de la OC
+                    'f451_id_sucursal_comprador': sucursal_comprador or None,                    # sucursal del comprador (requerida cuando hay tercero_comprador)
                     'f451_num_docto_referencia': num_docto_referencia,
                     'f451_id_moneda_docto': moneda_docto,
                     'f451_id_moneda_conv': moneda_conv,
@@ -798,18 +799,18 @@ class ConnektaGateway:
                     'f350_id_co_base': '',
                     'f350_id_tipo_docto_base': '',
                     'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
-                    'f462_id_vehiculo': '',
-                    'f462_id_tercero_transp': '',
-                    'f462_id_sucursal_transp': '',
-                    'f462_id_tercero_conductor': '',
-                    'f462_nombre_conductor': '',
-                    'f462_identif_conductor': '',
-                    'f462_numero_guia': '',
-                    'f462_cajas': 0,
-                    'f462_peso': 0.0,
-                    'f462_volumen': 0.0,
-                    'f462_valor_seguros': 0.0,
-                    'f462_notas': ''
+                    'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
+                    'f462_id_tercero_transp': None,
+                    'f462_id_sucursal_transp': None,
+                    'f462_id_tercero_conductor': None,
+                    'f462_nombre_conductor': None,
+                    'f462_identif_conductor': None,
+                    'f462_numero_guia': None,
+                    'f462_cajas': None,
+                    'f462_peso': None,
+                    'f462_volumen': None,
+                    'f462_valor_seguros': None,
+                    'f462_notas': None
                 }
             ],
             'Movimientos': [
@@ -887,18 +888,18 @@ class ConnektaGateway:
                     'f350_id_co_base': '',
                     'f350_id_tipo_docto_base': '',
                     'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
-                    'f462_id_vehiculo': '',
-                    'f462_id_tercero_transp': '',
-                    'f462_id_sucursal_transp': '',
-                    'f462_id_tercero_conductor': '',
-                    'f462_nombre_conductor': '',
-                    'f462_identif_conductor': '',
-                    'f462_numero_guia': '',
-                    'f462_cajas': 0,
-                    'f462_peso': 0.0,
-                    'f462_volumen': 0.0,
-                    'f462_valor_seguros': 0.0,
-                    'f462_notas': ''
+                    'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
+                    'f462_id_tercero_transp': None,
+                    'f462_id_sucursal_transp': None,
+                    'f462_id_tercero_conductor': None,
+                    'f462_nombre_conductor': None,
+                    'f462_identif_conductor': None,
+                    'f462_numero_guia': None,
+                    'f462_cajas': None,
+                    'f462_peso': None,
+                    'f462_volumen': None,
+                    'f462_valor_seguros': None,
+                    'f462_notas': None
                 }
             ],
             'Movimientos': [
@@ -923,7 +924,7 @@ class ConnektaGateway:
                     'f470_notas': '',
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
-                    'F_ID_UM_INVENTARIO': '',
+                    'F_ID_UM_INVENTARIO': self.uom_default,   # consistente con enviar_ajuste_inventario
                     'f470_id_ubicacion_aux_ent': '',
                     'f470_id_lote_ent': '',
                     'f470_id_item': '',

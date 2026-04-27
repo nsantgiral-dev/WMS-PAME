@@ -196,4 +196,6 @@ def trigger_sync():
 @jwt_required()
 def sync_estado():
     """Estado del último sync de empaques."""
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para consultar estado del sync'}), 403
     return jsonify(empaques_sync_service.get_estado()), 200

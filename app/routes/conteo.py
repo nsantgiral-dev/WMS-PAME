@@ -250,6 +250,7 @@ def generar_tareas_abc():
         )
         return jsonify(resultado), 201
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en generar_tareas_conteo_diario almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -269,6 +270,7 @@ def generar_todas_las_clases():
         )
         return jsonify(resultado), 201
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en generar_todas_las_clases almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -342,6 +344,7 @@ def sincronizar_abc():
         )
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en sincronizar_abc')
         return jsonify({'error': str(e)}), 500
 
 
@@ -361,6 +364,7 @@ def watchdog_anomalias():
         overrides = ABCService.watchdog_anomalias(almacen_id=data['almacen_id'])
         return jsonify({'overrides': len(overrides), 'detalle': overrides}), 200
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en watchdog_anomalias almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
 
 

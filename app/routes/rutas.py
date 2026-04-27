@@ -113,8 +113,9 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
 @rutas_bp.route('/conductores', methods=['GET'])
 @jwt_required()
 def listar_conductores():
+    from sqlalchemy.orm import selectinload as _sl_c
     solo_activos = request.args.get('activos', 'true').lower() == 'true'
-    q = Conductor.query.order_by(Conductor.nombre)
+    q = Conductor.query.options(_sl_c(Conductor.usuario)).order_by(Conductor.nombre)
     if solo_activos:
         q = q.filter_by(activo=True)
 
