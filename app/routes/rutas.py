@@ -409,7 +409,15 @@ def programar_viaje():
         estado=EstadoRutaDespacho.PROGRAMADO,
     )
     db.session.add(ruta)
+    db.session.flush()
+    ruta_id = ruta.id
     db.session.commit()
+    # Re-query con relaciones eager para evitar expire_on_commit en to_dict()
+    ruta = RutaDespacho.query.options(
+        _jl(RutaDespacho.conductor),
+        _jl(RutaDespacho.vehiculo),
+        _jl(RutaDespacho.ruta_maestra),
+    ).get(ruta_id)
     return jsonify({'ruta': ruta.to_dict()}), 201
 
 
@@ -630,10 +638,17 @@ def cerrar_ruta(id):
         }), 400
 
     _n_bultos = len(ruta.bultos)  # capturar antes del commit
+    _ruta_id  = ruta.id
     ruta.estado = EstadoRutaDespacho.EN_TRANSITO
     ruta.fecha_cierre = datetime.utcnow()
     db.session.commit()
-    logger.info(f'[RUTAS] Ruta {ruta.id} EN_CARGUE → EN_TRANSITO ({_n_bultos} bultos)')
+    logger.info(f'[RUTAS] Ruta {_ruta_id} EN_CARGUE → EN_TRANSITO ({_n_bultos} bultos)')
+    # Re-query con relaciones para evitar expire_on_commit en to_dict(include_bultos=True)
+    ruta = (RutaDespacho.query
+            .options(_jl(RutaDespacho.conductor), _jl(RutaDespacho.vehiculo),
+                     _jl(RutaDespacho.ruta_maestra),
+                     _sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+            .get(_ruta_id))
     return jsonify({'ok': True, 'ruta': ruta.to_dict(include_bultos=True)}), 200
 
 
@@ -724,7 +739,10 @@ def mis_rutas():
         return jsonify({'error': 'Tu cuenta no está vinculada a ningún conductor'}), 404
 
     rutas = (RutaDespacho.query
-             .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+             .options(_jl(RutaDespacho.conductor),
+                      _jl(RutaDespacho.vehiculo),
+                      _jl(RutaDespacho.ruta_maestra),
+                      _sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
              .filter_by(conductor_id=conductor.id, estado=EstadoRutaDespacho.EN_TRANSITO)
              .order_by(RutaDespacho.fecha_cierre.desc())
              .all())
