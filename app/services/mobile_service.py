@@ -163,20 +163,24 @@ class MobileService:
         # REGLA ESTRICTA: el picker solo puede ir a ubicaciones tipo_zona = PICKING o GENERAL.
         # Las zonas RESERVA (pacas selladas en alto) son exclusivas del Abastecedor.
         from app.models.ubicacion import Ubicacion
+        # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
+        _ids_validos = db.session.query(Ubicacion.id).filter(
+            Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL'])
+        ).subquery()
+        # Sin JOIN — with_for_update solo lockea tareas_picking (evita error PostgreSQL
+        # "FOR UPDATE cannot be applied to the nullable side of an outer join")
         tarea = (
             TareaPicking.query
-            .join(Ubicacion, Ubicacion.id == TareaPicking.ubicacion_id, isouter=True)
             .filter(
                 TareaPicking.estado == 'PENDIENTE',
                 TareaPicking.operario_id.is_(None),
-                # Permitir PICKING, GENERAL, y tareas sin ubicación asignada todavía
                 db.or_(
-                    Ubicacion.id.is_(None),
-                    Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL']),
+                    TareaPicking.ubicacion_id.is_(None),
+                    TareaPicking.ubicacion_id.in_(_ids_validos),
                 ),
             )
             .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc())
-            .with_for_update(skip_locked=True, of=TareaPicking)
+            .with_for_update(skip_locked=True)
             .first()
         )
 
