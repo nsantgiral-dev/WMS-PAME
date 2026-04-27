@@ -733,9 +733,13 @@ class ConnektaGateway:
                     'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': 401,                                                    # 401 = Compras/Entrada (spec 142948, obligatorio — ver Siesa: Compras → Maestros → Conceptos)
+                    'f470_id_concepto': 401,                                                    # 401 = Compras/Entrada (spec 142948, obligatorio)
                     # Bonificación usa motivo '04' (obsequio/bonif en Siesa). OC usa motivo de la OC o motivo_compras.
                     'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
+                    'f470_ind_naturaleza': 0,                                                   # 0 = Entrada (142948 siempre ingresa mercancía)
+                    'f470_ind_obsequio': 1 if i.get('tipo') == 'BONIFICACION' else 0,          # 1 = obsequio/bonif del proveedor
+                    'f470_ind_solo_valor': 0,
+                    'f470_ind_impto_asumido': 0,
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
                     'f421_fecha_entrega': self._fmt_fecha_iso(i.get('fecha_entrega')) or fecha_hoy_iso,
@@ -1179,7 +1183,12 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
+                    'f470_id_concepto': 607,                                         # 607 = Transferencias (spec inventarios, obligatorio)
                     'f470_id_motivo': self.motivo_traslado,
+                    'f470_ind_naturaleza': 1,                                        # 1 = Salida (mercancía sale de bodega_origen)
+                    'f470_ind_obsequio': 0,
+                    'f470_ind_solo_valor': 0,
+                    'f470_ind_impto_asumido': 0,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
@@ -1252,7 +1261,12 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
+                    'f470_id_concepto': 607,                                         # 607 = Transferencias
                     'f470_id_motivo': self.motivo_traslado,
+                    'f470_ind_naturaleza': 0,                                        # 0 = Entrada (mercancía llega a bodega_destino)
+                    'f470_ind_obsequio': 0,
+                    'f470_ind_solo_valor': 0,
+                    'f470_ind_impto_asumido': 0,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
@@ -1295,6 +1309,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Transferencia directa {codigo_solicitud}',
+                    'f350_id_tercero': self.nit_empresa or None,                     # obligatorio spec 173066 — mismo que 173076
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_destino,
                     # f450_docto_alterno, f350_id_co_base, f350_id_tipo_docto_base,
@@ -1309,7 +1324,12 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
+                    'f470_id_concepto': 607,                                         # 607 = Transferencias
                     'f470_id_motivo': self.motivo_traslado,
+                    'f470_ind_naturaleza': 1,                                        # 1 = Salida desde bodega_origen
+                    'f470_ind_obsequio': 0,
+                    'f470_ind_solo_valor': 0,
+                    'f470_ind_impto_asumido': 0,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',

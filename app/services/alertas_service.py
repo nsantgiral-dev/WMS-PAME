@@ -162,8 +162,12 @@ def verificar_y_alertar_huerfanas(app=None):
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_huerfanas: {e}', exc_info=True)
         finally:
-            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2004)'))
-            _db.session.commit()
+            try:
+                _db.session.rollback()
+                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2004)'))
+                _db.session.commit()
+            except Exception as _fe:
+                logger.error(f'[ALERTAS] Error liberando advisory lock 2004: {_fe}')
 
 
 def _enviar_alerta_huerfanas(huerfanas: list):
@@ -463,8 +467,12 @@ def verificar_y_alertar_stock_critico(app=None):
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_stock_critico: {e}', exc_info=True)
         finally:
-            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2005)'))
-            _db.session.commit()
+            try:
+                _db.session.rollback()
+                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2005)'))
+                _db.session.commit()
+            except Exception as _fe:
+                logger.error(f'[ALERTAS] Error liberando advisory lock 2005: {_fe}')
 
 
 def _enviar_alerta_stock_critico(criticos: list):
@@ -620,8 +628,12 @@ def enviar_resumen_diario(app=None):
         except Exception as e:
             logger.error(f'[ALERTAS] Error en enviar_resumen_diario: {e}', exc_info=True)
         finally:
-            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2006)'))
-            _db.session.commit()
+            try:
+                _db.session.rollback()
+                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2006)'))
+                _db.session.commit()
+            except Exception as _fe:
+                logger.error(f'[ALERTAS] Error liberando advisory lock 2006: {_fe}')
 
 
 def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fallidos):

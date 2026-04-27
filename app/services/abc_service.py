@@ -627,8 +627,12 @@ class ABCService:
                                 f'falla de almacenes {fallidos} completamente invisible: {_e_email_sched}'
                             )
                 finally:
-                    _db.session.execute(_db.text('SELECT pg_advisory_unlock(2003)'))
-                    _db.session.commit()
+                    try:
+                        _db.session.rollback()
+                        _db.session.execute(_db.text('SELECT pg_advisory_unlock(2003)'))
+                        _db.session.commit()
+                    except Exception as _fe:
+                        logger.error(f'[ABC] Error liberando advisory lock 2003: {_fe}')
 
         scheduler = BackgroundScheduler(timezone='America/Bogota')
         scheduler.add_job(

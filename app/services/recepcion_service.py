@@ -286,23 +286,30 @@ class RecepcionService:
                 return recepcion
             # CONFIRMADA pero Siesa nunca se disparó — verificar job en DLQ
             from app.models.siesa_job import SiesaJob
+            # [C7] Incluir COMPLETADO: si el job terminó exitosamente pero siesa_triggered=False
+            # (bug en el handler), re-encolar generaría doble ENTRADA_OC en Siesa.
             job_existente = SiesaJob.query.filter_by(
                 referencia_tipo='RecepcionMercancia',
                 referencia_id=recepcion.id,
-            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO'])).first()
+            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO', 'COMPLETADO'])).first()
             if job_existente:
                 if job_existente.estado == 'FALLIDO':
-                    # NO rescatar automáticamente — el job FALLIDO puede haber fallado
-                    # por timeout DESPUÉS de que Siesa procesó la entrada OC (HTTP 200
-                    # llegó a Siesa pero no al WMS). Re-encolar sin verificar genera una
-                    # SEGUNDA entrada OC: doble débito cuenta 14, proveedor con doble abono.
-                    # El supervisor debe verificar en Siesa y rescatar manualmente desde el admin.
                     logger.error(
                         f'[RECEPCION] Job FALLIDO {job_existente.id} para recepcion={recepcion.id} '
                         f'(CONFIRMADA sin siesa_triggered) — NO rescatado automáticamente. '
                         f'Verificar en Siesa si la entrada OC ya fue registrada antes de rescatar '
                         f'desde el panel de administración.'
                     )
+                elif job_existente.estado == 'COMPLETADO':
+                    # [C7] Job completado pero siesa_triggered no se actualizó (bug en handler).
+                    # Siesa ya procesó la entrada — NO re-encolar bajo ninguna circunstancia.
+                    logger.error(
+                        f'[RECEPCION] Job COMPLETADO {job_existente.id} para recepcion={recepcion.id} '
+                        f'pero siesa_triggered=False — posible bug en DLQ handler. '
+                        f'Corrigiendo siesa_triggered=True para evitar re-encolar.'
+                    )
+                    recepcion.siesa_triggered = True
+                    db.session.commit()
                 return recepcion
             # Sin job alguno — re-encolar con los datos disponibles en el registro.
             # El inventario ya fue ingresado; solo falta crear la entrada contable en Siesa.
@@ -350,7 +357,81 @@ class RecepcionService:
         if recepcion.estado != 'EN_PROCESO':
             raise ValueError(f'No se puede confirmar en estado {recepcion.estado}')
 
-        # Ingresar al inventario
+        # [C6] Lookup a Siesa ANTES de adquirir los row-locks de UbicacionProducto.
+        # Si este bloque estuviera después del for-loop, los locks de inventario quedarían
+        # retenidos durante ~30s de HTTP call, bloqueando workers concurrentes y
+        # agotando el connection pool bajo carga paralela.
+        remision = _limpiar_remision(num_remision_prov or recepcion.num_remision_prov or '')
+        if remision and not recepcion.num_remision_prov:
+            recepcion.num_remision_prov = remision
+
+        proveedor_id = recepcion.proveedor_codigo or ''
+        sucursal_prov = recepcion.sucursal_prov_siesa or ''
+        moneda_docto = None
+        moneda_conv = None
+        moneda_local = None
+        tasa_conv = 0.0
+        tasa_local = 0.0
+        tercero_comprador = None
+        sucursal_comprador = None
+        items_oc = {}
+        oc_fallback = {}
+        try:
+            consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
+            resultado_oc = connekta.get_ordenes_compra_aprobadas(consec=consec)
+            rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
+            header_leido = False
+            for row in rows_oc:
+                if not header_leido:
+                    proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
+                    sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
+                    moneda_docto = row.get('f420_id_moneda_docto') or None
+                    moneda_conv = row.get('f420_id_moneda_conv') or None
+                    moneda_local = row.get('f420_id_moneda_local') or None
+                    tasa_conv = float(row.get('f420_tasa_conv') or 0.0)
+                    tasa_local = float(row.get('f420_tasa_local') or 0.0)
+                    tercero_comprador = (row.get('f200_nit_comprador') or row.get('f200_id_comprador') or '').strip() or None
+                    sucursal_comprador = row.get('f202_id_sucursal_comprador', '').strip() or None
+                    if proveedor_id:
+                        recepcion.proveedor_codigo = proveedor_id
+                    if sucursal_prov:
+                        recepcion.sucursal_prov_siesa = sucursal_prov
+                    header_leido = True
+
+                ref_siesa = (row.get('f120_referencia', '') or '').strip()
+                item_data = {
+                    'ref_siesa': ref_siesa,
+                    'bodega': (row.get('f150_id', '') or '').strip() or None,
+                    'uom': (row.get('f421_id_unidad_medida', '') or '').strip() or None,
+                    'fecha_entrega': (row.get('f421_fecha_entrega', '') or '').strip() or None,
+                    'motivo': (row.get('f421_id_motivo', '') or '').strip() or None,
+                }
+                if not oc_fallback and item_data['bodega']:
+                    oc_fallback = item_data
+                if ref_siesa:
+                    items_oc[ref_siesa.upper()] = item_data
+                id_siesa = str(row.get('f120_id', '') or '').strip()
+                if id_siesa:
+                    items_oc[id_siesa] = item_data
+
+            logger.warning(
+                f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} '
+                f'items_oc keys={list(items_oc.keys())} fallback={oc_fallback!r}'
+            )
+        except Exception as lookup_err:
+            logger.error(
+                f'[RECEPCION] Lookup OC falló para {recepcion.numero_oc_siesa}: {lookup_err}',
+                exc_info=True
+            )
+
+        # Siesa requiere proveedor_id — fallar rápido antes de crear SiesaJob
+        if not proveedor_id:
+            raise ValueError(
+                f'No se pudo obtener el proveedor de la OC {recepcion.numero_oc_siesa} en Siesa. '
+                'Verifica que la OC exista en SIESA o asigna el código de proveedor manualmente.'
+            )
+
+        # Ingresar al inventario — row-locks adquiridos DESPUÉS del HTTP call
         tiene_excesos = False
         tiene_faltantes = False
         tiene_cross_dock = False
@@ -414,85 +495,6 @@ class RecepcionService:
         recepcion.observaciones = observaciones
         recepcion.estado = 'CONFIRMADA'
         recepcion.fecha_confirmacion = datetime.utcnow()
-
-        # Trigger a Siesa — genera entrada contable automáticamente
-
-        # Remisión del proveedor: capturada al iniciar recepción o pasada al confirmar (fallback rec. #8)
-        remision = _limpiar_remision(num_remision_prov or recepcion.num_remision_prov or '')
-        if remision and not recepcion.num_remision_prov:
-            recepcion.num_remision_prov = remision
-
-        # Lookup en vivo a Siesa: proveedor, sucursal y moneda (no persisten en BD aún)
-        proveedor_id = recepcion.proveedor_codigo or ''
-        sucursal_prov = recepcion.sucursal_prov_siesa or ''
-        moneda_docto = None
-        moneda_conv = None
-        moneda_local = None
-        tasa_conv = 0.0
-        tasa_local = 0.0
-        tercero_comprador = None
-        sucursal_comprador = None
-        # items_oc: mapa normalizado UPPER+strip → {ref_siesa, bodega, uom, fecha_entrega}
-        # Siesa exige que bodega/uom/fecha_entrega coincidan exactamente con la OC original.
-        # oc_fallback: valores de la primera línea real — usado cuando falla el match por código.
-        items_oc = {}
-        oc_fallback = {}
-        try:
-            consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
-            resultado_oc = connekta.get_ordenes_compra_aprobadas(consec=consec)
-            rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
-            header_leido = False
-            for row in rows_oc:
-                if not header_leido:
-                    proveedor_id = proveedor_id or (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip()
-                    sucursal_prov = sucursal_prov or row.get('f202_id_sucursal_prov', '').strip()
-                    moneda_docto = row.get('f420_id_moneda_docto') or None
-                    moneda_conv = row.get('f420_id_moneda_conv') or None
-                    moneda_local = row.get('f420_id_moneda_local') or None
-                    tasa_conv = float(row.get('f420_tasa_conv') or 0.0)
-                    tasa_local = float(row.get('f420_tasa_local') or 0.0)
-                    tercero_comprador = (row.get('f200_nit_comprador') or row.get('f200_id_comprador') or '').strip() or None
-                    sucursal_comprador = row.get('f202_id_sucursal_comprador', '').strip() or None
-                    if proveedor_id:
-                        recepcion.proveedor_codigo = proveedor_id
-                    if sucursal_prov:
-                        recepcion.sucursal_prov_siesa = sucursal_prov
-                    header_leido = True
-
-                ref_siesa = (row.get('f120_referencia', '') or '').strip()
-                item_data = {
-                    'ref_siesa': ref_siesa,
-                    'bodega': (row.get('f150_id', '') or '').strip() or None,
-                    'uom': (row.get('f421_id_unidad_medida', '') or '').strip() or None,
-                    'fecha_entrega': (row.get('f421_fecha_entrega', '') or '').strip() or None,
-                    'motivo': (row.get('f421_id_motivo', '') or '').strip() or None,
-                }
-                # Primer registro real de la OC como fallback universal
-                if not oc_fallback and item_data['bodega']:
-                    oc_fallback = item_data
-                # Indexar por referencia normalizada (UPPER) y por ID numérico de Siesa
-                if ref_siesa:
-                    items_oc[ref_siesa.upper()] = item_data
-                id_siesa = str(row.get('f120_id', '') or '').strip()
-                if id_siesa:
-                    items_oc[id_siesa] = item_data
-
-            logger.warning(
-                f'[RECEPCION] Lookup OC: proveedor={proveedor_id!r} '
-                f'items_oc keys={list(items_oc.keys())} fallback={oc_fallback!r}'
-            )
-        except Exception as lookup_err:
-            logger.error(
-                f'[RECEPCION] Lookup OC falló para {recepcion.numero_oc_siesa}: {lookup_err}',
-                exc_info=True
-            )
-
-        # Siesa requiere proveedor_id — fallar rápido antes de crear SiesaJob
-        if not proveedor_id:
-            raise ValueError(
-                f'No se pudo obtener el proveedor de la OC {recepcion.numero_oc_siesa} en Siesa. '
-                'Verifica que la OC exista en SIESA o asigna el código de proveedor manualmente.'
-            )
 
         items_payload = []
         for i in recepcion.items:
