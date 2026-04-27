@@ -495,8 +495,8 @@ def _run_carga_inicial(app):
                         _text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
                     )
                     db.session.commit()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.error('[INV-SIESA] Error liberando advisory lock — podría quedar bloqueado: %s', _e)
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),

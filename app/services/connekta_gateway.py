@@ -103,6 +103,13 @@ class ConnektaGateway:
         # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
         # Si no se configura, cae al motivo_traslado genérico (puede causar rechazo en Siesa).
         self.motivo_averia = os.getenv('SIESA_MOTIVO_AVERIA', '') or self.motivo_traslado
+        # Conceptos de movimiento en Siesa (Inventarios → Maestros → Conceptos y Motivos).
+        # Los valores por defecto son los estándar de Siesa Enterprise; pueden variar por compañía.
+        # Verificar en Siesa si los conceptos fueron renumerados antes de cambiar estos valores.
+        self.concepto_ventas       = int(os.getenv('SIESA_CONCEPTO_VENTAS',       '501'))
+        self.concepto_compras      = int(os.getenv('SIESA_CONCEPTO_COMPRAS',      '401'))
+        self.concepto_ajustes      = int(os.getenv('SIESA_CONCEPTO_AJUSTES',      '603'))
+        self.concepto_traslados    = int(os.getenv('SIESA_CONCEPTO_TRASLADOS',    '607'))
 
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
         self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
@@ -577,7 +584,7 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': 501,                          # 501 = Ventas (maestro Siesa)
+                    'f470_id_concepto': self.concepto_ventas,         # 501 = Ventas (maestro Siesa), override: SIESA_CONCEPTO_VENTAS
                     'f470_id_motivo': self.motivo_ventas or None,     # SIESA_ID_MOTIVO_VENTAS (pos 131, ancho 2) — DEBE configurarse en Railway
                     'f470_ind_obsequio': 0,
                     'f470_id_co_movto': self.centro_op,
@@ -761,7 +768,7 @@ class ConnektaGateway:
                     'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': 401,                                                    # 401 = Compras/Entrada (spec 142948, obligatorio)
+                    'f470_id_concepto': self.concepto_compras,                                  # 401 = Compras/Entrada (spec 142948, obligatorio), override: SIESA_CONCEPTO_COMPRAS
                     # Bonificación usa motivo '04' (obsequio/bonif en Siesa). OC usa motivo de la OC o motivo_compras.
                     'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
                     'f470_ind_naturaleza': 0,                                                   # 0 = Entrada (142948 siempre ingresa mercancía)
@@ -865,7 +872,7 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
+                    'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
@@ -954,7 +961,7 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias (spec 142951, obligatorio), override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_averia,                            # SIESA_MOTIVO_AVERIA — validado contra maestro Siesa por compañía
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
@@ -1211,7 +1218,7 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias (spec inventarios, obligatorio)
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias (spec inventarios, obligatorio), override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_ind_naturaleza': 1,                                        # 1 = Salida (mercancía sale de bodega_origen)
                     'f470_ind_obsequio': 0,
@@ -1290,7 +1297,7 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias, override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_ind_naturaleza': 0,                                        # 0 = Entrada (mercancía llega a bodega_destino)
                     'f470_ind_obsequio': 0,
@@ -1353,7 +1360,7 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias, override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_ind_naturaleza': 1,                                        # 1 = Salida desde bodega_origen
                     'f470_ind_obsequio': 0,
