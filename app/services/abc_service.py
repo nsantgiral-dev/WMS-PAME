@@ -177,7 +177,7 @@ class ABCService:
                 db.session.query(TareaPicking.producto_id, func.count(TareaPicking.id))
                 .filter(
                     TareaPicking.producto_id.in_(producto_ids_clase),
-                    TareaPicking.estado == 'COMPLETADA',
+                    TareaPicking.estado == 'COMPLETADO',  # [A] corrección typo: era 'COMPLETADA'
                     TareaPicking.fecha_completado >= ventana
                 )
                 .group_by(TareaPicking.producto_id)

@@ -85,12 +85,24 @@ class ConteoService:
         if sesion_pre.maneja_lote and not lote_id:
             raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
 
-        # Consultar Siesa ANTES del lock — puede tardar hasta 10s (timeout de red)
-        existencia_siesa = ConteoService._consultar_existencia_siesa(
-            producto_codigo_siesa=sesion_pre.producto_codigo_siesa,
-            ubicacion_codigo=sesion_pre.ubicacion.codigo if sesion_pre.ubicacion else None,
-            lote_id=lote_id
-        )
+        # [C7] Usar existencia ya guardada en DB como baseline compartido entre workers.
+        # _existencia_cache es in-memory por proceso (Gunicorn): Worker A y Worker B
+        # podrían ver valores distintos si uno tiene cache caliente y el otro no.
+        # Si ya se consultó en un request anterior (cualquier worker), el valor
+        # persiste en sesion.existencia_siesa — fuente de verdad única.
+        if sesion_pre.existencia_siesa is not None:
+            existencia_siesa = float(sesion_pre.existencia_siesa)
+            logger.info(
+                f'[CONTEO] existencia_siesa={existencia_siesa} desde DB '
+                f'(evita discrepancia cross-worker) para sesion {sesion_id}'
+            )
+        else:
+            # Primera vez — consultar Siesa y luego persistir en DB bajo el lock
+            existencia_siesa = ConteoService._consultar_existencia_siesa(
+                producto_codigo_siesa=sesion_pre.producto_codigo_siesa,
+                ubicacion_codigo=sesion_pre.ubicacion.codigo if sesion_pre.ubicacion else None,
+                lote_id=lote_id
+            )
 
         # Ahora adquirir el lock pesimista para el update atómico
         sesion = (SesionConteo.query
