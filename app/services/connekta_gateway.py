@@ -554,7 +554,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
-                    'f470_id_un_movto': self.centro_op,
+                    'f470_id_un_movto': self.unidad_negocio,   # spec: unidad de negocio, no centro_op
                     'f470_id_causal_devol': None
                 }
                 for i in items
@@ -787,7 +787,7 @@ class ConnektaGateway:
                     'f450_docto_alterno': '',
                     'f350_id_co_base': '',
                     'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': '',
+                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
                     'f462_id_vehiculo': '',
                     'f462_id_tercero_transp': '',
                     'f462_id_sucursal_transp': '',
@@ -832,7 +832,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': '',
                     'f470_id_ext1_detalle': '',
                     'f470_id_ext2_detalle': '',
-                    'f470_id_un_movto': self.centro_op
+                    'f470_id_un_movto': self.unidad_negocio   # spec 142951: unidad de negocio, no centro_op
                 }
             ],
             'Final': [
@@ -876,7 +876,7 @@ class ConnektaGateway:
                     'f450_docto_alterno': '',
                     'f350_id_co_base': '',
                     'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': '',
+                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
                     'f462_id_vehiculo': '',
                     'f462_id_tercero_transp': '',
                     'f462_id_sucursal_transp': '',
