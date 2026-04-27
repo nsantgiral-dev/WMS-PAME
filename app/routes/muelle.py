@@ -144,7 +144,11 @@ def cargar_bulto(codigo_barras):
     except (ValueError, TypeError):
         return jsonify({'error': 'ruta_id debe ser un número entero válido'}), 400
 
-    bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).with_for_update().first()
+    bulto = (Bulto.query
+             .options(selectinload(Bulto.tarea))
+             .filter_by(codigo_barras=codigo_barras.upper())
+             .with_for_update()
+             .first())
 
     if not bulto:
         return jsonify({'error': f'Bulto {codigo_barras} no encontrado'}), 404
@@ -172,7 +176,16 @@ def cargar_bulto(codigo_barras):
     if ruta.estado != EstadoRutaDespacho.EN_CARGUE:
         return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
 
-    _tarea_id = bulto.tarea_id  # capturar antes del commit — expire_on_commit invalida relaciones
+    # Capturar todos los escalares necesarios ANTES del commit.
+    # expire_on_commit invalida el objeto completo — acceder post-commit dispara
+    # lazy-loads individuales o DetachedInstanceError si la sesión se cierra.
+    _tarea_id          = bulto.tarea_id
+    _bulto_id          = bulto.id
+    _bulto_tipo        = bulto.tipo
+    _bulto_numero      = bulto.numero
+    _bulto_total       = bulto.total
+    _bulto_ruta_id     = bulto.ruta_despacho_id
+
     bulto.estado = EstadoBulto.CARGADO
     bulto.fecha_cargado = datetime.utcnow()
     db.session.commit()
@@ -187,15 +200,15 @@ def cargar_bulto(codigo_barras):
 
     return jsonify({
         'ok': True,
-        'id': bulto.id,
+        'id': _bulto_id,
         'codigo_barras': codigo_barras,
-        'tipo': bulto.tipo,
-        'numero': bulto.numero,
-        'total': bulto.total,
+        'tipo': _bulto_tipo,
+        'numero': _bulto_numero,
+        'total': _bulto_total,
         'numero_pedido_siesa': tarea.numero_pedido_siesa if tarea else None,
         'cliente': tarea.cliente or '' if tarea else '',
         'municipio': tarea.municipio or '' if tarea else '',
-        'ruta_despacho_id': bulto.ruta_despacho_id,
+        'ruta_despacho_id': _bulto_ruta_id,
         'pedido_completo_en_ruta': pendientes_ruta == 0,
         'bultos_pendientes_pedido_ruta': pendientes_ruta
     }), 200

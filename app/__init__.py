@@ -97,6 +97,31 @@ def create_app():
         resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
         return resp
 
+    # ── CLI: flask create-admin ────────────────────────────────────────────
+    @app.cli.command('create-admin')
+    @click.option('--email',    default='admin@papeleria.com', help='Email del admin')
+    @click.option('--password', default=None, help='Contraseña (obligatorio)')
+    @click.option('--nombre',   default='Administrador', help='Nombre del usuario')
+    def cmd_create_admin(email, password, nombre):
+        """Crea o actualiza el usuario admin. Uso: flask create-admin --password TuClave"""
+        if not password:
+            click.echo('ERROR: debes pasar --password. Ejemplo: flask create-admin --password MiClave123')
+            return
+        from app.models.usuario import Usuario
+        u = Usuario.query.filter_by(email=email).first()
+        if u:
+            u.set_password(password)
+            u.activo = True
+            u.rol = 'admin'
+            db.session.commit()
+            click.echo(f'Contraseña de {email} actualizada correctamente.')
+        else:
+            u = Usuario(nombre=nombre, email=email, rol='admin', activo=True)
+            u.set_password(password)
+            db.session.add(u)
+            db.session.commit()
+            click.echo(f'Admin {email} creado correctamente.')
+
     # ── CLI: flask sync-productos ──────────────────────────────────────────
     @app.cli.command('sync-productos')
     def cmd_sync_productos():

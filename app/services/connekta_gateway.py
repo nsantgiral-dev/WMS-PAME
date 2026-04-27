@@ -62,7 +62,10 @@ class ConnektaGateway:
         self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')[:5]
         # Bodega de tránsito (verificar si existe en Siesa — si no, usar TransferenciaDirecta)
         self.bodega_transito = os.getenv('SIESA_BODEGA_TRANSITO', '')
-        self.unidad_negocio = os.getenv('SIESA_UNIDAD_NEGOCIO', '001')
+        # Sin default: el código de Unidad de Negocio se valida contra el maestro de Siesa
+        # por compañía. Solicitar al área financiera el código exacto y configurarlo en Railway.
+        # Si está vacío, los conectores envían None y Siesa hereda el valor de la bodega.
+        self.unidad_negocio = os.getenv('SIESA_UNIDAD_NEGOCIO', '') or None
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
         self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
@@ -95,6 +98,18 @@ class ConnektaGateway:
         self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
+        # Motivo específico para transferencias a bodega de averías (142951).
+        # El maestro "Conceptos y Motivos" de Siesa puede tener un código distinto al de traslados
+        # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
+        # Si no se configura, cae al motivo_traslado genérico (puede causar rechazo en Siesa).
+        self.motivo_averia = os.getenv('SIESA_MOTIVO_AVERIA', '') or self.motivo_traslado
+        # Conceptos de movimiento en Siesa (Inventarios → Maestros → Conceptos y Motivos).
+        # Los valores por defecto son los estándar de Siesa Enterprise; pueden variar por compañía.
+        # Verificar en Siesa si los conceptos fueron renumerados antes de cambiar estos valores.
+        self.concepto_ventas       = int(os.getenv('SIESA_CONCEPTO_VENTAS',       '501'))
+        self.concepto_compras      = int(os.getenv('SIESA_CONCEPTO_COMPRAS',      '401'))
+        self.concepto_ajustes      = int(os.getenv('SIESA_CONCEPTO_AJUSTES',      '603'))
+        self.concepto_traslados    = int(os.getenv('SIESA_CONCEPTO_TRASLADOS',    '607'))
 
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
         self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
@@ -235,18 +250,21 @@ class ConnektaGateway:
                 raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
             resp_json = r.json()
             logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
-            # Connekta V2: HTTP 200 no garantiza éxito — verificar codigo==0 en body
-            codigo = resp_json.get('codigo')
-            if codigo != 0:
-                mensaje = resp_json.get('mensaje', 'Sin mensaje')
-                detalle = resp_json.get('detalle', '')
-                logger.error(
-                    f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
-                    f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
-                )
-                raise Exception(
-                    f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
-                )
+            # Connekta V2/V3.1: HTTP 200 no garantiza éxito — verificar codigo==0 en body.
+            # Guard isinstance: V3.1 (trigger_factura) puede retornar lista o dict sin 'codigo'.
+            # None != 0 es True en Python → sin guard se levantaría excepción en éxito V3.1.
+            if isinstance(resp_json, dict):
+                codigo = resp_json.get('codigo')
+                if codigo is not None and codigo != 0:
+                    mensaje = resp_json.get('mensaje', 'Sin mensaje')
+                    detalle = resp_json.get('detalle', '')
+                    logger.error(
+                        f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
+                        f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
+                    )
+                    raise Exception(
+                        f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
+                    )
             return resp_json
         except requests.exceptions.Timeout:
             logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
@@ -312,12 +330,29 @@ class ConnektaGateway:
             parametros = f"f430_id_co = ''{self.centro_op}'' AND f430_ind_estado = 3"
 
         all_items = []
+        _errores_consec = 0
         for pag in range(1, 200):
-            res = self._get(self.api_pedidos, {
-                'paginacion': f'numPag={pag}|tamPag=100',
-                'parametros': parametros
-            })
+            try:
+                res = self._get(self.api_pedidos, {
+                    'paginacion': f'numPag={pag}|tamPag=100',
+                    'parametros': parametros
+                })
+                _errores_consec = 0
+            except Exception as e:
+                _errores_consec += 1
+                logger.warning(
+                    f'[CONNEKTA] get_pedidos_aprobados pag={pag} error ({_errores_consec}/3): {e}'
+                )
+                if _errores_consec >= 3:
+                    logger.error(
+                        '[CONNEKTA] get_pedidos_aprobados abortando tras 3 errores consecutivos — '
+                        f'retornando {len(all_items)} ítems parciales'
+                    )
+                    break
+                continue
             rows = res.get('detalle', {}).get('Table', [])
+            if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                break
             all_items.extend(rows)
             if len(rows) < 100:
                 break
@@ -549,7 +584,7 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': 501,                          # 501 = Ventas (maestro Siesa)
+                    'f470_id_concepto': self.concepto_ventas,         # 501 = Ventas (maestro Siesa), override: SIESA_CONCEPTO_VENTAS
                     'f470_id_motivo': self.motivo_ventas or None,     # SIESA_ID_MOTIVO_VENTAS (pos 131, ancho 2) — DEBE configurarse en Railway
                     'f470_ind_obsequio': 0,
                     'f470_id_co_movto': self.centro_op,
@@ -733,7 +768,7 @@ class ConnektaGateway:
                     'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': 401,                                                    # 401 = Compras/Entrada (spec 142948, obligatorio)
+                    'f470_id_concepto': self.concepto_compras,                                  # 401 = Compras/Entrada (spec 142948, obligatorio), override: SIESA_CONCEPTO_COMPRAS
                     # Bonificación usa motivo '04' (obsequio/bonif en Siesa). OC usa motivo de la OC o motivo_compras.
                     'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
                     'f470_ind_naturaleza': 0,                                                   # 0 = Entrada (142948 siempre ingresa mercancía)
@@ -809,10 +844,10 @@ class ConnektaGateway:
                     'f450_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega if not es_entrada else None,
                     'f450_id_bodega_entrada': self.bodega if es_entrada else None,
-                    'f450_docto_alterno': '',
-                    'f350_id_co_base': '',
-                    'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
+                    'f450_docto_alterno': None,
+                    'f350_id_co_base': None,          # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_id_tipo_docto_base': None,  # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_consec_docto_base': 0,      # Entero (spec 142951) — 0 cuando no aplica tránsito
                     'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
                     'f462_id_tercero_transp': None,
                     'f462_id_sucursal_transp': None,
@@ -837,7 +872,7 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
+                    'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
@@ -890,7 +925,7 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': '',
+                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
                     'f350_id_clase_docto': '',
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
@@ -898,10 +933,10 @@ class ConnektaGateway:
                     'f450_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega,
                     'f450_id_bodega_entrada': self.bodega_averias,
-                    'f450_docto_alterno': '',
-                    'f350_id_co_base': '',
-                    'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
+                    'f450_docto_alterno': None,
+                    'f350_id_co_base': None,          # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_id_tipo_docto_base': None,  # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_consec_docto_base': 0,      # Entero (spec 142951) — 0 cuando no aplica tránsito
                     'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
                     'f462_id_tercero_transp': None,
                     'f462_id_sucursal_transp': None,
@@ -926,8 +961,8 @@ class ConnektaGateway:
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
-                    'f470_id_motivo': self.motivo_traslado,
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias (spec 142951, obligatorio), override: SIESA_CONCEPTO_TRASLADOS
+                    'f470_id_motivo': self.motivo_averia,                            # SIESA_MOTIVO_AVERIA — validado contra maestro Siesa por compañía
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
@@ -1035,7 +1070,7 @@ class ConnektaGateway:
                 'f470_id_motivo': self.motivo_traslado or '01',
                 'f470_id_co_movto': self.centro_op,
                 'f470_id_unidad_medida': self.uom_default or 'UND',
-                'f470_id_un_movto': self.unidad_negocio or self.centro_op,
+                'f470_id_un_movto': self.unidad_negocio,   # spec: unidad de negocio; None → Siesa hereda de bodega
             }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }
@@ -1164,7 +1199,7 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': self.nit_empresa,
+                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
@@ -1183,7 +1218,7 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias (spec inventarios, obligatorio)
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias (spec inventarios, obligatorio), override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_ind_naturaleza': 1,                                        # 1 = Salida (mercancía sale de bodega_origen)
                     'f470_ind_obsequio': 0,
@@ -1241,6 +1276,7 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
+                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
@@ -1248,8 +1284,8 @@ class ConnektaGateway:
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': codigo_solicitud,
                     # Referencia obligatoria al doc 173076 de salida
-                    'f350_id_co_base': self.centro_op if consec_salida else '',
-                    'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else '',
+                    'f350_id_co_base': self.centro_op if consec_salida else None,
+                    'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else None,
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                 }
             ],
@@ -1261,7 +1297,7 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias, override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_ind_naturaleza': 0,                                        # 0 = Entrada (mercancía llega a bodega_destino)
                     'f470_ind_obsequio': 0,
@@ -1324,7 +1360,7 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
-                    'f470_id_concepto': 607,                                         # 607 = Transferencias
+                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias, override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_ind_naturaleza': 1,                                        # 1 = Salida desde bodega_origen
                     'f470_ind_obsequio': 0,
@@ -1380,6 +1416,8 @@ class ConnektaGateway:
                 'req_solicitante': self.req_solicitante or 'NO CONFIGURADO',
                 'bodega_transito': self.bodega_transito or 'NO CONFIGURADO',
                 'motivo_traslado': self.motivo_traslado,
+                'motivo_averia': self.motivo_averia,
+                'unidad_negocio': self.unidad_negocio or 'NO CONFIGURADO (Siesa hereda de bodega)',
             },
             'apis_get': {
                 'pedidos': self.api_pedidos,

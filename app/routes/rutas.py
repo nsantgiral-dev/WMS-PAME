@@ -105,7 +105,7 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
     recaudo.fecha_confirmacion    = ahora
 
     db.session.commit()
-    return recaudo, es_edicion
+    return recaudo.id, es_edicion
 
 
 # ── Conductores ──────────────────────────────────────────────────
@@ -113,6 +113,16 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
 @rutas_bp.route('/conductores', methods=['GET'])
 @jwt_required()
 def listar_conductores():
+    from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles as _R
+    try:
+        _uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    _u = Usuario.query.get(_uid)
+    if not _u or _u.rol not in _R.GESTION + (_R.CONDUCTOR,):
+        return jsonify({'error': 'Sin permiso para listar conductores'}), 403
+
     from sqlalchemy.orm import selectinload as _sl_c
     solo_activos = request.args.get('activos', 'true').lower() == 'true'
     q = Conductor.query.options(_sl_c(Conductor.usuario)).order_by(Conductor.nombre)
@@ -120,7 +130,7 @@ def listar_conductores():
         q = q.filter_by(activo=True)
 
     # [23] Cédulas y teléfonos solo visibles para admin/jefe_almacen
-    puede_ver_datos_personales = bool(_es_admin_o_jefe())
+    puede_ver_datos_personales = _u.rol in _R.ALMACEN
 
     def _conductor_safe(c):
         d = c.to_dict()
@@ -409,7 +419,15 @@ def programar_viaje():
         estado=EstadoRutaDespacho.PROGRAMADO,
     )
     db.session.add(ruta)
+    db.session.flush()
+    ruta_id = ruta.id
     db.session.commit()
+    # Re-query con relaciones eager para evitar expire_on_commit en to_dict()
+    ruta = RutaDespacho.query.options(
+        _jl(RutaDespacho.conductor),
+        _jl(RutaDespacho.vehiculo),
+        _jl(RutaDespacho.ruta_maestra),
+    ).get(ruta_id)
     return jsonify({'ruta': ruta.to_dict()}), 201
 
 
@@ -597,7 +615,7 @@ def sugeridos_ruta(id):
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
             TareaPacking.siesa_triggered == True,
-            TareaPacking.estado != 'CANCELADO',
+            TareaPacking.estado != EstadoPacking.CANCELADO,
             Bulto.estado == EstadoBulto.PENDIENTE,
             Bulto.ruta_despacho_id == None,
         ).all())
@@ -630,10 +648,17 @@ def cerrar_ruta(id):
         }), 400
 
     _n_bultos = len(ruta.bultos)  # capturar antes del commit
+    _ruta_id  = ruta.id
     ruta.estado = EstadoRutaDespacho.EN_TRANSITO
     ruta.fecha_cierre = datetime.utcnow()
     db.session.commit()
-    logger.info(f'[RUTAS] Ruta {ruta.id} EN_CARGUE → EN_TRANSITO ({_n_bultos} bultos)')
+    logger.info(f'[RUTAS] Ruta {_ruta_id} EN_CARGUE → EN_TRANSITO ({_n_bultos} bultos)')
+    # Re-query con relaciones para evitar expire_on_commit en to_dict(include_bultos=True)
+    ruta = (RutaDespacho.query
+            .options(_jl(RutaDespacho.conductor), _jl(RutaDespacho.vehiculo),
+                     _jl(RutaDespacho.ruta_maestra),
+                     _sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+            .get(_ruta_id))
     return jsonify({'ok': True, 'ruta': ruta.to_dict(include_bultos=True)}), 200
 
 
@@ -724,7 +749,10 @@ def mis_rutas():
         return jsonify({'error': 'Tu cuenta no está vinculada a ningún conductor'}), 404
 
     rutas = (RutaDespacho.query
-             .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+             .options(_jl(RutaDespacho.conductor),
+                      _jl(RutaDespacho.vehiculo),
+                      _jl(RutaDespacho.ruta_maestra),
+                      _sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
              .filter_by(conductor_id=conductor.id, estado=EstadoRutaDespacho.EN_TRANSITO)
              .order_by(RutaDespacho.fecha_cierre.desc())
              .all())
@@ -754,11 +782,20 @@ def bultos_rechazados():
     """Bultos rechazados en entrega — auditoría para admin/jefe_almacen."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Sin permiso — se requiere admin o jefe_almacen'}), 403
-    bultos = (Bulto.query
-              .filter_by(estado=EstadoBulto.RECHAZADO)
-              .order_by(Bulto.fecha_entrega.desc())
-              .all())
-    return jsonify({'bultos': [b.to_dict() for b in bultos], 'total': len(bultos)}), 200
+    page  = max(1, int(request.args.get('page',  1)))
+    limit = min(200, max(1, int(request.args.get('limit', 50))))
+    q = (Bulto.query
+         .options(_sl(Bulto.tarea))
+         .filter_by(estado=EstadoBulto.RECHAZADO)
+         .order_by(Bulto.fecha_entrega.desc()))
+    total  = q.count()
+    bultos = q.offset((page - 1) * limit).limit(limit).all()
+    return jsonify({
+        'bultos': [b.to_dict() for b in bultos],
+        'total':  total,
+        'page':   page,
+        'pages':  (total + limit - 1) // limit,
+    }), 200
 
 
 # ── Última Milla: paradas y recaudos ────────────────────────────────
@@ -855,10 +892,11 @@ def confirmar_parada(id, tarea_id):
 
     data = request.get_json() or {}
     try:
-        recaudo, es_edicion = _procesar_confirmacion_parada(id, tarea_id, usuario_id, data)
+        recaudo_id, es_edicion = _procesar_confirmacion_parada(id, tarea_id, usuario_id, data)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
+    recaudo = RecaudoEntrega.query.get(recaudo_id)
     return jsonify({
         'ok':         True,
         'recaudo':    recaudo.to_dict(),

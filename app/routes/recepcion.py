@@ -53,7 +53,11 @@ def listar_recepciones():
 def obtener_recepcion(id):
     if not _es_recepcion_autorizado():
         return jsonify({'error': 'Sin permiso para ver recepciones'}), 403
-    recepcion = RecepcionMercancia.query.get_or_404(id)
+    from sqlalchemy.orm import selectinload as _sl
+    from app.models.recepcion import ItemRecepcion as _IR
+    recepcion = (RecepcionMercancia.query
+                 .options(_sl(RecepcionMercancia.items).selectinload(_IR.producto))
+                 .get_or_404(id))
     return jsonify(recepcion.to_dict()), 200
 
 

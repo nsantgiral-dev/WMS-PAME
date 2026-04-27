@@ -495,8 +495,8 @@ def _run_carga_inicial(app):
                         _text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
                     )
                     db.session.commit()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    logger.error('[INV-SIESA] Error liberando advisory lock — podría quedar bloqueado: %s', _e)
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),
@@ -603,6 +603,11 @@ def _run_reconciliacion(app):
                 _estado_reconciliacion['en_curso'] = False
                 logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
                 return
+
+            # Liberar la conexión DB antes del HTTP download (puede tardar 2+ min).
+            # Sin este commit, la sesión retiene la conexión del pool durante toda la descarga
+            # bloqueando requests concurrentes en un pool pequeño (Railway: 5-10 conexiones).
+            db.session.commit()
 
             # forzar=True: descarga datos frescos de Siesa ignorando el cache de la carga inicial.
             # Sin esto, si la carga inicial corrió hace <1h, la reconciliación compararía

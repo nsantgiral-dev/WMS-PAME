@@ -316,10 +316,13 @@ def mis_tareas_activas():
         operario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
-    tareas = TareaPicking.query.filter(
-        TareaPicking.operario_id == operario_id,
-        TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO])
-    ).order_by(TareaPicking.prioridad.desc()).all()
+    from sqlalchemy.orm import selectinload as _sl
+    tareas = (TareaPicking.query
+              .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
+              .filter(
+                  TareaPicking.operario_id == operario_id,
+                  TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO])
+              ).order_by(TareaPicking.prioridad.desc()).all())
     return jsonify({
         'tareas': [t.to_dict() for t in tareas],
         'total': len(tareas)

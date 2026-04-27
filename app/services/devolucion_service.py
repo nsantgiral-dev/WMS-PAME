@@ -208,7 +208,15 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
                 activo=True
             )
         db.session.add(ub)
-        db.session.flush()
+        try:
+            db.session.flush()
+        except _IntegrityError:
+            # Race condition: otro worker creó la misma Ubicacion entre el SELECT y este INSERT.
+            # Ubicacion.codigo tiene unique=True — recuperar la fila que ganó la carrera.
+            db.session.rollback()
+            ub = Ubicacion.query.filter_by(codigo=codigo_ub, almacen_id=tarea.almacen_id).first()
+            if not ub:
+                raise  # fallo por otra razón — propagar
 
     # [36] Actualizar stock con SELECT FOR UPDATE para evitar race condition
     reg = UbicacionProducto.query.filter_by(

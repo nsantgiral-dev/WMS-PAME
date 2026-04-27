@@ -93,11 +93,17 @@ def _run_dlq_jobs():
     from datetime import timedelta
     ahora = datetime.utcnow()
 
-    # Recuperar jobs atascados en PROCESANDO por más de 10 min (worker colgado / crash)
+    # Recuperar jobs atascados en PROCESANDO por más de 10 min (worker colgado / crash).
+    # Usamos fecha_procesando (cuándo entró a PROCESANDO) — fecha_creacion puede ser de horas
+    # antes si el job esperó en backoff, lo que causaría falsos reinicios y duplicados en Siesa.
+    # Fallback a fecha_creacion para jobs pre-migración sin fecha_procesando.
     _stuck_cutoff = ahora - timedelta(minutes=10)
     _stuck = SiesaJob.query.filter(
         SiesaJob.estado == 'PROCESANDO',
-        SiesaJob.fecha_creacion <= _stuck_cutoff,
+        db.or_(
+            db.and_(SiesaJob.fecha_procesando.isnot(None), SiesaJob.fecha_procesando <= _stuck_cutoff),
+            db.and_(SiesaJob.fecha_procesando.is_(None),   SiesaJob.fecha_creacion   <= _stuck_cutoff),
+        ),
     ).all()
     if _stuck:
         for j in _stuck:
@@ -135,6 +141,7 @@ def _run_dlq_jobs():
 
     for job in jobs:
         job.estado = 'PROCESANDO'
+        job.fecha_procesando = ahora  # registrar cuándo entró a PROCESANDO para stuck-job detection
         db.session.commit()  # lock en el registro
 
         if _inter_job_delay and procesados > 0:
@@ -557,6 +564,15 @@ def _crear_alerta_admin(job: SiesaJob):
         f'ref={job.referencia_tipo}:{job.referencia_id} '
         f'error="{job.error_ultimo}" — Verificar periodo contable en Siesa.'
     )
+    # Guard anti-cascade: si el job que falló es ALERTA_EMAIL, no crear otro ALERTA_EMAIL.
+    # Sin este guard, un Resend caído genera una cadena infinita:
+    # ALERTA_EMAIL FALLIDO → _crear_alerta_admin → alertar_job_fallido → nuevo ALERTA_EMAIL → ...
+    if job.tipo == 'ALERTA_EMAIL':
+        logger.critical(
+            f'[ALERTA ADMIN] El job fallido es ALERTA_EMAIL (id={job.id}) — '
+            f'no se crea alerta secundaria para evitar cascade. Revisar Resend manualmente.'
+        )
+        return
     try:
         from app.services.alertas_service import alertar_job_fallido
         alertar_job_fallido(job)

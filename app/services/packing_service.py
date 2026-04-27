@@ -202,6 +202,11 @@ class PackingService:
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
+        # [29] El pedido puede anularse en Siesa DESPUÉS de que el empacador inició —
+        # verificar aquí también evita que se registre un bulto para un pedido cancelado.
+        if getattr(tarea, 'pedido_anulado_siesa', False):
+            raise ValueError('Pedido anulado en Siesa — no se puede confirmar packing')
+
         if tarea.estado == 'DESPACHADO':
             raise ValueError('Este pedido ya fue despachado')
         if tarea.estado not in ['EN_PROCESO', 'PENDIENTE', 'VERIFICADO']:
