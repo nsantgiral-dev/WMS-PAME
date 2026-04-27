@@ -1581,18 +1581,23 @@ async function _procesarScanPicking(codigo) {
   // NO_ENCONTRADO → enviar codigo original, el backend dará error descriptivo
 
   // Incluir lpn_codigo cuando es un LPN — el backend lo vincula al traslado si aplica
-  _pickingTotal += cantidad;
-  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad, total_acumulado: _pickingTotal };
+  // GS1/EAN/LPN: el frontend ya conoce las unidades reales → usar modo idempotente.
+  // NO_ENCONTRADO (barcode empaque directo): el frontend no conoce el factor → el backend
+  // aplica factor_conversion con +=; no enviar total_acumulado en ese caso.
+  const _scanResuelto = tipo !== 'NO_ENCONTRADO';
+  if (_scanResuelto) _pickingTotal += cantidad;
+  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad };
   if (tipo === 'LPN') payload.lpn_codigo = codigo;  // 'LPN-XXXXXXX' original
+  if (_scanResuelto) payload.total_acumulado = _pickingTotal;
 
   try {
     const r = await post('/api/mobile/escanear', payload);
-    if (r.error) { beepError(); _pickingTotal -= cantidad; alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+    if (r.error) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
     beepOk();
-    _pickingTotal = r.cantidad_actual;  // sincronizar con verdad del servidor
+    _pickingTotal = r.cantidad_actual;  // siempre sincronizar con verdad del servidor
     if (etiqueta) alerta(`Registrado${etiqueta}`, 'exito');
     _actualizarContadorPicking(r);
-  } catch (e) { beepError(); _pickingTotal -= cantidad; alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+  } catch (e) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
 function _actualizarContadorPicking(r) {
