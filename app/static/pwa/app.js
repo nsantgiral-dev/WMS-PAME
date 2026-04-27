@@ -40,6 +40,7 @@ let TIMER_ADMIN = null;
 let TIMER_OPERARIO = null;
 let RECEPCION_ACTUAL = null;   // recepción en escaneo activo (pantalla recepcionista)
 let DEVOLUCION_ACTUAL = null;  // tarea de devolución en flujo activo
+let _pickingTotal = 0;         // acumulador local de picking — sincronizado con servidor post-scan
 let REC_TAB_ACTIVO = 'ocs';   // tab activo en pantalla recepcionista
 let TIMER_REC = null;          // polling recepcionista (30 seg)
 let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
@@ -1167,6 +1168,7 @@ async function trasConfirmarRecogida(id) {
 }
 
 function renderTarea(t) {
+  _pickingTotal = t.cantidad_escaneada || 0;
   const colores = { PICKING: '#1d4ed8', PACKING: '#7c3aed', CONTEO: '#b45309' };
   const color = colores[t.tipo] || '#333';
   const esConteo = t.tipo === 'CONTEO';
@@ -1579,16 +1581,18 @@ async function _procesarScanPicking(codigo) {
   // NO_ENCONTRADO → enviar codigo original, el backend dará error descriptivo
 
   // Incluir lpn_codigo cuando es un LPN — el backend lo vincula al traslado si aplica
-  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad };
+  _pickingTotal += cantidad;
+  const payload = { tarea_id: TAREA_ACTUAL.id, tipo: 'PICKING', codigo: codigoParaBackend, cantidad, total_acumulado: _pickingTotal };
   if (tipo === 'LPN') payload.lpn_codigo = codigo;  // 'LPN-XXXXXXX' original
 
   try {
     const r = await post('/api/mobile/escanear', payload);
-    if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+    if (r.error) { beepError(); _pickingTotal -= cantidad; alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
     beepOk();
+    _pickingTotal = r.cantidad_actual;  // sincronizar con verdad del servidor
     if (etiqueta) alerta(`Registrado${etiqueta}`, 'exito');
     _actualizarContadorPicking(r);
-  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+  } catch (e) { beepError(); _pickingTotal -= cantidad; alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
 function _actualizarContadorPicking(r) {

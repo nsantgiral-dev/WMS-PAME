@@ -378,7 +378,9 @@ class MobileService:
 
         # Debounce: si el mismo scan llega dos veces en < 5s (retry por red),
         # devolver el resultado cacheado sin incrementar la cantidad.
-        _db_key = (tarea_id, tipo, codigo_limpio)
+        # total_acumulado forma parte de la key — scans distintos tienen totales distintos
+        # y nunca colisionan entre sí, incluso en el mismo worker dentro del TTL.
+        _db_key = (tarea_id, tipo, codigo_limpio, total_acumulado)
         _ahora = datetime.utcnow().timestamp()
         with _SCAN_DEBOUNCE_LOCK:
             _cached = _SCAN_DEBOUNCE.get(_db_key)
@@ -431,7 +433,12 @@ class MobileService:
             factor = producto.factor_conversion or 1
             unidades_este_scan = cantidad * factor if es_empaque else cantidad
 
-            nueva_cantidad = tarea.cantidad_recogida + unidades_este_scan
+            if total_acumulado is not None:
+                # Idempotente: el cliente lleva el contador. MAX evita que un paquete
+                # retrasado (out-of-order entre workers) regrese el total en DB.
+                nueva_cantidad = max(total_acumulado, tarea.cantidad_recogida)
+            else:
+                nueva_cantidad = tarea.cantidad_recogida + unidades_este_scan
             if nueva_cantidad > tarea.cantidad_solicitada:
                 raise ValueError({
                     'tipo': 'EXCESO',
