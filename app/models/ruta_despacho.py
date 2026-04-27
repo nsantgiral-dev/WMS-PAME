@@ -9,6 +9,12 @@ class EstadoRutaDespacho:
     ENTREGADA   = 'ENTREGADA'
 
 
+class EstadoFinancieroRuta:
+    PENDIENTE      = 'PENDIENTE'
+    EN_LIQUIDACION = 'EN_LIQUIDACION'
+    LIQUIDADA      = 'LIQUIDADA'
+
+
 class RutaDespacho(db.Model):
     """
     Manifiesto de cargue: agrupa los bultos que salen en un mismo vehículo.
@@ -85,7 +91,7 @@ class RutaDespacho(db.Model):
             'fecha_programada':     self.fecha_programada.isoformat() if self.fecha_programada else None,
             'tipo_ruta':            self.tipo_ruta,
             'estado':             self.estado,
-            'estado_financiero':  self.estado_financiero or 'PENDIENTE',
+            'estado_financiero':  self.estado_financiero or EstadoFinancieroRuta.PENDIENTE,
             'notas':              self.notas or '',
             'total_bultos':       self.total_bultos(),
             'total_planificados': self.total_planificados(),

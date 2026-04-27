@@ -4,8 +4,20 @@ Dispensador automático de tareas — el operario pide trabajo, el sistema asign
 """
 
 import logging
+import threading
 from datetime import datetime, date, time as dtime
 from app.extensions import db
+
+# Debounce de scans: evita doble-conteo cuando la red cae después del commit
+# y la PWA reintenta el mismo scan. Cache por (tarea_id, tipo, codigo) → (ts, resultado).
+# Scope: por proceso/worker. No requiere migración. TTL 5s cubre el 95% de retries de red.
+_SCAN_DEBOUNCE: dict = {}
+_SCAN_DEBOUNCE_LOCK = threading.Lock()
+_SCAN_DEBOUNCE_TTL = 5  # segundos
+
+# Limitar threads de verificación de stock — evita colapsar el pool de conexiones DB
+# bajo carga alta (10-30 operarios pickeando simultáneamente en apertura de turno).
+_STOCK_VERIF_SEMAPHORE = threading.Semaphore(2)
 from app.models.picking import TareaPicking
 from app.models.packing import TareaPacking, ItemPacking
 from app.models.conteo import SesionConteo
@@ -140,7 +152,7 @@ class MobileService:
                 'cantidad_requerida': tarea_activa.cantidad_solicitada,
                 'cantidad_escaneada': tarea_activa.cantidad_recogida,
                 'empaques_escaneados': tarea_activa.empaques_escaneados or 0,
-                'factor_conversion': tarea_activa.producto.factor_conversion or 1 if tarea_activa.producto else 1,
+                'factor_conversion': (tarea_activa.producto.factor_conversion or 1) if tarea_activa.producto else 1,
                 'unidad_empaque': (tarea_activa.producto.unidad_empaque or '').upper() if tarea_activa.producto else '',
                 'estado': tarea_activa.estado,
                 'referencia': tarea_activa.referencia_documento,
@@ -170,10 +182,12 @@ class MobileService:
 
         if not tarea:
             # Sin picking pendiente — buscar conteo sin asignar
-            conteo = SesionConteo.query.filter_by(
-                estado='PENDIENTE',
-                operario_id=None
-            ).order_by(SesionConteo.fecha_creacion.asc()).first()
+            # with_for_update(skip_locked=True) evita que dos workers tomen el mismo conteo
+            conteo = (SesionConteo.query
+                      .filter_by(estado='PENDIENTE', operario_id=None)
+                      .order_by(SesionConteo.fecha_creacion.asc())
+                      .with_for_update(skip_locked=True)
+                      .first())
 
             if conteo:
                 conteo.operario_id = operario_id
@@ -195,22 +209,30 @@ class MobileService:
         # Respetar capacidad_diaria_conteo del operario (0 = sin límite).
         conteo_intercalado = None
         if tarea.ubicacion_id:
-            from app.models.usuario import Usuario
-            op_usuario = Usuario.query.get(operario_id)
-            capacidad = (op_usuario.capacidad_diaria_conteo
-                         if op_usuario and op_usuario.capacidad_diaria_conteo is not None
-                         else 15)
+            # Una sola query: capacidad del operario + conteos de hoy juntos
+            from sqlalchemy import text as _text
+            hoy = datetime.utcnow().date()
+            inicio_hoy = datetime.combine(hoy, dtime.min)
+            fin_hoy = datetime.combine(hoy, dtime.max)
+            _row = db.session.execute(
+                _text("""
+                    SELECT u.capacidad_diaria_conteo,
+                           COUNT(sc.id) AS conteos_hoy
+                    FROM usuarios u
+                    LEFT JOIN sesiones_conteo sc
+                        ON sc.operario_id = u.id
+                        AND sc.fecha_inicio >= :inicio
+                        AND sc.fecha_inicio <= :fin
+                    WHERE u.id = :uid
+                    GROUP BY u.capacidad_diaria_conteo
+                """),
+                {'uid': operario_id, 'inicio': inicio_hoy, 'fin': fin_hoy}
+            ).first()
+            capacidad = (_row.capacidad_diaria_conteo if _row and _row.capacidad_diaria_conteo is not None else 15)
+            conteos_hoy = int(_row.conteos_hoy) if _row else 0
 
             bajo_tope = True
             if capacidad > 0:
-                hoy = datetime.utcnow().date()
-                inicio_hoy = datetime.combine(hoy, dtime.min)
-                fin_hoy = datetime.combine(hoy, dtime.max)
-                conteos_hoy = SesionConteo.query.filter(
-                    SesionConteo.operario_id == operario_id,
-                    SesionConteo.fecha_inicio >= inicio_hoy,
-                    SesionConteo.fecha_inicio <= fin_hoy,
-                ).count()
                 bajo_tope = conteos_hoy < capacidad
                 if not bajo_tope:
                     logger.info(
@@ -335,7 +357,8 @@ class MobileService:
     @staticmethod
     def procesar_escaneo(operario_id: int, tarea_id: int,
                          tipo: str, codigo: str, cantidad: int = 1,
-                         lpn_codigo: str = None):
+                         lpn_codigo: str = None,
+                         total_acumulado: int = None):
         """
         Procesa un escaneo — funciona con cámara o láser Bluetooth.
         Valida que el código escaneado corresponde al producto de la tarea.
@@ -349,10 +372,43 @@ class MobileService:
         """
         codigo_limpio = MobileService._normalizar(codigo)
 
+        # Debounce: si el mismo scan llega dos veces en < 5s (retry por red),
+        # devolver el resultado cacheado sin incrementar la cantidad.
+        _db_key = (tarea_id, tipo, codigo_limpio)
+        _ahora = datetime.utcnow().timestamp()
+        with _SCAN_DEBOUNCE_LOCK:
+            _cached = _SCAN_DEBOUNCE.get(_db_key)
+            if _cached:
+                _ts_cache, _res_cache = _cached
+                if _ahora - _ts_cache < _SCAN_DEBOUNCE_TTL:
+                    logger.info(
+                        f'[SCAN DEBOUNCE] Scan duplicado ignorado: tarea={tarea_id} '
+                        f'tipo={tipo} codigo={codigo_limpio} (delta={_ahora - _ts_cache:.1f}s)'
+                    )
+                    return _res_cache
+
         if tipo == 'PICKING':
-            tarea = TareaPicking.query.get(tarea_id)
+            # [C5] SELECT FOR UPDATE — evita lost-update cuando dos workers (red inestable)
+            # leen cantidad_recogida al mismo tiempo y ambos suman sobre el mismo valor base.
+            tarea = TareaPicking.query.filter_by(id=tarea_id).with_for_update().first()
             if not tarea:
                 raise ValueError('Tarea no encontrada')
+
+            # [P5] Bloquear picking si el pedido fue anulado en Siesa.
+            # TareaPacking lleva el flag pedido_anulado_siesa; TareaPicking usa
+            # referencia_documento (= numero_pedido_siesa) para enlazarlo.
+            if tarea.referencia_documento:
+                from app.models.packing import TareaPacking as _TP
+                _pk_anulado = _TP.query.filter_by(
+                    numero_pedido_siesa=tarea.referencia_documento,
+                    pedido_anulado_siesa=True,
+                ).first()
+                if _pk_anulado:
+                    raise ValueError(
+                        f'Pedido {tarea.referencia_documento} fue anulado en Siesa '
+                        f'(estado={_pk_anulado.pedido_estado_siesa_detectado or "?"}). '
+                        f'Detén el picking y contacta a tu supervisor.'
+                    )
 
             producto = tarea.producto
             if not producto:
@@ -416,18 +472,21 @@ class MobileService:
                 except Exception as e_lpn:
                     logger.warning(f'[TRASLADO] No se pudo vincular LPN {lpn_codigo}: {e_lpn}')
 
+            # Capturar antes del commit — expire_on_commit invalida los atributos post-commit
+            _cantidad_solicitada = tarea.cantidad_solicitada
+            _unidad_empaque = producto.unidad_empaque
             db.session.commit()
-            completado = nueva_cantidad >= tarea.cantidad_solicitada
-            unidad_label = (producto.unidad_empaque or 'PKG').upper()
+            completado = nueva_cantidad >= _cantidad_solicitada
+            unidad_label = (_unidad_empaque or 'PKG').upper()
 
             if completado:
                 mensaje = '¡Completo! Presiona confirmar'
             elif es_empaque:
-                mensaje = f'{cantidad} {unidad_label} = {unidades_este_scan} und  →  {nueva_cantidad}/{tarea.cantidad_solicitada}'
+                mensaje = f'{cantidad} {unidad_label} = {unidades_este_scan} und  →  {nueva_cantidad}/{_cantidad_solicitada}'
             else:
-                mensaje = f'{nueva_cantidad} de {tarea.cantidad_solicitada}'
+                mensaje = f'{nueva_cantidad} de {_cantidad_solicitada}'
 
-            return {
+            _resultado_picking = {
                 'exito': True,
                 'tipo': 'PICKING',
                 'codigo_escaneado': codigo,
@@ -442,9 +501,19 @@ class MobileService:
                 'puede_confirmar': completado,
                 'mensaje': mensaje,
             }
+            with _SCAN_DEBOUNCE_LOCK:
+                _SCAN_DEBOUNCE[_db_key] = (datetime.utcnow().timestamp(), _resultado_picking)
+            return _resultado_picking
 
         elif tipo == 'PACKING':
-            tarea = TareaPacking.query.get(tarea_id)
+            from sqlalchemy.orm import selectinload as _sl
+            # with_for_update() previene lost-update cuando dos workers del mismo operario
+            # (retry por conexión móvil inestable) leen item.cantidad_real simultáneamente.
+            tarea = (TareaPacking.query
+                     .options(_sl(TareaPacking.items).selectinload(ItemPacking.producto))
+                     .filter_by(id=tarea_id)
+                     .with_for_update()
+                     .first())
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 
@@ -468,8 +537,14 @@ class MobileService:
             factor = producto.factor_conversion or 1
             unidades = cantidad * factor if es_empaque else cantidad
 
+            # Releer cantidad_real desde el objeto bloqueado (valor fresco post-lock)
             actual = item.cantidad_real or 0
-            nueva = actual + unidades
+            if total_acumulado is not None:
+                # Modo idempotente: el cliente lleva el contador — reintento seguro
+                nueva = total_acumulado
+            else:
+                # Modo legacy: += (protegido por debounce TTL 5s)
+                nueva = actual + unidades
             if nueva > item.cantidad_esperada:
                 raise ValueError(
                     f'Exceso: ya tienes {actual} de {item.cantidad_esperada} — '
@@ -500,7 +575,15 @@ class MobileService:
             }
 
         elif tipo == 'CONTEO':
-            sesion = SesionConteo.query.get(tarea_id)
+            # WITH FOR UPDATE previene que dos workers procesen el mismo escaneo simultáneamente.
+            # Idempotencia: el cliente envía total_acumulado → servidor usa SET en vez de +=.
+            # Sin total_acumulado (legacy), el debounce de 5s cubre retries rápidos de red.
+            from sqlalchemy.orm import selectinload as _sl_conteo
+            sesion = (SesionConteo.query
+                      .options(_sl_conteo(SesionConteo.producto))
+                      .filter_by(id=tarea_id)
+                      .with_for_update()
+                      .first())
             if not sesion:
                 raise ValueError('Sesión de conteo no encontrada')
 
@@ -508,9 +591,12 @@ class MobileService:
             if codigo_limpio not in MobileService._codigos_validos(producto):
                 raise ValueError(f'Producto incorrecto — escanea {producto.codigo}')
 
-            if not sesion.cantidad_fisica:
-                sesion.cantidad_fisica = 0
-            sesion.cantidad_fisica += cantidad
+            if total_acumulado is not None:
+                # Modo idempotente: el cliente lleva el contador — reintento seguro
+                sesion.cantidad_fisica = total_acumulado
+            else:
+                # Modo legacy: += (protegido por debounce TTL 5s)
+                sesion.cantidad_fisica = (sesion.cantidad_fisica or 0) + cantidad
             db.session.commit()
 
             return {
@@ -541,11 +627,20 @@ class MobileService:
                 cantidad_recogida=cantidad,
                 usuario_id=operario_id
             ).to_dict()
-            # Disparar verificación de stock en background — puede generar TareaReposicion
+            # Disparar verificación de stock en background — throttled a 2 threads concurrentes
+            # para no colapsar el connection pool DB durante apertura de turno (N operarios simultáneos)
             try:
-                import threading as _t
                 from app.services.reposicion_service import verificar_stock_picking as _vsp
-                _t.Thread(target=_vsp, args=(almacen_id,), daemon=True).start()
+
+                def _run_vsp(aid):
+                    if _STOCK_VERIF_SEMAPHORE.acquire(blocking=False):
+                        try:
+                            _vsp(aid)
+                        finally:
+                            _STOCK_VERIF_SEMAPHORE.release()
+
+                import threading as _t
+                _t.Thread(target=_run_vsp, args=(almacen_id,), daemon=True).start()
             except Exception as _e:
                 logger.warning(f'[MOBILE] verificar_stock_picking falló silenciosamente: {_e}')
             return resultado

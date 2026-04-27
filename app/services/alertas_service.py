@@ -88,6 +88,44 @@ def enviar_email(asunto: str, cuerpo_html: str, cuerpo_texto: str) -> bool:
         raise
 
 
+def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str, tipo_alerta: str):
+    """
+    Wrapper sobre enviar_email que encola un SiesaJob(ALERTA_EMAIL) cuando Resend falla.
+    El job queda visible en la queue del WMS y dispara logger.critical en el próximo DLQ run,
+    evitando que la falla de alertas pase completamente desapercibida (SF_JOB_SILENCIOSO).
+    """
+    try:
+        enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    except Exception as e:
+        logger.critical(
+            f'[ALERTAS] enviar_email falló para "{tipo_alerta}" — encolando en DLQ: {e}'
+        )
+        try:
+            from app.models.siesa_job import SiesaJob as _SJ
+            from app.extensions import db as _db
+            from datetime import date as _date
+            # Deduplicar por tipo_alerta + día para no acumular N jobs idénticos
+            # durante un downtime de Resend que dura múltiples ciclos del scheduler.
+            _idem = f'ALERTA-{tipo_alerta}-{_date.today().isoformat()}'
+            _ya_en_cola = _SJ.query.filter(
+                _SJ.tipo == 'ALERTA_EMAIL',
+                _SJ.estado.in_(['PENDIENTE', 'REINTENTANDO']),
+                _SJ.payload.contains(f'"tipo_alerta": "{tipo_alerta}"'),
+            ).first()
+            if not _ya_en_cola:
+                _SJ.encolar(
+                    'ALERTA_EMAIL',
+                    {'tipo_alerta': tipo_alerta, 'asunto': asunto, 'error': str(e),
+                     'idem_key': _idem},
+                )
+                _db.session.commit()
+        except Exception as e2:
+            logger.critical(
+                f'[ALERTAS] DLQ también falló — alerta "{tipo_alerta}" perdida: {e2}. '
+                'Revisar RESEND_API_KEY y conexión BD.'
+            )
+
+
 # ── Alerta de ubicaciones huérfanas ──────────────────────────────────────────
 
 def verificar_y_alertar_huerfanas(app=None):
@@ -99,6 +137,11 @@ def verificar_y_alertar_huerfanas(app=None):
     ctx_app = app or _app._get_current_object()
 
     with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2004)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] verificar_y_alertar_huerfanas omitida — otro worker ya la ejecuta')
+            return
         try:
             from app.models.ubicacion_huerfana import UbicacionHuerfana
 
@@ -118,6 +161,9 @@ def verificar_y_alertar_huerfanas(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_huerfanas: {e}', exc_info=True)
+        finally:
+            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2004)'))
+            _db.session.commit()
 
 
 def _enviar_alerta_huerfanas(huerfanas: list):
@@ -244,7 +290,7 @@ Si tienes dudas escribe a sistemas o abre un ticket.
 </body>
 </html>"""
 
-    enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'huerfanas')
 
 
 # ── Alerta: Job Siesa FALLIDO ─────────────────────────────────────────────────
@@ -314,10 +360,7 @@ Ref interna: {ref}
   </div>
 </body></html>"""
 
-    try:
-        enviar_email(asunto, cuerpo_html, cuerpo_texto)
-    except Exception as e:
-        logger.error(f'[ALERTAS] No se pudo enviar alerta job fallido: {e}')
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, f'job_fallido_{job.tipo}_{job.id}')
 
 
 # ── Alerta: Stock crítico sin reserva ─────────────────────────────────────────
@@ -332,6 +375,11 @@ def verificar_y_alertar_stock_critico(app=None):
     ctx_app = app or _app._get_current_object()
 
     with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2005)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] verificar_y_alertar_stock_critico omitida — otro worker ya la ejecuta')
+            return
         try:
             from app.models.ubicacion import Ubicacion
             from app.models.inventario import UbicacionProducto
@@ -414,6 +462,9 @@ def verificar_y_alertar_stock_critico(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_stock_critico: {e}', exc_info=True)
+        finally:
+            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2005)'))
+            _db.session.commit()
 
 
 def _enviar_alerta_stock_critico(criticos: list):
@@ -482,7 +533,7 @@ Compras debe ordenar o trasladar mercancía para estos SKUs.
   </div>
 </body></html>"""
 
-    enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'stock_critico')
 
 
 # ── Resumen operativo diario ──────────────────────────────────────────────────
@@ -496,6 +547,11 @@ def enviar_resumen_diario(app=None):
     ctx_app = app or _app._get_current_object()
 
     with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2006)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] enviar_resumen_diario omitido — otro worker ya lo ejecuta')
+            return
         try:
             from datetime import date, timedelta
             from app.extensions import db
@@ -513,7 +569,8 @@ def enviar_resumen_diario(app=None):
                     PedidoPicking.fecha_completado >= ayer_inicio,
                     PedidoPicking.fecha_completado < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.warning(f'[RESUMEN] No se pudo calcular pedidos_despachados: {_e}')
                 pedidos_despachados = 'N/D'
 
             # Bultos empacados ayer
@@ -523,7 +580,8 @@ def enviar_resumen_diario(app=None):
                     Bulto.fecha_creacion >= ayer_inicio,
                     Bulto.fecha_creacion < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.warning(f'[RESUMEN] No se pudo calcular bultos_empacados: {_e}')
                 bultos_empacados = 'N/D'
 
             # Tareas reposición completadas ayer
@@ -534,10 +592,11 @@ def enviar_resumen_diario(app=None):
                     TareaReposicion.fecha_completada >= ayer_inicio,
                     TareaReposicion.fecha_completada < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.warning(f'[RESUMEN] No se pudo calcular tareas_reposicion: {_e}')
                 tareas_ok = 'N/D'
 
-            # Jobs Siesa ayer
+            # Jobs Siesa ayer — crítico: jobs_fallidos='N/D' oculta movimientos que no llegaron al ERP
             try:
                 from app.models.siesa_job import SiesaJob
                 jobs_ok      = SiesaJob.query.filter(
@@ -550,7 +609,8 @@ def enviar_resumen_diario(app=None):
                     SiesaJob.fecha_creacion >= ayer_inicio,
                     SiesaJob.fecha_creacion < ayer_fin,
                 ).count()
-            except Exception:
+            except Exception as _e:
+                logger.error(f'[RESUMEN] No se pudo calcular jobs Siesa: {_e}', exc_info=True)
                 jobs_ok = jobs_fallidos = 'N/D'
 
             ayer_str = (date.today() - timedelta(days=1)).strftime('%d/%m/%Y')
@@ -559,13 +619,17 @@ def enviar_resumen_diario(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en enviar_resumen_diario: {e}', exc_info=True)
+        finally:
+            _db.session.execute(_db.text('SELECT pg_advisory_unlock(2006)'))
+            _db.session.commit()
 
 
 def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fallidos):
     hoy = datetime.now().strftime('%d/%m/%Y %H:%M')
     asunto = f'📊 WMS Papelería Medellín — Resumen operativo {fecha}'
 
-    alerta_jobs = jobs_fallidos not in ('N/D', 0) and jobs_fallidos > 0
+    # N/D en jobs_fallidos = fallo de query DB → también es alerta (no mostrar en gris neutro)
+    alerta_jobs = jobs_fallidos == 'N/D' or (jobs_fallidos not in (0,) and jobs_fallidos > 0)
 
     cuerpo_texto = f"""WMS Papelería Medellín — Resumen Operativo {fecha}
 
@@ -617,7 +681,7 @@ Generado: {hoy}
   </div>
 </body></html>"""
 
-    enviar_email(asunto, cuerpo_html, cuerpo_texto)
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'resumen_diario')
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -638,31 +702,33 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
 
+    # FM_SCHEDULER_PEAK: alejados del :00 exacto para no competir con el inicio del turno
+    # de operarios (6:00am) ni entre sí. Separados 30min para escalonar carga en DB.
     scheduler.add_job(
         func=verificar_y_alertar_huerfanas,
-        trigger=CronTrigger(hour=6, minute=0, timezone='America/Bogota'),
+        trigger=CronTrigger(hour=5, minute=45, timezone='America/Bogota'),
         kwargs={'app': app},
         id='alertas_huerfanas_email',
-        name='Alerta email ubicaciones huérfanas (06:00 Bogotá)',
+        name='Alerta email ubicaciones huérfanas (05:45 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
         func=verificar_y_alertar_stock_critico,
-        trigger=CronTrigger(hour=7, minute=0, timezone='America/Bogota'),
+        trigger=CronTrigger(hour=6, minute=15, timezone='America/Bogota'),
         kwargs={'app': app},
         id='alertas_stock_critico',
-        name='Alerta email stock crítico sin reserva (07:00 Bogotá)',
+        name='Alerta email stock crítico sin reserva (06:15 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
         func=enviar_resumen_diario,
-        trigger=CronTrigger(hour=8, minute=0, timezone='America/Bogota'),
+        trigger=CronTrigger(hour=6, minute=45, timezone='America/Bogota'),
         kwargs={'app': app},
         id='resumen_operativo_diario',
-        name='Resumen operativo diario (08:00 Bogotá)',
+        name='Resumen operativo diario (06:45 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
 
     scheduler.start()
-    logger.info('[ALERTAS] Scheduler iniciado — 06:00 huérfanas | 07:00 stock crítico | 08:00 resumen')
+    logger.info('[ALERTAS] Scheduler iniciado — 05:45 huérfanas | 06:15 stock crítico | 06:45 resumen')
     return scheduler

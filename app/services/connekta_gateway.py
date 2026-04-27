@@ -130,6 +130,17 @@ class ConnektaGateway:
         solo_digitos = ''.join(c for c in str(valor) if c.isdigit())
         return solo_digitos[:8] if len(solo_digitos) >= 8 else ''
 
+    @staticmethod
+    def _fmt_fecha_iso(valor: str) -> str:
+        """Normaliza cualquier formato de fecha a YYYY-MM-DD (con guiones). Usado en f421_fecha_entrega."""
+        if not valor:
+            return ''
+        solo_digitos = ''.join(c for c in str(valor) if c.isdigit())
+        if len(solo_digitos) >= 8:
+            d = solo_digitos[:8]
+            return f'{d[:4]}-{d[4:6]}-{d[6:8]}'
+        return ''
+
     def _simular(self, operacion: str, payload: dict = None):
         logger.info(f'[CONNEKTA SIMULADO] {operacion}')
         return {
@@ -151,8 +162,21 @@ class ConnektaGateway:
         target_url = url or self.url_get
         try:
             r = requests.get(target_url, headers=self.headers, params=params, timeout=timeout)
+            if r.status_code == 429:
+                retry_after = r.headers.get('Retry-After', '300')
+                logger.warning(f'[CONNEKTA] GET {nombre_api}: rate-limit (429) — Retry-After={retry_after}s')
+                raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            # [A21] Connekta puede devolver HTTP 200 con body de error interno.
+            # Verificar campo 'codigo' (0 = éxito, !=0 = error) igual que en _post().
+            if isinstance(data, dict):
+                _codigo = data.get('codigo')
+                if _codigo is not None and _codigo != 0:
+                    _msg = data.get('mensaje') or data.get('descripcion') or f'codigo={_codigo}'
+                    logger.warning(f'[CONNEKTA] GET {nombre_api}: error interno Siesa — {_msg}')
+                    raise Exception(f'Siesa retornó error interno (codigo={_codigo}): {_msg}')
+            return data
         except requests.exceptions.Timeout:
             raise Exception('Connekta no respondió — reintenta')
         except requests.exceptions.RequestException as e:
@@ -195,6 +219,13 @@ class ConnektaGateway:
                 json=payload,
                 timeout=(10, 30),  # connect=10s, read=30s — falla rápido; gunicorn timeout=120s
             )
+            if r.status_code == 429:
+                retry_after = r.headers.get('Retry-After', '300')
+                logger.warning(
+                    f'[CONNEKTA] POST {id_conector}: rate-limit (429) — '
+                    f'Retry-After={retry_after}s — DLQ reintentará con backoff'
+                )
+                raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
             if not r.ok:
                 try:
                     detalle = r.json()
@@ -204,6 +235,18 @@ class ConnektaGateway:
                 raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
             resp_json = r.json()
             logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
+            # Connekta V2: HTTP 200 no garantiza éxito — verificar codigo==0 en body
+            codigo = resp_json.get('codigo')
+            if codigo != 0:
+                mensaje = resp_json.get('mensaje', 'Sin mensaje')
+                detalle = resp_json.get('detalle', '')
+                logger.error(
+                    f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
+                    f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
+                )
+                raise Exception(
+                    f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
+                )
             return resp_json
         except requests.exceptions.Timeout:
             logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
@@ -222,9 +265,17 @@ class ConnektaGateway:
         Retorna el entero (3=Comprometido, 2=Aprobado, 4=Cumplido…) o None si no se encuentra.
         Se usa como pre-check en cerrar_packing para detectar pedidos que perdieron
         el estado Comprometido antes de crear bultos o disparar el trigger.
+        Retorna None si tipo_docto está vacío — el caller decide si bloquear o no.
         """
         if self.modo_simulacion:
             return 3  # simulación asume siempre comprometido
+
+        if not tipo_docto or not str(tipo_docto).strip():
+            logger.warning(
+                '[CONNEKTA] get_estado_pedido: tipo_docto vacío — '
+                'no se puede verificar estado en Siesa (consec=%s)', consec_docto
+            )
+            return None
 
         try:
             consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
@@ -430,11 +481,32 @@ class ConnektaGateway:
                           items: list):
         """
         142945 → API_v1_Ventas_Comercial_RemisionPedido
+        LEGACY — preferir trigger_factura (conector 238925).
         Genera remisión desde pedido — descarga inventario cuenta 14.
-        Siesa factura automáticamente. El WMS solo inyecta el documento.
         """
+        if not self.modo_simulacion:
+            if not self.tipo_docto_remision:
+                raise ValueError(
+                    'SIESA_TIPO_DOCTO_REMISION no está configurado. '
+                    'Si se usa trigger_despacho, agrega la variable en Railway.'
+                )
+            if not self.motivo_ventas:
+                raise ValueError(
+                    'SIESA_ID_MOTIVO_VENTAS no está configurado. '
+                    'Es obligatorio (pos 131, ancho 2) en connector 142945.'
+                )
         # Siesa: fecha en formato YYYYMMDD (8 chars max)
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+
+        # Filtrar ítems con cantidad 0 — Siesa acepta líneas vacías sin rechazar el documento
+        # pero no descarga inventario, causando discrepancias silenciosas.
+        items_validos = [i for i in items if float(i.get('cantidad_empacada') or 0) > 0]
+        if not items_validos:
+            raise ValueError(
+                'trigger_despacho: ningún ítem tiene cantidad_empacada > 0 — '
+                'el despacho no puede enviarse a Siesa sin líneas de movimiento.'
+            )
+        items = items_validos
 
         payload = {
             'Inicial': [
@@ -478,7 +550,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
                     'f470_id_concepto': 501,                          # 501 = Ventas (maestro Siesa)
-                    'f470_id_motivo': self.motivo_ventas or None,     # SIESA_ID_MOTIVO_VENTAS (pos 131, ancho 2)
+                    'f470_id_motivo': self.motivo_ventas or None,     # SIESA_ID_MOTIVO_VENTAS (pos 131, ancho 2) — DEBE configurarse en Railway
                     'f470_ind_obsequio': 0,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
@@ -486,10 +558,10 @@ class ConnektaGateway:
                     'f470_id_lista_precio': self.lista_precio or None,  # SIESA_LISTA_PRECIO (pos 169, ancho 3)
                     'f470_id_unidad_precio': i.get('unidad_medida') or None,
                     'f470_id_unidad_medida': i.get('unidad_medida') or None,
-                    'f470_cant_base': i.get('cantidad_empacada'),
+                    'f470_cant_base': round(float(abs(i.get('cantidad_empacada') or 0)), 4),
                     'f470_cant_2': None,
                     'f470_vlr_bruto': None,
-                    'f470_ind_naturaleza': 2,                         # 2 = Salida/Venta
+                    'f470_ind_naturaleza': 1,                         # 1 = Salida (spec: 0=Entrada, 1=Salida)
                     'f470_ind_solo_valor': 0,
                     'f470_ind_impto_asumido': 0,
                     'f470_notas': None,
@@ -501,7 +573,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
-                    'f470_id_un_movto': self.centro_op,
+                    'f470_id_un_movto': self.unidad_negocio,   # spec: unidad de negocio, no centro_op
                     'f470_id_causal_devol': None
                 }
                 for i in items
@@ -584,8 +656,14 @@ class ConnektaGateway:
         142948 → API_v1_Compras_Comercial_EntradaOC
         Genera entrada desde OC — debita cuenta 1435.
         """
-        # Siesa espera fecha sin guiones: YYYYMMDD (8 chars)
+        if not self.tipo_docto_entrada_oc:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_ENTRADA_OC no está configurado en variables de entorno. '
+                'Agrega la variable en Railway con el código de tipo de documento de entrada OC en Siesa.'
+            )
+        # Siesa espera fecha sin guiones: YYYYMMDD (8 chars). f421_fecha_entrega usa YYYY-MM-DD.
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy_iso = datetime.utcnow().strftime('%Y-%m-%d')
 
         # F_CIA debe ser entero según especificación Siesa/Connekta
         cia = int(self.id_cia_siesa)
@@ -614,8 +692,10 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,                                            # 1 = Aprobado — contabiliza automáticamente contra pasivo estimado (26059501 configurado en tipo EA/CO003)
                     'f350_ind_impresion': 0,
                     'f350_notas': None,
+                    'f451_id_cond_pago': cond_pago or self.cond_pago_compras or None,  # [A2] condición pago — obligatorio spec 142948 pos 324
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
                     'f451_id_tercero_comprador': tercero_comprador or self.nit_empresa or None,  # comprador exacto de la OC
+                    'f451_id_sucursal_comprador': sucursal_comprador or None,                    # sucursal del comprador (requerida cuando hay tercero_comprador)
                     'f451_num_docto_referencia': num_docto_referencia,
                     'f451_id_moneda_docto': moneda_docto,
                     'f451_id_moneda_conv': moneda_conv,
@@ -639,7 +719,7 @@ class ConnektaGateway:
                     'f451_ind_consignacion': 0,
                     'f420_id_co_docto': id_co_oc,
                     'f420_id_tipo_docto': tipo_docto_oc,
-                    'f420_consec_docto': consec_docto_oc,
+                    'f420_consec_docto': int(consec_docto_oc) if consec_docto_oc else 0,
                     'f420_ind_modo_sobrecosto': 0                                        # 0=No liquida — evita posteo a pasivo estimado (26059501 no tiene flag Proveedor habilitado)
                 }
             ],
@@ -653,11 +733,11 @@ class ConnektaGateway:
                     'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    # Bonificación usa motivo_siesa ('04'). OC usa motivo de la OC o motivo_compras por defecto.
-                    'f470_id_motivo': i.get('motivo_siesa') or (None if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
+                    # Bonificación usa motivo '04' (obsequio/bonif en Siesa). OC usa motivo de la OC o motivo_compras.
+                    'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
-                    'f421_fecha_entrega': self._fmt_fecha(i.get('fecha_entrega')) or fecha_hoy,
+                    'f421_fecha_entrega': self._fmt_fecha_iso(i.get('fecha_entrega')) or fecha_hoy_iso,
                     'f470_cant_base': round(float(i.get('cantidad_recibida') or 0), 4),  # 4 decimales spec Siesa
                     'f470_cant_2': 0.0,
                     'f470_notas': None,
@@ -688,6 +768,11 @@ class ConnektaGateway:
         Ajuste físico tras conteo cíclico double-blind.
         AJ-ENT: sobrante. AJ-SAL: faltante. Cantidad siempre positiva.
         """
+        if not self.tipo_docto_ajuste:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_AJUSTE no está configurado en variables de entorno. '
+                'Agrega la variable en Railway con el código de tipo de documento de ajuste en Siesa.'
+            )
         if motivo_codigo not in ['AJ-ENT', 'AJ-SAL']:
             raise ValueError(f'Motivo inválido: {motivo_codigo}')
 
@@ -716,24 +801,25 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
+                    'f450_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega if not es_entrada else None,
                     'f450_id_bodega_entrada': self.bodega if es_entrada else None,
                     'f450_docto_alterno': '',
                     'f350_id_co_base': '',
                     'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': '',
-                    'f462_id_vehiculo': '',
-                    'f462_id_tercero_transp': '',
-                    'f462_id_sucursal_transp': '',
-                    'f462_id_tercero_conductor': '',
-                    'f462_nombre_conductor': '',
-                    'f462_identif_conductor': '',
-                    'f462_numero_guia': '',
-                    'f462_cajas': '',
-                    'f462_peso': '',
-                    'f462_volumen': '',
-                    'f462_valor_seguros': '',
-                    'f462_notas': ''
+                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
+                    'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
+                    'f462_id_tercero_transp': None,
+                    'f462_id_sucursal_transp': None,
+                    'f462_id_tercero_conductor': None,
+                    'f462_nombre_conductor': None,
+                    'f462_identif_conductor': None,
+                    'f462_numero_guia': None,
+                    'f462_cajas': None,
+                    'f462_peso': None,
+                    'f462_volumen': None,
+                    'f462_valor_seguros': None,
+                    'f462_notas': None
                 }
             ],
             'Movimientos': [
@@ -741,23 +827,24 @@ class ConnektaGateway:
                     'F_CIA': cia,
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_ajuste,
-                    'f470_consec_docto': '',
-                    'f470_nro_registro': '',
+                    'f470_consec_docto': 0,
+                    'f470_nro_registro': 1,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
+                    'f470_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
-                    'f470_id_unidad_medida': '',
-                    'f470_cant_base': abs(cantidad),
-                    'f470_cant_2': '',
-                    'f470_costo_prom_uni': '',
+                    'f470_id_unidad_medida': self.uom_default,
+                    'f470_cant_base': round(float(abs(cantidad)), 4),
+                    'f470_cant_2': 0.0,
+                    'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
-                    'f470_desc_varible': '',
+                    'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
-                    'F_ID_UM_INVENTARIO': '',
+                    'F_ID_UM_INVENTARIO': self.uom_default,
                     'f470_id_ubicacion_aux_ent': '',
                     'f470_id_lote_ent': '',
                     'f470_id_item': '',
@@ -765,7 +852,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': '',
                     'f470_id_ext1_detalle': '',
                     'f470_id_ext2_detalle': '',
-                    'f470_id_un_movto': self.centro_op
+                    'f470_id_un_movto': self.unidad_negocio   # spec 142951: unidad de negocio, no centro_op
                 }
             ],
             'Final': [
@@ -793,60 +880,60 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': cia_averias,
-                    'F_CONSEC_AUTO_REG': '',
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
-                    'f350_consec_docto': '',
+                    'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': '',
                     'f350_id_clase_docto': '',
-                    'f350_ind_estado': '',
-                    'f350_ind_impresion': '',
+                    'f350_ind_estado': 1,
+                    'f350_ind_impresion': 0,
                     'f350_notas': referencia or f'Avería detectada por WMS · {item_codigo}',
-                    'f450_id_concepto': self.motivo_traslado,
+                    'f450_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega,
                     'f450_id_bodega_entrada': self.bodega_averias,
                     'f450_docto_alterno': '',
                     'f350_id_co_base': '',
                     'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': '',
-                    'f462_id_vehiculo': '',
-                    'f462_id_tercero_transp': '',
-                    'f462_id_sucursal_transp': '',
-                    'f462_id_tercero_conductor': '',
-                    'f462_nombre_conductor': '',
-                    'f462_identif_conductor': '',
-                    'f462_numero_guia': '',
-                    'f462_cajas': '',
-                    'f462_peso': '',
-                    'f462_volumen': '',
-                    'f462_valor_seguros': '',
-                    'f462_notas': ''
+                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
+                    'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
+                    'f462_id_tercero_transp': None,
+                    'f462_id_sucursal_transp': None,
+                    'f462_id_tercero_conductor': None,
+                    'f462_nombre_conductor': None,
+                    'f462_identif_conductor': None,
+                    'f462_numero_guia': None,
+                    'f462_cajas': None,
+                    'f462_peso': None,
+                    'f462_volumen': None,
+                    'f462_valor_seguros': None,
+                    'f462_notas': None
                 }
             ],
             'Movimientos': [
                 {
                     'F_CIA': cia_averias,
                     'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': '',
-                    'f470_consec_docto': '',
-                    'f470_nro_registro': '',
+                    'f470_id_tipo_docto': self.tipo_docto_traslado,
+                    'f470_consec_docto': 0,
+                    'f470_nro_registro': 1,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
-                    'f470_id_concepto': '',
-                    'f470_id_motivo': '',
+                    'f470_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
+                    'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
-                    'f470_id_unidad_medida': '',
-                    'f470_cant_base': abs(cantidad),
-                    'f470_cant_2': '',
-                    'f470_costo_prom_uni': '',
+                    'f470_id_unidad_medida': self.uom_default,
+                    'f470_cant_base': round(float(abs(cantidad)), 4),
+                    'f470_cant_2': 0.0,
+                    'f470_costo_prom_uni': 0.0,
                     'f470_notas': '',
-                    'f470_desc_varible': '',
+                    'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
-                    'F_ID_UM_INVENTARIO': '',
+                    'F_ID_UM_INVENTARIO': self.uom_default,   # consistente con enviar_ajuste_inventario
                     'f470_id_ubicacion_aux_ent': '',
                     'f470_id_lote_ent': '',
                     'f470_id_item': '',
@@ -854,7 +941,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': '',
                     'f470_id_ext1_detalle': '',
                     'f470_id_ext2_detalle': '',
-                    'f470_id_un_movto': self.centro_op
+                    'f470_id_un_movto': self.unidad_negocio
                 }
             ],
             'Final': [
@@ -922,9 +1009,9 @@ class ConnektaGateway:
                 'f350_id_tipo_docto': tipo_docto,
                 'f350_consec_docto': 0,
                 'f350_fecha': fecha_hoy,
-                'f350_id_tercero': self.nit_empresa,
+                'f350_id_tercero': self.nit_empresa or None,  # [C4] None en vez de '' — spec 173066
                 'f350_ind_estado': 1,
-                'f350_ind_impresion': 1,
+                'f350_ind_impresion': 0,  # [M1] consistente con transferencia_directa (mismo conector)
                 'f350_notas': nota[:200] if nota else '',
                 'f450_id_bodega_salida': bodega_id,
                 'f450_id_bodega_entrada': bodega_id,  # misma bodega — traslado interno
@@ -933,15 +1020,17 @@ class ConnektaGateway:
                 'F_CIA': int(self.id_cia_siesa),
                 'f470_id_co': self.centro_op,
                 'f470_id_tipo_docto': tipo_docto,
+                'f470_consec_docto': 0,                          # [C4] obligatorio spec 173066
+                'f470_nro_registro': 1,                          # [C4] obligatorio spec 173066
                 'f470_id_bodega': bodega_id,
-                'f470_id_ubicacion_aux': ubicacion_origen,      # origen  (ej. RES-01-A)
+                'f470_id_ubicacion_aux': ubicacion_origen,       # origen  (ej. RES-01-A)
                 'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
                 'f470_referencia_item': referencia_item,
-                'f470_cant_base': cantidad,
+                'f470_cant_base': round(float(cantidad), 4),
                 'f470_id_motivo': self.motivo_traslado or '01',
                 'f470_id_co_movto': self.centro_op,
                 'f470_id_unidad_medida': self.uom_default or 'UND',
-                'f470_id_un_movto': self.uom_default or 'UND',
+                'f470_id_un_movto': self.unidad_negocio or self.centro_op,
             }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }
@@ -1093,8 +1182,8 @@ class ConnektaGateway:
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
-                    'f470_id_unidad_medida': item.get('unidad_medida') or None,
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
+                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_cant_2': 0,
                     'f470_costo_prom_uni': 0,
                     'f470_notas': None,
@@ -1137,7 +1226,7 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'F_CONSEC_AUTO_REG': 0,
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
@@ -1151,7 +1240,7 @@ class ConnektaGateway:
                     # Referencia obligatoria al doc 173076 de salida
                     'f350_id_co_base': self.centro_op if consec_salida else '',
                     'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else '',
-                    'f350_consec_docto_base': consec_salida or '',
+                    'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                 }
             ],
             'Movimientos': [
@@ -1164,8 +1253,8 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
-                    'f470_id_unidad_medida': item.get('unidad_medida') or None,
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
+                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_un_movto': self.unidad_negocio,
                     'f470_notas': None,
@@ -1197,7 +1286,7 @@ class ConnektaGateway:
             'Documentos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'F_CONSEC_AUTO_REG': 0,
+                    'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
                     'f350_consec_docto': 0,
@@ -1207,10 +1296,8 @@ class ConnektaGateway:
                     'f350_notas': f'WMS Transferencia directa {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_destino,
-                    'f450_docto_alterno': codigo_solicitud,
-                    'f350_id_co_base': '',
-                    'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': '',
+                    # f450_docto_alterno, f350_id_co_base, f350_id_tipo_docto_base,
+                    # f350_consec_docto_base no existen en el spec 173066 — omitidos
                 }
             ],
             'Movimientos': [
@@ -1223,8 +1310,8 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': abs(item.get('cantidad', 0)),
-                    'f470_id_unidad_medida': item.get('unidad_medida') or None,
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
+                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_un_movto': self.unidad_negocio,
                     'f470_notas': None,

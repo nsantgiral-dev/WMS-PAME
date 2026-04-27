@@ -1,4 +1,5 @@
 import uuid
+import logging
 from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
@@ -6,9 +7,10 @@ from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.services.conteo_service import ConteoService
 from app.services.abc_service import ABCService
-from app.routes._auth_helpers import Roles
+from app.routes._auth_helpers import Roles, _es_personal_almacen
 
 conteo_bp = Blueprint('conteo', __name__)
+logger = logging.getLogger(__name__)
 
 
 from app.routes._auth_helpers import _solo_admin
@@ -32,7 +34,16 @@ def listar_sesiones():
     categoria = request.args.get('categoria', request.args.get('marca', '')).strip()
     page = request.args.get('page', 1, type=int)
 
-    query = SesionConteo.query.order_by(SesionConteo.fecha_creacion.desc())
+    from sqlalchemy.orm import joinedload as _jl
+    query = (SesionConteo.query
+             .options(
+                 _jl(SesionConteo.producto),
+                 _jl(SesionConteo.ubicacion),
+                 _jl(SesionConteo.operario),
+                 _jl(SesionConteo.aprobador),  # evita N+1 en to_dict() aprobador_nombre
+                 _jl(SesionConteo.editor),      # evita N+1 en to_dict() editado_por_nombre
+             )
+             .order_by(SesionConteo.fecha_creacion.desc()))
 
     if estado:
         query = query.filter_by(estado=estado)
@@ -44,9 +55,10 @@ def listar_sesiones():
         query = query.filter_by(operario_id=operario_id)
     if categoria:
         from app.models.producto import Producto
+        categoria_safe = categoria.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         query = (query
                  .join(Producto, SesionConteo.producto_id == Producto.id)
-                 .filter(Producto.categoria.ilike(f'%{categoria}%')))
+                 .filter(Producto.categoria.ilike(f'%{categoria_safe}%', escape='\\')))
 
     sesiones = query.paginate(page=page, per_page=30, error_out=False)
 
@@ -110,6 +122,8 @@ def registrar_conteo(id):
     Operario registra su conteo físico.
     Dispara conciliación en tiempo real contra Siesa.
     """
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para registrar conteos'}), 403
     try:
         operario_id = int(get_jwt_identity())
     except (ValueError, TypeError):
@@ -119,17 +133,38 @@ def registrar_conteo(id):
     if 'cantidad_fisica' not in data:
         return jsonify({'error': 'cantidad_fisica es requerida'}), 400
 
+    # Verificar ownership antes de delegar al servicio — un operario solo puede
+    # registrar sus propias sesiones (supervisores pueden acceder a cualquiera).
+    _sesion_chk = SesionConteo.query.get(id)
+    if _sesion_chk is None:
+        return jsonify({'error': 'Sesión de conteo no encontrada'}), 404
+    from app.models.usuario import Usuario
+    _u_chk = Usuario.query.get(operario_id)
+    if _u_chk and _u_chk.rol not in Roles.SUPERVISION:
+        if _sesion_chk.operario_id != operario_id:
+            return jsonify({'error': 'No puedes registrar el conteo de otra persona'}), 403
+
+    try:
+        cantidad_fisica = int(data['cantidad_fisica'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'cantidad_fisica debe ser un entero válido'}), 400
+
     try:
         resultado = ConteoService.registrar_conteo(
             sesion_id=id,
             operario_id=operario_id,
-            cantidad_fisica=data['cantidad_fisica'],
+            cantidad_fisica=cantidad_fisica,
             lote_id=data.get('lote_id')
         )
         return jsonify(resultado), 200
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        msg = str(e)
+        # Cache miss de Siesa → 503 reintentable, no error permanente del cliente
+        if 'Conectando con Siesa' in msg or 'Siesa aún no respondió' in msg:
+            return jsonify({'error': msg, 'retry_after': 3}), 503
+        return jsonify({'error': msg}), 400
     except Exception as e:
+        logger.exception(f'[CONTEO] Error inesperado en registrar_conteo sesion={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -150,16 +185,25 @@ def confirmar_ajuste(id):
         return jsonify({'error': 'Solo un supervisor o admin puede aprobar ajustes de inventario'}), 403
     try:
         sesion = ConteoService.confirmar_ajuste(id, supervisor_id)
+        # [A22] 202 cuando el ajuste está encolado en DLQ (AJUSTANDO) — el supervisor
+        # sabe que no completó todavía y no cierra la pantalla prematuramente.
+        # 200 solo cuando siesa_triggered=True (Siesa ya confirmó el ajuste).
+        http_status = 200 if sesion.siesa_triggered else 202
         return jsonify({
-            'mensaje': f'Ajuste {sesion.motivo_codigo} enviado a Siesa',
+            'mensaje': (
+                f'Ajuste {sesion.motivo_codigo} confirmado — Siesa ya procesó'
+                if sesion.siesa_triggered
+                else f'Ajuste {sesion.motivo_codigo} encolado — pendiente de sincronización con Siesa'
+            ),
             'diferencia': sesion.diferencia,
             'motivo_codigo': sesion.motivo_codigo,
             'siesa_triggered': sesion.siesa_triggered,
             'sesion': sesion.to_dict()
-        }), 200
+        }), http_status
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(f'[CONTEO] Error inesperado en confirmar_ajuste sesion={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -214,6 +258,7 @@ def generar_tareas_abc():
         )
         return jsonify(resultado), 201
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en generar_tareas_conteo_diario almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -233,6 +278,7 @@ def generar_todas_las_clases():
         )
         return jsonify(resultado), 201
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en generar_todas_las_clases almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -306,6 +352,7 @@ def sincronizar_abc():
         )
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en sincronizar_abc')
         return jsonify({'error': str(e)}), 500
 
 
@@ -325,12 +372,21 @@ def watchdog_anomalias():
         overrides = ABCService.watchdog_anomalias(almacen_id=data['almacen_id'])
         return jsonify({'overrides': len(overrides), 'detalle': overrides}), 200
     except Exception as e:
+        logger.exception(f'[CONTEO] Error en watchdog_anomalias almacen={data.get("almacen_id")}')
         return jsonify({'error': str(e)}), 500
 
 
 @conteo_bp.route('/abc/resumen', methods=['GET'])
 @jwt_required()
 def resumen_abc():
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso — se requiere admin, supervisor o jefe_almacen'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
@@ -368,7 +424,7 @@ def cargar_csv_abc():
         resultado = ABCService.procesar_csv_abc(f, ext, almacen_id=almacen_id)
         return jsonify(resultado), 200
     except Exception as e:
-        current_app.logger.error(f'[ABC CSV] Error procesando archivo: {e}')
+        logger.exception('[ABC CSV] Error procesando archivo')
         return jsonify({'error': str(e)}), 500
 
 

@@ -5,6 +5,7 @@ from app.extensions import db
 from app.models.picking import TareaPicking, EstadoPicking
 from app.services.picking_service import PickingService
 from app.routes._auth_helpers import Roles
+from app.models.usuario import Usuario
 
 picking_bp = Blueprint('picking', __name__)
 
@@ -27,10 +28,10 @@ def listar_tareas():
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
 
-    query = TareaPicking.query.order_by(
-        TareaPicking.prioridad.desc(),
-        TareaPicking.fecha_creacion.asc()
-    )
+    from sqlalchemy.orm import selectinload as _sl
+    query = (TareaPicking.query
+             .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
+             .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc()))
 
     if activas:
         query = query.filter(TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO, EstadoPicking.BLOQUEADO]))
@@ -80,7 +81,18 @@ def purgar_picks_cero():
 @picking_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_tarea(id):
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u:
+        return jsonify({'error': 'Usuario no encontrado'}), 401
     tarea = TareaPicking.query.get_or_404(id)
+    # Operarios solo ven sus propias tareas; supervisores/admin ven todo
+    if u.rol not in Roles.SUPERVISION and tarea.operario_id != uid:
+        return jsonify({'error': 'Sin permiso para ver esta tarea'}), 403
     return jsonify(tarea.to_dict()), 200
 
 
@@ -217,6 +229,13 @@ def reabrir_tarea(id):
 @picking_bp.route('/fefo', methods=['POST'])
 @jwt_required()
 def calcular_fefo():
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in (Roles.OPERARIO, Roles.JEFE_ALMACEN, Roles.ADMIN, Roles.SUPERVISOR):
+        return jsonify({'error': 'Sin permiso para calcular FEFO'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad', 'almacen_id']
     for campo in requeridos:
@@ -273,6 +292,7 @@ def siguiente_tarea():
             'mensaje': 'No hay tareas pendientes en la cola'
         }), 200
 
+    tarea_id = tarea.id
     tarea.operario_id = operario_id
     tarea.estado = EstadoPicking.EN_PROCESO
     tarea.fecha_inicio = datetime.utcnow()
@@ -280,6 +300,8 @@ def siguiente_tarea():
     tarea.empaques_escaneados = 0
     db.session.commit()
 
+    # Recargar después del commit — expire_on_commit invalida los atributos del objeto
+    tarea = TareaPicking.query.get(tarea_id)
     return jsonify({
         'tarea': tarea.to_dict(),
         'mensaje': 'Tarea asignada automáticamente'
@@ -317,6 +339,9 @@ def reportar_problema(id):
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in (Roles.OPERARIO, Roles.JEFE_ALMACEN, Roles.ADMIN, Roles.SUPERVISOR):
+        return jsonify({'error': 'Sin permiso para reportar problemas en picking'}), 403
     data = request.get_json() or {}
     try:
         resultado = PickingService.reportar_problema(
@@ -341,6 +366,10 @@ def reiniciar_conteo(id):
         operario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(operario_id)
+    if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
+        return jsonify({'error': 'Sin permiso para reiniciar conteo de picking'}), 403
+
     tarea = TareaPicking.query.get_or_404(id)
 
     if tarea.operario_id != operario_id:

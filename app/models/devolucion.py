@@ -49,7 +49,8 @@ class TareaDevolucion(db.Model):
     observaciones = db.Column(db.Text)
 
     # Idempotencia con Siesa — P4: evita traslado NB1→AV1 duplicado en reintento DLQ
-    siesa_triggered = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
+    siesa_triggered    = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
+    siesa_triggered_at = db.Column(db.DateTime, nullable=True)
 
     # Tiempos
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -72,6 +73,8 @@ class TareaDevolucion(db.Model):
             'ubicacion_id': self.ubicacion_id,
             'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
             'es_averiado': self.es_averiado,
+            'siesa_triggered': self.siesa_triggered,   # averiado: indica si Siesa fue notificado
+            'siesa_triggered_at': self.siesa_triggered_at.isoformat() if self.siesa_triggered_at else None,
             'recepcionista_id': self.recepcionista_id,
             'estado': self.estado,
             'observaciones': self.observaciones,

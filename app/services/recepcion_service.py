@@ -278,8 +278,72 @@ class RecepcionService:
         recepcion = RecepcionMercancia.query.get(recepcion_id)
         if not recepcion:
             raise ValueError('Recepción no encontrada')
-        # Idempotente: si ya fue confirmada devolver los datos sin error
+        # Idempotente: si ya fue confirmada, verificar que Siesa también fue disparado
         if recepcion.estado == 'CONFIRMADA':
+            if recepcion.siesa_triggered:
+                return recepcion
+            # CONFIRMADA pero Siesa nunca se disparó — verificar job en DLQ
+            from app.models.siesa_job import SiesaJob
+            job_existente = SiesaJob.query.filter_by(
+                referencia_tipo='RecepcionMercancia',
+                referencia_id=recepcion.id,
+            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO'])).first()
+            if job_existente:
+                if job_existente.estado == 'FALLIDO':
+                    # NO rescatar automáticamente — el job FALLIDO puede haber fallado
+                    # por timeout DESPUÉS de que Siesa procesó la entrada OC (HTTP 200
+                    # llegó a Siesa pero no al WMS). Re-encolar sin verificar genera una
+                    # SEGUNDA entrada OC: doble débito cuenta 14, proveedor con doble abono.
+                    # El supervisor debe verificar en Siesa y rescatar manualmente desde el admin.
+                    logger.error(
+                        f'[RECEPCION] Job FALLIDO {job_existente.id} para recepcion={recepcion.id} '
+                        f'(CONFIRMADA sin siesa_triggered) — NO rescatado automáticamente. '
+                        f'Verificar en Siesa si la entrada OC ya fue registrada antes de rescatar '
+                        f'desde el panel de administración.'
+                    )
+                return recepcion
+            # Sin job alguno — re-encolar con los datos disponibles en el registro.
+            # El inventario ya fue ingresado; solo falta crear la entrada contable en Siesa.
+            logger.warning(
+                f'[RECEPCION] recepcion={recepcion.id} CONFIRMADA sin SiesaJob — re-encolando ENTRADA_OC'
+            )
+            _items_rec = []
+            for _ir in recepcion.items:
+                if (_ir.cantidad_recibida or 0) <= 0:
+                    continue
+                _cod = (_ir.producto.codigo_siesa or _ir.producto.codigo) if _ir.producto else None
+                if not _cod:
+                    continue
+                _items_rec.append({
+                    'producto_codigo': _cod,
+                    'cantidad_recibida': _ir.cantidad_recibida,
+                    'cantidad_ordenada': _ir.cantidad_ordenada,
+                    'lote': _ir.lote,
+                    'es_parcial': _ir.es_faltante(),
+                    'tipo': _ir.tipo or 'NORMAL',
+                })
+            _job_rec = SiesaJob.encolar(
+                tipo='ENTRADA_OC',
+                payload={
+                    'recepcion_id': recepcion.id,
+                    'numero_oc_siesa': recepcion.numero_oc_siesa,
+                    'id_co_oc': recepcion.co_oc_siesa or '',
+                    'tipo_docto_oc': recepcion.tipo_docto_oc_siesa or '',
+                    'consec_docto_oc': recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
+                    'items': _items_rec,
+                    'es_parcial': recepcion.es_parcial,
+                    'proveedor_id': recepcion.proveedor_codigo or '',
+                    'sucursal_prov': recepcion.sucursal_prov_siesa or '',
+                    'cond_pago': recepcion.cond_pago_siesa or '',
+                    'num_docto_referencia': recepcion.num_remision_prov or None,
+                },
+                referencia_tipo='RecepcionMercancia',
+                referencia_id=recepcion.id,
+            )
+            db.session.commit()
+            from app.services.siesa_job_service import disparar_dlq_inmediato
+            disparar_dlq_inmediato()
+            logger.info(f'[RECEPCION] Job {_job_rec.id} encolado para recepcion={recepcion.id}')
             return recepcion
         if recepcion.estado != 'EN_PROCESO':
             raise ValueError(f'No se puede confirmar en estado {recepcion.estado}')
@@ -416,7 +480,10 @@ class RecepcionService:
                 f'items_oc keys={list(items_oc.keys())} fallback={oc_fallback!r}'
             )
         except Exception as lookup_err:
-            logger.warning(f'[RECEPCION] Lookup OC falló: {lookup_err}')
+            logger.error(
+                f'[RECEPCION] Lookup OC falló para {recepcion.numero_oc_siesa}: {lookup_err}',
+                exc_info=True
+            )
 
         # Siesa requiere proveedor_id — fallar rápido antes de crear SiesaJob
         if not proveedor_id:
@@ -451,16 +518,38 @@ class RecepcionService:
             # Ítems de OC: lookup normalizado por código WMS, código Siesa e ID numérico
             oc_data = (
                 items_oc.get((i.producto.codigo or '').strip().upper()) or
-                items_oc.get((i.producto.codigo_siesa or '').strip().upper()) or
-                items_oc.get(str(i.producto.id)) or
-                oc_fallback
+                items_oc.get((i.producto.codigo_siesa or '').strip().upper())
             )
-            logger.warning(
-                f'[RECEPCION] item {i.producto.codigo!r} → ref_siesa={oc_data.get("ref_siesa")!r} '
-                f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r} fecha={oc_data.get("fecha_entrega")!r}'
+            _usó_fallback = oc_data is None
+            if _usó_fallback:
+                # [OC-FALLBACK] Ítem no encontrado en líneas de la OC.
+                # Riesgo: OC con bodegas mixtas → bodega del primer ítem ≠ bodega correcta.
+                # Se usa oc_fallback solo si no hay otra opción; el WARNING es visible en logs.
+                oc_data = oc_fallback
+                logger.warning(
+                    f'[RECEPCION] OC-FALLBACK: item {i.producto.codigo!r} '
+                    f'(siesa={i.producto.codigo_siesa!r}) no encontrado en OC '
+                    f'{recepcion.numero_oc_siesa!r} — usando bodega/uom del primer ítem '
+                    f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r}. '
+                    f'Verificar que código Siesa del producto coincida con OC.'
+                )
+            else:
+                logger.debug(
+                    f'[RECEPCION] item {i.producto.codigo!r} → ref_siesa={oc_data.get("ref_siesa")!r} '
+                    f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r}'
+                )
+            # Cuando hay fallback, oc_data.get('ref_siesa') es el código del PRIMER ítem de la OC
+            # (no del producto actual) → se registraría la cantidad bajo código incorrecto en Siesa.
+            # Usar siempre el codigo_siesa del producto cuando está disponible.
+            _producto_codigo_siesa = (
+                (i.producto.codigo_siesa or '').strip() or
+                oc_data.get('ref_siesa') or
+                i.producto.codigo
+            ) if not _usó_fallback else (
+                (i.producto.codigo_siesa or '').strip() or i.producto.codigo
             )
             items_payload.append({
-                'producto_codigo': oc_data.get('ref_siesa') or i.producto.codigo,
+                'producto_codigo': _producto_codigo_siesa,
                 'cantidad_recibida': i.cantidad_recibida,
                 'cantidad_ordenada': i.cantidad_ordenada,
                 'lote': i.lote,
@@ -472,6 +561,20 @@ class RecepcionService:
                 'uom': oc_data.get('uom'),
                 'fecha_entrega': oc_data.get('fecha_entrega'),
             })
+
+        # Validar que tenemos datos de bodega/uom para al menos los items de OC (no BONIFICACION).
+        # Si el lookup OC falló Y recepcion no tenía bodega en BD, el payload sería inválido
+        # y el job quedaría en DLQ permanente sin posibilidad de reintento exitoso.
+        items_sin_bodega = [
+            item['producto_codigo'] for item in items_payload
+            if item.get('tipo') != 'BONIFICACION' and not item.get('bodega')
+        ]
+        if items_sin_bodega:
+            raise ValueError(
+                f'No se pudo obtener bodega/UOM para {len(items_sin_bodega)} ítem(s) de la OC '
+                f'{recepcion.numero_oc_siesa} en Siesa: {items_sin_bodega[:3]}. '
+                'Verifica que la OC exista en Siesa y tenga líneas activas.'
+            )
 
         # [P8] Crear SiesaJob ANTES de llamar a Siesa — atómico con el inventario.
         # Si el commit falla, ni el inventario ni el job persisten (consistente).
@@ -502,42 +605,16 @@ class RecepcionService:
             referencia_tipo='RecepcionMercancia',
             referencia_id=recepcion.id,
         )
-        # Commit inventario + SiesaJob en una sola transacción antes de llamar a Siesa
+        # Commit inventario + SiesaJob en una sola transacción
         db.session.commit()
 
-        try:
-            respuesta_siesa = connekta.confirmar_entrada_compras(
-                id_co_oc=recepcion.co_oc_siesa or connekta.centro_op,
-                tipo_docto_oc=recepcion.tipo_docto_oc_siesa or '',
-                consec_docto_oc=recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
-                items=items_payload,
-                es_parcial=tiene_faltantes,
-                proveedor_id=proveedor_id,
-                sucursal_prov=sucursal_prov,
-                tercero_comprador=tercero_comprador,
-                sucursal_comprador=sucursal_comprador,
-                moneda_docto=moneda_docto,
-                moneda_conv=moneda_conv,
-                moneda_local=moneda_local,
-                tasa_conv=tasa_conv,
-                tasa_local=tasa_local,
-                num_docto_referencia=remision or None,
-                cond_pago=recepcion.cond_pago_siesa or ''
-            )
-            recepcion.siesa_triggered = True
-            recepcion.siesa_response = json.dumps(respuesta_siesa)
-            recepcion.siesa_triggered_at = datetime.utcnow()
-            # Siesa respondió OK — marcar el job de respaldo como completado
-            job_dlq.marcar_completado(respuesta_siesa)
-            logger.info(f'[RECEPCION] Siesa triggered para OC {recepcion.numero_oc_siesa}')
+        # Disparar DLQ en hilo daemon — procesa el job recién encolado sin bloquear el worker.
+        # Si Siesa falla, el job queda PENDIENTE para reintento automático cada 5 min.
+        from app.services.siesa_job_service import disparar_dlq_inmediato
+        disparar_dlq_inmediato()
 
-        except Exception as e:
-            logger.error(f'[RECEPCION] Error triggering Siesa: {str(e)}')
-            recepcion.siesa_triggered = False
-            recepcion.siesa_response = str(e)
-            # job_dlq ya está PENDIENTE en DB — DLQ lo reintentará automáticamente
-            db.session.commit()
-            raise Exception(f'Error al comunicar con Siesa: {str(e)}. La recepción fue confirmada en WMS — Siesa se reintentará automáticamente.')
-
-        db.session.commit()
+        logger.info(
+            f'[RECEPCION] recepcion={recepcion.id} OC={recepcion.numero_oc_siesa} — '
+            f'job_dlq={job_dlq.id} encolado, DLQ disparado async'
+        )
         return recepcion

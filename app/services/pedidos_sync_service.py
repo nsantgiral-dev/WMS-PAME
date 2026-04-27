@@ -40,6 +40,7 @@ def _run_sync(app):
         upserts = 0
         eliminados = 0
         paginas_leidas = 0
+        anulados_detectados = []
 
         try:
             # estado=3 → Comprometido: inventario físicamente reservado en Siesa
@@ -47,7 +48,17 @@ def _run_sync(app):
             parametros = f"f430_id_co = ''{connekta.centro_op}'' AND f430_ind_estado = 3"
 
             all_items = []
+            _sync_inicio = datetime.utcnow()
+            _MAX_MINUTOS_PAGINACION = 5  # cota temporal: evita bloquear el scheduler >5 min
             for pag in range(1, 200):
+                # [M3] Cota temporal: si Siesa tarda mucho por página, no bloquear el scheduler
+                _elapsed = (datetime.utcnow() - _sync_inicio).total_seconds()
+                if _elapsed > _MAX_MINUTOS_PAGINACION * 60:
+                    logger.warning(
+                        f'[PEDIDOS_SYNC] Paginación abortada tras {_elapsed:.0f}s '
+                        f'({pag} páginas) — cota temporal alcanzada'
+                    )
+                    break
                 try:
                     res = connekta._get(connekta.api_pedidos, {
                         'paginacion': f'numPag={pag}|tamPag={TAM_PAG}',
@@ -160,12 +171,35 @@ def _run_sync(app):
                     for d in items_nb1
                 }
 
+                # Limitar a 10 verificaciones por ciclo — evita que el job tarde
+                # 20+ minutos con 50 packings no comprometidos (N × 30s timeout)
+                _MAX_VERIFICAR = 10
+                _pendientes_verificar = [
+                    pk for pk in packings_vivos
+                    if pk.numero_pedido_siesa not in numeros_comprometidos_siesa
+                    and not getattr(pk, 'pedido_anulado_siesa', False)  # ya confirmados no consumen budget
+                ][:_MAX_VERIFICAR]
+                if len(_pendientes_verificar) < sum(
+                    1 for pk in packings_vivos
+                    if pk.numero_pedido_siesa not in numeros_comprometidos_siesa
+                ):
+                    logger.warning(
+                        f'[PEDIDOS_SYNC] Verificación de anulados limitada a {_MAX_VERIFICAR} '
+                        f'por ciclo para proteger el scheduler. Habrá más en el próximo ciclo.'
+                    )
+
                 anulados_detectados = []
-                for pk in packings_vivos:
+                for pk in _pendientes_verificar:
                     if pk.numero_pedido_siesa not in numeros_comprometidos_siesa:
                         # Verificar el estado real en Siesa para este pedido puntual
+                        if not pk.tipo_docto_pedido_siesa:
+                            logger.warning(
+                                f'[PEDIDOS_SYNC] Packing {pk.id} ({pk.numero_pedido_siesa}) '
+                                f'sin tipo_docto_pedido_siesa — no se puede verificar estado en Siesa'
+                            )
+                            continue
                         estado_real = connekta.get_estado_pedido(
-                            pk.tipo_docto_pedido_siesa or '',
+                            pk.tipo_docto_pedido_siesa,
                             pk.consec_docto_pedido_siesa or pk.numero_pedido_siesa
                         )
                         # 1=En elaboración, 2=Aprobado, 3=Comprometido, 4=Cumplido: NO anular
@@ -219,6 +253,7 @@ def _run_sync(app):
                 'items_nb1_pendientes': len(items_nb1),
                 'upserts': upserts,
                 'eliminados': eliminados,
+                'anulados_detectados': len(anulados_detectados),
             }
             logger.info(f'[PEDIDOS_SYNC] OK: {resultado}')
             _sync_estado['ultimo_resultado'] = resultado

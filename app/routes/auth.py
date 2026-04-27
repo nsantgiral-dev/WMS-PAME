@@ -6,7 +6,12 @@ from app.models.usuario import Usuario
 auth_bp = Blueprint('auth', __name__)
 
 
-from app.routes._auth_helpers import _solo_admin  # noqa: F401
+from app.routes._auth_helpers import _solo_admin, Roles  # noqa: F401
+
+_ROLES_VALIDOS = (
+    Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN, Roles.GERENTE,
+    Roles.OPERARIO, Roles.EMPACADOR, Roles.RECEPCIONISTA, Roles.TIENDA, Roles.CONDUCTOR,
+)
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
@@ -60,10 +65,14 @@ def register():
     except (ValueError, TypeError):
         return jsonify({'error': 'capacidad_diaria_conteo debe ser un número entero'}), 400
 
+    _rol_nuevo = data.get('rol', 'operario')
+    if _rol_nuevo not in _ROLES_VALIDOS:
+        return jsonify({'error': f'Rol inválido: {_rol_nuevo!r}. Roles válidos: {list(_ROLES_VALIDOS)}'}), 400
+
     usuario = Usuario(
         nombre=data['nombre'],
         email=data['email'],
-        rol=data.get('rol', 'operario'),
+        rol=_rol_nuevo,
         almacen_id=data.get('almacen_id'),
         puede_usar_camara=data.get('puede_usar_camara', False),
         puede_picar=data.get('puede_picar', True),
@@ -71,6 +80,7 @@ def register():
         puede_abastecer=data.get('puede_abastecer', False),
         capacidad_diaria_conteo=_cap,
         bodega_siesa_id=data.get('bodega_siesa_id'),
+        siesa_co_id=data.get('siesa_co_id'),
         nombre_punto_venta=data.get('nombre_punto_venta'),
     )
     usuario.set_password(data['password'])
@@ -105,6 +115,9 @@ def actualizar_usuario(uid):
     if 'nombre' in data:
         usuario.nombre = data['nombre']
     if 'rol' in data:
+        # [B1] Validar que el rol sea uno de los valores definidos
+        if data['rol'] not in _ROLES_VALIDOS:
+            return jsonify({'error': f'Rol inválido: {data["rol"]!r}. Roles válidos: {list(_ROLES_VALIDOS)}'}), 400
         # Nadie puede auto-escalarse — admin solo puede cambiar rol de otros
         if uid == admin.id and data['rol'] != 'admin':
             return jsonify({'error': 'No puedes cambiar tu propio rol'}), 400

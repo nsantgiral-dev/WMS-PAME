@@ -3,8 +3,9 @@ from datetime import datetime
 from app.extensions import db
 
 
-# Backoff exponencial: intento 1 → 5min, intento 2 → 15min, intento 3 → 45min
-_BACKOFF_MINUTOS = [5, 15, 45]
+# Backoff exponencial: intento 1 → 5min, 2 → 15min, 3 → 45min, 4 → 120min, 5 → 180min
+# 5 intentos cubre caídas de Siesa de hasta ~6h sin intervención manual.
+_BACKOFF_MINUTOS = [5, 15, 45, 120, 180]
 
 
 class SiesaJob(db.Model):
@@ -28,7 +29,7 @@ class SiesaJob(db.Model):
 
     estado = db.Column(db.String(20), nullable=False, default='PENDIENTE')
     intentos = db.Column(db.Integer, nullable=False, default=0)
-    max_intentos = db.Column(db.Integer, nullable=False, default=3)
+    max_intentos = db.Column(db.Integer, nullable=False, default=5)
     proximo_intento = db.Column(db.DateTime, nullable=True)  # None = procesar inmediatamente
     resultado = db.Column(db.Text, nullable=True)
     error_ultimo = db.Column(db.Text, nullable=True)

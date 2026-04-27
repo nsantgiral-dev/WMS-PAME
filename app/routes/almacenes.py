@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy.exc import IntegrityError
 from app.extensions import db
 from app.models.almacen import Almacen
 from app.models.ubicacion import Ubicacion
@@ -7,11 +8,13 @@ from app.models.ubicacion import Ubicacion
 almacenes_bp = Blueprint('almacenes', __name__)
 
 
-from app.routes._auth_helpers import _solo_admin
+from app.routes._auth_helpers import _solo_admin, _es_personal_almacen
 
 @almacenes_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_almacenes():
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para listar almacenes'}), 403
     almacenes = Almacen.query.filter_by(activo=True).all()
     return jsonify([a.to_dict() for a in almacenes]), 200
 
@@ -19,6 +22,8 @@ def listar_almacenes():
 @almacenes_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_almacen(id):
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para consultar almacenes'}), 403
     almacen = Almacen.query.get_or_404(id)
     return jsonify(almacen.to_dict()), 200
 
@@ -45,7 +50,11 @@ def crear_almacen():
     )
 
     db.session.add(almacen)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'El código de almacén ya existe'}), 409
     return jsonify(almacen.to_dict()), 201
 
 
@@ -77,6 +86,8 @@ def actualizar_almacen(id):
 @almacenes_bp.route('/<int:id>/ubicaciones', methods=['GET'])
 @jwt_required()
 def listar_ubicaciones(id):
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para listar ubicaciones'}), 403
     almacen = Almacen.query.get_or_404(id)
     ubicaciones = Ubicacion.query.filter_by(
         almacen_id=almacen.id,

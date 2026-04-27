@@ -82,7 +82,7 @@ _cache_inventario_siesa = {'data': None, 'ts': None}
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
 
 
-def _descargar_inventario_siesa():
+def _descargar_inventario_siesa(forzar=False):
     """
     Descarga existencias de Siesa SIN filtro en la API (el API rechaza f150_id
     como parámetro igual que en OCs). Filtra por bodega en Python.
@@ -91,10 +91,14 @@ def _descargar_inventario_siesa():
     agregado por producto (un producto puede aparecer en múltiples lotes/ubicaciones).
     Cubre catálogos de hasta 50 000 filas de inventario.
     Cachea el resultado 1 hora para evitar 500 requests HTTP duplicados.
+
+    forzar=True: ignora el cache y descarga datos frescos (usado en reconciliación
+    para evitar comparar contra datos de la carga inicial y generar TareaDevolucion falsas).
     """
     global _cache_inventario_siesa
     ahora = datetime.utcnow()
-    if (_cache_inventario_siesa['data'] is not None
+    if (not forzar
+            and _cache_inventario_siesa['data'] is not None
             and _cache_inventario_siesa['ts'] is not None
             and (ahora - _cache_inventario_siesa['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
         logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h)')
@@ -103,11 +107,27 @@ def _descargar_inventario_siesa():
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
     bodega = connekta.bodega  # filtro Python
+    _errores_consecutivos = 0
 
     for pag in range(1, 501):  # hasta 50 000 filas (500 págs × 100)
-        resp = connekta._get(api, {
-            'paginacion': f'numPag={pag}|tamPag=100'
-        })
+        try:
+            resp = connekta._get(api, {
+                'paginacion': f'numPag={pag}|tamPag=100'
+            })
+            _errores_consecutivos = 0  # reset en éxito
+        except Exception as _e_pag:
+            _errores_consecutivos += 1
+            logger.warning(
+                f'[INV-SIESA] Error en página {pag}: {_e_pag} '
+                f'({_errores_consecutivos} consecutivos)'
+            )
+            if _errores_consecutivos >= 3:
+                # 3 timeouts/errores seguidos — abortar para activar el guard de respuesta parcial
+                raise ValueError(
+                    f'Siesa falló {_errores_consecutivos} veces consecutivas en página {pag}: {_e_pag}'
+                ) from _e_pag
+            continue
+
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
             break
@@ -135,6 +155,28 @@ def _descargar_inventario_siesa():
             break
 
     logger.info(f'[INV-SIESA] Total descargado: {len(inventario)} productos en bodega {connekta.bodega}')
+
+    # Guard: respuesta parcial de Siesa (red cortada a mitad de paginación).
+    # Si descargamos < 70% de los productos del cache anterior, rechazamos
+    # para evitar que reconciliación genere cientos de SIESA_MAYOR falsos.
+    _prev_count = len(_cache_inventario_siesa['data']) if _cache_inventario_siesa['data'] else 0
+    if not _prev_count:
+        # Primera ejecución (cache frío): usar conteo de UbicacionProducto en DB como referencia
+        try:
+            from app.models.inventario import UbicacionProducto as _UP
+            _prev_count = _UP.query.filter(_UP.cantidad > 0).count()
+        except Exception as _e_prev:
+            # [M17] NO operar sin baseline: si la DB falla y no tenemos cache previo,
+            # el guard queda a 0 y una respuesta parcial de Siesa pasaría sin detección.
+            raise ValueError(
+                f'No se pudo obtener baseline de inventario (cache frío + DB inaccesible): {_e_prev}'
+            ) from _e_prev
+    if _prev_count and len(inventario) < _prev_count * 0.70:
+        raise ValueError(
+            f'Respuesta parcial de Siesa: {len(inventario)} productos recibidos, '
+            f'{_prev_count} esperados (< 70%) — abortando para evitar falsos positivos'
+        )
+
     _cache_inventario_siesa['data'] = inventario
     _cache_inventario_siesa['ts'] = datetime.utcnow()
     return inventario
@@ -143,6 +185,9 @@ def _descargar_inventario_siesa():
 # ─────────────────────────────────────────────
 # 1. CARGA INICIAL
 # ─────────────────────────────────────────────
+
+_ADVISORY_LOCK_INV_SIESA = 2002  # clave única para pg_advisory_lock
+
 
 def _run_carga_inicial(app):
     """Lógica real de la carga inicial — corre en hilo de fondo."""
@@ -154,6 +199,20 @@ def _run_carga_inicial(app):
         actualizados = 0
         sin_producto_wms = 0
         errores = 0
+
+        # Advisory lock de PostgreSQL — protege contra carga simultánea entre workers Gunicorn
+        from sqlalchemy import text as _text
+        lock_adquirido = False
+        try:
+            lock_adquirido = db.session.execute(
+                _text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
+            ).scalar()
+            if not lock_adquirido:
+                logger.warning('[INV-SIESA] Otro worker ya ejecuta la carga — omitido')
+                _estado_carga['en_curso'] = False
+                return
+        except Exception as e:
+            logger.warning(f'[INV-SIESA] Advisory lock no disponible: {e} — continuando sin él')
 
         try:
             almacen = _get_almacen()
@@ -176,13 +235,28 @@ def _run_carga_inicial(app):
             packs_activos = _TareaPacking2.query.filter(
                 _TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
             ).count()
+            # Productos con operaciones activas — sus ubicaciones se excluirán del bulk zero
+            _prod_ids_activos: set = set()
             if picks_activos or packs_activos:
                 logger.warning(
                     f'[INV-SIESA] ATENCIÓN: carga inicial con operaciones activas — '
                     f'{picks_activos} picking(s) y {packs_activos} packing(s) en curso. '
-                    f'El stock manual de las ubicaciones WMS será sobrescrito con datos de Siesa. '
-                    f'Stock reservado puede quedar desactualizado.'
+                    f'Sus productos serán excluidos del bulk zero para proteger el stock reservado.'
                 )
+                # Recopilar product_ids activos para excluirlos del bulk zero
+                _picks_prods = _TareaPicking.query.filter(
+                    _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+                ).with_entities(_TareaPicking.producto_id).all()
+                _prod_ids_activos |= {r.producto_id for r in _picks_prods if r.producto_id}
+                from app.models.packing import ItemPacking as _ItemPacking
+                _pack_prods = (
+                    _ItemPacking.query
+                    .join(_TareaPacking2, _ItemPacking.tarea_id == _TareaPacking2.id)
+                    .filter(_TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO']))
+                    .with_entities(_ItemPacking.producto_id).all()
+                )
+                _prod_ids_activos |= {r.producto_id for r in _pack_prods if r.producto_id}
+                logger.info(f'[INV-SIESA] {len(_prod_ids_activos)} productos excluidos del bulk zero por operaciones activas')
 
             # ── Pre-cargar los 3 mapas en memoria — elimina N+1 del loop ──────────
             # Sin esto: hasta 3 queries × N productos (≈15.000 queries en catálogo de 5k)
@@ -240,6 +314,21 @@ def _run_carga_inicial(app):
                 f'{len(_mapa_ubicaciones)} ubicaciones · {len(_mapa_up)} registros UP'
             )
 
+            # Precalcular sets para el bulk zero diferido (se ejecuta AL FINAL del loop)
+            # El zero se mueve al final para evitar que un reinicio de Railway deje
+            # productos en 0 cuando solo se commiteó el primer lote y el proceso murió.
+            _ubs_almacen_ids = {ub.id for ub in _mapa_ubicaciones.values()}
+            _excluir_ub_ids = {uid for ubs in _ajustes_recientes.values() for uid in ubs}
+            _ubs_a_zero = _ubs_almacen_ids - _excluir_ub_ids
+            _prod_ids_ya_hoy: set = set()
+            for _ikey in ikeys_hoy:
+                try:
+                    _prod_ids_ya_hoy.add(int(_ikey.split('-')[2]))
+                except (IndexError, ValueError):
+                    pass
+            # Productos actualizados en este sync — se excluyen del bulk zero final
+            _prod_ids_actualizados: set = set()
+
             for codigo, datos in inventario_siesa.items():
                 existencia_siesa = int(round(datos['existencia']))
                 if existencia_siesa <= 0:
@@ -269,21 +358,7 @@ def _run_carga_inicial(app):
                         _savepoint.commit()
                         continue  # Ya se cargó hoy
 
-                    # Zero-ar otras ubicaciones del mismo producto para evitar
-                    # acumulación cuando Siesa cambia ubicacion_aux entre días.
-                    # EXCEPCIÓN P10: no tocar ubicaciones con ajuste manual reciente (12h).
-                    # _ajustes_recientes pre-cargado una vez antes del loop — sin N+1.
-                    _ubs_protegidas = _ajustes_recientes.get(prod.id, set())
-                    _filtro_zero = UbicacionProducto.query.filter(
-                        UbicacionProducto.producto_id == prod.id,
-                        UbicacionProducto.ubicacion_id != ub.id,
-                    )
-                    if _ubs_protegidas:
-                        _filtro_zero = _filtro_zero.filter(
-                            ~UbicacionProducto.ubicacion_id.in_(_ubs_protegidas)
-                        )
-                    _filtro_zero.update({'cantidad': 0}, synchronize_session=False)
-
+                    # El zero de otras ubicaciones se hizo en bulk antes del loop (M5)
                     saldo_antes = reg.cantidad if reg else 0
 
                     if reg:
@@ -322,6 +397,7 @@ def _run_carga_inicial(app):
                     # Solo añadir al set después del savepoint exitoso —
                     # evita marcar como procesado un producto que falló y fue revertido
                     ikeys_hoy.add(ikey)
+                    _prod_ids_actualizados.add(prod.id)
 
                     # Commit cada 200 productos para no acumular transacciones enormes
                     if (cargados + actualizados) % 200 == 0:
@@ -333,14 +409,64 @@ def _run_carga_inicial(app):
                     _savepoint.rollback()  # solo revierte este producto, no los anteriores
                     errores += 1
 
+            # [M5] Bulk zero DIFERIDO — se ejecuta DESPUÉS del loop, no antes.
+            # Antes estaba al inicio junto al primer lote: si Railway reiniciaba después del
+            # commit 200 pero antes del commit 400, los productos 201-5000 quedaban en 0.
+            # Ahora solo zeroeamos productos que Siesa NO reportó en este sync — los que
+            # ya se procesaron retienen su cantidad real.
+            if _ubs_a_zero:
+                _excl_prods = _prod_ids_ya_hoy | _prod_ids_activos | _prod_ids_actualizados
+                _q_zero = UbicacionProducto.query.filter(
+                    UbicacionProducto.ubicacion_id.in_(_ubs_a_zero),
+                    UbicacionProducto.lote.is_(None),
+                )
+                if _excl_prods:
+                    _q_zero = _q_zero.filter(
+                        ~UbicacionProducto.producto_id.in_(_excl_prods)
+                    )
+                _q_zero.update({'cantidad': 0}, synchronize_session=False)
+                logger.info(
+                    f'[INV-SIESA] Bulk zero diferido OK: {len(_prod_ids_actualizados)} productos '
+                    f'actualizados, {len(_excl_prods)} excluidos del zero'
+                )
+
             db.session.commit()
 
         except Exception as e:
-            logger.error(f'[INV-SIESA] Error en carga inicial: {e}')
+            # FM_RAILWAY_RESTART: si el proceso se mató a mitad del loop de páginas,
+            # el bulk-zero nunca se ejecutó → productos de páginas no procesadas
+            # conservan cantidad WMS potencialmente obsoleta. El siguiente sync
+            # los actualizará, pero hay un gap hasta entonces.
+            logger.error(f'[INV-SIESA] Error en carga inicial: {e}', exc_info=True)
             db.session.rollback()
             _estado_carga['ultimo_error'] = str(e)
             _estado_carga['en_curso'] = False
+            try:
+                from app.services.alertas_service import enviar_email, _config_resend
+                if _config_resend():
+                    enviar_email(
+                        asunto='[WMS ALERTA] Sync inventario Siesa falló — bulk-zero puede estar incompleto',
+                        cuerpo_texto=(
+                            f'El sync de inventario Siesa falló con error:\n{e}\n\n'
+                            'Si el fallo ocurrió a mitad del loop de páginas, el bulk-zero '
+                            '(zeroing de productos no reportados) puede no haberse ejecutado. '
+                            'Los productos de páginas no procesadas conservan cantidades WMS posiblemente obsoletas. '
+                            'Disparar sync manual: POST /api/inventario-siesa/cargar'
+                        ),
+                        cuerpo_html=None,
+                    )
+            except Exception:
+                pass
             return
+        finally:
+            if lock_adquirido:
+                try:
+                    db.session.execute(
+                        _text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
+                    )
+                    db.session.commit()
+                except Exception:
+                    pass
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),
@@ -448,7 +574,11 @@ def _run_reconciliacion(app):
                 logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
                 return
 
-            inventario_siesa = _descargar_inventario_siesa()
+            # forzar=True: descarga datos frescos de Siesa ignorando el cache de la carga inicial.
+            # Sin esto, si la carga inicial corrió hace <1h, la reconciliación compararía
+            # el WMS (ya actualizado) contra los mismos datos Siesa → falsos negativos Y
+            # si el WMS tiene picks intermedios → TareaDevolucion falsas.
+            inventario_siesa = _descargar_inventario_siesa(forzar=True)
 
             codigos_siesa = list(inventario_siesa.keys())
             prods_siesa = (

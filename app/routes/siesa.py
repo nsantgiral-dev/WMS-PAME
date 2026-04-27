@@ -213,9 +213,24 @@ def debug_pedidos_raw():
     params = {'paginacion': f'numPag={num_pag}|tamPag={tam_pag}'}
 
     if params_raw:
-        # Validación básica: evitar inyección de múltiples sentencias SQL
-        if len(params_raw) > 500 or ';' in params_raw or '--' in params_raw:
-            return jsonify({'error': 'params_raw inválido — usa filtros simples tipo campo=valor'}), 400
+        # Allowlist: params_raw debe ser tokens tipo campo=valor separados por AND.
+        # campo: convención Siesa f<nnn>_<nombre> (ej. f430_id_co).
+        # valor: número, ''texto'' (Connekta), o identificador simple.
+        import re as _re
+        _TOKEN_RE = _re.compile(
+            r'^[a-zA-Z][a-zA-Z0-9_]{2,40}='  # campo
+            r"(''[^']*''|'[^']*'|\"[^\"]*\"|-?\d+(\.\d+)?|[a-zA-Z0-9_\-\.]+)$"
+        )
+        if len(params_raw) > 500:
+            return jsonify({'error': 'params_raw demasiado largo (máx 500 chars)'}), 400
+        tokens = [t.strip() for t in _re.split(r'\bAND\b', params_raw, flags=_re.IGNORECASE)]
+        invalidos = [t for t in tokens if t and not _TOKEN_RE.match(t)]
+        if invalidos:
+            return jsonify({
+                'error': 'params_raw contiene tokens inválidos',
+                'invalidos': invalidos,
+                'formato': 'campo=valor [AND campo=valor] — valor: número, \'\'texto\'\' o identificador',
+            }), 400
         params['parametros'] = params_raw
     elif consec:
         filtros = [f'f430_consec_docto={consec}']
@@ -406,11 +421,11 @@ def pedidos_aprobados():
 
     # Cola de despacho: Read Model local enriquecido con estado del picking WMS.
     # Estado por pedido:
-    #   picking_iniciado=False                        → mostrar botón "Despachar"
-    #   picking_iniciado=True, completado=False       → picking en curso (progreso X/Y)
+    #   picking_iniciado=False                       → mostrar botón "Despachar"
+    #   picking_iniciado=True, completado=False      → picking en curso (progreso X/Y)
     #   picking_iniciado=True, completado=True,
-    #     siesa_triggered=False                       → mostrar botón "Confirmar en Siesa"
-    #   siesa_triggered=True                          → despachado ✓
+    #     siesa_triggered=False                      → mostrar botón "Confirmar en Siesa"
+    #   siesa_triggered=True                         → despachado ✓
     from app.models.pedido_siesa import PedidoSiesa
     from app.models.picking import TareaPicking
     from app.models.packing import TareaPacking
@@ -436,21 +451,31 @@ def pedidos_aprobados():
             }
         pedidos[num]['items'].append(row.to_dict())
 
-    # Enriquecer con estado del picking/packing en WMS
-    for num, pedido in pedidos.items():
-        packing = TareaPacking.query.filter(
-            TareaPacking.numero_pedido_siesa == num,
+    # Enriquecer con estado del picking/packing en WMS — bulk-load en 2 queries (evita N+1)
+    nums = list(pedidos.keys())
+    packings_map = {}
+    if nums:
+        for pk in TareaPacking.query.filter(
+            TareaPacking.numero_pedido_siesa.in_(nums),
             TareaPacking.estado != 'CANCELADO'
-        ).first()
+        ).all():
+            packings_map.setdefault(pk.numero_pedido_siesa, pk)  # primer activo por pedido
+
+        pickings_por_pedido: dict = {}
+        for p in TareaPicking.query.filter(
+            TareaPicking.referencia_documento.in_(nums),
+            TareaPicking.estado != 'CANCELADO'
+        ).all():
+            pickings_por_pedido.setdefault(p.referencia_documento, []).append(p)
+
+    for num, pedido in pedidos.items():
+        packing = packings_map.get(num)
 
         if not packing:
             pedido.update({'picking_iniciado': False, 'picking_completado': False,
                            'picking_progreso': '0/0', 'packing_id': None, 'siesa_triggered': False})
         else:
-            pickings = TareaPicking.query.filter(
-                TareaPicking.referencia_documento == num,
-                TareaPicking.estado != 'CANCELADO'
-            ).all()
+            pickings = pickings_por_pedido.get(num, [])
             total = len(pickings)
             completados = sum(1 for p in pickings if p.estado == 'COMPLETADO')
             pedido.update({
@@ -590,7 +615,10 @@ def debug_pedidos_compromisos_raw():
         return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
 
     pagina  = request.args.get('pagina', '1')
-    tam     = min(int(request.args.get('tam', '5')), 50)
+    try:
+        tam = min(int(request.args.get('tam', '5')), 50)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'tam debe ser un número entero'}), 400
     params_custom = request.args.get('parametros', '')
 
     params = {
@@ -612,8 +640,11 @@ def ordenes_compra():
     """
     # [41] NIT de proveedores solo visible para admin y jefe_almacen
     from app.models.usuario import Usuario
-    _uid = get_jwt_identity()
-    _u = Usuario.query.get(int(_uid))
+    try:
+        _uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    _u = Usuario.query.get(_uid)
     if not _u or _u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
 
@@ -786,7 +817,7 @@ def iniciar_despacho():
                 prioridad=2
             )
             tareas_picking_ids.extend([t.id for t in tareas])
-        except ValueError as e:
+        except (ValueError, TypeError) as e:
             errores.append(str(e))
 
     if not tareas_picking_ids:
@@ -838,10 +869,17 @@ def iniciar_recepcion():
     con los tres campos del documento origen (co, tipo_docto, consec_docto) y la inicia
     de inmediato. La PWA pasa directamente a la pantalla de escaneo ciego.
     """
+    # [C1] Solo recepcionistas, jefe_almacen y admin pueden crear recepciones.
+    # Sin este check cualquier usuario autenticado (ej. conductor, tienda) podría
+    # crear entradas de inventario en Siesa — riesgo crítico de integridad.
+    from app.models.usuario import Usuario as _Usr
     try:
         recepcionista_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    _usr = _Usr.query.get(recepcionista_id)
+    if not _usr or _usr.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Sin permiso — se requiere rol recepcionista, jefe_almacen o admin'}), 403
     data = request.get_json()
 
     for campo in ['numero_oc', 'tipo_docto', 'consec_docto', 'almacen_id', 'items']:

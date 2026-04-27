@@ -37,6 +37,31 @@ def create_app():
     allowed_origin = os.getenv('APP_URL', '*')
     cors.init_app(app, resources={r"/api/*": {"origins": allowed_origin}})
 
+    # Revocación de tokens: si el usuario se desactiva (activo=False),
+    # sus tokens existentes se tratan como revocados inmediatamente.
+    # Flask-JWT-Extended llama esto en cada @jwt_required() antes de continuar.
+    from app.extensions import jwt as _jwt
+
+    @_jwt.token_in_blocklist_loader
+    def _check_usuario_activo(jwt_header, jwt_payload):
+        uid = jwt_payload.get('sub')
+        if not uid:
+            return True   # token inválido — revocar
+        try:
+            from app.models.usuario import Usuario
+            u = Usuario.query.get(int(uid))
+            return u is None or not u.activo
+        except Exception as _e:
+            logging.getLogger(__name__).warning(
+                f'[JWT] Error al verificar blocklist para uid={uid}: {_e} — bloqueando (fail-closed)'
+            )
+            return True   # fail-closed: preferir seguridad sobre disponibilidad
+
+    @_jwt.revoked_token_loader
+    def _revoked_token_response(jwt_header, jwt_payload):
+        from flask import jsonify
+        return jsonify({'error': 'Usuario desactivado o sesión revocada'}), 401
+
     from flask import jsonify
 
     @app.errorhandler(500)
@@ -99,13 +124,13 @@ def create_app():
                 _mod = _il.import_module(_mod_path)
                 getattr(_mod, _fn_name)(app)
             except Exception as e:
-                _app_logger.error(f'{_tag} No se pudo iniciar: {e}')
+                _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
 
         # ABCService tiene una interfaz diferente (método de clase en vez de función suelta)
         try:
             from app.services.abc_service import ABCService
             ABCService.init_scheduler(app)
         except Exception as e:
-            logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}')
+            logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}', exc_info=True)
 
     return app

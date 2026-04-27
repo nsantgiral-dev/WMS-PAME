@@ -181,6 +181,11 @@ class TrasladoService:
 
         # Usar cantidad_enviada si fue confirmada por picking; si no, caer a aprobada.
         # Esto permite que el picking parcial (menos ítems de los aprobados) sea correcto.
+
+        # Pre-cargar productos para evitar N+1
+        prod_ids = [item.producto_id for item in s.items if item.producto_id]
+        prods_map = {p.id: p for p in Producto.query.filter(Producto.id.in_(prod_ids)).all()} if prod_ids else {}
+
         items_payload = []
         for item in s.items:
             # cantidad_enviada=None → picking no corrió, usar fallback.
@@ -192,12 +197,13 @@ class TrasladoService:
                 item.cantidad_enviada = cantidad  # fijar para que recepción tenga referencia exacta
             if not cantidad or cantidad <= 0:
                 continue
+            prod = prods_map.get(item.producto_id)
             items_payload.append({
                 'codigo_siesa': item.producto_codigo_siesa,
-                'codigo': item.producto.codigo if item.producto else '',
+                'codigo': prod.codigo if prod else '',
                 'cantidad': cantidad,
-                'unidad_medida': item.producto.unidad_medida if item.producto else '',
-                'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
+                'unidad_medida': prod.unidad_medida if prod else '',
+                'unidad_negocio_id': prod.unidad_negocio_id if prod else '',
             })
 
         if not items_payload:
@@ -284,13 +290,16 @@ class TrasladoService:
 
         # ── Trigger Siesa: Entrada tránsito ──
         if s.modo_transferencia == 'EN_TRANSITO':
+            # Pre-cargar productos para evitar N+1
+            _prod_ids = [i.producto_id for i in s.items if i.producto_id]
+            _prods = {p.id: p for p in Producto.query.filter(Producto.id.in_(_prod_ids)).all()} if _prod_ids else {}
             items_payload = [
                 {
                     'codigo_siesa': item.producto_codigo_siesa,
-                    'codigo': item.producto.codigo if item.producto else '',
+                    'codigo': _prods[item.producto_id].codigo if item.producto_id in _prods else '',
                     'cantidad': item.cantidad_recibida,
-                    'unidad_medida': item.producto.unidad_medida if item.producto else '',
-                    'unidad_negocio_id': item.producto.unidad_negocio_id if item.producto else '',
+                    'unidad_medida': _prods[item.producto_id].unidad_medida if item.producto_id in _prods else '',
+                    'unidad_negocio_id': _prods[item.producto_id].unidad_negocio_id if item.producto_id in _prods else '',
                 }
                 for item in s.items
             ]
@@ -393,7 +402,7 @@ class TrasladoService:
             reg = UbicacionProducto.query.filter_by(
                 ubicacion_id=t.ubicacion_id,
                 producto_id=t.producto_id,
-            ).first()
+            ).with_for_update().first()
             if reg:
                 reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
             t.estado = 'CANCELADO'
@@ -428,7 +437,7 @@ class TrasladoService:
                     reg = UbicacionProducto.query.filter_by(
                         ubicacion_id=t.ubicacion_id,
                         producto_id=t.producto_id,
-                    ).first()
+                    ).with_for_update().first()
                     if reg:
                         reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
                     t.estado = 'CANCELADO'
@@ -462,6 +471,7 @@ class TrasladoService:
                 .filter_by(producto_id=item.producto_id)
                 .filter(UbicacionProducto.cantidad > 0)
                 .order_by(UbicacionProducto.cantidad.asc())  # FIFO: vaciar las más pequeñas primero
+                .with_for_update()
                 .all()
             )
             saldo_antes = sum(u.cantidad for u in ubicaciones)

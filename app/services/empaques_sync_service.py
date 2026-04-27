@@ -59,8 +59,18 @@ def _cargar_factores_q35():
     """
     factores = {}
     total_filas = 0
+    _errores_q35 = 0
     for pag in range(1, 2001):
-        resp = connekta.get_items_unidades_medida(pag)
+        try:
+            resp = connekta.get_items_unidades_medida(pag)
+            _errores_q35 = 0
+        except Exception as _e:
+            _errores_q35 += 1
+            logger.warning(f'[EMPAQUES SYNC] Error q35 pág {pag}: {_e} (consecutivos: {_errores_q35})')
+            if _errores_q35 >= 3:
+                logger.error('[EMPAQUES SYNC] 3 errores consecutivos en q35 — abortando')
+                break
+            continue
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
             break
@@ -86,6 +96,9 @@ def _cargar_factores_q35():
     return factores
 
 
+_ADVISORY_LOCK_EMPAQUES = 2001  # clave única para pg_advisory_lock
+
+
 def _run_sync(app):
     global _sync_estado
     with app.app_context():
@@ -95,35 +108,77 @@ def _run_sync(app):
         sin_factor = 0
         errores = 0
 
+        # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
+        from sqlalchemy import text as _text
+        lock_adquirido = False
+        try:
+            lock_adquirido = db.session.execute(
+                _text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_EMPAQUES}
+            ).scalar()
+            if not lock_adquirido:
+                logger.info('[EMPAQUES SYNC] Otro worker ya ejecuta el sync — omitido')
+                _sync_estado['en_curso'] = False
+                return
+        except Exception as e:
+            logger.warning(f'[EMPAQUES SYNC] Advisory lock no disponible: {e} — continuando sin él')
+
         try:
             # ── Paso A: cargar productos en memoria ────────────────────────────
+            # Capturar solo los campos necesarios (evita expire_on_commit N+1 tras commit en paso C)
+            _ProdData = __import__('collections', fromlist=['namedtuple']).namedtuple('PD', ['id', 'codigo_siesa', 'codigo'])
             prods_por_siesa = {}
             prods_por_codigo = {}
-            for p in Producto.query.filter_by(activo=True).all():
-                if p.codigo_siesa:
-                    prods_por_siesa[p.codigo_siesa.strip()] = p
-                if p.codigo:
-                    prods_por_codigo[p.codigo.strip()] = p
+            for p in Producto.query.filter_by(activo=True).with_entities(
+                Producto.id, Producto.codigo_siesa, Producto.codigo
+            ).all():
+                _pd = _ProdData(id=p.id, codigo_siesa=p.codigo_siesa, codigo=p.codigo)
+                if _pd.codigo_siesa:
+                    prods_por_siesa[_pd.codigo_siesa.strip()] = _pd
+                if _pd.codigo:
+                    prods_por_codigo[_pd.codigo.strip()] = _pd
             logger.info(f'[EMPAQUES SYNC] Productos en memoria: {len(prods_por_siesa)}')
 
             # ── Paso B: cargar empaques existentes en memoria ──────────────────
+            # Capturar atributos antes del commit para evitar N+1 por expire_on_commit
+            _EmpData = __import__('collections', fromlist=['namedtuple']).namedtuple('ED', ['orm', 'origen', 'factor_conversion', 'unidad_medida'])
             empaques_existentes = {}
             for e in ProductoEmpaque.query.filter_by(activo=True).all():
-                empaques_existentes[(e.producto_id, e.codigo_barras)] = e
+                empaques_existentes[(e.producto_id, e.codigo_barras)] = _EmpData(
+                    orm=e, origen=e.origen, factor_conversion=e.factor_conversion, unidad_medida=e.unidad_medida
+                )
 
             # ── Paso C: cargar factores de q35 en memoria ──────────────────────
             # factores[(referencia, unidad)] = factor_int
             factores_q35 = _cargar_factores_q35()
+            if not factores_q35:
+                logger.error('[EMPAQUES SYNC] q35 retornó vacío (Connekta caído o sin datos) — sync abortado para evitar corrupción de factores')
+                _sync_estado['ultimo_error'] = 'q35 vacío — sync abortado'
+                return
+
+            # Liberar la conexión BD antes de las horas de HTTP calls en q28
+            # Los dicts en memoria (prods_por_siesa, empaques_existentes) conservan
+            # los atributos que necesitamos aunque los objetos queden detached.
+            db.session.commit()
 
             # ── Paso D: paginar q28 y hacer JOIN con factores_q35 ─────────────
             # Campos confirmados:
             #   f120_referencia        → código Siesa
             #   f131_id                → código de barras
             #   f131_id_unidad_medida  → tipo de unidad (JOIN key con q35)
+            _errores_q28 = 0
             for pag in range(1, 2001):
-                resp = connekta._get(connekta.api_barras, {
-                    'paginacion': f'numPag={pag}|tamPag=100'
-                })
+                try:
+                    resp = connekta._get(connekta.api_barras, {
+                        'paginacion': f'numPag={pag}|tamPag=100'
+                    })
+                    _errores_q28 = 0
+                except Exception as _e:
+                    _errores_q28 += 1
+                    logger.warning(f'[EMPAQUES SYNC] Error q28 pág {pag}: {_e} (consecutivos: {_errores_q28})')
+                    if _errores_q28 >= 3:
+                        logger.error('[EMPAQUES SYNC] 3 errores consecutivos en q28 — abortando')
+                        break
+                    continue
                 rows = resp.get('detalle', {}).get('Table', [])
                 if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
                     break
@@ -162,21 +217,28 @@ def _run_sync(app):
 
                         clave = (prod.id, codigo_barras)
                         if clave in empaques_existentes:
-                            emp = empaques_existentes[clave]
+                            _ed = empaques_existentes[clave]
                             # WMS_LPN nunca se toca
-                            if emp.origen == 'WMS_LPN':
+                            if _ed.origen == 'WMS_LPN':
                                 continue
                             changed = False
-                            if emp.factor_conversion != factor:
-                                emp.factor_conversion = factor
+                            if _ed.factor_conversion != factor:
+                                _ed.orm.factor_conversion = factor
                                 changed = True
-                            if emp.unidad_medida != unidad:
-                                emp.unidad_medida = unidad
+                            if _ed.unidad_medida != unidad:
+                                _ed.orm.unidad_medida = unidad
                                 changed = True
                             if changed:
+                                # Actualizar cache para futuras comparaciones en la misma corrida
+                                empaques_existentes[clave] = _EmpData(
+                                    orm=_ed.orm,
+                                    origen=_ed.origen,
+                                    factor_conversion=_ed.orm.factor_conversion,
+                                    unidad_medida=_ed.orm.unidad_medida,
+                                )
                                 actualizados += 1
                         else:
-                            emp = ProductoEmpaque(
+                            _emp_new = ProductoEmpaque(
                                 producto_id=prod.id,
                                 referencia_item=referencia,
                                 codigo_barras=codigo_barras,
@@ -185,8 +247,11 @@ def _run_sync(app):
                                 origen='SIESA_GS1',
                                 activo=True,
                             )
-                            db.session.add(emp)
-                            empaques_existentes[clave] = emp
+                            db.session.add(_emp_new)
+                            empaques_existentes[clave] = _EmpData(
+                                orm=_emp_new, origen='SIESA_GS1',
+                                factor_conversion=factor, unidad_medida=unidad,
+                            )
                             insertados += 1
 
                     except Exception as e:
@@ -216,9 +281,33 @@ def _run_sync(app):
         except Exception as e:
             db.session.rollback()
             _sync_estado['ultimo_error'] = str(e)
-            logger.error(f'[EMPAQUES SYNC] Error fatal: {e}')
+            logger.error(f'[EMPAQUES SYNC] Error fatal: {e}', exc_info=True)
+            # SF_JOB_SILENCIOSO: _sync_estado se pierde en restart de Railway.
+            # Enviar email para que ops sepa que los empaques no están actualizados.
+            try:
+                from app.services.alertas_service import enviar_email, _config_resend
+                if _config_resend():
+                    enviar_email(
+                        asunto='[WMS ALERTA] Sync empaques/barcodes Siesa falló',
+                        cuerpo_texto=(
+                            f'El sync de empaques/barcodes de Siesa falló con error:\n{e}\n\n'
+                            'Los empaques y factores de conversión pueden estar desactualizados. '
+                            'Usa POST /api/empaques/sync para disparar manualmente.'
+                        ),
+                        cuerpo_html=None,
+                    )
+            except Exception:
+                pass
         finally:
             _sync_estado['en_curso'] = False
+            if lock_adquirido:
+                try:
+                    db.session.execute(
+                        _text('SELECT pg_advisory_unlock(:key)'), {'key': _ADVISORY_LOCK_EMPAQUES}
+                    )
+                    db.session.commit()
+                except Exception:
+                    pass
 
 
 def ejecutar_sync(app):

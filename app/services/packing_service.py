@@ -174,10 +174,11 @@ class PackingService:
         alerta = None
         if item.tiene_diferencia():
             diferencia = item.diferencia()
+            _nombre = item.producto.nombre if item.producto else f'Producto {item.producto_id}'
             if diferencia > 0:
-                alerta = f'SOBRANTE: hay {diferencia} unidad(es) de más de {item.producto.nombre}'
+                alerta = f'SOBRANTE: hay {diferencia} unidad(es) de más de {_nombre}'
             else:
-                alerta = f'FALTANTE: faltan {abs(diferencia)} unidad(es) de {item.producto.nombre}'
+                alerta = f'FALTANTE: faltan {abs(diferencia)} unidad(es) de {_nombre}'
             logger.warning(f'[PACKING] {alerta} en tarea {tarea.codigo}')
 
         db.session.commit()
@@ -208,13 +209,16 @@ class PackingService:
 
         items_sin_verificar = [i for i in tarea.items if not i.verificado]
         if items_sin_verificar:
-            nombres = [i.producto.nombre for i in items_sin_verificar[:3]]
+            nombres = [
+                (i.producto.nombre if i.producto else f'ID {i.producto_id}')
+                for i in items_sin_verificar[:3]
+            ]
             raise ValueError(f'Faltan por escanear: {", ".join(nombres)}')
 
         items_con_diferencia = [i for i in tarea.items if i.tiene_diferencia()]
         if items_con_diferencia and not forzar:
             diferencias = [{
-                'producto': i.producto.nombre,
+                'producto': (i.producto.nombre if i.producto else f'Producto {i.producto_id}'),
                 'esperado': i.cantidad_esperada,
                 'real': i.cantidad_real,
                 'diferencia': i.diferencia()
@@ -239,47 +243,37 @@ class PackingService:
         bultos_data: [{'tipo': 'Caja', 'cantidad': 2}, {'tipo': 'Bolsa', 'cantidad': 1}]
         """
         from app.models.bulto import Bulto
-
-        # Lock pesimista — evita doble cierre concurrente (doble clic = doble remisión a Siesa)
         from sqlalchemy.orm import selectinload
-        tarea = (TareaPacking.query
-                 .options(selectinload(TareaPacking.items).selectinload(ItemPacking.producto))
-                 .filter_by(id=tarea_id)
-                 .with_for_update()
-                 .first())
-        if not tarea:
+
+        # Lectura previa SIN lock — solo para obtener datos del pre-check Siesa.
+        # El HTTP a Siesa puede tardar hasta 30s; retener el lock ese tiempo bloquearía
+        # cualquier otro worker que intente cerrar un packing simultáneamente.
+        tarea_pre = TareaPacking.query.filter_by(id=tarea_id).first()
+        if not tarea_pre:
             raise ValueError('Tarea no encontrada')
-        # Permitir retry si Siesa falló (VERIFICADO o DESPACHADO sin siesa_triggered)
-        siesa_pendiente = tarea.estado == 'DESPACHADO' and not tarea.siesa_triggered
-        if tarea.estado not in ['VERIFICADO'] and not siesa_pendiente:
-            raise ValueError('El packing debe estar VERIFICADO antes de cerrar')
+
+        # Validaciones rápidas antes del HTTP (evita llamadas inútiles a Siesa)
         if not bultos_data:
             raise ValueError('Debes declarar al menos una pieza')
-
-        # Total de piezas
         total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
         if total < 1:
             raise ValueError('Total de piezas debe ser al menos 1')
 
-        # Pre-verificar que el pedido sigue Comprometido en Siesa antes de crear bultos.
-        # Si falla aquí, el empacador no queda con bultos huérfanos ni tiene que resetear.
+        # Pre-verificar estado en Siesa ANTES de adquirir el lock de fila.
         # Solo se verifica si hay tipo_docto y consec válidos (pedido real de Siesa).
-        if tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+        if tarea_pre.tipo_docto_pedido_siesa and tarea_pre.consec_docto_pedido_siesa:
             logger.info(
-                f'[PACKING] Pre-check Siesa para {tarea.numero_pedido_siesa} '
-                f'(tipo={tarea.tipo_docto_pedido_siesa} consec={tarea.consec_docto_pedido_siesa})'
+                f'[PACKING] Pre-check Siesa para {tarea_pre.numero_pedido_siesa} '
+                f'(tipo={tarea_pre.tipo_docto_pedido_siesa} consec={tarea_pre.consec_docto_pedido_siesa})'
             )
             estado_siesa = connekta.get_estado_pedido(
-                tarea.tipo_docto_pedido_siesa,
-                tarea.consec_docto_pedido_siesa
+                tarea_pre.tipo_docto_pedido_siesa,
+                tarea_pre.consec_docto_pedido_siesa
             )
             logger.info(
-                f'[PACKING] Pre-check resultado: {tarea.numero_pedido_siesa} → estado_siesa={estado_siesa}'
+                f'[PACKING] Pre-check resultado: {tarea_pre.numero_pedido_siesa} → estado_siesa={estado_siesa}'
             )
             if estado_siesa is not None and str(estado_siesa) not in ('3', '4'):
-                # Solo bloqueamos estados definitivamente muertos (Anulado).
-                # Estado 4 (Cumplido) puede seguir siendo facturable en Siesa —
-                # dejamos que trigger_factura lo intente y Siesa decide.
                 ESTADOS = {
                     '0': 'Ingresado (sin aprobar)',
                     '1': 'Aprobado',
@@ -291,25 +285,41 @@ class PackingService:
                 anulado = str(estado_siesa) in ('5', '9')
                 if anulado:
                     logger.error(
-                        f'[PACKING] ⛔ PRE-CHECK BLOQUEÓ cierre de {tarea.numero_pedido_siesa}: '
+                        f'[PACKING] ⛔ PRE-CHECK BLOQUEÓ cierre de {tarea_pre.numero_pedido_siesa}: '
                         f'estado_siesa={estado_siesa} ({nombre_estado}) — '
                         f'trigger_factura NO fue enviado a Siesa'
                     )
                     raise ValueError(
-                        f'El pedido {tarea.numero_pedido_siesa} está Anulado en Siesa '
+                        f'El pedido {tarea_pre.numero_pedido_siesa} está Anulado en Siesa '
                         f'(estado {estado_siesa}) — no se puede facturar. '
                         f'Cancelar este packing y esperar el pedido clonado del área comercial.'
                     )
-                # Estado desconocido o Aprobado (1/2): advertir pero intentar
                 logger.warning(
-                    f'[PACKING] ⚠ Pedido {tarea.numero_pedido_siesa} en estado '
+                    f'[PACKING] ⚠ Pedido {tarea_pre.numero_pedido_siesa} en estado '
                     f'"{nombre_estado}" ({estado_siesa}) — se intenta trigger_factura de todas formas'
                 )
             elif estado_siesa is None:
                 logger.warning(
-                    f'[PACKING] No se pudo verificar estado de {tarea.numero_pedido_siesa} '
+                    f'[PACKING] No se pudo verificar estado de {tarea_pre.numero_pedido_siesa} '
                     f'en Siesa — continuando de todas formas'
                 )
+
+        # Ahora sí — adquirir lock pesimista para el resto de la transacción.
+        # El pre-check ya terminó; el lock solo cubre el tiempo de escritura en DB (<1s).
+        tarea = (TareaPacking.query
+                 .options(selectinload(TareaPacking.items).selectinload(ItemPacking.producto))
+                 .filter_by(id=tarea_id)
+                 .with_for_update()
+                 .first())
+        if not tarea:
+            raise ValueError('Tarea no encontrada')
+        # Guard de idempotencia: si Siesa ya confirmó, bloquear sin importar el estado
+        if tarea.siesa_triggered:
+            raise ValueError('Siesa ya procesó este despacho — verificar en ERP antes de reintentar')
+        # Permitir retry si Siesa falló (VERIFICADO o DESPACHADO sin siesa_triggered)
+        siesa_pendiente = tarea.estado == 'DESPACHADO' and not tarea.siesa_triggered
+        if tarea.estado not in ['VERIFICADO'] and not siesa_pendiente:
+            raise ValueError('El packing debe estar VERIFICADO antes de cerrar')
 
         # Crear bultos solo si no existen aún (idempotente en caso de reintento)
         bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
@@ -345,6 +355,9 @@ class PackingService:
 
         items_payload = []
         for i in tarea.items:
+            if not i.producto:
+                logger.error(f'[PACKING] ItemPacking {i.id} sin producto (producto_id={i.producto_id}) — saltando del payload Siesa')
+                continue
             codigo = i.producto.codigo_siesa or i.producto.codigo
             # Buscar el ID interno de Siesa para este producto en este pedido
             reg_siesa = regs_siesa_map.get(codigo)
@@ -356,6 +369,13 @@ class PackingService:
                 'item_id_siesa': reg_siesa.item_id_siesa if reg_siesa else '',
                 'unidad_medida': i.producto.unidad_medida or ''
             })
+
+        # Validar datos Siesa antes de crear job — un payload inválido causaría DLQ permanente
+        if not tarea.tipo_docto_pedido_siesa:
+            raise ValueError(
+                f'Tarea {tarea_id} no tiene tipo_docto_pedido_siesa — '
+                'el pedido no tiene datos Siesa válidos. Contacta al administrador.'
+            )
 
         # TRIGGER A SIESA — 238925 FacturaPedido → factura FE + remisión automática
         consec_para_siesa = tarea.consec_docto_pedido_siesa or tarea.numero_pedido_siesa
@@ -371,67 +391,87 @@ class PackingService:
         # [P8] Crear SiesaJob de respaldo ANTES del commit — atómico con los bultos.
         # Si el commit falla, ni los bultos ni el job persisten (sin pérdida silenciosa).
         # Si Siesa falla después, el job ya está en DB como PENDIENTE para DLQ.
-        job_dlq = _SiesaJob.encolar(
-            tipo='DESPACHO_F470',
-            payload={
+        # En reintento (siesa_pendiente=True) puede existir ya un job activo — reutilizarlo.
+        # [C3] Incluir PROCESANDO en la deduplicación — si el worker DLQ ya tomó el job
+        # y está ejecutándolo, crear uno nuevo causaría doble envío a Siesa.
+        # [CRÍTICO] Incluir FALLIDO — sin esto, tras resetear_siesa() el job FALLIDO queda
+        # huérfano y se crea un job nuevo: Siesa factura dos veces el mismo pedido.
+        # Si hay un job FALLIDO, reutilizarlo (resetear a PENDIENTE) en vez de crear uno nuevo.
+        job_dlq = _SiesaJob.query.filter(
+            _SiesaJob.tipo == 'DESPACHO_F470',
+            _SiesaJob.referencia_tipo == 'TareaPacking',
+            _SiesaJob.referencia_id == tarea_id,
+            _SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO']),
+        ).first()
+        if job_dlq and job_dlq.estado == 'FALLIDO':
+            # Reusar el job fallido: resetear a PENDIENTE con el payload actualizado.
+            # Esto evita crear un job nuevo que duplicaría el envío a Siesa.
+            job_dlq.estado = 'PENDIENTE'
+            job_dlq.intentos = 0
+            job_dlq.proximo_intento = None
+            job_dlq.error_ultimo = None
+            job_dlq.payload = json.dumps({
                 'tarea_id': tarea_id,
                 'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
                 'consec_docto_pedido': consec_para_siesa,
                 'items': items_payload,
                 'numero_pedido_siesa': tarea.numero_pedido_siesa,
-            },
-            referencia_tipo='TareaPacking',
-            referencia_id=tarea_id,
-        )
+            }, ensure_ascii=False)
+            logger.warning(
+                f'[PACKING] Job FALLIDO {job_dlq.id} reutilizado (reset a PENDIENTE) '
+                f'para tarea {tarea_id} — evita doble factura a Siesa'
+            )
+        elif not job_dlq:
+            job_dlq = _SiesaJob.encolar(
+                tipo='DESPACHO_F470',
+                payload={
+                    'tarea_id': tarea_id,
+                    'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
+                    'consec_docto_pedido': consec_para_siesa,
+                    'items': items_payload,
+                    'numero_pedido_siesa': tarea.numero_pedido_siesa,
+                },
+                referencia_tipo='TareaPacking',
+                referencia_id=tarea_id,
+            )
         # Commit bultos + SiesaJob en una sola transacción
         db.session.commit()
 
-        try:
-            respuesta_siesa = connekta.trigger_factura(
-                tipo_docto_pedido=tarea.tipo_docto_pedido_siesa or '',
-                consec_docto_pedido=consec_para_siesa,
-                items=items_payload
-            )
-            tarea.siesa_triggered = True
-            tarea.siesa_response = json.dumps(respuesta_siesa)
-            tarea.siesa_triggered_at = datetime.utcnow()
-            tarea.estado = 'DESPACHADO'
-            tarea.fecha_despachado = datetime.utcnow()
-            # Siesa respondió OK — marcar el job de respaldo como completado
-            job_dlq.marcar_completado(respuesta_siesa)
-            logger.info(
-                f'[PACKING] ✅ Siesa OK para {tarea.numero_pedido_siesa} — '
-                f'{total} bultos — respuesta: {str(respuesta_siesa)[:200]}'
-            )
-        except Exception as e:
-            error_str = str(e)
-            logger.error(
-                f'[PACKING] ❌ Siesa FALLÓ para {tarea.numero_pedido_siesa}: {error_str}'
-            )
-            tarea.siesa_response = error_str
-            # El job_dlq ya está en DB como PENDIENTE — DLQ lo reintentará en 5 min
-            db.session.commit()
-            if 'comprometido' in error_str.lower():
-                raise Exception(
-                    f'El pedido {tarea.numero_pedido_siesa} ya no está en estado '
-                    f'Comprometido en Siesa. Alguien lo puede haber modificado en el ERP. '
-                    f'Ir a Ventas → Pedidos → buscar {tarea.numero_pedido_siesa} → '
-                    f'Comprometer pedido y luego reintentar el cierre aquí.'
-                )
-            raise Exception(error_str)
+        # Disparar DLQ en hilo daemon — procesa el job recién encolado sin bloquear el worker.
+        # Si Siesa falla, el job queda PENDIENTE para reintento automático cada 5 min.
+        # El advisory lock en procesar_jobs_pendientes evita ejecuciones concurrentes.
+        from app.services.siesa_job_service import disparar_dlq_inmediato
+        disparar_dlq_inmediato()
 
-        db.session.commit()
+        logger.info(
+            f'[PACKING] bultos={total} pedido={tarea.numero_pedido_siesa} — '
+            f'job_dlq={job_dlq.id} encolado, DLQ disparado async'
+        )
         return bultos_existentes
 
     @staticmethod
     def cancelar(tarea_id: int, motivo: str = None):
         """Cancela una tarea de packing."""
         from app.models.bulto import Bulto
+        from app.models.siesa_job import SiesaJob as _SJ
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             raise ValueError('Tarea no encontrada')
         if tarea.estado == 'DESPACHADO' and tarea.siesa_triggered:
             raise ValueError('No se puede cancelar — Siesa ya generó la remisión')
+
+        # [C2] Bloquear cancelación si hay un SiesaJob activo (PENDIENTE/PROCESANDO/REINTENTANDO).
+        # Cancelar mientras Siesa está procesando podría dejar la remisión creada en Siesa
+        # sin reflejo en el WMS — inconsistencia imposible de detectar automáticamente.
+        job_activo = _SJ.query.filter_by(
+            referencia_tipo='TareaPacking',
+            referencia_id=tarea_id,
+        ).filter(_SJ.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO'])).first()
+        if job_activo:
+            raise ValueError(
+                f'No se puede cancelar — hay un job Siesa {job_activo.estado} (id={job_activo.id}). '
+                'Espera a que termine o falle definitivamente antes de cancelar.'
+            )
 
         # Si tiene bultos sin cargar, eliminarlos antes de cancelar
         Bulto.query.filter_by(tarea_id=tarea_id, estado='PENDIENTE').delete()
@@ -455,6 +495,17 @@ class PackingService:
             raise ValueError('Siesa ya procesó esta tarea')
         if tarea.estado not in ['VERIFICADO', 'DESPACHADO']:
             raise ValueError('Solo se puede resetear una tarea VERIFICADA o con error Siesa')
+
+        # Bloquear reset si hay bultos ya entregados al cliente —
+        # borrarlos eliminaría el registro de la entrega.
+        bultos_entregados = Bulto.query.filter_by(
+            tarea_id=tarea_id, estado='ENTREGADO'
+        ).count()
+        if bultos_entregados:
+            raise ValueError(
+                f'No se puede resetear: {bultos_entregados} bulto(s) ya entregados al cliente. '
+                'Usa el retry de Siesa en su lugar.'
+            )
 
         Bulto.query.filter_by(tarea_id=tarea_id).delete()
         tarea.estado = 'VERIFICADO'

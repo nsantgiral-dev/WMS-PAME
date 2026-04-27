@@ -9,7 +9,10 @@ Rutas de empaques y LPN.
 /api/empaques/sync                  POST — trigger manual del sync nocturno (solo admin)
 /api/empaques/sync/estado           GET  — estado del último sync
 """
+import logging
 from flask import Blueprint, request, jsonify, current_app
+
+logger = logging.getLogger(__name__)
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.lpn import LPN
@@ -18,7 +21,7 @@ from app.services.empaques_service import (
     scan_barcode, descomponer_en_empaques, generar_lpn, consumir_lpn
 )
 from app.services import empaques_sync_service
-from app.routes._auth_helpers import Roles
+from app.routes._auth_helpers import Roles, _es_personal_almacen, _es_gestion
 
 empaques_bp = Blueprint('empaques', __name__)
 
@@ -34,6 +37,8 @@ def scan(codigo_barras):
       tipo: GS1_UNICO | GS1_AMBIGUO | LPN | EAN_BASE | NO_ENCONTRADO
       producto, empaque, factor, lpn (si tipo=LPN), ambiguos (si tipo=GS1_AMBIGUO)
     """
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para escanear códigos'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     resultado = scan_barcode(codigo_barras, almacen_id=almacen_id)
     return jsonify(resultado), 200
@@ -48,6 +53,8 @@ def descomponer():
 
     Body: { producto_id, cantidad_solicitada, almacen_id }
     """
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso'}), 403
     data = request.get_json() or {}
     producto_id = data.get('producto_id')
     cantidad = data.get('cantidad_solicitada')
@@ -106,6 +113,7 @@ def crear_lpn():
         return jsonify({'lpn': lpn.to_dict(), 'mensaje': f'LPN {lpn.codigo} generado'}), 201
     except Exception as e:
         db.session.rollback()
+        logger.exception('Error generando LPN')
         return jsonify({'error': str(e)}), 500
 
 
@@ -113,6 +121,8 @@ def crear_lpn():
 @jwt_required()
 def get_lpn(codigo):
     """Info de un LPN específico."""
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para consultar LPNs'}), 403
     lpn = LPN.query.filter_by(codigo=codigo.upper()).first()
     if not lpn:
         return jsonify({'error': f'LPN {codigo} no encontrado'}), 404
@@ -128,6 +138,14 @@ def consumir(codigo):
 
     Retorna las unidades liberadas para que el frontend actualice el inventario.
     """
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Solo recepcionistas pueden consumir LPNs'}), 403
     try:
         lpn, unidades = consumir_lpn(codigo.upper())
         db.session.commit()
@@ -140,6 +158,7 @@ def consumir(codigo):
         return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
+        logger.exception('Error consumiendo LPN')
         return jsonify({'error': str(e)}), 500
 
 
@@ -147,6 +166,8 @@ def consumir(codigo):
 @jwt_required()
 def lpns_por_producto(producto_id):
     """Lista LPNs activos de un producto en un almacén. Usado por picking para saber qué hay."""
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para consultar LPNs'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
@@ -175,4 +196,6 @@ def trigger_sync():
 @jwt_required()
 def sync_estado():
     """Estado del último sync de empaques."""
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para consultar estado del sync'}), 403
     return jsonify(empaques_sync_service.get_estado()), 200

@@ -132,6 +132,16 @@ class ABCService:
         from app.models.picking import TareaPicking
         from app.models.inventario import UbicacionProducto
 
+        # [A3] Advisory lock por almacén — evita ejecuciones concurrentes (scheduler + API manual).
+        # Clave: 3000 + almacen_id (distinto de 2003 del scheduler general para no bloquear entre sí).
+        _lock_key = 3000 + almacen_id
+        _lock_acquired = db.session.execute(
+            db.text(f'SELECT pg_try_advisory_lock({_lock_key})')
+        ).scalar()
+        if not _lock_acquired:
+            logger.info(f'[ABC WATCHDOG] Almacén {almacen_id} — lock no disponible, omitiendo ejecución concurrente')
+            return []
+
         ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
         overrides = []
 
@@ -167,7 +177,7 @@ class ABCService:
                 db.session.query(TareaPicking.producto_id, func.count(TareaPicking.id))
                 .filter(
                     TareaPicking.producto_id.in_(producto_ids_clase),
-                    TareaPicking.estado == 'COMPLETADA',
+                    TareaPicking.estado == 'COMPLETADO',  # [A] corrección typo: era 'COMPLETADA'
                     TareaPicking.fecha_completado >= ventana
                 )
                 .group_by(TareaPicking.producto_id)
@@ -203,8 +213,19 @@ class ABCService:
                 registros = registros_por_prod.get(producto.id, [])
 
                 for reg in registros:
-                    # No duplicar si ya hay conteo activo — usa el set pre-cargado
+                    # Verificación en memoria (evita duplicar dentro de la misma corrida)
                     if (producto.id, reg.ubicacion_id) in conteos_activos:
+                        continue
+
+                    # Verificación en DB justo antes del insert — reduce ventana de race condition
+                    # entre dos workers que hayan pasado simultáneamente el check en memoria.
+                    ya_existe = SesionConteo.query.filter(
+                        SesionConteo.producto_id == producto.id,
+                        SesionConteo.ubicacion_id == reg.ubicacion_id,
+                        SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                    ).first()
+                    if ya_existe:
+                        conteos_activos.add((producto.id, reg.ubicacion_id))
                         continue
 
                     codigo = (
@@ -240,6 +261,14 @@ class ABCService:
             db.session.rollback()
             logger.error(f'[ABC WATCHDOG] Error guardando overrides: {e}')
             raise
+        finally:
+            # [M2] Envolver en try propio: excepción aquí no debe reemplazar el resultado exitoso
+            # del try ni del except principal (enmascararía overrides correctamente aplicados).
+            try:
+                db.session.execute(db.text(f'SELECT pg_advisory_unlock({_lock_key})'))
+                db.session.commit()
+            except Exception as _fe:
+                logger.error(f'[ABC WATCHDOG] Error liberando advisory lock {_lock_key}: {_fe}')
 
         if overrides:
             logger.warning(
@@ -337,7 +366,7 @@ class ABCService:
         # Pre-cargar conteos activos (PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO)
         pares_ubic_prod = [(r.ubicacion_id, r.producto_id) for r in todos_registros]
         if pares_ubic_prod:
-            ubic_ids_all = [x[0] for x in pares_ubic_prod]
+            ubic_ids_all = list({x[0] for x in pares_ubic_prod})  # dedup: evita IN clause con N duplicados
             sesiones_activas = SesionConteo.query.filter(
                 SesionConteo.producto_id.in_(producto_ids),
                 SesionConteo.ubicacion_id.in_(ubic_ids_all),
@@ -394,27 +423,49 @@ class ABCService:
         if batch_diario is not None:
             candidatos = candidatos[:batch_diario]
 
-        # Crear tareas
+        # Crear tareas — savepoint por ítem para tolerar race conditions entre
+        # scheduler y API sin perder todos los inserts por un único conflicto.
+        # La re-verificación dentro del savepoint cierra la ventana entre el
+        # activos_set (leído antes) y el INSERT efectivo.
+        from sqlalchemy.exc import IntegrityError as _IE
         tareas_creadas = []
         for _, producto, reg in candidatos:
-            codigo = (
-                f'CC-{clasificacion}-'
-                f'{datetime.utcnow().strftime("%Y%m%d")}-'
-                f'{str(uuid.uuid4())[:6].upper()}'
-            )
-            sesion = SesionConteo(
-                codigo=codigo,
-                tipo='DIARIO_ABC',
-                clasificacion_abc=clasificacion,
-                ubicacion_id=reg.ubicacion_id,
-                almacen_id=almacen_id,
-                producto_id=producto.id,
-                producto_codigo_siesa=producto.codigo_siesa,
-                maneja_lote=bool(getattr(reg, 'lote', None)),
-                estado='PENDIENTE'
-            )
-            db.session.add(sesion)
-            tareas_creadas.append(sesion)
+            sp = db.session.begin_nested()
+            try:
+                # Re-verificar bajo savepoint: otro worker puede haber insertado
+                # entre el SELECT de activos_set y este INSERT (race condition scheduler+API)
+                ya_existe = SesionConteo.query.filter(
+                    SesionConteo.ubicacion_id == reg.ubicacion_id,
+                    SesionConteo.producto_id == producto.id,
+                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                ).first()
+                if ya_existe:
+                    sp.rollback()
+                    continue
+
+                codigo = (
+                    f'CC-{clasificacion}-'
+                    f'{datetime.utcnow().strftime("%Y%m%d")}-'
+                    f'{str(uuid.uuid4())[:6].upper()}'
+                )
+                sesion = SesionConteo(
+                    codigo=codigo,
+                    tipo='DIARIO_ABC',
+                    clasificacion_abc=clasificacion,
+                    ubicacion_id=reg.ubicacion_id,
+                    almacen_id=almacen_id,
+                    producto_id=producto.id,
+                    producto_codigo_siesa=producto.codigo_siesa,
+                    maneja_lote=bool(getattr(reg, 'lote', None)),
+                    estado='PENDIENTE'
+                )
+                db.session.add(sesion)
+                db.session.flush()
+                sp.commit()
+                tareas_creadas.append(sesion)
+            except _IE:
+                sp.rollback()
+                logger.warning(f'[ABC] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
 
         try:
             db.session.commit()
@@ -422,6 +473,10 @@ class ABCService:
             db.session.rollback()
             logger.error(f'[ABC] Error guardando tareas de conteo: {e}')
             raise
+
+        # Prewarm consolidado: NO llamar aquí — se hace una única vez en generar_todas_las_clases()
+        # para todas las clases A+B+C juntas. Si se llama aquí, el semáforo non-blocking descarta
+        # los prewarms de B y C porque el de A todavía está en curso (cold cache garantizado).
 
         dias_para_ciclo = math.ceil(total_clase / (batch_diario or 1)) if batch_diario else 1
 
@@ -442,6 +497,7 @@ class ABCService:
             'frecuencia_dias': frecuencia,
             'almacen_id': almacen_id,
             'modo': 'completo' if forzar_todo else 'lote_diario',
+            '_sesiones_creadas': tareas_creadas,  # para prewarm consolidado en generar_todas_las_clases
         }
 
     @staticmethod
@@ -453,11 +509,15 @@ class ABCService:
         """
         resultados = {}
         total = 0
+        todas_sesiones_nuevas = []
         for clase in ['A', 'B', 'C']:
             r = ABCService.generar_tareas_conteo_diario(almacen_id, clase,
                                                         forzar_todo=forzar_todo)
             resultados[clase] = r
             total += r['tareas_creadas']
+            # Acumular sesiones recién creadas para prewarm consolidado al final
+            if r.get('_sesiones_creadas'):
+                todas_sesiones_nuevas.extend(r['_sesiones_creadas'])
 
         # Watchdog DESPUÉS de las tareas normales — detecta reclasificaciones urgentes
         try:
@@ -468,8 +528,38 @@ class ABCService:
                 'detalle': overrides
             }
         except Exception as e:
-            logger.error(f'[ABC WATCHDOG] Error en almacén {almacen_id}: {e}')
+            # Productos que debían reclasificarse a A quedan en B/C → sin conteo urgente.
+            logger.error(
+                f'[ABC WATCHDOG] Error en almacén {almacen_id}: {e} '
+                f'— overrides no aplicados; productos de alta rotación sin reclasificar',
+                exc_info=True
+            )
             resultados['watchdog'] = {'error': str(e)}
+            # Intentar notificar por email (best-effort — no lanzar si falla)
+            try:
+                from app.services.alertas_service import enviar_email, _config_resend
+                if _config_resend():
+                    enviar_email(
+                        asunto=f'[WMS ALERTA] ABC Watchdog falló — almacén {almacen_id}',
+                        cuerpo_texto=(
+                            f'El watchdog ABC del almacén {almacen_id} falló con error:\n{e}\n\n'
+                            'Los productos de alta rotación no fueron reclasificados a clase A. '
+                            'El conteo cíclico urgente no se generará automáticamente.'
+                        ),
+                        cuerpo_html=None,
+                    )
+            except Exception as _e_email_watchdog:
+                logger.critical(
+                    f'[ABC WATCHDOG] Email de alerta también falló — la falla del watchdog '
+                    f'queda completamente invisible: {_e_email_watchdog}'
+                )
+
+        # Prewarm único consolidado con A+B+C — evita que el semáforo non-blocking
+        # descarte los prewarms de B y C cuando el de A todavía está en curso.
+        if todas_sesiones_nuevas:
+            from app.services.conteo_service import ConteoService
+            ConteoService.prewarm_existencia_cache(todas_sesiones_nuevas)
+            logger.info(f'[ABC] Prewarm iniciado para {len(todas_sesiones_nuevas)} sesiones A+B+C')
 
         logger.info(f'[ABC] Generación completa · {total} tareas nuevas en almacén {almacen_id}')
         return {'total_tareas_creadas': total, 'por_clase': resultados}
@@ -487,37 +577,72 @@ class ABCService:
 
         def _job():
             with app.app_context():
-                from app.models.almacen import Almacen
-                from datetime import datetime as _dt
-                almacenes = Almacen.query.filter_by(activo=True).all()
-                logger.info(f'[ABC] Job iniciado — {len(almacenes)} almacén(es)')
-                completados = []
-                fallidos = []
-                for a in almacenes:
-                    try:
-                        ABCService.generar_todas_las_clases(a.id)
-                        completados.append(a.id)
-                        logger.info(f'[ABC] Almacén {a.id} completado')
-                    except Exception as ex:
-                        fallidos.append(a.id)
-                        logger.error(f'[ABC] Error almacén {a.id}: {ex}')
-                logger.info(
-                    f'[ABC] Job finalizado — OK: {completados} | FALLIDOS: {fallidos}'
-                )
+                from app.extensions import db as _db
+                # Advisory lock 2003 — garantiza que solo un worker Gunicorn ejecuta
+                # este job a la vez. Si el lock no está disponible (otro worker ganó),
+                # salir silenciosamente en vez de generar tareas duplicadas.
+                lock_acquired = _db.session.execute(
+                    _db.text('SELECT pg_try_advisory_lock(2003)')
+                ).scalar()
+                if not lock_acquired:
+                    logger.info('[ABC] Job omitido — otro worker ya lo está ejecutando')
+                    return
+                try:
+                    from app.models.almacen import Almacen
+                    almacenes = Almacen.query.filter_by(activo=True).all()
+                    logger.info(f'[ABC] Job iniciado — {len(almacenes)} almacén(es)')
+                    completados = []
+                    fallidos = []
+                    for a in almacenes:
+                        try:
+                            ABCService.generar_todas_las_clases(a.id)
+                            completados.append(a.id)
+                            logger.info(f'[ABC] Almacén {a.id} completado')
+                        except Exception as ex:
+                            fallidos.append(a.id)
+                            logger.error(f'[ABC] Error almacén {a.id}: {ex}')
+                    logger.info(
+                        f'[ABC] Job finalizado — OK: {completados} | FALLIDOS: {fallidos}'
+                    )
+                    if fallidos:
+                        # SF_JOB_SILENCIOSO: almacenes fallidos quedan sin tareas de conteo hoy.
+                        # Enviar alerta para que ops pueda disparar manualmente.
+                        try:
+                            from app.services.alertas_service import enviar_email, _config_resend
+                            if _config_resend():
+                                enviar_email(
+                                    asunto=f'[WMS ALERTA] ABC scheduler: {len(fallidos)} almacén(es) fallaron',
+                                    cuerpo_texto=(
+                                        f'El scheduler ABC (2am Bogotá) falló en {len(fallidos)} almacén(es):\n'
+                                        f'FALLIDOS: {fallidos}\n'
+                                        f'COMPLETADOS: {completados}\n\n'
+                                        'Las tareas de conteo cíclico no se generaron para esos almacenes. '
+                                        'Usa /api/abc/generar para disparar manualmente.'
+                                    ),
+                                    cuerpo_html=None,
+                                )
+                        except Exception as _e_email_sched:
+                            logger.critical(
+                                f'[ABC] Email de alerta del scheduler también falló — '
+                                f'falla de almacenes {fallidos} completamente invisible: {_e_email_sched}'
+                            )
+                finally:
+                    _db.session.execute(_db.text('SELECT pg_advisory_unlock(2003)'))
+                    _db.session.commit()
 
         scheduler = BackgroundScheduler(timezone='America/Bogota')
         scheduler.add_job(
             func=_job,
-            trigger=CronTrigger(hour=6, minute=0, timezone='America/Bogota'),
+            trigger=CronTrigger(hour=2, minute=0, timezone='America/Bogota'),
             id='abc_conteo_diario',
-            name='Generar tareas conteo cíclico ABC — 6am Bogotá',
+            name='Generar tareas conteo cíclico ABC — 2am Bogotá',
             replace_existing=True,
             max_instances=1,
             misfire_grace_time=3600,
         )
         scheduler.start()
         atexit.register(lambda: scheduler.shutdown(wait=False))
-        logger.info('[ABC] Scheduler configurado — corre a las 6am hora Bogotá')
+        logger.info('[ABC] Scheduler configurado — corre a las 2am hora Bogotá (fuera de horario operativo)')
         return scheduler
 
     @staticmethod
@@ -747,12 +872,24 @@ class ABCService:
 
                 actualizados += 1
 
+            # flush sin commit — la transacción completa se confirma al final
+            # para que un Railway restart no deje clasificaciones parcialmente actualizadas
             try:
-                db.session.commit()
-            except Exception as _commit_err:
+                db.session.flush()
+            except Exception as _flush_err:
                 db.session.rollback()
-                logger.error(f'[ABC CSV] Error en commit de lote {i}-{i+LOTE}: {_commit_err}')
+                logger.error(
+                    f'[ABC CSV] flush() falló en lote {i}–{i + LOTE}: {_flush_err}',
+                    exc_info=True
+                )
                 raise
+
+        try:
+            db.session.commit()
+        except Exception as _commit_err:
+            db.session.rollback()
+            logger.error(f'[ABC CSV] Error en commit final: {_commit_err}')
+            raise
 
         logger.info(
             f'[ABC CSV] almacen={almacen_id} · {actualizados} upserted · '

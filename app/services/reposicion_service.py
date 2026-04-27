@@ -50,7 +50,12 @@ def verificar_stock_picking(almacen_id: int = None):
     if almacen_id:
         q = q.filter(Ubicacion.almacen_id == almacen_id)
 
-    registros = q.all()
+    # with_for_update(skip_locked=True): evita crear tareas duplicadas cuando
+    # dos workers ejecutan verificar_stock_picking concurrentemente para el mismo inv.
+    try:
+        registros = q.with_for_update(skip_locked=True).all()
+    except Exception:
+        registros = q.all()
     generadas = 0
 
     for inv in registros:

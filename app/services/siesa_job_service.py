@@ -66,67 +66,116 @@ def procesar_jobs_pendientes(app=None):
         logger.error(f'[DLQ] Error inesperado en procesar_jobs_pendientes: {e}', exc_info=True)
 
 
+_ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
+
+
 def _procesar_jobs_pendientes_interno(_app):
     """Lógica interna de procesamiento — separada para permitir captura de errores DB externos."""
     with _app.app_context():
-        ahora = datetime.utcnow()
-
-        q = SiesaJob.query.filter(
-            SiesaJob.estado == 'PENDIENTE',
-            db.or_(
-                SiesaJob.proximo_intento.is_(None),
-                SiesaJob.proximo_intento <= ahora,
-            )
-        ).limit(20)
-        # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
-        try:
-            jobs = q.with_for_update(skip_locked=True).all()
-        except Exception:
-            jobs = q.all()
-
-        if not jobs:
+        # Advisory lock: solo un worker procesa la DLQ a la vez.
+        # Sin esto, cuando Siesa se recupera y hay 100 jobs acumulados, N workers
+        # los atacan simultáneamente saturando la API de Connekta.
+        from sqlalchemy import text as _text
+        lock = db.session.execute(_text('SELECT pg_try_advisory_lock(:k)'), {'k': _ADVISORY_LOCK_DLQ}).scalar()
+        if not lock:
+            logger.info('[DLQ] Otro worker ya procesa jobs — omitido')
             return 0
 
-        procesados = 0
-        for job in jobs:
-            job.estado = 'PROCESANDO'
-            db.session.commit()  # lock en el registro
+        try:
+            return _run_dlq_jobs()
+        finally:
+            db.session.execute(_text('SELECT pg_advisory_unlock(:k)'), {'k': _ADVISORY_LOCK_DLQ})
+            db.session.commit()
 
+
+def _run_dlq_jobs():
+    """Procesa hasta 20 jobs elegibles. Llamado solo cuando el advisory lock está tomado."""
+    from datetime import timedelta
+    ahora = datetime.utcnow()
+
+    # Recuperar jobs atascados en PROCESANDO por más de 10 min (worker colgado / crash)
+    _stuck_cutoff = ahora - timedelta(minutes=10)
+    _stuck = SiesaJob.query.filter(
+        SiesaJob.estado == 'PROCESANDO',
+        SiesaJob.fecha_creacion <= _stuck_cutoff,
+    ).all()
+    if _stuck:
+        for j in _stuck:
+            j.estado = 'PENDIENTE'
+            j.intentos = (j.intentos or 0) + 1
+            logger.warning(f'[DLQ] Job {j.id} stuck PROCESANDO >10min — reset a PENDIENTE (intento {j.intentos})')
+        db.session.commit()
+
+    q = SiesaJob.query.filter(
+        SiesaJob.estado == 'PENDIENTE',
+        db.or_(
+            SiesaJob.proximo_intento.is_(None),
+            SiesaJob.proximo_intento <= ahora,
+        )
+    ).limit(20)
+    # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
+    try:
+        jobs = q.with_for_update(skip_locked=True).all()
+    except Exception:
+        jobs = q.all()
+
+    if not jobs:
+        return 0
+
+    procesados = 0
+    # FM_SIESA_UNREACHABLE: si hay muchos jobs pendientes (recuperación tras outage),
+    # añadir pausa entre ejecuciones para no inundar Siesa con ráfaga de llamadas.
+    _total_pendientes = SiesaJob.query.filter(SiesaJob.estado == 'PENDIENTE').count()
+    _inter_job_delay = 1.0 if _total_pendientes > 10 else 0.0
+    if _inter_job_delay:
+        logger.info(
+            f'[DLQ] {_total_pendientes} jobs pendientes — aplicando delay {_inter_job_delay}s '
+            f'entre jobs para evitar ráfaga sobre Siesa (thundering herd)'
+        )
+
+    for job in jobs:
+        job.estado = 'PROCESANDO'
+        db.session.commit()  # lock en el registro
+
+        if _inter_job_delay and procesados > 0:
+            import time
+            time.sleep(_inter_job_delay)
+
+        try:
+            resultado = _ejecutar_job(job)
+            job.marcar_completado(resultado)
+            db.session.commit()
+            logger.info(f'[DLQ] Job {job.id} ({job.tipo}) completado — intento {job.intentos + 1}')
+            procesados += 1
+
+            # Actualizar referencia si aplica — aislado para que un fallo aquí
+            # no marque el job como FALLIDO (Siesa ya procesó el trabajo)
             try:
-                resultado = _ejecutar_job(job)
-                job.marcar_completado(resultado)
-                db.session.commit()
-                logger.info(f'[DLQ] Job {job.id} ({job.tipo}) completado — intento {job.intentos + 1}')
-                procesados += 1
+                _post_completado(job)
+            except Exception as post_err:
+                logger.warning(
+                    f'[DLQ] Job {job.id} ({job.tipo}) completado en Siesa pero '
+                    f'_post_completado falló: {post_err} — revisar referencia manualmente'
+                )
 
-                # Actualizar referencia si aplica — aislado para que un fallo aquí
-                # no marque el job como FALLIDO (Siesa ya procesó el trabajo)
-                try:
-                    _post_completado(job)
-                except Exception as post_err:
-                    logger.warning(
-                        f'[DLQ] Job {job.id} ({job.tipo}) completado en Siesa pero '
-                        f'_post_completado falló: {post_err} — revisar referencia manualmente'
-                    )
+        except Exception as e:
+            error_msg = str(e)
+            job.marcar_fallo(error_msg)
+            db.session.commit()
 
-            except Exception as e:
-                error_msg = str(e)
-                job.marcar_fallo(error_msg)
-                db.session.commit()
+            if job.estado == 'FALLIDO':
+                logger.error(
+                    f'[DLQ] Job {job.id} ({job.tipo}) FALLIDO tras {job.intentos} intentos: {error_msg}'
+                )
+                _crear_alerta_admin(job)
+            else:
+                logger.warning(
+                    f'[DLQ] Job {job.id} ({job.tipo}) falló (intento {job.intentos}/'
+                    f'{job.max_intentos}) — reintento en '
+                    f'{_BACKOFF_LABELS[min(job.intentos - 1, 2)]}: {error_msg}'
+                )
 
-                if job.estado == 'FALLIDO':
-                    logger.error(
-                        f'[DLQ] Job {job.id} ({job.tipo}) FALLIDO tras {job.intentos} intentos: {error_msg}'
-                    )
-                    _crear_alerta_admin(job)
-                else:
-                    logger.warning(
-                        f'[DLQ] Job {job.id} ({job.tipo}) falló (intento {job.intentos}/'
-                        f'{job.max_intentos}) — reintento en '
-                        f'{_BACKOFF_LABELS[min(job.intentos - 1, 2)]}: {error_msg}'
-                    )
-
-        return procesados
+    return procesados
 
 
 _BACKOFF_LABELS = ['5 min', '15 min', '45 min']
@@ -240,10 +289,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             num_docto_referencia=payload.get('num_docto_referencia'),
             cond_pago=payload.get('cond_pago', ''),
         )
-        # Persistir flag con commit propio — misma protección que DESPACHO_F470
+        # Persistir flag — misma protección que DESPACHO_F470 (emergency block)
         if rec and not rec.siesa_triggered:
             try:
-
                 rec.siesa_triggered = True
                 rec.siesa_response = _json.dumps(resultado)
                 rec.siesa_triggered_at = datetime.utcnow()
@@ -254,6 +302,20 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'siesa_triggered — revisar manualmente recepción {rec.id}. Error: {_e}'
                 )
                 db.session.rollback()
+                # Emergency: persistir SOLO el flag de idempotencia para bloquear
+                # el reintento de la DLQ — sin esto la próxima ejecución llamará a
+                # Siesa de nuevo y creará una entrada contable duplicada (cuenta 1435).
+                try:
+                    rec.siesa_triggered = True
+                    rec.siesa_triggered_at = datetime.utcnow()
+                    db.session.commit()
+                except Exception as _e2:
+                    db.session.rollback()
+                    logger.critical(
+                        f'[DLQ] ENTRADA_OC job={job.id}: DOBLE FALLO — '
+                        f'siesa_triggered no persiste: {_e2}. '
+                        f'Recepción {rec.id} en riesgo de duplicado contable.'
+                    )
         return resultado
 
     if job.tipo == 'TRASLADO_AVERIAS':
@@ -287,7 +349,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             cantidad=payload['cantidad'],
             referencia=payload.get('referencia', ''),
         )
-        # Marcar triggered para que futuros reintentos no dupliquen
+        # Marcar triggered — emergency block para bloquear reintento duplicado
         if tarea_dev:
             try:
                 tarea_dev.siesa_triggered = True
@@ -299,7 +361,175 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     f'siesa_triggered — revisar manualmente tarea_dev {tarea_dev.id}. Error: {_e}'
                 )
                 db.session.rollback()
+                # Emergency: sin este commit la DLQ reintentará y el traslado NB1→AV1
+                # se duplicará — el saldo de NB1 puede quedar negativo en Siesa.
+                try:
+                    tarea_dev.siesa_triggered = True
+                    tarea_dev.siesa_triggered_at = datetime.utcnow()
+                    db.session.commit()
+                except Exception as _e2:
+                    db.session.rollback()
+                    logger.critical(
+                        f'[DLQ] TRASLADO_AVERIAS job={job.id}: DOBLE FALLO — '
+                        f'siesa_triggered no persiste: {_e2}. '
+                        f'Tarea_dev {tarea_dev.id} en riesgo de traslado duplicado (NB1 puede quedar negativo).'
+                    )
         return resultado
+
+    if job.tipo == 'AJUSTE_CONTEO':
+        from app.models.conteo import SesionConteo as _SesionConteo
+        from app.models.inventario import UbicacionProducto as _UbicProd
+        sesion_id = payload.get('sesion_id')
+        sesion_cteo = _SesionConteo.query.get(sesion_id)
+
+        if sesion_cteo is None:
+            logger.warning(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion_id={sesion_id} '
+                f'no existe en DB — omitiendo para evitar ajuste sin clave'
+            )
+            return {'idempotente': True, 'sin_sesion': True}
+
+        # Guard: detectar estado inconsistente (AJUSTADO + siesa_triggered=False).
+        # Siesa ya registró el ajuste pero el mini-commit de siesa_triggered falló.
+        # Corregir siesa_triggered para que auditorías no muestren "sin Siesa".
+        if sesion_cteo.estado == 'AJUSTADO' and not sesion_cteo.siesa_triggered:
+            logger.critical(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} AJUSTADO '
+                f'pero siesa_triggered=False — inconsistencia detectada. '
+                f'Siesa pudo haberlo procesado. Corrigiendo flag.'
+            )
+            try:
+                sesion_cteo.siesa_triggered = True
+                sesion_cteo.siesa_triggered_at = sesion_cteo.fecha_cierre or datetime.utcnow()
+                db.session.commit()
+            except Exception as _e_fix:
+                db.session.rollback()
+                logger.error(f'[DLQ] No se pudo corregir siesa_triggered para sesion {sesion_id}: {_e_fix}')
+            return {'idempotente': True, 'sesion_id': sesion_id, 'estado_corregido': True}
+
+        # P4: idempotencia — si siesa_triggered, no reenviar
+        if sesion_cteo.siesa_triggered:
+            # Si la sesión quedó atascada en AJUSTANDO (crash entre mini-commit y full-commit),
+            # recuperar el estado final sin volver a llamar a Siesa.
+            if sesion_cteo.estado == 'AJUSTANDO':
+                logger.warning(
+                    f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} atascada en '
+                    f'AJUSTANDO con siesa_triggered=True — recuperando estado AJUSTADO'
+                )
+                try:
+                    _now_rec = datetime.utcnow()
+                    sesion_cteo.estado = 'AJUSTADO'
+                    sesion_cteo.fecha_cierre = sesion_cteo.fecha_cierre or _now_rec
+                    if not sesion_cteo.siesa_response:
+                        sesion_cteo.siesa_response = json.dumps({'recuperado_dlq': True, 'job_id': job.id})
+                    # Reaplicar cambio de inventario si había una excepción de picking
+                    _tpid = payload.get('tarea_picking_id')
+                    if _tpid:
+                        _mc = payload.get('motivo_codigo')
+                        _cant = payload.get('cantidad', 0)
+                        _inv = (_UbicProd.query
+                                .filter_by(
+                                    ubicacion_id=payload.get('ubicacion_id'),
+                                    producto_id=payload.get('producto_id')
+                                ).with_for_update().first())
+                        if _inv:
+                            _inv.bloqueado = max(0, _inv.bloqueado - _cant)
+                            if _mc == 'AJ-SAL':
+                                _inv.cantidad = max(0, _inv.cantidad - _cant)
+                            else:
+                                _inv.cantidad += _cant
+                    db.session.commit()
+                    logger.info(
+                        f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} recuperada → AJUSTADO'
+                    )
+                except Exception as _e_rec:
+                    db.session.rollback()
+                    logger.error(
+                        f'[DLQ] AJUSTE_CONTEO job={job.id}: fallo al recuperar sesion {sesion_id}: {_e_rec}'
+                    )
+            else:
+                logger.info(
+                    f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} ya tiene '
+                    f'siesa_triggered=True — omitiendo llamada (idempotencia P4)'
+                )
+            return {'idempotente': True, 'sesion_id': sesion_id}
+
+        item_codigo = payload.get('item_codigo')
+        if not item_codigo:
+            raise ValueError(
+                f'AJUSTE_CONTEO job={job.id}: item_codigo faltante en payload'
+            )
+
+        resultado = connekta.enviar_ajuste_inventario(
+            motivo_codigo=payload['motivo_codigo'],
+            item_codigo=item_codigo,
+            cantidad=payload['cantidad'],
+            referencia=payload.get('referencia', ''),
+        )
+
+        # CRÍTICO: commit mínimo de siesa_triggered=True ANTES del commit completo.
+        # Si Railway mata el proceso después de este commit, el retry verá
+        # siesa_triggered=True en el guard de idempotencia y no llamará Siesa de nuevo.
+        # Sin esto, un crash entre el HTTP 200 de Siesa y el commit completo
+        # deja siesa_triggered=False → el retry genera un doble ajuste de inventario.
+        _now = datetime.utcnow()
+        try:
+            sesion_cteo = _SesionConteo.query.get(sesion_id)
+            sesion_cteo.siesa_triggered = True
+            sesion_cteo.siesa_triggered_at = _now
+            db.session.commit()
+        except Exception as _e_flag:
+            db.session.rollback()
+            logger.critical(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: no se pudo persistir siesa_triggered '
+                f'para sesion {sesion_id}: {_e_flag} — abortando para no dejar estado ambiguo'
+            )
+            raise
+
+        # Commit completo: estado + respuesta + inventario
+        try:
+            sesion_cteo = _SesionConteo.query.get(sesion_id)
+            sesion_cteo.siesa_response = json.dumps(resultado)
+            sesion_cteo.estado = 'AJUSTADO'
+            sesion_cteo.fecha_cierre = _now
+
+            # Desbloquear inventario si vino de excepción de picking
+            tarea_picking_id = payload.get('tarea_picking_id')
+            if tarea_picking_id:
+                motivo_codigo = payload['motivo_codigo']
+                cantidad_ajuste = payload['cantidad']
+                inv = (_UbicProd.query
+                       .filter_by(
+                           ubicacion_id=payload.get('ubicacion_id'),
+                           producto_id=payload.get('producto_id')
+                       ).with_for_update().first())
+                if inv:
+                    inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
+                    if motivo_codigo == 'AJ-SAL':
+                        inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
+                    else:
+                        inv.cantidad += cantidad_ajuste
+
+            db.session.commit()
+        except Exception as _e:
+            db.session.rollback()
+            # siesa_triggered=True ya persistido — no hay riesgo de doble ajuste.
+            # Solo logueamos que el estado/respuesta no se guardaron (no crítico).
+            logger.error(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: siesa_triggered OK pero '
+                f'fallo guardando estado/respuesta para sesion {sesion_id}: {_e}'
+            )
+        return resultado
+
+    if job.tipo == 'ALERTA_EMAIL':
+        tipo_alerta = payload.get('tipo_alerta', 'desconocido')
+        asunto = payload.get('asunto', 'sin asunto')
+        error_original = payload.get('error', '')
+        logger.critical(
+            f'[ALERTA_EMAIL] Email de alerta "{tipo_alerta}" ({asunto}) no fue enviado: '
+            f'{error_original}. Verificar RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.'
+        )
+        return {'procesado': True, 'tipo_alerta': tipo_alerta, 'nota': 'ver logs CRITICAL'}
 
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
 
@@ -352,6 +582,32 @@ def reintentar_job(job_id: int) -> dict:
     job.error_ultimo = None
     db.session.commit()
     return job.to_dict()
+
+
+def disparar_dlq_inmediato(app=None):
+    """
+    Lanza procesar_jobs_pendientes() en un hilo daemon para procesar jobs recién encolados
+    sin bloquear el worker de Gunicorn. El advisory lock (pg_try_advisory_lock) garantiza que
+    a lo sumo un hilo corre la DLQ simultáneamente — si el scheduler ya está corriendo, el hilo
+    sale en <1ms sin hacer nada.
+
+    Uso: llamar inmediatamente después de commit() que encola un SiesaJob PENDIENTE.
+    El hilo procesa el job en segundos en vez de esperar el cron de 5 minutos.
+    """
+    import threading
+    from flask import current_app
+
+    _app = app or current_app._get_current_object()
+
+    def _run():
+        try:
+            procesar_jobs_pendientes(app=_app)
+        except Exception as _e:
+            logger.error(f'[DLQ] disparar_dlq_inmediato hilo error: {_e}')
+
+    t = threading.Thread(target=_run, daemon=True, name='dlq-inmediato')
+    t.start()
+    logger.debug('[DLQ] disparar_dlq_inmediato: hilo daemon lanzado')
 
 
 def init_scheduler(app):

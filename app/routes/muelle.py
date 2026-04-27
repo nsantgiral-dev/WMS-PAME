@@ -5,9 +5,11 @@ Flujo: siesa_triggered → bultos PENDIENTE aparecen en muelle → scan-to-truck
 from datetime import datetime, date
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy.orm import selectinload
 from app.extensions import db
-from app.models.bulto import Bulto
-from app.models.packing import TareaPacking
+from app.models.bulto import Bulto, EstadoBulto
+from app.models.packing import TareaPacking, EstadoPacking
+from app.models.ruta_despacho import EstadoRutaDespacho
 
 muelle_bp = Blueprint('muelle', __name__)
 
@@ -29,10 +31,11 @@ def listos():
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
             TareaPacking.siesa_triggered == True,
-            TareaPacking.estado != 'CANCELADO',
-            Bulto.estado == 'PENDIENTE',
+            TareaPacking.estado != EstadoPacking.CANCELADO,
+            Bulto.estado == EstadoBulto.PENDIENTE,
             Bulto.ruta_despacho_id.is_(None)
         )
+        .options(selectinload(Bulto.tarea))
         .order_by(TareaPacking.fecha_despachado.asc(), Bulto.numero.asc())
         .all()
     )
@@ -79,10 +82,10 @@ def asignar_a_ruta():
     ruta = RutaDespacho.query.get(ruta_id)
     if not ruta:
         return jsonify({'error': 'Ruta no encontrada'}), 404
-    if ruta.estado != 'EN_CARGUE':
+    if ruta.estado != EstadoRutaDespacho.EN_CARGUE:
         return jsonify({'error': f'La ruta ya está {ruta.estado}'}), 400
 
-    query = Bulto.query.filter(Bulto.estado == 'PENDIENTE')
+    query = Bulto.query.filter(Bulto.estado == EstadoBulto.PENDIENTE)
     if pedido_siesa:
         query = query.join(TareaPacking).filter(TareaPacking.numero_pedido_siesa == pedido_siesa)
     elif bultos_ids:
@@ -110,7 +113,7 @@ def desasignar_de_ruta(id):
     if not _es_admin_o_jefe():
         return jsonify({'error': 'No autorizado'}), 403
     bulto = Bulto.query.get_or_404(id)
-    if bulto.estado == 'CARGADO':
+    if bulto.estado == EstadoBulto.CARGADO:
         return jsonify({'error': 'No se puede desasignar un bulto que ya fue cargado físicamente'}), 400
 
     bulto.ruta_despacho_id = None
@@ -131,12 +134,17 @@ def cargar_bulto(codigo_barras):
 
     from app.models.ruta_despacho import RutaDespacho
     data = request.get_json(silent=True) or {}
-    ruta_id = data.get('ruta_id')
+    ruta_id_raw = data.get('ruta_id')
 
-    if not ruta_id:
+    if not ruta_id_raw:
         return jsonify({'error': 'ruta_id es requerido para verificación'}), 400
 
-    bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).first()
+    try:
+        ruta_id = int(ruta_id_raw)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'ruta_id debe ser un número entero válido'}), 400
+
+    bulto = Bulto.query.filter_by(codigo_barras=codigo_barras.upper()).with_for_update().first()
 
     if not bulto:
         return jsonify({'error': f'Bulto {codigo_barras} no encontrado'}), 404
@@ -150,7 +158,7 @@ def cargar_bulto(codigo_barras):
         else:
             return jsonify({'error': f'Bulto no ha sido asignado a ninguna ruta. Asígnalo manualmente primero.'}), 400
 
-    if bulto.estado == 'CARGADO':
+    if bulto.estado == EstadoBulto.CARGADO:
         return jsonify({
             'mensaje': 'Bulto ya fue verificado y cargado',
             'codigo_barras': codigo_barras,
@@ -161,20 +169,21 @@ def cargar_bulto(codigo_barras):
     ruta = RutaDespacho.query.get(ruta_id)
     if not ruta:
         return jsonify({'error': 'Ruta no encontrada'}), 404
-    if ruta.estado != 'EN_CARGUE':
+    if ruta.estado != EstadoRutaDespacho.EN_CARGUE:
         return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
 
-    bulto.estado = 'CARGADO'
+    _tarea_id = bulto.tarea_id  # capturar antes del commit — expire_on_commit invalida relaciones
+    bulto.estado = EstadoBulto.CARGADO
     bulto.fecha_cargado = datetime.utcnow()
     db.session.commit()
 
-    tarea = bulto.tarea
     # Pendientes de la misma tarea EN LA MISMA RUTA
     pendientes_ruta = Bulto.query.filter_by(
-        tarea_id=tarea.id, 
+        tarea_id=_tarea_id,
         ruta_despacho_id=ruta_id,
-        estado='PENDIENTE'
+        estado=EstadoBulto.PENDIENTE
     ).count()
+    tarea = TareaPacking.query.get(_tarea_id)
 
     return jsonify({
         'ok': True,
@@ -183,9 +192,9 @@ def cargar_bulto(codigo_barras):
         'tipo': bulto.tipo,
         'numero': bulto.numero,
         'total': bulto.total,
-        'numero_pedido_siesa': tarea.numero_pedido_siesa,
-        'cliente': tarea.cliente or '',
-        'municipio': tarea.municipio or '',
+        'numero_pedido_siesa': tarea.numero_pedido_siesa if tarea else None,
+        'cliente': tarea.cliente or '' if tarea else '',
+        'municipio': tarea.municipio or '' if tarea else '',
         'ruta_despacho_id': bulto.ruta_despacho_id,
         'pedido_completo_en_ruta': pendientes_ruta == 0,
         'bultos_pendientes_pedido_ruta': pendientes_ruta
@@ -206,9 +215,10 @@ def manifiesto():
     hoy = date.today()
     bultos = (
         Bulto.query
+        .options(selectinload(Bulto.tarea))
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
-            Bulto.estado == 'CARGADO',
+            Bulto.estado == EstadoBulto.CARGADO,
             func.date(Bulto.fecha_cargado) == hoy
         )
         .order_by(TareaPacking.municipio, TareaPacking.cliente, Bulto.numero)
@@ -262,7 +272,8 @@ def historial():
         return jsonify({'error': 'Sin permiso para ver historial de muelle'}), 403
     bultos = (
         Bulto.query
-        .filter_by(estado='CARGADO')
+        .options(selectinload(Bulto.tarea))
+        .filter_by(estado=EstadoBulto.CARGADO)
         .order_by(Bulto.fecha_cargado.desc())
         .limit(100).all()
     )

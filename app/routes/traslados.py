@@ -50,6 +50,12 @@ def listar_solicitudes():
 @traslados_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_solicitud(id):
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+
     s = SolicitudTraslado.query\
         .options(
             joinedload(SolicitudTraslado.solicitante),
@@ -59,6 +65,11 @@ def obtener_solicitud(id):
             .joinedload(ItemSolicitudTraslado.producto),
         )\
         .get_or_404(id)
+
+    # Tienda solo puede ver sus propias solicitudes
+    if usuario and usuario.rol == Roles.TIENDA and s.solicitante_id != usuario_id:
+        return jsonify({'error': 'Sin permiso para ver esta solicitud'}), 403
+
     return jsonify(s.to_dict()), 200
 
 
@@ -195,10 +206,21 @@ def cancelar_solicitud(id):
     # Liberar reservas de picking antes de cancelar
     if s.estado in ('EN_PICKING', 'PREPARADO'):
         from app.services.traslado_service import TrasladoService
-        TrasladoService._liberar_reservas_traslado(s)
+        try:
+            TrasladoService._liberar_reservas_traslado(s)
+        except Exception as _e:
+            from app.extensions import db as _db
+            _db.session.rollback()
+            logger.error(f'[TRASLADO] Error liberando reservas en {id}: {_e}', exc_info=True)
+            return jsonify({'error': f'Error liberando reservas de picking: {_e}'}), 500
     s.estado = 'CANCELADA'
     s.motivo_rechazo = data.get('motivo', 'Cancelada por usuario')
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[TRASLADO] Error cancelando solicitud {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error cancelando traslado — reintenta'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → CANCELADA por usuario {usuario_id}')
     return jsonify(s.to_dict()), 200
 
@@ -245,7 +267,12 @@ def confirmar_picking(id):
             item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
     s.estado = 'PREPARADO'
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[TRASLADO] Error al confirmar picking {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error interno al confirmar recogida — reintenta'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → PREPARADO (recogida confirmada por usuario {usuario_id})')
     return jsonify({
         'ok': True,
@@ -289,7 +316,12 @@ def reasignar_operario(id):
 
     s.operario_id = nuevo_operario_id
     from app.extensions import db
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'[TRASLADO] Error reasignando operario en {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error reasignando operario — reintenta'}), 500
     logger.info(f'[TRASLADO] {s.codigo} → operario reasignado a {nuevo_op.nombre} por {usuario_id}')
     return jsonify({'ok': True, 'solicitud': s.to_dict()}), 200
 

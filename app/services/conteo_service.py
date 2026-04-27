@@ -6,12 +6,20 @@ La conciliación se hace en tiempo real contra Siesa.
 import uuid
 import json
 import logging
+import threading
 from datetime import datetime
 from app.extensions import db
 from app.models.conteo import SesionConteo
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
+
+# Caché de existencias Siesa: evita llamadas HTTP duplicadas cuando varios
+# operarios cuentan el mismo producto en la misma ventana de ~90s.
+# El conteo cíclico no necesita exactitud al segundo — 90s es irrelevante operativamente.
+_existencia_cache: dict = {}   # {(codigo, ubicacion, lote): (existencia, ts)}
+_existencia_cache_lock = threading.Lock()
+_CACHE_TTL_SEGUNDOS = 300  # 5 min — reduce llamadas HTTP en turno; pre-warm al generar sesiones
 
 
 class ConteoService:
@@ -59,9 +67,44 @@ class ConteoService:
         """
         Registra el conteo físico del operario.
         1. Valida lote si el producto lo requiere.
-        2. Consulta existencia real en Siesa en tiempo real.
-        3. Compara y decide: MATCH o SEGUNDO_CONTEO.
+        2. Consulta existencia real en Siesa en tiempo real (FUERA del row-lock).
+        3. Adquiere lock, re-valida estado y guarda.
+        4. Decide: MATCH o SEGUNDO_CONTEO.
+
+        La llamada HTTP a Siesa ocurre ANTES de with_for_update() para no mantener
+        el row-lock de PostgreSQL durante los ~10s de timeout de red.
         """
+        # Lectura previa sin lock — solo para obtener datos necesarios para Siesa
+        sesion_pre = SesionConteo.query.filter_by(id=sesion_id).first()
+        if not sesion_pre:
+            raise ValueError('Sesión no encontrada')
+        if sesion_pre.estado not in ['PENDIENTE', 'EN_PROCESO']:
+            raise ValueError(f'No se puede registrar conteo en estado {sesion_pre.estado}')
+        if sesion_pre.operario_id and sesion_pre.operario_id != operario_id:
+            raise ValueError('Esta tarea no está asignada a ti')
+        if sesion_pre.maneja_lote and not lote_id:
+            raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
+
+        # [C7] Usar existencia ya guardada en DB como baseline compartido entre workers.
+        # _existencia_cache es in-memory por proceso (Gunicorn): Worker A y Worker B
+        # podrían ver valores distintos si uno tiene cache caliente y el otro no.
+        # Si ya se consultó en un request anterior (cualquier worker), el valor
+        # persiste en sesion.existencia_siesa — fuente de verdad única.
+        if sesion_pre.existencia_siesa is not None:
+            existencia_siesa = float(sesion_pre.existencia_siesa)
+            logger.info(
+                f'[CONTEO] existencia_siesa={existencia_siesa} desde DB '
+                f'(evita discrepancia cross-worker) para sesion {sesion_id}'
+            )
+        else:
+            # Primera vez — consultar Siesa y luego persistir en DB bajo el lock
+            existencia_siesa = ConteoService._consultar_existencia_siesa(
+                producto_codigo_siesa=sesion_pre.producto_codigo_siesa,
+                ubicacion_codigo=sesion_pre.ubicacion.codigo if sesion_pre.ubicacion else None,
+                lote_id=lote_id
+            )
+
+        # Ahora adquirir el lock pesimista para el update atómico
         sesion = (SesionConteo.query
                   .filter_by(id=sesion_id)
                   .with_for_update()
@@ -69,25 +112,17 @@ class ConteoService:
         if not sesion:
             raise ValueError('Sesión no encontrada')
 
+        # Re-validar estado bajo lock (pudo cambiar mientras esperábamos Siesa)
         if sesion.estado not in ['PENDIENTE', 'EN_PROCESO']:
             raise ValueError(f'No se puede registrar conteo en estado {sesion.estado}')
 
         if sesion.operario_id and sesion.operario_id != operario_id:
             raise ValueError('Esta tarea no está asignada a ti')
 
-        # Validar lote obligatorio
-        if sesion.maneja_lote and not lote_id:
-            raise ValueError(
-                f'Este producto maneja lotes. '
-                f'El campo lote_id es obligatorio.'
-            )
-
-        # Consultar existencia en Siesa en tiempo real
-        existencia_siesa = ConteoService._consultar_existencia_siesa(
-            producto_codigo_siesa=sesion.producto_codigo_siesa,
-            ubicacion_codigo=sesion.ubicacion.codigo if sesion.ubicacion else None,
-            lote_id=lote_id
-        )
+        if existencia_siesa is None:
+            # Cache miss: Siesa no respondió aún. El refresco de fondo ya está en vuelo.
+            # Error reintentable — en 3-5s el caché tendrá el valor real.
+            raise ValueError('Conectando con Siesa — reintenta en unos segundos')
 
         # Guardar conteo
         sesion.operario_id = operario_id
@@ -113,7 +148,7 @@ class ConteoService:
 
             logger.info(
                 f'[CONTEO] MATCH en {sesion.codigo} — '
-                f'producto {sesion.producto.codigo}'
+                f'producto {sesion.producto.codigo} — operario_id={operario_id}'
             )
 
             return {
@@ -126,17 +161,21 @@ class ConteoService:
             # DESCUADRE — generar segundo conteo por operario diferente
             sesion.estado = 'SEGUNDO_CONTEO'
             sesion.diferencia = diferencia
-            try:
-                db.session.commit()
-            except Exception as e_commit:
-                db.session.rollback()
-                logger.error(f'[CONTEO] Error al guardar SEGUNDO_CONTEO para sesión {sesion_id}: {e_commit}')
-                raise
 
-            segundo_conteo = ConteoService._crear_segundo_conteo(
-                sesion_origen=sesion,
-                operario_excluido=operario_id
-            )
+            # Commit único: SEGUNDO_CONTEO + hijo atómicos.
+            # Si el proceso muere entre ambas escrituras, el padre queda en SEGUNDO_CONTEO
+            # sin hijo, dejando al operario atascado. Con un solo commit, ambas son
+            # todo-o-nada — Railway restart no puede dejar estado intermedio inválido.
+            try:
+                segundo_conteo = ConteoService._crear_segundo_conteo(
+                    sesion_origen=sesion,
+                    operario_excluido=operario_id
+                )
+                db.session.commit()
+            except Exception as e_segundo:
+                db.session.rollback()
+                logger.error(f'[CONTEO] Error al crear segundo conteo para sesión {sesion_id}: {e_segundo}')
+                raise ValueError(f'Error al crear segundo conteo: {e_segundo}')
 
             logger.warning(
                 f'[CONTEO] DESCUADRE en {sesion.codigo} — '
@@ -151,6 +190,79 @@ class ConteoService:
             }
 
     @staticmethod
+    def prewarm_existencia_cache(sesiones: list):
+        """
+        Pre-calienta el caché de existencia Siesa para una lista de SesionConteo.
+        Corre en un hilo daemon — no bloquea al caller.
+        Llamar después de generar sesiones de conteo ABC para evitar HTTP sync en el turno.
+        """
+        from flask import current_app
+
+        def _worker(items, app):
+            # Thread daemon no hereda el app context de Flask — debe crearse explícitamente.
+            # Sin esto, las queries de modo_simulacion fallan con RuntimeError (no app context).
+            # [PREWARM-FIX] Llamar Siesa directamente en secuencia — NO usar
+            # _consultar_existencia_siesa() que en cache-miss dispara un nuevo thread
+            # por producto, causando N llamadas HTTP paralelas al API de Siesa.
+            with app.app_context():
+                _fallos_prewarm = 0
+                for codigo_siesa, ub_codigo in items:
+                    try:
+                        _cache_key = (codigo_siesa, ub_codigo or '', None)
+                        with _existencia_cache_lock:
+                            _cached = _existencia_cache.get(_cache_key)
+                        if _cached:
+                            _val, _ts = _cached
+                            if (datetime.utcnow() - _ts).total_seconds() < _CACHE_TTL_SEGUNDOS:
+                                continue  # ya en caché, no hay que consultar Siesa
+                        response = connekta.get_inventario_fecha(codigo_siesa)
+                        tabla = response.get('detalle', {}).get('Table', [])
+                        existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
+                        with _existencia_cache_lock:
+                            _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
+                        logger.debug(f'[PREWARM] {codigo_siesa}: {existencia}')
+                    except Exception as _e_pw:
+                        _fallos_prewarm += 1
+                        logger.warning(f'[PREWARM] Fallo pre-calentando caché para {codigo_siesa}/{ub_codigo}: {_e_pw}')
+                # [M18] Si más de la mitad falló, loggear como error — operarios recibirán
+                # 'Conectando con Siesa — reintenta' al iniciar su turno (cache frío sistemático).
+                if items and _fallos_prewarm > len(items) // 2:
+                    logger.error(
+                        f'[PREWARM] {_fallos_prewarm}/{len(items)} productos fallaron — '
+                        'cache frío sistemático: operarios verán error "Conectando con Siesa" al inicio de turno. '
+                        'Verificar conectividad con Connekta/Siesa.'
+                    )
+
+        pares = []
+        for s in sesiones:
+            if getattr(s, 'producto_codigo_siesa', None):
+                ub = getattr(s, 'ubicacion', None)
+                ub_codigo = ub.codigo if ub else ''
+                pares.append((s.producto_codigo_siesa, ub_codigo))
+
+        if pares:
+            app = current_app._get_current_object()
+            # Limitar a 1 prewarm concurrente — evita colapsar el pool de conexiones HTTP
+            # cuando el scheduler lanza prewarm para múltiples almacenes a la vez.
+            _prewarm_sem = getattr(ConteoService, '_prewarm_semaphore', None)
+            if _prewarm_sem is None:
+                ConteoService._prewarm_semaphore = threading.Semaphore(1)
+                _prewarm_sem = ConteoService._prewarm_semaphore
+
+            def _guarded_worker(items, _app, _sem):
+                if not _sem.acquire(blocking=False):
+                    logger.info('[PREWARM] Otro prewarm en curso — omitiendo para evitar sobrecarga')
+                    return
+                try:
+                    _worker(items, _app)
+                finally:
+                    _sem.release()
+
+            t = threading.Thread(target=_guarded_worker, args=(pares, app, _prewarm_sem), daemon=True)
+            t.start()
+            logger.info(f'[CONTEO] Pre-warm existencia_siesa iniciado para {len(pares)} productos')
+
+    @staticmethod
     def _consultar_existencia_siesa(
         producto_codigo_siesa: str,
         ubicacion_codigo: str,
@@ -161,65 +273,84 @@ class ConteoService:
         En modo simulación usa el stock local del WMS.
         """
         if connekta.modo_simulacion:
-            # Simulación: usar stock local como referencia
-            from app.models.inventario import UbicacionProducto
-            from app.models.producto import Producto
-            from app.models.ubicacion import Ubicacion
+            # Simulación: devolver stock WMS local como si fuera Siesa
+            return ConteoService._stock_local(producto_codigo_siesa, ubicacion_codigo)
 
-            producto = Producto.query.filter_by(
-                codigo_siesa=producto_codigo_siesa
-            ).first()
+        # Caché de 90s — reduce llamadas HTTP cuando varios operarios
+        # cuentan el mismo producto en una ventana corta
+        _cache_key = (producto_codigo_siesa, ubicacion_codigo, lote_id)
+        with _existencia_cache_lock:
+            _cached = _existencia_cache.get(_cache_key)
+            if _cached:
+                _val, _ts = _cached
+                if (datetime.utcnow() - _ts).total_seconds() < _CACHE_TTL_SEGUNDOS:
+                    logger.info(f'[CONTEO] existencia_siesa desde caché para {producto_codigo_siesa}')
+                    return _val
 
-            if not producto:
-                # Si no tiene codigo_siesa buscar por codigo normal
-                producto = Producto.query.filter_by(
-                    codigo=producto_codigo_siesa
-                ).first()
+        # Cache miss — disparar refresco en background y retornar None inmediatamente.
+        # NO llamar Siesa de forma síncrona: un timeout de 30s bloquea un worker Gunicorn
+        # completo. Con 4 workers y 4 operarios en cache miss simultáneo el sistema se congela.
+        # El operario recibe "Conectando con Siesa — reintenta en unos segundos" (503 reintentable)
+        # y reintenta 1 vez en 3-5s cuando el background thread ya habrá llenado el caché.
+        # Para conteos ABC planeados el prewarm debería haber calentado el caché antes del turno.
+        logger.info(f'[CONTEO] Cache miss para {producto_codigo_siesa} — iniciando refresco background')
+        ConteoService._refrescar_cache_en_background(producto_codigo_siesa, ubicacion_codigo, lote_id)
+        return None
 
-            if not producto:
-                return 0
+    @staticmethod
+    def _stock_local(producto_codigo_siesa: str, ubicacion_codigo: str) -> float:
+        """Retorna stock local WMS. Prueba codigo_siesa primero, luego codigo como fallback."""
+        from app.models.inventario import UbicacionProducto
+        from app.models.producto import Producto
+        from app.models.ubicacion import Ubicacion
+        producto = Producto.query.filter(
+            Producto.codigo_siesa == producto_codigo_siesa
+        ).first()
+        if not producto:
+            producto = Producto.query.filter_by(codigo=producto_codigo_siesa).first()
+        if not producto:
+            return 0
+        ubicacion = Ubicacion.query.filter_by(codigo=ubicacion_codigo).first()
+        if not ubicacion:
+            return 0
+        reg = UbicacionProducto.query.filter_by(
+            producto_id=producto.id, ubicacion_id=ubicacion.id
+        ).first()
+        return float(reg.cantidad) if reg else 0
 
-            ubicacion = Ubicacion.query.filter_by(
-                codigo=ubicacion_codigo
-            ).first()
-
-            if not ubicacion:
-                return 0
-
-            reg = UbicacionProducto.query.filter_by(
-                producto_id=producto.id,
-                ubicacion_id=ubicacion.id
-            ).first()
-
-            return reg.cantidad if reg else 0
-
+    @staticmethod
+    def _refrescar_cache_en_background(producto_codigo_siesa: str, ubicacion_codigo: str, lote_id: str = None):
+        """Dispara thread de fondo para actualizar cache de existencia Siesa (fire-and-forget)."""
+        from flask import current_app
         try:
-            response = connekta.get_inventario_fecha(producto_codigo_siesa)
-            tabla = response.get('detalle', {}).get('Table', [])
-            if not tabla:
-                return 0
-            fila = tabla[0]
-            # API_v2_Inventarios_InvFecha — campo correcto: f400_cant_existencia_1
-            return float(fila.get('f400_cant_existencia_1', 0))
+            app = current_app._get_current_object()
+        except RuntimeError:
+            return  # fuera de contexto Flask, no hay nada que hacer
 
-        except Exception as e:
-            # Timeout o error de red: fallback a stock local para no bloquear al operario
-            logger.warning(f'[CONTEO] Siesa no disponible ({e}) — usando stock local como referencia')
-            from app.models.inventario import UbicacionProducto
-            from app.models.producto import Producto
-            from app.models.ubicacion import Ubicacion
-            producto = (Producto.query
-                        .filter(Producto.codigo_siesa == producto_codigo_siesa)
-                        .first())
-            if not producto:
-                return 0
-            ubicacion = Ubicacion.query.filter_by(codigo=ubicacion_codigo).first()
-            if not ubicacion:
-                return 0
-            reg = UbicacionProducto.query.filter_by(
-                producto_id=producto.id, ubicacion_id=ubicacion.id
-            ).first()
-            return reg.cantidad if reg else 0
+        _cache_key = (producto_codigo_siesa, ubicacion_codigo, lote_id)
+
+        def _worker():
+            with app.app_context():
+                try:
+                    response = connekta.get_inventario_fecha(producto_codigo_siesa)
+                    tabla = response.get('detalle', {}).get('Table', [])
+                    if not tabla:
+                        # Siesa devolvió tabla vacía: producto sin registros en Siesa o
+                        # posible error parcial del API. Se cachea 0.0 — si el operario
+                        # cuenta unidades, se generará AJ-ENT. Verificar en Siesa si es correcto.
+                        logger.warning(
+                            f'[CONTEO] Siesa devolvió Table vacío para {producto_codigo_siesa} '
+                            f'— cacheando existencia=0.0. Verificar si el producto existe en Siesa.'
+                        )
+                    existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
+                    with _existencia_cache_lock:
+                        _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
+                    logger.info(f'[CONTEO] Cache Siesa actualizado para {producto_codigo_siesa}: {existencia}')
+                except Exception as e:
+                    logger.warning(f'[CONTEO] Refresco cache background falló para {producto_codigo_siesa}: {e}')
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
 
     @staticmethod
     def _crear_segundo_conteo(sesion_origen: SesionConteo, operario_excluido: int):
@@ -255,12 +386,8 @@ class ConteoService:
             segundo.operario_id = otro_operario.id
 
         db.session.add(segundo)
-        try:
-            db.session.commit()
-        except Exception as e_commit:
-            db.session.rollback()
-            logger.error(f'[CONTEO] Error al guardar segundo conteo para sesión {sesion_origen.id}: {e_commit}')
-            raise
+        # No commit aquí — el caller (registrar_conteo) hace un único commit
+        # que incluye tanto el estado SEGUNDO_CONTEO del padre como este hijo.
         return segundo
 
     @staticmethod
@@ -305,6 +432,18 @@ class ConteoService:
         Después del segundo conteo confirma el descuadre y dispara ajuste a Siesa.
         Siesa actualiza contabilidad automáticamente con el motivo correcto.
         """
+        # [A18] Pre-fetch existencia_siesa ANTES del lock — mismo patrón que registrar_conteo().
+        # _consultar_existencia_siesa() llena el caché in-memory si hay un hit; si es miss,
+        # dispara un hilo background (fire-and-forget). Bajo el lock sólo leemos del caché local,
+        # nunca hacemos HTTP: un timeout de 8s bajo row-lock bloquea workers concurrentes.
+        _pre = SesionConteo.query.filter_by(id=sesion_id).first()
+        if _pre and _pre.existencia_siesa is None and _pre.producto_codigo_siesa:
+            ConteoService._consultar_existencia_siesa(
+                producto_codigo_siesa=_pre.producto_codigo_siesa,
+                ubicacion_codigo=_pre.ubicacion.codigo if _pre.ubicacion else None,
+                lote_id=_pre.lote_id,
+            )
+
         sesion = (SesionConteo.query
                   .filter_by(id=sesion_id)
                   .with_for_update()
@@ -316,11 +455,83 @@ class ConteoService:
         if sesion.siesa_triggered:
             return sesion
 
+        if sesion.estado == 'AJUSTANDO':
+            from app.models.siesa_job import SiesaJob as _SJ
+            job_activo = _SJ.query.filter_by(
+                referencia_tipo='SesionConteo',
+                referencia_id=sesion.id,
+            ).filter(_SJ.estado.in_(['PENDIENTE', 'REINTENTANDO', 'PROCESANDO'])).first()
+            if job_activo:
+                return sesion  # En vuelo — la DLQ lo procesará
+
+            job_completado = _SJ.query.filter_by(
+                referencia_tipo='SesionConteo',
+                referencia_id=sesion.id,
+                estado='COMPLETADO',
+            ).first()
+            if job_completado:
+                # Siesa ya procesó el ajuste — recuperar marcando AJUSTADO con triggered=True
+                logger.warning(
+                    f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO — job COMPLETADO encontrado → marcando AJUSTADO'
+                )
+                sesion.estado = 'AJUSTADO'
+                sesion.siesa_triggered = True
+                sesion.fecha_cierre = sesion.fecha_cierre or datetime.utcnow()
+                db.session.commit()
+                return sesion
+
+            # Sin job activo ni completado: crash antes de crear el job o job FALLIDO.
+            # Re-encolar para que Siesa reciba el ajuste real.
+            logger.error(
+                f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO sin job DLQ — re-encolando ajuste a Siesa'
+            )
+            diferencia_reenc = (sesion.cantidad_fisica or 0) - (sesion.existencia_siesa or 0)
+            motivo_reenc = 'AJ-ENT' if diferencia_reenc > 0 else 'AJ-SAL'
+            if not sesion.producto_codigo_siesa:
+                raise ValueError(
+                    f'Sesión {sesion.id} sin producto_codigo_siesa — '
+                    'no se puede re-encolar ajuste a Siesa. El producto debe tener código Siesa configurado.'
+                )
+            payload_reenc = {
+                'sesion_id': sesion.id,
+                'motivo_codigo': motivo_reenc,
+                'item_codigo': sesion.producto_codigo_siesa,
+                'cantidad': abs(diferencia_reenc),
+                'referencia': sesion.codigo,
+                'tarea_picking_id': sesion.tarea_picking_id,
+                'ubicacion_id': sesion.ubicacion_id,
+                'producto_id': sesion.producto_id,
+            }
+            from app.models.siesa_job import SiesaJob as _SJ2
+            _SJ2.encolar('AJUSTE_CONTEO', payload_reenc,
+                         referencia_tipo='SesionConteo', referencia_id=sesion.id,
+                         creado_por_id=supervisor_id)
+            db.session.commit()
+            return sesion
         if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']:
             raise ValueError(f'No se puede ajustar en estado {sesion.estado}')
 
-        if sesion.cantidad_fisica is None or sesion.existencia_siesa is None:
+        if sesion.cantidad_fisica is None:
             raise ValueError('Faltan datos del conteo para generar ajuste')
+
+        if sesion.existencia_siesa is None:
+            # Bajo el lock NUNCA hacemos HTTP — leer del caché in-memory (pre-warm arriba).
+            # Si el caché está vacío el hilo background todavía está en vuelo → error reintentable.
+            _ck = (
+                sesion.producto_codigo_siesa or '',
+                sesion.ubicacion.codigo if sesion.ubicacion else '',
+                sesion.lote_id,
+            )
+            _existencia_refetch = None
+            with _existencia_cache_lock:
+                _hit = _existencia_cache.get(_ck)
+            if _hit:
+                _v, _ts = _hit
+                if (datetime.utcnow() - _ts).total_seconds() < _CACHE_TTL_SEGUNDOS:
+                    _existencia_refetch = _v
+            if _existencia_refetch is None:
+                raise ValueError('Siesa aún no respondió — reintenta el ajuste en unos segundos')
+            sesion.existencia_siesa = _existencia_refetch
 
         diferencia = sesion.cantidad_fisica - sesion.existencia_siesa
 
@@ -336,119 +547,68 @@ class ConteoService:
         sesion.motivo_codigo = motivo_codigo
 
         # Idempotency key estable — basado solo en sesion_id, no en timestamp
-        # Así un reintento usa la misma key y Siesa puede deduplicar
         idem_key = f'ADJ-{sesion_id}'
         sesion.idempotency_key = idem_key
         sesion.aprobador_id = supervisor_id
 
-        # Capturar referencias a atributos ANTES del commit intermedio
-        # (expire_on_commit=True invalida el objeto tras cada commit)
+        # CRÍTICO: marcar AJUSTANDO antes de liberar el lock.
+        # Esto bloquea requests concurrentes (doble-tap del supervisor) que llegarían
+        # tras el commit y verían siesa_triggered=False — sin este estado, ambas
+        # requests pasarían el guard y llamarían a Siesa → doble ajuste de inventario.
+        sesion.estado = 'AJUSTANDO'
+
+        # Capturar referencias a atributos ANTES del commit
+        # (expire_on_commit invalida el objeto tras el commit)
+        if not sesion.producto_codigo_siesa:
+            raise ValueError(
+                'Este producto no tiene código Siesa configurado — '
+                'el ajuste de inventario no puede enviarse a Siesa. '
+                'Configura el campo codigo_siesa del producto antes de confirmar.'
+            )
         producto_ref = sesion.producto
-        item_codigo = sesion.producto_codigo_siesa or (producto_ref.codigo if producto_ref else '')
+        item_codigo = sesion.producto_codigo_siesa
         sesion_codigo = sesion.codigo
         ubicacion_id = sesion.ubicacion_id
         producto_id = sesion.producto_id
         tarea_picking_id = sesion.tarea_picking_id
         producto_codigo_log = producto_ref.codigo if producto_ref else item_codigo
 
-        # Payload para Siesa
-        payload_siesa = {
-            'centro_operacion': '001',
-            'bodega': sesion.ubicacion.almacen.codigo if sesion.ubicacion and sesion.ubicacion.almacen else '',
-            'item_id': item_codigo,
-            'ubicacion': sesion.ubicacion.codigo if sesion.ubicacion else '',
-            'cantidad': cantidad_ajuste,
+        # Payload para la DLQ — incluye todos los campos que el worker necesita
+        # para llamar Siesa Y actualizar el estado local tras completar.
+        payload_dlq = {
+            'sesion_id': sesion_id,
             'motivo_codigo': motivo_codigo,
-            'lote': sesion.lote_id,
+            'item_codigo': item_codigo,
+            'cantidad': cantidad_ajuste,
             'referencia': sesion_codigo,
-            'fecha': datetime.utcnow().isoformat(),
-            'origen': 'WMS_CONTEO_CICLICO'
+            'tarea_picking_id': tarea_picking_id,
+            'ubicacion_id': ubicacion_id,
+            'producto_id': producto_id,
         }
 
-        # Liberar el row lock ANTES de la llamada HTTP a Siesa.
-        # with_for_update() mantiene el lock hasta el commit — si lo dejamos
-        # activo durante la llamada HTTP (hasta 30s timeout) bloqueamos
-        # cualquier otra operación sobre esta sesión.
+        # Commit único: AJUSTANDO + SiesaJob son atómicos.
+        # Si Railway reinicia después de este commit, el job DLQ se procesa al volver.
+        # Si reinicia antes de este commit, el estado vuelve a SEGUNDO_CONTEO (no hubo cambio).
+        # En ambos casos no hay estado intermedio inválido ni Siesa se llama dos veces.
+        from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar(
+            'AJUSTE_CONTEO',
+            payload_dlq,
+            referencia_tipo='SesionConteo',
+            referencia_id=sesion_id,
+            creado_por_id=supervisor_id,
+        )
         try:
             db.session.commit()
         except Exception as e_lock_release:
             db.session.rollback()
             raise ValueError(f'Error al registrar estado de conteo: {e_lock_release}') from e_lock_release
 
-        # Trigger a Siesa
-        siesa_llamado = False  # distingue fallo Siesa vs fallo commit
-        respuesta = None
-
-        try:
-            respuesta = connekta.enviar_ajuste_inventario(
-                motivo_codigo=motivo_codigo,
-                item_codigo=item_codigo,
-                cantidad=cantidad_ajuste,
-                referencia=sesion_codigo
-            )
-            siesa_llamado = True
-
-            # Re-fetch con lock para el update final (objeto expirado tras commit previo)
-            sesion = (SesionConteo.query
-                      .filter_by(id=sesion_id)
-                      .with_for_update()
-                      .first())
-            sesion.siesa_triggered = True
-            sesion.siesa_response = json.dumps(respuesta)
-            sesion.siesa_triggered_at = datetime.utcnow()
-            sesion.estado = 'AJUSTADO'
-            sesion.fecha_cierre = datetime.utcnow()
-
-            # Desbloquear inventario si vino de una excepción de picking
-            if tarea_picking_id:
-                from app.models.inventario import UbicacionProducto
-                inv = (UbicacionProducto.query
-                       .filter_by(ubicacion_id=ubicacion_id,
-                                  producto_id=producto_id)
-                       .with_for_update().first())
-                if inv:
-                    inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
-                    # Ajustar stock local para consistencia con Siesa
-                    if motivo_codigo == 'AJ-SAL':
-                        inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
-                    else:
-                        inv.cantidad += cantidad_ajuste
-
-            logger.info(
-                f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} aprobado por usuario #{supervisor_id} '
-                f'— {cantidad_ajuste} unidades de {producto_codigo_log} '
-                f'— idempotency_key: {idem_key}'
-            )
-            db.session.commit()
-
-        except Exception as e:
-            db.session.rollback()
-            if siesa_llamado:
-                # Siesa YA procesó el ajuste — guardar siesa_triggered=True para
-                # que el idempotency check evite un segundo envío en el reintento.
-                logger.error(
-                    f'[CONTEO] Siesa procesó el ajuste pero el commit WMS falló: {e} '
-                    f'— marcando siesa_triggered=True para evitar duplicado'
-                )
-                try:
-                    sesion = SesionConteo.query.filter_by(id=sesion_id).first()
-                    sesion.siesa_triggered = True
-                    sesion.siesa_response = json.dumps(respuesta)
-                    sesion.estado = 'AJUSTADO'
-                    db.session.commit()
-                except Exception as commit_err:
-                    logger.error(f'[CONTEO] No se pudo persistir siesa_triggered=True: {commit_err}')
-                raise Exception(f'Ajuste enviado a Siesa pero error guardando en WMS: {e}')
-            else:
-                logger.error(f'[CONTEO] Error enviando ajuste a Siesa: {str(e)}')
-                try:
-                    sesion = SesionConteo.query.filter_by(id=sesion_id).first()
-                    sesion.siesa_triggered = False
-                    sesion.siesa_response = str(e)
-                    db.session.commit()
-                except Exception as commit_err:
-                    logger.error(f'[CONTEO] No se pudo actualizar siesa_response: {commit_err}')
-                raise Exception(f'Error enviando ajuste a Siesa: {str(e)}')
+        logger.info(
+            f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} encolado en DLQ por usuario #{supervisor_id} '
+            f'— {cantidad_ajuste} unidades de {producto_codigo_log} '
+            f'— idempotency_key: {idem_key}'
+        )
 
         return sesion
 

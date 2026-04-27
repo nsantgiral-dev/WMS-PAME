@@ -163,6 +163,14 @@ class PickingService:
         if tarea.estado == EstadoPicking.CANCELADO:
             raise ValueError('Tarea cancelada')
 
+        # Operario solo puede confirmar tareas asignadas a él mismo
+        if tarea.operario_id and tarea.operario_id != usuario_id:
+            from app.models.usuario import Usuario as _U
+            u = _U.query.get(usuario_id)
+            es_supervision = u and u.rol in ('admin', 'supervisor', 'jefe_almacen')
+            if not es_supervision:
+                raise ValueError('No puedes confirmar una tarea asignada a otro operario')
+
         if cantidad_recogida > tarea.cantidad_solicitada:
             raise ValueError('Cantidad recogida supera la solicitada')
 
@@ -216,6 +224,14 @@ class PickingService:
 
         if tarea.estado != EstadoPicking.PENDIENTE:
             raise ValueError(f'No se puede iniciar una tarea en estado {tarea.estado}')
+
+        # Impedir que un operario se apropie de una tarea asignada a otro
+        if tarea.operario_id and tarea.operario_id != operario_id:
+            from app.models.usuario import Usuario as _U
+            u = _U.query.get(operario_id)
+            es_supervision = u and u.rol in ('admin', 'supervisor', 'jefe_almacen')
+            if not es_supervision:
+                raise ValueError('Esta tarea ya está asignada a otro operario')
 
         tarea.estado = EstadoPicking.EN_PROCESO
         tarea.operario_id = operario_id
@@ -295,6 +311,11 @@ class PickingService:
             raise ValueError(f'Tarea picking {tarea_id} no encontrada')
         if tarea.operario_id != operario_id:
             raise PermissionError('Esta tarea no te pertenece')
+        if tarea.estado not in (EstadoPicking.EN_PROCESO, EstadoPicking.PENDIENTE):
+            raise ValueError(
+                f'Solo se puede reportar problema en tareas EN_PROCESO o PENDIENTE '
+                f'(estado actual: {tarea.estado})'
+            )
 
         cantidad_faltante = max(0, tarea.cantidad_solicitada - cantidad_encontrada)
 

@@ -1,12 +1,14 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.models.packing import TareaPacking
+from app.models.packing import TareaPacking, ItemPacking, EstadoPacking
 from app.models.picking import TareaPicking
 from app.services.packing_service import PackingService
 from app.services.connekta_gateway import connekta
 from app.routes._auth_helpers import Roles, _puede_empacar
 
 packing_bp = Blueprint('packing', __name__)
+logger = logging.getLogger(__name__)
 
 
 from app.routes._auth_helpers import _solo_admin
@@ -61,7 +63,14 @@ def listar_tareas():
     almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
 
-    query = TareaPacking.query.order_by(TareaPacking.fecha_creacion.desc())
+    from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
+    query = (TareaPacking.query
+             .options(
+                 _sl(TareaPacking.items).selectinload(ItemPacking.producto),  # evita N+1 items.producto
+                 _sl(TareaPacking.bultos),
+                 _jl(TareaPacking.empacador),
+             )
+             .order_by(TareaPacking.fecha_creacion.desc()))
 
     if estado:
         query = query.filter_by(estado=estado)
@@ -90,6 +99,14 @@ def listar_tareas():
 @packing_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_tarea(id):
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or not _puede_empacar(u):
+        return jsonify({'error': 'Sin permiso para ver tareas de packing'}), 403
     tarea = TareaPacking.query.get_or_404(id)
     d = tarea.to_dict()
     d['picking_listo'] = _picking_listo_batch([tarea.numero_pedido_siesa]).get(tarea.numero_pedido_siesa, True)
@@ -179,6 +196,11 @@ def escanear_item(id):
     usuario = Usuario.query.get(uid)
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
+    # Ownership: empacador solo opera su propia tarea; supervisores/admin pueden cualquiera
+    if usuario.rol not in (Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN):
+        tarea_chk = TareaPacking.query.get(id)
+        if tarea_chk and tarea_chk.empacador_id and tarea_chk.empacador_id != uid:
+            return jsonify({'error': 'Esta tarea pertenece a otro empacador'}), 403
     data = request.get_json()
     requeridos = ['producto_id', 'cantidad_real']
     for campo in requeridos:
@@ -209,6 +231,11 @@ def confirmar_packing(id):
     u = Usuario.query.get(uid)
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para confirmar packing'}), 403
+    # Ownership: empacador solo confirma su propia tarea; supervisores/admin pueden cualquiera
+    if u.rol not in (Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN):
+        tarea_chk = TareaPacking.query.get(id)
+        if tarea_chk and tarea_chk.empacador_id and tarea_chk.empacador_id != uid:
+            return jsonify({'error': 'Esta tarea pertenece a otro empacador'}), 403
     data = request.get_json() or {}
     try:
         PackingService.confirmar_packing(
@@ -228,6 +255,7 @@ def confirmar_packing(id):
             return jsonify(error), 409
         return jsonify({'error': error}), 400
     except Exception as e:
+        logger.exception(f'[PACKING] Error inesperado en confirmar_packing id={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -239,10 +267,20 @@ def cerrar_packing(id):
     Body: {"bultos": [{"tipo": "Caja", "cantidad": 2}, {"tipo": "Bolsa", "cantidad": 1}]}
     """
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
+    # [A1] Ownership check: empacador solo puede cerrar su propia tarea.
+    # Supervisión puede cerrar cualquier tarea.
+    from app.models.packing import TareaPacking as _TP
+    _tarea_chk = _TP.query.get(id)
+    if _tarea_chk and _tarea_chk.empacador_id and _tarea_chk.empacador_id != uid:
+        if usuario.rol not in Roles.SUPERVISION:
+            return jsonify({'error': 'No puedes cerrar una tarea asignada a otro empacador'}), 403
     data = request.get_json() or {}
     bultos_data = data.get('bultos', [])
     # Permitir bultos_data vacío solo si ya existen bultos (retry Siesa)
@@ -257,7 +295,11 @@ def cerrar_packing(id):
         tarea = TareaPacking.query.get(id)
         return jsonify({
             'ok': True,
-            'mensaje': f'{len(bultos)} pieza(s) registradas — Siesa generó la remisión',
+            'mensaje': (
+                f'{len(bultos)} pieza(s) registradas — Siesa confirmó la remisión'
+                if tarea.siesa_triggered else
+                f'{len(bultos)} pieza(s) registradas — Siesa procesando (se confirma en segundos)'
+            ),
             'siesa_triggered': tarea.siesa_triggered,
             'numero_pedido': tarea.numero_pedido_siesa,
             'cliente': tarea.cliente or '',
@@ -267,6 +309,7 @@ def cerrar_packing(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(f'[PACKING] Error inesperado en cerrar_packing id={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -274,8 +317,11 @@ def cerrar_packing(id):
 @jwt_required()
 def cancelar_tarea(id):
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or usuario.rol not in Roles.LEAD:
         return jsonify({'error': 'No autorizado — se requiere rol admin o supervisor'}), 403
     data = request.get_json() or {}
@@ -292,17 +338,24 @@ def reiniciar_conteo(id):
     """Resetea todos los items a 0 y vuelve el estado a EN_PROCESO."""
     from app.extensions import db
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado'}), 403
     tarea = TareaPacking.query.get_or_404(id)
-    if tarea.estado not in ('EN_PROCESO', 'PENDIENTE', 'VERIFICADO'):
+    if tarea.estado not in (EstadoPacking.EN_PROCESO, EstadoPacking.PENDIENTE, EstadoPacking.VERIFICADO):
         return jsonify({'error': 'No se puede reiniciar una tarea en este estado'}), 400
+    # Solo el empacador asignado o un supervisor/admin puede reiniciar
+    if (tarea.empacador_id and tarea.empacador_id != usuario.id
+            and usuario.rol not in Roles.SUPERVISION):
+        return jsonify({'error': 'Solo el empacador asignado puede reiniciar esta tarea'}), 403
     for item in tarea.items:
         item.cantidad_real = 0
         item.verificado = False
-    tarea.estado = 'EN_PROCESO'
+    tarea.estado = EstadoPacking.EN_PROCESO
     tarea.verificacion_exitosa = False
     tarea.fecha_verificado = None
     db.session.commit()
@@ -353,6 +406,7 @@ def forzar_retry_siesa(id):
             'bultos': [b.to_dict() for b in bultos]
         }), 200
     except Exception as e:
+        logger.exception(f'[PACKING] Error inesperado en forzar_retry_siesa id={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -360,4 +414,12 @@ def forzar_retry_siesa(id):
 @jwt_required()
 def estado_connekta():
     """Verifica el estado de la integración con Siesa/Connekta."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in (Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN):
+        return jsonify({'error': 'Sin permiso para ver estado de Connekta'}), 403
     return jsonify(connekta.estado()), 200

@@ -59,6 +59,16 @@ def _es_gestion():
     return u if u and u.rol in Roles.GESTION else None
 
 
+def _es_personal_almacen():
+    """Retorna el usuario si pertenece al personal de almacén (excluye conductor y tienda)."""
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    return u if u and u.rol not in (Roles.CONDUCTOR, Roles.TIENDA) else None
+
+
 def _get_uid():
     """Convierte get_jwt_identity() a int de forma segura. Retorna None si falla."""
     try:

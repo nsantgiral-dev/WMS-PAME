@@ -2,10 +2,14 @@ import logging
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.mobile_service import MobileService
+from app.routes._auth_helpers import Roles
 
 logger = logging.getLogger(__name__)
 
 mobile_bp = Blueprint('mobile', __name__)
+
+# Tipos de tarea que solo deben ejecutar roles de almacén (no conductores)
+_TIPOS_ALMACEN = {'PICKING', 'PACKING', 'CONTEO', 'REPOSICION'}
 
 
 def _operario_id():
@@ -14,6 +18,20 @@ def _operario_id():
         return int(get_jwt_identity())
     except (TypeError, ValueError):
         return None
+
+
+def _verificar_rol_para_tipo(operario_id: int, tipo: str):
+    """
+    Devuelve None si el usuario tiene permiso para el tipo de tarea,
+    o una tupla (mensaje, status) si debe ser rechazado.
+    """
+    if tipo not in _TIPOS_ALMACEN:
+        return None  # Tipos de despacho/entrega — sin restricción adicional
+    from app.models.usuario import Usuario
+    u = Usuario.query.get(operario_id)
+    if not u or u.rol == Roles.CONDUCTOR:
+        return jsonify({'error': f'Conductores no pueden ejecutar tareas de tipo {tipo}'}), 403
+    return None
 
 
 @mobile_bp.route('/mis-tareas', methods=['GET'])
@@ -53,6 +71,10 @@ def escanear():
     if 'codigo' not in data or 'tarea_id' not in data or 'tipo' not in data:
         return jsonify({'error': 'codigo, tarea_id y tipo son requeridos'}), 400
 
+    rechazo = _verificar_rol_para_tipo(operario_id, data['tipo'])
+    if rechazo:
+        return rechazo
+
     try:
         resultado = MobileService.procesar_escaneo(
             operario_id=operario_id,
@@ -61,6 +83,7 @@ def escanear():
             codigo=data['codigo'],
             cantidad=data.get('cantidad', 1),
             lpn_codigo=data.get('lpn_codigo'),
+            total_acumulado=data.get('total_acumulado'),  # idempotencia conteo
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -83,6 +106,10 @@ def confirmar_tarea():
     if 'tarea_id' not in data or 'tipo' not in data:
         return jsonify({'error': 'tarea_id y tipo son requeridos'}), 400
 
+    rechazo = _verificar_rol_para_tipo(operario_id, data['tipo'])
+    if rechazo:
+        return rechazo
+
     try:
         resultado = MobileService.confirmar_tarea(
             operario_id=operario_id,
@@ -93,7 +120,10 @@ def confirmar_tarea():
         )
         return jsonify(resultado), 200
     except ValueError as e:
-        return jsonify({'error': str(e)}), 400
+        msg = str(e)
+        if 'Conectando con Siesa' in msg or 'Siesa aún no respondió' in msg:
+            return jsonify({'error': msg, 'retry_after': 3}), 503
+        return jsonify({'error': msg}), 400
     except Exception as e:
         current_app.logger.error(f'[MOBILE] /confirmar error inesperado: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
@@ -113,6 +143,15 @@ def sync_offline():
     resultados = []
     for item in cola:
         try:
+            rechazo = _verificar_rol_para_tipo(operario_id, item.get('tipo', ''))
+            if rechazo:
+                resp_body, status_code = rechazo
+                resultados.append({
+                    'tarea_id': item.get('tarea_id'),
+                    'exito': False,
+                    'error': f'Sin permiso para tipo {item.get("tipo")}'
+                })
+                continue
             resultado = MobileService.confirmar_tarea(
                 operario_id=operario_id,
                 tarea_id=item['tarea_id'],
@@ -152,7 +191,7 @@ def reportar_problema():
     Motivos: UBICACION_VACIA | FALTANTE | MERCANCIA_AVERIADA | PRODUCTO_INCORRECTO
     """
     from app.extensions import db
-    from app.models.conteo import SesionConteo
+    from app.models.conteo import SesionConteo, EstadoConteo
 
     operario_id = _operario_id()
     data = request.get_json() or {}
@@ -182,16 +221,28 @@ def reportar_problema():
             return jsonify({'error': str(e)}), 403
         except ValueError as e:
             return jsonify({'error': str(e)}), 404
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f'[MOBILE] reportar_problema PICKING error: {e}', exc_info=True)
+            return jsonify({'error': 'Error interno al reportar problema'}), 500
 
     # ── CONTEO ───────────────────────────────────────────────────
     if tipo == 'CONTEO':
         sesion = SesionConteo.query.get(tarea_id)
         if not sesion:
             return jsonify({'error': f'Sesión de conteo {tarea_id} no encontrada'}), 404
+        # Solo el operario asignado puede reportar problema en su propio conteo
+        if sesion.operario_id != operario_id:
+            return jsonify({'error': 'Esta sesión de conteo no te está asignada'}), 403
 
-        sesion.estado = 'BLOQUEADO'
-        sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
-        db.session.commit()
+        try:
+            sesion.estado = EstadoConteo.BLOQUEADO
+            sesion.motivo_edicion = f'[{motivo}] {observaciones or ""}'.strip()
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f'[MOBILE] reportar_problema CONTEO error: {e}', exc_info=True)
+            return jsonify({'error': 'Error al bloquear sesión de conteo — reintenta'}), 500
         return jsonify({
             'ok': True,
             'mensaje': 'Problema de conteo reportado — el jefe revisará la ubicación',
@@ -201,14 +252,28 @@ def reportar_problema():
 
     # ── PACKING ──────────────────────────────────────────────────
     if tipo == 'PACKING':
-        from app.models.packing import TareaPacking
+        from app.models.packing import TareaPacking, EstadoPacking
+        from app.models.usuario import Usuario
+        from app.routes._auth_helpers import _puede_empacar
+        u = Usuario.query.get(operario_id)
+        if not u or not _puede_empacar(u):
+            return jsonify({'error': 'Sin permiso para reportar problemas de packing'}), 403
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             return jsonify({'error': f'Tarea packing {tarea_id} no encontrada'}), 404
+        # Ownership: solo el empacador asignado puede bloquear su tarea
+        from app.routes._auth_helpers import Roles as _R
+        if tarea.empacador_id and tarea.empacador_id != operario_id and u.rol not in _R.SUPERVISION:
+            return jsonify({'error': 'Esta tarea no está asignada a ti'}), 403
 
-        tarea.estado = 'BLOQUEADO'
-        tarea.observaciones = f'[{motivo}] {observaciones or ""}'.strip()
-        db.session.commit()
+        try:
+            tarea.estado = EstadoPacking.BLOQUEADO
+            tarea.observaciones = f'[{motivo}] {observaciones or ""}'.strip()
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            current_app.logger.error(f'[MOBILE] reportar_problema PACKING error: {e}', exc_info=True)
+            return jsonify({'error': 'Error al bloquear tarea de packing — reintenta'}), 500
         return jsonify({
             'ok': True,
             'mensaje': 'Problema de packing reportado',

@@ -4,13 +4,15 @@ from app.extensions import db
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
-from app.routes._auth_helpers import Roles
+from app.routes._auth_helpers import Roles, _es_gestion
 
 inventario_bp = Blueprint('inventario', __name__)
 
 @inventario_bp.route('/stock/<int:producto_id>', methods=['GET'])
 @jwt_required()
 def stock_producto(producto_id):
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para consultar stock por ubicación'}), 403
     producto = Producto.query.get_or_404(producto_id)
     registros = UbicacionProducto.query.filter_by(
         producto_id=producto_id
@@ -28,10 +30,13 @@ def stock_producto(producto_id):
 @jwt_required()
 def ajuste_inventario():
     data = request.get_json()
-    usuario_id = get_jwt_identity()
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
 
     from app.models.usuario import Usuario
-    usuario = Usuario.query.get(int(usuario_id))
+    usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede realizar ajustes de inventario'}), 403
 
@@ -71,7 +76,10 @@ def ajuste_inventario():
         db.session.flush()
 
     saldo_antes = reg.cantidad
-    cantidad = int(data['cantidad'])
+    try:
+        cantidad = int(data['cantidad'])
+    except (ValueError, TypeError):
+        return jsonify({'error': 'cantidad debe ser un entero válido'}), 400
 
     if data['tipo'] == 'ENTRADA':
         reg.cantidad += cantidad

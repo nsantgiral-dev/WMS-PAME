@@ -13,13 +13,16 @@ Rutas de Reposición — Abastecedor + Admin.
 /api/siesa/debug-ubicaciones-raw      GET   → raw de la API 43 para certificar campos
 """
 
+import logging
 from flask import Blueprint, request, jsonify, current_app
+
+logger = logging.getLogger(__name__)
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.inventario import UbicacionProducto
 from app.models.producto import Producto
 from app.models.siesa_job import SiesaJob
-from app.models.tarea_reposicion import TareaReposicion
+from app.models.tarea_reposicion import TareaReposicion, EstadoReposicion
 from app.models.ubicacion import Ubicacion
 from app.models.ubicacion_huerfana import UbicacionHuerfana
 from app.models.usuario import Usuario
@@ -104,6 +107,7 @@ def confirmar():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception('Error confirmando reposición')
         return jsonify({'error': str(e)}), 500
 
 
@@ -128,6 +132,7 @@ def verificar_stock():
         generadas = verificar_stock_picking(almacen_id=almacen_id)
         return jsonify({'ok': True, 'tareas_generadas': generadas}), 200
     except Exception as e:
+        logger.exception('Error verificando stock picking')
         return jsonify({'error': str(e)}), 500
 
 
@@ -143,13 +148,20 @@ def pendientes():
     if not usuario or usuario.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver todas las tareas'}), 403
     estado = request.args.get('estado', '').upper()
-    estados_validos = {'PENDIENTE', 'EN_PROCESO', 'COMPLETADA', 'CANCELADA'}
+    estados_validos = {
+        EstadoReposicion.PENDIENTE, EstadoReposicion.EN_PROCESO,
+        EstadoReposicion.COMPLETADA, EstadoReposicion.CANCELADA,
+    }
 
+    from sqlalchemy.orm import selectinload as _sl
+    opts = [_sl(TareaReposicion.producto),
+            _sl(TareaReposicion.ubicacion_reserva),
+            _sl(TareaReposicion.ubicacion_picking)]
     if estado in estados_validos:
-        q = TareaReposicion.query.filter(TareaReposicion.estado == estado)
+        q = TareaReposicion.query.options(*opts).filter(TareaReposicion.estado == estado)
     else:
-        q = TareaReposicion.query.filter(
-            TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+        q = TareaReposicion.query.options(*opts).filter(
+            TareaReposicion.estado.in_([EstadoReposicion.PENDIENTE, EstadoReposicion.EN_PROCESO])
         )
     tareas = q.order_by(TareaReposicion.fecha_creacion.desc()).limit(100).all()
     return jsonify({'tareas': [t.to_dict() for t in tareas], 'total': len(tareas)}), 200
@@ -171,10 +183,10 @@ def cancelar(tarea_id):
     tarea = TareaReposicion.query.get(tarea_id)
     if not tarea:
         return jsonify({'error': f'Tarea {tarea_id} no encontrada'}), 404
-    if tarea.estado in ('COMPLETADA', 'CANCELADA'):
+    if tarea.estado in (EstadoReposicion.COMPLETADA, EstadoReposicion.CANCELADA):
         return jsonify({'error': f'Tarea ya está en estado {tarea.estado}'}), 400
 
-    tarea.estado = 'CANCELADA'
+    tarea.estado = EstadoReposicion.CANCELADA
     tarea.notas = (tarea.notas or '') + f' | Cancelada: {data.get("motivo", "sin motivo")}'
     db.session.commit()
     return jsonify({'ok': True, 'tarea': tarea.to_dict()}), 200
@@ -208,13 +220,18 @@ def sync_ubicaciones():
         )
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception('Error disparando sync de ubicaciones')
         return jsonify({'error': str(e)}), 500
 
 
 @reposicion_bp.route('/sync-ubicaciones/estado', methods=['GET'])
 @jwt_required()
 def sync_ubicaciones_estado():
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso'}), 403
     return jsonify(get_estado()), 200
@@ -261,7 +278,11 @@ def listar_ubicaciones_picking():
     Lista ubicaciones PICKING con sus límites configurados.
     El admin ve aquí qué zonas tienen min/max y cuáles faltan por configurar.
     """
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
@@ -271,9 +292,24 @@ def listar_ubicaciones_picking():
 
     ubicaciones = q.order_by(Ubicacion.codigo).all()
 
+    # Pre-cargar inventario y productos en 2 queries — evita N+1 por ubicación
+    ub_ids = [u.id for u in ubicaciones]
+    inv_map = {}
+    if ub_ids:
+        from sqlalchemy import and_
+        for inv in UbicacionProducto.query.filter(
+            UbicacionProducto.ubicacion_id.in_(ub_ids)
+        ).all():
+            inv_map.setdefault(inv.ubicacion_id, []).append(inv)
+
+    prod_ids = {inv.producto_id for invs in inv_map.values() for inv in invs}
+    prods_map = {}
+    if prod_ids:
+        prods_map = {p.id: p for p in Producto.query.filter(Producto.id.in_(prod_ids)).all()}
+
     resultado = []
     for ub in ubicaciones:
-        inventarios = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).all()
+        inventarios = inv_map.get(ub.id, [])
         stock_actual = sum((i.cantidad or 0) for i in inventarios)
         d = ub.to_dict()
         d['stock_actual'] = stock_actual
@@ -283,7 +319,7 @@ def listar_ubicaciones_picking():
         # SKU dominante (el que tiene más stock en esta ubicación)
         if inventarios:
             inv_top = max(inventarios, key=lambda i: i.cantidad or 0)
-            prod = Producto.query.get(inv_top.producto_id)
+            prod = prods_map.get(inv_top.producto_id)
             d['sku_asignado'] = {
                 'id': inv_top.producto_id,
                 'codigo': prod.codigo if prod else None,
@@ -311,7 +347,11 @@ def listar_ubicaciones_picking():
 @jwt_required()
 def ubicaciones_huerfanas():
     """Lista ubicaciones en cuarentena (prefijo inválido detectado en sync Siesa)."""
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso'}), 403
     items = UbicacionHuerfana.query.order_by(
@@ -370,7 +410,15 @@ def reintentar_job(job_id):
 @reposicion_bp.route('/siesa-jobs', methods=['GET'])
 @jwt_required()
 def listar_jobs():
-    """Lista todos los jobs (filtrable por estado)."""
+    """Lista todos los jobs (filtrable por estado). Solo supervisores y admin."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen'}), 403
     estado = request.args.get('estado')
     q = SiesaJob.query.order_by(SiesaJob.fecha_creacion.desc())
     if estado:
@@ -394,6 +442,8 @@ def pre_verificar_ola():
 
     Payload: { almacen_id, items: [{ producto_id, cantidad }, ...] }
     """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede disparar pre-verificación de ola'}), 403
     data = request.get_json() or {}
     items = data.get('items', [])
     almacen_id = data.get('almacen_id')
@@ -405,6 +455,7 @@ def pre_verificar_ola():
         resultado = _verificar(items=items, almacen_id=almacen_id)
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception('[OLA] Error en pre_verificar_ola')
         return jsonify({'error': str(e)}), 500
 
 
@@ -415,7 +466,11 @@ def debug_ubicaciones_raw():
     Descarga la primera página de API_v2_Ubicaciones sin procesar.
     Usar para certificar nombres exactos de campos antes del primer sync real.
     """
-    u = Usuario.query.get(int(get_jwt_identity()))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
     if not u or u.rol not in Roles.ALMACEN:
         return jsonify({'error': 'Sin permiso — solo admin/jefe_almacen'}), 403
     bodega_id = request.args.get('bodega_id', connekta.bodega)

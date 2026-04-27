@@ -1,10 +1,12 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.models.recepcion import RecepcionMercancia
+from app.models.recepcion import RecepcionMercancia, EstadoRecepcion
 from app.services.recepcion_service import RecepcionService
 from app.routes._auth_helpers import _solo_admin, Roles
 
 recepcion_bp = Blueprint('recepcion', __name__)
+logger = logging.getLogger(__name__)
 
 
 def _es_recepcion_autorizado():
@@ -27,9 +29,11 @@ def listar_recepciones():
     almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
 
-    query = RecepcionMercancia.query.order_by(
-        RecepcionMercancia.fecha_creacion.desc()
-    )
+    from sqlalchemy.orm import selectinload as _sl
+    from app.models.recepcion import ItemRecepcion as _IR
+    query = (RecepcionMercancia.query
+             .options(_sl(RecepcionMercancia.items).selectinload(_IR.producto))
+             .order_by(RecepcionMercancia.fecha_creacion.desc()))
     if estado:
         query = query.filter_by(estado=estado)
     if almacen_id:
@@ -86,6 +90,8 @@ def crear_recepcion():
 @recepcion_bp.route('/<int:id>/iniciar', methods=['PUT'])
 @jwt_required()
 def iniciar_recepcion(id):
+    if not _es_recepcion_autorizado():
+        return jsonify({'error': 'Sin permiso para iniciar recepciones'}), 403
     try:
         recepcionista_id = int(get_jwt_identity())
     except (TypeError, ValueError):
@@ -133,8 +139,11 @@ def escanear_producto(id):
 @jwt_required()
 def confirmar_recepcion(id):
     from app.models.usuario import Usuario
-    uid = get_jwt_identity()
-    usuario = Usuario.query.get(int(uid))
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
     if not usuario or usuario.rol not in Roles.RECEPCION_ROLES:
         return jsonify({'error': 'No autorizado'}), 403
     data = request.get_json() or {}
@@ -154,6 +163,7 @@ def confirmar_recepcion(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(f'[RECEPCION] Error inesperado en confirmar_recepcion id={id}')
         return jsonify({'error': str(e)}), 500
 
 
@@ -183,9 +193,9 @@ def cancelar_recepcion(id):
         return jsonify({'error': 'Solo admin puede cancelar recepciones'}), 403
     data = request.get_json() or {}
     recepcion = RecepcionMercancia.query.get_or_404(id)
-    if recepcion.estado == 'CONFIRMADA':
+    if recepcion.estado == EstadoRecepcion.CONFIRMADA:
         return jsonify({'error': 'No se puede cancelar una recepción ya confirmada'}), 400
-    recepcion.estado = 'CANCELADA'
+    recepcion.estado = EstadoRecepcion.CANCELADA
     recepcion.observaciones = data.get('motivo')
     from app.extensions import db
     db.session.commit()

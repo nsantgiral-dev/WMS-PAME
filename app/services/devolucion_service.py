@@ -20,6 +20,7 @@ from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.ubicacion import Ubicacion
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
+from sqlalchemy.exc import IntegrityError as _IntegrityError
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +56,44 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
             ).first()
 
             if existente:
-                # Si existe pero la cantidad cambió, actualizarla
-                if existente.cantidad_diferencia != cantidad:
-                    existente.cantidad_diferencia = cantidad
+                if existente.estado == 'COMPLETADO':
+                    if not existente.es_averiado:
+                        # Devolución normal: no necesita Siesa — ya resuelta físicamente
+                        ya_existian += 1
+                        savepoint.commit()
+                        continue
+                    # Averiado: verificar si existe SiesaJob activo o ya completado.
+                    # NO usamos siesa_triggered aquí porque ese flag sólo lo pone el DLQ
+                    # handler después del HTTP 200 de Siesa — consultamos directamente la tabla.
+                    from app.models.siesa_job import SiesaJob as _SiesaJob
+                    job_activo = _SiesaJob.query.filter_by(
+                        referencia_tipo='TareaDevolucion',
+                        referencia_id=existente.id,
+                    ).filter(_SiesaJob.estado.in_(
+                        ['PENDIENTE', 'REINTENTANDO', 'PROCESANDO', 'COMPLETADO']
+                    )).first()
+                    if job_activo:
+                        # Job en vuelo o Siesa ya confirmó — no recrear
+                        ya_existian += 1
+                        savepoint.commit()
+                        continue
+                    # Sin SiesaJob confirmado: averiado completado pero Siesa nunca fue notificada
+                    logger.warning(
+                        f'[DEV] TareaDevolucion {existente.id} COMPLETADO sin SiesaJob (averiado) '
+                        f'para prod {producto_id} — creando nueva tarea'
+                    )
+                    existente.idempotency_key = f'DEV-{producto_id}-SIN-SIESA-{existente.id}'
                     db.session.flush()
-                ya_existian += 1
-                savepoint.commit()
-                continue
+                    # Caer al bloque de creación abajo (no hacer continue)
+                elif existente.estado in ('PENDIENTE', 'EN_PROCESO'):
+                    # Ya está siendo atendida
+                    if existente.cantidad_diferencia != cantidad:
+                        existente.cantidad_diferencia = cantidad
+                        db.session.flush()
+                    ya_existian += 1
+                    savepoint.commit()
+                    continue
+                # CANCELADO u otro: recrear la tarea
 
             codigo = f'DEV-{producto_id}-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}'
             tarea = TareaDevolucion(
@@ -80,7 +112,12 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
             logger.info(f'[DEV] Tarea creada: {codigo} · prod {producto_id} · {cantidad} uds')
 
         except Exception as e:
-            logger.warning(f'[DEV] Error creando tarea para producto {producto_id}: {e}')
+            # ERROR (no warning): fallo aquí implica que una discrepancia queda sin tarea.
+            # El operario no verá el ítem para devolver → diferencia permanece invisible.
+            logger.error(
+                f'[DEV] Error creando tarea para producto {producto_id}: {e}',
+                exc_info=True
+            )
             savepoint.rollback()  # solo revierte este item, no los anteriores
             errores += 1
 
@@ -89,6 +126,31 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
     except Exception as e:
         logger.error(f'[DEV] Error en commit: {e}')
         db.session.rollback()
+
+    # [A26] Si hubo errores, notificar proactivamente — las discrepancias sin tarea
+    # quedan invisibles indefinidamente (el operario nunca ve esos ítems para devolver).
+    if errores > 0:
+        logger.error(
+            f'[DEV] {errores} discrepancia(s) SIESA_MAYOR sin tarea de devolución creada — '
+            f'el diferencial de inventario permanece activo. '
+            f'Creadas={creadas}, ya_existian={ya_existian}'
+        )
+        try:
+            from app.services.alertas_service import enviar_email, _config_resend
+            if _config_resend():
+                enviar_email(
+                    asunto=f'[WMS ALERTA] {errores} devolución(es) sin tarea — diferencial activo',
+                    cuerpo_texto=(
+                        f'El reconciliador detectó discrepancias SIESA_MAYOR pero '
+                        f'{errores} tarea(s) de devolución no pudieron crearse.\n\n'
+                        f'Creadas: {creadas} | Ya existían: {ya_existian} | Errores: {errores}\n'
+                        'Revisar logs del servidor para el detalle de cada fallo.\n'
+                        'Timestamp reconciliación: ' + str(timestamp_reconciliacion)
+                    ),
+                    cuerpo_html=None,
+                )
+        except Exception as _e_alert:
+            logger.critical(f'[DEV] Email de alerta de errores de devolución también falló: {_e_alert}')
 
     return {'creadas': creadas, 'ya_existian': ya_existian, 'errores': errores}
 
@@ -113,7 +175,12 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     4. Marca tarea como COMPLETADO.
     5. Elimina la idempotency_key para que si vuelve a haber diferencia se cree nueva tarea.
     """
-    tarea = TareaDevolucion.query.filter_by(id=tarea_id).with_for_update().first()
+    from sqlalchemy.orm import selectinload as _sl
+    tarea = (TareaDevolucion.query
+             .options(_sl(TareaDevolucion.producto))
+             .filter_by(id=tarea_id)
+             .with_for_update()
+             .first())
     if not tarea:
         raise ValueError(f'Tarea {tarea_id} no existe')
     if tarea.estado == 'COMPLETADO':
@@ -163,7 +230,37 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             fecha_ingreso=datetime.utcnow()
         )
         db.session.add(reg)
-        db.session.flush()
+        try:
+            db.session.flush()
+        except _IntegrityError:
+            # Race condition: otro worker insertó la fila entre el SELECT y el INSERT.
+            # [M1] db.session.rollback() libera el row-lock de tarea adquirido al inicio.
+            # Re-adquirir lock de tarea y re-verificar estado antes de continuar.
+            db.session.rollback()
+            tarea = (TareaDevolucion.query
+                     .options(_sl(TareaDevolucion.producto))
+                     .filter_by(id=tarea_id)
+                     .with_for_update()
+                     .first())
+            if not tarea or tarea.estado == 'COMPLETADO':
+                raise ValueError('Tarea ya completada por otro proceso — operación idempotente')
+            # Re-resolver ub: si era nueva fue revertida por el rollback
+            ub = Ubicacion.query.filter_by(codigo=codigo_ub, almacen_id=tarea.almacen_id).first()
+            if not ub:
+                raise ValueError(f'Ubicación {codigo_ub} no encontrada tras rollback de race condition')
+            reg = (UbicacionProducto.query.filter_by(
+                ubicacion_id=ub.id,
+                producto_id=tarea.producto_id,
+                lote=None
+            ).with_for_update().first())
+            if reg:
+                saldo_antes = reg.cantidad
+                reg.cantidad += tarea.cantidad_diferencia
+                reg.row_version += 1
+            else:
+                raise ValueError(
+                    f'No se pudo obtener/crear UbicacionProducto para ubicación {ub.codigo}'
+                )
 
     # Movimiento de inventario
     mov = MovimientoInventario(
@@ -196,38 +293,47 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     if es_averiado and not connekta.modo_simulacion:
         from app.models.siesa_job import SiesaJob
         # Capturar antes del commit (expire_on_commit haría lazy load ineficiente después)
-        _item_codigo = tarea.producto.codigo_siesa or tarea.producto.codigo
-        job_dlq = SiesaJob.encolar(
-            tipo='TRASLADO_AVERIAS',
-            payload={
-                'tarea_id': tarea.id,
-                'item_codigo': _item_codigo,
-                'cantidad': tarea.cantidad_diferencia,
-                'referencia': tarea.codigo,
-            },
-            referencia_tipo='TareaDevolucion',
-            referencia_id=tarea.id,
-        )
-
-    db.session.commit()
-    logger.info(f'[DEV] Tarea {tarea.codigo} completada · ubicación {codigo_ub} · averiado={es_averiado}')
-
-    # Disparar traslado NB1 → AV1 en Siesa para que vendedores no vean unidades dañadas
-    if job_dlq is not None:
-        try:
-            connekta.transferir_a_averias(
-                item_codigo=_item_codigo,
-                cantidad=tarea.cantidad_diferencia,
-                referencia=tarea.codigo
+        # [C6] Solo codigo_siesa — Siesa no conoce códigos WMS. Si se usara tarea.producto.codigo
+        # (WMS), el job quedaría en FALLIDO permanente: Siesa rechaza referencias desconocidas.
+        # [CRÍTICO] Si no hay codigo_siesa, bloquear la confirmación en vez de marcar COMPLETADO
+        # silenciosamente sin Siesa — la avería quedaría sin registrar en el ERP y el inventario
+        # de Siesa divergiría permanentemente del WMS.
+        _item_codigo = tarea.producto.codigo_siesa if tarea.producto else None
+        if not _item_codigo:
+            raise ValueError(
+                f'El producto (id={tarea.producto_id}) no tiene código Siesa configurado. '
+                'El traslado a bodega de averías no puede enviarse a Siesa sin ese código. '
+                'Configura el campo codigo_siesa en el catálogo de productos antes de confirmar.'
             )
-            tarea.siesa_triggered = True
-            job_dlq.marcar_completado({'ok': True})
-            db.session.commit()
-            logger.info(f'[DEV] Traslado Siesa NB1→AV1 OK para {_item_codigo}')
-        except Exception as e:
-            # El job_dlq ya está en DB como PENDIENTE — DLQ lo reintentará en 5 min
-            logger.error(f'[DEV] Error disparando traslado Siesa: {e} — DLQ reintentará')
-            db.session.commit()
+        job_dlq = SiesaJob.encolar(
+                tipo='TRASLADO_AVERIAS',
+                payload={
+                    'tarea_id': tarea.id,
+                    'item_codigo': _item_codigo,
+                    'cantidad': tarea.cantidad_diferencia,
+                    'referencia': tarea.codigo,
+                },
+                referencia_tipo='TareaDevolucion',
+                referencia_id=tarea.id,
+            )
+        # NO ponemos siesa_triggered=True aquí — el DLQ handler lo pondrá
+        # sólo cuando Siesa responda HTTP 200 (semántica exacta de idempotencia).
+        # El loop de reconciliación se suprime consultando SiesaJob activo (ver abajo).
+
+    try:
+        db.session.commit()
+    except Exception as e_commit:
+        db.session.rollback()
+        logger.error(f'[DEV] Error al confirmar ubicación tarea {tarea_id}: {e_commit}')
+        raise ValueError(f'Error al guardar confirmación de devolución: {e_commit}') from e_commit
+    logger.info(f'[DEV] Tarea {tarea.codigo} completada · ubicación {codigo_ub} · averiado={es_averiado}')
+    # Disparar DLQ inmediato para reducir gap WMS↔Siesa de ~5 min a ~segundos
+    if job_dlq:
+        try:
+            from app.services.siesa_job_service import disparar_dlq_inmediato
+            disparar_dlq_inmediato()
+        except Exception as _e_dlq:
+            logger.warning(f'[DEV] disparar_dlq_inmediato falló (DLQ scheduler lo recogerá): {_e_dlq}')
 
     return tarea
 
@@ -245,5 +351,10 @@ def descartar(tarea_id: int, recepcionista_id: int, motivo: str = None) -> Tarea
     tarea.observaciones = motivo
     tarea.fecha_completado = datetime.utcnow()
     tarea.idempotency_key = f'DEV-DESCARTADO-{tarea.id}'
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e_commit:
+        db.session.rollback()
+        logger.error(f'[DEV] Error al descartar tarea {tarea_id}: {e_commit}')
+        raise ValueError(f'Error al descartar tarea: {e_commit}') from e_commit
     return tarea

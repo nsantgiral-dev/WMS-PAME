@@ -16,6 +16,14 @@ devoluciones_bp = Blueprint('devoluciones', __name__)
 @devoluciones_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar():
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.RECEPCION_ROLES + tuple(Roles.SUPERVISION):
+        return jsonify({'error': 'Sin permiso para listar devoluciones'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
     return jsonify({'tareas': listar_pendientes(almacen_id)}), 200
 
