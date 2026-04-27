@@ -257,6 +257,10 @@ def reportar_problema():
         tarea = TareaPacking.query.get(tarea_id)
         if not tarea:
             return jsonify({'error': f'Tarea packing {tarea_id} no encontrada'}), 404
+        # Ownership: solo el empacador asignado puede bloquear su tarea
+        from app.routes._auth_helpers import Roles as _R
+        if tarea.empacador_id and tarea.empacador_id != operario_id and u.rol not in _R.SUPERVISION:
+            return jsonify({'error': 'Esta tarea no está asignada a ti'}), 403
 
         try:
             tarea.estado = EstadoPacking.BLOQUEADO

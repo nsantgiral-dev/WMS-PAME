@@ -691,31 +691,33 @@ def init_scheduler(app):
 
     scheduler = BackgroundScheduler(timezone='America/Bogota')
 
+    # FM_SCHEDULER_PEAK: alejados del :00 exacto para no competir con el inicio del turno
+    # de operarios (6:00am) ni entre sí. Separados 30min para escalonar carga en DB.
     scheduler.add_job(
         func=verificar_y_alertar_huerfanas,
-        trigger=CronTrigger(hour=6, minute=0, timezone='America/Bogota'),
+        trigger=CronTrigger(hour=5, minute=45, timezone='America/Bogota'),
         kwargs={'app': app},
         id='alertas_huerfanas_email',
-        name='Alerta email ubicaciones huérfanas (06:00 Bogotá)',
+        name='Alerta email ubicaciones huérfanas (05:45 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
         func=verificar_y_alertar_stock_critico,
-        trigger=CronTrigger(hour=7, minute=0, timezone='America/Bogota'),
+        trigger=CronTrigger(hour=6, minute=15, timezone='America/Bogota'),
         kwargs={'app': app},
         id='alertas_stock_critico',
-        name='Alerta email stock crítico sin reserva (07:00 Bogotá)',
+        name='Alerta email stock crítico sin reserva (06:15 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
         func=enviar_resumen_diario,
-        trigger=CronTrigger(hour=8, minute=0, timezone='America/Bogota'),
+        trigger=CronTrigger(hour=6, minute=45, timezone='America/Bogota'),
         kwargs={'app': app},
         id='resumen_operativo_diario',
-        name='Resumen operativo diario (08:00 Bogotá)',
+        name='Resumen operativo diario (06:45 Bogotá)',
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
 
     scheduler.start()
-    logger.info('[ALERTAS] Scheduler iniciado — 06:00 huérfanas | 07:00 stock crítico | 08:00 resumen')
+    logger.info('[ALERTAS] Scheduler iniciado — 05:45 huérfanas | 06:15 stock crítico | 06:45 resumen')
     return scheduler

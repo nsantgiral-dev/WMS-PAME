@@ -277,13 +277,27 @@ class ConteoService:
                     logger.info(f'[CONTEO] existencia_siesa desde caché para {producto_codigo_siesa}')
                     return _val
 
-        # Cache miss — disparar refresco de fondo y retornar None.
-        # Retornar stock WMS local como fallback es INCORRECTO: si WMS y Siesa difieren
-        # (que es el punto del conteo), el operador ve un diferencial falso.
-        # El caller debe manejar None lanzando un error reintentable (~3s más tarde el
-        # caché ya tiene el valor real de Siesa).
-        ConteoService._refrescar_cache_en_background(producto_codigo_siesa, ubicacion_codigo, lote_id)
-        return None
+        # Cache miss — llamar Siesa de forma síncrona la primera vez para evitar
+        # que el operario vea un error 503 y tenga que reintentar manualmente.
+        # El fallback background-thread es solo para refrescos subsecuentes (cache warm).
+        # Timeout: 12s (mismo que el timeout de red de Connekta).
+        try:
+            response = connekta.get_inventario_fecha(producto_codigo_siesa)
+            tabla = response.get('detalle', {}).get('Table', [])
+            if not tabla:
+                logger.warning(
+                    f'[CONTEO] Siesa Table vacío para {producto_codigo_siesa} — cacheando 0.0'
+                )
+            existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
+            with _existencia_cache_lock:
+                _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
+            logger.info(f'[CONTEO] existencia_siesa={existencia} (primera consulta síncrona)')
+            return existencia
+        except Exception as _e:
+            logger.warning(f'[CONTEO] Consulta síncrona Siesa falló para {producto_codigo_siesa}: {_e}')
+            # Fallback: disparar refresco de fondo y retornar None (error reintentable)
+            ConteoService._refrescar_cache_en_background(producto_codigo_siesa, ubicacion_codigo, lote_id)
+            return None
 
     @staticmethod
     def _stock_local(producto_codigo_siesa: str, ubicacion_codigo: str) -> float:
