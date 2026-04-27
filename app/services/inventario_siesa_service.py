@@ -144,6 +144,13 @@ def _descargar_inventario_siesa(forzar=False):
     # Si descargamos < 70% de los productos del cache anterior, rechazamos
     # para evitar que reconciliación genere cientos de SIESA_MAYOR falsos.
     _prev_count = len(_cache_inventario_siesa['data']) if _cache_inventario_siesa['data'] else 0
+    if not _prev_count:
+        # Primera ejecución (cache frío): usar conteo de UbicacionProducto en DB como referencia
+        try:
+            from app.models.inventario import UbicacionProducto as _UP
+            _prev_count = _UP.query.filter(_UP.cantidad > 0).count()
+        except Exception:
+            _prev_count = 0  # no disponible (fuera de contexto app o error DB)
     if _prev_count and len(inventario) < _prev_count * 0.70:
         raise ValueError(
             f'Respuesta parcial de Siesa: {len(inventario)} productos recibidos, '
@@ -406,10 +413,30 @@ def _run_carga_inicial(app):
             db.session.commit()
 
         except Exception as e:
-            logger.error(f'[INV-SIESA] Error en carga inicial: {e}')
+            # FM_RAILWAY_RESTART: si el proceso se mató a mitad del loop de páginas,
+            # el bulk-zero nunca se ejecutó → productos de páginas no procesadas
+            # conservan cantidad WMS potencialmente obsoleta. El siguiente sync
+            # los actualizará, pero hay un gap hasta entonces.
+            logger.error(f'[INV-SIESA] Error en carga inicial: {e}', exc_info=True)
             db.session.rollback()
             _estado_carga['ultimo_error'] = str(e)
             _estado_carga['en_curso'] = False
+            try:
+                from app.services.alertas_service import enviar_email, _config_resend
+                if _config_resend():
+                    enviar_email(
+                        asunto='[WMS ALERTA] Sync inventario Siesa falló — bulk-zero puede estar incompleto',
+                        cuerpo_texto=(
+                            f'El sync de inventario Siesa falló con error:\n{e}\n\n'
+                            'Si el fallo ocurrió a mitad del loop de páginas, el bulk-zero '
+                            '(zeroing de productos no reportados) puede no haberse ejecutado. '
+                            'Los productos de páginas no procesadas conservan cantidades WMS posiblemente obsoletas. '
+                            'Disparar sync manual: POST /api/inventario-siesa/cargar'
+                        ),
+                        cuerpo_html=None,
+                    )
+            except Exception:
+                pass
             return
         finally:
             if lock_adquirido:

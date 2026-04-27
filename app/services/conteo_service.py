@@ -201,13 +201,25 @@ class ConteoService:
         def _worker(items, app):
             # Thread daemon no hereda el app context de Flask — debe crearse explícitamente.
             # Sin esto, las queries de modo_simulacion fallan con RuntimeError (no app context).
+            # [PREWARM-FIX] Llamar Siesa directamente en secuencia — NO usar
+            # _consultar_existencia_siesa() que en cache-miss dispara un nuevo thread
+            # por producto, causando N llamadas HTTP paralelas al API de Siesa.
             with app.app_context():
                 for codigo_siesa, ub_codigo in items:
                     try:
-                        ConteoService._consultar_existencia_siesa(
-                            producto_codigo_siesa=codigo_siesa,
-                            ubicacion_codigo=ub_codigo or '',
-                        )
+                        _cache_key = (codigo_siesa, ub_codigo or '', None)
+                        with _existencia_cache_lock:
+                            _cached = _existencia_cache.get(_cache_key)
+                        if _cached:
+                            _val, _ts = _cached
+                            if (datetime.utcnow() - _ts).total_seconds() < _CACHE_TTL_SEGUNDOS:
+                                continue  # ya en caché, no hay que consultar Siesa
+                        response = connekta.get_inventario_fecha(codigo_siesa)
+                        tabla = response.get('detalle', {}).get('Table', [])
+                        existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
+                        with _existencia_cache_lock:
+                            _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
+                        logger.debug(f'[PREWARM] {codigo_siesa}: {existencia}')
                     except Exception:
                         logger.warning(f'[PREWARM] Fallo pre-calentando caché para {codigo_siesa}/{ub_codigo}')
 

@@ -51,8 +51,11 @@ def create_app():
             from app.models.usuario import Usuario
             u = Usuario.query.get(int(uid))
             return u is None or not u.activo
-        except Exception:
-            return True   # en caso de error de DB, bloquear (fail-closed — preferir seguridad sobre disponibilidad)
+        except Exception as _e:
+            logging.getLogger(__name__).warning(
+                f'[JWT] Error al verificar blocklist para uid={uid}: {_e} — bloqueando (fail-closed)'
+            )
+            return True   # fail-closed: preferir seguridad sobre disponibilidad
 
     @_jwt.revoked_token_loader
     def _revoked_token_response(jwt_header, jwt_payload):

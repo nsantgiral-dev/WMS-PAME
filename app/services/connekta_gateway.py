@@ -539,7 +539,7 @@ class ConnektaGateway:
                     'f470_id_lista_precio': self.lista_precio or None,  # SIESA_LISTA_PRECIO (pos 169, ancho 3)
                     'f470_id_unidad_precio': i.get('unidad_medida') or None,
                     'f470_id_unidad_medida': i.get('unidad_medida') or None,
-                    'f470_cant_base': float(i.get('cantidad_empacada') or 0),
+                    'f470_cant_base': round(float(abs(i.get('cantidad_empacada') or 0)), 4),
                     'f470_cant_2': None,
                     'f470_vlr_bruto': None,
                     'f470_ind_naturaleza': 1,                         # 1 = Salida (spec: 0=Entrada, 1=Salida)
