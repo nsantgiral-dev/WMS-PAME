@@ -78,6 +78,14 @@ def check_pending_transfers(app):
     """
     with app.app_context():
         try:
+            # [A13] Advisory lock — evita ejecuciones concurrentes (scheduler + API manual)
+            _lock_acquired = db.session.execute(
+                db.text('SELECT pg_try_advisory_lock(2010)')
+            ).scalar()
+            if not _lock_acquired:
+                logger.info('[TRASLADO_MONITOR] Lock no disponible — omitiendo ejecución concurrente')
+                return
+
             resumen = _traslados_en_riesgo()
 
             for t in resumen['criticos']:
@@ -101,6 +109,12 @@ def check_pending_transfers(app):
                 )
         except Exception as e:
             logger.error(f'[TRASLADO_MONITOR] Error en check: {e}')
+        finally:
+            try:
+                db.session.execute(db.text('SELECT pg_advisory_unlock(2010)'))
+                db.session.commit()
+            except Exception:
+                pass
 
 
 def get_resumen_alertas():

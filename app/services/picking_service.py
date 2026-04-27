@@ -218,7 +218,8 @@ class PickingService:
     @staticmethod
     def iniciar_picking(tarea_id: int, operario_id: int):
         """Marca la tarea como en proceso."""
-        tarea = TareaPicking.query.get(tarea_id)
+        # [A15] Row-lock — evita que dos operarios inicien la misma tarea simultáneamente
+        tarea = TareaPicking.query.filter_by(id=tarea_id).with_for_update().first()
         if not tarea:
             raise ValueError('Tarea no encontrada')
 

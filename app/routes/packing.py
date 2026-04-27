@@ -2,7 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.packing import TareaPacking, ItemPacking, EstadoPacking
-from app.models.picking import TareaPicking
+from app.models.picking import TareaPicking, EstadoPicking
 from app.services.packing_service import PackingService
 from app.services.connekta_gateway import connekta
 from app.routes._auth_helpers import Roles, _puede_empacar
@@ -25,7 +25,7 @@ def _picking_listo_batch(numeros_pedido: list) -> dict:
 
     pickings = TareaPicking.query.filter(
         TareaPicking.referencia_documento.in_(numeros_pedido),
-        TareaPicking.estado != 'CANCELADO'
+        TareaPicking.estado != EstadoPicking.CANCELADO
     ).all()
 
     # Agrupar por pedido
@@ -35,7 +35,7 @@ def _picking_listo_batch(numeros_pedido: list) -> dict:
         if num not in por_pedido:
             por_pedido[num] = {'total': 0, 'completados': 0}
         por_pedido[num]['total'] += 1
-        if p.estado == 'COMPLETADO':
+        if p.estado == EstadoPicking.COMPLETADO:
             por_pedido[num]['completados'] += 1
 
     resultado = {}

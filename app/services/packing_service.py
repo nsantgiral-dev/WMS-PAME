@@ -387,9 +387,15 @@ class PackingService:
                 f'Tarea {tarea_id} no tiene tipo_docto_pedido_siesa — '
                 'el pedido no tiene datos Siesa válidos. Contacta al administrador.'
             )
+        # [A14] Validar consec_docto_pedido_siesa — sin consecutivo, Siesa no puede localizar el pedido
+        if not tarea.consec_docto_pedido_siesa:
+            raise ValueError(
+                f'Tarea {tarea_id} no tiene consec_docto_pedido_siesa — '
+                'el pedido no tiene consecutivo Siesa válido. Contacta al administrador.'
+            )
 
         # TRIGGER A SIESA — 238925 FacturaPedido → factura FE + remisión automática
-        consec_para_siesa = tarea.consec_docto_pedido_siesa or tarea.numero_pedido_siesa
+        consec_para_siesa = tarea.consec_docto_pedido_siesa
         logger.info(
             f'[PACKING] ▶ Enviando trigger_factura a Siesa: '
             f'pedido={tarea.numero_pedido_siesa} '

@@ -786,13 +786,10 @@ class ConnektaGateway:
                     'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
-                    'f470_id_concepto': self.concepto_compras,                                  # 401 = Compras/Entrada (spec 142948, obligatorio), override: SIESA_CONCEPTO_COMPRAS
+                    # [A10] 142948 spec does NOT have f470_id_concepto, f470_ind_naturaleza,
+                    # f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido — removed
                     # Bonificación usa motivo '04' (obsequio/bonif en Siesa). OC usa motivo de la OC o motivo_compras.
                     'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
-                    'f470_ind_naturaleza': 0,                                                   # 0 = Entrada (142948 siempre ingresa mercancía)
-                    'f470_ind_obsequio': 1 if i.get('tipo') == 'BONIFICACION' else 0,          # 1 = obsequio/bonif del proveedor
-                    'f470_ind_solo_valor': 0,
-                    'f470_ind_impto_asumido': 0,
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
                     'f421_fecha_entrega': self._fmt_fecha_iso(i.get('fecha_entrega')) or fecha_hoy_iso,
@@ -1141,7 +1138,7 @@ class ConnektaGateway:
                     'f440_consec_docto': 0,
                     'f440_fecha': fecha_hoy,
                     'f440_id_tercero': self.nit_empresa or None,
-                    'f440_id_solicitante': self.req_solicitante,
+                    'f440_id_solicitante': self.req_solicitante or None,  # [A12] None when empty — Siesa rejects ''
                     'f440_fecha_entrega': fecha_hoy,
                     'f440_num_dias_entrega': 0,
                     'f440_ind_estado': 1,
@@ -1171,7 +1168,7 @@ class ConnektaGateway:
                     'f441_id_bodega': bodega_origen,
                     'f441_id_motivo': self.motivo_traslado,
                     'f441_id_unidad_medida': item.get('unidad_medida') or None,
-                    'f441_cant_base': abs(item.get('cantidad', 0)),  # número, NO string — Connekta serializa a 20 chars fixed-width
+                    'f441_cant_base': round(float(abs(item.get('cantidad', 0))), 4),  # número con precisión decimal — Connekta serializa a 20 chars fixed-width
                     'f441_cant_2': 0,
                     'f441_fecha_entrega': fecha_hoy,
                     'f441_num_dias_entrega': 0,
@@ -1236,12 +1233,9 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
-                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias (spec inventarios, obligatorio), override: SIESA_CONCEPTO_TRASLADOS
+                    # [A10] 173076 spec does NOT have f470_id_concepto, f470_ind_naturaleza,
+                    # f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido — removed
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_ind_naturaleza': 1,                                        # 1 = Salida (mercancía sale de bodega_origen)
-                    'f470_ind_obsequio': 0,
-                    'f470_ind_solo_valor': 0,
-                    'f470_ind_impto_asumido': 0,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
@@ -1315,12 +1309,9 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
-                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias, override: SIESA_CONCEPTO_TRASLADOS
+                    # [A10] 173079 spec does NOT have f470_id_concepto, f470_ind_naturaleza,
+                    # f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido — removed
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_ind_naturaleza': 0,                                        # 0 = Entrada (mercancía llega a bodega_destino)
-                    'f470_ind_obsequio': 0,
-                    'f470_ind_solo_valor': 0,
-                    'f470_ind_impto_asumido': 0,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
@@ -1378,12 +1369,9 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
-                    'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias, override: SIESA_CONCEPTO_TRASLADOS
+                    # [A10] 173066 spec does NOT have f470_id_concepto, f470_ind_naturaleza,
+                    # f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido — removed
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_ind_naturaleza': 1,                                        # 1 = Salida desde bodega_origen
-                    'f470_ind_obsequio': 0,
-                    'f470_ind_solo_valor': 0,
-                    'f470_ind_impto_asumido': 0,
                     'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',

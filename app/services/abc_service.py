@@ -145,121 +145,123 @@ class ABCService:
         ventana = datetime.utcnow() - timedelta(days=WATCHDOG_VENTANA_DIAS)
         overrides = []
 
-        # Pre-cargar todos los conteos activos del almacén en un set (producto_id, ubicacion_id)
-        # para evitar N+1 en el check de duplicados dentro del loop
-        conteos_activos = {
-            (sc.producto_id, sc.ubicacion_id)
-            for sc in SesionConteo.query.filter(
-                SesionConteo.almacen_id == almacen_id,
-                SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
-            ).with_entities(SesionConteo.producto_id, SesionConteo.ubicacion_id).all()
-        }
+        # [A1] Wrap everything in try/finally so advisory lock is always released,
+        # even if an exception occurs during queries before the commit.
+        try:
+            # Pre-cargar todos los conteos activos del almacén en un set (producto_id, ubicacion_id)
+            # para evitar N+1 en el check de duplicados dentro del loop
+            conteos_activos = {
+                (sc.producto_id, sc.ubicacion_id)
+                for sc in SesionConteo.query.filter(
+                    SesionConteo.almacen_id == almacen_id,
+                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                ).with_entities(SesionConteo.producto_id, SesionConteo.ubicacion_id).all()
+            }
 
-        # Clases susceptibles de override — consulta por almacén
-        for clase, umbral in WATCHDOG_UMBRAL.items():
-            productos_clase = (
-                Producto.query
-                .join(ProductoClasificacionABC,
-                      ProductoClasificacionABC.producto_id == Producto.id)
-                .filter(
-                    ProductoClasificacionABC.almacen_id == almacen_id,
-                    ProductoClasificacionABC.clasificacion == clase,
-                    Producto.activo == True
-                ).all()
-            )
-
-            if not productos_clase:
-                continue
-
-            # Pre-cargar todos los counts de picks en un solo query GROUP BY
-            producto_ids_clase = [p.id for p in productos_clase]
-            picks_rows = (
-                db.session.query(TareaPicking.producto_id, func.count(TareaPicking.id))
-                .filter(
-                    TareaPicking.producto_id.in_(producto_ids_clase),
-                    TareaPicking.estado == 'COMPLETADO',  # [A] corrección typo: era 'COMPLETADA'
-                    TareaPicking.fecha_completado >= ventana
+            # Clases susceptibles de override — consulta por almacén
+            for clase, umbral in WATCHDOG_UMBRAL.items():
+                productos_clase = (
+                    Producto.query
+                    .join(ProductoClasificacionABC,
+                          ProductoClasificacionABC.producto_id == Producto.id)
+                    .filter(
+                        ProductoClasificacionABC.almacen_id == almacen_id,
+                        ProductoClasificacionABC.clasificacion == clase,
+                        Producto.activo == True
+                    ).all()
                 )
-                .group_by(TareaPicking.producto_id)
-                .all()
-            )
-            picks_por_producto = {pid: cnt for pid, cnt in picks_rows}
 
-            # Pre-cargar UbicacionProducto solo para productos que superan el umbral
-            ids_sobre_umbral = [
-                p.id for p in productos_clase
-                if picks_por_producto.get(p.id, 0) >= umbral
-            ]
-            if not ids_sobre_umbral:
-                continue
-            registros_por_prod: dict = {}
-            for reg in (
-                UbicacionProducto.query
-                .join(Ubicacion)
-                .filter(
-                    UbicacionProducto.producto_id.in_(ids_sobre_umbral),
-                    UbicacionProducto.cantidad > 0,
-                    Ubicacion.almacen_id == almacen_id
-                ).all()
-            ):
-                registros_por_prod.setdefault(reg.producto_id, []).append(reg)
-
-            for producto in productos_clase:
-                picks = picks_por_producto.get(producto.id, 0)
-
-                if picks < umbral:
+                if not productos_clase:
                     continue
 
-                registros = registros_por_prod.get(producto.id, [])
+                # Pre-cargar todos los counts de picks en un solo query GROUP BY
+                producto_ids_clase = [p.id for p in productos_clase]
+                picks_rows = (
+                    db.session.query(TareaPicking.producto_id, func.count(TareaPicking.id))
+                    .filter(
+                        TareaPicking.producto_id.in_(producto_ids_clase),
+                        TareaPicking.estado == 'COMPLETADO',  # [A] corrección typo: era 'COMPLETADA'
+                        TareaPicking.fecha_completado >= ventana
+                    )
+                    .group_by(TareaPicking.producto_id)
+                    .all()
+                )
+                picks_por_producto = {pid: cnt for pid, cnt in picks_rows}
 
-                for reg in registros:
-                    # Verificación en memoria (evita duplicar dentro de la misma corrida)
-                    if (producto.id, reg.ubicacion_id) in conteos_activos:
+                # Pre-cargar UbicacionProducto solo para productos que superan el umbral
+                ids_sobre_umbral = [
+                    p.id for p in productos_clase
+                    if picks_por_producto.get(p.id, 0) >= umbral
+                ]
+                if not ids_sobre_umbral:
+                    continue
+                registros_por_prod: dict = {}
+                for reg in (
+                    UbicacionProducto.query
+                    .join(Ubicacion)
+                    .filter(
+                        UbicacionProducto.producto_id.in_(ids_sobre_umbral),
+                        UbicacionProducto.cantidad > 0,
+                        Ubicacion.almacen_id == almacen_id
+                    ).all()
+                ):
+                    registros_por_prod.setdefault(reg.producto_id, []).append(reg)
+
+                for producto in productos_clase:
+                    picks = picks_por_producto.get(producto.id, 0)
+
+                    if picks < umbral:
                         continue
 
-                    # Verificación en DB justo antes del insert — reduce ventana de race condition
-                    # entre dos workers que hayan pasado simultáneamente el check en memoria.
-                    ya_existe = SesionConteo.query.filter(
-                        SesionConteo.producto_id == producto.id,
-                        SesionConteo.ubicacion_id == reg.ubicacion_id,
-                        SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
-                    ).first()
-                    if ya_existe:
-                        conteos_activos.add((producto.id, reg.ubicacion_id))
-                        continue
+                    registros = registros_por_prod.get(producto.id, [])
 
-                    codigo = (
-                        f'CC-WATCHDOG-'
-                        f'{datetime.utcnow().strftime("%Y%m%d")}-'
-                        f'{str(uuid.uuid4())[:6].upper()}'
-                    )
-                    sesion = SesionConteo(
-                        codigo=codigo,
-                        tipo='WATCHDOG_ABC',
-                        clasificacion_abc='A',   # override temporal
-                        ubicacion_id=reg.ubicacion_id,
-                        almacen_id=almacen_id,
-                        producto_id=producto.id,
-                        producto_codigo_siesa=producto.codigo_siesa,
-                        maneja_lote=bool(getattr(reg, 'lote', None)),
-                        estado='PENDIENTE'
-                    )
-                    db.session.add(sesion)
-                    conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
-                    overrides.append({
-                        'producto_id': producto.id,
-                        'producto_codigo': producto.codigo_siesa or producto.codigo,
-                        'clase_actual': clase,
-                        'picks_7dias': picks,
-                        'umbral': umbral,
-                        'sesion_codigo': codigo,
-                    })
+                    for reg in registros:
+                        # Verificación en memoria (evita duplicar dentro de la misma corrida)
+                        if (producto.id, reg.ubicacion_id) in conteos_activos:
+                            continue
 
-        try:
+                        # Verificación en DB justo antes del insert — reduce ventana de race condition
+                        # entre dos workers que hayan pasado simultáneamente el check en memoria.
+                        ya_existe = SesionConteo.query.filter(
+                            SesionConteo.producto_id == producto.id,
+                            SesionConteo.ubicacion_id == reg.ubicacion_id,
+                            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                        ).first()
+                        if ya_existe:
+                            conteos_activos.add((producto.id, reg.ubicacion_id))
+                            continue
+
+                        codigo = (
+                            f'CC-WATCHDOG-'
+                            f'{datetime.utcnow().strftime("%Y%m%d")}-'
+                            f'{str(uuid.uuid4())[:6].upper()}'
+                        )
+                        sesion = SesionConteo(
+                            codigo=codigo,
+                            tipo='WATCHDOG_ABC',
+                            clasificacion_abc='A',   # override temporal
+                            ubicacion_id=reg.ubicacion_id,
+                            almacen_id=almacen_id,
+                            producto_id=producto.id,
+                            producto_codigo_siesa=producto.codigo_siesa,
+                            maneja_lote=bool(getattr(reg, 'lote', None)),
+                            estado='PENDIENTE'
+                        )
+                        db.session.add(sesion)
+                        conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
+                        overrides.append({
+                            'producto_id': producto.id,
+                            'producto_codigo': producto.codigo_siesa or producto.codigo,
+                            'clase_actual': clase,
+                            'picks_7dias': picks,
+                            'umbral': umbral,
+                            'sesion_codigo': codigo,
+                        })
+
             db.session.commit()
         except Exception as e:
             db.session.rollback()
-            logger.error(f'[ABC WATCHDOG] Error guardando overrides: {e}')
+            logger.error(f'[ABC WATCHDOG] Error en watchdog: {e}')
             raise
         finally:
             # [M2] Envolver en try propio: excepción aquí no debe reemplazar el resultado exitoso
