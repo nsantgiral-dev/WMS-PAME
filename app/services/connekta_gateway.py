@@ -106,10 +106,10 @@ class ConnektaGateway:
         # Conceptos de movimiento en Siesa (Inventarios → Maestros → Conceptos y Motivos).
         # Los valores por defecto son los estándar de Siesa Enterprise; pueden variar por compañía.
         # Verificar en Siesa si los conceptos fueron renumerados antes de cambiar estos valores.
-        self.concepto_ventas       = int(os.getenv('SIESA_CONCEPTO_VENTAS',       '501'))
-        self.concepto_compras      = int(os.getenv('SIESA_CONCEPTO_COMPRAS',      '401'))
-        self.concepto_ajustes      = int(os.getenv('SIESA_CONCEPTO_AJUSTES',      '603'))
-        self.concepto_traslados    = int(os.getenv('SIESA_CONCEPTO_TRASLADOS',    '607'))
+        self.concepto_ventas       = self._safe_int_env('SIESA_CONCEPTO_VENTAS',    501)
+        self.concepto_compras      = self._safe_int_env('SIESA_CONCEPTO_COMPRAS',  401)
+        self.concepto_ajustes      = self._safe_int_env('SIESA_CONCEPTO_AJUSTES',  603)
+        self.concepto_traslados    = self._safe_int_env('SIESA_CONCEPTO_TRASLADOS', 607)
 
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
         self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
@@ -128,6 +128,18 @@ class ConnektaGateway:
             logger.warning('[CONNEKTA] Modo simulación — faltan: CONNEKTA_IKEY, CONNEKTA_ITOKEN')
         elif self.modo_ensayo:
             logger.warning('[CONNEKTA] MODO ENSAYO activo — GETs reales, POSTs bloqueados en servidor')
+
+    @staticmethod
+    def _safe_int_env(var_name: str, default: int) -> int:
+        """Parse int env var safely — logs warning and falls back to default on bad value."""
+        raw = os.getenv(var_name, '')
+        if not raw:
+            return default
+        try:
+            return int(raw)
+        except (ValueError, TypeError):
+            logger.warning(f'[CONNEKTA] {var_name}={raw!r} no es numérico — usando default {default}')
+            return default
 
     @property
     def headers(self):

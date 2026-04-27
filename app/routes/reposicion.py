@@ -550,6 +550,13 @@ def test_alerta_email():
 @jwt_required()
 def smtp_check():
     """Diagnóstico de configuración Resend — no envía email."""
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.ALMACEN:
+        return jsonify({'error': 'Solo admin o jefe de almacén puede ver diagnóstico SMTP'}), 403
     import os
     api_key = os.getenv('RESEND_API_KEY', '')
     dest    = os.getenv('ALERTA_EMAIL_DEST', '')

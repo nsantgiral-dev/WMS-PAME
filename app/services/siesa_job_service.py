@@ -139,7 +139,19 @@ def _run_dlq_jobs():
             f'entre jobs para evitar ráfaga sobre Siesa (thundering herd)'
         )
 
+    # [M8] Time-box: break after 4 min to avoid blocking the scheduler slot
+    _dlq_start = datetime.utcnow()
+    _DLQ_MAX_SECONDS = 240  # 4 minutes
+
     for job in jobs:
+        # Check elapsed time before starting a new job
+        if (datetime.utcnow() - _dlq_start).total_seconds() > _DLQ_MAX_SECONDS:
+            logger.warning(
+                f'[DLQ] Ciclo excedió {_DLQ_MAX_SECONDS}s — cortando con {procesados} procesados, '
+                f'{len(jobs) - procesados} restantes se procesan en el próximo ciclo'
+            )
+            break
+
         job.estado = 'PROCESANDO'
         job.fecha_procesando = ahora  # registrar cuándo entró a PROCESANDO para stuck-job detection
         db.session.commit()  # lock en el registro

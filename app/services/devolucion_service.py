@@ -41,6 +41,15 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
 
     siesa_mayor = [d for d in discrepancias if d.get('estado') == 'SIESA_MAYOR']
 
+    # [M3] Bulk pre-load: fetch all existing TareaDevolucion by idempotency_key in one query
+    ikeys_all = [f'DEV-{d["producto_id"]}-PENDIENTE' for d in siesa_mayor]
+    existentes_map = {}
+    if ikeys_all:
+        for td in TareaDevolucion.query.filter(
+            TareaDevolucion.idempotency_key.in_(ikeys_all)
+        ).all():
+            existentes_map[td.idempotency_key] = td
+
     for disc in siesa_mayor:
         producto_id = disc['producto_id']
         cantidad = abs(disc['diferencia'])  # siempre positivo
@@ -51,9 +60,7 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
         # Savepoint por item — el rollback solo deshace este item, no los anteriores
         savepoint = db.session.begin_nested()
         try:
-            existente = TareaDevolucion.query.filter_by(
-                idempotency_key=ikey
-            ).first()
+            existente = existentes_map.get(ikey)
 
             if existente:
                 if existente.estado == 'COMPLETADO':
