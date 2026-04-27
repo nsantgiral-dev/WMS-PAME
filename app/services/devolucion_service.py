@@ -257,15 +257,17 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
         # Capturar antes del commit (expire_on_commit haría lazy load ineficiente después)
         # [C6] Solo codigo_siesa — Siesa no conoce códigos WMS. Si se usara tarea.producto.codigo
         # (WMS), el job quedaría en FALLIDO permanente: Siesa rechaza referencias desconocidas.
+        # [CRÍTICO] Si no hay codigo_siesa, bloquear la confirmación en vez de marcar COMPLETADO
+        # silenciosamente sin Siesa — la avería quedaría sin registrar en el ERP y el inventario
+        # de Siesa divergiría permanentemente del WMS.
         _item_codigo = tarea.producto.codigo_siesa if tarea.producto else None
         if not _item_codigo:
-            logger.error(
-                f'[DEV] Tarea {tarea.codigo}: producto_id={tarea.producto_id} sin codigo_siesa '
-                f'— TRASLADO_AVERIAS no encolado (código WMS no válido para Siesa). '
-                f'Asignar codigo_siesa al producto en el catálogo.'
+            raise ValueError(
+                f'El producto (id={tarea.producto_id}) no tiene código Siesa configurado. '
+                'El traslado a bodega de averías no puede enviarse a Siesa sin ese código. '
+                'Configura el campo codigo_siesa en el catálogo de productos antes de confirmar.'
             )
-        else:
-            job_dlq = SiesaJob.encolar(
+        job_dlq = SiesaJob.encolar(
                 tipo='TRASLADO_AVERIAS',
                 payload={
                     'tarea_id': tarea.id,
