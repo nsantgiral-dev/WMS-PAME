@@ -465,10 +465,15 @@ class ConteoService:
             )
             diferencia_reenc = (sesion.cantidad_fisica or 0) - (sesion.existencia_siesa or 0)
             motivo_reenc = 'AJ-ENT' if diferencia_reenc > 0 else 'AJ-SAL'
+            if not sesion.producto_codigo_siesa:
+                raise ValueError(
+                    f'Sesión {sesion.id} sin producto_codigo_siesa — '
+                    'no se puede re-encolar ajuste a Siesa. El producto debe tener código Siesa configurado.'
+                )
             payload_reenc = {
                 'sesion_id': sesion.id,
                 'motivo_codigo': motivo_reenc,
-                'item_codigo': sesion.producto_codigo_siesa or '',
+                'item_codigo': sesion.producto_codigo_siesa,
                 'cantidad': abs(diferencia_reenc),
                 'referencia': sesion.codigo,
                 'tarea_picking_id': sesion.tarea_picking_id,
@@ -524,8 +529,14 @@ class ConteoService:
 
         # Capturar referencias a atributos ANTES del commit
         # (expire_on_commit invalida el objeto tras el commit)
+        if not sesion.producto_codigo_siesa:
+            raise ValueError(
+                'Este producto no tiene código Siesa configurado — '
+                'el ajuste de inventario no puede enviarse a Siesa. '
+                'Configura el campo codigo_siesa del producto antes de confirmar.'
+            )
         producto_ref = sesion.producto
-        item_codigo = sesion.producto_codigo_siesa or (producto_ref.codigo if producto_ref else '')
+        item_codigo = sesion.producto_codigo_siesa
         sesion_codigo = sesion.codigo
         ubicacion_id = sesion.ubicacion_id
         producto_id = sesion.producto_id
