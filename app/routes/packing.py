@@ -67,7 +67,7 @@ def listar_tareas():
     from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
     query = (TareaPacking.query
              .options(
-                 _sl(TareaPacking.items),
+                 _sl(TareaPacking.items).selectinload(ItemPacking.producto),  # evita N+1 items.producto
                  _sl(TareaPacking.bultos),
                  _jl(TareaPacking.empacador),
              )
