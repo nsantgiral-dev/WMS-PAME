@@ -1,7 +1,7 @@
 import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.models.recepcion import RecepcionMercancia
+from app.models.recepcion import RecepcionMercancia, EstadoRecepcion
 from app.services.recepcion_service import RecepcionService
 from app.routes._auth_helpers import _solo_admin, Roles
 
@@ -193,9 +193,9 @@ def cancelar_recepcion(id):
         return jsonify({'error': 'Solo admin puede cancelar recepciones'}), 403
     data = request.get_json() or {}
     recepcion = RecepcionMercancia.query.get_or_404(id)
-    if recepcion.estado == 'CONFIRMADA':
+    if recepcion.estado == EstadoRecepcion.CONFIRMADA:
         return jsonify({'error': 'No se puede cancelar una recepción ya confirmada'}), 400
-    recepcion.estado = 'CANCELADA'
+    recepcion.estado = EstadoRecepcion.CANCELADA
     recepcion.observaciones = data.get('motivo')
     from app.extensions import db
     db.session.commit()

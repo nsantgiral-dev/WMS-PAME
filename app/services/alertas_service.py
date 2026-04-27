@@ -617,7 +617,8 @@ def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fal
     hoy = datetime.now().strftime('%d/%m/%Y %H:%M')
     asunto = f'📊 WMS Papelería Medellín — Resumen operativo {fecha}'
 
-    alerta_jobs = jobs_fallidos not in ('N/D', 0) and jobs_fallidos > 0
+    # N/D en jobs_fallidos = fallo de query DB → también es alerta (no mostrar en gris neutro)
+    alerta_jobs = jobs_fallidos == 'N/D' or (jobs_fallidos not in (0,) and jobs_fallidos > 0)
 
     cuerpo_texto = f"""WMS Papelería Medellín — Resumen Operativo {fecha}
 

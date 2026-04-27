@@ -112,7 +112,12 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
             logger.info(f'[DEV] Tarea creada: {codigo} · prod {producto_id} · {cantidad} uds')
 
         except Exception as e:
-            logger.warning(f'[DEV] Error creando tarea para producto {producto_id}: {e}')
+            # ERROR (no warning): fallo aquí implica que una discrepancia queda sin tarea.
+            # El operario no verá el ítem para devolver → diferencia permanece invisible.
+            logger.error(
+                f'[DEV] Error creando tarea para producto {producto_id}: {e}',
+                exc_info=True
+            )
             savepoint.rollback()  # solo revierte este item, no los anteriores
             errores += 1
 

@@ -133,6 +133,17 @@ def registrar_conteo(id):
     if 'cantidad_fisica' not in data:
         return jsonify({'error': 'cantidad_fisica es requerida'}), 400
 
+    # Verificar ownership antes de delegar al servicio — un operario solo puede
+    # registrar sus propias sesiones (supervisores pueden acceder a cualquiera).
+    _sesion_chk = SesionConteo.query.get(id)
+    if _sesion_chk is None:
+        return jsonify({'error': 'Sesión de conteo no encontrada'}), 404
+    from app.models.usuario import Usuario
+    _u_chk = Usuario.query.get(operario_id)
+    if _u_chk and _u_chk.rol not in Roles.SUPERVISION:
+        if _sesion_chk.operario_id != operario_id:
+            return jsonify({'error': 'No puedes registrar el conteo de otra persona'}), 403
+
     try:
         cantidad_fisica = int(data['cantidad_fisica'])
     except (ValueError, TypeError):

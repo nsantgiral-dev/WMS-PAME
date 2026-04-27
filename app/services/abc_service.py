@@ -497,8 +497,28 @@ class ABCService:
                 'detalle': overrides
             }
         except Exception as e:
-            logger.error(f'[ABC WATCHDOG] Error en almacén {almacen_id}: {e}')
+            # Productos que debían reclasificarse a A quedan en B/C → sin conteo urgente.
+            logger.error(
+                f'[ABC WATCHDOG] Error en almacén {almacen_id}: {e} '
+                f'— overrides no aplicados; productos de alta rotación sin reclasificar',
+                exc_info=True
+            )
             resultados['watchdog'] = {'error': str(e)}
+            # Intentar notificar por email (best-effort — no lanzar si falla)
+            try:
+                from app.services.alertas_service import enviar_email, _config_resend
+                if _config_resend():
+                    enviar_email(
+                        asunto=f'[WMS ALERTA] ABC Watchdog falló — almacén {almacen_id}',
+                        cuerpo_texto=(
+                            f'El watchdog ABC del almacén {almacen_id} falló con error:\n{e}\n\n'
+                            'Los productos de alta rotación no fueron reclasificados a clase A. '
+                            'El conteo cíclico urgente no se generará automáticamente.'
+                        ),
+                        cuerpo_html=None,
+                    )
+            except Exception:
+                pass
 
         logger.info(f'[ABC] Generación completa · {total} tareas nuevas en almacén {almacen_id}')
         return {'total_tareas_creadas': total, 'por_clase': resultados}
@@ -791,7 +811,15 @@ class ABCService:
 
             # flush sin commit — la transacción completa se confirma al final
             # para que un Railway restart no deje clasificaciones parcialmente actualizadas
-            db.session.flush()
+            try:
+                db.session.flush()
+            except Exception as _flush_err:
+                db.session.rollback()
+                logger.error(
+                    f'[ABC CSV] flush() falló en lote {i}–{i + LOTE}: {_flush_err}',
+                    exc_info=True
+                )
+                raise
 
         try:
             db.session.commit()
