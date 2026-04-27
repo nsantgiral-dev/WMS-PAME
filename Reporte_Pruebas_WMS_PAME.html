@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reporte de Pruebas - WMS PAME</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 1000px; margin: 0 auto; padding: 20px; background-color: #f4f7f6; }
+        .header { background-color: #2c3e50; color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }
+        .container { background-color: white; padding: 30px; border-radius: 0 0 8px 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .status-summary { display: flex; justify-content: space-around; margin-bottom: 30px; flex-wrap: wrap; }
+        .status-card { padding: 15px 25px; border-radius: 8px; text-align: center; min-width: 150px; margin: 10px; }
+        .passed { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .failed { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .warning { background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+        h2 { border-bottom: 2px solid #3498db; padding-bottom: 10px; color: #2c3e50; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #3498db; color: white; }
+        tr:hover { background-color: #f1f1f1; }
+        .detail-box { background-color: #f9f9f9; padding: 15px; border-left: 5px solid #3498db; margin: 10px 0; border-radius: 4px; }
+        .error-code { font-family: 'Courier New', Courier, monospace; background-color: #eee; padding: 2px 4px; border-radius: 3px; }
+        footer { margin-top: 50px; text-align: center; font-size: 0.9em; color: #7f8c8d; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Reporte de Auditoría Técnica y Pruebas</h1>
+        <p>Proyecto: <strong>WMS-PAME</strong> | Fecha: 25 de Abril de 2026</p>
+    </div>
+
+    <div class="container">
+        <h2>Resumen Ejecutivo</h2>
+        <div class="status-summary">
+            <div class="status-card passed">
+                <strong>PASADAS</strong><br>
+                <span style="font-size: 2em;">44</span><br>
+                Pruebas Unitarias
+            </div>
+            <div class="status-card failed">
+                <strong>FALLIDAS</strong><br>
+                <span style="font-size: 2em;">5</span><br>
+                Pruebas Integración
+            </div>
+            <div class="status-card warning">
+                <strong>ADVERTENCIAS</strong><br>
+                <span style="font-size: 2em;">344</span><br>
+                Deprecaciones/Config
+            </div>
+        </div>
+
+        <p>Se ha realizado una ejecución exhaustiva de la suite de pruebas del sistema WMS-PAME para validar la integridad del núcleo operativo y la capa de servicios.</p>
+
+        <h2>1. Análisis del Núcleo Operativo (Éxito 100%)</h2>
+        <p>Las pruebas unitarias del corazón del sistema confirman que la lógica de inventarios es sólida:</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Suite de Pruebas</th>
+                    <th>Funcionalidad Validada</th>
+                    <th>Resultado</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>test_01_modelos.py</strong></td>
+                    <td>Relaciones de base de datos, estados de LPN, persistencia de productos y almacenes.</td>
+                    <td>✅ EXITOSO</td>
+                </tr>
+                <tr>
+                    <td><strong>test_02_zona_sync.py</strong></td>
+                    <td>Algoritmo de clasificación de productos entre Reserva, Picking y General.</td>
+                    <td>✅ EXITOSO</td>
+                </tr>
+                <tr>
+                    <td><strong>test_03_reposicion.py</strong></td>
+                    <td>Cálculo de necesidades de reabastecimiento (Mín/Máx) y generación de tareas.</td>
+                    <td>✅ EXITOSO</td>
+                </tr>
+                <tr>
+                    <td><strong>test_04_ola_predictiva.py</strong></td>
+                    <td>Proyección de demanda y generación proactiva de reposiciones.</td>
+                    <td>✅ EXITOSO</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2>2. Hallazgos en Capa de Integración (Fallas Detectadas)</h2>
+        <p>La investigación técnica identificó dos puntos críticos que requieren atención en la configuración de las pruebas o el despliegue:</p>
+        
+        <div class="detail-box">
+            <strong>Fallo en Dead Letter Queue (DLQ):</strong><br>
+            El servicio <code>procesar_jobs_pendientes</code> en <code>siesa_job_service.py</code> ejecuta la lógica pero no retorna el valor de los procesados a la función llamadora. 
+            <br><em>Impacto:</em> Los procesos de monitoreo reciben "None" y no pueden confirmar el éxito de la tarea.
+        </div>
+
+        <div class="detail-box">
+            <strong>Restricción de Acceso API (403 Forbidden):</strong><br>
+            Los endpoints de configuración de límites y gestión de tareas han sido endurecidos y ahora requieren rol de <code class="error-code">admin</code> o <code class="error-code">jefe_almacen</code>. 
+            <br><em>Impacto:</em> Los tests fallan porque utilizan un usuario de prueba con rol <code class="error-code">operario</code>.
+        </div>
+
+        <h2>3. Recomendaciones Técnicas</h2>
+        <ul>
+            <li><strong>Ajuste de Retorno:</strong> Modificar <code>app/services/siesa_job_service.py</code> para incluir el <code>return</code> faltante.</li>
+            <li><strong>Actualización de Suite de Pruebas:</strong> Elevar el rol del usuario en <code>tests/conftest.py</code> de 'operario' a 'admin' para permitir la validación de endpoints de gestión.</li>
+            <li><strong>Limpieza de Logs:</strong> Atender las advertencias de SQLAlchemy y Flask para reducir el ruido en los reportes de integración continua.</li>
+        </ul>
+
+        <footer>
+            Generado automáticamente por Gemini CLI para WMS-PAME.<br>
+            &copy; 2026 Auditoría de Sistemas WMS.
+        </footer>
+    </div>
+</body>
+</html>

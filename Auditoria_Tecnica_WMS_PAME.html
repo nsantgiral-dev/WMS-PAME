@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: auto; padding: 20px; }
+        h1 { color: #2c3e50; border-bottom: 2px solid #2c3e50; padding-bottom: 10px; }
+        h2 { color: #2980b9; margin-top: 30px; border-left: 5px solid #2980b9; padding-left: 10px; }
+        h3 { color: #16a085; }
+        .critico { color: #c0392b; font-weight: bold; }
+        .riesgo { color: #d35400; font-weight: bold; }
+        .exito { color: #27ae60; font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        ul { padding-left: 20px; }
+        li { margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Informe de Auditoría Técnica: WMS-PAME</h1>
+    <p><strong>Fecha:</strong> 23 de abril de 2026</p>
+    <p><strong>Estado del Proyecto:</strong> Fase de Integración / Pre-producción</p>
+
+    <h2>1. Resumen Ejecutivo</h2>
+    <p>El sistema <strong>WMS-PAME</strong> presenta una arquitectura sólida y bien estructurada, diseñada para operaciones logísticas de alta intensidad. La implementación destaca por su capacidad de resiliencia ante fallos del ERP y un control riguroso de la integridad del inventario mediante bloqueos transaccionales.</p>
+
+    <h2>2. Arquitectura y Calidad de Código</h2>
+    <ul>
+        <li><span class="exito">Modularidad:</span> Separación clara entre modelos, rutas y servicios. Facilita la escalabilidad.</li>
+        <li><span class="exito">Integración Resiliente:</span> Uso de <strong>SiesaJob (DLQ)</strong> con backoff exponencial. Garantiza que ninguna transacción con el ERP se pierda definitivamente por fallos de red.</li>
+        <li><span class="exito">Seguridad Transaccional:</span> Uso de <code>with_for_update()</code> para prevenir condiciones de carrera (Race Conditions) en el stock.</li>
+    </ul>
+
+    <h2>3. Hallazgos Críticos y Riesgos</h2>
+    
+    <h3>3.1 Seguridad <span class="critico">(Alta Prioridad)</span></h3>
+    <ul>
+        <li><strong>Expiración de Tokens JWT:</strong> Configurada en 7 días. Se recomienda reducir a 12-24 horas para minimizar el impacto en caso de robo de credenciales.</li>
+        <li><strong>Claves Maestras:</strong> Dependencia de un fallback <code>'dev-secret'</code>. Es vital asegurar que <code>SECRET_KEY</code> esté configurada en el entorno de producción.</li>
+        <li><strong>Credenciales Expuestas:</strong> Presencia de contraseñas de prueba en el archivo <code>CONTEXTO_WMS.md</code>.</li>
+    </ul>
+
+    <h3>3.2 Estabilidad y Concurrencia <span class="riesgo">(Media Prioridad)</span></h3>
+    <ul>
+        <li><strong>Sincronización Multi-worker:</strong> El estado de sincronización es global en memoria. En un entorno con múltiples procesos (Gunicorn workers), esto provocará que varios procesos intenten sincronizar el catálogo simultáneamente, causando carga innecesaria o errores de duplicidad.</li>
+        <li><strong>Carga del Scheduler:</strong> 9 procesos de fondo corriendo dentro del servidor web. Se recomienda moverlos a un proceso "Worker" independiente (ej. Celery o un script separado).</li>
+    </ul>
+
+    <h2>4. Lógica de Negocio y Eficiencia</h2>
+    <table>
+        <tr>
+            <th>Módulo</th>
+            <th>Hallazgo</th>
+            <th>Impacto</th>
+        </tr>
+        <tr>
+            <td>Picking</td>
+            <td>Lógica FEFO estricta por fecha de vencimiento.</td>
+            <td><span class="exito">Alta eficiencia</span></td>
+        </tr>
+        <tr>
+            <td>Mobile</td>
+            <td>Task Interleaving (Conteo + Picking en el mismo viaje).</td>
+            <td><span class="exito">Ahorro de tiempo</span></td>
+        </tr>
+        <tr>
+            <td>Integración</td>
+            <td>Modo Simulación y Modo Ensayo.</td>
+            <td><span class="exito">Pruebas seguras</span></td>
+        </tr>
+    </table>
+
+    <h2>5. Conclusiones y Próximos Pasos</h2>
+    <p>El proyecto es técnicamente superior a la media de implementaciones similares. Se recomienda realizar las siguientes correcciones antes de la puesta en marcha oficial:</p>
+    <ol>
+        <li>Centralizar el estado de los "Jobs" en la base de datos para soporte multi-proceso.</li>
+        <li>Eliminar credenciales de la documentación.</li>
+        <li>Configurar monitoreo activo sobre la tabla <code>siesa_jobs</code> para detectar fallos de integración en tiempo real.</li>
+    </ol>
+
+    <hr>
+    <p style="text-align: center; font-size: 0.8em;">Documento generado por Auditoría Gemini CLI - 2026</p>
+</body>
+</html>

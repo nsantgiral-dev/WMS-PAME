@@ -1,0 +1,456 @@
+Modulo de Conectividad Siesa SQL Server-API_v1_Compras_Comercial_EntradaOC
+Descripción técnica
+Type
+POST
+Base URL
+QA
+Request URL
+https://serviciosqa.siesacloud.com/api/siesa/v3/conectoresimportarestandar?idCompania=8215&idDocumento=142948&nombreDocumento=API_v1_Compras_Comercial_EntradaOC
+Headers
+ConniKey:
+ConniToken:
+Params
+idCompania: 8215idDocumento: 142948nombreDocumento: API_v1_Compras_Comercial_EntradaOC
+Request Body
+{
+"Inicial": [
+{
+"F_CIA": ""
+}
+],
+"Documentos": [
+{
+"F_CIA": "",
+"F_CONSEC_AUTO_REG": "",
+"f350_id_co": "",
+"f350_id_tipo_docto": "",
+"f350_consec_docto": "",
+"f350_fecha": "",
+"f350_id_tercero": "",
+"f350_ind_estado": "",
+"f350_ind_impresion": "",
+"f350_notas": "",
+"f451_id_sucursal_prov": "",
+"f451_id_tercero_comprador": "",
+"f451_num_docto_referencia": "",
+"f451_id_moneda_docto": "",
+"f451_id_moneda_conv": "",
+"f451_tasa_conv": "",
+"f451_id_moneda_local": "",
+"f451_tasa_local": "",
+"f451_tasa_dscto_global1": "",
+"f451_tasa_dscto_global2": "",
+"f462_id_vehiculo": "",
+"f462_id_tercero_transp": "",
+"f462_id_sucursal_transp": "",
+"f462_id_tercero_conductor": "",
+"f462_nombre_conductor": "",
+"f462_identif_conductor": "",
+"f462_numero_guia": "",
+"f462_cajas": "",
+"f462_peso": "",
+"f462_volumen": "",
+"f462_valor_seguros": "",
+"f462_notas": "",
+"f451_ind_consignacion": "",
+"f420_id_co_docto": "",
+"f420_id_tipo_docto": "",
+"f420_consec_docto": "",
+"f420_ind_modo_sobrecosto": ""
+}
+],
+"Movimientos": [
+{
+"F_CIA": "",
+"f470_id_co": "",
+"f470_id_tipo_docto": "",
+"f470_consec_docto": "",
+"f470_nro_registro": "",
+"f470_id_bodega": "",
+"f470_id_ubicacion_aux": "",
+"f470_id_lote": "",
+"f470_id_unidad_medida": "",
+"f421_fecha_entrega": "",
+"f470_cant_base": "",
+"f470_cant_2": "",
+"f470_notas": "",
+"f470_id_item": "",
+"f470_referencia_item": "",
+"f470_codigo_barras": "",
+"f470_id_ext1_detalle": "",
+"f470_id_ext2_detalle": "",
+"f470_id_ccosto_movto": "",
+"f470_id_proyecto": "",
+"f470_rowid": ""
+}
+],
+"Final": [
+{
+"F_CIA": ""
+}
+]
+}
+Inicial
+F_CIA
+Entero
+Valida en maestro, código de la compañía a la cual pertenece la información del registro
+Si
+16
+3
+F_CIA
+Entero
+Valida en maestro, código de la compañía a la cual pertenece la informacion del registro
+Si
+16
+3
+F_CONSEC_AUTO_REG
+Entero
+0=Manual, significa que respecta el consecutivo asignado en el plano, 1=Automatico, significa que el consecutivo es recalculado con base en la tabla de consecutivos de docto.
+Si
+20
+1
+f350_id_co
+Alfanumerico
+Valida en maestro, código de centro de operación del documento
+Si
+21
+3
+f350_id_tipo_docto
+Alfanumerico
+Valida en maestro, código de tipo de documento
+Si
+24
+3
+f350_consec_docto
+Entero
+Numero de documento
+Si
+27
+8
+f350_fecha
+Alfanumerico
+El formato debe ser AAAAMMDD
+Si
+35
+8
+f350_id_tercero
+Alfanumerico
+Valida en maestro de terceros, debe ser proveedor.
+Si
+43
+15
+f350_ind_estado
+Entero
+0=En elaboración, 1=Aprobado/Contabilizado, 2=Anulado
+Si
+61
+1
+f350_ind_impresión
+Entero
+0=No, 1=Si
+Si
+62
+1
+f350_notas
+Alfanumerico
+Notas del documento
+No
+63
+255
+f451_id_sucursal_prov
+Alfanumerico
+Valida en maestro, proveedor
+Si
+324
+3
+f451_id_tercero_comprador
+Alfanumerico
+Valida en maestro. Es el código de tercero con que se identifica el comprador.
+Si
+327
+15
+f451_num_docto_referencia
+Alfanumerico
+Documento referencia
+No
+342
+12
+f451_id_moneda_docto
+Alfanumerico
+Valida en maestro, código de moneda del documento
+Dep
+354
+3
+f451_id_moneda_conv
+Alfanumerico
+Valida en maestro, código de moneda base definida en la compañía
+Dep
+357
+3
+f451_tasa_conv
+Decimal
+Coloque 1 si la moneda del documento es igual a la moneda local o a la moneda base de conversion de lo contrario coloque la tasa de conversion. El formato debe ser (8 enteros + punto + 4)
+Si
+360
+13
+f451_id_moneda_local
+Alfanumerico
+Valida en maestro, código de moneda local definida en la compañía.
+Dep
+373
+3
+f451_tasa_local
+Decimal
+Coloque 1 si la moneda del documento es igual a la moneda local de lo contrario coloque la tasa de cambio. El formato debe ser (8 enteros + punto + 4 decimales) 00000000.0000), obligatorio
+Si
+376
+13
+f451_tasa_dscto_global1
+Decimal
+Tasa de descuento global, el formato debe ser (3 enteros + punto + 4 decimales) (000.0000)
+No
+389
+8
+f451_tasa_dscto_global2
+Decimal
+Tasa de descuento global, el formato debe ser (3 enteros + punto + 4 decimales) (000.0000)
+No
+397
+8
+f462_id_vehiculo
+Alfanumerico
+Valida en maestro de vehiculos, obligatorio si graban información del transportador
+Dep
+405
+10
+f462_id_tercero_transp
+Alfanumerico
+Código del transportador, obligatorio si graban información del transportador y existe vehículo
+Dep
+415
+15
+f462_id_sucursal_transp
+Alfanumerico
+Sucursal del transportador, obligatorio si graban información del transportador y existe vehículo
+Dep
+430
+3
+f462_id_tercero_conductor
+Alfanumerico
+Código del conductor, obligatorio si graban información del transportador y existe vehículo
+Dep
+433
+15
+f462_nombre_conductor
+Alfanumerico
+Nombre del conductor, obligatorio si graban información del transportador y existe vehículo
+Dep
+448
+50
+f462_identif_conductor
+Alfanumerico
+Identificación del conductor, obligatorio si graban información del transportador y existe vehículo
+Dep
+498
+15
+f462_numero_guia
+Alfanumerico
+Numero de guia, oblogatoria si graban informacion del transportador y existe vehículo
+Dep
+513
+30
+f462_cajas
+Decimal
+El formato debe ser (10 enteros + punto + 4 decimales). (0000000000.0000)
+No
+543
+15
+f462_peso
+Decimal
+El formato debe ser (15 enteros + punto + 4 decimales). El número de decimales se deben reportar teniendo en cuenta el número de decimales configurados en la unidade de peso del sistema. (000000000000000.0000)
+No
+558
+20
+f462_volumen
+Decimal
+El formato debe ser (15 enteros + punto + 4 decimales). El número de decimales se deben reportar teniendo en cuenta el número de decimales configurados en la unidade de volumen del sistema. (000000000000000.0000)
+No
+578
+20
+142948 - API_v1_Compras_Comercial_EntradaOC
+Documentos
+f462_valor_seguros
+Decimal
+El formato debe ser (15 enteros + punto + 4 decimales). El número de decimales se deben reportar teniendo en cuenta el número de decimales configurados en la moneda (decimales unidades). (000000000000000.0000)
+No
+598
+20
+f462_notas
+Alfanumerico
+Notas del transportador
+No
+618
+255
+f451_ind_consignacion
+Entero
+Inidicador de consignación
+No
+873
+1
+f420_id_co_docto
+Alfanumerico
+Valida en maestro, código de centro de operación del documento
+Si
+874
+3
+f420_id_tipo_docto
+Alfanumerico
+Valida en maestro, código de tipo de documento. Es obligatorio si la clase de documento es 409 Entradas desde OC
+Si
+877
+3
+f420_consec_docto
+Entero
+Numero de documento. Es obligatorio si la clase de documento es 409 Entradas desde OC
+Si
+880
+8
+f420_ind_modo_sobrecosto
+Entero
+0=No liquida y 0 cuando no maneja OC; 1=Asume de la OC con base en el COSTO; 2=Asume de la OC con base en la CANTIDAD; 3=Asume de la OC con base en el PESO; 4=Asume de la OC con base en el VOLUMEN
+Dep
+888
+1
+Movimientos
+F_CIA
+Entero
+Valida en maestro, código de la compañía a la cual pertenece la informacion del registro
+Si
+16
+3
+f470_id_co
+Alfanumerico
+Valida en maestro, código de centro de operación del documento
+Si
+19
+3
+f470_id_tipo_docto
+Alfanumerico
+Valida en maestro, código de tipo de documento
+Si
+22
+3
+f470_consec_docto
+Entero
+Numero de documento
+Si
+25
+8
+f470_nro_registro
+Entero
+Numero de registro del movimiento
+Si
+33
+10
+f470_id_bodega
+Alfanumerico
+Valida en maestro, código de bodega
+Si
+98
+5
+f470_id_ubicacion_aux
+Alfanumerico
+Valida en maestro, obligatorio si la bodega maneja ubiaciones
+Dep
+103
+10
+f470_id_lote
+Alfanumerico
+Valida en maestro, obligatorio si el item y la bodega manejan lotes
+Dep
+113
+15
+f470_id_unidad_medida
+Alfanumerico
+Valida en maestro, código de unidad de medida del movimiento
+Si
+128
+4
+f421_fecha_entrega
+Alfanumerico
+El formato debe ser AAAAMMDD
+Si
+132
+8
+f470_cant_base
+Decimal
+Cantidad en unidad de captura, el formato debe ser (15 enteros + punto + 4 decimales). El número de decimales se deben reportar teniendo en cuenta el número de decimales configurados en la unidad de medidad. (000000000000000.0000)
+Si
+140
+20
+f470_cant_2
+Decimal
+Cantidad adicional, es obligatorio si el item maneja unidad adicional, el formato debe ser (15 enteros + punto + 4 decimales). El número de decimales se deben reportar teniendo en cuenta el número de decimales configurados en la unidad de medidad. (000000
+Dep
+160
+20
+f470_notas
+Alfanumerico
+Notas del movimiento
+No
+180
+255
+f470_id_item
+Entero
+Codigo, es obligatorio si no va referencia ni codigo de barras
+Dep
+435
+7
+f470_referencia_item
+Alfanumerico
+Codigo, es obligatorio si no va codigo de item ni codigo de barras
+Dep
+442
+50
+f470_codigo_barras
+Alfanumerico
+Codigo, es obligatorio si no va codigo de item ni referencia
+Dep
+492
+20
+f470_id_ext1_detalle
+Alfanumerico
+Es obligatorio si el ítem maneja extensión 1
+Dep
+512
+20
+f470_id_ext2_detalle
+Alfanumerico
+Es obligatorio si el ítem maneja extensión 2
+Dep
+532
+20
+f470_id_ccosto_movto
+Alfanumerico
+Obligatorio si la cuenta contable exige ccosto. Valida en maestro, código de centro de costo del movimiento.
+Dep
+552
+15
+f470_id_proyecto
+Alfanumerico
+Valida en maestro, código de proyecto del movimiento
+No
+567
+15
+f470_rowid
+Entero
+Consecutivo interno del movimiento, si no requiere consecutivo debe ir en ceros. '0000000'
+No
+582
+7
+F_CIA
+Entero
+Valida en maestro, código de la compañía a la cual pertenece la información del registro
+Si
+16
+3
