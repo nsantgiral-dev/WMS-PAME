@@ -313,7 +313,8 @@ class ConnektaGateway:
             res = self._get(self.api_pedidos, {
                 'paginacion': 'numPag=1|tamPag=1',
                 'parametros': (
-                    f"f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"f430_id_co = ''{self.centro_op}'' "
+                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
                     f"AND f430_consec_docto = {consec_int}"
                 )
             })
@@ -324,6 +325,34 @@ class ConnektaGateway:
         except Exception as e:
             logger.warning(f'[CONNEKTA] get_estado_pedido falló silenciosamente: {e}')
             return None  # error de red — no bloqueamos, el POST revelará el error
+
+    def get_factura_desde_pedido(self, tipo_docto: str, consec_docto) -> list:
+        """
+        Consulta si ya existe una factura activa (no anulada) generada desde un pedido.
+        Retorna lista de facturas activas. Lista vacía = sin factura previa, proceder.
+        Guard anti-duplicado en cerrar_packing antes de disparar trigger_factura (238925).
+        """
+        if self.modo_simulacion:
+            return []
+
+        if not tipo_docto or not str(tipo_docto).strip():
+            return []
+
+        try:
+            consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
+                'paginacion': 'numPag=1|tamPag=50',
+                'parametros': (
+                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"AND f430_consec_docto = {consec_int}"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] get_factura_desde_pedido falló silenciosamente: {e}')
+            return []
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """

@@ -310,6 +310,25 @@ class PackingService:
                     f'en Siesa — continuando de todas formas'
                 )
 
+            # Guard anti-duplicado: verificar si ya existe factura activa en Siesa
+            facturas_activas = connekta.get_factura_desde_pedido(
+                tarea_pre.tipo_docto_pedido_siesa,
+                tarea_pre.consec_docto_pedido_siesa
+            )
+            if facturas_activas:
+                f0 = facturas_activas[0]
+                tipo_f  = f0.get('f350_id_tipo_docto', '?')
+                consec_f = f0.get('f350_consec_docto', '?')
+                logger.error(
+                    f'[PACKING] ⛔ Factura duplicada detectada para '
+                    f'{tarea_pre.numero_pedido_siesa}: {tipo_f}{consec_f} '
+                    f'ya existe en Siesa — trigger_factura bloqueado'
+                )
+                raise ValueError(
+                    f'El pedido {tarea_pre.numero_pedido_siesa} ya tiene una factura activa '
+                    f'en Siesa ({tipo_f}{consec_f}) — verificar en ERP antes de continuar.'
+                )
+
         # Ahora sí — adquirir lock pesimista para el resto de la transacción.
         # El pre-check ya terminó; el lock solo cubre el tiempo de escritura en DB (<1s).
         tarea = (TareaPacking.query
