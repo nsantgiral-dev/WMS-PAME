@@ -36,6 +36,7 @@ class SiesaJob(db.Model):
 
     creado_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+    fecha_procesando = db.Column(db.DateTime, nullable=True)  # cuándo entró a PROCESANDO (stuck-job detection)
     fecha_completado = db.Column(db.DateTime, nullable=True)
 
     @classmethod
@@ -89,5 +90,6 @@ class SiesaJob(db.Model):
             'error_ultimo': self.error_ultimo,
             'proximo_intento': self.proximo_intento.isoformat() if self.proximo_intento else None,
             'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,
+            'fecha_procesando': self.fecha_procesando.isoformat() if self.fecha_procesando else None,
             'fecha_completado': self.fecha_completado.isoformat() if self.fecha_completado else None,
         }

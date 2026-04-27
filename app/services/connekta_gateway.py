@@ -323,12 +323,29 @@ class ConnektaGateway:
             parametros = f"f430_id_co = ''{self.centro_op}'' AND f430_ind_estado = 3"
 
         all_items = []
+        _errores_consec = 0
         for pag in range(1, 200):
-            res = self._get(self.api_pedidos, {
-                'paginacion': f'numPag={pag}|tamPag=100',
-                'parametros': parametros
-            })
+            try:
+                res = self._get(self.api_pedidos, {
+                    'paginacion': f'numPag={pag}|tamPag=100',
+                    'parametros': parametros
+                })
+                _errores_consec = 0
+            except Exception as e:
+                _errores_consec += 1
+                logger.warning(
+                    f'[CONNEKTA] get_pedidos_aprobados pag={pag} error ({_errores_consec}/3): {e}'
+                )
+                if _errores_consec >= 3:
+                    logger.error(
+                        '[CONNEKTA] get_pedidos_aprobados abortando tras 3 errores consecutivos — '
+                        f'retornando {len(all_items)} ítems parciales'
+                    )
+                    break
+                continue
             rows = res.get('detalle', {}).get('Table', [])
+            if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                break
             all_items.extend(rows)
             if len(rows) < 100:
                 break
@@ -820,10 +837,10 @@ class ConnektaGateway:
                     'f450_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega if not es_entrada else None,
                     'f450_id_bodega_entrada': self.bodega if es_entrada else None,
-                    'f450_docto_alterno': '',
-                    'f350_id_co_base': '',
-                    'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
+                    'f450_docto_alterno': None,
+                    'f350_id_co_base': None,          # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_id_tipo_docto_base': None,  # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_consec_docto_base': 0,      # Entero (spec 142951) — 0 cuando no aplica tránsito
                     'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
                     'f462_id_tercero_transp': None,
                     'f462_id_sucursal_transp': None,
@@ -909,10 +926,10 @@ class ConnektaGateway:
                     'f450_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega,
                     'f450_id_bodega_entrada': self.bodega_averias,
-                    'f450_docto_alterno': '',
-                    'f350_id_co_base': '',
-                    'f350_id_tipo_docto_base': '',
-                    'f350_consec_docto_base': 0,   # Entero (spec 142951) — 0 cuando no aplica tránsito
+                    'f450_docto_alterno': None,
+                    'f350_id_co_base': None,          # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_id_tipo_docto_base': None,  # None cuando no aplica tránsito; Siesa rechaza string vacío
+                    'f350_consec_docto_base': 0,      # Entero (spec 142951) — 0 cuando no aplica tránsito
                     'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
                     'f462_id_tercero_transp': None,
                     'f462_id_sucursal_transp': None,

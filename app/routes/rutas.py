@@ -113,6 +113,16 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
 @rutas_bp.route('/conductores', methods=['GET'])
 @jwt_required()
 def listar_conductores():
+    from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles as _R
+    try:
+        _uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    _u = Usuario.query.get(_uid)
+    if not _u or _u.rol not in _R.GESTION + (_R.CONDUCTOR,):
+        return jsonify({'error': 'Sin permiso para listar conductores'}), 403
+
     from sqlalchemy.orm import selectinload as _sl_c
     solo_activos = request.args.get('activos', 'true').lower() == 'true'
     q = Conductor.query.options(_sl_c(Conductor.usuario)).order_by(Conductor.nombre)
@@ -120,7 +130,7 @@ def listar_conductores():
         q = q.filter_by(activo=True)
 
     # [23] Cédulas y teléfonos solo visibles para admin/jefe_almacen
-    puede_ver_datos_personales = bool(_es_admin_o_jefe())
+    puede_ver_datos_personales = _u.rol in _R.ALMACEN
 
     def _conductor_safe(c):
         d = c.to_dict()
