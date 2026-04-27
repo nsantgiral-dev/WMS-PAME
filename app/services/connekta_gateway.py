@@ -489,6 +489,16 @@ class ConnektaGateway:
         # Siesa: fecha en formato YYYYMMDD (8 chars max)
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
+        # Filtrar ítems con cantidad 0 — Siesa acepta líneas vacías sin rechazar el documento
+        # pero no descarga inventario, causando discrepancias silenciosas.
+        items_validos = [i for i in items if float(i.get('cantidad_empacada') or 0) > 0]
+        if not items_validos:
+            raise ValueError(
+                'trigger_despacho: ningún ítem tiene cantidad_empacada > 0 — '
+                'el despacho no puede enviarse a Siesa sin líneas de movimiento.'
+            )
+        items = items_validos
+
         payload = {
             'Inicial': [
                 {'F_CIA': self.id_cia_siesa}

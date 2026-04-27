@@ -418,27 +418,49 @@ class ABCService:
         if batch_diario is not None:
             candidatos = candidatos[:batch_diario]
 
-        # Crear tareas
+        # Crear tareas — savepoint por ítem para tolerar race conditions entre
+        # scheduler y API sin perder todos los inserts por un único conflicto.
+        # La re-verificación dentro del savepoint cierra la ventana entre el
+        # activos_set (leído antes) y el INSERT efectivo.
+        from sqlalchemy.exc import IntegrityError as _IE
         tareas_creadas = []
         for _, producto, reg in candidatos:
-            codigo = (
-                f'CC-{clasificacion}-'
-                f'{datetime.utcnow().strftime("%Y%m%d")}-'
-                f'{str(uuid.uuid4())[:6].upper()}'
-            )
-            sesion = SesionConteo(
-                codigo=codigo,
-                tipo='DIARIO_ABC',
-                clasificacion_abc=clasificacion,
-                ubicacion_id=reg.ubicacion_id,
-                almacen_id=almacen_id,
-                producto_id=producto.id,
-                producto_codigo_siesa=producto.codigo_siesa,
-                maneja_lote=bool(getattr(reg, 'lote', None)),
-                estado='PENDIENTE'
-            )
-            db.session.add(sesion)
-            tareas_creadas.append(sesion)
+            sp = db.session.begin_nested()
+            try:
+                # Re-verificar bajo savepoint: otro worker puede haber insertado
+                # entre el SELECT de activos_set y este INSERT (race condition scheduler+API)
+                ya_existe = SesionConteo.query.filter(
+                    SesionConteo.ubicacion_id == reg.ubicacion_id,
+                    SesionConteo.producto_id == producto.id,
+                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO'])
+                ).first()
+                if ya_existe:
+                    sp.rollback()
+                    continue
+
+                codigo = (
+                    f'CC-{clasificacion}-'
+                    f'{datetime.utcnow().strftime("%Y%m%d")}-'
+                    f'{str(uuid.uuid4())[:6].upper()}'
+                )
+                sesion = SesionConteo(
+                    codigo=codigo,
+                    tipo='DIARIO_ABC',
+                    clasificacion_abc=clasificacion,
+                    ubicacion_id=reg.ubicacion_id,
+                    almacen_id=almacen_id,
+                    producto_id=producto.id,
+                    producto_codigo_siesa=producto.codigo_siesa,
+                    maneja_lote=bool(getattr(reg, 'lote', None)),
+                    estado='PENDIENTE'
+                )
+                db.session.add(sesion)
+                db.session.flush()
+                sp.commit()
+                tareas_creadas.append(sesion)
+            except _IE:
+                sp.rollback()
+                logger.warning(f'[ABC] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
 
         try:
             db.session.commit()
@@ -447,10 +469,9 @@ class ABCService:
             logger.error(f'[ABC] Error guardando tareas de conteo: {e}')
             raise
 
-        # Pre-calentar caché de existencia Siesa en background — evita HTTP sync en el turno
-        if tareas_creadas:
-            from app.services.conteo_service import ConteoService
-            ConteoService.prewarm_existencia_cache(tareas_creadas)
+        # Prewarm consolidado: NO llamar aquí — se hace una única vez en generar_todas_las_clases()
+        # para todas las clases A+B+C juntas. Si se llama aquí, el semáforo non-blocking descarta
+        # los prewarms de B y C porque el de A todavía está en curso (cold cache garantizado).
 
         dias_para_ciclo = math.ceil(total_clase / (batch_diario or 1)) if batch_diario else 1
 
@@ -471,6 +492,7 @@ class ABCService:
             'frecuencia_dias': frecuencia,
             'almacen_id': almacen_id,
             'modo': 'completo' if forzar_todo else 'lote_diario',
+            '_sesiones_creadas': tareas_creadas,  # para prewarm consolidado en generar_todas_las_clases
         }
 
     @staticmethod
@@ -482,11 +504,15 @@ class ABCService:
         """
         resultados = {}
         total = 0
+        todas_sesiones_nuevas = []
         for clase in ['A', 'B', 'C']:
             r = ABCService.generar_tareas_conteo_diario(almacen_id, clase,
                                                         forzar_todo=forzar_todo)
             resultados[clase] = r
             total += r['tareas_creadas']
+            # Acumular sesiones recién creadas para prewarm consolidado al final
+            if r.get('_sesiones_creadas'):
+                todas_sesiones_nuevas.extend(r['_sesiones_creadas'])
 
         # Watchdog DESPUÉS de las tareas normales — detecta reclasificaciones urgentes
         try:
@@ -519,6 +545,13 @@ class ABCService:
                     )
             except Exception:
                 pass
+
+        # Prewarm único consolidado con A+B+C — evita que el semáforo non-blocking
+        # descarte los prewarms de B y C cuando el de A todavía está en curso.
+        if todas_sesiones_nuevas:
+            from app.services.conteo_service import ConteoService
+            ConteoService.prewarm_existencia_cache(todas_sesiones_nuevas)
+            logger.info(f'[ABC] Prewarm iniciado para {len(todas_sesiones_nuevas)} sesiones A+B+C')
 
         logger.info(f'[ABC] Generación completa · {total} tareas nuevas en almacén {almacen_id}')
         return {'total_tareas_creadas': total, 'por_clase': resultados}

@@ -289,7 +289,13 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
         logger.error(f'[DEV] Error al confirmar ubicación tarea {tarea_id}: {e_commit}')
         raise ValueError(f'Error al guardar confirmación de devolución: {e_commit}') from e_commit
     logger.info(f'[DEV] Tarea {tarea.codigo} completada · ubicación {codigo_ub} · averiado={es_averiado}')
-    # Si hay job_dlq, el DLQ worker lo disparará async (TRASLADO_AVERIAS) — no bloqueamos la request.
+    # Disparar DLQ inmediato para reducir gap WMS↔Siesa de ~5 min a ~segundos
+    if job_dlq:
+        try:
+            from app.services.siesa_job_service import disparar_dlq_inmediato
+            disparar_dlq_inmediato()
+        except Exception as _e_dlq:
+            logger.warning(f'[DEV] disparar_dlq_inmediato falló (DLQ scheduler lo recogerá): {_e_dlq}')
 
     return tarea
 

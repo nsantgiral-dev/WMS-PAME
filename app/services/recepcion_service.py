@@ -290,14 +290,16 @@ class RecepcionService:
             ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO'])).first()
             if job_existente:
                 if job_existente.estado == 'FALLIDO':
-                    # Rescatar el job caído — DLQ lo procesará en el próximo ciclo
-                    job_existente.estado = 'PENDIENTE'
-                    job_existente.intentos = 0
-                    job_existente.error_mensaje = None
-                    db.session.commit()
-                    logger.warning(
-                        f'[RECEPCION] Job {job_existente.id} rescatado a PENDIENTE '
-                        f'para recepcion={recepcion.id} (CONFIRMADA sin siesa_triggered)'
+                    # NO rescatar automáticamente — el job FALLIDO puede haber fallado
+                    # por timeout DESPUÉS de que Siesa procesó la entrada OC (HTTP 200
+                    # llegó a Siesa pero no al WMS). Re-encolar sin verificar genera una
+                    # SEGUNDA entrada OC: doble débito cuenta 14, proveedor con doble abono.
+                    # El supervisor debe verificar en Siesa y rescatar manualmente desde el admin.
+                    logger.error(
+                        f'[RECEPCION] Job FALLIDO {job_existente.id} para recepcion={recepcion.id} '
+                        f'(CONFIRMADA sin siesa_triggered) — NO rescatado automáticamente. '
+                        f'Verificar en Siesa si la entrada OC ya fue registrada antes de rescatar '
+                        f'desde el panel de administración.'
                     )
                 return recepcion
             # Sin job alguno — re-encolar con los datos disponibles en el registro.
@@ -536,8 +538,18 @@ class RecepcionService:
                     f'[RECEPCION] item {i.producto.codigo!r} → ref_siesa={oc_data.get("ref_siesa")!r} '
                     f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r}'
                 )
+            # Cuando hay fallback, oc_data.get('ref_siesa') es el código del PRIMER ítem de la OC
+            # (no del producto actual) → se registraría la cantidad bajo código incorrecto en Siesa.
+            # Usar siempre el codigo_siesa del producto cuando está disponible.
+            _producto_codigo_siesa = (
+                (i.producto.codigo_siesa or '').strip() or
+                oc_data.get('ref_siesa') or
+                i.producto.codigo
+            ) if not _usó_fallback else (
+                (i.producto.codigo_siesa or '').strip() or i.producto.codigo
+            )
             items_payload.append({
-                'producto_codigo': oc_data.get('ref_siesa') or i.producto.codigo,
+                'producto_codigo': _producto_codigo_siesa,
                 'cantidad_recibida': i.cantidad_recibida,
                 'cantidad_ordenada': i.cantidad_ordenada,
                 'lote': i.lote,

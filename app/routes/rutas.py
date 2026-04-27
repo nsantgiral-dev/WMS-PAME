@@ -513,16 +513,21 @@ def crear_ruta():
 @jwt_required()
 def obtener_ruta(id):
     from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles as _R
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(uid)
+    # Solo roles de gestión y conductores pueden ver rutas — operarios, empacadores,
+    # recepcionistas y tiendas no tienen acceso a esta información (IDOR).
+    if not usuario or usuario.rol not in _R.GESTION + (_R.CONDUCTOR,):
+        return jsonify({'error': 'Sin permiso para acceder a rutas de despacho'}), 403
     ruta = (RutaDespacho.query
             .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
             .get_or_404(id))
     # Conductores solo pueden ver sus propias rutas
-    usuario = Usuario.query.get(uid)
-    if usuario and usuario.rol == 'conductor':
+    if usuario.rol == _R.CONDUCTOR:
         conductor = Conductor.query.filter_by(usuario_id=uid).first()
         if not conductor or ruta.conductor_id != conductor.id:
             return jsonify({'error': 'Sin permiso para ver esta ruta'}), 403

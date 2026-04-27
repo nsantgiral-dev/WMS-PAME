@@ -1,12 +1,11 @@
 import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.models.packing import TareaPacking
+from app.models.packing import TareaPacking, ItemPacking, EstadoPacking
 from app.models.picking import TareaPicking
 from app.services.packing_service import PackingService
 from app.services.connekta_gateway import connekta
 from app.routes._auth_helpers import Roles, _puede_empacar
-from app.models.packing import EstadoPacking
 
 packing_bp = Blueprint('packing', __name__)
 logger = logging.getLogger(__name__)
