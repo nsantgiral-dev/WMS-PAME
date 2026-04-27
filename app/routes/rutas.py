@@ -687,6 +687,7 @@ def entregar_ruta(id):
 
     ruta.estado = EstadoRutaDespacho.ENTREGADA
     ruta.fecha_entregada = ahora
+    _ruta_id = ruta.id  # capturar antes del commit — expire_on_commit invalida el objeto
     try:
         db.session.commit()
     except Exception as e:
@@ -694,6 +695,11 @@ def entregar_ruta(id):
         logger.error(f'[RUTAS] Error en entregar_ruta {id}: {e}', exc_info=True)
         return jsonify({'error': 'Error registrando entrega de ruta — reintenta'}), 500
 
+    # Re-query con eager loading — evita N+1 en ruta.to_dict() (conductor/vehiculo/ruta_maestra)
+    ruta = (RutaDespacho.query
+            .options(_jl(RutaDespacho.conductor), _jl(RutaDespacho.vehiculo),
+                     _jl(RutaDespacho.ruta_maestra))
+            .get(_ruta_id))
     return jsonify({
         'ok': True,
         'entregados': len(confirmaciones) - rechazados if confirmaciones else 0,
@@ -1003,8 +1009,14 @@ def forzar_cierre_ruta(id):
     ruta.estado = EstadoRutaDespacho.ENTREGADA
     ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
     ruta.fecha_cierre = ahora
+    _ruta_id = ruta.id  # capturar antes del commit — expire_on_commit invalida el objeto
     db.session.commit()
 
+    # Re-query con eager loading — evita N+1 en ruta.to_dict() (conductor/vehiculo/ruta_maestra)
+    ruta = (RutaDespacho.query
+            .options(_jl(RutaDespacho.conductor), _jl(RutaDespacho.vehiculo),
+                     _jl(RutaDespacho.ruta_maestra))
+            .get(_ruta_id))
     return jsonify({
         'ok': True,
         'paradas_auto_cerradas': auto_cerradas,

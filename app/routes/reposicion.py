@@ -455,6 +455,7 @@ def pre_verificar_ola():
         resultado = _verificar(items=items, almacen_id=almacen_id)
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception('[OLA] Error en pre_verificar_ola')
         return jsonify({'error': str(e)}), 500
 
 

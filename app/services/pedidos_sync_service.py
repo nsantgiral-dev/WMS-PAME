@@ -177,6 +177,7 @@ def _run_sync(app):
                 _pendientes_verificar = [
                     pk for pk in packings_vivos
                     if pk.numero_pedido_siesa not in numeros_comprometidos_siesa
+                    and not getattr(pk, 'pedido_anulado_siesa', False)  # ya confirmados no consumen budget
                 ][:_MAX_VERIFICAR]
                 if len(_pendientes_verificar) < sum(
                     1 for pk in packings_vivos

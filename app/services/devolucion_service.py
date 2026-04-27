@@ -234,14 +234,27 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             db.session.flush()
         except _IntegrityError:
             # Race condition: otro worker insertó la fila entre el SELECT y el INSERT.
-            # Releer con lock y sumar.
+            # [M1] db.session.rollback() libera el row-lock de tarea adquirido al inicio.
+            # Re-adquirir lock de tarea y re-verificar estado antes de continuar.
             db.session.rollback()
+            tarea = (TareaDevolucion.query
+                     .options(_sl(TareaDevolucion.producto))
+                     .filter_by(id=tarea_id)
+                     .with_for_update()
+                     .first())
+            if not tarea or tarea.estado == 'COMPLETADO':
+                raise ValueError('Tarea ya completada por otro proceso — operación idempotente')
+            # Re-resolver ub: si era nueva fue revertida por el rollback
+            ub = Ubicacion.query.filter_by(codigo=codigo_ub, almacen_id=tarea.almacen_id).first()
+            if not ub:
+                raise ValueError(f'Ubicación {codigo_ub} no encontrada tras rollback de race condition')
             reg = (UbicacionProducto.query.filter_by(
                 ubicacion_id=ub.id,
                 producto_id=tarea.producto_id,
                 lote=None
             ).with_for_update().first())
             if reg:
+                saldo_antes = reg.cantidad
                 reg.cantidad += tarea.cantidad_diferencia
                 reg.row_version += 1
             else:

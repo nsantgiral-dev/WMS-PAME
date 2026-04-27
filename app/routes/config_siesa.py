@@ -79,6 +79,9 @@ def tipos_sin_mapeo():
     Lista los f120_id_tipo_inv_serv que Siesa devolvió pero no están en la tabla
     de mapeo — son los que dejan unidad_negocio_id=NULL en productos.
     """
+    from app.routes._auth_helpers import _es_gestion
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para ver configuración Siesa'}), 403
     from app.models.producto import Producto
     rows = (
         db.session.query(Producto.unidad_negocio_id, db.func.count(Producto.id))

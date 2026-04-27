@@ -366,6 +366,10 @@ def reiniciar_conteo(id):
         operario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(operario_id)
+    if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
+        return jsonify({'error': 'Sin permiso para reiniciar conteo de picking'}), 403
+
     tarea = TareaPicking.query.get_or_404(id)
 
     if tarea.operario_id != operario_id:

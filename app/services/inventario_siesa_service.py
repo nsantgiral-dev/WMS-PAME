@@ -107,11 +107,27 @@ def _descargar_inventario_siesa(forzar=False):
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
     bodega = connekta.bodega  # filtro Python
+    _errores_consecutivos = 0
 
     for pag in range(1, 501):  # hasta 50 000 filas (500 págs × 100)
-        resp = connekta._get(api, {
-            'paginacion': f'numPag={pag}|tamPag=100'
-        })
+        try:
+            resp = connekta._get(api, {
+                'paginacion': f'numPag={pag}|tamPag=100'
+            })
+            _errores_consecutivos = 0  # reset en éxito
+        except Exception as _e_pag:
+            _errores_consecutivos += 1
+            logger.warning(
+                f'[INV-SIESA] Error en página {pag}: {_e_pag} '
+                f'({_errores_consecutivos} consecutivos)'
+            )
+            if _errores_consecutivos >= 3:
+                # 3 timeouts/errores seguidos — abortar para activar el guard de respuesta parcial
+                raise ValueError(
+                    f'Siesa falló {_errores_consecutivos} veces consecutivas en página {pag}: {_e_pag}'
+                ) from _e_pag
+            continue
+
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
             break
@@ -149,8 +165,12 @@ def _descargar_inventario_siesa(forzar=False):
         try:
             from app.models.inventario import UbicacionProducto as _UP
             _prev_count = _UP.query.filter(_UP.cantidad > 0).count()
-        except Exception:
-            _prev_count = 0  # no disponible (fuera de contexto app o error DB)
+        except Exception as _e_prev:
+            # [M17] NO operar sin baseline: si la DB falla y no tenemos cache previo,
+            # el guard queda a 0 y una respuesta parcial de Siesa pasaría sin detección.
+            raise ValueError(
+                f'No se pudo obtener baseline de inventario (cache frío + DB inaccesible): {_e_prev}'
+            ) from _e_prev
     if _prev_count and len(inventario) < _prev_count * 0.70:
         raise ValueError(
             f'Respuesta parcial de Siesa: {len(inventario)} productos recibidos, '

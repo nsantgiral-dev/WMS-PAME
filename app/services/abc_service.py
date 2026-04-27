@@ -262,8 +262,13 @@ class ABCService:
             logger.error(f'[ABC WATCHDOG] Error guardando overrides: {e}')
             raise
         finally:
-            db.session.execute(db.text(f'SELECT pg_advisory_unlock({_lock_key})'))
-            db.session.commit()
+            # [M2] Envolver en try propio: excepción aquí no debe reemplazar el resultado exitoso
+            # del try ni del except principal (enmascararía overrides correctamente aplicados).
+            try:
+                db.session.execute(db.text(f'SELECT pg_advisory_unlock({_lock_key})'))
+                db.session.commit()
+            except Exception as _fe:
+                logger.error(f'[ABC WATCHDOG] Error liberando advisory lock {_lock_key}: {_fe}')
 
         if overrides:
             logger.warning(
@@ -361,7 +366,7 @@ class ABCService:
         # Pre-cargar conteos activos (PENDIENTE/EN_PROCESO/SEGUNDO_CONTEO)
         pares_ubic_prod = [(r.ubicacion_id, r.producto_id) for r in todos_registros]
         if pares_ubic_prod:
-            ubic_ids_all = [x[0] for x in pares_ubic_prod]
+            ubic_ids_all = list({x[0] for x in pares_ubic_prod})  # dedup: evita IN clause con N duplicados
             sesiones_activas = SesionConteo.query.filter(
                 SesionConteo.producto_id.in_(producto_ids),
                 SesionConteo.ubicacion_id.in_(ubic_ids_all),

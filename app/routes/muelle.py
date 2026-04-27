@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.extensions import db
 from app.models.bulto import Bulto, EstadoBulto
 from app.models.packing import TareaPacking, EstadoPacking
+from app.models.ruta_despacho import EstadoRutaDespacho
 
 muelle_bp = Blueprint('muelle', __name__)
 
@@ -81,10 +82,10 @@ def asignar_a_ruta():
     ruta = RutaDespacho.query.get(ruta_id)
     if not ruta:
         return jsonify({'error': 'Ruta no encontrada'}), 404
-    if ruta.estado != 'EN_CARGUE':
+    if ruta.estado != EstadoRutaDespacho.EN_CARGUE:
         return jsonify({'error': f'La ruta ya está {ruta.estado}'}), 400
 
-    query = Bulto.query.filter(Bulto.estado == 'PENDIENTE')
+    query = Bulto.query.filter(Bulto.estado == EstadoBulto.PENDIENTE)
     if pedido_siesa:
         query = query.join(TareaPacking).filter(TareaPacking.numero_pedido_siesa == pedido_siesa)
     elif bultos_ids:
@@ -168,7 +169,7 @@ def cargar_bulto(codigo_barras):
     ruta = RutaDespacho.query.get(ruta_id)
     if not ruta:
         return jsonify({'error': 'Ruta no encontrada'}), 404
-    if ruta.estado != 'EN_CARGUE':
+    if ruta.estado != EstadoRutaDespacho.EN_CARGUE:
         return jsonify({'error': f'La ruta #{ruta_id} ya está {ruta.estado}'}), 400
 
     _tarea_id = bulto.tarea_id  # capturar antes del commit — expire_on_commit invalida relaciones
@@ -180,7 +181,7 @@ def cargar_bulto(codigo_barras):
     pendientes_ruta = Bulto.query.filter_by(
         tarea_id=_tarea_id,
         ruta_despacho_id=ruta_id,
-        estado='PENDIENTE'
+        estado=EstadoBulto.PENDIENTE
     ).count()
     tarea = TareaPacking.query.get(_tarea_id)
 

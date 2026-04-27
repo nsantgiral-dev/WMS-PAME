@@ -103,11 +103,22 @@ def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str, tipo
         try:
             from app.models.siesa_job import SiesaJob as _SJ
             from app.extensions import db as _db
-            _SJ.encolar(
-                'ALERTA_EMAIL',
-                {'tipo_alerta': tipo_alerta, 'asunto': asunto, 'error': str(e)},
-            )
-            _db.session.commit()
+            from datetime import date as _date
+            # Deduplicar por tipo_alerta + día para no acumular N jobs idénticos
+            # durante un downtime de Resend que dura múltiples ciclos del scheduler.
+            _idem = f'ALERTA-{tipo_alerta}-{_date.today().isoformat()}'
+            _ya_en_cola = _SJ.query.filter(
+                _SJ.tipo == 'ALERTA_EMAIL',
+                _SJ.estado.in_(['PENDIENTE', 'REINTENTANDO']),
+                _SJ.payload.contains(f'"tipo_alerta": "{tipo_alerta}"'),
+            ).first()
+            if not _ya_en_cola:
+                _SJ.encolar(
+                    'ALERTA_EMAIL',
+                    {'tipo_alerta': tipo_alerta, 'asunto': asunto, 'error': str(e),
+                     'idem_key': _idem},
+                )
+                _db.session.commit()
         except Exception as e2:
             logger.critical(
                 f'[ALERTAS] DLQ también falló — alerta "{tipo_alerta}" perdida: {e2}. '
