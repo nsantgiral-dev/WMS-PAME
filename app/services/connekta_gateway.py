@@ -243,18 +243,21 @@ class ConnektaGateway:
                 raise Exception(f'Siesa rechazó el documento (HTTP {r.status_code}): {detalle}')
             resp_json = r.json()
             logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
-            # Connekta V2: HTTP 200 no garantiza éxito — verificar codigo==0 en body
-            codigo = resp_json.get('codigo')
-            if codigo != 0:
-                mensaje = resp_json.get('mensaje', 'Sin mensaje')
-                detalle = resp_json.get('detalle', '')
-                logger.error(
-                    f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
-                    f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
-                )
-                raise Exception(
-                    f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
-                )
+            # Connekta V2/V3.1: HTTP 200 no garantiza éxito — verificar codigo==0 en body.
+            # Guard isinstance: V3.1 (trigger_factura) puede retornar lista o dict sin 'codigo'.
+            # None != 0 es True en Python → sin guard se levantaría excepción en éxito V3.1.
+            if isinstance(resp_json, dict):
+                codigo = resp_json.get('codigo')
+                if codigo is not None and codigo != 0:
+                    mensaje = resp_json.get('mensaje', 'Sin mensaje')
+                    detalle = resp_json.get('detalle', '')
+                    logger.error(
+                        f'[CONNEKTA] POST {id_conector} rechazado por Siesa — '
+                        f'codigo={codigo} mensaje={mensaje} detalle={detalle}'
+                    )
+                    raise Exception(
+                        f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
+                    )
             return resp_json
         except requests.exceptions.Timeout:
             logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
@@ -1043,7 +1046,7 @@ class ConnektaGateway:
                 'f470_id_motivo': self.motivo_traslado or '01',
                 'f470_id_co_movto': self.centro_op,
                 'f470_id_unidad_medida': self.uom_default or 'UND',
-                'f470_id_un_movto': self.unidad_negocio or self.centro_op,
+                'f470_id_un_movto': self.unidad_negocio,   # spec: unidad de negocio; None → Siesa hereda de bodega
             }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }
@@ -1249,6 +1252,7 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
+                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
@@ -1256,8 +1260,8 @@ class ConnektaGateway:
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': codigo_solicitud,
                     # Referencia obligatoria al doc 173076 de salida
-                    'f350_id_co_base': self.centro_op if consec_salida else '',
-                    'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else '',
+                    'f350_id_co_base': self.centro_op if consec_salida else None,
+                    'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else None,
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                 }
             ],
