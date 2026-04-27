@@ -599,7 +599,7 @@ class ConnektaGateway:
                     'F350_ID_TIPO_DOCTO': self.tipo_docto_remision,
                     'F350_CONSEC_DOCTO': 0,
                     'F350_FECHA': fecha_hoy,        # YYYYMMDD — 8 chars
-                    'F350_IND_ESTADO': 0,
+                    'F350_IND_ESTADO': 1,            # 1 = Aprobado — descarga inventario cuenta 14 y cierra pedido en Siesa
                     'F350_IND_IMPRESION': 0,
                     'F430_ID_TIPO_DOCTO': tipo_docto_pedido,
                     'F430_CONSEC_DOCTO': int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido,
