@@ -167,7 +167,16 @@ class ConnektaGateway:
                 logger.warning(f'[CONNEKTA] GET {nombre_api}: rate-limit (429) — Retry-After={retry_after}s')
                 raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            # [A21] Connekta puede devolver HTTP 200 con body de error interno.
+            # Verificar campo 'codigo' (0 = éxito, !=0 = error) igual que en _post().
+            if isinstance(data, dict):
+                _codigo = data.get('codigo')
+                if _codigo is not None and _codigo != 0:
+                    _msg = data.get('mensaje') or data.get('descripcion') or f'codigo={_codigo}'
+                    logger.warning(f'[CONNEKTA] GET {nombre_api}: error interno Siesa — {_msg}')
+                    raise Exception(f'Siesa retornó error interno (codigo={_codigo}): {_msg}')
+            return data
         except requests.exceptions.Timeout:
             raise Exception('Connekta no respondió — reintenta')
         except requests.exceptions.RequestException as e:

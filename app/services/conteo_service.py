@@ -422,6 +422,18 @@ class ConteoService:
         Después del segundo conteo confirma el descuadre y dispara ajuste a Siesa.
         Siesa actualiza contabilidad automáticamente con el motivo correcto.
         """
+        # [A18] Pre-fetch existencia_siesa ANTES del lock — mismo patrón que registrar_conteo().
+        # _consultar_existencia_siesa() llena el caché in-memory si hay un hit; si es miss,
+        # dispara un hilo background (fire-and-forget). Bajo el lock sólo leemos del caché local,
+        # nunca hacemos HTTP: un timeout de 8s bajo row-lock bloquea workers concurrentes.
+        _pre = SesionConteo.query.filter_by(id=sesion_id).first()
+        if _pre and _pre.existencia_siesa is None and _pre.producto_codigo_siesa:
+            ConteoService._consultar_existencia_siesa(
+                producto_codigo_siesa=_pre.producto_codigo_siesa,
+                ubicacion_codigo=_pre.ubicacion.codigo if _pre.ubicacion else None,
+                lote_id=_pre.lote_id,
+            )
+
         sesion = (SesionConteo.query
                   .filter_by(id=sesion_id)
                   .with_for_update()
@@ -493,15 +505,23 @@ class ConteoService:
             raise ValueError('Faltan datos del conteo para generar ajuste')
 
         if sesion.existencia_siesa is None:
-            # Sesión creada con cache miss — re-fetch desde Siesa (el caché ya debe estar caliente)
-            existencia_refetch = ConteoService._consultar_existencia_siesa(
-                producto_codigo_siesa=sesion.producto_codigo_siesa,
-                ubicacion_codigo=sesion.ubicacion.codigo if sesion.ubicacion else None,
-                lote_id=sesion.lote_id,
+            # Bajo el lock NUNCA hacemos HTTP — leer del caché in-memory (pre-warm arriba).
+            # Si el caché está vacío el hilo background todavía está en vuelo → error reintentable.
+            _ck = (
+                sesion.producto_codigo_siesa or '',
+                sesion.ubicacion.codigo if sesion.ubicacion else '',
+                sesion.lote_id,
             )
-            if existencia_refetch is None:
+            _existencia_refetch = None
+            with _existencia_cache_lock:
+                _hit = _existencia_cache.get(_ck)
+            if _hit:
+                _v, _ts = _hit
+                if (datetime.utcnow() - _ts).total_seconds() < _CACHE_TTL_SEGUNDOS:
+                    _existencia_refetch = _v
+            if _existencia_refetch is None:
                 raise ValueError('Siesa aún no respondió — reintenta el ajuste en unos segundos')
-            sesion.existencia_siesa = existencia_refetch
+            sesion.existencia_siesa = _existencia_refetch
 
         diferencia = sesion.cantidad_fisica - sesion.existencia_siesa
 

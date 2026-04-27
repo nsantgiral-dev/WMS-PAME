@@ -127,6 +127,31 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
         logger.error(f'[DEV] Error en commit: {e}')
         db.session.rollback()
 
+    # [A26] Si hubo errores, notificar proactivamente — las discrepancias sin tarea
+    # quedan invisibles indefinidamente (el operario nunca ve esos ítems para devolver).
+    if errores > 0:
+        logger.error(
+            f'[DEV] {errores} discrepancia(s) SIESA_MAYOR sin tarea de devolución creada — '
+            f'el diferencial de inventario permanece activo. '
+            f'Creadas={creadas}, ya_existian={ya_existian}'
+        )
+        try:
+            from app.services.alertas_service import enviar_email, _config_resend
+            if _config_resend():
+                enviar_email(
+                    asunto=f'[WMS ALERTA] {errores} devolución(es) sin tarea — diferencial activo',
+                    cuerpo_texto=(
+                        f'El reconciliador detectó discrepancias SIESA_MAYOR pero '
+                        f'{errores} tarea(s) de devolución no pudieron crearse.\n\n'
+                        f'Creadas: {creadas} | Ya existían: {ya_existian} | Errores: {errores}\n'
+                        'Revisar logs del servidor para el detalle de cada fallo.\n'
+                        'Timestamp reconciliación: ' + str(timestamp_reconciliacion)
+                    ),
+                    cuerpo_html=None,
+                )
+        except Exception as _e_alert:
+            logger.critical(f'[DEV] Email de alerta de errores de devolución también falló: {_e_alert}')
+
     return {'creadas': creadas, 'ya_existian': ya_existian, 'errores': errores}
 
 

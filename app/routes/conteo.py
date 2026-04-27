@@ -185,13 +185,21 @@ def confirmar_ajuste(id):
         return jsonify({'error': 'Solo un supervisor o admin puede aprobar ajustes de inventario'}), 403
     try:
         sesion = ConteoService.confirmar_ajuste(id, supervisor_id)
+        # [A22] 202 cuando el ajuste está encolado en DLQ (AJUSTANDO) — el supervisor
+        # sabe que no completó todavía y no cierra la pantalla prematuramente.
+        # 200 solo cuando siesa_triggered=True (Siesa ya confirmó el ajuste).
+        http_status = 200 if sesion.siesa_triggered else 202
         return jsonify({
-            'mensaje': f'Ajuste {sesion.motivo_codigo} enviado a Siesa',
+            'mensaje': (
+                f'Ajuste {sesion.motivo_codigo} confirmado — Siesa ya procesó'
+                if sesion.siesa_triggered
+                else f'Ajuste {sesion.motivo_codigo} encolado — pendiente de sincronización con Siesa'
+            ),
             'diferencia': sesion.diferencia,
             'motivo_codigo': sesion.motivo_codigo,
             'siesa_triggered': sesion.siesa_triggered,
             'sesion': sesion.to_dict()
-        }), 200
+        }), http_status
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:

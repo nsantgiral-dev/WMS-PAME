@@ -543,8 +543,11 @@ class ABCService:
                         ),
                         cuerpo_html=None,
                     )
-            except Exception:
-                pass
+            except Exception as _e_email_watchdog:
+                logger.critical(
+                    f'[ABC WATCHDOG] Email de alerta también falló — la falla del watchdog '
+                    f'queda completamente invisible: {_e_email_watchdog}'
+                )
 
         # Prewarm único consolidado con A+B+C — evita que el semáforo non-blocking
         # descarte los prewarms de B y C cuando el de A todavía está en curso.
@@ -613,8 +616,11 @@ class ABCService:
                                     ),
                                     cuerpo_html=None,
                                 )
-                        except Exception:
-                            pass
+                        except Exception as _e_email_sched:
+                            logger.critical(
+                                f'[ABC] Email de alerta del scheduler también falló — '
+                                f'falla de almacenes {fallidos} completamente invisible: {_e_email_sched}'
+                            )
                 finally:
                     _db.session.execute(_db.text('SELECT pg_advisory_unlock(2003)'))
                     _db.session.commit()
