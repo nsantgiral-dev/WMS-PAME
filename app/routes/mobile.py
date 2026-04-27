@@ -30,7 +30,11 @@ def mis_tareas():
 def tarea_actual():
     """La tarea más prioritaria del operario ahora mismo."""
     operario_id = _operario_id()
-    resultado = MobileService.get_tarea_actual(operario_id)
+    try:
+        resultado = MobileService.get_tarea_actual(operario_id)
+    except Exception as e:
+        current_app.logger.error(f'[MOBILE] /tarea-actual error: {e}', exc_info=True)
+        return jsonify({'error': str(e)}), 500
     if not resultado:
         return jsonify({'sin_tareas': True, 'mensaje': 'No tienes tareas pendientes'}), 200
     return jsonify(resultado), 200

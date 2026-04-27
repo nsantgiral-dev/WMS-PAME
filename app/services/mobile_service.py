@@ -164,7 +164,7 @@ class MobileService:
                 ),
             )
             .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc())
-            .with_for_update(skip_locked=True)
+            .with_for_update(skip_locked=True, of=TareaPicking)
             .first()
         )
 
