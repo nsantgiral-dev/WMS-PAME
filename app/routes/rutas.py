@@ -105,7 +105,7 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
     recaudo.fecha_confirmacion    = ahora
 
     db.session.commit()
-    return recaudo, es_edicion
+    return recaudo.id, es_edicion
 
 
 # ── Conductores ──────────────────────────────────────────────────
@@ -782,12 +782,20 @@ def bultos_rechazados():
     """Bultos rechazados en entrega — auditoría para admin/jefe_almacen."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Sin permiso — se requiere admin o jefe_almacen'}), 403
-    bultos = (Bulto.query
-              .options(_sl(Bulto.tarea))
-              .filter_by(estado=EstadoBulto.RECHAZADO)
-              .order_by(Bulto.fecha_entrega.desc())
-              .all())
-    return jsonify({'bultos': [b.to_dict() for b in bultos], 'total': len(bultos)}), 200
+    page  = max(1, int(request.args.get('page',  1)))
+    limit = min(200, max(1, int(request.args.get('limit', 50))))
+    q = (Bulto.query
+         .options(_sl(Bulto.tarea))
+         .filter_by(estado=EstadoBulto.RECHAZADO)
+         .order_by(Bulto.fecha_entrega.desc()))
+    total  = q.count()
+    bultos = q.offset((page - 1) * limit).limit(limit).all()
+    return jsonify({
+        'bultos': [b.to_dict() for b in bultos],
+        'total':  total,
+        'page':   page,
+        'pages':  (total + limit - 1) // limit,
+    }), 200
 
 
 # ── Última Milla: paradas y recaudos ────────────────────────────────
@@ -884,10 +892,11 @@ def confirmar_parada(id, tarea_id):
 
     data = request.get_json() or {}
     try:
-        recaudo, es_edicion = _procesar_confirmacion_parada(id, tarea_id, usuario_id, data)
+        recaudo_id, es_edicion = _procesar_confirmacion_parada(id, tarea_id, usuario_id, data)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
+    recaudo = RecaudoEntrega.query.get(recaudo_id)
     return jsonify({
         'ok':         True,
         'recaudo':    recaudo.to_dict(),
