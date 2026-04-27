@@ -1,6 +1,6 @@
 """idx_picking_packing_conteo
 
-Revision ID: a8b9c0d1e2f3
+Revision ID: a8b9c0d1e2f4
 Revises: z7a8b9c0d1e2
 Create Date: 2026-04-25
 
@@ -15,7 +15,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision = 'a8b9c0d1e2f3'
+revision = 'a8b9c0d1e2f4'
 down_revision = 'z7a8b9c0d1e2'
 branch_labels = None
 depends_on = None
