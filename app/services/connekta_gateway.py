@@ -62,7 +62,10 @@ class ConnektaGateway:
         self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')[:5]
         # Bodega de tránsito (verificar si existe en Siesa — si no, usar TransferenciaDirecta)
         self.bodega_transito = os.getenv('SIESA_BODEGA_TRANSITO', '')
-        self.unidad_negocio = os.getenv('SIESA_UNIDAD_NEGOCIO', '001')
+        # Sin default: el código de Unidad de Negocio se valida contra el maestro de Siesa
+        # por compañía. Solicitar al área financiera el código exacto y configurarlo en Railway.
+        # Si está vacío, los conectores envían None y Siesa hereda el valor de la bodega.
+        self.unidad_negocio = os.getenv('SIESA_UNIDAD_NEGOCIO', '') or None
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
         self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
@@ -95,6 +98,11 @@ class ConnektaGateway:
         self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
+        # Motivo específico para transferencias a bodega de averías (142951).
+        # El maestro "Conceptos y Motivos" de Siesa puede tener un código distinto al de traslados
+        # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
+        # Si no se configura, cae al motivo_traslado genérico (puede causar rechazo en Siesa).
+        self.motivo_averia = os.getenv('SIESA_MOTIVO_AVERIA', '') or self.motivo_traslado
 
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
         self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
@@ -927,7 +935,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux': '',
                     'f470_id_lote': '',
                     'f470_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
-                    'f470_id_motivo': self.motivo_traslado,
+                    'f470_id_motivo': self.motivo_averia,                            # SIESA_MOTIVO_AVERIA — validado contra maestro Siesa por compañía
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': '',
                     'f470_id_proyecto': '',
@@ -1380,6 +1388,8 @@ class ConnektaGateway:
                 'req_solicitante': self.req_solicitante or 'NO CONFIGURADO',
                 'bodega_transito': self.bodega_transito or 'NO CONFIGURADO',
                 'motivo_traslado': self.motivo_traslado,
+                'motivo_averia': self.motivo_averia,
+                'unidad_negocio': self.unidad_negocio or 'NO CONFIGURADO (Siesa hereda de bodega)',
             },
             'apis_get': {
                 'pedidos': self.api_pedidos,
