@@ -96,7 +96,7 @@ def _cargar_factores_q35():
     return factores
 
 
-_ADVISORY_LOCK_EMPAQUES = 2001  # clave única para pg_advisory_lock
+_ADVISORY_LOCK_EMPAQUES = 2006  # clave única para pg_advisory_lock
 
 
 def _run_sync(app):

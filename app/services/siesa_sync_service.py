@@ -30,6 +30,16 @@ def _run_sync(app):
     global _sync_estado
 
     with app.app_context():
+        # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
+        from sqlalchemy import text as _text
+        lock_adquirido = db.session.execute(
+            _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2007}
+        ).scalar()
+        if not lock_adquirido:
+            logger.warning('[SYNC] Otro worker ya ejecuta — omitido')
+            _sync_estado['en_curso'] = False
+            return
+
         creados = 0
         actualizados = 0
         errores = 0
@@ -148,6 +158,13 @@ def _run_sync(app):
             _sync_estado['en_curso'] = False
             _sync_estado['ultimo_error'] = str(e)
             return
+        finally:
+            if lock_adquirido:
+                try:
+                    db.session.execute(_text('SELECT pg_advisory_unlock(:key)'), {'key': 2007})
+                    db.session.commit()
+                except Exception as _e:
+                    logger.error('[SYNC] Error liberando advisory lock: %s', _e)
 
         if tipos_sin_mapeo:
             lista = sorted(tipos_sin_mapeo)

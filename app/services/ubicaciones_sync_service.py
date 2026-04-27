@@ -93,6 +93,16 @@ def _run_sync(app, bodega_id: str = None):
     global _sync_estado
 
     with app.app_context():
+        # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
+        from sqlalchemy import text as _text
+        lock_adquirido = db.session.execute(
+            _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2009}
+        ).scalar()
+        if not lock_adquirido:
+            logger.warning('[UBICACIONES SYNC] Otro worker ya ejecuta — omitido')
+            _sync_estado['en_curso'] = False
+            return
+
         creadas = 0
         actualizadas = 0
         errores = 0
@@ -203,6 +213,12 @@ def _run_sync(app, bodega_id: str = None):
         finally:
             _sync_estado['en_curso'] = False
             _sync_estado['ultimo_inicio'] = None
+            if lock_adquirido:
+                try:
+                    db.session.execute(_text('SELECT pg_advisory_unlock(:key)'), {'key': 2009})
+                    db.session.commit()
+                except Exception as _e:
+                    logger.error('[UBICACIONES SYNC] Error liberando advisory lock: %s', _e)
 
 
 def sync_ubicaciones_desde_siesa(app=None, bodega_id: str = None, en_hilo: bool = True):
