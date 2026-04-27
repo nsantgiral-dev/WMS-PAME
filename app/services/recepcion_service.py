@@ -275,7 +275,9 @@ class RecepcionService:
         Confirma la recepción e ingresa todo al inventario.
         Dispara Siesa automáticamente para generar entrada contable.
         """
-        recepcion = RecepcionMercancia.query.get(recepcion_id)
+        # [C1] with_for_update() serializa dos workers que lleguen simultáneamente —
+        # el segundo ve estado='CONFIRMADA' y sale limpio, sin doble ENTRADA_OC en Siesa.
+        recepcion = RecepcionMercancia.query.filter_by(id=recepcion_id).with_for_update().first()
         if not recepcion:
             raise ValueError('Recepción no encontrada')
         # Idempotente: si ya fue confirmada, verificar que Siesa también fue disparado

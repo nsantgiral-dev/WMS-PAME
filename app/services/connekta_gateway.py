@@ -733,6 +733,7 @@ class ConnektaGateway:
                     'f470_id_bodega': i.get('bodega') or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
+                    'f470_id_concepto': 401,                                                    # 401 = Compras/Entrada (spec 142948, obligatorio — ver Siesa: Compras → Maestros → Conceptos)
                     # Bonificación usa motivo '04' (obsequio/bonif en Siesa). OC usa motivo de la OC o motivo_compras.
                     'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)

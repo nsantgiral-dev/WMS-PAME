@@ -81,7 +81,7 @@ INSTRUCCIONES DE RESPUESTA
 - El campo "detectable_en" es OBLIGATORIO: "logs" / "alertas" / "dashboard" / "nunca"
 - El campo "tipo" es OBLIGATORIO: "invariant_violation" / "silent_failure"
 - El campo "enforcement_actual" es OBLIGATORIO para invariantes: "solo_app_code" / "solo_db" / "ambos" / "ninguno"
-- Máximo 12 issues (6 por parte)
+- Máximo 16 issues (8 por parte)
 
 FORMATO JSON REQUERIDO:
 {
@@ -105,6 +105,8 @@ FORMATO JSON REQUERIDO:
 }
 
 Severidades válidas: CRÍTICO, ALTO, MEDIO, BAJO
+Nota: Las migraciones de DB están incluidas en el contexto — úsalas para verificar FACTUALMENTE si existen CHECK constraints, UNIQUE constraints, NOT NULL, etc. No asumas — verifica en el código de migración real.
+
 Score: 0-10 donde 10 = todos los invariantes enforced en DB Y todos los fallos críticos son observables
 
 CÓDIGO A ANALIZAR:

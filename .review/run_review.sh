@@ -223,6 +223,23 @@ build_context "$CTX_BUGS" "$MAX_CHARS_SERVICES" \
     "$APP_DIR/services" \
     "$APP_DIR/models"
 
+# invariants: bugs context + últimas migraciones (para verificar DB constraints reales)
+CTX_INVARIANTS="$TEMP_DIR/ctx_invariants.txt"
+cp "$CTX_BUGS" "$CTX_INVARIANTS"
+MIGRATIONS_DIR="$PROYECTO_DIR/migrations/versions"
+if [ -d "$MIGRATIONS_DIR" ]; then
+    printf '\n\n=== MIGRACIONES DE BASE DE DATOS (últimas 25) ===\n' >> "$CTX_INVARIANTS"
+    # Las más recientes primero (orden cronológico inverso por fecha de modificación)
+    while IFS= read -r mig; do
+        current_size=$(wc -c < "$CTX_INVARIANTS" 2>/dev/null || echo 0)
+        if [ "$current_size" -ge "$MAX_CHARS_ALL" ]; then break; fi
+        printf '=== MIGRACIÓN: %s ===\n' "${mig#$PROYECTO_DIR/}" >> "$CTX_INVARIANTS"
+        cat "$mig" >> "$CTX_INVARIANTS"
+        printf '\n' >> "$CTX_INVARIANTS"
+    done < <(find "$MIGRATIONS_DIR" -name "*.py" ! -path "*/__pycache__/*" 2>/dev/null \
+        | sort -t_ -k1 -r | head -25)
+fi
+
 # security: rutas + configuración + extensiones
 build_context "$CTX_SECURITY" "$MAX_CHARS_ROUTES" \
     "$APP_DIR/routes" \
@@ -246,7 +263,7 @@ build_context "$CTX_DEBT" "$MAX_CHARS_ALL" "$APP_DIR"
 NUM_ARCHIVOS=$(find "$APP_DIR" -name "*.py" ! -path "*/__pycache__/*" ! -path "*/venv/*" ! -path "*/migrations/*" 2>/dev/null | wc -l | tr -d ' ')
 
 log "Contextos listos | Archivos totales del proyecto: ${BOLD}$NUM_ARCHIVOS${NC}"
-for ctx in "$CTX_BUGS" "$CTX_SECURITY" "$CTX_PERF" "$CTX_SIESA" "$CTX_DEBT"; do
+for ctx in "$CTX_BUGS" "$CTX_SECURITY" "$CTX_PERF" "$CTX_SIESA" "$CTX_DEBT" "$CTX_INVARIANTS"; do
     name=$(basename "$ctx" .txt | sed 's/ctx_//')
     size=$(wc -c < "$ctx" | tr -d ' ')
     log "  [$name] → ${size} bytes"
@@ -319,7 +336,7 @@ PID_PATTERNS=$!
 run_agent "resilience"   "$PROMPTS_DIR/07_resilience.md"   "$CTX_PERF"     &
 PID_RESILIENCE=$!
 
-run_agent "invariants"   "$PROMPTS_DIR/08_invariants.md"   "$CTX_BUGS"     &
+run_agent "invariants"   "$PROMPTS_DIR/08_invariants.md"   "$CTX_INVARIANTS" &
 PID_INVARIANTS=$!
 
 # Esperar a que todos terminen

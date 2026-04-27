@@ -66,7 +66,7 @@ INSTRUCCIONES DE RESPUESTA
 - El campo "tiempo_deteccion" es OBLIGATORIO: "inmediato" / "minutos" / "horas" / "nunca"
 - El campo "datos_en_riesgo" es OBLIGATORIO: "inventario" / "fiscal" / "ambos" / "ninguno"
 - El campo "estado_sistema_post_fallo" es OBLIGATORIO: descripción concreta del estado de la DB después del fallo
-- Máximo 10 issues (puede haber múltiples issues por failure mode si afectan partes distintas del código)
+- Máximo 14 issues (puede haber múltiples issues por failure mode si afectan partes distintas del código)
 
 FORMATO JSON REQUERIDO:
 {

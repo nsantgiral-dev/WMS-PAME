@@ -102,12 +102,33 @@ AGENT_PRIORITY = {
 
 def _dedup_key(issue):
     """
-    Clave de deduplicación: archivo + primeras 50 chars del título normalizado.
+    Clave de deduplicación: archivo + primeras 70 chars del título normalizado.
     Dos issues del mismo archivo con título similar se consideran el mismo problema.
     """
     file_part  = (issue.get("file") or "").strip().lower()
-    title_part = re.sub(r"\s+", " ", (issue.get("title") or "").strip().lower())[:50]
+    title_part = re.sub(r"\s+", " ", (issue.get("title") or "").strip().lower())[:70]
     return f"{file_part}|{title_part}"
+
+
+def _title_words(issue):
+    """Conjunto de palabras significativas del título (>3 chars) para comparación semántica."""
+    title = re.sub(r"\s+", " ", (issue.get("title") or "").strip().lower())
+    return {w for w in re.split(r"[\s\-_/]+", title) if len(w) > 3}
+
+
+def _is_similar_issue(issue, prev_issue, threshold=0.6):
+    """
+    True si issue y prev_issue son probablemente el mismo problema.
+    Criterios: mismo archivo Y solapamiento de palabras significativas >= threshold.
+    """
+    if (issue.get("file") or "").strip().lower() != (prev_issue.get("file") or "").strip().lower():
+        return False
+    words_a = _title_words(issue)
+    words_b = _title_words(prev_issue)
+    if not words_a or not words_b:
+        return False
+    overlap = len(words_a & words_b) / min(len(words_a), len(words_b))
+    return overlap >= threshold
 
 def deduplicate_issues(all_issues):
     """
@@ -158,13 +179,48 @@ def deduplicate_issues(all_issues):
 
 # ── Detección de issues nuevos vs reporte anterior ───────────
 
-def find_new_issues(current_issues, prev_data):
-    if not prev_data:
+def _load_all_prev_issues(reports_dir: str) -> list:
+    """
+    Carga todos los issues de todos los reportes JSON previos en REPORTS_DIR.
+    Esto evita que un issue marcado como 'NUEVO' solo porque no estaba en el de ayer.
+    """
+    all_prev = []
+    if not reports_dir or not os.path.isdir(reports_dir):
+        return all_prev
+    for path in sorted(Path(reports_dir).glob("*_wms_review.json")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            all_prev.extend(data.get("all_issues", []))
+        except Exception:
+            pass
+    return all_prev
+
+
+def find_new_issues(current_issues, prev_data, reports_dir: str = None):
+    """
+    Un issue es NUEVO solo si no existe en NINGÚN reporte previo —
+    ni por clave exacta ni por similitud semántica (mismo archivo, >60% palabras en común).
+    """
+    all_prev = _load_all_prev_issues(reports_dir)
+    # También incluir issues del prev_data pasado explícitamente (backward compat)
+    if prev_data:
+        all_prev.extend(prev_data.get("all_issues", []))
+
+    if not all_prev:
         return set()
-    prev_keys = set()
-    for issue in prev_data.get("all_issues", []):
-        prev_keys.add(_dedup_key(issue))
-    return {i for i, issue in enumerate(current_issues) if _dedup_key(issue) not in prev_keys}
+
+    prev_keys = {_dedup_key(p) for p in all_prev}
+
+    new_indices = set()
+    for i, issue in enumerate(current_issues):
+        if _dedup_key(issue) in prev_keys:
+            continue
+        # Comparación semántica: ¿hay algún issue previo similar?
+        if any(_is_similar_issue(issue, p) for p in all_prev):
+            continue
+        new_indices.add(i)
+    return new_indices
 
 
 # ── Generación del HTML ───────────────────────────────────────
@@ -186,7 +242,8 @@ def generate_html(all_agents, args, prev_data=None):
     all_issues.sort(key=lambda x: severity_order(x.get("severity", "BAJO")))
 
     # 4. Estadísticas
-    new_issue_indices = find_new_issues(all_issues, prev_data)
+    reports_dir = getattr(args, "reports_dir", None)
+    new_issue_indices = find_new_issues(all_issues, prev_data, reports_dir=reports_dir)
     counts = {"CRÍTICO": 0, "ALTO": 0, "MEDIO": 0, "BAJO": 0}
     for issue in all_issues:
         s = issue.get("severity", "BAJO")
@@ -196,6 +253,13 @@ def generate_html(all_agents, args, prev_data=None):
     avg_score = round(
         sum(d.get("score", 0) for d in all_agents.values()) / max(len(all_agents), 1), 1
     )
+
+    # Score ponderado por severidad: penaliza más los CRÍTICOS que los BAJOS
+    # Fórmula: empieza en 10 y descuenta según severidad de los issues encontrados
+    _SEV_PESO = {"CRÍTICO": 1.5, "ALTO": 0.8, "MEDIO": 0.3, "BAJO": 0.1}
+    _penalizacion = sum(_SEV_PESO.get(iss.get("severity", "BAJO"), 0.1) for iss in all_issues)
+    weighted_score = round(max(0.0, min(10.0, 10.0 - _penalizacion)), 1)
+
     new_count = len(new_issue_indices)
 
     # 5. Generar cards de issues
@@ -475,11 +539,11 @@ def generate_html(all_agents, args, prev_data=None):
   /* Score global */
   .global-score {{
     position: absolute; top: 32px; right: 32px;
-    text-align: center;
+    text-align: center; display: flex; gap: 20px;
   }}
+  .score-block {{ text-align: center; }}
   .global-score-num {{
     font-size: 48px; font-weight: 700;
-    color: {score_color(avg_score)};
     line-height: 1;
   }}
   .global-score-label {{
@@ -651,8 +715,14 @@ def generate_html(all_agents, args, prev_data=None):
     <span>🔁 {dedup_removed} duplicados eliminados</span>
   </div>
   <div class="global-score">
-    <div class="global-score-num">{avg_score}</div>
-    <div class="global-score-label">Score Global</div>
+    <div class="score-block">
+      <div class="global-score-num" style="color:{score_color(avg_score)}">{avg_score}</div>
+      <div class="global-score-label">Promedio agentes</div>
+    </div>
+    <div class="score-block">
+      <div class="global-score-num" style="color:{score_color(weighted_score)}">{weighted_score}</div>
+      <div class="global-score-label">Score ponderado</div>
+    </div>
   </div>
 </div>
 
@@ -767,7 +837,7 @@ def generate_html(all_agents, args, prev_data=None):
 </body>
 </html>"""
 
-    return html, all_issues
+    return html, all_issues, weighted_score
 
 
 # ── Main ──────────────────────────────────────────────────────
@@ -789,8 +859,13 @@ def main():
     parser.add_argument("--fecha",       default=datetime.now().strftime("%Y-%m-%d %H:%M"))
     parser.add_argument("--modo",        default="completo")
     parser.add_argument("--archivos",    default="?")
-    parser.add_argument("--prev-report", default=None)
+    parser.add_argument("--prev-report",  default=None)
+    parser.add_argument("--reports-dir",  default=None,
+                        help="Directorio de reportes JSON previos para comparación histórica")
     args = parser.parse_args()
+    # Inferir reports_dir del output-html path si no se pasa explícitamente
+    if not args.reports_dir and args.output_html:
+        args.reports_dir = str(Path(args.output_html).parent)
 
     # Cargar datos de cada agente
     all_agents = {
@@ -811,7 +886,7 @@ def main():
         prev_data = load_json(args.prev_report)
 
     # Generar HTML
-    html, all_issues = generate_html(all_agents, args, prev_data)
+    html, all_issues, weighted_score = generate_html(all_agents, args, prev_data)
 
     # Escribir HTML
     Path(args.output_html).parent.mkdir(parents=True, exist_ok=True)
@@ -834,11 +909,12 @@ def main():
             for name, d in all_agents.items()
         },
         "stats": {
-            "total":    len(all_issues),
-            "criticos": sum(1 for i in all_issues if i.get("severity") == "CRÍTICO"),
-            "altos":    sum(1 for i in all_issues if i.get("severity") == "ALTO"),
-            "medios":   sum(1 for i in all_issues if i.get("severity") == "MEDIO"),
-            "bajos":    sum(1 for i in all_issues if i.get("severity") == "BAJO"),
+            "total":          len(all_issues),
+            "criticos":       sum(1 for i in all_issues if i.get("severity") == "CRÍTICO"),
+            "altos":          sum(1 for i in all_issues if i.get("severity") == "ALTO"),
+            "medios":         sum(1 for i in all_issues if i.get("severity") == "MEDIO"),
+            "bajos":          sum(1 for i in all_issues if i.get("severity") == "BAJO"),
+            "weighted_score": weighted_score,
         },
     }
     with open(args.output_json, "w", encoding="utf-8") as f:

@@ -217,7 +217,16 @@ class ConteoService:
                                 continue  # ya en caché, no hay que consultar Siesa
                         response = connekta.get_inventario_fecha(codigo_siesa)
                         tabla = response.get('detalle', {}).get('Table', [])
-                        existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
+                        if not tabla:
+                            # [C5] No cachear 0.0 cuando Siesa devuelve Table vacío —
+                            # mismo riesgo que en _refrescar_cache_en_background.
+                            _fallos_prewarm += 1
+                            logger.error(
+                                f'[PREWARM] Siesa devolvió Table vacío para {codigo_siesa} '
+                                f'— NO se cachea existencia=0.0 para evitar AJ-ENT erróneo.'
+                            )
+                            continue
+                        existencia = float(tabla[0].get('f400_cant_existencia_1', 0))
                         with _existencia_cache_lock:
                             _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
                         logger.debug(f'[PREWARM] {codigo_siesa}: {existencia}')
@@ -335,14 +344,18 @@ class ConteoService:
                     response = connekta.get_inventario_fecha(producto_codigo_siesa)
                     tabla = response.get('detalle', {}).get('Table', [])
                     if not tabla:
-                        # Siesa devolvió tabla vacía: producto sin registros en Siesa o
-                        # posible error parcial del API. Se cachea 0.0 — si el operario
-                        # cuenta unidades, se generará AJ-ENT. Verificar en Siesa si es correcto.
-                        logger.warning(
+                        # [C5] Siesa devolvió Table vacío — NO cachear 0.0.
+                        # Si se cacheara, confirmar_ajuste tomaría existencia=0 como real
+                        # y generaría AJ-ENT duplicando el stock en Siesa (cuenta 14 corrupta).
+                        # Sin entrada en caché, confirmar_ajuste lanza "Siesa aún no respondió"
+                        # → operario reintenta en segundos, con datos reales.
+                        logger.error(
                             f'[CONTEO] Siesa devolvió Table vacío para {producto_codigo_siesa} '
-                            f'— cacheando existencia=0.0. Verificar si el producto existe en Siesa.'
+                            f'— NO se cachea existencia=0.0 para evitar AJ-ENT fiscal erróneo. '
+                            f'Verificar en Siesa que el producto exista y tenga stock registrado.'
                         )
-                    existencia = float(tabla[0].get('f400_cant_existencia_1', 0)) if tabla else 0.0
+                        return  # no actualizar caché con dato vacío
+                    existencia = float(tabla[0].get('f400_cant_existencia_1', 0))
                     with _existencia_cache_lock:
                         _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
                     logger.info(f'[CONTEO] Cache Siesa actualizado para {producto_codigo_siesa}: {existencia}')
