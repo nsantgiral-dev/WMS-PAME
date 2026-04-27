@@ -650,6 +650,7 @@ class ConnektaGateway:
                 'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
                 'F350_CONSEC_DOCTO': 0,
                 'F350_FECHA': fecha_hoy,
+                'F350_IND_ESTADO': 1,
                 'F430_ID_TIPO_DOCTO': tipo_docto_pedido or None,
                 'F430_CONSEC_DOCTO': consec_int
             }],
