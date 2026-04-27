@@ -898,7 +898,7 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': self.tipo_docto_traslado,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': '',
+                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
                     'f350_id_clase_docto': '',
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
@@ -1172,7 +1172,7 @@ class ConnektaGateway:
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': self.nit_empresa,
+                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',

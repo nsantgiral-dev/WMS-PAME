@@ -557,6 +557,15 @@ def _crear_alerta_admin(job: SiesaJob):
         f'ref={job.referencia_tipo}:{job.referencia_id} '
         f'error="{job.error_ultimo}" — Verificar periodo contable en Siesa.'
     )
+    # Guard anti-cascade: si el job que falló es ALERTA_EMAIL, no crear otro ALERTA_EMAIL.
+    # Sin este guard, un Resend caído genera una cadena infinita:
+    # ALERTA_EMAIL FALLIDO → _crear_alerta_admin → alertar_job_fallido → nuevo ALERTA_EMAIL → ...
+    if job.tipo == 'ALERTA_EMAIL':
+        logger.critical(
+            f'[ALERTA ADMIN] El job fallido es ALERTA_EMAIL (id={job.id}) — '
+            f'no se crea alerta secundaria para evitar cascade. Revisar Resend manualmente.'
+        )
+        return
     try:
         from app.services.alertas_service import alertar_job_fallido
         alertar_job_fallido(job)

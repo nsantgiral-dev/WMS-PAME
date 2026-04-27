@@ -604,6 +604,11 @@ def _run_reconciliacion(app):
                 logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
                 return
 
+            # Liberar la conexión DB antes del HTTP download (puede tardar 2+ min).
+            # Sin este commit, la sesión retiene la conexión del pool durante toda la descarga
+            # bloqueando requests concurrentes en un pool pequeño (Railway: 5-10 conexiones).
+            db.session.commit()
+
             # forzar=True: descarga datos frescos de Siesa ignorando el cache de la carga inicial.
             # Sin esto, si la carga inicial corrió hace <1h, la reconciliación compararía
             # el WMS (ya actualizado) contra los mismos datos Siesa → falsos negativos Y

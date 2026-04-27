@@ -597,7 +597,7 @@ def sugeridos_ruta(id):
         .join(TareaPacking, Bulto.tarea_id == TareaPacking.id)
         .filter(
             TareaPacking.siesa_triggered == True,
-            TareaPacking.estado != 'CANCELADO',
+            TareaPacking.estado != EstadoPacking.CANCELADO,
             Bulto.estado == EstadoBulto.PENDIENTE,
             Bulto.ruta_despacho_id == None,
         ).all())
@@ -755,6 +755,7 @@ def bultos_rechazados():
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Sin permiso — se requiere admin o jefe_almacen'}), 403
     bultos = (Bulto.query
+              .options(_sl(Bulto.tarea))
               .filter_by(estado=EstadoBulto.RECHAZADO)
               .order_by(Bulto.fecha_entrega.desc())
               .all())

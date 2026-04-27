@@ -89,10 +89,13 @@ def mis_tareas():
         value=SesionConteo.clasificacion_abc,
         else_=4
     )
-    tareas = SesionConteo.query.filter(
-        SesionConteo.operario_id == operario_id,
-        SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-    ).order_by(prioridad_abc, SesionConteo.fecha_creacion.asc()).all()
+    from sqlalchemy.orm import selectinload as _sl_mis
+    tareas = (SesionConteo.query
+              .options(_sl_mis(SesionConteo.ubicacion), _sl_mis(SesionConteo.producto))
+              .filter(
+                  SesionConteo.operario_id == operario_id,
+                  SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+              ).order_by(prioridad_abc, SesionConteo.fecha_creacion.asc()).all())
 
     return jsonify({
         'tareas': [t.to_dict_operario() for t in tareas],
