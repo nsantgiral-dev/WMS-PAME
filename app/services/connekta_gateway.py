@@ -639,6 +639,20 @@ class ConnektaGateway:
                 'tipo_docto_pedido está vacío — configura SIESA_TIPO_DOCTO_FACTURA '
                 'o verifica que el pedido tenga tipo de documento asignado'
             )
+        # Pre-check idempotencia: si el pedido ya fue facturado (estado=4 Cumplido),
+        # no reenviar POST — evita factura FE duplicada en retry de DLQ tras timeout.
+        if not self.modo_simulacion:
+            try:
+                estado_pre = self.get_estado_pedido(tipo_docto_pedido, consec_docto_pedido)
+                if estado_pre is not None and str(estado_pre) == '4':
+                    logger.warning(
+                        f'[CONNEKTA] trigger_factura: pedido {tipo_docto_pedido}{consec_docto_pedido} '
+                        f'ya está Cumplido (estado=4) en Siesa — omitiendo POST para evitar duplicado'
+                    )
+                    return {'idempotente': True, 'mensaje': 'Pedido ya facturado en Siesa (estado=4)'}
+            except Exception as _e:
+                logger.warning(f'[CONNEKTA] Pre-check factura falló: {_e} — continuando con POST')
+
         from datetime import timedelta
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         consec_int = int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido
