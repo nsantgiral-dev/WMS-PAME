@@ -243,7 +243,6 @@ def confirmar_packing(id):
             observaciones=data.get('observaciones'),
             forzar=data.get('forzar', False)
         )
-        from app.models.packing import TareaPacking
         tarea = TareaPacking.query.get(id)
         return jsonify({
             'mensaje': 'Ítems verificados — declara las piezas físicas para cerrar',
@@ -276,8 +275,7 @@ def cerrar_packing(id):
         return jsonify({'error': 'No autorizado'}), 403
     # [A1] Ownership check: empacador solo puede cerrar su propia tarea.
     # Supervisión puede cerrar cualquier tarea.
-    from app.models.packing import TareaPacking as _TP
-    _tarea_chk = _TP.query.get(id)
+    _tarea_chk = TareaPacking.query.get(id)
     if _tarea_chk and _tarea_chk.empacador_id and _tarea_chk.empacador_id != uid:
         if usuario.rol not in Roles.SUPERVISION:
             return jsonify({'error': 'No puedes cerrar una tarea asignada a otro empacador'}), 403
@@ -291,7 +289,6 @@ def cerrar_packing(id):
             return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
     try:
         bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data)
-        from app.models.packing import TareaPacking
         from app.models.bulto import Bulto as _Bulto
         from sqlalchemy.orm import selectinload as _sl_b
         tarea = TareaPacking.query.get(id)
@@ -391,7 +388,6 @@ def forzar_retry_siesa(id):
     """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede forzar retry de Siesa'}), 403
-    from app.models.packing import TareaPacking
     from app.extensions import db
     tarea = TareaPacking.query.get_or_404(id)
     if tarea.estado != 'DESPACHADO':
