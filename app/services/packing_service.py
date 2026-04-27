@@ -280,6 +280,7 @@ class PackingService:
             )
             if estado_siesa is not None and str(estado_siesa) not in ('3', '4'):
                 ESTADOS = {
+                    '-1': 'No encontrado en Siesa (eliminado)',
                     '0': 'Ingresado (sin aprobar)',
                     '1': 'Aprobado',
                     '2': 'Aprobado',
@@ -287,7 +288,7 @@ class PackingService:
                     '9': 'Anulado / ya procesado en Siesa',
                 }
                 nombre_estado = ESTADOS.get(str(estado_siesa), f'desconocido (código {estado_siesa})')
-                anulado = str(estado_siesa) in ('5', '9')
+                anulado = str(estado_siesa) in ('-1', '5', '9')
                 if anulado:
                     logger.error(
                         f'[PACKING] ⛔ PRE-CHECK BLOQUEÓ cierre de {tarea_pre.numero_pedido_siesa}: '
@@ -363,7 +364,12 @@ class PackingService:
             if not i.producto:
                 logger.error(f'[PACKING] ItemPacking {i.id} sin producto (producto_id={i.producto_id}) — saltando del payload Siesa')
                 continue
-            codigo = i.producto.codigo_siesa or i.producto.codigo
+            if not i.producto.codigo_siesa:
+                raise ValueError(
+                    f'Producto {i.producto.codigo} (id={i.producto_id}) no tiene codigo_siesa. '
+                    'Configura el campo en el catálogo de productos antes de cerrar packing.'
+                )
+            codigo = i.producto.codigo_siesa
             # Buscar el ID interno de Siesa para este producto en este pedido
             reg_siesa = regs_siesa_map.get(codigo)
             items_payload.append({

@@ -37,6 +37,16 @@ def _run_sync(app):
     WORKERS = 10
 
     with app.app_context():
+        # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
+        from sqlalchemy import text as _text
+        lock_adquirido = db.session.execute(
+            _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2008}
+        ).scalar()
+        if not lock_adquirido:
+            logger.warning('[PEDIDOS_SYNC] Otro worker ya ejecuta — omitido')
+            _sync_estado['en_curso'] = False
+            return
+
         upserts = 0
         eliminados = 0
         paginas_leidas = 0
@@ -202,8 +212,9 @@ def _run_sync(app):
                             pk.tipo_docto_pedido_siesa,
                             pk.consec_docto_pedido_siesa or pk.numero_pedido_siesa
                         )
+                        # -1 = pedido no encontrado (eliminado de Siesa), 9 = Anulado
                         # 1=En elaboración, 2=Aprobado, 3=Comprometido, 4=Cumplido: NO anular
-                        # Solo marcar anulado para estado=9 (Anulado) u otros desconocidos
+                        # None = error de red (no actuar para evitar falso positivo)
                         if estado_real is not None and str(estado_real) not in ('1', '2', '3', '4'):
                             if not getattr(pk, 'pedido_anulado_siesa', False):
                                 pk.pedido_anulado_siesa = True
@@ -265,6 +276,12 @@ def _run_sync(app):
             _sync_estado['ultimo_error'] = str(e)
         finally:
             _sync_estado['en_curso'] = False
+            if lock_adquirido:
+                try:
+                    db.session.execute(_text('SELECT pg_advisory_unlock(:key)'), {'key': 2008})
+                    db.session.commit()
+                except Exception as _e:
+                    logger.error('[PEDIDOS_SYNC] Error liberando advisory lock: %s', _e)
 
 
 def iniciar_sync_background(app, forzar=False):

@@ -27,6 +27,12 @@ def create_app():
 
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_size': int(os.getenv('DB_POOL_SIZE', '10')),
+        'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '5')),
+        'pool_recycle': 1800,       # reciclar conexiones cada 30min (Railway puede cerrar idle)
+        'pool_pre_ping': True,      # SELECT 1 antes de usar conexión — evita "server closed the connection"
+    }
     app.config['JWT_SECRET_KEY'] = secret_key
     app.config['SECRET_KEY'] = secret_key
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)

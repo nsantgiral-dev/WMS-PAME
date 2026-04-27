@@ -280,10 +280,11 @@ class ConnektaGateway:
     def get_estado_pedido(self, tipo_docto: str, consec_docto) -> int | None:
         """
         Consulta el ind_estado actual de un pedido específico en Siesa.
-        Retorna el entero (3=Comprometido, 2=Aprobado, 4=Cumplido…) o None si no se encuentra.
-        Se usa como pre-check en cerrar_packing para detectar pedidos que perdieron
-        el estado Comprometido antes de crear bultos o disparar el trigger.
-        Retorna None si tipo_docto está vacío — el caller decide si bloquear o no.
+        Retorna:
+          - int positivo (1-9): estado real del pedido
+          - -1: pedido no encontrado en Siesa (eliminado o nunca existió)
+          - None: error de red / tipo_docto vacío (no se pudo consultar)
+        Se usa como pre-check en cerrar_packing y detección de anulados en pedidos_sync.
         """
         if self.modo_simulacion:
             return 3  # simulación asume siempre comprometido
@@ -306,11 +307,11 @@ class ConnektaGateway:
             })
             rows = res.get('detalle', {}).get('Table', [])
             if not rows:
-                return None
+                return -1  # pedido no encontrado en Siesa (eliminado o nunca existió)
             return rows[0].get('f430_ind_estado')
         except Exception as e:
             logger.warning(f'[CONNEKTA] get_estado_pedido falló silenciosamente: {e}')
-            return None  # si falla el GET, no bloqueamos — el POST revelará el error
+            return None  # error de red — no bloqueamos, el POST revelará el error
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
@@ -543,13 +544,15 @@ class ConnektaGateway:
             )
         items = items_validos
 
+        cia = int(self.id_cia_siesa)
+
         payload = {
             'Inicial': [
-                {'F_CIA': self.id_cia_siesa}
+                {'F_CIA': cia}
             ],
             'Remision': [
                 {
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': cia,
                     'F_CONSEC_AUTO_REG': 0,
                     'F350_ID_CO': self.centro_op,
                     'F350_ID_TIPO_DOCTO': self.tipo_docto_remision,
@@ -576,11 +579,11 @@ class ConnektaGateway:
             ],
             'Movtoventascomercial': [
                 {
-                    'F_CIA': self.id_cia_siesa,
+                    'F_CIA': cia,
                     'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_remision,
                     'f470_consec_docto': 0,
-                    'f470_nro_registro': 0,
+                    'f470_nro_registro': idx + 1,
                     'f470_id_bodega': self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': i.get('lote') or None,
@@ -611,10 +614,10 @@ class ConnektaGateway:
                     'f470_id_un_movto': self.unidad_negocio,   # spec: unidad de negocio, no centro_op
                     'f470_id_causal_devol': None
                 }
-                for i in items
+                for idx, i in enumerate(items)
             ],
             'Final': [
-                {'F_CIA': self.id_cia_siesa}
+                {'F_CIA': cia}
             ]
         }
 
@@ -871,8 +874,8 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': 1,
                     'f470_id_bodega': self.bodega,
-                    'f470_id_ubicacion_aux': '',
-                    'f470_id_lote': '',
+                    'f470_id_ubicacion_aux': None,
+                    'f470_id_lote': None,
                     'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
@@ -886,8 +889,8 @@ class ConnektaGateway:
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': self.uom_default,
-                    'f470_id_ubicacion_aux_ent': '',
-                    'f470_id_lote_ent': '',
+                    'f470_id_ubicacion_aux_ent': None,
+                    'f470_id_lote_ent': None,
                     'f470_id_item': '',
                     'f470_referencia_item': item_codigo,
                     'f470_codigo_barras': '',
@@ -960,8 +963,8 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': 1,
                     'f470_id_bodega': self.bodega,
-                    'f470_id_ubicacion_aux': '',
-                    'f470_id_lote': '',
+                    'f470_id_ubicacion_aux': None,
+                    'f470_id_lote': None,
                     'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias (spec 142951, obligatorio), override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_averia,                            # SIESA_MOTIVO_AVERIA — validado contra maestro Siesa por compañía
                     'f470_id_co_movto': self.centro_op,
@@ -975,8 +978,8 @@ class ConnektaGateway:
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': self.uom_default,   # consistente con enviar_ajuste_inventario
-                    'f470_id_ubicacion_aux_ent': '',
-                    'f470_id_lote_ent': '',
+                    'f470_id_ubicacion_aux_ent': None,
+                    'f470_id_lote_ent': None,
                     'f470_id_item': '',
                     'f470_referencia_item': item_codigo,
                     'f470_codigo_barras': '',
