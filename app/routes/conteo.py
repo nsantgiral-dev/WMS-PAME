@@ -40,6 +40,8 @@ def listar_sesiones():
                  _jl(SesionConteo.producto),
                  _jl(SesionConteo.ubicacion),
                  _jl(SesionConteo.operario),
+                 _jl(SesionConteo.aprobador),  # evita N+1 en to_dict() aprobador_nombre
+                 _jl(SesionConteo.editor),      # evita N+1 en to_dict() editado_por_nombre
              )
              .order_by(SesionConteo.fecha_creacion.desc()))
 

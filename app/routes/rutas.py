@@ -188,6 +188,15 @@ def desactivar_conductor(id):
 @rutas_bp.route('/vehiculos', methods=['GET'])
 @jwt_required()
 def listar_vehiculos():
+    from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles as _R
+    try:
+        _uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    _u = Usuario.query.get(_uid)
+    if not _u or _u.rol not in _R.GESTION + (_R.CONDUCTOR,):
+        return jsonify({'error': 'Sin permiso para listar vehículos'}), 403
     solo_activos = request.args.get('activos', 'true').lower() == 'true'
     q = Vehiculo.query.order_by(Vehiculo.placa)
     if solo_activos:
@@ -244,6 +253,15 @@ def desactivar_vehiculo(id):
 @rutas_bp.route('/maestras', methods=['GET'])
 @jwt_required()
 def listar_maestras():
+    from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles as _R
+    try:
+        _uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    _u = Usuario.query.get(_uid)
+    if not _u or _u.rol not in _R.GESTION + (_R.CONDUCTOR,):
+        return jsonify({'error': 'Sin permiso para listar rutas maestras'}), 403
     solo_activas = request.args.get('activas', 'true').lower() == 'true'
     q = RutaMaestra.query.options(_sl(RutaMaestra.paradas)).order_by(RutaMaestra.nombre)
     if solo_activas:
@@ -254,6 +272,15 @@ def listar_maestras():
 @rutas_bp.route('/maestras/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_maestra(id):
+    from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles as _R
+    try:
+        _uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    _u = Usuario.query.get(_uid)
+    if not _u or _u.rol not in _R.GESTION + (_R.CONDUCTOR,):
+        return jsonify({'error': 'Sin permiso para obtener ruta maestra'}), 403
     m = RutaMaestra.query.get_or_404(id)
     return jsonify({'maestra': m.to_dict()}), 200
 
@@ -471,7 +498,14 @@ def crear_ruta():
         estado=EstadoRutaDespacho.EN_CARGUE,
     )
     db.session.add(ruta)
+    db.session.flush()
+    ruta_id = ruta.id
     db.session.commit()
+    # Re-query con relaciones eager para evitar expire_on_commit en to_dict()
+    ruta = RutaDespacho.query.options(
+        _jl(RutaDespacho.conductor),
+        _jl(RutaDespacho.vehiculo),
+    ).get(ruta_id)
     return jsonify({'ruta': ruta.to_dict()}), 201
 
 
