@@ -537,17 +537,19 @@ class ABCService:
             resultados['watchdog'] = {'error': str(e)}
             # Intentar notificar por email (best-effort — no lanzar si falla)
             try:
-                from app.services.alertas_service import enviar_email, _config_resend
-                if _config_resend():
-                    enviar_email(
-                        asunto=f'[WMS ALERTA] ABC Watchdog falló — almacén {almacen_id}',
-                        cuerpo_texto=(
-                            f'El watchdog ABC del almacén {almacen_id} falló con error:\n{e}\n\n'
-                            'Los productos de alta rotación no fueron reclasificados a clase A. '
-                            'El conteo cíclico urgente no se generará automáticamente.'
-                        ),
-                        cuerpo_html=None,
-                    )
+                # [M26] Usar DLQ para que si Resend falla, el job quede visible en la queue
+                # y se reintente — sin DLQ, la falla del watchdog queda completamente invisible.
+                from app.services.alertas_service import _enviar_email_con_dlq
+                _enviar_email_con_dlq(
+                    asunto=f'[WMS ALERTA] ABC Watchdog falló — almacén {almacen_id}',
+                    cuerpo_texto=(
+                        f'El watchdog ABC del almacén {almacen_id} falló con error:\n{e}\n\n'
+                        'Los productos de alta rotación no fueron reclasificados a clase A. '
+                        'El conteo cíclico urgente no se generará automáticamente.'
+                    ),
+                    cuerpo_html=None,
+                    tipo_alerta=f'abc_watchdog_fallo_{almacen_id}',
+                )
             except Exception as _e_email_watchdog:
                 logger.critical(
                     f'[ABC WATCHDOG] Email de alerta también falló — la falla del watchdog '
@@ -592,35 +594,46 @@ class ABCService:
                     almacenes = Almacen.query.filter_by(activo=True).all()
                     logger.info(f'[ABC] Job iniciado — {len(almacenes)} almacén(es)')
                     completados = []
+                    parciales = []   # [M28] Completados con watchdog fallido internamente
                     fallidos = []
                     for a in almacenes:
                         try:
-                            ABCService.generar_todas_las_clases(a.id)
-                            completados.append(a.id)
-                            logger.info(f'[ABC] Almacén {a.id} completado')
+                            res = ABCService.generar_todas_las_clases(a.id)
+                            # [M28] generar_todas_las_clases no lanza excepción si el watchdog
+                            # falla — lo registra en resultados['watchdog']['error'].
+                            # Separar "completo" de "parcial" para que el log/email sea preciso.
+                            watchdog_err = (res or {}).get('por_clase', {}).get('watchdog', {}).get('error')
+                            if watchdog_err:
+                                parciales.append(a.id)
+                                logger.warning(
+                                    f'[ABC] Almacén {a.id} parcial — watchdog falló: {watchdog_err}'
+                                )
+                            else:
+                                completados.append(a.id)
+                                logger.info(f'[ABC] Almacén {a.id} completado')
                         except Exception as ex:
                             fallidos.append(a.id)
                             logger.error(f'[ABC] Error almacén {a.id}: {ex}')
                     logger.info(
-                        f'[ABC] Job finalizado — OK: {completados} | FALLIDOS: {fallidos}'
+                        f'[ABC] Job finalizado — OK: {completados} | PARCIALES: {parciales} | FALLIDOS: {fallidos}'
                     )
-                    if fallidos:
+                    if fallidos or parciales:
                         # SF_JOB_SILENCIOSO: almacenes fallidos quedan sin tareas de conteo hoy.
                         # Enviar alerta para que ops pueda disparar manualmente.
                         try:
-                            from app.services.alertas_service import enviar_email, _config_resend
-                            if _config_resend():
-                                enviar_email(
-                                    asunto=f'[WMS ALERTA] ABC scheduler: {len(fallidos)} almacén(es) fallaron',
-                                    cuerpo_texto=(
-                                        f'El scheduler ABC (2am Bogotá) falló en {len(fallidos)} almacén(es):\n'
-                                        f'FALLIDOS: {fallidos}\n'
-                                        f'COMPLETADOS: {completados}\n\n'
-                                        'Las tareas de conteo cíclico no se generaron para esos almacenes. '
-                                        'Usa /api/abc/generar para disparar manualmente.'
-                                    ),
-                                    cuerpo_html=None,
-                                )
+                            from app.services.alertas_service import _enviar_email_con_dlq
+                            _enviar_email_con_dlq(
+                                asunto=f'[WMS ALERTA] ABC scheduler: {len(fallidos)} fallidos, {len(parciales)} parciales',
+                                cuerpo_texto=(
+                                    f'El scheduler ABC (2am Bogotá) tuvo problemas:\n'
+                                    f'FALLIDOS (sin tareas generadas): {fallidos}\n'
+                                    f'PARCIALES (watchdog sin reclasificar A): {parciales}\n'
+                                    f'COMPLETADOS: {completados}\n\n'
+                                    'Usa /api/abc/generar para re-disparar almacenes fallidos.'
+                                ),
+                                cuerpo_html=None,
+                                tipo_alerta=f'abc_scheduler_fallo',
+                            )
                         except Exception as _e_email_sched:
                             logger.critical(
                                 f'[ABC] Email de alerta del scheduler también falló — '

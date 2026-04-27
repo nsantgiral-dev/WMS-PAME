@@ -43,6 +43,10 @@ _estado_carga = {
     'ultimo_inicio': None,
     'ultimo_resultado': None,
     'ultimo_error': None,
+    # [M19] Marca de sync completo: se actualiza DESPUÉS del bulk-zero y el commit final.
+    # Si Railway reinicia a mitad del loop, 'ultimo_sync_completo' queda en el valor anterior
+    # (o None) — el próximo sync detecta que el último no terminó y lo registra en log.
+    'ultimo_sync_completo': None,
 }
 
 
@@ -171,6 +175,13 @@ def _descargar_inventario_siesa(forzar=False):
             raise ValueError(
                 f'No se pudo obtener baseline de inventario (cache frío + DB inaccesible): {_e_prev}'
             ) from _e_prev
+    # [M20] Umbral absoluto: < 50 productos nunca es válido, independiente del baseline.
+    # Protege contra respuestas vacías/truncadas cuando _prev_count es pequeño.
+    if len(inventario) < 50:
+        raise ValueError(
+            f'Respuesta de Siesa sospechosamente pequeña: {len(inventario)} productos '
+            f'(mínimo absoluto = 50) — abortando para evitar zeroing masivo'
+        )
     if _prev_count and len(inventario) < _prev_count * 0.70:
         raise ValueError(
             f'Respuesta parcial de Siesa: {len(inventario)} productos recibidos, '
@@ -213,6 +224,21 @@ def _run_carga_inicial(app):
                 return
         except Exception as e:
             logger.warning(f'[INV-SIESA] Advisory lock no disponible: {e} — continuando sin él')
+
+        # [M19] Detectar sync previo incompleto (Railway reinició entre loop y bulk-zero).
+        if _estado_carga.get('ultimo_inicio') and not _estado_carga.get('ultimo_sync_completo'):
+            logger.warning(
+                '[INV-SIESA] El sync anterior inició (%s) pero no marcó ultimo_sync_completo '
+                '— posible restart a mitad de carga. El sync actual sobreescribirá cantidades.',
+                _estado_carga['ultimo_inicio'],
+            )
+        elif (_estado_carga.get('ultimo_inicio') and _estado_carga.get('ultimo_sync_completo')
+              and _estado_carga['ultimo_sync_completo'] < _estado_carga['ultimo_inicio']):
+            logger.warning(
+                '[INV-SIESA] ultimo_sync_completo (%s) < ultimo_inicio (%s) '
+                '— sync anterior incompleto detectado.',
+                _estado_carga['ultimo_sync_completo'], _estado_carga['ultimo_inicio'],
+            )
 
         try:
             almacen = _get_almacen()
@@ -431,6 +457,10 @@ def _run_carga_inicial(app):
                 )
 
             db.session.commit()
+            # [M19] Marcar sync como completado — si Railway mata el proceso antes de
+            # llegar aquí, 'ultimo_sync_completo' queda en el valor previo y el siguiente
+            # sync puede detectar el gap con 'ultimo_inicio'.
+            _estado_carga['ultimo_sync_completo'] = datetime.utcnow()
 
         except Exception as e:
             # FM_RAILWAY_RESTART: si el proceso se mató a mitad del loop de páginas,
