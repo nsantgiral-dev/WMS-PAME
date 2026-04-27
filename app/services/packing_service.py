@@ -394,13 +394,34 @@ class PackingService:
         # En reintento (siesa_pendiente=True) puede existir ya un job activo — reutilizarlo.
         # [C3] Incluir PROCESANDO en la deduplicación — si el worker DLQ ya tomó el job
         # y está ejecutándolo, crear uno nuevo causaría doble envío a Siesa.
+        # [CRÍTICO] Incluir FALLIDO — sin esto, tras resetear_siesa() el job FALLIDO queda
+        # huérfano y se crea un job nuevo: Siesa factura dos veces el mismo pedido.
+        # Si hay un job FALLIDO, reutilizarlo (resetear a PENDIENTE) en vez de crear uno nuevo.
         job_dlq = _SiesaJob.query.filter(
             _SiesaJob.tipo == 'DESPACHO_F470',
             _SiesaJob.referencia_tipo == 'TareaPacking',
             _SiesaJob.referencia_id == tarea_id,
-            _SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO']),
+            _SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO']),
         ).first()
-        if not job_dlq:
+        if job_dlq and job_dlq.estado == 'FALLIDO':
+            # Reusar el job fallido: resetear a PENDIENTE con el payload actualizado.
+            # Esto evita crear un job nuevo que duplicaría el envío a Siesa.
+            job_dlq.estado = 'PENDIENTE'
+            job_dlq.intentos = 0
+            job_dlq.proximo_intento = None
+            job_dlq.error_ultimo = None
+            job_dlq.payload = json.dumps({
+                'tarea_id': tarea_id,
+                'tipo_docto_pedido': tarea.tipo_docto_pedido_siesa or '',
+                'consec_docto_pedido': consec_para_siesa,
+                'items': items_payload,
+                'numero_pedido_siesa': tarea.numero_pedido_siesa,
+            }, ensure_ascii=False)
+            logger.warning(
+                f'[PACKING] Job FALLIDO {job_dlq.id} reutilizado (reset a PENDIENTE) '
+                f'para tarea {tarea_id} — evita doble factura a Siesa'
+            )
+        elif not job_dlq:
             job_dlq = _SiesaJob.encolar(
                 tipo='DESPACHO_F470',
                 payload={
