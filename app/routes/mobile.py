@@ -20,6 +20,10 @@ def _operario_id():
         return None
 
 
+# Roles que NO pueden ejecutar tareas de almacén bajo ninguna circunstancia
+_ROLES_SIN_ALMACEN = {Roles.CONDUCTOR, Roles.TIENDA}
+
+
 def _verificar_rol_para_tipo(operario_id: int, tipo: str):
     """
     Devuelve None si el usuario tiene permiso para el tipo de tarea,
@@ -29,8 +33,8 @@ def _verificar_rol_para_tipo(operario_id: int, tipo: str):
         return None  # Tipos de despacho/entrega — sin restricción adicional
     from app.models.usuario import Usuario
     u = Usuario.query.get(operario_id)
-    if not u or u.rol == Roles.CONDUCTOR:
-        return jsonify({'error': f'Conductores no pueden ejecutar tareas de tipo {tipo}'}), 403
+    if not u or u.rol in _ROLES_SIN_ALMACEN:
+        return jsonify({'error': f'El rol "{u.rol if u else "desconocido"}" no puede ejecutar tareas de almacén (tipo={tipo})'}), 403
     return None
 
 
@@ -39,6 +43,10 @@ def _verificar_rol_para_tipo(operario_id: int, tipo: str):
 def mis_tareas():
     """Todas las tareas activas del operario — optimizado para tablet."""
     operario_id = _operario_id()
+    from app.models.usuario import Usuario
+    u = Usuario.query.get(operario_id)
+    if not u or u.rol in _ROLES_SIN_ALMACEN:
+        return jsonify({'error': 'Sin permiso para acceder a tareas de almacén'}), 403
     resultado = MobileService.get_tareas_operario(operario_id)
     return jsonify(resultado), 200
 
@@ -48,6 +56,10 @@ def mis_tareas():
 def tarea_actual():
     """La tarea más prioritaria del operario ahora mismo."""
     operario_id = _operario_id()
+    from app.models.usuario import Usuario
+    u = Usuario.query.get(operario_id)
+    if not u or u.rol in _ROLES_SIN_ALMACEN:
+        return jsonify({'error': 'Sin permiso para acceder a tareas de almacén'}), 403
     try:
         resultado = MobileService.get_tarea_actual(operario_id)
     except Exception as e:

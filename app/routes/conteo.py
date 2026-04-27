@@ -223,7 +223,14 @@ def auditorias_urgentes():
     if not usuario or usuario.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo admin o supervisor puede ver las auditorías urgentes'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
+    from sqlalchemy.orm import selectinload as _sl
     q = (SesionConteo.query
+         .options(
+             _sl(SesionConteo.producto),
+             _sl(SesionConteo.ubicacion),
+             _sl(SesionConteo.operario),
+             _sl(SesionConteo.segundo_operario),
+         )
          .filter_by(tipo='EXCEPCION_PICKING')
          .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE'])))
     if almacen_id:
