@@ -14,11 +14,10 @@ depends_on = None
 
 
 def upgrade():
-    # dashboard_service.movimientos_recientes() filtra por almacen_id y ordena por fecha DESC.
-    # Sin índice, cada llamada hace seq-scan sobre toda la tabla (crece con cada movimiento).
-    # CONCURRENTLY: no bloquea writes durante la construcción del índice.
+    # CONCURRENTLY eliminado: no puede correr dentro de la transacción de Alembic.
+    # Durante el deploy no hay tráfico, el lock breve es aceptable.
     op.execute(
-        'CREATE INDEX CONCURRENTLY IF NOT EXISTS '
+        'CREATE INDEX IF NOT EXISTS '
         'idx_movimientos_almacen_fecha '
         'ON movimientos_inventario (almacen_id, fecha DESC)'
     )
