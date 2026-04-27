@@ -250,13 +250,14 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     if es_averiado and not connekta.modo_simulacion:
         from app.models.siesa_job import SiesaJob
         # Capturar antes del commit (expire_on_commit haría lazy load ineficiente después)
-        _item_codigo = (tarea.producto.codigo_siesa or tarea.producto.codigo) if tarea.producto else None
-        # [C6] Guard: sin código Siesa el DLQ quedaría en FALLIDO permanente (no reintentable).
-        # Omitir el job y loguear — el admin puede corregir el catálogo y disparar manualmente.
+        # [C6] Solo codigo_siesa — Siesa no conoce códigos WMS. Si se usara tarea.producto.codigo
+        # (WMS), el job quedaría en FALLIDO permanente: Siesa rechaza referencias desconocidas.
+        _item_codigo = tarea.producto.codigo_siesa if tarea.producto else None
         if not _item_codigo:
             logger.error(
-                f'[DEV] Tarea {tarea.codigo}: producto_id={tarea.producto_id} sin codigo_siesa ni codigo '
-                f'— TRASLADO_AVERIAS no encolado. Corregir el producto en el catálogo.'
+                f'[DEV] Tarea {tarea.codigo}: producto_id={tarea.producto_id} sin codigo_siesa '
+                f'— TRASLADO_AVERIAS no encolado (código WMS no válido para Siesa). '
+                f'Asignar codigo_siesa al producto en el catálogo.'
             )
         else:
             job_dlq = SiesaJob.encolar(

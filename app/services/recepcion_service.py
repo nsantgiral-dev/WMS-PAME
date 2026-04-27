@@ -516,13 +516,26 @@ class RecepcionService:
             # Ítems de OC: lookup normalizado por código WMS, código Siesa e ID numérico
             oc_data = (
                 items_oc.get((i.producto.codigo or '').strip().upper()) or
-                items_oc.get((i.producto.codigo_siesa or '').strip().upper()) or
-                oc_fallback
+                items_oc.get((i.producto.codigo_siesa or '').strip().upper())
             )
-            logger.warning(
-                f'[RECEPCION] item {i.producto.codigo!r} → ref_siesa={oc_data.get("ref_siesa")!r} '
-                f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r} fecha={oc_data.get("fecha_entrega")!r}'
-            )
+            _usó_fallback = oc_data is None
+            if _usó_fallback:
+                # [OC-FALLBACK] Ítem no encontrado en líneas de la OC.
+                # Riesgo: OC con bodegas mixtas → bodega del primer ítem ≠ bodega correcta.
+                # Se usa oc_fallback solo si no hay otra opción; el WARNING es visible en logs.
+                oc_data = oc_fallback
+                logger.warning(
+                    f'[RECEPCION] OC-FALLBACK: item {i.producto.codigo!r} '
+                    f'(siesa={i.producto.codigo_siesa!r}) no encontrado en OC '
+                    f'{recepcion.numero_oc_siesa!r} — usando bodega/uom del primer ítem '
+                    f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r}. '
+                    f'Verificar que código Siesa del producto coincida con OC.'
+                )
+            else:
+                logger.debug(
+                    f'[RECEPCION] item {i.producto.codigo!r} → ref_siesa={oc_data.get("ref_siesa")!r} '
+                    f'bodega={oc_data.get("bodega")!r} uom={oc_data.get("uom")!r}'
+                )
             items_payload.append({
                 'producto_codigo': oc_data.get('ref_siesa') or i.producto.codigo,
                 'cantidad_recibida': i.cantidad_recibida,
