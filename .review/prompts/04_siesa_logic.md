@@ -77,6 +77,46 @@ OMITIR COMPLETAMENTE:
   - Comentarios sobre la conveniencia de usar Celery/Redis — se decidió conscientemente no usarlos
   - "Llamada síncrona bloquea worker" — ya cubierto por agente de performance, no duplicar
 
+════════════════════════════════════════
+MECANISMOS DE DEFENSA YA IMPLEMENTADOS
+════════════════════════════════════════
+
+ANTES DE REPORTAR IDEMPOTENCIA EN RETRY:
+El sistema tiene estos guards en siesa_job_service.py para CADA tipo de job:
+1. Pre-check: if entity.siesa_triggered → skip (no llama Siesa)
+2. POST a Siesa
+3. Commit principal con try/except
+4. Emergency commit en except: persiste siesa_triggered=True incluso si commit principal falla
+5. trigger_factura tiene pre-check adicional: get_estado_pedido()==4 → skip
+
+Si el guard de siesa_triggered + emergency commit EXISTE para un tipo de job,
+el riesgo de duplicación baja de CRÍTICO a MEDIO (window residual ~50ms entre
+HTTP 200 de Siesa y commit del flag — no explotable en operación normal).
+
+Solo reportar CRÍTICO si:
+- NO existe guard de siesa_triggered para ese tipo de job
+- El emergency commit NO persiste el flag
+- Hay un gap específico que el guard no cubre (explicar cuál)
+
+FIXES YA APLICADOS (no re-reportar):
+- F_CIA: int() en todos los conectores ✓
+- f470_nro_registro: enumerate en trigger_despacho ✓
+- f350_id_co_base, f350_id_tipo_docto_base: '' → None ✓
+- f450_docto_alterno: '' → None ✓
+- f470_id_ubicacion_aux, f470_id_lote: '' → None ✓
+- trigger_factura: pre-check estado=4 antes de POST ✓
+- get_estado_pedido: retorna -1 (not found) vs None (error red) ✓
+- codigo_siesa: raise ValueError si None en cerrar_packing ✓
+- Advisory locks: todos los sync services tienen pg_advisory_lock ✓
+
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
 INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - Este agente es el más crítico para el negocio — sé minucioso pero también preciso
@@ -97,7 +137,8 @@ FORMATO JSON REQUERIDO:
       "recommendation": "Corrección específica respetando el patrón real (gateway + SiesaJob en misma transacción)",
       "code_snippet": "fragmento problemático (máx 3 líneas)",
       "principio_violado": "P3 — No se crea SiesaJob cuando Connekta falla",
-      "business_impact": "Impacto exacto: qué documento se pierde/duplica, qué discrepancia se genera"
+      "business_impact": "Impacto exacto: qué documento se pierde/duplica, qué discrepancia se genera",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántas violaciones críticas reales existen y cuál es el riesgo de desincronización",

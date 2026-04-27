@@ -102,12 +102,13 @@ AGENT_PRIORITY = {
 
 def _dedup_key(issue):
     """
-    Clave de deduplicación: archivo + primeras 70 chars del título normalizado.
+    Clave de deduplicación: archivo + line_hint + primeras 70 chars del título normalizado.
     Dos issues del mismo archivo con título similar se consideran el mismo problema.
     """
     file_part  = (issue.get("file") or "").strip().lower()
+    line_part  = (issue.get("line_hint") or "").strip().lower()[:30]
     title_part = re.sub(r"\s+", " ", (issue.get("title") or "").strip().lower())[:70]
-    return f"{file_part}|{title_part}"
+    return f"{file_part}|{line_part}|{title_part}"
 
 
 def _title_words(issue):
@@ -177,6 +178,60 @@ def deduplicate_issues(all_issues):
     return result
 
 
+# ── Filtrado de known issues ─────────────────────────────────
+
+def _load_known_issues(review_dir):
+    """Load known_issues.json for filtering."""
+    path = os.path.join(review_dir, 'known_issues.json')
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"dismissed": [], "accepted_risk": []}
+
+def _is_dismissed(issue, known_issues):
+    """Check if issue matches any dismissed pattern."""
+    title = (issue.get('title') or '').lower()
+    desc = (issue.get('description') or '').lower()
+    combined = f"{title} {desc}"
+    for d in known_issues.get('dismissed', []):
+        pattern = d.get('pattern', '')
+        if pattern:
+            try:
+                if re.search(pattern, combined, re.IGNORECASE):
+                    return True
+            except re.error:
+                pass
+    return False
+
+def filter_known_issues(issues, review_dir):
+    """Remove issues that match dismissed patterns in known_issues.json."""
+    ki = _load_known_issues(review_dir)
+    filtered = []
+    dismissed_count = 0
+    for issue in issues:
+        if _is_dismissed(issue, ki):
+            dismissed_count += 1
+        else:
+            filtered.append(issue)
+    if dismissed_count:
+        print(f"🔇 {dismissed_count} issues filtrados por known_issues.json", file=sys.stderr)
+    return filtered
+
+
+# ── Score calculado por fórmula ──────────────────────────────
+
+def _calculate_score(issues):
+    """Score calculado por fórmula fija, no auto-asignado por el agente."""
+    criticos = sum(1 for i in issues if i.get('severity') == 'CRÍTICO')
+    altos = sum(1 for i in issues if i.get('severity') == 'ALTO')
+    medios = sum(1 for i in issues if i.get('severity') == 'MEDIO')
+    score = 10.0 - (criticos * 1.5) - (altos * 0.8) - (medios * 0.3)
+    return round(max(0, min(10, score)), 1)
+
+
 # ── Detección de issues nuevos vs reporte anterior ───────────
 
 def _load_all_prev_issues(reports_dir: str) -> list:
@@ -234,6 +289,10 @@ def generate_html(all_agents, args, prev_data=None):
             issue["_agent"] = agent_data.get("agent", "unknown")
             raw_issues.append(issue)
 
+    # 1b. Filtrar issues conocidos (known_issues.json)
+    review_dir = os.path.dirname(os.path.abspath(__file__))
+    raw_issues = filter_known_issues(raw_issues, review_dir)
+
     # 2. Deduplicar cross-agente
     all_issues = deduplicate_issues(raw_issues)
     dedup_removed = len(raw_issues) - len(all_issues)
@@ -251,7 +310,7 @@ def generate_html(all_agents, args, prev_data=None):
 
     total_issues = len(all_issues)
     avg_score = round(
-        sum(d.get("score", 0) for d in all_agents.values()) / max(len(all_agents), 1), 1
+        sum(_calculate_score(d.get("issues", [])) for d in all_agents.values()) / max(len(all_agents), 1), 1
     )
 
     # Score ponderado por severidad: penaliza más los CRÍTICOS que los BAJOS
@@ -461,11 +520,12 @@ def generate_html(all_agents, args, prev_data=None):
     if not issues_html:
         issues_html = '<div class="no-issues">🎉 No se encontraron issues en esta revisión</div>'
 
-    # 6. Score cards por agente
+    # 6. Score cards por agente (score calculado por fórmula, no auto-asignado)
     agent_cards = ""
     for name, data in all_agents.items():
-        score    = data.get("score", 0)
-        n_issues = len(data.get("issues", []))
+        agent_issues = data.get("issues", [])
+        score    = _calculate_score(agent_issues)
+        n_issues = len(agent_issues)
         agent_cards += f"""
         <div class="agent-score-card">
           <div class="agent-score-icon">{agent_icon(name)}</div>
@@ -902,7 +962,7 @@ def main():
         "all_issues":          all_issues,
         "agents": {
             name: {
-                "score":        d.get("score", 0),
+                "score":        _calculate_score(d.get("issues", [])),
                 "summary":      d.get("summary", ""),
                 "issues_count": len(d.get("issues", [])),
             }

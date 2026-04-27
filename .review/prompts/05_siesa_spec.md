@@ -77,6 +77,39 @@ NO REPORTAR:
 - Campos que YA están documentados como corregidos en el código (ej: f470_ind_obsequio=0 explícito)
 - Timeout de 10s/30s — configurado intencionalmente
 
+════════════════════════════════════════
+FIXES YA APLICADOS — NO RE-REPORTAR
+════════════════════════════════════════
+
+- F_CIA: int() en TODOS los conectores (incluido trigger_despacho) ✓
+- f470_nro_registro: enumerate() en trigger_despacho (antes era siempre 0) ✓
+- f350_id_co_base: None cuando no aplica (no '') ✓
+- f350_id_tipo_docto_base: None cuando no aplica (no '') ✓
+- f450_docto_alterno: None cuando no aplica (no '') ✓
+- f470_id_ubicacion_aux: None cuando no aplica (no '') ✓
+- f470_id_lote: None cuando no aplica (no '') ✓
+- f470_id_ubicacion_aux_ent: None cuando no aplica (no '') ✓
+- f470_id_lote_ent: None cuando no aplica (no '') ✓
+- f470_id_un_movto: self.unidad_negocio (no centro_op como fallback) ✓
+- f470_id_concepto: env-var overridable (SIESA_CONCEPTO_VENTAS/COMPRAS/AJUSTES/TRASLADOS) ✓
+- f441_cant_base: round(float(abs(...)), 4) en 174646 ✓
+- req_solicitante: or None (no '') en 174646 ✓
+
+CAMPOS QUE NO EXISTEN EN CIERTAS SPECS (verificado en .docx oficiales):
+- f470_ind_naturaleza: SOLO existe en 142945 (RemisionPedido). NO existe en 142951, 173066, 173076, 173079.
+- f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido: SOLO existen en 142945.
+- f470_id_concepto en Movimientos: SOLO existe en 142951 (DocumentoInv). NO existe en 173066, 173076, 173079 Movimientos.
+
+NO reportar la presencia o ausencia de estos campos como issue si coincide con lo anterior.
+
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
 INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - El campo "connector_id" es OBLIGATORIO en cada issue: número del conector afectado o "unknown"
@@ -96,7 +129,8 @@ FORMATO JSON REQUERIDO:
       "recommendation": "Corrección concreta con el valor/tipo correcto según spec Connekta",
       "code_snippet": "fragmento exacto del código problemático (máx 3 líneas)",
       "connector_id": "142951",
-      "produccion_impacto": "Escenario concreto: qué documento crea Siesa incorrectamente o rechaza"
+      "produccion_impacto": "Escenario concreto: qué documento crea Siesa incorrectamente o rechaza",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántas violaciones de spec existen y cuál es el riesgo de documentos incorrectos en Siesa",

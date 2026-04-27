@@ -24,13 +24,21 @@ Hazte ESTAS PREGUNTAS:
 
 CALIBRACIÓN DE SEVERIDADES:
 
-CRÍTICO: El failure mode deja datos fiscales o de inventario en estado corrupto sin recovery automático, o bloquea todas las operaciones del sistema para todos los usuarios.
+CRÍTICO: El failure mode deja datos fiscales o de inventario en estado corrupto Y:
+  - Requiere UN SOLO punto de fallo (no cadenas de 2+ fallos simultáneos)
+  - No tiene recovery automático NI mecanismo de detección existente
+  - Puede ocurrir en operación normal (no requiere caída de Railway + Siesa + email simultáneamente)
 
-ALTO: El failure mode causa pérdida de datos recuperable con intervención manual, o bloquea operaciones para un subconjunto de usuarios/pedidos.
+ALTO: El failure mode causa pérdida de datos recuperable con intervención manual, o bloquea operaciones para un subconjunto de usuarios/pedidos. Máximo un punto de fallo.
 
-MEDIO: El failure mode degrada la UX pero no corrompe datos, o tiene recovery automático. Solo reportar si la corrección es no trivial.
+MEDIO: El failure mode degrada la UX pero no corrompe datos, o tiene recovery automático. También para cadenas de 2 fallos simultáneos con impacto real. Solo reportar si la corrección es no trivial.
 
-BAJO: Omitir.
+BAJO: Omitir. También omitir cadenas de 3+ fallos simultáneos — probabilidad <0.01%.
+
+OMITIR COMPLETAMENTE:
+- Escenarios "Si Railway reinicia Y Siesa está caído Y email falla" — triple-failure, probabilidad negligible
+- "APScheduler en ambos workers genera doble overhead" — advisory lock ya previene ejecución doble, overhead de SELECT pg_try_advisory_lock es <1ms
+- Escenarios que requieren fallo simultáneo de PostgreSQL + Siesa + Resend — no justifican complejidad
 
 ════════════════════════════════════════
 LOS 7 FAILURE MODES A ANALIZAR
@@ -58,6 +66,29 @@ Dos workers Gunicorn pueden procesar el mismo request o el mismo job simultánea
 Un operario escanea un bulto, pierde conexión, no ve la confirmación, y reintenta el mismo escaneo. Analiza: ¿los endpoints de escaneo son idempotentes? Si el primer request procesó el movimiento de stock y el segundo también lo procesa, ¿se duplica el movimiento? Buscar endpoints de escaneo/confirmación sin verificación de estado actual antes de aplicar el cambio.
 
 ════════════════════════════════════════
+MECANISMOS DE RESILIENCIA YA IMPLEMENTADOS
+════════════════════════════════════════
+
+1. DLQ (tabla siesa_jobs): jobs PENDIENTE → PROCESANDO → COMPLETADO/FALLIDO, 5 intentos con backoff exponencial
+2. siesa_triggered flag + emergency commit: previene duplicación en retry
+3. pg_advisory_lock: TODOS los jobs background y sync services tienen advisory lock
+4. WITH FOR UPDATE: todas las operaciones de stock usan row-level locking
+5. fecha_procesando: stuck-job detection usa timestamp de inicio, no creación
+6. Pool configurado: pool_size=10, max_overflow=5, pool_pre_ping=True, pool_recycle=1800
+7. trigger_factura pre-check: get_estado_pedido()==4 → skip POST
+8. DLQ time-box: 4 minutos máximo por ciclo, evita starvation
+
+Si un failure mode ya está cubierto por uno de estos mecanismos, bajar severidad correspondiente.
+
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
+════════════════════════════════════════
 INSTRUCCIONES DE RESPUESTA
 ════════════════════════════════════════
 
@@ -83,7 +114,8 @@ FORMATO JSON REQUERIDO:
       "recovery_posible": false,
       "tiempo_deteccion": "horas",
       "datos_en_riesgo": "fiscal",
-      "estado_sistema_post_fallo": "TareaPacking en estado COMPLETADO en WMS pero SiesaJob no creado — Siesa nunca fue notificado del despacho"
+      "estado_sistema_post_fallo": "TareaPacking en estado COMPLETADO en WMS pero SiesaJob no creado — Siesa nunca fue notificado del despacho",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántos failure modes causan pérdida de datos, cuál es el más probable en producción y cuál el más grave",

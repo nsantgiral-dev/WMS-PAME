@@ -53,6 +53,14 @@ FOCO ESPECIAL — LO QUE SÍ IMPORTA EN ESTE SISTEMA:
   - ¿Hay endpoints sin @jwt_required() que no deberían ser públicos?
   - ¿Las credenciales de Connekta/Siesa están en código o en variables de entorno?
 
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
 INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - Si no encuentras vulnerabilidades reales, devuelve "issues": []
@@ -71,7 +79,8 @@ FORMATO JSON REQUERIDO:
       "description": "Descripción del riesgo con impacto concreto en este sistema",
       "recommendation": "Corrección concreta y específica",
       "code_snippet": "fragmento problemático (máx 3 líneas)",
-      "vector_explotacion": "Cómo exactamente lo exploitaría un atacante con acceso al sistema"
+      "vector_explotacion": "Cómo exactamente lo exploitaría un atacante con acceso al sistema",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: postura de seguridad real del sistema y riesgo neto",

@@ -49,6 +49,14 @@ FOCO ESPECIAL — LO QUE SÍ IMPORTA:
   - Queries .all() en tablas de pedidos/productos en endpoints de listado sin paginación
   - N+1 en el loop de serialización de tareas de packing/picking (sí tienen volumen)
 
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
 INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - Si no encuentras problemas de performance reales, devuelve "issues": []
@@ -67,7 +75,8 @@ FORMATO JSON REQUERIDO:
       "description": "Qué está haciendo lento el código y en qué escenario se nota",
       "recommendation": "Optimización concreta con código si aplica",
       "code_snippet": "fragmento problemático (máx 3 líneas)",
-      "impacto_volumen_real": "Con 200 pedidos/2000 productos: tiempo estimado, frecuencia, impacto en workers"
+      "impacto_volumen_real": "Con 200 pedidos/2000 productos: tiempo estimado, frecuencia, impacto en workers",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuáles son los cuellos de botella REALES y si el sistema puede escalar a 2x carga actual",

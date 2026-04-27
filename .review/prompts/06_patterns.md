@@ -70,6 +70,14 @@ Buscar en: .paginate( y .all() en routes/ sin .options( en la misma query.
 GAP: query sin .options() que luego accede a relaciones en el loop de serialización.
 
 ════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
+════════════════════════════════════════
 INSTRUCCIONES DE RESPUESTA
 ════════════════════════════════════════
 
@@ -92,7 +100,8 @@ FORMATO JSON REQUERIDO:
       "recommendation": "Corrección concreta: código o estructura que implementa el patrón",
       "code_snippet": "fragmento del código donde falta el patrón (máx 3 líneas)",
       "pattern_id": "P_EMERGENCY_COMMIT",
-      "missing_in": ["app/services/packing_service.py:despachar_orden", "app/services/muelle_service.py:confirmar_salida"]
+      "missing_in": ["app/services/packing_service.py:despachar_orden", "app/services/muelle_service.py:confirmar_salida"],
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántos patrones tienen GAPs, cuáles son los más críticos, y cuál es el riesgo operacional",

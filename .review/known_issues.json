@@ -1,0 +1,66 @@
+{
+  "dismissed": [
+    {
+      "pattern": "idempotencia.*142948|EntradaOC.*pre-check|EntradaOC.*idempotencia",
+      "reason": "siesa_triggered guard in DLQ handler ENTRADA_OC + emergency commit covers this. Residual window ~50ms.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "idempotencia.*142951|ajuste.*idempotencia|DocumentoInv.*pre-check",
+      "reason": "siesa_triggered guard in DLQ handler AJUSTE_CONTEO + emergency mini-commit covers this.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "idempotencia.*averías|TRASLADO_AVERIAS.*idempotencia|NB1.*AV1.*duplica",
+      "reason": "siesa_triggered guard in DLQ handler TRASLADO_AVERIAS + emergency commit covers this.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "idempotencia.*173066|idempotencia.*173076|idempotencia.*173079|idempotencia.*174646",
+      "reason": "siesa_triggered guard in respective DLQ handlers covers this. Residual window ~50ms.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "CHECK.*cantidad.*>=.*0|cantidad.*negativ|stock.*negativ",
+      "reason": "CHECK constraint exists in migration b1c2d3e4f5g6: ck_cantidad_no_negativa on ubicaciones_productos.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "f470_ind_naturaleza.*142951|f470_ind_naturaleza.*173066|f470_ind_naturaleza.*173076|f470_ind_naturaleza.*173079",
+      "reason": "Field does NOT exist in specs 142951, 173066, 173076, 173079. Only exists in 142945 (RemisionPedido).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "f470_id_concepto.*173066|f470_id_concepto.*173076|f470_id_concepto.*173079",
+      "reason": "Field does NOT exist in Movimientos section of specs 173066, 173076, 173079. Only in 142951 DocumentoInv.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "f470_ind_obsequio.*142951|f470_ind_solo_valor.*142951|f470_ind_impto_asumido.*142951",
+      "reason": "These fields do NOT exist in spec 142951. Only in 142945 RemisionPedido.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "FOR UPDATE.*picking|row-lock.*picking|picking.*sin.*lock",
+      "reason": "picking_service.py uses with_for_update() in all 5 stock operations (lines 134, 180, 257, 285, 324).",
+      "date": "2026-04-27"
+    }
+  ],
+  "accepted_risk": [
+    {
+      "pattern": "Railway.*reinicia.*AND.*Siesa.*caído.*AND.*email.*falla",
+      "reason": "Triple-failure chain. Probability <0.01%. Cost of fix exceeds expected loss.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "APScheduler.*ambos.*workers|scheduler.*doble.*overhead",
+      "reason": "Advisory lock prevents double execution. SELECT pg_try_advisory_lock is <1ms overhead. Not worth single-worker complexity.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "god.*function.*mobile|mobile.*120.*líneas",
+      "reason": "Acknowledged tech debt. 3 branches (PICKING/CONTEO/PACKING) with distinct imports. Future sprint.",
+      "date": "2026-04-27"
+    }
+  ]
+}

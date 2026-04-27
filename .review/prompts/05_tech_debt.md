@@ -51,6 +51,14 @@ FOCO ESPECIAL — LO QUE SÍ IMPORTA:
   - ¿Hay estados de tarea hardcodeados como strings en lógica de transición que podría typo-earse?
   - ¿Hay funciones en services/ que mezclan tantas responsabilidades que ya causaron bugs difíciles de encontrar?
 
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
 INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - Si no encuentras deuda técnica que pase el filtro CTO, devuelve "issues": []
@@ -70,7 +78,8 @@ FORMATO JSON REQUERIDO:
       "recommendation": "Refactor concreto con ejemplo de cómo quedaría",
       "code_snippet": "fragmento problemático (máx 3 líneas)",
       "riesgo_produccion": "Bug concreto que esta deuda puede causar o ya causó",
-      "effort_to_fix": "30 min | 2 horas | medio día"
+      "effort_to_fix": "30 min | 2 horas | medio día",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuál es la deuda técnica que MÁS impacta la capacidad de operar y mantener el sistema",

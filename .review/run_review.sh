@@ -262,6 +262,38 @@ build_context "$CTX_DEBT" "$MAX_CHARS_ALL" "$APP_DIR"
 # Contar archivos totales analizados
 NUM_ARCHIVOS=$(find "$APP_DIR" -name "*.py" ! -path "*/__pycache__/*" ! -path "*/venv/*" ! -path "*/migrations/*" 2>/dev/null | wc -l | tr -d ' ')
 
+# ── Inyectar known_issues en cada prompt ────────────────────
+KNOWN_ISSUES="$REVIEW_DIR/known_issues.json"
+if [ -f "$KNOWN_ISSUES" ]; then
+    KNOWN_ISSUES_SECTION=$(cat <<'KIEOF'
+
+════════════════════════════════════════
+ISSUES YA EVALUADOS — NO RE-REPORTAR
+════════════════════════════════════════
+
+Los siguientes patrones ya fueron evaluados y tienen mitigación documentada.
+NO los incluyas en tu respuesta. Si crees que la mitigación es insuficiente,
+explica ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repitas
+el issue original.
+
+KIEOF
+)
+    KNOWN_ISSUES_SECTION="$KNOWN_ISSUES_SECTION
+$(python3 -c "
+import json
+with open('$KNOWN_ISSUES') as f:
+    ki = json.load(f)
+for d in ki.get('dismissed', []):
+    print(f\"DISMISSED: {d['pattern']}\")
+    print(f\"  Reason: {d['reason']}\")
+    print()
+for a in ki.get('accepted_risk', []):
+    print(f\"ACCEPTED RISK: {a['pattern']}\")
+    print(f\"  Reason: {a['reason']}\")
+    print()
+")"
+fi
+
 log "Contextos listos | Archivos totales del proyecto: ${BOLD}$NUM_ARCHIVOS${NC}"
 for ctx in "$CTX_BUGS" "$CTX_SECURITY" "$CTX_PERF" "$CTX_SIESA" "$CTX_DEBT" "$CTX_INVARIANTS"; do
     name=$(basename "$ctx" .txt | sed 's/ctx_//')
@@ -281,6 +313,12 @@ run_agent() {
     # Construir input: prompt + código
     local input_file="$TEMP_DIR/${agent_name}_input.txt"
     cat "$prompt_file" > "$input_file"
+
+    # Inject known issues
+    if [ -n "$KNOWN_ISSUES_SECTION" ]; then
+        printf '\n%s\n' "$KNOWN_ISSUES_SECTION" >> "$input_file"
+    fi
+
     printf '\n\n' >> "$input_file"
     cat "$ctx_file" >> "$input_file"
 

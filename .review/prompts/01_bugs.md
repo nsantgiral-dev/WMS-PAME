@@ -71,6 +71,14 @@ NO REPORTAR:
   - Uso de .first() cuando el resultado "debería" ser único — no es un bug sin evidencia de duplicados
   - Validaciones de input "defensivas" que duplican lo que el framework ya hace
 
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
 INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - Si no encuentras bugs que pasen el filtro CTO, devuelve "issues": []
@@ -89,7 +97,8 @@ FORMATO JSON REQUERIDO:
       "description": "Descripción del bug y por qué ocurrirá en producción",
       "recommendation": "Corrección concreta con código",
       "code_snippet": "fragmento exacto del código problemático (máx 3 líneas)",
-      "produccion_impacto": "Escenario concreto: cuándo ocurre, qué falla, qué datos se corrompen"
+      "produccion_impacto": "Escenario concreto: cuándo ocurre, qué falla, qué datos se corrompen",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántos bugs reales hay y cuál es el riesgo operacional neto",

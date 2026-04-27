@@ -15,14 +15,26 @@ FILOSOFÍA CTO — ANTES DE REPORTAR UN ISSUE
 ════════════════════════════════════════
 
 PARTE A — INVARIANTES:
-- Un invariante enforcement solo en app code (sin DB constraint) se puede violar si: (1) hay un bug en el app code, (2) alguien escribe directamente en DB, (3) hay una race condition. Reportar si el invariante es crítico para el negocio.
-- Solo es CRÍTICO si la violación del invariante puede ocurrir con el código actual y no hay ningún mecanismo que la detecte.
+- Equipo de 1-3 devs. App code enforcement es ACEPTABLE si hay logging + alerta.
+- No es necesario CHECK constraint para todo — solo para campos críticos de stock.
+- CHECK(cantidad >= 0) YA EXISTE en migración b1c2d3e4f5g6 (ck_cantidad_no_negativa en ubicaciones_productos). NO re-reportar.
+- Un invariante enforcement solo en app code se puede violar si: (1) hay un bug en el app code, (2) alguien escribe directamente en DB, (3) hay una race condition. Reportar solo si el invariante es crítico para el negocio Y no tiene ningún mecanismo de detección.
+
+CALIBRACIÓN:
+- CRÍTICO: Solo si la violación puede ocurrir con el código actual, UN SOLO punto de fallo, y no hay ningún mecanismo que la detecte (ni log, ni alerta, ni dashboard).
+- ALTO: Violación posible pero detectable en logs o dashboard admin.
+- MEDIO: Violación teórica (requiere 2+ fallos) o con recovery automático.
+- BAJO: Omitir.
 
 PARTE B — FALLOS SILENCIOSOS:
-- Un fallo silencioso es CRÍTICO si una operación de negocio falla completamente sin dejar traza visible (ni log, ni alerta, ni estado de error en DB).
-- Un fallo silencioso es ALTO si hay un log interno pero ninguna alerta al equipo y puede pasar días sin detectarse.
+- CRÍTICO: operación de negocio falla completamente sin NINGUNA traza (ni log, ni alerta, ni estado de error en DB, ni dashboard).
+- ALTO: hay log interno pero ninguna alerta proactiva al equipo. Puede pasar días sin detectarse.
+- MEDIO: hay log Y el operario ve un error o estado incorrecto que puede reportar.
+- BAJO: Omitir.
 
-BAJO: Omitir completamente.
+ANTES DE REPORTAR "falta CHECK constraint":
+Busca en TODAS las migraciones disponibles. Si no encuentras el CHECK, reporta
+"no encontrado en migraciones visibles" — NO afirmes "no existe" sin certeza.
 
 ════════════════════════════════════════
 PARTE A — INVARIANTES DE NEGOCIO A VERIFICAR
@@ -74,6 +86,26 @@ Endpoints que retornan HTTP 200 al cliente pero internamente fallaron. Buscar: f
 Flujos donde el estado en WMS dice COMPLETADO/DESPACHADO/CONFIRMADO pero Siesa nunca fue notificado y no hay ningún indicador visible para el operario o el sistema. Diferente a SF_HTTP_200_FALLO_INTERNO: este es el estado persistido en DB, no la respuesta HTTP.
 
 ════════════════════════════════════════
+CONSTRAINTS Y GUARDS YA EXISTENTES
+════════════════════════════════════════
+
+- CHECK(cantidad >= 0) en ubicaciones_productos — migración b1c2d3e4f5g6
+- WITH FOR UPDATE en picking, packing, muelle, devoluciones — row-level locking
+- siesa_triggered flag — DLQ handler verifica antes de llamar Siesa
+- Emergency commit — persiste siesa_triggered=True si commit principal falla
+- pg_advisory_lock — todos los sync services y schedulers
+- SiesaJob.max_intentos=5 — DLQ no reintenta infinitamente
+- pedido_anulado_siesa — detección de pedidos eliminados de Siesa (retorna -1)
+
+════════════════════════════════════════
+ANTI-REPETICIÓN
+════════════════════════════════════════
+
+- NO re-reportar issues que coincidan con patrones en la sección "ISSUES YA EVALUADOS" inyectada al final del prompt.
+- Si un issue persiste después de un fix documentado, explicar ESPECÍFICAMENTE qué gap queda DESPUÉS de la mitigación — no repetir el issue original.
+- Cada issue debe incluir campo "probability_this_month": "alta" | "media" | "baja" | "teórica" basado en la probabilidad real de que ocurra en los próximos 30 días con el volumen actual del sistema (~200 pedidos/día, ~2000 productos, ~10-30 usuarios).
+
+════════════════════════════════════════
 INSTRUCCIONES DE RESPUESTA
 ════════════════════════════════════════
 
@@ -97,7 +129,8 @@ FORMATO JSON REQUERIDO:
       "code_snippet": "fragmento relevante del código (máx 3 líneas)",
       "tipo": "invariant_violation",
       "detectable_en": "nunca",
-      "enforcement_actual": "solo_app_code"
+      "enforcement_actual": "solo_app_code",
+      "probability_this_month": "media"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántos invariantes están solo en app code, cuántos fallos son completamente silenciosos, y cuál es el riesgo fiscal/operacional neto",
