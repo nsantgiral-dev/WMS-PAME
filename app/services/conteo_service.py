@@ -120,9 +120,41 @@ class ConteoService:
             raise ValueError('Esta tarea no está asignada a ti')
 
         if existencia_siesa is None:
-            # Cache miss: Siesa no respondió aún. El refresco de fondo ya está en vuelo.
-            # Error reintentable — en 3-5s el caché tendrá el valor real.
-            raise ValueError('Conectando con Siesa — reintenta en unos segundos')
+            # Siesa no respondió (cache miss persistente o Table=[] indefinido).
+            # Guardar el conteo del operario y escalar a SEGUNDO_CONTEO para revisión admin.
+            # confirmar_ajuste() ya maneja existencia_siesa=NULL en DB: re-consulta Siesa
+            # cuando el admin confirma, garantizando que el AJ-ENT use el valor real.
+            sesion.operario_id = operario_id
+            sesion.cantidad_fisica = cantidad_fisica
+            sesion.existencia_siesa = None  # admin resolverá al confirmar
+            sesion.lote_id = lote_id
+            sesion.fecha_inicio = sesion.fecha_inicio or datetime.utcnow()
+            sesion.estado = 'SEGUNDO_CONTEO'
+            sesion.diferencia = None
+            logger.warning(
+                f'[CONTEO] Siesa no disponible para {sesion_pre.producto_codigo_siesa} '
+                f'— sesión {sesion_id} marcada SEGUNDO_CONTEO sin existencia_siesa. '
+                f'Admin deberá confirmar ajuste cuando Siesa responda.'
+            )
+            try:
+                segundo_conteo = ConteoService._crear_segundo_conteo(
+                    sesion_origen=sesion,
+                    operario_excluido=operario_id,
+                )
+                db.session.commit()
+            except Exception as e_sc:
+                db.session.rollback()
+                logger.error(
+                    f'[CONTEO] Error creando segundo conteo (Siesa no disponible) '
+                    f'para sesión {sesion_id}: {e_sc}'
+                )
+                raise ValueError(f'Error al registrar conteo: {e_sc}')
+            return {
+                'resultado': 'SEGUNDO_CONTEO',
+                'mensaje': 'Conteo registrado — pendiente verificación (Siesa no disponible temporalmente)',
+                'sesion_id': sesion.id,
+                'segundo_conteo_id': segundo_conteo.id,
+            }
 
         # Guardar conteo
         sesion.operario_id = operario_id
