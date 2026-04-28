@@ -34,7 +34,11 @@ def listar_solicitudes():
         )\
         .order_by(SolicitudTraslado.fecha_creacion.desc())
 
-    if usuario and usuario.rol == 'tienda':
+    # Roles con acceso total: gestión de bodega y admin
+    _roles_gestion = ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+    if not usuario or usuario.rol not in _roles_gestion + ('tienda',):
+        return jsonify({'error': 'Sin permiso para ver traslados'}), 403
+    if usuario.rol == 'tienda':
         query = query.filter_by(solicitante_id=usuario_id)
     if estado:
         query = query.filter_by(estado=estado)
@@ -106,6 +110,7 @@ def crear_solicitud():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(str(e))
         return jsonify({'error': str(e)}), 500
 
 
@@ -120,6 +125,9 @@ def enviar_solicitud(id):
     if not usuario:
         return jsonify({'error': 'Usuario no encontrado'}), 401
     s = SolicitudTraslado.query.get_or_404(id)
+    _roles_gestion = ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+    if usuario.rol not in _roles_gestion + ('tienda',):
+        return jsonify({'error': 'Sin permiso para enviar solicitudes de traslado'}), 403
     if usuario.rol == 'tienda' and s.solicitante_id != usuario_id:
         return jsonify({'error': 'Solo puedes enviar tus propias solicitudes'}), 403
     try:
@@ -151,6 +159,7 @@ def aprobar_solicitud(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(str(e))
         return jsonify({'error': str(e)}), 500
 
 
@@ -342,6 +351,7 @@ def despachar(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(str(e))
         return jsonify({'error': str(e)}), 500
 
 
@@ -369,6 +379,7 @@ def confirmar_recepcion(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except Exception as e:
+        logger.exception(str(e))
         return jsonify({'error': str(e)}), 500
 
 
@@ -376,6 +387,14 @@ def confirmar_recepcion(id):
 @jwt_required()
 def listar_lpns_traslado(id):
     """Lista los LPNs (pacas/cajas) vinculados a este traslado."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    _roles_gestion = ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+    if not usuario or usuario.rol not in _roles_gestion + ('tienda', 'operario', 'empacador'):
+        return jsonify({'error': 'Sin permiso'}), 403
     from app.models.lpn import LPN
     lpns = LPN.query.filter_by(traslado_id=id).order_by(LPN.id).all()
     return jsonify({
@@ -623,6 +642,7 @@ def stock_disponible():
         resultado = TrasladoService.get_stock_disponible(bodega)
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(str(e))
         return jsonify({'error': str(e)}), 500
 
 
@@ -631,7 +651,16 @@ def stock_disponible():
 def bodegas_siesa():
     """Lista bodegas configuradas en Siesa (para seleccionar punto de venta)."""
     try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    _roles_permitidos = ('admin', 'supervisor', 'gerente', 'jefe_almacen', 'tienda')
+    if not usuario or usuario.rol not in _roles_permitidos:
+        return jsonify({'error': 'Sin permiso'}), 403
+    try:
         resultado = TrasladoService.get_bodegas_disponibles()
         return jsonify(resultado), 200
     except Exception as e:
+        logger.exception(str(e))
         return jsonify({'error': str(e)}), 500

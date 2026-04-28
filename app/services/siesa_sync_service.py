@@ -33,7 +33,7 @@ def _run_sync(app):
         # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
         from sqlalchemy import text as _text
         lock_adquirido = db.session.execute(
-            _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2007}
+            _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2012}
         ).scalar()
         if not lock_adquirido:
             logger.warning('[SYNC] Otro worker ya ejecuta — omitido')
@@ -161,7 +161,7 @@ def _run_sync(app):
         finally:
             if lock_adquirido:
                 try:
-                    db.session.execute(_text('SELECT pg_advisory_unlock(:key)'), {'key': 2007})
+                    db.session.execute(_text('SELECT pg_advisory_unlock(:key)'), {'key': 2012})
                     db.session.commit()
                 except Exception as _e:
                     logger.error('[SYNC] Error liberando advisory lock: %s', _e)

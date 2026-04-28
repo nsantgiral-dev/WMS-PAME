@@ -245,10 +245,12 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
     tarea.unidades_movidas = unidades
     tarea.fecha_completada = datetime.utcnow()
 
-    db.session.commit()
-
-    # f) Encolar job Siesa en la DLQ — reintentos automáticos, alerta si falla 3 veces
+    # f) Encolar job Siesa ANTES del commit — P8: el SiesaJob debe ser atómico con el
+    # cambio de estado. Si el commit falla o Railway reinicia entre dos commits separados,
+    # el job queda sin crear y Siesa nunca se entera del movimiento RESERVA→PICKING.
     _encolar_siesa_job(tarea, lpn, unidades)
+
+    db.session.commit()
 
     # g) Re-evaluar stock (puede haber otra tarea necesaria)
     try:
@@ -295,5 +297,6 @@ def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
         referencia_tipo='TareaReposicion',
         referencia_id=tarea.id,
     )
-    db.session.commit()
-    logger.info(f'[REPOSICION DLQ] Job {job.id} encolado para {tarea.codigo}')
+    # No hacer commit aquí — el commit lo hace el caller (confirmar_reposicion) de forma atómica
+    # con el cambio de estado de la tarea (P8: SiesaJob atómico con cambio de estado).
+    logger.info(f'[REPOSICION DLQ] Job {job.id} preparado para {tarea.codigo}')

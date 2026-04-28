@@ -164,6 +164,36 @@
       "pattern": "f470_rowid.*0.*142948|f470_rowid.*posicion",
       "reason": "Consultant confirmed: rowid=0 is correct (Siesa auto-assigns). Different from f470_nro_registro.",
       "date": "2026-04-27"
+    },
+    {
+      "pattern": "advisory.*lock.*2005.*alertas|advisory.*lock.*2007.*DLQ|barcode.*sync.*advisory.*colisión|siesa_sync.*advisory.*key.*2007",
+      "reason": "Fixed 2026-04-27: siesa_sync_service uses key 2012 (was 2007, collided with DLQ), siesa_barcode_sync_service uses key 2013 (was 2005, collided with alertas_service).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "traslado_service.*race.*condition|aprobar_solicitud.*get_or_404.*sin.*lock|despachar.*get_or_404.*sin.*lock|confirmar_recepcion.*get_or_404.*sin.*lock",
+      "reason": "Fixed 2026-04-27: aprobar_solicitud, despachar, confirmar_recepcion use filter_by().with_for_update().first() + idempotency guards (siesa_salida_consec, siesa_entrada_consec) to prevent Siesa duplication.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "confirmar_picking.*sin.*row-lock|TareaPicking.*double-decrement|PICK.*idempotency.*uuid.*random",
+      "reason": "Fixed 2026-04-27: confirmar_picking uses with_for_update() row-lock. Idempotency key is deterministic f'PICK-{tarea.id}' (was UUID — random).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "reposicion.*P8.*viola|_encolar_siesa_job.*commit.*separado|confirmar_reposicion.*commit.*antes.*dlq",
+      "reason": "Fixed 2026-04-27: _encolar_siesa_job is called BEFORE db.session.commit() in confirmar_reposicion. _encolar_siesa_job itself no longer calls commit (atomicity with state change).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "IDOR.*traslados|listar_solicitudes.*sin.*rol|listar_lpns_traslado.*sin.*auth|bodegas_siesa.*sin.*rol|enviar_solicitud.*sin.*rol",
+      "reason": "Fixed 2026-04-27: traslados.py listar_solicitudes, enviar_solicitud, listar_lpns_traslado, bodegas_siesa all have role checks + JWT auth.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "P_LOGGER_EXCEPTION.*traslados|traslados.*except.*sin.*stack|traslados.*500.*logger\\.error",
+      "reason": "Fixed 2026-04-27: all except Exception blocks in traslados.py now call logger.exception(str(e)) before returning 500.",
+      "date": "2026-04-27"
     }
   ],
   "accepted_risk": [

@@ -102,7 +102,10 @@ class TrasladoService:
         items_aprobados: [{id, cantidad_aprobada}] — si None, aprueba cantidades solicitadas.
         operario_id: usuario con rol operario que irá a recoger los ítems.
         """
-        s = SolicitudTraslado.query.get_or_404(solicitud_id)
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            from flask import abort
+            abort(404)
         if s.estado not in ('ENVIADA',):
             raise ValueError(f'Solo se puede aprobar una solicitud ENVIADA (estado: {s.estado})')
 
@@ -175,9 +178,19 @@ class TrasladoService:
         Empacador selló las cajas. Dispara 173076 (tránsito) o 173066 (directa).
         La solicitud puede estar EN_PICKING o APROBADA (si picking manual).
         """
-        s = SolicitudTraslado.query.get_or_404(solicitud_id)
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            from flask import abort
+            abort(404)
         if s.estado not in ('PREPARADO', 'EN_PICKING'):
             raise ValueError(f'No se puede despachar en estado {s.estado}')
+        # Guard idempotencia: si Siesa ya procesó este despacho (siesa_salida_consec asignado)
+        # y el estado ya avanzó, evitar llamar Siesa de nuevo (duplicación de documento)
+        if s.siesa_salida_consec and s.estado in ('EN_TRANSITO', 'ENTREGADA'):
+            raise ValueError(
+                f'Despacho ya registrado en Siesa (consec={s.siesa_salida_consec}). '
+                f'Si necesitas reintentar, usa el endpoint de reintento.'
+            )
 
         # Usar cantidad_enviada si fue confirmada por picking; si no, caer a aprobada.
         # Esto permite que el picking parcial (menos ítems de los aprobados) sea correcto.
@@ -272,9 +285,18 @@ class TrasladoService:
         Admin tienda confirma recepción física. Dispara 173079 (entrada tránsito).
         items_recibidos: [{id, cantidad_recibida}] — si None, confirma cantidades despachadas.
         """
-        s = SolicitudTraslado.query.get_or_404(solicitud_id)
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            from flask import abort
+            abort(404)
         if s.estado not in ('EN_TRANSITO', 'DESPACHADA'):
             raise ValueError(f'No se puede confirmar recepción en estado {s.estado}')
+        # Guard idempotencia: 173079 ya se envió exitosamente — no duplicar
+        if s.siesa_entrada_consec and s.estado == 'ENTREGADA':
+            raise ValueError(
+                f'Recepción ya registrada en Siesa (consec={s.siesa_entrada_consec}). '
+                f'El traslado ya fue confirmado.'
+            )
 
         # Actualizar cantidades recibidas.
         # Fallback: cantidad_enviada (lo que salió) > cantidad_aprobada > solicitada.

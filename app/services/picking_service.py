@@ -153,7 +153,10 @@ class PickingService:
         Confirma que el operario recogió la mercancía.
         Descuenta el stock real y libera la reserva.
         """
-        tarea = TareaPicking.query.get(tarea_id)
+        # [A16] Row-lock en TareaPicking — serializa confirmaciones concurrentes del mismo tarea_id.
+        # Sin este lock, dos workers leen estado=EN_PROCESO simultáneamente, ambos pasan el guard
+        # y ambos decrementan el stock → double-decrement silencioso.
+        tarea = TareaPicking.query.filter_by(id=tarea_id).with_for_update().first()
         if not tarea:
             raise ValueError('Tarea no encontrada')
 
@@ -200,7 +203,7 @@ class PickingService:
             motivo=f'Picking {tarea.codigo}',
             numero_documento=tarea.referencia_documento,
             usuario_id=usuario_id,
-            idempotency_key=f'PICK-{tarea.id}-{uuid.uuid4()}'
+            idempotency_key=f'PICK-{tarea.id}'
         )
 
         # Actualizar tarea
