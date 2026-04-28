@@ -166,14 +166,12 @@ class ConteoService:
         sesion.lote_id = lote_id
         sesion.fecha_inicio = sesion.fecha_inicio or datetime.utcnow()
 
-        # Conciliar
-        diferencia = cantidad_fisica - existencia_siesa
+        # Conciliar — lógica centralizada en reconciliar_cantidad
+        resultado_conciliacion = ConteoService.reconciliar_cantidad(sesion, cantidad_fisica)
+        diferencia = resultado_conciliacion['diferencia']
 
-        if diferencia == 0:
+        if resultado_conciliacion['es_match']:
             # MATCH — cierre inmediato, cero trabajo administrativo
-            sesion.estado = EstadoConteo.MATCH
-            sesion.diferencia = 0
-            sesion.fecha_cierre = datetime.utcnow()
             try:
                 db.session.commit()
             except Exception as e_commit:
@@ -195,7 +193,6 @@ class ConteoService:
         else:
             # DESCUADRE — generar segundo conteo por operario diferente
             sesion.estado = EstadoConteo.SEGUNDO_CONTEO
-            sesion.diferencia = diferencia
 
             # Commit único: SEGUNDO_CONTEO + hijo atómicos.
             # Si el proceso muere entre ambas escrituras, el padre queda en SEGUNDO_CONTEO
@@ -411,6 +408,27 @@ class ConteoService:
 
         t = threading.Thread(target=_worker, daemon=True)
         t.start()
+
+    @staticmethod
+    def reconciliar_cantidad(sesion: SesionConteo, nueva_cantidad: int) -> dict:
+        """
+        Calcula diferencia y aplica transición MATCH si cuadra.
+        Llamar desde registrar_conteo y editar_conteo para centralizar
+        la lógica de conciliación (tolerancias, reglas de negocio, etc.).
+
+        Returns:
+            {'es_match': bool, 'diferencia': float}
+            Si es_match=True, el estado ya fue cambiado a MATCH + fecha_cierre.
+            Si es_match=False, el caller decide la transición (DESCUADRE/SEGUNDO_CONTEO).
+        """
+        diferencia = nueva_cantidad - sesion.existencia_siesa
+        sesion.diferencia = diferencia
+        if diferencia == 0:
+            sesion.estado = EstadoConteo.MATCH
+            sesion.diferencia = 0
+            sesion.fecha_cierre = datetime.utcnow()
+            return {'es_match': True, 'diferencia': 0}
+        return {'es_match': False, 'diferencia': diferencia}
 
     @staticmethod
     def _crear_segundo_conteo(sesion_origen: SesionConteo, operario_excluido: int):

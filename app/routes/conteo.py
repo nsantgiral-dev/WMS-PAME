@@ -479,13 +479,11 @@ def editar_conteo(id):
 
         # Re-conciliar si ya tenemos referencia Siesa
         if sesion.existencia_siesa is not None:
-            diferencia = nueva_cantidad - sesion.existencia_siesa
-            sesion.diferencia = diferencia
-            if diferencia == 0:
-                sesion.estado = EstadoConteo.MATCH
-                sesion.fecha_cierre = datetime.utcnow()
+            resultado = ConteoService.reconciliar_cantidad(sesion, nueva_cantidad)
+            if resultado['es_match']:
                 cambios.append('estado → MATCH')
             else:
+                diferencia = resultado['diferencia']
                 # Si estaba en MATCH pero ahora no cuadra, volver a DESCUADRE
                 if sesion.estado == EstadoConteo.MATCH:
                     sesion.estado = EstadoConteo.DESCUADRE
