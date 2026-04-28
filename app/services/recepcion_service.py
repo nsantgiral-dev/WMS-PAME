@@ -319,6 +319,56 @@ class RecepcionService:
             logger.warning(
                 f'[RECEPCION] recepcion={recepcion.id} CONFIRMADA sin SiesaJob — re-encolando ENTRADA_OC'
             )
+
+            # Re-fetch OC data from Siesa to get bodega/uom/fecha_entrega per item.
+            # Siesa validates these fields against the original OC — defaults would be rejected.
+            _oc_items: dict = {}
+            _oc_fallback: dict = {}
+            _re_proveedor = recepcion.proveedor_codigo or ''
+            _re_sucursal = recepcion.sucursal_prov_siesa or ''
+            _re_tercero_comprador = None
+            _re_moneda_docto = None
+            _re_moneda_conv = None
+            _re_moneda_local = None
+            _re_tasa_conv = 0.0
+            _re_tasa_local = 0.0
+            try:
+                _consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
+                _oc_result = connekta.get_ordenes_compra_aprobadas(consec=_consec)
+                _rows_oc = _oc_result.get('detalle', {}).get('Table', [])
+                _header_leido = False
+                for _row in _rows_oc:
+                    if not _header_leido:
+                        _re_proveedor = _re_proveedor or (_row.get('f200_nit_prov', '') or _row.get('f200_id_prov', '')).strip()
+                        _re_sucursal = _re_sucursal or _row.get('f202_id_sucursal_prov', '').strip()
+                        _re_moneda_docto = _row.get('f420_id_moneda_docto') or None
+                        _re_moneda_conv = _row.get('f420_id_moneda_conv') or None
+                        _re_moneda_local = _row.get('f420_id_moneda_local') or None
+                        _re_tasa_conv = float(_row.get('f420_tasa_conv') or 0.0)
+                        _re_tasa_local = float(_row.get('f420_tasa_local') or 0.0)
+                        _re_tercero_comprador = (_row.get('f200_nit_comprador') or _row.get('f200_id_comprador') or '').strip() or None
+                        _header_leido = True
+                    _ref = (_row.get('f120_referencia', '') or '').strip()
+                    _idata = {
+                        'bodega': (_row.get('f150_id', '') or '').strip() or None,
+                        'uom': (_row.get('f421_id_unidad_medida', '') or '').strip() or None,
+                        'fecha_entrega': (_row.get('f421_fecha_entrega', '') or '').strip() or None,
+                        'motivo': (_row.get('f421_id_motivo', '') or '').strip() or None,
+                    }
+                    if not _oc_fallback and _idata['bodega']:
+                        _oc_fallback = _idata
+                    if _ref:
+                        _oc_items[_ref.upper()] = _idata
+                    _id_siesa = str(_row.get('f120_id', '') or '').strip()
+                    if _id_siesa:
+                        _oc_items[_id_siesa] = _idata
+            except Exception as _lookup_err:
+                logger.error(
+                    f'[RECEPCION] Re-enqueue: lookup OC falló para {recepcion.numero_oc_siesa}: {_lookup_err} '
+                    f'— re-enqueueing sin bodega/uom/fecha_entrega (Siesa usará defaults)',
+                    exc_info=True
+                )
+
             _items_rec = []
             for _ir in recepcion.items:
                 if (_ir.cantidad_recibida or 0) <= 0:
@@ -326,6 +376,7 @@ class RecepcionService:
                 _cod = (_ir.producto.codigo_siesa or _ir.producto.codigo) if _ir.producto else None
                 if not _cod:
                     continue
+                _oc_data = _oc_items.get((_cod or '').upper()) or _oc_fallback
                 _items_rec.append({
                     'producto_codigo': _cod,
                     'cantidad_recibida': _ir.cantidad_recibida,
@@ -333,19 +384,29 @@ class RecepcionService:
                     'lote': _ir.lote,
                     'es_parcial': _ir.es_faltante(),
                     'tipo': _ir.tipo or 'NORMAL',
+                    'motivo_siesa': _ir.motivo_siesa or _oc_data.get('motivo'),
+                    'bodega': _oc_data.get('bodega'),
+                    'uom': _oc_data.get('uom'),
+                    'fecha_entrega': _oc_data.get('fecha_entrega'),
                 })
             _job_rec = SiesaJob.encolar(
                 tipo='ENTRADA_OC',
                 payload={
                     'recepcion_id': recepcion.id,
                     'numero_oc_siesa': recepcion.numero_oc_siesa,
-                    'id_co_oc': recepcion.co_oc_siesa or '',
+                    'id_co_oc': recepcion.co_oc_siesa or connekta.centro_op,
                     'tipo_docto_oc': recepcion.tipo_docto_oc_siesa or '',
                     'consec_docto_oc': recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
                     'items': _items_rec,
                     'es_parcial': recepcion.es_parcial,
-                    'proveedor_id': recepcion.proveedor_codigo or '',
-                    'sucursal_prov': recepcion.sucursal_prov_siesa or '',
+                    'proveedor_id': _re_proveedor,
+                    'sucursal_prov': _re_sucursal,
+                    'tercero_comprador': _re_tercero_comprador,
+                    'moneda_docto': _re_moneda_docto,
+                    'moneda_conv': _re_moneda_conv,
+                    'moneda_local': _re_moneda_local,
+                    'tasa_conv': _re_tasa_conv,
+                    'tasa_local': _re_tasa_local,
                     'cond_pago': recepcion.cond_pago_siesa or '',
                     'num_docto_referencia': recepcion.num_remision_prov or None,
                 },
