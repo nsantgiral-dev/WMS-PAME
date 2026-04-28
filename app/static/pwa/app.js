@@ -584,7 +584,13 @@ async function cargarPedidos() {
         let accionBtn = '';
         if (p.siesa_triggered) {
           // Estado final: Siesa tiene la remisión
-          accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa</div>`;
+          const btnRemision = p.packing_id
+            ? `<button onclick="imprimirRemisionAdmin(${p.packing_id})"
+                style="margin-top:6px;width:100%;background:#1a1a1a;color:#fff;border:none;padding:5px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">
+                🖨 Remisión
+               </button>`
+            : '';
+          accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa${btnRemision}</div>`;
         } else if (p.packing_estado === 'EN_PROCESO') {
           // Empacador verificando en mesa
           accionBtn = `<div style="flex-shrink:0;background:#1a0a2e;color:#c084fc;border:1px solid #4c1d95;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
@@ -1974,6 +1980,32 @@ function beepError() { _tono(220, 0.18, 'square', 0.3); setTimeout(() => _tono(1
 function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); setTimeout(() => _tono(784, 0.25), 240); } // fanfarria — tarea completa
 
 // ─────────────────────────────────────────────────────────────
+// ADMIN — Remisión de despacho (pedidos ya confirmados en Siesa)
+// ─────────────────────────────────────────────────────────────
+
+async function imprimirRemisionAdmin(packingId) {
+  try {
+    const res = await fetch(`/api/admin/remision/${packingId}`, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      alerta(d.error || 'No se pudo obtener la remisión', 'error');
+      return;
+    }
+    const html = await res.text();
+    const ventana = window.open('', '_blank');
+    if (!ventana) {
+      alerta('El navegador bloqueó la ventana emergente — permite popups para este sitio', 'advertencia');
+      return;
+    }
+    ventana.document.write(html);
+    ventana.document.close();
+  } catch (e) {
+    alerta('Error de conexión al obtener la remisión', 'error');
+  }
+}
+
 // ADMIN — Despacho desde Siesa
 // ─────────────────────────────────────────────────────────────
 
