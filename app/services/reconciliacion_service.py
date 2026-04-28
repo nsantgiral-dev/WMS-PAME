@@ -6,7 +6,8 @@ from app.extensions import db
 logger = logging.getLogger(__name__)
 
 # Estados del pedido en Siesa que confirman que ya fue facturado/procesado
-_ESTADOS_CUMPLIDO = {'9'}
+# 4 = Cumplido (facturado), 9 = Anulado/ya procesado
+_ESTADOS_CUMPLIDO = {'4', '9'}
 
 
 class ReconciliacionService:
