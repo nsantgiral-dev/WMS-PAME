@@ -325,7 +325,6 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             proveedor_id=payload.get('proveedor_id', ''),
             sucursal_prov=payload.get('sucursal_prov', ''),
             tercero_comprador=payload.get('tercero_comprador'),
-            sucursal_comprador=payload.get('sucursal_comprador'),
             moneda_docto=payload.get('moneda_docto'),
             moneda_conv=payload.get('moneda_conv'),
             moneda_local=payload.get('moneda_local'),

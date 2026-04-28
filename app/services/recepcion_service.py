@@ -373,7 +373,6 @@ class RecepcionService:
         tasa_conv = 0.0
         tasa_local = 0.0
         tercero_comprador = None
-        sucursal_comprador = None
         items_oc = {}
         oc_fallback = {}
         try:
@@ -391,7 +390,6 @@ class RecepcionService:
                     tasa_conv = float(row.get('f420_tasa_conv') or 0.0)
                     tasa_local = float(row.get('f420_tasa_local') or 0.0)
                     tercero_comprador = (row.get('f200_nit_comprador') or row.get('f200_id_comprador') or '').strip() or None
-                    sucursal_comprador = row.get('f202_id_sucursal_comprador', '').strip() or None
                     if proveedor_id:
                         recepcion.proveedor_codigo = proveedor_id
                     if sucursal_prov:
@@ -597,7 +595,6 @@ class RecepcionService:
                 'proveedor_id': proveedor_id,
                 'sucursal_prov': sucursal_prov,
                 'tercero_comprador': tercero_comprador,
-                'sucursal_comprador': sucursal_comprador,
                 'moneda_docto': moneda_docto,
                 'moneda_conv': moneda_conv,
                 'moneda_local': moneda_local,

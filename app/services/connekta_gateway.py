@@ -610,10 +610,10 @@ class ConnektaGateway:
                     'f462_nombre_conductor': None,
                     'f462_identif_conductor': None,
                     'f462_numero_guia': None,
-                    'f462_cajas': None,
-                    'f462_peso': None,
-                    'f462_volumen': None,
-                    'f462_valor_seguros': None,
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
                     'f462_notas': None,
                     'f460_id_cond_pago': None
                 }
@@ -738,7 +738,6 @@ class ConnektaGateway:
                                    proveedor_id: str = None,
                                    sucursal_prov: str = None,
                                    tercero_comprador: str = None,
-                                   sucursal_comprador: str = None,
                                    moneda_docto: str = None,
                                    moneda_conv: str = None,
                                    moneda_local: str = None,
@@ -789,7 +788,6 @@ class ConnektaGateway:
                     'f451_id_cond_pago': cond_pago or self.cond_pago_compras or None,  # [A2] condición pago — obligatorio spec 142948 pos 324
                     'f451_id_sucursal_prov': sucursal_prov_fmt,                      # sucursal proveedor (pos 324-327) — 3 chars, zfill aplicado
                     'f451_id_tercero_comprador': tercero_comprador or self.nit_empresa or None,  # comprador exacto de la OC
-                    'f451_id_sucursal_comprador': sucursal_comprador or None,                    # sucursal del comprador (requerida cuando hay tercero_comprador)
                     'f451_num_docto_referencia': num_docto_referencia,
                     'f451_id_moneda_docto': moneda_docto,
                     'f451_id_moneda_conv': moneda_conv,
@@ -911,10 +909,10 @@ class ConnektaGateway:
                     'f462_nombre_conductor': None,
                     'f462_identif_conductor': None,
                     'f462_numero_guia': None,
-                    'f462_cajas': None,
-                    'f462_peso': None,
-                    'f462_volumen': None,
-                    'f462_valor_seguros': None,
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
                     'f462_notas': None
                 }
             ],
@@ -1000,10 +998,10 @@ class ConnektaGateway:
                     'f462_nombre_conductor': None,
                     'f462_identif_conductor': None,
                     'f462_numero_guia': None,
-                    'f462_cajas': None,
-                    'f462_peso': None,
-                    'f462_volumen': None,
-                    'f462_valor_seguros': None,
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
                     'f462_notas': None
                 }
             ],
