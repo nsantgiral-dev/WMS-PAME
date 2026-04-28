@@ -594,7 +594,7 @@ class ConnektaGateway:
             'Remision': [
                 {
                     'F_CIA': cia,
-                    'F_CONSEC_AUTO_REG': 0,
+                    'F_CONSEC_AUTO_REG': 1,
                     'F350_ID_CO': self.centro_op,
                     'F350_ID_TIPO_DOCTO': self.tipo_docto_remision,
                     'F350_CONSEC_DOCTO': 0,
@@ -856,8 +856,6 @@ class ConnektaGateway:
             ]
         }
 
-        import json as _json
-        logger.warning(f'[CONNEKTA][DEBUG] EntradaOC payload completo: {_json.dumps(payload, default=str)}')
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,

@@ -143,6 +143,9 @@ def iniciar_tarea(id):
     u = Usuario.query.get(usuario_id)
     if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
         return jsonify({'error': 'Sin permiso para iniciar tareas de picking'}), 403
+    tarea_check = TareaPicking.query.get_or_404(id)
+    if u.rol not in Roles.SUPERVISION and tarea_check.operario_id is not None and tarea_check.operario_id != usuario_id:
+        return jsonify({'error': 'Esta tarea no te pertenece'}), 403
     try:
         tarea = PickingService.iniciar_picking(id, usuario_id)
         return jsonify(tarea.to_dict()), 200
@@ -161,6 +164,9 @@ def confirmar_tarea(id):
     u = Usuario.query.get(usuario_id)
     if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
         return jsonify({'error': 'Sin permiso para confirmar picking'}), 403
+    tarea_check = TareaPicking.query.get_or_404(id)
+    if u.rol not in Roles.SUPERVISION and tarea_check.operario_id != usuario_id:
+        return jsonify({'error': 'Esta tarea no te pertenece'}), 403
     data = request.get_json()
     if 'cantidad_recogida' not in data:
         return jsonify({'error': 'cantidad_recogida requerida'}), 400

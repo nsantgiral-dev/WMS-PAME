@@ -46,6 +46,10 @@ def _run_sync(app):
         total_procesados = 0
 
         try:
+            from datetime import datetime as _dt_sync
+            _sync_inicio = _dt_sync.utcnow()
+            _MAX_MINUTOS_PAGINACION = 5
+
             # Cargar tabla de mapeo en memoria para evitar N queries por item
             mapeo_unidades = {
                 m.tipo_inv_siesa: m.unidad_negocio_id
@@ -54,6 +58,10 @@ def _run_sync(app):
             tipos_sin_mapeo = set()  # tipos que Siesa devuelve pero no están en nuestra tabla
 
             for pag in range(1, 501):  # hasta 50 000 items (500 págs × 100) — catálogo 28k+
+                _elapsed = (_dt_sync.utcnow() - _sync_inicio).total_seconds()
+                if _elapsed > _MAX_MINUTOS_PAGINACION * 60:
+                    logger.warning(f'[SYNC] Paginación abortada tras {_elapsed:.0f}s — supera límite de {_MAX_MINUTOS_PAGINACION} min')
+                    break
                 resp = connekta.get_items_catalogo(pag)
                 rows = resp.get('detalle', {}).get('Table', [])
 

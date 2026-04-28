@@ -18,6 +18,8 @@ import logging
 from datetime import datetime
 from app.extensions import db
 from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+from app.models.packing import EstadoPacking
+from app.models.conteo import EstadoConteo
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +297,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 tarea.siesa_triggered = True
                 tarea.siesa_response = _json.dumps(resultado)
                 tarea.siesa_triggered_at = datetime.utcnow()
-                tarea.estado = 'DESPACHADO'
+                tarea.estado = EstadoPacking.DESPACHADO
                 tarea.fecha_despachado = datetime.utcnow()
                 db.session.commit()
             except Exception as _e:
@@ -449,7 +451,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Guard: detectar estado inconsistente (AJUSTADO + siesa_triggered=False).
         # Siesa ya registró el ajuste pero el mini-commit de siesa_triggered falló.
         # Corregir siesa_triggered para que auditorías no muestren "sin Siesa".
-        if sesion_cteo.estado == 'AJUSTADO' and not sesion_cteo.siesa_triggered:
+        if sesion_cteo.estado == EstadoConteo.AJUSTADO and not sesion_cteo.siesa_triggered:
             logger.critical(
                 f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} AJUSTADO '
                 f'pero siesa_triggered=False — inconsistencia detectada. '
@@ -468,14 +470,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         if sesion_cteo.siesa_triggered:
             # Si la sesión quedó atascada en AJUSTANDO (crash entre mini-commit y full-commit),
             # recuperar el estado final sin volver a llamar a Siesa.
-            if sesion_cteo.estado == 'AJUSTANDO':
+            if sesion_cteo.estado == EstadoConteo.AJUSTANDO:
                 logger.warning(
                     f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} atascada en '
                     f'AJUSTANDO con siesa_triggered=True — recuperando estado AJUSTADO'
                 )
                 try:
                     _now_rec = datetime.utcnow()
-                    sesion_cteo.estado = 'AJUSTADO'
+                    sesion_cteo.estado = EstadoConteo.AJUSTADO
                     sesion_cteo.fecha_cierre = sesion_cteo.fecha_cierre or _now_rec
                     if not sesion_cteo.siesa_response:
                         sesion_cteo.siesa_response = json.dumps({'recuperado_dlq': True, 'job_id': job.id})
@@ -547,7 +549,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         try:
             sesion_cteo = _SesionConteo.query.get(sesion_id)
             sesion_cteo.siesa_response = json.dumps(resultado)
-            sesion_cteo.estado = 'AJUSTADO'
+            sesion_cteo.estado = EstadoConteo.AJUSTADO
             sesion_cteo.fecha_cierre = _now
 
             # Desbloquear inventario si vino de excepción de picking

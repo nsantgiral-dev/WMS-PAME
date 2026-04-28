@@ -579,9 +579,14 @@ def _run_reconciliacion(app):
         # Advisory lock — protege contra reconciliaciones paralelas entre workers Gunicorn.
         # Sin esto, dos workers pueden calcular la misma diferencia y enviar ajustes duplicados a Siesa.
         from sqlalchemy import text as _text_rec
-        _lock_rec = db.session.execute(
-            _text_rec('SELECT pg_try_advisory_lock(:key)'), {'key': 1003}
-        ).scalar()
+        try:
+            _lock_rec = db.session.execute(
+                _text_rec('SELECT pg_try_advisory_lock(:key)'), {'key': 1003}
+            ).scalar()
+        except Exception as _lock_err:
+            logger.error(f'[RECONCILIACION] Fallo al adquirir advisory lock: {_lock_err}')
+            _estado_reconciliacion['en_curso'] = False
+            return
         if not _lock_rec:
             logger.warning('[RECONCILIACION] Otro worker ya ejecuta — omitido')
             _estado_reconciliacion['en_curso'] = False
