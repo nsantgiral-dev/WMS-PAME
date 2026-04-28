@@ -249,7 +249,28 @@ class TrasladoService:
             s.siesa_error = None
         except Exception as e:
             s.siesa_error = f'Despacho Siesa: {str(e)}'
-            logger.error(f'[TRASLADO] Error despacho Siesa {s.codigo}: {e}')
+            logger.error(f'[TRASLADO] Error despacho Siesa {s.codigo}: {e}', exc_info=True)
+            # Alerta inmediata — el traslado físico ya salió pero Siesa no tiene documento.
+            # Ops debe reintentar vía WMS admin → Traslados → Reintentar despacho.
+            try:
+                from app.services.alertas_service import _enviar_email_con_dlq
+                _txt = (
+                    f'Traslado {s.codigo} despachado físicamente pero Siesa rechazó el documento.\n\n'
+                    f'Error: {str(e)[:400]}\n\n'
+                    f'ACCIÓN REQUERIDA:\n'
+                    f'WMS Admin → Traslados → {s.codigo} → Reintentar despacho\n'
+                )
+                _html = (
+                    f'<p><b>Traslado {s.codigo}</b> despachado físicamente pero Siesa rechazó el documento.</p>'
+                    f'<p style="color:#ef4444;"><b>Error:</b> {str(e)[:400]}</p>'
+                    f'<p><b>ACCIÓN:</b> WMS Admin → Traslados → {s.codigo} → Reintentar despacho</p>'
+                )
+                _enviar_email_con_dlq(
+                    f'🚨 WMS — Traslado {s.codigo} sin documento Siesa',
+                    _html, _txt, f'traslado_despacho_fail_{s.id}',
+                )
+            except Exception as _ae:
+                logger.warning(f'[TRASLADO] No se pudo enviar alerta email para {s.codigo}: {_ae}')
 
         nuevo_estado = 'EN_TRANSITO' if s.modo_transferencia == 'EN_TRANSITO' else 'ENTREGADA'
         s.estado = nuevo_estado

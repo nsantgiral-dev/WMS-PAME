@@ -91,7 +91,9 @@ def create_app():
         try:
             db.session.execute(db.text('SELECT 1'))
         except Exception as _e:
-            return jsonify({'status': 'unhealthy', 'db': str(_e)[:200]}), 503
+            import logging as _log
+            _log.getLogger(__name__).error('[HEALTH] DB check failed: %s', _e, exc_info=True)
+            return jsonify({'status': 'unhealthy'}), 503
         return jsonify({'status': 'ok'}), 200
 
     @app.route('/static/pwa/<path:filename>')

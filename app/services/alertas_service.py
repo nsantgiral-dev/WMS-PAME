@@ -636,7 +636,7 @@ def enviar_resumen_diario(app=None):
                 if _sin_bultos:
                     anomalias.append(f'⚠ {_sin_bultos} packing(s) DESPACHADO sin bultos')
             except Exception:
-                pass
+                logger.error('[RESUMEN] Sweep INV_PACKING_BULTO falló', exc_info=True)
             try:
                 # Jobs FALLIDO >24h (no solo ayer)
                 _fallidos_viejos = SiesaJob.query.filter(
@@ -646,7 +646,7 @@ def enviar_resumen_diario(app=None):
                 if _fallidos_viejos:
                     anomalias.append(f'⚠ {_fallidos_viejos} job(s) Siesa FALLIDO >24h sin resolver')
             except Exception:
-                pass
+                logger.error('[RESUMEN] Sweep jobs FALLIDO >24h falló', exc_info=True)
             if anomalias:
                 logger.warning(f'[RESUMEN] Anomalías detectadas: {anomalias}')
 
@@ -672,6 +672,22 @@ def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fal
     # N/D en jobs_fallidos = fallo de query DB → también es alerta (no mostrar en gris neutro)
     alerta_jobs = jobs_fallidos == 'N/D' or (jobs_fallidos not in (0,) and jobs_fallidos > 0)
 
+    _anomalias_texto = (
+        '\nANOMALÍAS DETECTADAS:\n' + '\n'.join(f'  {a}' for a in anomalias) + '\n'
+        if anomalias else ''
+    )
+    _filas_anomalias = ''.join(
+        f'<div style="font-size:14px;color:#fecaca;margin:4px 0;">{a}</div>'
+        for a in (anomalias or [])
+    )
+    _bloque_anomalias_html = (
+        f'<div style="background:#7c2d12;border:1px solid #991b1b;border-radius:12px;'
+        f'padding:16px 20px;margin-bottom:16px;">'
+        f'<div style="font-size:12px;font-weight:700;color:#fca5a5;text-transform:uppercase;'
+        f'letter-spacing:0.06em;margin-bottom:8px;">⚠ Anomalías detectadas</div>'
+        f'{_filas_anomalias}</div>'
+        if anomalias else ''
+    )
     cuerpo_texto = f"""WMS Papelería Medellín — Resumen Operativo {fecha}
 
 Pedidos despachados:      {pedidos}
@@ -679,7 +695,7 @@ Bultos empacados:         {bultos}
 Reposiciones completadas: {tareas_rep}
 Transferencias Siesa OK:  {jobs_ok}
 Transferencias fallidas:  {jobs_fallidos}{'  ← REVISAR' if alerta_jobs else ''}
-
+{_anomalias_texto}
 Generado: {hoy}
 """
     def _stat(valor, alerta=False):
@@ -716,6 +732,7 @@ Generado: {hoy}
         {'&nbsp;&nbsp;' + _stat(jobs_fallidos, alerta=True) + ' <span style="font-size:13px;color:#ef4444;">fallidos</span>' if isinstance(jobs_fallidos, int) and jobs_fallidos > 0 else ''}</div>
       </div>
     </div>
+    {_bloque_anomalias_html}
     <div style="text-align:center;font-size:11px;color:#4b5563;padding:8px;">
       WMS Papelería Medellín · Resumen automático generado el {hoy}
     </div>
