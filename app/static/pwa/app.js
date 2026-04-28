@@ -3538,6 +3538,8 @@ async function bultosConfirmar() {
       return;
     }
 
+    const tareaId = EMP_TAREA.id;
+
     document.getElementById('modal-bultos').style.display = 'none';
     _BULTOS_LINEAS = [];
 
@@ -3552,10 +3554,57 @@ async function bultosConfirmar() {
     EMP_ITEMS = [];
     alerta(`${data.bultos.length} pieza(s) registradas — Siesa generó la remisión`, 'exito');
     empCargarTareas();
+    empMostrarBotonRemision(tareaId, data.numero_pedido);
 
   } catch (e) {
     errEl.textContent = 'Error de conexión';
     if (btnConf) { btnConf.disabled = false; btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// REMISIÓN — botón flotante post-cierre e impresión con JWT
+// ─────────────────────────────────────────────────────────────
+
+function empMostrarBotonRemision(packingId, numeroPedido) {
+  const existing = document.getElementById('btn-remision-flotante');
+  if (existing) existing.remove();
+
+  const div = document.createElement('div');
+  div.id = 'btn-remision-flotante';
+  div.style.cssText = 'position:fixed;bottom:90px;left:50%;transform:translateX(-50%);z-index:9999;display:flex;flex-direction:column;align-items:center;gap:8px;';
+  div.innerHTML = `
+    <div style="background:#14532d;border:1px solid #16a34a;color:#bbf7d0;font-size:11px;font-weight:600;padding:6px 14px;border-radius:20px;text-align:center;">
+      Pedido ${numeroPedido || ''} cerrado
+    </div>
+    <button onclick="empImprimirRemision(${packingId})"
+      style="background:#16a34a;color:#fff;border:none;border-radius:12px;padding:14px 28px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.5);">
+      🖨 Imprimir Remisión
+    </button>
+    <button onclick="document.getElementById('btn-remision-flotante').remove()"
+      style="background:transparent;color:#6b7280;border:none;font-size:12px;cursor:pointer;padding:4px;">
+      Cerrar
+    </button>`;
+  document.body.appendChild(div);
+}
+
+async function empImprimirRemision(packingId) {
+  try {
+    const resp = await fetch(`/api/packing/${packingId}/remision`, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      alerta(err.error || 'No se pudo generar la remisión', 'error');
+      return;
+    }
+    const html = await resp.text();
+    const win = window.open('', '_blank');
+    if (!win) { alerta('Permite ventanas emergentes para imprimir la remisión', 'error'); return; }
+    win.document.write(html);
+    win.document.close();
+  } catch (e) {
+    alerta('Error de conexión al generar remisión', 'error');
   }
 }
 
