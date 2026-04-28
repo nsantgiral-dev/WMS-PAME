@@ -3459,6 +3459,8 @@ async function empConfirmarPacking() {
     document.getElementById('modal-bultos-error').textContent = '';
     document.getElementById('modal-bultos-pedido').textContent =
       `${EMP_TAREA.numero_pedido_siesa} · ${EMP_TAREA.cliente || ''} · ${EMP_TAREA.municipio || ''}`;
+    const _btnConf = document.querySelector('#modal-bultos button[onclick="bultosConfirmar()"]');
+    if (_btnConf) { _btnConf.disabled = false; _btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
     document.getElementById('modal-bultos').style.display = 'flex';
 
   } catch (e) {
@@ -3524,12 +3526,17 @@ async function bultosConfirmar() {
   const btnConf = document.querySelector('#modal-bultos button[onclick="bultosConfirmar()"]');
   if (btnConf) { btnConf.disabled = true; btnConf.textContent = 'Cerrando...'; }
 
+  const _abort = new AbortController();
+  const _timeout = setTimeout(() => _abort.abort(), 45000);
+
   try {
     const r = await fetch(`/api/packing/${EMP_TAREA.id}/cerrar`, {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bultos: _BULTOS_LINEAS.map(l => ({ tipo: l.tipo, cantidad: l.cantidad })) })
+      body: JSON.stringify({ bultos: _BULTOS_LINEAS.map(l => ({ tipo: l.tipo, cantidad: l.cantidad })) }),
+      signal: _abort.signal
     });
+    clearTimeout(_timeout);
     const data = await r.json();
 
     if (!r.ok) {
