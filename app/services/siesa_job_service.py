@@ -112,6 +112,31 @@ def _run_dlq_jobs():
             logger.warning(f'[DLQ] Job {j.id} stuck PROCESANDO >10min — reset a PENDIENTE (intento {j.intentos})')
         db.session.commit()
 
+    # Sweep: SesionConteo stuck en AJUSTANDO >15min sin job activo → re-encolar
+    try:
+        from app.models.conteo import SesionConteo as _SC
+        _ajustando_cutoff = ahora - timedelta(minutes=15)
+        _stuck_sesiones = _SC.query.filter(
+            _SC.estado == 'AJUSTANDO',
+            _SC.siesa_triggered == False,
+            _SC.fecha_cierre <= _ajustando_cutoff,
+        ).all()
+        for _ss in _stuck_sesiones:
+            _tiene_job = SiesaJob.query.filter_by(
+                referencia_tipo='SesionConteo', referencia_id=_ss.id,
+            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO'])).first()
+            if not _tiene_job:
+                logger.warning(f'[DLQ] SesionConteo {_ss.id} stuck AJUSTANDO >15min sin job — re-encolando')
+                SiesaJob.encolar(
+                    tipo='AJUSTE_CONTEO',
+                    payload={'sesion_id': _ss.id},
+                    referencia_tipo='SesionConteo',
+                    referencia_id=_ss.id,
+                )
+                db.session.commit()
+    except Exception as _e_sweep:
+        logger.warning(f'[DLQ] Sweep AJUSTANDO falló: {_e_sweep}')
+
     q = SiesaJob.query.filter(
         SiesaJob.estado == 'PENDIENTE',
         db.or_(

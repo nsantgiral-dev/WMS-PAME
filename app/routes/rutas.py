@@ -59,8 +59,29 @@ def _procesar_confirmacion_parada(ruta_id, tarea_id, usuario_id, data):
         raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
 
     foto = data.get('foto_entrega', '') or None
-    if foto and len(foto) > 1_150_000:
-        raise ValueError('Foto demasiado grande. Máximo ~800KB JPEG.')
+    if foto and len(foto) > 2_000_000:
+        raise ValueError('Foto demasiado grande. Máximo ~1.5MB.')
+    # Comprimir foto server-side para reducir impacto en PostgreSQL
+    # ~800KB base64 → ~150KB tras recomprimir a JPEG quality=40 (suficiente para evidencia)
+    if foto:
+        try:
+            import base64
+            from io import BytesIO
+            from PIL import Image
+            # Decodificar base64 (puede tener prefijo data:image/...)
+            _foto_raw = foto.split(',', 1)[-1] if ',' in foto else foto
+            _img_bytes = base64.b64decode(_foto_raw)
+            _img = Image.open(BytesIO(_img_bytes))
+            # Redimensionar si es muy grande (max 1200px lado mayor)
+            _max_dim = 1200
+            if max(_img.size) > _max_dim:
+                _img.thumbnail((_max_dim, _max_dim), Image.LANCZOS)
+            # Recomprimir como JPEG quality=40
+            _buf = BytesIO()
+            _img.convert('RGB').save(_buf, format='JPEG', quality=40, optimize=True)
+            foto = base64.b64encode(_buf.getvalue()).decode('ascii')
+        except Exception:
+            pass  # si falla la compresión, guardar original
 
     ids_tarea = {b.id for b in bultos_tarea}
     bultos_rechazados_ids = data.get('bultos_rechazados', [])

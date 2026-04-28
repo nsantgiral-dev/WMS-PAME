@@ -623,9 +623,36 @@ def enviar_resumen_diario(app=None):
                 logger.error(f'[RESUMEN] No se pudo calcular jobs Siesa: {_e}', exc_info=True)
                 jobs_ok = jobs_fallidos = 'N/D'
 
+            # Sweep de invariantes: detectar violaciones que solo app code previene
+            anomalias = []
+            try:
+                from app.models.packing import TareaPacking
+                from app.models.bulto import Bulto
+                # INV_PACKING_BULTO: DESPACHADO sin bultos
+                _sin_bultos = (db.session.query(TareaPacking.id)
+                    .outerjoin(Bulto, Bulto.tarea_id == TareaPacking.id)
+                    .filter(TareaPacking.estado == 'DESPACHADO', Bulto.id.is_(None))
+                    .count())
+                if _sin_bultos:
+                    anomalias.append(f'⚠ {_sin_bultos} packing(s) DESPACHADO sin bultos')
+            except Exception:
+                pass
+            try:
+                # Jobs FALLIDO >24h (no solo ayer)
+                _fallidos_viejos = SiesaJob.query.filter(
+                    SiesaJob.estado == 'FALLIDO',
+                    SiesaJob.fecha_creacion < ayer_inicio,
+                ).count()
+                if _fallidos_viejos:
+                    anomalias.append(f'⚠ {_fallidos_viejos} job(s) Siesa FALLIDO >24h sin resolver')
+            except Exception:
+                pass
+            if anomalias:
+                logger.warning(f'[RESUMEN] Anomalías detectadas: {anomalias}')
+
             ayer_str = (date.today() - timedelta(days=1)).strftime('%d/%m/%Y')
             _enviar_resumen_diario(ayer_str, pedidos_despachados, bultos_empacados,
-                                   tareas_ok, jobs_ok, jobs_fallidos)
+                                   tareas_ok, jobs_ok, jobs_fallidos, anomalias=anomalias)
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en enviar_resumen_diario: {e}', exc_info=True)
@@ -638,7 +665,7 @@ def enviar_resumen_diario(app=None):
                 logger.error(f'[ALERTAS] Error liberando advisory lock 2011: {_fe}')
 
 
-def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fallidos):
+def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fallidos, anomalias=None):
     hoy = datetime.now().strftime('%d/%m/%Y %H:%M')
     asunto = f'📊 WMS Papelería Medellín — Resumen operativo {fecha}'
 
