@@ -768,6 +768,11 @@ class ConnektaGateway:
                 f'[CONNEKTA] EntradaOC — proveedor_id={proveedor_id!r} sucursal_prov={sucursal_prov!r}: '
                 'campos obligatorios vacíos, Siesa rechazará el documento (pos 43-58 y 324-327)'
             )
+        if not (cond_pago or self.cond_pago_compras):
+            logger.warning(
+                '[CONNEKTA] EntradaOC — f451_id_cond_pago vacío: campo obligatorio pos 324. '
+                'Configura SIESA_COND_PAGO_COMPRAS en Railway o pasa cond_pago en la recepción.'
+            )
 
         payload = {
             'Inicial': [
@@ -1175,6 +1180,13 @@ class ConnektaGateway:
         Usa f440_* para documentos y f441_* para movimientos (schema propio, distinto
         al f350_*/f470_* de los demás conectores de inventario).
         """
+        if not self.tipo_docto_req_traslado:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_TRASLADO no está configurado. '
+                'Agrega la variable en Railway con el código de tipo de documento '
+                'de requisición para transferir en Siesa '
+                '(Inventarios → Tipos de documento → clase 75).'
+            )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
