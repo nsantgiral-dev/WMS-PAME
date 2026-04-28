@@ -556,7 +556,7 @@ def enviar_resumen_diario(app=None):
 
     with ctx_app.app_context():
         from app.extensions import db as _db
-        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2006)')).scalar()
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2011)')).scalar()
         if not _lock:
             logger.info('[ALERTAS] enviar_resumen_diario omitido — otro worker ya lo ejecuta')
             return
@@ -630,10 +630,10 @@ def enviar_resumen_diario(app=None):
         finally:
             try:
                 _db.session.rollback()
-                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2006)'))
+                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2011)'))
                 _db.session.commit()
             except Exception as _fe:
-                logger.error(f'[ALERTAS] Error liberando advisory lock 2006: {_fe}')
+                logger.error(f'[ALERTAS] Error liberando advisory lock 2011: {_fe}')
 
 
 def _enviar_resumen_diario(fecha, pedidos, bultos, tareas_rep, jobs_ok, jobs_fallidos):

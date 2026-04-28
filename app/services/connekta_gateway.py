@@ -1208,7 +1208,7 @@ class ConnektaGateway:
                     'f441_id_ext2_detalle': None,
                     'f441_id_bodega': bodega_origen,
                     'f441_id_motivo': self.motivo_traslado,
-                    'f441_id_unidad_medida': item.get('unidad_medida') or None,
+                    'f441_id_unidad_medida': item.get('unidad_medida') or self.uom_default,  # obligatorio en 174646 — fallback a SIESA_UOM_DEFAULT
                     'f441_cant_base': round(float(abs(item.get('cantidad', 0))), 4),  # número con precisión decimal — Connekta serializa a 20 chars fixed-width
                     'f441_cant_2': 0,
                     'f441_fecha_entrega': fecha_hoy,
@@ -1242,6 +1242,11 @@ class ConnektaGateway:
         El inventario NO está en la tienda hasta que se confirme la entrada (173079).
         NO lleva f350_id_co_base/f350_id_tipo_docto_base — esas son solo de 173079.
         """
+        if not self.tipo_docto_transito_salida:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_TRANSITO_SALIDA no configurado — crear tipo doc '
+                'amarrado a Clase 65 en Siesa (Inventarios → Tipos de documento)'
+            )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
@@ -1317,6 +1322,16 @@ class ConnektaGateway:
         el documento 173076 de salida — obligatorio para cerrar el tránsito en Siesa.
         f470_id_bodega debe ser bodega_transito (== f450_id_bodega_salida de este doc).
         """
+        if not self.tipo_docto_transito_entrada:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_TRANSITO_ENTRADA no configurado — crear tipo doc '
+                'amarrado a Clase 66 en Siesa (Inventarios → Tipos de documento)'
+            )
+        if not consec_salida:
+            raise ValueError(
+                'consec_salida obligatorio para 173079 — no se puede recibir tránsito '
+                'sin el consecutivo del documento de salida (173076)'
+            )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
