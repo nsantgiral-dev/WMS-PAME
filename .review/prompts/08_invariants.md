@@ -11,6 +11,57 @@ Este es un WMS para una papelería mediana en Colombia. Los invariantes no son o
 - El equipo de desarrollo es pequeño — los fallos silenciosos pueden pasar semanas sin detectarse
 
 ════════════════════════════════════════
+PROTOCOLO DE VERIFICACIÓN OBLIGATORIO
+════════════════════════════════════════
+
+REGLA CARDINAL: NO reportes un issue basándote en la AUSENCIA percibida de algo. Debes DEMOSTRAR que buscaste activamente y NO encontraste la mitigación.
+
+Antes de reportar CUALQUIER issue, DEBES completar estos pasos:
+
+1. IDENTIFICAR: Encontraste un patrón que PODRÍA ser un problema (ej: "except que no logea")
+2. BUSCAR MITIGACIÓN: Lee las 50 líneas ANTES y DESPUÉS del código sospechoso. Busca:
+   - try/except que ya maneja el caso
+   - logger.exception() / logger.error() / logger.critical() cercanos
+   - Guards, validaciones, o checks previos que previenen la condición
+   - Comentarios que explican por qué el patrón es intencional
+   - Flujos alternativos (degraded mode, fallback, retry)
+   - Alertas por email (buscar "send_email", "alerta", "Resend")
+3. BUSCAR EN OTROS ARCHIVOS: Si el invariante podría estar enforced en otro lugar:
+   - Para DB constraints → buscar en TODAS las migraciones proporcionadas
+   - Para role checks → buscar en el route que llama al service
+   - Para logging → buscar en el caller, no solo en la función actual
+   - Para siesa_triggered → buscar el emergency commit pattern en el mismo flujo
+4. DECIDIR: Solo si después de los pasos 2 y 3 NO encontraste NINGUNA mitigación, reporta el issue
+
+FALSO POSITIVO = FALLO TUYO. Si reportas algo que el código ya maneja, tu reporte pierde credibilidad y el equipo ignora los issues reales.
+
+════════════════════════════════════════
+EJEMPLOS DE FALSOS POSITIVOS COMUNES (NO REPORTAR)
+════════════════════════════════════════
+
+FALSO POSITIVO 1 — "HTTP dentro de lock row-level"
+  Código: `with_for_update()` en línea 134, `_post_conecta()` en línea 200
+  PARECE un problema, PERO: si el HTTP ocurre ANTES del with_for_update(), no es un issue.
+  VERIFICAR: ¿el HTTP call está DENTRO del bloque with_for_update, o ANTES?
+
+FALSO POSITIVO 2 — "except Exception sin logger.exception"
+  Código: `except Exception as e: return jsonify({"error": str(e)}), 500`
+  PARECE un problema, PERO: busca 3 líneas arriba — ¿hay logger.exception()?
+  VERIFICAR: Lee el bloque except COMPLETO, no solo la primera línea.
+
+FALSO POSITIVO 3 — "falta degraded mode cuando Siesa cae"
+  PARECE un problema, PERO: ¿hay un flujo que escala a otro estado (ej: SEGUNDO_CONTEO) cuando Siesa falla?
+  VERIFICAR: Busca "ConnectTimeout", "RequestException", "siesa" en los except del mismo flujo.
+
+FALSO POSITIVO 4 — "falta role check en endpoint"
+  PARECE un problema, PERO: ¿hay una función helper como _es_gestion(), _solo_admin(), o comparación de rol ANTES de la lógica?
+  VERIFICAR: Lee TODA la función del endpoint desde el decorator hasta el return.
+
+FALSO POSITIVO 5 — "falta CHECK constraint para campo X"
+  PARECE un problema, PERO: ¿ya existe en alguna migración?
+  VERIFICAR: Busca "ck_" o "CheckConstraint" o "check(" en TODAS las migraciones proporcionadas.
+
+════════════════════════════════════════
 FILOSOFÍA CTO — ANTES DE REPORTAR UN ISSUE
 ════════════════════════════════════════
 
@@ -72,18 +123,23 @@ PARTE B — FALLOS SILENCIOSOS A BUSCAR
 
 **SF_EXCEPT_PASS**
 Buscar: `except Exception: pass`, `except Exception: return None`, `except: pass` sin ningún log. Cualquier excepción capturada sin log es un fallo completamente invisible. Reportar todos los que encuentres en flujos de negocio (no en utilidades menores).
+⚠️ VERIFICACIÓN: Lee el bloque except COMPLETO. Si tiene logger.exception(), logger.error(), logger.critical(), send_email, o cualquier forma de alerta → NO es silencioso.
 
 **SF_JOB_SILENCIOSO**
-Jobs APScheduler donde el except externo solo hace logger.error() pero: (a) no re-alerta al equipo, y (b) el job continúa ejecutándose en el próximo ciclo sin indicar que hubo un fallo. Un job que falla silenciosamente cada 5 minutos puede pasar semanas sin detectarse.
+Jobs APScheduler donde el except externo solo hace logger.error() pero: (a) no re-alerta al equipo, y (b) el job continúa ejecutándose en el próximo ciclo sin indicar que hubo un fallo.
+⚠️ VERIFICACIÓN: Busca si el except tiene logger.critical(), send_email, o si hay un mecanismo de alerta que recopila estos errores. Un logger.error() + alerta email en el scheduler IS suficiente.
 
 **SF_SIESA_200_SIN_VERIFICAR**
-Siesa puede devolver HTTP 200 con {"exito": false} o {"Resultado": []} vacío cuando falla internamente. Buscar: llamadas a _post_conecta() donde solo se verifica el código HTTP pero no el contenido de la respuesta. Específicamente: ¿se verifica que "Resultado" no esté vacío o que no haya campo "error" en la respuesta?
+Siesa puede devolver HTTP 200 con {"exito": false}. Buscar: llamadas a _post_conecta() o _get() donde solo se verifica el código HTTP.
+⚠️ VERIFICACIÓN: Lee la función _get() y _post_conecta() COMPLETA. Si internamente ya valida el campo "codigo" o "exito" de la respuesta → NO es un issue. No asumas que la validación falta sin leer el código de la función.
 
 **SF_HTTP_200_FALLO_INTERNO**
-Endpoints que retornan HTTP 200 al cliente pero internamente fallaron. Buscar: flujos donde siesa_triggered=False o el SiesaJob no se creó, pero el endpoint retorna {"success": True} o {"mensaje": "completado"} al cliente. El cliente cree que todo salió bien, pero Siesa nunca fue notificado.
+Endpoints que retornan HTTP 200 al cliente pero internamente fallaron.
+⚠️ VERIFICACIÓN: Verifica que el endpoint NO tiene try/except que captura el fallo de Siesa y lo reporta en la respuesta. Busca campos como "siesa_triggered", "estado", "warning" en la respuesta JSON.
 
 **SF_ESTADO_COMPLETADO_SIN_SIESA**
-Flujos donde el estado en WMS dice COMPLETADO/DESPACHADO/CONFIRMADO pero Siesa nunca fue notificado y no hay ningún indicador visible para el operario o el sistema. Diferente a SF_HTTP_200_FALLO_INTERNO: este es el estado persistido en DB, no la respuesta HTTP.
+Flujos donde el estado en WMS dice COMPLETADO pero Siesa nunca fue notificado.
+⚠️ VERIFICACIÓN: Verifica que NO existe un patrón de DLQ (SiesaJob.encolar) en el mismo flujo. El estado puede ser COMPLETADO en WMS mientras el SiesaJob se procesa asincrónicamente — esto es BY DESIGN, no un fallo.
 
 ════════════════════════════════════════
 CONSTRAINTS Y GUARDS YA EXISTENTES
@@ -96,6 +152,10 @@ CONSTRAINTS Y GUARDS YA EXISTENTES
 - pg_advisory_lock — todos los sync services y schedulers
 - SiesaJob.max_intentos=5 — DLQ no reintenta infinitamente
 - pedido_anulado_siesa — detección de pedidos eliminados de Siesa (retorna -1)
+- _get() valida campo "codigo" de respuesta Siesa (!=0 → raises) — lines 198-205
+- Degraded mode en conteo: escala a SEGUNDO_CONTEO cuando Siesa está caído
+- Todos los ABC endpoints usan logger.exception() para stack traces
+- Scheduler alert email recopila errores parciales y los envía al equipo
 
 ════════════════════════════════════════
 ANTI-REPETICIÓN
@@ -113,6 +173,7 @@ INSTRUCCIONES DE RESPUESTA
 - El campo "detectable_en" es OBLIGATORIO: "logs" / "alertas" / "dashboard" / "nunca"
 - El campo "tipo" es OBLIGATORIO: "invariant_violation" / "silent_failure"
 - El campo "enforcement_actual" es OBLIGATORIO para invariantes: "solo_app_code" / "solo_db" / "ambos" / "ninguno"
+- El campo "verification_done" es OBLIGATORIO: describe QUÉ buscaste para confirmar que la mitigación NO existe (ej: "Busqué logger.exception en el except de líneas 270-295 — no encontrado", "Revisé migraciones b1c2d3e4f5g6 y a1b2c3d4e5f6 — no hay CHECK para este campo")
 - Máximo 16 issues (8 por parte)
 
 FORMATO JSON REQUERIDO:
@@ -130,7 +191,8 @@ FORMATO JSON REQUERIDO:
       "tipo": "invariant_violation",
       "detectable_en": "nunca",
       "enforcement_actual": "solo_app_code",
-      "probability_this_month": "media"
+      "probability_this_month": "media",
+      "verification_done": "Busqué CHECK constraint en migraciones X, Y, Z — no encontrado. Busqué guard en función abc() líneas 50-80 — no hay validación de cantidad >= 0 antes del commit"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántos invariantes están solo en app code, cuántos fallos son completamente silenciosos, y cuál es el riesgo fiscal/operacional neto",

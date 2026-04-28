@@ -54,6 +54,23 @@ FOCO ESPECIAL — LO QUE SÍ IMPORTA EN ESTE SISTEMA:
   - ¿Las credenciales de Connekta/Siesa están en código o en variables de entorno?
 
 ════════════════════════════════════════
+PROTOCOLO DE VERIFICACIÓN OBLIGATORIO
+════════════════════════════════════════
+
+ANTES DE REPORTAR "falta verificación de rol":
+1. Lee TODA la función del endpoint desde @jwt_required() hasta el return final
+2. Busca: _es_gestion(), _solo_admin(), _es_operario(), comparaciones de .rol, abort(403)
+3. Las funciones helper pueden estar definidas al inicio del archivo — búscalas
+
+ANTES DE REPORTAR "endpoint sin @jwt_required":
+1. Verifica que el endpoint ejecuta operaciones de escritura (POST, PUT, DELETE)
+2. Si es un endpoint GET de información pública (health check, status) → NO es un issue
+
+ANTES DE REPORTAR "IDOR — usuario accede datos de otro":
+1. Lee el flujo completo — ¿hay filtro por usuario/rol en la query?
+2. ¿El endpoint está restringido por rol (solo GESTION) y no es accesible por usuarios finales?
+
+════════════════════════════════════════
 ANTI-REPETICIÓN
 ════════════════════════════════════════
 
@@ -65,6 +82,7 @@ INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - Si no encuentras vulnerabilidades reales, devuelve "issues": []
 - El campo "vector_explotacion" es OBLIGATORIO: describe CÓMO exactamente un atacante real lo explotaría
+- El campo "verification_done" es OBLIGATORIO: describe qué verificaste para confirmar que la vulnerabilidad es real (ej: "Leí función completa listar_rutas() líneas 50-85 — NO hay filtro por conductor.id ni verificación de rol. Cualquier usuario autenticado puede ver todas las rutas.")
 - Máximo 8 issues. Si encuentras más, prioriza por impacto real.
 
 FORMATO JSON REQUERIDO:
@@ -80,7 +98,8 @@ FORMATO JSON REQUERIDO:
       "recommendation": "Corrección concreta y específica",
       "code_snippet": "fragmento problemático (máx 3 líneas)",
       "vector_explotacion": "Cómo exactamente lo exploitaría un atacante con acceso al sistema",
-      "probability_this_month": "media"
+      "probability_this_month": "media",
+      "verification_done": "Leí función completa X() líneas Y-Z — NO hay verificación de rol ni abort(403)"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: postura de seguridad real del sistema y riesgo neto",

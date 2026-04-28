@@ -50,6 +50,20 @@ FOCO ESPECIAL — LO QUE SÍ IMPORTA:
   - N+1 en el loop de serialización de tareas de packing/picking (sí tienen volumen)
 
 ════════════════════════════════════════
+PROTOCOLO DE VERIFICACIÓN OBLIGATORIO
+════════════════════════════════════════
+
+ANTES DE REPORTAR N+1 o falta de eager loading:
+1. Lee la query COMPLETA incluyendo .options() — puede estar varias líneas arriba
+2. Verifica que to_dict() REALMENTE accede relaciones (no solo columnas propias del modelo)
+3. Busca selectinload/joinedload en la query antes de reportar su ausencia
+4. Si la query ya tiene .options() con la relación que reportas → NO es un issue
+
+ANTES DE REPORTAR "query sin paginación":
+1. Verifica que la tabla tiene >1K registros en producción real
+2. Verifica que NO hay .limit() o .paginate() en la query
+
+════════════════════════════════════════
 ANTI-REPETICIÓN
 ════════════════════════════════════════
 
@@ -61,6 +75,7 @@ INSTRUCCIONES DE RESPUESTA:
 - Responde SOLO con JSON válido, sin texto adicional, sin backticks, sin markdown
 - Si no encuentras problemas de performance reales, devuelve "issues": []
 - El campo "impacto_volumen_real" es OBLIGATORIO: estima el impacto con los volúmenes reales del sistema
+- El campo "verification_done" es OBLIGATORIO: describe qué verificaste para confirmar que el issue es real (ej: "Leí query completa líneas 50-65 — NO tiene .options() y to_dict() accede relación .conductor en línea 70")
 - Máximo 8 issues. Si encuentras más, prioriza por impacto real en workers/usuarios.
 
 FORMATO JSON REQUERIDO:
@@ -76,7 +91,8 @@ FORMATO JSON REQUERIDO:
       "recommendation": "Optimización concreta con código si aplica",
       "code_snippet": "fragmento problemático (máx 3 líneas)",
       "impacto_volumen_real": "Con 200 pedidos/2000 productos: tiempo estimado, frecuencia, impacto en workers",
-      "probability_this_month": "media"
+      "probability_this_month": "media",
+      "verification_done": "Leí query completa líneas X-Y — NO tiene .options(). to_dict() accede relación Z en línea W"
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuáles son los cuellos de botella REALES y si el sistema puede escalar a 2x carga actual",

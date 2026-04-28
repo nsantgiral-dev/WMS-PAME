@@ -110,6 +110,23 @@ FIXES YA APLICADOS (no re-reportar):
 - Advisory locks: todos los sync services tienen pg_advisory_lock ✓
 
 ════════════════════════════════════════
+PROTOCOLO DE VERIFICACIÓN OBLIGATORIO
+════════════════════════════════════════
+
+REGLA CARDINAL: Antes de reportar una violación de principio, DEBES verificar que la mitigación NO existe. No basta con identificar un patrón que PODRÍA ser un problema.
+
+ANTES DE REPORTAR:
+1. Lee el flujo COMPLETO (no solo la línea sospechosa — lee 50 líneas antes y después)
+2. Busca guards existentes: siesa_triggered check, emergency commit, validación previa
+3. Verifica en siesa_job_service.py si el handler para ese tipo de job ya tiene el guard
+4. Si reportas un campo que "podría ser None" → verifica si hay validación upstream que lo previene
+
+FALSOS POSITIVOS COMUNES:
+- "siesa_triggered puede quedar inconsistente" → VERIFICAR: ¿existe emergency commit en el handler?
+- "campo puede ser None en payload" → VERIFICAR: ¿hay validación previa o el campo viene de DB NOT NULL?
+- "falta idempotencia en retry" → VERIFICAR: ¿el handler tiene pre-check de siesa_triggered?
+
+════════════════════════════════════════
 ANTI-REPETICIÓN
 ════════════════════════════════════════
 
@@ -122,6 +139,7 @@ INSTRUCCIONES DE RESPUESTA:
 - Este agente es el más crítico para el negocio — sé minucioso pero también preciso
 - El campo "business_impact" es OBLIGATORIO con descripción exacta del daño al negocio
 - El campo "principio_violado" es OBLIGATORIO (P1-P8)
+- El campo "verification_done" es OBLIGATORIO: describe qué buscaste para confirmar que la mitigación NO existe (ej: "Busqué siesa_triggered check en handler ENTRADA_OC líneas 300-350 — no encontrado")
 - Máximo 10 issues. Si encuentras más, prioriza los que causan desincronización de inventario.
 
 FORMATO JSON REQUERIDO:
@@ -138,7 +156,8 @@ FORMATO JSON REQUERIDO:
       "code_snippet": "fragmento problemático (máx 3 líneas)",
       "principio_violado": "P3 — No se crea SiesaJob cuando Connekta falla",
       "business_impact": "Impacto exacto: qué documento se pierde/duplica, qué discrepancia se genera",
-      "probability_this_month": "media"
+      "probability_this_month": "media",
+      "verification_done": "Busqué siesa_triggered check en handler líneas X-Y — no encontrado. Busqué emergency commit — no existe."
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántas violaciones críticas reales existen y cuál es el riesgo de desincronización",

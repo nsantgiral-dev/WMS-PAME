@@ -12,6 +12,52 @@ CONTEXTO DEL SISTEMA (LECTURA OBLIGATORIA)
 - Operarios: Colombia, conexión móvil, pueden perder conexión y reintentar
 
 ════════════════════════════════════════
+PROTOCOLO DE VERIFICACIÓN OBLIGATORIO
+════════════════════════════════════════
+
+REGLA CARDINAL: Antes de reportar un failure mode, debes DEMOSTRAR que el sistema NO tiene un mecanismo de recovery para ese escenario. Encontrar un escenario de fallo NO es suficiente — debes probar que no está mitigado.
+
+Para cada failure mode que identifiques:
+
+1. DESCRIBIR EL ESCENARIO: ¿Qué falla exactamente? ¿En qué línea del código?
+2. BUSCAR MITIGACIÓN EXISTENTE — lee el código circundante y busca:
+   - try/except que captura y maneja el error
+   - Emergency commit patterns (rollback + re-commit de flags críticos)
+   - DLQ/SiesaJob que encola para retry asíncrono
+   - Degraded mode (escalamiento a otro estado, flujo alternativo)
+   - Row-level locks (with_for_update) que previenen race conditions
+   - Advisory locks (pg_try_advisory_lock) que previenen ejecución doble
+   - Guards de estado (verificar estado actual antes de actuar)
+   - Alertas (send_email, logger.critical) que notifican al equipo
+3. SI ENCONTRASTE MITIGACIÓN: No reportes el failure mode. Si la mitigación es parcial, reporta SOLO el gap residual con evidencia.
+4. SI NO ENCONTRASTE MITIGACIÓN: Reporta con evidencia de dónde buscaste.
+
+FALSO POSITIVO = FALLO TUYO. El equipo pierde confianza si reportas failure modes que el código ya maneja.
+
+════════════════════════════════════════
+EJEMPLOS DE FALSOS POSITIVOS COMUNES (NO REPORTAR)
+════════════════════════════════════════
+
+FALSO POSITIVO 1 — "Siesa caído bloquea conteo/picking/packing"
+  PARECE un problema, PERO: ¿existe un degraded mode que permite continuar sin Siesa?
+  VERIFICAR: Busca "ConnectTimeout", "RequestException" en los except. ¿Escala a otro estado? ¿Encola para DLQ? Si sí → el sistema NO se bloquea.
+
+FALSO POSITIVO 2 — "Row lock retenido durante HTTP call a Siesa"
+  PARECE un problema (lock held during I/O = classic anti-pattern), PERO: ¿el HTTP call ocurre ANTES del with_for_update()? Si el código hace: (1) HTTP call, (2) procesa respuesta, (3) with_for_update() para actualizar stock → NO hay lock durante I/O.
+  VERIFICAR: Lee el orden de operaciones. Busca comentarios que explican este diseño.
+
+FALSO POSITIVO 3 — "Advisory lock no previene ejecución doble en APScheduler"
+  PARECE un problema, PERO: pg_try_advisory_lock al inicio del job ES la prevención. Si worker 1 adquiere el lock, worker 2 hace pg_try_advisory_lock → retorna False → skip.
+  VERIFICAR: ¿El job tiene pg_try_advisory_lock ANTES de la lógica de negocio?
+
+FALSO POSITIVO 4 — "Job falla silenciosamente sin alerta"
+  PARECE un problema, PERO: ¿el scheduler tiene un mecanismo de alerta que recopila errores de todos los jobs y envía email?
+  VERIFICAR: Busca el flujo completo del scheduler — ¿hay un try/except externo con send_email o logger.critical?
+
+FALSO POSITIVO 5 — "Triple failure: Railway reinicia + Siesa caído + email falla"
+  ESTO NO ES UN ISSUE. Triple-failure chain tiene probabilidad <0.01%. No reportar escenarios que requieren 3+ fallos simultáneos.
+
+════════════════════════════════════════
 FILOSOFÍA CTO — ANTES DE REPORTAR UN FAILURE MODE
 ════════════════════════════════════════
 
@@ -48,22 +94,26 @@ LOS 7 FAILURE MODES A ANALIZAR
 Railway puede reiniciar el proceso en cualquier momento (nuevo deploy, crash, memory limit). Analiza: ¿qué operaciones tienen múltiples commits separados donde el estado intermedio es inválido si el segundo commit no ocurre? Buscar: flujos con dos o más db.session.commit() en secuencia sin que el primero sea dentro de un try que hace rollback si el segundo falla. Estado concreto resultante: ¿qué tabla queda en qué estado inconsistente?
 
 **FM_SIESA_UNREACHABLE**
-Siesa cae y no responde por 2 horas. Analiza: ¿qué se acumula en el DLQ (tabla siesa_jobs)? ¿Tiene el DLQ algún límite de tamaño o backpressure? ¿Los operarios pueden seguir trabajando (escaneando, empacando) mientras Siesa está caído, o el sistema bloquea esperando respuesta? ¿El retry automático cada 5 minutos puede causar thundering herd cuando Siesa vuelve?
+Siesa cae y no responde por 2 horas. Analiza: ¿qué se acumula en el DLQ (tabla siesa_jobs)? ¿Tiene el DLQ algún límite de tamaño o backpressure? ¿Los operarios pueden seguir trabajando (escaneando, empacando) mientras Siesa está caído, o el sistema bloquea esperando respuesta?
+⚠️ VERIFICAR: Antes de reportar "bloqueo cuando Siesa cae", busca si el flujo: (a) encola en DLQ y retorna inmediatamente, (b) tiene degraded mode, (c) usa try/except alrededor del HTTP call con fallback.
 
 **FM_SCHEDULER_PEAK**
-APScheduler corre in-process con los workers Gunicorn. Analiza: ¿los jobs APScheduler compiten por los mismos threads/connections que las requests de usuario? ¿Un job pesado (carga de inventario desde Siesa, sincronización masiva) puede degradar o bloquear los endpoints de usuario durante el despacho de las 8AM? ¿Hay algún throttling o priorización?
+APScheduler corre in-process con los workers Gunicorn. Analiza: ¿los jobs APScheduler compiten por los mismos threads/connections que las requests de usuario? ¿Un job pesado puede degradar endpoints de usuario?
 
 **FM_POOL_EXHAUSTED**
-PostgreSQL connection pool tiene un tamaño configurado. Analiza: ¿cuál es el pool_size configurado (buscar en config.py, extensions.py, o SQLAlchemy init)? ¿Hay conexiones que no se liberan correctamente (falta de context manager, falta de rollback en except, jobs APScheduler que no liberan)? ¿Qué operación del sistema falla primero cuando el pool se agota?
+PostgreSQL connection pool tiene un tamaño configurado. Analiza: ¿cuál es el pool_size configurado? ¿Hay conexiones que no se liberan correctamente? ¿Qué falla primero cuando el pool se agota?
 
 **FM_DLQ_INFINITE_RETRY**
-El DLQ reintenta jobs cada 5 minutos. Analiza: ¿hay jobs que pueden reintentar infinitamente porque el payload es estructuralmente inválido (campo Siesa faltante, codigo_siesa=None)? ¿Hay un límite de intentos? ¿Qué pasa cuando un job llega al límite — queda en FALLIDO para siempre sin alerta? ¿Hay jobs PENDIENTE de hace días que nadie detectó?
+El DLQ reintenta jobs cada 5 minutos. Analiza: ¿hay jobs que pueden reintentar infinitamente porque el payload es estructuralmente inválido? ¿Hay un límite de intentos? ¿Qué pasa cuando un job llega al límite?
+⚠️ VERIFICAR: Busca max_intentos en el modelo SiesaJob y en el procesador DLQ. Si existe límite + estado FALLIDO → NO es infinite retry.
 
 **FM_CONCURRENT_WORKER**
-Dos workers Gunicorn pueden procesar el mismo request o el mismo job simultáneamente. Analiza: ¿el DLQ worker tiene protección contra dos workers procesando el mismo SiesaJob al mismo tiempo (SELECT FOR UPDATE, advisory lock, estado PROCESANDO actualizado atómicamente)? ¿Los endpoints de escaneo de bultos/picking/packing tienen protección contra doble tap del mismo operario o de dos operarios?
+Dos workers Gunicorn pueden procesar el mismo request o job simultáneamente. Analiza: ¿el DLQ worker tiene protección contra doble procesamiento? ¿Los endpoints de escaneo tienen protección contra doble tap?
+⚠️ VERIFICAR: Busca SELECT FOR UPDATE, pg_advisory_lock, o estado PROCESANDO con update atómico ANTES de reportar race condition.
 
 **FM_OPERARIO_RETRY**
-Un operario escanea un bulto, pierde conexión, no ve la confirmación, y reintenta el mismo escaneo. Analiza: ¿los endpoints de escaneo son idempotentes? Si el primer request procesó el movimiento de stock y el segundo también lo procesa, ¿se duplica el movimiento? Buscar endpoints de escaneo/confirmación sin verificación de estado actual antes de aplicar el cambio.
+Un operario escanea un bulto, pierde conexión, reintenta el mismo escaneo. ¿Los endpoints de escaneo son idempotentes?
+⚠️ VERIFICAR: Busca verificación de estado actual antes de aplicar cambios (ej: "if bulto.estado == ESCANEADO: return ok" → idempotente).
 
 ════════════════════════════════════════
 MECANISMOS DE RESILIENCIA YA IMPLEMENTADOS
@@ -77,8 +127,12 @@ MECANISMOS DE RESILIENCIA YA IMPLEMENTADOS
 6. Pool configurado: pool_size=10, max_overflow=5, pool_pre_ping=True, pool_recycle=1800
 7. trigger_factura pre-check: get_estado_pedido()==4 → skip POST
 8. DLQ time-box: 4 minutos máximo por ciclo, evita starvation
+9. HTTP calls ANTES de with_for_update(): diseño explícito para no retener locks durante I/O
+10. Degraded mode en conteo: escala a SEGUNDO_CONTEO cuando Siesa está caído
+11. Scheduler alert email: recopila errores parciales y los envía al equipo
+12. Lock re-adquisición post-rollback: devolucion_service re-acquires lock after IntegrityError rollback
 
-Si un failure mode ya está cubierto por uno de estos mecanismos, bajar severidad correspondiente.
+Estos mecanismos cubren la MAYORÍA de los failure modes. Tu trabajo es encontrar los GAPS que quedan DESPUÉS de estas mitigaciones, no re-reportar los failure modes que estos mecanismos ya manejan.
 
 ════════════════════════════════════════
 ANTI-REPETICIÓN
@@ -97,6 +151,7 @@ INSTRUCCIONES DE RESPUESTA
 - El campo "tiempo_deteccion" es OBLIGATORIO: "inmediato" / "minutos" / "horas" / "nunca"
 - El campo "datos_en_riesgo" es OBLIGATORIO: "inventario" / "fiscal" / "ambos" / "ninguno"
 - El campo "estado_sistema_post_fallo" es OBLIGATORIO: descripción concreta del estado de la DB después del fallo
+- El campo "mitigations_checked" es OBLIGATORIO: lista de mecanismos existentes que buscaste y confirmaste que NO cubren este escenario (ej: "Busqué emergency commit en flujo de despacho líneas 300-350 — no existe. Busqué DLQ enqueue — sí existe pero el retry no re-valida estado.")
 - Máximo 14 issues (puede haber múltiples issues por failure mode si afectan partes distintas del código)
 
 FORMATO JSON REQUERIDO:
@@ -115,7 +170,8 @@ FORMATO JSON REQUERIDO:
       "tiempo_deteccion": "horas",
       "datos_en_riesgo": "fiscal",
       "estado_sistema_post_fallo": "TareaPacking en estado COMPLETADO en WMS pero SiesaJob no creado — Siesa nunca fue notificado del despacho",
-      "probability_this_month": "media"
+      "probability_this_month": "media",
+      "mitigations_checked": "Busqué emergency commit en despachar_bultos líneas 200-250 — no existe. Busqué SiesaJob.encolar después del commit — existe en línea 248 pero sin emergency commit si el encolar falla."
     }
   ],
   "summary": "Resumen de 2-3 oraciones: cuántos failure modes causan pérdida de datos, cuál es el más probable en producción y cuál el más grave",
