@@ -267,6 +267,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'siesa_triggered=True — omitiendo llamada a Siesa (idempotencia)'
             )
             return {'idempotente': True, 'tarea_id': tarea.id}
+
+        # Reconciliación automática: Siesa puede tener la factura aunque WMS no lo sepa
+        # (respuesta HTTP perdida por restart/timeout). Si ya existe → corregir WMS sin reenviar.
+        if tarea and not tarea.siesa_triggered:
+            from app.services.reconciliacion_service import ReconciliacionService
+            rec = ReconciliacionService.reconciliar_despacho(
+                tarea,
+                tipo_docto=payload.get('tipo_docto_pedido', ''),
+                consec_docto=payload.get('consec_docto_pedido', ''),
+            )
+            if rec.get('reconciliado'):
+                return rec
+
         resultado = connekta.trigger_factura(
             tipo_docto_pedido=payload['tipo_docto_pedido'],
             consec_docto_pedido=payload['consec_docto_pedido'],
