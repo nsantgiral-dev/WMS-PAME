@@ -44,6 +44,126 @@
       "pattern": "FOR UPDATE.*picking|row-lock.*picking|picking.*sin.*lock",
       "reason": "picking_service.py uses with_for_update() in all 5 stock operations (lines 134, 180, 257, 285, 324).",
       "date": "2026-04-27"
+    },
+    {
+      "pattern": "HTTP.*síncrono.*with_for_update|row-lock.*retenido.*I/O.*red|with_for_update.*HTTP",
+      "reason": "Code explicitly avoids this: HTTP calls happen BEFORE with_for_update() (conteo_service.py comments lines 70-75, 483-486).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "Siesa.*caído.*bloquea.*conteo|sin.*modo.*degradado.*conteo",
+      "reason": "Degraded mode EXISTS: registrar_conteo() escalates to SEGUNDO_CONTEO when Siesa is down (lines 122-157).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "P_ROLE_CHECK.*sync.*estado.*empaques|empaques.*sin.*verificación.*rol",
+      "reason": "empaques.py sync_estado has _es_gestion() check at line 199.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "P_LOGGER_EXCEPTION.*ABC|logger\\.error.*ABC.*sin.*stack|ABC.*retornan.*500",
+      "reason": "All ABC endpoints in conteo.py use logger.exception() (lines 271, 291, 365, 385, 437).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "N\\+1.*listar_conductores|conductores.*selectinload",
+      "reason": "listar_conductores uses selectinload(Conductor.usuario) at line 149.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "IDOR.*ruta.*despacho|operario.*accede.*ruta",
+      "reason": "Role-based access control at line 564 blocks operarios/empacadores. Only GESTION + CONDUCTOR roles allowed.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "P_ROLE_CHECK.*reiniciar_conteo|reiniciar_conteo.*ownership",
+      "reason": "reiniciar_conteo has both role check (line 373) AND ownership check (line 378).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "P_LOGGER_EXCEPTION.*pre_verificar_ola|pre_verificar_ola.*500",
+      "reason": "pre_verificar_ola uses logger.exception() at line 458.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "P_ESTADO_CONSTANTS.*muelle|string.*literal.*muelle|muelle.*desincronización",
+      "reason": "muelle.py uses EstadoBulto/EstadoRutaDespacho constants throughout, no string literals.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "rollback.*IntegrityError.*row-lock.*sin.*re-adquir",
+      "reason": "devolucion_service confirmar_ubicacion re-acquires lock after rollback at lines 255-259.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "SF_SIESA_200_SIN_VERIFICAR.*_get|_get.*JSON.*crudo.*sin.*validar",
+      "reason": "_get() validates Siesa error codes at lines 198-205 (checks 'codigo' field, raises on !=0).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "TRASLADO_AVERIAS.*sin.*disparar_dlq|TRASLADO_AVERIAS.*gap.*5.*min",
+      "reason": "disparar_dlq_inmediato IS called after TRASLADO_AVERIAS enqueue (devolucion_service lines 346-351).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "SF_EXCEPT_PASS.*devolución.*contador|devolucion.*solo.*incrementan.*contador",
+      "reason": "crear_tareas_desde_discrepancias sends email alert when errores > 0 (lines 137-161).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "INV_RECEPCION_SIESA_JOB.*TareaDevolucion.*siesa_triggered",
+      "reason": "TareaDevolucion HAS siesa_triggered field (model line 51-53) + DLQ handler uses it (siesa_job_service lines 377-382).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "config_siesa.*diagnóstico.*sin.*rol|config_siesa.*sin.*verificación",
+      "reason": "All config_siesa.py endpoints have proper role checks (_es_gestion or _solo_admin).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "IN.*clause.*ubicacion_ids.*duplicados|lista.*sin.*deduplicar.*SesionConteo",
+      "reason": "abc_service generar_tareas_conteo_diario deduplicates at line 371 with set comprehension.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "paginación.*sin.*try.*except.*iteración|timeout.*página.*N.*aborta",
+      "reason": "inventario_siesa_service has per-page try/except (lines 117-133) with 3-consecutive-error abort.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "_prev_count.*cae.*0|guard.*bypasseable.*_prev_count",
+      "reason": "When _prev_count=0 (cold cache), code uses DB baseline (lines 167-177) + absolute minimum 50 products (lines 180-184).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "pedido_anulado_siesa.*budget|anulado.*consumen.*budget.*10",
+      "reason": "pedidos_sync_service filters out pedido_anulado_siesa=True BEFORE slicing to 10 (line 197).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "f470_cant_base.*0\\.0.*142945|cantidad_empacada.*None.*142945",
+      "reason": "trigger_despacho filters items with cantidad_empacada<=0 at line 580 before building payload.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "f462_.*string.*vacío.*142951|f462_.*''.*None.*142951",
+      "reason": "Fixed 2026-04-27: f462_ decimal fields now use 0/0.0 consistently across all connectors.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "f451_id_sucursal_comprador|sucursal.*comprador.*142948",
+      "reason": "Removed 2026-04-27: field does not exist in 142948 spec per consultant validation.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "F_ID_UM_INVENTARIO.*inconsisten|F_ID_UM_INVENTARIO.*''.*142951",
+      "reason": "Consultant confirmed: F_ID_UM_INVENTARIO is optional audit field. '' is valid (skips validation).",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "f470_rowid.*0.*142948|f470_rowid.*posicion",
+      "reason": "Consultant confirmed: rowid=0 is correct (Siesa auto-assigns). Different from f470_nro_registro.",
+      "date": "2026-04-27"
     }
   ],
   "accepted_risk": [
@@ -58,8 +178,73 @@
       "date": "2026-04-27"
     },
     {
-      "pattern": "god.*function.*mobile|mobile.*120.*líneas",
+      "pattern": "god.*function.*mobile|mobile.*120.*líneas|BLOQUEADO.*route.*service",
       "reason": "Acknowledged tech debt. 3 branches (PICKING/CONTEO/PACKING) with distinct imports. Future sprint.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "OC.*FALLBACK.*ref_siesa.*primer.*ítem|OC.*FALLBACK.*código.*producto",
+      "reason": "Documented design choice: uses first item's data when product not found in OC. WARNING logged. Alternative (skip item) worse.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "SF_JOB_SILENCIOSO.*email.*scheduler.*except|ABC.*email.*invisible",
+      "reason": "Logged at CRITICAL level (line 640). In scheduler context, re-raise would crash the job without benefit.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "Bulk-zero.*diferido.*Railway.*reinicia|restart.*durante.*loop.*5000",
+      "reason": "Deferred bulk-zero is better than pre-zero. On restart, old quantities remain (no data loss), next sync fixes it.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "confirmar_ajuste.*AJUSTANDO|HTTP_200_FALLO.*AJUSTANDO",
+      "reason": "By design: Siesa call is async via DLQ. State AJUSTANDO is correct intermediate state. Client polls for AJUSTADO.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "Semaphore.*per-proceso.*prewarm|prewarm.*simultánea.*workers",
+      "reason": "Prewarm is read-only (GET Siesa + cache). Worst case: duplicate HTTP requests. Not data corruption.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "Semáforo.*non-blocking.*descarta.*B.*C|cold.*cache.*clases.*B.*C",
+      "reason": "Design choice: prevents Siesa overload. Scheduler re-runs periodically, B/C will be prewarmed eventually.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "Rescue.*FALLIDO.*CONFIRMADA.*sin.*verificar.*Siesa",
+      "reason": "Code checks for existing jobs in ALL states (PENDIENTE/PROCESANDO/REINTENTANDO/FALLIDO/COMPLETADO). Risk is only if job was deleted from DB.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "INV_CONTEO_SIESA.*AJUSTADO.*sin.*siesa_triggered|SesionConteo.*AJUSTADO.*invariante",
+      "reason": "App-level invariant enforced in confirmar_ajuste flow. DB constraint not needed — state machine is sequential.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "INV_DEVOLUCION_MOVIMIENTO.*FK.*constraint|TareaDevolucion.*COMPLETADO.*MovimientoInv",
+      "reason": "No FK by design. MovimientoInventario references tarea via numero_documento. Adding FK requires migration + backward compat.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "SF_EXCEPT_PASS.*watchdog.*email.*silencio|watchdog.*falla.*email.*falla",
+      "reason": "Watchdog failure is already captured in 'parciales' list and included in scheduler alert email.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "ALERTA_EMAIL.*idempotency_key|ALERTA_EMAIL.*acumulan.*DLQ",
+      "reason": "Dedup via query filter works (checks PENDIENTE/PROCESANDO/FALLIDO). Formal idempotency_key column not needed.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "Commits.*separados.*clase.*ABC|restart.*entre.*clase.*A.*B",
+      "reason": "On restart, scheduler re-runs and regenerates. Duplicate tasks prevented by sesiones_activas check.",
+      "date": "2026-04-27"
+    },
+    {
+      "pattern": "flush.*lote.*parcial.*ABC|procesar_csv.*clasificaciones.*parcial",
+      "reason": "Per-lot flush + single final commit = atomic. No partial state possible.",
       "date": "2026-04-27"
     }
   ]

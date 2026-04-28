@@ -588,7 +588,14 @@ def iniciar_ruta(id):
         return jsonify({'error': f'La ruta debe estar PROGRAMADO, está {ruta.estado}'}), 400
 
     ruta.estado = EstadoRutaDespacho.EN_CARGUE
+    ruta_id = ruta.id
     db.session.commit()
+    # Re-query con eager loading — evita lazy loads en to_dict() post-commit
+    ruta = RutaDespacho.query.options(
+        _jl(RutaDespacho.conductor),
+        _jl(RutaDespacho.vehiculo),
+        _jl(RutaDespacho.ruta_maestra),
+    ).get(ruta_id)
 
     sugeridos_ids = []
     if ruta.ruta_maestra:
