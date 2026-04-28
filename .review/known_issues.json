@@ -341,6 +341,36 @@
       "pattern": "flush.*lote.*parcial.*ABC|procesar_csv.*clasificaciones.*parcial",
       "reason": "Per-lot flush + single final commit = atomic. No partial state possible.",
       "date": "2026-04-27"
+    },
+    {
+      "pattern": "APScheduler.*pierde.*estado|BackgroundScheduler.*Railway.*restart|scheduler.*sin.*persistencia|FM_SCHEDULER_PEAK",
+      "reason": "ACCEPTED RISK pre-launch. DLQ + reconciliacion run every 5min — max gap after restart is 5min, self-healing via advisory locks + idempotency (siesa_triggered). Cron jobs (2am/3am) skipping once per rare restart is recoverable via manual trigger. SQLAlchemyJobStore deferred to post-launch: requires new DB table, distribution logic for 2 Gunicorn workers, and integration risk not justified before production validation.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "FM_OPERARIO_RETRY.*double.count|double.count.*registrar_conteo|debounce.*in.memory.*worker",
+      "reason": "ACCEPTED RISK pre-launch. registrar_conteo debounce is per-worker but with_for_update() on SesionConteo provides row-level serialization. True double-count requires the same operario retrying from a different worker within the debounce window (~2s) — rare in practice. DB idempotency key deferred to post-launch.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "FM_RAILWAY_RESTART.*confirmar_ubicacion|confirmar_ubicacion.*commits.*separados|devolucion.*3.*commits",
+      "reason": "ACCEPTED RISK pre-launch. confirmar_ubicacion has 3 commits but intermediate states are detectable via audit. Probability of Railway restart between commits is <0.01%. Refactor to single commit deferred post-launch.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "INV_CONTEO_SIESA.*mini.commit.*ventana|siesa_triggered.*AJUSTADO.*dos.*commits",
+      "reason": "ACCEPTED RISK pre-launch. The DLQ recovery path (lines 472-506) explicitly handles siesa_triggered=True + estado=AJUSTANDO — detected and corrected on next cycle. Ventana de 30ms is observable but self-healing.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "forzar_todo.*savepoints.*bloquea|batch.*diario.*None.*2000.*savepoint",
+      "reason": "ACCEPTED RISK pre-launch. forzar_todo is an exceptional admin operation, not a daily path. batch_diario normal is 12-27 items. Impact only on first use or emergency reset, not on daily operations.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "expire_on_commit.*prewarm.*abc|prewarm.*sesiones_creadas.*N.1",
+      "reason": "ACCEPTED RISK pre-launch. Affects only the 2am ABC scheduler prewarm on days when class C resets (every 180 days). Normal daily batch (12-27 sessions) unaffected. N+1 lazy loads add latency but no correctness issue.",
+      "date": "2026-04-28"
     }
   ]
 }
