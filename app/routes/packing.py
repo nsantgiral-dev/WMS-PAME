@@ -413,6 +413,27 @@ def forzar_retry_siesa(id):
         return jsonify({'error': str(e)}), 500
 
 
+@packing_bp.route('/<int:id>/remision', methods=['GET'])
+@jwt_required()
+def imprimir_remision(id):
+    """Devuelve el HTML imprimible de la remisión. Solo disponible en estado DESPACHADO."""
+    from app.models.usuario import Usuario
+    from flask import Response
+    from app.services.remision_service import RemisionService
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or not _puede_empacar(u):
+        return jsonify({'error': 'Sin permiso para ver la remisión'}), 403
+    tarea = TareaPacking.query.get_or_404(id)
+    if tarea.estado != EstadoPacking.DESPACHADO:
+        return jsonify({'error': f'La remisión solo está disponible una vez despachado. Estado actual: {tarea.estado}'}), 409
+    html = RemisionService.generar_html(tarea)
+    return Response(html, mimetype='text/html; charset=utf-8'), 200
+
+
 @packing_bp.route('/connekta/estado', methods=['GET'])
 @jwt_required()
 def estado_connekta():
