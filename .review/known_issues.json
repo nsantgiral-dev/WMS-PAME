@@ -239,6 +239,26 @@
       "pattern": "f451_id_cond_pago.*None.*sin.*warning|cond_pago.*obligatorio.*sin.*alerta|SIESA_COND_PAGO_COMPRAS.*sin.*guard",
       "reason": "Fixed 2026-04-28: logger.warning added when f451_id_cond_pago would be None (both cond_pago and self.cond_pago_compras empty).",
       "date": "2026-04-28"
+    },
+    {
+      "pattern": "reconciliar_cantidad.*duplicada|editar_conteo.*registrar_conteo.*duplica.*lógica|MATCH.*inline.*dos.*lugares",
+      "reason": "Fixed 2026-04-28: ConteoService.reconciliar_cantidad() centralizes diferencia/MATCH logic. Used by both registrar_conteo and editar_conteo.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "142948.*re-enqueue.*sin.*bodega|re-enqueue.*ENTRADA_OC.*bodega.*None|CONFIRMADA.*sin.*SiesaJob.*uom.*vacío",
+      "reason": "Fixed 2026-04-28: re-enqueue path re-fetches OC data from Siesa to get bodega/uom/fecha_entrega/moneda per item. Falls back gracefully if OC lookup fails.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "prewarm.*2am.*caduca.*turno|cache.*fría.*operarios.*6am|abc.*scheduler.*cold.*cache",
+      "reason": "Fixed 2026-04-28: second prewarm job at 5:55am Bogotá (_prewarm_pre_turno) ensures cache is warm when operators arrive at 6-7am.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "thundering.*herd.*30.*operarios|_refrescar_cache.*sin.*límite.*concurrente|Semaphore.*background.*refresh",
+      "reason": "Fixed 2026-04-28: _refrescar_bg_semaphore = Semaphore(3) limits concurrent Siesa HTTP calls during cache refresh. Non-blocking acquire, thread drops refresh if semaphore full.",
+      "date": "2026-04-28"
     }
   ],
   "accepted_risk": [
