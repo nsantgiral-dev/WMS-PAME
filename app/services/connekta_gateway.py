@@ -43,8 +43,9 @@ class ConnektaGateway:
         self.api_barras = os.getenv('CONNEKTA_API_BARRAS', 'API_v2_ItemsBarras')
         self.api_unidades_medida = os.getenv('CONNEKTA_API_UNIDADES_MEDIDA', 'API_v2_ItemsUnidadesMedida')
 
-        self.conector_factura  = os.getenv('CONNEKTA_CONECTOR_FACTURA',  '238925')  # FacturaPedido (reemplaza 142945)
-        self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')  # RemisionPedido (legacy — no usar)
+        self.conector_factura  = os.getenv('CONNEKTA_CONECTOR_FACTURA',  '238925')  # FacturaPedido
+        self.conector_despacho = os.getenv('CONNEKTA_CONECTOR_DESPACHO', '142945')  # RemisionPedido — despacho parcial
+        self.conector_factura_remision = os.getenv('CONNEKTA_CONECTOR_FACTURA_REMISION', '142943')  # FacturaDesdeRemision — despacho parcial
         self.conector_entrada  = os.getenv('CONNEKTA_CONECTOR_ENTRADA',  '142948')
         self.conector_ajuste   = os.getenv('CONNEKTA_CONECTOR_AJUSTE',   '142951')
         self.api_clasificacion = os.getenv('CONNEKTA_API_CLASIFICACION', '238920')  # CLASIFICACION DE ITEMS
@@ -550,6 +551,64 @@ class ConnektaGateway:
             url=self.url_get_dinamico,
         )
 
+    def get_compromisos_pedido(self, tipo_docto: str, consec_docto) -> list:
+        """
+        GET API_v2_Ventas_Pedidos_Compromisos (API ID 103)
+        Retorna líneas de compromiso con f400_cant_comprometida_1 por ítem (f120_referencia).
+        Usado exclusivamente por DespachoParialService — no toca flujo de packing.
+        """
+        if self.modo_simulacion:
+            return []
+        if not tipo_docto or not str(tipo_docto).strip():
+            return []
+        try:
+            consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+            res = self._get('API_v2_Ventas_Pedidos_Compromisos', {
+                'paginacion': 'numPag=1|tamPag=200',
+                'parametros': (
+                    f"f430_id_co = ''{self.centro_op}'' "
+                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"AND f430_consec_docto = {consec_int}"
+                )
+            })
+            return res.get('detalle', {}).get('Table', [])
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] get_compromisos_pedido falló: {e}')
+            return []
+
+    def get_pedido_cabecera(self, tipo_docto: str, consec_docto) -> dict | None:
+        """
+        GET API_v2_Ventas_Pedidos — fila única de cabecera del pedido.
+        Campos confirmados por consultor Siesa:
+          f200_id_fact          → código tercero cliente (para F350_ID_TERCERO en 142943)
+          f461_id_sucursal_fact → sucursal facturación
+          f461_id_tipo_cli_fact → tipo cliente facturación
+          f461_id_cond_pago     → condición de pago
+          f461_id_moneda_docto  → moneda del documento
+          f461_tasa_conv        → tasa conversión
+          f461_tasa_local       → tasa local
+        Usado exclusivamente por DespachoParialService.
+        """
+        if self.modo_simulacion:
+            return None
+        if not tipo_docto or not str(tipo_docto).strip():
+            return None
+        try:
+            consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+            res = self._get(self.api_pedidos, {
+                'paginacion': 'numPag=1|tamPag=1',
+                'parametros': (
+                    f"f430_id_co = ''{self.centro_op}'' "
+                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"AND f430_consec_docto = {consec_int}"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            return rows[0] if rows else None
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] get_pedido_cabecera falló: {e}')
+            return None
+
     # ==========================================
     # POSTs — Bodies oficiales desde Ver Guía
     # ==========================================
@@ -730,6 +789,122 @@ class ConnektaGateway:
             self.conector_factura, 'FACTURA_DESDE_PEDIDO', payload,
             url=self.url_post_dinamico,
             extra_params={'idSistema': self.id_sistema}
+        )
+
+    def trigger_factura_desde_remision(self, tipo_docto_rm: str, consec_rm: int,
+                                        cabecera: dict):
+        """
+        142943 → API_v1_Ventas_Comercial_FacturaRemision
+        Convierte una remisión (RM) en factura electrónica (FE).
+        Estructura oficial confirmada en docx 142943.
+        cabecera: dict devuelto por get_pedido_cabecera() con campos del pedido original.
+        RelacionDoctos vincula la FE a la RM — Siesa no hereda campos del RM, se envían explícitamente.
+        Usado exclusivamente por DespachoParialService — no toca flujo de packing.
+        """
+        from datetime import timedelta
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_vcto = (datetime.utcnow() + timedelta(days=30)).strftime('%Y%m%d')
+        cia = int(self.id_cia_siesa)
+
+        tercero      = cabecera.get('f200_id_fact') or ''
+        sucursal     = cabecera.get('f461_id_sucursal_fact') or ''
+        tipo_cli     = cabecera.get('f461_id_tipo_cli_fact') or ''
+        cond_pago    = cabecera.get('f461_id_cond_pago') or self.cond_pago_compras or None
+        moneda_docto = cabecera.get('f461_id_moneda_docto') or 'COP'
+        moneda_conv  = cabecera.get('f461_id_moneda_conv') or moneda_docto
+        moneda_local = cabecera.get('f461_id_moneda_local') or moneda_docto
+        tasa_conv    = float(cabecera.get('f461_tasa_conv') or 1)
+        tasa_local   = float(cabecera.get('f461_tasa_local') or 1)
+        vendedor     = cabecera.get('f461_id_tercero_vendedor') or None
+
+        if not self.modo_simulacion and not tercero:
+            raise ValueError(
+                'get_pedido_cabecera no devolvió f200_id_fact — '
+                'no se puede construir la FE sin el código de tercero cliente'
+            )
+
+        payload = {
+            'Inicial': [{'F_CIA': cia}],
+            'Doctoventascomercial': [{
+                'F_CIA': cia,
+                'F_CONSEC_AUTO_REG': 1,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
+                'F350_CONSEC_DOCTO': 0,
+                'F350_FECHA': fecha_hoy,
+                'F350_ID_TERCERO': tercero,
+                'F350_IND_ESTADO': 1,
+                'F350_IND_IMPRESION': 0,
+                'f461_id_sucursal_fact': sucursal,
+                'f461_id_tipo_cli_fact': tipo_cli,
+                'f461_id_co_fact': self.centro_op,
+                'f461_id_cli_contado': None,
+                'f461_id_tercero_rem': tercero,
+                'f461_id_sucursal_rem': sucursal,
+                'f461_id_tercero_vendedor': vendedor,
+                'f461_referencia': None,
+                'f461_id_cargue': None,
+                'f461_id_cond_pago': cond_pago,
+                'f461_id_moneda_docto': moneda_docto,
+                'f461_id_moneda_conv': moneda_conv,
+                'f461_tasa_conv': tasa_conv,
+                'f461_id_moneda_local': moneda_local,
+                'f461_tasa_local': tasa_local,
+                'f461_notas': None,
+                'f461_id_punto_envio': None,
+                'f462_id_vehiculo': None,
+                'f462_id_tercero_transp': None,
+                'f462_id_sucursal_transp': None,
+                'f462_id_tercero_conductor': None,
+                'f462_nombre_conductor': None,
+                'f462_identif_conductor': None,
+                'f462_numero_guia': None,
+                'f462_cajas': 0,
+                'f462_peso': 0.0,
+                'f462_volumen': 0.0,
+                'f462_valor_seguros': 0.0,
+                'f462_notas': None,
+                'f462_id_caja': None,
+                'F461_IND_GENERA_KIT': 0,
+                'F461_ID_TIPO_DOCTO_PROCESO': None,
+                'F461_ID_BODEGA_COMPON_PROCESO': None,
+                'F461_ID_MOTIVO_SALIDA_PROCESO': None,
+                'F461_ID_MOTIVO_ENTRADA_PROCESO': None,
+                'F461_ID_CLASE_DOCTO_PROCESO': None,
+                'F461_ID_UN_CXC': self.unidad_negocio,
+                'F461_ID_CCOSTO_CXC': None,
+                'f461_tasa_dscto_global_cap': None,
+                'f461_valor_dscto_global_cap': None,
+                'f461_num_docto_referencia': None,
+            }],
+            'RelacionDoctos': [{
+                'F_CIA': cia,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
+                'F350_CONSEC_DOCTO': 0,
+                'F460_ID_CO': self.centro_op,
+                'F460_ID_TIPO_DOCTO': tipo_docto_rm,
+                'F460_CONSEC_DOCTO': int(consec_rm),
+            }],
+            'CuotasCxC': [{
+                'F_CIA': cia,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
+                'F350_CONSEC_DOCTO': 0,
+                'F353_FECHA_VCTO': fecha_vcto,
+                'F353_FECHA_DSCTO_PP': fecha_vcto,
+            }],
+            'Final': [{'F_CIA': cia}],
+        }
+
+        logger.info(
+            '[CONNEKTA] FacturaDesdeRemision %s%s → FE tercero=%s',
+            tipo_docto_rm, consec_rm, tercero
+        )
+        return self._post(
+            self.conector_factura_remision,
+            'API_v1_Ventas_Comercial_FacturaRemision',
+            payload
         )
 
     def confirmar_entrada_compras(self, id_co_oc: str, tipo_docto_oc: str,

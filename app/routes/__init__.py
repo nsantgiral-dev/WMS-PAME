@@ -18,6 +18,7 @@ def register_routes(app):
     from app.routes.empaques import empaques_bp
     from app.routes.reposicion import reposicion_bp
     from app.routes.remision_admin import remision_admin_bp
+    from app.routes.despacho_parcial import despacho_parcial_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(productos_bp, url_prefix='/api/productos')
@@ -38,3 +39,4 @@ def register_routes(app):
     app.register_blueprint(empaques_bp, url_prefix='/api/empaques')
     app.register_blueprint(reposicion_bp, url_prefix='/api/reposicion')
     app.register_blueprint(remision_admin_bp, url_prefix='/api/admin/remision')
+    app.register_blueprint(despacho_parcial_bp, url_prefix='/api/despacho_parcial')

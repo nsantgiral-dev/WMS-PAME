@@ -23,13 +23,20 @@ class PackingService:
         Crea una tarea de packing a partir de tareas de picking completadas.
         Agrupa todos los ítems del pedido en una sola tarea de packing.
         """
+        from app.extensions import db as _db
         tareas_picking = TareaPicking.query.filter(
             TareaPicking.id.in_(tareas_picking_ids),
-            TareaPicking.estado == 'COMPLETADO'
+            _db.or_(
+                TareaPicking.estado == 'COMPLETADO',
+                _db.and_(
+                    TareaPicking.estado == 'BLOQUEADO',
+                    TareaPicking.cantidad_recogida > 0
+                )
+            )
         ).all()
 
         if not tareas_picking:
-            raise ValueError('No hay tareas de picking completadas para empacar')
+            raise ValueError('No hay tareas de picking con unidades recogidas para empacar')
 
         # Verificar que no exista ya un packing para este pedido
         existente = TareaPacking.query.filter_by(
