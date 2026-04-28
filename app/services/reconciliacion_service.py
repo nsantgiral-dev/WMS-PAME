@@ -105,18 +105,18 @@ class ReconciliacionService:
     @staticmethod
     def _ejecutar_sweep():
         from app.models.packing import TareaPacking
-        from app.models.bulto import Bulto
-        from sqlalchemy import exists
 
-        # Tareas con siesa_triggered=False, no canceladas, y que tienen bultos
+        # Tareas VERIFICADO o DESPACHADO con siesa_triggered=False.
+        # No se exige bultos: tareas bloqueadas por guard anti-duplicado en cerrar_packing
+        # nunca alcanzan a crear bultos pero Siesa ya procesó la factura.
+        # La doble señal de Connekta (factura activa o estado==4) es suficiente garantía.
         tareas = (
             TareaPacking.query
             .filter(
                 TareaPacking.siesa_triggered == False,
-                TareaPacking.estado != 'CANCELADO',
+                TareaPacking.estado.in_(['VERIFICADO', 'DESPACHADO']),
                 TareaPacking.tipo_docto_pedido_siesa.isnot(None),
                 TareaPacking.consec_docto_pedido_siesa.isnot(None),
-                exists().where(Bulto.tarea_id == TareaPacking.id)
             )
             .limit(10)
             .all()
@@ -125,7 +125,10 @@ class ReconciliacionService:
         if not tareas:
             return
 
-        logger.info(f'[RECONCILIACION] Sweep encontró {len(tareas)} tarea(s) candidatas')
+        logger.info(
+            f'[RECONCILIACION] Sweep encontró {len(tareas)} tarea(s) candidatas '
+            f'(ids={[t.id for t in tareas]})'
+        )
 
         for tarea in tareas:
             ReconciliacionService.reconciliar_despacho(

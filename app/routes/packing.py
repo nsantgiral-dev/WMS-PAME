@@ -366,6 +366,31 @@ def reiniciar_conteo(id):
     return jsonify({'ok': True, 'mensaje': 'Conteo reiniciado', 'tarea': tarea.to_dict()}), 200
 
 
+@packing_bp.route('/<int:id>/reconciliar', methods=['POST'])
+@jwt_required()
+def reconciliar_manual(id):
+    """
+    Fuerza reconciliación inmediata de una tarea: verifica en Siesa si ya existe
+    factura o estado==4 y, si aplica, la marca DESPACHADO + siesa_triggered=True.
+    Solo admin. Úsalo cuando el sweep aún no ha corrido y necesitas resolver ya.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede reconciliar tareas Siesa'}), 403
+    tarea = TareaPacking.query.get_or_404(id)
+    if tarea.siesa_triggered:
+        return jsonify({'ok': True, 'mensaje': 'Ya estaba reconciliada (siesa_triggered=True)', 'tarea': tarea.to_dict()}), 200
+    from app.services.reconciliacion_service import ReconciliacionService
+    resultado = ReconciliacionService.reconciliar_despacho(
+        tarea,
+        tipo_docto=tarea.tipo_docto_pedido_siesa,
+        consec_docto=tarea.consec_docto_pedido_siesa,
+    )
+    tarea = TareaPacking.query.get(id)
+    if resultado.get('reconciliado'):
+        return jsonify({'ok': True, 'mensaje': 'Reconciliada — tarea marcada DESPACHADO', 'tarea': tarea.to_dict()}), 200
+    return jsonify({'ok': False, 'mensaje': 'Siesa aún no tiene la factura o no se pudo consultar', 'tarea': tarea.to_dict()}), 200
+
+
 @packing_bp.route('/<int:id>/resetear-siesa', methods=['POST'])
 @jwt_required()
 def resetear_siesa(id):
