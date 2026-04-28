@@ -580,8 +580,13 @@ async function cargarPedidos() {
     if (siesa.simulado) {
       html += `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">⚡ Connekta en simulación — conecta credenciales para ver pedidos reales</div>`;
     } else if (SIESA_PEDIDOS.length) {
-      html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">PENDIENTES EN SIESA</div>`;
+      const _g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
+      const _GL = [['POR DESPACHAR','#aaa'],['EN PROCESO','#93c5fd'],['DESPACHADO EN SIESA','#4ade80'],['ERROR SIESA','#fca5a5']];
+      let _ga = -1;
       html += SIESA_PEDIDOS.map((p, i) => {
+        const _gp = _g(p);
+        let _header = '';
+        if (_gp !== _ga) { _ga = _gp; _header = `<div style="font-size:11px;font-weight:700;color:${_GL[_gp][1]};text-transform:uppercase;letter-spacing:0.8px;padding:12px 0 5px;border-bottom:1px solid #222;margin-bottom:6px;margin-top:${_gp===0?'0':'14px'};">${_GL[_gp][0]}</div>`; }
         const sinProd = p.items.filter(it => !it.producto_id).length;
         const totalUds = p.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
 
@@ -623,7 +628,7 @@ async function cargarPedidos() {
           </button>`;
         }
 
-        return `
+        return _header + `
           <div class="tabla-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
               <div style="min-width:0;">
