@@ -98,7 +98,7 @@ def resumen_completo():
         try:
             return fn(*args, **kwargs)
         except Exception as _e:
-            _logger.error(f'[DASHBOARD] {fn.__name__} falló: {_e}')
+            _logger.error(f'[DASHBOARD] {fn.__name__} falló: {_e}', exc_info=True)
             return None
 
     kpis            = _safe(DashboardService.kpis_operativos, almacen_id)

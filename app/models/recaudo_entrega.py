@@ -42,8 +42,8 @@ class RecaudoEntrega(db.Model):
     usuario_confirmador = db.relationship('Usuario', foreign_keys=[confirmado_por], lazy=True)
     usuario_editor      = db.relationship('Usuario', foreign_keys=[editado_por], lazy=True)
 
-    def to_dict(self):
-        return {
+    def to_dict(self, include_foto=False):
+        d = {
             'id':                    self.id,
             'ruta_id':               self.ruta_id,
             'tarea_id':              self.tarea_id,
@@ -51,10 +51,12 @@ class RecaudoEntrega(db.Model):
             'forma_pago':            self.forma_pago or '',
             'monto_cobrado':         float(self.monto_cobrado) if self.monto_cobrado else 0,
             'observaciones':         self.observaciones or '',
-            'foto_entrega':          self.foto_entrega or '',
             'bultos_rechazados_ids': self.bultos_rechazados_ids or [],
             'confirmado_por':        self.confirmado_por,
             'editado_por':           self.editado_por,
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,
             'fecha_confirmacion':    self.fecha_confirmacion.isoformat(),
         }
+        if include_foto:
+            d['foto_entrega'] = self.foto_entrega or ''
+        return d

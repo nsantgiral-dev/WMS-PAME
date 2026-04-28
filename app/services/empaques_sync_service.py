@@ -153,7 +153,7 @@ def _run_sync(app):
             if not factores_q35:
                 logger.error('[EMPAQUES SYNC] q35 retornó vacío (Connekta caído o sin datos) — sync abortado para evitar corrupción de factores')
                 _sync_estado['ultimo_error'] = 'q35 vacío — sync abortado'
-                return
+                raise RuntimeError('q35 retornó vacío — sync abortado (Connekta caído o sin datos)')
 
             # Liberar la conexión BD antes de las horas de HTTP calls en q28
             # Los dicts en memoria (prods_por_siesa, empaques_existentes) conservan

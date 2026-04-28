@@ -927,7 +927,7 @@ def confirmar_parada(id, tarea_id):
     recaudo = RecaudoEntrega.query.get(recaudo_id)
     return jsonify({
         'ok':         True,
-        'recaudo':    recaudo.to_dict(),
+        'recaudo':    recaudo.to_dict(include_foto=True),
         'es_edicion': es_edicion,
     }), 200
 

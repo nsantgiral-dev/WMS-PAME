@@ -718,7 +718,7 @@ def _run_reconciliacion(app):
                         f'devoluciones automáticas desactivadas para evitar falsos positivos'
                     )
             except Exception as e_dev:
-                logger.warning(f'[RECONCILIACION] Error creando tareas devolución: {e_dev}')
+                logger.exception('[RECONCILIACION] Error creando tareas devolución — discrepancias sin procesar en esta ejecución')
 
             _estado_reconciliacion['ultimo_resultado'] = {
                 'timestamp': ts,

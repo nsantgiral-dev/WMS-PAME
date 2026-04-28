@@ -932,23 +932,23 @@ class ConnektaGateway:
                     'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': self.centro_op,
-                    'f470_id_ccosto_movto': '',
-                    'f470_id_proyecto': '',
+                    'f470_id_ccosto_movto': None,
+                    'f470_id_proyecto': None,
                     'f470_id_unidad_medida': self.uom_default,
                     'f470_cant_base': round(float(abs(cantidad)), 4),
-                    'f470_cant_2': 0.0,
-                    'f470_costo_prom_uni': 0.0,
+                    'f470_cant_2': None,
+                    'f470_costo_prom_uni': None,
                     'f470_notas': '',
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': self.uom_default,
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
-                    'f470_id_item': '',
+                    'f470_id_item': None,
                     'f470_referencia_item': item_codigo,
-                    'f470_codigo_barras': '',
-                    'f470_id_ext1_detalle': '',
-                    'f470_id_ext2_detalle': '',
+                    'f470_codigo_barras': None,
+                    'f470_id_ext1_detalle': None,
+                    'f470_id_ext2_detalle': None,
                     'f470_id_un_movto': self.unidad_negocio   # spec 142951: unidad de negocio, no centro_op
                 }
             ],
@@ -1021,23 +1021,23 @@ class ConnektaGateway:
                     'f470_id_concepto': self.concepto_traslados,                     # 607 = Transferencias (spec 142951, obligatorio), override: SIESA_CONCEPTO_TRASLADOS
                     'f470_id_motivo': self.motivo_averia,                            # SIESA_MOTIVO_AVERIA — validado contra maestro Siesa por compañía
                     'f470_id_co_movto': self.centro_op,
-                    'f470_id_ccosto_movto': '',
-                    'f470_id_proyecto': '',
+                    'f470_id_ccosto_movto': None,
+                    'f470_id_proyecto': None,
                     'f470_id_unidad_medida': self.uom_default,
                     'f470_cant_base': round(float(abs(cantidad)), 4),
-                    'f470_cant_2': 0.0,
-                    'f470_costo_prom_uni': 0.0,
+                    'f470_cant_2': None,
+                    'f470_costo_prom_uni': None,
                     'f470_notas': '',
                     'f470_desc_variable': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': self.uom_default,   # consistente con enviar_ajuste_inventario
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
-                    'f470_id_item': '',
+                    'f470_id_item': None,
                     'f470_referencia_item': item_codigo,
-                    'f470_codigo_barras': '',
-                    'f470_id_ext1_detalle': '',
-                    'f470_id_ext2_detalle': '',
+                    'f470_codigo_barras': None,
+                    'f470_id_ext1_detalle': None,
+                    'f470_id_ext2_detalle': None,
                     'f470_id_un_movto': self.unidad_negocio
                 }
             ],
@@ -1153,7 +1153,7 @@ class ConnektaGateway:
         """API_v2_Inventarios_InvFecha — existencia real en una bodega específica.
         Tienda consulta disponibilidad en NB1 antes de armar su solicitud."""
         all_rows = []
-        for pag in range(1, 20):
+        for pag in range(1, 6):  # 500 ítems máx (5 págs × 100) — suficiente para NB1
             res = self._get(self.api_inventario, {
                 'paginacion': f'numPag={pag}|tamPag=100',
                 'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0"
@@ -1306,8 +1306,8 @@ class ConnektaGateway:
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
-                    'f470_cant_2': 0,
-                    'f470_costo_prom_uni': 0,
+                    'f470_cant_2': None,
+                    'f470_costo_prom_uni': None,
                     'f470_notas': None,
                     'f470_desc_variable': None,
                     'f470_id_ubicacion_aux_ent': None,
