@@ -93,8 +93,22 @@ def asignar_a_ruta():
     else:
         return jsonify({'error': 'Debe enviar bultos_ids o pedido_siesa'}), 400
 
-    # Bloqueo para evitar doble asignación
+    # Bloqueo pesimista — serializa acceso concurrente al mismo bulto entre workers
     bultos = query.with_for_update().all()
+
+    if not bultos:
+        return jsonify({'error': 'No se encontraron bultos PENDIENTE con los criterios indicados'}), 404
+
+    # Guard post-lock: detectar bultos ya asignados a otra ruta activa.
+    # with_for_update() garantiza que vemos el estado más reciente tras adquirir el lock.
+    # Si dos admins intentan asignar el mismo bulto simultáneamente, el segundo verá
+    # ruta_despacho_id != None aquí y recibirá 409 en lugar de sobreescribir silenciosamente.
+    ya_asignados = [b.id for b in bultos if b.ruta_despacho_id and b.ruta_despacho_id != ruta_id]
+    if ya_asignados:
+        otra_ruta = next(b.ruta_despacho_id for b in bultos if b.ruta_despacho_id and b.ruta_despacho_id != ruta_id)
+        return jsonify({
+            'error': f'Los bultos {ya_asignados} ya están asignados a la ruta #{otra_ruta}. Desasígnalos primero.'
+        }), 409
 
     for b in bultos:
         b.ruta_despacho_id = ruta_id
