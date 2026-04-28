@@ -87,6 +87,11 @@ def create_app():
 
     @app.route('/health')
     def health():
+        # [M10] Verify DB connectivity — Railway uses this to detect unhealthy instances
+        try:
+            db.session.execute(db.text('SELECT 1'))
+        except Exception as _e:
+            return jsonify({'status': 'unhealthy', 'db': str(_e)[:200]}), 503
         return jsonify({'status': 'ok'}), 200
 
     @app.route('/static/pwa/<path:filename>')

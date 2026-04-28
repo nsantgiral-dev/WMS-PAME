@@ -39,9 +39,16 @@ def _run_sync(app):
     with app.app_context():
         # Advisory lock de PostgreSQL — protege contra ejecución simultánea entre workers
         from sqlalchemy import text as _text
-        lock_adquirido = db.session.execute(
-            _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2008}
-        ).scalar()
+        # [M6] Wrap lock acquisition in try/except — a dead connection here would
+        # leave _sync_estado['en_curso']=True permanently, blocking all future syncs.
+        try:
+            lock_adquirido = db.session.execute(
+                _text('SELECT pg_try_advisory_lock(:key)'), {'key': 2008}
+            ).scalar()
+        except Exception as _e_lock:
+            logger.error(f'[PEDIDOS_SYNC] Error adquiriendo advisory lock: {_e_lock}')
+            _sync_estado['en_curso'] = False
+            return
         if not lock_adquirido:
             logger.warning('[PEDIDOS_SYNC] Otro worker ya ejecuta — omitido')
             _sync_estado['en_curso'] = False
@@ -208,9 +215,18 @@ def _run_sync(app):
                                 f'sin tipo_docto_pedido_siesa — no se puede verificar estado en Siesa'
                             )
                             continue
+                        # [A5] consec_docto must be numeric for Siesa SQL query.
+                        # numero_pedido_siesa is alphanumeric (e.g. "PE12345") — do NOT use as fallback.
+                        _consec = pk.consec_docto_pedido_siesa
+                        if not _consec or not str(_consec).strip().isdigit():
+                            logger.warning(
+                                f'[PEDIDOS_SYNC] Packing {pk.id} ({pk.numero_pedido_siesa}) '
+                                f'sin consec_docto numérico ({_consec!r}) — omitiendo verificación estado Siesa'
+                            )
+                            continue
                         estado_real = connekta.get_estado_pedido(
                             pk.tipo_docto_pedido_siesa,
-                            pk.consec_docto_pedido_siesa or pk.numero_pedido_siesa
+                            _consec
                         )
                         # -1 = pedido no encontrado (eliminado de Siesa), 9 = Anulado
                         # 1=En elaboración, 2=Aprobado, 3=Comprometido, 4=Cumplido: NO anular

@@ -62,6 +62,9 @@ class TareaReposicion(db.Model):
 
     @classmethod
     def generar_codigo(cls):
+        """Serialize code generation with advisory lock to avoid race conditions."""
+        from sqlalchemy import text as _text
+        db.session.execute(_text('SELECT pg_advisory_xact_lock(:k)'), {'k': 3002})
         ultimo = db.session.query(db.func.max(cls.id)).scalar() or 0
         return f'REP-{(ultimo + 1):07d}'
 

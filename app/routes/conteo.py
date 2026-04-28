@@ -4,7 +4,7 @@ from datetime import datetime
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
-from app.models.conteo import SesionConteo
+from app.models.conteo import SesionConteo, EstadoConteo
 from app.services.conteo_service import ConteoService
 from app.services.abc_service import ABCService
 from app.routes._auth_helpers import Roles, _es_personal_almacen
@@ -459,7 +459,7 @@ def editar_conteo(id):
     if not sesion:
         return jsonify({'error': 'Conteo no encontrado'}), 404
 
-    if sesion.estado == 'AJUSTADO':
+    if sesion.estado == EstadoConteo.AJUSTADO:
         return jsonify({'error': 'No se puede editar un conteo ya ajustado en Siesa'}), 409
 
     data = request.get_json() or {}
@@ -482,13 +482,13 @@ def editar_conteo(id):
             diferencia = nueva_cantidad - sesion.existencia_siesa
             sesion.diferencia = diferencia
             if diferencia == 0:
-                sesion.estado = 'MATCH'
+                sesion.estado = EstadoConteo.MATCH
                 sesion.fecha_cierre = datetime.utcnow()
                 cambios.append('estado → MATCH')
             else:
                 # Si estaba en MATCH pero ahora no cuadra, volver a DESCUADRE
-                if sesion.estado == 'MATCH':
-                    sesion.estado = 'DESCUADRE'
+                if sesion.estado == EstadoConteo.MATCH:
+                    sesion.estado = EstadoConteo.DESCUADRE
                     sesion.fecha_cierre = None
                     cambios.append(f'estado → DESCUADRE (dif={diferencia})')
 
@@ -501,8 +501,8 @@ def editar_conteo(id):
                 return jsonify({'error': f'Operario {nuevo_op} no encontrado'}), 404
         sesion.operario_id = nuevo_op
         cambios.append(f'operario_id → {nuevo_op}')
-        if sesion.estado == 'PENDIENTE' and nuevo_op:
-            sesion.estado = 'PENDIENTE'  # mantener — asignación no cambia estado
+        if sesion.estado == EstadoConteo.PENDIENTE and nuevo_op:
+            sesion.estado = EstadoConteo.PENDIENTE  # mantener — asignación no cambia estado
 
     if not cambios:
         return jsonify({'error': 'No se enviaron campos a modificar'}), 400

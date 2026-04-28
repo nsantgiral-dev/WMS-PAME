@@ -122,7 +122,8 @@ def _run_dlq_jobs():
     # skip_locked solo disponible en PostgreSQL — en SQLite lo ignoramos
     try:
         jobs = q.with_for_update(skip_locked=True).all()
-    except Exception:
+    except Exception as _e_skip:
+        logger.warning(f'[DLQ] skip_locked no soportado — fallback sin lock: {_e_skip}')
         jobs = q.all()
 
     if not jobs:
@@ -544,6 +545,20 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         tipo_alerta = payload.get('tipo_alerta', 'desconocido')
         asunto = payload.get('asunto', 'sin asunto')
         error_original = payload.get('error', '')
+        # [A17] Actually retry sending the email — the DLQ backoff may have given
+        # Resend time to recover. Only fall back to CRITICAL log if retry also fails.
+        try:
+            from app.services.alertas_service import enviar_email as _enviar
+            _enviado = _enviar(
+                asunto=f'[RETRY] {asunto}',
+                cuerpo_html=f'<p>Alerta original falló: {error_original}</p>',
+                cuerpo_texto=f'Alerta original falló: {error_original}',
+            )
+            if _enviado:
+                logger.info(f'[ALERTA_EMAIL] Retry exitoso para "{tipo_alerta}" ({asunto})')
+                return {'procesado': True, 'tipo_alerta': tipo_alerta, 'email_reenviado': True}
+        except Exception as _e_retry:
+            logger.warning(f'[ALERTA_EMAIL] Retry de email también falló: {_e_retry}')
         logger.critical(
             f'[ALERTA_EMAIL] Email de alerta "{tipo_alerta}" ({asunto}) no fue enviado: '
             f'{error_original}. Verificar RESEND_API_KEY y ALERTA_EMAIL_DEST en Railway.'

@@ -381,8 +381,12 @@ class PackingService:
         items_payload = []
         for i in tarea.items:
             if not i.producto:
-                logger.error(f'[PACKING] ItemPacking {i.id} sin producto (producto_id={i.producto_id}) — saltando del payload Siesa')
-                continue
+                # [M19] Raise instead of silently skipping — a partial factura in Siesa
+                # would leave inventory and accounting inconsistent with the physical shipment.
+                raise ValueError(
+                    f'ItemPacking {i.id} referencia producto_id={i.producto_id} que no existe en BD. '
+                    'Corregir el catálogo de productos antes de cerrar packing.'
+                )
             if not i.producto.codigo_siesa:
                 raise ValueError(
                     f'Producto {i.producto.codigo} (id={i.producto_id}) no tiene codigo_siesa. '

@@ -43,7 +43,14 @@ class LPN(db.Model):
 
     @classmethod
     def generar_codigo(cls):
-        """Genera el próximo código LPN secuencial: LPN-0000001, LPN-0000002..."""
+        """Genera el próximo código LPN secuencial: LPN-0000001, LPN-0000002...
+        Uses MAX(id)+1 as baseline — safe because `codigo` column is UNIQUE:
+        if a concurrent insert causes a collision, the caller gets IntegrityError
+        and can retry (or use a UUID-based fallback).
+        """
+        from sqlalchemy import text as _text
+        # Lock-free: use advisory lock scoped to this table to serialize code generation
+        db.session.execute(_text('SELECT pg_advisory_xact_lock(:k)'), {'k': 3001})
         ultimo = db.session.query(db.func.max(cls.id)).scalar() or 0
         return f'LPN-{(ultimo + 1):07d}'
 

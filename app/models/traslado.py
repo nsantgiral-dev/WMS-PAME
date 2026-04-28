@@ -123,17 +123,23 @@ class SolicitudTraslado(db.Model):
         }
 
     def _picking_progreso(self):
-        """Progreso de TareasPicking — solo relevante en EN_PICKING/PREPARADO."""
+        """Progreso de TareasPicking — solo relevante en EN_PICKING/PREPARADO.
+        [M9] Single query with conditional count instead of 2 separate COUNT queries.
+        """
         if self.estado not in ('EN_PICKING', 'PREPARADO'):
             return None
-        base = TareaPicking.query.filter_by(
+        from sqlalchemy import func as _func, case as _case
+        from app.extensions import db as _db
+        row = _db.session.query(
+            _func.count().label('total'),
+            _func.count(_case((TareaPicking.estado == 'COMPLETADO', 1))).label('completadas'),
+        ).filter_by(
             referencia_documento=self.codigo,
             tipo_documento='TRASLADO',
-        )
-        total = base.count()
+        ).first()
+        total, completadas = row.total, row.completadas
         if total == 0:
             return {'total': 0, 'completadas': 0, 'sin_tareas': True}
-        completadas = base.filter_by(estado='COMPLETADO').count()
         return {
             'total': total,
             'completadas': completadas,

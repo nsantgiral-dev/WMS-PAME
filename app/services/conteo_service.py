@@ -419,13 +419,16 @@ class ConteoService:
             sesion_origen_id=sesion_origen.id
         )
 
-        # Buscar operario disponible diferente al primero
+        # Buscar operario disponible diferente al primero — mismo almacén
         from app.models.usuario import Usuario
-        otro_operario = Usuario.query.filter(
+        _q = Usuario.query.filter(
             Usuario.id != operario_excluido,
             Usuario.activo == True,
             Usuario.rol.in_(['operario', 'jefe_almacen', 'admin'])
-        ).first()
+        )
+        if sesion_origen.almacen_id:
+            _q = _q.filter(Usuario.almacen_id == sesion_origen.almacen_id)
+        otro_operario = _q.first()
 
         if otro_operario:
             segundo.operario_id = otro_operario.id

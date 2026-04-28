@@ -107,9 +107,11 @@ def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str, tipo
             # Deduplicar por tipo_alerta + día para no acumular N jobs idénticos
             # durante un downtime de Resend que dura múltiples ciclos del scheduler.
             _idem = f'ALERTA-{tipo_alerta}-{_date.today().isoformat()}'
+            # [M1] Fix: REINTENTANDO state doesn't exist — after failure, estado='PENDIENTE'.
+            # Include PROCESANDO (DLQ running) and FALLIDO (exhausted retries) to avoid dupes.
             _ya_en_cola = _SJ.query.filter(
                 _SJ.tipo == 'ALERTA_EMAIL',
-                _SJ.estado.in_(['PENDIENTE', 'REINTENTANDO']),
+                _SJ.estado.in_(['PENDIENTE', 'PROCESANDO', 'FALLIDO']),
                 _SJ.payload.contains(f'"tipo_alerta": "{tipo_alerta}"'),
             ).first()
             if not _ya_en_cola:
