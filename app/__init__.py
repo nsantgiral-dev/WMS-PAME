@@ -153,6 +153,7 @@ def create_app():
             ('app.services.empaques_sync_service',      'init_scheduler',          '[EMPAQUES_SCHEDULER]'),
             ('app.services.ubicaciones_sync_service',   'init_scheduler',          '[UBICACIONES_SCHEDULER]'),
             ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
+            ('app.services.reconciliacion_service',     'init_scheduler',          '[RECONCILIACION_SCHEDULER]'),
             ('app.services.alertas_service',            'init_scheduler',          '[ALERTAS_SCHEDULER]'),
         ]
         _app_logger = logging.getLogger(__name__)
