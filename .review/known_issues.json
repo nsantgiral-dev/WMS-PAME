@@ -194,6 +194,51 @@
       "pattern": "P_LOGGER_EXCEPTION.*traslados|traslados.*except.*sin.*stack|traslados.*500.*logger\\.error",
       "reason": "Fixed 2026-04-27: all except Exception blocks in traslados.py now call logger.exception(str(e)) before returning 500.",
       "date": "2026-04-27"
+    },
+    {
+      "pattern": "SF_EXCEPT_PASS.*alertas.*resumen|sweep.*PACKING_BULTO.*pass|sweep.*FALLIDO.*24h.*pass",
+      "reason": "Fixed 2026-04-28: both sweeps use logger.error(exc_info=True) instead of bare except Exception: pass.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "SF_ANOMALIAS_NO_RENDEREADAS|anomalias.*no.*renderiza.*email|_enviar_resumen_diario.*anomalias.*ignoradas",
+      "reason": "Fixed 2026-04-28: anomalias param now rendered in both cuerpo_texto and cuerpo_html (red block when non-empty).",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "health.*expone.*PostgreSQL|health.*str.*e.*cliente|health.*db.*error.*sin.*auth",
+      "reason": "Fixed 2026-04-28: health endpoint no longer returns str(e) to client. Error logged to Railway; client only sees 'unhealthy'.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "despachar.*sin.*DLQ.*fallback|Siesa.*caída.*traslado.*EN_TRANSITO.*sin.*documento|traslado.*despacho.*sin.*email.*alerta",
+      "reason": "Fixed 2026-04-28: despachar() sends immediate alert email via DLQ when Siesa call fails. Ops receives email with action link.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "EstadoSiesaJob.*sin.*clase|SiesaJob.*raw.*string|siesa_job.*PENDIENTE.*literal",
+      "reason": "Fixed 2026-04-28: EstadoSiesaJob class added to siesa_job.py with ACTIVOS frozenset. All 14+ raw strings replaced in siesa_job.py, siesa_job_service.py, recepcion_service.py, packing_service.py, alertas_service.py.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "P_ESTADO_CONSTANTS.*traslado_service|P_ESTADO_CONSTANTS.*6.*servicios|raw.*string.*EstadoPacking|raw.*string.*EstadoConteo|raw.*string.*EstadoRecepcion|raw.*string.*EstadoDevolucion|raw.*string.*EstadoReposicion",
+      "reason": "Fixed 2026-04-28: 32+ raw state strings replaced with constants in 7 services (traslado, reposicion, recepcion, devolucion, packing, conteo, mobile). EstadoPicking and EstadoConteo imported where missing.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "reportar_problema.*CONTEO.*sin.*guard|reportar_problema.*PACKING.*sin.*guard|AJUSTADO.*BLOQUEADO.*revertir",
+      "reason": "Fixed 2026-04-28: CONTEO and PACKING branches in reportar_problema now check estado not in (PENDIENTE, EN_PROCESO) → 409.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "174646.*tipo_docto.*sin.*validar|crear_requisicion_traslado.*tipo_docto.*vacío|SIESA_TIPO_DOCTO_TRASLADO.*sin.*check",
+      "reason": "Fixed 2026-04-28: crear_requisicion_traslado raises ValueError if tipo_docto_req_traslado is empty, same as all other POST connectors.",
+      "date": "2026-04-28"
+    },
+    {
+      "pattern": "f451_id_cond_pago.*None.*sin.*warning|cond_pago.*obligatorio.*sin.*alerta|SIESA_COND_PAGO_COMPRAS.*sin.*guard",
+      "reason": "Fixed 2026-04-28: logger.warning added when f451_id_cond_pago would be None (both cond_pago and self.cond_pago_compras empty).",
+      "date": "2026-04-28"
     }
   ],
   "accepted_risk": [
