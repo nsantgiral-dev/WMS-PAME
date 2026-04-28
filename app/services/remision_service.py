@@ -3,7 +3,22 @@ from app.models.packing import TareaPacking
 
 
 class RemisionService:
-    """Genera el documento HTML de remisión para una tarea de packing DESPACHADA."""
+    """Genera el documento HTML de remisión para una tarea de packing con caja cerrada."""
+
+    @staticmethod
+    def puede_generar(tarea: TareaPacking) -> tuple[bool, str]:
+        """
+        Retorna (True, '') si la remisión está disponible.
+        Retorna (False, motivo) si no.
+        'Caja cerrada' se detecta por la existencia de bultos — el estado DESPACHADO
+        llega async (DLQ Siesa), pero los bultos se crean sincrónicamente al cerrar.
+        """
+        from app.models.packing import EstadoPacking
+        if tarea.estado == EstadoPacking.CANCELADO:
+            return False, 'No se puede generar remisión de una tarea cancelada'
+        if not tarea.bultos:
+            return False, 'La remisión estará disponible una vez se cierren las piezas físicas (cerrar caja)'
+        return True, ''
 
     @staticmethod
     def generar_html(tarea: TareaPacking) -> str:

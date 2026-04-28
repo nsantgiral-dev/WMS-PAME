@@ -428,8 +428,9 @@ def imprimir_remision(id):
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para ver la remisión'}), 403
     tarea = TareaPacking.query.get_or_404(id)
-    if tarea.estado != EstadoPacking.DESPACHADO:
-        return jsonify({'error': f'La remisión solo está disponible una vez despachado. Estado actual: {tarea.estado}'}), 409
+    disponible, motivo = RemisionService.puede_generar(tarea)
+    if not disponible:
+        return jsonify({'error': motivo}), 409
     html = RemisionService.generar_html(tarea)
     return Response(html, mimetype='text/html; charset=utf-8'), 200
 
