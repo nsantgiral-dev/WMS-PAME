@@ -640,7 +640,7 @@ class ConnektaGateway:
                     'f470_cant_base': round(float(abs(i.get('cantidad_empacada') or 0)), 4),
                     'f470_cant_2': None,
                     'f470_vlr_bruto': None,
-                    'f470_ind_naturaleza': 1,                         # 1 = Salida (spec: 0=Entrada, 1=Salida)
+                    'f470_ind_naturaleza': 2,                         # 2 = Salida/Venta (spec 142945: 1=Entrada/Devol, 2=Salida/Venta)
                     'f470_ind_solo_valor': 0,
                     'f470_ind_impto_asumido': 0,
                     'f470_notas': None,
@@ -893,7 +893,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': self.nit_empresa or None,
-                    'f350_id_clase_docto': '',
+                    'f350_id_clase_docto': 63,           # Entero obligatorio: 63=Ajustes (spec 142951)
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
@@ -982,7 +982,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
-                    'f350_id_clase_docto': '',
+                    'f350_id_clase_docto': 67,           # Entero obligatorio: 67=Transferencias (spec 142951)
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia or f'Avería detectada por WMS · {item_codigo}',
@@ -1116,17 +1116,28 @@ class ConnektaGateway:
                 'F_CIA': int(self.id_cia_siesa),
                 'f470_id_co': self.centro_op,
                 'f470_id_tipo_docto': tipo_docto,
-                'f470_consec_docto': 0,                          # [C4] obligatorio spec 173066
-                'f470_nro_registro': 1,                          # [C4] obligatorio spec 173066
+                'f470_consec_docto': 0,
+                'f470_nro_registro': 1,
                 'f470_id_bodega': bodega_id,
-                'f470_id_ubicacion_aux': ubicacion_origen,       # origen  (ej. RES-01-A)
-                'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
-                'f470_referencia_item': referencia_item,
-                'f470_cant_base': round(float(cantidad), 4),
+                'f470_id_ubicacion_aux': ubicacion_origen,       # origen (ej. RES-01-A)
+                'f470_id_lote': None,                            # Dep — si ítem maneja lotes
                 'f470_id_motivo': self.motivo_traslado or '01',
                 'f470_id_co_movto': self.centro_op,
+                'f470_id_ccosto_movto': None,                    # Dep — si cuenta contable exige ccosto
+                'f470_id_proyecto': None,
                 'f470_id_unidad_medida': self.uom_default or 'UND',
-                'f470_id_un_movto': self.unidad_negocio,   # spec: unidad de negocio; None → Siesa hereda de bodega
+                'f470_cant_base': round(float(cantidad), 4),
+                'f470_cant_2': None,                             # Dep — unidad adicional
+                'f470_costo_prom_uni': None,                     # Dep — costo unitario
+                'f470_notas': None,
+                'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
+                'f470_id_lote_ent': None,
+                'f470_id_item': None,                            # Dep — usamos referencia_item
+                'f470_referencia_item': referencia_item,
+                'f470_codigo_barras': None,
+                'f470_id_ext1_detalle': None,
+                'f470_id_ext2_detalle': None,
+                'f470_id_un_movto': self.unidad_negocio,
             }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }
@@ -1365,15 +1376,25 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
-                    # [A10] 173079 spec does NOT have f470_id_concepto, f470_ind_naturaleza,
-                    # f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido — removed
+                    'f470_id_ubicacion_aux': None,       # Dep — si bodega maneja ubicaciones
+                    'f470_id_lote': None,                # Dep — si ítem maneja lotes
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
-                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
-                    'f470_id_un_movto': self.unidad_negocio,
+                    'f470_id_ccosto_movto': None,        # Dep — si cuenta contable exige ccosto
+                    'f470_id_proyecto': None,
+                    'f470_id_unidad_medida': item.get('unidad_medida') or self.uom_default,
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
+                    'f470_cant_2': None,                 # Dep — unidad adicional
+                    'f470_costo_prom_uni': None,          # Dep
                     'f470_notas': None,
+                    'f470_id_ubicacion_aux_ent': None,   # Dep — ubicación entrada
+                    'f470_id_lote_ent': None,
+                    'f470_id_item': None,                # Dep — usamos referencia_item
+                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f470_codigo_barras': None,
+                    'f470_id_ext1_detalle': None,
+                    'f470_id_ext2_detalle': None,
+                    'f470_id_un_movto': self.unidad_negocio,
                 }
                 for idx, item in enumerate(items)
             ],
@@ -1425,15 +1446,25 @@ class ConnektaGateway:
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
-                    # [A10] 173066 spec does NOT have f470_id_concepto, f470_ind_naturaleza,
-                    # f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido — removed
+                    'f470_id_ubicacion_aux': None,       # Dep — si bodega maneja ubicaciones
+                    'f470_id_lote': None,                # Dep — si ítem maneja lotes
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
-                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
-                    'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_id_co_movto': self.centro_op,
-                    'f470_id_un_movto': self.unidad_negocio,
+                    'f470_id_ccosto_movto': None,        # Dep — si cuenta contable exige ccosto
+                    'f470_id_proyecto': None,             # No — opcional
+                    'f470_id_unidad_medida': item.get('unidad_medida') or self.uom_default,
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
+                    'f470_cant_2': None,                 # Dep — si ítem maneja unidad adicional
+                    'f470_costo_prom_uni': None,          # Dep — costo unitario
                     'f470_notas': None,
+                    'f470_id_ubicacion_aux_ent': None,   # Dep — si bodega entrada maneja ubicaciones
+                    'f470_id_lote_ent': None,             # Dep — si ítem+bodega entrada manejan lotes
+                    'f470_id_item': None,                # Dep — usamos referencia_item
+                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f470_codigo_barras': None,           # Dep
+                    'f470_id_ext1_detalle': None,        # Dep — si ítem maneja extensión 1
+                    'f470_id_ext2_detalle': None,        # Dep — si ítem maneja extensión 2
+                    'f470_id_un_movto': self.unidad_negocio,
                 }
                 for idx, item in enumerate(items)
             ],
