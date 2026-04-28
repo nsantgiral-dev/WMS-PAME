@@ -6,7 +6,7 @@ import uuid
 import json
 from datetime import datetime
 from app.extensions import db
-from app.models.packing import TareaPacking, ItemPacking
+from app.models.packing import TareaPacking, ItemPacking, EstadoPacking
 from app.models.picking import TareaPicking
 from app.services.connekta_gateway import connekta
 import logging
@@ -130,7 +130,7 @@ class PackingService:
         if tarea.estado != 'PENDIENTE':
             raise ValueError(f'No se puede iniciar una tarea en estado {tarea.estado}')
 
-        tarea.estado = 'EN_PROCESO'
+        tarea.estado = EstadoPacking.EN_PROCESO
         tarea.empacador_id = empacador_id
         tarea.fecha_inicio = datetime.utcnow()
         db.session.commit()
@@ -235,8 +235,8 @@ class PackingService:
 
         tarea.verificacion_exitosa = not bool(items_con_diferencia)
         tarea.observaciones = observaciones
-        if tarea.estado != 'VERIFICADO':
-            tarea.estado = 'VERIFICADO'
+        if tarea.estado != EstadoPacking.VERIFICADO:
+            tarea.estado = EstadoPacking.VERIFICADO
             tarea.fecha_verificado = datetime.utcnow()
         db.session.commit()
 
@@ -515,7 +515,7 @@ class PackingService:
 
         # Si tiene bultos sin cargar, eliminarlos antes de cancelar
         Bulto.query.filter_by(tarea_id=tarea_id, estado='PENDIENTE').delete()
-        tarea.estado = 'CANCELADO'
+        tarea.estado = EstadoPacking.CANCELADO
         tarea.observaciones = motivo
         db.session.commit()
         return tarea
@@ -548,7 +548,7 @@ class PackingService:
             )
 
         Bulto.query.filter_by(tarea_id=tarea_id).delete()
-        tarea.estado = 'VERIFICADO'
+        tarea.estado = EstadoPacking.VERIFICADO
         tarea.siesa_response = None
         db.session.commit()
         return tarea

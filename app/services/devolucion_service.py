@@ -15,7 +15,7 @@ Flujo:
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models.devolucion import TareaDevolucion
+from app.models.devolucion import TareaDevolucion, EstadoDevolucion
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.ubicacion import Ubicacion
 from app.models.almacen import Almacen
@@ -293,7 +293,7 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
     db.session.add(mov)
 
     # Cerrar tarea
-    tarea.estado = 'COMPLETADO'
+    tarea.estado = EstadoDevolucion.COMPLETADO
     tarea.ubicacion_id = ub.id
     tarea.es_averiado = es_averiado
     tarea.recepcionista_id = recepcionista_id
@@ -361,7 +361,7 @@ def descartar(tarea_id: int, recepcionista_id: int, motivo: str = None) -> Tarea
     tarea = TareaDevolucion.query.get(tarea_id)
     if not tarea:
         raise ValueError(f'Tarea {tarea_id} no existe')
-    tarea.estado = 'DESCARTADO'
+    tarea.estado = EstadoDevolucion.DESCARTADO
     tarea.recepcionista_id = recepcionista_id
     tarea.observaciones = motivo
     tarea.fecha_completado = datetime.utcnow()

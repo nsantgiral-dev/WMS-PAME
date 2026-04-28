@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models.recepcion import RecepcionMercancia, ItemRecepcion
+from app.models.recepcion import RecepcionMercancia, ItemRecepcion, EstadoRecepcion
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.ubicacion import Ubicacion
 from app.models.picking import TareaPicking
@@ -84,7 +84,7 @@ class RecepcionService:
         if recepcion.estado != 'ABIERTA':
             raise ValueError(f'No se puede iniciar en estado {recepcion.estado}')
 
-        recepcion.estado = 'EN_PROCESO'
+        recepcion.estado = EstadoRecepcion.EN_PROCESO
         recepcion.recepcionista_id = recepcionista_id
         recepcion.fecha_inicio = datetime.utcnow()
         db.session.commit()
@@ -494,7 +494,7 @@ class RecepcionService:
         recepcion.tiene_excesos = tiene_excesos
         recepcion.tiene_cross_dock = tiene_cross_dock
         recepcion.observaciones = observaciones
-        recepcion.estado = 'CONFIRMADA'
+        recepcion.estado = EstadoRecepcion.CONFIRMADA
         recepcion.fecha_confirmacion = datetime.utcnow()
 
         items_payload = []

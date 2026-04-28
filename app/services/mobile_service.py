@@ -18,9 +18,9 @@ _SCAN_DEBOUNCE_TTL = 5  # segundos
 # Limitar threads de verificación de stock — evita colapsar el pool de conexiones DB
 # bajo carga alta (10-30 operarios pickeando simultáneamente en apertura de turno).
 _STOCK_VERIF_SEMAPHORE = threading.Semaphore(2)
-from app.models.picking import TareaPicking
+from app.models.picking import TareaPicking, EstadoPicking
 from app.models.packing import TareaPacking, ItemPacking
-from app.models.conteo import SesionConteo
+from app.models.conteo import SesionConteo, EstadoConteo
 from app.models.producto import Producto
 from app.services.picking_service import PickingService
 from app.services.packing_service import PackingService
@@ -195,7 +195,7 @@ class MobileService:
 
             if conteo:
                 conteo.operario_id = operario_id
-                conteo.estado = 'EN_PROCESO'
+                conteo.estado = EstadoConteo.EN_PROCESO
                 conteo.fecha_inicio = datetime.utcnow()
                 db.session.commit()
                 logger.info(f'[MOBILE] Conteo {conteo.codigo} asignado a operario {operario_id}')
@@ -289,7 +289,7 @@ class MobileService:
 
         # Asignar picking al operario
         tarea.operario_id = operario_id
-        tarea.estado = 'EN_PROCESO'
+        tarea.estado = EstadoPicking.EN_PROCESO
         tarea.fecha_inicio = datetime.utcnow()
         db.session.commit()
 
@@ -456,8 +456,8 @@ class MobileService:
             if es_empaque:
                 tarea.empaques_escaneados = (tarea.empaques_escaneados or 0) + cantidad
 
-            if tarea.estado == 'PENDIENTE':
-                tarea.estado = 'EN_PROCESO'
+            if tarea.estado == EstadoPicking.PENDIENTE:
+                tarea.estado = EstadoPicking.EN_PROCESO
                 tarea.operario_id = operario_id
                 tarea.fecha_inicio = datetime.utcnow()
 

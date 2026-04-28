@@ -22,7 +22,7 @@ from app.extensions import db
 from app.models.ubicacion import Ubicacion
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.lpn import LPN
-from app.models.tarea_reposicion import TareaReposicion
+from app.models.tarea_reposicion import TareaReposicion, EstadoReposicion
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,7 @@ def get_tarea_abastecedor(abastecedor_id: int):
         return None
 
     siguiente.abastecedor_id = abastecedor_id
-    siguiente.estado = 'EN_PROCESO'
+    siguiente.estado = EstadoReposicion.EN_PROCESO
     siguiente.fecha_inicio = datetime.utcnow()
     db.session.commit()
 
@@ -241,7 +241,7 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
     ))
 
     # e) Cerrar tarea
-    tarea.estado = 'COMPLETADA'
+    tarea.estado = EstadoReposicion.COMPLETADA
     tarea.unidades_movidas = unidades
     tarea.fecha_completada = datetime.utcnow()
 

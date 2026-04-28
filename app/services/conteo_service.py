@@ -9,7 +9,7 @@ import logging
 import threading
 from datetime import datetime
 from app.extensions import db
-from app.models.conteo import SesionConteo
+from app.models.conteo import SesionConteo, EstadoConteo
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class ConteoService:
         # Asignar operario si no tiene
         if not sesion.operario_id:
             sesion.operario_id = operario_id
-            sesion.estado = 'EN_PROCESO'
+            sesion.estado = EstadoConteo.EN_PROCESO
             sesion.fecha_inicio = datetime.utcnow()
             try:
                 db.session.commit()
@@ -129,7 +129,7 @@ class ConteoService:
             sesion.existencia_siesa = None  # admin resolverá al confirmar
             sesion.lote_id = lote_id
             sesion.fecha_inicio = sesion.fecha_inicio or datetime.utcnow()
-            sesion.estado = 'SEGUNDO_CONTEO'
+            sesion.estado = EstadoConteo.SEGUNDO_CONTEO
             sesion.diferencia = None
             logger.warning(
                 f'[CONTEO] Siesa no disponible para {sesion_pre.producto_codigo_siesa} '
@@ -168,7 +168,7 @@ class ConteoService:
 
         if diferencia == 0:
             # MATCH — cierre inmediato, cero trabajo administrativo
-            sesion.estado = 'MATCH'
+            sesion.estado = EstadoConteo.MATCH
             sesion.diferencia = 0
             sesion.fecha_cierre = datetime.utcnow()
             try:
@@ -191,7 +191,7 @@ class ConteoService:
 
         else:
             # DESCUADRE — generar segundo conteo por operario diferente
-            sesion.estado = 'SEGUNDO_CONTEO'
+            sesion.estado = EstadoConteo.SEGUNDO_CONTEO
             sesion.diferencia = diferencia
 
             # Commit único: SEGUNDO_CONTEO + hijo atómicos.
@@ -522,7 +522,7 @@ class ConteoService:
                 logger.warning(
                     f'[CONTEO] Sesión {sesion.id} stuck AJUSTANDO — job COMPLETADO encontrado → marcando AJUSTADO'
                 )
-                sesion.estado = 'AJUSTADO'
+                sesion.estado = EstadoConteo.AJUSTADO
                 sesion.siesa_triggered = True
                 sesion.fecha_cierre = sesion.fecha_cierre or datetime.utcnow()
                 db.session.commit()
@@ -603,7 +603,7 @@ class ConteoService:
         # Esto bloquea requests concurrentes (doble-tap del supervisor) que llegarían
         # tras el commit y verían siesa_triggered=False — sin este estado, ambas
         # requests pasarían el guard y llamarían a Siesa → doble ajuste de inventario.
-        sesion.estado = 'AJUSTANDO'
+        sesion.estado = EstadoConteo.AJUSTANDO
 
         # Capturar referencias a atributos ANTES del commit
         # (expire_on_commit invalida el objeto tras el commit)

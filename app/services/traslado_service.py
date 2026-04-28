@@ -16,7 +16,7 @@ import uuid
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado
+from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado, EstadoTraslado
 from app.models.producto import Producto
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.almacen import Almacen
@@ -52,7 +52,7 @@ class TrasladoService:
             bodega_origen_siesa=BODEGA_ORIGEN_DEFAULT,
             bodega_destino_siesa=bodega_destino,
             nombre_punto_venta=nombre_punto_venta,
-            estado='BORRADOR',
+            estado=EstadoTraslado.BORRADOR,
             modo_transferencia='EN_TRANSITO' if connekta.bodega_transito else 'DIRECTA',
             bodega_transito_siesa=connekta.bodega_transito or None,
             solicitante_id=solicitante_id,
@@ -82,12 +82,12 @@ class TrasladoService:
     def enviar_solicitud(solicitud_id: int) -> SolicitudTraslado:
         """Tienda confirma y envía al admin bodega."""
         s = SolicitudTraslado.query.get_or_404(solicitud_id)
-        if s.estado != 'BORRADOR':
+        if s.estado != EstadoTraslado.BORRADOR:
             raise ValueError(f'Solo se puede enviar una solicitud en BORRADOR (estado actual: {s.estado})')
         if not s.items:
             raise ValueError('No se puede enviar una solicitud sin ítems')
 
-        s.estado = 'ENVIADA'
+        s.estado = EstadoTraslado.ENVIADA
         s.fecha_envio = datetime.utcnow()
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → ENVIADA')
@@ -106,7 +106,7 @@ class TrasladoService:
         if not s:
             from flask import abort
             abort(404)
-        if s.estado not in ('ENVIADA',):
+        if s.estado not in (EstadoTraslado.ENVIADA,):
             raise ValueError(f'Solo se puede aprobar una solicitud ENVIADA (estado: {s.estado})')
 
         # Actualizar cantidades aprobadas
@@ -140,7 +140,7 @@ class TrasladoService:
         # El WMS es el único libro de estado (EN_PICKING → PREPARADO → EN_TRANSITO).
         # Siesa solo recibe los movimientos reales: 173076 al despachar y 173079 al recibir.
         s.siesa_error = None
-        s.estado = 'EN_PICKING'
+        s.estado = EstadoTraslado.EN_PICKING
         db.session.flush()  # necesario antes de crear tareas (s.id ya existe)
 
         # ── Reserva dura FEFO: crea TareaPicking prioridad 10 ──
@@ -162,10 +162,10 @@ class TrasladoService:
                            motivo: str) -> SolicitudTraslado:
         """Admin rechaza la solicitud."""
         s = SolicitudTraslado.query.get_or_404(solicitud_id)
-        if s.estado not in ('ENVIADA',):
+        if s.estado not in (EstadoTraslado.ENVIADA,):
             raise ValueError(f'Solo se puede rechazar una solicitud ENVIADA (estado: {s.estado})')
 
-        s.estado = 'RECHAZADA'
+        s.estado = EstadoTraslado.RECHAZADA
         s.aprobador_id = aprobador_id
         s.motivo_rechazo = motivo
         db.session.commit()
@@ -182,11 +182,11 @@ class TrasladoService:
         if not s:
             from flask import abort
             abort(404)
-        if s.estado not in ('PREPARADO', 'EN_PICKING'):
+        if s.estado not in (EstadoTraslado.PREPARADO, EstadoTraslado.EN_PICKING):
             raise ValueError(f'No se puede despachar en estado {s.estado}')
         # Guard idempotencia: si Siesa ya procesó este despacho (siesa_salida_consec asignado)
         # y el estado ya avanzó, evitar llamar Siesa de nuevo (duplicación de documento)
-        if s.siesa_salida_consec and s.estado in ('EN_TRANSITO', 'ENTREGADA'):
+        if s.siesa_salida_consec and s.estado in (EstadoTraslado.EN_TRANSITO, EstadoTraslado.ENTREGADA):
             raise ValueError(
                 f'Despacho ya registrado en Siesa (consec={s.siesa_salida_consec}). '
                 f'Si necesitas reintentar, usa el endpoint de reintento.'
@@ -272,10 +272,10 @@ class TrasladoService:
             except Exception as _ae:
                 logger.warning(f'[TRASLADO] No se pudo enviar alerta email para {s.codigo}: {_ae}')
 
-        nuevo_estado = 'EN_TRANSITO' if s.modo_transferencia == 'EN_TRANSITO' else 'ENTREGADA'
+        nuevo_estado = EstadoTraslado.EN_TRANSITO if s.modo_transferencia == 'EN_TRANSITO' else EstadoTraslado.ENTREGADA
         s.estado = nuevo_estado
         s.fecha_despacho = datetime.utcnow()
-        if nuevo_estado == 'ENTREGADA':
+        if nuevo_estado == EstadoTraslado.ENTREGADA:
             s.fecha_entrega = datetime.utcnow()
 
         # ── Descontar inventario WMS ──
@@ -290,7 +290,7 @@ class TrasladoService:
         try:
             from app.models.lpn import LPN
             LPN.query.filter_by(traslado_id=s.id, estado='ACTIVO').update(
-                {'estado': 'EN_TRANSITO'}, synchronize_session=False
+                {'estado': EstadoTraslado.EN_TRANSITO}, synchronize_session=False
             )
         except Exception as e_lpn:
             logger.warning(f'[TRASLADO] Error confirmando LPNs EN_TRANSITO para {s.codigo}: {e_lpn}')
@@ -310,10 +310,10 @@ class TrasladoService:
         if not s:
             from flask import abort
             abort(404)
-        if s.estado not in ('EN_TRANSITO', 'DESPACHADA'):
+        if s.estado not in (EstadoTraslado.EN_TRANSITO, 'DESPACHADA'):
             raise ValueError(f'No se puede confirmar recepción en estado {s.estado}')
         # Guard idempotencia: 173079 ya se envió exitosamente — no duplicar
-        if s.siesa_entrada_consec and s.estado == 'ENTREGADA':
+        if s.siesa_entrada_consec and s.estado == EstadoTraslado.ENTREGADA:
             raise ValueError(
                 f'Recepción ya registrada en Siesa (consec={s.siesa_entrada_consec}). '
                 f'El traslado ya fue confirmado.'
@@ -376,7 +376,7 @@ class TrasladoService:
         except Exception as e_lpn:
             logger.warning(f'[TRASLADO] Error consumiendo LPNs para {s.codigo}: {e_lpn}')
 
-        s.estado = 'ENTREGADA'
+        s.estado = EstadoTraslado.ENTREGADA
         s.fecha_entrega = datetime.utcnow()
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → ENTREGADA (confirmado por usuario {usuario_id})')
@@ -434,12 +434,12 @@ class TrasladoService:
         Cancela las TareaPicking pendientes de un traslado y libera el campo
         reservado en UbicacionProducto. Se llama al cancelar/rechazar en EN_PICKING.
         """
-        from app.models.picking import TareaPicking
+        from app.models.picking import TareaPicking, EstadoPicking as _EP
 
         tareas = TareaPicking.query.filter_by(
             referencia_documento=solicitud.codigo,
             tipo_documento='TRASLADO',
-        ).filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).all()
+        ).filter(TareaPicking.estado.in_([_EP.PENDIENTE, _EP.EN_PROCESO])).all()
 
         for t in tareas:
             reg = UbicacionProducto.query.filter_by(
@@ -448,7 +448,7 @@ class TrasladoService:
             ).with_for_update().first()
             if reg:
                 reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
-            t.estado = 'CANCELADO'
+            t.estado = _EP.CANCELADO
             logger.info(f'[TRASLADO] Tarea {t.codigo} cancelada por cancelación de {solicitud.codigo}')
 
     @staticmethod
@@ -463,7 +463,7 @@ class TrasladoService:
         ya decrementó 'cantidad' al confirmar cada ítem — solo se cancelan las
         tareas pendientes (liberando reservas) y se retorna para evitar doble descuento.
         """
-        from app.models.picking import TareaPicking
+        from app.models.picking import TareaPicking, EstadoPicking as _EP2
 
         # ── Anti-double-decrement: detectar si picking ya corrió ──
         tareas_traslado = TareaPicking.query.filter_by(
@@ -476,14 +476,14 @@ class TrasladoService:
             # decrementó 'cantidad'. Solo cancelar las que quedaron pendientes
             # (items no recogidos — el operario no llegó, o picking parcial).
             for t in tareas_traslado:
-                if t.estado in ('PENDIENTE', 'EN_PROCESO'):
+                if t.estado in (_EP2.PENDIENTE, _EP2.EN_PROCESO):
                     reg = UbicacionProducto.query.filter_by(
                         ubicacion_id=t.ubicacion_id,
                         producto_id=t.producto_id,
                     ).with_for_update().first()
                     if reg:
                         reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
-                    t.estado = 'CANCELADO'
+                    t.estado = _EP2.CANCELADO
             logger.info(
                 f'[TRASLADO] {solicitud.codigo}: stock descontado vía picking formal '
                 f'({len(tareas_traslado)} tareas). _descontar_inventario_wms omitido.'
