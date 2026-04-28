@@ -571,6 +571,10 @@ async function cargarPedidos() {
       get('/api/picking/?activas=true&per_page=20').catch(() => ({ tareas: [] }))
     ]);
     SIESA_PEDIDOS = siesa.pedidos || [];
+    SIESA_PEDIDOS.sort((a, b) => {
+      const g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
+      return g(a) - g(b);
+    });
     let html = '';
 
     if (siesa.simulado) {
