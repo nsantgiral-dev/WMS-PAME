@@ -246,6 +246,11 @@ def reportar_problema():
         # Solo el operario asignado puede reportar problema en su propio conteo
         if sesion.operario_id != operario_id:
             return jsonify({'error': 'Esta sesión de conteo no te está asignada'}), 403
+        # Guard estado: solo bloquear conteos activos (previene revertir AJUSTADO → BLOQUEADO)
+        if sesion.estado not in (EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO):
+            return jsonify({
+                'error': f'No se puede reportar problema en un conteo con estado {sesion.estado}'
+            }), 409
 
         try:
             sesion.estado = EstadoConteo.BLOQUEADO
@@ -277,6 +282,11 @@ def reportar_problema():
         from app.routes._auth_helpers import Roles as _R
         if tarea.empacador_id and tarea.empacador_id != operario_id and u.rol not in _R.SUPERVISION:
             return jsonify({'error': 'Esta tarea no está asignada a ti'}), 403
+        # Guard estado: solo bloquear packings activos (previene revertir VERIFICADO/DESPACHADO)
+        if tarea.estado not in (EstadoPacking.PENDIENTE, EstadoPacking.EN_PROCESO):
+            return jsonify({
+                'error': f'No se puede reportar problema en una tarea con estado {tarea.estado}'
+            }), 409
 
         try:
             tarea.estado = EstadoPacking.BLOQUEADO
