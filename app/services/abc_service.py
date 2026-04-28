@@ -649,6 +649,30 @@ class ABCService:
                     except Exception as _fe:
                         logger.error(f'[ABC] Error liberando advisory lock 2003: {_fe}')
 
+        def _prewarm_pre_turno(app):
+            """
+            Precalienta el caché de existencia Siesa 5 min antes del turno (5:55am).
+            El prewarm de las 2am expira a las 2:05am — 4h antes de que los operarios
+            lleguen. Este job garantiza caché caliente al inicio de turno, evitando
+            SEGUNDO_CONTEOs falsos por cache miss en el primer conteo del día.
+            """
+            with app.app_context():
+                try:
+                    from app.models.conteo import SesionConteo, EstadoConteo
+                    from app.services.conteo_service import ConteoService
+                    sesiones_pendientes = SesionConteo.query.filter(
+                        SesionConteo.estado == EstadoConteo.PENDIENTE
+                    ).all()
+                    if sesiones_pendientes:
+                        ConteoService.prewarm_existencia_cache(sesiones_pendientes)
+                        logger.info(
+                            f'[ABC] Pre-turno prewarm (5:55am): {len(sesiones_pendientes)} sesiones'
+                        )
+                    else:
+                        logger.info('[ABC] Pre-turno prewarm (5:55am): sin sesiones PENDIENTE')
+                except Exception as e:
+                    logger.error(f'[ABC] Pre-turno prewarm falló: {e}', exc_info=True)
+
         scheduler = BackgroundScheduler(timezone='America/Bogota')
         scheduler.add_job(
             func=_job,
@@ -659,9 +683,19 @@ class ABCService:
             max_instances=1,
             misfire_grace_time=3600,
         )
+        scheduler.add_job(
+            func=_prewarm_pre_turno,
+            trigger=CronTrigger(hour=5, minute=55, timezone='America/Bogota'),
+            kwargs={'app': app},
+            id='abc_prewarm_pre_turno',
+            name='Pre-calentar caché Siesa antes del turno — 5:55am Bogotá',
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=300,
+        )
         scheduler.start()
         atexit.register(lambda: scheduler.shutdown(wait=False))
-        logger.info('[ABC] Scheduler configurado — corre a las 2am hora Bogotá (fuera de horario operativo)')
+        logger.info('[ABC] Scheduler configurado — ABC 2am + prewarm pre-turno 5:55am Bogotá')
         return scheduler
 
     @staticmethod

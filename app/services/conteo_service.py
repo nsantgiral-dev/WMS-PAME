@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 _existencia_cache: dict = {}   # {(codigo, ubicacion, lote): (existencia, ts)}
 _existencia_cache_lock = threading.Lock()
 _CACHE_TTL_SEGUNDOS = 300  # 5 min — reduce llamadas HTTP en turno; pre-warm al generar sesiones
+# Semáforo para _refrescar_cache_en_background — limita a 3 threads HTTP simultáneos.
+# Sin límite, 30 operarios arrancando turno generan 30 threads a Siesa en paralelo.
+_refrescar_bg_semaphore = threading.Semaphore(3)
 
 
 class ConteoService:
@@ -371,28 +374,40 @@ class ConteoService:
         _cache_key = (producto_codigo_siesa, ubicacion_codigo, lote_id)
 
         def _worker():
-            with app.app_context():
-                try:
-                    response = connekta.get_inventario_fecha(producto_codigo_siesa)
-                    tabla = response.get('detalle', {}).get('Table', [])
-                    if not tabla:
-                        # [C5] Siesa devolvió Table vacío — NO cachear 0.0.
-                        # Si se cacheara, confirmar_ajuste tomaría existencia=0 como real
-                        # y generaría AJ-ENT duplicando el stock en Siesa (cuenta 14 corrupta).
-                        # Sin entrada en caché, confirmar_ajuste lanza "Siesa aún no respondió"
-                        # → operario reintenta en segundos, con datos reales.
-                        logger.error(
-                            f'[CONTEO] Siesa devolvió Table vacío para {producto_codigo_siesa} '
-                            f'— NO se cachea existencia=0.0 para evitar AJ-ENT fiscal erróneo. '
-                            f'Verificar en Siesa que el producto exista y tenga stock registrado.'
-                        )
-                        return  # no actualizar caché con dato vacío
-                    existencia = float(tabla[0].get('f400_cant_existencia_1', 0))
-                    with _existencia_cache_lock:
-                        _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
-                    logger.info(f'[CONTEO] Cache Siesa actualizado para {producto_codigo_siesa}: {existencia}')
-                except Exception as e:
-                    logger.warning(f'[CONTEO] Refresco cache background falló para {producto_codigo_siesa}: {e}')
+            # Semáforo global — máx 3 threads HTTP simultáneos a Siesa.
+            # Sin esto, 30 operarios arrancando turno con caché frío generan
+            # 30 threads HTTP en paralelo (P11 thundering herd).
+            if not _refrescar_bg_semaphore.acquire(blocking=False):
+                logger.debug(
+                    f'[CONTEO] Refresco cache limitado (3 slots ocupados) para '
+                    f'{producto_codigo_siesa} — el operario reintentará automáticamente'
+                )
+                return
+            try:
+                with app.app_context():
+                    try:
+                        response = connekta.get_inventario_fecha(producto_codigo_siesa)
+                        tabla = response.get('detalle', {}).get('Table', [])
+                        if not tabla:
+                            # [C5] Siesa devolvió Table vacío — NO cachear 0.0.
+                            # Si se cacheara, confirmar_ajuste tomaría existencia=0 como real
+                            # y generaría AJ-ENT duplicando el stock en Siesa (cuenta 14 corrupta).
+                            # Sin entrada en caché, confirmar_ajuste lanza "Siesa aún no respondió"
+                            # → operario reintenta en segundos, con datos reales.
+                            logger.error(
+                                f'[CONTEO] Siesa devolvió Table vacío para {producto_codigo_siesa} '
+                                f'— NO se cachea existencia=0.0 para evitar AJ-ENT fiscal erróneo. '
+                                f'Verificar en Siesa que el producto exista y tenga stock registrado.'
+                            )
+                            return  # no actualizar caché con dato vacío
+                        existencia = float(tabla[0].get('f400_cant_existencia_1', 0))
+                        with _existencia_cache_lock:
+                            _existencia_cache[_cache_key] = (existencia, datetime.utcnow())
+                        logger.info(f'[CONTEO] Cache Siesa actualizado para {producto_codigo_siesa}: {existencia}')
+                    except Exception as e:
+                        logger.warning(f'[CONTEO] Refresco cache background falló para {producto_codigo_siesa}: {e}')
+            finally:
+                _refrescar_bg_semaphore.release()
 
         t = threading.Thread(target=_worker, daemon=True)
         t.start()

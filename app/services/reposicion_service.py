@@ -287,11 +287,22 @@ def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
         logger.error(f'[REPOSICION DLQ] Datos incompletos para job — no se encola')
         return
 
+    # Validar codigo_siesa explícitamente — Siesa rechaza códigos WMS internos.
+    # Patrón de devolucion_service.py:316-322 y conteo_service.py:610-615.
+    item_codigo = getattr(producto, 'codigo_siesa', None)
+    if not item_codigo:
+        logger.error(
+            f'[REPOSICION DLQ] Producto {producto.id} ({producto.codigo}) sin codigo_siesa '
+            f'— no se encola el job (Siesa rechazaría el código WMS). '
+            f'Configura codigo_siesa en el producto para activar la transferencia automática.'
+        )
+        return
+
     job = encolar_transferencia_ubicaciones(
         bodega_id=connekta.bodega,
         ubicacion_origen=ub_reserva.codigo,
         ubicacion_destino=ub_picking.codigo,
-        referencia_item=getattr(producto, 'codigo_siesa', None) or producto.codigo,
+        referencia_item=item_codigo,
         cantidad=unidades,
         nota=f'Reposición WMS {tarea.codigo} — LPN {lpn.codigo}',
         referencia_tipo='TareaReposicion',
