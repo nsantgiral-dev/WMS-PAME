@@ -285,22 +285,25 @@ class RecepcionService:
             if recepcion.siesa_triggered:
                 return recepcion
             # CONFIRMADA pero Siesa nunca se disparó — verificar job en DLQ
-            from app.models.siesa_job import SiesaJob
+            from app.models.siesa_job import SiesaJob, EstadoSiesaJob
             # [C7] Incluir COMPLETADO: si el job terminó exitosamente pero siesa_triggered=False
             # (bug en el handler), re-encolar generaría doble ENTRADA_OC en Siesa.
             job_existente = SiesaJob.query.filter_by(
                 referencia_tipo='RecepcionMercancia',
                 referencia_id=recepcion.id,
-            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO', 'COMPLETADO'])).first()
+            ).filter(SiesaJob.estado.in_([
+                EstadoSiesaJob.PENDIENTE, EstadoSiesaJob.PROCESANDO, EstadoSiesaJob.REINTENTANDO,
+                EstadoSiesaJob.FALLIDO, EstadoSiesaJob.COMPLETADO,
+            ])).first()
             if job_existente:
-                if job_existente.estado == 'FALLIDO':
+                if job_existente.estado == EstadoSiesaJob.FALLIDO:
                     logger.error(
                         f'[RECEPCION] Job FALLIDO {job_existente.id} para recepcion={recepcion.id} '
                         f'(CONFIRMADA sin siesa_triggered) — NO rescatado automáticamente. '
                         f'Verificar en Siesa si la entrada OC ya fue registrada antes de rescatar '
                         f'desde el panel de administración.'
                     )
-                elif job_existente.estado == 'COMPLETADO':
+                elif job_existente.estado == EstadoSiesaJob.COMPLETADO:
                     # [C7] Job completado pero siesa_triggered no se actualizó (bug en handler).
                     # Siesa ya procesó la entrada — NO re-encolar bajo ninguna circunstancia.
                     logger.error(

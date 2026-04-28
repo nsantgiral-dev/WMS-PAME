@@ -3,6 +3,17 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoSiesaJob:
+    PENDIENTE    = 'PENDIENTE'
+    PROCESANDO   = 'PROCESANDO'
+    COMPLETADO   = 'COMPLETADO'
+    FALLIDO      = 'FALLIDO'
+    REINTENTANDO = 'REINTENTANDO'
+
+    # Estados que aún pueden procesarse (útil para filtros de dedup/idempotencia)
+    ACTIVOS = frozenset({PENDIENTE, PROCESANDO, REINTENTANDO})
+
+
 # Backoff exponencial: intento 1 → 5min, 2 → 15min, 3 → 45min, 4 → 120min, 5 → 180min
 # 5 intentos cubre caídas de Siesa de hasta ~6h sin intervención manual.
 _BACKOFF_MINUTOS = [5, 15, 45, 120, 180]
@@ -50,7 +61,7 @@ class SiesaJob(db.Model):
             referencia_tipo=referencia_tipo,
             referencia_id=referencia_id,
             creado_por_id=creado_por_id,
-            estado='PENDIENTE',
+            estado=EstadoSiesaJob.PENDIENTE,
             intentos=0,
         )
         db.session.add(job)
@@ -60,7 +71,7 @@ class SiesaJob(db.Model):
         return json.loads(self.payload)
 
     def marcar_completado(self, resultado: dict):
-        self.estado = 'COMPLETADO'
+        self.estado = EstadoSiesaJob.COMPLETADO
         self.resultado = json.dumps(resultado, ensure_ascii=False)
         self.fecha_completado = datetime.utcnow()
 
@@ -70,13 +81,13 @@ class SiesaJob(db.Model):
         self.error_ultimo = str(error)[:2000]
 
         if self.intentos >= self.max_intentos:
-            self.estado = 'FALLIDO'
+            self.estado = EstadoSiesaJob.FALLIDO
             self.proximo_intento = None
         else:
             # Backoff exponencial
             minutos = _BACKOFF_MINUTOS[min(self.intentos - 1, len(_BACKOFF_MINUTOS) - 1)]
             self.proximo_intento = datetime.utcnow() + timedelta(minutes=minutos)
-            self.estado = 'PENDIENTE'
+            self.estado = EstadoSiesaJob.PENDIENTE
 
     def to_dict(self):
         return {

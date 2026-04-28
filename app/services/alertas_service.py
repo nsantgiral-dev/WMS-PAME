@@ -608,14 +608,14 @@ def enviar_resumen_diario(app=None):
 
             # Jobs Siesa ayer — crítico: jobs_fallidos='N/D' oculta movimientos que no llegaron al ERP
             try:
-                from app.models.siesa_job import SiesaJob
+                from app.models.siesa_job import SiesaJob, EstadoSiesaJob
                 jobs_ok      = SiesaJob.query.filter(
-                    SiesaJob.estado == 'COMPLETADO',
+                    SiesaJob.estado == EstadoSiesaJob.COMPLETADO,
                     SiesaJob.fecha_creacion >= ayer_inicio,
                     SiesaJob.fecha_creacion < ayer_fin,
                 ).count()
                 jobs_fallidos = SiesaJob.query.filter(
-                    SiesaJob.estado == 'FALLIDO',
+                    SiesaJob.estado == EstadoSiesaJob.FALLIDO,
                     SiesaJob.fecha_creacion >= ayer_inicio,
                     SiesaJob.fecha_creacion < ayer_fin,
                 ).count()
@@ -640,7 +640,7 @@ def enviar_resumen_diario(app=None):
             try:
                 # Jobs FALLIDO >24h (no solo ayer)
                 _fallidos_viejos = SiesaJob.query.filter(
-                    SiesaJob.estado == 'FALLIDO',
+                    SiesaJob.estado == EstadoSiesaJob.FALLIDO,
                     SiesaJob.fecha_creacion < ayer_inicio,
                 ).count()
                 if _fallidos_viejos:

@@ -17,7 +17,7 @@ import json
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models.siesa_job import SiesaJob
+from app.models.siesa_job import SiesaJob, EstadoSiesaJob
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ def _run_dlq_jobs():
     # Fallback a fecha_creacion para jobs pre-migración sin fecha_procesando.
     _stuck_cutoff = ahora - timedelta(minutes=10)
     _stuck = SiesaJob.query.filter(
-        SiesaJob.estado == 'PROCESANDO',
+        SiesaJob.estado == EstadoSiesaJob.PROCESANDO,
         db.or_(
             db.and_(SiesaJob.fecha_procesando.isnot(None), SiesaJob.fecha_procesando <= _stuck_cutoff),
             db.and_(SiesaJob.fecha_procesando.is_(None),   SiesaJob.fecha_creacion   <= _stuck_cutoff),
@@ -107,7 +107,7 @@ def _run_dlq_jobs():
     ).all()
     if _stuck:
         for j in _stuck:
-            j.estado = 'PENDIENTE'
+            j.estado = EstadoSiesaJob.PENDIENTE
             j.intentos = (j.intentos or 0) + 1
             logger.warning(f'[DLQ] Job {j.id} stuck PROCESANDO >10min — reset a PENDIENTE (intento {j.intentos})')
         db.session.commit()
@@ -124,7 +124,7 @@ def _run_dlq_jobs():
         for _ss in _stuck_sesiones:
             _tiene_job = SiesaJob.query.filter_by(
                 referencia_tipo='SesionConteo', referencia_id=_ss.id,
-            ).filter(SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO'])).first()
+            ).filter(SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS))).first()
             if not _tiene_job:
                 logger.warning(f'[DLQ] SesionConteo {_ss.id} stuck AJUSTANDO >15min sin job — re-encolando')
                 SiesaJob.encolar(
@@ -138,7 +138,7 @@ def _run_dlq_jobs():
         logger.warning(f'[DLQ] Sweep AJUSTANDO falló: {_e_sweep}')
 
     q = SiesaJob.query.filter(
-        SiesaJob.estado == 'PENDIENTE',
+        SiesaJob.estado == EstadoSiesaJob.PENDIENTE,
         db.or_(
             SiesaJob.proximo_intento.is_(None),
             SiesaJob.proximo_intento <= ahora,
@@ -157,7 +157,7 @@ def _run_dlq_jobs():
     procesados = 0
     # FM_SIESA_UNREACHABLE: si hay muchos jobs pendientes (recuperación tras outage),
     # añadir pausa entre ejecuciones para no inundar Siesa con ráfaga de llamadas.
-    _total_pendientes = SiesaJob.query.filter(SiesaJob.estado == 'PENDIENTE').count()
+    _total_pendientes = SiesaJob.query.filter(SiesaJob.estado == EstadoSiesaJob.PENDIENTE).count()
     _inter_job_delay = 1.0 if _total_pendientes > 10 else 0.0
     if _inter_job_delay:
         logger.info(
@@ -178,7 +178,7 @@ def _run_dlq_jobs():
             )
             break
 
-        job.estado = 'PROCESANDO'
+        job.estado = EstadoSiesaJob.PROCESANDO
         job.fecha_procesando = ahora  # registrar cuándo entró a PROCESANDO para stuck-job detection
         db.session.commit()  # lock en el registro
 
@@ -208,7 +208,7 @@ def _run_dlq_jobs():
             job.marcar_fallo(error_msg)
             db.session.commit()
 
-            if job.estado == 'FALLIDO':
+            if job.estado == EstadoSiesaJob.FALLIDO:
                 logger.error(
                     f'[DLQ] Job {job.id} ({job.tipo}) FALLIDO tras {job.intentos} intentos: {error_msg}'
                 )
@@ -633,7 +633,7 @@ def _crear_alerta_admin(job: SiesaJob):
 
 def get_jobs_fallidos():
     """Para el dashboard del admin."""
-    return SiesaJob.query.filter_by(estado='FALLIDO').order_by(SiesaJob.fecha_creacion.desc()).all()
+    return SiesaJob.query.filter_by(estado=EstadoSiesaJob.FALLIDO).order_by(SiesaJob.fecha_creacion.desc()).all()
 
 
 def reintentar_job(job_id: int) -> dict:
@@ -641,9 +641,9 @@ def reintentar_job(job_id: int) -> dict:
     job = SiesaJob.query.get(job_id)
     if not job:
         raise ValueError(f'Job {job_id} no encontrado')
-    if job.estado != 'FALLIDO':
+    if job.estado != EstadoSiesaJob.FALLIDO:
         raise ValueError(f'Job {job_id} no está en estado FALLIDO — está {job.estado}')
-    job.estado = 'PENDIENTE'
+    job.estado = EstadoSiesaJob.PENDIENTE
     job.intentos = 0
     job.proximo_intento = None
     job.error_ultimo = None

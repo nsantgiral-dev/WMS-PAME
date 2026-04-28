@@ -366,7 +366,7 @@ class PackingService:
 
         # [11] Commit bultos + SiesaJob de respaldo en la MISMA transacción antes de llamar a Siesa.
         # Así, si Siesa falla, el SiesaJob queda PENDIENTE para reintento automático (DLQ).
-        from app.models.siesa_job import SiesaJob as _SiesaJob
+        from app.models.siesa_job import SiesaJob as _SiesaJob, EstadoSiesaJob as _ESJ
         db.session.flush()  # obtener IDs de bultos antes del commit
         bultos_existentes = Bulto.query.filter_by(tarea_id=tarea_id).all()
 
@@ -441,12 +441,12 @@ class PackingService:
             _SiesaJob.tipo == 'DESPACHO_F470',
             _SiesaJob.referencia_tipo == 'TareaPacking',
             _SiesaJob.referencia_id == tarea_id,
-            _SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO', 'REINTENTANDO', 'FALLIDO']),
+            _SiesaJob.estado.in_(list(_ESJ.ACTIVOS) + [_ESJ.FALLIDO]),
         ).first()
-        if job_dlq and job_dlq.estado == 'FALLIDO':
+        if job_dlq and job_dlq.estado == _ESJ.FALLIDO:
             # Reusar el job fallido: resetear a PENDIENTE con el payload actualizado.
             # Esto evita crear un job nuevo que duplicaría el envío a Siesa.
-            job_dlq.estado = 'PENDIENTE'
+            job_dlq.estado = _ESJ.PENDIENTE
             job_dlq.intentos = 0
             job_dlq.proximo_intento = None
             job_dlq.error_ultimo = None
