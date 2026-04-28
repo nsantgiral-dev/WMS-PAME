@@ -35,7 +35,9 @@ def _picking_listo_batch(numeros_pedido: list) -> dict:
         if num not in por_pedido:
             por_pedido[num] = {'total': 0, 'completados': 0}
         por_pedido[num]['total'] += 1
-        if p.estado == EstadoPicking.COMPLETADO:
+        if p.estado == EstadoPicking.COMPLETADO or (
+            p.estado == EstadoPicking.BLOQUEADO and (p.cantidad_recogida or 0) > 0
+        ):
             por_pedido[num]['completados'] += 1
 
     resultado = {}
