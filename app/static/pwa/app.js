@@ -3216,14 +3216,6 @@ async function empReintentarSiesa(t) {
   }
 }
 
-function empSimularScan() {
-  const inp = document.getElementById('emp-input-manual');
-  if (!inp) return;
-  const codigo = inp.value.trim();
-  if (!codigo) return;
-  inp.value = '';
-  empProcesarEscaneo(codigo);
-}
 
 function empCerrarHUD() {
   document.getElementById('emp-hud').classList.remove('activo');
