@@ -293,6 +293,14 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # (evita que la excepción del commit fuerce un reintento → duplicado).
         if tarea and not tarea.siesa_triggered:
             try:
+                # INV_PACKING_BULTO: verificar invariante antes de marcar DESPACHADO.
+                # Siesa ya confirmó — detectar aquí evita hasta 18h de violación silenciosa.
+                from app.models.bulto import Bulto as _Bulto
+                if not _Bulto.query.filter_by(tarea_id=tarea.id).count():
+                    raise ValueError(
+                        f'Invariante violada: tarea {tarea.id} sin bultos — '
+                        'no se puede marcar DESPACHADO sin evidencia física de empaque'
+                    )
 
                 tarea.siesa_triggered = True
                 tarea.siesa_response = _json.dumps(resultado)
