@@ -3793,10 +3793,21 @@ function _formUsuario(u = {}) {
       </select>
       <!-- Campos tienda (solo si rol=tienda) -->
       <div id="u-tienda-fields" style="display:${(u.rol==='tienda')?'block':'none'};">
-        <input id="u-bodega-siesa" placeholder="ID Bodega Siesa (ej. TP1)" value="${u.bodega_siesa_id || ''}"
+        <select id="u-bodega-siesa"
+          onchange="(function(sel){const nombres={'NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito'};document.getElementById('u-nombre-pv').value=nombres[sel.value]||'';})(this)"
           style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
-        <input id="u-nombre-pv" placeholder="Nombre punto de venta (ej. Tienda Centro)" value="${u.nombre_punto_venta || ''}"
-          style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;margin-top:8px;box-sizing:border-box;">
+          <option value="">— Seleccionar punto de venta —</option>
+          <option value="NC1" ${u.bodega_siesa_id==='NC1'?'selected':''}>NC1 — Neiva Centro</option>
+          <option value="NS1" ${u.bodega_siesa_id==='NS1'?'selected':''}>NS1 — Neiva Sur Principal</option>
+          <option value="NS2" ${u.bodega_siesa_id==='NS2'?'selected':''}>NS2 — Neiva Sur Fundación</option>
+          <option value="FC1" ${u.bodega_siesa_id==='FC1'?'selected':''}>FC1 — Florencia Centro</option>
+          <option value="PC1" ${u.bodega_siesa_id==='PC1'?'selected':''}>PC1 — Pitalito Centro</option>
+          <option value="PT1" ${u.bodega_siesa_id==='PT1'?'selected':''}>PT1 — Pitalito Terminal</option>
+          <option value="FF1" ${u.bodega_siesa_id==='FF1'?'selected':''}>FF1 — Feria Florencia</option>
+          <option value="FN1" ${u.bodega_siesa_id==='FN1'?'selected':''}>FN1 — Feria Neiva</option>
+          <option value="FP1" ${u.bodega_siesa_id==='FP1'?'selected':''}>FP1 — Feria Pitalito</option>
+        </select>
+        <input id="u-nombre-pv" type="hidden" value="${u.nombre_punto_venta || ''}">
       </div>
       <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
         <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
