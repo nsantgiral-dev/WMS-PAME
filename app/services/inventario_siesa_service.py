@@ -732,10 +732,25 @@ def _run_reconciliacion(app):
             _estado_reconciliacion['ultimo_error'] = None
 
         except Exception as e:
-            logger.error(f'[RECONCILIACION] Error: {e}')
+            logger.error('[RECONCILIACION] Error fatal — discrepancias SIESA_MAYOR sin procesar', exc_info=True)
             db.session.rollback()
             _estado_reconciliacion['ultimo_error'] = str(e)
             _estado_reconciliacion['ultimo_resultado'] = None
+            try:
+                from app.services.alertas_service import enviar_email, _config_resend
+                if _config_resend():
+                    enviar_email(
+                        asunto='[WMS ALERTA] Reconciliación Siesa falló — discrepancias sin procesar',
+                        cuerpo_texto=(
+                            f'La reconciliación automática de inventario falló con error:\n{e}\n\n'
+                            'Las discrepancias SIESA_MAYOR de este ciclo no generaron TareaDevolucion. '
+                            'Se reintentará en el próximo ciclo (~5 min). '
+                            'Si el error persiste, verificar conectividad con Siesa/Connekta.'
+                        ),
+                        cuerpo_html=None,
+                    )
+            except Exception as _e_alert:
+                logger.error('[RECONCILIACION] Email de alerta también falló: %s', _e_alert)
 
         finally:
             _estado_reconciliacion['en_curso'] = False

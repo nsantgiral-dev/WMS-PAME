@@ -131,8 +131,25 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
     try:
         db.session.commit()
     except Exception as e:
-        logger.error(f'[DEV] Error en commit: {e}')
+        logger.error('[DEV] Error en commit outer — todas las TareaDevolucion del batch se perdieron', exc_info=True)
         db.session.rollback()
+        # El outer commit falló: ninguna tarea fue persistida aunque creadas > 0
+        errores += creadas
+        creadas = 0
+        try:
+            from app.services.alertas_service import enviar_email, _config_resend
+            if _config_resend():
+                enviar_email(
+                    asunto='[WMS ALERTA] Batch devoluciones perdido — commit fallido',
+                    cuerpo_texto=(
+                        f'El commit final del reconciliador falló con error:\n{e}\n\n'
+                        f'Todas las TareaDevolucion del batch ({errores} ítems) fueron revertidas. '
+                        'Se reintentará en el próximo ciclo de reconciliación (~5 min).'
+                    ),
+                    cuerpo_html=None,
+                )
+        except Exception as _e_alert:
+            logger.critical('[DEV] Email de alerta de commit fallido también falló: %s', _e_alert)
 
     # [A26] Si hubo errores, notificar proactivamente — las discrepancias sin tarea
     # quedan invisibles indefinidamente (el operario nunca ve esos ítems para devolver).
