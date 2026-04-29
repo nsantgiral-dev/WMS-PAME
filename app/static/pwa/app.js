@@ -3116,6 +3116,9 @@ async function empIniciarHUD(packingId) {
         method: 'PUT',
         headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
       });
+      // Re-cargar para obtener cantidades actualizadas tras el sync de picking
+      const tFresh = await get(`/api/packing/${packingId}`);
+      if (tFresh && tFresh.id) Object.assign(t, tFresh);
     }
 
     // Ítems pendientes de verificar van primero
