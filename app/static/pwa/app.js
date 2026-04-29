@@ -601,20 +601,22 @@ async function cargarPedidos() {
             : '';
           accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa${btnRemision}</div>`;
         } else if (p.packing_estado === 'EN_PROCESO') {
-          // Empacador verificando en mesa
-          accionBtn = `<div style="flex-shrink:0;background:#1a0a2e;color:#c084fc;border:1px solid #4c1d95;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
-            En empaque<br>🔄
-          </div>`;
+          // Empacador verificando en mesa — admin puede entrar a ayudar/probar
+          accionBtn = `<button onclick="empIniciarHUD(${p.packing_id})"
+            style="flex-shrink:0;background:#1a0a2e;color:#c084fc;border:1px solid #4c1d95;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-align:center;">
+            Packing<br>🔄 Abrir
+          </button>`;
         } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) {
           // Empaque listo pero Siesa falló — empacador debe reintentar Cerrar Caja
           accionBtn = `<div style="flex-shrink:0;background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
             ⚠ Error<br>Siesa
           </div>`;
         } else if (p.picking_completado) {
-          // Picking listo, esperando empacador
-          accionBtn = `<div style="flex-shrink:0;background:#1c1400;color:#fbbf24;border:1px solid #78350f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
-            Packing<br>pendiente
-          </div>`;
+          // Picking listo — admin puede abrir directamente el packing
+          accionBtn = `<button onclick="empIniciarHUD(${p.packing_id})"
+            style="flex-shrink:0;background:#1c1400;color:#fbbf24;border:1px solid #78350f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;text-align:center;">
+            Packing<br>pendiente ▶
+          </button>`;
         } else if (p.picking_iniciado) {
           // Operario recogiendo
           accionBtn = `<div style="flex-shrink:0;background:#1a1a2a;color:#93c5fd;border:1px solid #1e3a5f;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">

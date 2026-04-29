@@ -1745,16 +1745,22 @@
             Cerrar cámara
           </button>
         </div>
-        <!-- Entrada manual -->
-        <div style="display:flex;gap:8px;margin-bottom:12px;">
-          <input id="emp-input-manual" type="text" placeholder="Código del producto (sin escáner)"
-            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
-            style="flex:1;padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;color:#fff;font-size:16px;"
-            onkeydown="if(event.key==='Enter'){ empSimularScan(); event.preventDefault(); }">
-          <button onclick="empSimularScan()"
-            style="padding:14px 18px;background:#222;border:1px solid #444;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;flex-shrink:0;">
-            ↵
-          </button>
+        <!-- Entrada manual de código de barras -->
+        <div style="margin-bottom:12px;">
+          <div style="font-size:11px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">
+            ⌨ Código manual (pruebas sin escáner)
+          </div>
+          <div style="display:flex;gap:8px;">
+            <input id="emp-input-manual" type="text" placeholder="Ej: RESMA-A4-75 o código de barras"
+              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+              style="flex:1;padding:14px;background:#111;border:1px solid #4b5563;border-radius:10px;color:#fff;font-size:15px;outline:none;"
+              onkeydown="if(event.key==='Enter'){ empSimularScan(); event.preventDefault(); }"
+              onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#4b5563'">
+            <button onclick="empSimularScan()"
+              style="padding:14px 20px;background:#4f46e5;border:none;color:#fff;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;flex-shrink:0;">
+              OK
+            </button>
+          </div>
         </div>
         <button id="emp-btn-cerrar-caja" onclick="empConfirmarPacking()">
           Cerrar Caja ✓
