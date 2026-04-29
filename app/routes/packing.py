@@ -181,6 +181,11 @@ def iniciar_tarea(id):
     if not usuario or not _puede_empacar(usuario):
         return jsonify({'error': 'No autorizado — se requiere rol empacador, supervisor o admin'}), 403
     try:
+        from app.services.packing_picking_sync_service import PackingPickingSyncService
+        try:
+            PackingPickingSyncService.sincronizar(id)
+        except Exception:
+            pass  # Sin picking asociado → se trabaja con cantidades de Siesa
         tarea = PackingService.iniciar(id, empacador_id)
         return jsonify(tarea.to_dict()), 200
     except ValueError as e:
