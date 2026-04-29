@@ -475,3 +475,28 @@ def estado_connekta():
     if not u or u.rol not in (Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN):
         return jsonify({'error': 'Sin permiso para ver estado de Connekta'}), 403
     return jsonify(connekta.estado()), 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SINCRONIZACIÓN PICKING → PACKING
+# Ajusta cantidad_esperada de los ítems del packing con lo que el picker
+# realmente recogió. Se llama antes de que el empacador empiece a contar.
+# ─────────────────────────────────────────────────────────────────────────────
+@packing_bp.route('/<int:id>/sincronizar-picking', methods=['POST'])
+@jwt_required()
+def sincronizar_picking(id):
+    """
+    Recalcula cantidad_esperada de cada ítem del packing usando la suma real
+    de cantidad_recogida de las tareas de picking del mismo pedido.
+
+    Solo actúa si hay picking COMPLETADO o BLOQUEADO con unidades recogidas.
+    Idempotente: se puede llamar varias veces sin efecto secundario.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede sincronizar picking con packing'}), 403
+    from app.services.packing_picking_sync_service import PackingPickingSyncService
+    try:
+        resultado = PackingPickingSyncService.sincronizar(id)
+        return jsonify(resultado), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400

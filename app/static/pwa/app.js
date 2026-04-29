@@ -3105,6 +3105,11 @@ async function empIniciarHUD(packingId) {
 
     // Iniciar si aún está PENDIENTE
     if (t.estado === 'PENDIENTE') {
+      // Ajustar cantidades con lo que el picker realmente recogió (faltantes parciales)
+      await fetch(`/api/packing/${packingId}/sincronizar-picking`, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
+      });
       await fetch(`/api/packing/${packingId}/iniciar`, {
         method: 'PUT',
         headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
