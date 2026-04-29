@@ -180,14 +180,12 @@ class ConnektaGateway:
 
     @staticmethod
     def _fmt_fecha_iso(valor: str) -> str:
-        """Normaliza cualquier formato de fecha a YYYY-MM-DD (con guiones). Usado en f421_fecha_entrega."""
+        """Normaliza cualquier formato de fecha a YYYYMMDD (8 dígitos, sin separadores).
+        Siesa exige exactamente 8 caracteres en f421_fecha_entrega — guiones causan rechazo."""
         if not valor:
             return ''
         solo_digitos = ''.join(c for c in str(valor) if c.isdigit())
-        if len(solo_digitos) >= 8:
-            d = solo_digitos[:8]
-            return f'{d[:4]}-{d[4:6]}-{d[6:8]}'
-        return ''
+        return solo_digitos[:8] if len(solo_digitos) >= 8 else ''
 
     def _simular(self, operacion: str, payload: dict = None):
         logger.info(f'[CONNEKTA SIMULADO] {operacion}')
