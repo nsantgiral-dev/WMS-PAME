@@ -133,9 +133,9 @@ class SolicitudTraslado(db.Model):
         row = _db.session.query(
             _func.count().label('total'),
             _func.count(_case((TareaPicking.estado == 'COMPLETADO', 1))).label('completadas'),
-        ).filter_by(
-            referencia_documento=self.codigo,
-            tipo_documento='TRASLADO',
+        ).select_from(TareaPicking).filter(
+            TareaPicking.referencia_documento == self.codigo,
+            TareaPicking.tipo_documento == 'TRASLADO',
         ).first()
         total, completadas = row.total, row.completadas
         if total == 0:
