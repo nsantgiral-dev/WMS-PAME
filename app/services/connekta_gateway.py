@@ -375,8 +375,8 @@ class ConnektaGateway:
                 'paginacion': 'numPag=1|tamPag=50',
                 'parametros': (
                     f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
-                    f"AND f430_consec_docto = {consec_int}"
+                    f"AND f350_id_tipo_docto = ''{tipo_docto}'' "
+                    f"AND f350_consec_docto = {consec_int}"
                 )
             })
             rows = res.get('detalle', {}).get('Table', [])
