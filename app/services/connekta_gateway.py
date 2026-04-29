@@ -640,15 +640,20 @@ class ConnektaGateway:
     def get_pedido_cabecera(self, tipo_docto: str, consec_docto) -> dict | None:
         """
         GET API_v2_Ventas_Pedidos — fila única de cabecera del pedido.
-        Campos confirmados por consultor Siesa:
-          f200_id_fact          → código tercero cliente (para F350_ID_TERCERO en 142943)
-          f461_id_sucursal_fact → sucursal facturación
-          f461_id_tipo_cli_fact → tipo cliente facturación
-          f461_id_cond_pago     → condición de pago
-          f461_id_moneda_docto  → moneda del documento
-          f461_tasa_conv        → tasa conversión
-          f461_tasa_local       → tasa local
-        Usado exclusivamente por DespachoParialService.
+        Campos verificados empíricamente contra respuesta JSON real de Connekta V2
+        (2026-04-28 — el procedimiento almacenado usa aliases que difieren de los
+        nombres de tabla base; NO confiar en docstrings anteriores ni en el spec):
+          f200_id_pedido_fact         → NIT/código tercero cliente (F350_ID_TERCERO en 142943)
+          f461_id_sucursal_pedido_rem → sucursal (alias del JOIN a t461/t202)
+          f430_id_tipo_cli_fact       → tipo cliente facturación
+          f430_id_cond_pago           → condición de pago (ej. 'C01', '30D')
+          f430_id_moneda_docto        → moneda del documento
+          f430_id_moneda_conv         → moneda conversión
+          f430_id_moneda_local        → moneda local
+          f430_tasa_conv              → tasa conversión
+          f430_tasa_local             → tasa local
+          f200_id_pedido_vend         → NIT del vendedor
+        Usado exclusivamente por DespachoParialService → trigger_factura_desde_remision.
         """
         if self.modo_simulacion:
             return None
@@ -867,25 +872,27 @@ class ConnektaGateway:
         fecha_vcto = (datetime.utcnow() + timedelta(days=30)).strftime('%Y%m%d')
         cia = int(self.id_cia_siesa)
 
-        tercero      = cabecera.get('f200_id_fact') or ''
-        sucursal     = cabecera.get('f461_id_sucursal_fact') or ''
-        tipo_cli     = cabecera.get('f461_id_tipo_cli_fact') or ''
-        cond_pago    = cabecera.get('f461_id_cond_pago') or self.cond_pago_ventas or None
+        # Nombres de campo verificados empíricamente contra JSON real de API_v2_Ventas_Pedidos
+        # El procedimiento almacenado de Siesa usa aliases propios — NO son los nombres de tabla base.
+        tercero      = cabecera.get('f200_id_pedido_fact') or ''
+        sucursal     = cabecera.get('f461_id_sucursal_pedido_rem') or None  # None → Siesa hereda del maestro
+        tipo_cli     = cabecera.get('f430_id_tipo_cli_fact') or None        # None → Siesa hereda del maestro
+        cond_pago    = cabecera.get('f430_id_cond_pago') or self.cond_pago_ventas or None
         if not cond_pago:
             raise ValueError(
-                'f461_id_cond_pago no disponible en cabecera y SIESA_COND_PAGO_VENTAS no configurado — '
+                'f430_id_cond_pago no disponible en cabecera y SIESA_COND_PAGO_VENTAS no configurado — '
                 'Connekta V2 .NET serializer colapsa con HTTP 500 si se envía null'
             )
-        moneda_docto = cabecera.get('f461_id_moneda_docto') or 'COP'
-        moneda_conv  = cabecera.get('f461_id_moneda_conv') or moneda_docto
-        moneda_local = cabecera.get('f461_id_moneda_local') or moneda_docto
-        tasa_conv    = float(cabecera.get('f461_tasa_conv') or 1)
-        tasa_local   = float(cabecera.get('f461_tasa_local') or 1)
-        vendedor     = cabecera.get('f461_id_tercero_vendedor') or None
+        moneda_docto = cabecera.get('f430_id_moneda_docto') or 'COP'
+        moneda_conv  = cabecera.get('f430_id_moneda_conv') or moneda_docto
+        moneda_local = cabecera.get('f430_id_moneda_local') or moneda_docto
+        tasa_conv    = float(cabecera.get('f430_tasa_conv') or 1)
+        tasa_local   = float(cabecera.get('f430_tasa_local') or 1)
+        vendedor     = cabecera.get('f200_id_pedido_vend') or None  # None → Siesa hereda del maestro
 
         if not self.modo_simulacion and not tercero:
             raise ValueError(
-                'get_pedido_cabecera no devolvió f200_id_fact — '
+                'get_pedido_cabecera no devolvió f200_id_pedido_fact — '
                 'no se puede construir la FE sin el código de tercero cliente'
             )
 
