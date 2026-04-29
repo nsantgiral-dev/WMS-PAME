@@ -362,8 +362,10 @@ class ConnektaGateway:
         Consulta si ya existe una factura activa (no anulada) generada desde un pedido.
         Retorna lista de facturas activas. Lista vacía = sin factura previa, proceder.
         Guard anti-duplicado en cerrar_packing antes de disparar trigger_factura (238925).
+        SKIP_FE_CHECK=true omite el guard (solo QA — nunca en producción).
         """
-        if self.modo_simulacion:
+        import os
+        if self.modo_simulacion or os.getenv('SKIP_FE_CHECK', '').lower() == 'true':
             return []
 
         if not tipo_docto or not str(tipo_docto).strip():
@@ -371,12 +373,11 @@ class ConnektaGateway:
 
         try:
             consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
-            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
+            res = self._get('papeleriamedellin_monitos_facturas_wms', {
                 'paginacion': 'numPag=1|tamPag=50',
                 'parametros': (
                     f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f350_id_tipo_docto = ''{tipo_docto}'' "
-                    f"AND f350_consec_docto = {consec_int}"
+                    f"AND f430_consec_docto = {consec_int}"
                 )
             })
             rows = res.get('detalle', {}).get('Table', [])
