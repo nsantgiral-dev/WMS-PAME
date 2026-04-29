@@ -63,9 +63,10 @@ def procesar_jobs_pendientes(app=None):
 
     # [46] Envolver todo el cuerpo en try/except para que un fallo de DB no paralice la DLQ
     try:
-        _procesar_jobs_pendientes_interno(_app)
+        return _procesar_jobs_pendientes_interno(_app)
     except Exception as e:
         logger.error(f'[DLQ] Error inesperado en procesar_jobs_pendientes: {e}', exc_info=True)
+        return 0
 
 
 _ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers

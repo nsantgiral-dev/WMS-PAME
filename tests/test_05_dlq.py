@@ -57,7 +57,7 @@ class TestProcesarJobsPendientes:
         assert job.proximo_intento > datetime.utcnow()
 
     def test_tres_fallos_pasan_a_fallido(self, app, db):
-        """Tras 3 intentos fallidos → FALLIDO."""
+        """Tras max_intentos fallidos → FALLIDO."""
         from app.models.siesa_job import SiesaJob
         from app.services.siesa_job_service import procesar_jobs_pendientes
 
@@ -67,8 +67,9 @@ class TestProcesarJobsPendientes:
             'cantidad': 100, 'nota': '',
         })
         db.session.commit()
+        max_intentos = job.max_intentos  # 5 por defecto
 
-        for i in range(3):
+        for i in range(max_intentos):
             # Resetear proximo_intento para que el procesador lo tome
             job.proximo_intento = None
             db.session.commit()
@@ -81,7 +82,7 @@ class TestProcesarJobsPendientes:
 
         db.session.refresh(job)
         assert job.estado == 'FALLIDO'
-        assert job.intentos == 3
+        assert job.intentos == max_intentos
 
     def test_no_procesa_job_con_proximo_intento_futuro(self, app, db):
         """Un job con proximo_intento en el futuro NO se procesa ahora."""

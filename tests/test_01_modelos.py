@@ -171,12 +171,13 @@ class TestSiesaJob:
         job = SiesaJob.encolar('TRANSFERENCIA_UBICACIONES', {'x': 1})
         db.session.commit()
 
-        for _ in range(3):
+        # max_intentos por defecto = 5 (cubre caídas de Siesa de hasta ~6h)
+        for _ in range(job.max_intentos):
             job.marcar_fallo('Error persistente')
         db.session.commit()
 
         assert job.estado == 'FALLIDO'
-        assert job.intentos == 3
+        assert job.intentos == job.max_intentos
 
     def test_to_dict_campos_completos(self, db):
         from app.models.siesa_job import SiesaJob

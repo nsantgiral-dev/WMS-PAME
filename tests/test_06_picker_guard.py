@@ -103,11 +103,11 @@ class TestPickerSoloVeZonasPermitidas:
 class TestConfiguracionLimites:
     """El admin puede configurar stock_minimo/stock_maximo en el WMS."""
 
-    def test_patch_limites_via_api(self, app, db, client, jwt_token, ub_picking):
+    def test_patch_limites_via_api(self, app, db, client, jwt_token_admin, ub_picking):
         response = client.patch(
             f'/api/reposicion/ubicacion/{ub_picking.id}/limites',
             json={'stock_minimo': 75, 'stock_maximo': 300, 'secuencia_ruteo': 5},
-            headers={'Authorization': f'Bearer {jwt_token}'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
         )
         assert response.status_code == 200
         data = response.get_json()
@@ -116,7 +116,7 @@ class TestConfiguracionLimites:
         assert data['ubicacion']['stock_maximo'] == 300
         assert data['ubicacion']['secuencia_ruteo'] == 5
 
-    def test_listar_ubicaciones_picking(self, app, db, client, jwt_token,
+    def test_listar_ubicaciones_picking(self, app, db, client, jwt_token_admin,
                                          ub_picking, producto):
         from app.models.inventario import UbicacionProducto
         inv = UbicacionProducto(
@@ -128,7 +128,7 @@ class TestConfiguracionLimites:
 
         response = client.get(
             '/api/reposicion/ubicaciones',
-            headers={'Authorization': f'Bearer {jwt_token}'},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
         )
         assert response.status_code == 200
         data = response.get_json()

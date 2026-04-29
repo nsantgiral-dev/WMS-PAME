@@ -18,6 +18,19 @@ from app import create_app
 from app.extensions import db as _db
 
 
+def _register_pg_stubs(dbapi_conn, _connection_record):
+    """
+    Registra stubs SQLite que simulan las funciones de advisory lock de PostgreSQL.
+    pg_advisory_xact_lock  → no-op (siempre concede el lock)
+    pg_try_advisory_lock   → retorna 1 (éxito)
+    pg_advisory_unlock     → retorna 1 (éxito)
+    Permite correr los tests en SQLite sin modificar el código de producción.
+    """
+    dbapi_conn.create_function('pg_advisory_xact_lock', 1, lambda k: None)
+    dbapi_conn.create_function('pg_try_advisory_lock',  1, lambda k: 1)
+    dbapi_conn.create_function('pg_advisory_unlock',    1, lambda k: 1)
+
+
 @pytest.fixture(scope='session')
 def app():
     """App Flask con SQLite en memoria — una instancia por sesión de tests."""
@@ -26,8 +39,15 @@ def app():
         'TESTING': True,
         'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:',
         'JWT_ACCESS_TOKEN_EXPIRES': False,
+        # SQLite no soporta pool_size/max_overflow — limpiar opciones de PG
+        'SQLALCHEMY_ENGINE_OPTIONS': {
+            'pool_pre_ping': True,
+        },
     })
     with application.app_context():
+        # Registrar stubs de advisory locks de PG en cada conexión SQLite
+        from sqlalchemy import event as _sa_event
+        _sa_event.listen(_db.engine, 'connect', _register_pg_stubs)
         _db.create_all()
         yield application
         _db.drop_all()
@@ -183,7 +203,60 @@ def usuario(db, almacen):
 
 @pytest.fixture
 def jwt_token(app, usuario):
-    """Token JWT válido para el usuario de prueba."""
+    """Token JWT válido para el usuario de prueba (operario)."""
     from flask_jwt_extended import create_access_token
     with app.app_context():
         return create_access_token(identity=str(usuario.id))
+
+
+@pytest.fixture
+def usuario_admin(db, almacen):
+    """Usuario con rol admin — accede a todos los endpoints."""
+    from app.models.usuario import Usuario
+    from werkzeug.security import generate_password_hash
+    u = Usuario(
+        nombre='Admin Test',
+        email='admin@test.com',
+        password_hash=generate_password_hash('test123'),
+        rol='admin',
+        almacen_id=almacen.id,
+        activo=True,
+    )
+    db.session.add(u)
+    db.session.commit()
+    return u
+
+
+@pytest.fixture
+def jwt_token_admin(app, usuario_admin):
+    """Token JWT para usuario admin."""
+    from flask_jwt_extended import create_access_token
+    with app.app_context():
+        return create_access_token(identity=str(usuario_admin.id))
+
+
+@pytest.fixture
+def usuario_abastecedor(db, almacen):
+    """Usuario operario con permiso puede_abastecer=True."""
+    from app.models.usuario import Usuario
+    from werkzeug.security import generate_password_hash
+    u = Usuario(
+        nombre='Abastecedor Test',
+        email='abast@test.com',
+        password_hash=generate_password_hash('test123'),
+        rol='operario',
+        almacen_id=almacen.id,
+        activo=True,
+        puede_abastecer=True,
+    )
+    db.session.add(u)
+    db.session.commit()
+    return u
+
+
+@pytest.fixture
+def jwt_token_abastecedor(app, usuario_abastecedor):
+    """Token JWT para usuario abastecedor."""
+    from flask_jwt_extended import create_access_token
+    with app.app_context():
+        return create_access_token(identity=str(usuario_abastecedor.id))

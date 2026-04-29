@@ -25,14 +25,18 @@ def create_app():
             'Agrega SECRET_KEY en Railway (o en tu .env local) antes de arrancar la app.'
         )
 
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
+    _db_url = os.getenv('DATABASE_URL', '')
+    app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_size': int(os.getenv('DB_POOL_SIZE', '10')),
-        'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '5')),
-        'pool_recycle': 1800,       # reciclar conexiones cada 30min (Railway puede cerrar idle)
-        'pool_pre_ping': True,      # SELECT 1 antes de usar conexión — evita "server closed the connection"
-    }
+    # pool_size/max_overflow solo aplican a PostgreSQL — SQLite (tests) los rechaza
+    _engine_opts = {'pool_pre_ping': True}
+    if not _db_url.startswith('sqlite'):
+        _engine_opts.update({
+            'pool_size': int(os.getenv('DB_POOL_SIZE', '10')),
+            'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '5')),
+            'pool_recycle': 1800,   # reciclar conexiones cada 30min (Railway puede cerrar idle)
+        })
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = _engine_opts
     app.config['JWT_SECRET_KEY'] = secret_key
     app.config['SECRET_KEY'] = secret_key
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
