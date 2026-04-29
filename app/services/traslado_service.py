@@ -246,7 +246,23 @@ class TrasladoService:
                 consec = TrasladoService._extraer_consec(res)
                 if consec:
                     s.siesa_salida_consec = consec
-            s.siesa_error = None
+                else:
+                    # 173076 aceptado por Siesa pero consecutivo no parseado.
+                    # Sin consecutivo, el 173079 de recepción fallará.
+                    # Guardamos warning para que ops identifique el folio manualmente.
+                    s.siesa_error = (
+                        'AVISO: 173076 enviado correctamente a Siesa pero el WMS no pudo '
+                        'leer el consecutivo del documento. Revisa logs de Railway '
+                        '("[TRASLADO] _extraer_consec") para obtener el folio y cargarlo '
+                        'manualmente antes de que la tienda confirme recepción.'
+                    )
+                    logger.error(
+                        '[TRASLADO] %s: 173076 OK pero consecutivo null — '
+                        '173079 bloqueado hasta resolución manual. Response: %s',
+                        s.codigo, str(res)[:500]
+                    )
+            else:
+                s.siesa_error = None
         except Exception as e:
             s.siesa_error = f'Despacho Siesa: {str(e)}'
             logger.error(f'[TRASLADO] Error despacho Siesa {s.codigo}: {e}', exc_info=True)
@@ -548,18 +564,70 @@ class TrasladoService:
 
     @staticmethod
     def _extraer_consec(respuesta_siesa: dict) -> int | None:
-        """Intenta extraer el consecutivo del documento creado en Siesa."""
+        """
+        Extrae el consecutivo del documento creado en Siesa.
+
+        Connekta puede devolver el consecutivo en estructuras distintas según
+        la versión del conector. Orden de búsqueda:
+          1. detalle.Table[0] — campos canónicos (f350_consec_docto, consec_docto, consecutivo)
+          2. detalle.Table[0] — cualquier clave que contenga 'consec' con valor entero
+          3. Nivel raíz del response — mismos campos
+          4. detalle como lista — primer elemento con campo canónico
+
+        Cuando falla, loguea la estructura completa para diagnóstico en Railway.
+        """
         try:
+            # 1. Ruta canónica: detalle.Table[0]
             detalle = respuesta_siesa.get('detalle', {})
             if isinstance(detalle, dict):
                 tabla = detalle.get('Table', [])
                 if tabla and isinstance(tabla, list) and len(tabla) > 0:
                     row = tabla[0]
-                    for key in ['f350_consec_docto', 'consec_docto', 'consecutivo']:
+                    for key in ('f350_consec_docto', 'consec_docto', 'consecutivo',
+                                'f350_consec', 'consec', 'NumeroDocumento'):
                         if key in row:
-                            return int(row[key])
-        except Exception:
-            pass
+                            try:
+                                return int(row[key])
+                            except (ValueError, TypeError):
+                                pass
+                    # Búsqueda amplia: cualquier clave con 'consec' y valor entero
+                    for key, val in row.items():
+                        if 'consec' in key.lower():
+                            try:
+                                v = int(val)
+                                if v > 0:
+                                    logger.info(f'[TRASLADO] _extraer_consec: encontrado via clave amplia "{key}"={v}')
+                                    return v
+                            except (ValueError, TypeError):
+                                pass
+
+            # 2. Nivel raíz del response
+            for key in ('f350_consec_docto', 'consec_docto', 'consecutivo', 'consec'):
+                if key in respuesta_siesa:
+                    try:
+                        return int(respuesta_siesa[key])
+                    except (ValueError, TypeError):
+                        pass
+
+            # 3. detalle como lista
+            if isinstance(detalle, list) and detalle:
+                row = detalle[0]
+                if isinstance(row, dict):
+                    for key in ('f350_consec_docto', 'consec_docto', 'consecutivo'):
+                        if key in row:
+                            try:
+                                return int(row[key])
+                            except (ValueError, TypeError):
+                                pass
+
+            # No se encontró — logear estructura para diagnóstico
+            logger.warning(
+                '[TRASLADO] _extraer_consec: consecutivo no encontrado. '
+                'Estructura response: %s',
+                str(respuesta_siesa)[:600]
+            )
+        except Exception as e:
+            logger.error(f'[TRASLADO] _extraer_consec excepción: {e} — response: {str(respuesta_siesa)[:400]}')
         return None
 
     @staticmethod
