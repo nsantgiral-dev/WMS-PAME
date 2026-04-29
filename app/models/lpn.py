@@ -57,7 +57,11 @@ class LPN(db.Model):
     @classmethod
     def buscar_activos_por_producto(cls, producto_id: int, almacen_id: int):
         """Todos los LPNs disponibles de un producto en un almacén."""
-        return cls.query.filter_by(
+        from sqlalchemy.orm import selectinload
+        return cls.query.options(
+            selectinload(cls.producto),
+            selectinload(cls.ubicacion),
+        ).filter_by(
             producto_id=producto_id,
             almacen_id=almacen_id,
             estado='ACTIVO'

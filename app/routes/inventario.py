@@ -45,6 +45,9 @@ def ajuste_inventario():
         if campo not in data:
             return jsonify({'error': f'Campo requerido: {campo}'}), 400
 
+    if data['idempotency_key'] is None:
+        return jsonify({'error': 'idempotency_key no puede ser null'}), 400
+
     # Idempotencia real — si ya existe este key, devolver el movimiento original sin tocar stock
     existente = MovimientoInventario.query.filter_by(
         idempotency_key=data['idempotency_key']

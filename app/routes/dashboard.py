@@ -119,7 +119,7 @@ def resumen_completo():
         auditorias_urgentes = None
 
     try:
-        tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO').count()
+        tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO', almacen_id=almacen_id).count()
     except Exception:
         logger.exception('[DASHBOARD] tareas_bloqueadas query falló')
         tareas_bloqueadas = None

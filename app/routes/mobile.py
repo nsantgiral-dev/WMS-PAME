@@ -29,6 +29,8 @@ def _verificar_rol_para_tipo(operario_id: int, tipo: str):
     Devuelve None si el usuario tiene permiso para el tipo de tarea,
     o una tupla (mensaje, status) si debe ser rechazado.
     """
+    if not tipo:
+        return jsonify({'error': 'tipo de tarea no puede estar vacío'}), 400
     if tipo not in _TIPOS_ALMACEN:
         return None  # Tipos de despacho/entrega — sin restricción adicional
     from app.models.usuario import Usuario

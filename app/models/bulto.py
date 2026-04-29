@@ -9,13 +9,6 @@ class EstadoBulto:
     RECHAZADO  = 'RECHAZADO'
 
 
-class EstadoRuta:
-    PROGRAMADO  = 'PROGRAMADO'
-    EN_CARGUE   = 'EN_CARGUE'
-    EN_TRANSITO = 'EN_TRANSITO'
-    ENTREGADA   = 'ENTREGADA'
-
-
 class Bulto(db.Model):
     """
     Pieza física de un pedido empacado.

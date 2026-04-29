@@ -247,16 +247,24 @@ class ABCService:
                             maneja_lote=bool(getattr(reg, 'lote', None)),
                             estado='PENDIENTE'
                         )
-                        db.session.add(sesion)
-                        conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
-                        overrides.append({
-                            'producto_id': producto.id,
-                            'producto_codigo': producto.codigo_siesa or producto.codigo,
-                            'clase_actual': clase,
-                            'picks_7dias': picks,
-                            'umbral': umbral,
-                            'sesion_codigo': codigo,
-                        })
+                        from sqlalchemy.exc import IntegrityError as _IE_wd
+                        _sp = db.session.begin_nested()
+                        try:
+                            db.session.add(sesion)
+                            db.session.flush()
+                            _sp.commit()
+                            conteos_activos.add((producto.id, reg.ubicacion_id))  # evita duplicar en misma corrida
+                            overrides.append({
+                                'producto_id': producto.id,
+                                'producto_codigo': producto.codigo_siesa or producto.codigo,
+                                'clase_actual': clase,
+                                'picks_7dias': picks,
+                                'umbral': umbral,
+                                'sesion_codigo': codigo,
+                            })
+                        except _IE_wd:
+                            _sp.rollback()
+                            logger.warning(f'[ABC WATCHDOG] Sesión duplicada ignorada — prod {producto.id} ubic {reg.ubicacion_id}')
 
             db.session.commit()
         except Exception as e:
@@ -593,7 +601,25 @@ class ABCService:
                     return
                 try:
                     from app.models.almacen import Almacen
-                    almacenes = Almacen.query.filter_by(activo=True).all()
+                    try:
+                        almacenes = Almacen.query.filter_by(activo=True).all()
+                    except Exception as _ex_setup:
+                        logger.error('[ABC] Job falló consultando almacenes — sin tareas generadas', exc_info=True)
+                        try:
+                            from app.services.alertas_service import _enviar_email_con_dlq
+                            _enviar_email_con_dlq(
+                                asunto='[WMS ALERTA] ABC scheduler falló en setup (almacenes)',
+                                cuerpo_texto=(
+                                    f'El scheduler ABC no pudo obtener la lista de almacenes:\n{_ex_setup}\n\n'
+                                    'No se generaron tareas de conteo cíclico hoy. '
+                                    'Usar /api/abc/generar para re-disparar manualmente.'
+                                ),
+                                cuerpo_html=None,
+                                tipo_alerta='abc_scheduler_setup_fallo',
+                            )
+                        except Exception as _e_em:
+                            logger.critical('[ABC] Email de alerta de setup también falló: %s', _e_em)
+                        return
                     logger.info(f'[ABC] Job iniciado — {len(almacenes)} almacén(es)')
                     completados = []
                     parciales = []   # [M28] Completados con watchdog fallido internamente
@@ -660,7 +686,11 @@ class ABCService:
                 try:
                     from app.models.conteo import SesionConteo, EstadoConteo
                     from app.services.conteo_service import ConteoService
-                    sesiones_pendientes = SesionConteo.query.filter(
+                    from sqlalchemy.orm import selectinload
+                    sesiones_pendientes = SesionConteo.query.options(
+                        selectinload(SesionConteo.producto),
+                        selectinload(SesionConteo.ubicacion),
+                    ).filter(
                         SesionConteo.estado == EstadoConteo.PENDIENTE
                     ).all()
                     if sesiones_pendientes:

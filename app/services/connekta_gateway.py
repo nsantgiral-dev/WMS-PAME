@@ -84,6 +84,11 @@ class ConnektaGateway:
         # Condición de pago para entradas de OC — campo f451_id_cond_pago (pos 324, ancho 3/4)
         # Verificar en Siesa: Cartera → Condiciones de pago → código usado en OCs
         self.cond_pago_compras = os.getenv('SIESA_COND_PAGO_COMPRAS', '')
+        # Condición de pago para facturas de venta (CxC) — f461_id_cond_pago en 142943.
+        # Distinto de cond_pago_compras (CxP). El .NET serializer de Connekta V2 colapsa
+        # con HTTP 500 si se envía null — SIESA_COND_PAGO_VENTAS es obligatorio.
+        # Verificar en Siesa: Ventas → Condiciones de pago → código de la condición activa.
+        self.cond_pago_ventas = os.getenv('SIESA_COND_PAGO_VENTAS', '')
         # Lista de precio en Siesa — campo requerido f470_id_lista_precio (pos 169, ancho 3)
         # Verificar en Siesa: Ventas → Listas de precio → código de la lista activa
         self.lista_precio = os.getenv('SIESA_LISTA_PRECIO', '')
@@ -98,7 +103,9 @@ class ConnektaGateway:
         # Tipo documento ajuste físico en Siesa (Inventarios → Tipos de documento)
         self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
-        self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '01')
+        # Sin default — SIESA_MOTIVO_TRASLADO es obligatorio en producción.
+        # '01' era un fallback genérico que generaba rechazos en Siesas que usan otro código.
+        self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '')
         # Motivo específico para transferencias a bodega de averías (142951).
         # El maestro "Conceptos y Motivos" de Siesa puede tener un código distinto al de traslados
         # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
@@ -129,6 +136,19 @@ class ConnektaGateway:
             logger.warning('[CONNEKTA] Modo simulación — faltan: CONNEKTA_IKEY, CONNEKTA_ITOKEN')
         elif self.modo_ensayo:
             logger.warning('[CONNEKTA] MODO ENSAYO activo — GETs reales, POSTs bloqueados en servidor')
+        else:
+            # Validación de arranque — variables obligatorias en modo producción real.
+            # El servidor no debe arrancar sin estas; fallarían silencios en producción.
+            _faltantes = []
+            if not self.cond_pago_ventas:
+                _faltantes.append('SIESA_COND_PAGO_VENTAS')
+            if not self.motivo_traslado:
+                _faltantes.append('SIESA_MOTIVO_TRASLADO')
+            if _faltantes:
+                raise EnvironmentError(
+                    f'[CONNEKTA] Variables obligatorias no configuradas: {", ".join(_faltantes)}. '
+                    'Configurar en Railway antes de desplegar.'
+                )
 
     @staticmethod
     def _safe_int_env(var_name: str, default: int) -> int:
@@ -264,8 +284,6 @@ class ConnektaGateway:
             resp_json = r.json()
             logger.info(f'[CONNEKTA] POST {id_conector} HTTP 200 — respuesta: {str(resp_json)[:300]}')
             # Connekta V2/V3.1: HTTP 200 no garantiza éxito — verificar codigo==0 en body.
-            # Guard isinstance: V3.1 (trigger_factura) puede retornar lista o dict sin 'codigo'.
-            # None != 0 es True en Python → sin guard se levantaría excepción en éxito V3.1.
             if isinstance(resp_json, dict):
                 codigo = resp_json.get('codigo')
                 if codigo is not None and codigo != 0:
@@ -278,6 +296,20 @@ class ConnektaGateway:
                     raise Exception(
                         f'Siesa rechazó el documento (codigo={codigo}): {mensaje}. {detalle}'
                     )
+            elif isinstance(resp_json, list):
+                # V3.1 retorna lista — verificar si algún elemento señala error
+                for _item in resp_json:
+                    if isinstance(_item, dict):
+                        _cod = _item.get('codigo')
+                        if _cod is not None and _cod != 0:
+                            _msg = _item.get('mensaje', 'Sin mensaje')
+                            logger.error(
+                                f'[CONNEKTA] POST {id_conector} (v3.1 list) rechazado — '
+                                f'codigo={_cod} mensaje={_msg}'
+                            )
+                            raise Exception(
+                                f'Siesa rechazó el documento (codigo={_cod}): {_msg}'
+                            )
             return resp_json
         except requests.exceptions.Timeout:
             logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
@@ -355,6 +387,36 @@ class ConnektaGateway:
             logger.warning(f'[CONNEKTA] get_factura_desde_pedido falló silenciosamente: {e}')
             return []
 
+    def get_factura_desde_remision(self, tipo_docto_rm: str, consec_rm) -> list:
+        """
+        Pre-check anti-duplicado para 142943 (FacturaDesdeRemision).
+        Consulta si ya existe una FE activa (no anulada) vinculada a la remisión.
+        Retorna lista de facturas activas. Lista vacía = sin factura previa, proceder.
+        Usa el mismo API que get_factura_desde_pedido filtrando por el documento base
+        (f460_id_tipo_docto / f460_consec_docto) que identifica la RM en RelacionDoctos.
+        """
+        if self.modo_simulacion:
+            return []
+
+        if not tipo_docto_rm or not str(tipo_docto_rm).strip():
+            return []
+
+        try:
+            consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
+            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
+                'paginacion': 'numPag=1|tamPag=50',
+                'parametros': (
+                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
+                    f"AND f460_consec_docto = {consec_int}"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] get_factura_desde_remision falló silenciosamente: {e}')
+            return []
+
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
         Cola viva de picking: filtra por CO y estado directo en Connekta.
@@ -387,11 +449,10 @@ class ConnektaGateway:
                     f'[CONNEKTA] get_pedidos_aprobados pag={pag} error ({_errores_consec}/3): {e}'
                 )
                 if _errores_consec >= 3:
-                    logger.error(
-                        '[CONNEKTA] get_pedidos_aprobados abortando tras 3 errores consecutivos — '
-                        f'retornando {len(all_items)} ítems parciales'
+                    raise Exception(
+                        f'get_pedidos_aprobados abortó tras 3 errores consecutivos en pág={pag} — '
+                        f'{len(all_items)} ítems parciales descartados'
                     )
-                    break
                 continue
             rows = res.get('detalle', {}).get('Table', [])
             if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
@@ -809,7 +870,12 @@ class ConnektaGateway:
         tercero      = cabecera.get('f200_id_fact') or ''
         sucursal     = cabecera.get('f461_id_sucursal_fact') or ''
         tipo_cli     = cabecera.get('f461_id_tipo_cli_fact') or ''
-        cond_pago    = cabecera.get('f461_id_cond_pago') or self.cond_pago_compras or None
+        cond_pago    = cabecera.get('f461_id_cond_pago') or self.cond_pago_ventas or None
+        if not cond_pago:
+            raise ValueError(
+                'f461_id_cond_pago no disponible en cabecera y SIESA_COND_PAGO_VENTAS no configurado — '
+                'Connekta V2 .NET serializer colapsa con HTTP 500 si se envía null'
+            )
         moneda_docto = cabecera.get('f461_id_moneda_docto') or 'COP'
         moneda_conv  = cabecera.get('f461_id_moneda_conv') or moneda_docto
         moneda_local = cabecera.get('f461_id_moneda_local') or moneda_docto
@@ -1360,6 +1426,12 @@ class ConnektaGateway:
                 'de requisición para transferir en Siesa '
                 '(Inventarios → Tipos de documento → clase 75).'
             )
+        for _item in items:
+            if not _item.get('codigo_siesa'):
+                raise ValueError(
+                    f'Item sin codigo_siesa en requisicion_traslado: {_item.get("codigo") or _item}. '
+                    'Nunca usar código interno WMS como fallback hacia Siesa.'
+                )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
@@ -1396,7 +1468,7 @@ class ConnektaGateway:
                     'f441_consec_docto': 0,
                     'f441_nro_registro': idx + 1,
                     'f441_id_item': 0,
-                    'f441_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f441_referencia_item': item.get('codigo_siesa'),
                     'f441_codigo_barras': None,
                     'f441_id_ext1_detalle': None,
                     'f441_id_ext2_detalle': None,
@@ -1441,6 +1513,12 @@ class ConnektaGateway:
                 'SIESA_TIPO_DOCTO_TRANSITO_SALIDA no configurado — crear tipo doc '
                 'amarrado a Clase 65 en Siesa (Inventarios → Tipos de documento)'
             )
+        for _item in items:
+            if not _item.get('codigo_siesa'):
+                raise ValueError(
+                    f'Item sin codigo_siesa en transferencia_transito_salida: {_item.get("codigo") or _item}. '
+                    'Nunca usar código interno WMS como fallback hacia Siesa.'
+                )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
@@ -1488,7 +1566,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
-                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f470_referencia_item': item.get('codigo_siesa'),
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
@@ -1526,6 +1604,17 @@ class ConnektaGateway:
                 'consec_salida obligatorio para 173079 — no se puede recibir tránsito '
                 'sin el consecutivo del documento de salida (173076)'
             )
+        if not self.tipo_docto_transito_salida:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_TRANSITO_SALIDA no configurado — requerido en 173079 '
+                'para f350_id_tipo_docto_base (referencia al documento de salida 173076)'
+            )
+        for _item in items:
+            if not _item.get('codigo_siesa'):
+                raise ValueError(
+                    f'Item sin codigo_siesa en transferencia_transito_entrada: {_item.get("codigo") or _item}. '
+                    'Nunca usar código interno WMS como fallback hacia Siesa.'
+                )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
@@ -1547,7 +1636,7 @@ class ConnektaGateway:
                     'f450_docto_alterno': codigo_solicitud,
                     # Referencia obligatoria al doc 173076 de salida
                     'f350_id_co_base': self.centro_op if consec_salida else None,
-                    'f350_id_tipo_docto_base': self.tipo_docto_transito_salida if consec_salida else None,
+                    'f350_id_tipo_docto_base': (self.tipo_docto_transito_salida or None) if consec_salida else None,
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                 }
             ],
@@ -1573,7 +1662,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux_ent': None,   # Dep — ubicación entrada
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,                # Dep — usamos referencia_item
-                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f470_referencia_item': item.get('codigo_siesa'),
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
@@ -1599,6 +1688,12 @@ class ConnektaGateway:
 
         VERIFICAR desde Connekta → Ver Guía del conector 173066.
         """
+        for _item in items:
+            if not _item.get('codigo_siesa'):
+                raise ValueError(
+                    f'Item sin codigo_siesa en transferencia_directa: {_item.get("codigo") or _item}. '
+                    'Nunca usar código interno WMS como fallback hacia Siesa.'
+                )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
         payload = {
@@ -1643,7 +1738,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux_ent': None,   # Dep — si bodega entrada maneja ubicaciones
                     'f470_id_lote_ent': None,             # Dep — si ítem+bodega entrada manejan lotes
                     'f470_id_item': None,                # Dep — usamos referencia_item
-                    'f470_referencia_item': item.get('codigo_siesa') or item.get('codigo'),
+                    'f470_referencia_item': item.get('codigo_siesa'),
                     'f470_codigo_barras': None,           # Dep
                     'f470_id_ext1_detalle': None,        # Dep — si ítem maneja extensión 1
                     'f470_id_ext2_detalle': None,        # Dep — si ítem maneja extensión 2

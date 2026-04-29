@@ -788,5 +788,7 @@ def init_scheduler(app):
     )
 
     scheduler.start()
+    import atexit
+    atexit.register(lambda: scheduler.shutdown(wait=False))
     logger.info('[ALERTAS] Scheduler iniciado — 05:45 huérfanas | 06:15 stock crítico | 06:45 resumen')
     return scheduler

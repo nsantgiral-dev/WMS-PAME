@@ -75,5 +75,5 @@ def despachar_parcial(packing_id: int):
     except ValueError as e:
         return jsonify({'error': str(e)}), 409
     except Exception as e:
-        logger.error('[DESPACHO_PARCIAL] Error Siesa packing_id=%s: %s', packing_id, e)
+        logger.exception('[DESPACHO_PARCIAL] Error Siesa packing_id=%s: %s', packing_id, e)
         return jsonify({'error': f'Error Siesa: {str(e)}'}), 502

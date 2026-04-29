@@ -481,6 +481,8 @@ def editar_conteo(id):
         if sesion.existencia_siesa is not None:
             resultado = ConteoService.reconciliar_cantidad(sesion, nueva_cantidad)
             if resultado['es_match']:
+                sesion.estado = EstadoConteo.MATCH
+                sesion.fecha_cierre = datetime.utcnow()
                 cambios.append('estado → MATCH')
             else:
                 diferencia = resultado['diferencia']

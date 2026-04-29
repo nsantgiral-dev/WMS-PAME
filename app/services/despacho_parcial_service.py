@@ -68,8 +68,17 @@ class DespachoParialService:
         resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
         tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
 
-        # 4. Convertir RM → FE con 142943
-        resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
+        # 4. Convertir RM → FE con 142943 — guard anti-duplicado antes de disparar.
+        # Si la RM ya tiene FE (reintento DLQ tras fallo en paso 4), no crear otra.
+        facturas_existentes = connekta.get_factura_desde_remision(tipo_rm, consec_rm)
+        if facturas_existentes:
+            logger.info(
+                '[DESPACHO_PARCIAL] tarea=%s RM=%s%s ya tiene FE — omitiendo 142943',
+                tarea.id, tipo_rm, consec_rm
+            )
+            resp_fe = {'idempotente': True, 'facturas': facturas_existentes}
+        else:
+            resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
 
         # 5. Persistir resultado en la tarea
         resultado = {'rm': f'{tipo_rm}-{consec_rm}', 'fe_response': resp_fe}

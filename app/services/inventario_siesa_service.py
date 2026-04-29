@@ -719,6 +719,20 @@ def _run_reconciliacion(app):
                     )
             except Exception as e_dev:
                 logger.exception('[RECONCILIACION] Error creando tareas devolución — discrepancias sin procesar en esta ejecución')
+                try:
+                    from app.services.alertas_service import _enviar_email_con_dlq
+                    _enviar_email_con_dlq(
+                        asunto='[WMS ALERTA] Reconciliación — tareas devolución fallaron',
+                        cuerpo_texto=(
+                            f'Error al crear tareas de logística inversa:\n{e_dev}\n\n'
+                            'Las discrepancias de este ciclo no generaron TareaDevolucion. '
+                            'Se reintentará en el próximo ciclo (~5 min).'
+                        ),
+                        cuerpo_html=None,
+                        tipo_alerta='reconciliacion_dev_fallo',
+                    )
+                except Exception as _e_alert:
+                    logger.error('[RECONCILIACION] Email de alerta también falló: %s', _e_alert)
 
             _estado_reconciliacion['ultimo_resultado'] = {
                 'timestamp': ts,
