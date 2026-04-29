@@ -37,16 +37,13 @@ class ReconciliacionService:
             return {'reconciliado': False}
 
         # Señal 1: factura directa
+        # FAIL-FAST: si get_factura_desde_pedido lanza excepción (error de red),
+        # re-raise para que el DLQ handler marque el job como REINTENTANDO.
+        # No swallow: si no podemos verificar, no procedemos con trigger_factura.
         factura_encontrada = None
-        try:
-            facturas = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-            if facturas:
-                factura_encontrada = facturas[0]
-        except Exception as e:
-            logger.warning(
-                f'[RECONCILIACION] get_factura_desde_pedido falló '
-                f'para {tarea.numero_pedido_siesa}: {e}'
-            )
+        facturas = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
+        if facturas:
+            factura_encontrada = facturas[0]
 
         # Señal 2: estado del pedido en Siesa == 9 (cumplido/ya procesado)
         if not factura_encontrada:

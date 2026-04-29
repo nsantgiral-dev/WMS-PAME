@@ -384,8 +384,13 @@ class ConnektaGateway:
             rows = res.get('detalle', {}).get('Table', [])
             return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
         except Exception as e:
-            logger.warning(f'[CONNEKTA] get_factura_desde_pedido falló silenciosamente: {e}')
-            return []
+            # FAIL-FAST: no retornar [] ante error de red — el caller asumiría que no hay FE
+            # y dispararía trigger_factura (238925) generando FE duplicada (riesgo fiscal / DIAN).
+            logger.error('[CONNEKTA] get_factura_desde_pedido falló — abortando para evitar FE duplicada: %s', e)
+            raise Exception(
+                f'No se pudo verificar si ya existe FE para pedido {tipo_docto}-{consec_docto}: {e}. '
+                'Reintenta cuando Connekta esté disponible.'
+            )
 
     def get_factura_desde_remision(self, tipo_docto_rm: str, consec_rm) -> list:
         """
@@ -414,8 +419,14 @@ class ConnektaGateway:
             rows = res.get('detalle', {}).get('Table', [])
             return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
         except Exception as e:
-            logger.warning(f'[CONNEKTA] get_factura_desde_remision falló silenciosamente: {e}')
-            return []
+            # FAIL-FAST: no retornar [] ante error de red — eso haría creer que no hay FE
+            # y el caller procedería a crear una FE duplicada (riesgo fiscal / DIAN).
+            # El caller debe capturar esta excepción y abortar el despacho.
+            logger.error('[CONNEKTA] get_factura_desde_remision falló — abortando para evitar FE duplicada: %s', e)
+            raise Exception(
+                f'No se pudo verificar si ya existe FE para RM {tipo_docto_rm}-{consec_rm}: {e}. '
+                'Reintenta cuando Connekta esté disponible.'
+            )
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
@@ -1040,15 +1051,30 @@ class ConnektaGateway:
 
         # Siesa exige sucursal de 3 chars (ej. '1' → '001'). Sin NIT+sucursal, rechaza.
         sucursal_prov_fmt = sucursal_prov.strip().zfill(3) if sucursal_prov and sucursal_prov.strip() else None
-        if not proveedor_id or not sucursal_prov_fmt:
-            logger.warning(
-                f'[CONNEKTA] EntradaOC — proveedor_id={proveedor_id!r} sucursal_prov={sucursal_prov!r}: '
-                'campos obligatorios vacíos, Siesa rechazará el documento (pos 43-58 y 324-327)'
+        # f350_id_tercero es OBLIGATORIO en spec 142948 (pos 43-58). Bloquear localmente antes
+        # de gastar ancho de banda en un POST que Siesa rechazará con error 500.
+        if not proveedor_id:
+            raise ValueError(
+                'confirmar_entrada_compras: proveedor_id es None — '
+                'f350_id_tercero es obligatorio en 142948 (pos 43-58). '
+                'Verificar que la OC en Siesa expone f200_id_prov correctamente.'
+            )
+        if not sucursal_prov_fmt:
+            raise ValueError(
+                'confirmar_entrada_compras: sucursal_prov es None o vacío — '
+                'f451_id_sucursal_prov es obligatorio en 142948 (pos 324-327).'
             )
         if not (cond_pago or self.cond_pago_compras):
             logger.warning(
                 '[CONNEKTA] EntradaOC — f451_id_cond_pago vacío: campo obligatorio pos 324. '
                 'Configura SIESA_COND_PAGO_COMPRAS en Railway o pasa cond_pago en la recepción.'
+            )
+        # Payload sanitizer anticipado — si todos los ítems tienen cantidad 0, abortar aquí.
+        items_validos = [i for i in items if float(i.get('cantidad_recibida') or 0) > 0]
+        if not items_validos:
+            raise ValueError(
+                'confirmar_entrada_compras: todos los ítems tienen cantidad_recibida=0 — '
+                'nada que enviar a Siesa. Verificar recepción antes de confirmar.'
             )
 
         payload = {
@@ -1114,7 +1140,7 @@ class ConnektaGateway:
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
                     'f421_fecha_entrega': self._fmt_fecha_iso(i.get('fecha_entrega')) or fecha_hoy_iso,
-                    'f470_cant_base': round(float(i.get('cantidad_recibida') or 0), 4),  # 4 decimales spec Siesa
+                    'f470_cant_base': round(float(i['_qty']), 4),  # filtrado previo garantiza > 0
                     'f470_cant_2': 0.0,
                     'f470_notas': None,
                     'f470_id_item': None,
@@ -1126,7 +1152,14 @@ class ConnektaGateway:
                     'f470_id_proyecto': None,
                     'f470_rowid': 0
                 }
-                for idx, i in enumerate(items)
+                # Payload sanitizer: filtrar ítems con cantidad_recibida <= 0 ANTES del POST.
+                # Siesa rechaza f470_cant_base=0.0 con error duro (regla de cuenta 14).
+                # Entregas parciales dejan el resto de la OC como backorder en Siesa.
+                for idx, i in enumerate(
+                    [dict(item, _qty=float(item.get('cantidad_recibida') or 0))
+                     for item in items
+                     if float(item.get('cantidad_recibida') or 0) > 0]
+                )
             ],
             'Final': [
                 {'F_CIA': cia}
