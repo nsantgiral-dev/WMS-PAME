@@ -283,10 +283,25 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             if rec.get('reconciliado'):
                 return rec
 
+        # Pedido parcial: algún ítem empacado < pedido original → 142945 (RM) → 142943 (FE)
+        items_job = payload.get('items', [])
+        es_parcial = any(
+            float(i.get('cantidad_empacada') or 0) < float(i.get('cantidad_pedida') or 0)
+            for i in items_job
+        )
+        if es_parcial and tarea:
+            from app.services.despacho_parcial_service import DespachoParialService
+            cantidades = {
+                item.producto.codigo: float(item.cantidad_real or item.cantidad_esperada or 0)
+                for item in tarea.items
+                if item.producto
+            }
+            return DespachoParialService.despachar_parcial(tarea, cantidades)
+
         resultado = connekta.trigger_factura(
             tipo_docto_pedido=payload['tipo_docto_pedido'],
             consec_docto_pedido=payload['consec_docto_pedido'],
-            items=payload.get('items', []),
+            items=items_job,
         )
         # Siesa procesó el despacho — persistir flag ANTES de retornar para que
         # un posible reintento no genere documento duplicado.
