@@ -1,4 +1,5 @@
 def register_routes(app):
+    from app.routes.health import health_bp
     from app.routes.auth import auth_bp
     from app.routes.productos import productos_bp
     from app.routes.inventario import inventario_bp
@@ -20,6 +21,7 @@ def register_routes(app):
     from app.routes.remision_admin import remision_admin_bp
     from app.routes.despacho_parcial import despacho_parcial_bp
 
+    app.register_blueprint(health_bp, url_prefix='/api/health')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(productos_bp, url_prefix='/api/productos')
     app.register_blueprint(inventario_bp, url_prefix='/api/inventario')
