@@ -877,12 +877,41 @@ class ConnektaGateway:
         tercero      = cabecera.get('f200_id_pedido_fact') or ''
         sucursal     = cabecera.get('f461_id_sucursal_pedido_rem') or None  # None → Siesa hereda del maestro
         tipo_cli     = cabecera.get('f430_id_tipo_cli_fact') or None        # None → Siesa hereda del maestro
-        cond_pago    = cabecera.get('f430_id_cond_pago') or self.cond_pago_ventas or None
+        _cond_pago_siesa = cabecera.get('f430_id_cond_pago')
+        cond_pago    = _cond_pago_siesa or self.cond_pago_ventas or None
         if not cond_pago:
             raise ValueError(
                 'f430_id_cond_pago no disponible en cabecera y SIESA_COND_PAGO_VENTAS no configurado — '
                 'Connekta V2 .NET serializer colapsa con HTTP 500 si se envía null'
             )
+        if not _cond_pago_siesa and cond_pago == self.cond_pago_ventas:
+            # Data maestra incompleta — factura se emite como CONTADO pero no bloquea el despacho.
+            # Alerta asíncrona para que el equipo comercial corrija el maestro del tercero en Siesa.
+            _tercero_alerta = cabecera.get('f200_id_pedido_fact') or 'desconocido'
+            logger.warning(
+                '[CONNEKTA] RM %s-%s: f430_id_cond_pago vacío — fallback %s (CONTADO). '
+                'Maestro del cliente %s en Siesa sin condición de pago asignada.',
+                tipo_docto_rm, consec_rm, cond_pago, _tercero_alerta
+            )
+            try:
+                from app.services.alertas_service import _enviar_email_con_dlq
+                _cuerpo = (
+                    f'El pedido RM-{consec_rm} del cliente {_tercero_alerta} fue facturado '
+                    f'automáticamente como CONTADO ({cond_pago}) porque Siesa no devolvió '
+                    f'condición de pago (f430_id_cond_pago vacío).\n\n'
+                    f'Acción requerida: actualizar el maestro del tercero {_tercero_alerta} '
+                    f'en Siesa Enterprise con la condición de pago correcta para evitar '
+                    f'futuras facturas incorrectas y posibles fricciones con el cliente.\n\n'
+                    f'Documento: {tipo_docto_rm}-{consec_rm}'
+                )
+                _enviar_email_con_dlq(
+                    asunto='[WMS ALERTA] Factura emitida como CONTADO por data incompleta en Siesa',
+                    cuerpo_html=f'<pre>{_cuerpo}</pre>',
+                    cuerpo_texto=_cuerpo,
+                    tipo_alerta='DATA_MAESTRA_COND_PAGO'
+                )
+            except Exception as _e_alert:
+                logger.error('[CONNEKTA] Email alerta data maestra falló: %s', _e_alert)
         moneda_docto = cabecera.get('f430_id_moneda_docto') or 'COP'
         moneda_conv  = cabecera.get('f430_id_moneda_conv') or moneda_docto
         moneda_local = cabecera.get('f430_id_moneda_local') or moneda_docto
