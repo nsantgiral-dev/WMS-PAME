@@ -66,7 +66,25 @@ class DespachoParialService:
 
         # 3. Crear RM con 142945 (trigger_despacho existente, sin modificar)
         resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
-        tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
+        try:
+            tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
+        except ValueError:
+            # El response de 142945 no incluye el consecutivo (flag "Respuesta Simplificada"
+            # activo en el conector). Fallback: consultar Siesa por la RM recién creada.
+            logger.warning(
+                '[DESPACHO_PARCIAL] _parsear_rm falló — consultando Siesa por RM del pedido %s%s',
+                tipo_docto, consec_docto
+            )
+            rm_data = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+            if not rm_data:
+                raise ValueError(
+                    f'142945 reportó éxito pero no se pudo recuperar el número de RM '
+                    f'para el pedido {tipo_docto}{consec_docto}. '
+                    'Verificar en Siesa que la remisión fue creada y reintentar.'
+                )
+            tipo_rm  = rm_data['tipo']
+            consec_rm = rm_data['consec']
+            logger.info('[DESPACHO_PARCIAL] RM recuperada por query: %s-%s', tipo_rm, consec_rm)
 
         # 4. Convertir RM → FE con 142943 — guard anti-duplicado antes de disparar.
         # Si la RM ya tiene FE (reintento DLQ tras fallo en paso 4), no crear otra.
@@ -122,28 +140,28 @@ class DespachoParialService:
     @staticmethod
     def _parsear_rm(resp) -> tuple[str, int]:
         """
-        Extrae tipo y consecutivo del RM del campo `mensaje` del response de 142945.
-        Formato confirmado por consultor: "Transacción Exitosa. Se generó el documento RM-XXXX"
+        Extrae tipo y consecutivo de la RM buscando en todos los campos string del response.
+        Cubre el formato "Se generó el documento RM-XXXX" (cuando el consultor habilite
+        el mensaje dinámico en 142945) y cualquier variante futura de Siesa.
+        Lanza ValueError si no encuentra el patrón — el caller hace fallback a query Siesa.
         """
         if not resp:
-            raise ValueError('Response de 142945 vacío — no se obtuvo número de RM')
+            raise ValueError('Response de 142945 vacío')
 
         if isinstance(resp, dict):
-            mensaje = str(resp.get('mensaje') or resp.get('message') or '')
+            candidatos = [str(v) for v in resp.values() if v]
         elif isinstance(resp, list) and resp:
-            mensaje = str(resp[0].get('mensaje') or '')
+            primer = resp[0]
+            candidatos = [str(v) for v in (primer.values() if isinstance(primer, dict) else [primer]) if v]
         else:
-            mensaje = str(resp)
+            candidatos = [str(resp)]
 
-        match = _RE_RM.search(mensaje)
-        if not match:
-            logger.error('[DESPACHO_PARCIAL] No se extrajo RM de: %r', mensaje)
-            raise ValueError(
-                f'No se pudo extraer número de RM del response de Siesa (mensaje={mensaje!r}). '
-                'Verificar formato de respuesta del conector 142945.'
-            )
+        for texto in candidatos:
+            match = _RE_RM.search(texto)
+            if match:
+                tipo_rm   = match.group(1).upper()
+                consec_rm = int(match.group(2))
+                logger.info('[DESPACHO_PARCIAL] RM parseado del response: %s-%s', tipo_rm, consec_rm)
+                return tipo_rm, consec_rm
 
-        tipo_rm  = match.group(1).upper()
-        consec_rm = int(match.group(2))
-        logger.info('[DESPACHO_PARCIAL] RM parseado: %s-%s', tipo_rm, consec_rm)
-        return tipo_rm, consec_rm
+        raise ValueError(f'Patrón RM-XXXX no encontrado en response: {resp!r}')
