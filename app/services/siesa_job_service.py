@@ -284,9 +284,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 return rec
 
         # Pedido parcial: algún ítem empacado < pedido original → 142945 (RM) → 142943 (FE)
+        # cantidad_pedida en el payload viene de ItemPacking.cantidad_esperada, que
+        # PackingPickingSyncService ajusta al valor del picking. Por eso se consulta
+        # PedidoSiesa.cantidad_pedida (cantidad original de Siesa) para la comparación.
         items_job = payload.get('items', [])
+        from app.models.pedido_siesa import PedidoSiesa as _PS
+        _orig_siesa = {
+            r.item_codigo: r.cantidad_pedida
+            for r in _PS.query.filter_by(numero_pedido=payload.get('numero_pedido_siesa', '')).all()
+        } if tarea else {}
         es_parcial = any(
-            float(i.get('cantidad_empacada') or 0) < float(i.get('cantidad_pedida') or 0)
+            float(i.get('cantidad_empacada') or 0) < float(
+                _orig_siesa.get(i.get('producto_codigo')) or i.get('cantidad_pedida') or 0
+            )
             for i in items_job
         )
         if es_parcial and tarea:

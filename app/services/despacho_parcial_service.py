@@ -103,17 +103,18 @@ class DespachoParialService:
     def _build_items(tarea, cantidades: dict) -> list:
         items = []
         for item in tarea.items:
-            codigo = item.producto.codigo if item.producto else None
-            qty = float(cantidades.get(codigo, 0) if codigo else 0)
+            if not item.producto:
+                continue
+            codigo_wms   = item.producto.codigo
+            codigo_siesa = item.producto.codigo_siesa or codigo_wms
+            qty = float(cantidades.get(codigo_wms, 0))
             if qty <= 0:
                 continue
             items.append({
-                'producto_codigo': codigo,
+                'producto_codigo': codigo_siesa,   # Siesa espera el código interno (codigo_siesa)
                 'cantidad_empacada': qty,
                 'lote': item.lote or None,
-                'unidad_medida': (
-                    item.producto.unidad_empaque if item.producto else None
-                ) or 'UND',
+                'unidad_medida': (item.producto.unidad_empaque or item.producto.unidad_medida or 'UND'),
                 'item_id_siesa': None,
             })
         return items
