@@ -1667,7 +1667,11 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
-                    'f470_desc_variable': None,
+                    # Nombre exacto del docx 173076 (typo incluido: 'varible' no 'variable').
+                    # El serializador de Connekta usa este nombre para construir el flat file
+                    # posicional. Si el nombre difiere, el registro se trunca en pos 487 (702 chars)
+                    # y Siesa rechaza con "Tamaño del registro no corresponde al exigido".
+                    'f470_desc_varible': None,
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
@@ -1675,7 +1679,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
-                    'f470_id_un_movto': self.unidad_negocio,
+                    'f470_id_un_movto': self.unidad_negocio,  # SIESA_UNIDAD_NEGOCIO — obligatorio
                     'f470_rowid_movto': 0,
                 }
                 for idx, item in enumerate(items)
@@ -1764,6 +1768,7 @@ class ConnektaGateway:
                     'f470_cant_2': None,                 # Dep — unidad adicional
                     'f470_costo_prom_uni': None,          # Dep
                     'f470_notas': None,
+                    'f470_desc_varible': None,           # typo intencional — nombre exacto del spec 173079
                     'f470_id_ubicacion_aux_ent': None,   # Dep — ubicación entrada
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,                # Dep — usamos referencia_item
@@ -1771,7 +1776,8 @@ class ConnektaGateway:
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
-                    'f470_id_un_movto': self.unidad_negocio,
+                    'f470_id_un_movto': self.unidad_negocio,  # SIESA_UNIDAD_NEGOCIO — obligatorio
+                    'f470_rowid_movto': 0,
                 }
                 for idx, item in enumerate(items)
             ],
