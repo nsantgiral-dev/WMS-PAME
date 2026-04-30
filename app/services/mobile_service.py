@@ -642,16 +642,19 @@ class MobileService:
             # para no colapsar el connection pool DB durante apertura de turno (N operarios simultáneos)
             try:
                 from app.services.reposicion_service import verificar_stock_picking as _vsp
+                from flask import current_app as _curr_app
+                _app = _curr_app._get_current_object()
 
-                def _run_vsp(aid):
+                def _run_vsp(aid, app):
                     if _STOCK_VERIF_SEMAPHORE.acquire(blocking=False):
                         try:
-                            _vsp(aid)
+                            with app.app_context():
+                                _vsp(aid)
                         finally:
                             _STOCK_VERIF_SEMAPHORE.release()
 
                 import threading as _t
-                _t.Thread(target=_run_vsp, args=(almacen_id,), daemon=True).start()
+                _t.Thread(target=_run_vsp, args=(almacen_id, _app), daemon=True).start()
             except Exception as _e:
                 logger.warning(f'[MOBILE] verificar_stock_picking falló silenciosamente: {_e}')
             return resultado
