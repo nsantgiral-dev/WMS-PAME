@@ -283,75 +283,18 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             if rec.get('reconciliado'):
                 return rec
 
-        # Pedido parcial: algún ítem empacado < pedido original → 142945 (RM) → 142943 (FE)
-        # cantidad_pedida en el payload viene de ItemPacking.cantidad_esperada, que
-        # PackingPickingSyncService ajusta al valor del picking. Por eso se consulta
-        # PedidoSiesa.cantidad_pedida (cantidad original de Siesa) para la comparación.
-        items_job = payload.get('items', [])
-        from app.models.pedido_siesa import PedidoSiesa as _PS
-        _orig_siesa = {
-            r.item_codigo: r.cantidad_pedida
-            for r in _PS.query.filter_by(numero_pedido=payload.get('numero_pedido_siesa', '')).all()
-        } if tarea else {}
-        es_parcial = any(
-            float(i.get('cantidad_empacada') or 0) < float(
-                _orig_siesa.get(i.get('producto_codigo')) or i.get('cantidad_pedida') or 0
-            )
-            for i in items_job
-        )
-        if es_parcial and tarea:
-            from app.services.despacho_parcial_service import DespachoParialService
-            cantidades = {
-                item.producto.codigo: float(item.cantidad_real or item.cantidad_esperada or 0)
-                for item in tarea.items
-                if item.producto
-            }
-            return DespachoParialService.despachar_parcial(tarea, cantidades)
-
-        resultado = connekta.trigger_factura(
-            tipo_docto_pedido=payload['tipo_docto_pedido'],
-            consec_docto_pedido=payload['consec_docto_pedido'],
-            items=items_job,
-        )
-        # Siesa procesó el despacho — persistir flag ANTES de retornar para que
-        # un posible reintento no genere documento duplicado.
-        # Commit en bloque propio: si falla, el job igual se marca COMPLETADO
-        # (evita que la excepción del commit fuerce un reintento → duplicado).
-        if tarea and not tarea.siesa_triggered:
-            try:
-                # INV_PACKING_BULTO: verificar invariante antes de marcar DESPACHADO.
-                # Siesa ya confirmó — detectar aquí evita hasta 18h de violación silenciosa.
-                from app.models.bulto import Bulto as _Bulto
-                if not _Bulto.query.filter_by(tarea_id=tarea.id).count():
-                    raise ValueError(
-                        f'Invariante violada: tarea {tarea.id} sin bultos — '
-                        'no se puede marcar DESPACHADO sin evidencia física de empaque'
-                    )
-
-                tarea.siesa_triggered = True
-                tarea.siesa_response = _json.dumps(resultado)
-                tarea.siesa_triggered_at = datetime.utcnow()
-                tarea.estado = EstadoPacking.DESPACHADO
-                tarea.fecha_despachado = datetime.utcnow()
-                db.session.commit()
-            except Exception as _e:
-                logger.critical(
-                    f'[DLQ] DESPACHO_F470 job={job.id}: Siesa OK pero fallo al guardar '
-                    f'siesa_triggered — revisar manualmente tarea {tarea.id}. Error: {_e}'
-                )
-                db.session.rollback()
-                # Emergency: persistir SOLO el flag idempotencia para bloquear re-despacho
-                try:
-                    tarea.siesa_triggered = True
-                    tarea.siesa_triggered_at = datetime.utcnow()
-                    db.session.commit()
-                except Exception as _e2:
-                    db.session.rollback()
-                    logger.critical(
-                        f'[DLQ] DESPACHO_F470 job={job.id}: DOBLE FALLO — '
-                        f'siesa_triggered no persiste: {_e2}. Tarea {tarea.id} en riesgo de duplicado.'
-                    )
-        return resultado
+        # Flujo único para completos y parciales: 142945 (RM) → 142943 (FEW).
+        # DespachoParialService dicta la realidad física del WMS — Siesa factura
+        # exactamente lo que el operario empacó, sin importar el compromiso original.
+        if not tarea:
+            raise ValueError(f'DESPACHO_F470 job={job.id}: tarea_id={payload.get("tarea_id")} no encontrada')
+        from app.services.despacho_parcial_service import DespachoParialService
+        cantidades = {
+            item.producto.codigo: float(item.cantidad_real or item.cantidad_esperada or 0)
+            for item in tarea.items
+            if item.producto
+        }
+        return DespachoParialService.despachar_parcial(tarea, cantidades)
 
     if job.tipo == 'ENTRADA_OC':
         # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),
