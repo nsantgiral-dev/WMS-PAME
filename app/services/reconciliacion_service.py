@@ -36,14 +36,19 @@ class ReconciliacionService:
         if not tipo_docto or not consec_docto:
             return {'reconciliado': False}
 
-        # Señal 1: factura directa
-        # FAIL-FAST: si get_factura_desde_pedido lanza excepción (error de red),
-        # re-raise para que el DLQ handler marque el job como REINTENTANDO.
-        # No swallow: si no podemos verificar, no procedemos con trigger_factura.
+        # Señal 1: factura directa.
+        # Si la consulta falla, advertir y continuar a Señal 2 — trigger_factura tiene
+        # su propio guard (get_estado_pedido == 4) que evita FE duplicada igualmente.
         factura_encontrada = None
-        facturas = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-        if facturas:
-            factura_encontrada = facturas[0]
+        try:
+            facturas = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
+            if facturas:
+                factura_encontrada = facturas[0]
+        except Exception as e:
+            logger.warning(
+                f'[RECONCILIACION] Señal 1 (get_factura_desde_pedido) falló para '
+                f'{tarea.numero_pedido_siesa}: {e} — continuando con Señal 2'
+            )
 
         # Señal 2: estado del pedido en Siesa == 9 (cumplido/ya procesado)
         if not factura_encontrada:
@@ -128,11 +133,17 @@ class ReconciliacionService:
         )
 
         for tarea in tareas:
-            ReconciliacionService.reconciliar_despacho(
-                tarea,
-                tipo_docto=tarea.tipo_docto_pedido_siesa,
-                consec_docto=tarea.consec_docto_pedido_siesa,
-            )
+            try:
+                ReconciliacionService.reconciliar_despacho(
+                    tarea,
+                    tipo_docto=tarea.tipo_docto_pedido_siesa,
+                    consec_docto=tarea.consec_docto_pedido_siesa,
+                )
+            except Exception as e:
+                logger.error(
+                    f'[RECONCILIACION] Error reconciliando tarea {tarea.id} '
+                    f'({tarea.numero_pedido_siesa}): {e}'
+                )
 
 
 def init_scheduler(app):
