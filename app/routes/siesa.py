@@ -977,6 +977,42 @@ def iniciar_recepcion():
 # Jobs DLQ — gestión de jobs fallidos
 # ──────────────────────────────────────────────
 
+@siesa_bp.route('/jobs', methods=['GET'])
+@jwt_required()
+def listar_jobs():
+    """
+    Lista jobs filtrando por estado y/o tipo. Solo admin.
+    ?estado=REINTENTANDO&tipo=DESPACHO_F470&ref_id=62
+    Si no se pasa estado, devuelve todos los estados activos (PENDIENTE, PROCESANDO, REINTENTANDO, FALLIDO).
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ver jobs'}), 403
+
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+
+    estado = request.args.get('estado')
+    tipo = request.args.get('tipo')
+    ref_id = request.args.get('ref_id', type=int)
+
+    query = SiesaJob.query
+    if estado:
+        query = query.filter_by(estado=estado)
+    else:
+        query = query.filter(SiesaJob.estado.in_([
+            EstadoSiesaJob.PENDIENTE,
+            EstadoSiesaJob.PROCESANDO,
+            EstadoSiesaJob.REINTENTANDO,
+            EstadoSiesaJob.FALLIDO,
+        ]))
+    if tipo:
+        query = query.filter_by(tipo=tipo)
+    if ref_id:
+        query = query.filter_by(referencia_id=ref_id)
+
+    jobs = query.order_by(SiesaJob.fecha_creacion.desc()).limit(100).all()
+    return jsonify({'total': len(jobs), 'jobs': [j.to_dict() for j in jobs]}), 200
+
+
 @siesa_bp.route('/jobs-fallidos', methods=['GET'])
 @jwt_required()
 def listar_jobs_fallidos():
