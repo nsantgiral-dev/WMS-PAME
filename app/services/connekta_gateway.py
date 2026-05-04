@@ -1884,12 +1884,22 @@ class ConnektaGateway:
             },
             'conectores_post': {
                 'despacho': f'{self.conector_despacho} RemisionPedido',
+                'factura_remision': f'{self.conector_factura_remision} FacturaRemision',
                 'entrada': f'{self.conector_entrada} EntradaOC',
                 'ajuste': f'{self.conector_ajuste} DocumentoInv',
                 'req_traslado': f'{self.conector_requisicion_traslado} RequisicionesParaTransferir',
                 'transito_salida': f'{self.conector_transito_salida} TransferenciaEnTransitoSalida',
                 'transito_entrada': f'{self.conector_transito_entrada} TransferenciaEnTransitoEntrada',
                 'transf_directa': f'{self.conector_transferencia_directa} TransferenciaDirecta',
+            },
+            'despacho_config': {
+                'tipo_docto_remision': self.tipo_docto_remision or 'NO CONFIGURADO — agregar SIESA_TIPO_DOCTO_REMISION en Railway',
+                'tipo_docto_factura': self.tipo_docto_factura or 'NO CONFIGURADO',
+                'cond_pago_ventas': self.cond_pago_ventas or 'NO CONFIGURADO — agregar SIESA_COND_PAGO_VENTAS en Railway',
+                'lista_precio': self.lista_precio or 'NO CONFIGURADO',
+                'motivo_ventas': self.motivo_ventas or 'NO CONFIGURADO',
+                'listo_para_despacho': bool(self.tipo_docto_remision),
+                'listo_para_factura': bool(self.cond_pago_ventas or True),
             },
             'traslados_config': {
                 'tipo_docto_req_traslado': self.tipo_docto_req_traslado or 'NO CONFIGURADO',
