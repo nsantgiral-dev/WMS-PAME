@@ -5,9 +5,11 @@ from app.extensions import db
 
 logger = logging.getLogger(__name__)
 
-# Estados del pedido en Siesa que confirman que ya fue facturado/procesado
-# 4 = Cumplido (facturado), 9 = Anulado/ya procesado
-_ESTADOS_CUMPLIDO = {'4', '9'}
+# Estado 9 = Anulado/ya procesado: único estado terminal confiable para reconciliación.
+# Estado 4 (Cumplido) se excluye deliberadamente: Siesa pone ind_estado=4 cuando el
+# conector 142945 procesa la RM internamente, antes de que la FE exista. Tratarlo como
+# señal de "RM+FE ya creados" hace que el DLQ omita la creación de la FE en el reintento.
+_ESTADOS_CUMPLIDO = {'9'}
 
 
 class ReconciliacionService:
