@@ -266,10 +266,16 @@ class PackingService:
 
         # Validaciones rápidas antes del HTTP (evita llamadas inútiles a Siesa)
         if not bultos_data:
-            raise ValueError('Debes declarar al menos una pieza')
-        total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
-        if total < 1:
-            raise ValueError('Total de piezas debe ser al menos 1')
+            # Retry path: la route ya verificó que existen bultos en DB; recalcular total.
+            from app.models.bulto import Bulto as _BultoCheck
+            bultos_previos = _BultoCheck.query.filter_by(tarea_id=tarea_id).all()
+            if not bultos_previos:
+                raise ValueError('Debes declarar al menos una pieza')
+            total = len(bultos_previos)
+        else:
+            total = sum(int(b.get('cantidad', 1)) for b in bultos_data)
+            if total < 1:
+                raise ValueError('Total de piezas debe ser al menos 1')
 
         # Pre-verificar estado en Siesa ANTES de adquirir el lock de fila.
         # Solo se verifica si hay tipo_docto y consec válidos (pedido real de Siesa).
