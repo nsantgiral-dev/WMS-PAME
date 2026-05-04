@@ -1050,3 +1050,32 @@ def resetear_jobs_fallidos():
         'tipo': tipo,
         'job_ids': [j.id for j in jobs]
     }), 200
+
+
+@siesa_bp.route('/trigger-dlq', methods=['POST'])
+@jwt_required()
+def trigger_dlq_manual():
+    """
+    Fuerza la ejecución inmediata del DLQ en hilo daemon.
+    Útil cuando el daemon perdió el advisory lock contra el scheduler.
+    Devuelve cuántos jobs PENDIENTE/REINTENTANDO hay elegibles. Solo admin.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede disparar el DLQ'}), 403
+
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+    from datetime import datetime, timezone
+
+    ahora = datetime.now(timezone.utc).replace(tzinfo=None)
+    elegibles = SiesaJob.query.filter(
+        SiesaJob.estado.in_([EstadoSiesaJob.PENDIENTE, EstadoSiesaJob.REINTENTANDO]),
+        (SiesaJob.proximo_intento == None) | (SiesaJob.proximo_intento <= ahora)
+    ).count()
+
+    from app.services.siesa_job_service import disparar_dlq_inmediato
+    disparar_dlq_inmediato()
+
+    return jsonify({
+        'mensaje': 'DLQ disparado — procesando jobs en hilo daemon',
+        'jobs_elegibles': elegibles
+    }), 200
