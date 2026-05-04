@@ -971,3 +971,82 @@ def iniciar_recepcion():
         }), 201
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+
+
+# ──────────────────────────────────────────────
+# Jobs DLQ — gestión de jobs fallidos
+# ──────────────────────────────────────────────
+
+@siesa_bp.route('/jobs-fallidos', methods=['GET'])
+@jwt_required()
+def listar_jobs_fallidos():
+    """Lista jobs FALLIDO agrupados por tipo. Solo admin."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede ver jobs fallidos'}), 403
+
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+
+    tipo = request.args.get('tipo')
+    query = SiesaJob.query.filter_by(estado=EstadoSiesaJob.FALLIDO)
+    if tipo:
+        query = query.filter_by(tipo=tipo)
+
+    jobs = query.order_by(SiesaJob.fecha_creacion.desc()).limit(200).all()
+
+    por_tipo = {}
+    for j in jobs:
+        por_tipo.setdefault(j.tipo, 0)
+        por_tipo[j.tipo] += 1
+
+    return jsonify({
+        'total': len(jobs),
+        'por_tipo': por_tipo,
+        'jobs': [j.to_dict() for j in jobs]
+    }), 200
+
+
+@siesa_bp.route('/resetear-jobs-fallidos', methods=['POST'])
+@jwt_required()
+def resetear_jobs_fallidos():
+    """
+    Resetea jobs FALLIDO → PENDIENTE y dispara DLQ inmediatamente.
+    Usar después de corregir CONNEKTA_IKEY/ITOKEN en Railway.
+    ?tipo=DESPACHO_F470  (default)
+    Solo admin.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede resetear jobs'}), 403
+
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+    from app.extensions import db
+
+    tipo = request.args.get('tipo', 'DESPACHO_F470')
+
+    jobs = SiesaJob.query.filter_by(
+        tipo=tipo,
+        estado=EstadoSiesaJob.FALLIDO
+    ).all()
+
+    if not jobs:
+        return jsonify({
+            'mensaje': f'No hay jobs {tipo} en estado FALLIDO',
+            'reseteados': 0
+        }), 200
+
+    for job in jobs:
+        job.estado = EstadoSiesaJob.PENDIENTE
+        job.intentos = 0
+        job.proximo_intento = None
+        job.error_ultimo = None
+
+    db.session.commit()
+
+    from app.services.siesa_job_service import disparar_dlq_inmediato
+    disparar_dlq_inmediato()
+
+    return jsonify({
+        'mensaje': f'{len(jobs)} job(s) reseteados a PENDIENTE — DLQ disparado',
+        'reseteados': len(jobs),
+        'tipo': tipo,
+        'job_ids': [j.id for j in jobs]
+    }), 200
