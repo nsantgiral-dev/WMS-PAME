@@ -709,17 +709,18 @@ class ConnektaGateway:
         try:
             consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
             res = self._get(self.api_pedidos, {
-                'paginacion': 'numPag=1|tamPag=1',
+                'paginacion': 'numPag=1|tamPag=5',
                 'parametros': (
                     f"f430_id_co = ''{self.centro_op}'' "
                     f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
-                    f"AND f430_consec_docto = {consec_int}"
+                    f"AND f430_consec_docto = {consec_int} "
+                    f"AND f430_ind_estado <> 9"
                 )
             })
             rows = res.get('detalle', {}).get('Table', [])
             return rows[0] if rows else None
         except Exception as e:
-            logger.warning(f'[CONNEKTA] get_pedido_cabecera falló: {e}')
+            logger.error('[CONNEKTA] get_pedido_cabecera(%s%s) falló: %s', tipo_docto, consec_docto, e)
             return None
 
     # ==========================================
