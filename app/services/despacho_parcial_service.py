@@ -98,12 +98,15 @@ class DespachoParialService:
                 logger.info('[DESPACHO_PARCIAL] RM recuperada por query: %s-%s', tipo_rm, consec_rm)
 
         # 4. Convertir RM → FE con 142943 — guard anti-duplicado antes de disparar.
-        # Si la RM ya tiene FE (reintento DLQ tras fallo en paso 4), no crear otra.
-        facturas_existentes = connekta.get_factura_desde_remision(tipo_rm, consec_rm)
+        # Usamos get_factura_desde_pedido (papeleriamedellin_monitos_facturas_wms) en lugar de
+        # get_factura_desde_remision (API_v2_Ventas_Facturas_DesdePedido) porque esta última
+        # filtra por f460_* (RelacionDoctos) que ese API no expone — causaba FAIL-FAST en cada
+        # intento, dejando la FE sin crear aunque la RM existía.
+        facturas_existentes = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
         if facturas_existentes:
             logger.info(
-                '[DESPACHO_PARCIAL] tarea=%s RM=%s%s ya tiene FE — omitiendo 142943',
-                tarea.id, tipo_rm, consec_rm
+                '[DESPACHO_PARCIAL] tarea=%s pedido=%s%s ya tiene FE — omitiendo 142943',
+                tarea.id, tipo_docto, consec_docto
             )
             resp_fe = {'idempotente': True, 'facturas': facturas_existentes}
         else:
