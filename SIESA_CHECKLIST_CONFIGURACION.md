@@ -89,8 +89,8 @@
 
 **Notas:**
 - Se dispara automáticamente cuando el empacador **cierra el packing** (declara los bultos físicos).
-- Genera la factura FE + remisión automáticamente en Siesa.
-- Variable Railway: `SIESA_TIPO_DOCTO_FACTURA=FE`
+- Genera la factura FEW + remisión automáticamente en Siesa.
+- Variable Railway: `SIESA_TIPO_DOCTO_FACTURA=FEW`
 
 ---
 
@@ -151,7 +151,7 @@ CONNEKTA_URL=https://servicios.siesacloud.com   # producción (sin 'qa')
 
 # Siesa — Documentos
 SIESA_ID_CIA=1
-SIESA_TIPO_DOCTO_FACTURA=FE
+SIESA_TIPO_DOCTO_FACTURA=FEW
 SIESA_TIPO_DOCTO_TRASLADO=TRA
 SIESA_TIPO_DOCTO_TRANSITO_SALIDA=STS
 SIESA_TIPO_DOCTO_TRANSITO_ENTRADA=ETS

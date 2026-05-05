@@ -70,8 +70,8 @@ class ConnektaGateway:
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
         self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
-        # Tipo documento factura electrónica en Siesa (normalmente 'FE')
-        self.tipo_docto_factura  = os.getenv('SIESA_TIPO_DOCTO_FACTURA',  'FE')
+        # Tipo documento factura electrónica en Siesa (FEW para Papelería Medellín)
+        self.tipo_docto_factura  = os.getenv('SIESA_TIPO_DOCTO_FACTURA',  'FEW')
         # Tipo de documento remisión en Siesa (ej. 'RS', 'REMI', 'RM') — legacy
         # Verificar en Siesa: Ventas → Tipos de documento → código del tipo Remisión
         self.tipo_docto_remision = os.getenv('SIESA_TIPO_DOCTO_REMISION', '')
