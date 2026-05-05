@@ -77,25 +77,48 @@ class DespachoParialService:
                 tipo_rm, consec_rm
             )
         else:
-            resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
             try:
-                tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
-            except ValueError:
-                # Fallback: "Respuesta Simplificada" activo en el conector, sin consecutivo.
-                logger.warning(
-                    '[DESPACHO_PARCIAL] _parsear_rm falló — consultando Siesa por RM del pedido %s%s',
-                    tipo_docto, consec_docto
-                )
-                rm_data = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
-                if not rm_data:
-                    raise ValueError(
-                        f'142945 reportó éxito pero no se pudo recuperar el número de RM '
-                        f'para el pedido {tipo_docto}{consec_docto}. '
-                        'Verificar en Siesa que la remisión fue creada y reintentar.'
+                resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
+            except Exception as e_rm:
+                # Siesa rechaza 142945 cuando el pedido ya no está comprometido (RM ya existe).
+                # Recuperar la RM existente y continuar hacia la FE en lugar de abortar.
+                if 'comprometido' in str(e_rm).lower():
+                    logger.warning(
+                        '[DESPACHO_PARCIAL] 142945 rechazado (pedido no comprometido) — '
+                        'buscando RM existente para %s%s', tipo_docto, consec_docto
                     )
-                tipo_rm  = rm_data['tipo']
-                consec_rm = rm_data['consec']
-                logger.info('[DESPACHO_PARCIAL] RM recuperada por query: %s-%s', tipo_rm, consec_rm)
+                    rm_data = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+                    if not rm_data:
+                        raise ValueError(
+                            f'Pedido {tipo_docto}{consec_docto} no está comprometido y no se '
+                            f'encontró RM existente — verificar estado en Siesa.'
+                        )
+                    tipo_rm  = rm_data['tipo']
+                    consec_rm = rm_data['consec']
+                    logger.info(
+                        '[DESPACHO_PARCIAL] RM existente recuperada: %s-%s', tipo_rm, consec_rm
+                    )
+                else:
+                    raise
+            else:
+                try:
+                    tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
+                except ValueError:
+                    # Fallback: "Respuesta Simplificada" activo en el conector, sin consecutivo.
+                    logger.warning(
+                        '[DESPACHO_PARCIAL] _parsear_rm falló — consultando Siesa por RM del pedido %s%s',
+                        tipo_docto, consec_docto
+                    )
+                    rm_data = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+                    if not rm_data:
+                        raise ValueError(
+                            f'142945 reportó éxito pero no se pudo recuperar el número de RM '
+                            f'para el pedido {tipo_docto}{consec_docto}. '
+                            'Verificar en Siesa que la remisión fue creada y reintentar.'
+                        )
+                    tipo_rm  = rm_data['tipo']
+                    consec_rm = rm_data['consec']
+                    logger.info('[DESPACHO_PARCIAL] RM recuperada por query: %s-%s', tipo_rm, consec_rm)
 
         # 4. Convertir RM → FE con 142943 — guard anti-duplicado antes de disparar.
         # Usamos get_factura_desde_pedido (papeleriamedellin_monitos_facturas_wms) en lugar de

@@ -665,7 +665,8 @@ class ConnektaGateway:
                 'parametros': (
                     f"f350_id_co = ''{self.centro_op}'' "
                     f"AND f430_id_tipo_docto = ''{tipo_docto_pedido}'' "
-                    f"AND f430_consec_docto = {consec_int}"
+                    f"AND f430_consec_docto = {consec_int} "
+                    f"AND f350_ind_estado <> 9"
                 )
             })
             rows = res.get('detalle', {}).get('Table', [])
