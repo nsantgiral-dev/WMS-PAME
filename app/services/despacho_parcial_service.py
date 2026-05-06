@@ -59,10 +59,22 @@ class DespachoParialService:
                 f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa'
             )
 
-        # 2. Items con cantidades indicadas
+        # 2. Items con cantidades del packing (WMS-side truth).
+        # Fallback a compromisos de Siesa cuando cantidad_real/esperada son 0 en todos los ítems
+        # — causa del bug "cerrar caja no factura" cuando el job DLQ corre sin cantidades WMS.
         items = DespachoParialService._build_items(tarea, cantidades)
         if not items:
-            raise ValueError('Ningún ítem con cantidad > 0 — nada que despachar')
+            logger.warning(
+                '[DESPACHO_PARCIAL] tarea=%s — WMS sin cantidades; consultando compromisos Siesa',
+                tarea.id
+            )
+            compromisos = connekta.get_compromisos_pedido(tipo_docto, consec_docto)
+            items = DespachoParialService._build_items_from_compromisos(compromisos)
+            if not items:
+                raise ValueError(
+                    f'Pedido {tarea.numero_pedido_siesa}: sin cantidades en WMS ni compromisos '
+                    'vigentes en Siesa — verificar estado del pedido.'
+                )
 
         # 3. Idempotencia para 142945: si la RM ya existe (reintento DLQ tras fallo de red
         # o "Respuesta Simplificada" activo en el conector), reutilizarla sin crear otra.
@@ -241,6 +253,28 @@ class DespachoParialService:
                 'lote': item.lote or None,
                 'unidad_medida': (item.producto.unidad_empaque or item.producto.unidad_medida or 'UND'),
                 'item_id_siesa': None,
+            })
+        return items
+
+    @staticmethod
+    def _build_items_from_compromisos(compromisos: list) -> list:
+        """
+        Construye items de despacho desde API_v2_Ventas_Pedidos_Compromisos.
+        Usa f405_cant_por_remisionar_base como cantidad autoritativa de Siesa.
+        Solo se invoca cuando _build_items() devuelve vacío (WMS sin cantidades).
+        """
+        items = []
+        for row in compromisos:
+            codigo = str(row.get('f120_referencia', '')).strip()
+            qty = float(row.get('f405_cant_por_remisionar_base') or 0)
+            if not codigo or qty <= 0:
+                continue
+            items.append({
+                'producto_codigo': codigo,
+                'cantidad_empacada': qty,
+                'lote': row.get('f405_id_lote') or None,
+                'unidad_medida': str(row.get('f405_id_unidad_medida', 'UND')).strip() or 'UND',
+                'item_id_siesa': row.get('f431_rowid'),
             })
         return items
 

@@ -624,9 +624,10 @@ class ConnektaGateway:
 
     def get_compromisos_pedido(self, tipo_docto: str, consec_docto) -> list:
         """
-        GET API_v2_Ventas_Pedidos_Compromisos (API ID 103)
-        Retorna líneas de compromiso con f400_cant_comprometida_1 por ítem (f120_referencia).
-        Usado exclusivamente por DespachoParialService — no toca flujo de packing.
+        GET API_v2_Ventas_Pedidos_Compromisos
+        Retorna líneas comprometidas pendientes de remisionar (f405_cant_por_remisionar_base > 0).
+        Fuente autoritativa de cantidades cuando el WMS no tiene cantidad_real/esperada.
+        Campos clave: f120_referencia (SKU), f405_cant_por_remisionar_base (qty), f405_id_lote.
         """
         if self.modo_simulacion:
             return []
@@ -642,9 +643,10 @@ class ConnektaGateway:
                     f"AND f430_consec_docto = {consec_int}"
                 )
             })
-            return res.get('detalle', {}).get('Table', [])
+            rows = res.get('detalle', {}).get('Table', [])
+            return [r for r in rows if float(r.get('f405_cant_por_remisionar_base') or 0) > 0]
         except Exception as e:
-            logger.warning(f'[CONNEKTA] get_compromisos_pedido falló: {e}')
+            logger.warning('[CONNEKTA] get_compromisos_pedido falló: %s', e)
             return []
 
     def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido) -> dict | None:
