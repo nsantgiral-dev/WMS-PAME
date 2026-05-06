@@ -192,15 +192,10 @@ class DespachoParialService:
                 tipo_rm, consec_rm, tarea.id
             )
         else:
-            rm_data = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
-            if not rm_data:
-                raise ValueError(
-                    f'No se encontró remisión para {tarea.numero_pedido_siesa}. '
-                    'El consecutivo no está en BD ni disponible via Connekta. '
-                    'Usar /facturar-rm-manual con el número de RM visible en Siesa.'
-                )
-            tipo_rm   = rm_data['tipo']
-            consec_rm = rm_data['consec']
+            raise ValueError(
+                f'No hay consecutivo de RM en BD para {tarea.numero_pedido_siesa}. '
+                'Usar POST /facturar-rm-manual con el número de RM visible en Siesa.'
+            )
 
         # 2. Anti-duplicado FE
         facturas_existentes = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
