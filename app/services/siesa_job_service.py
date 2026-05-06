@@ -283,18 +283,25 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             if rec.get('reconciliado'):
                 return rec
 
-        # Flujo único para completos y parciales: 142945 (RM) → 142943 (FEW).
-        # DespachoParialService dicta la realidad física del WMS — Siesa factura
-        # exactamente lo que el operario empacó, sin importar el compromiso original.
+        # 238925 (FacturaPedido): Siesa toma las cantidades comprometidas del pedido y
+        # genera FE + RM automáticamente → pedido pasa a "cumplido" sin env vars adicionales.
+        # DespachoParialService (142945→142943) se reserva para el endpoint /despacho_parcial
+        # del módulo de administración, donde se controlan cantidades individualmente.
         if not tarea:
             raise ValueError(f'DESPACHO_F470 job={job.id}: tarea_id={payload.get("tarea_id")} no encontrada')
-        from app.services.despacho_parcial_service import DespachoParialService
-        cantidades = {
-            item.producto.codigo: float(item.cantidad_real or item.cantidad_esperada or 0)
-            for item in tarea.items
-            if item.producto
-        }
-        return DespachoParialService.despachar_parcial(tarea, cantidades)
+        tipo_docto   = payload.get('tipo_docto_pedido', '')
+        consec_docto = payload.get('consec_docto_pedido', '')
+        items        = payload.get('items', [])
+        resultado = connekta.trigger_factura(tipo_docto, consec_docto, items)
+        ahora = datetime.utcnow()
+        tarea.siesa_triggered    = True
+        tarea.siesa_triggered_at = ahora
+        tarea.estado             = 'DESPACHADO'
+        tarea.fecha_despachado   = tarea.fecha_despachado or ahora
+        tarea.siesa_response     = _json.dumps(resultado)
+        db.session.commit()
+        logger.info('[DLQ] DESPACHO_F470 job=%s tarea=%s → DESPACHADO (238925)', job.id, tarea.id)
+        return resultado
 
     if job.tipo == 'ENTRADA_OC':
         # Idempotencia: si un intento anterior llegó a Siesa (siesa_triggered=True),
