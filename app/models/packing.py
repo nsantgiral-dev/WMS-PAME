@@ -40,6 +40,10 @@ class TareaPacking(db.Model):
     siesa_response = db.Column(db.Text)
     siesa_triggered_at = db.Column(db.DateTime)
 
+    # Consecutivo de la RM creada por 142945 — persistido para retry sin depender de API Connekta
+    rm_tipo   = db.Column(db.String(10), nullable=True)
+    rm_consec = db.Column(db.Integer,    nullable=True)
+
     # Alerta: pedido anulado en Siesa mientras el WMS lo procesaba
     pedido_anulado_siesa = db.Column(db.Boolean, default=False)
     pedido_estado_siesa_detectado = db.Column(db.String(10))

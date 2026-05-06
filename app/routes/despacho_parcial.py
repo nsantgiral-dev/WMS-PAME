@@ -113,3 +113,50 @@ def facturar_remision(packing_id: int):
     except Exception as e:
         logger.exception('[FACTURAR_RM] Error Siesa packing_id=%s: %s', packing_id, e)
         return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
+
+
+@despacho_parcial_bp.route('/<int:packing_id>/facturar-rm-manual', methods=['POST'])
+@jwt_required()
+def facturar_rm_manual(packing_id: int):
+    """
+    POST /api/despacho_parcial/<packing_id>/facturar-rm-manual
+    Body: {"tipo_rm": "RS", "consec_rm": 1234}
+
+    Carril de emergencia: convierte una RM conocida a FE (142943) cuando
+    el consecutivo no está en BD y API_v2_Ventas_Remisiones_DesdePedido no existe.
+    El operario busca el número de RM en Siesa y lo ingresa manualmente.
+    """
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Sin permiso — se requiere rol de gestión'}), 403
+
+    tarea = TareaPacking.query.get_or_404(packing_id)
+    if tarea.estado == EstadoPacking.CANCELADO:
+        return jsonify({'error': 'No se puede facturar una tarea cancelada'}), 409
+    if tarea.siesa_triggered:
+        return jsonify({'error': 'Esta tarea ya fue procesada en Siesa (siesa_triggered=True)'}), 409
+
+    body = request.get_json(silent=True) or {}
+    tipo_rm   = str(body.get('tipo_rm', '')).strip().upper()
+    consec_rm = body.get('consec_rm')
+
+    if not tipo_rm or consec_rm is None:
+        return jsonify({'error': 'Se requiere body {"tipo_rm": "RS", "consec_rm": 1234}'}), 400
+    try:
+        consec_rm = int(consec_rm)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'consec_rm debe ser un entero'}), 400
+
+    from app.services.despacho_parcial_service import DespachoParialService
+    try:
+        resultado = DespachoParialService.facturar_rm_con_consec(tarea, tipo_rm, consec_rm)
+        logger.info(
+            '[FACTURAR_RM_MANUAL] usuario=%s packing_id=%s %s-%s → ok',
+            u.email, packing_id, tipo_rm, consec_rm
+        )
+        return jsonify({'ok': True, **resultado}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    except Exception as e:
+        logger.exception('[FACTURAR_RM_MANUAL] Error packing_id=%s: %s', packing_id, e)
+        return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
