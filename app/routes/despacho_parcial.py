@@ -77,3 +77,39 @@ def despachar_parcial(packing_id: int):
     except Exception as e:
         logger.exception('[DESPACHO_PARCIAL] Error Siesa packing_id=%s: %s', packing_id, e)
         return jsonify({'error': f'Error Siesa: {str(e)}'}), 502
+
+
+@despacho_parcial_bp.route('/<int:packing_id>/facturar-remision', methods=['POST'])
+@jwt_required()
+def facturar_remision(packing_id: int):
+    """
+    POST /api/despacho_parcial/<packing_id>/facturar-remision
+
+    Carril de recuperación: detecta la RM existente en Siesa y genera la FE (142943).
+    No requiere body. Usar cuando cerrar_caja creó la RM pero la FE falló.
+    """
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Sin permiso — se requiere rol de gestión'}), 403
+
+    tarea = TareaPacking.query.get_or_404(packing_id)
+
+    if tarea.estado == EstadoPacking.CANCELADO:
+        return jsonify({'error': 'No se puede facturar una tarea cancelada'}), 409
+
+    if tarea.siesa_triggered:
+        return jsonify({'error': 'Esta tarea ya fue procesada en Siesa (siesa_triggered=True)'}), 409
+
+    from app.services.despacho_parcial_service import DespachoParialService
+    try:
+        resultado = DespachoParialService.facturar_remision_existente(tarea)
+        logger.info(
+            '[FACTURAR_RM] usuario=%s facturó remisión packing_id=%s → %s',
+            u.email, packing_id, resultado.get('rm')
+        )
+        return jsonify({'ok': True, **resultado}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 409
+    except Exception as e:
+        logger.exception('[FACTURAR_RM] Error Siesa packing_id=%s: %s', packing_id, e)
+        return jsonify({'error': f'Error Siesa: {str(e)}'}), 502

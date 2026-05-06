@@ -150,6 +150,76 @@ class DespachoParialService:
         )
         return resultado
 
+    @staticmethod
+    def facturar_remision_existente(tarea) -> dict:
+        """
+        Carril de recuperación: detecta la RM que 142945 ya creó y dispara 142943.
+        Usar cuando cerrar_packing creó la RM en Siesa pero la FE falló.
+        No llama 142945 — la RM debe existir previamente.
+        """
+        from app.services.connekta_gateway import connekta
+
+        if tarea.siesa_triggered:
+            raise ValueError(f'Tarea {tarea.id} ya tiene siesa_triggered=True — sin acción necesaria')
+
+        tipo_docto   = tarea.tipo_docto_pedido_siesa
+        consec_docto = tarea.consec_docto_pedido_siesa
+        if not tipo_docto or not consec_docto:
+            raise ValueError('Tarea sin tipo_docto/consec_docto — imposible facturar')
+
+        # 1. Detectar RM existente en Siesa
+        rm_data = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+        if not rm_data:
+            raise ValueError(
+                f'No se encontró remisión para el pedido {tarea.numero_pedido_siesa} en Siesa. '
+                'Usa "Despacho Parcial" para crear la remisión primero.'
+            )
+        tipo_rm   = rm_data['tipo']
+        consec_rm = rm_data['consec']
+        logger.info(
+            '[FACTURAR_RM] tarea=%s pedido=%s → RM detectada: %s-%s',
+            tarea.id, tarea.numero_pedido_siesa, tipo_rm, consec_rm
+        )
+
+        # 2. Anti-duplicado FE — falla ruidosamente si Connekta no responde (FAIL-FAST)
+        facturas_existentes = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
+        if facturas_existentes:
+            resultado = {
+                'idempotente': True,
+                'rm': f'{tipo_rm}-{consec_rm}',
+                'facturas': facturas_existentes,
+            }
+            logger.info(
+                '[FACTURAR_RM] tarea=%s FE ya existe — marcando siesa_triggered sin reenviar',
+                tarea.id
+            )
+        else:
+            # 3. Cabecera del pedido para heredar tercero, cond_pago, moneda en 142943
+            cabecera = connekta.get_pedido_cabecera(tipo_docto, consec_docto)
+            if not cabecera:
+                raise ValueError(
+                    f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa — '
+                    'no se puede construir la factura sin datos del tercero.'
+                )
+
+            # 4. POST 142943 — convierte RM a FE
+            resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
+            resultado = {'rm': f'{tipo_rm}-{consec_rm}', 'fe_response': resp_fe}
+
+        # 5. Persistir — misma estructura que despachar_parcial para consistencia
+        tarea.siesa_triggered    = True
+        tarea.siesa_triggered_at = datetime.utcnow()
+        tarea.estado             = 'DESPACHADO'
+        tarea.fecha_despachado   = tarea.fecha_despachado or datetime.utcnow()
+        tarea.siesa_response     = json.dumps(resultado)
+        db.session.commit()
+
+        logger.info(
+            '[FACTURAR_RM] tarea=%s pedido=%s → %s FE=ok',
+            tarea.id, tarea.numero_pedido_siesa, resultado['rm']
+        )
+        return resultado
+
     # ------------------------------------------------------------------
     # Helpers privados
     # ------------------------------------------------------------------

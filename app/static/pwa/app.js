@@ -607,10 +607,16 @@ async function cargarPedidos() {
             Packing<br>🔄 Abrir
           </button>`;
         } else if (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) {
-          // Empaque listo pero Siesa falló — empacador debe reintentar Cerrar Caja
-          accionBtn = `<div style="flex-shrink:0;background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">
-            ⚠ Error<br>Siesa
-          </div>`;
+          // RM creada en Siesa pero FE falló — carril de recuperación
+          accionBtn = p.packing_id
+            ? `<div style="flex-shrink:0;display:flex;flex-direction:column;gap:4px;align-items:stretch;">
+                <div style="background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:700;text-align:center;">⚠ Error Siesa</div>
+                <button onclick="facturarRemisionExistente(${p.packing_id})"
+                  style="background:#7c2d12;color:#fed7aa;border:1px solid #c2410c;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;text-align:center;">
+                  🧾 Facturar Remisión
+                </button>
+              </div>`
+            : `<div style="flex-shrink:0;background:#2d0a0a;color:#fca5a5;border:1px solid #7f1d1d;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">⚠ Error<br>Siesa</div>`;
         } else if (p.picking_completado) {
           // Picking listo — admin puede abrir directamente el packing
           accionBtn = `<button onclick="empIniciarHUD(${p.packing_id})"
@@ -2014,6 +2020,24 @@ async function imprimirRemisionAdmin(packingId) {
     ventana.document.close();
   } catch (e) {
     alerta('Error de conexión al obtener la remisión', 'error');
+  }
+}
+
+// ADMIN — Facturar remisión existente (carril de recuperación 142943)
+// ─────────────────────────────────────────────────────────────
+
+async function facturarRemisionExistente(packingId) {
+  if (!confirm('¿Facturar la remisión detectada en Siesa?\nEsto generará la Factura Electrónica (142943) desde la RM existente.')) return;
+  try {
+    const r = await post(`/api/despacho_parcial/${packingId}/facturar-remision`, {});
+    if (r.idempotente) {
+      alerta(`FE ya existía en Siesa — tarea marcada como despachada (${r.rm})`, 'exito');
+    } else {
+      alerta(`Factura generada desde ${r.rm} ✓`, 'exito');
+    }
+    setTimeout(cargarPedidos, 800);
+  } catch (e) {
+    alerta(e.message || 'Error al facturar la remisión', 'error');
   }
 }
 
