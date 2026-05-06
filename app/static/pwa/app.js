@@ -7587,6 +7587,28 @@ async function repReintentar(jobId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+async function repReintentarTodosFallidos(btn) {
+  if (!confirm('¿Reintentar TODOS los jobs DESPACHO_F470 fallidos? Esto enviará las facturas pendientes a Siesa.')) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
+  try {
+    const r = await fetch(API + '/api/siesa/resetear-jobs-fallidos', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(d.mensaje || `${d.reseteados} job(s) enviados a reintentar`, 'ok');
+      repCargarJobs();
+    } else {
+      alerta(d.error || 'Error al reintentar', 'error');
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Reintentar todos los fallidos'; }
+  }
+}
+
 async function repTestEmail(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
