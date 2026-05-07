@@ -89,8 +89,7 @@ class DespachoParialService:
         else:
             compromisos_check = connekta.get_compromisos_pedido(tipo_docto, consec_docto)
             if not compromisos_check:
-                # Compromisos vacíos: la RM existe pero no tenemos el consec en BD.
-                # Verificar si la FE también existe antes de declarar fallo.
+                # Compromisos vacíos: RM ya existe en Siesa sin consecutivo en BD.
                 facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
                 if facturas_pre:
                     logger.info(
@@ -100,56 +99,68 @@ class DespachoParialService:
                     return DespachoParialService._persistir_resultado(
                         tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
                     )
-                raise ValueError(
-                    f'Pedido {tarea.numero_pedido_siesa}: compromisos vacíos (RM existe en Siesa) '
-                    'pero FE no existe y el consecutivo no está en BD. '
-                    'Usar POST /facturar-rm-manual con el número de RM visible en Siesa.'
-                )
-
-            # Compromisos vigentes → RM no existe → crear con 142945
-            try:
-                resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
-            except Exception as e_rm:
-                if 'comprometido' in str(e_rm).lower():
-                    logger.warning(
-                        '[DESPACHO_PARCIAL] 142945 rechazado (no comprometido) — '
-                        'verificando FE para %s%s', tipo_docto, consec_docto
+                # Auto-detectar RM desde Siesa — recuperación sin intervención manual.
+                rm_detectada = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+                if not rm_detectada:
+                    raise ValueError(
+                        f'Pedido {tarea.numero_pedido_siesa}: compromisos vacíos (RM existe en Siesa) '
+                        'pero FE no existe y el consecutivo no está en BD. '
+                        'Usar POST /facturar-rm-manual con el número de RM visible en Siesa.'
                     )
+                tipo_rm   = rm_detectada['tipo']
+                consec_rm = rm_detectada['consec']
+                tarea.rm_tipo   = tipo_rm
+                tarea.rm_consec = consec_rm
+                db.session.commit()
+                logger.info(
+                    '[DESPACHO_PARCIAL] RM auto-detectada %s-%s — tarea=%s (compromisos ya vacíos)',
+                    tipo_rm, consec_rm, tarea.id
+                )
+            else:
+                # Compromisos vigentes → RM no existe → crear con 142945
+                try:
+                    resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
+                except Exception as e_rm:
+                    if 'comprometido' in str(e_rm).lower():
+                        logger.warning(
+                            '[DESPACHO_PARCIAL] 142945 rechazado (no comprometido) — '
+                            'verificando FE para %s%s', tipo_docto, consec_docto
+                        )
+                        facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
+                        if facturas_pre:
+                            return DespachoParialService._persistir_resultado(
+                                tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
+                            )
+                        raise ValueError(
+                            f'Pedido {tarea.numero_pedido_siesa}: 142945 rechazado y no hay FE activa. '
+                            'Usar /facturar-rm-manual con el número de RM visible en Siesa.'
+                        )
+                    raise
+
+                try:
+                    tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
+                except ValueError:
                     facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
                     if facturas_pre:
                         return DespachoParialService._persistir_resultado(
                             tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
                         )
                     raise ValueError(
-                        f'Pedido {tarea.numero_pedido_siesa}: 142945 rechazado y no hay FE activa. '
-                        'Usar /facturar-rm-manual con el número de RM visible en Siesa.'
+                        f'142945 creó la RM para {tarea.numero_pedido_siesa} pero no devolvió '
+                        'el consecutivo en el response. '
+                        'Buscar en Siesa y usar /facturar-rm-manual con ese número.'
                     )
-                raise
 
-            try:
-                tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
-            except ValueError:
-                facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-                if facturas_pre:
-                    return DespachoParialService._persistir_resultado(
-                        tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
-                    )
-                raise ValueError(
-                    f'142945 creó la RM para {tarea.numero_pedido_siesa} pero no devolvió '
-                    'el consecutivo en el response. '
-                    'Buscar en Siesa y usar /facturar-rm-manual con ese número.'
+                # Guardar consec en BD ANTES de llamar 142943 — garantiza retry sin re-crear RM.
+                # Commit independiente: si 142943 falla, el retry lee rm_tipo/rm_consec de BD
+                # y salta directamente a 142943 sin volver a llamar 142945.
+                tarea.rm_tipo   = tipo_rm
+                tarea.rm_consec = consec_rm
+                db.session.commit()
+                logger.info(
+                    '[DESPACHO_PARCIAL] RM %s-%s guardada en BD — tarea=%s',
+                    tipo_rm, consec_rm, tarea.id
                 )
-
-            # Guardar consec en BD ANTES de llamar 142943 — garantiza retry sin re-crear RM.
-            # Commit independiente: si 142943 falla, el retry lee rm_tipo/rm_consec de BD
-            # y salta directamente a 142943 sin volver a llamar 142945.
-            tarea.rm_tipo   = tipo_rm
-            tarea.rm_consec = consec_rm
-            db.session.commit()
-            logger.info(
-                '[DESPACHO_PARCIAL] RM %s-%s guardada en BD — tarea=%s',
-                tipo_rm, consec_rm, tarea.id
-            )
 
         # 4. Guard anti-duplicado FE
         facturas_existentes = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
