@@ -889,6 +889,7 @@ class ConnektaGateway:
                 'F430_CONSEC_DOCTO': consec_int
             }],
             'Cuotas_CxC': [{
+                'F_CIA': int(self.id_cia_siesa),
                 'F350_ID_CO': self.centro_op,
                 'F350_ID_TIPO_DOCTO': self.tipo_docto_factura,
                 'F350_CONSEC_DOCTO': 0,

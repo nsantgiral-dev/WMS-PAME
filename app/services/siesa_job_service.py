@@ -1,7 +1,7 @@
 """
 Dead Letter Queue — procesador de jobs asíncronos hacia Siesa.
 
-El scheduler llama a procesar_jobs_pendientes() cada 5 minutos.
+El scheduler llama a procesar_jobs_pendientes() cada 1 minuto.
 Si Connekta rechaza (periodo cerrado, ítem bloqueado, timeout):
   - Reintento 1 → espera 5 min
   - Reintento 2 → espera 15 min
@@ -170,7 +170,7 @@ def _run_dlq_jobs():
 
     # [M8] Time-box: break after 4 min to avoid blocking the scheduler slot
     _dlq_start = datetime.utcnow()
-    _DLQ_MAX_SECONDS = 240  # 4 minutes
+    _DLQ_MAX_SECONDS = 50  # ~50s — deja margen antes del próximo ciclo de 1 min
 
     for job in jobs:
         # Check elapsed time before starting a new job
@@ -688,14 +688,14 @@ def init_scheduler(app):
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     scheduler.add_job(
         func=procesar_jobs_pendientes,
-        trigger=IntervalTrigger(minutes=5),
+        trigger=IntervalTrigger(minutes=1),
         kwargs={'app': app},
         id='dlq_siesa_jobs',
-        name='DLQ — procesar jobs Siesa pendientes (cada 5 min)',
+        name='DLQ — procesar jobs Siesa pendientes (cada 1 min)',
         replace_existing=True,
         max_instances=1,
         misfire_grace_time=60,
     )
     scheduler.start()
-    logger.info('[DLQ] Scheduler iniciado — DLQ cada 5 min')
+    logger.info('[DLQ] Scheduler iniciado — DLQ cada 1 min')
     return scheduler

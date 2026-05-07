@@ -334,7 +334,7 @@ def estado_sync():
 
 
 def init_scheduler(app):
-    """Scheduler cada 2 min entre 7am y 8pm hora Bogotá."""
+    """Scheduler cada 1 min entre 7am y 8pm hora Bogotá."""
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
@@ -345,11 +345,11 @@ def init_scheduler(app):
     scheduler = BackgroundScheduler(timezone='America/Bogota')
     scheduler.add_job(
         func=lambda: iniciar_sync_background(app),
-        trigger=CronTrigger(minute='*/2', hour='7-20', timezone='America/Bogota'),
+        trigger=CronTrigger(minute='*', hour='7-20', timezone='America/Bogota'),
         id='pedidos_siesa_sync',
         replace_existing=True,
         max_instances=1,        # [44] Evita ejecuciones concurrentes del sync
         misfire_grace_time=60,
     )
     scheduler.start()
-    logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 2 min entre 7am y 8pm')
+    logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 1 min entre 7am y 8pm')
