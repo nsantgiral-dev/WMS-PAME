@@ -87,7 +87,12 @@ class DespachoParialService:
                 tipo_rm, consec_rm, tarea.id
             )
         else:
-            compromisos_check = connekta.get_compromisos_pedido(tipo_docto, consec_docto)
+            # Skip compromisos check when WMS has explicit quantities — rm_tipo/rm_consec
+            # not in BD already guarantees 142945 was never called successfully for this tarea.
+            compromisos_check = (
+                [True] if cantidades
+                else connekta.get_compromisos_pedido(tipo_docto, consec_docto)
+            )
             if not compromisos_check:
                 # Compromisos vacíos: RM ya existe en Siesa sin consecutivo en BD.
                 facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
