@@ -703,6 +703,7 @@ class ConnektaGateway:
           f430_tasa_conv              → tasa conversión
           f430_tasa_local             → tasa local
           f200_id_pedido_vend         → NIT del vendedor
+          f461_id_punto_envio         → punto de envío del cliente (puede no venir — trigger usa default '001')
         Usado exclusivamente por DespachoParialService → trigger_factura_desde_remision.
         """
         if self.modo_simulacion:
@@ -970,6 +971,13 @@ class ConnektaGateway:
         tasa_conv    = float(cabecera.get('f430_tasa_conv') or 1)
         tasa_local   = float(cabecera.get('f430_tasa_local') or 1)
         vendedor     = cabecera.get('f200_id_pedido_vend') or None  # None → Siesa hereda del maestro
+        punto_envio  = cabecera.get('f461_id_punto_envio') or '001'
+        if not cabecera.get('f461_id_punto_envio'):
+            logger.warning(
+                '[CONNEKTA] RM %s-%s: f461_id_punto_envio no devuelto por API_v2_Ventas_Pedidos '
+                '— usando default 001. Confirmar con consultor si el cliente tiene puntos de envío distintos.',
+                tipo_docto_rm, consec_rm
+            )
 
         if not self.modo_simulacion and not tercero:
             raise ValueError(
@@ -1004,8 +1012,8 @@ class ConnektaGateway:
                 'f461_tasa_conv': tasa_conv,
                 'f461_id_moneda_local': moneda_local,
                 'f461_tasa_local': tasa_local,
-                'f461_notas': '',
-                'f461_id_punto_envio': None,
+                'f461_notas': ' ',
+                'f461_id_punto_envio': punto_envio,
                 'f462_id_vehiculo': None,
                 'f462_id_tercero_transp': None,
                 'f462_id_sucursal_transp': None,
