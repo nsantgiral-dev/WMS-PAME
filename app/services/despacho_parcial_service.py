@@ -94,7 +94,8 @@ class DespachoParialService:
                 else connekta.get_compromisos_pedido(tipo_docto, consec_docto)
             )
             if not compromisos_check:
-                # Compromisos vacíos: RM ya existe en Siesa sin consecutivo en BD.
+                # Compromisos vacíos y WMS sin cantidades: RM ya existe en Siesa sin consecutivo en BD.
+                # API_v2_Ventas_Remisiones_DesdePedido no disponible en Connekta — recuperación manual.
                 facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
                 if facturas_pre:
                     logger.info(
@@ -104,22 +105,10 @@ class DespachoParialService:
                     return DespachoParialService._persistir_resultado(
                         tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
                     )
-                # Auto-detectar RM desde Siesa — recuperación sin intervención manual.
-                rm_detectada = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
-                if not rm_detectada:
-                    raise ValueError(
-                        f'Pedido {tarea.numero_pedido_siesa}: compromisos vacíos (RM existe en Siesa) '
-                        'pero FE no existe y el consecutivo no está en BD. '
-                        'Usar POST /facturar-rm-manual con el número de RM visible en Siesa.'
-                    )
-                tipo_rm   = rm_detectada['tipo']
-                consec_rm = rm_detectada['consec']
-                tarea.rm_tipo   = tipo_rm
-                tarea.rm_consec = consec_rm
-                db.session.commit()
-                logger.info(
-                    '[DESPACHO_PARCIAL] RM auto-detectada %s-%s — tarea=%s (compromisos ya vacíos)',
-                    tipo_rm, consec_rm, tarea.id
+                raise ValueError(
+                    f'Pedido {tarea.numero_pedido_siesa}: compromisos vacíos (RM existe en Siesa) '
+                    'pero FE no existe y el consecutivo no está en BD. '
+                    'Usar POST /facturar-rm-manual con el número de RM visible en Siesa.'
                 )
             else:
                 # Compromisos vigentes → RM no existe → crear con 142945
