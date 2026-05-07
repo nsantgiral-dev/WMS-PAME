@@ -283,24 +283,21 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             if rec.get('reconciliado'):
                 return rec
 
-        # 238925 (FacturaPedido): Siesa toma las cantidades comprometidas del pedido y
-        # genera FE + RM automáticamente → pedido pasa a "cumplido" sin env vars adicionales.
-        # DespachoParialService (142945→142943) se reserva para el endpoint /despacho_parcial
-        # del módulo de administración, donde se controlan cantidades individualmente.
+        # 142945→142943: RemisionPedido → FacturaRemision.
+        # La RM descarga inventario cuenta 14 directamente — sin dependencia de automatización Siesa.
+        # DespachoParialService maneja idempotencia (rm_tipo/rm_consec en BD), cabecera del pedido
+        # y el encadenamiento completo incluyendo _persistir_resultado (siesa_triggered, DESPACHADO).
         if not tarea:
             raise ValueError(f'DESPACHO_F470 job={job.id}: tarea_id={payload.get("tarea_id")} no encontrada')
-        tipo_docto   = payload.get('tipo_docto_pedido', '')
-        consec_docto = payload.get('consec_docto_pedido', '')
-        items        = payload.get('items', [])
-        resultado = connekta.trigger_factura(tipo_docto, consec_docto, items)
-        ahora = datetime.utcnow()
-        tarea.siesa_triggered    = True
-        tarea.siesa_triggered_at = ahora
-        tarea.estado             = 'DESPACHADO'
-        tarea.fecha_despachado   = tarea.fecha_despachado or ahora
-        tarea.siesa_response     = _json.dumps(resultado)
-        db.session.commit()
-        logger.info('[DLQ] DESPACHO_F470 job=%s tarea=%s → DESPACHADO (238925)', job.id, tarea.id)
+        from app.services.despacho_parcial_service import DespachoParialService
+        items = payload.get('items', [])
+        cantidades = {
+            i['producto_codigo']: float(i.get('cantidad_empacada') or 0)
+            for i in items
+            if float(i.get('cantidad_empacada') or 0) > 0
+        }
+        resultado = DespachoParialService.despachar_parcial(tarea, cantidades)
+        logger.info('[DLQ] DESPACHO_F470 job=%s tarea=%s → DESPACHADO (142945→142943)', job.id, tarea.id)
         return resultado
 
     if job.tipo == 'ENTRADA_OC':
