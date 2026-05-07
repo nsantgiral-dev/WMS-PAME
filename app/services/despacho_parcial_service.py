@@ -144,17 +144,17 @@ class DespachoParialService:
 
                 try:
                     tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
-                except ValueError:
+                except ValueError as _e_parse:
                     facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
                     if facturas_pre:
                         return DespachoParialService._persistir_resultado(
                             tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
                         )
                     raise ValueError(
-                        f'142945 creó la RM para {tarea.numero_pedido_siesa} pero no devolvió '
-                        'el consecutivo en el response. '
+                        f'142945 creó la RM para {tarea.numero_pedido_siesa} pero no se pudo '
+                        f'extraer el consecutivo. {_e_parse}. '
                         'Buscar en Siesa y usar /facturar-rm-manual con ese número.'
-                    )
+                    ) from _e_parse
 
                 # Guardar consec en BD ANTES de llamar 142943 — garantiza retry sin re-crear RM.
                 # Commit independiente: si 142943 falla, el retry lee rm_tipo/rm_consec de BD
@@ -332,27 +332,63 @@ class DespachoParialService:
     @staticmethod
     def _parsear_rm(resp) -> tuple[str, int]:
         """
-        Extrae tipo y consecutivo de la RM buscando en todos los campos string del response.
-        Cubre el formato "Se generó el documento RM-XXXX".
-        Lanza ValueError si no encuentra el patrón — el caller decide el fallback.
+        Extrae tipo y consecutivo de la RM del response de 142945.
+        Estrategia 1: regex "RM-XXXX" en todos los strings (recursivo).
+        Estrategia 2: buscar tipo y consec como campos separados en dicts anidados.
+        Lanza ValueError con el response completo si no encuentra — facilita diagnóstico.
         """
         if not resp:
             raise ValueError('Response de 142945 vacío')
 
-        if isinstance(resp, dict):
-            candidatos = [str(v) for v in resp.values() if v]
-        elif isinstance(resp, list) and resp:
-            primer = resp[0]
-            candidatos = [str(v) for v in (primer.values() if isinstance(primer, dict) else [primer]) if v]
-        else:
-            candidatos = [str(resp)]
+        # Aplanar recursivamente todos los valores del response
+        def _aplanar(obj):
+            if isinstance(obj, dict):
+                for v in obj.values():
+                    yield from _aplanar(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    yield from _aplanar(item)
+            elif obj is not None:
+                yield obj
 
-        for texto in candidatos:
-            match = _RE_RM.search(texto)
+        # Estrategia 1: regex "TIPO-CONSEC" en cualquier valor string
+        for val in _aplanar(resp):
+            match = _RE_RM.search(str(val))
             if match:
                 tipo_rm   = match.group(1).upper()
                 consec_rm = int(match.group(2))
-                logger.info('[DESPACHO_PARCIAL] RM parseado del response: %s-%s', tipo_rm, consec_rm)
+                logger.info('[DESPACHO_PARCIAL] RM parseado (regex): %s-%s', tipo_rm, consec_rm)
                 return tipo_rm, consec_rm
 
-        raise ValueError(f'Patrón RM-XXXX no encontrado en response: {resp!r}')
+        # Estrategia 2: tipo y consec en campos separados (Connekta v1 structured response)
+        _TIPO_KEYS   = {'f350_id_tipo_docto', 'tipodocto', 'tipo_docto', 'tipo', 'tipoDocto', 'TipoDocto'}
+        _CONSEC_KEYS = {'f350_consec_docto', 'consecutivo', 'consec_docto', 'consec', 'Consecutivo', 'numero'}
+
+        def _buscar_campos(obj):
+            if isinstance(obj, dict):
+                tipo_val  = next((str(v).strip().upper() for k, v in obj.items() if k in _TIPO_KEYS and v), None)
+                consec_val = next(
+                    (int(v) for k, v in obj.items()
+                     if k in _CONSEC_KEYS and v is not None and str(v).strip().isdigit() and int(v) > 0),
+                    None
+                )
+                if tipo_val and consec_val:
+                    return tipo_val, consec_val
+                for v in obj.values():
+                    result = _buscar_campos(v)
+                    if result:
+                        return result
+            elif isinstance(obj, list):
+                for item in obj:
+                    result = _buscar_campos(item)
+                    if result:
+                        return result
+            return None
+
+        result = _buscar_campos(resp)
+        if result:
+            tipo_rm, consec_rm = result
+            logger.info('[DESPACHO_PARCIAL] RM por campos estructurados: %s-%s', tipo_rm, consec_rm)
+            return tipo_rm, consec_rm
+
+        raise ValueError(f'RM no encontrada en response de 142945: {str(resp)[:400]}')
