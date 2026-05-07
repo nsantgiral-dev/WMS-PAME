@@ -1012,7 +1012,7 @@ class ConnektaGateway:
                 'f461_tasa_conv': tasa_conv,
                 'f461_id_moneda_local': moneda_local,
                 'f461_tasa_local': tasa_local,
-                'f461_notas': ' ',
+                'f461_notas': '.',
                 'f461_id_punto_envio': punto_envio,
                 'f462_id_vehiculo': None,
                 'f462_id_tercero_transp': None,
