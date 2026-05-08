@@ -695,9 +695,13 @@ class ConnektaGateway:
     def get_pedido_cabecera(self, tipo_docto: str, consec_docto) -> dict | None:
         """
         GET API_v2_Ventas_Pedidos — fila única de cabecera del pedido.
-        Campos verificados empíricamente contra respuesta JSON real de Connekta V2
-        (2026-04-28 — el procedimiento almacenado usa aliases que difieren de los
-        nombres de tabla base; NO confiar en docstrings anteriores ni en el spec):
+        Devuelve una fila por línea de ítem; se toma rows[0] para extraer campos de cabecera.
+
+        IMPORTANTE — aliases reales vs spec oficial (2026-05-08):
+        El procedimiento almacenado usa aliases que difieren del spec v2 (API_v2_Ventas_Pedidos.docx).
+        Los nombres abajo son los que devuelve la API real, NO los del spec.
+        Ejemplo: spec dice 'f200_id_fact', real devuelve 'f200_id_pedido_fact'.
+
           f200_id_pedido_fact         → NIT/código tercero cliente (F350_ID_TERCERO en 142943)
           f461_id_sucursal_pedido_rem → sucursal (alias del JOIN a t461/t202)
           f430_id_tipo_cli_fact       → tipo cliente facturación
@@ -708,7 +712,11 @@ class ConnektaGateway:
           f430_tasa_conv              → tasa conversión
           f430_tasa_local             → tasa local
           f200_id_pedido_vend         → NIT del vendedor
-          f461_id_punto_envio         → punto de envío del cliente (puede venir vacío/nulo — trigger usa SIESA_PUNTO_ENVIO_DEFAULT como paracaídas)
+
+        f461_id_punto_envio NO existe en esta API — confirmado contra spec oficial y
+        respuesta real (120 keys, 2026-05-08). El trigger usa SIESA_PUNTO_ENVIO_DEFAULT
+        como valor permanente. Ver trigger_factura_desde_remision().
+
         Usado exclusivamente por DespachoParialService → trigger_factura_desde_remision.
         """
         if self.modo_simulacion:
