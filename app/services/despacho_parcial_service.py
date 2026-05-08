@@ -180,13 +180,19 @@ class DespachoParialService:
         """
         from app.services.connekta_gateway import connekta
 
-        if tarea.siesa_triggered:
-            raise ValueError(f'Tarea {tarea.id} ya tiene siesa_triggered=True — sin acción necesaria')
-
         tipo_docto   = tarea.tipo_docto_pedido_siesa
         consec_docto = tarea.consec_docto_pedido_siesa
         if not tipo_docto or not consec_docto:
             raise ValueError('Tarea sin tipo_docto/consec_docto — imposible facturar')
+
+        if tarea.siesa_triggered:
+            facturas_check = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
+            if facturas_check:
+                raise ValueError(f'Tarea {tarea.id} ya procesada — FE confirmada en Siesa')
+            logger.warning(
+                '[FACTURAR_RM] siesa_triggered=True pero FE ausente en Siesa — '
+                'recuperación permitida (tarea=%s)', tarea.id
+            )
 
         # 1. Detectar RM: BD primero, luego API Siesa (puede fallar si no existe en Connekta)
         if tarea.rm_tipo and tarea.rm_consec:

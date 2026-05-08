@@ -97,9 +97,6 @@ def facturar_remision(packing_id: int):
     if tarea.estado == EstadoPacking.CANCELADO:
         return jsonify({'error': 'No se puede facturar una tarea cancelada'}), 409
 
-    if tarea.siesa_triggered:
-        return jsonify({'error': 'Esta tarea ya fue procesada en Siesa (siesa_triggered=True)'}), 409
-
     from app.services.despacho_parcial_service import DespachoParialService
     try:
         resultado = DespachoParialService.facturar_remision_existente(tarea)
@@ -133,8 +130,6 @@ def facturar_rm_manual(packing_id: int):
     tarea = TareaPacking.query.get_or_404(packing_id)
     if tarea.estado == EstadoPacking.CANCELADO:
         return jsonify({'error': 'No se puede facturar una tarea cancelada'}), 409
-    if tarea.siesa_triggered:
-        return jsonify({'error': 'Esta tarea ya fue procesada en Siesa (siesa_triggered=True)'}), 409
 
     body = request.get_json(silent=True) or {}
     tipo_rm   = str(body.get('tipo_rm', '')).strip().upper()
