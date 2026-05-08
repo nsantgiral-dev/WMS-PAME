@@ -995,7 +995,7 @@ class ConnektaGateway:
         if not punto_envio:
             raise ValueError(
                 f'f461_id_punto_envio no disponible para RM {tipo_docto_rm}-{consec_rm}. '
-                'API_v2_Ventas_Pedidos no devolvió el campo y SIESA_PUNTO_ENVIO_DEFAULT no está configurado. '
+                'API_v2_Ventas_Pedidos no devuelve el campo y SIESA_PUNTO_ENVIO_DEFAULT no está configurado. '
                 'Verificar con consultor Siesa el código de punto de envío del cliente '
                 f"(tercero={cabecera.get('f200_id_pedido_fact', 'desconocido')}) "
                 'y configurar la variable en Railway.'
