@@ -708,7 +708,7 @@ class ConnektaGateway:
           f430_tasa_conv              → tasa conversión
           f430_tasa_local             → tasa local
           f200_id_pedido_vend         → NIT del vendedor
-          f461_id_punto_envio         → punto de envío del cliente (puede no venir — trigger usa default '001')
+          f461_id_punto_envio         → punto de envío del cliente (puede venir vacío/nulo — trigger usa SIESA_PUNTO_ENVIO_DEFAULT como paracaídas)
         Usado exclusivamente por DespachoParialService → trigger_factura_desde_remision.
         """
         if self.modo_simulacion:
