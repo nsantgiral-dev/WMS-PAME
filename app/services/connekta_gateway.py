@@ -100,6 +100,11 @@ class ConnektaGateway:
         self.tipo_docto_entrada_oc = os.getenv('SIESA_TIPO_DOCTO_ENTRADA_OC', '')
         # Unidad de medida por defecto para movimientos de inventario
         self.uom_default = os.getenv('SIESA_UOM_DEFAULT', 'UND')
+        # Punto de envío por defecto para 142943 (FacturaRemision) — campo f461_id_punto_envio.
+        # Configurar en Railway con el código exacto del maestro Siesa (Maestros → Terceros → Puntos de envío).
+        # Se usa solo cuando API_v2_Ventas_Pedidos no devuelve el campo en la cabecera del pedido.
+        # Si no se configura y la API tampoco lo devuelve, trigger_factura_desde_remision lanza ValueError.
+        self.punto_envio_default = os.getenv('SIESA_PUNTO_ENVIO_DEFAULT', '') or None
         # Tipo documento ajuste físico en Siesa (Inventarios → Tipos de documento)
         self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
@@ -971,12 +976,21 @@ class ConnektaGateway:
         tasa_conv    = float(cabecera.get('f430_tasa_conv') or 1)
         tasa_local   = float(cabecera.get('f430_tasa_local') or 1)
         vendedor     = cabecera.get('f200_id_pedido_vend') or None  # None → Siesa hereda del maestro
-        punto_envio  = cabecera.get('f461_id_punto_envio') or '001'
+        punto_envio  = cabecera.get('f461_id_punto_envio') or self.punto_envio_default
         if not cabecera.get('f461_id_punto_envio'):
+            _cabecera_keys = list(cabecera.keys()) if cabecera else []
             logger.warning(
-                '[CONNEKTA] RM %s-%s: f461_id_punto_envio no devuelto por API_v2_Ventas_Pedidos '
-                '— usando default 001. Confirmar con consultor si el cliente tiene puntos de envío distintos.',
-                tipo_docto_rm, consec_rm
+                '[CONNEKTA] RM %s-%s: f461_id_punto_envio no devuelto por API_v2_Ventas_Pedidos. '
+                'Fallback a SIESA_PUNTO_ENVIO_DEFAULT=%r. Keys disponibles en cabecera: %s',
+                tipo_docto_rm, consec_rm, self.punto_envio_default, _cabecera_keys
+            )
+        if not punto_envio:
+            raise ValueError(
+                f'f461_id_punto_envio no disponible para RM {tipo_docto_rm}-{consec_rm}. '
+                'API_v2_Ventas_Pedidos no devolvió el campo y SIESA_PUNTO_ENVIO_DEFAULT no está configurado. '
+                'Verificar con consultor Siesa el código de punto de envío del cliente '
+                f"(tercero={cabecera.get('f200_id_pedido_fact', 'desconocido')}) "
+                'y configurar la variable en Railway.'
             )
 
         if not self.modo_simulacion and not tercero:
