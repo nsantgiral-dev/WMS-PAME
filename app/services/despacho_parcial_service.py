@@ -301,7 +301,7 @@ class DespachoParialService:
                 continue
             codigo_wms   = item.producto.codigo
             codigo_siesa = item.producto.codigo_siesa or codigo_wms
-            qty = float(cantidades.get(codigo_wms, 0))
+            qty = float(cantidades.get(codigo_siesa, 0) or cantidades.get(codigo_wms, 0))
             if qty <= 0:
                 continue
             items.append({
