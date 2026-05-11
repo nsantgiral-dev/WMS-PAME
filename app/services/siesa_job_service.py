@@ -79,16 +79,12 @@ def _procesar_jobs_pendientes_interno(_app):
         # Sin esto, cuando Siesa se recupera y hay 100 jobs acumulados, N workers
         # los atacan simultáneamente saturando la API de Connekta.
         from sqlalchemy import text as _text
-        lock = db.session.execute(_text('SELECT pg_try_advisory_lock(:k)'), {'k': _ADVISORY_LOCK_DLQ}).scalar()
+        lock = db.session.execute(_text('SELECT pg_try_advisory_xact_lock(:k)'), {'k': _ADVISORY_LOCK_DLQ}).scalar()
         if not lock:
             logger.info('[DLQ] Otro worker ya procesa jobs — omitido')
             return 0
 
-        try:
-            return _run_dlq_jobs()
-        finally:
-            db.session.execute(_text('SELECT pg_advisory_unlock(:k)'), {'k': _ADVISORY_LOCK_DLQ})
-            db.session.commit()
+        return _run_dlq_jobs()
 
 
 def _run_dlq_jobs():
