@@ -656,37 +656,33 @@ class ConnektaGateway:
 
     def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido) -> dict | None:
         """
-        GET API_v2_Ventas_Remisiones_DesdePedido
-        Recupera la RM más reciente vinculada al pedido — fallback cuando el response
-        de 142945 no incluye el consecutivo del documento generado.
+        Consulta dinámica papeleriamedellin_WMS_Remision_DesdePedido.
+        Busca en BD Siesa la RM más reciente creada para el pedido dado.
+        Fallback cuando 142945 no devuelve el consecutivo en su response.
         Retorna {'tipo': 'RM', 'consec': 1234} o None si no existe.
+
+        La query devuelve el MAX(consec_rm) por pedido de los últimos 30 días.
+        Filtramos client-side por consec_pd para aislar el pedido específico.
         """
         if self.modo_simulacion:
             return None
-        if not tipo_docto_pedido or not str(tipo_docto_pedido).strip():
+        if not consec_docto_pedido:
             return None
         try:
-            consec_int = int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido
-            res = self._get('API_v2_Ventas_Remisiones_DesdePedido', {
-                'paginacion': 'numPag=1|tamPag=10',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto_pedido}'' "
-                    f"AND f430_consec_docto = {consec_int} "
-                    f"AND f350_ind_estado <> 9"
-                )
-            })
-            rows = res.get('detalle', {}).get('Table', [])
-            if not rows:
+            consec_int = int(str(consec_docto_pedido).strip())
+            res = self._get(
+                'papeleriamedellin_WMS_Remision_DesdePedido',
+                params_extra={'paginacion': 'numPag=1|tamPag=200'},
+                url=self.url_get_dinamico,
+            )
+            rows = res.get('detalle', {}).get('Datos', [])
+            matches = [r for r in rows if r.get('consec_pd') == consec_int]
+            if not matches:
                 return None
-            # Tomar la más reciente (mayor consecutivo)
-            rows_validas = [r for r in rows if r.get('f350_consec_docto')]
-            if not rows_validas:
-                return None
-            fila = max(rows_validas, key=lambda r: int(r.get('f350_consec_docto', 0)))
+            fila = max(matches, key=lambda r: int(r.get('consec_rm', 0)))
             return {
-                'tipo':  str(fila.get('f350_id_tipo_docto', 'RM')).strip(),
-                'consec': int(fila['f350_consec_docto']),
+                'tipo':   str(fila.get('tipo_rm', 'RM')).strip(),
+                'consec': int(fila['consec_rm']),
             }
         except Exception as e:
             logger.warning('[CONNEKTA] get_remision_desde_pedido falló: %s', e)

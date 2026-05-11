@@ -134,16 +134,27 @@ class DespachoParialService:
                 try:
                     tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
                 except ValueError as _e_parse:
-                    facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-                    if facturas_pre:
-                        return DespachoParialService._persistir_resultado(
-                            tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
+                    # 142945 no devuelve el consecutivo en su response ("Importacion exitosa").
+                    # Auto-detect: consulta dinámica busca en BD Siesa la RM recién creada.
+                    rm_detectada = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+                    if rm_detectada:
+                        tipo_rm   = rm_detectada['tipo']
+                        consec_rm = rm_detectada['consec']
+                        logger.info(
+                            '[DESPACHO_PARCIAL] RM auto-detectada %s-%s para %s%s (tarea=%s)',
+                            tipo_rm, consec_rm, tipo_docto, consec_docto, tarea.id
                         )
-                    raise ValueError(
-                        f'142945 creó la RM para {tarea.numero_pedido_siesa} pero no se pudo '
-                        f'extraer el consecutivo. {_e_parse}. '
-                        'Buscar en Siesa y usar /facturar-rm-manual con ese número.'
-                    ) from _e_parse
+                    else:
+                        facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
+                        if facturas_pre:
+                            return DespachoParialService._persistir_resultado(
+                                tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
+                            )
+                        raise ValueError(
+                            f'142945 creó la RM para {tarea.numero_pedido_siesa} pero no se pudo '
+                            f'detectar el consecutivo. {_e_parse}. '
+                            'Buscar en Siesa y usar /facturar-rm-manual con ese número.'
+                        ) from _e_parse
 
                 # Guardar consec en BD ANTES de llamar 142943 — garantiza retry sin re-crear RM.
                 # Commit independiente: si 142943 falla, el retry lee rm_tipo/rm_consec de BD
