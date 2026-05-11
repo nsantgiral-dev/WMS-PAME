@@ -2,7 +2,7 @@
 builder = "nixpacks"
 
 [deploy]
-startCommand = "gunicorn wsgi:app --workers=2 --threads=2 --timeout=120"
+startCommand = "gunicorn wsgi:app --workers=1 --threads=4 --timeout=120"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
