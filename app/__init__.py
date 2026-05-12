@@ -44,12 +44,7 @@ def create_app():
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
-    allowed_origin = os.getenv('APP_URL')
-    if not allowed_origin:
-        raise RuntimeError(
-            'APP_URL no está configurada. '
-            'Agrega APP_URL en Railway con el origen exacto de la PWA (ej: https://wms-pame-production.up.railway.app).'
-        )
+    allowed_origin = os.getenv('APP_URL', '*')
     cors.init_app(app, resources={r"/api/*": {"origins": allowed_origin}})
 
     # Revocación de tokens: si el usuario se desactiva (activo=False),
