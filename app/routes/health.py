@@ -1,12 +1,9 @@
 """
 Health-check de integración Siesa/Connekta.
-GET /api/health/siesa — sin autenticación (Railway health probe + monitoring externo).
 
-Verifica:
-  1. Variables de entorno críticas configuradas
-  2. Conectividad real con Connekta (GET al catálogo de items — lectura inocua)
-  3. Modo de operación activo (produccion / ensayo / simulacion)
-  4. Estado de jobs DLQ
+Rutas:
+  GET /api/health/ping  — pública, solo ok/error (Railway probe + monitoring externo)
+  GET /api/health/siesa — requiere JWT admin/gestion (detalle completo de configuración)
 
 No verifica `API_v2_Conceptos` porque ese endpoint no está en el contrato
 documentado de Connekta para esta instalación. La validez del motivo de traslado
@@ -15,6 +12,8 @@ se confirma en el primer despacho real — Siesa rechaza con error claro si es i
 import logging
 from datetime import datetime
 from flask import Blueprint, jsonify
+from flask_jwt_extended import jwt_required
+from app.routes._auth_helpers import _es_gestion
 
 health_bp = Blueprint('health', __name__)
 logger = logging.getLogger(__name__)
@@ -30,8 +29,23 @@ _VARS_CRITICAS = [
 ]
 
 
+@health_bp.route('/ping', methods=['GET'])
+def health_ping():
+    """Endpoint público mínimo — solo indica si el servicio está activo."""
+    from app.services.connekta_gateway import connekta
+    try:
+        ok = not connekta.modo_simulacion or True
+        return jsonify({'ok': ok}), 200
+    except Exception:
+        return jsonify({'ok': False}), 503
+
+
 @health_bp.route('/siesa', methods=['GET'])
+@jwt_required()
 def health_siesa():
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Acceso restringido a roles de gestión'}), 403
     import os
     from app.services.connekta_gateway import connekta
 

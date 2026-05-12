@@ -27,3 +27,11 @@ migrations/versions/__pycache__/
 
 # Review agent reports (generados localmente)
 .review/reports/
+
+# Scripts de diagnóstico y fix operacional (no deben committearse)
+fix_*.py
+debug_*.py
+diag_*.py
+reset_*.py
+check_*.py
+facturar_rm_*.py
