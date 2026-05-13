@@ -306,3 +306,38 @@ def reportar_problema():
         }), 200
 
     return jsonify({'error': f'Tipo de tarea no reconocido: {tipo}'}), 400
+
+
+@mobile_bp.route('/faltante-info', methods=['POST'])
+@jwt_required()
+def registrar_faltante_info():
+    """
+    Registra un faltante informativo después de confirmar un picking parcial.
+    No toca inventario — crea auditoría urgente y envía email al admin.
+    """
+    from app.services.faltante_reporte_service import FaltanteReporteService
+
+    operario_id = _operario_id()  # noqa: F841 — futuro: adjuntar al reporte
+    data = request.get_json() or {}
+
+    tarea_id = data.get('tarea_id')
+    cantidad_recogida = int(data.get('cantidad_recogida', 0))
+    cantidad_solicitada = int(data.get('cantidad_solicitada', 0))
+
+    if not tarea_id:
+        return jsonify({'error': 'tarea_id es requerido'}), 400
+
+    try:
+        resultado = FaltanteReporteService.registrar(
+            tarea_id=tarea_id,
+            cantidad_recogida=cantidad_recogida,
+            cantidad_solicitada=cantidad_solicitada,
+        )
+        return jsonify(resultado), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+    except Exception as e:
+        from app.extensions import db
+        db.session.rollback()
+        current_app.logger.error(f'[MOBILE] faltante-info error: {e}', exc_info=True)
+        return jsonify({'error': 'Error registrando faltante'}), 500

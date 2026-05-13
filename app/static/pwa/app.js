@@ -1273,8 +1273,8 @@ function renderTarea(t) {
         <button onclick="cerrarCamara()" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
       </div>` : ''}
 
-      <button id="btn-ok" onclick="confirmar()" ${(esConteo || (req > 0 && unds >= req)) ? '' : 'disabled'}
-        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:${(esConteo || (req > 0 && unds >= req)) ? '#16a34a' : '#000'};color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${(esConteo || (req > 0 && unds >= req)) ? 1 : 0.3};margin-bottom:10px;">
+      <button id="btn-ok" onclick="${esPicking ? 'confirmarConGuard()' : 'confirmar()'}" ${(esConteo || esPicking || (req > 0 && unds >= req)) ? '' : 'disabled'}
+        style="width:100%;padding:20px;font-size:22px;font-weight:700;background:${esPicking ? (unds >= req ? '#16a34a' : (unds > 0 ? '#b45309' : '#4b5563')) : ((esConteo || (req > 0 && unds >= req)) ? '#16a34a' : '#000')};color:#fff;border:none;border-radius:16px;cursor:pointer;opacity:${(esConteo || esPicking || (req > 0 && unds >= req)) ? 1 : 0.3};margin-bottom:10px;">
         ✓ Confirmar
       </button>
 
@@ -1752,6 +1752,55 @@ async function confirmar() {
   }
 }
 
+async function confirmarConGuard() {
+  if (!TAREA_ACTUAL) return;
+  const unds    = TAREA_ACTUAL.cantidad_escaneada || 0;
+  const req     = TAREA_ACTUAL.cantidad_requerida  || 0;
+  const tareaId = TAREA_ACTUAL.id;
+
+  if (req === 0 || unds >= req) {
+    await confirmar();
+    return;
+  }
+
+  const ok = await _modalFaltanteParcial(unds, req);
+  if (!ok) return;
+
+  await confirmar();
+  _reportarFaltanteInfo(tareaId, unds, req).catch(() => {});
+}
+
+function _modalFaltanteParcial(encontradas, requeridas) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:360px;border:2px solid #b45309;">
+        <div style="font-size:20px;font-weight:800;color:#fb923c;margin-bottom:8px;">⚠ Faltante parcial</div>
+        <div style="font-size:14px;color:#aaa;margin-bottom:20px;line-height:1.6;">
+          Encontraste <strong style="color:#fff;font-size:18px;">${encontradas}</strong> de
+          <strong style="color:#fff;font-size:18px;">${requeridas}</strong> unidades.<br>
+          <span style="font-size:12px;color:#666;">Se notificará al administrador para revisar el faltante.</span>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button id="_fp-no" style="flex:1;padding:14px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Cancelar</button>
+          <button id="_fp-si" style="flex:1;padding:14px;background:#b45309;color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Continuar</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#_fp-si').onclick = () => { overlay.remove(); resolve(true); };
+    overlay.querySelector('#_fp-no').onclick = () => { overlay.remove(); resolve(false); };
+  });
+}
+
+async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
+  await post('/api/mobile/faltante-info', {
+    tarea_id: tareaId,
+    cantidad_recogida: cantRecogida,
+    cantidad_solicitada: cantSolicitada,
+  });
+}
+
 async function confirmarManual(tareaId, cantidad) {
   if (!confirm(`¿Confirmar ${cantidad} unidades recogidas manualmente?`)) return;
   const payload = {
@@ -1783,11 +1832,6 @@ async function reportarProblema(tareaId) {
           📦 Ubicación vacía — no había nada
         </button>
 
-        <button onclick="mostrarShortPick(${tareaId})"
-          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#451a03;color:#fb923c;border:1px solid #7c2d12;border-radius:10px;cursor:pointer;text-align:left;">
-          📉 Faltante parcial — encontré menos
-        </button>
-
         <button onclick="confirmarProblema(${tareaId},'MERCANCIA_AVERIADA',0)"
           style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
           🚫 Mercancía averiada
@@ -1797,16 +1841,6 @@ async function reportarProblema(tareaId) {
           style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
           ❌ Producto incorrecto
         </button>
-
-        <div id="short-pick-panel" style="display:none;background:#1a0a00;border:1px solid #7c2d12;border-radius:10px;padding:14px;margin-bottom:8px;">
-          <div style="font-size:12px;color:#fb923c;margin-bottom:8px;">¿Cuántas unidades SÍ encontraste?</div>
-          <input id="short-pick-qty" type="number" min="0" placeholder="Cantidad encontrada"
-            style="width:100%;padding:10px;background:#000;border:2px solid #7c2d12;border-radius:8px;color:#fff;font-size:16px;margin-bottom:10px;">
-          <button onclick="confirmarShortPick(${tareaId})"
-            style="width:100%;padding:12px;background:#fb923c;color:#000;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">
-            Confirmar faltante parcial
-          </button>
-        </div>
 
         <div style="margin-top:4px;margin-bottom:8px;">
           <div style="font-size:11px;color:#555;margin-bottom:4px;">Observaciones (opcional)</div>
@@ -1821,16 +1855,6 @@ async function reportarProblema(tareaId) {
       </div>
     </div>`;
   document.body.appendChild(modal);
-}
-
-function mostrarShortPick(tareaId) {
-  const panel = document.getElementById('short-pick-panel');
-  if (panel) panel.style.display = 'block';
-}
-
-async function confirmarShortPick(tareaId) {
-  const qty = parseInt(document.getElementById('short-pick-qty')?.value || '0');
-  await confirmarProblema(tareaId, 'FALTANTE', qty);
 }
 
 async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
