@@ -67,6 +67,7 @@ class ConnektaGateway:
         # por compañía. Solicitar al área financiera el código exacto y configurarlo en Railway.
         # Si está vacío, los conectores envían None y Siesa hereda el valor de la bodega.
         self.unidad_negocio = os.getenv('SIESA_UNIDAD_NEGOCIO', '') or None
+        self.ubicacion_entrada_default = os.getenv('SIESA_UBICACION_ENTRADA_DEFAULT') or None
         # id_cia interno de Siesa (distinto de idCompania Connekta)
         # Verificar en Siesa Enterprise → Parámetros de empresa → Código de compañía
         self.id_cia_siesa = os.getenv('SIESA_ID_CIA', '1')
@@ -1825,7 +1826,7 @@ class ConnektaGateway:
                     'f470_costo_prom_uni': None,          # Dep
                     'f470_notas': None,
                     'f470_desc_varible': None,           # typo intencional — nombre exacto del spec 173079
-                    'f470_id_ubicacion_aux_ent': None,   # Dep — ubicación entrada
+                    'f470_id_ubicacion_aux_ent': item.get('ubicacion_entrada') or self.ubicacion_entrada_default,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,                # Dep — usamos referencia_item
                     'f470_referencia_item': item.get('codigo_siesa'),
