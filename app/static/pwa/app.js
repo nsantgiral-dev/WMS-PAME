@@ -3432,15 +3432,15 @@ function empFlash(color, mensaje) {
     msgEl.style.color = '#f87171';
     msgEl.textContent = '⚠ ' + mensaje;
     setTimeout(() => {
-      msgEl.style.color = '#fff';
+      msgEl.style.color = '';
       msgEl.textContent = prevText;
-      hud.style.background = '#000';
+      hud.style.background = '';
     }, 1800);
   }
 
   setTimeout(() => {
     flash.style.opacity = '0';
-    if (esVerde) hud.style.background = '#000';
+    if (esVerde) hud.style.background = '';
   }, esVerde ? 150 : 300);
 }
 
