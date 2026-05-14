@@ -3424,7 +3424,7 @@ function empFlash(color, mensaje) {
     msgEl.style.color = '#4ade80';
     msgEl.textContent = mensaje;
     setTimeout(() => {
-      msgEl.style.color = '#fff';
+      msgEl.style.color = '';
       msgEl.textContent = prevText;
     }, 900);
   } else if (!esVerde && mensaje && msgEl) {
