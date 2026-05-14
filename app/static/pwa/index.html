@@ -142,6 +142,13 @@
       background-color: var(--bg-s) !important;
       border-color: var(--brd) !important;
     }
+    /* Texto blanco dentro de contenedores convertidos a claro — siempre invisible sin esto */
+    body.light [style*="background:#111"] *[style*="color:#fff"],
+    body.light [style*="background:#0d0d0d"] *[style*="color:#fff"],
+    body.light [style*="background:#0a0a0a"] *[style*="color:#fff"],
+    body.light [style*="background:#000"] *[style*="color:#fff"] {
+      color: var(--tx) !important;
+    }
 
     /* 2. Fondos de inputs / secundarios oscuros → gris claro */
     body.light [style*="background:#1a1a1a"],
