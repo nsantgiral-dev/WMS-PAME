@@ -1722,6 +1722,24 @@ class ConnektaGateway:
                 }
                 for idx, item in enumerate(items)
             ],
+            # None explícito en f462_* sobreescribe el template de Connekta que envía ""
+            # por defecto. Siesa interpreta "" como vehículo inexistente y rechaza.
+            # None indica "sin datos de transportador" y omite validación de maestros.
+            'Transporte': [{
+                'F_CIA': int(self.id_cia_siesa),
+                'f462_id_vehiculo': None,
+                'f462_id_tercero_transp': None,
+                'f462_id_sucursal_transp': None,
+                'f462_id_tercero_conductor': None,
+                'f462_nombre_conductor': None,
+                'f462_identif_conductor': None,
+                'f462_numero_guia': None,
+                'f462_cajas': None,
+                'f462_peso': None,
+                'f462_volumen': None,
+                'f462_valor_seguros': None,
+                'f462_notas': None,
+            }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
