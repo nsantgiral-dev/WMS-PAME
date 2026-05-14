@@ -6397,10 +6397,14 @@ function _renderTrasladoCard(s) {
   }
 
   if (s.estado === 'EN_TRANSITO') {
+    acciones.push(`<button onclick="trasConfirmarRecepcion(${s.id})" style="flex:1;padding:10px;background:#065f46;color:#4ade80;border:1px solid #166534;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✓ Confirmar Recepción</button>`);
     acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs en ruta</button>`);
   }
   if (s.siesa_necesita_atencion && s.estado === 'EN_TRANSITO') {
     acciones.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="flex:1;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">⚠ Reintentar Siesa</button>`);
+  }
+  if (s.estado === 'ENTREGADA' && s.modo_transferencia === 'EN_TRANSITO' && !s.siesa_entrada_consec) {
+    acciones.push(`<button onclick="trasReintentarRecepcionSiesa(${s.id})" style="flex:1;padding:10px;background:#7c2d12;color:#fed7aa;border:1px solid #9a3412;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">⚠ Reintentar entrada Siesa</button>`);
   }
 
   const operarioTag = s.operario_nombre
@@ -6629,6 +6633,20 @@ async function trasConfirmarRecepcion(id) {
     const d = await r.json();
     if (r.ok) { alerta('Recepción confirmada — inventario en tienda', 'exito'); cargarTrasladosAdmin(); }
     else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function trasReintentarRecepcionSiesa(id) {
+  if (!confirm('¿Reintentar registro de entrada en Siesa (173079)? Solo usar si la recepción física ya fue confirmada.')) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/reintentar-recepcion`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Entrada Siesa registrada', 'exito'); cargarTrasladosAdmin(); }
+    else { alerta(d.error || 'Error al reintentar', 'error'); }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
