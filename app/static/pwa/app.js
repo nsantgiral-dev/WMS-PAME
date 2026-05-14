@@ -1778,8 +1778,8 @@ function _modalFaltanteParcial(encontradas, requeridas) {
       <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:360px;border:2px solid #b45309;">
         <div style="font-size:20px;font-weight:800;color:#fb923c;margin-bottom:8px;">⚠ Faltante parcial</div>
         <div style="font-size:14px;color:#aaa;margin-bottom:20px;line-height:1.6;">
-          Encontraste <strong style="color:#fff;font-size:18px;">${encontradas}</strong> de
-          <strong style="color:#fff;font-size:18px;">${requeridas}</strong> unidades.<br>
+          Encontraste <strong style="color:#fb923c;font-size:18px;font-weight:800;">${encontradas}</strong> de
+          <strong style="color:#fb923c;font-size:18px;font-weight:800;">${requeridas}</strong> unidades.<br>
           <span style="font-size:12px;color:#666;">Se notificará al administrador para revisar el faltante.</span>
         </div>
         <div style="display:flex;gap:10px;">
