@@ -616,6 +616,10 @@ def reintentar_recepcion_siesa(id):
         if (item.cantidad_recibida or item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada)
     ]
 
+    from app.models.usuario import Usuario as _Usuario
+    _solicitante = _Usuario.query.get(s.solicitante_id) if s.solicitante_id else None
+    _co_destino = _solicitante.siesa_co_id if _solicitante else None
+
     try:
         bodega_transito = s.bodega_transito_siesa or connekta.bodega_transito
         res = connekta.transferencia_transito_entrada(
@@ -623,7 +627,8 @@ def reintentar_recepcion_siesa(id):
             bodega_destino=s.bodega_destino_siesa,
             items=items_payload,
             codigo_solicitud=s.codigo,
-            consec_salida=s.siesa_salida_consec
+            consec_salida=s.siesa_salida_consec,
+            co_destino=_co_destino,
         )
         from app.services.traslado_service import TrasladoService
         if not res.get('simulado') and not res.get('modo_ensayo'):

@@ -247,20 +247,32 @@ class TrasladoService:
                 if consec:
                     s.siesa_salida_consec = consec
                 else:
-                    # 173076 aceptado por Siesa pero consecutivo no parseado.
-                    # Sin consecutivo, el 173079 de recepción fallará.
-                    # Guardamos warning para que ops identifique el folio manualmente.
-                    s.siesa_error = (
-                        'AVISO: 173076 enviado correctamente a Siesa pero el WMS no pudo '
-                        'leer el consecutivo del documento. Revisa logs de Railway '
-                        '("[TRASLADO] _extraer_consec") para obtener el folio y cargarlo '
-                        'manualmente antes de que la tienda confirme recepción.'
+                    # 173076 aceptado pero consecutivo no vino en la respuesta.
+                    # Auto-recovery: consulta API v2 (176) por f450_docto_alterno.
+                    logger.warning(
+                        '[TRASLADO] %s: consecutivo null en respuesta 173076 — '
+                        'intentando recovery via API_v2_Inventarios_Transferencia_Salida_Transito',
+                        s.codigo
                     )
-                    logger.error(
-                        '[TRASLADO] %s: 173076 OK pero consecutivo null — '
-                        '173079 bloqueado hasta resolución manual. Response: %s',
-                        s.codigo, str(res)[:500]
-                    )
+                    consec_recuperado = connekta.get_consec_salida_transito_by_alterno(s.codigo)
+                    if consec_recuperado:
+                        s.siesa_salida_consec = consec_recuperado
+                        s.siesa_error = None
+                        logger.info(
+                            '[TRASLADO] %s: consecutivo recuperado via API v2 (176): %s',
+                            s.codigo, consec_recuperado
+                        )
+                    else:
+                        s.siesa_error = (
+                            'AVISO: 173076 enviado correctamente a Siesa pero el WMS no pudo '
+                            'leer el consecutivo. Usa WMS Admin → Traslados → Reintentar despacho '
+                            'para forzar el recovery, o cárgalo manualmente.'
+                        )
+                        logger.error(
+                            '[TRASLADO] %s: 173076 OK pero consecutivo null y recovery fallido — '
+                            '173079 bloqueado hasta resolución manual. Response: %s',
+                            s.codigo, str(res)[:500]
+                        )
             else:
                 s.siesa_error = None
         except Exception as e:
@@ -349,6 +361,11 @@ class TrasladoService:
 
         # ── Trigger Siesa: Entrada tránsito ──
         if s.modo_transferencia == 'EN_TRANSITO':
+            # CO de la sede destino — necesario para f350_id_co / f470_id_co_movto en 173079
+            from app.models.usuario import Usuario
+            _solicitante = Usuario.query.get(s.solicitante_id) if s.solicitante_id else None
+            _co_destino = _solicitante.siesa_co_id if _solicitante else None
+
             # Pre-cargar productos para evitar N+1
             _prod_ids = [i.producto_id for i in s.items if i.producto_id]
             _prods = {p.id: p for p in Producto.query.filter(Producto.id.in_(_prod_ids)).all()} if _prod_ids else {}
@@ -369,7 +386,8 @@ class TrasladoService:
                     bodega_destino=s.bodega_destino_siesa,
                     items=items_payload,
                     codigo_solicitud=s.codigo,
-                    consec_salida=s.siesa_salida_consec
+                    consec_salida=s.siesa_salida_consec,
+                    co_destino=_co_destino,
                 )
                 if not res.get('simulado') and not res.get('modo_ensayo'):
                     consec = TrasladoService._extraer_consec(res)

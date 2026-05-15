@@ -6965,7 +6965,7 @@ async function tiendaCargarRecibir() {
       <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${s.codigo}</div>
       <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${s.total_items} ítem${s.total_items !== 1?'s':''}</div>
       ${(s.items || []).map(i => `
-        <div style="font-size:11px;color:#aaa;padding:2px 0;">${i.producto_codigo} · ${i.cantidad_aprobada || i.cantidad_solicitada} und</div>
+        <div style="font-size:11px;color:#aaa;padding:2px 0;">${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada} und</div>
       `).join('')}
       <button onclick="tiendaRecibirSolicitud(${s.id})"
         style="width:100%;padding:13px;margin-top:12px;background:#4ade80;color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">

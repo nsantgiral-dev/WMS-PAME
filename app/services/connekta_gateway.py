@@ -63,9 +63,8 @@ class ConnektaGateway:
         self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')[:5]
         # Bodega de tránsito (verificar si existe en Siesa — si no, usar TransferenciaDirecta)
         self.bodega_transito = os.getenv('SIESA_BODEGA_TRANSITO', '')
-        # Sin default: el código de Unidad de Negocio se valida contra el maestro de Siesa
-        # por compañía. Solicitar al área financiera el código exacto y configurarlo en Railway.
-        # Si está vacío, los conectores envían None y Siesa hereda el valor de la bodega.
+        # En traslados Siesa NO hereda la UN de la bodega — debe enviarse explícita en f470_id_un_movto.
+        # Sin default: solicitar a finanzas el código exacto y configurarlo en Railway.
         self.unidad_negocio = os.getenv('SIESA_UNIDAD_NEGOCIO', '') or None
         self.ubicacion_entrada_default = os.getenv('SIESA_UBICACION_ENTRADA_DEFAULT') or None
         # id_cia interno de Siesa (distinto de idCompania Connekta)
@@ -1669,14 +1668,13 @@ class ConnektaGateway:
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [
                 {
-                    # 13 keys obligatorias para f450 — tamaño exacto 826 bytes
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
+                    'f350_id_tercero': self.nit_empresa or None,
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
@@ -1685,6 +1683,8 @@ class ConnektaGateway:
                     'f450_docto_alterno': codigo_solicitud,
                 }
             ],
+            # Spec 173076 incluye sección serial — vacío para productos sin número de serie
+            'Movimiento de Seriales': [],
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
@@ -1695,8 +1695,6 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
-                    # [A10] 173076 spec does NOT have f470_id_concepto, f470_ind_naturaleza,
-                    # f470_ind_obsequio, f470_ind_solo_valor, f470_ind_impto_asumido — removed
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': self.centro_op,
                     'f470_id_ccosto_movto': None,
@@ -1706,10 +1704,8 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
-                    # Nombre exacto del docx 173076 (typo incluido: 'varible' no 'variable').
-                    # El serializador de Connekta usa este nombre para construir el flat file
-                    # posicional. Si el nombre difiere, el registro se trunca en pos 487 (702 chars)
-                    # y Siesa rechaza con "Tamaño del registro no corresponde al exigido".
+                    # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173076.
+                    # Si difiere, Connekta trunca el registro en pos 487 y Siesa rechaza.
                     'f470_desc_varible': None,
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
@@ -1723,24 +1719,6 @@ class ConnektaGateway:
                 }
                 for idx, item in enumerate(items)
             ],
-            # None explícito en f462_* sobreescribe el template de Connekta que envía ""
-            # por defecto. Siesa interpreta "" como vehículo inexistente y rechaza.
-            # None indica "sin datos de transportador" y omite validación de maestros.
-            'Transporte': [{
-                'F_CIA': int(self.id_cia_siesa),
-                'f462_id_vehiculo': None,
-                'f462_id_tercero_transp': None,
-                'f462_id_sucursal_transp': None,
-                'f462_id_tercero_conductor': None,
-                'f462_nombre_conductor': None,
-                'f462_identif_conductor': None,
-                'f462_numero_guia': None,
-                'f462_cajas': None,
-                'f462_peso': None,
-                'f462_volumen': None,
-                'f462_valor_seguros': None,
-                'f462_notas': None,
-            }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
@@ -1751,7 +1729,8 @@ class ConnektaGateway:
 
     def transferencia_transito_entrada(self, bodega_transito: str, bodega_destino: str,
                                         items: list, codigo_solicitud: str,
-                                        consec_salida: int = None):
+                                        consec_salida: int = None,
+                                        co_destino: str = None):
         """
         173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
         Confirma llegada: bodega_transito → bodega_destino.
@@ -1783,17 +1762,21 @@ class ConnektaGateway:
                 )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
+        # co_destino: CO de la sede que recibe. En 173079 el movimiento debe
+        # quedar atribuido al CO destino, no al CO003 del CD que genera el documento.
+        _co_ent = co_destino or self.centro_op
+
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
-                    'f350_id_co': self.centro_op,
+                    'f350_id_co': _co_ent,
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
-                    'f350_id_tercero': self.nit_empresa or None,                      # SIESA_NIT_EMPRESA — None si no configurado; Siesa rechaza string vacío
+                    'f350_id_tercero': self.nit_empresa or None,
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
@@ -1806,29 +1789,32 @@ class ConnektaGateway:
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                 }
             ],
+            # Spec 173079 incluye sección serial — vacío para productos sin número de serie
+            'Movimiento de Seriales': [],
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'f470_id_co': self.centro_op,
-                    'f470_id_tipo_docto': self.tipo_docto_transito_entrada,  # REQUIRED
+                    'f470_id_co': _co_ent,
+                    'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
-                    'f470_id_ubicacion_aux': None,       # Dep — si bodega maneja ubicaciones
-                    'f470_id_lote': None,                # Dep — si ítem maneja lotes
+                    'f470_id_ubicacion_aux': None,
+                    'f470_id_lote': None,
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_id_co_movto': self.centro_op,
-                    'f470_id_ccosto_movto': None,        # Dep — si cuenta contable exige ccosto
+                    'f470_id_co_movto': _co_ent,
+                    'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': item.get('unidad_medida') or self.uom_default,
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
-                    'f470_cant_2': None,                 # Dep — unidad adicional
-                    'f470_costo_prom_uni': None,          # Dep
+                    'f470_cant_2': None,
+                    'f470_costo_prom_uni': None,
                     'f470_notas': None,
-                    'f470_desc_varible': None,           # typo intencional — nombre exacto del spec 173079
+                    # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173079
+                    'f470_desc_varible': None,
                     'f470_id_ubicacion_aux_ent': item.get('ubicacion_entrada') or self.ubicacion_entrada_default,
                     'f470_id_lote_ent': None,
-                    'f470_id_item': None,                # Dep — usamos referencia_item
+                    'f470_id_item': None,
                     'f470_referencia_item': item.get('codigo_siesa'),
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
@@ -1845,6 +1831,29 @@ class ConnektaGateway:
                     f'{bodega_transito}→{bodega_destino}')
         return self._post(self.conector_transito_entrada,
                           'API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada', payload)
+
+    def get_consec_salida_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
+        """
+        API_v2_Inventarios_Transferencia_Salida_Transito (GET 176)
+        Recovery: cuando 173076 acepta pero no devuelve consecutivo, busca el
+        documento de salida por f450_docto_alterno = codigo_solicitud.
+        Retorna f350_consec_docto o None si no encuentra.
+        """
+        try:
+            res = self._get(
+                'API_v2_Inventarios_Transferencia_Salida_Transito',
+                params_extra={
+                    'paginacion': 'numPag=1|tamPag=5',
+                    'parametros': f"f450_docto_alterno = ''{codigo_solicitud}''",
+                }
+            )
+            tabla = (res.get('detalle') or {}).get('Table') or []
+            if tabla:
+                consec = tabla[0].get('f350_consec_docto')
+                return int(consec) if consec else None
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] get_consec_salida_transito_by_alterno({codigo_solicitud}): {e}')
+        return None
 
     def transferencia_directa(self, bodega_origen: str, bodega_destino: str,
                                items: list, codigo_solicitud: str):
