@@ -722,11 +722,12 @@ class TestConnektaGatewayTraslados:
                     items=self._items_validos(1), codigo_solicitud='ST-005',
                 )
 
-            transporte = payloads[0]['Transporte'][0]
-            campos_f462 = [k for k in transporte if k.startswith('f462_')]
+            # f462_ van dentro de Documentos (no sección separada) — spec 173076
+            doc = payloads[0]['Documentos'][0]
+            campos_f462 = [k for k in doc if k.startswith('f462_')]
             assert len(campos_f462) > 0
             for campo in campos_f462:
-                assert transporte[campo] is None, f'{campo} debe ser None, no string vacío'
+                assert doc[campo] is None, f'{campo} debe ser None, no string vacío'
 
     def test_173076_item_sin_codigo_siesa_lanza_valueerror(self, app):
         with app.app_context():
