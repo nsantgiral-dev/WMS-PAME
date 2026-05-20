@@ -1599,7 +1599,7 @@
     <div class="operario-bar">
       <div>
         <div class="operario-nombre" id="tienda-nombre">—</div>
-        <div class="operario-rol">Punto de Venta</div>
+        <div class="operario-rol" id="tienda-subtitulo">Punto de Venta</div>
       </div>
     </div>
 
@@ -1629,6 +1629,14 @@
 
     <!-- Panel: Nueva Solicitud -->
     <div id="tienda-panel-nueva" style="padding:14px;display:none;">
+      <!-- Destino del pedido -->
+      <div id="tienda-destino-badge" style="display:flex;align-items:center;gap:8px;background:#0d2137;border:1px solid #1E8395;border-radius:10px;padding:10px 14px;margin-bottom:12px;">
+        <span style="font-size:18px;">📦</span>
+        <div>
+          <div style="font-size:11px;color:#7ab8c4;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;">Pedido para</div>
+          <div id="tienda-destino-nombre" style="font-size:14px;font-weight:700;color:#fff;">—</div>
+        </div>
+      </div>
       <!-- Carrito -->
       <div id="tienda-carrito-header" style="display:none;background:var(--bg-s);border:1px solid var(--pm-border);border-radius:14px;padding:14px;margin-bottom:12px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">

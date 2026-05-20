@@ -6677,6 +6677,14 @@ function tiendaIniciar() {
   _TIENDA_STOCK = [];
   _TIENDA_STOCK_ESTADO = 'cargando';
   _TIENDA_CARRITO = [];
+
+  const nombrePv = OPERARIO?.nombre_punto_venta || OPERARIO?.nombre || '';
+  const bodega   = OPERARIO?.bodega_siesa_id    || '';
+  const subtitulo = document.getElementById('tienda-subtitulo');
+  if (subtitulo) subtitulo.textContent = bodega ? `Punto de Venta · ${bodega}` : 'Punto de Venta';
+  const destinoNombre = document.getElementById('tienda-destino-nombre');
+  if (destinoNombre) destinoNombre.textContent = nombrePv && bodega ? `${nombrePv} (${bodega})` : (nombrePv || bodega || '—');
+
   tiendaSubtab('solicitudes');
   tiendaCargarStock();  // pre-carga stock en background
 }
@@ -6893,7 +6901,8 @@ function tiendaQuitarCarrito(codigoSiesa) {
 
 async function tiendaEnviarSolicitud() {
   if (!_TIENDA_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
-  if (!confirm(`¿Enviar pedido con ${_TIENDA_CARRITO.length} productos al almacén?`)) return;
+  const _destino = OPERARIO?.nombre_punto_venta || OPERARIO?.bodega_siesa_id || 'la tienda';
+  if (!confirm(`¿Enviar pedido con ${_TIENDA_CARRITO.length} producto${_TIENDA_CARRITO.length !== 1 ? 's' : ''} a ${_destino}?`)) return;
 
   const items = _TIENDA_CARRITO
     .filter(c => c.producto_id)
