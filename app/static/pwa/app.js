@@ -6668,25 +6668,51 @@ async function trasReintentarDespachoSiesa(id) {
 // TIENDA — Pantalla punto de venta
 // ══════════════════════════════════════════════════════════════════
 
+const _TIENDAS_CATALOGO = [
+  { id: 'NC1', nombre: 'Neiva Centro' },
+  { id: 'NS1', nombre: 'Neiva Sur' },
+  { id: 'NS2', nombre: 'Neiva Sur Fundación' },
+  { id: 'PC1', nombre: 'Pitalito Centro' },
+  { id: 'PT1', nombre: 'Pitalito Terminal' },
+  { id: 'FC1', nombre: 'Florencia Centro' },
+  { id: 'FF1', nombre: 'Feria Florencia' },
+  { id: 'FN1', nombre: 'Feria Neiva' },
+  { id: 'FP1', nombre: 'Feria Pitalito' },
+];
+
 let _TIENDA_SUBTAB = 'solicitudes';
 let _TIENDA_STOCK = [];          // cache del stock disponible en NB1
 let _TIENDA_STOCK_ESTADO = 'cargando'; // 'cargando' | 'listo' | 'error'
 let _TIENDA_CARRITO = []; // [{producto_id, codigo_siesa, nombre, cantidad, disponible}]
+let _TIENDA_DESTINO = { id: null, nombre: null };
 
 function tiendaIniciar() {
   _TIENDA_STOCK = [];
   _TIENDA_STOCK_ESTADO = 'cargando';
   _TIENDA_CARRITO = [];
 
-  const nombrePv = OPERARIO?.nombre_punto_venta || OPERARIO?.nombre || '';
   const bodega   = OPERARIO?.bodega_siesa_id    || '';
   const subtitulo = document.getElementById('tienda-subtitulo');
   if (subtitulo) subtitulo.textContent = bodega ? `Punto de Venta · ${bodega}` : 'Punto de Venta';
-  const destinoNombre = document.getElementById('tienda-destino-nombre');
-  if (destinoNombre) destinoNombre.textContent = nombrePv && bodega ? `${nombrePv} (${bodega})` : (nombrePv || bodega || '—');
+
+  // Poblar selector de tienda destino
+  const sel = document.getElementById('tienda-destino-select');
+  if (sel) {
+    sel.innerHTML = _TIENDAS_CATALOGO.map(t =>
+      `<option value="${t.id}" data-nombre="${t.nombre}" ${t.id === bodega ? 'selected' : ''}
+        style="background:#0d2137;color:#fff;">${t.nombre} (${t.id})</option>`
+    ).join('');
+    const selected = _TIENDAS_CATALOGO.find(t => t.id === bodega) || _TIENDAS_CATALOGO[0];
+    _TIENDA_DESTINO = { id: selected.id, nombre: selected.nombre };
+  }
 
   tiendaSubtab('solicitudes');
   tiendaCargarStock();  // pre-carga stock en background
+}
+
+function tiendaCambiarDestino(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  _TIENDA_DESTINO = { id: sel.value, nombre: opt.dataset.nombre || sel.value };
 }
 
 function tiendaSubtab(nombre) {
@@ -6901,7 +6927,7 @@ function tiendaQuitarCarrito(codigoSiesa) {
 
 async function tiendaEnviarSolicitud() {
   if (!_TIENDA_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
-  const _destino = OPERARIO?.nombre_punto_venta || OPERARIO?.bodega_siesa_id || 'la tienda';
+  const _destino = _TIENDA_DESTINO.nombre || _TIENDA_DESTINO.id || 'la tienda';
   if (!confirm(`¿Enviar pedido con ${_TIENDA_CARRITO.length} producto${_TIENDA_CARRITO.length !== 1 ? 's' : ''} a ${_destino}?`)) return;
 
   const items = _TIENDA_CARRITO
@@ -6918,7 +6944,11 @@ async function tiendaEnviarSolicitud() {
     const r = await fetch(API + '/api/traslados/', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items })
+      body: JSON.stringify({
+        items,
+        bodega_destino_siesa: _TIENDA_DESTINO.id || undefined,
+        nombre_punto_venta: _TIENDA_DESTINO.nombre || undefined,
+      })
     });
     const d = await r.json();
     if (!r.ok) { alerta(d.error || 'Error creando solicitud', 'error'); return; }
