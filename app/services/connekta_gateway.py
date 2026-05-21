@@ -770,6 +770,10 @@ class ConnektaGateway:
                 'el despacho no puede enviarse a Siesa sin líneas de movimiento.'
             )
         items = items_validos
+        logger.info(
+            '[CONNEKTA] 142945 f470_cant_base por ítem: %s',
+            [(i['producto_codigo'], float(i.get('cantidad_empacada') or 0)) for i in items],
+        )
 
         cia = int(self.id_cia_siesa)
 
