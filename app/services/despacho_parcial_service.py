@@ -112,6 +112,12 @@ class DespachoParialService:
                 )
             else:
                 # Compromisos vigentes → RM no existe → crear con 142945
+                logger.info(
+                    '[DESPACHO_PARCIAL] → 142945 tarea=%s pedido=%s cantidades=%s',
+                    tarea.id,
+                    tarea.numero_pedido_siesa,
+                    [(i['producto_codigo'], i['cantidad_empacada']) for i in items],
+                )
                 try:
                     resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
                 except Exception as e_rm:
