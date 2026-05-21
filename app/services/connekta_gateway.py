@@ -736,6 +736,40 @@ class ConnektaGateway:
             logger.error('[CONNEKTA] get_pedido_cabecera(%s%s) falló: %s', tipo_docto, consec_docto, e)
             return None
 
+    def get_pedido_rowid_map(self, tipo_docto: str, consec_docto) -> dict:
+        """
+        Devuelve {f120_referencia: f431_rowid} para todas las líneas del pedido.
+        Usa API_v2_Ventas_Pedidos (misma fuente que get_pedido_cabecera) que SÍ devuelve
+        f431_rowid por línea — a diferencia de API_v2_Ventas_Pedidos_Compromisos que no lo incluye.
+        Requerido para enviar f470_rowid_movto en 142945 y forzar cantidad parcial en Siesa.
+        """
+        if self.modo_simulacion:
+            return {}
+        if not tipo_docto or not str(tipo_docto).strip():
+            return {}
+        try:
+            consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+            res = self._get(self.api_pedidos, {
+                'paginacion': 'numPag=1|tamPag=200',
+                'parametros': (
+                    f"f430_id_co = ''{self.centro_op}'' "
+                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"AND f430_consec_docto = {consec_int} "
+                    f"AND f430_ind_estado <> 9"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            rowid_map = {
+                str(r.get('f120_referencia', '')).strip(): r.get('f431_rowid')
+                for r in rows
+                if r.get('f120_referencia') and r.get('f431_rowid')
+            }
+            logger.info('[CONNEKTA] get_pedido_rowid_map %s%s: %s', tipo_docto, consec_docto, rowid_map)
+            return rowid_map
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_pedido_rowid_map falló: %s', e)
+            return {}
+
     # ==========================================
     # POSTs — Bodies oficiales desde Ver Guía
     # ==========================================
