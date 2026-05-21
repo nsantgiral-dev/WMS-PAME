@@ -828,6 +828,7 @@ class ConnektaGateway:
                     'f470_id_unidad_precio': i.get('unidad_medida') or None,
                     'f470_id_unidad_medida': i.get('unidad_medida') or None,
                     'f470_cant_base': round(float(abs(i.get('cantidad_empacada') or 0)), 4),
+                    'f470_rowid_movto': i.get('rowid_movto') or None,
                     'f470_cant_2': None,
                     'f470_vlr_bruto': None,
                     'f470_ind_naturaleza': 2,                         # 2 = Salida/Venta (spec 142945: 1=Entrada/Devol, 2=Salida/Venta)

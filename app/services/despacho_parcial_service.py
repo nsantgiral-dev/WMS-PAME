@@ -61,8 +61,20 @@ class DespachoParialService:
             raise ValueError(f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa')
 
         # 2. Items con cantidades del packing (WMS-side truth).
+        # Fetch compromisos para extraer f431_rowid por SKU — necesario para f470_rowid_movto.
+        # Sin rowid_movto Siesa ignora f470_cant_base y despacha la cantidad comprometida completa.
+        _compromisos_rowid = connekta.get_compromisos_pedido(tipo_docto, consec_docto)
+        rowid_map = {
+            str(r.get('f120_referencia', '')).strip(): r.get('f431_rowid')
+            for r in _compromisos_rowid
+            if r.get('f120_referencia') and r.get('f431_rowid')
+        }
+        logger.info(
+            '[DESPACHO_PARCIAL] rowid_map tarea=%s: %s',
+            tarea.id, rowid_map
+        )
         # Fallback a compromisos de Siesa cuando cantidad_real/esperada son 0 en todos los ítems.
-        items = DespachoParialService._build_items(tarea, cantidades)
+        items = DespachoParialService._build_items(tarea, cantidades, rowid_map)
         if not items:
             logger.warning(
                 '[DESPACHO_PARCIAL] tarea=%s — WMS sin cantidades; consultando compromisos Siesa',
@@ -300,7 +312,8 @@ class DespachoParialService:
         return resultado
 
     @staticmethod
-    def _build_items(tarea, cantidades: dict) -> list:
+    def _build_items(tarea, cantidades: dict, rowid_map: dict = None) -> list:
+        _rowid = rowid_map or {}
         items = []
         for item in tarea.items:
             if not item.producto:
@@ -316,6 +329,7 @@ class DespachoParialService:
                 'lote': item.lote or None,
                 'unidad_medida': (item.producto.unidad_empaque or item.producto.unidad_medida or 'UND'),
                 'item_id_siesa': None,
+                'rowid_movto': _rowid.get(codigo_siesa) or _rowid.get(codigo_wms),
             })
         return items
 
