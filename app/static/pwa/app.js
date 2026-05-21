@@ -1624,6 +1624,7 @@ async function _procesarScanPicking(codigo) {
 }
 
 function _actualizarContadorPicking(r) {
+  if (TAREA_ACTUAL) TAREA_ACTUAL.cantidad_escaneada = r.cantidad_actual || 0;
   const pkgEl = document.getElementById('contador-pkg');
   const undEl = document.getElementById('contador-und');
 
