@@ -50,9 +50,36 @@ let RUTAS_TIPO_SEL = 'Urbana'; // tipo seleccionado en form nueva ruta
 let RUTAS_SUBTAB = 'rutas';    // sub-tab activo en tab-rutas
 let MUELLE_TIMER = null;
 
+function _mostrarBannerSW(reg) {
+  if (document.getElementById('sw-update-banner')) return;
+  const div = document.createElement('div');
+  div.id = 'sw-update-banner';
+  div.innerHTML = `<div style="position:fixed;bottom:0;left:0;right:0;z-index:99999;background:#1e3a5f;color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:15px;font-weight:600;box-shadow:0 -2px 16px rgba(0,0,0,0.5);">
+    <span>Nueva version disponible</span>
+    <button id="sw-update-btn" style="background:#3b82f6;color:#fff;border:none;border-radius:8px;padding:9px 20px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;">Actualizar ahora</button>
+  </div>`;
+  document.body.appendChild(div);
+  document.getElementById('sw-update-btn').addEventListener('click', () => {
+    div.remove();
+    if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+  });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/static/pwa/sw.js').catch(() => {});
+    navigator.serviceWorker.register('/static/pwa/sw.js').then(reg => {
+      if (reg.waiting) _mostrarBannerSW(reg);
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        sw.addEventListener('statechange', () => {
+          if (sw.state === 'installed' && navigator.serviceWorker.controller) _mostrarBannerSW(reg);
+        });
+      });
+    }).catch(() => {});
+    let _swRefreshing = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!_swRefreshing) { _swRefreshing = true; window.location.reload(); }
+    });
   }
   // Sync theme icon + logo with stored preference
   const isLight = document.body.classList.contains('light');

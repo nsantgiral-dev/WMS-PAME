@@ -100,6 +100,21 @@ def create_app():
             return jsonify({'status': 'unhealthy'}), 503
         return jsonify({'status': 'ok'}), 200
 
+    @app.route('/static/pwa/sw.js')
+    def pwa_sw():
+        from flask import make_response as _mkr
+        pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
+        with open(os.path.join(pwa_dir, 'sw.js'), encoding='utf-8') as _f:
+            _content = _f.read()
+        try:
+            _v = int(os.path.getmtime(os.path.join(pwa_dir, 'app.js')))
+        except Exception:
+            _v = 0
+        resp = _mkr(f'// v{_v}\n' + _content, 200)
+        resp.headers['Content-Type'] = 'application/javascript'
+        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return resp
+
     @app.route('/static/pwa/<path:filename>')
     def pwa_files(filename):
         pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
