@@ -649,6 +649,11 @@ class ConnektaGateway:
                 )
             })
             rows = res.get('detalle', {}).get('Table', [])
+            # Diagnóstico temporal: mostrar fila completa para descubrir campo RowID T405
+            if rows:
+                logger.info('[CONNEKTA] compromisos RAW primera fila %s%s: %s', tipo_docto, consec_docto, rows[0])
+            else:
+                logger.warning('[CONNEKTA] compromisos RAW %s%s: 0 filas (sin filtro cant)', tipo_docto, consec_docto)
             return [r for r in rows if float(r.get('f405_cant_por_remisionar_base') or 0) > 0]
         except Exception as e:
             logger.warning('[CONNEKTA] get_compromisos_pedido falló: %s', e)
@@ -774,6 +779,8 @@ class ConnektaGateway:
                 if r.get('f120_referencia') and r.get('f431_rowid')
             }
             logger.info('[CONNEKTA] get_pedido_rowid_map %s%s: %s', tipo_docto, consec_docto, rowid_map)
+            # Diagnóstico adicional: consultar compromisos para ver sus campos raw
+            self.get_compromisos_pedido(tipo_docto, consec_docto)
             return rowid_map
         except Exception as e:
             logger.warning('[CONNEKTA] get_pedido_rowid_map falló: %s', e)
