@@ -564,7 +564,7 @@ class MobileService:
                 )
 
             item.cantidad_real = nueva
-            item.verificado = item.cantidad_real >= item.cantidad_esperada
+            item.verificado = item.cantidad_real is not None
             db.session.commit()
 
             todos_verificados = all(i.verificado for i in tarea.items)
