@@ -27,7 +27,10 @@ class PackingService:
         tareas_picking = TareaPicking.query.filter(
             TareaPicking.id.in_(tareas_picking_ids),
             _db.or_(
-                TareaPicking.estado == 'COMPLETADO',
+                _db.and_(
+                    TareaPicking.estado == 'COMPLETADO',
+                    TareaPicking.cantidad_recogida > 0
+                ),
                 _db.and_(
                     TareaPicking.estado == 'BLOQUEADO',
                     TareaPicking.cantidad_recogida > 0
