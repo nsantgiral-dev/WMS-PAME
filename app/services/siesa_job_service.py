@@ -287,6 +287,12 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             raise ValueError(f'DESPACHO_F470 job={job.id}: tarea_id={payload.get("tarea_id")} no encontrada')
         from app.services.despacho_parcial_service import DespachoParialService
         items = payload.get('items', [])
+        if items and all(float(i.get('cantidad_empacada') or 0) <= 0 for i in items):
+            raise ValueError(
+                f'DESPACHO_F470 job={job.id}: pedido {payload.get("numero_pedido_siesa")} — '
+                'todos los ítems tienen cantidad_empacada=0. Sin stock para remisionar. '
+                'Cancelar el packing o ajustar cantidades antes de reintentar.'
+            )
         cantidades = {
             i['producto_codigo']: float(i.get('cantidad_empacada') or 0)
             for i in items

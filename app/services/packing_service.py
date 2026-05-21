@@ -173,7 +173,7 @@ class PackingService:
             )
 
         item.cantidad_real = cantidad_real
-        item.verificado = item.cantidad_real >= item.cantidad_esperada
+        item.verificado = item.cantidad_real is not None
         if lote:
             item.lote = lote
 
