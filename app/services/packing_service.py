@@ -221,11 +221,15 @@ class PackingService:
 
         items_sin_verificar = [i for i in tarea.items if not i.verificado]
         if items_sin_verificar:
-            nombres = [
-                (i.producto.nombre if i.producto else f'ID {i.producto_id}')
-                for i in items_sin_verificar[:3]
-            ]
-            raise ValueError(f'Faltan por escanear: {", ".join(nombres)}')
+            if not forzar:
+                nombres = [
+                    (i.producto.nombre if i.producto else f'ID {i.producto_id}')
+                    for i in items_sin_verificar[:3]
+                ]
+                raise ValueError(f'Faltan por escanear: {", ".join(nombres)}')
+            for item in items_sin_verificar:
+                item.cantidad_real = 0
+                item.verificado = True
 
         items_con_diferencia = [i for i in tarea.items if i.tiene_diferencia()]
         if items_con_diferencia and not forzar:

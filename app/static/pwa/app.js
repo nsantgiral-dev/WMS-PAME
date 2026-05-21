@@ -3234,6 +3234,48 @@ async function empReiniciarConteo(packingId) {
   } catch (e) { alerta('Error reiniciando conteo', 'error'); }
 }
 
+async function empDespacharConFaltantes() {
+  if (!EMP_TAREA) return;
+  const sinEscanear = EMP_ITEMS.filter(i => !i.verificado);
+  const nombres = sinEscanear.map(i =>
+    `• ${i.producto_nombre || i.producto_codigo || 'Producto'} (esperado: ${i.cantidad_esperada})`
+  ).join('\n');
+  if (!confirm(`Sin stock — quedarán en 0 y Siesa los cancelará automáticamente:\n\n${nombres}\n\n¿Confirmar despacho parcial?`)) return;
+
+  const btn = document.getElementById('emp-btn-faltantes');
+  if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
+
+  try {
+    const r = await fetch(`/api/packing/${EMP_TAREA.id}/confirmar`, {
+      method: 'PUT',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ forzar: true })
+    });
+    const data = await r.json();
+    if (!r.ok) {
+      empFlash('rojo', data.error || 'Error confirmando');
+      if (btn) { btn.disabled = false; btn.textContent = 'Despachar con faltantes ⚠'; }
+      return;
+    }
+    if (data.tarea && data.tarea.items) {
+      EMP_ITEMS = data.tarea.items;
+      Object.assign(EMP_TAREA, data.tarea);
+    }
+    empRenderHUDItem();
+    _BULTOS_LINEAS = [];
+    document.getElementById('modal-bultos-lineas').innerHTML = '';
+    document.getElementById('modal-bultos-error').textContent = '';
+    document.getElementById('modal-bultos-pedido').textContent =
+      `${EMP_TAREA.numero_pedido_siesa} · ${EMP_TAREA.cliente || ''} · ${EMP_TAREA.municipio || ''}`;
+    const _btnConf = document.querySelector('#modal-bultos button[onclick="bultosConfirmar()"]');
+    if (_btnConf) { _btnConf.disabled = false; _btnConf.textContent = 'Cerrar Caja y Etiquetar →'; }
+    document.getElementById('modal-bultos').style.display = 'flex';
+  } catch (e) {
+    empFlash('rojo', 'Error de conexión');
+    if (btn) { btn.disabled = false; btn.textContent = 'Despachar con faltantes ⚠'; }
+  }
+}
+
 async function empReintentarSiesa(t) {
   // Los bultos ya existen — el backend los reutiliza, solo reintenta Siesa
   const bultoResumen = t.bultos.reduce((acc, b) => {
@@ -3327,6 +3369,12 @@ function empRenderHUDItem() {
     document.getElementById('emp-hud-producto').textContent = '¡Todo verificado! Cierra la caja.';
   } else {
     btn.style.display = 'none';
+  }
+
+  // Botón faltantes: visible cuando hay ítems escaneados pero algunos siguen sin stock
+  const btnFaltantes = document.getElementById('emp-btn-faltantes');
+  if (btnFaltantes) {
+    btnFaltantes.style.display = (verificados > 0 && verificados < total) ? 'block' : 'none';
   }
 }
 
