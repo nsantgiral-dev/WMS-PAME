@@ -759,6 +759,15 @@ class ConnektaGateway:
                 )
             })
             rows = res.get('detalle', {}).get('Table', [])
+            # Diagnóstico: loguear valores crudos para detectar si f431_rowid es null
+            for r in rows[:3]:
+                logger.info(
+                    '[CONNEKTA] rowid_map RAW %s%s → f120_referencia=%r f431_rowid=%r',
+                    tipo_docto, consec_docto,
+                    r.get('f120_referencia'), r.get('f431_rowid')
+                )
+            if not rows:
+                logger.warning('[CONNEKTA] get_pedido_rowid_map %s%s: API devolvió 0 filas', tipo_docto, consec_docto)
             rowid_map = {
                 str(r.get('f120_referencia', '')).strip(): r.get('f431_rowid')
                 for r in rows
