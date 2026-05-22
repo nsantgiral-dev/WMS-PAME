@@ -749,21 +749,29 @@ class ConnektaGateway:
         Usa f405_rowid_pv_movto (FK a t431_cm_pv_movto) como puente.
         Se combina con get_compromisos_pedido en get_pedido_rowid_map para
         producir {referencia: f405_rowid} por pedido.
+        Pagina hasta agotar resultados — sin TOP arbitrario.
         """
         if self.modo_simulacion:
             return {}
         try:
-            res = self._get(
-                'papeleriamedellin_compromisos_wms',
-                params_extra={'paginacion': 'numPag=1|tamPag=1000'},
-                url=self.url_get_dinamico,
-            )
-            rows = res.get('detalle', {}).get('Datos') or []
-            return {
-                int(r['rowid_linea_pedido']): int(r['rowid_compromiso'])
-                for r in rows
-                if r.get('rowid_linea_pedido') and r.get('rowid_compromiso')
-            }
+            result = {}
+            for pag in range(1, 50):
+                res = self._get(
+                    'papeleriamedellin_compromisos_wms',
+                    params_extra={'paginacion': f'numPag={pag}|tamPag=100'},
+                    url=self.url_get_dinamico,
+                )
+                rows = res.get('detalle', {}).get('Datos') or []
+                if not rows:
+                    break
+                for r in rows:
+                    if r.get('rowid_linea_pedido') and r.get('rowid_compromiso'):
+                        result[int(r['rowid_linea_pedido'])] = int(r['rowid_compromiso'])
+                total_pag = res.get('detalle', {}).get('total_páginas', 1)
+                if pag >= total_pag:
+                    break
+            logger.info('[CONNEKTA] get_compromisos_t405: %d compromisos activos', len(result))
+            return result
         except Exception as e:
             logger.error('[CONNEKTA] get_compromisos_t405 falló: %s', e)
             raise
