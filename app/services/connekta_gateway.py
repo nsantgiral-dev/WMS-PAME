@@ -778,14 +778,9 @@ class ConnektaGateway:
 
     def get_pedido_rowid_map(self, tipo_docto: str, consec_docto, f430_rowid=None) -> dict:
         """
-        Devuelve {referencia: f405_rowid} para las líneas del pedido.
-
-        Dos pasos:
-          1. API_v2_Ventas_Pedidos_Compromisos → {f431_rowid: referencia} filtrado por pedido
-          2. papeleriamedellin_compromisos_wms  → {f431_rowid: f405_rowid} activos
-
-        f470_rowid_movto en 142945 exige el rowid de T405 — usar f431_rowid causa
-        que Siesa ignore f470_cant_base y remisione el 100% comprometido.
+        Devuelve {referencia: f431_rowid} para las líneas del pedido.
+        f431_rowid es el ID único de la línea en T431 — valor que 142945 exige en
+        f470_rowid_movto para que Siesa respete f470_cant_base (cantidad parcial del picking).
         """
         if self.modo_simulacion:
             return {}
@@ -793,20 +788,10 @@ class ConnektaGateway:
             return {}
         try:
             compromisos = self.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
-            f431_map = {
-                int(r['f431_rowid']): str(r.get('f120_referencia', '')).strip()
+            result = {
+                str(r.get('f120_referencia', '')).strip(): int(r['f431_rowid'])
                 for r in compromisos
                 if r.get('f431_rowid') and r.get('f120_referencia')
-            }
-            if not f431_map:
-                return {}
-
-            t405_map = self.get_compromisos_t405()
-
-            result = {
-                referencia: t405_map[f431_rowid]
-                for f431_rowid, referencia in f431_map.items()
-                if f431_rowid in t405_map
             }
             logger.info('[CONNEKTA] get_pedido_rowid_map %s%s: %s', tipo_docto, consec_docto, result)
             return result
