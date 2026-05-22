@@ -641,7 +641,7 @@ class ConnektaGateway:
         try:
             consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
             res = self._get('API_v2_Ventas_Pedidos_Compromisos', {
-                'paginacion': 'numPag=1|tamPag=10',
+                'paginacion': 'numPag=1|tamPag=100',
                 'parametros': (
                     f"f430_id_co = ''{self.centro_op}'' "
                     f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
