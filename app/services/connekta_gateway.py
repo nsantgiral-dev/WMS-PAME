@@ -741,12 +741,43 @@ class ConnektaGateway:
             logger.error('[CONNEKTA] get_pedido_cabecera(%s%s) falló: %s', tipo_docto, consec_docto, e)
             return None
 
+    def get_compromisos_t405(self) -> dict:
+        """
+        papeleriamedellin_compromisos_wms — mapeo {f431_rowid: f405_rowid}.
+
+        T405 no expone claves naturales (co, consec, referencia) directamente.
+        Usa f405_rowid_pv_movto (FK a t431_cm_pv_movto) como puente.
+        Se combina con get_compromisos_pedido en get_pedido_rowid_map para
+        producir {referencia: f405_rowid} por pedido.
+        """
+        if self.modo_simulacion:
+            return {}
+        try:
+            res = self._get(
+                'papeleriamedellin_compromisos_wms',
+                params_extra={'paginacion': 'numPag=1|tamPag=1000'},
+                url=self.url_get_dinamico,
+            )
+            rows = res.get('detalle', {}).get('Datos') or []
+            return {
+                int(r['rowid_linea_pedido']): int(r['rowid_compromiso'])
+                for r in rows
+                if r.get('rowid_linea_pedido') and r.get('rowid_compromiso')
+            }
+        except Exception as e:
+            logger.error('[CONNEKTA] get_compromisos_t405 falló: %s', e)
+            raise
+
     def get_pedido_rowid_map(self, tipo_docto: str, consec_docto, f430_rowid=None) -> dict:
         """
-        Devuelve {f120_referencia: f431_rowid} para las líneas de compromiso del pedido.
-        f431_rowid es el RowID de T431 confirmado en la respuesta de API_v2_Ventas_Pedidos_Compromisos.
-        Se envía como f470_rowid_movto en 142945 para que Siesa respete f470_cant_base.
-        Pasar f430_rowid (de get_pedido_cabecera) para filtrado exacto — es el único campo T430 en el response.
+        Devuelve {referencia: f405_rowid} para las líneas del pedido.
+
+        Dos pasos:
+          1. API_v2_Ventas_Pedidos_Compromisos → {f431_rowid: referencia} filtrado por pedido
+          2. papeleriamedellin_compromisos_wms  → {f431_rowid: f405_rowid} activos
+
+        f470_rowid_movto en 142945 exige el rowid de T405 — usar f431_rowid causa
+        que Siesa ignore f470_cant_base y remisione el 100% comprometido.
         """
         if self.modo_simulacion:
             return {}
@@ -754,13 +785,23 @@ class ConnektaGateway:
             return {}
         try:
             compromisos = self.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
-            rowid_map = {
-                str(r.get('f120_referencia', '')).strip(): r['f431_rowid']
+            f431_map = {
+                int(r['f431_rowid']): str(r.get('f120_referencia', '')).strip()
                 for r in compromisos
-                if r.get('f120_referencia') and r.get('f431_rowid')
+                if r.get('f431_rowid') and r.get('f120_referencia')
             }
-            logger.info('[CONNEKTA] get_pedido_rowid_map %s%s: %s', tipo_docto, consec_docto, rowid_map)
-            return rowid_map
+            if not f431_map:
+                return {}
+
+            t405_map = self.get_compromisos_t405()
+
+            result = {
+                referencia: t405_map[f431_rowid]
+                for f431_rowid, referencia in f431_map.items()
+                if f431_rowid in t405_map
+            }
+            logger.info('[CONNEKTA] get_pedido_rowid_map %s%s: %s', tipo_docto, consec_docto, result)
+            return result
         except Exception as e:
             logger.warning('[CONNEKTA] get_pedido_rowid_map falló: %s', e)
             return {}
