@@ -61,9 +61,10 @@ class DespachoParialService:
             raise ValueError(f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa')
 
         # 2. Items con cantidades del packing (WMS-side truth).
-        # API_v2_Ventas_Pedidos devuelve f431_rowid por línea — API_v2_Ventas_Pedidos_Compromisos no.
-        # Sin f470_rowid_movto Siesa ignora f470_cant_base y despacha la cantidad comprometida completa.
-        rowid_map = connekta.get_pedido_rowid_map(tipo_docto, consec_docto)
+        # f431_rowid de API_v2_Ventas_Pedidos_Compromisos se envía como f470_rowid_movto en 142945
+        # para que Siesa respete f470_cant_base en lugar de usar la cantidad comprometida completa.
+        f430_rowid = cabecera.get('f430_rowid')
+        rowid_map = connekta.get_pedido_rowid_map(tipo_docto, consec_docto, f430_rowid)
         logger.info('[DESPACHO_PARCIAL] rowid_map tarea=%s: %s', tarea.id, rowid_map)
         # Fallback a compromisos de Siesa cuando cantidad_real/esperada son 0 en todos los ítems.
         items = DespachoParialService._build_items(tarea, cantidades, rowid_map)
@@ -72,7 +73,7 @@ class DespachoParialService:
                 '[DESPACHO_PARCIAL] tarea=%s — WMS sin cantidades; consultando compromisos Siesa',
                 tarea.id
             )
-            compromisos = connekta.get_compromisos_pedido(tipo_docto, consec_docto)
+            compromisos = connekta.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
             items = DespachoParialService._build_items_from_compromisos(compromisos)
             if not items:
                 raise ValueError(

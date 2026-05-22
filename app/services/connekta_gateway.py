@@ -627,26 +627,30 @@ class ConnektaGateway:
             url=self.url_get_dinamico,
         )
 
-    def get_compromisos_pedido(self, tipo_docto: str, consec_docto) -> list:
+    def get_compromisos_pedido(self, tipo_docto: str, consec_docto, f430_rowid=None) -> list:
         """
         GET API_v2_Ventas_Pedidos_Compromisos
         Retorna líneas comprometidas pendientes de remisionar (f405_cant_por_remisionar_base > 0).
-        Fuente autoritativa de cantidades cuando el WMS no tiene cantidad_real/esperada.
-        Campos clave: f120_referencia (SKU), f405_cant_por_remisionar_base (qty), f405_id_lote.
+        Filtra por f430_rowid cuando está disponible — único campo T430 en el response de la API.
+        Campos clave: f120_referencia (SKU), f431_rowid (rowid T431), f405_cant_por_remisionar_base.
         """
         if self.modo_simulacion:
             return []
         if not tipo_docto or not str(tipo_docto).strip():
             return []
         try:
-            consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
-            res = self._get('API_v2_Ventas_Pedidos_Compromisos', {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': (
+            if f430_rowid:
+                parametros = f"f430_rowid = {int(f430_rowid)}"
+            else:
+                consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+                parametros = (
                     f"f430_id_co = ''{self.centro_op}'' "
                     f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
                     f"AND f430_consec_docto = {consec_int}"
                 )
+            res = self._get('API_v2_Ventas_Pedidos_Compromisos', {
+                'paginacion': 'numPag=1|tamPag=100',
+                'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
             rows = [r for r in rows if 'alerta' not in r]
@@ -737,29 +741,24 @@ class ConnektaGateway:
             logger.error('[CONNEKTA] get_pedido_cabecera(%s%s) falló: %s', tipo_docto, consec_docto, e)
             return None
 
-    def get_pedido_rowid_map(self, tipo_docto: str, consec_docto) -> dict:
+    def get_pedido_rowid_map(self, tipo_docto: str, consec_docto, f430_rowid=None) -> dict:
         """
-        Devuelve {f120_referencia: rowid_T405} para las líneas de compromiso del pedido.
-        Usa API_v2_Ventas_Pedidos_Compromisos (conector 103) — fuente del RowID de T405
-        requerido como f470_rowid_movto en 142945 para forzar cantidad parcial en Siesa.
-        Sin este RowID Siesa ignora f470_cant_base y despacha la cantidad comprometida completa.
+        Devuelve {f120_referencia: f431_rowid} para las líneas de compromiso del pedido.
+        f431_rowid es el RowID de T431 confirmado en la respuesta de API_v2_Ventas_Pedidos_Compromisos.
+        Se envía como f470_rowid_movto en 142945 para que Siesa respete f470_cant_base.
+        Pasar f430_rowid (de get_pedido_cabecera) para filtrado exacto — es el único campo T430 en el response.
         """
         if self.modo_simulacion:
             return {}
         if not tipo_docto or not str(tipo_docto).strip():
             return {}
         try:
-            compromisos = self.get_compromisos_pedido(tipo_docto, consec_docto)
-            rowid_map = {}
-            for r in compromisos:
-                ref = str(r.get('f120_referencia', '')).strip()
-                if not ref:
-                    continue
-                # f405_rowid = RowID del registro en T405 (compromisos) — campo autoritativo
-                # f431_rowid = RowID de la línea del pedido (T431) — fallback si f405_rowid ausente
-                rowid = r.get('f405_rowid') or r.get('f431_rowid')
-                if rowid:
-                    rowid_map[ref] = rowid
+            compromisos = self.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
+            rowid_map = {
+                str(r.get('f120_referencia', '')).strip(): r['f431_rowid']
+                for r in compromisos
+                if r.get('f120_referencia') and r.get('f431_rowid')
+            }
             logger.info('[CONNEKTA] get_pedido_rowid_map %s%s: %s', tipo_docto, consec_docto, rowid_map)
             return rowid_map
         except Exception as e:
