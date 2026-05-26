@@ -65,11 +65,39 @@ class DespachoParialService:
         # f431_rowid → f470_rowid_movto en 142945 y f431_nro_registro en 244328.
         f430_rowid = cabecera.get('f430_rowid')
         compromisos_siesa = connekta.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
-        rowid_map = {
-            str(r.get('f120_referencia', '')).strip(): int(r['f431_rowid'])
-            for r in compromisos_siesa
-            if r.get('f431_rowid') and r.get('f120_referencia')
-        }
+
+        # Mapa UOM preferida por producto — clave para desambiguar productos dual-unit
+        # (PQ + UND) que aparecen con dos líneas en los compromisos de Siesa.
+        # Para PAPELSP6741: unidad_empaque='PQ' → preferir la línea PQ (committed=3)
+        # sobre la línea UND (committed=1); sin este mapa el dict-comprehension clásico
+        # guardaba la ÚLTIMA línea (UND) causando el error 244328 "cant 2 > 1 comprometida".
+        _uom_pref = {}
+        for _ti in tarea.items:
+            if _ti.producto:
+                _ref = (_ti.producto.codigo_siesa or _ti.producto.codigo or '').strip()
+                _uom = (_ti.producto.unidad_empaque or _ti.producto.unidad_medida or 'UND').upper()
+                if _ref:
+                    _uom_pref[_ref] = _uom
+
+        # Construir rowid_map con desambiguación dual-unit:
+        # 1ª prioridad: f405_id_unidad_medida coincide con unidad_empaque del producto (WMS)
+        # 2ª prioridad: mayor f405_cant_por_remisionar_base (línea principal > línea auxiliar)
+        rowid_map = {}
+        _rowid_score = {}   # {ref: (uom_match:0|1, cant)}
+        for _r in compromisos_siesa:
+            _ref = str(_r.get('f120_referencia', '')).strip()
+            _rid = _r.get('f431_rowid')
+            if not _ref or not _rid:
+                continue
+            _cant   = float(_r.get('f405_cant_por_remisionar_base') or 0)
+            _uom_c  = str(_r.get('f405_id_unidad_medida', '')).strip().upper()
+            _uom_w  = _uom_pref.get(_ref, '')
+            _match  = 1 if (_uom_w and _uom_c == _uom_w) else 0
+            _prev   = _rowid_score.get(_ref, (-1, -1))
+            if (_match, _cant) > _prev:
+                rowid_map[_ref]    = int(_rid)
+                _rowid_score[_ref] = (_match, _cant)
+
         logger.info('[DESPACHO_PARCIAL] rowid_map tarea=%s: %s', tarea.id, rowid_map)
         # Fallback a compromisos de Siesa cuando cantidad_real/esperada son 0 en todos los ítems.
         items = DespachoParialService._build_items(tarea, cantidades, rowid_map)
@@ -133,7 +161,7 @@ class DespachoParialService:
                 # (campo nativo del JOIN T431→T120, confirmado Postman QA 2026-05-26).
                 # No se necesita PedidoSiesa como fuente — los datos ya están en compromisos_siesa.
                 _compromisos_payload = DespachoParialService._build_compromisos_244328(
-                    cantidades, rowid_map, compromisos_siesa
+                    cantidades, rowid_map, compromisos_siesa, uom_map=_uom_pref
                 )
                 if _compromisos_payload:
                     connekta.trigger_comprometer_pedido(consec_docto, _compromisos_payload)
@@ -381,7 +409,8 @@ class DespachoParialService:
 
     @staticmethod
     def _build_compromisos_244328(cantidades: dict, rowid_map: dict,
-                                   compromisos_siesa: list) -> list:
+                                   compromisos_siesa: list,
+                                   uom_map: dict = None) -> list:
         """
         Construye el payload de Compromisos para el conector 244328.
 
@@ -397,15 +426,30 @@ class DespachoParialService:
           · el admin envió cantidad > 0 en el body
           · existe f431_rowid en rowid_map (línea identificada en T431)
           · f120_id está presente en compromisos_siesa (garantiza lookup en 244328)
+
+        uom_map: {codigo_siesa: unidad_empaque} — para desambiguar productos dual-unit
+          que aparecen con 2 líneas en compromisos (PQ y UND). Se prefiere la línea
+          cuya f405_id_unidad_medida coincida; si no hay match, la de mayor cantidad.
         """
         # Mapa {referencia: fila_completa} — f120_id y f405_cant_por_remisionar_base
         # vienen directamente del response de API_v2_Ventas_Pedidos_Compromisos.
-        # Eliminamos dependencia de PedidoSiesa.item_id_siesa (podía estar NULL o stale).
-        _comp_por_ref = {
-            str(r.get('f120_referencia', '')).strip(): r
-            for r in compromisos_siesa
-            if r.get('f120_referencia')
-        }
+        # Misma lógica de desambiguación dual-unit que rowid_map en despachar_parcial():
+        # 1ª prioridad: UOM match; 2ª prioridad: mayor f405_cant_por_remisionar_base.
+        _uom = uom_map or {}
+        _comp_por_ref  = {}
+        _comp_score    = {}   # {ref: (uom_match, cant)}
+        for r in compromisos_siesa:
+            ref = str(r.get('f120_referencia', '')).strip()
+            if not ref:
+                continue
+            _cant  = float(r.get('f405_cant_por_remisionar_base') or 0)
+            _uom_c = str(r.get('f405_id_unidad_medida', '')).strip().upper()
+            _uom_w = _uom.get(ref, '')
+            _match = 1 if (_uom_w and _uom_c == _uom_w) else 0
+            _prev  = _comp_score.get(ref, (-1, -1))
+            if (_match, _cant) > _prev:
+                _comp_por_ref[ref] = r
+                _comp_score[ref]   = (_match, _cant)
 
         result = []
         for ref, rowid in rowid_map.items():
