@@ -152,6 +152,7 @@ def _run_sync(app):
                     reg.cliente              = d['cliente']
                     reg.municipio            = d.get('municipio', '')
                     reg.fecha_entrega        = d['fecha_entrega']
+                    reg.item_id_siesa        = d['item_id_siesa']   # f120_id — necesario para 244328
                     reg.producto_id          = prod.id if prod else None
                     reg.sync_at              = datetime.utcnow()
                 else:

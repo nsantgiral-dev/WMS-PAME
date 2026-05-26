@@ -128,21 +128,12 @@ class DespachoParialService:
                 # Sin este paso, 142945 usa la cant. comprometida original (ej. 4)
                 # e ignora f470_cant_base (ej. 3) → bug de cantidad resuelta.
                 # 244328 reemplaza consulta 7811 + GRANT UPDATE (ya no se requieren).
-                # Confirmado funcional en Postman QA 2026-05-26.
                 # ─────────────────────────────────────────────────────────────────────
-                # item_id_siesa (f120_id) desde read model local — más fiable que
-                # f431_referencia_item para el lookup en 244328 (confirmado en Postman).
-                from app.models.pedido_siesa import PedidoSiesa as _PS
-                _regs_siesa = _PS.query.filter_by(
-                    numero_pedido=tarea.numero_pedido_siesa
-                ).all()
-                _item_id_map = {
-                    r.item_codigo: r.item_id_siesa
-                    for r in _regs_siesa
-                    if r.item_id_siesa
-                }
+                # f120_id viene directamente en el response de API_v2_Ventas_Pedidos_Compromisos
+                # (campo nativo del JOIN T431→T120, confirmado Postman QA 2026-05-26).
+                # No se necesita PedidoSiesa como fuente — los datos ya están en compromisos_siesa.
                 _compromisos_payload = DespachoParialService._build_compromisos_244328(
-                    cantidades, rowid_map, compromisos_siesa, _item_id_map
+                    cantidades, rowid_map, compromisos_siesa
                 )
                 if _compromisos_payload:
                     connekta.trigger_comprometer_pedido(consec_docto, _compromisos_payload)
@@ -390,30 +381,28 @@ class DespachoParialService:
 
     @staticmethod
     def _build_compromisos_244328(cantidades: dict, rowid_map: dict,
-                                   compromisos_siesa: list,
-                                   item_id_map: dict = None) -> list:
+                                   compromisos_siesa: list) -> list:
         """
         Construye el payload de Compromisos para el conector 244328.
 
         Mapeo de campos (confirmado Postman QA 2026-05-26):
-          f431_id_item             = PedidoSiesa.item_id_siesa (f120_id numérico)
-                                     El conector NO resuelve por f431_referencia_item.
-          f431_nro_registro        = f431_rowid  (no es 1, 2, 3 — es el rowid de T431)
-          f431_cant_base           = cant. comprometida original en Siesa
+          f431_id_item             = f120_id del response de API_v2_Ventas_Pedidos_Compromisos
+                                     (campo nativo JOIN T431→T120 — confirmado en Postman 2026-05-26).
+                                     El conector NO resuelve por f431_referencia_item (texto SKU).
+          f431_nro_registro        = f431_rowid  (rowid de T431, no es 1,2,3)
+          f431_cant_base           = f405_cant_por_remisionar_base original en Siesa
           f405_cant_por_remisionar_base = cant. REAL picada (del WMS)
 
-        item_id_map: {item_codigo: item_id_siesa} — obtenido de PedidoSiesa local.
         Solo incluye ítems donde:
           · el admin envió cantidad > 0 en el body
           · existe f431_rowid en rowid_map (línea identificada en T431)
+          · f120_id está presente en compromisos_siesa (garantiza lookup en 244328)
         """
-        _id_map = item_id_map or {}
-
-        # Mapa {referencia: cant_comprometida_original} desde compromisos Siesa
-        cant_comprometida = {
-            str(r.get('f120_referencia', '')).strip(): float(
-                r.get('f405_cant_por_remisionar_base') or 0
-            )
+        # Mapa {referencia: fila_completa} — f120_id y f405_cant_por_remisionar_base
+        # vienen directamente del response de API_v2_Ventas_Pedidos_Compromisos.
+        # Eliminamos dependencia de PedidoSiesa.item_id_siesa (podía estar NULL o stale).
+        _comp_por_ref = {
+            str(r.get('f120_referencia', '')).strip(): r
             for r in compromisos_siesa
             if r.get('f120_referencia')
         }
@@ -423,14 +412,24 @@ class DespachoParialService:
             cant_real = float(cantidades.get(ref, 0))
             if cant_real <= 0 or not rowid:
                 continue
-            cant_orig = cant_comprometida.get(ref) or cant_real
+            comp_row  = _comp_por_ref.get(ref, {})
+            cant_orig = float(comp_row.get('f405_cant_por_remisionar_base') or cant_real)
+            id_item   = comp_row.get('f120_id')          # ID numérico de T120 — fuente primaria
+
+            if not id_item:
+                logger.warning(
+                    '[DESPACHO_PARCIAL] _build_compromisos_244328: f120_id ausente para ref=%s '
+                    '— 244328 fallará (conector no acepta referencia texto)',
+                    ref,
+                )
+
             result.append({
                 'referencia_item':     ref,
-                'id_item':             _id_map.get(ref),   # f431_id_item numérico (prioritario)
+                'id_item':             id_item,   # f431_id_item en 244328 — OBLIGATORIO numérico
                 'cant_base':           cant_orig,
-                'nro_registro':        rowid,               # f431_nro_registro = f431_rowid
+                'nro_registro':        rowid,      # f431_nro_registro = f431_rowid
                 'cant_por_remisionar': cant_real,
-                'lote':                None,
+                'lote':                comp_row.get('f405_id_lote') or None,
             })
         return result
 
