@@ -346,7 +346,19 @@ def cancelar_tarea(id):
 @packing_bp.route('/<int:id>/reiniciar-conteo', methods=['PUT'])
 @jwt_required()
 def reiniciar_conteo(id):
-    """Resetea todos los items a 0 y vuelve el estado a EN_PROCESO."""
+    """
+    Resetea el conteo del empacador a 0 y re-sincroniza cantidad_esperada
+    con lo que picking realmente recogió.
+
+    Dos acciones atómicas:
+      1. cantidad_real = 0, verificado = False en todos los ítems → el
+         empacador empieza a contar desde cero.
+      2. PackingPickingSyncService.sincronizar → actualiza cantidad_esperada
+         al total recogido por picking (puede diferir de la cantidad original
+         de Siesa si el picker reportó faltantes).
+
+    Si no hay tareas de picking asociadas el paso 2 es silencioso (no falla).
+    """
     from app.extensions import db
     from app.models.usuario import Usuario
     try:
@@ -363,14 +375,32 @@ def reiniciar_conteo(id):
     if (tarea.empacador_id and tarea.empacador_id != usuario.id
             and usuario.rol not in Roles.SUPERVISION):
         return jsonify({'error': 'Solo el empacador asignado puede reiniciar esta tarea'}), 403
+
+    # 1. Resetear conteo del empacador
     for item in tarea.items:
         item.cantidad_real = 0
-        item.verificado = False
-    tarea.estado = EstadoPacking.EN_PROCESO
+        item.verificado    = False
+    tarea.estado               = EstadoPacking.EN_PROCESO
     tarea.verificacion_exitosa = False
-    tarea.fecha_verificado = None
+    tarea.fecha_verificado     = None
     db.session.commit()
-    return jsonify({'ok': True, 'mensaje': 'Conteo reiniciado', 'tarea': tarea.to_dict()}), 200
+
+    # 2. Re-sincronizar cantidad_esperada desde picking (estado ya es EN_PROCESO)
+    sync_resultado = {'sincronizado': False, 'razon': 'Sin picking asociado'}
+    try:
+        from app.services.packing_picking_sync_service import PackingPickingSyncService
+        sync_resultado = PackingPickingSyncService.sincronizar(id)
+    except Exception as _e:
+        logger.warning('[PACKING] reiniciar_conteo: sync picking silencioso id=%s — %s', id, _e)
+
+    # Re-query para incluir cantidad_esperada actualizada en la respuesta
+    tarea = TareaPacking.query.get(id)
+    return jsonify({
+        'ok': True,
+        'mensaje': 'Conteo reiniciado',
+        'sync_picking': sync_resultado,
+        'tarea': tarea.to_dict(),
+    }), 200
 
 
 @packing_bp.route('/<int:id>/reconciliar', methods=['POST'])
