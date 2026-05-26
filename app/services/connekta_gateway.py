@@ -837,8 +837,12 @@ class ConnektaGateway:
             'Compromisos': [
                 {
                     'f430_consec_docto':             consec_int,
-                    'f431_referencia_item':           c['referencia_item'],
-                    'f431_id_item':                  None,
+                    # Prioridad de identificación de ítem (igual que Postman QA 2026-05-26):
+                    # 1. f431_id_item = ID numérico interno Siesa (PedidoSiesa.item_id_siesa).
+                    #    El conector 244328 resuelve confiablemente por este campo.
+                    # 2. f431_referencia_item = SKU texto — solo si no hay ID numérico.
+                    'f431_id_item':                  int(c['id_item']) if c.get('id_item') else None,
+                    'f431_referencia_item':           None if c.get('id_item') else c['referencia_item'],
                     'f431_codigo_barras':             None,
                     'f431_id_bodega':                self.bodega,
                     'f431_id_ubicacion_aux':          None,
