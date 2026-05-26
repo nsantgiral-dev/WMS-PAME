@@ -564,7 +564,10 @@ class MobileService:
                 )
 
             item.cantidad_real = nueva
-            item.verificado = item.cantidad_real is not None
+            # verificado = True solo cuando se alcanza o supera la cantidad esperada.
+            # Antes era `is not None`, que marcaba el ítem como done tras el PRIMER escaneo
+            # aunque faltaran unidades → el HUD saltaba al siguiente producto prematuramente.
+            item.verificado = nueva >= item.cantidad_esperada
             db.session.commit()
 
             todos_verificados = all(i.verificado for i in tarea.items)

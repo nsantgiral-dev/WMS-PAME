@@ -3503,12 +3503,14 @@ function empFlash(color, mensaje) {
   const prevText = msgEl ? msgEl.textContent : '';
 
   if (esVerde && mensaje && msgEl) {
-    // Mostrar brevemente qué se registró (ej. "CAJA completa — 24 und")
+    // Mostrar brevemente qué se registró (ej. "CAJA completa — 24 und").
+    // Al expirar, re-renderizar el ítem ACTUAL (no restaurar prevText:
+    // empRenderHUDItem ya pudo haber avanzado al siguiente producto).
     msgEl.style.color = '#4ade80';
     msgEl.textContent = mensaje;
     setTimeout(() => {
       msgEl.style.color = '';
-      msgEl.textContent = prevText;
+      empRenderHUDItem();   // ← ítem correcto, no el anterior
     }, 900);
   } else if (!esVerde && mensaje && msgEl) {
     hud.style.background = '#1a0000';
