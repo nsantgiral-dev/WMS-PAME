@@ -799,6 +799,74 @@ class ConnektaGateway:
             logger.warning('[CONNEKTA] get_pedido_rowid_map falló: %s', e)
             return {}
 
+    def trigger_comprometer_pedido(self, consec_docto: str, compromisos: list) -> dict:
+        """
+        244328 → Compromiso_PididosV1
+        Actualiza f405_cant_por_remisionar_base en T405 con las cantidades
+        reales picadas por el operario.
+
+        PREREQUISITO OBLIGATORIO antes de trigger_despacho() (142945).
+        Reemplaza consulta 7811 + GRANT UPDATE — usa API oficial Siesa.
+
+        Payload confirmado en Postman QA (2026-05-26):
+          · No lleva Inicial / Final
+          · No lleva f430_id_tipo_docto en el body (Siesa lo infiere)
+          · f431_nro_registro = f431_rowid (confirmado: 470418 = rowid real de T431)
+          · f431_cant_base     = cant. comprometida original (Siesa)
+          · f405_cant_por_remisionar_base = cant. REAL a despachar (WMS)
+
+        compromisos: [{
+            'referencia_item':     str,    # f431_referencia_item (codigo_siesa)
+            'cant_base':           float,  # cant. comprometida original en Siesa
+            'nro_registro':        int,    # f431_rowid de la línea en T431
+            'cant_por_remisionar': float,  # cant. REAL picada (a despachar)
+            'lote':                str|None,
+        }]
+        """
+        if self.modo_simulacion:
+            logger.info(
+                '[CONNEKTA SIM] 244328 comprometer_pedido: consec=%s líneas=%d %s',
+                consec_docto, len(compromisos),
+                [(c['referencia_item'], c['cant_por_remisionar']) for c in compromisos],
+            )
+            return {'simulado': True}
+
+        consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+
+        payload = {
+            'Compromisos': [
+                {
+                    'f430_consec_docto':             consec_int,
+                    'f431_referencia_item':           c['referencia_item'],
+                    'f431_id_item':                  None,
+                    'f431_codigo_barras':             None,
+                    'f431_id_bodega':                self.bodega,
+                    'f431_id_ubicacion_aux':          None,
+                    'f431_id_lote':                  c.get('lote') or None,
+                    'f431_id_unidad_medida':          self.uom_default,
+                    'f431_cant_base':                round(float(c['cant_base']), 4),
+                    'f431_cant_2':                   None,
+                    'f431_nro_registro':             int(c['nro_registro']),   # = f431_rowid
+                    'f405_cant_por_remisionar_base': round(float(c['cant_por_remisionar']), 4),
+                    'f405_cant_por_remisionar_2':    None,
+                }
+                for c in compromisos
+            ]
+        }
+
+        logger.info(
+            '[CONNEKTA] 244328 comprometer_pedido consec=%s — %d líneas: %s',
+            consec_docto, len(compromisos),
+            [(c['referencia_item'], c['cant_por_remisionar']) for c in compromisos],
+        )
+        return self._post(
+            '244328',
+            'Compromiso_PididosV1',
+            payload,
+            url=self.url_post_dinamico,
+            extra_params={'idSistema': self.id_sistema},
+        )
+
     # ==========================================
     # POSTs — Bodies oficiales desde Ver Guía
     # ==========================================

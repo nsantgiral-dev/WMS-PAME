@@ -60,11 +60,16 @@ class DespachoParialService:
         if not cabecera:
             raise ValueError(f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa')
 
-        # 2. Items con cantidades del packing (WMS-side truth).
-        # f431_rowid de API_v2_Ventas_Pedidos_Compromisos se envía como f470_rowid_movto en 142945
-        # para que Siesa respete f470_cant_base en lugar de usar la cantidad comprometida completa.
+        # 2. Compromisos Siesa — fuente única para rowid_map Y payload 244328.
+        # Una sola llamada a API_v2_Ventas_Pedidos_Compromisos evita duplicar el GET.
+        # f431_rowid → f470_rowid_movto en 142945 y f431_nro_registro en 244328.
         f430_rowid = cabecera.get('f430_rowid')
-        rowid_map = connekta.get_pedido_rowid_map(tipo_docto, consec_docto, f430_rowid)
+        compromisos_siesa = connekta.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
+        rowid_map = {
+            str(r.get('f120_referencia', '')).strip(): int(r['f431_rowid'])
+            for r in compromisos_siesa
+            if r.get('f431_rowid') and r.get('f120_referencia')
+        }
         logger.info('[DESPACHO_PARCIAL] rowid_map tarea=%s: %s', tarea.id, rowid_map)
         # Fallback a compromisos de Siesa cuando cantidad_real/esperada son 0 en todos los ítems.
         items = DespachoParialService._build_items(tarea, cantidades, rowid_map)
@@ -117,6 +122,30 @@ class DespachoParialService:
                 )
             else:
                 # Compromisos vigentes → RM no existe → crear con 142945
+
+                # ── Paso 5: comprometer cantidades reales en Siesa (244328) ──────────
+                # Actualiza f405_cant_por_remisionar_base en T405 ANTES de llamar 142945.
+                # Sin este paso, 142945 usa la cant. comprometida original (ej. 4)
+                # e ignora f470_cant_base (ej. 3) → bug de cantidad resuelta.
+                # 244328 reemplaza consulta 7811 + GRANT UPDATE (ya no se requieren).
+                # Confirmado funcional en Postman QA 2026-05-26.
+                # ─────────────────────────────────────────────────────────────────────
+                _compromisos_payload = DespachoParialService._build_compromisos_244328(
+                    cantidades, rowid_map, compromisos_siesa
+                )
+                if _compromisos_payload:
+                    connekta.trigger_comprometer_pedido(consec_docto, _compromisos_payload)
+                    logger.info(
+                        '[DESPACHO_PARCIAL] 244328 OK — T405 actualizado tarea=%s líneas=%d',
+                        tarea.id, len(_compromisos_payload),
+                    )
+                else:
+                    logger.warning(
+                        '[DESPACHO_PARCIAL] 244328 omitido — sin compromisos válidos tarea=%s',
+                        tarea.id,
+                    )
+                # ─────────────────────────────────────────────────────────────────────
+
                 logger.info(
                     '[DESPACHO_PARCIAL] → 142945 tarea=%s pedido=%s cantidades=%s',
                     tarea.id,
@@ -347,6 +376,46 @@ class DespachoParialService:
                 'item_id_siesa': row.get('f431_rowid'),
             })
         return items
+
+    @staticmethod
+    def _build_compromisos_244328(cantidades: dict, rowid_map: dict,
+                                   compromisos_siesa: list) -> list:
+        """
+        Construye el payload de Compromisos para el conector 244328.
+
+        Mapeo de campos (confirmado Postman QA 2026-05-26):
+          f431_nro_registro        = f431_rowid  (no es 1, 2, 3 — es el rowid de T431)
+          f431_cant_base           = cant. comprometida original en Siesa
+          f405_cant_por_remisionar_base = cant. REAL picada (del WMS)
+
+        Solo incluye ítems donde:
+          · el admin envió cantidad > 0 en el body
+          · existe f431_rowid en rowid_map (línea identificada en T431)
+        """
+        # Mapa {referencia: cant_comprometida_original} desde compromisos Siesa
+        cant_comprometida = {
+            str(r.get('f120_referencia', '')).strip(): float(
+                r.get('f405_cant_por_remisionar_base') or 0
+            )
+            for r in compromisos_siesa
+            if r.get('f120_referencia')
+        }
+
+        result = []
+        for ref, rowid in rowid_map.items():
+            cant_real = float(cantidades.get(ref, 0))
+            if cant_real <= 0 or not rowid:
+                continue
+            # Fallback: si Siesa no devolvió cant. comprometida, usar la cantidad real
+            cant_orig = cant_comprometida.get(ref) or cant_real
+            result.append({
+                'referencia_item':     ref,
+                'cant_base':           cant_orig,   # f431_cant_base (comprometida en Siesa)
+                'nro_registro':        rowid,        # f431_nro_registro = f431_rowid
+                'cant_por_remisionar': cant_real,    # f405_cant_por_remisionar_base (real WMS)
+                'lote':                None,
+            })
+        return result
 
     @staticmethod
     def _parsear_rm(resp) -> tuple[str, int]:
