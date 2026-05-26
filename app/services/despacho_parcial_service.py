@@ -1,15 +1,23 @@
 """
-DespachoParialService — despacho parcial vía 142945 → 142943.
+DespachoParialService — despacho parcial vía conector 244328 (Compromiso_PididosV1).
 
-Responsabilidad única: orquestar el encadenamiento RemisionPedido → FacturaRemision
-para pedidos con compromisos parciales. Completamente separado del flujo de packing;
-no importa ni modifica nada de packing.py, cerrar_packing ni TareaPacking directamente
-(solo lee la tarea y escribe rm_tipo/rm_consec/siesa_triggered/estado al finalizar).
+Responsabilidad única: actualizar f405_cant_por_remisionar_base en T405 de Siesa
+con las cantidades reales picadas/empacadas en el WMS. Tras esa actualización,
+la automatización interna de Siesa crea la RM y la FE sin intervención adicional.
 
-Idempotencia sin API_v2_Ventas_Remisiones_DesdePedido (no existe en Connekta):
-  - rm_tipo + rm_consec en BD: fuente primaria del consecutivo de la RM
-  - API_v2_Ventas_Pedidos_Compromisos vacía: señal de que la RM ya fue creada
-  - get_factura_desde_pedido: guard anti-duplicado de FE
+Flujo confirmado (2026-05-26):
+  1. GET API_v2_Ventas_Pedidos_Compromisos  → obtiene rowid_map + cant. originales
+  2. POST 244328 (v3.1 dynamic URL)         → actualiza T405 con cant. WMS reales
+  3. Siesa automation                        → crea RM + FE automáticamente
+  4. _persistir_resultado()                  → marca tarea DESPACHADO + siesa_triggered
+
+Idempotencia:
+  - compromisos vacíos en Siesa = automation ya procesó el pedido → persistir directo
+  - siesa_triggered=True en BD  = tarea ya completada → raise (guard en línea 50)
+
+Nota: los conectores 142945 (RemisionPedido) y 142943 (FacturaRemision) usan la URL
+estándar v3 para la que las credenciales Connekta NO están autorizadas (HTTP 401).
+Solo 244328 usa v3.1 dinámica y está autorizado — es el único conector necesario.
 """
 import re
 import json
@@ -35,13 +43,12 @@ class DespachoParialService:
     @staticmethod
     def despachar_parcial(tarea, cantidades: dict) -> dict:
         """
-        Ejecuta el despacho parcial completo:
-          1. Lee cabecera del pedido en Siesa (tercero, moneda, cond. pago)
-          2. Construye items (WMS primary, compromisos Siesa fallback)
-          3. Idempotencia via BD (rm_tipo/rm_consec) o compromisos vacíos
-          4. POST 142945 → crea RM, guarda consec en BD inmediatamente
-          5. POST 142943 → convierte RM a FE
-          6. Marca tarea DESPACHADO + siesa_triggered=True
+        Ejecuta el despacho parcial completo vía conector 244328:
+          1. Lee cabecera del pedido en Siesa
+          2. Obtiene compromisos vigentes del pedido
+          3. Actualiza cantidades reales en T405 con 244328 (Compromiso_PididosV1)
+          4. Marca tarea DESPACHADO + siesa_triggered=True
+          Siesa automation crea RM + FE automáticamente tras la actualización de T405.
 
         cantidades: {producto_codigo: float}
         """
@@ -55,16 +62,26 @@ class DespachoParialService:
         if not tipo_docto or not consec_docto:
             raise ValueError('Tarea sin tipo_docto/consec_docto — imposible despachar')
 
-        # 1. Cabecera del pedido (cliente, moneda, condición de pago)
+        # 1. Cabecera del pedido (necesaria para f430_rowid del GET compromisos)
         cabecera = connekta.get_pedido_cabecera(tipo_docto, consec_docto)
         if not cabecera:
             raise ValueError(f'Pedido {tarea.numero_pedido_siesa} no encontrado en Siesa')
 
         # 2. Compromisos Siesa — fuente única para rowid_map Y payload 244328.
-        # Una sola llamada a API_v2_Ventas_Pedidos_Compromisos evita duplicar el GET.
-        # f431_rowid → f470_rowid_movto en 142945 y f431_nro_registro en 244328.
+        # f431_rowid → f431_nro_registro en 244328 (campo obligatorio del conector).
         f430_rowid = cabecera.get('f430_rowid')
         compromisos_siesa = connekta.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
+
+        # Idempotencia: compromisos vacíos = automation Siesa ya procesó el pedido completo.
+        # Se marca DESPACHADO directamente sin volver a llamar 244328.
+        if not compromisos_siesa:
+            logger.info(
+                '[DESPACHO_PARCIAL] compromisos vacíos — automation Siesa ya procesó tarea=%s pedido=%s',
+                tarea.id, tarea.numero_pedido_siesa,
+            )
+            return DespachoParialService._persistir_resultado(
+                tarea, '244328-AUTO', {'automatizacion_siesa': True, 'compromisos_vacios': True}
+            )
 
         # Mapa UOM preferida por producto — clave para desambiguar productos dual-unit
         # (PQ + UND) que aparecen con dos líneas en los compromisos de Siesa.
@@ -99,158 +116,30 @@ class DespachoParialService:
                 _rowid_score[_ref] = (_match, _cant)
 
         logger.info('[DESPACHO_PARCIAL] rowid_map tarea=%s: %s', tarea.id, rowid_map)
-        # Fallback a compromisos de Siesa cuando cantidad_real/esperada son 0 en todos los ítems.
-        items = DespachoParialService._build_items(tarea, cantidades, rowid_map)
-        if not items:
+
+        # 3. Actualizar cantidades reales en Siesa con conector 244328.
+        # f120_id viene en el response de API_v2_Ventas_Pedidos_Compromisos (JOIN T431→T120).
+        # Tras esta actualización, automation Siesa crea RM + FE automáticamente.
+        _compromisos_payload = DespachoParialService._build_compromisos_244328(
+            cantidades, rowid_map, compromisos_siesa, uom_map=_uom_pref
+        )
+        if _compromisos_payload:
+            connekta.trigger_comprometer_pedido(consec_docto, _compromisos_payload)
+            logger.info(
+                '[DESPACHO_PARCIAL] 244328 OK — T405 actualizado tarea=%s líneas=%d; '
+                'automation Siesa creará RM + FE automáticamente',
+                tarea.id, len(_compromisos_payload),
+            )
+        else:
             logger.warning(
-                '[DESPACHO_PARCIAL] tarea=%s — WMS sin cantidades; consultando compromisos Siesa',
-                tarea.id
+                '[DESPACHO_PARCIAL] 244328 omitido — sin compromisos válidos tarea=%s '
+                '(sin rowid o cantidad=0); automation Siesa manejará el pedido',
+                tarea.id,
             )
-            compromisos = connekta.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
-            items = DespachoParialService._build_items_from_compromisos(compromisos)
-            if not items:
-                raise ValueError(
-                    f'Pedido {tarea.numero_pedido_siesa}: sin cantidades en WMS ni compromisos '
-                    'vigentes en Siesa — verificar estado del pedido.'
-                )
 
-        # 3. Idempotencia para 142945 — sin depender de API_v2_Ventas_Remisiones_DesdePedido:
-        #   a) Consec guardado en BD: camino rápido y confiable
-        #   b) Compromisos vacíos: señal de que la RM ya existe en Siesa
-        if tarea.rm_tipo and tarea.rm_consec:
-            tipo_rm   = tarea.rm_tipo
-            consec_rm = tarea.rm_consec
-            logger.info(
-                '[DESPACHO_PARCIAL] RM en BD: %s-%s — saltando 142945 (tarea=%s)',
-                tipo_rm, consec_rm, tarea.id
-            )
-        else:
-            # Skip compromisos check when WMS has explicit quantities — rm_tipo/rm_consec
-            # not in BD already guarantees 142945 was never called successfully for this tarea.
-            compromisos_check = (
-                [True] if cantidades
-                else connekta.get_compromisos_pedido(tipo_docto, consec_docto)
-            )
-            if not compromisos_check:
-                # Compromisos vacíos y WMS sin cantidades: RM ya existe en Siesa sin consecutivo en BD.
-                # API_v2_Ventas_Remisiones_DesdePedido no disponible en Connekta — recuperación manual.
-                facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-                if facturas_pre:
-                    logger.info(
-                        '[DESPACHO_PARCIAL] FE ya existe para %s%s — idempotente',
-                        tipo_docto, consec_docto
-                    )
-                    return DespachoParialService._persistir_resultado(
-                        tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
-                    )
-                raise ValueError(
-                    f'Pedido {tarea.numero_pedido_siesa}: compromisos vacíos (RM existe en Siesa) '
-                    'pero FE no existe y el consecutivo no está en BD. '
-                    'Usar POST /facturar-rm-manual con el número de RM visible en Siesa.'
-                )
-            else:
-                # Compromisos vigentes → RM no existe → crear con 142945
-
-                # ── Paso 5: comprometer cantidades reales en Siesa (244328) ──────────
-                # Actualiza f405_cant_por_remisionar_base en T405 ANTES de llamar 142945.
-                # Sin este paso, 142945 usa la cant. comprometida original (ej. 4)
-                # e ignora f470_cant_base (ej. 3) → bug de cantidad resuelta.
-                # 244328 reemplaza consulta 7811 + GRANT UPDATE (ya no se requieren).
-                # ─────────────────────────────────────────────────────────────────────
-                # f120_id viene directamente en el response de API_v2_Ventas_Pedidos_Compromisos
-                # (campo nativo del JOIN T431→T120, confirmado Postman QA 2026-05-26).
-                # No se necesita PedidoSiesa como fuente — los datos ya están en compromisos_siesa.
-                _compromisos_payload = DespachoParialService._build_compromisos_244328(
-                    cantidades, rowid_map, compromisos_siesa, uom_map=_uom_pref
-                )
-                if _compromisos_payload:
-                    connekta.trigger_comprometer_pedido(consec_docto, _compromisos_payload)
-                    logger.info(
-                        '[DESPACHO_PARCIAL] 244328 OK — T405 actualizado tarea=%s líneas=%d',
-                        tarea.id, len(_compromisos_payload),
-                    )
-                else:
-                    logger.warning(
-                        '[DESPACHO_PARCIAL] 244328 omitido — sin compromisos válidos tarea=%s',
-                        tarea.id,
-                    )
-                # ─────────────────────────────────────────────────────────────────────
-
-                logger.info(
-                    '[DESPACHO_PARCIAL] → 142945 tarea=%s pedido=%s cantidades=%s',
-                    tarea.id,
-                    tarea.numero_pedido_siesa,
-                    [(i['producto_codigo'], i['cantidad_empacada']) for i in items],
-                )
-                try:
-                    resp_rm = connekta.trigger_despacho(tipo_docto, consec_docto, items)
-                except Exception as e_rm:
-                    if 'comprometido' in str(e_rm).lower():
-                        logger.warning(
-                            '[DESPACHO_PARCIAL] 142945 rechazado (no comprometido) — '
-                            'verificando FE para %s%s', tipo_docto, consec_docto
-                        )
-                        facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-                        if facturas_pre:
-                            return DespachoParialService._persistir_resultado(
-                                tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
-                            )
-                        raise ValueError(
-                            f'Pedido {tarea.numero_pedido_siesa}: 142945 rechazado y no hay FE activa. '
-                            'Usar /facturar-rm-manual con el número de RM visible en Siesa.'
-                        )
-                    raise
-
-                try:
-                    tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
-                except ValueError as _e_parse:
-                    # 142945 no devuelve el consecutivo en su response ("Importacion exitosa").
-                    # Auto-detect: consulta dinámica busca en BD Siesa la RM recién creada.
-                    rm_detectada = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
-                    if rm_detectada:
-                        tipo_rm   = rm_detectada['tipo']
-                        consec_rm = rm_detectada['consec']
-                        logger.info(
-                            '[DESPACHO_PARCIAL] RM auto-detectada %s-%s para %s%s (tarea=%s)',
-                            tipo_rm, consec_rm, tipo_docto, consec_docto, tarea.id
-                        )
-                    else:
-                        facturas_pre = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-                        if facturas_pre:
-                            return DespachoParialService._persistir_resultado(
-                                tarea, 'PREEXISTENTE', {'idempotente': True, 'facturas': facturas_pre}
-                            )
-                        raise ValueError(
-                            f'142945 creó la RM para {tarea.numero_pedido_siesa} pero no se pudo '
-                            f'detectar el consecutivo. {_e_parse}. '
-                            'Buscar en Siesa y usar /facturar-rm-manual con ese número.'
-                        ) from _e_parse
-
-                # Guardar consec en BD ANTES de llamar 142943 — garantiza retry sin re-crear RM.
-                # Commit independiente: si 142943 falla, el retry lee rm_tipo/rm_consec de BD
-                # y salta directamente a 142943 sin volver a llamar 142945.
-                tarea.rm_tipo   = tipo_rm
-                tarea.rm_consec = consec_rm
-                db.session.commit()
-                logger.info(
-                    '[DESPACHO_PARCIAL] RM %s-%s guardada en BD — tarea=%s',
-                    tipo_rm, consec_rm, tarea.id
-                )
-
-        # 4. Guard anti-duplicado FE
-        facturas_existentes = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
-        if facturas_existentes:
-            logger.info(
-                '[DESPACHO_PARCIAL] tarea=%s pedido=%s%s ya tiene FE — omitiendo 142943',
-                tarea.id, tipo_docto, consec_docto
-            )
-            resp_fe = {'idempotente': True, 'facturas': facturas_existentes}
-        else:
-            resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
-
-        # 5. Persistir resultado final
+        # 4. Persistir resultado — Siesa automation gestiona RM + FE internamente
         return DespachoParialService._persistir_resultado(
-            tarea, f'{tipo_rm}-{consec_rm}', resp_fe
+            tarea, '244328-OK', {'automatizacion_siesa': True}
         )
 
     @staticmethod
