@@ -542,11 +542,29 @@ class MobileService:
             if not producto or not item:
                 raise ValueError(f'Producto {codigo_limpio} no pertenece a este pedido')
 
-            # Si el código escaneado es el del empaque y el front no lo resolvió antes,
-            # aplicar el factor aquí para no sumar solo 1 unidad.
+            # Calcular cuántas unidades suma este scan.
+            # El frontend resuelve el DUN-14 de empaque vía /api/empaques/scan y envía:
+            #   { codigo: producto.codigo, cantidad: factor }  ← ya en UND
+            # Si el código NO pasó por ese resolver (fallo de red, escaneo directo del EAN empaque),
+            # es_empaque = True y aplicamos la conversión manualmente.
             es_empaque = MobileService._es_escaneo_empaque(producto, codigo_limpio)
             factor = producto.factor_conversion or 1
-            unidades = cantidad * factor if es_empaque else cantidad
+
+            # Detectar si cantidad_esperada está en unidades de empaque (PQ) o en UND.
+            # Heurístico: si cant_esp > 0 y cant_esp < factor → está en empaque (PQ).
+            # Esto cubre packings creados antes de la normalización a UND.
+            _cant_en_pq = (factor > 1 and 0 < item.cantidad_esperada < factor)
+
+            if _cant_en_pq:
+                # cantidad_esperada está en PQ → contar en PQ también.
+                # Independientemente de lo que envíe el frontend, sumamos 1 PQ por scan.
+                unidades = 1
+            elif es_empaque:
+                # cantidad_esperada está en UND y el scan fue un empaque directo → convertir
+                unidades = cantidad * factor
+            else:
+                # cantidad_esperada en UND, scan de unidad suelta o ya convertido por el frontend
+                unidades = cantidad
 
             # Releer cantidad_real desde el objeto bloqueado (valor fresco post-lock)
             actual = item.cantidad_real or 0
@@ -557,9 +575,10 @@ class MobileService:
                 # Modo legacy: += (protegido por debounce TTL 5s)
                 nueva = actual + unidades
             if nueva > item.cantidad_esperada:
+                _unid_label = f'{factor} und' if (not _cant_en_pq and factor > 1) else '1 PQ'
                 raise ValueError(
-                    f'Exceso: ya tienes {actual} de {item.cantidad_esperada} — '
-                    f'{"esta caja tiene " + str(unidades) + " und — " if unidades > 1 else ""}'
+                    f'Exceso: ya tienes {actual} de {item.cantidad_esperada} '
+                    f'{"PQ" if _cant_en_pq else "und"} — '
                     f'no caben {unidades} más'
                 )
 

@@ -3366,15 +3366,27 @@ function empRenderHUDItem() {
   const pendientes = EMP_ITEMS.filter(i => !i.verificado);
   const item = pendientes[0] || EMP_ITEMS[EMP_ITEM_IDX] || EMP_ITEMS[0];
 
-  // Calcular display en piezas si el producto tiene empaque
+  // Calcular display en piezas si el producto tiene empaque.
+  // cantidad_esperada puede estar en UND (normalizado) o en unidades de empaque / PQ (legado).
+  // Heurístico: si cantEsp > 0 && cantEsp < factor → está en PQ (no dividir).
   const emp = EMP_EMPAQUES[item.producto_id];
   const factor = emp ? emp.factor : 1;
   const unidad = emp ? emp.unidad : 'und';
-  const cantReal    = item.cantidad_real || 0;
-  const cantEsp     = item.cantidad_esperada || 0;
-  const piezasReal  = factor > 1 ? Math.floor(cantReal / factor) : cantReal;
-  const piezasEsp   = factor > 1 ? Math.ceil(cantEsp / factor)   : cantEsp;
-  const sueltas     = factor > 1 ? cantReal % factor : 0;
+  const cantReal = item.cantidad_real || 0;
+  const cantEsp  = item.cantidad_esperada || 0;
+
+  // esPQ: cantidad_esperada en unidades de empaque (legado pre-normalización)
+  const esPQ = factor > 1 && cantEsp > 0 && cantEsp < factor;
+
+  const piezasReal = esPQ
+    ? cantReal                            // cantReal ya está en PQ
+    : (factor > 1 ? Math.floor(cantReal / factor) : cantReal);
+  const piezasEsp = esPQ
+    ? cantEsp                             // cantEsp ya está en PQ
+    : (factor > 1 ? Math.ceil(cantEsp / factor) : cantEsp);
+  const sueltas = esPQ
+    ? 0
+    : (factor > 1 ? cantReal % factor : 0);
 
   document.getElementById('emp-hud-pedido').textContent = EMP_TAREA.numero_pedido_siesa;
   document.getElementById('emp-hud-producto').textContent = item.producto_nombre || item.producto_codigo || '—';
@@ -3384,7 +3396,10 @@ function empRenderHUDItem() {
     document.getElementById('emp-hud-contador').textContent = piezasReal;
     document.getElementById('emp-hud-de').textContent =
       `de ${piezasEsp} ${unidad}${sueltas > 0 ? ` (+${sueltas} sueltas)` : ''}`;
-    if (undEl) undEl.textContent = `${cantReal} / ${cantEsp} und`;
+    // Línea secundaria: en UND para items normalizados, en PQ para legado
+    if (undEl) undEl.textContent = esPQ
+      ? `${cantReal * factor} / ${cantEsp * factor} und estimadas`
+      : `${cantReal} / ${cantEsp} und`;
   } else {
     document.getElementById('emp-hud-contador').textContent = cantReal;
     document.getElementById('emp-hud-de').textContent = `de ${cantEsp}`;

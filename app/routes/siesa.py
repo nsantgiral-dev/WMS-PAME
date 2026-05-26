@@ -825,7 +825,21 @@ def iniciar_despacho():
 
     # Crear packing con las llaves del documento Siesa — usar crear_manual porque
     # el picking aún está PENDIENTE (los operarios lo completarán después).
-    items_packing = [{'producto_id': i['producto_id'], 'cantidad': int(i['cantidad_pendiente'])} for i in items]
+    #
+    # NORMALIZACIÓN A UND: Siesa devuelve f431_cant1_pedida en la unidad1 del pedido,
+    # que puede ser PQ (empaque) o UND según cómo se parametrizó el pedido.
+    # El WMS maneja cantidad_esperada siempre en UND para que el escaneo por empaque
+    # (frontend envía cantidad = factor) funcione correctamente.
+    # Heurístico: si cant_raw < factor_conversion → la cantidad está en unidades de empaque.
+    from app.models.producto import Producto as _ProdPack
+    items_packing = []
+    for _ip in items:
+        _pp = _ProdPack.query.get(_ip['producto_id'])
+        _fc = (_pp.factor_conversion or 1) if _pp else 1
+        _cq = int(_ip['cantidad_pendiente'])
+        # Si la cantidad es menor que el factor, Siesa la envió en unidades de empaque → convertir a UND
+        _cq_und = _cq * _fc if (_fc > 1 and _cq < _fc) else _cq
+        items_packing.append({'producto_id': _ip['producto_id'], 'cantidad': _cq_und})
 
     # Obtener cliente/destino del pedido Siesa para el Monitor de Muelle
     from app.models.pedido_siesa import PedidoSiesa as _PS

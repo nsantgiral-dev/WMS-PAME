@@ -55,13 +55,26 @@ class PackingPickingSyncService:
         cambios = []
         for item in tarea.items:
             cantidad_picking = recogido_por_producto.get(item.producto_id)
-            if cantidad_picking is not None and item.cantidad_esperada != cantidad_picking:
-                cambios.append({
-                    'producto_id': item.producto_id,
-                    'anterior': item.cantidad_esperada,
-                    'nuevo': cantidad_picking
-                })
-                item.cantidad_esperada = cantidad_picking
+            if cantidad_picking is not None:
+                # Normalizar a UND: si picking reportó en unidades de empaque (cant < factor),
+                # convertir antes de actualizar cantidad_esperada del packing.
+                from app.models.producto import Producto as _ProdSync
+                _prod_s = _ProdSync.query.get(item.producto_id)
+                _fc_s = (_prod_s.factor_conversion or 1) if _prod_s else 1
+                if _fc_s > 1 and 0 < cantidad_picking < _fc_s:
+                    cantidad_picking = cantidad_picking * _fc_s
+
+                if item.cantidad_esperada != cantidad_picking:
+                    cambios.append({
+                        'producto_id': item.producto_id,
+                        'anterior': item.cantidad_esperada,
+                        'nuevo': cantidad_picking
+                    })
+                    item.cantidad_esperada = cantidad_picking
+                    # Resetear conteo si cambia la cantidad esperada para evitar
+                    # mezcla de unidades (ej. cantReal en PQ vs cantEsp en UND).
+                    item.cantidad_real = 0
+                    item.verificado = False
 
         db.session.commit()
 

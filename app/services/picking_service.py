@@ -213,8 +213,26 @@ class PickingService:
         if not tarea.fecha_inicio:
             tarea.fecha_inicio = datetime.utcnow()
 
+        # Capturar referencia_documento antes del commit — expire_on_commit la invalida
+        _ref_doc_cp = tarea.referencia_documento
+
         db.session.add(movimiento)
         db.session.commit()
+
+        # Auto-sync packing asociado — ajusta cantidad_esperada al recogido real
+        # Fallo silencioso: el empacador siempre puede usar "reiniciar conteo" como fallback
+        try:
+            from app.models.packing import TareaPacking as _TPSync
+            from app.services.packing_picking_sync_service import PackingPickingSyncService as _PPSync
+            if _ref_doc_cp:
+                _sync_pk = _TPSync.query.filter(
+                    _TPSync.numero_pedido_siesa == _ref_doc_cp,
+                    _TPSync.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+                ).first()
+                if _sync_pk:
+                    _PPSync.sincronizar(_sync_pk.id)
+        except Exception:
+            pass  # Sync no bloquea el flujo de picking
 
         return tarea
 
@@ -363,7 +381,25 @@ class PickingService:
             sesion.motivo_codigo = motivo
             auditoria_id = sesion.id
 
+        # Capturar referencia antes del commit
+        _ref_doc_rp = tarea.referencia_documento
+
         db.session.commit()
+
+        # Auto-sync packing asociado — refleja el short-pick en cantidad_esperada del packing
+        try:
+            from app.models.packing import TareaPacking as _TPSyncRP
+            from app.services.packing_picking_sync_service import PackingPickingSyncService as _PPSyncRP
+            if _ref_doc_rp:
+                _sync_pk_rp = _TPSyncRP.query.filter(
+                    _TPSyncRP.numero_pedido_siesa == _ref_doc_rp,
+                    _TPSyncRP.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+                ).first()
+                if _sync_pk_rp:
+                    _PPSyncRP.sincronizar(_sync_pk_rp.id)
+        except Exception:
+            pass  # Sync no bloquea el flujo de picking
+
         return {
             'ok': True,
             'mensaje': 'Problema reportado — el jefe de almacén lo resolverá',
