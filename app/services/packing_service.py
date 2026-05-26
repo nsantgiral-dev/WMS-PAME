@@ -415,13 +415,33 @@ class PackingService:
             codigo = i.producto.codigo_siesa
             # Buscar el ID interno de Siesa para este producto en este pedido
             reg_siesa = regs_siesa_map.get(codigo)
+            # ── Normalización UND→UOM_Siesa ───────────────────────────────────
+            # Tras el fix de dual-unit (commit 6f20698), cantidad_real se almacena
+            # en UND (p. ej. 20 UND = 2 PQ × factor 10). Siesa espera la cantidad
+            # en la unidad de empaque del pedido (PQ). Convertir aquí para que
+            # 244328 y 142945 reciban el valor correcto (2 PQ, no 20 PQ).
+            # Regla: si factor > 1 y unidad_empaque existe y cantidad >= factor
+            #        → la cantidad está en UND → dividir por factor → PQ.
+            # Productos simples (factor=1): sin cambio.
+            _fc_pay  = i.producto.factor_conversion or 1
+            _emp_pay = i.producto.unidad_empaque or ''
+            _cant_raw = (
+                i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada
+            )
+            if _fc_pay > 1 and _emp_pay and _cant_raw >= _fc_pay:
+                _cant_siesa = round(_cant_raw / _fc_pay, 4)   # UND → PQ
+                _uom_siesa  = _emp_pay
+            else:
+                _cant_siesa = _cant_raw                        # ya en UOM correcta
+                _uom_siesa  = i.producto.unidad_medida or ''
+            # ─────────────────────────────────────────────────────────────────
             items_payload.append({
                 'producto_codigo': codigo,
-                'cantidad_empacada': i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada,
+                'cantidad_empacada': _cant_siesa,
                 'cantidad_pedida': i.cantidad_esperada,
                 'lote': i.lote or '',
                 'item_id_siesa': reg_siesa.item_id_siesa if reg_siesa else '',
-                'unidad_medida': i.producto.unidad_medida or ''
+                'unidad_medida': _uom_siesa
             })
 
         # Validar datos Siesa antes de crear job — un payload inválido causaría DLQ permanente
