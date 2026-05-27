@@ -716,6 +716,61 @@ def ordenes_compra():
     return jsonify({'ordenes': lista, 'total': len(lista)}), 200
 
 
+@siesa_bp.route('/debug-oc/<consec>', methods=['GET'])
+@jwt_required()
+def debug_oc(consec):
+    """
+    Diagnóstico temporal: campos raw de Siesa para una OC específica
+    y cuál filtro la excluye del módulo de recepción. Solo admin.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+
+    resultado = connekta.get_ordenes_compra_aprobadas(consec=consec)
+    rows = resultado.get('detalle', {}).get('Table', [])
+    if not rows:
+        return jsonify({
+            'mensaje': f'OC consec={consec} no retornada por Siesa (sin líneas o estado≠1)',
+            'tip': 'Si la OC existe en Siesa, su f420_ind_estado puede ser distinto de 1 '
+                   '(Aprobado en UI ≠ 1 en API). Verificar con consultor.',
+            'raw': resultado,
+        }), 404
+
+    lineas = []
+    for r in rows:
+        co_oc     = r.get('f420_id_co', '').strip()
+        bodega_oc = r.get('f150_id', '').strip()
+        estado    = r.get('f420_ind_estado')
+        cant_ped  = float(r.get('f421_cant_pedida') or 0)
+        cant_rec  = float(r.get('f421_cant_entrada') or 0)
+        cant_pend = cant_ped - cant_rec
+        ref       = r.get('f120_referencia', '').strip()
+        prod      = _buscar_producto(ref) if ref else None
+        lineas.append({
+            'f120_referencia':     ref,
+            'f120_descripcion':    r.get('f120_descripcion', ''),
+            'producto_wms_id':     prod.id if prod else None,
+            'f420_ind_estado':     estado,
+            'f420_id_co':          co_oc,
+            'f150_id':             bodega_oc,
+            'cant_pedida':         cant_ped,
+            'cant_recibida':       cant_rec,
+            'cant_pendiente':      cant_pend,
+            'co_wms':              connekta.centro_op,
+            'bodega_wms':          connekta.bodega,
+            'pasa_co':             co_oc == connekta.centro_op,
+            'pasa_bodega':         bodega_oc == connekta.bodega,
+            'pasa_pendiente':      cant_pend > 0,
+            'pasa_producto_wms':   prod is not None,
+            'apareceria_en_lista': (
+                co_oc == connekta.centro_op
+                and bodega_oc == connekta.bodega
+                and cant_pend > 0
+            ),
+        })
+    return jsonify({'consec': consec, 'total_lineas': len(lineas), 'lineas': lineas}), 200
+
+
 @siesa_bp.route('/producto/<codigo>', methods=['GET'])
 @jwt_required()
 def buscar_producto(codigo):
