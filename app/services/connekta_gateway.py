@@ -847,7 +847,10 @@ class ConnektaGateway:
                     'f431_id_bodega':                self.bodega,
                     'f431_id_ubicacion_aux':          None,
                     'f431_id_lote':                  c.get('lote') or None,
-                    'f431_id_unidad_medida':          self.uom_default,
+                    # UOM real de la línea (f405_id_unidad_medida del GET API_v2_Ventas_Pedidos_Compromisos).
+                    # Fallback a uom_default ('UND') si el caller no la propagó (compatibilidad futura).
+                    # Campo OBLIGATORIO en 244328 (spec: Si) — nunca debe quedar vacío.
+                    'f431_id_unidad_medida':          c.get('uom') or self.uom_default,
                     'f431_cant_base':                round(float(c['cant_base']), 4),
                     'f431_cant_2':                   None,
                     'f431_nro_registro':             int(c['nro_registro']),   # = f431_rowid

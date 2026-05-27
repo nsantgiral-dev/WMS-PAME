@@ -356,6 +356,13 @@ class DespachoParialService:
                     ref,
                 )
 
+            # UOM real de la línea de compromiso Siesa (f405_id_unidad_medida).
+            # Siesa devuelve el campo con espacio trailing (ej. "UND ") → strip().upper().
+            # Se propaga como f431_id_unidad_medida en 244328 — campo OBLIGATORIO (Si).
+            # Para productos dual-unit (PQ + UND) la desambiguación previa ya garantiza
+            # que comp_row es la fila correcta, por lo que _uom_linea será la UOM real del movimiento.
+            _uom_linea = str(comp_row.get('f405_id_unidad_medida') or '').strip().upper() or None
+
             result.append({
                 'referencia_item':     ref,
                 'id_item':             id_item,   # f431_id_item en 244328 — OBLIGATORIO numérico
@@ -363,6 +370,7 @@ class DespachoParialService:
                 'nro_registro':        rowid,      # f431_nro_registro = f431_rowid
                 'cant_por_remisionar': cant_real,
                 'lote':                comp_row.get('f405_id_lote') or None,
+                'uom':                 _uom_linea, # f431_id_unidad_medida — UOM real (spec 244328: Si)
             })
         return result
 
