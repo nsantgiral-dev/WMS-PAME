@@ -55,6 +55,15 @@ class DespachoParialService:
         if tarea.siesa_triggered:
             raise ValueError(f'Tarea {tarea.id} ya tiene siesa_triggered=True')
 
+        # Idempotencia: si 142945 ya corrió en un intento anterior y la RM quedó en BD,
+        # saltamos 244328/142945 y vamos directo a 142943 — evita crear RM duplicada en Siesa.
+        if tarea.rm_tipo and tarea.rm_consec:
+            logger.info(
+                '[DESPACHO_PARCIAL] RM ya en BD (%s-%s) — saltando 244328/142945, directo a 142943 — tarea=%s',
+                tarea.rm_tipo, tarea.rm_consec, tarea.id,
+            )
+            return DespachoParialService.facturar_remision_existente(tarea)
+
         tipo_docto   = tarea.tipo_docto_pedido_siesa
         consec_docto = tarea.consec_docto_pedido_siesa
         if not tipo_docto or not consec_docto:
@@ -187,7 +196,32 @@ class DespachoParialService:
             # Sin url/extra_params → usa url_post (v3/conectoresimportarestandar)
             # 142945 formato sectioned requiere v3; v3.1 rechaza con "Error en la Estructura"
         )
-        tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
+
+        # La URL estándar v3 solo devuelve {'codigo':0,'mensaje':'Transacción Exitosa'} sin consecutivo.
+        # Estrategia 1: extraer RM del response (funciona si Connekta configura respuesta enriquecida).
+        # Estrategia 2: fallback GET papeleriamedellin_WMS_Remision_DesdePedido — busca la RM recién creada.
+        try:
+            tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
+        except ValueError:
+            logger.info(
+                '[DESPACHO_PARCIAL] RM no en response de 142945 — '
+                'consultando Siesa vía get_remision_desde_pedido tarea=%s pedido=%s',
+                tarea.id, tarea.numero_pedido_siesa,
+            )
+            rm_siesa = connekta.get_remision_desde_pedido(tipo_docto, consec_docto)
+            if not rm_siesa:
+                raise ValueError(
+                    f'142945 OK pero RM no encontrada en response ni en Siesa — '
+                    f'tarea={tarea.id} pedido={tarea.numero_pedido_siesa}. '
+                    f'Verificar que papeleriamedellin_WMS_Remision_DesdePedido esté '
+                    f'configurado en Connekta. Response 142945: {str(resp_rm)[:300]}'
+                )
+            tipo_rm   = rm_siesa['tipo']
+            consec_rm = rm_siesa['consec']
+            logger.info(
+                '[DESPACHO_PARCIAL] RM recuperada vía Siesa query: %s-%s tarea=%s pedido=%s',
+                tipo_rm, consec_rm, tarea.id, tarea.numero_pedido_siesa,
+            )
 
         # Guardar RM en BD ANTES de llamar 142943.
         # Si 142943 falla y la DLQ reintenta, facturar_remision_existente detecta
