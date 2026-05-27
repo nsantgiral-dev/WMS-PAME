@@ -173,7 +173,9 @@ class DespachoParialService:
                 f'tarea={tarea.id} cantidades={cantidades}'
             )
 
-        # 5. POST 142945 → RemisionPedido vía URL dinámica v3.1 (misma autorización que 244328).
+        # 5. POST 142945 → RemisionPedido vía URL estándar v3 (conectoresimportarestandar).
+        # 142945 usa formato sectioned (Inicial/Remision/Movtoventascomercial/Final),
+        # incompatible con v3.1 dinámica que solo acepta formato plano.
         # f470_rowid_movto identifica la línea exacta en T431, garantizando que Siesa
         # remisione la cantidad parcial del WMS en vez del total del pedido.
         logger.info(
@@ -182,8 +184,8 @@ class DespachoParialService:
         )
         resp_rm = connekta.trigger_despacho(
             tipo_docto, consec_docto, _items_rm,
-            url=connekta.url_post_dinamico,
-            extra_params={'idSistema': connekta.id_sistema},
+            # Sin url/extra_params → usa url_post (v3/conectoresimportarestandar)
+            # 142945 formato sectioned requiere v3; v3.1 rechaza con "Error en la Estructura"
         )
         tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
 
