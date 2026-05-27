@@ -879,11 +879,16 @@ class ConnektaGateway:
     # ==========================================
 
     def trigger_despacho(self, tipo_docto_pedido: str, consec_docto_pedido: str,
-                          items: list):
+                          items: list, url: str = None, extra_params: dict = None):
         """
         142945 → API_v1_Ventas_Comercial_RemisionPedido
-        LEGACY — preferir trigger_factura (conector 238925).
         Genera remisión desde pedido — descarga inventario cuenta 14.
+
+        url / extra_params opcionales: permiten llamar al conector por la URL dinámica v3.1
+        (misma autorización que 244328) en vez de la URL estándar v3 que puede dar HTTP 401.
+        Uso desde despacho_parcial_service:
+          connekta.trigger_despacho(..., url=connekta.url_post_dinamico,
+                                        extra_params={'idSistema': connekta.id_sistema})
         """
         if not self.modo_simulacion:
             if not self.tipo_docto_remision:
@@ -992,7 +997,8 @@ class ConnektaGateway:
         }
 
         logger.info(f'[CONNEKTA] Despacho {tipo_docto_pedido}{consec_docto_pedido}')
-        return self._post(self.conector_despacho, 'API_v1_Ventas_Comercial_RemisionPedido', payload)
+        return self._post(self.conector_despacho, 'API_v1_Ventas_Comercial_RemisionPedido', payload,
+                          url=url, extra_params=extra_params)
 
     def trigger_factura(self, tipo_docto_pedido: str, consec_docto_pedido: str,
                         items: list):

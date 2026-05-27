@@ -1,23 +1,21 @@
 """
-DespachoParialService — despacho parcial vía conector 244328 (Compromiso_PididosV1).
+DespachoParialService — despacho parcial vía 244328 → 142945 → 142943.
 
-Responsabilidad única: actualizar f405_cant_por_remisionar_base en T405 de Siesa
-con las cantidades reales picadas/empacadas en el WMS. Tras esa actualización,
-la automatización interna de Siesa crea la RM y la FE sin intervención adicional.
-
-Flujo confirmado (2026-05-26):
-  1. GET API_v2_Ventas_Pedidos_Compromisos  → obtiene rowid_map + cant. originales
-  2. POST 244328 (v3.1 dynamic URL)         → actualiza T405 con cant. WMS reales
-  3. Siesa automation                        → crea RM + FE automáticamente
-  4. _persistir_resultado()                  → marca tarea DESPACHADO + siesa_triggered
+Flujo confirmado (2026-05-27):
+  1. GET API_v2_Ventas_Pedidos_Compromisos  → rowid_map + cant. originales + metadata
+  2. POST 244328 (v3.1)  → ajusta f405_cant_por_remisionar_base en T405 (cant. WMS real)
+  3. POST 142945 (v3.1)  → crea RemisionPedido (RM) — descarga inventario cuenta 14
+  4. Guardar rm_tipo/rm_consec en BD antes de 142943 (idempotencia ante fallo entre pasos)
+  5. POST 142943 (v3)    → FacturaDesdeRemision (FE)
+  6. _persistir_resultado() → marca tarea DESPACHADO + siesa_triggered=True
 
 Idempotencia:
-  - compromisos vacíos en Siesa = automation ya procesó el pedido → persistir directo
-  - siesa_triggered=True en BD  = tarea ya completada → raise (guard en línea 50)
+  - compromisos vacíos en Siesa = Siesa ya procesó el pedido → persistir directo
+  - siesa_triggered=True en BD  = tarea ya completada → raise (guard al inicio)
+  - rm_tipo/rm_consec en BD     = 142945 ya corrió → DLQ llama facturar_remision_existente
 
-Nota: los conectores 142945 (RemisionPedido) y 142943 (FacturaRemision) usan la URL
-estándar v3 para la que las credenciales Connekta NO están autorizadas (HTTP 401).
-Solo 244328 usa v3.1 dinámica y está autorizado — es el único conector necesario.
+Nota: 142945 y 142943 se llaman por la URL dinámica v3.1 (misma autorización que 244328)
+para evitar el HTTP 401 que tenía la URL estándar v3 con las credenciales actuales.
 """
 import re
 import json
@@ -126,20 +124,90 @@ class DespachoParialService:
         if _compromisos_payload:
             connekta.trigger_comprometer_pedido(consec_docto, _compromisos_payload)
             logger.info(
-                '[DESPACHO_PARCIAL] 244328 OK — T405 actualizado tarea=%s líneas=%d; '
-                'automation Siesa creará RM + FE automáticamente',
+                '[DESPACHO_PARCIAL] 244328 OK — T405 actualizado tarea=%s líneas=%d',
                 tarea.id, len(_compromisos_payload),
             )
         else:
             logger.warning(
                 '[DESPACHO_PARCIAL] 244328 omitido — sin compromisos válidos tarea=%s '
-                '(sin rowid o cantidad=0); automation Siesa manejará el pedido',
+                '(sin rowid o cantidad=0); continuando con 142945',
                 tarea.id,
             )
 
-        # 4. Persistir resultado — Siesa automation gestiona RM + FE internamente
+        # 4. Construir items para 142945 desde cantidades reales (WMS) + metadata compromisos.
+        # Misma lógica de desambiguación dual-unit que _build_compromisos_244328:
+        # prioridad 1 → UOM match con unidad_empaque del producto; prioridad 2 → mayor cant.
+        _comp_por_ref_rm = {}
+        _comp_score_rm   = {}
+        for _r in compromisos_siesa:
+            _ref = str(_r.get('f120_referencia', '')).strip()
+            if not _ref:
+                continue
+            _cant  = float(_r.get('f405_cant_por_remisionar_base') or 0)
+            _uom_c = str(_r.get('f405_id_unidad_medida', '')).strip().upper()
+            _uom_w = _uom_pref.get(_ref, '')
+            _match = 1 if (_uom_w and _uom_c == _uom_w) else 0
+            _prev  = _comp_score_rm.get(_ref, (-1, -1))
+            if (_match, _cant) > _prev:
+                _comp_por_ref_rm[_ref] = _r
+                _comp_score_rm[_ref]   = (_match, _cant)
+
+        _items_rm = []
+        for _ref, _cant_real in cantidades.items():
+            _cant_real = float(_cant_real or 0)
+            if _cant_real <= 0:
+                continue
+            _cr = _comp_por_ref_rm.get(_ref, {})
+            _items_rm.append({
+                'producto_codigo': _ref,
+                'cantidad_empacada': _cant_real,
+                'lote':             _cr.get('f405_id_lote') or None,
+                'unidad_medida':    str(_cr.get('f405_id_unidad_medida') or '').strip().upper() or 'UND',
+                'item_id_siesa':    _cr.get('f120_id') or None,
+                'rowid_movto':      rowid_map.get(_ref) or None,
+            })
+
+        if not _items_rm:
+            raise ValueError(
+                f'[DESPACHO_PARCIAL] Sin ítems con cantidad>0 para 142945 — '
+                f'tarea={tarea.id} cantidades={cantidades}'
+            )
+
+        # 5. POST 142945 → RemisionPedido vía URL dinámica v3.1 (misma autorización que 244328).
+        # f470_rowid_movto identifica la línea exacta en T431, garantizando que Siesa
+        # remisione la cantidad parcial del WMS en vez del total del pedido.
+        logger.info(
+            '[DESPACHO_PARCIAL] 142945 enviando RM — tarea=%s pedido=%s ítems=%d',
+            tarea.id, tarea.numero_pedido_siesa, len(_items_rm),
+        )
+        resp_rm = connekta.trigger_despacho(
+            tipo_docto, consec_docto, _items_rm,
+            url=connekta.url_post_dinamico,
+            extra_params={'idSistema': connekta.id_sistema},
+        )
+        tipo_rm, consec_rm = DespachoParialService._parsear_rm(resp_rm)
+
+        # Guardar RM en BD ANTES de llamar 142943.
+        # Si 142943 falla y la DLQ reintenta, facturar_remision_existente detecta
+        # rm_tipo/rm_consec y no vuelve a llamar 142945 — evita RM duplicada en Siesa.
+        tarea.rm_tipo   = tipo_rm
+        tarea.rm_consec = consec_rm
+        db.session.commit()
+        logger.info(
+            '[DESPACHO_PARCIAL] 142945 OK — RM=%s-%s tarea=%s pedido=%s',
+            tipo_rm, consec_rm, tarea.id, tarea.numero_pedido_siesa,
+        )
+
+        # 6. POST 142943 → FacturaDesdeRemision
+        resp_fe = connekta.trigger_factura_desde_remision(tipo_rm, consec_rm, cabecera)
+        logger.info(
+            '[DESPACHO_PARCIAL] 142943 OK — FE generada tarea=%s pedido=%s',
+            tarea.id, tarea.numero_pedido_siesa,
+        )
+
+        # 7. Persistir resultado final con referencia a la RM creada
         return DespachoParialService._persistir_resultado(
-            tarea, '244328-OK', {'automatizacion_siesa': True}
+            tarea, f'{tipo_rm}-{consec_rm}', resp_fe
         )
 
     @staticmethod
