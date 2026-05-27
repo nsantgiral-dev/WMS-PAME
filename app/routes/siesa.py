@@ -645,8 +645,8 @@ def ordenes_compra():
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     _u = Usuario.query.get(_uid)
-    if not _u or _u.rol not in Roles.ALMACEN:
-        return jsonify({'error': 'Sin permiso — se requiere rol admin o jefe_almacen'}), 403
+    if not _u or _u.rol not in Roles.RECEPCION_ROLES:
+        return jsonify({'error': 'Sin permiso — se requiere rol admin, jefe_almacen o recepcionista'}), 403
 
     sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
     resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
