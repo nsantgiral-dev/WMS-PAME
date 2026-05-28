@@ -232,6 +232,35 @@ def reabrir_tarea(id):
         return jsonify({'error': str(e)}), 400
 
 
+@picking_bp.route('/<int:id>/auditar', methods=['POST'])
+@jwt_required()
+def auditar_tarea(id):
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Solo admin o supervisor puede auditar tareas'}), 403
+    data = request.get_json() or {}
+    resultado = data.get('resultado', '').strip()
+    if not resultado:
+        return jsonify({'error': 'El campo resultado es requerido'}), 400
+    try:
+        tarea = PickingService.auditar_tarea(
+            tarea_id=id,
+            admin_id=uid,
+            resultado=resultado,
+            cantidad_hallada=int(data.get('cantidad_hallada', 0) or 0),
+            ubicacion_hallada=data.get('ubicacion_hallada'),
+            observaciones=data.get('observaciones'),
+        )
+        return jsonify({'mensaje': 'Auditoría registrada', 'tarea': tarea.to_dict()}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @picking_bp.route('/fefo', methods=['POST'])
 @jwt_required()
 def calcular_fefo():

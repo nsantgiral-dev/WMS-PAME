@@ -318,6 +318,114 @@ class PickingService:
         return tarea
 
     @staticmethod
+    def auditar_tarea(tarea_id: int, admin_id: int, resultado: str,
+                      cantidad_hallada: int = 0, ubicacion_hallada: str = None,
+                      observaciones: str = None) -> TareaPicking:
+        """
+        El admin cierra el ciclo de una tarea BLOQUEADA registrando qué encontró físicamente.
+
+        Resultados y su efecto sobre el inventario WMS:
+          ENCONTRADO_COMPLETO   → descongela bloqueado, ajusta real si difiere, cancela tarea
+          ENCONTRADO_PARCIAL    → descongela, reduce cantidad WMS a lo hallado, cancela tarea
+          NO_ENCONTRADO         → descongela, reduce inventario a 0 en esa ubicación, cancela tarea
+          AVERIA                → descongela, mueve stock a ubicación AVERIAS, cancela tarea
+          DISCREPANCIA_SIESA    → descongela, cancela tarea; registra para ajuste manual en Siesa
+        """
+        RESULTADOS_VALIDOS = {
+            'ENCONTRADO_COMPLETO', 'ENCONTRADO_PARCIAL',
+            'NO_ENCONTRADO', 'AVERIA', 'DISCREPANCIA_SIESA'
+        }
+        if resultado not in RESULTADOS_VALIDOS:
+            raise ValueError(f'Resultado inválido: {resultado}')
+
+        tarea = TareaPicking.query.get(tarea_id)
+        if not tarea:
+            raise ValueError('Tarea no encontrada')
+        if tarea.estado != EstadoPicking.BLOQUEADO:
+            raise ValueError(f'Solo se pueden auditar tareas BLOQUEADAS (estado: {tarea.estado})')
+
+        cantidad_faltante = max(0, tarea.cantidad_solicitada - (tarea.cantidad_recogida or 0))
+
+        reg = UbicacionProducto.query.filter_by(
+            ubicacion_id=tarea.ubicacion_id,
+            producto_id=tarea.producto_id
+        ).with_for_update().first()
+
+        # 1. Descongelar inventario bloqueado en todos los casos
+        if reg:
+            reg.bloqueado = max(0, reg.bloqueado - cantidad_faltante)
+
+        # 2. Ajuste de inventario según resultado
+        if resultado == 'ENCONTRADO_COMPLETO':
+            pass  # stock correcto, no hay ajuste
+
+        elif resultado == 'ENCONTRADO_PARCIAL':
+            if reg and cantidad_hallada < cantidad_faltante:
+                diferencia = cantidad_faltante - cantidad_hallada
+                reg.cantidad = max(0, reg.cantidad - diferencia)
+                db.session.add(MovimientoInventario(
+                    producto_id=tarea.producto_id,
+                    ubicacion_id=tarea.ubicacion_id,
+                    tipo='AJUSTE_AUDITORIA',
+                    cantidad=-diferencia,
+                    motivo=f'Auditoría tarea {tarea.codigo}: hallado {cantidad_hallada} de {tarea.cantidad_solicitada} solicitadas',
+                ))
+
+        elif resultado == 'NO_ENCONTRADO':
+            if reg:
+                db.session.add(MovimientoInventario(
+                    producto_id=tarea.producto_id,
+                    ubicacion_id=tarea.ubicacion_id,
+                    tipo='AJUSTE_AUDITORIA',
+                    cantidad=-reg.cantidad,
+                    motivo=f'Auditoría tarea {tarea.codigo}: faltante confirmado, unidades no encontradas',
+                ))
+                reg.cantidad = 0
+
+        elif resultado == 'AVERIA':
+            if reg and cantidad_hallada > 0:
+                from app.models.ubicacion import Ubicacion
+                averia_ub = Ubicacion.query.filter_by(
+                    almacen_id=tarea.almacen_id, tipo_zona='AVERIAS'
+                ).first()
+                if averia_ub:
+                    reg_averia = UbicacionProducto.query.filter_by(
+                        ubicacion_id=averia_ub.id, producto_id=tarea.producto_id
+                    ).first()
+                    if reg_averia:
+                        reg_averia.cantidad += cantidad_hallada
+                    else:
+                        db.session.add(UbicacionProducto(
+                            ubicacion_id=averia_ub.id,
+                            producto_id=tarea.producto_id,
+                            cantidad=cantidad_hallada,
+                        ))
+                reg.cantidad = max(0, reg.cantidad - cantidad_hallada)
+                db.session.add(MovimientoInventario(
+                    producto_id=tarea.producto_id,
+                    ubicacion_id=tarea.ubicacion_id,
+                    tipo='AJUSTE_AUDITORIA',
+                    cantidad=-cantidad_hallada,
+                    motivo=f'Auditoría tarea {tarea.codigo}: mercancía averiada trasladada a zona AVERIAS',
+                ))
+
+        elif resultado == 'DISCREPANCIA_SIESA':
+            pass  # admin ajustará manualmente en Siesa; solo registramos
+
+        # 3. Registrar auditoría y cancelar tarea
+        tarea.auditoria_resultado         = resultado
+        tarea.auditoria_cantidad_hallada  = cantidad_hallada
+        tarea.auditoria_ubicacion_hallada = (ubicacion_hallada or '').strip() or None
+        tarea.auditoria_observaciones     = (observaciones or '').strip() or None
+        tarea.auditoria_resuelta_por_id   = admin_id
+        tarea.fecha_auditoria             = datetime.utcnow()
+        tarea.estado                      = EstadoPicking.CANCELADO
+        tarea.operario_id                 = None
+
+        db.session.commit()
+        return tarea
+
+    @staticmethod
     def reportar_problema(tarea_id: int, operario_id: int, motivo: str,
                            cantidad_encontrada: int = 0, observaciones: str = None) -> dict:
         """

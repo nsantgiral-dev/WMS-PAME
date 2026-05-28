@@ -43,15 +43,24 @@ class TareaPicking(db.Model):
     referencia_documento = db.Column(db.String(50))
     tipo_documento = db.Column(db.String(30))
 
+    # Auditoría (rellena el admin cuando investiga una tarea BLOQUEADA)
+    auditoria_resultado      = db.Column(db.String(30))   # ENCONTRADO_COMPLETO|ENCONTRADO_PARCIAL|NO_ENCONTRADO|AVERIA|DISCREPANCIA_SIESA
+    auditoria_cantidad_hallada = db.Column(db.Integer)
+    auditoria_ubicacion_hallada = db.Column(db.String(100))
+    auditoria_observaciones  = db.Column(db.Text)
+    auditoria_resuelta_por_id = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    fecha_auditoria          = db.Column(db.DateTime)
+
     # Tiempos
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_inicio = db.Column(db.DateTime)
     fecha_completado = db.Column(db.DateTime)
 
     # Relaciones
-    producto = db.relationship('Producto', backref='tareas_picking', lazy=True)
-    ubicacion = db.relationship('Ubicacion', backref='tareas_picking', lazy=True)
-    operario = db.relationship('Usuario', backref='tareas_picking', lazy=True)
+    producto   = db.relationship('Producto', backref='tareas_picking', lazy=True)
+    ubicacion  = db.relationship('Ubicacion', backref='tareas_picking', lazy=True)
+    operario   = db.relationship('Usuario', foreign_keys=[operario_id], backref='tareas_picking', lazy=True)
+    auditado_por = db.relationship('Usuario', foreign_keys=[auditoria_resuelta_por_id], lazy=True)
 
     def to_dict(self):
         return {
@@ -77,6 +86,12 @@ class TareaPicking(db.Model):
             'tipo_documento': self.tipo_documento,
             'motivo_bloqueo': self.motivo_bloqueo,
             'observaciones_bloqueo': self.observaciones_bloqueo,
+            'auditoria_resultado': self.auditoria_resultado,
+            'auditoria_cantidad_hallada': self.auditoria_cantidad_hallada,
+            'auditoria_ubicacion_hallada': self.auditoria_ubicacion_hallada,
+            'auditoria_observaciones': self.auditoria_observaciones,
+            'auditoria_resuelta_por_id': self.auditoria_resuelta_por_id,
+            'fecha_auditoria': self.fecha_auditoria.isoformat() if self.fecha_auditoria else None,
             'fecha_creacion': self.fecha_creacion.isoformat(),
             'fecha_inicio': self.fecha_inicio.isoformat() if self.fecha_inicio else None,
             'fecha_completado': self.fecha_completado.isoformat() if self.fecha_completado else None

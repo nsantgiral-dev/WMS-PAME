@@ -585,6 +585,43 @@ async function cancelarTareaPicking(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+function auditoriaMostrarPanel(id) {
+  document.getElementById(`auditoria-panel-${id}`).style.display = 'block';
+}
+
+function auditoriaCancelarPanel(id) {
+  document.getElementById(`auditoria-panel-${id}`).style.display = 'none';
+}
+
+async function auditoriaGuardar(id) {
+  const resultado       = document.getElementById(`auditoria-resultado-${id}`)?.value;
+  const cantidadHallada = parseInt(document.getElementById(`auditoria-cantidad-${id}`)?.value || '0', 10);
+  const ubicacion       = document.getElementById(`auditoria-ubicacion-${id}`)?.value.trim();
+  const observaciones   = document.getElementById(`auditoria-obs-${id}`)?.value.trim();
+
+  if (!resultado) { alerta('Selecciona un resultado antes de guardar', 'error'); return; }
+
+  try {
+    const r = await fetch(API + `/api/picking/${id}/auditar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({
+        resultado,
+        cantidad_hallada: cantidadHallada,
+        ubicacion_hallada: ubicacion || null,
+        observaciones: observaciones || null,
+      }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta('Auditoría registrada ✓', 'exito');
+      await cargarTareasBodega();
+    } else {
+      alerta(d.error || 'Error al guardar auditoría', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
 async function cargarPedidos() {
   const el = document.getElementById('lista-pedidos');
   if (!el) return;
@@ -740,15 +777,47 @@ async function cargarTareasBodega() {
             </div>
           </div>
           ${t.estado === 'BLOQUEADO' ? `
-          <div style="display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
-            <button onclick="reabrirTareaPicking(${t.id})"
-              style="flex:1;padding:9px;background:#1e3a1e;color:#4ade80;border:1px solid #166534;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-              ↩ Reabrir al pool
+          <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
+            <button onclick="auditoriaMostrarPanel(${t.id})"
+              style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+              🔍 Auditoría
             </button>
-            <button onclick="cancelarTareaPicking(${t.id})"
-              style="flex:1;padding:9px;background:#1a0a0a;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-              ✕ Cancelar tarea
-            </button>
+            <div id="auditoria-panel-${t.id}" style="display:none;margin-top:10px;">
+              <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
+              <select id="auditoria-resultado-${t.id}"
+                style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
+                <option value="">— Selecciona resultado —</option>
+                <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
+                <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
+                <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
+                <option value="AVERIA">🚫 Mercancía averiada</option>
+                <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
+              </select>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                <div>
+                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
+                  <input id="auditoria-cantidad-${t.id}" type="number" min="0" value="0"
+                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+                </div>
+                <div>
+                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
+                  <input id="auditoria-ubicacion-${t.id}" type="text" placeholder="Ej: A-01-02"
+                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+                </div>
+              </div>
+              <textarea id="auditoria-obs-${t.id}" placeholder="Observaciones (opcional)..."
+                style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
+              <div style="display:flex;gap:8px;">
+                <button onclick="auditoriaCancelarPanel(${t.id})"
+                  style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+                  Cancelar
+                </button>
+                <button onclick="auditoriaGuardar(${t.id})"
+                  style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
+                  Guardar auditoría →
+                </button>
+              </div>
+            </div>
           </div>` : ''}
         </div>`).join('');
     });
