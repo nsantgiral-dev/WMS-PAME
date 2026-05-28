@@ -83,7 +83,13 @@ class RutaService:
             raise LookupError('Conductor no encontrado')
         if 'nombre'     in data: c.nombre     = (data['nombre'] or '').strip()
         if 'telefono'   in data: c.telefono   = (data['telefono'] or '').strip() or None
-        if 'activo'     in data: c.activo     = bool(data['activo'])
+        if 'activo' in data:
+            c.activo = bool(data['activo'])
+            if c.usuario_id:
+                from app.models.usuario import Usuario
+                u = Usuario.query.get(c.usuario_id)
+                if u:
+                    u.activo = c.activo
         if 'usuario_id' in data: c.usuario_id = data['usuario_id'] or None
         db.session.commit()
         db.session.refresh(c)

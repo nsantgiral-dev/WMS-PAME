@@ -5231,16 +5231,10 @@ async function cargarListaConductores() {
             ? '<span style="background:#14532d;color:#4ade80;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;height:fit-content;">ACTIVO</span>'
             : '<span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;height:fit-content;">INACTIVO</span>'}
         </div>
-        <div style="display:flex;gap:6px;">
-          <button onclick="conductorEditar(${c.id})"
-            style="flex:1;padding:8px;background:#1a1a2a;border:1px solid #2d1b69;color:#a78bfa;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-            ✏ Editar
-          </button>
-          <button onclick="conductorToggle(${c.id}, ${!c.activo})"
-            style="flex:1;padding:8px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
-            ${c.activo ? 'Desactivar' : 'Activar'}
-          </button>
-        </div>
+        <button onclick="conductorToggle(${c.id}, ${!c.activo})"
+          style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+          ${c.activo ? 'Desactivar' : 'Activar'}
+        </button>
       </div>`).join('');
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando conductores</div>';
@@ -5307,73 +5301,6 @@ async function conductorToggle(id, activar) {
   } catch (e) { alert('Error de conexión'); }
 }
 
-let _CONDUCTOR_EDIT_ID = null;
-
-async function conductorEditar(id) {
-  // Cargar datos del conductor y abrir modal de edición
-  _CONDUCTOR_EDIT_ID = id;
-  const modal = document.getElementById('modal-conductor-edit');
-  if (!modal) return;
-
-  // Precargar usuarios disponibles
-  try {
-    const [dc, du] = await Promise.all([
-      get('/api/rutas/conductores?activos=false'),
-      get('/api/rutas/usuarios-conductores'),
-    ]);
-    const conductor = (dc.conductores || []).find(c => c.id === id);
-    if (!conductor) { alert('Conductor no encontrado'); return; }
-
-    document.getElementById('cedit-nombre').value    = conductor.nombre;
-    document.getElementById('cedit-telefono').value  = conductor.telefono || '';
-
-    const sel = document.getElementById('cedit-usuario');
-    sel.innerHTML = '<option value="">Sin cuenta (solo flota)</option>' +
-      (du.usuarios || []).map(u =>
-        `<option value="${u.id}" ${u.id === conductor.usuario_id ? 'selected' : ''}>${u.nombre} (${u.email})</option>`
-      ).join('');
-
-    document.getElementById('cedit-error').textContent = '';
-    modal.style.display = 'flex';
-  } catch (e) { alert('Error cargando datos del conductor'); }
-}
-
-async function conductorEditarGuardar() {
-  const id       = _CONDUCTOR_EDIT_ID;
-  const nombre   = document.getElementById('cedit-nombre')?.value.trim();
-  const telefono = document.getElementById('cedit-telefono')?.value.trim();
-  const usuarioId = document.getElementById('cedit-usuario')?.value || null;
-  const errorEl  = document.getElementById('cedit-error');
-  errorEl.textContent = '';
-
-  if (!nombre) { errorEl.textContent = 'El nombre es requerido'; return; }
-
-  try {
-    const r = await fetch(API + '/api/rutas/conductores/' + id, {
-      method: 'PUT',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        nombre,
-        telefono: telefono || null,
-        usuario_id: usuarioId ? parseInt(usuarioId) : null,
-      }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      cerrarModalConductorEdit();
-      await cargarListaConductores();
-      alerta('Conductor actualizado', 'exito');
-    } else {
-      errorEl.textContent = d.error || 'Error al guardar';
-    }
-  } catch (e) { errorEl.textContent = 'Error de conexión'; }
-}
-
-function cerrarModalConductorEdit() {
-  const modal = document.getElementById('modal-conductor-edit');
-  if (modal) modal.style.display = 'none';
-  _CONDUCTOR_EDIT_ID = null;
-}
 
 // ─────────────────────────────────────────────────────────────
 // CONDUCTOR — Pantalla de confirmación de entregas en campo
