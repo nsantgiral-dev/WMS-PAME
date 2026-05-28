@@ -219,11 +219,15 @@ class RutaService:
         return m
 
     @staticmethod
-    def desactivar_maestra(id: int) -> None:
+    def eliminar_maestra(id: int) -> None:
         m = RutaMaestra.query.get(id)
         if not m:
             raise LookupError('Ruta maestra no encontrada')
-        m.activa = False
+        if RutaDespacho.query.filter_by(ruta_maestra_id=id).first():
+            raise ConflictError('No se puede eliminar: la ruta tiene viajes asociados. Desactívala en su lugar.')
+        for p in m.paradas:
+            db.session.delete(p)
+        db.session.delete(m)
         db.session.commit()
 
     # ── Programar viaje desde plantilla ─────────────────────────────

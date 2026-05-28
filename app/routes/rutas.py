@@ -190,13 +190,15 @@ def actualizar_maestra(id):
 
 @rutas_bp.route('/maestras/<int:id>', methods=['DELETE'])
 @jwt_required()
-def desactivar_maestra(id):
+def eliminar_maestra(id):
     if not _solo_admin():
-        return jsonify({'error': 'Solo admin puede desactivar rutas maestras'}), 403
+        return jsonify({'error': 'Solo admin puede eliminar rutas maestras'}), 403
     try:
-        RutaService.desactivar_maestra(id)
+        RutaService.eliminar_maestra(id)
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
+    except ConflictError as e:
+        return jsonify({'error': str(e)}), 409
     return jsonify({'ok': True}), 200
 
 

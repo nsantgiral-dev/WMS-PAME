@@ -1142,9 +1142,10 @@
           </button>
         </div>
 
-        <!-- Form nueva ruta maestra -->
+        <!-- Form crear / editar ruta maestra -->
         <div id="maestras-form" style="display:none;background:var(--bg-s);border:1px solid var(--pm-border);border-radius:14px;padding:18px;margin-bottom:14px;">
-          <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nueva ruta maestra</div>
+          <input type="hidden" id="maestras-form-id" value="">
+          <div id="maestras-form-titulo" style="font-size:14px;font-weight:700;margin-bottom:14px;">Nueva ruta maestra</div>
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Nombre *</div>
             <input id="maestra-form-nombre" type="text" placeholder="Ej: Ruta Neiva, Ruta Sur Medellín..."
@@ -1177,7 +1178,7 @@
           <div id="maestras-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
           <div style="display:flex;gap:8px;">
             <button onclick="maestraCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="maestrasCrear()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar ruta →</button>
+            <button onclick="maestrasGuardar()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar ruta →</button>
           </div>
         </div>
 

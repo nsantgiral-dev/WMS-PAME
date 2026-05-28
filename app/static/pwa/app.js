@@ -4981,13 +4981,21 @@ async function cargarListaMaestras() {
             <div style="font-size:15px;font-weight:800;">${m.tipo_ruta === 'Urbana' ? '🏙️' : '🛣️'} ${m.nombre}</div>
             <div style="font-size:11px;color:#555;margin-top:2px;">${m.tipo_ruta} · ${(m.paradas || []).length} parada${(m.paradas || []).length !== 1 ? 's' : ''}</div>
           </div>
-          <div style="display:flex;gap:6px;align-items:center;">
+          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
             ${m.activa
               ? '<span style="background:#14532d;color:#4ade80;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;">ACTIVA</span>'
               : '<span style="background:#3f1515;color:#f87171;padding:2px 8px;border-radius:6px;font-size:10px;font-weight:700;">INACTIVA</span>'}
+            <button onclick="maestraEditar(${m.id})"
+              style="padding:5px 10px;background:#1a1a2a;border:1px solid #2d1b69;color:#a78bfa;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">
+              ✏ Editar
+            </button>
             <button onclick="maestraToggle(${m.id},${!m.activa})"
               style="padding:5px 10px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:6px;font-size:11px;cursor:pointer;">
               ${m.activa ? 'Desactivar' : 'Activar'}
+            </button>
+            <button onclick="maestraEliminar(${m.id},${JSON.stringify(m.nombre)})"
+              style="padding:5px 10px;background:#1a0000;border:1px solid #5c1a1a;color:#f87171;border-radius:6px;font-size:11px;cursor:pointer;">
+              🗑
             </button>
           </div>
         </div>
@@ -5009,13 +5017,35 @@ let _MAESTRAS_PARADAS = [];
 
 function maestraMostrarForm() {
   _MAESTRAS_PARADAS = [];
-  document.getElementById('maestras-form').style.display = 'block';
+  document.getElementById('maestras-form-id').value = '';
+  document.getElementById('maestras-form-titulo').textContent = 'Nueva ruta maestra';
+  document.getElementById('maestra-form-nombre').value = '';
   document.getElementById('maestras-form-error').textContent = '';
+  rutasSeleccionarTipo('Urbana');
+  document.getElementById('maestras-form').style.display = 'block';
   _maestraRenderParadas();
 }
 
 function maestraCancelarForm() {
   document.getElementById('maestras-form').style.display = 'none';
+  document.getElementById('maestras-form-id').value = '';
+}
+
+async function maestraEditar(id) {
+  try {
+    const d = await get('/api/rutas/maestras/' + id);
+    const m = d.maestra;
+    if (!m) { alerta('Maestra no encontrada', 'error'); return; }
+    _MAESTRAS_PARADAS = (m.paradas || []).sort((a, b) => a.orden - b.orden).map(p => p.municipio);
+    document.getElementById('maestras-form-id').value = id;
+    document.getElementById('maestras-form-titulo').textContent = 'Editar ruta maestra';
+    document.getElementById('maestra-form-nombre').value = m.nombre;
+    document.getElementById('maestras-form-error').textContent = '';
+    rutasSeleccionarTipo(m.tipo_ruta);
+    document.getElementById('maestras-form').style.display = 'block';
+    _maestraRenderParadas();
+    document.getElementById('maestras-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (e) { alerta('Error cargando la ruta', 'error'); }
 }
 
 function maestraAgregarParada() {
@@ -5056,26 +5086,29 @@ function _maestraRenderParadas() {
     </div>`).join('');
 }
 
-async function maestrasCrear() {
+async function maestrasGuardar() {
   const errorEl = document.getElementById('maestras-form-error');
   const nombre  = document.getElementById('maestra-form-nombre')?.value.trim();
+  const editId  = document.getElementById('maestras-form-id')?.value;
   errorEl.textContent = '';
 
   if (!nombre) { errorEl.textContent = 'El nombre es requerido'; return; }
   if (!_MAESTRAS_PARADAS.length) { errorEl.textContent = 'Agrega al menos una parada'; return; }
 
   try {
-    const r = await fetch(API + '/api/rutas/maestras', {
-      method: 'POST',
+    const url    = editId ? (API + '/api/rutas/maestras/' + editId) : (API + '/api/rutas/maestras');
+    const method = editId ? 'PUT' : 'POST';
+    const r = await fetch(url, {
+      method,
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ nombre, tipo_ruta: RUTAS_TIPO_SEL, paradas: _MAESTRAS_PARADAS }),
     });
     const d = await r.json();
     if (r.ok) {
       maestraCancelarForm();
-      document.getElementById('maestra-form-nombre').value = '';
       _MAESTRAS_PARADAS = [];
       await cargarListaMaestras();
+      alerta(editId ? 'Ruta actualizada' : 'Ruta creada', 'exito');
     } else {
       errorEl.textContent = d.error || 'Error al guardar';
     }
@@ -5084,13 +5117,35 @@ async function maestrasCrear() {
 
 async function maestraToggle(id, activar) {
   try {
-    await fetch(API + '/api/rutas/maestras/' + id, {
+    const r = await fetch(API + '/api/rutas/maestras/' + id, {
       method: 'PUT',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({ activa: activar }),
     });
-    await cargarListaMaestras();
-  } catch (e) { alert('Error de conexión'); }
+    if (r.ok) {
+      await cargarListaMaestras();
+    } else {
+      const d = await r.json();
+      alerta(d.error || 'Error al cambiar estado', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function maestraEliminar(id, nombre) {
+  if (!confirm(`¿Eliminar la ruta "${nombre}"?\n\nEsta acción no se puede deshacer. Si tiene viajes asociados no se podrá eliminar.`)) return;
+  try {
+    const r = await fetch(API + '/api/rutas/maestras/' + id, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const d = await r.json();
+    if (r.ok) {
+      await cargarListaMaestras();
+      alerta('Ruta eliminada', 'exito');
+    } else {
+      alerta(d.error || 'No se pudo eliminar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 // ── Vehículos ────────────────────────────────────────
