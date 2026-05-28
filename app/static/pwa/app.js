@@ -3955,7 +3955,7 @@ function _formUsuario(u = {}) {
       <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
         <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
-          <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;">
+          <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;" onchange="document.getElementById('u-conteo-wrapper').style.display=this.checked?'block':'none'">
           <div>
             <div style="font-size:14px;font-weight:600;color:#60a5fa;">Picker</div>
             <div style="font-size:11px;color:#555;">Puede recoger productos del almacén</div>
@@ -3982,7 +3982,7 @@ function _formUsuario(u = {}) {
             <div style="font-size:11px;color:#555;">Muestra botón de cámara en picking y recepción</div>
           </div>
         </label>
-        <div style="margin-top:14px;padding-top:14px;border-top:1px solid #222;">
+        <div id="u-conteo-wrapper" style="margin-top:14px;padding-top:14px;border-top:1px solid #222;display:${u.puede_picar!==false?'block':'none'};">
           <label style="font-size:12px;color:#888;display:block;margin-bottom:6px;">Conteos cíclicos por día (0 = sin límite)</label>
           <input id="u-capacidad-conteo" type="number" min="0" max="200" step="1"
             value="${u.capacidad_diaria_conteo ?? 15}"
@@ -4037,7 +4037,7 @@ async function _guardarUsuario(uid) {
   const puedeEmpacar    = document.getElementById('u-puede-empacar')?.checked;
   const puedeAbastecer  = document.getElementById('u-puede-abastecer')?.checked || false;
   const puedeCamara     = document.getElementById('u-puede-camara')?.checked ?? true;
-  const capacidadConteo = parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10);
+  const capacidadConteo = puedePicar ? parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10) : null;
 
   if (!nombre) { alerta('El nombre es requerido', 'error'); return; }
 
@@ -4047,7 +4047,7 @@ async function _guardarUsuario(uid) {
   const payload = {
     nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
     puede_abastecer: puedeAbastecer, puede_usar_camara: puedeCamara,
-    capacidad_diaria_conteo: isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo),
+    capacidad_diaria_conteo: capacidadConteo === null ? null : (isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo)),
     bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv
   };
   if (pass) payload.password = pass;
