@@ -363,6 +363,7 @@ function salir(porExpiracion = false) {
 async function cargarAdmin() {
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
+  else if (TAB === 'tab-bodega') await cargarTareasBodega();
   else if (TAB === 'tab-operarios') await cargarOperarios();
   else if (TAB === 'tab-usuarios') await cargarUsuarios();
   else if (TAB === 'tab-stock') await cargarStock();
@@ -375,7 +376,7 @@ async function cargarAdmin() {
 }
 
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-traslados','tab-reposicion'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-traslados','tab-reposicion'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
@@ -563,7 +564,7 @@ async function reabrirTareaPicking(id) {
   try {
     const r = await fetch(API + `/api/picking/${id}/reabrir`, { method: 'PUT', headers: { Authorization: 'Bearer ' + TOKEN } });
     const d = await r.json();
-    if (r.ok) { alerta('Tarea reabierta al pool ✓', 'exito'); await cargarPedidos(); }
+    if (r.ok) { alerta('Tarea reabierta al pool ✓', 'exito'); await cargarTareasBodega(); }
     else alerta(d.error || 'Error al reabrir', 'error');
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
@@ -579,7 +580,7 @@ async function cancelarTareaPicking(id) {
       body: JSON.stringify({ motivo })
     });
     const d = await r.json();
-    if (r.ok) { alerta('Tarea cancelada', 'advertencia'); await cargarPedidos(); }
+    if (r.ok) { alerta('Tarea cancelada', 'advertencia'); await cargarTareasBodega(); }
     else alerta(d.error || 'Error al cancelar', 'error');
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
@@ -593,9 +594,8 @@ async function cargarPedidos() {
     headers: { 'Authorization': 'Bearer ' + TOKEN }
   }).catch(() => {});
   try {
-    const [siesa, db] = await Promise.all([
-      get('/api/siesa/pedidos').catch(() => ({ pedidos: [] })),
-      get('/api/picking/?activas=true&per_page=20').catch(() => ({ tareas: [] }))
+    const [siesa] = await Promise.all([
+      get('/api/siesa/pedidos').catch(() => ({ pedidos: [] }))
     ]);
     SIESA_PEDIDOS = siesa.pedidos || [];
     SIESA_PEDIDOS.sort((a, b) => {
@@ -680,20 +680,62 @@ async function cargarPedidos() {
       html += `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin pedidos pendientes en Siesa</div>`;
     }
 
-    if (db.tareas && db.tareas.length) {
-      html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin:10px 0 8px;">TAREAS EN BODEGA</div>`;
-      const MOTIVO_LABEL = { UBICACION_VACIA:'📦 Ubicación vacía', FALTANTE:'📉 Faltante parcial', MERCANCIA_AVERIADA:'🚫 Mercancía averiada', PRODUCTO_INCORRECTO:'❌ Producto incorrecto' };
-      html += db.tareas.map(t => `
+    if (!html) html = '<div style="color:#555;text-align:center;padding:40px;">Sin actividad ✓</div>';
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
+  }
+}
+
+async function cargarTareasBodega() {
+  const el = document.getElementById('lista-tareas-bodega');
+  if (!el) return;
+  try {
+    const d = await get('/api/picking/?activas=true&per_page=50');
+    const tareas = d.tareas || [];
+    if (!tareas.length) {
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin tareas activas en bodega ✓</div>';
+      return;
+    }
+    const MOTIVO_LABEL = {
+      UBICACION_VACIA:    '📦 Ubicación vacía',
+      FALTANTE:           '📉 Faltante parcial',
+      MERCANCIA_AVERIADA: '🚫 Mercancía averiada',
+      PRODUCTO_INCORRECTO:'❌ Producto incorrecto'
+    };
+    const porEstado = { BLOQUEADO: [], EN_PROCESO: [], PENDIENTE: [] };
+    tareas.forEach(t => {
+      const g = porEstado[t.estado] ?? porEstado.PENDIENTE;
+      g.push(t);
+    });
+    const grupos = [
+      { label: '🔴 Bloqueadas', color: '#f87171', tareas: porEstado.BLOQUEADO },
+      { label: '🔵 En proceso', color: '#93c5fd', tareas: porEstado.EN_PROCESO },
+      { label: '⏳ En cola',    color: '#aaa',    tareas: porEstado.PENDIENTE  },
+    ];
+    let html = '';
+    grupos.forEach(({ label, color, tareas: ts }) => {
+      if (!ts.length) return;
+      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${ts.length}</div>`;
+      html += ts.map(t => `
         <div class="tabla-card" style="${t.estado==='BLOQUEADO'?'border-color:#7f1d1d;background:#110a0a;':''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
             <div style="flex:1;min-width:0;">
               <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
               <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
-              <div style="font-size:11px;color:#444;margin-top:2px;">${t.operario_id ? '👤 En proceso' : t.estado === 'BLOQUEADO' ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada') : '⏳ En cola'}</div>
-              ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>` : ''}
+              <div style="font-size:11px;color:#444;margin-top:2px;">${
+                t.operario_id
+                  ? '👤 En proceso'
+                  : t.estado === 'BLOQUEADO'
+                    ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada')
+                    : '⏳ En cola'
+              }</div>
+              ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
+                ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>`
+                : ''}
             </div>
             <div style="text-align:right;flex-shrink:0;">
-              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='COMPLETADO'?'badge-green':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
+              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
               <div style="font-size:20px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
             </div>
           </div>
@@ -709,12 +751,10 @@ async function cargarPedidos() {
             </button>
           </div>` : ''}
         </div>`).join('');
-    }
-
-    if (!html) html = '<div style="color:#555;text-align:center;padding:40px;">Sin actividad ✓</div>';
+    });
     el.innerHTML = html;
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando tareas de bodega</div>';
   }
 }
 
