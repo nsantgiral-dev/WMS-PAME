@@ -1121,49 +1121,11 @@
       <!-- Sub-panel: Conductores -->
       <div id="rutas-panel-conductores" style="display:none;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <div style="font-size:16px;font-weight:700;">Conductores</div>
-          <button onclick="conductoresMostrarForm()"
-            style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            + Nuevo
-          </button>
-        </div>
-
-        <!-- Form nuevo conductor -->
-        <div id="conductores-form" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:14px;padding:18px;margin-bottom:14px;">
-          <div style="font-size:14px;font-weight:700;margin-bottom:14px;">Nuevo conductor</div>
-          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:12px;">
-            <div>
-              <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Nombre *</div>
-              <input id="cond-form-nombre" type="text" placeholder="Nombre completo"
-                style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-              <div>
-                <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Cédula *</div>
-                <input id="cond-form-cedula" type="text" placeholder="12345678"
-                  style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-              </div>
-              <div>
-                <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Teléfono</div>
-                <input id="cond-form-telefono" type="tel" placeholder="3001234567"
-                  style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-              </div>
-            </div>
-          </div>
-            <div>
-              <div style="font-size:11px;color:#facc15;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Cuenta de acceso PWA</div>
-              <select id="cond-form-usuario" onchange="" style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:13px;">
-                <option value="">Sin cuenta (solo flota)</option>
-              </select>
-              <div style="font-size:11px;color:#555;margin-top:4px;">Vincula un usuario con rol Conductor para que pueda confirmar entregas desde su celular.</div>
-            </div>
-          <div id="conductores-form-error" style="color:#ef4444;font-size:12px;min-height:18px;margin-bottom:10px;"></div>
-          <div style="display:flex;gap:8px;">
-            <button onclick="conductoresCancelarForm()" style="flex:1;padding:13px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;cursor:pointer;">Cancelar</button>
-            <button onclick="conductoresCrear()" style="flex:2;padding:13px;background:var(--pm);color:#fff;border:none;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">Guardar →</button>
+          <div>
+            <div style="font-size:16px;font-weight:700;">Conductores</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">Para crear un conductor nuevo, hazlo desde el módulo Usuarios con rol = Conductor</div>
           </div>
         </div>
-
         <div id="lista-conductores"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
       </div>
 

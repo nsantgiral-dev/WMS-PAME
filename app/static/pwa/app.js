@@ -3924,7 +3924,7 @@ function _formUsuario(u = {}) {
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
       <input id="u-password" placeholder="${u.id ? 'Nueva contraseña (dejar vacío para no cambiar)' : 'Contraseña'}" type="password"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-      <select id="u-rol" onchange="document.getElementById('u-tienda-fields').style.display=this.value==='tienda'?'block':'none'"
+      <select id="u-rol" onchange="document.getElementById('u-tienda-fields').style.display=this.value==='tienda'?'block':'none';document.getElementById('u-conductor-fields').style.display=this.value==='conductor'?'block':'none';"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
         <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
@@ -3934,6 +3934,22 @@ function _formUsuario(u = {}) {
         <option value="jefe_almacen" ${u.rol==='jefe_almacen'?'selected':''}>Jefe de almacén</option>
         <option value="admin" ${u.rol==='admin'?'selected':''}>Admin</option>
       </select>
+      <!-- Campos conductor (solo si rol=conductor) -->
+      <div id="u-conductor-fields" style="display:${u.rol==='conductor'?'block':'none'};background:#1a1a1a;border:1px solid #2d1b69;border-radius:8px;padding:14px;">
+        <div style="font-size:11px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Datos del conductor</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:5px;">Cédula *</div>
+            <input id="u-conductor-cedula" type="text" placeholder="12345678" value="${u.conductor_cedula || ''}"
+              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+          </div>
+          <div>
+            <div style="font-size:11px;color:#888;margin-bottom:5px;">Teléfono</div>
+            <input id="u-conductor-telefono" type="tel" placeholder="3001234567" value="${u.conductor_telefono || ''}"
+              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
+          </div>
+        </div>
+      </div>
       <!-- Campos tienda (solo si rol=tienda) -->
       <div id="u-tienda-fields" style="display:${(u.rol==='tienda')?'block':'none'};">
         <select id="u-bodega-siesa"
@@ -4038,8 +4054,11 @@ async function _guardarUsuario(uid) {
   const puedeAbastecer  = document.getElementById('u-puede-abastecer')?.checked || false;
   const puedeCamara     = document.getElementById('u-puede-camara')?.checked ?? true;
   const capacidadConteo = puedePicar ? parseInt(document.getElementById('u-capacidad-conteo')?.value || '15', 10) : null;
+  const conductorCedula   = rol === 'conductor' ? (document.getElementById('u-conductor-cedula')?.value.trim() || '') : null;
+  const conductorTelefono = rol === 'conductor' ? (document.getElementById('u-conductor-telefono')?.value.trim() || null) : null;
 
   if (!nombre) { alerta('El nombre es requerido', 'error'); return; }
+  if (rol === 'conductor' && !conductorCedula) { alerta('La cédula es requerida para conductores', 'error'); return; }
 
   const bodegaSiesaId = document.getElementById('u-bodega-siesa')?.value.trim() || null;
   const nombrePv = document.getElementById('u-nombre-pv')?.value.trim() || null;
@@ -4048,7 +4067,8 @@ async function _guardarUsuario(uid) {
     nombre, rol, puede_picar: puedePicar, puede_empacar: puedeEmpacar,
     puede_abastecer: puedeAbastecer, puede_usar_camara: puedeCamara,
     capacidad_diaria_conteo: capacidadConteo === null ? null : (isNaN(capacidadConteo) ? 15 : Math.max(0, capacidadConteo)),
-    bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv
+    bodega_siesa_id: bodegaSiesaId, nombre_punto_venta: nombrePv,
+    ...(rol === 'conductor' && { cedula: conductorCedula, telefono: conductorTelefono })
   };
   if (pass) payload.password = pass;
 

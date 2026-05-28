@@ -34,6 +34,7 @@ class Usuario(db.Model):
         return check_password_hash(self.password_hash, password)
 
     def to_dict(self):
+        _cond = self.conductor_perfil[0] if getattr(self, 'conductor_perfil', None) else None
         return {
             'id': self.id,
             'nombre': self.nombre,
@@ -49,4 +50,7 @@ class Usuario(db.Model):
             'bodega_siesa_id': self.bodega_siesa_id,
             'siesa_co_id': self.siesa_co_id,
             'nombre_punto_venta': self.nombre_punto_venta,
+            'conductor_id': _cond.id if _cond else None,
+            'conductor_cedula': _cond.cedula if _cond else None,
+            'conductor_telefono': _cond.telefono if _cond else None,
         }

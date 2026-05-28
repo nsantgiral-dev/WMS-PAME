@@ -88,6 +88,18 @@ def register():
     db.session.add(usuario)
     db.session.commit()
 
+    if _rol_nuevo == 'conductor':
+        from app.models.conductor import Conductor
+        cedula = (data.get('cedula') or '').strip()
+        if cedula and not Conductor.query.filter_by(usuario_id=usuario.id).first():
+            db.session.add(Conductor(
+                nombre=usuario.nombre,
+                cedula=cedula,
+                telefono=(data.get('telefono') or '').strip() or None,
+                usuario_id=usuario.id,
+            ))
+            db.session.commit()
+
     return jsonify(usuario.to_dict()), 201
 
 
@@ -150,4 +162,25 @@ def actualizar_usuario(uid):
         usuario.set_password(data['password'])
 
     db.session.commit()
+
+    if usuario.rol == 'conductor':
+        from app.models.conductor import Conductor
+        conductor = Conductor.query.filter_by(usuario_id=usuario.id).first()
+        cedula = (data.get('cedula') or '').strip()
+        telefono_c = (data.get('telefono') or '').strip() or None
+        if conductor:
+            if 'nombre' in data:
+                conductor.nombre = usuario.nombre
+            if telefono_c is not None:
+                conductor.telefono = telefono_c
+            db.session.commit()
+        elif cedula:
+            db.session.add(Conductor(
+                nombre=usuario.nombre,
+                cedula=cedula,
+                telefono=telefono_c,
+                usuario_id=usuario.id,
+            ))
+            db.session.commit()
+
     return jsonify(usuario.to_dict()), 200
