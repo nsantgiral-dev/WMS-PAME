@@ -4903,10 +4903,21 @@ function rutasCancelarForm() {
 
 function rutasSeleccionarTipo(tipo) {
   RUTAS_TIPO_SEL = tipo;
+  const isLight = document.body.classList.contains('light');
+  const ON  = isLight ? { bg:'#0d9488', color:'#fff',    border:'#0d9488' }
+                      : { bg:'#0C3535', color:'#25BBBB', border:'#174848' };
+  const OFF = isLight ? { bg:'#f1f5f9', color:'#64748b', border:'#cbd5e1' }
+                      : { bg:'#0D1622', color:'#415A70', border:'#1C2B3A' };
+  const apply = (btn, active) => {
+    const s = active ? ON : OFF;
+    btn.style.background  = s.bg;
+    btn.style.color       = s.color;
+    btn.style.borderColor = s.border;
+  };
   const btnU = document.getElementById('rutas-tipo-urbana');
   const btnM = document.getElementById('rutas-tipo-municipal');
-  if (btnU) { btnU.style.background = tipo === 'Urbana' ? '#0C3535' : '#0D1622'; btnU.style.color = tipo === 'Urbana' ? '#25BBBB' : '#415A70'; btnU.style.borderColor = tipo === 'Urbana' ? '#174848' : '#1C2B3A'; }
-  if (btnM) { btnM.style.background = tipo === 'Municipal' ? '#0C3535' : '#0D1622'; btnM.style.color = tipo === 'Municipal' ? '#25BBBB' : '#415A70'; btnM.style.borderColor = tipo === 'Municipal' ? '#174848' : '#1C2B3A'; }
+  if (btnU) apply(btnU, tipo === 'Urbana');
+  if (btnM) apply(btnM, tipo === 'Municipal');
 }
 
 async function rutasProgramar() {
@@ -5015,6 +5026,14 @@ async function cargarListaMaestras() {
 // Paradas dinámicas en el form
 let _MAESTRAS_PARADAS = [];
 
+async function cargarMunicipiosDatalist() {
+  try {
+    const d = await get('/api/rutas/municipios');
+    const dl = document.getElementById('maestras-municipios-list');
+    if (dl) dl.innerHTML = (d.municipios || []).map(m => `<option value="${m}">`).join('');
+  } catch (e) {}
+}
+
 function maestraMostrarForm() {
   _MAESTRAS_PARADAS = [];
   document.getElementById('maestras-form-id').value = '';
@@ -5024,6 +5043,7 @@ function maestraMostrarForm() {
   rutasSeleccionarTipo('Urbana');
   document.getElementById('maestras-form').style.display = 'block';
   _maestraRenderParadas();
+  cargarMunicipiosDatalist();
 }
 
 function maestraCancelarForm() {
@@ -5044,6 +5064,7 @@ async function maestraEditar(id) {
     rutasSeleccionarTipo(m.tipo_ruta);
     document.getElementById('maestras-form').style.display = 'block';
     _maestraRenderParadas();
+    cargarMunicipiosDatalist();
     document.getElementById('maestras-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) { alerta('Error cargando la ruta', 'error'); }
 }

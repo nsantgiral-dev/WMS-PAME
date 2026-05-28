@@ -133,6 +133,20 @@ def desactivar_vehiculo(id):
     return jsonify({'ok': True}), 200
 
 
+# ── Municipios ───────────────────────────────────────────────────
+
+@rutas_bp.route('/municipios', methods=['GET'])
+@jwt_required()
+def listar_municipios():
+    from app.models.packing import TareaPacking
+    from sqlalchemy import distinct
+    rows = (db.session.query(distinct(TareaPacking.municipio))
+            .filter(TareaPacking.municipio != None, TareaPacking.municipio != '')
+            .order_by(TareaPacking.municipio)
+            .all())
+    return jsonify({'municipios': [r[0] for r in rows]}), 200
+
+
 # ── Rutas Maestras ───────────────────────────────────────────────
 
 @rutas_bp.route('/maestras', methods=['GET'])
