@@ -104,11 +104,15 @@ class FacturaFEService:
                     tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa
                 )
                 if cab_ped:
+                    _ciudad_raw = str(cab_ped.get('f015_id_ciudad_pe') or '').strip()
+                    _barrio_raw = str(cab_ped.get('f015_id_barrio_pe') or '').strip()
                     envio = {
                         'f462_contacto':  str(cab_ped.get('f015_contacto_pe') or '').strip(),
-                        'ciudad':         str(cab_ped.get('f015_id_ciudad_pe') or '').strip(),
+                        # Mostrar ciudad solo si parece un nombre real (>3 chars)
+                        # f015_id_ciudad_pe puede devolver el código de sucursal ("001")
+                        'ciudad':         _ciudad_raw if len(_ciudad_raw) > 3 else '',
                         'f462_direccion': str(cab_ped.get('f015_direccion1_pe') or '').strip(),
-                        'f462_barrio':    str(cab_ped.get('f015_id_barrio_pe') or '').strip(),
+                        'f462_barrio':    _barrio_raw if len(_barrio_raw) > 3 else '',
                         'f462_telefono':  str(cab_ped.get('f015_telefono_pe') or '').strip(),
                         'f462_celular':   str(cab_ped.get('f015_celular_pe') or '').strip(),
                     }
