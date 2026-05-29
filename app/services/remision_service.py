@@ -1,24 +1,57 @@
+import json
+import re
 from datetime import datetime
 from app.models.packing import TareaPacking
 
+_RE_DOC = re.compile(r'([A-Z]{2,10})-(\d+)', re.IGNORECASE)
 
-class RemisionService:
-    """Genera el documento HTML de remisión para una tarea de packing con caja cerrada."""
+
+class FacturaService:
+    """Genera el HTML imprimible de factura de despacho para una TareaPacking."""
 
     @staticmethod
     def puede_generar(tarea: TareaPacking) -> tuple[bool, str]:
-        """
-        Retorna (True, '') si la remisión está disponible.
-        Retorna (False, motivo) si no.
-        'Caja cerrada' se detecta por la existencia de bultos — el estado DESPACHADO
-        llega async (DLQ Siesa), pero los bultos se crean sincrónicamente al cerrar.
-        """
         from app.models.packing import EstadoPacking
         if tarea.estado == EstadoPacking.CANCELADO:
-            return False, 'No se puede generar remisión de una tarea cancelada'
+            return False, 'No se puede generar factura de una tarea cancelada'
         if not tarea.bultos:
-            return False, 'La remisión estará disponible una vez se cierren las piezas físicas (cerrar caja)'
+            return False, 'La factura estará disponible una vez se cierren las piezas físicas (cerrar caja)'
         return True, ''
+
+    @staticmethod
+    def _rm_label(tarea) -> str:
+        if tarea.rm_tipo and tarea.rm_consec:
+            return f'{tarea.rm_tipo}-{tarea.rm_consec}'
+        if tarea.siesa_response:
+            try:
+                d = json.loads(tarea.siesa_response)
+                rm = str(d.get('rm', '')).strip()
+                if rm and rm not in ('244328-AUTO', ''):
+                    return rm
+            except Exception:
+                pass
+        return None
+
+    @staticmethod
+    def _fe_badge(tarea) -> str:
+        fe_ref = None
+        if tarea.siesa_response:
+            try:
+                d = json.loads(tarea.siesa_response)
+                fe_resp = d.get('fe_response')
+                if fe_resp:
+                    fe_str = json.dumps(fe_resp) if not isinstance(fe_resp, str) else fe_resp
+                    m = _RE_DOC.search(fe_str)
+                    if m:
+                        fe_ref = f'{m.group(1).upper()}-{m.group(2)}'
+            except Exception:
+                pass
+
+        if tarea.siesa_triggered and fe_ref:
+            return f'<span class="badge badge-ok">{fe_ref}</span>'
+        if tarea.siesa_triggered:
+            return '<span class="badge badge-ok">Confirmada en Siesa</span>'
+        return '<span class="badge" style="background:#fef3c7;color:#92400e;">Procesando...</span>'
 
     @staticmethod
     def generar_html(tarea: TareaPacking) -> str:
@@ -33,15 +66,17 @@ class RemisionService:
             else (tarea.empacador.nombre if tarea.empacador and hasattr(tarea.empacador, 'nombre') else '—')
         )
 
-        filas_items = RemisionService._filas_items(tarea.items)
-        filas_bultos = RemisionService._filas_bultos(tarea.bultos)
+        rm_label = FacturaService._rm_label(tarea) or '—'
+        fe_badge = FacturaService._fe_badge(tarea)
+        filas_items = FacturaService._filas_items(tarea.items)
+        filas_bultos = FacturaService._filas_bultos(tarea.bultos)
         tiene_diferencias = tarea.tiene_diferencias()
 
         return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Remisión {tarea.numero_pedido_siesa}</title>
+  <title>Factura {tarea.numero_pedido_siesa}</title>
   <style>
     * {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{ font-family: Arial, sans-serif; font-size: 12px; color: #1a1a1a; padding: 24px; }}
@@ -82,10 +117,10 @@ class RemisionService:
   <div class="header">
     <div class="header-left">
       <h1>PAME</h1>
-      <p>Documento de Remisión de Despacho</p>
+      <p>Documento de Despacho</p>
     </div>
     <div class="header-right">
-      <strong>REMISIÓN</strong><br>
+      <strong>FACTURA</strong><br>
       Pedido: <strong>{tarea.numero_pedido_siesa}</strong><br>
       Fecha: {ahora}
     </div>
@@ -94,6 +129,12 @@ class RemisionService:
   <div class="info-grid">
     <span class="label">Pedido Siesa</span>
     <span class="value">{tarea.numero_pedido_siesa}</span>
+
+    <span class="label">Remisión Siesa</span>
+    <span class="value">{rm_label}</span>
+
+    <span class="label">Factura Electrónica</span>
+    <span class="value">{fe_badge}</span>
 
     <span class="label">Cliente</span>
     <span class="value">{tarea.cliente or '—'}</span>
@@ -148,7 +189,7 @@ class RemisionService:
   {f'<div class="obs"><strong>Observaciones:</strong> {tarea.observaciones}</div>' if tarea.observaciones else ''}
 
   <div class="footer">
-    <span>WMS-PAME · Remisión generada el {ahora}</span>
+    <span>WMS-PAME · Factura generada el {ahora}</span>
     <span>Código tarea: {tarea.codigo}</span>
   </div>
 
@@ -194,3 +235,7 @@ class RemisionService:
   <td style="text-align:right;">{bulto.total}</td>
 </tr>""")
         return '\n'.join(filas)
+
+
+# Alias de compatibilidad — packing.py y remision_admin.py importan RemisionService
+RemisionService = FacturaService

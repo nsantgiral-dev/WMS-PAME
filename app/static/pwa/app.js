@@ -656,11 +656,11 @@ async function cargarPedidos() {
 
         let accionBtn = '';
         if (p.siesa_triggered) {
-          // Estado final: Siesa tiene la remisión
+          // Estado final: Siesa tiene la factura
           const btnRemision = p.packing_id
-            ? `<button onclick="imprimirRemisionAdmin(${p.packing_id})"
+            ? `<button onclick="imprimirFacturaAdmin(${p.packing_id})"
                 style="margin-top:6px;width:100%;background:#1a1a1a;color:#fff;border:none;padding:5px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">
-                🖨 Remisión
+                🖨 Factura
                </button>`
             : '';
           accionBtn = `<div style="flex-shrink:0;background:#0d1a0d;color:#4ade80;border:1px solid #166534;padding:8px 12px;border-radius:8px;font-size:12px;font-weight:700;text-align:center;">✓ Despachado<br>en Siesa${btnRemision}</div>`;
@@ -2165,17 +2165,17 @@ function beepError() { _tono(220, 0.18, 'square', 0.3); setTimeout(() => _tono(1
 function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); setTimeout(() => _tono(784, 0.25), 240); } // fanfarria — tarea completa
 
 // ─────────────────────────────────────────────────────────────
-// ADMIN — Remisión de despacho (pedidos ya confirmados en Siesa)
+// ADMIN — Factura de despacho (pedidos ya confirmados en Siesa)
 // ─────────────────────────────────────────────────────────────
 
-async function imprimirRemisionAdmin(packingId) {
+async function imprimirFacturaAdmin(packingId) {
   try {
     const res = await fetch(`/api/admin/remision/${packingId}`, {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      alerta(d.error || 'No se pudo obtener la remisión', 'error');
+      alerta(d.error || 'No se pudo obtener la factura', 'error');
       return;
     }
     const html = await res.text();
@@ -3446,7 +3446,7 @@ async function empReintentarSiesa(t) {
       cliente: data.cliente,
       municipio: data.municipio
     });
-    alerta(`${t.numero_pedido_siesa} despachado — Siesa generó la remisión`, 'exito');
+    alerta(`${t.numero_pedido_siesa} despachado — Siesa procesó la factura`, 'exito');
     empCargarTareas();
   } catch (e) {
     alerta('Error de conexión al reintentar Siesa', 'error');
@@ -3859,9 +3859,9 @@ async function bultosConfirmar() {
     document.getElementById('emp-hud').classList.remove('activo');
     EMP_TAREA = null;
     EMP_ITEMS = [];
-    alerta(`${data.bultos.length} pieza(s) registradas — Siesa generó la remisión`, 'exito');
+    alerta(`${data.bultos.length} pieza(s) registradas — Siesa procesó la factura`, 'exito');
     empCargarTareas();
-    empMostrarBotonRemision(tareaId, data.numero_pedido);
+    empMostrarBotonFactura(tareaId, data.numero_pedido);
 
   } catch (e) {
     errEl.textContent = 'Error de conexión';
@@ -3870,10 +3870,10 @@ async function bultosConfirmar() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// REMISIÓN — botón flotante post-cierre e impresión con JWT
+// FACTURA — botón flotante post-cierre e impresión con JWT
 // ─────────────────────────────────────────────────────────────
 
-function empMostrarBotonRemision(packingId, numeroPedido) {
+function empMostrarBotonFactura(packingId, numeroPedido) {
   const existing = document.getElementById('btn-remision-flotante');
   if (existing) existing.remove();
 
@@ -3884,9 +3884,9 @@ function empMostrarBotonRemision(packingId, numeroPedido) {
     <div style="background:#14532d;border:1px solid #16a34a;color:#bbf7d0;font-size:11px;font-weight:600;padding:6px 14px;border-radius:20px;text-align:center;">
       Pedido ${numeroPedido || ''} cerrado
     </div>
-    <button onclick="empImprimirRemision(${packingId})"
+    <button onclick="empImprimirFactura(${packingId})"
       style="background:#16a34a;color:#fff;border:none;border-radius:12px;padding:14px 28px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.5);">
-      🖨 Imprimir Remisión
+      🖨 Imprimir Factura
     </button>
     <button onclick="document.getElementById('btn-remision-flotante').remove()"
       style="background:transparent;color:#6b7280;border:none;font-size:12px;cursor:pointer;padding:4px;">
@@ -3895,23 +3895,23 @@ function empMostrarBotonRemision(packingId, numeroPedido) {
   document.body.appendChild(div);
 }
 
-async function empImprimirRemision(packingId) {
+async function empImprimirFactura(packingId) {
   try {
     const resp = await fetch(`/api/packing/${packingId}/remision`, {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
-      alerta(err.error || 'No se pudo generar la remisión', 'error');
+      alerta(err.error || 'No se pudo generar la factura', 'error');
       return;
     }
     const html = await resp.text();
     const win = window.open('', '_blank');
-    if (!win) { alerta('Permite ventanas emergentes para imprimir la remisión', 'error'); return; }
+    if (!win) { alerta('Permite ventanas emergentes para imprimir la factura', 'error'); return; }
     win.document.write(html);
     win.document.close();
   } catch (e) {
-    alerta('Error de conexión al generar remisión', 'error');
+    alerta('Error de conexión al generar factura', 'error');
   }
 }
 
