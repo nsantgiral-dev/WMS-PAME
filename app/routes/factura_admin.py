@@ -16,6 +16,40 @@ factura_admin_bp = Blueprint('factura_admin', __name__)
 logger = logging.getLogger(__name__)
 
 
+@factura_admin_bp.route('/<int:packing_id>/debug-campos', methods=['GET'])
+@jwt_required()
+def debug_campos_fe(packing_id: int):
+    """
+    GET /api/admin/factura/<packing_id>/debug-campos — solo admin.
+    Devuelve la respuesta cruda de Connekta para descubrir los nombres reales
+    de los campos de API_v2_Ventas_Facturas_DesdePedido.
+    Usar en QA para validar field mapping antes de desplegar a producción.
+    """
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    tarea = TareaPacking.query.get_or_404(packing_id)
+    try:
+        from app.services.connekta_gateway import connekta
+        lineas = connekta.get_detalle_factura(
+            tipo_docto_rm=tarea.rm_tipo or '',
+            consec_rm=tarea.rm_consec or 0,
+            consec_pedido=tarea.consec_docto_pedido_siesa,
+        )
+        campos = list(lineas[0].keys()) if lineas else []
+        return jsonify({
+            'packing_id': packing_id,
+            'rm': f'{tarea.rm_tipo}-{tarea.rm_consec}',
+            'consec_pedido': tarea.consec_docto_pedido_siesa,
+            'total_lineas': len(lineas),
+            'campos_disponibles': campos,
+            'primera_fila': lineas[0] if lineas else None,
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @factura_admin_bp.route('/<int:packing_id>', methods=['GET'])
 @jwt_required()
 def imprimir_factura_admin(packing_id: int):

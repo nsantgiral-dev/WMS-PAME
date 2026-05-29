@@ -21,17 +21,19 @@ class FacturaFEService:
     @staticmethod
     def obtener_lineas(tarea) -> list:
         """
-        Consulta API_v2_Ventas_Facturas_DesdePedido filtrando por la RM que
-        ya está guardada en la tarea (rm_tipo / rm_consec).
-        Retorna lista de filas Siesa o [] si aún no hay RM o la API falla.
+        Consulta API_v2_Ventas_Facturas_DesdePedido.
+        Pasa RM + consec_pedido para que el gateway pruebe ambos filtros.
+        Retorna lista de filas Siesa o [] si la API no devuelve datos.
         """
-        if not tarea.rm_tipo or not tarea.rm_consec:
-            return []
         try:
             from app.services.connekta_gateway import connekta
-            return connekta.get_detalle_factura(tarea.rm_tipo, tarea.rm_consec)
+            return connekta.get_detalle_factura(
+                tipo_docto_rm=tarea.rm_tipo or '',
+                consec_rm=tarea.rm_consec or 0,
+                consec_pedido=tarea.consec_docto_pedido_siesa,
+            )
         except Exception as e:
-            logger.warning('[FACTURA_FE] get_detalle_factura falló: %s', e)
+            logger.warning('[FACTURA_FE] obtener_lineas falló: %s', e)
             return []
 
     @staticmethod
@@ -278,7 +280,7 @@ class FacturaFEService:
     <button onclick="window.print()"
       style="padding:7px 16px;font-size:12px;cursor:pointer;background:#1a1a1a;color:#fff;
              border:none;border-radius:4px;">Imprimir</button>
-    <button onclick="location.reload()"
+    <button onclick="if(window.opener&&window.opener.empImprimirFactura){{window.opener.empImprimirFactura({tarea.id});window.close();}}else{{window.close();}}"
       style="padding:7px 16px;font-size:12px;cursor:pointer;background:#374151;color:#fff;
              border:none;border-radius:4px;margin-left:8px;">↻ Actualizar</button>
   </div>

@@ -461,30 +461,54 @@ class ConnektaGateway:
             logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
             return []
 
-    def get_detalle_factura(self, tipo_docto_rm: str, consec_rm) -> list:
+    def get_detalle_factura(self, tipo_docto_rm: str, consec_rm,
+                             consec_pedido=None) -> list:
         """
         GET API_v2_Ventas_Facturas_DesdePedido — detalle completo de la FE para impresión.
-        Filtra por RM (f460_id_tipo_docto / f460_consec_docto).
+        Intento 1: filtra por RM (f460_id_tipo_docto / f460_consec_docto).
+        Intento 2 (fallback): filtra por consec_pedido si intento 1 devuelve vacío.
         Falla silenciosamente: uso exclusivo de display, nunca de anti-duplicado.
-        Campos: f350_consec_docto, f350_id_tipo_docto, f350_fecha, f200_nit_fact,
-                f120_referencia, f470_cant_base, f470_precio_uni, f470_vlr_imp, f461_vlr_neto.
         """
         if self.modo_simulacion:
             return []
-        if not tipo_docto_rm or not str(tipo_docto_rm).strip():
-            return []
-        try:
-            consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
+
+        def _query(parametros: str) -> list:
             res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
                 'paginacion': 'numPag=1|tamPag=100',
-                'parametros': (
+                'parametros': parametros,
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            rows = [r for r in rows if 'alerta' not in r]
+            if rows:
+                logger.info('[CONNEKTA] get_detalle_factura: %d filas, keys=%s',
+                            len(rows), list(rows[0].keys()) if rows else [])
+            return rows
+
+        try:
+            # Intento 1: filtrar por documento base (RM)
+            if tipo_docto_rm and str(tipo_docto_rm).strip():
+                consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
+                rows = _query(
                     f"f350_id_co = ''{self.centro_op}'' "
                     f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
                     f"AND f460_consec_docto = {consec_int}"
                 )
-            })
-            rows = res.get('detalle', {}).get('Table', [])
-            return [r for r in rows if 'alerta' not in r]
+                if rows:
+                    return rows
+                logger.info('[CONNEKTA] get_detalle_factura intento RM vacío — probando por pedido')
+
+            # Intento 2: filtrar por pedido origen
+            if consec_pedido:
+                consec_ped_int = int(consec_pedido) if str(consec_pedido).isdigit() else consec_pedido
+                rows = _query(
+                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"AND f430_consec_docto = {consec_ped_int}"
+                )
+                if rows:
+                    return rows
+                logger.info('[CONNEKTA] get_detalle_factura intento pedido también vacío')
+
+            return []
         except Exception as e:
             logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
             return []
