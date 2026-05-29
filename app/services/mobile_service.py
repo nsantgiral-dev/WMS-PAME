@@ -660,6 +660,16 @@ class MobileService:
                 cantidad_recogida=cantidad,
                 usuario_id=operario_id
             ).to_dict()
+            try:
+                from app.models.packing import TareaPacking as _TP
+                pk = _TP.query.filter_by(
+                    numero_pedido_siesa=tarea.referencia_documento
+                ).first()
+                if pk:
+                    resultado['packing_id'] = pk.id
+                    resultado['etiqueta_url'] = f'/api/packing/{pk.id}/etiqueta-canasto'
+            except Exception:
+                pass
             # Disparar verificación de stock en background — throttled a 2 threads concurrentes
             # para no colapsar el connection pool DB durante apertura de turno (N operarios simultáneos)
             try:

@@ -1849,6 +1849,11 @@ async function confirmar() {
     }
     beepDone();
     TAREA_ACTUAL = null;
+    // Picking con packing asociado → mostrar botón etiqueta canasto
+    if (r.etiqueta_url) {
+      _modalEtiquetaCanasto(r.etiqueta_url, r.packing_id);
+      return;
+    }
     // Conteos: mostrar resultado MATCH vs SEGUNDO_CONTEO antes de pedir siguiente tarea
     if (r.resultado === 'MATCH' || r.resultado === 'SEGUNDO_CONTEO') {
       const esMatch = r.resultado === 'MATCH';
@@ -1881,6 +1886,35 @@ async function confirmar() {
       setTimeout(pedirTarea, 2000);
     }
   }
+}
+
+function _modalEtiquetaCanasto(etiquetaUrl, packingId) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:#111;border-radius:16px;padding:28px 24px;width:100%;max-width:360px;border:2px solid #16a34a;text-align:center;">
+      <div style="font-size:56px;margin-bottom:8px;">✅</div>
+      <div style="font-size:22px;font-weight:900;color:#4ade80;margin-bottom:8px;">Picking completado</div>
+      <div style="font-size:14px;color:#aaa;margin-bottom:24px;line-height:1.6;">
+        Imprime la etiqueta y pégala en el canasto<br>para que packing identifique el pedido.
+      </div>
+      <button id="_ecan-print" style="width:100%;padding:16px;background:#16a34a;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:12px;">
+        🖨 Imprimir etiqueta canasto
+      </button>
+      <button id="_ecan-skip" style="width:100%;padding:14px;background:#1a1a1a;color:#666;border:1px solid #333;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;">
+        Continuar sin imprimir
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector('#_ecan-print').onclick = () => {
+    window.open(etiquetaUrl, '_blank');
+    overlay.remove();
+    setTimeout(pedirTarea, 800);
+  };
+  overlay.querySelector('#_ecan-skip').onclick = () => {
+    overlay.remove();
+    pedirTarea();
+  };
 }
 
 async function confirmarConGuard() {
