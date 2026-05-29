@@ -663,19 +663,21 @@ class MobileService:
                 usuario_id=operario_id
             ).to_dict()
             try:
-                from app.models.packing import TareaPacking as _TP
+                from app.models.pedido_siesa import PedidoSiesa as _PS
+                _operario_nombre = tarea.operario.nombre if tarea.operario else '—'
+                _cliente = ''
                 if _ref_doc:
-                    pk = _TP.query.filter_by(numero_pedido_siesa=_ref_doc).first()
-                    if pk:
-                        resultado['packing_id'] = pk.id
-                        resultado['etiqueta_url'] = f'/api/packing/{pk.id}/etiqueta-canasto'
-                        logger.info('[MOBILE] etiqueta_url generada: packing_id=%s pedido=%s', pk.id, _ref_doc)
-                    else:
-                        logger.info('[MOBILE] sin TareaPacking para pedido=%s', _ref_doc)
-                else:
-                    logger.info('[MOBILE] referencia_documento vacía en tarea_id=%s', tarea_id)
+                    ped = _PS.query.filter_by(numero_pedido=_ref_doc).first()
+                    _cliente = ped.cliente if ped else ''
+                resultado['canasto_data'] = {
+                    'pedido':   _ref_doc or '—',
+                    'cliente':  _cliente,
+                    'operario': _operario_nombre,
+                    'ref':      resultado.get('referencia') or '',
+                    'cantidad': cantidad,
+                }
             except Exception as _e:
-                logger.warning('[MOBILE] lookup packing para etiqueta falló: %s', _e)
+                logger.warning('[MOBILE] canasto_data falló: %s', _e)
             # Disparar verificación de stock en background — throttled a 2 threads concurrentes
             # para no colapsar el connection pool DB durante apertura de turno (N operarios simultáneos)
             try:

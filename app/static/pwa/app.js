@@ -1850,8 +1850,8 @@ async function confirmar() {
     beepDone();
     TAREA_ACTUAL = null;
     // Picking con packing asociado → mostrar botón etiqueta canasto
-    if (r.etiqueta_url) {
-      _modalEtiquetaCanasto(r.etiqueta_url, r.packing_id);
+    if (r.canasto_data) {
+      _modalEtiquetaCanasto(r.canasto_data);
       return;
     }
     // Conteos: mostrar resultado MATCH vs SEGUNDO_CONTEO antes de pedir siguiente tarea
@@ -1888,7 +1888,7 @@ async function confirmar() {
   }
 }
 
-function _modalEtiquetaCanasto(etiquetaUrl, packingId) {
+function _modalEtiquetaCanasto(canasto) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
   overlay.innerHTML = `
@@ -1915,34 +1915,22 @@ function _modalEtiquetaCanasto(etiquetaUrl, packingId) {
   const numEl = overlay.querySelector('#_ecan-num');
   overlay.querySelector('#_ecan-menos').onclick = () => { if (copias > 1) numEl.textContent = --copias; };
   overlay.querySelector('#_ecan-mas').onclick  = () => { if (copias < 10) numEl.textContent = ++copias; };
-  overlay.querySelector('#_ecan-print').onclick = async () => {
-    const btn = overlay.querySelector('#_ecan-print');
-    btn.textContent = 'Generando...'; btn.disabled = true;
-    try {
-      const pk = await get(`/api/packing/${packingId}`);
-      const hoy = new Date().toLocaleString('es-CO');
-      const empacador = pk.empacador_nombre || pk.empacador_id || '—';
-      const itemsHtml = (pk.items || []).map(i =>
-        `<div class="ec-item"><span class="ec-ref">${i.referencia}</span><span class="ec-cant">${i.cantidad_real ?? i.cantidad_esperada} uds</span></div>`
-      ).join('');
-      const bloque = `
-        <div class="etiqueta-canasto">
-          <div class="ec-titulo">CANASTO — PICKING PAME</div>
-          <div class="ec-pedido">${pk.numero_pedido_siesa}</div>
-          <div class="ec-cliente">${pk.cliente || '—'}</div>
-          <div class="ec-municipio">${pk.municipio || ''}</div>
-          <div class="ec-items">${itemsHtml}</div>
-          <div class="ec-footer">${pk.total_items} ref · Empacador: ${empacador} · ${hoy}</div>
-        </div>`;
-      const area = document.getElementById('print-area');
-      area.innerHTML = bloque.repeat(copias);
-      window.print();
-      setTimeout(() => { area.innerHTML = ''; }, 1200);
-    } catch (e) {
-      alerta('Error al generar etiqueta: ' + (e.message || e), 'error');
-      btn.textContent = '🖨 Imprimir etiquetas'; btn.disabled = false;
-      return;
-    }
+  overlay.querySelector('#_ecan-print').onclick = () => {
+    const hoy = new Date().toLocaleString('es-CO');
+    const bloque = `
+      <div class="etiqueta-canasto">
+        <div class="ec-titulo">CANASTO — PICKING PAME</div>
+        <div class="ec-pedido">${canasto.pedido}</div>
+        <div class="ec-cliente">${canasto.cliente || '—'}</div>
+        <div class="ec-items">
+          <div class="ec-item"><span class="ec-ref">${canasto.ref}</span><span class="ec-cant">${canasto.cantidad} uds</span></div>
+        </div>
+        <div class="ec-footer">Operario: ${canasto.operario} · ${hoy}</div>
+      </div>`;
+    const area = document.getElementById('print-area');
+    area.innerHTML = bloque.repeat(copias);
+    window.print();
+    setTimeout(() => { area.innerHTML = ''; }, 1200);
     overlay.remove();
     setTimeout(pedirTarea, 800);
   };
