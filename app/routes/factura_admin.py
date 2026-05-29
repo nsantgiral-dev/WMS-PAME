@@ -16,6 +16,24 @@ factura_admin_bp = Blueprint('factura_admin', __name__)
 logger = logging.getLogger(__name__)
 
 
+@factura_admin_bp.route('/debug-tablas', methods=['GET'])
+@jwt_required()
+def debug_tablas():
+    """GET /api/admin/factura/debug-tablas — lista tablas accesibles en Siesa (solo admin)."""
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Sin permiso'}), 403
+    try:
+        from app.services.connekta_gateway import connekta
+        res = connekta._get(
+            'papeleriamedellin_pame_descubrir_tablas',
+            url=connekta.url_get_dinamico,
+        )
+        return jsonify(res), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @factura_admin_bp.route('/<int:packing_id>/debug-campos', methods=['GET'])
 @jwt_required()
 def debug_campos_fe(packing_id: int):
