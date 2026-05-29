@@ -1915,8 +1915,24 @@ function _modalEtiquetaCanasto(etiquetaUrl, packingId) {
   const numEl = overlay.querySelector('#_ecan-num');
   overlay.querySelector('#_ecan-menos').onclick = () => { if (copias > 1) numEl.textContent = --copias; };
   overlay.querySelector('#_ecan-mas').onclick  = () => { if (copias < 10) numEl.textContent = ++copias; };
-  overlay.querySelector('#_ecan-print').onclick = () => {
-    window.open(etiquetaUrl + '?copias=' + copias, '_blank');
+  overlay.querySelector('#_ecan-print').onclick = async () => {
+    const btn = overlay.querySelector('#_ecan-print');
+    btn.textContent = 'Generando...'; btn.disabled = true;
+    try {
+      const resp = await fetch(etiquetaUrl + '?copias=' + copias, {
+        headers: { 'Authorization': 'Bearer ' + TOKEN }
+      });
+      if (!resp.ok) throw new Error('Error ' + resp.status);
+      const html = await resp.text();
+      const blob = new Blob([html], { type: 'text/html' });
+      const blobUrl = URL.createObjectURL(blob);
+      const w = window.open(blobUrl, '_blank');
+      if (w) setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+    } catch (e) {
+      alerta('Error al generar etiqueta: ' + (e.message || e), 'error');
+      btn.textContent = '🖨 Imprimir etiquetas'; btn.disabled = false;
+      return;
+    }
     overlay.remove();
     setTimeout(pedirTarea, 800);
   };
