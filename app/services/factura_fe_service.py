@@ -85,13 +85,33 @@ class FacturaFEService:
         nombre_cli = str(cab.get('f200_razon_social_fact') or tarea.cliente or '—').strip()
         vendedor   = str(cab.get('f200_razon_social_vendedor') or '').strip()
 
-        # ── Datos de entrega desde T462 (requiere consulta papeleriamedellin_WMS_PuntoEnvio_FE) ─
+        # ── Datos de entrega: T462 (consulta dinámica) con fallback f015 del pedido ──
         envio = {}
         f350_rowid = cab.get('f350_rowid')
         if f350_rowid:
             try:
                 from app.services.connekta_gateway import connekta
                 envio = connekta.get_punto_envio_factura(f350_rowid)
+            except Exception:
+                pass
+
+        # Fallback: f015_* del pedido original (ya devueltos por get_pedido_cabecera,
+        # disponibles en API_v2_Ventas_Pedidos sin llamada extra si la FE fue reciente)
+        if not any(envio.values()) and tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+            try:
+                from app.services.connekta_gateway import connekta
+                cab_ped = connekta.get_pedido_cabecera(
+                    tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa
+                )
+                if cab_ped:
+                    envio = {
+                        'f462_contacto':  str(cab_ped.get('f015_contacto_pe') or '').strip(),
+                        'ciudad':         str(cab_ped.get('f015_id_ciudad_pe') or '').strip(),
+                        'f462_direccion': str(cab_ped.get('f015_direccion1_pe') or '').strip(),
+                        'f462_barrio':    str(cab_ped.get('f015_id_barrio_pe') or '').strip(),
+                        'f462_telefono':  str(cab_ped.get('f015_telefono_pe') or '').strip(),
+                        'f462_celular':   str(cab_ped.get('f015_celular_pe') or '').strip(),
+                    }
             except Exception:
                 pass
 

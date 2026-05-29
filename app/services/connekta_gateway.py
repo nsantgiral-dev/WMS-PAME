@@ -484,11 +484,13 @@ class ConnektaGateway:
         if self.modo_simulacion or not f350_rowid:
             return {}
         try:
+            # Pasar rowid como parámetro directo de URL (no en 'parametros') —
+            # el endpoint ejecutarconsulta sustituye @rowid por el valor del param rowid.
             res = self._get(
                 'papeleriamedellin_WMS_PuntoEnvio_FE',
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
-                    'parametros': f'rowid={int(f350_rowid)}',
+                    'rowid': int(f350_rowid),
                 },
                 url=self.url_get_dinamico,
             )
@@ -496,6 +498,9 @@ class ConnektaGateway:
                 res.get('detalle', {}).get('Datos') or
                 res.get('detalle', {}).get('Table') or []
             )
+            if rows:
+                logger.info('[CONNEKTA] get_punto_envio_factura OK rowid=%s keys=%s',
+                            f350_rowid, list(rows[0].keys()))
             return rows[0] if rows else {}
         except Exception as e:
             logger.warning('[CONNEKTA] get_punto_envio_factura falló silenciosamente: %s', e)
