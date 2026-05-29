@@ -396,33 +396,3 @@ def reportar_problema(id):
         return jsonify({'error': str(e)}), 404
 
 
-@picking_bp.route('/<int:id>/reiniciar-conteo', methods=['PUT'])
-@jwt_required()
-def reiniciar_conteo(id):
-    """Resetea cantidad_recogida a 0 para que el operario vuelva a escanear desde cero."""
-    try:
-        operario_id = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Token inválido'}), 401
-    u = Usuario.query.get(operario_id)
-    if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
-        return jsonify({'error': 'Sin permiso para reiniciar conteo de picking'}), 403
-
-    tarea = TareaPicking.query.get_or_404(id)
-
-    if tarea.operario_id != operario_id:
-        return jsonify({'error': 'Esta tarea no te pertenece'}), 403
-    if tarea.estado != EstadoPicking.EN_PROCESO:
-        return jsonify({'error': 'Solo se puede reiniciar una tarea en proceso'}), 400
-
-    tarea.cantidad_recogida = 0
-    tarea.empaques_escaneados = 0
-    db.session.commit()
-
-    return jsonify({
-        'ok': True,
-        'cantidad_actual': 0,
-        'empaques_escaneados': 0,
-        'cantidad_requerida': tarea.cantidad_solicitada,
-        'puede_confirmar': False,
-    }), 200
