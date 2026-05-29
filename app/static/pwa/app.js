@@ -2170,7 +2170,7 @@ function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); 
 
 async function imprimirFacturaAdmin(packingId) {
   try {
-    const res = await fetch(`/api/admin/remision/${packingId}`, {
+    const res = await fetch(`/api/admin/factura/${packingId}`, {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     });
     if (!res.ok) {
@@ -3897,7 +3897,7 @@ function empMostrarBotonFactura(packingId, numeroPedido) {
 
 async function empImprimirFactura(packingId) {
   try {
-    const resp = await fetch(`/api/packing/${packingId}/remision`, {
+    const resp = await fetch(`/api/packing/${packingId}/factura`, {
       headers: { 'Authorization': 'Bearer ' + TOKEN }
     });
     if (!resp.ok) {

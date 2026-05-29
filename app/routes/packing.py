@@ -497,6 +497,29 @@ def imprimir_remision(id):
     return Response(html, mimetype='text/html; charset=utf-8'), 200
 
 
+@packing_bp.route('/<int:id>/factura', methods=['GET'])
+@jwt_required()
+def imprimir_factura(id):
+    """Devuelve el HTML de factura electrónica con datos reales de Siesa."""
+    from app.models.usuario import Usuario
+    from flask import Response
+    from app.services.factura_fe_service import FacturaFEService
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or not _puede_empacar(u):
+        return jsonify({'error': 'Sin permiso para ver la factura'}), 403
+    tarea = TareaPacking.query.get_or_404(id)
+    disponible, motivo = FacturaFEService.puede_generar(tarea)
+    if not disponible:
+        return jsonify({'error': motivo}), 409
+    lineas_fe = FacturaFEService.obtener_lineas(tarea)
+    html = FacturaFEService.generar_html(tarea, lineas_fe)
+    return Response(html, mimetype='text/html; charset=utf-8'), 200
+
+
 @packing_bp.route('/connekta/estado', methods=['GET'])
 @jwt_required()
 def estado_connekta():

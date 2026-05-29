@@ -432,6 +432,63 @@ class ConnektaGateway:
                 'Reintenta cuando Connekta esté disponible.'
             )
 
+    def get_detalle_factura(self, tipo_docto_rm: str, consec_rm) -> list:
+        """
+        GET API_v2_Ventas_Facturas_DesdePedido — detalle completo de la FE para impresión.
+        Retorna todas las líneas con precios, IVA y totales.
+        Falla silenciosamente (retorna []) — uso exclusivo de display, nunca de anti-duplicado.
+        Campos clave: f350_consec_docto, f350_id_tipo_docto, f350_fecha,
+          f200_nit_fact, f120_referencia, f470_cant_base, f470_precio_uni,
+          f470_vlr_imp, f461_vlr_neto.
+        """
+        if self.modo_simulacion:
+            return []
+        if not tipo_docto_rm or not str(tipo_docto_rm).strip():
+            return []
+        try:
+            consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
+            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
+                'paginacion': 'numPag=1|tamPag=100',
+                'parametros': (
+                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
+                    f"AND f460_consec_docto = {consec_int}"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            return [r for r in rows if 'alerta' not in r]
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
+            return []
+
+    def get_detalle_factura(self, tipo_docto_rm: str, consec_rm) -> list:
+        """
+        GET API_v2_Ventas_Facturas_DesdePedido — detalle completo de la FE para impresión.
+        Filtra por RM (f460_id_tipo_docto / f460_consec_docto).
+        Falla silenciosamente: uso exclusivo de display, nunca de anti-duplicado.
+        Campos: f350_consec_docto, f350_id_tipo_docto, f350_fecha, f200_nit_fact,
+                f120_referencia, f470_cant_base, f470_precio_uni, f470_vlr_imp, f461_vlr_neto.
+        """
+        if self.modo_simulacion:
+            return []
+        if not tipo_docto_rm or not str(tipo_docto_rm).strip():
+            return []
+        try:
+            consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
+            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
+                'paginacion': 'numPag=1|tamPag=100',
+                'parametros': (
+                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
+                    f"AND f460_consec_docto = {consec_int}"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            return [r for r in rows if 'alerta' not in r]
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
+            return []
+
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
         """
         Cola viva de picking: filtra por CO y estado directo en Connekta.
