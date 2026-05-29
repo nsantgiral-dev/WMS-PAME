@@ -176,22 +176,10 @@ def confirmar_tarea(id):
             cantidad_recogida=data['cantidad_recogida'],
             usuario_id=usuario_id
         )
-        packing_id = None
-        try:
-            from app.models.packing import TareaPacking as _TP
-            pk = _TP.query.filter_by(numero_pedido_siesa=tarea.referencia_documento).first()
-            if pk:
-                packing_id = pk.id
-        except Exception:
-            pass
-        resp = {
+        return jsonify({
             'mensaje': 'Picking confirmado exitosamente',
-            'tarea': tarea.to_dict(),
-        }
-        if packing_id:
-            resp['packing_id'] = packing_id
-            resp['etiqueta_url'] = f'/api/packing/{packing_id}/etiqueta-canasto'
-        return jsonify(resp), 200
+            'tarea': tarea.to_dict()
+        }), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
