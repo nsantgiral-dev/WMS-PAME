@@ -1919,15 +1919,25 @@ function _modalEtiquetaCanasto(etiquetaUrl, packingId) {
     const btn = overlay.querySelector('#_ecan-print');
     btn.textContent = 'Generando...'; btn.disabled = true;
     try {
-      const resp = await fetch(etiquetaUrl + '?copias=' + copias, {
-        headers: { 'Authorization': 'Bearer ' + TOKEN }
-      });
-      if (!resp.ok) throw new Error('Error ' + resp.status);
-      const html = await resp.text();
-      const blob = new Blob([html], { type: 'text/html' });
-      const blobUrl = URL.createObjectURL(blob);
-      const w = window.open(blobUrl, '_blank');
-      if (w) setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+      const pk = await get(`/api/packing/${packingId}`);
+      const hoy = new Date().toLocaleString('es-CO');
+      const empacador = pk.empacador_nombre || pk.empacador_id || '—';
+      const itemsHtml = (pk.items || []).map(i =>
+        `<div class="ec-item"><span class="ec-ref">${i.referencia}</span><span class="ec-cant">${i.cantidad_real ?? i.cantidad_esperada} uds</span></div>`
+      ).join('');
+      const bloque = `
+        <div class="etiqueta-canasto">
+          <div class="ec-titulo">CANASTO — PICKING PAME</div>
+          <div class="ec-pedido">${pk.numero_pedido_siesa}</div>
+          <div class="ec-cliente">${pk.cliente || '—'}</div>
+          <div class="ec-municipio">${pk.municipio || ''}</div>
+          <div class="ec-items">${itemsHtml}</div>
+          <div class="ec-footer">${pk.total_items} ref · Empacador: ${empacador} · ${hoy}</div>
+        </div>`;
+      const area = document.getElementById('print-area');
+      area.innerHTML = bloque.repeat(copias);
+      window.print();
+      setTimeout(() => { area.innerHTML = ''; }, 1200);
     } catch (e) {
       alerta('Error al generar etiqueta: ' + (e.message || e), 'error');
       btn.textContent = '🖨 Imprimir etiquetas'; btn.disabled = false;

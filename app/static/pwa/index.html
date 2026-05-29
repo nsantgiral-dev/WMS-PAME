@@ -52,6 +52,27 @@
       .etiqueta-lpn .el-producto { font-size: 11px; text-align: center; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .etiqueta-lpn .el-cantidad { font-size: 22px; font-weight: 900; text-align: center; margin-top: 6px; border-top: 1px dashed #000; padding-top: 4px; }
       .etiqueta-lpn .el-fecha { font-size: 9px; text-align: right; color: #555; margin-top: 4px; }
+
+      /* ── Etiqueta canasto (identificación para picking) ── */
+      .etiqueta-canasto {
+        width: 80mm;
+        border: 2px solid #000;
+        padding: 8px;
+        margin: 4px auto;
+        page-break-after: always;
+        page-break-inside: avoid;
+        font-family: monospace;
+      }
+      .etiqueta-canasto:last-child { page-break-after: avoid; }
+      .etiqueta-canasto .ec-titulo { font-size: 10px; font-weight: 700; text-align: center; letter-spacing: 2px; border-bottom: 1px solid #000; padding-bottom: 4px; margin-bottom: 6px; }
+      .etiqueta-canasto .ec-pedido { font-size: 22px; font-weight: 900; text-align: center; letter-spacing: 1px; }
+      .etiqueta-canasto .ec-cliente { font-size: 11px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+      .etiqueta-canasto .ec-municipio { font-size: 12px; font-weight: 700; text-align: center; margin-bottom: 6px; }
+      .etiqueta-canasto .ec-items { border-top: 1px solid #000; padding-top: 4px; margin-top: 4px; }
+      .etiqueta-canasto .ec-item { display: flex; justify-content: space-between; font-size: 10px; padding: 1px 0; }
+      .etiqueta-canasto .ec-ref { font-weight: 700; }
+      .etiqueta-canasto .ec-cant { font-weight: 900; }
+      .etiqueta-canasto .ec-footer { font-size: 9px; text-align: center; border-top: 1px dashed #ccc; padding-top: 4px; margin-top: 6px; color: #333; }
     }
   </style>
   <style>
