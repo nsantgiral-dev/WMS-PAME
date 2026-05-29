@@ -461,6 +461,46 @@ class ConnektaGateway:
             logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
             return []
 
+    def get_punto_envio_factura(self, f350_rowid) -> dict:
+        """
+        Consulta dinámica papeleriamedellin_WMS_PuntoEnvio_FE.
+        Retorna datos del punto de envío (T462): contacto, ciudad, dirección,
+        barrio, teléfono, celular.
+
+        REQUIERE crear esta consulta en Connekta QA con el SQL:
+          SELECT TOP 1
+            f462_contacto, f462_barrio, f462_direccion,
+            f462_telefono, f462_celular,
+            f202_descripcion AS ciudad
+          FROM t462_cm_venta_docto_penv penv
+          INNER JOIN t461_cm_venta_docto v461
+            ON v461.f461_rowid = penv.f462_rowid_cm_venta_docto
+          LEFT JOIN t202_co_municipio mun
+            ON mun.f202_id_cia = penv.f462_id_cia
+            AND mun.f202_id = penv.f462_id_ciudad
+          WHERE v461.f461_rowid_co_docto_contable = @rowid
+            AND penv.f462_id_cia = 1
+        """
+        if self.modo_simulacion or not f350_rowid:
+            return {}
+        try:
+            res = self._get(
+                'papeleriamedellin_WMS_PuntoEnvio_FE',
+                params_extra={
+                    'paginacion': 'numPag=1|tamPag=5',
+                    'parametros': f'rowid={int(f350_rowid)}',
+                },
+                url=self.url_get_dinamico,
+            )
+            rows = (
+                res.get('detalle', {}).get('Datos') or
+                res.get('detalle', {}).get('Table') or []
+            )
+            return rows[0] if rows else {}
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_punto_envio_factura falló silenciosamente: %s', e)
+            return {}
+
     def get_detalle_factura(self, tipo_docto_rm: str, consec_rm,
                              consec_pedido=None) -> list:
         """

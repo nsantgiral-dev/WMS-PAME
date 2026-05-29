@@ -76,87 +76,86 @@ class FacturaFEService:
         ahora = datetime.now().strftime('%d/%m/%Y %H:%M')
         cab = lineas[0]  # campos de cabecera repetidos en cada fila
 
-        def _s(*keys) -> str:
-            """Primer valor no vacío entre varias claves posibles."""
-            for k in keys:
-                v = str(cab.get(k) or '').strip()
+        # ── Cabecera FE — nombres de campo confirmados del log Railway ──────────
+        tipo_fe    = str(cab.get('f350_id_tipo_docto') or '').strip()
+        consec_fe  = cab.get('f350_consec_docto') or ''
+        fe_numero  = f'{tipo_fe}-{int(consec_fe):05d}' if consec_fe else f'{tipo_fe}-?'
+        fecha_fe   = FacturaFEService._fmt_fecha(str(cab.get('f350_fecha') or '')) or ahora
+        nit_cliente= str(cab.get('f200_nit_fact') or '').strip()
+        nombre_cli = str(cab.get('f200_razon_social_fact') or tarea.cliente or '—').strip()
+        vendedor   = str(cab.get('f200_razon_social_vendedor') or '').strip()
+
+        # ── Datos de entrega desde T462 (requiere consulta papeleriamedellin_WMS_PuntoEnvio_FE) ─
+        envio = {}
+        f350_rowid = cab.get('f350_rowid')
+        if f350_rowid:
+            try:
+                from app.services.connekta_gateway import connekta
+                envio = connekta.get_punto_envio_factura(f350_rowid)
+            except Exception:
+                pass
+
+        def _ev(key, *alt_keys):
+            for k in (key,) + alt_keys:
+                v = str(envio.get(k) or '').strip()
                 if v:
                     return v
             return ''
 
-        # ── Cabecera FE ───────────────────────────────────────────────────────
-        tipo_fe    = _s('f350_id_tipo_docto')
-        consec_fe  = cab.get('f350_consec_docto') or ''
-        fe_numero  = f'{tipo_fe}-{int(consec_fe):05d}' if consec_fe else f'{tipo_fe}-?'
-        fecha_fe   = FacturaFEService._fmt_fecha(_s('f350_fecha')) or ahora
-        nit_cliente= _s('f200_nit_fact', 'f200_id_tercero_fact', 'f200_id_fact')
-        nombre_cli = _s('f200_razon_social_pedido_fact', 'f200_razon_social',
-                        'f200_nombre') or (tarea.cliente or '—')
-
-        # ── Datos de entrega / punto de envío ─────────────────────────────────
-        vendedor   = _s('f430_id_vendedor', 'f461_id_vendedor',
-                        'f430_vendedor', 'f200_id_vendedor')
-        contacto   = _s('f462_contacto', 'f200_contacto',
-                        'f462_nombre_contacto', 'f202_contacto')
-        ciudad     = _s('f462_descripcion_ciudad', 'f462_ciudad',
-                        'f462_id_ciudad', 'f202_descripcion', 'f200_ciudad')
-        direccion  = _s('f462_direccion', 'f200_direccion',
-                        'f462_dir', 'f200_dir_fact')
-        barrio     = _s('f462_barrio', 'f200_barrio', 'f462_id_barrio')
-        telefono   = _s('f462_telefono', 'f200_telefono',
-                        'f462_tel', 'f200_tel')
-        celular    = _s('f462_celular', 'f200_celular',
-                        'f462_cel', 'f200_cel')
+        contacto  = _ev('f462_contacto', 'contacto')
+        ciudad    = _ev('ciudad', 'f462_id_ciudad')
+        direccion = _ev('f462_direccion', 'direccion')
+        barrio    = _ev('f462_barrio', 'barrio')
+        telefono  = _ev('f462_telefono', 'telefono')
+        celular   = _ev('f462_celular', 'celular')
 
         # ── Líneas de ítems ───────────────────────────────────────────────────
-        # En Siesa: f470_precio_uni × cant = total IVA incluido.
-        # base_linea = total - iva  (lo que va antes de impuestos)
+        # Usar f470_vlr_bruto (base sin IVA) y f470_vlr_neto (total con IVA)
+        # directamente de Siesa — más preciso que recalcular.
         base_doc = 0.0
         iva_doc  = 0.0
         filas_html = []
         for i, r in enumerate(lineas, 1):
-            ref  = str(r.get('f120_referencia') or '').strip()
-            desc = str(
-                r.get('f120_descripcion') or r.get('f120_descripcion_1') or
-                r.get('f120_nombre') or ref
-            ).strip()
+            ref       = str(r.get('f120_referencia') or '').strip()
+            desc      = str(r.get('f120_descripcion') or ref).strip()
             cant      = float(r.get('f470_cant_base') or 0)
             precio    = float(r.get('f470_precio_uni') or 0)
-            iva_linea = float(r.get('f470_vlr_imp') or 0)
-            total_linea = cant * precio          # precio ya incluye IVA
-            base_linea  = total_linea - iva_linea
-            base_doc += base_linea
-            iva_doc  += iva_linea
+            base_lin  = float(r.get('f470_vlr_bruto') or 0)
+            iva_lin   = float(r.get('f470_vlr_imp') or 0)
+            neto_lin  = float(r.get('f470_vlr_neto') or (base_lin + iva_lin))
+            base_doc += base_lin
+            iva_doc  += iva_lin
             filas_html.append(f"""<tr>
               <td>{i}</td>
               <td>{ref}</td>
               <td>{desc}</td>
               <td style="text-align:right;">{cant:,.0f}</td>
               <td style="text-align:right;">{FacturaFEService._fmt_pesos(precio)}</td>
-              <td style="text-align:right;">{FacturaFEService._fmt_pesos(base_linea)}</td>
-              <td style="text-align:right;">{FacturaFEService._fmt_pesos(iva_linea)}</td>
-              <td style="text-align:right;">{FacturaFEService._fmt_pesos(total_linea)}</td>
+              <td style="text-align:right;">{FacturaFEService._fmt_pesos(base_lin)}</td>
+              <td style="text-align:right;">{FacturaFEService._fmt_pesos(iva_lin)}</td>
+              <td style="text-align:right;">{FacturaFEService._fmt_pesos(neto_lin)}</td>
             </tr>""")
 
-        # f461_vlr_neto = total a pagar (base + IVA); usar si está disponible
-        neto_siesa = float(cab.get('f461_vlr_neto') or 0)
-        total_doc  = neto_siesa if neto_siesa else (base_doc + iva_doc)
+        # Totales del documento desde f461 (más precisos que sumar líneas)
+        base_doc  = float(cab.get('f461_vlr_bruto') or base_doc)
+        iva_doc   = float(cab.get('f461_vlr_imp')   or iva_doc)
+        total_doc = float(cab.get('f461_vlr_neto')  or (base_doc + iva_doc))
 
         filas       = '\n'.join(filas_html)
         nit_empresa = os.getenv('SIESA_NIT_EMPRESA', '')
 
-        # ── Filas opcionales de entrega (solo si tienen valor) ────────────────
-        def _fila_cli(lbl, val):
-            return (f'<span class="lbl">{lbl}</span><span>{val}</span>' if val else '')
+        # ── Bloque de entrega (solo se renderiza si hay al menos un campo) ────
+        def _fila(lbl, val):
+            return f'<span class="lbl">{lbl}</span><span>{val}</span>' if val else ''
 
         filas_entrega = '\n'.join(filter(None, [
-            _fila_cli('Vendedor',  vendedor),
-            _fila_cli('Contacto',  contacto),
-            _fila_cli('Ciudad',    ciudad),
-            _fila_cli('Dirección', direccion),
-            _fila_cli('Barrio',    barrio),
-            _fila_cli('Teléfono',  telefono),
-            _fila_cli('Celular',   celular),
+            _fila('Vendedor',  vendedor),
+            _fila('Contacto',  contacto),
+            _fila('Ciudad',    ciudad),
+            _fila('Dirección', direccion),
+            _fila('Barrio',    barrio),
+            _fila('Teléfono',  telefono),
+            _fila('Celular',   celular),
         ]))
 
         return f"""<!DOCTYPE html>
