@@ -1895,19 +1895,28 @@ function _modalEtiquetaCanasto(etiquetaUrl, packingId) {
     <div style="background:#111;border-radius:16px;padding:28px 24px;width:100%;max-width:360px;border:2px solid #16a34a;text-align:center;">
       <div style="font-size:56px;margin-bottom:8px;">✅</div>
       <div style="font-size:22px;font-weight:900;color:#4ade80;margin-bottom:8px;">Picking completado</div>
-      <div style="font-size:14px;color:#aaa;margin-bottom:24px;line-height:1.6;">
-        Imprime la etiqueta y pégala en el canasto<br>para que packing identifique el pedido.
+      <div style="font-size:14px;color:#aaa;margin-bottom:20px;line-height:1.6;">
+        ¿Cuántos canastos usaste para este pedido?
+      </div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:16px;margin-bottom:24px;">
+        <button id="_ecan-menos" style="width:48px;height:48px;background:#1a1a1a;color:#fff;border:2px solid #333;border-radius:12px;font-size:24px;font-weight:900;cursor:pointer;">−</button>
+        <span id="_ecan-num" style="font-size:40px;font-weight:900;color:#fff;min-width:48px;">1</span>
+        <button id="_ecan-mas" style="width:48px;height:48px;background:#1a1a1a;color:#fff;border:2px solid #333;border-radius:12px;font-size:24px;font-weight:900;cursor:pointer;">+</button>
       </div>
       <button id="_ecan-print" style="width:100%;padding:16px;background:#16a34a;color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:12px;">
-        🖨 Imprimir etiqueta canasto
+        🖨 Imprimir etiquetas
       </button>
       <button id="_ecan-skip" style="width:100%;padding:14px;background:#1a1a1a;color:#666;border:1px solid #333;border-radius:12px;font-size:14px;font-weight:600;cursor:pointer;">
         Continuar sin imprimir
       </button>
     </div>`;
   document.body.appendChild(overlay);
+  let copias = 1;
+  const numEl = overlay.querySelector('#_ecan-num');
+  overlay.querySelector('#_ecan-menos').onclick = () => { if (copias > 1) numEl.textContent = --copias; };
+  overlay.querySelector('#_ecan-mas').onclick  = () => { if (copias < 10) numEl.textContent = ++copias; };
   overlay.querySelector('#_ecan-print').onclick = () => {
-    window.open(etiquetaUrl, '_blank');
+    window.open(etiquetaUrl + '?copias=' + copias, '_blank');
     overlay.remove();
     setTimeout(pedirTarea, 800);
   };

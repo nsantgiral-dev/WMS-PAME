@@ -431,11 +431,15 @@ def etiqueta_canasto(id):
     tarea = TareaPacking.query.get_or_404(id)
     if tarea.estado == EstadoPacking.PENDIENTE:
         return jsonify({'error': 'Tarea aún no iniciada'}), 409
-    html = _html_etiqueta_canasto(tarea)
+    try:
+        copias = max(1, min(10, int(request.args.get('copias', 1))))
+    except (ValueError, TypeError):
+        copias = 1
+    html = _html_etiqueta_canasto(tarea, copias)
     return Response(html, mimetype='text/html; charset=utf-8'), 200
 
 
-def _html_etiqueta_canasto(tarea: TareaPacking) -> str:
+def _html_etiqueta_canasto(tarea: TareaPacking, copias: int = 1) -> str:
     from datetime import datetime
     empacador_nombre = tarea.empacador.nombre if tarea.empacador else '—'
     ahora = datetime.now().strftime('%d/%m/%Y %H:%M')
@@ -446,6 +450,28 @@ def _html_etiqueta_canasto(tarea: TareaPacking) -> str:
         desc = (item.producto.descripcion[:40] if item.producto and item.producto.descripcion else '') or ''
         filas_items += f'<tr><td>{item.referencia}</td><td>{desc}</td><td style="text-align:right;font-weight:700">{cant:,}</td></tr>'
 
+    bloque = f"""<div class="etiqueta">
+  <div class="header">
+    <div class="pedido">&#128230; {tarea.numero_pedido_siesa}</div>
+    <div class="cliente">{tarea.cliente or '—'}</div>
+    <div class="municipio">{tarea.municipio or ''}</div>
+  </div>
+  <div class="meta">
+    <span><span class="lbl">Empacador</span><span class="val">{empacador_nombre}</span></span>
+    <span><span class="lbl">Referencias</span><span class="val">{tarea.total_items()}</span></span>
+    <span><span class="lbl">Total uds</span><span class="val">{total_unidades:,}</span></span>
+    <span><span class="lbl">Generado</span><span class="val">{ahora}</span></span>
+  </div>
+  <table>
+    <thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right">Cant.</th></tr></thead>
+    <tbody>{filas_items}</tbody>
+  </table>
+  <div class="totales">{tarea.total_items()} ref · {total_unidades:,} uds</div>
+  <div class="footer">WMS-PAME · Tarea #{tarea.id}</div>
+</div>"""
+
+    bloques = bloque * copias
+
     return f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -453,12 +479,14 @@ def _html_etiqueta_canasto(tarea: TareaPacking) -> str:
 <title>Etiqueta Canasto — {tarea.numero_pedido_siesa}</title>
 <style>
   * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ font-family: Arial, sans-serif; font-size: 12px; padding: 12px; width: 100%; }}
+  body {{ font-family: Arial, sans-serif; font-size: 12px; }}
+  .etiqueta {{ padding: 12px; page-break-after: always; }}
+  .etiqueta:last-child {{ page-break-after: avoid; }}
   .header {{ border: 3px solid #000; padding: 10px 14px; margin-bottom: 10px; }}
   .pedido {{ font-size: 36px; font-weight: 900; letter-spacing: 2px; color: #000; }}
   .cliente {{ font-size: 16px; font-weight: 700; margin-top: 4px; }}
   .municipio {{ font-size: 13px; color: #444; }}
-  .meta {{ display: flex; gap: 24px; margin: 8px 0; font-size: 12px; }}
+  .meta {{ display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0; font-size: 12px; }}
   .meta span {{ display: flex; flex-direction: column; }}
   .meta .lbl {{ font-size: 10px; color: #666; text-transform: uppercase; }}
   .meta .val {{ font-weight: 700; font-size: 13px; }}
@@ -467,30 +495,10 @@ def _html_etiqueta_canasto(tarea: TareaPacking) -> str:
   td {{ padding: 3px 6px; border-bottom: 1px solid #ddd; }}
   .totales {{ margin-top: 8px; text-align: right; font-size: 13px; font-weight: 700; border-top: 2px solid #000; padding-top: 6px; }}
   .footer {{ margin-top: 10px; font-size: 10px; color: #666; border-top: 1px solid #ccc; padding-top: 6px; }}
-  @media print {{
-    body {{ padding: 4px; }}
-    .pedido {{ font-size: 30px; }}
-  }}
 </style>
 </head>
 <body>
-<div class="header">
-  <div class="pedido">&#128230; {tarea.numero_pedido_siesa}</div>
-  <div class="cliente">{tarea.cliente or '—'}</div>
-  <div class="municipio">{tarea.municipio or ''}</div>
-</div>
-<div class="meta">
-  <span><span class="lbl">Empacador</span><span class="val">{empacador_nombre}</span></span>
-  <span><span class="lbl">Referencias</span><span class="val">{tarea.total_items()}</span></span>
-  <span><span class="lbl">Total unidades</span><span class="val">{total_unidades:,}</span></span>
-  <span><span class="lbl">Generado</span><span class="val">{ahora}</span></span>
-</div>
-<table>
-  <thead><tr><th>Referencia</th><th>Descripción</th><th style="text-align:right">Cant.</th></tr></thead>
-  <tbody>{filas_items}</tbody>
-</table>
-<div class="totales">{tarea.total_items()} ref · {total_unidades:,} uds</div>
-<div class="footer">WMS-PAME · Etiqueta canasto · Tarea #{tarea.id}</div>
+{bloques}
 <script>window.onload = function(){{ window.print(); }}</script>
 </body>
 </html>"""

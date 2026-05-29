@@ -655,6 +655,8 @@ class MobileService:
             almacen_id = tarea.almacen_id
             # cantidad_manual: confirmación sin escáner (operario contó físicamente)
             cantidad = cantidad_manual if cantidad_manual is not None else tarea.cantidad_recogida
+            # Capturar antes del commit — expire_on_commit invalida los atributos
+            _ref_doc = tarea.referencia_documento
             resultado = PickingService.confirmar_picking(
                 tarea_id=tarea_id,
                 cantidad_recogida=cantidad,
@@ -662,14 +664,18 @@ class MobileService:
             ).to_dict()
             try:
                 from app.models.packing import TareaPacking as _TP
-                pk = _TP.query.filter_by(
-                    numero_pedido_siesa=tarea.referencia_documento
-                ).first()
-                if pk:
-                    resultado['packing_id'] = pk.id
-                    resultado['etiqueta_url'] = f'/api/packing/{pk.id}/etiqueta-canasto'
-            except Exception:
-                pass
+                if _ref_doc:
+                    pk = _TP.query.filter_by(numero_pedido_siesa=_ref_doc).first()
+                    if pk:
+                        resultado['packing_id'] = pk.id
+                        resultado['etiqueta_url'] = f'/api/packing/{pk.id}/etiqueta-canasto'
+                        logger.info('[MOBILE] etiqueta_url generada: packing_id=%s pedido=%s', pk.id, _ref_doc)
+                    else:
+                        logger.info('[MOBILE] sin TareaPacking para pedido=%s', _ref_doc)
+                else:
+                    logger.info('[MOBILE] referencia_documento vacía en tarea_id=%s', tarea_id)
+            except Exception as _e:
+                logger.warning('[MOBILE] lookup packing para etiqueta falló: %s', _e)
             # Disparar verificación de stock en background — throttled a 2 threads concurrentes
             # para no colapsar el connection pool DB durante apertura de turno (N operarios simultáneos)
             try:
