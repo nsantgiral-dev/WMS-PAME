@@ -60,57 +60,104 @@ class FacturaFEService:
     # ──────────────────────────────────────────────────────────────────────────
 
     @staticmethod
+    def _fmt_fecha(raw: str) -> str:
+        """Limpia el formato ISO de Siesa (2026-05-29T00:00:00 → 29/05/2026)."""
+        if not raw:
+            return ''
+        try:
+            parte = str(raw).split('T')[0]           # quitar la hora
+            y, m, d = parte.split('-')
+            return f'{d}/{m}/{y}'
+        except Exception:
+            return str(raw)
+
+    @staticmethod
     def _html_fe_completa(tarea, lineas: list) -> str:
         ahora = datetime.now().strftime('%d/%m/%Y %H:%M')
         cab = lineas[0]  # campos de cabecera repetidos en cada fila
 
-        # ── Cabecera FE ───────────────────────────────────────────────────────
-        tipo_fe     = str(cab.get('f350_id_tipo_docto') or '').strip()
-        consec_fe   = cab.get('f350_consec_docto') or ''
-        fe_numero   = f'{tipo_fe}-{int(consec_fe):05d}' if consec_fe else f'{tipo_fe}-?'
-        fecha_fe    = str(cab.get('f350_fecha') or ahora).strip()
-        nit_cliente = str(cab.get('f200_nit_fact') or cab.get('f200_id_tercero_fact') or '').strip()
-        nombre_cli  = str(
-            cab.get('f200_razon_social_pedido_fact') or
-            cab.get('f200_razon_social') or
-            tarea.cliente or '—'
-        ).strip()
+        def _s(*keys) -> str:
+            """Primer valor no vacío entre varias claves posibles."""
+            for k in keys:
+                v = str(cab.get(k) or '').strip()
+                if v:
+                    return v
+            return ''
 
-        # ── Líneas de items ───────────────────────────────────────────────────
-        subtotal_doc = 0.0
-        iva_doc      = 0.0
-        filas_html   = []
+        # ── Cabecera FE ───────────────────────────────────────────────────────
+        tipo_fe    = _s('f350_id_tipo_docto')
+        consec_fe  = cab.get('f350_consec_docto') or ''
+        fe_numero  = f'{tipo_fe}-{int(consec_fe):05d}' if consec_fe else f'{tipo_fe}-?'
+        fecha_fe   = FacturaFEService._fmt_fecha(_s('f350_fecha')) or ahora
+        nit_cliente= _s('f200_nit_fact', 'f200_id_tercero_fact', 'f200_id_fact')
+        nombre_cli = _s('f200_razon_social_pedido_fact', 'f200_razon_social',
+                        'f200_nombre') or (tarea.cliente or '—')
+
+        # ── Datos de entrega / punto de envío ─────────────────────────────────
+        vendedor   = _s('f430_id_vendedor', 'f461_id_vendedor',
+                        'f430_vendedor', 'f200_id_vendedor')
+        contacto   = _s('f462_contacto', 'f200_contacto',
+                        'f462_nombre_contacto', 'f202_contacto')
+        ciudad     = _s('f462_descripcion_ciudad', 'f462_ciudad',
+                        'f462_id_ciudad', 'f202_descripcion', 'f200_ciudad')
+        direccion  = _s('f462_direccion', 'f200_direccion',
+                        'f462_dir', 'f200_dir_fact')
+        barrio     = _s('f462_barrio', 'f200_barrio', 'f462_id_barrio')
+        telefono   = _s('f462_telefono', 'f200_telefono',
+                        'f462_tel', 'f200_tel')
+        celular    = _s('f462_celular', 'f200_celular',
+                        'f462_cel', 'f200_cel')
+
+        # ── Líneas de ítems ───────────────────────────────────────────────────
+        # En Siesa: f470_precio_uni × cant = total IVA incluido.
+        # base_linea = total - iva  (lo que va antes de impuestos)
+        base_doc = 0.0
+        iva_doc  = 0.0
+        filas_html = []
         for i, r in enumerate(lineas, 1):
-            ref   = str(r.get('f120_referencia') or '').strip()
-            desc  = str(
-                r.get('f120_descripcion') or
-                r.get('f120_descripcion_1') or
+            ref  = str(r.get('f120_referencia') or '').strip()
+            desc = str(
+                r.get('f120_descripcion') or r.get('f120_descripcion_1') or
                 r.get('f120_nombre') or ref
             ).strip()
-            cant  = float(r.get('f470_cant_base') or 0)
-            precio= float(r.get('f470_precio_uni') or 0)
-            iva   = float(r.get('f470_vlr_imp') or 0)
-            sub   = cant * precio
-            total_linea = sub + iva
-            subtotal_doc += sub
-            iva_doc      += iva
+            cant      = float(r.get('f470_cant_base') or 0)
+            precio    = float(r.get('f470_precio_uni') or 0)
+            iva_linea = float(r.get('f470_vlr_imp') or 0)
+            total_linea = cant * precio          # precio ya incluye IVA
+            base_linea  = total_linea - iva_linea
+            base_doc += base_linea
+            iva_doc  += iva_linea
             filas_html.append(f"""<tr>
               <td>{i}</td>
               <td>{ref}</td>
               <td>{desc}</td>
               <td style="text-align:right;">{cant:,.0f}</td>
               <td style="text-align:right;">{FacturaFEService._fmt_pesos(precio)}</td>
-              <td style="text-align:right;">{FacturaFEService._fmt_pesos(sub)}</td>
-              <td style="text-align:right;">{FacturaFEService._fmt_pesos(iva)}</td>
+              <td style="text-align:right;">{FacturaFEService._fmt_pesos(base_linea)}</td>
+              <td style="text-align:right;">{FacturaFEService._fmt_pesos(iva_linea)}</td>
               <td style="text-align:right;">{FacturaFEService._fmt_pesos(total_linea)}</td>
             </tr>""")
 
-        # f461_vlr_neto puede traer el neto del documento — usarlo si existe
+        # f461_vlr_neto = total a pagar (base + IVA); usar si está disponible
         neto_siesa = float(cab.get('f461_vlr_neto') or 0)
-        neto_doc   = neto_siesa if neto_siesa else (subtotal_doc + iva_doc)
+        total_doc  = neto_siesa if neto_siesa else (base_doc + iva_doc)
 
-        filas = '\n'.join(filas_html)
+        filas       = '\n'.join(filas_html)
         nit_empresa = os.getenv('SIESA_NIT_EMPRESA', '')
+
+        # ── Filas opcionales de entrega (solo si tienen valor) ────────────────
+        def _fila_cli(lbl, val):
+            return (f'<span class="lbl">{lbl}</span><span>{val}</span>' if val else '')
+
+        filas_entrega = '\n'.join(filter(None, [
+            _fila_cli('Vendedor',  vendedor),
+            _fila_cli('Contacto',  contacto),
+            _fila_cli('Ciudad',    ciudad),
+            _fila_cli('Dirección', direccion),
+            _fila_cli('Barrio',    barrio),
+            _fila_cli('Teléfono',  telefono),
+            _fila_cli('Celular',   celular),
+        ]))
 
         return f"""<!DOCTYPE html>
 <html lang="es">
@@ -125,15 +172,16 @@ class FacturaFEService:
     .emisor h1 {{ font-size: 18px; font-weight: 700; }}
     .emisor p  {{ font-size: 10px; color: #555; margin-top: 2px; }}
     .fe-box {{ text-align: right; border: 2px solid #1a1a1a; padding: 8px 14px; border-radius: 4px; }}
-    .fe-box .fe-tipo {{ font-size: 20px; font-weight: 800; letter-spacing: 2px; }}
-    .fe-box .fe-num  {{ font-size: 13px; font-weight: 700; color: #333; }}
-    .fe-box .fe-fecha{{ font-size: 10px; color: #555; margin-top: 2px; }}
-    .cliente {{ background: #f8f8f8; padding: 10px 14px; border-radius: 4px;
-                margin-bottom: 14px; display: grid; grid-template-columns: auto 1fr; gap: 4px 16px; }}
-    .cliente .lbl {{ font-weight: 700; color: #444; white-space: nowrap; }}
+    .fe-box .fe-tipo  {{ font-size: 20px; font-weight: 800; letter-spacing: 2px; }}
+    .fe-box .fe-num   {{ font-size: 13px; font-weight: 700; color: #333; }}
+    .fe-box .fe-fecha {{ font-size: 10px; color: #555; margin-top: 2px; }}
+    .info-bloque {{ background: #f8f8f8; padding: 10px 14px; border-radius: 4px;
+                   margin-bottom: 8px; display: grid;
+                   grid-template-columns: auto 1fr; gap: 4px 16px; }}
+    .info-bloque .lbl {{ font-weight: 700; color: #444; white-space: nowrap; }}
     .section-title {{ font-size: 10px; font-weight: 700; text-transform: uppercase;
                       letter-spacing: .5px; color: #555; border-bottom: 1px solid #ddd;
-                      padding-bottom: 3px; margin-bottom: 6px; margin-top: 16px; }}
+                      padding-bottom: 3px; margin-bottom: 6px; margin-top: 14px; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 10px; }}
     th {{ background: #1a1a1a; color: #fff; padding: 5px 7px; text-align: left; font-weight: 600; }}
     td {{ padding: 4px 7px; border-bottom: 1px solid #eee; vertical-align: middle; }}
@@ -142,9 +190,9 @@ class FacturaFEService:
     .totales table {{ width: auto; min-width: 260px; }}
     .totales td {{ padding: 3px 8px; border: none; }}
     .totales td:first-child {{ font-weight: 700; color: #444; text-align: right; }}
-    .totales td:last-child {{ text-align: right; font-variant-numeric: tabular-nums; }}
-    .totales .total-neto td {{ font-size: 13px; font-weight: 800; border-top: 2px solid #1a1a1a;
-                               padding-top: 5px; }}
+    .totales td:last-child  {{ text-align: right; font-variant-numeric: tabular-nums; }}
+    .totales .total-fila td {{ font-size: 13px; font-weight: 800;
+                               border-top: 2px solid #1a1a1a; padding-top: 5px; }}
     .footer {{ margin-top: 20px; display: flex; justify-content: space-between;
                font-size: 9px; color: #888; border-top: 1px solid #ddd; padding-top: 8px; }}
     @media print {{ body {{ padding: 8px; }} .no-print {{ display: none; }} }}
@@ -169,12 +217,14 @@ class FacturaFEService:
     </div>
   </div>
 
-  <div class="cliente">
-    <span class="lbl">Cliente</span>   <span>{nombre_cli}</span>
-    <span class="lbl">NIT</span>        <span>{nit_cliente}</span>
-    <span class="lbl">Pedido</span>     <span>{tarea.numero_pedido_siesa}</span>
-    <span class="lbl">Remisión</span>   <span>{tarea.rm_tipo or '—'}-{tarea.rm_consec or '—'}</span>
+  <div class="info-bloque">
+    <span class="lbl">Cliente</span>  <span>{nombre_cli}</span>
+    <span class="lbl">NIT</span>       <span>{nit_cliente}</span>
+    <span class="lbl">Pedido</span>    <span>{tarea.numero_pedido_siesa}</span>
+    <span class="lbl">Remisión</span>  <span>{tarea.rm_tipo or '—'}-{tarea.rm_consec or '—'}</span>
   </div>
+
+  {f'<div class="info-bloque">{filas_entrega}</div>' if filas_entrega else ''}
 
   <div class="section-title">Detalle de la factura</div>
   <table>
@@ -185,7 +235,7 @@ class FacturaFEService:
         <th>Descripción</th>
         <th style="text-align:right;">Cant.</th>
         <th style="text-align:right;">Precio unit.</th>
-        <th style="text-align:right;">Subtotal</th>
+        <th style="text-align:right;">Base</th>
         <th style="text-align:right;">IVA</th>
         <th style="text-align:right;">Total línea</th>
       </tr>
@@ -197,17 +247,11 @@ class FacturaFEService:
 
   <div class="totales">
     <table>
-      <tr>
-        <td>Subtotal</td>
-        <td>{FacturaFEService._fmt_pesos(subtotal_doc)}</td>
-      </tr>
-      <tr>
-        <td>IVA</td>
-        <td>{FacturaFEService._fmt_pesos(iva_doc)}</td>
-      </tr>
-      <tr class="total-neto">
-        <td>TOTAL NETO</td>
-        <td>{FacturaFEService._fmt_pesos(neto_doc)}</td>
+      <tr><td>Base gravable</td><td>{FacturaFEService._fmt_pesos(base_doc)}</td></tr>
+      <tr><td>IVA</td>          <td>{FacturaFEService._fmt_pesos(iva_doc)}</td></tr>
+      <tr class="total-fila">
+        <td>TOTAL</td>
+        <td>{FacturaFEService._fmt_pesos(total_doc)}</td>
       </tr>
     </table>
   </div>
