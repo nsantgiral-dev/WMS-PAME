@@ -220,7 +220,6 @@ class PickingService:
         db.session.commit()
 
         # Auto-sync packing asociado — ajusta cantidad_esperada al recogido real
-        # Fallo silencioso: el empacador siempre puede usar "reiniciar conteo" como fallback
         try:
             from app.models.packing import TareaPacking as _TPSync
             from app.services.packing_picking_sync_service import PackingPickingSyncService as _PPSync

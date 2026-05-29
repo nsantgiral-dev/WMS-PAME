@@ -2420,11 +2420,6 @@ function renderEscaneoRecepcion(rec) {
         🎁 Registrar Obsequio / Bonificación
       </button>
 
-      <button onclick="reiniciarConteoRecepcion()"
-        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#ef4444;border:1px solid #7f1d1d;border-radius:10px;cursor:pointer;margin-bottom:8px;">
-        🔄 Reiniciar conteo
-      </button>
-
       <button onclick="volverListaRecepciones()"
         style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
         Guardar y salir (continuar más tarde)
@@ -2903,18 +2898,6 @@ function _pedirRemision() {
   });
 }
 
-async function reiniciarConteoRecepcion() {
-  if (!RECEPCION_ACTUAL) return;
-  if (!confirm('¿Reiniciar el conteo? Se borrará todo lo escaneado en esta recepción.')) return;
-  try {
-    const r = await put('/api/recepcion/' + RECEPCION_ACTUAL.id + '/reiniciar-conteo', {});
-    if (r.error) { alerta(r.error, 'error'); return; }
-    RECEPCION_ACTUAL = r.recepcion;
-    renderEscaneoRecepcion(r.recepcion);
-    alerta('Conteo reiniciado — vuelve a escanear', 'info');
-  } catch (e) { alerta('Error reiniciando conteo', 'error'); }
-}
-
 function volverListaRecepciones() {
   RECEPCION_ACTUAL = null;
   cargarRecepciones();
@@ -3221,11 +3204,6 @@ async function empCargarTareas() {
             style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
             🗑 Limpiar bultos y redeclarar piezas
           </button>` : '';
-        const reiniciarBtn = enProceso ? `
-          <button onclick="event.stopPropagation();empReiniciarConteo(${t.id})"
-            style="margin-top:8px;width:100%;padding:8px;background:#1a1200;border:1px solid #713f12;color:#facc15;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;">
-            🔄 Reiniciar conteo
-          </button>` : '';
         return `
         <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${t.id})`}"
           style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border-color:#7f1d1d;background:#110505;' : ''}">
@@ -3237,7 +3215,6 @@ async function empCargarTareas() {
           <span class="emp-task-badge" style="background:${bg};color:${color};">${label}</span>
           ${anulado_banner}
           ${limpiarBtn}
-          ${reiniciarBtn}
         </div>`;
       }).join('')}`;
   } catch (e) {
@@ -3339,15 +3316,6 @@ async function empLimpiarSiesa(packingId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-async function empReiniciarConteo(packingId) {
-  if (!confirm('¿Reiniciar el conteo? Se borrará todo lo escaneado en esta tarea y deberás volver a escanear todos los productos.')) return;
-  try {
-    const r = await put('/api/packing/' + packingId + '/reiniciar-conteo', {});
-    if (r.error) { alerta(r.error, 'error'); return; }
-    alerta('Conteo reiniciado — todos los productos vuelven a 0', 'info');
-    empCerrarHUD();
-  } catch (e) { alerta('Error reiniciando conteo', 'error'); }
-}
 
 async function empDespacharConFaltantes() {
   if (!EMP_TAREA) return;
