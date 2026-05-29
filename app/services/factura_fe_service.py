@@ -85,19 +85,12 @@ class FacturaFEService:
         nombre_cli = str(cab.get('f200_razon_social_fact') or tarea.cliente or '—').strip()
         vendedor   = str(cab.get('f200_razon_social_vendedor') or '').strip()
 
-        # ── Datos de entrega: T462 (consulta dinámica) con fallback f015 del pedido ──
+        # ── Datos de entrega desde f015_* del pedido original ────────────────────
+        # T462 (t462_cm_venta_docto_penv) no está accesible vía Módulo Conectividad —
+        # el usuario SQL no tiene SELECT sobre esa tabla (requiere GRANT de Siesa).
+        # Usamos f015_* de get_pedido_cabecera que sí está disponible.
         envio = {}
-        f350_rowid = cab.get('f350_rowid')
-        if f350_rowid:
-            try:
-                from app.services.connekta_gateway import connekta
-                envio = connekta.get_punto_envio_factura(f350_rowid)
-            except Exception:
-                pass
-
-        # Fallback: f015_* del pedido original (ya devueltos por get_pedido_cabecera,
-        # disponibles en API_v2_Ventas_Pedidos sin llamada extra si la FE fue reciente)
-        if not any(envio.values()) and tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+        if tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
             try:
                 from app.services.connekta_gateway import connekta
                 cab_ped = connekta.get_pedido_cabecera(
