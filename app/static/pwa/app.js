@@ -5691,33 +5691,28 @@ function _condRenderParadas(d) {
 
   paradas.forEach((p, idx) => {
     const r = p.recaudo;
-    const colorBorde = r
-      ? (r.estado_entrega === 'ENTREGADO' ? '#166534' : r.estado_entrega === 'PARCIAL' ? '#78350f' : '#7f1d1d')
-      : '#222';
-    const colorFondo = r
-      ? (r.estado_entrega === 'ENTREGADO' ? '#0d1a0d' : r.estado_entrega === 'PARCIAL' ? '#1a0d00' : '#1a0d0d')
-      : '#111';
-    const badge = r
-      ? (r.estado_entrega === 'ENTREGADO'
-          ? `<span style="background:#166534;color:#4ade80;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">ENTREGADO</span>`
-          : r.estado_entrega === 'PARCIAL'
-          ? `<span style="background:#78350f;color:#fbbf24;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">PARCIAL</span>`
-          : `<span style="background:#7f1d1d;color:#f87171;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">RECHAZADO</span>`)
-      : `<span style="background:#1a1a1a;color:#555;padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">PENDIENTE</span>`;
+    const EST_C = {
+      ENTREGADO: { borde: '#16a34a', fondo: '#f0fdf4', badgeBg: '#dcfce7', badgeColor: '#15803d', label: 'ENTREGADO' },
+      PARCIAL:   { borde: '#d97706', fondo: '#fffbeb', badgeBg: '#fef3c7', badgeColor: '#b45309', label: 'PARCIAL'   },
+      RECHAZADO: { borde: '#dc2626', fondo: '#fef2f2', badgeBg: '#fee2e2', badgeColor: '#b91c1c', label: 'RECHAZADO' },
+    };
+    const est = r ? r.estado_entrega : null;
+    const c = est ? EST_C[est] : { borde: '#d1d5db', fondo: '#f9fafb', badgeBg: '#f3f4f6', badgeColor: '#6b7280', label: 'PENDIENTE' };
+    const badge = `<span style="background:${c.badgeBg};color:${c.badgeColor};padding:2px 8px;border-radius:8px;font-size:10px;font-weight:700;">${c.label}</span>`;
     const monto = r ? ` · $${Number(r.monto_cobrado || 0).toLocaleString('es-CO')}` : '';
 
     html += `
-      <div style="background:${colorFondo};border:1px solid ${colorBorde};border-radius:12px;padding:14px;margin-bottom:8px;cursor:pointer;"
+      <div style="background:${c.fondo};border:1px solid ${c.borde};border-radius:12px;padding:14px;margin-bottom:8px;cursor:pointer;"
            onclick="condAbrirFormParada(${idx})">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;">
           <div style="flex:1;min-width:0;">
-            <div style="font-size:14px;font-weight:800;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.cliente}</div>
-            <div style="font-size:12px;color:#666;margin-top:2px;">📍 ${p.municipio} · ${p.numero_pedido}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px;">${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}${monto}</div>
+            <div style="font-size:14px;font-weight:800;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.cliente}</div>
+            <div style="font-size:12px;color:#6b7280;margin-top:2px;">📍 ${p.municipio} · ${p.numero_pedido}</div>
+            <div style="font-size:11px;color:#9ca3af;margin-top:2px;">${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}${monto}</div>
           </div>
           <div style="margin-left:10px;flex-shrink:0;">${badge}</div>
         </div>
-        ${r ? `<div style="font-size:11px;color:#555;margin-top:6px;">${r.forma_pago || ''}${r.observaciones ? ' · ' + r.observaciones.substring(0,40) : ''}</div>` : ''}
+        ${r ? `<div style="font-size:11px;color:#6b7280;margin-top:6px;">${r.forma_pago || ''}${r.observaciones ? ' · ' + r.observaciones.substring(0,40) : ''}</div>` : ''}
       </div>`;
   });
 
