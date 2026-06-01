@@ -4776,8 +4776,9 @@ function rutaCard(r) {
   const btnCerrar = r.estado === 'EN_CARGUE'
     ? `<button onclick="rutaCerrar(${r.id})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Salió</button>`
     : '';
+  // EN_TRANSITO: estado informativo — solo el conductor marca como entregada desde su app
   const btnEntregar = r.estado === 'EN_TRANSITO'
-    ? `<button onclick="rutaEntregar(${r.id})" style="flex:1;padding:10px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✓ Entregada</button>`
+    ? `<div style="flex:1;padding:10px;background:#1e3a5f22;color:#60a5fa;border:1px solid #1e3a5f;border-radius:8px;font-size:13px;font-weight:700;text-align:center;pointer-events:none;">🚛 En camino</div>`
     : '';
   const btnManifiesto = r.total_bultos > 0
     ? `<button onclick="rutaVerManifiesto(${r.id})" style="flex:1;padding:10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:13px;cursor:pointer;">📋 Ver</button>`
