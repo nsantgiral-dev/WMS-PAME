@@ -5133,19 +5133,15 @@ async function cargarListaMaestras() {
 let _MAESTRAS_PARADAS = [];
 let _MUNICIPIOS_CACHE = [];
 
-let _MUNICIPIOS_LOADING = false;
+let _municipiosPromise = null;
 
-async function _cargarMunicipios() {
-  if (_MUNICIPIOS_CACHE.length || _MUNICIPIOS_LOADING) return;
-  _MUNICIPIOS_LOADING = true;
-  try {
-    const d = await get('/api/rutas/municipios');
-    _MUNICIPIOS_CACHE = d.municipios || [];
-  } catch (e) {
-    console.error('[WMS] Error cargando municipios:', e);
-  } finally {
-    _MUNICIPIOS_LOADING = false;
-  }
+function _cargarMunicipios() {
+  if (_MUNICIPIOS_CACHE.length) return Promise.resolve();
+  if (_municipiosPromise) return _municipiosPromise;
+  _municipiosPromise = get('/api/rutas/municipios')
+    .then(d => { _MUNICIPIOS_CACHE = d.municipios || []; })
+    .catch(e => { console.error('[WMS] municipios:', e); _municipiosPromise = null; });
+  return _municipiosPromise;
 }
 
 function maestraInputParada(input) {
@@ -5154,7 +5150,10 @@ function maestraInputParada(input) {
   if (!el) return;
   if (!q) { el.style.display = 'none'; return; }
   if (!_MUNICIPIOS_CACHE.length) {
-    _cargarMunicipios();  // dispara carga; el próximo keystroke mostrará resultados
+    _cargarMunicipios().then(() => {
+      const inp = document.getElementById('maestras-parada-input');
+      if (inp && inp.value.trim()) maestraInputParada(inp);
+    });
     return;
   }
   const matches = _MUNICIPIOS_CACHE.filter(m => m.toLowerCase().includes(q)).slice(0, 50);
@@ -5168,18 +5167,10 @@ function maestraInputParada(input) {
 }
 
 function maestraSeleccionarMunicipio(el) {
-  const nombre = typeof el === 'string' ? el : el.dataset.municipio;
   const inp = document.getElementById('maestras-parada-input');
-  if (inp) inp.value = nombre;
+  if (inp) inp.value = el.dataset.municipio;
   const drop = document.getElementById('maestras-sugerencias');
   if (drop) drop.style.display = 'none';
-}
-
-function maestraSeleccionarMunicipio(nombre) {
-  const inp = document.getElementById('maestras-parada-input');
-  if (inp) inp.value = nombre;
-  const el = document.getElementById('maestras-sugerencias');
-  if (el) el.style.display = 'none';
 }
 
 function maestraOcultarSugerencias() {
