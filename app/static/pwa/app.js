@@ -4985,71 +4985,73 @@ async function rutaVerManifiesto(id) {
     const ruta    = dr.ruta;
     const paradas = dp.paradas || [];
 
-    const estadoColor  = { ENTREGADO: '#4ade80', PARCIAL: '#fbbf24', RECHAZADO: '#f87171' };
-    const estadoBg     = { ENTREGADO: '#0d1a0d', PARCIAL: '#1a0d00', RECHAZADO: '#1a0505' };
-    const estadoLabel  = { ENTREGADO: '✓ Entregado', PARCIAL: '⚠ Parcial', RECHAZADO: '✗ Rechazado' };
+    // Paleta modo día
+    const EST = {
+      ENTREGADO: { border: '#16a34a', bg: '#f0fdf4', badge: '#15803d', badgeBg: '#dcfce7', label: '✓ Entregado' },
+      PARCIAL:   { border: '#d97706', bg: '#fffbeb', badge: '#b45309', badgeBg: '#fef3c7', label: '⚠ Parcial'   },
+      RECHAZADO: { border: '#dc2626', bg: '#fef2f2', badge: '#b91c1c', badgeBg: '#fee2e2', label: '✗ Rechazado' },
+    };
+    const EST_DEF = { border: '#d1d5db', bg: '#f9fafb', badge: '#6b7280', badgeBg: '#f3f4f6', label: 'Sin gestionar' };
 
     let filas = '';
     if (paradas.length) {
       paradas.forEach(p => {
-        const r = p.recaudo;
+        const r   = p.recaudo;
         const est = r ? r.estado_entrega : null;
-        const color = est ? estadoColor[est] : '#555';
-        const bg    = est ? estadoBg[est]    : '#1a1a1a';
-        const label = est ? estadoLabel[est] : 'Sin gestionar';
+        const e   = est ? EST[est] : EST_DEF;
 
-        filas += `<div style="background:${bg};border:1px solid ${color}22;border-radius:10px;padding:12px;margin-bottom:8px;">
+        filas += `<div style="background:${e.bg};border:1px solid ${e.border};border-radius:10px;padding:12px;margin-bottom:8px;">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
             <div>
-              <div style="font-size:13px;font-weight:800;color:#fff;">${p.numero_pedido}</div>
-              <div style="font-size:11px;color:#aaa;">${p.cliente} · 📍 ${p.municipio}</div>
+              <div style="font-size:13px;font-weight:800;color:#111827;">${p.numero_pedido}</div>
+              <div style="font-size:11px;color:#6b7280;">${p.cliente} · 📍 ${p.municipio}</div>
             </div>
-            <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 10px;border-radius:8px;">${label}</span>
+            <span style="font-size:11px;font-weight:700;color:${e.badge};background:${e.badgeBg};padding:3px 10px;border-radius:8px;">${e.label}</span>
           </div>`;
 
         // Bultos
-        const bultosRechazadosIds = new Set(r ? (r.bultos_rechazados_ids || []) : []);
-        filas += `<div style="font-size:11px;color:#666;margin-bottom:${est && est !== 'ENTREGADO' ? 6 : 0}px;">`;
+        const rechazadosIds = new Set(r ? (r.bultos_rechazados_ids || []) : []);
+        filas += `<div style="font-size:11px;margin-bottom:${est && est !== 'ENTREGADO' ? 6 : 0}px;">`;
         (p.bultos_detalle || []).forEach(b => {
-          const rechazado = bultosRechazadosIds.has(b.id);
-          filas += `<span style="color:${rechazado ? '#f87171' : '#4ade80'};margin-right:8px;">
+          const rechazado = rechazadosIds.has(b.id);
+          filas += `<span style="color:${rechazado ? '#b91c1c' : '#15803d'};margin-right:8px;">
             ${rechazado ? '✗' : '✓'} ${b.codigo_barras} (${b.tipo} ${b.numero}/${b.total})</span>`;
         });
         filas += '</div>';
 
         // Detalle PARCIAL
         if (est === 'PARCIAL' && r.items_entregados && r.items_entregados.length) {
-          filas += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #333;">
-            <div style="font-size:10px;color:#fbbf24;font-weight:700;margin-bottom:4px;">DETALLE PARCIAL</div>
-            <div style="display:grid;grid-template-columns:1fr auto auto;gap:2px 10px;font-size:10px;">
+          filas += `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #fde68a;">
+            <div style="font-size:10px;color:#92400e;font-weight:700;margin-bottom:4px;">DETALLE PARCIAL</div>
+            <div style="display:grid;grid-template-columns:1fr auto auto;gap:3px 10px;font-size:11px;">
               ${r.items_entregados.map(it => `
-                <div style="color:#ccc;">${it.nombre || it.codigo}</div>
-                <div style="color:#4ade80;text-align:right;">✓ ${it.cantidad_entregada}</div>
-                <div style="color:${it.cantidad_devuelta > 0 ? '#f87171' : '#555'};text-align:right;">↩ ${it.cantidad_devuelta}</div>
+                <div style="color:#374151;">${it.nombre || it.codigo}</div>
+                <div style="color:#15803d;text-align:right;font-weight:700;">✓ ${it.cantidad_entregada}</div>
+                <div style="color:${it.cantidad_devuelta > 0 ? '#b91c1c' : '#9ca3af'};text-align:right;font-weight:700;">↩ ${it.cantidad_devuelta}</div>
               `).join('')}
             </div>
           </div>`;
         }
 
-        // Detalle RECHAZADO — motivo
+        // Motivo RECHAZADO
         if (est === 'RECHAZADO' && r.observaciones) {
-          filas += `<div style="margin-top:6px;font-size:11px;color:#fbbf24;font-style:italic;">"${r.observaciones}"</div>`;
+          filas += `<div style="margin-top:6px;font-size:11px;color:#b91c1c;font-style:italic;">"${r.observaciones}"</div>`;
         }
 
         filas += '</div>';
       });
     } else {
-      filas = '<div style="color:#666;text-align:center;padding:20px;">Sin paradas registradas</div>';
+      filas = '<div style="color:#9ca3af;text-align:center;padding:20px;">Sin paradas registradas</div>';
     }
 
     const modal = document.createElement('div');
-    modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;padding:16px;';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:16px;';
     modal.innerHTML = `
-      <div style="background:#111;border:1px solid #333;border-radius:14px;padding:20px;max-width:560px;width:100%;max-height:85vh;display:flex;flex-direction:column;">
-        <div style="font-size:16px;font-weight:800;margin-bottom:4px;">${ruta.ruta_maestra_nombre || 'Ruta'} <span style="color:#555;font-weight:400;font-size:13px;">#${ruta.id}</span></div>
-        <div style="font-size:12px;color:#888;margin-bottom:14px;">${ruta.conductor_nombre} · ${ruta.tipo_ruta} · ${paradas.length} pedido${paradas.length !== 1 ? 's' : ''}</div>
+      <div style="background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:20px;max-width:560px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 20px 40px rgba(0,0,0,.15);">
+        <div style="font-size:16px;font-weight:800;color:#111827;margin-bottom:4px;">${ruta.ruta_maestra_nombre || 'Ruta'} <span style="color:#9ca3af;font-weight:400;font-size:13px;">#${ruta.id}</span></div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:14px;">${ruta.conductor_nombre} · ${ruta.tipo_ruta} · ${paradas.length} pedido${paradas.length !== 1 ? 's' : ''}</div>
         <div style="overflow-y:auto;flex:1;">${filas}</div>
-        <button onclick="this.closest('div[style*=fixed]').remove()" style="margin-top:16px;padding:10px;background:#222;color:#aaa;border:1px solid #333;border-radius:8px;font-size:13px;cursor:pointer;width:100%;">Cerrar</button>
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="margin-top:16px;padding:10px;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;cursor:pointer;width:100%;font-weight:600;">Cerrar</button>
       </div>`;
     document.body.appendChild(modal);
     modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
