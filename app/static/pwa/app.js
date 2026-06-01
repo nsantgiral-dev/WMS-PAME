@@ -4291,7 +4291,8 @@ async function cargarRutaSelector() {
     rutas.forEach(r => {
       const opt = document.createElement('option');
       opt.value = r.id;
-      opt.textContent = `#${r.id} · ${r.conductor_nombre} · ${r.vehiculo_placa || ''} · ${r.tipo_ruta} · ${r.total_bultos} bultos`;
+      const nombre = r.ruta_maestra_nombre || r.tipo_ruta;
+      opt.textContent = `#${r.id} · ${nombre} · ${r.conductor_nombre} · ${r.total_bultos} bultos`;
       if (r.id === valorActual) opt.selected = true;
       sel.appendChild(opt);
     });
