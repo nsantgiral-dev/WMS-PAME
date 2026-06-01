@@ -4980,16 +4980,29 @@ async function rutaVerManifiesto(id) {
     const d = await get('/api/rutas/' + id);
     const ruta = d.ruta;
     const manifiesto = ruta.manifiesto || [];
-    let html = `<b>Ruta #${ruta.id} — ${ruta.conductor_nombre} — ${ruta.tipo_ruta}</b>\n\n`;
+    let filas = '';
     manifiesto.forEach(grupo => {
-      html += `📍 ${grupo.destino}\n`;
+      filas += `<div style="margin-bottom:12px;">
+        <div style="font-size:13px;font-weight:700;color:#facc15;margin-bottom:4px;">📍 ${grupo.destino}</div>`;
       grupo.bultos.forEach(b => {
-        html += `  ${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente}\n`;
+        filas += `<div style="font-size:12px;color:#ccc;padding:3px 0;border-bottom:1px solid #222;">
+          ${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total} · ${b.numero_pedido} · ${b.cliente}
+        </div>`;
       });
-      html += '\n';
+      filas += '</div>';
     });
-    alert(html);
-  } catch (e) { alert('Error cargando manifiesto'); }
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:center;justify-content:center;padding:16px;';
+    modal.innerHTML = `
+      <div style="background:#111;border:1px solid #333;border-radius:14px;padding:20px;max-width:560px;width:100%;max-height:80vh;display:flex;flex-direction:column;">
+        <div style="font-size:16px;font-weight:800;margin-bottom:4px;">${ruta.ruta_maestra_nombre || 'Ruta'} <span style="color:#555;font-weight:400;font-size:13px;">#${ruta.id}</span></div>
+        <div style="font-size:12px;color:#888;margin-bottom:14px;">${ruta.conductor_nombre} · ${ruta.tipo_ruta}</div>
+        <div style="overflow-y:auto;flex:1;">${filas || '<div style="color:#666;">Sin bultos cargados</div>'}</div>
+        <button onclick="this.closest('div[style*=fixed]').remove()" style="margin-top:16px;padding:10px;background:#222;color:#aaa;border:1px solid #333;border-radius:8px;font-size:13px;cursor:pointer;width:100%;">Cerrar</button>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  } catch (e) { alerta('Error cargando manifiesto', 'error'); }
 }
 
 function rutasMostrarForm() {
