@@ -5724,7 +5724,7 @@ function _condRenderFormParada() {
         ${['ENTREGADO','PARCIAL','RECHAZADO'].map(e => `
           <button onclick="condSelEstado('${e}')"
             id="cond-estado-${e}"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoActual ? (e==='ENTREGADO'?'#166534':e==='PARCIAL'?'#78350f':'#7f1d1d') : '#222'};background:${e===estadoActual ? (e==='ENTREGADO'?'#0d1a0d':e==='PARCIAL'?'#1a0d00':'#1a0d0d') : '#111'};color:${e===estadoActual ? (e==='ENTREGADO'?'#4ade80':e==='PARCIAL'?'#fbbf24':'#f87171') : '#555'};">
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoActual ? (e==='ENTREGADO'?'#16a34a':e==='PARCIAL'?'#d97706':'#dc2626') : '#ddd'};background:${e===estadoActual ? (e==='ENTREGADO'?'#f0fdf4':e==='PARCIAL'?'#fffbeb':'#fef2f2') : '#fff'};color:${e===estadoActual ? (e==='ENTREGADO'?'#15803d':e==='PARCIAL'?'#b45309':'#b91c1c') : '#aaa'};">
             ${e === 'ENTREGADO' ? '✓ Entregado' : e === 'PARCIAL' ? '⚠ Parcial' : '✗ Rechazado'}
           </button>`).join('')}
       </div>
@@ -5795,8 +5795,8 @@ function condSelEstado(estado) {
     const btn = document.getElementById('cond-estado-' + e);
     if (!btn) return;
     const activo = e === estado;
-    const colores = { ENTREGADO: ['#166534','#0d1a0d','#4ade80'], PARCIAL: ['#78350f','#1a0d00','#fbbf24'], RECHAZADO: ['#7f1d1d','#1a0d0d','#f87171'] };
-    const [borde, fondo, texto] = activo ? colores[e] : ['#222','#111','#555'];
+    const colores = { ENTREGADO: ['#16a34a','#f0fdf4','#15803d'], PARCIAL: ['#d97706','#fffbeb','#b45309'], RECHAZADO: ['#dc2626','#fef2f2','#b91c1c'] };
+    const [borde, fondo, texto] = activo ? colores[e] : ['#ddd','#fff','#aaa'];
     btn.style.borderColor = borde;
     btn.style.background  = fondo;
     btn.style.color       = texto;
