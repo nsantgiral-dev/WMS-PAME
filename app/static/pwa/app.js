@@ -6241,13 +6241,6 @@ async function _cargarPlanilla(id) {
               `<div style="font-size:12px;color:#fca5a5;padding:3px 0;">${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total}</div>`
             ).join('')}
             ${r.observaciones ? `<div style="margin-top:8px;font-size:12px;color:#fbbf24;font-style:italic;">"${r.observaciones}"</div>` : ''}
-            ${r.foto_entrega ? `
-            <div style="margin-top:10px;">
-              <div style="font-size:10px;color:#f87171;font-weight:700;margin-bottom:4px;">EVIDENCIA FOTOGRÁFICA</div>
-              <img src="data:image/jpeg;base64,${r.foto_entrega}"
-                style="width:100%;max-width:320px;border-radius:8px;border:1px solid #7f1d1d;cursor:pointer;"
-                onclick="this.style.maxWidth=this.style.maxWidth==='100%'?'320px':'100%'">
-            </div>` : ''}
           </div>` : ''}
           ${r && r.estado_entrega === 'PARCIAL' && r.items_entregados && r.items_entregados.length ? `
           <div style="margin-top:10px;border-top:1px solid #222;padding-top:10px;">
