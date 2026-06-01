@@ -5568,7 +5568,9 @@ async function cargarRutasConductor() {
     _COND_RUTAS = d.rutas || [];
     document.getElementById('cond-badge-rutas').textContent = _COND_RUTAS.length;
 
-    // Si el conductor está viendo paradas, refrescar esa vista sin redirigir
+    // Conductor llenando formulario → no interrumpir bajo ninguna circunstancia
+    if (_COND_PARADA_FORM) return;
+    // Conductor viendo lista de paradas → refrescar esa vista sin redirigir
     if (_COND_RUTA_ACTIVA) {
       await condAbrirParadas(_COND_RUTA_ACTIVA.id);
       return;
