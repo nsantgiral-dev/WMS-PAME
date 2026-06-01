@@ -5778,7 +5778,7 @@ function _condRenderFormParada() {
       }).join('')}
     </div>
 
-    <div style="margin-bottom:14px;">
+    <div id="cond-forma-pago-wrap" style="margin-bottom:14px;display:${estadoActual === 'RECHAZADO' ? 'none' : 'block'};">
       <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
       <select id="cond-forma-pago"
         style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
@@ -5789,7 +5789,7 @@ function _condRenderFormParada() {
       </select>
     </div>
 
-    <div style="margin-bottom:14px;">
+    <div id="cond-monto-wrap" style="margin-bottom:14px;display:${estadoActual === 'RECHAZADO' ? 'none' : 'block'};">
       <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
       <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
         style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
@@ -5845,6 +5845,12 @@ function condSelEstado(estado) {
 
   const divItems = document.getElementById('cond-items-parcial');
   if (divItems) divItems.style.display = estado === 'PARCIAL' ? 'block' : 'none';
+
+  const mostrarPago = estado !== 'RECHAZADO';
+  const divFormaPago = document.getElementById('cond-forma-pago-wrap');
+  const divMonto     = document.getElementById('cond-monto-wrap');
+  if (divFormaPago) divFormaPago.style.display = mostrarPago ? 'block' : 'none';
+  if (divMonto)     divMonto.style.display     = mostrarPago ? 'block' : 'none';
 }
 
 function condActualizarDevuelto(idx, pedido) {
