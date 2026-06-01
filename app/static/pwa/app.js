@@ -4825,24 +4825,23 @@ async function rutaIniciar(id) {
       if (card) card.outerHTML = rutaCard(d.ruta);
       await cargarRutaSelector();
       if (d.sugeridos_count > 0) {
-        // Asignar automáticamente los sugeridos y abrir muelle
         await fetch(API + '/api/muelle/asignar', {
           method: 'POST',
           headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
           body: JSON.stringify({ ruta_id: id, bultos_ids: d.sugeridos_ids }),
         });
         alerta(`✓ ${d.sugeridos_count} bulto${d.sugeridos_count !== 1 ? 's' : ''} asignados automáticamente. Abriendo muelle...`, 'exito');
-        // Cambiar a tab muelle con esta ruta activa
-        setTimeout(() => {
-          tab('tab-muelle');
-          RUTA_ACTIVA_ID = id;
-          const sel = document.getElementById('muelle-ruta-select');
-          if (sel) sel.value = id;
-          muelleSeleccionarRuta(String(id));
-        }, 800);
       } else {
-        alerta('Ruta iniciada. Sin bultos sugeridos para auto-asignar.', 'advertencia');
+        alerta('Cargue iniciado. Abriendo muelle...', 'exito');
       }
+      // Siempre redirigir al muelle con la ruta activa pre-seleccionada
+      setTimeout(() => {
+        tab('tab-muelle');
+        RUTA_ACTIVA_ID = id;
+        const sel = document.getElementById('muelle-ruta-select');
+        if (sel) sel.value = id;
+        muelleSeleccionarRuta(String(id));
+      }, 800);
     } else { alert(d.error || 'Error al iniciar ruta'); }
   } catch (e) { alert('Error de conexión'); }
 }
