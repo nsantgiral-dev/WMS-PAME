@@ -140,12 +140,13 @@ def desactivar_vehiculo(id):
 def listar_municipios():
     from app.models.packing import TareaPacking
     from app.models.ruta_maestra import RutaMaestraParada
+    from app.utils.dane_municipios import DANE
     from sqlalchemy import distinct
     de_pedidos = {r[0] for r in db.session.query(distinct(TareaPacking.municipio))
                   .filter(TareaPacking.municipio != None, TareaPacking.municipio != '').all()}
     de_rutas   = {r[0] for r in db.session.query(distinct(RutaMaestraParada.municipio))
                   .filter(RutaMaestraParada.municipio != None, RutaMaestraParada.municipio != '').all()}
-    return jsonify({'municipios': sorted(de_pedidos | de_rutas)}), 200
+    return jsonify({'municipios': sorted(de_pedidos | de_rutas | set(DANE.values()))}), 200
 
 
 # ── Rutas Maestras ───────────────────────────────────────────────
