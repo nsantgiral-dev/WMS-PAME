@@ -5854,8 +5854,19 @@ function _condRenderFormParada() {
     <div style="margin-bottom:20px;">
       <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FOTO EVIDENCIA <span style="color:#555;font-weight:400;">(opcional)</span></label>
       <input type="file" id="cond-foto" accept="image/*" capture="environment"
-        style="width:100%;padding:10px;background:#1a1a1a;border:1px dashed #333;color:#aaa;border-radius:10px;font-size:13px;box-sizing:border-box;">
-      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#4ade80;">✓ Foto guardada (subir nueva para reemplazar)</div>` : ''}
+        style="display:none;" onchange="condPrevisualizarFoto()">
+      <button type="button" onclick="document.getElementById('cond-foto').click()"
+        style="width:100%;padding:16px;background:#f0f9ff;color:#0369a1;border:2px dashed #7dd3fc;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;">
+        📷 Tomar foto con la cámara
+      </button>
+      <div id="cond-foto-preview" style="margin-top:8px;display:none;">
+        <img id="cond-foto-img" src="" style="width:100%;border-radius:10px;border:2px solid #7dd3fc;max-height:200px;object-fit:cover;">
+        <button type="button" onclick="condEliminarFoto()"
+          style="margin-top:6px;width:100%;padding:8px;background:#fef2f2;color:#b91c1c;border:1px solid #dc2626;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+          ✕ Quitar foto
+        </button>
+      </div>
+      ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#4ade80;">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
     </div>
 
     <div style="position:sticky;bottom:16px;display:flex;flex-direction:column;gap:8px;">
@@ -5900,6 +5911,26 @@ function condSelEstado(estado) {
   const divMonto     = document.getElementById('cond-monto-wrap');
   if (divFormaPago) divFormaPago.style.display = mostrarPago ? 'block' : 'none';
   if (divMonto)     divMonto.style.display     = mostrarPago ? 'block' : 'none';
+}
+
+function condPrevisualizarFoto() {
+  const input = document.getElementById('cond-foto');
+  const preview = document.getElementById('cond-foto-preview');
+  const img = document.getElementById('cond-foto-img');
+  if (!input || !input.files[0]) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    img.src = ev.target.result;
+    preview.style.display = 'block';
+  };
+  reader.readAsDataURL(input.files[0]);
+}
+
+function condEliminarFoto() {
+  const input = document.getElementById('cond-foto');
+  const preview = document.getElementById('cond-foto-preview');
+  if (input) input.value = '';
+  if (preview) preview.style.display = 'none';
 }
 
 function condActualizarDevuelto(idx, pedido) {
