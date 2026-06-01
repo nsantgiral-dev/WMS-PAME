@@ -139,12 +139,13 @@ def desactivar_vehiculo(id):
 @jwt_required()
 def listar_municipios():
     from app.models.packing import TareaPacking
+    from app.models.ruta_maestra import RutaMaestraParada
     from sqlalchemy import distinct
-    rows = (db.session.query(distinct(TareaPacking.municipio))
-            .filter(TareaPacking.municipio != None, TareaPacking.municipio != '')
-            .order_by(TareaPacking.municipio)
-            .all())
-    return jsonify({'municipios': [r[0] for r in rows]}), 200
+    de_pedidos = {r[0] for r in db.session.query(distinct(TareaPacking.municipio))
+                  .filter(TareaPacking.municipio != None, TareaPacking.municipio != '').all()}
+    de_rutas   = {r[0] for r in db.session.query(distinct(RutaMaestraParada.municipio))
+                  .filter(RutaMaestraParada.municipio != None, RutaMaestraParada.municipio != '').all()}
+    return jsonify({'municipios': sorted(de_pedidos | de_rutas)}), 200
 
 
 # ── Rutas Maestras ───────────────────────────────────────────────
