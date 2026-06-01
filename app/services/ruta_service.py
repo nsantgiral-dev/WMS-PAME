@@ -680,6 +680,7 @@ class RutaService:
         for t in tareas:
             r = recaudos_map.get(t.id)
             bultos_t = [b for b in ruta.bultos if b.tarea_id == t.id]
+            ids_rechazados = set(r.bultos_rechazados_ids or []) if r else set()
             parada = {
                 'tarea_id':           t.id,
                 'numero_pedido':      t.numero_pedido_siesa,
@@ -688,7 +689,12 @@ class RutaService:
                 'bultos_total':       len(bultos_t),
                 'bultos_entregados':  sum(1 for b in bultos_t if b.estado == EstadoBulto.ENTREGADO),
                 'bultos_rechazados':  sum(1 for b in bultos_t if b.estado == EstadoBulto.RECHAZADO),
-                'recaudo':            r.to_dict() if r else None,
+                'bultos_detalle':     [
+                    {'id': b.id, 'codigo_barras': b.codigo_barras, 'tipo': b.tipo,
+                     'numero': b.numero, 'total': b.total, 'rechazado': b.id in ids_rechazados}
+                    for b in bultos_t
+                ],
+                'recaudo':            r.to_dict(include_foto=True) if r else None,
             }
             paradas.append(parada)
             if r:
