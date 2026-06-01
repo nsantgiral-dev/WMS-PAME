@@ -5133,12 +5133,19 @@ async function cargarListaMaestras() {
 let _MAESTRAS_PARADAS = [];
 let _MUNICIPIOS_CACHE = [];
 
+let _MUNICIPIOS_LOADING = false;
+
 async function _cargarMunicipios() {
-  if (_MUNICIPIOS_CACHE.length) return;
+  if (_MUNICIPIOS_CACHE.length || _MUNICIPIOS_LOADING) return;
+  _MUNICIPIOS_LOADING = true;
   try {
     const d = await get('/api/rutas/municipios');
     _MUNICIPIOS_CACHE = d.municipios || [];
-  } catch (e) {}
+  } catch (e) {
+    console.error('[WMS] Error cargando municipios:', e);
+  } finally {
+    _MUNICIPIOS_LOADING = false;
+  }
 }
 
 function maestraInputParada(input) {
@@ -5146,14 +5153,26 @@ function maestraInputParada(input) {
   const el = document.getElementById('maestras-sugerencias');
   if (!el) return;
   if (!q) { el.style.display = 'none'; return; }
+  if (!_MUNICIPIOS_CACHE.length) {
+    _cargarMunicipios().then(() => { if (input.value.trim()) maestraInputParada(input); });
+    return;
+  }
   const matches = _MUNICIPIOS_CACHE.filter(m => m.toLowerCase().includes(q)).slice(0, 50);
   if (!matches.length) { el.style.display = 'none'; return; }
-  el.innerHTML = matches.map(m =>
-    `<div onmousedown="maestraSeleccionarMunicipio('${m.replace(/'/g, "\\'")}')"
+  el.innerHTML = matches.map((m, i) =>
+    `<div data-idx="${i}" onmousedown="maestraSeleccionarMunicipio(this.dataset.municipio)" data-municipio="${m.replace(/"/g, '&quot;')}"
       style="padding:9px 12px;cursor:pointer;font-size:13px;color:#eee;border-bottom:1px solid #222;"
       onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background=''">${m}</div>`
   ).join('');
   el.style.display = 'block';
+}
+
+function maestraSeleccionarMunicipio(el) {
+  const nombre = typeof el === 'string' ? el : el.dataset.municipio;
+  const inp = document.getElementById('maestras-parada-input');
+  if (inp) inp.value = nombre;
+  const drop = document.getElementById('maestras-sugerencias');
+  if (drop) drop.style.display = 'none';
 }
 
 function maestraSeleccionarMunicipio(nombre) {
