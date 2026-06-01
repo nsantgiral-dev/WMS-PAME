@@ -580,6 +580,9 @@ class RutaService:
         if estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
             if not forma_pago:
                 raise ValueError('Forma de pago es obligatoria para registrar una entrega')
+        if estado_entrega == EstadoEntrega.RECHAZADO:
+            if not (data.get('observaciones') or '').strip():
+                raise ValueError('El motivo del rechazo es obligatorio')
         if estado_entrega == EstadoEntrega.PARCIAL:
             monto = float(data.get('monto_cobrado') or 0)
             if monto <= 0:

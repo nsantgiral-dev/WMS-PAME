@@ -5027,9 +5027,17 @@ async function rutaVerManifiesto(id) {
           </div>`;
         }
 
-        // Motivo RECHAZADO
-        if (est === 'RECHAZADO' && r.observaciones) {
-          filas += `<div style="margin-top:6px;font-size:11px;color:#b91c1c;font-style:italic;">"${r.observaciones}"</div>`;
+        // Motivo + evidencia RECHAZADO
+        if (est === 'RECHAZADO') {
+          if (r.observaciones) {
+            filas += `<div style="margin-top:6px;font-size:11px;color:#b91c1c;font-style:italic;">"${r.observaciones}"</div>`;
+          }
+          if (r.foto_entrega) {
+            filas += `<button onclick="(function(){const w=window.open();w.document.write('<img src=\\'data:image/jpeg;base64,${r.foto_entrega}\\' style=\\'max-width:100%;\\'>');w.document.title='Evidencia ${p.numero_pedido}';})()"
+              style="margin-top:8px;padding:6px 14px;background:#fee2e2;color:#b91c1c;border:1px solid #dc2626;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+              📷 Ver evidencia fotográfica
+            </button>`;
+          }
         }
 
         filas += '</div>';
@@ -5931,6 +5939,13 @@ async function condGuardarParada() {
       document.getElementById('cond-obs')?.focus();
       return;
     }
+  }
+
+  // Observaciones obligatorias para RECHAZADO
+  if (estadoEntrega === 'RECHAZADO' && !obs) {
+    alerta('Escribe el motivo del rechazo (ej: cliente cerrado, dirección incorrecta)', 'error');
+    document.getElementById('cond-obs')?.focus();
+    return;
   }
 
   // Bultos rechazados
