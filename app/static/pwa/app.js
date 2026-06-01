@@ -5568,6 +5568,12 @@ async function cargarRutasConductor() {
     _COND_RUTAS = d.rutas || [];
     document.getElementById('cond-badge-rutas').textContent = _COND_RUTAS.length;
 
+    // Si el conductor está viendo paradas, refrescar esa vista sin redirigir
+    if (_COND_RUTA_ACTIVA) {
+      await condAbrirParadas(_COND_RUTA_ACTIVA.id);
+      return;
+    }
+
     if (!_COND_RUTAS.length) {
       el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
         <div style="font-size:60px;">✅</div>
@@ -5592,7 +5598,9 @@ async function cargarRutasConductor() {
         </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando rutas. Verifica conexión.</div>';
+    if (!_COND_RUTA_ACTIVA) {
+      el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando rutas. Verifica conexión.</div>';
+    }
   }
 }
 
