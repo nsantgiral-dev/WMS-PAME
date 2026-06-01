@@ -5154,13 +5154,13 @@ function maestraInputParada(input) {
   if (!el) return;
   if (!q) { el.style.display = 'none'; return; }
   if (!_MUNICIPIOS_CACHE.length) {
-    _cargarMunicipios().then(() => { if (input.value.trim()) maestraInputParada(input); });
+    _cargarMunicipios();  // dispara carga; el próximo keystroke mostrará resultados
     return;
   }
   const matches = _MUNICIPIOS_CACHE.filter(m => m.toLowerCase().includes(q)).slice(0, 50);
   if (!matches.length) { el.style.display = 'none'; return; }
-  el.innerHTML = matches.map((m, i) =>
-    `<div data-idx="${i}" onmousedown="maestraSeleccionarMunicipio(this.dataset.municipio)" data-municipio="${m.replace(/"/g, '&quot;')}"
+  el.innerHTML = matches.map(m =>
+    `<div onmousedown="maestraSeleccionarMunicipio(this)" data-municipio="${m.replace(/"/g, '&quot;')}"
       style="padding:9px 12px;cursor:pointer;font-size:13px;color:#eee;border-bottom:1px solid #222;"
       onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background=''">${m}</div>`
   ).join('');
