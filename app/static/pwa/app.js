@@ -4678,7 +4678,7 @@ async function muelleCargarCaja() {
         feedback.textContent = `ℹ Ya estaba cargado: ${d.codigo_barras}`;
       } else {
         feedback.style.color = '#4ade80';
-        const rutaLista = d.ruta_lista ? ' · ✓ Ruta lista para salir' : ` · ${d.bultos_pendientes_pedido} bulto${d.bultos_pendientes_pedido !== 1 ? 's' : ''} pendientes en pedido`;
+        const rutaLista = d.pedido_completo_en_ruta ? ' · ✓ Pedido completo en ruta' : ` · ${d.bultos_pendientes_pedido_ruta} bulto${d.bultos_pendientes_pedido_ruta !== 1 ? 's' : ''} pendientes en pedido`;
         feedback.textContent = `✓ ${d.codigo_barras} · ${d.tipo} ${d.numero}/${d.total}${rutaLista}`;
         if (navigator.vibrate) navigator.vibrate(50);
       }
