@@ -93,15 +93,17 @@ class MuelleService:
 
     @staticmethod
     def cargar_bulto(codigo_barras: str, ruta_id: int) -> dict:
+        # Algunos escáneres con layout español envían apóstrofe en lugar de guion
+        codigo_normalizado = codigo_barras.upper().replace("'", "-")
         bulto = (
             Bulto.query
             .options(selectinload(Bulto.tarea))
-            .filter_by(codigo_barras=codigo_barras.upper())
+            .filter_by(codigo_barras=codigo_normalizado)
             .with_for_update()
             .first()
         )
         if not bulto:
-            raise LookupError(f'Bulto {codigo_barras} no encontrado')
+            raise LookupError(f'Bulto {codigo_normalizado} no encontrado')
         if not bulto.tarea.siesa_triggered:
             raise ValueError('Este pedido aún no fue procesado por Siesa')
         if bulto.ruta_despacho_id != ruta_id:
