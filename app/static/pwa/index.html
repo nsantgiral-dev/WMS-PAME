@@ -1201,10 +1201,15 @@
           <div style="margin-bottom:12px;">
             <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Paradas en orden de entrega (1ª = primera entrega = última en cargar)</div>
             <div style="display:flex;gap:8px;margin-bottom:8px;">
-              <datalist id="maestras-municipios-list"></datalist>
-              <input id="maestras-parada-input" type="text" list="maestras-municipios-list" placeholder="Municipio o zona..."
-                style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;"
-                onkeydown="if(event.key==='Enter'){event.preventDefault();maestraAgregarParada();}">
+              <div style="flex:1;position:relative;">
+                <input id="maestras-parada-input" type="text" autocomplete="off" placeholder="Municipio o zona..."
+                  style="width:100%;box-sizing:border-box;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+                  oninput="maestraInputParada(this)"
+                  onkeydown="maestraInputKeydown(event)"
+                  onblur="maestraOcultarSugerencias()">
+                <div id="maestras-sugerencias"
+                  style="display:none;position:absolute;top:100%;left:0;right:0;background:#1a1a1a;border:1px solid #333;border-radius:8px;max-height:220px;overflow-y:auto;z-index:999;margin-top:2px;"></div>
+              </div>
               <button onclick="maestraAgregarParada()"
                 style="padding:10px 16px;background:#fff;color:#000;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">+</button>
             </div>

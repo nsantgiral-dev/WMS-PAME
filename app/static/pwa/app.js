@@ -5131,13 +5131,51 @@ async function cargarListaMaestras() {
 
 // Paradas dinámicas en el form
 let _MAESTRAS_PARADAS = [];
+let _MUNICIPIOS_CACHE = [];
 
-async function cargarMunicipiosDatalist() {
+async function _cargarMunicipios() {
+  if (_MUNICIPIOS_CACHE.length) return;
   try {
     const d = await get('/api/rutas/municipios');
-    const dl = document.getElementById('maestras-municipios-list');
-    if (dl) dl.innerHTML = (d.municipios || []).map(m => `<option value="${m}">`).join('');
+    _MUNICIPIOS_CACHE = d.municipios || [];
   } catch (e) {}
+}
+
+function maestraInputParada(input) {
+  const q = (input.value || '').trim().toLowerCase();
+  const el = document.getElementById('maestras-sugerencias');
+  if (!el) return;
+  if (!q) { el.style.display = 'none'; return; }
+  const matches = _MUNICIPIOS_CACHE.filter(m => m.toLowerCase().includes(q)).slice(0, 50);
+  if (!matches.length) { el.style.display = 'none'; return; }
+  el.innerHTML = matches.map(m =>
+    `<div onmousedown="maestraSeleccionarMunicipio('${m.replace(/'/g, "\\'")}')"
+      style="padding:9px 12px;cursor:pointer;font-size:13px;color:#eee;border-bottom:1px solid #222;"
+      onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background=''">${m}</div>`
+  ).join('');
+  el.style.display = 'block';
+}
+
+function maestraSeleccionarMunicipio(nombre) {
+  const inp = document.getElementById('maestras-parada-input');
+  if (inp) inp.value = nombre;
+  const el = document.getElementById('maestras-sugerencias');
+  if (el) el.style.display = 'none';
+}
+
+function maestraOcultarSugerencias() {
+  setTimeout(() => {
+    const el = document.getElementById('maestras-sugerencias');
+    if (el) el.style.display = 'none';
+  }, 150);
+}
+
+function maestraInputKeydown(event) {
+  if (event.key === 'Enter') { event.preventDefault(); maestraAgregarParada(); }
+  if (event.key === 'Escape') {
+    const el = document.getElementById('maestras-sugerencias');
+    if (el) el.style.display = 'none';
+  }
 }
 
 function maestraMostrarForm() {
@@ -5149,12 +5187,14 @@ function maestraMostrarForm() {
   rutasSeleccionarTipo('Urbana');
   document.getElementById('maestras-form').style.display = 'block';
   _maestraRenderParadas();
-  cargarMunicipiosDatalist();
+  _cargarMunicipios();
 }
 
 function maestraCancelarForm() {
   document.getElementById('maestras-form').style.display = 'none';
   document.getElementById('maestras-form-id').value = '';
+  const el = document.getElementById('maestras-sugerencias');
+  if (el) el.style.display = 'none';
 }
 
 async function maestraEditar(id) {
@@ -5170,7 +5210,7 @@ async function maestraEditar(id) {
     rutasSeleccionarTipo(m.tipo_ruta);
     document.getElementById('maestras-form').style.display = 'block';
     _maestraRenderParadas();
-    cargarMunicipiosDatalist();
+    _cargarMunicipios();
     document.getElementById('maestras-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) { alerta('Error cargando la ruta', 'error'); }
 }
@@ -5180,6 +5220,8 @@ function maestraAgregarParada() {
   if (!val) return;
   _MAESTRAS_PARADAS.push(val);
   document.getElementById('maestras-parada-input').value = '';
+  const el = document.getElementById('maestras-sugerencias');
+  if (el) el.style.display = 'none';
   _maestraRenderParadas();
 }
 
