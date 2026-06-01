@@ -572,7 +572,7 @@ class RutaService:
         if estado_entrega not in EstadoEntrega.VALIDOS:
             raise ValueError(f'estado_entrega debe ser {", ".join(EstadoEntrega.VALIDOS)}')
 
-        forma_pago = data.get('forma_pago', '').upper() or None
+        forma_pago = (data.get('forma_pago') or '').upper() or None
         if forma_pago and forma_pago not in FormaPago.VALIDOS:
             raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
 
