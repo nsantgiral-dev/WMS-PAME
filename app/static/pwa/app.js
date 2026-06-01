@@ -4826,16 +4826,10 @@ async function rutaIniciar(id) {
       const card = document.getElementById('ruta-card-' + id);
       if (card) card.outerHTML = rutaCard(d.ruta);
       await cargarRutaSelector();
-      if (d.sugeridos_count > 0) {
-        await fetch(API + '/api/muelle/asignar', {
-          method: 'POST',
-          headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ruta_id: id, bultos_ids: d.sugeridos_ids }),
-        });
-        alerta(`✓ ${d.sugeridos_count} bulto${d.sugeridos_count !== 1 ? 's' : ''} asignados automáticamente. Abriendo muelle...`, 'exito');
-      } else {
-        alerta('Cargue iniciado. Abriendo muelle...', 'exito');
-      }
+      const infoSug = d.sugeridos_count > 0
+        ? ` · ${d.sugeridos_count} bulto${d.sugeridos_count !== 1 ? 's' : ''} disponibles para asignar`
+        : '';
+      alerta(`Cargue iniciado${infoSug}. Asigna los bultos manualmente en el muelle.`, 'exito');
       // Siempre redirigir al muelle con la ruta activa pre-seleccionada
       setTimeout(() => {
         tab('tab-muelle');
