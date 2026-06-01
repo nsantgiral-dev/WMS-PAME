@@ -5923,6 +5923,25 @@ async function condGuardarParada() {
   const monto         = parseFloat(document.getElementById('cond-monto')?.value || 0) || 0;
   const obs           = document.getElementById('cond-obs')?.value?.trim() || '';
 
+  // Validación por campo según estado
+  if (estadoEntrega !== 'RECHAZADO') {
+    if (!formaPago) {
+      alerta('Selecciona la forma de pago antes de confirmar', 'error');
+      document.getElementById('cond-forma-pago')?.focus();
+      return;
+    }
+    if (estadoEntrega === 'PARCIAL' && monto <= 0) {
+      alerta('Ingresa el monto cobrado por la parte entregada', 'error');
+      document.getElementById('cond-monto')?.focus();
+      return;
+    }
+    if (estadoEntrega === 'PARCIAL' && !obs) {
+      alerta('Escribe una observación: qué se entregó y qué se devolvió', 'error');
+      document.getElementById('cond-obs')?.focus();
+      return;
+    }
+  }
+
   // Bultos rechazados
   const bultosRechazados = [];
   if (estadoEntrega !== 'ENTREGADO') {

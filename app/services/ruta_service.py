@@ -576,6 +576,17 @@ class RutaService:
         if forma_pago and forma_pago not in FormaPago.VALIDOS:
             raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
 
+        # Validación de campos obligatorios por estado
+        if estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
+            if not forma_pago:
+                raise ValueError('Forma de pago es obligatoria para registrar una entrega')
+        if estado_entrega == EstadoEntrega.PARCIAL:
+            monto = float(data.get('monto_cobrado') or 0)
+            if monto <= 0:
+                raise ValueError('El monto cobrado debe ser mayor a 0 en una entrega parcial')
+            if not (data.get('observaciones') or '').strip():
+                raise ValueError('Las observaciones son obligatorias en una entrega parcial')
+
         foto = data.get('foto_entrega', '') or None
         if foto and len(foto) > 2_000_000:
             raise ValueError('Foto demasiado grande. Máximo ~1.5MB.')
