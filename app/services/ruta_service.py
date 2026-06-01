@@ -508,6 +508,7 @@ class RutaService:
         if not ruta:
             raise LookupError('Ruta no encontrada')
 
+        from app.models.packing import ItemPacking
         tareas_map: dict = {}
         for b in ruta.bultos:
             if not b.tarea:
@@ -515,6 +516,10 @@ class RutaService:
             tid = b.tarea_id
             if tid not in tareas_map:
                 t = b.tarea
+                items_raw = (ItemPacking.query
+                             .filter_by(tarea_id=tid)
+                             .options(_sl(ItemPacking.producto))
+                             .all())
                 tareas_map[tid] = {
                     'tarea_id':      tid,
                     'numero_pedido': t.numero_pedido_siesa,
@@ -522,6 +527,16 @@ class RutaService:
                     'municipio':     t.municipio or '',
                     'bultos':        [],
                     'recaudo':       None,
+                    'items': [
+                        {
+                            'producto_id':    i.producto_id,
+                            'codigo':         i.producto.codigo if i.producto else '',
+                            'nombre':         i.producto.nombre if i.producto else '',
+                            'unidad':         i.producto.unidad_empaque if i.producto else 'und',
+                            'cantidad_pedida': i.cantidad_real or i.cantidad_esperada,
+                        }
+                        for i in items_raw
+                    ],
                 }
             tareas_map[tid]['bultos'].append({
                 'id':            b.id,
@@ -622,6 +637,26 @@ class RutaService:
         recaudo.foto_entrega          = foto
         recaudo.bultos_rechazados_ids = list(ids_rechazados_set & ids_tarea)
         recaudo.fecha_confirmacion    = ahora
+
+        # Detalle de referencias para entrega PARCIAL
+        items_raw = data.get('items_entregados') or []
+        if estado_entrega == EstadoEntrega.PARCIAL and items_raw:
+            items_limpios = []
+            for it in items_raw:
+                pedido    = int(it.get('cantidad_pedida', 0))
+                entregado = max(0, min(int(it.get('cantidad_entregada', pedido)), pedido))
+                items_limpios.append({
+                    'codigo':             str(it.get('codigo', '')),
+                    'nombre':             str(it.get('nombre', '')),
+                    'unidad':             str(it.get('unidad', 'und')),
+                    'cantidad_pedida':    pedido,
+                    'cantidad_entregada': entregado,
+                    'cantidad_devuelta':  pedido - entregado,
+                })
+            recaudo.items_entregados = items_limpios
+        elif estado_entrega == EstadoEntrega.ENTREGADO:
+            recaudo.items_entregados = None
+
         db.session.commit()
         return recaudo.id, es_edicion
 

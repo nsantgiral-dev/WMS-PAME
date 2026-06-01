@@ -5732,13 +5732,50 @@ function _condRenderFormParada() {
     </div>
 
     <div id="cond-bultos-rechazo" style="margin-bottom:14px;display:${estadoActual !== 'ENTREGADO' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
+      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
       ${p.bultos.map(b => `
-        <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#1a1a1a;border-radius:8px;margin-bottom:6px;cursor:pointer;">
+        <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;">
           <input type="checkbox" value="${b.id}" ${rechazadosActuales.includes(b.id) ? 'checked' : ''}
             style="width:18px;height:18px;cursor:pointer;" id="chk-bulto-${b.id}">
-          <span style="font-size:13px;color:#ccc;">${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total}</span>
+          <span style="font-size:13px;color:#374151;">${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total}</span>
         </label>`).join('')}
+    </div>
+
+    <div id="cond-items-parcial" style="margin-bottom:14px;display:${estadoActual === 'PARCIAL' ? 'block' : 'none'};">
+      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS ENTREGADAS</label>
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Ajusta la cantidad entregada por referencia. Lo que no se entregó queda como devolución.</div>
+      ${(p.items && p.items.length ? p.items : []).map((it, idx) => {
+        const pedido = it.cantidad_pedida || 0;
+        const prevEntregado = (() => {
+          if (!rechazadosActuales.length && r && r.items_entregados) {
+            const prev = (r.items_entregados || []).find(x => x.codigo === it.codigo);
+            return prev ? prev.cantidad_entregada : pedido;
+          }
+          return pedido;
+        })();
+        return `
+        <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;">
+          <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:2px;">${it.nombre || it.codigo}</div>
+          <div style="font-size:11px;color:#6b7280;margin-bottom:10px;">${it.codigo} · ${it.unidad || 'und'}</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="flex:1;text-align:center;">
+              <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">PEDIDO</div>
+              <div style="font-size:18px;font-weight:800;color:#374151;">${pedido}</div>
+            </div>
+            <div style="flex:2;">
+              <div style="font-size:10px;color:#9ca3af;margin-bottom:4px;">ENTREGADO</div>
+              <input type="number" id="item-entregado-${idx}"
+                value="${prevEntregado}" min="0" max="${pedido}" step="1"
+                oninput="condActualizarDevuelto(${idx}, ${pedido})"
+                style="width:100%;padding:10px;border:2px solid #d1d5db;border-radius:8px;font-size:18px;font-weight:800;color:#15803d;text-align:center;box-sizing:border-box;">
+            </div>
+            <div style="flex:1;text-align:center;">
+              <div style="font-size:10px;color:#9ca3af;margin-bottom:2px;">DEVUELTO</div>
+              <div id="item-devuelto-${idx}" style="font-size:18px;font-weight:800;color:#b91c1c;">${pedido - prevEntregado}</div>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
     </div>
 
     <div style="margin-bottom:14px;">
@@ -5805,6 +5842,19 @@ function condSelEstado(estado) {
 
   const divRechazo = document.getElementById('cond-bultos-rechazo');
   if (divRechazo) divRechazo.style.display = estado !== 'ENTREGADO' ? 'block' : 'none';
+
+  const divItems = document.getElementById('cond-items-parcial');
+  if (divItems) divItems.style.display = estado === 'PARCIAL' ? 'block' : 'none';
+}
+
+function condActualizarDevuelto(idx, pedido) {
+  const inp = document.getElementById('item-entregado-' + idx);
+  const div = document.getElementById('item-devuelto-' + idx);
+  if (!inp || !div) return;
+  let val = parseInt(inp.value) || 0;
+  if (val < 0) { val = 0; inp.value = 0; }
+  if (val > pedido) { val = pedido; inp.value = pedido; }
+  div.textContent = pedido - val;
 }
 
 async function condGuardarParada() {
@@ -5824,10 +5874,31 @@ async function condGuardarParada() {
       const chk = document.getElementById('chk-bulto-' + b.id);
       if (chk && chk.checked) bultosRechazados.push(b.id);
     });
-    // RECHAZADO total: el backend auto-selecciona todos los bultos — no bloquear aquí
-    // PARCIAL sí requiere selección explícita
     if (estadoEntrega === 'PARCIAL' && !bultosRechazados.length) {
       alerta('Para entrega parcial selecciona qué bultos fueron rechazados', 'error');
+      return;
+    }
+  }
+
+  // Ítems con cantidades para PARCIAL
+  const itemsEntregados = [];
+  if (estadoEntrega === 'PARCIAL' && p.items && p.items.length) {
+    let hayDevolucion = false;
+    p.items.forEach((it, idx) => {
+      const pedido    = it.cantidad_pedida || 0;
+      const inp       = document.getElementById('item-entregado-' + idx);
+      const entregado = inp ? Math.max(0, Math.min(parseInt(inp.value) || pedido, pedido)) : pedido;
+      if (entregado < pedido) hayDevolucion = true;
+      itemsEntregados.push({
+        codigo:             it.codigo,
+        nombre:             it.nombre,
+        unidad:             it.unidad || 'und',
+        cantidad_pedida:    pedido,
+        cantidad_entregada: entregado,
+      });
+    });
+    if (!hayDevolucion) {
+      alerta('Si no hay devolución de referencias, usa "Entregado" en lugar de Parcial', 'advertencia');
       return;
     }
   }
@@ -5876,6 +5947,7 @@ async function condGuardarParada() {
         observaciones:     obs || null,
         foto_entrega:      fotoBase64 || null,
         bultos_rechazados: bultosRechazados,
+        items_entregados:  itemsEntregados.length ? itemsEntregados : null,
       }),
     });
     const d = await r.json();
@@ -6051,6 +6123,22 @@ async function _cargarPlanilla(id) {
             ${p.bultos_entregados} entregado${p.bultos_entregados !== 1 ? 's' : ''} · ${p.bultos_rechazados} rechazado${p.bultos_rechazados !== 1 ? 's' : ''}
             ${r && r.observaciones ? ' · "' + r.observaciones.substring(0, 50) + '"' : ''}
           </div>
+          ${r && r.estado_entrega === 'PARCIAL' && r.items_entregados && r.items_entregados.length ? `
+          <div style="margin-top:10px;border-top:1px solid #222;padding-top:10px;">
+            <div style="font-size:10px;color:#fbbf24;font-weight:700;margin-bottom:6px;">DETALLE PARCIAL</div>
+            <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:4px 10px;font-size:11px;">
+              <div style="color:#555;font-weight:700;">REFERENCIA</div>
+              <div style="color:#555;font-weight:700;text-align:right;">PEDIDO</div>
+              <div style="color:#4ade80;font-weight:700;text-align:right;">ENTREGADO</div>
+              <div style="color:#f87171;font-weight:700;text-align:right;">DEVUELTO</div>
+              ${r.items_entregados.map(it => `
+                <div style="color:#ccc;">${it.nombre || it.codigo}</div>
+                <div style="color:#555;text-align:right;">${it.cantidad_pedida}</div>
+                <div style="color:#4ade80;text-align:right;font-weight:700;">${it.cantidad_entregada}</div>
+                <div style="color:${it.cantidad_devuelta > 0 ? '#f87171' : '#555'};text-align:right;font-weight:700;">${it.cantidad_devuelta}</div>
+              `).join('')}
+            </div>
+          </div>` : ''}
         </div>`;
     });
 

@@ -28,6 +28,10 @@ class RecaudoEntrega(db.Model):
     # IDs de bultos rechazados (para reingreso)
     bultos_rechazados_ids = db.Column(db.JSON, default=list)
 
+    # Detalle de referencias en entrega parcial
+    # [{"codigo": "REF001", "nombre": "Papel A4", "pedido": 10, "entregado": 7, "devuelto": 3}]
+    items_entregados = db.Column(db.JSON, nullable=True)
+
     # Trazabilidad
     confirmado_por  = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     editado_por     = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
@@ -52,6 +56,7 @@ class RecaudoEntrega(db.Model):
             'monto_cobrado':         float(self.monto_cobrado) if self.monto_cobrado else 0,
             'observaciones':         self.observaciones or '',
             'bultos_rechazados_ids': self.bultos_rechazados_ids or [],
+            'items_entregados':      self.items_entregados or [],
             'confirmado_por':        self.confirmado_por,
             'editado_por':           self.editado_por,
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,
