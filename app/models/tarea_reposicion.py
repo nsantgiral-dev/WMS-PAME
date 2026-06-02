@@ -55,6 +55,7 @@ class TareaReposicion(db.Model):
 
     # Relaciones
     producto = db.relationship('Producto', backref='tareas_reposicion', lazy=True)
+    almacen = db.relationship('Almacen', backref='tareas_reposicion', lazy=True)
     ubicacion_reserva = db.relationship('Ubicacion', foreign_keys=[ubicacion_reserva_id], lazy=True)
     ubicacion_picking = db.relationship('Ubicacion', foreign_keys=[ubicacion_picking_id], lazy=True)
     lpn = db.relationship('LPN', backref='tarea_reposicion', lazy=True)
@@ -78,6 +79,8 @@ class TareaReposicion(db.Model):
             'producto_codigo': self.producto.codigo if self.producto else None,
             'producto_nombre': self.producto.nombre if self.producto else None,
             'almacen_id': self.almacen_id,
+            'almacen_nombre': self.almacen.nombre if self.almacen else None,
+            'bodega_siesa_id': self.almacen.bodega_siesa_id if self.almacen else None,
             'cantidad_unidades': self.cantidad_unidades,
             'ubicacion_reserva': self.ubicacion_reserva.codigo if self.ubicacion_reserva else None,
             'ubicacion_reserva_id': self.ubicacion_reserva_id,

@@ -137,10 +137,13 @@ def get_tarea_abastecedor(abastecedor_id: int):
         return activa.to_dict()
 
     # Tomar la más antigua PENDIENTE con LPN asignado (las más urgentes primero)
-    siguiente = TareaReposicion.query.filter_by(
-        estado='PENDIENTE',
-        abastecedor_id=None,
-    ).order_by(TareaReposicion.fecha_creacion.asc()).first()
+    # with_for_update(skip_locked=True): si dos abastecedores piden al mismo tiempo,
+    # cada uno toma una tarea diferente — sin esto ambos tomarían la misma.
+    siguiente = (TareaReposicion.query
+        .filter_by(estado='PENDIENTE', abastecedor_id=None)
+        .order_by(TareaReposicion.fecha_creacion.asc())
+        .with_for_update(skip_locked=True)
+        .first())
 
     if not siguiente:
         return None
@@ -278,6 +281,7 @@ def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
     """
     from app.services.siesa_job_service import encolar_transferencia_ubicaciones
     from app.models.ubicacion import Ubicacion as _Ub
+    from app.models.almacen import Almacen
 
     ub_reserva = _Ub.query.get(tarea.ubicacion_reserva_id)
     ub_picking = _Ub.query.get(tarea.ubicacion_picking_id)
@@ -285,29 +289,49 @@ def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
 
     if not ub_reserva or not ub_picking or not producto:
         logger.error(f'[REPOSICION DLQ] Datos incompletos para job — no se encola')
+        tarea.notas = (tarea.notas or '') + ' | SIESA: datos incompletos, job no creado'
         return
 
     # Validar codigo_siesa explícitamente — Siesa rechaza códigos WMS internos.
-    # Patrón de devolucion_service.py:316-322 y conteo_service.py:610-615.
     item_codigo = getattr(producto, 'codigo_siesa', None)
     if not item_codigo:
-        logger.error(
+        logger.critical(
             f'[REPOSICION DLQ] Producto {producto.id} ({producto.codigo}) sin codigo_siesa '
-            f'— no se encola el job (Siesa rechazaría el código WMS). '
+            f'— job NO creado. Siesa NO se enteró de este movimiento RESERVA→PICKING. '
             f'Configura codigo_siesa en el producto para activar la transferencia automática.'
         )
+        tarea.notas = (tarea.notas or '') + f' | SIESA: producto {producto.codigo} sin codigo_siesa — transferencia NO enviada'
+        tarea.siesa_enviado = False
+        return
+
+    # Resolver bodega dinámicamente desde el almacén de la tarea
+    almacen = Almacen.query.get(tarea.almacen_id)
+    bodega_siesa = almacen.bodega_siesa_id if almacen else None
+    centro_op_siesa = almacen.centro_op_siesa if almacen else None
+
+    if not bodega_siesa:
+        logger.critical(
+            f'[REPOSICION DLQ] Almacén {tarea.almacen_id} sin bodega_siesa_id — '
+            f'job NO creado. Configura bodega_siesa_id en el almacén.'
+        )
+        tarea.notas = (tarea.notas or '') + f' | SIESA: almacén sin bodega_siesa_id — transferencia NO enviada'
+        tarea.siesa_enviado = False
         return
 
     job = encolar_transferencia_ubicaciones(
-        bodega_id=connekta.bodega,
+        bodega_id=bodega_siesa,
         ubicacion_origen=ub_reserva.codigo,
         ubicacion_destino=ub_picking.codigo,
         referencia_item=item_codigo,
         cantidad=unidades,
         nota=f'Reposición WMS {tarea.codigo} — LPN {lpn.codigo}',
+        centro_op=centro_op_siesa,
         referencia_tipo='TareaReposicion',
         referencia_id=tarea.id,
     )
     # No hacer commit aquí — el commit lo hace el caller (confirmar_reposicion) de forma atómica
     # con el cambio de estado de la tarea (P8: SiesaJob atómico con cambio de estado).
-    logger.info(f'[REPOSICION DLQ] Job {job.id} preparado para {tarea.codigo}')
+    logger.info(
+        f'[REPOSICION DLQ] Job {job.id} preparado para {tarea.codigo} '
+        f'— bodega={bodega_siesa} centro_op={centro_op_siesa}'
+    )

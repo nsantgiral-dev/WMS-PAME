@@ -31,11 +31,12 @@ def encolar_transferencia_ubicaciones(
     referencia_item: str,
     cantidad: int,
     nota: str = '',
+    centro_op: str = None,
     referencia_tipo: str = None,
     referencia_id: int = None,
 ) -> SiesaJob:
     """
-    Encola una transferencia entre ubicaciones (conector 173076).
+    Encola una transferencia entre ubicaciones (conector 173066).
     El caller hace commit.
     """
     return SiesaJob.encolar(
@@ -47,6 +48,7 @@ def encolar_transferencia_ubicaciones(
             'referencia_item': referencia_item,
             'cantidad': cantidad,
             'nota': nota,
+            'centro_op': centro_op,
         },
         referencia_tipo=referencia_tipo,
         referencia_id=referencia_id,
@@ -252,6 +254,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             referencia_item=payload['referencia_item'],
             cantidad=payload['cantidad'],
             nota=payload.get('nota', ''),
+            centro_op=payload.get('centro_op'),
         )
 
     if job.tipo == 'DESPACHO_F470':

@@ -1750,7 +1750,8 @@ class ConnektaGateway:
 
     def transferir_entre_ubicaciones(self, bodega_id: str, ubicacion_origen: str,
                                       ubicacion_destino: str, referencia_item: str,
-                                      cantidad: int, nota: str = ''):
+                                      cantidad: int, nota: str = '',
+                                      centro_op: str = None):
         """
         Conector 173066 (TransferenciaDirecta) — traslado interno en UN SOLO PASO
         entre ubicaciones dentro de la MISMA bodega (RESERVA → PICKING).
@@ -1765,13 +1766,14 @@ class ConnektaGateway:
         """
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         tipo_docto = self.tipo_docto_traslado or 'TRA'
+        _centro_op = centro_op or self.centro_op
 
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [{
                 'F_CIA': int(self.id_cia_siesa),
                 'F_CONSEC_AUTO_REG': 1,
-                'f350_id_co': self.centro_op,
+                'f350_id_co': _centro_op,
                 'f350_id_tipo_docto': tipo_docto,
                 'f350_consec_docto': 0,
                 'f350_fecha': fecha_hoy,
@@ -1784,7 +1786,7 @@ class ConnektaGateway:
             }],
             'Movimientos': [{
                 'F_CIA': int(self.id_cia_siesa),
-                'f470_id_co': self.centro_op,
+                'f470_id_co': _centro_op,
                 'f470_id_tipo_docto': tipo_docto,
                 'f470_consec_docto': 0,
                 'f470_nro_registro': 1,
@@ -1792,7 +1794,7 @@ class ConnektaGateway:
                 'f470_id_ubicacion_aux': ubicacion_origen,       # origen (ej. RES-01-A)
                 'f470_id_lote': None,                            # Dep — si ítem maneja lotes
                 'f470_id_motivo': self.motivo_traslado or '01',
-                'f470_id_co_movto': self.centro_op,
+                'f470_id_co_movto': _centro_op,
                 'f470_id_ccosto_movto': None,                    # Dep — si cuenta contable exige ccosto
                 'f470_id_proyecto': None,
                 'f470_id_unidad_medida': self.uom_default or 'UND',
