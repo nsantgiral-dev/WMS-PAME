@@ -1915,7 +1915,7 @@ class ConnektaGateway:
                     'f441_notas': None,
                     'f441_id_un_movto': self.unidad_negocio,
                     'f441_precio_unitario': 0,
-                    'f441_id_ubicacion_sal': None,
+                    'f441_id_ubicacion_sal': item.get('ubicacion_codigo') or None,
                     'f441_id_proy_etapa': None,
                     'f441_id_rubro_pof': None,
                 }
@@ -1928,6 +1928,85 @@ class ConnektaGateway:
                     f'{bodega_origen}→{bodega_destino} ({len(items)} items)')
         return self._post(self.conector_requisicion_traslado,
                           'API_v1_Inventarios_Comercial_RequisicionesParaTransferir', payload)
+
+    def compromisos_desde_requisicion(self, consec_rit: int, bodega_destino: str,
+                                      items: list):
+        """
+        174720 — Registra compromisos sobre una RIT existente con cantidades y
+        ubicaciones reales del packing. Dispara después del segundo conteo (EN_PACKING).
+        Cada item: {codigo_siesa, cantidad, unidad_medida, ubicacion_codigo, lote}
+        """
+        if not consec_rit:
+            raise ValueError('compromisos_desde_requisicion: consec_rit obligatorio')
+        payload = {
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
+            'Compromisos': [
+                {
+                    'F_CIA':                       int(self.id_cia_siesa),
+                    'f440_id_co':                  self.centro_op,
+                    'f440_id_tipo_docto':           self.tipo_docto_req_traslado,
+                    'f440_consec_docto':            consec_rit,
+                    'f441_id_item':                 0,
+                    'f441_referencia_item':         item.get('codigo_siesa'),
+                    'f441_codigo_barras':           None,
+                    'f441_id_ext1_detalle':         None,
+                    'f441_id_ext2_detalle':         None,
+                    'f441_id_bodega':               self.bodega,
+                    'f441_id_ubicacion_aux':        item.get('ubicacion_codigo') or None,
+                    'f441_id_lote':                 item.get('lote') or None,
+                    'f441_id_unidad_medida':        item.get('unidad_medida') or self.uom_default,
+                    'f441_cant_base':               round(float(abs(item.get('cantidad', 0))), 4),
+                    'f441_cant_2':                  0,
+                    'f441_id_bodega_ent':           bodega_destino,
+                    'f441_id_ubicacion_aux_ent':    None,
+                    'f441_id_lote_ent':             None,
+                    'f441_cant_por_remisionar_base': round(float(abs(item.get('cantidad_packing',
+                                                         item.get('cantidad', 0)))), 4),
+                    'f441_cant_por_remisionar_2':   0,
+                    'f441_nro_registro':            idx + 1,
+                }
+                for idx, item in enumerate(items)
+                if item.get('codigo_siesa') and item.get('cantidad', 0) > 0
+            ],
+            'Movto seriales': [],
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}],
+        }
+        logger.info('[CONNEKTA] compromisos_desde_requisicion RIT=%s (%d ítems)',
+                    consec_rit, len(payload['Compromisos']))
+        return self._post('174720',
+                          'API_v1_Inventarios_Comercial_CompromisosDesdeRequisicion', payload)
+
+    def transferencia_desde_requisicion(self, consec_rit: int):
+        """
+        174930 — Crea STS (Salida en Tránsito) desde una RIT comprometida.
+        Siesa lee los ítems directamente de la RIT — no se envían movimientos.
+        Dispara al despachar cuando existe siesa_requisicion_consec.
+        """
+        if not consec_rit:
+            raise ValueError('transferencia_desde_requisicion: consec_rit obligatorio')
+        if not self.tipo_docto_transito_salida:
+            raise ValueError('SIESA_TIPO_DOCTO_TRANSITO_SALIDA no configurado')
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        payload = {
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
+            'Documentos': [{
+                'F_CIA':                      int(self.id_cia_siesa),
+                'F_CONSEC_AUTO_REG':          1,
+                'f350_id_co':                 self.centro_op,
+                'f350_id_tipo_docto':         self.tipo_docto_transito_salida,
+                'f350_consec_docto':          0,
+                'f350_fecha':                 fecha_hoy,
+                'f350_ind_estado':            1,
+                'f350_ind_impresion':         0,
+                'f440_id_co_req_int':         self.centro_op,
+                'f440_id_tipo_docto_req_int': self.tipo_docto_req_traslado,
+                'f440_consec_docto_req_int':  consec_rit,
+            }],
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}],
+        }
+        logger.info('[CONNEKTA] transferencia_desde_requisicion RIT=%s', consec_rit)
+        return self._post('174930',
+                          'API_v1_Inventarios_Comercial_TransferenciasDesdeRequisicion', payload)
 
     def transferencia_transito_salida(self, bodega_origen: str, bodega_transito: str,
                                        items: list, codigo_solicitud: str,

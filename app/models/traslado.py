@@ -2,16 +2,17 @@
 Traslados entre Bodega Principal y Puntos de Venta.
 
 Máquina de estados:
-  BORRADOR → ENVIADA → EN_PICKING → PREPARADO → EN_TRANSITO → ENTREGADA
+  BORRADOR → ENVIADA → EN_PICKING → EN_PACKING → PREPARADO → EN_TRANSITO → ENTREGADA
                      ↘ RECHAZADA
            ↘ CANCELADA  (tienda: BORRADOR/ENVIADA; admin: hasta PREPARADO)
 
-  BORRADOR:   Tienda arma la solicitud
-  ENVIADA:    Tienda envía al admin bodega
-  EN_PICKING: Admin aprueba y asigna operario; operario recoge los ítems
-  PREPARADO:  Operario confirma recogida con cantidades reales; listo para despachar
-  EN_TRANSITO: Admin despacha; mercancía en camino al PV
-  ENTREGADA:  Tienda confirma recepción
+  BORRADOR:    Tienda arma la solicitud
+  ENVIADA:     Tienda envía al admin bodega
+  EN_PICKING:  Admin aprueba; operario recoge ítems con TareaPicking
+  EN_PACKING:  Picking confirmado + RIT 174646 disparada; operario verifica empaque
+  PREPARADO:   Packing confirmado + Compromisos 174720 disparados; listo para despachar
+  EN_TRANSITO: Admin despacha con 174930; mercancía en camino al PV
+  ENTREGADA:   Tienda confirma recepción; ETS 173079 disparada
 """
 from datetime import datetime
 from app.extensions import db
@@ -22,6 +23,7 @@ class EstadoTraslado:
     BORRADOR    = 'BORRADOR'
     ENVIADA     = 'ENVIADA'
     EN_PICKING  = 'EN_PICKING'
+    EN_PACKING  = 'EN_PACKING'
     PREPARADO   = 'PREPARADO'
     EN_TRANSITO = 'EN_TRANSITO'
     ENTREGADA   = 'ENTREGADA'

@@ -82,6 +82,32 @@ class SiesaTrasladoAdapter:
         """Recovery: consulta API v2 cuando el consecutivo de 173076 no llegó en la respuesta."""
         return connekta.get_consec_salida_transito_by_alterno(codigo)
 
+    # ── 174720 — Compromisos desde RIT (packing) ─────────────────────────
+
+    def registrar_compromisos(self, consec_rit: int, bodega_destino: str,
+                               items: list, codigo: str) -> dict:
+        """
+        174720 — Registra cantidades y ubicaciones reales confirmadas en packing.
+        Debe dispararse al confirmar packing (EN_PACKING → PREPARADO).
+        """
+        logger.info('[TRASLADO_ADAPTER] compromisos %s  RIT=%s  (%d ítems)',
+                    codigo, consec_rit, len(items))
+        return connekta.compromisos_desde_requisicion(
+            consec_rit=consec_rit,
+            bodega_destino=bodega_destino,
+            items=items,
+        )
+
+    # ── 174930 — Transfer desde RIT (despacho) ───────────────────────────
+
+    def despachar_desde_rit(self, consec_rit: int, codigo: str) -> dict:
+        """
+        174930 — Crea STS desde la RIT comprometida. Reemplaza 173076 cuando
+        el traslado pasó por el flujo completo RIT → Compromisos.
+        """
+        logger.info('[TRASLADO_ADAPTER] despachar_desde_rit %s  RIT=%s', codigo, consec_rit)
+        return connekta.transferencia_desde_requisicion(consec_rit=consec_rit)
+
     # ── 173079 — Entrada ──────────────────────────────────────────────────
 
     def registrar_entrada(self, bodega_transito: str, bodega_destino: str,

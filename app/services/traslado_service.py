@@ -137,40 +137,9 @@ class TrasladoService:
                 f'Configura el mapeo en /api/config/mapeo-unidades y vuelve a aprobar.'
             )
 
-        # ── 174646 — Requisición Interna para Transferir (RIT) ──────────────
-        # Compromete el inventario en Siesa (Estado 3 Aprobado) antes del picking.
-        # Sin este paso, e-commerce puede vender mercancía ya destinada a la tienda.
-        _rit_items = [
-            {
-                'codigo_siesa': item.producto_codigo_siesa,
-                'cantidad':     item.cantidad_aprobada or item.cantidad_solicitada,
-                'unidad_medida': (item.producto.unidad_medida if item.producto else '') or '',
-            }
-            for item in s.items
-            if (item.cantidad_aprobada or item.cantidad_solicitada or 0) > 0
-            and item.producto_codigo_siesa
-        ]
-        try:
-            res_rit = siesa_traslado.crear_rit(
-                bodega_origen=s.bodega_origen_siesa,
-                bodega_destino=s.bodega_destino_siesa,
-                items=_rit_items,
-                codigo=s.codigo,
-            )
-            if not res_rit.get('simulado') and not res_rit.get('modo_ensayo'):
-                consec_rit = TrasladoService._extraer_consec(res_rit)
-                if consec_rit:
-                    s.siesa_requisicion_consec = consec_rit
-                    logger.info('[TRASLADO] %s RIT creada → consec %s', s.codigo, consec_rit)
-                else:
-                    logger.warning('[TRASLADO] %s RIT aceptada pero consecutivo no recuperado', s.codigo)
-            s.siesa_error = None
-        except Exception as e_rit:
-            # RIT fallida no bloquea el picking — el WMS sigue operando.
-            # El inventario queda comprometido solo en WMS (reserva local), no en Siesa.
-            s.siesa_error = f'RIT 174646: {str(e_rit)}'
-            logger.error('[TRASLADO] %s Error creando RIT: %s', s.codigo, e_rit)
-
+        # 174646 se dispara al confirmar picking (con ubicaciones reales del operario).
+        # Aquí solo se avanza el estado y se crean las tareas de picking.
+        s.siesa_error = None
         s.estado = EstadoTraslado.EN_PICKING
         db.session.flush()  # necesario antes de crear tareas (s.id ya existe)
 
@@ -186,6 +155,143 @@ class TrasladoService:
 
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → EN_PICKING (aprobado por {aprobador_id}, operario {operario_id})')
+        return s
+
+    @staticmethod
+    def confirmar_picking_traslado(solicitud_id: int, usuario_id: int,
+                                   items_confirmados: list = None) -> SolicitudTraslado:
+        """
+        Operario terminó el picking. Actualiza cantidades reales, dispara
+        174646 (RIT con ubicaciones físicas), transiciona EN_PICKING → EN_PACKING.
+        items_confirmados: [{'id': item_id, 'cantidad_confirmada': N}]
+        """
+        from app.models.picking import TareaPicking, EstadoPicking as _EP
+        from app.models.ubicacion import Ubicacion
+
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            from flask import abort; abort(404)
+        if s.estado != EstadoTraslado.EN_PICKING:
+            raise ValueError(f'Solo se puede confirmar picking en EN_PICKING (estado: {s.estado})')
+
+        # Actualizar cantidades reales por ítem
+        if items_confirmados:
+            mapa = {i['id']: i['cantidad_confirmada'] for i in items_confirmados}
+            for item in s.items:
+                if item.id in mapa:
+                    item.cantidad_enviada = max(0, mapa[item.id])
+        else:
+            for item in s.items:
+                if item.cantidad_enviada is None:
+                    item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
+
+        db.session.flush()
+
+        # Construir ítems para 174646 con ubicaciones reales del picking
+        tareas_completadas = TareaPicking.query.filter_by(
+            referencia_documento=s.codigo,
+            tipo_documento='TRASLADO',
+            estado=_EP.COMPLETADO,
+        ).all()
+        # Mapa producto_id → ubicacion.codigo (toma la primera tarea completada)
+        ubicacion_por_producto = {}
+        for t in tareas_completadas:
+            if t.producto_id not in ubicacion_por_producto and t.ubicacion:
+                ubicacion_por_producto[t.producto_id] = t.ubicacion.codigo
+
+        _rit_items = []
+        for item in s.items:
+            cantidad = item.cantidad_enviada or 0
+            if cantidad <= 0 or not item.producto_codigo_siesa:
+                continue
+            _rit_items.append({
+                'codigo_siesa':    item.producto_codigo_siesa,
+                'cantidad':        cantidad,
+                'unidad_medida':   (item.producto.unidad_medida if item.producto else '') or '',
+                'ubicacion_codigo': ubicacion_por_producto.get(item.producto_id),
+            })
+
+        try:
+            res_rit = siesa_traslado.crear_rit(
+                bodega_origen=s.bodega_origen_siesa,
+                bodega_destino=s.bodega_destino_siesa,
+                items=_rit_items,
+                codigo=s.codigo,
+            )
+            if not res_rit.get('simulado') and not res_rit.get('modo_ensayo'):
+                consec = TrasladoService._extraer_consec(res_rit)
+                if consec:
+                    s.siesa_requisicion_consec = consec
+                    logger.info('[TRASLADO] %s RIT creada en picking → consec %s', s.codigo, consec)
+                else:
+                    logger.warning('[TRASLADO] %s RIT aceptada sin consecutivo', s.codigo)
+            s.siesa_error = None
+        except Exception as e_rit:
+            s.siesa_error = f'RIT 174646: {e_rit}'
+            logger.error('[TRASLADO] %s Error RIT en picking: %s', s.codigo, e_rit)
+
+        s.estado = EstadoTraslado.EN_PACKING
+        db.session.commit()
+        logger.info('[TRASLADO] %s → EN_PACKING (picking confirmado por %s)', s.codigo, usuario_id)
+        return s
+
+    @staticmethod
+    def confirmar_packing_traslado(solicitud_id: int, usuario_id: int) -> SolicitudTraslado:
+        """
+        Operario verificó empaque (segundo conteo). Dispara 174720 (Compromisos desde RIT)
+        y transiciona EN_PACKING → PREPARADO.
+        """
+        from app.models.picking import TareaPicking, EstadoPicking as _EP
+
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            from flask import abort; abort(404)
+        if s.estado != EstadoTraslado.EN_PACKING:
+            raise ValueError(f'Solo se puede confirmar packing en EN_PACKING (estado: {s.estado})')
+
+        # Ítems con cantidades confirmadas + ubicaciones del picking
+        tareas = TareaPicking.query.filter_by(
+            referencia_documento=s.codigo,
+            tipo_documento='TRASLADO',
+            estado=_EP.COMPLETADO,
+        ).all()
+        ubicacion_por_producto = {
+            t.producto_id: t.ubicacion.codigo
+            for t in tareas if t.ubicacion
+        }
+
+        _comp_items = []
+        for item in s.items:
+            cantidad = item.cantidad_enviada or 0
+            if cantidad <= 0 or not item.producto_codigo_siesa:
+                continue
+            _comp_items.append({
+                'codigo_siesa':    item.producto_codigo_siesa,
+                'cantidad':        cantidad,
+                'cantidad_packing': cantidad,
+                'unidad_medida':   (item.producto.unidad_medida if item.producto else '') or '',
+                'ubicacion_codigo': ubicacion_por_producto.get(item.producto_id),
+            })
+
+        if s.siesa_requisicion_consec and _comp_items:
+            try:
+                siesa_traslado.registrar_compromisos(
+                    consec_rit=s.siesa_requisicion_consec,
+                    bodega_destino=s.bodega_destino_siesa,
+                    items=_comp_items,
+                    codigo=s.codigo,
+                )
+                s.siesa_error = None
+                logger.info('[TRASLADO] %s compromisos 174720 registrados', s.codigo)
+            except Exception as e_comp:
+                s.siesa_error = f'174720: {e_comp}'
+                logger.error('[TRASLADO] %s Error compromisos: %s', s.codigo, e_comp)
+        else:
+            logger.warning('[TRASLADO] %s sin RIT consec — 174720 omitido', s.codigo)
+
+        s.estado = EstadoTraslado.PREPARADO
+        db.session.commit()
+        logger.info('[TRASLADO] %s → PREPARADO (packing confirmado por %s)', s.codigo, usuario_id)
         return s
 
     @staticmethod
@@ -206,14 +312,16 @@ class TrasladoService:
     @staticmethod
     def despachar(solicitud_id: int) -> SolicitudTraslado:
         """
-        Empacador selló las cajas. Dispara 173076 (tránsito) o 173066 (directa).
-        La solicitud puede estar EN_PICKING o APROBADA (si picking manual).
+        Admin despacha. Si la solicitud pasó por el flujo completo (tiene RIT),
+        usa 174930 (Transfer desde Requisición). Fallback a 173076/173066 para
+        traslados manuales sin RIT.
         """
         s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
         if not s:
             from flask import abort
             abort(404)
-        if s.estado not in (EstadoTraslado.PREPARADO, EstadoTraslado.EN_PICKING):
+        if s.estado not in (EstadoTraslado.PREPARADO, EstadoTraslado.EN_PICKING,
+                             EstadoTraslado.EN_PACKING):
             raise ValueError(f'No se puede despachar en estado {s.estado}')
         # Guard idempotencia: si Siesa ya procesó este despacho (siesa_salida_consec asignado)
         # y el estado ya avanzó, evitar llamar Siesa de nuevo (duplicación de documento)
@@ -254,7 +362,14 @@ class TrasladoService:
             raise ValueError('No hay ítems con cantidad para despachar')
 
         try:
-            if s.modo_transferencia == 'EN_TRANSITO':
+            if s.siesa_requisicion_consec:
+                # Flujo completo: 174646 + 174720 ya disparados — usar 174930
+                res = siesa_traslado.despachar_desde_rit(
+                    consec_rit=s.siesa_requisicion_consec,
+                    codigo=s.codigo,
+                )
+            elif s.modo_transferencia == 'EN_TRANSITO':
+                # Fallback manual: sin RIT, usar 173076 directamente
                 bodega_transito = s.bodega_transito_siesa or siesa_traslado.bodega_transito
                 if not bodega_transito:
                     raise ValueError('SIESA_BODEGA_TRANSITO no configurada — usar modo DIRECTA')
@@ -263,7 +378,7 @@ class TrasladoService:
                     bodega_transito=bodega_transito,
                     items=items_payload,
                     codigo=s.codigo,
-                    consec_requisicion=s.siesa_requisicion_consec,
+                    consec_requisicion=None,
                 )
             else:
                 res = siesa_traslado.registrar_salida_directa(

@@ -760,7 +760,10 @@ async function cargarTareasBodega() {
         <div class="tabla-card" style="${t.estado==='BLOQUEADO'?'border-color:#7f1d1d;background:#110a0a;':''}">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
             <div style="flex:1;min-width:0;">
-              <div style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</div>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
+                ${t.tipo_documento === 'TRASLADO' ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
+              </div>
               <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
               <div style="font-size:11px;color:#444;margin-top:2px;">${
                 t.operario_id
@@ -8851,7 +8854,7 @@ async function repTestEmail(btn) {
 // No comparte estado ni funciones con tab-pedidos ni tab-traslados.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'PREPARADO'];
+const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'EN_PACKING', 'PREPARADO'];
 
 async function cargarRequisiciones() {
   const lista = document.getElementById('req-lista');
@@ -8876,6 +8879,7 @@ function _renderRequisicionCard(r) {
   const BADGE = {
     ENVIADA:    { color: '#f59e0b', bg: '#fef3c7', label: 'Enviada' },
     EN_PICKING: { color: '#3b82f6', bg: '#dbeafe', label: 'En picking' },
+    EN_PACKING: { color: '#f97316', bg: '#fff7ed', label: 'En empaque' },
     PREPARADO:  { color: '#8b5cf6', bg: '#ede9fe', label: 'Preparado' },
   };
   const badge  = BADGE[r.estado] || { color: '#6b7280', bg: '#f3f4f6', label: r.estado };
@@ -8893,16 +8897,26 @@ function _renderRequisicionCard(r) {
     ? `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">+${items.length - 4} más</div>`
     : '';
 
-  const puedeDespachar = r.estado === 'PREPARADO';
-  const btnDespachar = `
-    <button onclick="despacharRequisicion(${r.id})"
-      ${puedeDespachar ? '' : 'disabled'}
-      style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:${puedeDespachar ? 'pointer' : 'default'};
-             background:${puedeDespachar ? '#111' : 'var(--bg-s2)'};
-             color:${puedeDespachar ? '#fff' : 'var(--tx3)'};
-             border:1px solid ${puedeDespachar ? '#111' : 'var(--brd)'};">
-      🚚 Despachar
-    </button>`;
+  const accionBtn =
+    r.estado === 'EN_PICKING'
+      ? `<button onclick="confirmarPickingTraslado(${r.id})"
+           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                  background:#1d4ed8;color:#fff;border:1px solid #1d4ed8;">
+           ✅ Confirmar picking
+         </button>`
+    : r.estado === 'EN_PACKING'
+      ? `<button onclick="confirmarPackingTraslado(${r.id})"
+           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                  background:#ea580c;color:#fff;border:1px solid #ea580c;">
+           📦 Confirmar empaque
+         </button>`
+    : r.estado === 'PREPARADO'
+      ? `<button onclick="despacharRequisicion(${r.id})"
+           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                  background:#111;color:#fff;border:1px solid #111;">
+           🚚 Despachar
+         </button>`
+    : '';
 
   return `
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
@@ -8928,12 +8942,55 @@ function _renderRequisicionCard(r) {
         </div>
       </div>
       <div style="display:flex;justify-content:flex-end;">
-        ${btnDespachar}
+        ${accionBtn}
       </div>
     </div>`;
 }
 
 async function despacharRequisicion(id) {
-  // Placeholder — flujo completo se implementa en la siguiente iteración
-  alerta('Funcionalidad de despacho próximamente', 'info');
+  if (!confirm('¿Confirmar despacho de esta requisición?')) return;
+  try {
+    const r = await fetch(`/api/traslados/${id}/despachar`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al despachar', 'error'); return; }
+    alerta('Requisición despachada ✓', 'exito');
+    await cargarRequisiciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+async function confirmarPickingTraslado(id) {
+  if (!confirm('¿Confirmar que el picking de esta transferencia está completo?')) return;
+  try {
+    const r = await fetch(`/api/traslados/${id}/confirmar-picking`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al confirmar picking', 'error'); return; }
+    alerta('Picking confirmado — pendiente de verificar empaque 📦', 'exito');
+    await cargarRequisiciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+async function confirmarPackingTraslado(id) {
+  if (!confirm('¿Confirmar verificación de empaque? Esto disparará los compromisos en Siesa.')) return;
+  try {
+    const r = await fetch(`/api/traslados/${id}/confirmar-packing`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al confirmar packing', 'error'); return; }
+    alerta('Empaque verificado — listo para despachar ✓', 'exito');
+    await cargarRequisiciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
 }

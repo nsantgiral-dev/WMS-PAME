@@ -238,54 +238,67 @@ def cancelar_solicitud(id):
 @jwt_required()
 def confirmar_picking(id):
     """
-    Operario confirma que recogió físicamente los ítems y declara las cantidades reales.
-    Transiciona EN_PICKING → PREPARADO, habilitando el botón Despachar para el admin.
-
+    Operario terminó el picking de la transferencia.
+    Dispara 174646 (RIT con ubicaciones reales) y transiciona EN_PICKING → EN_PACKING.
     Body opcional: {"items_confirmados": [{"id": 1, "cantidad_confirmada": 5}]}
-    Sin body: confirma cantidades aprobadas en su totalidad.
     """
-    from app.extensions import db
     try:
         usuario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     s = SolicitudTraslado.query.get_or_404(id)
-
-    if s.estado != 'EN_PICKING':
-        return jsonify({'error': f'Solo se puede confirmar recogida en EN_PICKING (estado: {s.estado})'}), 400
-
-    # Verificar que el operario que confirma es el asignado (o un admin)
     usuario = Usuario.query.get(usuario_id)
     es_admin = usuario and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen')
     if not es_admin and s.operario_id != usuario_id:
-        return jsonify({'error': 'Solo el operario asignado puede confirmar la recogida'}), 403
-
+        return jsonify({'error': 'Solo el operario asignado o un admin puede confirmar la recogida'}), 403
     data = request.get_json() or {}
-    confirmados = data.get('items_confirmados')
-
-    if confirmados:
-        confirmados_map = {i['id']: i['cantidad_confirmada'] for i in confirmados}
-        for item in s.items:
-            cantidad = confirmados_map.get(item.id)
-            if cantidad is not None:
-                if cantidad < 0:
-                    return jsonify({'error': f'Cantidad negativa para ítem {item.id}'}), 400
-                item.cantidad_enviada = cantidad
-    else:
-        for item in s.items:
-            item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
-
-    s.estado = 'PREPARADO'
     try:
-        db.session.commit()
+        s = TrasladoService.confirmar_picking_traslado(
+            solicitud_id=id,
+            usuario_id=usuario_id,
+            items_confirmados=data.get('items_confirmados'),
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
-        db.session.rollback()
-        logger.error(f'[TRASLADO] Error al confirmar picking {id}: {e}', exc_info=True)
-        return jsonify({'error': 'Error interno al confirmar recogida — reintenta'}), 500
-    logger.info(f'[TRASLADO] {s.codigo} → PREPARADO (recogida confirmada por usuario {usuario_id})')
+        logger.error(f'[TRASLADO] Error confirmar-picking {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error interno — reintenta'}), 500
     return jsonify({
         'ok': True,
-        'mensaje': 'Recogida confirmada — el traslado está listo para despachar',
+        'mensaje': 'Picking confirmado — listo para verificación de empaque',
+        'solicitud': s.to_dict(),
+    }), 200
+
+
+@traslados_bp.route('/<int:id>/confirmar-packing', methods=['POST'])
+@jwt_required()
+def confirmar_packing(id):
+    """
+    Operario verificó el empaque (segundo conteo de la transferencia).
+    Dispara 174720 (Compromisos desde RIT) y transiciona EN_PACKING → PREPARADO.
+    """
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    s = SolicitudTraslado.query.get_or_404(id)
+    usuario = Usuario.query.get(usuario_id)
+    es_admin = usuario and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen')
+    if not es_admin and s.operario_id != usuario_id:
+        return jsonify({'error': 'Solo el operario asignado o un admin puede confirmar el empaque'}), 403
+    try:
+        s = TrasladoService.confirmar_packing_traslado(
+            solicitud_id=id,
+            usuario_id=usuario_id,
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f'[TRASLADO] Error confirmar-packing {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error interno — reintenta'}), 500
+    return jsonify({
+        'ok': True,
+        'mensaje': 'Empaque verificado — listo para despachar',
         'solicitud': s.to_dict(),
     }), 200
 
