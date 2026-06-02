@@ -54,8 +54,12 @@ class ConnektaGateway:
         self.conector_transito_salida = os.getenv('CONNEKTA_CONECTOR_TRANSITO_SALIDA', '173076')
         self.conector_transito_entrada = os.getenv('CONNEKTA_CONECTOR_TRANSITO_ENTRADA', '173079')
         self.conector_transferencia_directa = os.getenv('CONNEKTA_CONECTOR_TRANSF_DIRECTA', '173066')
-        # Tipo documento requisición de traslado (Siesa: Inventarios → Tipos de documento → clase 75)
-        self.tipo_docto_req_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', '')
+        # Tipo documento requisición de traslado (Siesa: clase 75 — distinto de clase 65 STS)
+        # SIESA_TIPO_DOCTO_RIT toma precedencia; fallback a SIESA_TIPO_DOCTO_TRASLADO para
+        # instancias que aún no hayan separado las variables.
+        self.tipo_docto_req_traslado = (
+            os.getenv('SIESA_TIPO_DOCTO_RIT') or os.getenv('SIESA_TIPO_DOCTO_TRASLADO', '')
+        )
         # Tipo documento tránsito salida/entrada (verificar con consultor Siesa)
         self.tipo_docto_transito_salida = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_SALIDA', '')
         self.tipo_docto_transito_entrada = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', '')

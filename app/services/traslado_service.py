@@ -21,6 +21,7 @@ from app.models.producto import Producto
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
+from app.services.siesa_traslado_adapter import siesa_traslado
 
 logger = logging.getLogger(__name__)
 
@@ -136,10 +137,40 @@ class TrasladoService:
                 f'Configura el mapeo en /api/config/mapeo-unidades y vuelve a aprobar.'
             )
 
-        # 174646 (Requisición de traslado) eliminado del flujo.
-        # El WMS es el único libro de estado (EN_PICKING → PREPARADO → EN_TRANSITO).
-        # Siesa solo recibe los movimientos reales: 173076 al despachar y 173079 al recibir.
-        s.siesa_error = None
+        # ── 174646 — Requisición Interna para Transferir (RIT) ──────────────
+        # Compromete el inventario en Siesa (Estado 3 Aprobado) antes del picking.
+        # Sin este paso, e-commerce puede vender mercancía ya destinada a la tienda.
+        _rit_items = [
+            {
+                'codigo_siesa': item.producto_codigo_siesa,
+                'cantidad':     item.cantidad_aprobada or item.cantidad_solicitada,
+                'unidad_medida': (item.producto.unidad_medida if item.producto else '') or '',
+            }
+            for item in s.items
+            if (item.cantidad_aprobada or item.cantidad_solicitada or 0) > 0
+            and item.producto_codigo_siesa
+        ]
+        try:
+            res_rit = siesa_traslado.crear_rit(
+                bodega_origen=s.bodega_origen_siesa,
+                bodega_destino=s.bodega_destino_siesa,
+                items=_rit_items,
+                codigo=s.codigo,
+            )
+            if not res_rit.get('simulado') and not res_rit.get('modo_ensayo'):
+                consec_rit = TrasladoService._extraer_consec(res_rit)
+                if consec_rit:
+                    s.siesa_requisicion_consec = consec_rit
+                    logger.info('[TRASLADO] %s RIT creada → consec %s', s.codigo, consec_rit)
+                else:
+                    logger.warning('[TRASLADO] %s RIT aceptada pero consecutivo no recuperado', s.codigo)
+            s.siesa_error = None
+        except Exception as e_rit:
+            # RIT fallida no bloquea el picking — el WMS sigue operando.
+            # El inventario queda comprometido solo en WMS (reserva local), no en Siesa.
+            s.siesa_error = f'RIT 174646: {str(e_rit)}'
+            logger.error('[TRASLADO] %s Error creando RIT: %s', s.codigo, e_rit)
+
         s.estado = EstadoTraslado.EN_PICKING
         db.session.flush()  # necesario antes de crear tareas (s.id ya existe)
 
@@ -224,22 +255,22 @@ class TrasladoService:
 
         try:
             if s.modo_transferencia == 'EN_TRANSITO':
-                bodega_transito = s.bodega_transito_siesa or connekta.bodega_transito
+                bodega_transito = s.bodega_transito_siesa or siesa_traslado.bodega_transito
                 if not bodega_transito:
                     raise ValueError('SIESA_BODEGA_TRANSITO no configurada — usar modo DIRECTA')
-                res = connekta.transferencia_transito_salida(
+                res = siesa_traslado.registrar_salida_transito(
                     bodega_origen=s.bodega_origen_siesa,
                     bodega_transito=bodega_transito,
                     items=items_payload,
-                    codigo_solicitud=s.codigo,
-                    consec_requisicion=s.siesa_requisicion_consec
+                    codigo=s.codigo,
+                    consec_requisicion=s.siesa_requisicion_consec,
                 )
             else:
-                res = connekta.transferencia_directa(
+                res = siesa_traslado.registrar_salida_directa(
                     bodega_origen=s.bodega_origen_siesa,
                     bodega_destino=s.bodega_destino_siesa,
                     items=items_payload,
-                    codigo_solicitud=s.codigo
+                    codigo=s.codigo,
                 )
 
             if not res.get('simulado') and not res.get('modo_ensayo'):
@@ -254,7 +285,7 @@ class TrasladoService:
                         'intentando recovery via API_v2_Inventarios_Transferencia_Salida_Transito',
                         s.codigo
                     )
-                    consec_recuperado = connekta.get_consec_salida_transito_by_alterno(s.codigo)
+                    consec_recuperado = siesa_traslado.recuperar_consec_salida(s.codigo)
                     if consec_recuperado:
                         s.siesa_salida_consec = consec_recuperado
                         s.siesa_error = None
@@ -380,12 +411,12 @@ class TrasladoService:
                 for item in s.items
             ]
             try:
-                bodega_transito = s.bodega_transito_siesa or connekta.bodega_transito
-                res = connekta.transferencia_transito_entrada(
+                bodega_transito = s.bodega_transito_siesa or siesa_traslado.bodega_transito
+                res = siesa_traslado.registrar_entrada(
                     bodega_transito=bodega_transito,
                     bodega_destino=s.bodega_destino_siesa,
                     items=items_payload,
-                    codigo_solicitud=s.codigo,
+                    codigo=s.codigo,
                     consec_salida=s.siesa_salida_consec,
                     co_destino=_co_destino,
                 )
