@@ -89,7 +89,7 @@ class SesionConteo(db.Model):
                                 backref='ajustes_aprobados', lazy=True)
     editor = db.relationship('Usuario', foreign_keys=[editado_por],
                              backref='conteos_editados', lazy=True)
-    # Relación padre → hijo (segundo conteo generado por este)
+    # Relación padre → hijo (segundo conteo generado por este).
     # uselist=False: cada sesión tiene máximo un hijo directo.
     # remote_side=[id] en el backref desambigua la dirección self-referencial.
     hijo_conteo = db.relationship(

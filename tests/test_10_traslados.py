@@ -853,6 +853,112 @@ class TestConnektaGatewayTraslados:
             assert doc['f350_id_tipo_docto_base'] == 'TTS'
             assert doc['f350_consec_docto_base'] == 9999
 
+    # ── 174646 ────────────────────────────────────────────────────────────────
+
+    def test_174646_f_cia_viaja_como_entero(self, app):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_req_traslado = 'RIT'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.crear_requisicion_traslado(
+                    bodega_origen='NB1', bodega_destino='TC1',
+                    items=self._items_validos(1), codigo_solicitud='ST-RIT-001',
+                )
+
+            assert isinstance(payloads[0]['Inicial'][0]['F_CIA'], int)
+            assert isinstance(payloads[0]['Documentos'][0]['F_CIA'], int)
+            assert isinstance(payloads[0]['Movimientos'][0]['F_CIA'], int)
+
+    def test_174646_consec_auto_reg_es_1(self, app):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_req_traslado = 'RIT'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.crear_requisicion_traslado(
+                    bodega_origen='NB1', bodega_destino='TC1',
+                    items=self._items_validos(1), codigo_solicitud='ST-RIT-002',
+                )
+
+            assert payloads[0]['Documentos'][0]['F_CONSEC_AUTO_REG'] == 1
+
+    def test_174646_ind_estado_es_1_comprometido(self, app):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_req_traslado = 'RIT'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.crear_requisicion_traslado(
+                    bodega_origen='NB1', bodega_destino='TC1',
+                    items=self._items_validos(1), codigo_solicitud='ST-RIT-003',
+                )
+
+            # Estado 3 Comprometido en Siesa — bloquea el inventario antes del picking
+            assert payloads[0]['Documentos'][0]['f440_ind_estado'] == 1
+
+    def test_174646_bodega_origen_y_destino_correctas(self, app):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_req_traslado = 'RIT'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.crear_requisicion_traslado(
+                    bodega_origen='NB1', bodega_destino='TC2',
+                    items=self._items_validos(1), codigo_solicitud='ST-RIT-004',
+                )
+
+            doc = payloads[0]['Documentos'][0]
+            assert doc['f440_id_bodega_salida'] == 'NB1'
+            assert doc['f440_id_bodega_entrada'] == 'TC2'
+
+    def test_174646_nro_registro_secuencial_desde_1(self, app):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_req_traslado = 'RIT'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.crear_requisicion_traslado(
+                    bodega_origen='NB1', bodega_destino='TC1',
+                    items=self._items_validos(3), codigo_solicitud='ST-RIT-005',
+                )
+
+            numeros = [m['f441_nro_registro'] for m in payloads[0]['Movimientos']]
+            assert numeros == [1, 2, 3]
+
+    def test_174646_item_sin_codigo_siesa_lanza_valueerror(self, app):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_req_traslado = 'RIT'
+
+            with pytest.raises(ValueError, match='codigo_siesa'):
+                connekta.crear_requisicion_traslado(
+                    bodega_origen='NB1', bodega_destino='TC1',
+                    items=[{'codigo': 'INTERNO-SOLO', 'cantidad': 5, 'unidad_medida': 'UND'}],
+                    codigo_solicitud='ST-RIT-006',
+                )
+
+    def test_174646_sin_tipo_docto_lanza_valueerror(self, app):
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_req_traslado = ''
+
+            with pytest.raises(ValueError):
+                connekta.crear_requisicion_traslado(
+                    bodega_origen='NB1', bodega_destino='TC1',
+                    items=self._items_validos(1), codigo_solicitud='ST-RIT-007',
+                )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # D. Endpoints HTTP
