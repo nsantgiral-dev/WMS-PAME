@@ -520,3 +520,139 @@ def editar_conteo(id):
         f'[CONTEO EDIT] #{id} editado por usuario #{editor_id}: {"; ".join(cambios)}. Motivo: {motivo}'
     )
     return jsonify({'mensaje': 'Conteo actualizado', 'cambios': cambios, 'sesion': sesion.to_dict()}), 200
+
+
+@conteo_bp.route('/stats', methods=['GET'])
+@jwt_required()
+def stats_conteo():
+    """
+    Estadísticas rápidas de conteo para el dashboard del admin.
+    Retorna contadores: pendientes, en_proceso, hoy_completados, atrasados.
+    """
+    from app.models.usuario import Usuario
+    from sqlalchemy import func as _fn, case as _case
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    almacen_id = request.args.get('almacen_id', type=int)
+
+    # Un solo query — COUNT por estado agrupado
+    q = db.session.query(
+        SesionConteo.estado,
+        _fn.count(SesionConteo.id)
+    ).group_by(SesionConteo.estado)
+    if almacen_id:
+        q = q.filter(SesionConteo.almacen_id == almacen_id)
+    counts = {estado: cnt for estado, cnt in q.all()}
+
+    pendientes = counts.get('PENDIENTE', 0)
+    en_proceso = counts.get('EN_PROCESO', 0)
+    segundo_conteo = counts.get('SEGUNDO_CONTEO', 0)
+    descuadre = counts.get('DESCUADRE', 0)
+    match = counts.get('MATCH', 0)
+    ajustado = counts.get('AJUSTADO', 0)
+    ajustando = counts.get('AJUSTANDO', 0)
+
+    # Completados hoy (MATCH + AJUSTADO con fecha_cierre de hoy)
+    hoy_inicio = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    q_hoy = SesionConteo.query.filter(
+        SesionConteo.estado.in_(['MATCH', 'AJUSTADO']),
+        SesionConteo.fecha_cierre >= hoy_inicio
+    )
+    if almacen_id:
+        q_hoy = q_hoy.filter(SesionConteo.almacen_id == almacen_id)
+    hoy_completados = q_hoy.count()
+
+    # Atrasados: PENDIENTE con fecha_creacion > 2 días
+    umbral_atraso = datetime.utcnow() - __import__('datetime').timedelta(days=2)
+    q_atraso = SesionConteo.query.filter(
+        SesionConteo.estado == 'PENDIENTE',
+        SesionConteo.fecha_creacion < umbral_atraso
+    )
+    if almacen_id:
+        q_atraso = q_atraso.filter(SesionConteo.almacen_id == almacen_id)
+    atrasados = q_atraso.count()
+
+    # Pendientes sin operario asignado
+    q_sin_asignar = SesionConteo.query.filter(
+        SesionConteo.estado == 'PENDIENTE',
+        SesionConteo.operario_id.is_(None)
+    )
+    if almacen_id:
+        q_sin_asignar = q_sin_asignar.filter(SesionConteo.almacen_id == almacen_id)
+    sin_asignar = q_sin_asignar.count()
+
+    return jsonify({
+        'pendientes': pendientes,
+        'en_proceso': en_proceso,
+        'segundo_conteo': segundo_conteo,
+        'descuadre': descuadre,
+        'hoy_completados': hoy_completados,
+        'atrasados_2d': atrasados,
+        'sin_asignar': sin_asignar,
+        'accion_requerida': segundo_conteo + descuadre,
+        'resueltos': match + ajustado + ajustando,
+    }), 200
+
+
+@conteo_bp.route('/asignar-lote', methods=['POST'])
+@jwt_required()
+def asignar_lote():
+    """
+    Admin asigna todas las tareas PENDIENTE sin operario a un operario específico.
+    Body: { operario_id, almacen_id, limite (opcional, default 20) }
+    """
+    from app.models.usuario import Usuario
+    try:
+        admin_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    admin = Usuario.query.get(admin_id)
+    if not admin or admin.rol not in Roles.LEAD:
+        return jsonify({'error': 'Solo admin o supervisor puede asignar conteos'}), 403
+
+    data = request.get_json() or {}
+    operario_id = data.get('operario_id')
+    almacen_id = data.get('almacen_id')
+    limite = data.get('limite', 20)
+
+    if not operario_id:
+        return jsonify({'error': 'operario_id es requerido'}), 400
+
+    operario = Usuario.query.get(operario_id)
+    if not operario or not operario.activo:
+        return jsonify({'error': 'Operario no encontrado o inactivo'}), 404
+
+    q = SesionConteo.query.filter(
+        SesionConteo.estado == 'PENDIENTE',
+        SesionConteo.operario_id.is_(None)
+    ).order_by(SesionConteo.fecha_creacion.asc())
+
+    if almacen_id:
+        q = q.filter(SesionConteo.almacen_id == almacen_id)
+
+    tareas = q.limit(limite).all()
+
+    asignadas = 0
+    for t in tareas:
+        t.operario_id = operario_id
+        asignadas += 1
+
+    if asignadas > 0:
+        db.session.commit()
+        logger.info(
+            f'[CONTEO] {asignadas} tareas asignadas a operario #{operario_id} '
+            f'por admin #{admin_id} (almacen={almacen_id})'
+        )
+
+    return jsonify({
+        'asignadas': asignadas,
+        'operario_id': operario_id,
+        'operario_nombre': operario.nombre,
+        'almacen_id': almacen_id,
+    }), 200

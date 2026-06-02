@@ -6769,6 +6769,91 @@ function _renderCardResuelto(s) {
   </div>`;
 }
 
+// ── Stats dashboard + asignación en lote ─────────────────────────────────────
+
+async function cargarConteoStats() {
+  const bar = document.getElementById('conteo-stats-bar');
+  if (!bar) return;
+  try {
+    const qs = new URLSearchParams();
+    const almId = document.getElementById('inv-abc-almacen')?.value;
+    if (almId) qs.set('almacen_id', almId);
+    const r = await fetch(API + '/api/conteo/stats?' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!r.ok) return;
+    const d = await r.json();
+    document.getElementById('cs-pendientes').textContent = d.pendientes || 0;
+    document.getElementById('cs-en-curso').textContent = d.en_proceso || 0;
+    document.getElementById('cs-hoy').textContent = d.hoy_completados || 0;
+    const atrasados = d.atrasados_2d || 0;
+    const wrapAtraso = document.getElementById('cs-atrasados-wrap');
+    if (wrapAtraso) {
+      wrapAtraso.style.display = atrasados > 0 ? 'inline' : 'none';
+      document.getElementById('cs-atrasados').textContent = atrasados;
+    }
+    const btnAsignar = document.getElementById('cs-btn-asignar');
+    const sinAsignar = d.sin_asignar || 0;
+    if (btnAsignar) {
+      btnAsignar.style.display = sinAsignar > 0 ? 'inline-block' : 'none';
+      document.getElementById('cs-sin-asignar').textContent = sinAsignar;
+    }
+    bar.style.display = 'block';
+  } catch (e) { /* silencioso */ }
+}
+
+let _CONTEO_OPERARIOS = [];
+
+async function conteoMostrarAsignar() {
+  const panel = document.getElementById('conteo-asignar-panel');
+  if (!panel) return;
+  // Cargar operarios del almacén
+  if (_CONTEO_OPERARIOS.length === 0) {
+    try {
+      const r = await fetch(API + '/api/auth/usuarios', { headers: { Authorization: 'Bearer ' + TOKEN } });
+      if (r.ok) {
+        const todos = await r.json();
+        _CONTEO_OPERARIOS = (todos.usuarios || todos || []).filter(u =>
+          u.activo && ['operario', 'jefe_almacen'].includes(u.rol)
+        );
+      }
+    } catch (e) { /* silencioso */ }
+  }
+  const sel = document.getElementById('conteo-asignar-operario');
+  if (sel) {
+    sel.innerHTML = _CONTEO_OPERARIOS.map(u =>
+      `<option value="${u.id}">${u.nombre || u.usuario} (${u.rol})</option>`
+    ).join('');
+  }
+  panel.style.display = 'block';
+}
+
+function conteoCerrarAsignar() {
+  const panel = document.getElementById('conteo-asignar-panel');
+  if (panel) panel.style.display = 'none';
+}
+
+async function conteoAsignarLote() {
+  const operarioId = document.getElementById('conteo-asignar-operario')?.value;
+  const limite = parseInt(document.getElementById('conteo-asignar-limite')?.value) || 10;
+  const almId = document.getElementById('inv-abc-almacen')?.value;
+  if (!operarioId) { alerta('Selecciona un operario', 'error'); return; }
+  try {
+    const r = await fetch(API + '/api/conteo/asignar-lote', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operario_id: parseInt(operarioId), almacen_id: almId ? parseInt(almId) : null, limite })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      conteoCerrarAsignar();
+      alerta(`${d.asignadas} tareas asignadas a ${d.operario_nombre}`, 'exito');
+      await cargarConteoStats();
+      await cargarConteos(_CONTEO_PAGE);
+    } else {
+      alerta(d.error || 'Error al asignar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
 // ── Carga principal ───────────────────────────────────────────────────────────
 
 async function cargarConteos(page) {
@@ -6776,6 +6861,8 @@ async function cargarConteos(page) {
   const lista = document.getElementById('inv-conteos-lista');
   const pag   = document.getElementById('inv-conteos-paginacion');
   if (!lista) return;
+
+  cargarConteoStats();
 
   const marca = document.getElementById('inv-filtro-marca')?.value?.trim() || '';
   const clase = document.getElementById('inv-filtro-clase')?.value || '';
