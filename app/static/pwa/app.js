@@ -5218,9 +5218,16 @@ function maestraInputParada(input) {
   if (!el) return;
   if (!q) { el.style.display = 'none'; return; }
   if (!_MUNICIPIOS_CACHE.length) {
+    el.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--tx2);text-align:center;">Cargando municipios…</div>';
+    el.style.display = 'block';
     _cargarMunicipios().then(() => {
       const inp = document.getElementById('maestras-parada-input');
-      if (inp && inp.value.trim()) maestraInputParada(inp);
+      if (!inp || !inp.value.trim()) { el.style.display = 'none'; return; }
+      if (!_MUNICIPIOS_CACHE.length) {
+        el.innerHTML = '<div style="padding:12px;font-size:13px;color:var(--red);text-align:center;">Error cargando municipios</div>';
+        return;
+      }
+      maestraInputParada(inp);
     });
     return;
   }
