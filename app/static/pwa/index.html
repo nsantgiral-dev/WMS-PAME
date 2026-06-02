@@ -822,6 +822,7 @@
     <div class="admin-nav">
       <div class="nav-tab active" onclick="tab('tab-dashboard')">Dashboard</div>
       <div class="nav-tab" onclick="tab('tab-pedidos')">Pedidos</div>
+      <div class="nav-tab" onclick="tab('tab-requisiciones')">📋 Requisiciones</div>
       <div class="nav-tab" onclick="tab('tab-bodega')">🏭 Bodega</div>
       <div class="nav-tab" onclick="tab('tab-operarios')">Operarios</div>
       <div class="nav-tab" onclick="tab('tab-usuarios')">Usuarios</div>
@@ -961,6 +962,18 @@
         Las tareas se asignan automáticamente cuando un operario queda libre. Cuando Connekta esté activo, los pedidos de Siesa aparecerán aquí solos.
       </div>
       <div id="lista-pedidos">Cargando...</div>
+    </div>
+
+    <!-- REQUISICIONES — Solicitudes de traslado enviadas desde tienda -->
+    <div id="tab-requisiciones" class="admin-content" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+        <div>
+          <div style="font-size:16px;font-weight:700;">📋 Requisiciones</div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">Solicitudes enviadas desde puntos de venta — pendientes de despacho</div>
+        </div>
+        <button onclick="_refreshBtn(event, cargarRequisiciones)" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx2);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;">↻</button>
+      </div>
+      <div id="req-lista">Cargando...</div>
     </div>
 
     <!-- Bodega — Tareas de picking activas -->

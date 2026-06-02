@@ -364,6 +364,7 @@ function salir(porExpiracion = false) {
 async function cargarAdmin() {
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
+  else if (TAB === 'tab-requisiciones') await cargarRequisiciones();
   else if (TAB === 'tab-bodega') await cargarTareasBodega();
   else if (TAB === 'tab-operarios') await cargarOperarios();
   else if (TAB === 'tab-usuarios') await cargarUsuarios();
@@ -377,7 +378,7 @@ async function cargarAdmin() {
 }
 
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-traslados','tab-reposicion'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-traslados','tab-reposicion'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
@@ -8841,4 +8842,98 @@ async function repTestEmail(btn) {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Enviar email de prueba ahora'; }
   }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO REQUISICIONES — Solicitudes de traslado enviadas desde tienda
+// Responsabilidad única: mostrar requisiciones y disparar despacho.
+// No comparte estado ni funciones con tab-pedidos ni tab-traslados.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'PREPARADO'];
+
+async function cargarRequisiciones() {
+  const lista = document.getElementById('req-lista');
+  if (!lista) return;
+  lista.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando...</div>';
+  try {
+    const promesas = _REQ_ESTADOS.map(e => get(`/api/traslados/?estado=${e}`).catch(() => ({ solicitudes: [] })));
+    const resultados = await Promise.all(promesas);
+    const todas = resultados.flatMap(r => r.solicitudes || []);
+    todas.sort((a, b) => new Date(a.fecha_creacion) - new Date(b.fecha_creacion));
+    if (!todas.length) {
+      lista.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones pendientes</div>';
+      return;
+    }
+    lista.innerHTML = todas.map(r => _renderRequisicionCard(r)).join('');
+  } catch (e) {
+    lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando requisiciones</div>';
+  }
+}
+
+function _renderRequisicionCard(r) {
+  const BADGE = {
+    ENVIADA:    { color: '#f59e0b', bg: '#fef3c7', label: 'Enviada' },
+    EN_PICKING: { color: '#3b82f6', bg: '#dbeafe', label: 'En picking' },
+    PREPARADO:  { color: '#8b5cf6', bg: '#ede9fe', label: 'Preparado' },
+  };
+  const badge  = BADGE[r.estado] || { color: '#6b7280', bg: '#f3f4f6', label: r.estado };
+  const fecha  = r.fecha_creacion ? new Date(r.fecha_creacion).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+  const items  = (r.items || []);
+  const totalUnd = items.reduce((s, i) => s + (i.cantidad_solicitada || 0), 0);
+
+  const itemsHtml = items.slice(0, 4).map(i =>
+    `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx3);padding:2px 0;">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${i.producto_nombre || i.producto_codigo_siesa || '—'}</span>
+      <span style="font-weight:600;color:var(--tx2);">${i.cantidad_solicitada}</span>
+    </div>`
+  ).join('');
+  const masItems = items.length > 4
+    ? `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">+${items.length - 4} más</div>`
+    : '';
+
+  const puedeDespachar = r.estado === 'PREPARADO';
+  const btnDespachar = `
+    <button onclick="despacharRequisicion(${r.id})"
+      ${puedeDespachar ? '' : 'disabled'}
+      style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:${puedeDespachar ? 'pointer' : 'default'};
+             background:${puedeDespachar ? '#111' : 'var(--bg-s2)'};
+             color:${puedeDespachar ? '#fff' : 'var(--tx3)'};
+             border:1px solid ${puedeDespachar ? '#111' : 'var(--brd)'};">
+      🚚 Despachar
+    </button>`;
+
+  return `
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--tx1);">${r.codigo}</div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">
+            ${r.nombre_punto_venta || r.bodega_destino_siesa} · ${fecha}
+          </div>
+          <div style="font-size:11px;color:var(--tx3);">
+            Solicitado por: ${r.solicitante_nombre || '—'}
+          </div>
+        </div>
+        <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;
+                     color:${badge.color};background:${badge.bg};">
+          ${badge.label}
+        </span>
+      </div>
+      <div style="background:var(--bg-s2);border-radius:8px;padding:8px;margin-bottom:10px;">
+        ${itemsHtml}${masItems}
+        <div style="font-size:11px;color:var(--tx3);margin-top:4px;border-top:1px solid var(--brd);padding-top:4px;">
+          ${items.length} producto${items.length !== 1 ? 's' : ''} · ${totalUnd} unidades
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;">
+        ${btnDespachar}
+      </div>
+    </div>`;
+}
+
+async function despacharRequisicion(id) {
+  // Placeholder — flujo completo se implementa en la siguiente iteración
+  alerta('Funcionalidad de despacho próximamente', 'info');
 }
