@@ -88,9 +88,19 @@ class SesionConteo(db.Model):
                                 backref='ajustes_aprobados', lazy=True)
     editor = db.relationship('Usuario', foreign_keys=[editado_por],
                              backref='conteos_editados', lazy=True)
+    # Relación padre → hijo (segundo conteo generado por este)
+    # uselist=False: cada sesión tiene máximo un hijo directo.
+    hijo_conteo = db.relationship(
+        'SesionConteo',
+        foreign_keys='SesionConteo.sesion_origen_id',
+        backref=db.backref('sesion_padre', foreign_keys='SesionConteo.sesion_origen_id', lazy='select'),
+        uselist=False,
+        lazy='select',
+    )
 
     def to_dict_operario(self):
-        """Vista para el operario — SIN cantidad esperada (conteo ciego)."""
+        """Vista para el operario — SIN cantidad esperada (conteo ciego).
+        No exponer es_segundo_conteo: el operario no debe saber si está verificando."""
         return {
             'id': self.id,
             'codigo': self.codigo,
@@ -100,7 +110,6 @@ class SesionConteo(db.Model):
             'producto_nombre': self.producto.nombre if self.producto else None,
             'maneja_lote': self.maneja_lote,
             'estado': self.estado,
-            'es_segundo_conteo': self.es_segundo_conteo
         }
 
     def to_dict(self):
@@ -139,4 +148,20 @@ class SesionConteo(db.Model):
             'editado_por_nombre': self.editor.nombre if self.editor else None,
             'editado_en': self.editado_en.isoformat() if self.editado_en else None,
             'motivo_edicion': self.motivo_edicion,
+            # Datos del segundo conteo (hijo) para que el admin pueda comparar
+            # sin necesitar un request adicional.
+            'segundo_conteo': {
+                'id': self.hijo_conteo.id,
+                'estado': self.hijo_conteo.estado,
+                'cantidad_fisica': self.hijo_conteo.cantidad_fisica,
+                'operario_id': self.hijo_conteo.operario_id,
+                'operario_nombre': (
+                    self.hijo_conteo.operario.nombre
+                    if self.hijo_conteo.operario else None
+                ),
+                'fecha_cierre': (
+                    self.hijo_conteo.fecha_cierre.isoformat()
+                    if self.hijo_conteo.fecha_cierre else None
+                ),
+            } if self.hijo_conteo else None,
         }

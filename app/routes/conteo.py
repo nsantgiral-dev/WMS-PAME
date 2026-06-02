@@ -40,12 +40,19 @@ def listar_sesiones():
                  _jl(SesionConteo.producto),
                  _jl(SesionConteo.ubicacion),
                  _jl(SesionConteo.operario),
-                 _jl(SesionConteo.aprobador),  # evita N+1 en to_dict() aprobador_nombre
-                 _jl(SesionConteo.editor),      # evita N+1 en to_dict() editado_por_nombre
+                 _jl(SesionConteo.aprobador),   # evita N+1 en to_dict() aprobador_nombre
+                 _jl(SesionConteo.editor),       # evita N+1 en to_dict() editado_por_nombre
+                 _jl(SesionConteo.hijo_conteo)   # evita N+1 en to_dict() segundo_conteo
+                 .joinedload(SesionConteo.operario),  # nombre del 2do operario
              )
              .order_by(SesionConteo.fecha_creacion.desc()))
 
-    if estado:
+    # Soporte para múltiples estados separados por coma (ej: "SEGUNDO_CONTEO,DESCUADRE")
+    estados_multi = request.args.get('estados', '')
+    if estados_multi:
+        estados_list = [e.strip() for e in estados_multi.split(',') if e.strip()]
+        query = query.filter(SesionConteo.estado.in_(estados_list))
+    elif estado:
         query = query.filter_by(estado=estado)
     if almacen_id:
         query = query.filter_by(almacen_id=almacen_id)
@@ -459,8 +466,8 @@ def editar_conteo(id):
     if not sesion:
         return jsonify({'error': 'Conteo no encontrado'}), 404
 
-    if sesion.estado == EstadoConteo.AJUSTADO:
-        return jsonify({'error': 'No se puede editar un conteo ya ajustado en Siesa'}), 409
+    if sesion.estado in (EstadoConteo.AJUSTADO, EstadoConteo.AJUSTANDO):
+        return jsonify({'error': 'No se puede editar un conteo que ya fue enviado o está en vuelo a Siesa'}), 409
 
     data = request.get_json() or {}
     motivo = (data.get('motivo_edicion') or '').strip()

@@ -191,7 +191,29 @@ class ConteoService:
             }
 
         else:
-            # DESCUADRE — generar segundo conteo por operario diferente
+            if sesion.es_segundo_conteo:
+                # Ya es el segundo conteo — ambos operarios encontraron diferencia.
+                # Escalar a DESCUADRE para revisión del admin. NO crear un tercero:
+                # el bucle infinito de sesiones queda cortado aquí.
+                sesion.estado = EstadoConteo.DESCUADRE
+                try:
+                    db.session.commit()
+                except Exception as e_desc:
+                    db.session.rollback()
+                    logger.error(f'[CONTEO] Error al marcar DESCUADRE para sesión {sesion_id}: {e_desc}')
+                    raise ValueError(f'Error al registrar descuadre: {e_desc}')
+
+                logger.warning(
+                    f'[CONTEO] DESCUADRE confirmado en {sesion.codigo} — '
+                    f'diferencia: {diferencia}. Escalado a admin.'
+                )
+                return {
+                    'resultado': 'DESCUADRE',
+                    'mensaje': 'Diferencia confirmada en segundo conteo — el administrador debe revisar y aprobar el ajuste',
+                    'sesion_id': sesion.id,
+                }
+
+            # Primer conteo con diferencia — generar segundo conteo por operario diferente
             sesion.estado = EstadoConteo.SEGUNDO_CONTEO
 
             # Commit único: SEGUNDO_CONTEO + hijo atómicos.

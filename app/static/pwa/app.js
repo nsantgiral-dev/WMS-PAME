@@ -6570,11 +6570,150 @@ function invSubtab(nombre) {
 }
 
 let _CONTEO_PAGE = 1;
+let _CONTEO_VISTA = 'accion';  // 'accion' | 'progreso' | 'resueltos'
 
-function conteosFiltrar() {
-  _CONTEO_PAGE = 1;  // resetear a página 1 cuando cambian los filtros
+function conteoVista(v) {
+  _CONTEO_VISTA = v;
+  _CONTEO_PAGE = 1;
+  ['accion', 'progreso', 'resueltos'].forEach(k => {
+    const btn = document.getElementById(`cv-tab-${k}`);
+    if (!btn) return;
+    const activo = k === v;
+    if (k === 'accion') {
+      btn.style.background = activo ? '#b45309' : '#111';
+      btn.style.color      = activo ? '#fff'    : '#94a3b8';
+      btn.style.border     = activo ? 'none'    : '1px solid #333';
+    } else {
+      btn.style.background = activo ? '#1E8395' : '#111';
+      btn.style.color      = activo ? '#fff'    : '#94a3b8';
+      btn.style.border     = activo ? 'none'    : '1px solid #333';
+    }
+  });
   cargarConteos();
 }
+
+function conteosFiltrar() {
+  _CONTEO_PAGE = 1;
+  cargarConteos();
+}
+
+// ── Render helpers por vista ──────────────────────────────────────────────────
+
+function _tipoTag(s) {
+  if (s.tipo === 'EXCEPCION_PICKING')
+    return `<span style="background:#1a0a0a;color:#f87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">PICKING</span>`;
+  if (s.tipo === 'MANUAL')
+    return `<span style="background:#1a1a2a;color:#a78bfa;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">MANUAL</span>`;
+  return '';
+}
+
+function _renderCardAccion(s) {
+  const hijo = s.segundo_conteo;
+  const TERMINADOS = ['MATCH','DESCUADRE','SEGUNDO_CONTEO','AJUSTADO','CANCELADO'];
+  const hijoPendiente = hijo ? !TERMINADOS.includes(hijo.estado) : (s.estado !== 'DESCUADRE');
+  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?';
+  const difCol = (s.diferencia || 0) > 0 ? '#4ade80' : '#f87171';
+  const puedeAjustar = s.estado === 'DESCUADRE' || (s.estado === 'SEGUNDO_CONTEO' && hijo && !hijoPendiente);
+  const coinciden = hijo && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
+  const bordColor = s.estado === 'DESCUADRE' ? '#7c2d12' : '#2d1b69';
+
+  return `<div style="background:#111;border:1px solid ${bordColor};border-radius:12px;padding:14px;margin-bottom:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:700;">${s.producto_codigo || '—'}${_tipoTag(s)}${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;">ABC-${s.clasificacion_abc}</span>` : ''}</div>
+        <div style="font-size:11px;color:#555;margin-top:1px;">${s.producto_nombre || ''}</div>
+        <div style="font-size:11px;color:#444;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+      </div>
+      <span style="background:${s.estado==='DESCUADRE'?'#7c2d12':'#4c1d95'};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${s.estado}</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#0a0a0a;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
+      <div>
+        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">SIESA</div>
+        <div style="font-size:20px;font-weight:800;color:#60a5fa;line-height:1;">${s.existencia_siesa != null ? s.existencia_siesa : '—'}</div>
+        <div style="font-size:9px;color:#374151;margin-top:2px;">referencia</div>
+      </div>
+      <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
+        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er Conteo</div>
+        <div style="font-size:20px;font-weight:800;color:#f59e0b;line-height:1;">${s.cantidad_fisica != null ? s.cantidad_fisica : '—'}</div>
+        <div style="font-size:9px;color:#374151;margin-top:2px;">${s.operario_id ? `Op #${s.operario_id}` : '—'}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2do Conteo</div>
+        ${hijo && !hijoPendiente
+          ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#4ade80':'#f87171'};line-height:1;">${hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—'}</div>
+             <div style="font-size:9px;color:#374151;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—')}</div>`
+          : `<div style="font-size:16px;color:#374151;padding:2px 0;">⏳</div>
+             <div style="font-size:9px;color:#374151;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar'}</div>`
+        }
+      </div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#555;margin-bottom:10px;">
+      <span>Δ <span style="color:${difCol};font-weight:700;">${dif} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#4ade80':'#f87171'};">${s.motivo_codigo}</span>` : ''}</span>
+      ${!hijoPendiente && hijo
+        ? coinciden
+          ? `<span style="color:#4ade80;font-size:10px;">✓ Ambos coinciden</span>`
+          : `<span style="color:#f87171;font-size:10px;">⚠ Operarios no coinciden</span>`
+        : ''
+      }
+    </div>
+
+    <div style="display:flex;gap:6px;">
+      ${s.estado !== 'AJUSTADO' && s.estado !== 'AJUSTANDO'
+        ? `<button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
+             style="flex:1;padding:8px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:8px;font-size:12px;cursor:pointer;">✏ Corregir</button>`
+        : ''
+      }
+      <button onclick="${puedeAjustar ? `conteoAbrirAjuste(${JSON.stringify(s).replace(/"/g,'&quot;')})` : 'void(0)'}"
+        ${!puedeAjustar ? 'disabled' : ''}
+        style="flex:2;padding:8px;background:${puedeAjustar?'#b45309':'#1a1a1a'};color:${puedeAjustar?'#fff':'#374151'};border:${puedeAjustar?'none':'1px solid #1f2937'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};">
+        ${hijoPendiente ? '⏳ Esperando 2do conteo' : '✓ Confirmar ajuste →'}
+      </button>
+    </div>
+    ${s.editado_en ? `<div style="font-size:10px;color:#78350f;margin-top:6px;">✏ Editado: ${s.motivo_edicion}</div>` : ''}
+  </div>`;
+}
+
+function _renderCardProgreso(s) {
+  const col = s.estado === 'EN_PROCESO' ? '#1d4ed8' : '#374151';
+  return `<div style="background:#111;border:1px solid #1f2937;border-radius:10px;padding:12px;margin-bottom:6px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:700;">${s.producto_codigo || '—'}${_tipoTag(s)}</div>
+        <div style="font-size:11px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
+        <div style="font-size:11px;color:#444;margin-top:2px;">📍 ${s.ubicacion_codigo || '—'}${s.operario_id ? ` · 👤 Op #${s.operario_id}` : ''}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
+        ${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${s.clasificacion_abc}</span>` : ''}
+        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function _renderCardResuelto(s) {
+  const colMap = { MATCH:'#166534', AJUSTADO:'#065f46', AJUSTANDO:'#7c2d12', CANCELADO:'#374151' };
+  const col = colMap[s.estado] || '#333';
+  const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : null;
+  const difCol = (s.diferencia || 0) > 0 ? '#4ade80' : (s.diferencia || 0) < 0 ? '#f87171' : '#aaa';
+  return `<div style="background:#0a0a0a;border:1px solid #111;border-radius:10px;padding:12px;margin-bottom:6px;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:700;color:#4b5563;">${s.producto_codigo || '—'}</div>
+        <div style="font-size:11px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
+        <div style="font-size:11px;color:#2d3748;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;margin-left:8px;">
+        <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
+        ${dif ? `<span style="color:${difCol};font-size:11px;font-weight:700;">Δ ${dif}</span>` : ''}
+      </div>
+    </div>
+    ${s.aprobador_nombre ? `<div style="font-size:10px;color:#374151;margin-top:4px;">✓ ${s.aprobador_nombre}</div>` : ''}
+  </div>`;
+}
+
+// ── Carga principal ───────────────────────────────────────────────────────────
 
 async function cargarConteos(page) {
   if (page !== undefined) _CONTEO_PAGE = page;
@@ -6582,77 +6721,55 @@ async function cargarConteos(page) {
   const pag   = document.getElementById('inv-conteos-paginacion');
   if (!lista) return;
 
-  const estado = document.getElementById('inv-filtro-estado')?.value || '';
-  const marca  = document.getElementById('inv-filtro-marca')?.value?.trim() || '';
-  const clase  = document.getElementById('inv-filtro-clase')?.value || '';
+  const marca = document.getElementById('inv-filtro-marca')?.value?.trim() || '';
+  const clase = document.getElementById('inv-filtro-clase')?.value || '';
 
-  // Solo mostrar "Cargando" en primera carga — no en refresh de fondo
+  const VISTA_ESTADOS = {
+    accion:    'SEGUNDO_CONTEO,DESCUADRE',
+    progreso:  'PENDIENTE,EN_PROCESO',
+    resueltos: 'MATCH,AJUSTADO,AJUSTANDO,CANCELADO',
+  };
+
   const esVacia = !lista.innerHTML.trim() || lista.innerHTML.includes('Cargando');
   if (esVacia) lista.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
 
   try {
     const qs = new URLSearchParams({ page: _CONTEO_PAGE });
-    if (estado) qs.set('estado', estado);
-    if (marca)  qs.set('marca', marca);
-    if (clase)  qs.set('clasificacion', clase);
+    qs.set('estados', VISTA_ESTADOS[_CONTEO_VISTA] || '');
+    if (marca) qs.set('marca', marca);
+    if (clase) qs.set('clasificacion', clase);
 
     const r = await fetch(API + '/api/conteo/?' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
     const d = await r.json();
-    const sesiones = d.sesiones || [];
-    const total = d.total || 0;
-    const totalPag = d.total_paginas || 1;
+    const sesiones  = d.sesiones  || [];
+    const total     = d.total     || 0;
+    const totalPag  = d.total_paginas || 1;
+
+    // Badge contador en tab "Acción"
+    if (_CONTEO_VISTA === 'accion') {
+      const badge = document.getElementById('cv-badge-accion');
+      if (badge) badge.textContent = total > 0 ? total : '';
+    }
 
     if (!sesiones.length) {
-      lista.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">No hay conteos con este filtro</div>';
+      lista.innerHTML = `<div style="text-align:center;padding:30px;color:#555;">${_CONTEO_VISTA === 'accion' ? '✓ Sin conteos pendientes de revisión' : 'No hay conteos con este filtro'}</div>`;
       if (pag) pag.innerHTML = '';
       return;
     }
 
-    const colEstado = {
-      PENDIENTE: '#555', EN_PROCESO: '#1d4ed8', SEGUNDO_CONTEO: '#7c3aed',
-      DESCUADRE: '#b45309', MATCH: '#166534', AJUSTADO: '#065f46'
-    };
-    lista.innerHTML = sesiones.map(s => {
-      const col = colEstado[s.estado] || '#333';
-      const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : s.diferencia) : '—';
-      const difCol = s.diferencia > 0 ? '#4ade80' : s.diferencia < 0 ? '#f87171' : '#aaa';
-      const tipoTag = s.tipo === 'MANUAL'
-        ? `<span style="background:#1a1a2a;color:#a78bfa;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;">MANUAL</span>`
-        : s.tipo === 'EXCEPCION_PICKING'
-        ? `<span style="background:#1a0a0a;color:#f87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;">PICKING</span>`
-        : '';
-      return `
-      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_codigo || '—'}</div>
-            <div style="font-size:11px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
-          </div>
-          <div style="display:flex;gap:4px;align-items:center;flex-shrink:0;margin-left:8px;">
-            ${tipoTag}
-            ${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:10px;font-weight:700;padding:2px 6px;border-radius:8px;">ABC-${s.clasificacion_abc}</span>` : ''}
-            <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
-          </div>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#666;">
-          <span>📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}</span>
-          <span>Δ <span style="color:${difCol};font-weight:700;">${dif}</span></span>
-          <div style="display:flex;gap:4px;">
-            ${s.estado === 'DESCUADRE' || s.estado === 'SEGUNDO_CONTEO' ? `<button onclick="ajustarConteo(${s.id})"
-              style="background:#b45309;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
-              Ajustar →</button>` : ''}
-            ${s.estado !== 'AJUSTADO' && s.estado !== 'CANCELADO' ? `<button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
-              style="background:#1e293b;color:#94a3b8;border:1px solid #334155;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
-              ✏ Editar</button>` : ''}
-          </div>
-        </div>
-        ${s.operario_id ? `<div style="font-size:11px;color:#555;margin-top:3px;">👤 Op #${s.operario_id}</div>` : ''}
-        ${s.editado_en ? `<div style="font-size:10px;color:#78350f;margin-top:2px;">✏ Editado por ${s.editado_por_nombre || '#'+s.editado_por} — ${s.motivo_edicion}</div>` : ''}
-      </div>`;
+    // En vista acción mostrar solo padres — los hijos van embebidos en segundo_conteo
+    const filas = _CONTEO_VISTA === 'accion'
+      ? sesiones.filter(s => !s.es_segundo_conteo)
+      : sesiones;
+
+    lista.innerHTML = filas.map(s => {
+      if (_CONTEO_VISTA === 'accion')    return _renderCardAccion(s);
+      if (_CONTEO_VISTA === 'progreso')  return _renderCardProgreso(s);
+      return _renderCardResuelto(s);
     }).join('');
 
-    // Paginación
     if (pag) {
+      if (totalPag <= 1) { pag.innerHTML = ''; return; }
       pag.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;width:100%;padding:4px 0;">
           <button onclick="cargarConteos(${_CONTEO_PAGE - 1})" ${_CONTEO_PAGE <= 1 ? 'disabled' : ''}
@@ -6849,11 +6966,16 @@ function conteoAbrirEdicion(s) {
 
   const infoDiv = document.getElementById('conteo-edit-info');
   if (infoDiv) {
+    const hijo = s.segundo_conteo;
     infoDiv.innerHTML = `
       <div style="font-size:12px;color:#888;margin-bottom:10px;">
         <b>${s.producto_codigo || '—'}</b> · ${s.producto_nombre || ''}<br>
-        📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'} · ABC-${s.clasificacion_abc || '?'}<br>
-        ${s.existencia_siesa != null ? `Siesa: <b>${s.existencia_siesa}</b> uds` : 'Sin ref. Siesa'}
+        📍 ${s.ubicacion_codigo || s.ubicacion_id || '—'}${s.clasificacion_abc ? ` · ABC-${s.clasificacion_abc}` : ''}<br>
+        <span style="display:inline-flex;gap:12px;margin-top:4px;">
+          ${s.existencia_siesa != null ? `<span>Siesa <b style="color:#60a5fa;">${s.existencia_siesa}</b></span>` : '<span style="color:#374151;">Sin ref. Siesa</span>'}
+          ${s.cantidad_fisica != null ? `<span>1er conteo <b style="color:#f59e0b;">${s.cantidad_fisica}</b></span>` : ''}
+          ${hijo?.cantidad_fisica != null ? `<span>2do conteo <b style="color:${hijo.cantidad_fisica===s.cantidad_fisica?'#4ade80':'#f87171'};">${hijo.cantidad_fisica}</b></span>` : ''}
+        </span>
         ${s.editado_en ? `<br><span style="color:#f59e0b;">Última edición: ${s.motivo_edicion}</span>` : ''}
       </div>`;
   }
@@ -6986,8 +7108,75 @@ async function ejecutarWatchdog() {
   }
 }
 
-async function ajustarConteo(sesionId) {
-  if (!confirm('¿Confirmar ajuste de inventario? Esto enviará el movimiento a Siesa.')) return;
+let _CONTEO_AJUSTE_SESION = null;
+
+function conteoAbrirAjuste(s) {
+  _CONTEO_AJUSTE_SESION = s;
+  const m    = document.getElementById('modal-conteo-ajuste');
+  const info = document.getElementById('conteo-ajuste-info');
+  const obs  = document.getElementById('conteo-ajuste-obs');
+  if (!m || !info) return;
+  if (obs) obs.value = '';
+
+  const hijo     = s.segundo_conteo;
+  const difVal   = s.diferencia != null ? s.diferencia : 0;
+  const dif      = difVal > 0 ? `+${difVal}` : `${difVal}`;
+  const difCol   = difVal > 0 ? '#4ade80' : '#f87171';
+  const motivo   = s.motivo_codigo || (difVal > 0 ? 'AJ-ENT' : 'AJ-SAL');
+  const accion   = motivo === 'AJ-ENT' ? '📦 ENTRADA' : '📤 SALIDA';
+  const cant     = Math.abs(difVal);
+  const coinciden = hijo && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
+
+  info.innerHTML = `
+    <div style="margin-bottom:10px;">
+      <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${s.producto_codigo || '—'} · ${s.producto_nombre || ''}</div>
+      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;text-align:center;">
+      <div>
+        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">SIESA</div>
+        <div style="font-size:18px;font-weight:800;color:#60a5fa;">${s.existencia_siesa ?? '—'}</div>
+      </div>
+      <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
+        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">1er Conteo</div>
+        <div style="font-size:18px;font-weight:800;color:#f59e0b;">${s.cantidad_fisica ?? '—'}</div>
+      </div>
+      <div>
+        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">2do Conteo</div>
+        <div style="font-size:18px;font-weight:800;color:${coinciden?'#4ade80':'#f87171'};">${hijo?.cantidad_fisica ?? '—'}</div>
+      </div>
+    </div>
+    <div style="background:#0d0d0d;border-radius:8px;padding:10px;text-align:center;margin-bottom:8px;">
+      <div style="font-size:10px;color:#4b5563;margin-bottom:4px;">Se enviará a SIESA:</div>
+      <div style="font-size:16px;font-weight:800;color:${difCol};">${accion} de ${cant} unidades</div>
+      <div style="font-size:10px;color:#4b5563;margin-top:2px;">${motivo} · Concepto 603 · Clase 63</div>
+    </div>
+    ${hijo && !coinciden ? `<div style="color:#f87171;font-size:11px;text-align:center;">⚠ Los operarios no coinciden — se usará el 2do conteo como referencia</div>` : ''}
+    ${coinciden ? `<div style="color:#4ade80;font-size:11px;text-align:center;">✓ Ambos operarios confirmaron el mismo valor</div>` : ''}
+  `;
+
+  m.style.display = 'flex';
+}
+
+function conteosCerrarAjuste() {
+  const m = document.getElementById('modal-conteo-ajuste');
+  if (m) m.style.display = 'none';
+  _CONTEO_AJUSTE_SESION = null;
+}
+
+async function conteoConfirmarAjuste() {
+  if (!_CONTEO_AJUSTE_SESION) return;
+  const s    = _CONTEO_AJUSTE_SESION;
+  const hijo = s.segundo_conteo;
+
+  // Usar ID del hijo cuando está completo (datos verificados del 2do conteo);
+  // caer al padre si no hay hijo (excepción picking, conteo directo a DESCUADRE).
+  const TERMINADOS = ['DESCUADRE', 'SEGUNDO_CONTEO'];
+  const sesionId   = (hijo && hijo.id && TERMINADOS.includes(hijo.estado)) ? hijo.id : s.id;
+
+  const btn = document.getElementById('btn-confirmar-ajuste');
+  if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
+
   try {
     const r = await fetch(API + `/api/conteo/${sesionId}/ajustar`, {
       method: 'PUT',
@@ -6995,12 +7184,17 @@ async function ajustarConteo(sesionId) {
     });
     const d = await r.json();
     if (r.ok) {
-      alerta(`Ajuste ${d.motivo_codigo} enviado a Siesa · Diferencia: ${d.diferencia}`, 'exito');
-      await cargarConteos();
+      conteosCerrarAjuste();
+      alerta(`Ajuste ${d.motivo_codigo} encolado a Siesa · Diferencia: ${d.diferencia}`, 'exito');
+      await cargarConteos(_CONTEO_PAGE);
     } else {
       alerta(d.error || 'Error al ajustar', 'error');
     }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Confirmar → SIESA'; }
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════

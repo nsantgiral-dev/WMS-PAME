@@ -1292,36 +1292,37 @@
 
     <!-- Panel Conteos -->
     <div id="inv-panel-conteos">
-      <!-- Filtros -->
-      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px;">
-        <div style="display:flex;gap:8px;align-items:center;">
-          <select id="inv-filtro-estado" onchange="conteosFiltrar()"
-            style="flex:1;padding:8px 10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
-            <option value="">Todos</option>
-            <option value="PENDIENTE" selected>Pendientes</option>
-            <option value="EN_PROCESO">En proceso</option>
-            <option value="SEGUNDO_CONTEO">Segundo conteo</option>
-            <option value="DESCUADRE">Descuadre</option>
-            <option value="MATCH">Match</option>
-            <option value="AJUSTADO">Ajustado</option>
-          </select>
-          <button onclick="conteosMostrarFormManual()" title="Crear conteo manual"
-            style="padding:8px 12px;background:#1a1a2a;border:1px solid #2d1b69;color:#a78bfa;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">
-            + Manual
-          </button>
-        </div>
-        <div style="display:flex;gap:8px;">
-          <input id="inv-filtro-marca" type="text" placeholder="Filtrar por marca..."
-            style="flex:1;padding:8px 10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;"
-            oninput="conteosFiltrar()">
-          <select id="inv-filtro-clase" onchange="conteosFiltrar()"
-            style="padding:8px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
-            <option value="">A+B+C</option>
-            <option value="A">Solo A</option>
-            <option value="B">Solo B</option>
-            <option value="C">Solo C</option>
-          </select>
-        </div>
+      <!-- 3 vistas operacionales -->
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <button id="cv-tab-accion" onclick="conteoVista('accion')"
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:none;cursor:pointer;background:#b45309;color:#fff;">
+          ⚠ Acción <span id="cv-badge-accion" style="background:rgba(0,0,0,.3);border-radius:10px;padding:1px 5px;font-size:10px;margin-left:2px;"></span>
+        </button>
+        <button id="cv-tab-progreso" onclick="conteoVista('progreso')"
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid #333;cursor:pointer;background:#111;color:#94a3b8;">
+          ▶ En progreso
+        </button>
+        <button id="cv-tab-resueltos" onclick="conteoVista('resueltos')"
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid #333;cursor:pointer;background:#111;color:#94a3b8;">
+          ✓ Resueltos
+        </button>
+        <button onclick="conteosMostrarFormManual()" title="Crear conteo manual"
+          style="padding:8px 10px;background:#1a1a2a;border:1px solid #2d1b69;color:#a78bfa;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          + Manual
+        </button>
+      </div>
+      <!-- Filtros secundarios -->
+      <div style="display:flex;gap:8px;margin-bottom:12px;">
+        <input id="inv-filtro-marca" type="text" placeholder="Filtrar por marca..."
+          style="flex:1;padding:8px 10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;"
+          oninput="conteosFiltrar()">
+        <select id="inv-filtro-clase" onchange="conteosFiltrar()"
+          style="padding:8px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+          <option value="">A+B+C</option>
+          <option value="A">Solo A</option>
+          <option value="B">Solo B</option>
+          <option value="C">Solo C</option>
+        </select>
       </div>
 
       <!-- Form conteo manual (oculto por defecto) -->
@@ -1876,6 +1877,33 @@
         <button onclick="conteoGuardarEdicion()"
           style="flex:2;padding:12px;background:#4f46e5;border:none;color:#fff;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
           Guardar cambios
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal confirmación de ajuste inventario a Siesa -->
+  <div id="modal-conteo-ajuste" style="display:none;position:fixed;inset:0;background:rgba(7,11,16,.95);z-index:750;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:#111;border:1px solid #7c2d12;border-radius:20px;width:100%;max-width:440px;padding:24px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:800;color:#fed7aa;">⚠ Confirmar Ajuste de Inventario</div>
+        <button onclick="conteosCerrarAjuste()" style="background:none;border:none;color:#555;font-size:22px;cursor:pointer;">✕</button>
+      </div>
+      <div id="conteo-ajuste-info" style="background:#0d0d0d;border-radius:12px;padding:14px;margin-bottom:14px;font-size:12px;color:#888;"></div>
+      <div style="margin-bottom:16px;">
+        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">Observaciones (opcional)</label>
+        <textarea id="conteo-ajuste-obs" rows="2"
+          style="width:100%;background:#0d0d0d;border:1px solid #333;color:#fff;border-radius:8px;padding:10px;font-size:13px;box-sizing:border-box;resize:none;"
+          placeholder="Ej: Validado con cámara, faltante confirmado por jefe de turno"></textarea>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button onclick="conteosCerrarAjuste()"
+          style="flex:1;padding:12px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:10px;font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+        <button id="btn-confirmar-ajuste" onclick="conteoConfirmarAjuste()"
+          style="flex:2;padding:12px;background:#b45309;border:none;color:#fff;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;">
+          Confirmar → SIESA
         </button>
       </div>
     </div>
