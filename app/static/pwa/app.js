@@ -118,6 +118,7 @@ function mostrarSegunRol(rol) {
     pantalla('pantalla-conductor');
     if (OPERARIO) actualizarUI(OPERARIO);
     document.getElementById('cond-nombre').textContent = OPERARIO.nombre || '—';
+    _condIniciarOffline();
     cargarRutasConductor();
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {
@@ -5619,6 +5620,71 @@ let _COND_RUTAS = [];
 let _COND_RUTA_ACTIVA = null;   // ruta seleccionada
 let _COND_PARADAS = [];         // paradas de la ruta activa
 let _COND_PARADA_FORM = null;   // parada en formulario de confirmación
+let _COND_SYNCING = false;
+let _COND_OFFLINE_INIT = false;
+
+// ── IndexedDB helper (módulo conductor) ──────────────────────────
+const _condDB = (() => {
+  let _db = null;
+  function _open() {
+    if (_db) return Promise.resolve(_db);
+    return new Promise((res, rej) => {
+      const r = indexedDB.open('wms_cond', 1);
+      r.onupgradeneeded = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains('cache'))
+          db.createObjectStore('cache', { keyPath: 'k' });
+        if (!db.objectStoreNames.contains('queue'))
+          db.createObjectStore('queue', { keyPath: 'id', autoIncrement: true });
+      };
+      r.onsuccess = e => { _db = e.target.result; res(_db); };
+      r.onerror   = () => rej(r.error);
+    });
+  }
+  return {
+    async get(key) {
+      const db = await _open();
+      return new Promise(res => {
+        const r = db.transaction('cache').objectStore('cache').get(key);
+        r.onsuccess = () => res(r.result ? r.result.v : null);
+        r.onerror   = () => res(null);
+      });
+    },
+    async set(key, val) {
+      const db = await _open();
+      return new Promise((res, rej) => {
+        const tx = db.transaction('cache', 'readwrite');
+        tx.objectStore('cache').put({ k: key, v: val, ts: Date.now() });
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      });
+    },
+    async enqueue(item) {
+      const db = await _open();
+      return new Promise((res, rej) => {
+        const tx = db.transaction('queue', 'readwrite');
+        const r  = tx.objectStore('queue').add({ ...item, ts: Date.now() });
+        r.onsuccess = () => res(r.result);
+        r.onerror   = () => rej(r.error);
+      });
+    },
+    async queue() {
+      const db = await _open();
+      return new Promise(res => {
+        const r = db.transaction('queue').objectStore('queue').getAll();
+        r.onsuccess = () => res(r.result || []);
+        r.onerror   = () => res([]);
+      });
+    },
+    async dequeue(id) {
+      const db = await _open();
+      return new Promise((res, rej) => {
+        const tx = db.transaction('queue', 'readwrite');
+        tx.objectStore('queue').delete(id);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+      });
+    }
+  };
+})();
 
 // ── Lista de rutas del conductor ──────────────────────────────────
 
@@ -5628,44 +5694,50 @@ async function cargarRutasConductor() {
   try {
     const d = await get('/api/rutas/mis-rutas');
     _COND_RUTAS = d.rutas || [];
-    document.getElementById('cond-badge-rutas').textContent = _COND_RUTAS.length;
-
-    // Conductor llenando formulario → no interrumpir bajo ninguna circunstancia
-    if (_COND_PARADA_FORM) return;
-    // Conductor viendo lista de paradas → refrescar esa vista sin redirigir
-    if (_COND_RUTA_ACTIVA) {
-      await condAbrirParadas(_COND_RUTA_ACTIVA.id);
-      return;
-    }
-
-    if (!_COND_RUTAS.length) {
-      el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
-        <div style="font-size:60px;">✅</div>
-        <div style="font-size:20px;font-weight:700;color:#4ade80;margin-top:16px;">Sin rutas en tránsito</div>
-        <div style="font-size:13px;color:#555;margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
-        <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:12px;font-size:15px;cursor:pointer;">🔄 Actualizar</button>
-      </div>`;
-      return;
-    }
-
-    el.innerHTML = _COND_RUTAS.map((r) => {
-      const totalBultos = r.total_bultos || 0;
-      return `
-        <div style="background:#111;border:2px solid #1e3a5f;border-radius:16px;padding:20px;margin-bottom:12px;">
-          <div style="font-size:18px;font-weight:800;color:#60a5fa;margin-bottom:4px;">🚛 Ruta #${r.id}</div>
-          <div style="font-size:14px;color:#ccc;margin-bottom:12px;">${r.ruta_maestra_nombre || r.tipo_ruta} · ${r.vehiculo_placa || 'Sin vehículo'}</div>
-          <div style="font-size:12px;color:#555;margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
-          <button onclick="condAbrirParadas(${r.id})"
-            style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
-            📦 Ver Paradas y Cobros
-          </button>
-        </div>`;
-    }).join('');
+    await _condDB.set('rutas', _COND_RUTAS);
   } catch (e) {
-    if (!_COND_RUTA_ACTIVA) {
-      el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando rutas. Verifica conexión.</div>';
+    const cached = await _condDB.get('rutas');
+    if (cached !== null) {
+      _COND_RUTAS = cached;
+    } else if (!_COND_RUTA_ACTIVA) {
+      el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Sin conexión y sin datos en caché. Abre la app con señal primero.</div>';
+      return;
     }
   }
+
+  document.getElementById('cond-badge-rutas').textContent = _COND_RUTAS.length;
+
+  // Conductor llenando formulario → no interrumpir bajo ninguna circunstancia
+  if (_COND_PARADA_FORM) return;
+  // Conductor viendo lista de paradas → refrescar esa vista sin redirigir
+  if (_COND_RUTA_ACTIVA) {
+    await condAbrirParadas(_COND_RUTA_ACTIVA.id);
+    return;
+  }
+
+  if (!_COND_RUTAS.length) {
+    el.innerHTML = `<div style="text-align:center;padding:80px 20px;">
+      <div style="font-size:60px;">✅</div>
+      <div style="font-size:20px;font-weight:700;color:#4ade80;margin-top:16px;">Sin rutas en tránsito</div>
+      <div style="font-size:13px;color:#555;margin-top:8px;">El jefe de almacén te asignará una cuando salgas</div>
+      <button onclick="cargarRutasConductor()" style="margin-top:24px;padding:14px 28px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:12px;font-size:15px;cursor:pointer;">🔄 Actualizar</button>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = _COND_RUTAS.map((r) => {
+    const totalBultos = r.total_bultos || 0;
+    return `
+      <div style="background:#111;border:2px solid #1e3a5f;border-radius:16px;padding:20px;margin-bottom:12px;">
+        <div style="font-size:18px;font-weight:800;color:#60a5fa;margin-bottom:4px;">🚛 Ruta #${r.id}</div>
+        <div style="font-size:14px;color:#ccc;margin-bottom:12px;">${r.ruta_maestra_nombre || r.tipo_ruta} · ${r.vehiculo_placa || 'Sin vehículo'}</div>
+        <div style="font-size:12px;color:#555;margin-bottom:16px;">${totalBultos} bulto${totalBultos !== 1 ? 's' : ''}</div>
+        <button onclick="condAbrirParadas(${r.id})"
+          style="width:100%;padding:18px;background:#1d4ed8;color:#fff;border:none;border-radius:12px;font-size:18px;font-weight:800;cursor:pointer;letter-spacing:0.02em;">
+          📦 Ver Paradas y Cobros
+        </button>
+      </div>`;
+  }).join('');
 }
 
 // ── Lista de paradas de la ruta ───────────────────────────────────
@@ -5673,14 +5745,22 @@ async function cargarRutasConductor() {
 async function condAbrirParadas(rutaId) {
   const el = document.getElementById('cond-contenido');
   el.innerHTML = '<div style="text-align:center;padding:60px;color:#555;">Cargando paradas...</div>';
+  let data = null;
   try {
+    if (!navigator.onLine) throw new Error('offline');
     const d = await get('/api/rutas/' + rutaId + '/paradas');
-    _COND_RUTA_ACTIVA = { id: rutaId };
-    _COND_PARADAS = d.paradas || [];
-    _condRenderParadas(d);
+    data = d;
+    await _condDB.set('paradas_' + rutaId, d);
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando paradas.</div>';
+    data = await _condDB.get('paradas_' + rutaId);
+    if (!data) {
+      el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Sin conexión y sin datos en caché para esta ruta.</div>';
+      return;
+    }
   }
+  _COND_RUTA_ACTIVA = { id: rutaId };
+  _COND_PARADAS = data.paradas || [];
+  _condRenderParadas(data);
 }
 
 function _condRenderParadas(d) {
@@ -6052,6 +6132,39 @@ async function condGuardarParada() {
     } catch (_) { alerta('Error procesando la foto', 'error'); return; }
   }
 
+  const payload = {
+    estado_entrega:    estadoEntrega,
+    forma_pago:        formaPago || null,
+    monto_cobrado:     monto,
+    observaciones:     obs || null,
+    foto_entrega:      fotoBase64 || null,
+    bultos_rechazados: bultosRechazados,
+    items_entregados:  itemsEntregados.length ? itemsEntregados : null,
+  };
+
+  // ── Sin conexión: encolar y actualizar local ────────────────────
+  if (!navigator.onLine) {
+    await _condDB.enqueue({ tipo: 'confirmar', rutaId: _COND_RUTA_ACTIVA.id, tareaId: p.tarea_id, payload });
+    const idx = _COND_PARADAS.findIndex(x => x.tarea_id === p.tarea_id);
+    if (idx >= 0) {
+      _COND_PARADAS[idx].recaudo = {
+        estado_entrega:        estadoEntrega,
+        forma_pago:            formaPago || null,
+        monto_cobrado:         monto,
+        observaciones:         obs || null,
+        foto_entrega:          fotoBase64 || null,
+        bultos_rechazados_ids: bultosRechazados,
+        items_entregados:      itemsEntregados.length ? itemsEntregados : null,
+      };
+      const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
+      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, paradas_gestionadas: gestionadas });
+    }
+    await _condActualizarBarras();
+    alerta('Guardado sin conexión — se enviará al reconectar', 'advertencia');
+    condVolverAParadas(false);
+    return;
+  }
+
   const btn = el.querySelector('button[onclick="condGuardarParada()"]');
   if (btn) { btn.disabled = true; btn.textContent = 'Guardando...'; }
 
@@ -6059,15 +6172,7 @@ async function condGuardarParada() {
     const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/paradas/' + p.tarea_id + '/confirmar', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({
-        estado_entrega:    estadoEntrega,
-        forma_pago:        formaPago || null,
-        monto_cobrado:     monto,
-        observaciones:     obs || null,
-        foto_entrega:      fotoBase64 || null,
-        bultos_rechazados: bultosRechazados,
-        items_entregados:  itemsEntregados.length ? itemsEntregados : null,
-      }),
+      body: JSON.stringify(payload),
     });
     const d = await r.json();
     if (r.ok) {
@@ -6098,18 +6203,32 @@ async function condNoSePudoEntregar() {
   const p = _COND_PARADA_FORM;
   if (!p) return;
   const obs = prompt('Motivo (opcional):', 'Cliente no disponible');
-  if (obs === null) return; // canceló
+  if (obs === null) return;
+  const payload = {
+    estado_entrega: 'RECHAZADO',
+    forma_pago:     'EXENTO',
+    monto_cobrado:  0,
+    observaciones:  obs || 'Cliente no disponible',
+    bultos_rechazados: [],
+  };
+  if (!navigator.onLine) {
+    await _condDB.enqueue({ tipo: 'confirmar', rutaId: _COND_RUTA_ACTIVA.id, tareaId: p.tarea_id, payload });
+    const idx = _COND_PARADAS.findIndex(x => x.tarea_id === p.tarea_id);
+    if (idx >= 0) {
+      _COND_PARADAS[idx].recaudo = { ...payload, bultos_rechazados_ids: [], items_entregados: null };
+      const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
+      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, paradas_gestionadas: gestionadas });
+    }
+    await _condActualizarBarras();
+    alerta('Registrado sin conexión — se enviará al reconectar', 'advertencia');
+    await condAbrirParadas(_COND_RUTA_ACTIVA.id);
+    return;
+  }
   try {
     const r = await fetch(API + `/api/rutas/${_COND_RUTA_ACTIVA.id}/paradas/${p.tarea_id}/confirmar`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({
-        estado_entrega: 'RECHAZADO',
-        forma_pago: 'EXENTO',
-        monto_cobrado: 0,
-        observaciones: obs || 'Cliente no disponible',
-        bultos_rechazados: [],  // backend auto-rechaza todos
-      })
+      body: JSON.stringify(payload)
     });
     const d = await r.json();
     if (r.ok) {
@@ -6124,6 +6243,15 @@ async function condNoSePudoEntregar() {
 async function condCerrarRuta() {
   if (!_COND_RUTA_ACTIVA) return;
   if (!confirm('¿Confirmar cierre de ruta? Ya no podrás agregar más confirmaciones de parada.')) return;
+  if (!navigator.onLine) {
+    await _condDB.enqueue({ tipo: 'cerrar', rutaId: _COND_RUTA_ACTIVA.id, payload: { bultos: [] } });
+    await _condActualizarBarras();
+    alerta('Cierre en cola — se enviará al reconectar', 'advertencia');
+    _COND_RUTA_ACTIVA = null;
+    _COND_PARADAS = [];
+    cargarRutasConductor();
+    return;
+  }
   try {
     const r = await fetch(API + '/api/rutas/' + _COND_RUTA_ACTIVA.id + '/entregar', {
       method: 'POST',
@@ -6140,6 +6268,86 @@ async function condCerrarRuta() {
       alerta(d.error || 'Error al cerrar ruta', 'error');
     }
   } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+// ── Offline: init, barras de estado y motor de sync ──────────────
+
+function _condIniciarOffline() {
+  if (!_COND_OFFLINE_INIT) {
+    _COND_OFFLINE_INIT = true;
+    window.addEventListener('online',  () => { _condActualizarBarras(); condSyncQueue(); });
+    window.addEventListener('offline', () => { _condActualizarBarras(); });
+  }
+  _condActualizarBarras();
+}
+
+async function _condActualizarBarras() {
+  const offlineBar = document.getElementById('cond-offline-bar');
+  const syncBar    = document.getElementById('cond-sync-bar');
+  const syncStatus = document.getElementById('cond-sync-status');
+  const syncBtn    = document.getElementById('cond-sync-btn');
+  if (!offlineBar || !syncBar) return;
+
+  offlineBar.style.display = navigator.onLine ? 'none' : 'block';
+
+  const items = await _condDB.queue();
+  const n = items.length;
+  if (n > 0) {
+    syncBar.style.display = 'flex';
+    if (syncStatus && !_COND_SYNCING)
+      syncStatus.textContent = `⏳ ${n} confirmación${n !== 1 ? 'es' : ''} pendiente${n !== 1 ? 's' : ''} de sincronizar`;
+    if (syncBtn) syncBtn.disabled = _COND_SYNCING || !navigator.onLine;
+  } else {
+    syncBar.style.display = 'none';
+  }
+}
+
+async function condSyncQueue() {
+  if (_COND_SYNCING || !navigator.onLine) return;
+  const items = await _condDB.queue();
+  if (!items.length) { await _condActualizarBarras(); return; }
+
+  _COND_SYNCING = true;
+  const syncStatus = document.getElementById('cond-sync-status');
+  const syncBtn    = document.getElementById('cond-sync-btn');
+  if (syncBtn) syncBtn.disabled = true;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (syncStatus)
+      syncStatus.textContent = `🔄 Sincronizando ${i + 1}/${items.length}…`;
+    try {
+      const url = item.tipo === 'confirmar'
+        ? `${API}/api/rutas/${item.rutaId}/paradas/${item.tareaId}/confirmar`
+        : `${API}/api/rutas/${item.rutaId}/entregar`;
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+        body: JSON.stringify(item.payload),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || `Error ${r.status}`);
+      }
+      await _condDB.dequeue(item.id);
+    } catch (e) {
+      _COND_SYNCING = false;
+      await _condActualizarBarras();
+      alerta(`Error al sincronizar: ${e.message}`, 'error');
+      return;
+    }
+  }
+
+  _COND_SYNCING = false;
+  alerta('✓ Sincronización completa', 'exito');
+  await _condActualizarBarras();
+
+  // Recargar datos frescos del servidor
+  if (_COND_RUTA_ACTIVA) {
+    await condAbrirParadas(_COND_RUTA_ACTIVA.id);
+  } else {
+    await cargarRutasConductor();
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════

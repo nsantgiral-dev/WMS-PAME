@@ -1725,6 +1725,13 @@
         <div id="cond-badge-rutas" style="font-size:24px;font-weight:800;color:#fff;">—</div>
       </div>
     </div>
+    <div id="cond-offline-bar" style="display:none;padding:9px 16px;background:#7f1d1d;border-bottom:1px solid #991b1b;color:#fca5a5;font-size:13px;font-weight:700;text-align:center;">
+      📡 Sin conexión — trabajando con datos en caché
+    </div>
+    <div id="cond-sync-bar" style="display:none;padding:8px 16px;background:#1c1917;border-bottom:1px solid #292524;justify-content:space-between;align-items:center;">
+      <span id="cond-sync-status" style="font-size:12px;color:#facc15;font-weight:700;"></span>
+      <button onclick="condSyncQueue()" id="cond-sync-btn" style="background:#854d0e;color:#fef08a;border:none;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">🔄 Sincronizar</button>
+    </div>
     <div id="cond-contenido" style="padding:16px;">
       <div style="text-align:center;padding:60px 20px;color:#666;">Cargando rutas...</div>
     </div>
