@@ -90,10 +90,11 @@ class SesionConteo(db.Model):
                              backref='conteos_editados', lazy=True)
     # Relación padre → hijo (segundo conteo generado por este)
     # uselist=False: cada sesión tiene máximo un hijo directo.
+    # remote_side=[id] en el backref desambigua la dirección self-referencial.
     hijo_conteo = db.relationship(
         'SesionConteo',
-        foreign_keys='SesionConteo.sesion_origen_id',
-        backref=db.backref('sesion_padre', foreign_keys='SesionConteo.sesion_origen_id', lazy='select'),
+        foreign_keys=[sesion_origen_id],
+        backref=db.backref('sesion_padre', remote_side=[id], lazy='select'),
         uselist=False,
         lazy='select',
     )
