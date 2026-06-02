@@ -1345,13 +1345,35 @@
     <!-- Panel ABC -->
     <div id="inv-panel-abc" style="display:none;">
 
-      <!-- Selector almacén -->
+      <!-- Selector almacén + config bodega -->
       <div style="margin-bottom:14px;">
         <div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Almacén</div>
-        <select id="inv-abc-almacen" onchange="cargarResumenAbc()"
+        <select id="inv-abc-almacen" onchange="cargarResumenAbc();mostrarConfigBodega()"
           style="width:100%;padding:10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
           <option value="">Cargando almacenes...</option>
         </select>
+        <div id="inv-abc-bodega-info" style="margin-top:6px;font-size:11px;color:#555;display:none;">
+          <span id="inv-abc-bodega-label"></span>
+          <button onclick="toggleEditBodega()" style="background:none;border:none;color:#60a5fa;font-size:11px;cursor:pointer;margin-left:4px;">✏ editar</button>
+        </div>
+        <div id="inv-abc-bodega-edit" style="display:none;margin-top:8px;background:#0a0a0a;border:1px solid #1f2937;border-radius:8px;padding:10px;">
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <div style="flex:1;">
+              <label style="font-size:10px;color:#555;display:block;margin-bottom:3px;">Bodega Siesa</label>
+              <input id="inv-bodega-input" type="text" placeholder="ej: NB1"
+                style="width:100%;padding:6px 8px;background:#111;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;box-sizing:border-box;">
+            </div>
+            <div style="flex:1;">
+              <label style="font-size:10px;color:#555;display:block;margin-bottom:3px;">Centro operación</label>
+              <input id="inv-centro-op-input" type="text" placeholder="ej: 003"
+                style="width:100%;padding:6px 8px;background:#111;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;box-sizing:border-box;">
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="toggleEditBodega()" style="flex:1;padding:6px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:6px;font-size:12px;cursor:pointer;">Cancelar</button>
+            <button onclick="guardarConfigBodega()" style="flex:1;padding:6px;background:#1E8395;border:none;color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Guardar</button>
+          </div>
+        </div>
       </div>
 
       <!-- Distribución ABC -->

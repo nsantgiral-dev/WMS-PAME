@@ -6539,14 +6539,70 @@ async function cargarInventario() {
         const sel = document.getElementById('inv-abc-almacen');
         if (sel) {
           sel.innerHTML = _INV_ALMACENES.map(a =>
-            `<option value="${a.id}">${a.nombre}</option>`
+            `<option value="${a.id}">${a.nombre}${a.bodega_siesa_id ? ` (${a.bodega_siesa_id})` : ''}</option>`
           ).join('');
         }
+        mostrarConfigBodega();
       }
     } catch (e) { /* silencioso */ }
   }
   if (_INV_SUBTAB === 'conteos') await cargarConteos();
   else await cargarResumenAbc();
+}
+
+// ── Config bodega por almacén ─────────────────────────────────────────────────
+
+function mostrarConfigBodega() {
+  const sel = document.getElementById('inv-abc-almacen');
+  const info = document.getElementById('inv-abc-bodega-info');
+  const label = document.getElementById('inv-abc-bodega-label');
+  if (!sel || !info || !label) return;
+  const alm = _INV_ALMACENES.find(a => a.id == sel.value);
+  if (!alm) { info.style.display = 'none'; return; }
+  const bod = alm.bodega_siesa_id || '—';
+  const co = alm.centro_op_siesa || '—';
+  label.innerHTML = `Bodega Siesa: <span style="color:#60a5fa;font-weight:700;">${bod}</span> · CO: <span style="color:#60a5fa;font-weight:700;">${co}</span>`;
+  info.style.display = 'block';
+  document.getElementById('inv-abc-bodega-edit').style.display = 'none';
+}
+
+function toggleEditBodega() {
+  const edit = document.getElementById('inv-abc-bodega-edit');
+  if (!edit) return;
+  const visible = edit.style.display !== 'none';
+  if (visible) { edit.style.display = 'none'; return; }
+  const sel = document.getElementById('inv-abc-almacen');
+  const alm = _INV_ALMACENES.find(a => a.id == sel.value);
+  if (!alm) return;
+  document.getElementById('inv-bodega-input').value = alm.bodega_siesa_id || '';
+  document.getElementById('inv-centro-op-input').value = alm.centro_op_siesa || '';
+  edit.style.display = 'block';
+}
+
+async function guardarConfigBodega() {
+  const sel = document.getElementById('inv-abc-almacen');
+  const almId = sel?.value;
+  if (!almId) return;
+  const bodega = document.getElementById('inv-bodega-input').value.trim().toUpperCase();
+  const centroOp = document.getElementById('inv-centro-op-input').value.trim();
+  try {
+    const r = await fetch(API + `/api/almacenes/${almId}`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bodega_siesa_id: bodega || null, centro_op_siesa: centroOp || null })
+    });
+    if (r.ok) {
+      const updated = await r.json();
+      const idx = _INV_ALMACENES.findIndex(a => a.id == almId);
+      if (idx >= 0) _INV_ALMACENES[idx] = updated;
+      sel.options[sel.selectedIndex].text = `${updated.nombre}${updated.bodega_siesa_id ? ` (${updated.bodega_siesa_id})` : ''}`;
+      mostrarConfigBodega();
+      alerta(`Bodega actualizada → ${bodega || '(sin bodega)'}`, 'exito');
+    } else {
+      const d = await r.json();
+      alerta(d.error || 'Error al guardar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 function invSubtab(nombre) {
