@@ -692,6 +692,17 @@ class ABCService:
                 except Exception as e:
                     logger.error(f'[ABC] Pre-turno prewarm falló: {e}', exc_info=True)
 
+        def _liberar_zombis():
+            """Libera tareas EN_PROCESO >2h sin progreso — cada 30 min."""
+            with app.app_context():
+                try:
+                    from app.services.conteo_service import ConteoService
+                    ConteoService.liberar_tareas_zombi(timeout_horas=2)
+                except Exception as e:
+                    logger.error(f'[ABC] Liberación de tareas zombi falló: {e}', exc_info=True)
+
+        from apscheduler.triggers.interval import IntervalTrigger
+
         scheduler = BackgroundScheduler(timezone='America/Bogota')
         scheduler.add_job(
             func=_job,
@@ -712,9 +723,18 @@ class ABCService:
             max_instances=1,
             misfire_grace_time=300,
         )
+        scheduler.add_job(
+            func=_liberar_zombis,
+            trigger=IntervalTrigger(minutes=30),
+            id='conteo_liberar_zombis',
+            name='Liberar conteos EN_PROCESO >2h — cada 30 min',
+            replace_existing=True,
+            max_instances=1,
+            misfire_grace_time=120,
+        )
         scheduler.start()
         atexit.register(lambda: scheduler.shutdown(wait=False))
-        logger.info('[ABC] Scheduler configurado — ABC 2am + prewarm pre-turno 5:55am Bogotá')
+        logger.info('[ABC] Scheduler configurado — ABC 2am + prewarm 5:55am + zombis cada 30min')
         return scheduler
 
     @staticmethod

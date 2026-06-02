@@ -587,6 +587,13 @@ def stats_conteo():
         q_sin_asignar = q_sin_asignar.filter(SesionConteo.almacen_id == almacen_id)
     sin_asignar = q_sin_asignar.count()
 
+    # Jobs DLQ fallidos (ajustes que Siesa rechazó después de 3 reintentos)
+    from app.models.siesa_job import SiesaJob
+    fallos_dlq = SiesaJob.query.filter(
+        SiesaJob.tipo == 'AJUSTE_CONTEO',
+        SiesaJob.estado == 'FALLIDO',
+    ).count()
+
     return jsonify({
         'pendientes': pendientes,
         'en_proceso': en_proceso,
@@ -597,6 +604,7 @@ def stats_conteo():
         'sin_asignar': sin_asignar,
         'accion_requerida': segundo_conteo + descuadre,
         'resueltos': match + ajustado + ajustando,
+        'fallos_dlq': fallos_dlq,
     }), 200
 
 
@@ -656,3 +664,219 @@ def asignar_lote():
         'operario_nombre': operario.nombre,
         'almacen_id': almacen_id,
     }), 200
+
+
+@conteo_bp.route('/<int:id>/cancelar', methods=['PUT'])
+@jwt_required()
+def cancelar_conteo(id):
+    """Cancela un conteo que no ha sido ajustado ni está en vuelo a Siesa."""
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    sesion = SesionConteo.query.filter_by(id=id).with_for_update().first()
+    if not sesion:
+        return jsonify({'error': 'Sesión no encontrada'}), 404
+
+    estados_cancelables = ['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']
+    if sesion.estado not in estados_cancelables:
+        return jsonify({
+            'error': f'No se puede cancelar en estado {sesion.estado}'
+        }), 409
+
+    motivo = (request.get_json() or {}).get('motivo', '').strip()
+    if not motivo:
+        return jsonify({'error': 'Se requiere un motivo de cancelación'}), 400
+
+    sesion.estado = EstadoConteo.CANCELADO
+    sesion.fecha_cierre = datetime.utcnow()
+    sesion.motivo_edicion = f'CANCELADO: {motivo}'
+    sesion.editado_por = uid
+    sesion.editado_en = datetime.utcnow()
+
+    # Cancelar hijo también si existe
+    if sesion.hijo_conteo and sesion.hijo_conteo.estado in estados_cancelables:
+        sesion.hijo_conteo.estado = EstadoConteo.CANCELADO
+        sesion.hijo_conteo.fecha_cierre = datetime.utcnow()
+        sesion.hijo_conteo.motivo_edicion = f'CANCELADO (padre): {motivo}'
+        sesion.hijo_conteo.editado_por = uid
+        sesion.hijo_conteo.editado_en = datetime.utcnow()
+
+    db.session.commit()
+    logger.info(f'[CONTEO] #{id} cancelado por usuario #{uid}: {motivo}')
+    return jsonify({'mensaje': 'Conteo cancelado', 'sesion': sesion.to_dict()}), 200
+
+
+@conteo_bp.route('/reintentar-fallos', methods=['POST'])
+@jwt_required()
+def reintentar_fallos_dlq():
+    """Re-encola todos los jobs AJUSTE_CONTEO FALLIDO para un nuevo intento."""
+    from app.models.usuario import Usuario
+    from app.models.siesa_job import SiesaJob
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.LEAD:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    fallidos = SiesaJob.query.filter(
+        SiesaJob.tipo == 'AJUSTE_CONTEO',
+        SiesaJob.estado == 'FALLIDO',
+    ).all()
+
+    reencolados = 0
+    for job in fallidos:
+        job.estado = 'PENDIENTE'
+        job.intento = 0
+        job.siguiente_intento_en = None
+        job.error = None
+        reencolados += 1
+
+    if reencolados:
+        db.session.commit()
+        logger.info(f'[CONTEO DLQ] {reencolados} jobs FALLIDO re-encolados por usuario #{uid}')
+
+    return jsonify({'reencolados': reencolados}), 200
+
+
+@conteo_bp.route('/exportar', methods=['GET'])
+@jwt_required()
+def exportar_conteos():
+    """
+    Exporta historial de conteos en CSV.
+    Query params: desde (YYYY-MM-DD), hasta (YYYY-MM-DD), almacen_id.
+    Incluye: accuracy por operario, varianza por clase, ajustes totales.
+    """
+    import csv
+    import io
+    from flask import Response
+    from app.models.usuario import Usuario
+    from sqlalchemy.orm import joinedload
+
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    desde_str = request.args.get('desde')
+    hasta_str = request.args.get('hasta')
+    almacen_id = request.args.get('almacen_id', type=int)
+
+    q = (SesionConteo.query
+         .options(
+             joinedload(SesionConteo.producto),
+             joinedload(SesionConteo.ubicacion),
+             joinedload(SesionConteo.operario),
+             joinedload(SesionConteo.almacen),
+             joinedload(SesionConteo.aprobador),
+         )
+         .filter(SesionConteo.estado.in_([
+             'MATCH', 'AJUSTADO', 'AJUSTANDO', 'DESCUADRE', 'CANCELADO'
+         ]))
+         .order_by(SesionConteo.fecha_creacion.desc()))
+
+    if desde_str:
+        try:
+            desde = datetime.strptime(desde_str, '%Y-%m-%d')
+            q = q.filter(SesionConteo.fecha_creacion >= desde)
+        except ValueError:
+            pass
+    if hasta_str:
+        try:
+            hasta = datetime.strptime(hasta_str, '%Y-%m-%d').replace(hour=23, minute=59, second=59)
+            q = q.filter(SesionConteo.fecha_creacion <= hasta)
+        except ValueError:
+            pass
+    if almacen_id:
+        q = q.filter(SesionConteo.almacen_id == almacen_id)
+
+    sesiones = q.limit(5000).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        'Codigo', 'Tipo', 'ABC', 'Estado', 'Producto', 'Producto Nombre',
+        'Ubicacion', 'Almacen', 'Operario', 'Stock WMS', 'Conteo Fisico',
+        'Diferencia', 'Motivo', '2do Conteo', 'Aprobador',
+        'Creacion', 'Cierre', 'Editado', 'Motivo Edicion',
+    ])
+
+    for s in sesiones:
+        writer.writerow([
+            s.codigo,
+            s.tipo,
+            s.clasificacion_abc or '',
+            s.estado,
+            s.producto.codigo if s.producto else '',
+            s.producto.nombre if s.producto else '',
+            s.ubicacion.codigo if s.ubicacion else '',
+            s.almacen.nombre if s.almacen else '',
+            s.operario.nombre if s.operario else '',
+            s.existencia_siesa if s.existencia_siesa is not None else '',
+            s.cantidad_fisica if s.cantidad_fisica is not None else '',
+            s.diferencia if s.diferencia is not None else '',
+            s.motivo_codigo or '',
+            'Si' if s.es_segundo_conteo else 'No',
+            s.aprobador.nombre if s.aprobador else '',
+            s.fecha_creacion.strftime('%Y-%m-%d %H:%M') if s.fecha_creacion else '',
+            s.fecha_cierre.strftime('%Y-%m-%d %H:%M') if s.fecha_cierre else '',
+            s.editado_en.strftime('%Y-%m-%d %H:%M') if s.editado_en else '',
+            s.motivo_edicion or '',
+        ])
+
+    # Resumen al final
+    writer.writerow([])
+    writer.writerow(['=== RESUMEN ==='])
+
+    # Accuracy por operario
+    from collections import defaultdict
+    op_stats = defaultdict(lambda: {'total': 0, 'match': 0})
+    for s in sesiones:
+        if not s.operario or s.es_segundo_conteo:
+            continue
+        nombre = s.operario.nombre
+        op_stats[nombre]['total'] += 1
+        if s.estado == 'MATCH':
+            op_stats[nombre]['match'] += 1
+
+    writer.writerow([])
+    writer.writerow(['Operario', 'Total Conteos', 'Match', 'Accuracy %'])
+    for nombre, stats in sorted(op_stats.items()):
+        acc = round(stats['match'] / stats['total'] * 100, 1) if stats['total'] else 0
+        writer.writerow([nombre, stats['total'], stats['match'], f'{acc}%'])
+
+    # Varianza por clase ABC
+    clase_stats = defaultdict(lambda: {'total': 0, 'match': 0, 'ajustado': 0, 'sum_dif': 0})
+    for s in sesiones:
+        if s.es_segundo_conteo:
+            continue
+        cls = s.clasificacion_abc or '?'
+        clase_stats[cls]['total'] += 1
+        if s.estado == 'MATCH':
+            clase_stats[cls]['match'] += 1
+        if s.estado in ('AJUSTADO', 'AJUSTANDO'):
+            clase_stats[cls]['ajustado'] += 1
+            clase_stats[cls]['sum_dif'] += abs(s.diferencia or 0)
+
+    writer.writerow([])
+    writer.writerow(['Clase ABC', 'Total', 'Match', 'Ajustados', 'Accuracy %', 'Varianza Total (uds)'])
+    for cls in ['A', 'B', 'C', '?']:
+        if cls not in clase_stats:
+            continue
+        st = clase_stats[cls]
+        acc = round(st['match'] / st['total'] * 100, 1) if st['total'] else 0
+        writer.writerow([cls, st['total'], st['match'], st['ajustado'], f'{acc}%', st['sum_dif']])
+
+    resp = Response(output.getvalue(), mimetype='text/csv')
+    resp.headers['Content-Disposition'] = f'attachment; filename=conteos_{desde_str or "all"}_{hasta_str or "all"}.csv'
+    return resp

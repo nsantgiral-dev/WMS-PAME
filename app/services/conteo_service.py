@@ -534,3 +534,33 @@ class ConteoService:
             'producto_nombre': producto.nombre or '',
             'codigos': creadas,
         }
+
+    @staticmethod
+    def liberar_tareas_zombi(timeout_horas: int = 2):
+        """
+        Libera tareas EN_PROCESO que llevan más de `timeout_horas` sin progreso.
+        Devuelve la tarea a PENDIENTE sin operario para que otro la tome.
+        """
+        from datetime import timedelta
+        umbral = datetime.utcnow() - timedelta(hours=timeout_horas)
+        zombis = SesionConteo.query.filter(
+            SesionConteo.estado == EstadoConteo.EN_PROCESO,
+            SesionConteo.fecha_inicio < umbral,
+        ).all()
+
+        liberadas = 0
+        for s in zombis:
+            logger.warning(
+                f'[CONTEO TIMEOUT] Sesion {s.codigo} (id={s.id}) EN_PROCESO '
+                f'desde {s.fecha_inicio} — liberando (operario #{s.operario_id})'
+            )
+            s.estado = EstadoConteo.PENDIENTE
+            s.operario_id = None
+            s.fecha_inicio = None
+            s.cantidad_fisica = None
+            liberadas += 1
+
+        if liberadas:
+            db.session.commit()
+            logger.info(f'[CONTEO TIMEOUT] {liberadas} tareas liberadas')
+        return liberadas

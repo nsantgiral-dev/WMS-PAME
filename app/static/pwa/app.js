@@ -6726,6 +6726,7 @@ function _renderCardAccion(s) {
         style="flex:2;padding:8px;background:${puedeAjustar?'#b45309':'#1a1a1a'};color:${puedeAjustar?'#fff':'#374151'};border:${puedeAjustar?'none':'1px solid #1f2937'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};">
         ${hijoPendiente ? '⏳ Esperando 2do conteo' : '✓ Confirmar ajuste →'}
       </button>
+      <button onclick="conteoCancelar(${s.id})" style="padding:8px;background:none;border:1px solid #7f1d1d;color:#ef4444;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
     </div>
     ${s.editado_en ? `<div style="font-size:10px;color:#78350f;margin-top:6px;">✏ Editado: ${s.motivo_edicion}</div>` : ''}
   </div>`;
@@ -6743,6 +6744,7 @@ function _renderCardProgreso(s) {
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
         ${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${s.clasificacion_abc}</span>` : ''}
         <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
+        <button onclick="conteoCancelar(${s.id})" style="background:none;border:1px solid #7f1d1d;color:#ef4444;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
       </div>
     </div>
   </div>`;
@@ -6796,8 +6798,53 @@ async function cargarConteoStats() {
       btnAsignar.style.display = sinAsignar > 0 ? 'inline-block' : 'none';
       document.getElementById('cs-sin-asignar').textContent = sinAsignar;
     }
+    const wrapFallos = document.getElementById('cs-fallos-wrap');
+    const fallosDlq = d.fallos_dlq || 0;
+    if (wrapFallos) {
+      wrapFallos.style.display = fallosDlq > 0 ? 'inline-flex' : 'none';
+      document.getElementById('cs-fallos').textContent = fallosDlq;
+    }
     bar.style.display = 'block';
   } catch (e) { /* silencioso */ }
+}
+
+async function conteoReintentarFallos() {
+  if (!confirm('Re-encolar todos los ajustes fallidos para reintentar con Siesa?')) return;
+  try {
+    const r = await fetch(API + '/api/conteo/reintentar-fallos', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`${d.reencolados} ajustes re-encolados`, 'exito');
+      await cargarConteoStats();
+    } else {
+      alerta(d.error || 'Error', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function conteoExportar() {
+  const almId = document.getElementById('inv-abc-almacen')?.value;
+  const desde = prompt('Desde (YYYY-MM-DD, vacío = todo):', '')?.trim() || '';
+  if (desde === null) return;
+  const hasta = prompt('Hasta (YYYY-MM-DD, vacío = hoy):', '')?.trim() || '';
+  const qs = new URLSearchParams();
+  if (desde) qs.set('desde', desde);
+  if (hasta) qs.set('hasta', hasta);
+  if (almId) qs.set('almacen_id', almId);
+  try {
+    const r = await fetch(API + '/api/conteo/exportar?' + qs, { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!r.ok) { alerta('Error al exportar', 'error'); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `conteos_${desde || 'all'}_${hasta || 'all'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 let _CONTEO_OPERARIOS = [];
@@ -6850,6 +6897,26 @@ async function conteoAsignarLote() {
       await cargarConteos(_CONTEO_PAGE);
     } else {
       alerta(d.error || 'Error al asignar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function conteoCancelar(id) {
+  const motivo = prompt('Motivo de cancelación:');
+  if (!motivo || !motivo.trim()) return;
+  try {
+    const r = await fetch(API + `/api/conteo/${id}/cancelar`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo: motivo.trim() })
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta('Conteo cancelado', 'advertencia');
+      await cargarConteoStats();
+      await cargarConteos(_CONTEO_PAGE);
+    } else {
+      alerta(d.error || 'Error al cancelar', 'error');
     }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }

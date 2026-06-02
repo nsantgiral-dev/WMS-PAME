@@ -464,22 +464,22 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     sesion_cteo.fecha_cierre = sesion_cteo.fecha_cierre or _now_rec
                     if not sesion_cteo.siesa_response:
                         sesion_cteo.siesa_response = json.dumps({'recuperado_dlq': True, 'job_id': job.id})
-                    # Reaplicar cambio de inventario si había una excepción de picking
-                    _tpid = payload.get('tarea_picking_id')
-                    if _tpid:
-                        _mc = payload.get('motivo_codigo')
-                        _cant = payload.get('cantidad', 0)
-                        _inv = (_UbicProd.query
-                                .filter_by(
-                                    ubicacion_id=payload.get('ubicacion_id'),
-                                    producto_id=payload.get('producto_id')
-                                ).with_for_update().first())
-                        if _inv:
+                    # Reaplicar cambio de inventario WMS
+                    _mc = payload.get('motivo_codigo')
+                    _cant = payload.get('cantidad', 0)
+                    _inv = (_UbicProd.query
+                            .filter_by(
+                                ubicacion_id=payload.get('ubicacion_id'),
+                                producto_id=payload.get('producto_id')
+                            ).with_for_update().first())
+                    if _inv:
+                        _tpid = payload.get('tarea_picking_id')
+                        if _tpid:
                             _inv.bloqueado = max(0, _inv.bloqueado - _cant)
-                            if _mc == 'AJ-SAL':
-                                _inv.cantidad = max(0, _inv.cantidad - _cant)
-                            else:
-                                _inv.cantidad += _cant
+                        if _mc == 'AJ-SAL':
+                            _inv.cantidad = max(0, _inv.cantidad - _cant)
+                        else:
+                            _inv.cantidad += _cant
                     db.session.commit()
                     logger.info(
                         f'[DLQ] AJUSTE_CONTEO job={job.id}: sesion {sesion_id} recuperada → AJUSTADO'
@@ -537,22 +537,24 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             sesion_cteo.estado = EstadoConteo.AJUSTADO
             sesion_cteo.fecha_cierre = _now
 
-            # Desbloquear inventario si vino de excepción de picking
-            tarea_picking_id = payload.get('tarea_picking_id')
-            if tarea_picking_id:
-                motivo_codigo = payload['motivo_codigo']
-                cantidad_ajuste = payload['cantidad']
-                inv = (_UbicProd.query
-                       .filter_by(
-                           ubicacion_id=payload.get('ubicacion_id'),
-                           producto_id=payload.get('producto_id')
-                       ).with_for_update().first())
-                if inv:
+            # Actualizar stock WMS local — mantiene sincronía sin esperar sync nocturna
+            motivo_codigo = payload['motivo_codigo']
+            cantidad_ajuste = payload['cantidad']
+            inv = (_UbicProd.query
+                   .filter_by(
+                       ubicacion_id=payload.get('ubicacion_id'),
+                       producto_id=payload.get('producto_id')
+                   ).with_for_update().first())
+            if inv:
+                # Desbloquear solo si vino de excepción de picking
+                tarea_picking_id = payload.get('tarea_picking_id')
+                if tarea_picking_id:
                     inv.bloqueado = max(0, inv.bloqueado - cantidad_ajuste)
-                    if motivo_codigo == 'AJ-SAL':
-                        inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
-                    else:
-                        inv.cantidad += cantidad_ajuste
+                # Ajustar stock WMS (conteos cíclicos + excepciones)
+                if motivo_codigo == 'AJ-SAL':
+                    inv.cantidad = max(0, inv.cantidad - cantidad_ajuste)
+                else:
+                    inv.cantidad += cantidad_ajuste
 
             db.session.commit()
         except Exception as _e:
