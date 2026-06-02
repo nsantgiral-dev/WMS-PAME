@@ -5228,8 +5228,8 @@ function maestraInputParada(input) {
   if (!matches.length) { el.style.display = 'none'; return; }
   el.innerHTML = matches.map(m =>
     `<div onmousedown="maestraSeleccionarMunicipio(this)" data-municipio="${m.replace(/"/g, '&quot;')}"
-      style="padding:9px 12px;cursor:pointer;font-size:13px;color:#eee;border-bottom:1px solid #222;"
-      onmouseover="this.style.background='#2a2a2a'" onmouseout="this.style.background=''">${m}</div>`
+      style="padding:9px 12px;cursor:pointer;font-size:13px;color:var(--tx);border-bottom:1px solid var(--brd);"
+      onmouseover="this.style.background='var(--bg-s2)'" onmouseout="this.style.background=''">${m}</div>`
   ).join('');
   el.style.display = 'block';
 }

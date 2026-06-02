@@ -1203,12 +1203,12 @@
             <div style="display:flex;gap:8px;margin-bottom:8px;">
               <div style="flex:1;position:relative;">
                 <input id="maestras-parada-input" type="text" autocomplete="off" placeholder="Municipio o zona..."
-                  style="width:100%;box-sizing:border-box;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+                  style="width:100%;box-sizing:border-box;padding:10px;background:var(--bg-input);border:2px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;"
                   oninput="maestraInputParada(this)"
                   onkeydown="maestraInputKeydown(event)"
                   onblur="maestraOcultarSugerencias()">
                 <div id="maestras-sugerencias"
-                  style="display:none;position:absolute;top:100%;left:0;right:0;background:#1a1a1a;border:1px solid #333;border-radius:8px;max-height:220px;overflow-y:auto;z-index:999;margin-top:2px;"></div>
+                  style="display:none;position:absolute;top:100%;left:0;right:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;max-height:220px;overflow-y:auto;z-index:999;margin-top:2px;box-shadow:0 4px 12px rgba(0,0,0,.15);"></div>
               </div>
               <button onclick="maestraAgregarParada()"
                 style="padding:10px 16px;background:#fff;color:#000;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">+</button>
