@@ -8877,10 +8877,10 @@ async function cargarRequisiciones() {
 
 function _renderRequisicionCard(r) {
   const BADGE = {
-    ENVIADA:    { color: '#f59e0b', bg: '#fef3c7', label: 'Enviada' },
-    EN_PICKING: { color: '#3b82f6', bg: '#dbeafe', label: 'En picking' },
-    EN_PACKING: { color: '#f97316', bg: '#fff7ed', label: 'En empaque' },
-    PREPARADO:  { color: '#8b5cf6', bg: '#ede9fe', label: 'Preparado' },
+    ENVIADA:    { color: '#d97706', bg: '#fef3c7', label: '⏳ Pendiente aprobar' },
+    EN_PICKING: { color: '#2563eb', bg: '#dbeafe', label: '🔍 En picking' },
+    EN_PACKING: { color: '#ea580c', bg: '#fff7ed', label: '📦 En empaque' },
+    PREPARADO:  { color: '#7c3aed', bg: '#ede9fe', label: '✅ Listo despachar' },
   };
   const badge  = BADGE[r.estado] || { color: '#6b7280', bg: '#f3f4f6', label: r.estado };
   const fecha  = r.fecha_creacion ? new Date(r.fecha_creacion).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
@@ -8898,7 +8898,13 @@ function _renderRequisicionCard(r) {
     : '';
 
   const accionBtn =
-    r.estado === 'EN_PICKING'
+    r.estado === 'ENVIADA'
+      ? `<button onclick="aprobarRequisicion(${r.id})"
+           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                  background:#16a34a;color:#fff;border:1px solid #16a34a;">
+           ✓ Aprobar
+         </button>`
+    : r.estado === 'EN_PICKING'
       ? `<button onclick="confirmarPickingTraslado(${r.id})"
            style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
                   background:#1d4ed8;color:#fff;border:1px solid #1d4ed8;">
@@ -8957,6 +8963,23 @@ async function despacharRequisicion(id) {
     const d = await r.json();
     if (!r.ok) { alerta(d.error || 'Error al despachar', 'error'); return; }
     alerta('Requisición despachada ✓', 'exito');
+    await cargarRequisiciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+async function aprobarRequisicion(id) {
+  if (!confirm('¿Aprobar esta requisición? Se crearán las tareas de picking en Bodega.')) return;
+  try {
+    const r = await fetch(`/api/traslados/${id}/aprobar`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al aprobar', 'error'); return; }
+    alerta('Requisición aprobada — tareas de picking creadas en Bodega ✓', 'exito');
     await cargarRequisiciones();
   } catch (e) {
     alerta('Error de conexión', 'error');
