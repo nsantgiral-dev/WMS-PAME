@@ -1,3 +1,4 @@
+from datetime import timedelta
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from app.extensions import db
@@ -24,7 +25,8 @@ def login():
     if not usuario or not usuario.check_password(data['password']):
         return jsonify({'error': 'Credenciales inválidas'}), 401
 
-    token = create_access_token(identity=str(usuario.id))
+    expires = timedelta(days=30) if usuario.rol == 'conductor' else timedelta(days=7)
+    token = create_access_token(identity=str(usuario.id), expires_delta=expires)
 
     return jsonify({
         'token': token,
