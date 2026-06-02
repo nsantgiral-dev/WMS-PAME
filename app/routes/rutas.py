@@ -143,9 +143,11 @@ def listar_municipios():
     from app.utils.dane_municipios import DANE
     from sqlalchemy import distinct
     de_pedidos = {r[0] for r in db.session.query(distinct(TareaPacking.municipio))
-                  .filter(TareaPacking.municipio != None, TareaPacking.municipio != '').all()}
+                  .filter(TareaPacking.municipio.isnot(None),
+                          TareaPacking.municipio != '').all() if r[0]}
     de_rutas   = {r[0] for r in db.session.query(distinct(RutaMaestraParada.municipio))
-                  .filter(RutaMaestraParada.municipio != None, RutaMaestraParada.municipio != '').all()}
+                  .filter(RutaMaestraParada.municipio.isnot(None),
+                          RutaMaestraParada.municipio != '').all() if r[0]}
     return jsonify({'municipios': sorted(de_pedidos | de_rutas | set(DANE.values()))}), 200
 
 
