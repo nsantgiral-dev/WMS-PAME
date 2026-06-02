@@ -39,11 +39,12 @@ def listar_sesiones():
              .options(
                  _jl(SesionConteo.producto),
                  _jl(SesionConteo.ubicacion),
+                 _jl(SesionConteo.almacen),      # evita N+1 en to_dict() almacen_nombre/bodega
                  _jl(SesionConteo.operario),
-                 _jl(SesionConteo.aprobador),   # evita N+1 en to_dict() aprobador_nombre
-                 _jl(SesionConteo.editor),       # evita N+1 en to_dict() editado_por_nombre
-                 _jl(SesionConteo.hijo_conteo)   # evita N+1 en to_dict() segundo_conteo
-                 .joinedload(SesionConteo.operario),  # nombre del 2do operario
+                 _jl(SesionConteo.aprobador),
+                 _jl(SesionConteo.editor),
+                 _jl(SesionConteo.hijo_conteo)
+                 .joinedload(SesionConteo.operario),
              )
              .order_by(SesionConteo.fecha_creacion.desc()))
 
@@ -130,7 +131,7 @@ def obtener_tarea(id):
 def registrar_conteo(id):
     """
     Operario registra su conteo físico.
-    Dispara conciliación en tiempo real contra Siesa.
+    Dispara conciliación en tiempo real contra stock WMS.
     """
     if not _es_personal_almacen():
         return jsonify({'error': 'Sin permiso para registrar conteos'}), 403
@@ -168,11 +169,7 @@ def registrar_conteo(id):
         )
         return jsonify(resultado), 200
     except ValueError as e:
-        msg = str(e)
-        # Cache miss de Siesa → 503 reintentable, no error permanente del cliente
-        if 'Conectando con Siesa' in msg or 'Siesa aún no respondió' in msg:
-            return jsonify({'error': msg, 'retry_after': 3}), 503
-        return jsonify({'error': msg}), 400
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.exception(f'[CONTEO] Error inesperado en registrar_conteo sesion={id}')
         return jsonify({'error': str(e)}), 500

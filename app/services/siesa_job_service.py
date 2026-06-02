@@ -507,6 +507,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             item_codigo=item_codigo,
             cantidad=payload['cantidad'],
             referencia=payload.get('referencia', ''),
+            bodega=payload.get('bodega'),
+            centro_op=payload.get('centro_op'),
         )
 
         # CRÍTICO: commit mínimo de siesa_triggered=True ANTES del commit completo.

@@ -6629,9 +6629,9 @@ function _renderCardAccion(s) {
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#0a0a0a;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
       <div>
-        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">SIESA</div>
+        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">WMS</div>
         <div style="font-size:20px;font-weight:800;color:#60a5fa;line-height:1;">${s.existencia_siesa != null ? s.existencia_siesa : '—'}</div>
-        <div style="font-size:9px;color:#374151;margin-top:2px;">referencia</div>
+        <div style="font-size:9px;color:#374151;margin-top:2px;">${s.bodega_siesa_id || 'stock'}</div>
       </div>
       <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
         <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er Conteo</div>
@@ -7127,14 +7127,16 @@ function conteoAbrirAjuste(s) {
   const cant     = Math.abs(difVal);
   const coinciden = hijo && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
 
+  const bodega = s.bodega_siesa_id || '—';
+
   info.innerHTML = `
     <div style="margin-bottom:10px;">
       <div style="font-size:13px;font-weight:700;color:#e2e8f0;">${s.producto_codigo || '—'} · ${s.producto_nombre || ''}</div>
-      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+      <div style="font-size:11px;color:#4b5563;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'} · Bodega: <span style="color:#60a5fa;font-weight:700;">${bodega}</span></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:12px;text-align:center;">
       <div>
-        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">SIESA</div>
+        <div style="font-size:9px;color:#4b5563;text-transform:uppercase;margin-bottom:2px;">WMS</div>
         <div style="font-size:18px;font-weight:800;color:#60a5fa;">${s.existencia_siesa ?? '—'}</div>
       </div>
       <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
@@ -7147,7 +7149,7 @@ function conteoAbrirAjuste(s) {
       </div>
     </div>
     <div style="background:#0d0d0d;border-radius:8px;padding:10px;text-align:center;margin-bottom:8px;">
-      <div style="font-size:10px;color:#4b5563;margin-bottom:4px;">Se enviará a SIESA:</div>
+      <div style="font-size:10px;color:#4b5563;margin-bottom:4px;">Se enviará a SIESA → Bodega <span style="color:#60a5fa;font-weight:700;">${bodega}</span>:</div>
       <div style="font-size:16px;font-weight:800;color:${difCol};">${accion} de ${cant} unidades</div>
       <div style="font-size:10px;color:#4b5563;margin-top:2px;">${motivo} · Concepto 603 · Clase 63</div>
     </div>
@@ -7185,7 +7187,7 @@ async function conteoConfirmarAjuste() {
     const d = await r.json();
     if (r.ok) {
       conteosCerrarAjuste();
-      alerta(`Ajuste ${d.motivo_codigo} encolado a Siesa · Diferencia: ${d.diferencia}`, 'exito');
+      alerta(`Ajuste ${d.motivo_codigo} encolado a Siesa · Δ ${d.diferencia} uds`, 'exito');
       await cargarConteos(_CONTEO_PAGE);
     } else {
       alerta(d.error || 'Error al ajustar', 'error');

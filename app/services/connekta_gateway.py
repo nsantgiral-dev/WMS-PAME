@@ -697,13 +697,15 @@ class ConnektaGateway:
             logger.warning(f'[CONNEKTA] validar_tipo_proveedor falló: {e}')
             return {'configurado': None, 'tipo_proveedor': None, 'mensaje': ''}
 
-    def get_inventario_fecha(self, item_codigo: str):
+    def get_inventario_fecha(self, item_codigo: str, bodega: str = None):
         """API_v2_Inventarios_InvFecha — existencia real para conteo cíclico.
+        bodega: código de bodega Siesa (ej 'NB1'). Si None usa self.bodega del env.
         Timeout reducido a 8s: es user-facing, no puede bloquear un worker Gunicorn.
         """
+        _bodega = bodega or self.bodega
         return self._get(self.api_inventario, {
             'paginacion': 'numPag=1|tamPag=10',
-            'parametros': f"f120_referencia = ''{item_codigo}'' AND f150_id = ''{self.bodega}''"
+            'parametros': f"f120_referencia = ''{item_codigo}'' AND f150_id = ''{_bodega}''"
         }, timeout=8)
 
     def get_item_por_barras(self, codigo_barras: str):
@@ -1522,11 +1524,14 @@ class ConnektaGateway:
         return self._post(self.conector_entrada, 'API_v1_Compras_Comercial_EntradaOC', payload)
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
-                                  cantidad: int, referencia: str):
+                                  cantidad: int, referencia: str,
+                                  bodega: str = None, centro_op: str = None):
         """
         142951 → API_v1_Inventarios_Comercial_DocumentoInv
         Ajuste físico tras conteo cíclico double-blind.
         AJ-ENT: sobrante. AJ-SAL: faltante. Cantidad siempre positiva.
+        bodega: código bodega Siesa (ej 'NB1','NB2'). Si None usa self.bodega.
+        centro_op: centro de operación Siesa. Si None usa self.centro_op.
         """
         if not self.tipo_docto_ajuste:
             raise ValueError(
@@ -1536,8 +1541,9 @@ class ConnektaGateway:
         if motivo_codigo not in ['AJ-ENT', 'AJ-SAL']:
             raise ValueError(f'Motivo inválido: {motivo_codigo}')
 
-        # Mapeo WMS → Siesa: concepto 0603 (Ajuste a inventario)
-        # Motivo 01 = Entrada Ajuste (sobrante), 02 = Salida Ajuste (faltante)
+        _bodega = bodega or self.bodega
+        _centro_op = centro_op or self.centro_op
+
         es_entrada = motivo_codigo == 'AJ-ENT'
         siesa_motivo   = '01' if es_entrada else '02'
 
@@ -1552,23 +1558,23 @@ class ConnektaGateway:
                 {
                     'F_CIA': cia,
                     'F_CONSEC_AUTO_REG': 1,
-                    'f350_id_co': self.centro_op,
+                    'f350_id_co': _centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_ajuste,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': self.nit_empresa or None,
-                    'f350_id_clase_docto': 63,           # Entero obligatorio: 63=Ajustes (spec 142951)
+                    'f350_id_clase_docto': 63,
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
-                    'f450_id_concepto': 603,                                         # 603 = Ajustes (spec 142951, obligatorio)
-                    'f450_id_bodega_salida': self.bodega if not es_entrada else None,
-                    'f450_id_bodega_entrada': self.bodega if es_entrada else None,
+                    'f450_id_concepto': 603,
+                    'f450_id_bodega_salida': _bodega if not es_entrada else None,
+                    'f450_id_bodega_entrada': _bodega if es_entrada else None,
                     'f450_docto_alterno': None,
-                    'f350_id_co_base': None,          # None cuando no aplica tránsito; Siesa rechaza string vacío
-                    'f350_id_tipo_docto_base': None,  # None cuando no aplica tránsito; Siesa rechaza string vacío
-                    'f350_consec_docto_base': 0,      # Entero (spec 142951) — 0 cuando no aplica tránsito
-                    'f462_id_vehiculo': None,        # Dep — None cuando no hay transportador
+                    'f350_id_co_base': None,
+                    'f350_id_tipo_docto_base': None,
+                    'f350_consec_docto_base': 0,
+                    'f462_id_vehiculo': None,
                     'f462_id_tercero_transp': None,
                     'f462_id_sucursal_transp': None,
                     'f462_id_tercero_conductor': None,
@@ -1585,16 +1591,16 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     'F_CIA': cia,
-                    'f470_id_co': self.centro_op,
+                    'f470_id_co': _centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_ajuste,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': 1,
-                    'f470_id_bodega': self.bodega,
+                    'f470_id_bodega': _bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
                     'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
                     'f470_id_motivo': siesa_motivo,
-                    'f470_id_co_movto': self.centro_op,
+                    'f470_id_co_movto': _centro_op,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': self.uom_default,

@@ -79,6 +79,7 @@ class SesionConteo(db.Model):
 
     # Relaciones
     ubicacion = db.relationship('Ubicacion', backref='sesiones_conteo', lazy=True)
+    almacen = db.relationship('Almacen', backref='sesiones_conteo', lazy=True)
     producto = db.relationship('Producto', backref='sesiones_conteo', lazy=True)
     operario = db.relationship('Usuario', foreign_keys=[operario_id],
                                backref='conteos_asignados', lazy=True)
@@ -123,6 +124,8 @@ class SesionConteo(db.Model):
             'ubicacion_id': self.ubicacion_id,
             'ubicacion_codigo': self.ubicacion.codigo if self.ubicacion else None,
             'almacen_id': self.almacen_id,
+            'almacen_nombre': self.almacen.nombre if self.almacen else None,
+            'bodega_siesa_id': self.almacen.bodega_siesa_id if self.almacen else None,
             'producto_id': self.producto_id,
             'producto_codigo': self.producto.codigo if self.producto else None,
             'producto_nombre': self.producto.nombre if self.producto else None,

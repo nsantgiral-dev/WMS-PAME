@@ -566,13 +566,6 @@ class ABCService:
                     f'queda completamente invisible: {_e_email_watchdog}'
                 )
 
-        # Prewarm único consolidado con A+B+C — evita que el semáforo non-blocking
-        # descarte los prewarms de B y C cuando el de A todavía está en curso.
-        if todas_sesiones_nuevas:
-            from app.services.conteo_service import ConteoService
-            ConteoService.prewarm_existencia_cache(todas_sesiones_nuevas)
-            logger.info(f'[ABC] Prewarm iniciado para {len(todas_sesiones_nuevas)} sesiones A+B+C')
-
         logger.info(f'[ABC] Generación completa · {total} tareas nuevas en almacén {almacen_id}')
         return {'total_tareas_creadas': total, 'por_clase': resultados}
 
@@ -693,13 +686,9 @@ class ABCService:
                     ).filter(
                         SesionConteo.estado == EstadoConteo.PENDIENTE
                     ).all()
-                    if sesiones_pendientes:
-                        ConteoService.prewarm_existencia_cache(sesiones_pendientes)
-                        logger.info(
-                            f'[ABC] Pre-turno prewarm (5:55am): {len(sesiones_pendientes)} sesiones'
-                        )
-                    else:
-                        logger.info('[ABC] Pre-turno prewarm (5:55am): sin sesiones PENDIENTE')
+                    logger.info(
+                        f'[ABC] Pre-turno check (5:55am): {len(sesiones_pendientes)} sesiones PENDIENTE'
+                    )
                 except Exception as e:
                     logger.error(f'[ABC] Pre-turno prewarm falló: {e}', exc_info=True)
 
