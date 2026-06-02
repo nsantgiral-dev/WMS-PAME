@@ -337,6 +337,9 @@ class TrasladoService:
         if nuevo_estado == EstadoTraslado.ENTREGADA:
             s.fecha_entrega = datetime.utcnow()
 
+        # Invalidar cache stock: la mercancía ya salió de la bodega origen
+        TrasladoService.invalidar_cache_stock(s.bodega_origen_siesa)
+
         # ── Descontar inventario WMS ──
         # Se descuenta al despachar (los bienes salen físicamente de la bodega).
         # Se hace independientemente del resultado de Siesa — el camión ya salió.
@@ -444,6 +447,8 @@ class TrasladoService:
         s.estado = EstadoTraslado.ENTREGADA
         s.fecha_entrega = datetime.utcnow()
         db.session.commit()
+        # Invalidar cache stock de la bodega destino: ya recibió mercancía
+        TrasladoService.invalidar_cache_stock(s.bodega_destino_siesa)
         logger.info(f'[TRASLADO] {s.codigo} → ENTREGADA (confirmado por usuario {usuario_id})')
         return s
 
@@ -679,13 +684,98 @@ class TrasladoService:
             logger.error(f'[TRASLADO] _extraer_consec excepción: {e} — response: {str(respuesta_siesa)[:400]}')
         return None
 
+    # ── Cache stock Siesa — proceso-nivel, TTL 5 min por bodega ─────────────────
+    _stock_siesa_cache: dict = {}   # {bodega_id: {'data': dict, 'ts': float}}
+    _STOCK_SIESA_TTL = 300.0        # 5 minutos
+
+    @staticmethod
+    def invalidar_cache_stock(bodega_id: str = None):
+        """Invalida el cache de stock Siesa. Llamar al despachar o recibir un traslado."""
+        if bodega_id:
+            TrasladoService._stock_siesa_cache.pop(bodega_id, None)
+        else:
+            TrasladoService._stock_siesa_cache.clear()
+
     @staticmethod
     def get_stock_disponible(bodega_id: str = None):
         """
-        Consulta stock disponible en el WMS local (PostgreSQL) para que la tienda
-        sepa qué puede pedir. No llama a Siesa — usa el inventario del WMS que se
-        sincroniza periódicamente. Respuesta inmediata sin dependencia de red.
+        Consulta stock disponible directamente en Siesa (API_v2_Inventarios_InvFecha).
+        Fuente de verdad: f400_cant_existencia_1 de la bodega origen en tiempo real.
+        Cache TTL 5 min para no saturar Connekta en cada apertura del tab Pedir.
+        Fallback automático a WMS local si Siesa no responde.
         """
+        import time
+        from app.models.producto import Producto
+
+        bod = bodega_id or BODEGA_ORIGEN_DEFAULT
+
+        # Servir desde cache si está vigente
+        entrada = TrasladoService._stock_siesa_cache.get(bod)
+        if entrada and (time.time() - entrada['ts']) < TrasladoService._STOCK_SIESA_TTL:
+            return entrada['data']
+
+        # Consulta real a Siesa
+        try:
+            res_siesa = connekta.get_stock_bodega(bod)
+
+            if connekta.modo_simulacion:
+                # En modo simulación no hay datos reales — usar WMS local
+                return TrasladoService._get_stock_wms(bod)
+
+            rows = res_siesa.get('detalle', {}).get('Table', []) or []
+            if not rows:
+                logger.warning('[TRASLADO] stock Siesa vacío para bodega %s — usando WMS', bod)
+                return TrasladoService._get_stock_wms(bod)
+
+            # Siesa devuelve f120_referencia (código Siesa) y f400_cant_existencia_1
+            siesa_stock = {
+                str(r.get('f120_referencia', '')).strip(): int(r.get('f400_cant_existencia_1') or 0)
+                for r in rows
+                if r.get('f120_referencia') and int(r.get('f400_cant_existencia_1') or 0) > 0
+            }
+
+            if not siesa_stock:
+                return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'siesa'}
+
+            # Cross-reference con catálogo local para nombre, producto_id y unidad
+            productos = {
+                p.codigo_siesa: p
+                for p in Producto.query.filter(
+                    Producto.codigo_siesa.in_(list(siesa_stock.keys())),
+                    Producto.activo == True,
+                ).all()
+                if p.codigo_siesa
+            }
+
+            items = []
+            for codigo_siesa, cantidad in siesa_stock.items():
+                prod = productos.get(codigo_siesa)
+                if not prod:
+                    # Producto en Siesa sin espejo en WMS — omitir (no tiene producto_id)
+                    continue
+                items.append({
+                    'codigo_siesa': codigo_siesa,
+                    'nombre': prod.nombre,
+                    'producto_id': prod.id,
+                    'disponible': cantidad,
+                    'existencia': cantidad,
+                    'unidad_medida': prod.unidad_medida,
+                })
+
+            items.sort(key=lambda x: x['nombre'])
+            resultado = {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'siesa'}
+
+            TrasladoService._stock_siesa_cache[bod] = {'data': resultado, 'ts': time.time()}
+            logger.info('[TRASLADO] stock Siesa cargado: %d ítems en %s', len(items), bod)
+            return resultado
+
+        except Exception as exc:
+            logger.error('[TRASLADO] Siesa stock falló (%s) — fallback a WMS local', exc)
+            return TrasladoService._get_stock_wms(bod)
+
+    @staticmethod
+    def _get_stock_wms(bodega_id: str):
+        """Fallback: stock desde WMS local (PostgreSQL) cuando Siesa no responde."""
         from app.models.producto import Producto
         from app.models.inventario import UbicacionProducto
         from app.models.almacen import Almacen
@@ -694,12 +784,8 @@ class TrasladoService:
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
         almacen = Almacen.query.filter_by(bodega_siesa_id=bod).first()
         if not almacen:
-            logger.warning(f'[TRASLADO] stock_disponible: no hay almacén WMS para bodega {bod}')
-            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms'}
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback'}
 
-        # 2 queries planas — sin N+1
-        # Query 1: stock agrupado por producto en este almacén
-        # UbicacionProducto no tiene almacen_id directo — se llega vía JOIN con Ubicacion
         registros = (
             db.session.query(
                 UbicacionProducto.producto_id,
@@ -707,27 +793,20 @@ class TrasladoService:
                 db.func.sum(UbicacionProducto.reservado).label('reservado'),
             )
             .join(Ubicacion, UbicacionProducto.ubicacion_id == Ubicacion.id)
-            .filter(
-                Ubicacion.almacen_id == almacen.id,
-                UbicacionProducto.cantidad > 0,
-            )
+            .filter(Ubicacion.almacen_id == almacen.id, UbicacionProducto.cantidad > 0)
             .group_by(UbicacionProducto.producto_id)
             .all()
         )
-
         if not registros:
-            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms'}
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback'}
 
-        # Query 2: todos los productos en un solo IN (no 1 query por producto)
-        producto_ids = [r.producto_id for r in registros]
         productos = {
             p.id: p
             for p in Producto.query.filter(
-                Producto.id.in_(producto_ids),
+                Producto.id.in_([r.producto_id for r in registros]),
                 Producto.activo == True,
             ).all()
         }
-
         items = []
         for reg in registros:
             prod = productos.get(reg.producto_id)
@@ -744,9 +823,8 @@ class TrasladoService:
                 'existencia': int(reg.existencia or 0),
                 'unidad_medida': prod.unidad_medida,
             })
-
         items.sort(key=lambda x: x['nombre'])
-        return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms'}
+        return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms_fallback'}
 
     # Cache de bodegas — proceso-nivel, TTL 1 hora. Evita llamar a Siesa en cada request.
     _bodegas_cache: dict = {'data': None, 'ts': 0.0}

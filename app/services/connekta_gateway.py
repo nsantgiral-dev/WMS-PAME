@@ -1820,11 +1820,11 @@ class ConnektaGateway:
 
     def get_stock_bodega(self, bodega_id: str):
         """API_v2_Inventarios_InvFecha — existencia real en una bodega específica.
-        Tienda consulta disponibilidad en NB1 antes de armar su solicitud."""
+        Pagina hasta 10 × 500 = 5 000 ítems — cubre catálogos de hasta 5 000 SKU con stock."""
         all_rows = []
-        for pag in range(1, 6):  # 500 ítems máx (5 págs × 100) — suficiente para NB1
+        for pag in range(1, 11):  # 10 págs × 500 = 5 000 ítems máx
             res = self._get(self.api_inventario, {
-                'paginacion': f'numPag={pag}|tamPag=100',
+                'paginacion': f'numPag={pag}|tamPag=500',
                 'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0"
             })
             if self.modo_simulacion:
@@ -1833,7 +1833,7 @@ class ConnektaGateway:
             if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
                 break
             all_rows.extend(rows)
-            if len(rows) < 100:
+            if len(rows) < 500:
                 break
         return {'detalle': {'Table': all_rows}}
 
