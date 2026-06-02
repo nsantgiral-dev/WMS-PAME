@@ -138,6 +138,7 @@ def desactivar_vehiculo(id):
 @rutas_bp.route('/municipios', methods=['GET'])
 @jwt_required()
 def listar_municipios():
+    from app.extensions import db
     from app.models.packing import TareaPacking
     from app.models.ruta_maestra import RutaMaestraParada
     from app.utils.dane_municipios import DANE
