@@ -1,29 +1,30 @@
-"""picking_packing_unificado: bodega_origen_siesa en picking, campos ST en packing
+"""picking_packing_unificado: merge de heads + bodega_origen_siesa + campos ST
 
-Revision ID: a1b2c3d4e5f6
-Revises: z7a8b9c0d1e2
+Revision ID: b3c4d5e6f7g8
+Revises: 27fbcf49ac17, a1b2c3d4e5f7, b9c0d1e2f3g4, f2g3h4i5j6k7, f8e9d0c1b2a3, r1s2t3u4v5w6
 Create Date: 2026-06-03
 
-Habilita el módulo unificado de picking y packing para Pedidos (PD) y
-Requisiciones/Traslados (ST):
+Consolida los 6 heads sueltos y aplica los campos necesarios para el módulo
+unificado de picking/packing (PD + ST):
 
   tareas_picking:
-    + bodega_origen_siesa  VARCHAR(20)  — scoping multi-bodega (NB1, NC1, NS1…)
+    + bodega_origen_siesa  VARCHAR(20) — scoping multi-bodega (NB1, NC1, NS1…)
 
   tareas_packing:
-    + tipo_documento       VARCHAR(20)  — 'PEDIDO' | 'TRASLADO'
-    + referencia_doc       VARCHAR(50)  — 'PD1307' o 'ST-20260603-001'
-    + solicitud_id         INTEGER FK   — solo si TRASLADO
-    + tienda_destino       VARCHAR(100) — nombre display en UI
-    + bodega_origen_siesa  VARCHAR(20)  — scoping igual que picking
-    ~ numero_pedido_siesa  → nullable=True (era NOT NULL, incompatible con ST)
+    + tipo_documento       VARCHAR(20) NOT NULL DEFAULT 'PEDIDO'
+    + referencia_doc       VARCHAR(50) nullable
+    + solicitud_id         INTEGER FK nullable → solicitudes_traslado
+    + tienda_destino       VARCHAR(100) nullable
+    + bodega_origen_siesa  VARCHAR(20) nullable
+    ~ numero_pedido_siesa  → nullable=True
 """
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = 'a1b2c3d4e5f6'
-down_revision = 'z7a8b9c0d1e2'
+revision = 'b3c4d5e6f7g8'
+down_revision = ('27fbcf49ac17', 'a1b2c3d4e5f7', 'b9c0d1e2f3g4',
+                 'f2g3h4i5j6k7', 'f8e9d0c1b2a3', 'r1s2t3u4v5w6')
 branch_labels = None
 depends_on = None
 
@@ -34,7 +35,6 @@ def upgrade():
         'tareas_picking',
         sa.Column('bodega_origen_siesa', sa.String(20), nullable=True),
     )
-    # Backfill: todos los registros existentes son de NB1
     op.execute("UPDATE tareas_picking SET bodega_origen_siesa = 'NB1'")
 
     # ── tareas_packing: soporte para ST ─────────────────────────────────────
@@ -62,14 +62,14 @@ def upgrade():
         sa.Column('bodega_origen_siesa', sa.String(20), nullable=True),
     )
 
-    # Backfill packing existente: todos son PEDIDO de NB1
+    # Backfill: todos los packing existentes son PEDIDO de NB1
     op.execute("UPDATE tareas_packing SET bodega_origen_siesa = 'NB1'")
     op.execute(
         "UPDATE tareas_packing SET referencia_doc = numero_pedido_siesa "
         "WHERE referencia_doc IS NULL AND numero_pedido_siesa IS NOT NULL"
     )
 
-    # numero_pedido_siesa: aflojar NOT NULL para que tareas ST puedan tenerlo NULL
+    # numero_pedido_siesa: aflojar NOT NULL (incompatible con tareas ST)
     op.alter_column(
         'tareas_packing',
         'numero_pedido_siesa',
