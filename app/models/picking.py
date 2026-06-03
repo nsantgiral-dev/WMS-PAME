@@ -41,7 +41,8 @@ class TareaPicking(db.Model):
 
     # Referencia origen
     referencia_documento = db.Column(db.String(50))
-    tipo_documento = db.Column(db.String(30))
+    tipo_documento = db.Column(db.String(30))   # 'PEDIDO' | 'TRASLADO'
+    bodega_origen_siesa = db.Column(db.String(20))  # scoping multi-bodega
 
     # Auditoría (rellena el admin cuando investiga una tarea BLOQUEADA)
     auditoria_resultado      = db.Column(db.String(30))   # ENCONTRADO_COMPLETO|ENCONTRADO_PARCIAL|NO_ENCONTRADO|AVERIA|DISCREPANCIA_SIESA
@@ -84,6 +85,7 @@ class TareaPicking(db.Model):
             'prioridad': self.prioridad,
             'referencia_documento': self.referencia_documento,
             'tipo_documento': self.tipo_documento,
+            'bodega_origen_siesa': self.bodega_origen_siesa,
             'motivo_bloqueo': self.motivo_bloqueo,
             'observaciones_bloqueo': self.observaciones_bloqueo,
             'auditoria_resultado': self.auditoria_resultado,

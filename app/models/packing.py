@@ -17,8 +17,16 @@ class TareaPacking(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     codigo = db.Column(db.String(50), unique=True, nullable=False)
 
-    # Referencia al pedido de Siesa
-    numero_pedido_siesa = db.Column(db.String(50), nullable=False)
+    # Tipo de documento — distingue flujo de cierre
+    tipo_documento = db.Column(db.String(20), nullable=False, default='PEDIDO')  # 'PEDIDO' | 'TRASLADO'
+    referencia_doc = db.Column(db.String(50))   # 'PD1307' o 'ST-20260603-001'
+    solicitud_id = db.Column(db.Integer, db.ForeignKey('solicitudes_traslado.id',
+                             ondelete='SET NULL'), nullable=True)
+    tienda_destino = db.Column(db.String(100))  # display en UI para TRASLADO
+    bodega_origen_siesa = db.Column(db.String(20))  # scoping multi-bodega
+
+    # Referencia al pedido de Siesa (solo para PEDIDO — nullable para TRASLADO)
+    numero_pedido_siesa = db.Column(db.String(50), nullable=True)
     # Componentes separados requeridos por el gateway (F430_ID_TIPO_DOCTO / F430_CONSEC_DOCTO)
     tipo_docto_pedido_siesa = db.Column(db.String(20))
     consec_docto_pedido_siesa = db.Column(db.String(30))
@@ -61,6 +69,7 @@ class TareaPacking(db.Model):
 
     # Relaciones
     empacador = db.relationship('Usuario', backref='tareas_packing', lazy=True)
+    solicitud_traslado = db.relationship('SolicitudTraslado', backref='tareas_packing', lazy=True, foreign_keys=[solicitud_id])
     almacen = db.relationship('Almacen', backref='tareas_packing', lazy=True)
     items = db.relationship('ItemPacking', backref='tarea', lazy=True,
                             cascade='all, delete-orphan')
@@ -78,6 +87,11 @@ class TareaPacking(db.Model):
         return {
             'id': self.id,
             'codigo': self.codigo,
+            'tipo_documento': self.tipo_documento,
+            'referencia_doc': self.referencia_doc,
+            'solicitud_id': self.solicitud_id,
+            'tienda_destino': self.tienda_destino,
+            'bodega_origen_siesa': self.bodega_origen_siesa,
             'numero_pedido_siesa': self.numero_pedido_siesa,
             'tipo_docto_pedido_siesa': self.tipo_docto_pedido_siesa,
             'consec_docto_pedido_siesa': self.consec_docto_pedido_siesa,

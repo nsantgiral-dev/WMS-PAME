@@ -295,7 +295,7 @@ def cerrar_packing(id):
         if not hay_bultos:
             return jsonify({'error': 'Debes declarar al menos una pieza'}), 400
     try:
-        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data)
+        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data, usuario_id=uid)
         from app.models.bulto import Bulto as _Bulto
         from sqlalchemy.orm import selectinload as _sl_b
         tarea = TareaPacking.query.get(id)

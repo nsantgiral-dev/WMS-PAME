@@ -255,12 +255,25 @@ class PackingService:
         db.session.commit()
 
     @staticmethod
-    def cerrar_packing(tarea_id: int, bultos_data: list):
+    def cerrar_packing(tarea_id: int, bultos_data: list, usuario_id: int = None):
         """
-        Paso 2: El empacador declara las piezas físicas (bultos).
-        Crea los Bultos, dispara Siesa y marca la tarea como DESPACHADO.
+        Empacador declara bultos y cierra la caja.
+        Delega al closer correspondiente según tipo_documento (PEDIDO | TRASLADO).
         bultos_data: [{'tipo': 'Caja', 'cantidad': 2}, {'tipo': 'Bolsa', 'cantidad': 1}]
         """
+        from app.services.closing.factory import PackingCloserFactory
+        tarea = TareaPacking.query.filter_by(id=tarea_id).first()
+        if not tarea:
+            raise ValueError('Tarea no encontrada')
+        closer = PackingCloserFactory.get(tarea.tipo_documento or 'PEDIDO')
+        resultado = closer.ejecutar_cierre(tarea_id, bultos_data, usuario_id or 0)
+        if not resultado.exitoso:
+            raise ValueError(resultado.error or resultado.mensaje)
+        return resultado
+
+    @staticmethod
+    def _cerrar_packing_pedido_legacy(tarea_id: int, bultos_data: list):
+        """Lógica original de cierre PD — mantenida para referencia interna."""
         from app.models.bulto import Bulto
         from sqlalchemy.orm import selectinload
 
