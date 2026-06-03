@@ -164,22 +164,34 @@ class MobileService:
         # REGLA ESTRICTA: el picker solo puede ir a ubicaciones tipo_zona = PICKING o GENERAL.
         # Las zonas RESERVA (pacas selladas en alto) son exclusivas del Abastecedor.
         from app.models.ubicacion import Ubicacion
+        from app.models.usuario import Usuario as _U
+        _u_pick = _U.query.get(operario_id)
+        # picker_traslado y roles de tienda: solo ven tareas TRASLADO de su bodega
+        _solo_traslado = _u_pick and _u_pick.rol in ('picker_traslado', 'packer_traslado')
+        _bodega_tienda = _u_pick.bodega_siesa_id if _solo_traslado and _u_pick else None
+
         # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
         _ids_validos = db.session.query(Ubicacion.id).filter(
             Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL'])
         ).subquery()
         # Sin JOIN — with_for_update solo lockea tareas_picking (evita error PostgreSQL
         # "FOR UPDATE cannot be applied to the nullable side of an outer join")
+        _filtros_base = [
+            TareaPicking.estado == 'PENDIENTE',
+            TareaPicking.operario_id.is_(None),
+            db.or_(
+                TareaPicking.ubicacion_id.is_(None),
+                TareaPicking.ubicacion_id.in_(_ids_validos),
+            ),
+        ]
+        if _solo_traslado:
+            _filtros_base.append(TareaPicking.tipo_documento == 'TRASLADO')
+            if _bodega_tienda:
+                _filtros_base.append(TareaPicking.bodega_origen_siesa == _bodega_tienda)
+
         tarea = (
             TareaPicking.query
-            .filter(
-                TareaPicking.estado == 'PENDIENTE',
-                TareaPicking.operario_id.is_(None),
-                db.or_(
-                    TareaPicking.ubicacion_id.is_(None),
-                    TareaPicking.ubicacion_id.in_(_ids_validos),
-                ),
-            )
+            .filter(*_filtros_base)
             .order_by(
                 # PD (PEDIDO) antes que ST (TRASLADO): CASE tipo_documento PEDIDO=0, TRASLADO=1
                 db.case({'PEDIDO': 0, 'TRASLADO': 1},

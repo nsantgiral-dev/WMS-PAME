@@ -153,16 +153,17 @@ function mostrarSegunRol(rol) {
     empCargarTareas();
     TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
   } else if (rol === 'picker_traslado') {
-    pantalla('pantalla-picker-traslado');
-    document.getElementById('tpick-nombre').textContent = OPERARIO?.nombre || '—';
-    document.getElementById('tpick-rol').textContent = 'Picking traslado';
-    trasPickerCargarCola();
-    TIMER_OPERARIO = setInterval(trasPickerCargarCola, 30000);
+    // Picker de tienda: pantalla unificada, scoping automático a TRASLADO en backend
+    pantalla('pantalla-operario');
+    if (OPERARIO) actualizarUI(OPERARIO);
+    pedirTarea();
+    TIMER_OPERARIO = setInterval(() => { if (!TAREA_ACTUAL) pedirTarea(); }, 5000);
   } else if (rol === 'packer_traslado') {
-    pantalla('pantalla-packer-traslado');
-    document.getElementById('tpack-nombre').textContent = OPERARIO?.nombre || '—';
-    trasPackerCargarCola();
-    TIMER_OPERARIO = setInterval(trasPackerCargarCola, 20000);
+    // Packer de tienda: pantalla unificada, scoping automático a TRASLADO en backend
+    pantalla('pantalla-empacador');
+    if (OPERARIO) actualizarUI(OPERARIO);
+    empCargarTareas();
+    TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
   } else if (puedeAbastecer && (puedePicar || puedeEmpacar)) {
     // Rol dual: picker/empacador + abastecedor → picker por defecto, botón para cambiar
     pantalla('pantalla-operario');
@@ -9073,11 +9074,13 @@ async function confirmarPackingTraslado(id) {
   }
 }
 
-// ─── TRASLADOS — PICKING / PACKING (roles picker_traslado, packer_traslado) ───
-// Flujo completamente independiente de Pedidos y del tab Requisiciones de admin.
+// ─── TRASLADOS — PICKING / PACKING ────────────────────────────────────────────
+// Los roles picker_traslado y packer_traslado usan las pantallas unificadas
+// (pantalla-operario y pantalla-empacador). El scoping por bodega_siesa_id
+// en el backend garantiza que solo vean tareas tipo TRASLADO de su tienda.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// PICKER TRASLADO
+// PICKER TRASLADO (legacy — mantenido solo para cargarTrasladosOperario en pantalla-operario)
 
 let TRAS_PICK = null;
 
