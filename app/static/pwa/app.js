@@ -1219,8 +1219,12 @@ async function pedirTarea() {
       document.getElementById('contenido-tarea').innerHTML = `
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">✓</div>
-          <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin tareas de picking</div>
+          <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin tareas pendientes</div>
           <div style="font-size:14px;color:#666;margin-top:6px;">El sistema te asignará la próxima automáticamente</div>
+          <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
+            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#1e3a5f;color:#93c5fd;font-weight:700;">PEDIDO</span>
+            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#431407;color:#fb923c;font-weight:700;">TRASLADO</span>
+          </div>
         </div>
         <div id="traslados-operario" style="padding:0 16px 16px;"></div>`;
       cargarTrasladosOperario();
@@ -1397,9 +1401,15 @@ function renderTarea(t) {
           </div>
         </div>`;
 
+  // Etiqueta de tipo de documento (PEDIDO / TRASLADO) para picking
+  const _tipoDoc = t.tipo_documento || (t.referencia_documento && t.referencia_documento.startsWith('ST-') ? 'TRASLADO' : 'PEDIDO');
+  const _etiquetaTipoDoc = _tipoDoc === 'TRASLADO'
+    ? `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:10px;background:#431407;color:#fb923c;margin-left:8px;letter-spacing:.5px;">TRASLADO</span>`
+    : `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:10px;background:#1e3a5f;color:#93c5fd;margin-left:8px;letter-spacing:.5px;">PEDIDO</span>`;
+
   document.getElementById('contenido-tarea').innerHTML = `
     <div style="padding:16px;">
-      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;">${t.tipo}</div>
+      <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;display:flex;align-items:center;justify-content:center;">${t.tipo}${esPicking ? _etiquetaTipoDoc : ''}</div>
 
       <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
         <div style="font-size:13px;color:#666;">UBICACIÓN</div>
@@ -3290,10 +3300,18 @@ async function empCargarTareas() {
             style="margin-top:8px;width:100%;padding:8px;background:#1a1a1a;border:1px solid #444;color:#aaa;border-radius:8px;cursor:pointer;font-size:12px;">
             🗑 Limpiar bultos y redeclarar piezas
           </button>` : '';
+        const esTraslado = t.tipo_documento === 'TRASLADO';
+        const refDisplay = t.referencia_doc || t.numero_pedido_siesa || '—';
+        const etiquetaHtml = esTraslado
+          ? `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#431407;color:#fb923c;letter-spacing:.5px;margin-left:8px;">TRASLADO</span>`
+          : `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#1e3a5f;color:#93c5fd;letter-spacing:.5px;margin-left:8px;">PEDIDO</span>`;
+        const destinoHtml = esTraslado && t.tienda_destino
+          ? `<div style="font-size:11px;color:#fb923c;margin-top:2px;">→ ${t.tienda_destino}</div>` : '';
         return `
         <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${t.id})`}"
-          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border-color:#7f1d1d;background:#110505;' : ''}">
-          <div class="emp-task-pedido">${t.numero_pedido_siesa}</div>
+          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border-color:#7f1d1d;background:#110505;' : ''}${esTraslado ? 'border-color:#431407;' : ''}">
+          <div class="emp-task-pedido" style="display:flex;align-items:center;">${refDisplay}${etiquetaHtml}</div>
+          ${destinoHtml}
           <div class="emp-task-sub">${total} producto(s) · ${t.items_verificados || 0}/${total} verificados</div>
           ${total > 0 ? `<div style="margin-top:10px;background:#1a1a1a;border-radius:8px;height:6px;overflow:hidden;">
             <div style="height:100%;background:#4ade80;width:${pct}%;border-radius:8px;transition:width 0.3s;"></div>

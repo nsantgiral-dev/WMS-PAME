@@ -143,6 +143,7 @@ class MobileService:
             return {
                 'id': tarea_activa.id,
                 'tipo': 'PICKING',
+                'tipo_documento': tarea_activa.tipo_documento or 'PEDIDO',
                 'prioridad': tarea_activa.prioridad,
                 'ubicacion': tarea_activa.ubicacion.codigo if tarea_activa.ubicacion else '',
                 'producto_id': tarea_activa.producto_id,
@@ -156,7 +157,7 @@ class MobileService:
                 'unidad_empaque': (tarea_activa.producto.unidad_empaque or '').upper() if tarea_activa.producto else '',
                 'estado': tarea_activa.estado,
                 'referencia': tarea_activa.referencia_documento,
-                'lote': tarea_activa.lote
+                'lote': tarea_activa.lote,
             }
 
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
@@ -179,7 +180,13 @@ class MobileService:
                     TareaPicking.ubicacion_id.in_(_ids_validos),
                 ),
             )
-            .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc())
+            .order_by(
+                # PD (PEDIDO) antes que ST (TRASLADO): CASE tipo_documento PEDIDO=0, TRASLADO=1
+                db.case({'PEDIDO': 0, 'TRASLADO': 1},
+                        value=TareaPicking.tipo_documento, else_=0).asc(),
+                TareaPicking.prioridad.desc(),
+                TareaPicking.fecha_creacion.asc(),
+            )
             .with_for_update(skip_locked=True)
             .first()
         )
@@ -286,6 +293,7 @@ class MobileService:
         _tarea_unidad_empaque = (tarea.producto.unidad_empaque or '').upper() if tarea.producto else ''
         _tarea_referencia = tarea.referencia_documento
         _tarea_lote = tarea.lote
+        _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
 
         # Asignar picking al operario
         tarea.operario_id = operario_id
@@ -298,6 +306,7 @@ class MobileService:
         resultado = {
             'id': _tarea_id,
             'tipo': 'PICKING',
+            'tipo_documento': _tarea_tipo_documento,
             'prioridad': _tarea_prioridad,
             'ubicacion': _tarea_ubicacion,
             'producto_id': _tarea_producto_id,
