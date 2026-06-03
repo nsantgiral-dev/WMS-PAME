@@ -73,10 +73,21 @@ class ABCService:
 
         try:
             # Paginar — puede haber miles de items
+            _MAX_PAGS_ABC = 50  # 50 × 200 = 10 000 items — holgado para catálogo real
             actualizados = 0
+            _errores_consec = 0
             pag = 1
-            while True:
-                res = connekta._get(api_abc, {'paginacion': f'numPag={pag}|tamPag=200'})
+            while pag <= _MAX_PAGS_ABC:
+                try:
+                    res = connekta._get(api_abc, {'paginacion': f'numPag={pag}|tamPag=200'})
+                    _errores_consec = 0
+                except Exception as _e_pag:
+                    _errores_consec += 1
+                    logger.warning(f'[ABC] Error en pag {pag}: {_e_pag} (consecutivos: {_errores_consec})')
+                    if _errores_consec >= 3:
+                        raise RuntimeError(f'ABC sync abortado tras 3 errores consecutivos en pag {pag}') from _e_pag
+                    pag += 1
+                    continue
                 rows = res.get('detalle', {}).get('Table', [])
                 if not rows:
                     break
@@ -107,6 +118,8 @@ class ABCService:
                 if len(rows) < 200:
                     break
                 pag += 1
+            else:
+                logger.critical(f'[ABC] Alcanzó MAX_PAGS={_MAX_PAGS_ABC} — posible loop infinito en endpoint Connekta')
 
             db.session.commit()
             logger.info(f'[ABC] {actualizados} productos reclasificados desde Siesa')
@@ -519,15 +532,13 @@ class ABCService:
         """
         resultados = {}
         total = 0
-        todas_sesiones_nuevas = []
         for clase in ['A', 'B', 'C']:
             r = ABCService.generar_tareas_conteo_diario(almacen_id, clase,
                                                         forzar_todo=forzar_todo)
             resultados[clase] = r
             total += r['tareas_creadas']
-            # Acumular sesiones recién creadas para prewarm consolidado al final
-            if r.get('_sesiones_creadas'):
-                todas_sesiones_nuevas.extend(r['_sesiones_creadas'])
+            # Prewarm se ejecuta en _prewarm_pre_turno (5:55am) — no aquí (2am) porque
+            # el caché expira en ~5min y el turno empieza a las 6am.
 
         # Watchdog DESPUÉS de las tareas normales — detecta reclasificaciones urgentes
         try:
@@ -671,9 +682,8 @@ class ABCService:
         def _prewarm_pre_turno(app):
             """
             Precalienta el caché de existencia Siesa 5 min antes del turno (5:55am).
-            El prewarm de las 2am expira a las 2:05am — 4h antes de que los operarios
-            lleguen. Este job garantiza caché caliente al inicio de turno, evitando
-            SEGUNDO_CONTEOs falsos por cache miss en el primer conteo del día.
+            Para cada sesión PENDIENTE, consulta get_inventario_fecha para que el
+            primer conteo del día no sufra cold cache (SEGUNDO_CONTEO falso).
             """
             with app.app_context():
                 try:
@@ -687,8 +697,21 @@ class ABCService:
                         SesionConteo.estado == EstadoConteo.PENDIENTE
                     ).all()
                     logger.info(
-                        f'[ABC] Pre-turno check (5:55am): {len(sesiones_pendientes)} sesiones PENDIENTE'
+                        f'[ABC] Pre-turno prewarm (5:55am): {len(sesiones_pendientes)} sesiones PENDIENTE'
                     )
+                    # Prewarm: consultar existencia Siesa para cada producto pendiente
+                    _warmed = 0
+                    for _s in sesiones_pendientes:
+                        if _s.producto and _s.producto.codigo_siesa:
+                            try:
+                                _bodega = _s.ubicacion.almacen.bodega_siesa if _s.ubicacion and _s.ubicacion.almacen else None
+                                ConteoService.consultar_existencia_siesa(
+                                    _s.producto.codigo_siesa, bodega=_bodega
+                                )
+                                _warmed += 1
+                            except Exception:
+                                pass  # prewarm best-effort — no bloquea
+                    logger.info(f'[ABC] Pre-turno prewarm completado: {_warmed}/{len(sesiones_pendientes)} productos')
                 except Exception as e:
                     logger.error(f'[ABC] Pre-turno prewarm falló: {e}', exc_info=True)
 

@@ -153,6 +153,8 @@ class ConnektaGateway:
                 _faltantes.append('SIESA_COND_PAGO_VENTAS')
             if not self.motivo_traslado:
                 _faltantes.append('SIESA_MOTIVO_TRASLADO')
+            if not self.lista_precio:
+                _faltantes.append('SIESA_LISTA_PRECIO')
             if _faltantes:
                 raise EnvironmentError(
                     f'[CONNEKTA] Variables obligatorias no configuradas: {", ".join(_faltantes)}. '
@@ -899,8 +901,7 @@ class ConnektaGateway:
                 for r in rows:
                     if r.get('rowid_linea_pedido') and r.get('rowid_compromiso'):
                         result[int(r['rowid_linea_pedido'])] = int(r['rowid_compromiso'])
-                total_pag = res.get('detalle', {}).get('total_páginas', 1)
-                if pag >= total_pag:
+                if len(rows) < 100:
                     break
             logger.info('[CONNEKTA] get_compromisos_t405: %d compromisos activos', len(result))
             return result
@@ -1494,7 +1495,7 @@ class ConnektaGateway:
                     'f470_id_motivo': i.get('motivo_siesa') or ('04' if i.get('tipo') == 'BONIFICACION' else self.motivo_compras),
                     # UOM y fecha_entrega deben coincidir exactamente con los de la OC (Siesa los valida)
                     'f470_id_unidad_medida': i.get('uom') or i.get('unidad_medida') or self.uom_default,
-                    'f421_fecha_entrega': self._fmt_fecha_iso(i.get('fecha_entrega')) or fecha_hoy_iso,
+                    'f421_fecha_entrega': self._fmt_fecha_iso(i.get('fecha_entrega')) or fecha_hoy,
                     'f470_cant_base': round(float(i['_qty']), 4),  # filtrado previo garantiza > 0
                     'f470_cant_2': 0.0,
                     'f470_notas': None,
@@ -1567,7 +1568,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
-                    'f450_id_concepto': 603,
+                    'f450_id_concepto': self.concepto_ajustes,
                     'f450_id_bodega_salida': _bodega if not es_entrada else None,
                     'f450_id_bodega_entrada': _bodega if es_entrada else None,
                     'f450_docto_alterno': None,
@@ -1656,7 +1657,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia or f'Avería detectada por WMS · {item_codigo}',
-                    'f450_id_concepto': 607,                                         # 607 = Transferencias (spec 142951, obligatorio)
+                    'f450_id_concepto': self.concepto_traslados,                       # env SIESA_CONCEPTO_TRASLADOS (spec 142951, obligatorio)
                     'f450_id_bodega_salida': self.bodega,
                     'f450_id_bodega_entrada': self.bodega_averias,
                     'f450_docto_alterno': None,
@@ -1938,6 +1939,10 @@ class ConnektaGateway:
         """
         if not consec_rit:
             raise ValueError('compromisos_desde_requisicion: consec_rit obligatorio')
+        if not self.tipo_docto_req_traslado:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_RIT no configurado — requerido en 174720 para f440_id_tipo_docto'
+            )
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Compromisos': [

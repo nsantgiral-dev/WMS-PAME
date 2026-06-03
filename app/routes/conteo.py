@@ -683,7 +683,10 @@ def cancelar_conteo(id):
     if not sesion:
         return jsonify({'error': 'Sesión no encontrada'}), 404
 
-    estados_cancelables = ['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE']
+    estados_cancelables = [
+        EstadoConteo.PENDIENTE, EstadoConteo.EN_PROCESO,
+        EstadoConteo.SEGUNDO_CONTEO, EstadoConteo.DESCUADRE,
+    ]
     if sesion.estado not in estados_cancelables:
         return jsonify({
             'error': f'No se puede cancelar en estado {sesion.estado}'
@@ -717,7 +720,7 @@ def cancelar_conteo(id):
 def reintentar_fallos_dlq():
     """Re-encola todos los jobs AJUSTE_CONTEO FALLIDO para un nuevo intento."""
     from app.models.usuario import Usuario
-    from app.models.siesa_job import SiesaJob
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
@@ -728,15 +731,15 @@ def reintentar_fallos_dlq():
 
     fallidos = SiesaJob.query.filter(
         SiesaJob.tipo == 'AJUSTE_CONTEO',
-        SiesaJob.estado == 'FALLIDO',
+        SiesaJob.estado == EstadoSiesaJob.FALLIDO,
     ).all()
 
     reencolados = 0
     for job in fallidos:
-        job.estado = 'PENDIENTE'
-        job.intento = 0
-        job.siguiente_intento_en = None
-        job.error = None
+        job.estado = EstadoSiesaJob.PENDIENTE
+        job.intentos = 0
+        job.proximo_intento = None
+        job.error_ultimo = None
         reencolados += 1
 
     if reencolados:

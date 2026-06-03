@@ -315,7 +315,11 @@ def registrar_faltante_info():
     Registra un faltante informativo después de confirmar un picking parcial.
     No toca inventario — crea auditoría urgente y envía email al admin.
     """
+    from app.routes._auth_helpers import _es_personal_almacen
     from app.services.faltante_reporte_service import FaltanteReporteService
+
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso'}), 403
 
     operario_id = _operario_id()  # noqa: F841 — futuro: adjuntar al reporte
     data = request.get_json() or {}

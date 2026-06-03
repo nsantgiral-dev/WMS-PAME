@@ -73,9 +73,10 @@ class ReconciliacionService:
         )
 
         try:
+            from app.models.packing import EstadoPacking
             tarea.siesa_triggered = True
             tarea.siesa_triggered_at = datetime.utcnow()
-            tarea.estado = 'DESPACHADO'
+            tarea.estado = EstadoPacking.DESPACHADO
             tarea.fecha_despachado = tarea.fecha_despachado or datetime.utcnow()
             tarea.siesa_response = json.dumps(factura_encontrada)
             db.session.commit()
@@ -109,6 +110,13 @@ class ReconciliacionService:
     @staticmethod
     def _ejecutar_sweep():
         from app.models.packing import TareaPacking
+        from sqlalchemy import text as _text
+
+        # Advisory lock: evita que 2 workers Gunicorn ejecuten sweep simultáneamente
+        lock = db.session.execute(_text('SELECT pg_try_advisory_lock(2014)')).scalar()
+        if not lock:
+            logger.info('[RECONCILIACION] Lock no disponible — omitiendo sweep')
+            return
 
         # Tareas VERIFICADO o DESPACHADO con siesa_triggered=False.
         # No se exige bultos: tareas bloqueadas por guard anti-duplicado en cerrar_packing

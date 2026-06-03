@@ -41,7 +41,7 @@ def _solo_admin():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol == Roles.ADMIN else None
+    return u if u and u.activo and u.rol == Roles.ADMIN else None
 
 
 def _es_admin_o_jefe():
@@ -51,7 +51,7 @@ def _es_admin_o_jefe():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol in Roles.ALMACEN else None
+    return u if u and u.activo and u.rol in Roles.ALMACEN else None
 
 
 def _es_gestion():
@@ -61,7 +61,7 @@ def _es_gestion():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol in Roles.GESTION else None
+    return u if u and u.activo and u.rol in Roles.GESTION else None
 
 
 def _es_personal_almacen():
@@ -71,7 +71,7 @@ def _es_personal_almacen():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol not in (Roles.CONDUCTOR, Roles.TIENDA) else None
+    return u if u and u.activo and u.rol not in (Roles.CONDUCTOR, Roles.TIENDA) else None
 
 
 def _es_compras():
@@ -81,7 +81,7 @@ def _es_compras():
     except (TypeError, ValueError):
         return None
     u = Usuario.query.get(uid)
-    return u if u and u.rol in Roles.COMPRAS_ROLES else None
+    return u if u and u.activo and u.rol in Roles.COMPRAS_ROLES else None
 
 
 def _get_uid():

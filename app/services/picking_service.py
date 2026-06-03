@@ -230,8 +230,8 @@ class PickingService:
                 ).first()
                 if _sync_pk:
                     _PPSync.sincronizar(_sync_pk.id)
-        except Exception:
-            pass  # Sync no bloquea el flujo de picking
+        except Exception as _e_sync:
+            logger.warning('[PICKING] Sync packing falló — cantidad_esperada puede estar desactualizada: %s', _e_sync)
 
         return tarea
 
@@ -504,8 +504,8 @@ class PickingService:
                 ).first()
                 if _sync_pk_rp:
                     _PPSyncRP.sincronizar(_sync_pk_rp.id)
-        except Exception:
-            pass  # Sync no bloquea el flujo de picking
+        except Exception as _e_sync_rp:
+            logger.warning('[PICKING] Sync packing (reportar_problema) falló: %s', _e_sync_rp)
 
         return {
             'ok': True,

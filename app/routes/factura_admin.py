@@ -31,6 +31,7 @@ def debug_tablas():
         )
         return jsonify(res), 200
     except Exception as e:
+        logger.exception('[DEBUG] Error en debug_tablas')
         return jsonify({'error': str(e)}), 500
 
 
@@ -65,6 +66,7 @@ def debug_campos_fe(packing_id: int):
             'primera_fila': lineas[0] if lineas else None,
         }), 200
     except Exception as e:
+        logger.exception('[DEBUG] Error en debug_campos_fe packing_id=%s', packing_id)
         return jsonify({'error': str(e)}), 500
 
 

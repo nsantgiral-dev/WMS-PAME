@@ -9,6 +9,7 @@ POST /api/siesa/confirmar-despacho    → dispara RemisionPedido (142945) a Sies
 POST /api/siesa/iniciar-recepcion     → crea e inicia una recepción desde una OC
 """
 import json
+import logging
 import os
 from datetime import datetime
 from flask import Blueprint, request, jsonify
@@ -19,6 +20,7 @@ from app.services.picking_service import PickingService
 from app.services.packing_service import PackingService
 from app.services.recepcion_service import RecepcionService
 
+logger = logging.getLogger(__name__)
 siesa_bp = Blueprint('siesa', __name__)
 
 
@@ -371,6 +373,7 @@ def debug_monitor_facturas():
             'raw': resultado
         }), 200
     except Exception as e:
+        logger.exception('[DEBUG] Error en debug_monitor_facturas')
         return jsonify({'error': str(e)}), 500
 
 

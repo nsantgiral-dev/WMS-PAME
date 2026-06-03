@@ -226,9 +226,31 @@ class DespachoParialService:
         # Guardar RM en BD ANTES de llamar 142943.
         # Si 142943 falla y la DLQ reintenta, facturar_remision_existente detecta
         # rm_tipo/rm_consec y no vuelve a llamar 142945 — evita RM duplicada en Siesa.
+        # P_EMERGENCY_COMMIT: si el commit falla, Siesa ya creó la RM — sin rm_tipo/rm_consec
+        # en BD el retry llamaría 142945 de nuevo creando una RM DUPLICADA.
         tarea.rm_tipo   = tipo_rm
         tarea.rm_consec = consec_rm
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as _e_rm:
+            db.session.rollback()
+            logger.critical(
+                '[DESPACHO_PARCIAL] Fallo commit rm_tipo/rm_consec — emergency mini-commit '
+                'tarea=%s RM=%s-%s: %s', tarea.id, tipo_rm, consec_rm, _e_rm,
+            )
+            try:
+                tarea = db.session.merge(tarea)
+                tarea.rm_tipo   = tipo_rm
+                tarea.rm_consec = consec_rm
+                db.session.commit()
+            except Exception as _e_rm2:
+                db.session.rollback()
+                logger.critical(
+                    '[DESPACHO_PARCIAL] DOBLE FALLO — rm_tipo/rm_consec NO persistidos '
+                    'tarea=%s RM=%s-%s: %s. RIESGO DE RM DUPLICADA en retry.',
+                    tarea.id, tipo_rm, consec_rm, _e_rm2,
+                )
+                raise
         logger.info(
             '[DESPACHO_PARCIAL] 142945 OK — RM=%s-%s tarea=%s pedido=%s',
             tipo_rm, consec_rm, tarea.id, tarea.numero_pedido_siesa,
@@ -346,13 +368,35 @@ class DespachoParialService:
     @staticmethod
     def _persistir_resultado(tarea, rm_str: str, fe_response: dict) -> dict:
         """Persiste el estado final de la tarea tras despacho exitoso."""
+        from app.models.packing import EstadoPacking
         resultado = {'rm': rm_str, 'fe_response': fe_response}
         tarea.siesa_triggered    = True
         tarea.siesa_triggered_at = datetime.utcnow()
-        tarea.estado             = 'DESPACHADO'
+        tarea.estado             = EstadoPacking.DESPACHADO
         tarea.fecha_despachado   = tarea.fecha_despachado or datetime.utcnow()
         tarea.siesa_response     = json.dumps(resultado)
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as _e_persist:
+            db.session.rollback()
+            logger.critical(
+                '[DESPACHO_PARCIAL] Fallo commit _persistir_resultado — emergency mini-commit '
+                'siesa_triggered tarea=%s: %s', tarea.id, _e_persist,
+            )
+            # P_EMERGENCY_COMMIT: al menos persistir siesa_triggered para bloquear retry duplicado
+            try:
+                tarea = db.session.merge(tarea)
+                tarea.siesa_triggered    = True
+                tarea.siesa_triggered_at = datetime.utcnow()
+                db.session.commit()
+            except Exception as _e_persist2:
+                db.session.rollback()
+                logger.critical(
+                    '[DESPACHO_PARCIAL] DOBLE FALLO — siesa_triggered NO persistido '
+                    'tarea=%s: %s. RIESGO DE FE DUPLICADA en retry.',
+                    tarea.id, _e_persist2,
+                )
+                raise
         logger.info('[DESPACHO_PARCIAL] tarea=%s → %s FE=ok', tarea.id, rm_str)
         return resultado
 

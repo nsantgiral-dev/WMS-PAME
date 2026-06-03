@@ -89,7 +89,7 @@ def register():
     usuario.set_password(data['password'])
 
     db.session.add(usuario)
-    db.session.commit()
+    db.session.flush()  # genera usuario.id sin hacer commit
 
     if _rol_nuevo == 'conductor':
         from app.models.conductor import Conductor
@@ -101,7 +101,14 @@ def register():
                 telefono=(data.get('telefono') or '').strip() or None,
                 usuario_id=usuario.id,
             ))
-            db.session.commit()
+
+    try:
+        db.session.commit()
+    except Exception as _e_reg:
+        db.session.rollback()
+        if 'cedula' in str(_e_reg).lower() or 'conductor' in str(_e_reg).lower():
+            return jsonify({'error': 'Cédula ya registrada en el sistema'}), 409
+        raise
 
     return jsonify(usuario.to_dict()), 201
 

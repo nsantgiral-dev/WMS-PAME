@@ -120,7 +120,10 @@ def _run_dlq_jobs():
         _stuck_sesiones = _SC.query.filter(
             _SC.estado == 'AJUSTANDO',
             _SC.siesa_triggered == False,
-            _SC.fecha_cierre <= _ajustando_cutoff,
+            db.or_(
+                _SC.fecha_cierre <= _ajustando_cutoff,
+                db.and_(_SC.fecha_cierre.is_(None), _SC.fecha_creacion <= _ajustando_cutoff),
+            ),
         ).all()
         for _ss in _stuck_sesiones:
             _tiene_job = SiesaJob.query.filter_by(

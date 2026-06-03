@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from sqlalchemy import func, case, desc
+from sqlalchemy.orm import selectinload, joinedload
 from app.extensions import db
 from app.routes._auth_helpers import _es_compras, Roles
 
@@ -182,7 +183,9 @@ def dock_lock():
     almacen_id = request.args.get('almacen_id', type=int)
     desde = datetime.utcnow() - timedelta(days=dias)
 
-    q = RecepcionMercancia.query.filter(
+    q = RecepcionMercancia.query.options(
+        selectinload(RecepcionMercancia.items).selectinload(ItemRecepcion.producto),
+    ).filter(
         RecepcionMercancia.fecha_creacion >= desde,
         RecepcionMercancia.estado == 'CONFIRMADA',
     )
@@ -272,7 +275,9 @@ def cuarentena():
     ahora = datetime.utcnow()
 
     # 1) Tareas de devolución averiadas (pendientes + completadas recientes)
-    q_dev = TareaDevolucion.query.filter(
+    q_dev = TareaDevolucion.query.options(
+        selectinload(TareaDevolucion.producto),
+    ).filter(
         TareaDevolucion.es_averiado == True,
     )
     if almacen_id:
@@ -366,8 +371,10 @@ def audit_trail():
     if not busqueda:
         return jsonify({'error': 'Parámetro q requerido (OC, proveedor, o código producto)'}), 400
 
-    # Buscar recepciones que matcheen
-    q = RecepcionMercancia.query.filter(
+    # Buscar recepciones que matcheen — eager-load items+producto para evitar N+1
+    q = RecepcionMercancia.query.options(
+        selectinload(RecepcionMercancia.items).selectinload(ItemRecepcion.producto),
+    ).filter(
         RecepcionMercancia.fecha_creacion >= desde,
     )
     if almacen_id:
@@ -384,12 +391,15 @@ def audit_trail():
 
     recepciones = q.order_by(RecepcionMercancia.fecha_creacion.desc()).limit(limite).all()
 
+    # Pre-cargar recepcionistas para evitar N+1 (1 query en vez de 1 por recepción)
+    _rec_ids = {rec.recepcionista_id for rec in recepciones if rec.recepcionista_id}
+    _usr_map = {}
+    if _rec_ids:
+        _usr_map = {u.id: u.nombre for u in Usuario.query.filter(Usuario.id.in_(_rec_ids)).all()}
+
     resultado = []
     for rec in recepciones:
-        recepcionista = None
-        if rec.recepcionista_id:
-            usr = Usuario.query.get(rec.recepcionista_id)
-            recepcionista = usr.nombre if usr else None
+        recepcionista = _usr_map.get(rec.recepcionista_id) if rec.recepcionista_id else None
 
         items_detalle = []
         for item in rec.items:

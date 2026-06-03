@@ -2,7 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy.orm import joinedload, subqueryload
-from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado
+from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado, EstadoTraslado
 from app.models.usuario import Usuario
 from app.routes._auth_helpers import Roles
 from app.services.traslado_service import TrasladoService
@@ -222,7 +222,7 @@ def cancelar_solicitud(id):
             _db.session.rollback()
             logger.error(f'[TRASLADO] Error liberando reservas en {id}: {_e}', exc_info=True)
             return jsonify({'error': f'Error liberando reservas de picking: {_e}'}), 500
-    s.estado = 'CANCELADA'
+    s.estado = EstadoTraslado.CANCELADA
     s.motivo_rechazo = data.get('motivo', 'Cancelada por usuario')
     try:
         db.session.commit()
