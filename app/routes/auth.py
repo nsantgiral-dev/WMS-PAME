@@ -12,6 +12,7 @@ from app.routes._auth_helpers import _solo_admin, Roles  # noqa: F401
 _ROLES_VALIDOS = (
     Roles.ADMIN, Roles.SUPERVISOR, Roles.JEFE_ALMACEN, Roles.GERENTE,
     Roles.OPERARIO, Roles.EMPACADOR, Roles.RECEPCIONISTA, Roles.TIENDA, Roles.CONDUCTOR,
+    Roles.COMPRAS, Roles.PICKER_TRASLADO, Roles.PACKER_TRASLADO,
 )
 
 @auth_bp.route('/login', methods=['POST'])
