@@ -40,17 +40,19 @@ class TrasladoService:
     @staticmethod
     def crear_solicitud(solicitante_id: int, bodega_destino: str,
                         nombre_punto_venta: str, items: list,
+                        bodega_origen: str = None,
                         observaciones: str = None) -> SolicitudTraslado:
         """
         Tienda arma el carrito y crea la solicitud en BORRADOR.
         items: [{producto_id, cantidad_solicitada}]
+        bodega_origen: bodega fuente del traslado (default NB1)
         """
         if not items:
             raise ValueError('La solicitud debe tener al menos un ítem')
 
         solicitud = SolicitudTraslado(
             codigo=TrasladoService._codigo_solicitud(),
-            bodega_origen_siesa=BODEGA_ORIGEN_DEFAULT,
+            bodega_origen_siesa=bodega_origen or BODEGA_ORIGEN_DEFAULT,
             bodega_destino_siesa=bodega_destino,
             nombre_punto_venta=nombre_punto_venta,
             estado=EstadoTraslado.BORRADOR,

@@ -90,8 +90,11 @@ def crear_solicitud():
         return jsonify({'error': 'Sin permiso para crear solicitudes de traslado'}), 403
     data = request.get_json() or {}
 
+    # Destino: siempre la tienda del usuario logueado
     bodega_destino = data.get('bodega_destino_siesa') or (usuario.bodega_siesa_id if usuario else None)
     nombre_pv = data.get('nombre_punto_venta') or (usuario.nombre_punto_venta if usuario else None)
+    # Origen: bodega fuente seleccionada en "Pedir desde" (default NB1)
+    bodega_origen = data.get('bodega_origen_siesa') or None
 
     if not bodega_destino:
         return jsonify({'error': 'bodega_destino_siesa es requerida (o configurar en perfil de usuario)'}), 400
@@ -104,6 +107,7 @@ def crear_solicitud():
             bodega_destino=bodega_destino,
             nombre_punto_venta=nombre_pv,
             items=data['items'],
+            bodega_origen=bodega_origen,
             observaciones=data.get('observaciones'),
         )
         return jsonify(s.to_dict()), 201
