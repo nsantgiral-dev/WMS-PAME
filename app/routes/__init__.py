@@ -21,6 +21,7 @@ def register_routes(app):
     from app.routes.remision_admin import remision_admin_bp
     from app.routes.factura_admin import factura_admin_bp
     from app.routes.despacho_parcial import despacho_parcial_bp
+    from app.routes.compras import compras_bp
 
     app.register_blueprint(health_bp, url_prefix='/api/health')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -44,3 +45,4 @@ def register_routes(app):
     app.register_blueprint(remision_admin_bp, url_prefix='/api/admin/remision')
     app.register_blueprint(factura_admin_bp, url_prefix='/api/admin/factura')
     app.register_blueprint(despacho_parcial_bp, url_prefix='/api/despacho_parcial')
+    app.register_blueprint(compras_bp, url_prefix='/api/compras')

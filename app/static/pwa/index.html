@@ -374,6 +374,7 @@
     #pantalla-packer-traslado { display: none; min-height: 100vh; }
     #pantalla-admin    { display: none; min-height: 100vh; }
     #pantalla-recepcion { display: none; min-height: 100vh; }
+    #pantalla-compras   { display: none; min-height: 100vh; }
 
     /* ── Barra de usuario ── */
     .operario-bar {
@@ -591,6 +592,9 @@
 
       /* ── Conductor: centrado + scroll propio ── */
       #pantalla-conductor { max-width: 760px; margin: 0 auto; overflow-y: auto; height: 100vh; }
+
+      /* ── Compras: centrado + scroll propio ── */
+      #pantalla-compras { max-width: 900px; margin: 0 auto; overflow-y: auto; height: 100vh; }
 
       /* ══════════════════════════════════════════════
          ADMIN — Flex layout: sidebar fijo + contenido scrollable
@@ -835,6 +839,7 @@
       <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
       <div class="nav-tab" onclick="tab('tab-traslados')">🏪 Traslados</div>
       <div class="nav-tab" onclick="tab('tab-reposicion')">📦 Reposición</div>
+      <div class="nav-tab" onclick="tab('tab-compras')">🛒 Compras</div>
     </div>
 
     <!-- Contenido principal scrollable -->
@@ -1662,9 +1667,214 @@
     </div>
   </div><!-- /tab-reposicion -->
 
+  <!-- ═══════════ TAB COMPRAS ═══════════ -->
+  <div id="tab-compras" class="admin-content" style="display:none;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">🛒 Panel de Compras</div>
+    <div style="font-size:12px;color:var(--tx3);margin-bottom:12px;">Verdad física del WMS — ve los datos, actúa en Siesa.</div>
+
+    <!-- KPIs rápidos -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;">
+      <div class="kpi-card">
+        <div class="kpi-valor" id="comp-kpi-picks">—</div>
+        <div class="kpi-label">Picks 7d</div>
+      </div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="compSubtab('dock')">
+        <div class="kpi-valor" id="comp-kpi-rechazos" style="color:#f59e0b;">—</div>
+        <div class="kpi-label">Rechazos 30d</div>
+      </div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="compSubtab('cuarentena')">
+        <div class="kpi-valor" id="comp-kpi-averias" style="color:#ef4444;">—</div>
+        <div class="kpi-label">Averías pend.</div>
+      </div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="compSubtab('audit')">
+        <div class="kpi-valor" id="comp-kpi-auditorias" style="color:#8b5cf6;">—</div>
+        <div class="kpi-label">Audit. críticas</div>
+      </div>
+    </div>
+
+    <!-- Sub-tabs -->
+    <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;flex-wrap:wrap;">
+      <div id="comp-sub-velocity" onclick="compSubtab('velocity')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;background:var(--pm);color:#fff;">
+        Velocity + ABC
+      </div>
+      <div id="comp-sub-dock" onclick="compSubtab('dock')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        Dock Lock
+      </div>
+      <div id="comp-sub-cuarentena" onclick="compSubtab('cuarentena')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        Cuarentena
+      </div>
+      <div id="comp-sub-audit" onclick="compSubtab('audit')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        Audit Trail
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: VELOCITY + ABC ──────────────────────────────── -->
+    <div id="comp-sec-velocity">
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+        <select id="comp-vel-dias" onchange="compCargarVelocity()"
+          style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <option value="7">7 días</option>
+          <option value="15">15 días</option>
+          <option value="30" selected>30 días</option>
+          <option value="60">60 días</option>
+        </select>
+        <select id="comp-vel-abc" onchange="compFiltrarVelocity()"
+          style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <option value="">Todos ABC</option>
+          <option value="A">Solo A</option>
+          <option value="B">Solo B</option>
+          <option value="C">Solo C</option>
+        </select>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tx3);cursor:pointer;">
+          <input type="checkbox" id="comp-vel-alertas" onchange="compFiltrarVelocity()"> Solo alertas
+        </label>
+      </div>
+      <div id="comp-lista-velocity">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando velocity...</div>
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: DOCK LOCK ───────────────────────────────────── -->
+    <div id="comp-sec-dock" style="display:none;">
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+        <select id="comp-dock-dias" onchange="compCargarDock()"
+          style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <option value="7">7 días</option>
+          <option value="15">15 días</option>
+          <option value="30" selected>30 días</option>
+          <option value="60">60 días</option>
+        </select>
+      </div>
+      <div id="comp-dock-stats" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
+        <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
+          <div style="font-size:22px;font-weight:800;color:#ef4444;" id="dock-total-prob">—</div>
+          <div style="font-size:11px;color:var(--tx3);">Recepciones con problema</div>
+        </div>
+        <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
+          <div style="font-size:22px;font-weight:800;color:#f59e0b;" id="dock-total-excesos">—</div>
+          <div style="font-size:11px;color:var(--tx3);">Items con exceso</div>
+        </div>
+        <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;text-align:center;">
+          <div style="font-size:22px;font-weight:800;color:#3b82f6;" id="dock-total-faltantes">—</div>
+          <div style="font-size:11px;color:var(--tx3);">Items con faltante</div>
+        </div>
+      </div>
+      <div id="comp-lista-dock">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando dock lock...</div>
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: CUARENTENA / AVERÍAS ────────────────────────── -->
+    <div id="comp-sec-cuarentena" style="display:none;">
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px;">
+        <div style="background:#110a0a;border:1px solid #7f1d1d;border-radius:10px;padding:14px;text-align:center;">
+          <div style="font-size:26px;font-weight:800;color:#f87171;" id="cuar-pendientes">—</div>
+          <div style="font-size:11px;color:#fca5a5;">Pendientes de gestión</div>
+        </div>
+        <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:14px;text-align:center;">
+          <div style="font-size:26px;font-weight:800;color:var(--tx);" id="cuar-productos">—</div>
+          <div style="font-size:11px;color:var(--tx3);">Productos en zona averías</div>
+        </div>
+      </div>
+      <div id="comp-lista-cuarentena">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando cuarentena...</div>
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: AUDIT TRAIL ─────────────────────────────────── -->
+    <div id="comp-sec-audit" style="display:none;">
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+        <input type="text" id="comp-audit-buscar" placeholder="Buscar por OC, proveedor, remisión..."
+          style="flex:1;min-width:200px;padding:10px 14px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;"
+          onkeydown="if(event.key==='Enter')compCargarAudit()">
+        <button onclick="compCargarAudit()"
+          style="padding:10px 18px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+          Buscar
+        </button>
+        <select id="comp-audit-dias" onchange="compCargarAudit()"
+          style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <option value="30">30 días</option>
+          <option value="60">60 días</option>
+          <option value="90" selected>90 días</option>
+          <option value="180">180 días</option>
+        </select>
+      </div>
+      <div id="comp-lista-audit">
+        <div style="text-align:center;padding:30px;color:#555;">Escribe una OC, proveedor o remisión y presiona Buscar</div>
+      </div>
+    </div>
+  </div><!-- /tab-compras -->
+
     </div><!-- /admin-main -->
     </div><!-- /admin-body -->
   </div><!-- /pantalla-admin -->
+
+  <!-- COMPRAS — Pantalla dedicada para rol compras -->
+  <div id="pantalla-compras" style="display:none;min-height:100vh;background:var(--bg);">
+    <div class="header">
+      <div class="header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:13px;color:#22c55e;" id="conexion-status-compras">● Online</span>
+        <button id="btn-theme-comp" class="btn-logout" onclick="toggleTheme()" style="font-size:16px;padding:6px 10px;">🌙</button>
+        <button class="btn-logout" onclick="salir()">Salir</button>
+      </div>
+    </div>
+    <div class="operario-bar">
+      <div>
+        <div class="operario-nombre" id="compras-nombre">—</div>
+        <div class="operario-rol" id="compras-rol">Compras</div>
+      </div>
+    </div>
+    <div style="padding:14px;max-width:900px;margin:0 auto;">
+
+      <!-- KPIs rápidos -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;">
+        <div class="kpi-card">
+          <div class="kpi-valor" id="comp2-kpi-picks">—</div>
+          <div class="kpi-label">Picks 7d</div>
+        </div>
+        <div class="kpi-card" style="cursor:pointer;" onclick="compSubtab2('dock')">
+          <div class="kpi-valor" id="comp2-kpi-rechazos" style="color:#f59e0b;">—</div>
+          <div class="kpi-label">Rechazos 30d</div>
+        </div>
+        <div class="kpi-card" style="cursor:pointer;" onclick="compSubtab2('cuarentena')">
+          <div class="kpi-valor" id="comp2-kpi-averias" style="color:#ef4444;">—</div>
+          <div class="kpi-label">Averías pend.</div>
+        </div>
+        <div class="kpi-card" style="cursor:pointer;" onclick="compSubtab2('audit')">
+          <div class="kpi-valor" id="comp2-kpi-auditorias" style="color:#8b5cf6;">—</div>
+          <div class="kpi-label">Audit. críticas</div>
+        </div>
+      </div>
+
+      <!-- Sub-tabs -->
+      <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;flex-wrap:wrap;">
+        <div id="comp2-sub-velocity" onclick="compSubtab2('velocity')"
+          style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;background:var(--pm);color:#fff;">
+          Velocity + ABC
+        </div>
+        <div id="comp2-sub-dock" onclick="compSubtab2('dock')"
+          style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+          Dock Lock
+        </div>
+        <div id="comp2-sub-cuarentena" onclick="compSubtab2('cuarentena')"
+          style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+          Cuarentena
+        </div>
+        <div id="comp2-sub-audit" onclick="compSubtab2('audit')"
+          style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+          Audit Trail
+        </div>
+      </div>
+
+      <!-- Contenido (reutiliza las mismas funciones render con target diferente) -->
+      <div id="comp2-contenido"></div>
+    </div>
+  </div><!-- /pantalla-compras -->
 
   <!-- TIENDA — Pantalla punto de venta -->
   <div id="pantalla-tienda" style="display:none;min-height:100vh;background:var(--bg);">

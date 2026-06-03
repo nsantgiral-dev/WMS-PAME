@@ -13,6 +13,7 @@ class Roles:
     RECEPCIONISTA     = 'recepcionista'
     TIENDA            = 'tienda'
     CONDUCTOR         = 'conductor'
+    COMPRAS           = 'compras'
     PICKER_TRASLADO   = 'picker_traslado'   # picking de solicitudes de traslado
     PACKER_TRASLADO   = 'packer_traslado'   # packing/verificacion de solicitudes de traslado
 
@@ -23,6 +24,7 @@ class Roles:
     SUPERVISION    = (ADMIN, SUPERVISOR, JEFE_ALMACEN)
     PACKING_ROLES  = (ADMIN, SUPERVISOR, EMPACADOR)
     RECEPCION_ROLES = (ADMIN, JEFE_ALMACEN, RECEPCIONISTA)
+    COMPRAS_ROLES  = (ADMIN, JEFE_ALMACEN, GERENTE, COMPRAS)
     LEAD           = (ADMIN, SUPERVISOR)
     TRASLADO_OPS   = (PICKER_TRASLADO, PACKER_TRASLADO)
 
@@ -70,6 +72,16 @@ def _es_personal_almacen():
         return None
     u = Usuario.query.get(uid)
     return u if u and u.rol not in (Roles.CONDUCTOR, Roles.TIENDA) else None
+
+
+def _es_compras():
+    """Retorna el usuario si tiene acceso a paneles de compras."""
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    return u if u and u.rol in Roles.COMPRAS_ROLES else None
 
 
 def _get_uid():
