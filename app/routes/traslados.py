@@ -698,6 +698,54 @@ def operarios_disponibles():
     }), 200
 
 
+@traslados_bp.route('/<int:id>/items-picking', methods=['GET'])
+@jwt_required()
+def items_picking_detail(id):
+    """Items del traslado enriquecidos con ubicación real de TareaPicking — para el HUD de picking/packing."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    _roles = ('admin', 'supervisor', 'gerente', 'jefe_almacen', 'operario', 'empacador', 'tienda')
+    if not usuario or usuario.rol not in _roles:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    s = SolicitudTraslado.query\
+        .options(subqueryload(SolicitudTraslado.items)
+                 .joinedload(ItemSolicitudTraslado.producto))\
+        .get_or_404(id)
+
+    from app.models.picking import TareaPicking
+    from sqlalchemy.orm import joinedload as _jl
+    tareas = (TareaPicking.query
+              .options(_jl(TareaPicking.ubicacion))
+              .filter_by(referencia_documento=s.codigo, tipo_documento='TRASLADO')
+              .all())
+    tarea_por_producto = {}
+    for t in tareas:
+        if t.producto_id not in tarea_por_producto:
+            tarea_por_producto[t.producto_id] = t
+
+    result = []
+    for item in s.items:
+        t = tarea_por_producto.get(item.producto_id)
+        result.append({
+            'item_id': item.id,
+            'producto_id': item.producto_id,
+            'producto_codigo': item.producto.codigo if item.producto else '',
+            'producto_nombre': item.producto.nombre if item.producto else '',
+            'producto_codigo_barras': (item.producto.codigo_barras or '') if item.producto else '',
+            'ubicacion': t.ubicacion.codigo if t and t.ubicacion else 'BODEGA',
+            'cantidad_aprobada': item.cantidad_aprobada or item.cantidad_solicitada or 0,
+            'cantidad_enviada': item.cantidad_enviada or 0,
+            'tarea_picking_id': t.id if t else None,
+            'tarea_picking_estado': t.estado if t else None,
+            'cantidad_recogida': t.cantidad_recogida if t else 0,
+        })
+    return jsonify({'solicitud_id': id, 'codigo': s.codigo, 'items': result}), 200
+
+
 @traslados_bp.route('/stock-disponible', methods=['GET'])
 @jwt_required()
 def stock_disponible():

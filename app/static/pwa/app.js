@@ -1678,6 +1678,9 @@ async function procesarScan(codigo) {
   if (EMP_TAREA && document.getElementById('emp-hud')?.classList.contains('activo')) {
     await empProcesarEscaneo(codigo); return;
   }
+  // HUDs de requisiciones (picking y packing de traslados)
+  if (REQ_PICKING)  { await reqPickingScan(codigo); return; }
+  if (REQ_PACKING)  { reqPackingScan(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
 
@@ -8905,16 +8908,16 @@ function _renderRequisicionCard(r) {
            ✓ Aprobar
          </button>`
     : r.estado === 'EN_PICKING'
-      ? `<button onclick="confirmarPickingTraslado(${r.id})"
+      ? `<button onclick="reqAbrirPickingHUD(${r.id})"
            style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
                   background:#1d4ed8;color:#fff;border:1px solid #1d4ed8;">
-           ✅ Confirmar picking
+           🔍 Hacer picking
          </button>`
     : r.estado === 'EN_PACKING'
-      ? `<button onclick="confirmarPackingTraslado(${r.id})"
+      ? `<button onclick="reqAbrirPackingHUD(${r.id})"
            style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
                   background:#ea580c;color:#fff;border:1px solid #ea580c;">
-           📦 Confirmar empaque
+           📦 Hacer packing
          </button>`
     : r.estado === 'PREPARADO'
       ? `<button onclick="despacharRequisicion(${r.id})"
@@ -8979,7 +8982,7 @@ async function aprobarRequisicion(id) {
     });
     const d = await r.json();
     if (!r.ok) { alerta(d.error || 'Error al aprobar', 'error'); return; }
-    alerta('Requisición aprobada — tareas de picking creadas en Bodega ✓', 'exito');
+    alerta('Requisición aprobada — usa el botón "Hacer picking" para iniciar ✓', 'exito');
     await cargarRequisiciones();
   } catch (e) {
     alerta('Error de conexión', 'error');
@@ -9016,4 +9019,329 @@ async function confirmarPackingTraslado(id) {
   } catch (e) {
     alerta('Error de conexión', 'error');
   }
+}
+
+// ─── REQUISICIONES — HUD PICKING ─────────────────────────────────────────────
+// Flujo independiente de Pedidos: picking ítem por ítem dentro del módulo
+// Requisiciones. No toca el tab Bodega ni las funciones de pedidos.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let REQ_PICKING = null;
+// { solicitudId, codigo, items:[{item_id,producto_id,producto_codigo,producto_nombre,
+//   producto_codigo_barras,ubicacion,cantidad_aprobada,cantidad_enviada,
+//   tarea_picking_id,cantidad_recogida}], idx, counts:{item_id:n} }
+
+async function reqAbrirPickingHUD(solicitudId) {
+  try {
+    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
+    if (!d.items || !d.items.length) { alerta('Sin ítems para picking', 'error'); return; }
+    REQ_PICKING = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
+    for (const it of d.items) REQ_PICKING.counts[it.item_id] = it.cantidad_recogida || 0;
+    _reqPickingRender();
+  } catch (e) { alerta('Error cargando ítems de picking', 'error'); }
+}
+
+function _reqPickingRender() {
+  if (!REQ_PICKING) return;
+  const { items, idx, counts, codigo } = REQ_PICKING;
+  const item    = items[idx];
+  const cant    = counts[item.item_id] || 0;
+  const req     = item.cantidad_aprobada || 0;
+  const pct     = req > 0 ? Math.min(cant / req * 100, 100) : 0;
+  const esUltimo    = idx === items.length - 1;
+  const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
+  const colorCont  = cant >= req ? '#22c55e' : '#fff';
+  const colorBarra = cant >= req ? '#22c55e' : (cant > 0 ? '#f59e0b' : '#4b5563');
+  const colorBtn   = cant >= req ? '#16a34a' : '#7c3aed';
+  const labelBtn   = esUltimo ? '✓ Confirmar picking' : '→ Siguiente ítem';
+
+  const existente = document.getElementById('req-picking-hud');
+  const hud = existente || document.createElement('div');
+  hud.id = 'req-picking-hud';
+  hud.style.cssText = 'position:fixed;inset:0;background:#0a0a0a;z-index:8000;overflow-y:auto;';
+  hud.innerHTML = `
+    <div style="padding:16px;max-width:480px;margin:0 auto;padding-bottom:30px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div style="background:#7c3aed;color:#fff;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;">
+          🔄 TRANSFERENCIA — PICKING
+        </div>
+        <button onclick="reqCerrarPickingHUD()" style="background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;">✕</button>
+      </div>
+      <div style="text-align:center;font-size:11px;color:#555;margin-bottom:14px;">
+        Ítem ${idx + 1} de ${items.length} · <span style="color:#7c3aed;">${codigo}</span>
+      </div>
+      <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
+        <div style="font-size:13px;color:#666;letter-spacing:1px;">UBICACIÓN</div>
+        <div style="font-size:44px;font-weight:900;letter-spacing:2px;">${item.ubicacion}</div>
+      </div>
+      <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
+        <div style="font-size:13px;color:#666;letter-spacing:1px;">PRODUCTO</div>
+        <div style="font-size:26px;font-weight:700;">${item.producto_codigo}</div>
+        <div style="font-size:15px;color:#aaa;">${item.producto_nombre}</div>
+      </div>
+      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:13px;color:#666;letter-spacing:1px;">CANTIDAD</div>
+        <div id="req-pick-contador" style="font-size:64px;font-weight:900;color:${colorCont};">${cant}/${req}</div>
+        <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;overflow:hidden;">
+          <div id="req-pick-barra" style="height:100%;background:${colorBarra};border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:10px;">
+        <button onclick="reqPickingDelta(-1)" style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">−</button>
+        <button onclick="reqPickingDelta(1)"  style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">+</button>
+      </div>
+      ${puedeCamara ? `
+      <button onclick="abrirCamara('req-pick-lector','req-pick-cambox',reqPickingScan)"
+        style="width:100%;padding:14px;font-size:15px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+        📷 Escanear con cámara
+      </button>
+      <div id="req-pick-cambox" style="display:none;margin-bottom:10px;">
+        <div id="req-pick-lector" style="border-radius:12px;overflow:hidden;"></div>
+        <button onclick="cerrarCamara('req-pick-cambox')" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
+      </div>` : ''}
+      <button onclick="reqPickingSiguiente()"
+        style="width:100%;padding:20px;font-size:20px;font-weight:700;background:${colorBtn};color:#fff;border:none;border-radius:16px;cursor:pointer;margin-bottom:10px;">
+        ${labelBtn}
+      </button>
+      <button onclick="reqPickingManual()"
+        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;">
+        ✓ Ingresar cantidad manual
+      </button>
+    </div>`;
+  if (!existente) document.body.appendChild(hud);
+}
+
+function reqPickingDelta(delta) {
+  if (!REQ_PICKING) return;
+  const item  = REQ_PICKING.items[REQ_PICKING.idx];
+  const actual = REQ_PICKING.counts[item.item_id] || 0;
+  const nuevo  = Math.max(0, Math.min(actual + delta, item.cantidad_aprobada));
+  REQ_PICKING.counts[item.item_id] = nuevo;
+  const contEl = document.getElementById('req-pick-contador');
+  const barEl  = document.getElementById('req-pick-barra');
+  if (contEl) { contEl.textContent = `${nuevo}/${item.cantidad_aprobada}`; contEl.style.color = nuevo >= item.cantidad_aprobada ? '#22c55e' : '#fff'; }
+  if (barEl) {
+    const pct = item.cantidad_aprobada > 0 ? Math.min(nuevo / item.cantidad_aprobada * 100, 100) : 0;
+    barEl.style.width = pct + '%';
+    barEl.style.background = nuevo >= item.cantidad_aprobada ? '#22c55e' : (nuevo > 0 ? '#f59e0b' : '#4b5563');
+  }
+}
+
+async function reqPickingScan(codigo) {
+  if (!REQ_PICKING) return;
+  const item = REQ_PICKING.items[REQ_PICKING.idx];
+  vibrar();
+  if (item.tarea_picking_id) {
+    try {
+      const r = await post('/api/mobile/escanear', { codigo, tarea_id: item.tarea_picking_id, tipo: 'PICKING' });
+      if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
+      REQ_PICKING.counts[item.item_id] = r.cantidad_actual;
+      _reqPickingRender();
+      if (r.completado) beepDone(); else beepOk();
+    } catch (e) { alerta('Error de escaneo', 'error'); }
+  } else {
+    const limpio  = (codigo || '').trim().toUpperCase();
+    const validos = [item.producto_codigo, item.producto_codigo_barras].filter(Boolean).map(c => c.toUpperCase());
+    if (!validos.includes(limpio)) { beepError(); alerta(`Código incorrecto — escanea ${item.producto_codigo}`, 'error'); return; }
+    beepOk();
+    reqPickingDelta(1);
+  }
+}
+
+function reqPickingManual() {
+  if (!REQ_PICKING) return;
+  const item    = REQ_PICKING.items[REQ_PICKING.idx];
+  const cantStr = prompt(`¿Cuántas unidades de ${item.producto_codigo} recogiste? (máx. ${item.cantidad_aprobada})`);
+  if (cantStr === null) return;
+  const cant = parseInt(cantStr, 10);
+  if (isNaN(cant) || cant < 0 || cant > item.cantidad_aprobada) { alerta(`Ingresa un número entre 0 y ${item.cantidad_aprobada}`, 'error'); return; }
+  REQ_PICKING.counts[item.item_id] = cant;
+  _reqPickingRender();
+}
+
+async function reqPickingSiguiente() {
+  if (!REQ_PICKING) return;
+  if (REQ_PICKING.idx < REQ_PICKING.items.length - 1) { REQ_PICKING.idx++; _reqPickingRender(); return; }
+  await _reqPickingConfirmar();
+}
+
+async function _reqPickingConfirmar() {
+  if (!REQ_PICKING) return;
+  const { solicitudId, items, counts } = REQ_PICKING;
+  const items_confirmados = items.map(i => ({ id: i.item_id, cantidad_confirmada: counts[i.item_id] || 0 }));
+  try {
+    const r = await fetch(API + `/api/traslados/${solicitudId}/confirmar-picking`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items_confirmados })
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al confirmar picking', 'error'); return; }
+    beepDone();
+    alerta('Picking confirmado — pendiente de verificar empaque 📦', 'exito');
+    reqCerrarPickingHUD();
+    await cargarRequisiciones();
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+function reqCerrarPickingHUD() {
+  cerrarCamara('req-pick-cambox');
+  document.getElementById('req-picking-hud')?.remove();
+  REQ_PICKING = null;
+}
+
+
+// ─── REQUISICIONES — HUD PACKING ─────────────────────────────────────────────
+
+let REQ_PACKING = null;
+// { solicitudId, codigo, items, idx, counts:{item_id:n} }
+
+async function reqAbrirPackingHUD(solicitudId) {
+  try {
+    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
+    if (!d.items || !d.items.length) { alerta('Sin ítems para verificar', 'error'); return; }
+    REQ_PACKING = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
+    for (const it of d.items) REQ_PACKING.counts[it.item_id] = 0;
+    _reqPackingRender();
+  } catch (e) { alerta('Error cargando ítems de empaque', 'error'); }
+}
+
+function _reqPackingRender() {
+  if (!REQ_PACKING) return;
+  const { items, idx, counts, codigo } = REQ_PACKING;
+  const item    = items[idx];
+  const cant    = counts[item.item_id] || 0;
+  const req     = item.cantidad_enviada || item.cantidad_aprobada || 0;
+  const pct     = req > 0 ? Math.min(cant / req * 100, 100) : 0;
+  const esUltimo    = idx === items.length - 1;
+  const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
+  const colorCont  = cant >= req ? '#22c55e' : '#fff';
+  const colorBarra = cant >= req ? '#22c55e' : (cant > 0 ? '#f59e0b' : '#4b5563');
+  const colorBtn   = cant >= req ? '#16a34a' : '#ea580c';
+  const labelBtn   = esUltimo ? '📦 Confirmar empaque' : '→ Siguiente ítem';
+
+  const existente = document.getElementById('req-packing-hud');
+  const hud = existente || document.createElement('div');
+  hud.id = 'req-packing-hud';
+  hud.style.cssText = 'position:fixed;inset:0;background:#0a0a0a;z-index:8000;overflow-y:auto;';
+  hud.innerHTML = `
+    <div style="padding:16px;max-width:480px;margin:0 auto;padding-bottom:30px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <div style="background:#ea580c;color:#fff;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;">
+          🔄 TRANSFERENCIA — PACKING
+        </div>
+        <button onclick="reqCerrarPackingHUD()" style="background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;">✕</button>
+      </div>
+      <div style="text-align:center;font-size:11px;color:#555;margin-bottom:14px;">
+        Ítem ${idx + 1} de ${items.length} · <span style="color:#ea580c;">${codigo}</span>
+      </div>
+      <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
+        <div style="font-size:13px;color:#666;letter-spacing:1px;">ZONA</div>
+        <div style="font-size:44px;font-weight:900;letter-spacing:2px;">PACKING</div>
+      </div>
+      <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
+        <div style="font-size:13px;color:#666;letter-spacing:1px;">PRODUCTO</div>
+        <div style="font-size:26px;font-weight:700;">${item.producto_codigo}</div>
+        <div style="font-size:15px;color:#aaa;">${item.producto_nombre}</div>
+        ${req > 0 ? `<div style="margin-top:6px;font-size:12px;color:#666;">Picking confirmó: <span style="color:#ea580c;font-weight:700;">${req} und</span></div>` : ''}
+      </div>
+      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
+        <div style="font-size:13px;color:#666;letter-spacing:1px;">VERIFICAR</div>
+        <div id="req-pack-contador" style="font-size:64px;font-weight:900;color:${colorCont};">${cant}/${req}</div>
+        <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;overflow:hidden;">
+          <div id="req-pack-barra" style="height:100%;background:${colorBarra};border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:10px;">
+        <button onclick="reqPackingDelta(-1)" style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">−</button>
+        <button onclick="reqPackingDelta(1)"  style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">+</button>
+      </div>
+      ${puedeCamara ? `
+      <button onclick="abrirCamara('req-pack-lector','req-pack-cambox',reqPackingScan)"
+        style="width:100%;padding:14px;font-size:15px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
+        📷 Escanear con cámara
+      </button>
+      <div id="req-pack-cambox" style="display:none;margin-bottom:10px;">
+        <div id="req-pack-lector" style="border-radius:12px;overflow:hidden;"></div>
+        <button onclick="cerrarCamara('req-pack-cambox')" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
+      </div>` : ''}
+      <button onclick="reqPackingSiguiente()"
+        style="width:100%;padding:20px;font-size:20px;font-weight:700;background:${colorBtn};color:#fff;border:none;border-radius:16px;cursor:pointer;margin-bottom:10px;">
+        ${labelBtn}
+      </button>
+      <button onclick="reqPackingManual()"
+        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;">
+        ✓ Ingresar cantidad manual
+      </button>
+    </div>`;
+  if (!existente) document.body.appendChild(hud);
+}
+
+function reqPackingDelta(delta) {
+  if (!REQ_PACKING) return;
+  const item  = REQ_PACKING.items[REQ_PACKING.idx];
+  const max   = item.cantidad_enviada || item.cantidad_aprobada || 0;
+  const actual = REQ_PACKING.counts[item.item_id] || 0;
+  const nuevo  = Math.max(0, Math.min(actual + delta, max));
+  REQ_PACKING.counts[item.item_id] = nuevo;
+  const contEl = document.getElementById('req-pack-contador');
+  const barEl  = document.getElementById('req-pack-barra');
+  if (contEl) { contEl.textContent = `${nuevo}/${max}`; contEl.style.color = nuevo >= max ? '#22c55e' : '#fff'; }
+  if (barEl) {
+    const pct = max > 0 ? Math.min(nuevo / max * 100, 100) : 0;
+    barEl.style.width = pct + '%';
+    barEl.style.background = nuevo >= max ? '#22c55e' : (nuevo > 0 ? '#f59e0b' : '#4b5563');
+  }
+}
+
+function reqPackingScan(codigo) {
+  if (!REQ_PACKING) return;
+  const item   = REQ_PACKING.items[REQ_PACKING.idx];
+  const limpio  = (codigo || '').trim().toUpperCase();
+  const validos = [item.producto_codigo, item.producto_codigo_barras].filter(Boolean).map(c => c.toUpperCase());
+  if (!validos.includes(limpio)) { beepError(); alerta(`Código incorrecto — escanea ${item.producto_codigo}`, 'error'); return; }
+  vibrar(); beepOk();
+  reqPackingDelta(1);
+}
+
+function reqPackingManual() {
+  if (!REQ_PACKING) return;
+  const item    = REQ_PACKING.items[REQ_PACKING.idx];
+  const max     = item.cantidad_enviada || item.cantidad_aprobada || 0;
+  const cantStr = prompt(`¿Cuántas unidades de ${item.producto_codigo} verificaste? (máx. ${max})`);
+  if (cantStr === null) return;
+  const cant = parseInt(cantStr, 10);
+  if (isNaN(cant) || cant < 0 || cant > max) { alerta(`Ingresa un número entre 0 y ${max}`, 'error'); return; }
+  REQ_PACKING.counts[item.item_id] = cant;
+  _reqPackingRender();
+}
+
+async function reqPackingSiguiente() {
+  if (!REQ_PACKING) return;
+  if (REQ_PACKING.idx < REQ_PACKING.items.length - 1) { REQ_PACKING.idx++; _reqPackingRender(); return; }
+  await _reqPackingConfirmar();
+}
+
+async function _reqPackingConfirmar() {
+  if (!REQ_PACKING) return;
+  const { solicitudId } = REQ_PACKING;
+  try {
+    const r = await fetch(API + `/api/traslados/${solicitudId}/confirmar-packing`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al confirmar empaque', 'error'); return; }
+    beepDone();
+    alerta('Empaque verificado — listo para despachar ✓', 'exito');
+    reqCerrarPackingHUD();
+    await cargarRequisiciones();
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+function reqCerrarPackingHUD() {
+  cerrarCamara('req-pack-cambox');
+  document.getElementById('req-packing-hud')?.remove();
+  REQ_PACKING = null;
 }
