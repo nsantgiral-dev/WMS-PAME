@@ -216,6 +216,54 @@ class TrasladoService:
                 if item.cantidad_enviada is None:
                     item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
+        # ── Crear TareaPacking unificada (ST) ────────────────────────────────
+        # El empacador la verá en la misma cola que los PD, con etiqueta [TRASLADO].
+        # Solo se crea si no existe ya una (idempotente en caso de reintento).
+        from app.models.packing import TareaPacking, ItemPacking
+        from app.models.picking import TareaPicking as _TP, EstadoPicking as _EP2
+        import uuid as _uuid
+
+        packing_existente = TareaPacking.query.filter_by(solicitud_id=s.id).first()
+        if not packing_existente:
+            almacen_obj = Almacen.query.filter_by(
+                bodega_siesa_id=s.bodega_origen_siesa
+            ).first()
+            almacen_id_pk = almacen_obj.id if almacen_obj else None
+
+            tareas_ok = _TP.query.filter_by(
+                referencia_documento=s.codigo,
+                tipo_documento='TRASLADO',
+                estado=_EP2.COMPLETADO,
+            ).all()
+            ubicacion_por_prod = {
+                t.producto_id: t.ubicacion.codigo for t in tareas_ok if t.ubicacion
+            }
+
+            codigo_pack = f'PACK-ST-{_uuid.uuid4().hex[:8].upper()}'
+            tarea_pack = TareaPacking(
+                codigo=codigo_pack,
+                tipo_documento='TRASLADO',
+                referencia_doc=s.codigo,
+                solicitud_id=s.id,
+                tienda_destino=s.nombre_punto_venta or s.bodega_destino_siesa,
+                bodega_origen_siesa=s.bodega_origen_siesa,
+                almacen_id=almacen_id_pk or 1,
+                estado='PENDIENTE',
+            )
+            db.session.add(tarea_pack)
+            db.session.flush()
+
+            for item in s.items:
+                cantidad = item.cantidad_enviada or 0
+                if cantidad <= 0 or not item.producto_id:
+                    continue
+                db.session.add(ItemPacking(
+                    tarea_id=tarea_pack.id,
+                    producto_id=item.producto_id,
+                    cantidad_esperada=int(cantidad),
+                ))
+            logger.info('[TRASLADO] %s TareaPacking %s creada', s.codigo, codigo_pack)
+
         s.estado = EstadoTraslado.EN_PACKING
         db.session.commit()
         logger.info('[TRASLADO] %s → EN_PACKING (picking confirmado por %s)', s.codigo, usuario_id)
@@ -589,6 +637,7 @@ class TrasladoService:
                     tipo_documento='TRASLADO',
                     operario_id=solicitud.operario_id,
                     prioridad=10,
+                    bodega_origen_siesa=solicitud.bodega_origen_siesa,
                 )
             except ValueError as e:
                 # Stock insuficiente en WMS para este ítem — picking manual

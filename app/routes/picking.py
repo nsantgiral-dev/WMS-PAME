@@ -19,19 +19,23 @@ def listar_tareas():
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(uid)
-    if not u or u.rol not in Roles.SUPERVISION:
+    _roles_picking = Roles.SUPERVISION + (Roles.OPERARIO, Roles.TIENDA,
+                                          Roles.PICKER_TRASLADO, Roles.PACKER_TRASLADO)
+    if not u or u.rol not in _roles_picking:
         return jsonify({'error': 'Sin permiso para listar tareas de picking'}), 403
     estado = request.args.get('estado')
     operario_id = request.args.get('operario_id', type=int)
-    almacen_id = request.args.get('almacen_id', type=int)
     activas = request.args.get('activas', '').lower() == 'true'
     page = request.args.get('page', 1, type=int)
     per_page = min(request.args.get('per_page', 50, type=int), 200)
 
     from sqlalchemy.orm import selectinload as _sl
+    from app.services.scoping.task_scope import scope_picking
     query = (TareaPicking.query
              .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
              .order_by(TareaPicking.prioridad.desc(), TareaPicking.fecha_creacion.asc()))
+
+    query = scope_picking(u, query)
 
     if activas:
         query = query.filter(TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO, EstadoPicking.BLOQUEADO]))
@@ -39,8 +43,6 @@ def listar_tareas():
         query = query.filter_by(estado=estado)
     if operario_id:
         query = query.filter_by(operario_id=operario_id)
-    if almacen_id:
-        query = query.filter_by(almacen_id=almacen_id)
 
     tareas = query.paginate(page=page, per_page=per_page, error_out=False)
 
@@ -141,11 +143,27 @@ def iniciar_tarea(id):
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     u = Usuario.query.get(usuario_id)
-    if not u or u.rol not in Roles.SUPERVISION + (Roles.OPERARIO,):
+    _roles_ini = Roles.SUPERVISION + (Roles.OPERARIO, Roles.TIENDA,
+                                      Roles.PICKER_TRASLADO, Roles.PACKER_TRASLADO)
+    if not u or u.rol not in _roles_ini:
         return jsonify({'error': 'Sin permiso para iniciar tareas de picking'}), 403
     tarea_check = TareaPicking.query.get_or_404(id)
     if u.rol not in Roles.SUPERVISION and tarea_check.operario_id is not None and tarea_check.operario_id != usuario_id:
         return jsonify({'error': 'Esta tarea no te pertenece'}), 403
+
+    # Lock de prioridad: operario no puede tomar otra tarea si tiene una EN_PROCESO
+    if u.rol not in Roles.SUPERVISION:
+        activa = TareaPicking.query.filter_by(
+            operario_id=usuario_id,
+            estado=EstadoPicking.EN_PROCESO,
+        ).first()
+        if activa and activa.id != id:
+            return jsonify({
+                'error': 'Tienes una tarea en proceso. Confírmala antes de tomar otra.',
+                'tarea_activa_id': activa.id,
+                'tarea_activa_codigo': activa.referencia_documento,
+            }), 409
+
     try:
         tarea = PickingService.iniciar_picking(id, usuario_id)
         return jsonify(tarea.to_dict()), 200

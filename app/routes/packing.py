@@ -1,4 +1,5 @@
 import logging
+from app.extensions import db
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.packing import TareaPacking, ItemPacking, EstadoPacking
@@ -62,22 +63,28 @@ def listar_tareas():
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para listar tareas de packing'}), 403
     estado = request.args.get('estado')
-    almacen_id = request.args.get('almacen_id', type=int)
     page = request.args.get('page', 1, type=int)
 
     from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
+    from app.services.scoping.task_scope import scope_packing
     query = (TareaPacking.query
              .options(
-                 _sl(TareaPacking.items).selectinload(ItemPacking.producto),  # evita N+1 items.producto
+                 _sl(TareaPacking.items).selectinload(ItemPacking.producto),
                  _sl(TareaPacking.bultos),
                  _jl(TareaPacking.empacador),
              )
-             .order_by(TareaPacking.fecha_creacion.desc()))
+             .order_by(
+                 # PD primero (PEDIDO < TRASLADO alfabéticamente inverso con desc no aplica;
+                 # usamos CASE: PEDIDO=0, TRASLADO=1 para que PD siempre aparezca antes)
+                 db.case({'PEDIDO': 0, 'TRASLADO': 1},
+                         value=TareaPacking.tipo_documento, else_=0).asc(),
+                 TareaPacking.fecha_creacion.asc(),
+             ))
+
+    query = scope_packing(u, query)
 
     if estado:
         query = query.filter_by(estado=estado)
-    if almacen_id:
-        query = query.filter_by(almacen_id=almacen_id)
 
     tareas = query.paginate(page=page, per_page=50, error_out=False)
 

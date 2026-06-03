@@ -74,7 +74,8 @@ class PickingService:
         referencia_documento: str = None,
         tipo_documento: str = None,
         operario_id: int = None,
-        prioridad: int = 1
+        prioridad: int = 1,
+        bodega_origen_siesa: str = None,
     ):
         """
         Crea tareas de picking usando FEFO.
@@ -124,7 +125,8 @@ class PickingService:
                 estado=EstadoPicking.PENDIENTE,
                 prioridad=prioridad,
                 referencia_documento=referencia_documento,
-                tipo_documento=tipo_documento
+                tipo_documento=tipo_documento,
+                bodega_origen_siesa=bodega_origen_siesa,
             )
 
             # Reservar el stock — lock a nivel de fila para evitar doble reserva concurrente

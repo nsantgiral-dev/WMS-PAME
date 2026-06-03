@@ -597,6 +597,57 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         )
         return {'procesado': True, 'tipo_alerta': tipo_alerta, 'nota': 'ver logs CRITICAL'}
 
+    if job.tipo == 'DESPACHO_TRASLADO':
+        # 174930 — Transfer desde RIT → Salida en Tránsito (STS)
+        # Idempotencia: siesa_salida_consec ya guardado → no reenviar
+        from app.models.traslado import SolicitudTraslado, EstadoTraslado
+        solicitud_id = payload.get('solicitud_id')
+        solicitud = SolicitudTraslado.query.get(solicitud_id) if solicitud_id else None
+        if not solicitud:
+            raise ValueError(f'DESPACHO_TRASLADO job={job.id}: solicitud_id={solicitud_id} no encontrada')
+        if solicitud.siesa_salida_consec:
+            logger.info(
+                '[DLQ] DESPACHO_TRASLADO job=%s: solicitud %s ya tiene siesa_salida_consec=%s — '
+                'idempotente, omitiendo', job.id, solicitud.codigo, solicitud.siesa_salida_consec
+            )
+            return {'idempotente': True, 'solicitud_id': solicitud_id}
+
+        from app.services.siesa_traslado_adapter import siesa_traslado as _st
+        from app.services.traslado_service import TrasladoService
+
+        consec_rit = payload.get('consec_rit') or solicitud.siesa_requisicion_consec
+        if consec_rit:
+            res = _st.despachar_desde_rit(consec_rit=consec_rit, codigo=solicitud.codigo)
+        else:
+            bodega_transito = solicitud.bodega_transito_siesa or _st.bodega_transito
+            if not bodega_transito:
+                raise ValueError(
+                    f'DESPACHO_TRASLADO job={job.id}: sin RIT ni bodega_transito configurada'
+                )
+            items = payload.get('items', [])
+            res = _st.registrar_salida_transito(
+                bodega_origen=solicitud.bodega_origen_siesa,
+                bodega_transito=bodega_transito,
+                items=items,
+                codigo=solicitud.codigo,
+                consec_requisicion=None,
+            )
+
+        if not res.get('simulado') and not res.get('modo_ensayo'):
+            consec = TrasladoService._extraer_consec(res)
+            if consec:
+                solicitud.siesa_salida_consec = consec
+            else:
+                consec_rec = _st.recuperar_consec_salida(solicitud.codigo)
+                solicitud.siesa_salida_consec = consec_rec
+            solicitud.estado = EstadoTraslado.EN_TRANSITO
+            solicitud.siesa_error = None
+            from app.extensions import db as _db
+            _db.session.commit()
+        logger.info('[DLQ] DESPACHO_TRASLADO job=%s solicitud=%s → EN_TRANSITO',
+                    job.id, solicitud.codigo)
+        return {'solicitud_id': solicitud_id, 'consec': solicitud.siesa_salida_consec}
+
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
 
 
