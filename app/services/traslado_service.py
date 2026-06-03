@@ -139,21 +139,50 @@ class TrasladoService:
                 f'Configura el mapeo en /api/config/mapeo-unidades y vuelve a aprobar.'
             )
 
-        # 174646 se dispara al confirmar picking (con ubicaciones reales del operario).
-        # Aquí solo se avanza el estado y se crean las tareas de picking.
         s.siesa_error = None
         s.estado = EstadoTraslado.EN_PICKING
         db.session.flush()  # necesario antes de crear tareas (s.id ya existe)
 
         # ── Reserva dura FEFO: crea TareaPicking prioridad 10 ──
-        # Bloquea el stock en PostgreSQL. Pedidos de venta no pueden "robar" estas unidades.
-        # Si no hay stock en WMS (arranque sin inventario mapeado), degradar a picking manual.
         tareas_sin_stock = TrasladoService._crear_picking_tasks(s)
         if tareas_sin_stock:
             logger.warning(
                 f'[TRASLADO] {s.codigo}: {len(tareas_sin_stock)} ítems sin stock WMS '
                 f'({tareas_sin_stock}) — picking manual requerido para esos ítems'
             )
+
+        # ── 174646 (RIT) — reserva en SIESA al aprobar ──
+        # Se crea aquí con cantidades aprobadas para que SIESA blinde el inventario
+        # en "Comprometido" antes de que el operario empiece a recoger.
+        # Ubicaciones reales se envían luego en 174720 al confirmar packing.
+        _rit_items = [
+            {
+                'codigo_siesa':     item.producto_codigo_siesa,
+                'cantidad':         item.cantidad_aprobada or 0,
+                'unidad_medida':    (item.producto.unidad_medida if item.producto else '') or '',
+                'ubicacion_codigo': None,
+            }
+            for item in s.items
+            if (item.cantidad_aprobada or 0) > 0 and item.producto_codigo_siesa
+        ]
+        if _rit_items:
+            try:
+                res_rit = siesa_traslado.crear_rit(
+                    bodega_origen=s.bodega_origen_siesa,
+                    bodega_destino=s.bodega_destino_siesa,
+                    items=_rit_items,
+                    codigo=s.codigo,
+                )
+                if not res_rit.get('simulado') and not res_rit.get('modo_ensayo'):
+                    consec = TrasladoService._extraer_consec(res_rit)
+                    if consec:
+                        s.siesa_requisicion_consec = consec
+                        logger.info('[TRASLADO] %s RIT creada al aprobar → consec %s', s.codigo, consec)
+                    else:
+                        logger.warning('[TRASLADO] %s RIT aceptada sin consecutivo', s.codigo)
+            except Exception as e_rit:
+                s.siesa_error = f'RIT 174646: {e_rit}'
+                logger.error('[TRASLADO] %s Error RIT al aprobar: %s', s.codigo, e_rit)
 
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → EN_PICKING (aprobado por {aprobador_id}, operario {operario_id})')
@@ -163,12 +192,12 @@ class TrasladoService:
     def confirmar_picking_traslado(solicitud_id: int, usuario_id: int,
                                    items_confirmados: list = None) -> SolicitudTraslado:
         """
-        Operario terminó el picking. Actualiza cantidades reales, dispara
-        174646 (RIT con ubicaciones físicas), transiciona EN_PICKING → EN_PACKING.
+        Operario terminó el picking. Actualiza cantidades reales y transiciona
+        EN_PICKING → EN_PACKING. La RIT (174646) ya fue creada al aprobar;
+        174720 (Compromisos con ubicaciones reales) se dispara en confirmar_packing.
         items_confirmados: [{'id': item_id, 'cantidad_confirmada': N}]
         """
         from app.models.picking import TareaPicking, EstadoPicking as _EP
-        from app.models.ubicacion import Ubicacion
 
         s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
         if not s:
@@ -186,51 +215,6 @@ class TrasladoService:
             for item in s.items:
                 if item.cantidad_enviada is None:
                     item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
-
-        db.session.flush()
-
-        # Construir ítems para 174646 con ubicaciones reales del picking
-        tareas_completadas = TareaPicking.query.filter_by(
-            referencia_documento=s.codigo,
-            tipo_documento='TRASLADO',
-            estado=_EP.COMPLETADO,
-        ).all()
-        # Mapa producto_id → ubicacion.codigo (toma la primera tarea completada)
-        ubicacion_por_producto = {}
-        for t in tareas_completadas:
-            if t.producto_id not in ubicacion_por_producto and t.ubicacion:
-                ubicacion_por_producto[t.producto_id] = t.ubicacion.codigo
-
-        _rit_items = []
-        for item in s.items:
-            cantidad = item.cantidad_enviada or 0
-            if cantidad <= 0 or not item.producto_codigo_siesa:
-                continue
-            _rit_items.append({
-                'codigo_siesa':    item.producto_codigo_siesa,
-                'cantidad':        cantidad,
-                'unidad_medida':   (item.producto.unidad_medida if item.producto else '') or '',
-                'ubicacion_codigo': ubicacion_por_producto.get(item.producto_id),
-            })
-
-        try:
-            res_rit = siesa_traslado.crear_rit(
-                bodega_origen=s.bodega_origen_siesa,
-                bodega_destino=s.bodega_destino_siesa,
-                items=_rit_items,
-                codigo=s.codigo,
-            )
-            if not res_rit.get('simulado') and not res_rit.get('modo_ensayo'):
-                consec = TrasladoService._extraer_consec(res_rit)
-                if consec:
-                    s.siesa_requisicion_consec = consec
-                    logger.info('[TRASLADO] %s RIT creada en picking → consec %s', s.codigo, consec)
-                else:
-                    logger.warning('[TRASLADO] %s RIT aceptada sin consecutivo', s.codigo)
-            s.siesa_error = None
-        except Exception as e_rit:
-            s.siesa_error = f'RIT 174646: {e_rit}'
-            logger.error('[TRASLADO] %s Error RIT en picking: %s', s.codigo, e_rit)
 
         s.estado = EstadoTraslado.EN_PACKING
         db.session.commit()
