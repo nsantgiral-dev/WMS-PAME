@@ -4072,6 +4072,9 @@ function _formUsuario(u = {}) {
           <option value="picker_traslado" ${u.rol==='picker_traslado'?'selected':''}>Picker traslado</option>
           <option value="packer_traslado" ${u.rol==='packer_traslado'?'selected':''}>Packer traslado</option>
         </optgroup>
+        <optgroup label="── Compras ──">
+          <option value="compras" ${u.rol==='compras'?'selected':''}>Compras</option>
+        </optgroup>
       </select>
       <!-- Campos conductor (solo si rol=conductor) -->
       <div id="u-conductor-fields" style="display:${u.rol==='conductor'?'block':'none'};background:#1a1a1a;border:1px solid #2d1b69;border-radius:8px;padding:14px;">
