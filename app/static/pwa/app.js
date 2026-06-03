@@ -146,6 +146,17 @@ function mostrarSegunRol(rol) {
     if (OPERARIO) actualizarUI(OPERARIO);
     empCargarTareas();
     TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
+  } else if (rol === 'picker_traslado') {
+    pantalla('pantalla-picker-traslado');
+    document.getElementById('tpick-nombre').textContent = OPERARIO?.nombre || '—';
+    document.getElementById('tpick-rol').textContent = 'Picking traslado';
+    trasPickerCargarCola();
+    TIMER_OPERARIO = setInterval(trasPickerCargarCola, 30000);
+  } else if (rol === 'packer_traslado') {
+    pantalla('pantalla-packer-traslado');
+    document.getElementById('tpack-nombre').textContent = OPERARIO?.nombre || '—';
+    trasPackerCargarCola();
+    TIMER_OPERARIO = setInterval(trasPackerCargarCola, 20000);
   } else if (puedeAbastecer && (puedePicar || puedeEmpacar)) {
     // Rol dual: picker/empacador + abastecedor → picker por defecto, botón para cambiar
     pantalla('pantalla-operario');
@@ -1678,9 +1689,9 @@ async function procesarScan(codigo) {
   if (EMP_TAREA && document.getElementById('emp-hud')?.classList.contains('activo')) {
     await empProcesarEscaneo(codigo); return;
   }
-  // HUDs de requisiciones (picking y packing de traslados)
-  if (REQ_PICKING)  { await reqPickingScan(codigo); return; }
-  if (REQ_PACKING)  { reqPackingScan(codigo); return; }
+  // HUDs de traslados (picker_traslado y packer_traslado)
+  if (TRAS_PICK) { await trasPickerScan(codigo); return; }
+  if (TRAS_PACK) { trasPackerScan(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
 
@@ -2170,7 +2181,9 @@ async function cargarRecepciones(silencioso = false) {
 }
 
 function pantalla(id) {
-  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion','pantalla-empacador','pantalla-conductor','pantalla-tienda','pantalla-abastecedor'].forEach(p => {
+  ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion',
+   'pantalla-empacador','pantalla-conductor','pantalla-tienda','pantalla-abastecedor',
+   'pantalla-picker-traslado','pantalla-packer-traslado'].forEach(p => {
     const el = document.getElementById(p);
     if (el) el.style.display = p === id ? 'block' : 'none';
   });
@@ -4040,13 +4053,17 @@ function _formUsuario(u = {}) {
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
       <select id="u-rol" onchange="document.getElementById('u-tienda-fields').style.display=this.value==='tienda'?'block':'none';document.getElementById('u-conductor-fields').style.display=this.value==='conductor'?'block':'none';"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-        <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario</option>
+        <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario (pedidos)</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
         <option value="conductor" ${u.rol==='conductor'?'selected':''}>Conductor</option>
         <option value="tienda" ${u.rol==='tienda'?'selected':''}>Tienda (punto de venta)</option>
         <option value="supervisor" ${u.rol==='supervisor'?'selected':''}>Supervisor</option>
         <option value="jefe_almacen" ${u.rol==='jefe_almacen'?'selected':''}>Jefe de almacén</option>
         <option value="admin" ${u.rol==='admin'?'selected':''}>Admin</option>
+        <optgroup label="── Traslados ──">
+          <option value="picker_traslado" ${u.rol==='picker_traslado'?'selected':''}>Picker traslado</option>
+          <option value="packer_traslado" ${u.rol==='packer_traslado'?'selected':''}>Packer traslado</option>
+        </optgroup>
       </select>
       <!-- Campos conductor (solo si rol=conductor) -->
       <div id="u-conductor-fields" style="display:${u.rol==='conductor'?'block':'none'};background:#1a1a1a;border:1px solid #2d1b69;border-radius:8px;padding:14px;">
@@ -8908,17 +8925,9 @@ function _renderRequisicionCard(r) {
            ✓ Aprobar
          </button>`
     : r.estado === 'EN_PICKING'
-      ? `<button onclick="reqAbrirPickingHUD(${r.id})"
-           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
-                  background:#1d4ed8;color:#fff;border:1px solid #1d4ed8;">
-           🔍 Hacer picking
-         </button>`
+      ? `<span style="font-size:12px;color:#2563eb;font-weight:600;">🔍 Operario pickeando...</span>`
     : r.estado === 'EN_PACKING'
-      ? `<button onclick="reqAbrirPackingHUD(${r.id})"
-           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
-                  background:#ea580c;color:#fff;border:1px solid #ea580c;">
-           📦 Hacer packing
-         </button>`
+      ? `<span style="font-size:12px;color:#ea580c;font-weight:600;">📦 Empacador verificando...</span>`
     : r.estado === 'PREPARADO'
       ? `<button onclick="despacharRequisicion(${r.id})"
            style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
@@ -8982,7 +8991,7 @@ async function aprobarRequisicion(id) {
     });
     const d = await r.json();
     if (!r.ok) { alerta(d.error || 'Error al aprobar', 'error'); return; }
-    alerta('Requisición aprobada — usa el botón "Hacer picking" para iniciar ✓', 'exito');
+    alerta('Requisición aprobada — el operario de traslado puede iniciar el picking ✓', 'exito');
     await cargarRequisiciones();
   } catch (e) {
     alerta('Error de conexión', 'error');
@@ -9021,122 +9030,95 @@ async function confirmarPackingTraslado(id) {
   }
 }
 
-// ─── REQUISICIONES — HUD PICKING ─────────────────────────────────────────────
-// Flujo independiente de Pedidos: picking ítem por ítem dentro del módulo
-// Requisiciones. No toca el tab Bodega ni las funciones de pedidos.
+// ─── TRASLADOS — PICKING / PACKING (roles picker_traslado, packer_traslado) ───
+// Flujo completamente independiente de Pedidos y del tab Requisiciones de admin.
 // ─────────────────────────────────────────────────────────────────────────────
 
-let REQ_PICKING = null;
-// { solicitudId, codigo, items:[{item_id,producto_id,producto_codigo,producto_nombre,
-//   producto_codigo_barras,ubicacion,cantidad_aprobada,cantidad_enviada,
-//   tarea_picking_id,cantidad_recogida}], idx, counts:{item_id:n} }
+// PICKER TRASLADO
 
-async function reqAbrirPickingHUD(solicitudId) {
+let TRAS_PICK = null;
+
+async function trasPickerCargarCola() {
+  const el = document.getElementById('tpick-lista');
+  if (!el) return;
   try {
-    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
-    if (!d.items || !d.items.length) { alerta('Sin ítems para picking', 'error'); return; }
-    REQ_PICKING = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
-    for (const it of d.items) REQ_PICKING.counts[it.item_id] = it.cantidad_recogida || 0;
-    _reqPickingRender();
-  } catch (e) { alerta('Error cargando ítems de picking', 'error'); }
+    const d = await get('/api/traslados/cola-picker');
+    const solicitudes = d.solicitudes || [];
+    if (!solicitudes.length) {
+      el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#666;">Sin traslados para pickear ✓<br><button onclick="trasPickerCargarCola()" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button></div>';
+      return;
+    }
+    el.innerHTML = solicitudes.map(s => {
+      const items = s.items || [];
+      const totalUnd = items.reduce((a, i) => a + (i.cantidad_aprobada || i.cantidad_solicitada || 0), 0);
+      return `<div onclick="trasPickerAbrirHUD(${s.id})" style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;cursor:pointer;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:15px;font-weight:700;color:#fff;">${s.codigo}</div>
+          <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:#dbeafe;color:#2563eb;">🔍 En picking</span>
+        </div>
+        <div style="font-size:12px;color:#666;margin-bottom:4px;">${s.nombre_punto_venta || s.bodega_destino_siesa}</div>
+        <div style="font-size:12px;color:#666;">${items.length} producto(s) · ${totalUnd} uds</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando cola</div>';
+  }
 }
 
-function _reqPickingRender() {
-  if (!REQ_PICKING) return;
-  const { items, idx, counts, codigo } = REQ_PICKING;
+async function trasPickerAbrirHUD(solicitudId) {
+  try {
+    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
+    if (!d.items || !d.items.length) { alerta('Sin ítems para pickear', 'error'); return; }
+    TRAS_PICK = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
+    for (const it of d.items) TRAS_PICK.counts[it.item_id] = it.cantidad_recogida || 0;
+    _trasPickerRenderHUD();
+    document.getElementById('tpick-hud').style.display = 'block';
+  } catch (e) { alerta('Error cargando traslado', 'error'); }
+}
+
+function _trasPickerRenderHUD() {
+  if (!TRAS_PICK) return;
+  const { items, idx, counts, codigo } = TRAS_PICK;
   const item    = items[idx];
   const cant    = counts[item.item_id] || 0;
   const req     = item.cantidad_aprobada || 0;
   const pct     = req > 0 ? Math.min(cant / req * 100, 100) : 0;
-  const esUltimo    = idx === items.length - 1;
-  const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
-  const colorCont  = cant >= req ? '#22c55e' : '#fff';
-  const colorBarra = cant >= req ? '#22c55e' : (cant > 0 ? '#f59e0b' : '#4b5563');
-  const colorBtn   = cant >= req ? '#16a34a' : '#7c3aed';
-  const labelBtn   = esUltimo ? '✓ Confirmar picking' : '→ Siguiente ítem';
-
-  const existente = document.getElementById('req-picking-hud');
-  const hud = existente || document.createElement('div');
-  hud.id = 'req-picking-hud';
-  hud.style.cssText = 'position:fixed;inset:0;background:#0a0a0a;z-index:8000;overflow-y:auto;';
-  hud.innerHTML = `
-    <div style="padding:16px;max-width:480px;margin:0 auto;padding-bottom:30px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <div style="background:#7c3aed;color:#fff;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;">
-          🔄 TRANSFERENCIA — PICKING
-        </div>
-        <button onclick="reqCerrarPickingHUD()" style="background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;">✕</button>
-      </div>
-      <div style="text-align:center;font-size:11px;color:#555;margin-bottom:14px;">
-        Ítem ${idx + 1} de ${items.length} · <span style="color:#7c3aed;">${codigo}</span>
-      </div>
-      <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
-        <div style="font-size:13px;color:#666;letter-spacing:1px;">UBICACIÓN</div>
-        <div style="font-size:44px;font-weight:900;letter-spacing:2px;">${item.ubicacion}</div>
-      </div>
-      <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
-        <div style="font-size:13px;color:#666;letter-spacing:1px;">PRODUCTO</div>
-        <div style="font-size:26px;font-weight:700;">${item.producto_codigo}</div>
-        <div style="font-size:15px;color:#aaa;">${item.producto_nombre}</div>
-      </div>
-      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:13px;color:#666;letter-spacing:1px;">CANTIDAD</div>
-        <div id="req-pick-contador" style="font-size:64px;font-weight:900;color:${colorCont};">${cant}/${req}</div>
-        <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;overflow:hidden;">
-          <div id="req-pick-barra" style="height:100%;background:${colorBarra};border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;margin-bottom:10px;">
-        <button onclick="reqPickingDelta(-1)" style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">−</button>
-        <button onclick="reqPickingDelta(1)"  style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">+</button>
-      </div>
-      ${puedeCamara ? `
-      <button onclick="abrirCamara('req-pick-lector','req-pick-cambox',reqPickingScan)"
-        style="width:100%;padding:14px;font-size:15px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
-        📷 Escanear con cámara
-      </button>
-      <div id="req-pick-cambox" style="display:none;margin-bottom:10px;">
-        <div id="req-pick-lector" style="border-radius:12px;overflow:hidden;"></div>
-        <button onclick="cerrarCamara('req-pick-cambox')" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
-      </div>` : ''}
-      <button onclick="reqPickingSiguiente()"
-        style="width:100%;padding:20px;font-size:20px;font-weight:700;background:${colorBtn};color:#fff;border:none;border-radius:16px;cursor:pointer;margin-bottom:10px;">
-        ${labelBtn}
-      </button>
-      <button onclick="reqPickingManual()"
-        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;">
-        ✓ Ingresar cantidad manual
-      </button>
-    </div>`;
-  if (!existente) document.body.appendChild(hud);
-}
-
-function reqPickingDelta(delta) {
-  if (!REQ_PICKING) return;
-  const item  = REQ_PICKING.items[REQ_PICKING.idx];
-  const actual = REQ_PICKING.counts[item.item_id] || 0;
-  const nuevo  = Math.max(0, Math.min(actual + delta, item.cantidad_aprobada));
-  REQ_PICKING.counts[item.item_id] = nuevo;
-  const contEl = document.getElementById('req-pick-contador');
-  const barEl  = document.getElementById('req-pick-barra');
-  if (contEl) { contEl.textContent = `${nuevo}/${item.cantidad_aprobada}`; contEl.style.color = nuevo >= item.cantidad_aprobada ? '#22c55e' : '#fff'; }
-  if (barEl) {
-    const pct = item.cantidad_aprobada > 0 ? Math.min(nuevo / item.cantidad_aprobada * 100, 100) : 0;
-    barEl.style.width = pct + '%';
-    barEl.style.background = nuevo >= item.cantidad_aprobada ? '#22c55e' : (nuevo > 0 ? '#f59e0b' : '#4b5563');
+  const esUltimo = idx === items.length - 1;
+  document.getElementById('tpick-hud-badge').textContent    = '🔄 TRANSFERENCIA — PICKING';
+  document.getElementById('tpick-hud-progreso').textContent = `Ítem ${idx + 1} de ${items.length} · ${codigo}`;
+  document.getElementById('tpick-hud-ubicacion').textContent = item.ubicacion || 'BODEGA';
+  document.getElementById('tpick-hud-prod-codigo').textContent = item.producto_codigo;
+  document.getElementById('tpick-hud-prod-nombre').textContent = item.producto_nombre;
+  const contEl = document.getElementById('tpick-hud-contador');
+  contEl.textContent = `${cant}/${req}`;
+  contEl.style.color = cant >= req ? '#22c55e' : '#fff';
+  const barEl = document.getElementById('tpick-hud-barra');
+  barEl.style.width = pct + '%';
+  barEl.style.background = cant >= req ? '#22c55e' : (cant > 0 ? '#f59e0b' : '#4b5563');
+  const btnSig = document.getElementById('tpick-btn-sig');
+  if (btnSig) {
+    btnSig.textContent = esUltimo ? '✓ Confirmar picking' : '→ Siguiente ítem';
+    btnSig.style.background = (esUltimo && cant >= req) ? '#16a34a' : '#7c3aed';
   }
 }
 
-async function reqPickingScan(codigo) {
-  if (!REQ_PICKING) return;
-  const item = REQ_PICKING.items[REQ_PICKING.idx];
+function trasPickerDelta(delta) {
+  if (!TRAS_PICK) return;
+  const item = TRAS_PICK.items[TRAS_PICK.idx];
+  TRAS_PICK.counts[item.item_id] = Math.max(0, Math.min((TRAS_PICK.counts[item.item_id] || 0) + delta, item.cantidad_aprobada));
+  _trasPickerRenderHUD();
+}
+
+async function trasPickerScan(codigo) {
+  if (!TRAS_PICK) return;
+  const item = TRAS_PICK.items[TRAS_PICK.idx];
   vibrar();
   if (item.tarea_picking_id) {
     try {
       const r = await post('/api/mobile/escanear', { codigo, tarea_id: item.tarea_picking_id, tipo: 'PICKING' });
       if (r.error) { beepError(); alerta(typeof r.error === 'object' ? r.error.mensaje : r.error, 'error'); return; }
-      REQ_PICKING.counts[item.item_id] = r.cantidad_actual;
-      _reqPickingRender();
+      TRAS_PICK.counts[item.item_id] = r.cantidad_actual;
+      _trasPickerRenderHUD();
       if (r.completado) beepDone(); else beepOk();
     } catch (e) { alerta('Error de escaneo', 'error'); }
   } else {
@@ -9144,30 +9126,30 @@ async function reqPickingScan(codigo) {
     const validos = [item.producto_codigo, item.producto_codigo_barras].filter(Boolean).map(c => c.toUpperCase());
     if (!validos.includes(limpio)) { beepError(); alerta(`Código incorrecto — escanea ${item.producto_codigo}`, 'error'); return; }
     beepOk();
-    reqPickingDelta(1);
+    trasPickerDelta(1);
   }
 }
 
-function reqPickingManual() {
-  if (!REQ_PICKING) return;
-  const item    = REQ_PICKING.items[REQ_PICKING.idx];
+function trasPickerManual() {
+  if (!TRAS_PICK) return;
+  const item = TRAS_PICK.items[TRAS_PICK.idx];
   const cantStr = prompt(`¿Cuántas unidades de ${item.producto_codigo} recogiste? (máx. ${item.cantidad_aprobada})`);
   if (cantStr === null) return;
   const cant = parseInt(cantStr, 10);
   if (isNaN(cant) || cant < 0 || cant > item.cantidad_aprobada) { alerta(`Ingresa un número entre 0 y ${item.cantidad_aprobada}`, 'error'); return; }
-  REQ_PICKING.counts[item.item_id] = cant;
-  _reqPickingRender();
+  TRAS_PICK.counts[item.item_id] = cant;
+  _trasPickerRenderHUD();
 }
 
-async function reqPickingSiguiente() {
-  if (!REQ_PICKING) return;
-  if (REQ_PICKING.idx < REQ_PICKING.items.length - 1) { REQ_PICKING.idx++; _reqPickingRender(); return; }
-  await _reqPickingConfirmar();
+async function trasPickerSiguiente() {
+  if (!TRAS_PICK) return;
+  if (TRAS_PICK.idx < TRAS_PICK.items.length - 1) { TRAS_PICK.idx++; _trasPickerRenderHUD(); return; }
+  await _trasPickerConfirmar();
 }
 
-async function _reqPickingConfirmar() {
-  if (!REQ_PICKING) return;
-  const { solicitudId, items, counts } = REQ_PICKING;
+async function _trasPickerConfirmar() {
+  if (!TRAS_PICK) return;
+  const { solicitudId, items, counts } = TRAS_PICK;
   const items_confirmados = items.map(i => ({ id: i.item_id, cantidad_confirmada: counts[i.item_id] || 0 }));
   try {
     const r = await fetch(API + `/api/traslados/${solicitudId}/confirmar-picking`, {
@@ -9178,155 +9160,121 @@ async function _reqPickingConfirmar() {
     const d = await r.json();
     if (!r.ok) { alerta(d.error || 'Error al confirmar picking', 'error'); return; }
     beepDone();
-    alerta('Picking confirmado — pendiente de verificar empaque 📦', 'exito');
-    reqCerrarPickingHUD();
-    await cargarRequisiciones();
+    alerta('Picking confirmado ✓ — empaque pendiente', 'exito');
+    trasPickerPausarHUD();
+    await trasPickerCargarCola();
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-function reqCerrarPickingHUD() {
-  cerrarCamara('req-pick-cambox');
-  document.getElementById('req-picking-hud')?.remove();
-  REQ_PICKING = null;
+function trasPickerPausarHUD() {
+  cerrarCamara('tpick-cambox');
+  document.getElementById('tpick-hud').style.display = 'none';
+  TRAS_PICK = null;
+}
+
+function trasPickerProblema() {
+  if (!TRAS_PICK) return;
+  alerta('Reporta el problema al supervisor — código: ' + TRAS_PICK.codigo, 'advertencia');
 }
 
 
-// ─── REQUISICIONES — HUD PACKING ─────────────────────────────────────────────
+// PACKER TRASLADO
 
-let REQ_PACKING = null;
-// { solicitudId, codigo, items, idx, counts:{item_id:n} }
+let TRAS_PACK = null;
 
-async function reqAbrirPackingHUD(solicitudId) {
+async function trasPackerCargarCola() {
+  const el = document.getElementById('tpack-lista');
+  if (!el) return;
   try {
-    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
-    if (!d.items || !d.items.length) { alerta('Sin ítems para verificar', 'error'); return; }
-    REQ_PACKING = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
-    for (const it of d.items) REQ_PACKING.counts[it.item_id] = 0;
-    _reqPackingRender();
-  } catch (e) { alerta('Error cargando ítems de empaque', 'error'); }
-}
-
-function _reqPackingRender() {
-  if (!REQ_PACKING) return;
-  const { items, idx, counts, codigo } = REQ_PACKING;
-  const item    = items[idx];
-  const cant    = counts[item.item_id] || 0;
-  const req     = item.cantidad_enviada || item.cantidad_aprobada || 0;
-  const pct     = req > 0 ? Math.min(cant / req * 100, 100) : 0;
-  const esUltimo    = idx === items.length - 1;
-  const puedeCamara = OPERARIO && OPERARIO.puede_usar_camara;
-  const colorCont  = cant >= req ? '#22c55e' : '#fff';
-  const colorBarra = cant >= req ? '#22c55e' : (cant > 0 ? '#f59e0b' : '#4b5563');
-  const colorBtn   = cant >= req ? '#16a34a' : '#ea580c';
-  const labelBtn   = esUltimo ? '📦 Confirmar empaque' : '→ Siguiente ítem';
-
-  const existente = document.getElementById('req-packing-hud');
-  const hud = existente || document.createElement('div');
-  hud.id = 'req-packing-hud';
-  hud.style.cssText = 'position:fixed;inset:0;background:#0a0a0a;z-index:8000;overflow-y:auto;';
-  hud.innerHTML = `
-    <div style="padding:16px;max-width:480px;margin:0 auto;padding-bottom:30px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <div style="background:#ea580c;color:#fff;border-radius:10px;padding:8px 14px;font-size:13px;font-weight:700;">
-          🔄 TRANSFERENCIA — PACKING
-        </div>
-        <button onclick="reqCerrarPackingHUD()" style="background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;padding:8px 12px;font-size:13px;cursor:pointer;">✕</button>
-      </div>
-      <div style="text-align:center;font-size:11px;color:#555;margin-bottom:14px;">
-        Ítem ${idx + 1} de ${items.length} · <span style="color:#ea580c;">${codigo}</span>
-      </div>
-      <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
-        <div style="font-size:13px;color:#666;letter-spacing:1px;">ZONA</div>
-        <div style="font-size:44px;font-weight:900;letter-spacing:2px;">PACKING</div>
-      </div>
-      <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
-        <div style="font-size:13px;color:#666;letter-spacing:1px;">PRODUCTO</div>
-        <div style="font-size:26px;font-weight:700;">${item.producto_codigo}</div>
-        <div style="font-size:15px;color:#aaa;">${item.producto_nombre}</div>
-        ${req > 0 ? `<div style="margin-top:6px;font-size:12px;color:#666;">Picking confirmó: <span style="color:#ea580c;font-weight:700;">${req} und</span></div>` : ''}
-      </div>
-      <div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
-        <div style="font-size:13px;color:#666;letter-spacing:1px;">VERIFICAR</div>
-        <div id="req-pack-contador" style="font-size:64px;font-weight:900;color:${colorCont};">${cant}/${req}</div>
-        <div style="height:8px;background:#333;border-radius:4px;margin-top:10px;overflow:hidden;">
-          <div id="req-pack-barra" style="height:100%;background:${colorBarra};border-radius:4px;width:${pct}%;transition:width 0.3s;"></div>
-        </div>
-      </div>
-      <div style="display:flex;gap:10px;margin-bottom:10px;">
-        <button onclick="reqPackingDelta(-1)" style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">−</button>
-        <button onclick="reqPackingDelta(1)"  style="flex:1;padding:20px;font-size:30px;font-weight:900;background:#1a1a1a;color:#fff;border:1px solid #333;border-radius:12px;cursor:pointer;">+</button>
-      </div>
-      ${puedeCamara ? `
-      <button onclick="abrirCamara('req-pack-lector','req-pack-cambox',reqPackingScan)"
-        style="width:100%;padding:14px;font-size:15px;background:#fff;color:#000;border:2px solid #000;border-radius:12px;cursor:pointer;margin-bottom:10px;">
-        📷 Escanear con cámara
-      </button>
-      <div id="req-pack-cambox" style="display:none;margin-bottom:10px;">
-        <div id="req-pack-lector" style="border-radius:12px;overflow:hidden;"></div>
-        <button onclick="cerrarCamara('req-pack-cambox')" style="width:100%;padding:10px;margin-top:6px;font-size:15px;background:#333;color:#fff;border:none;border-radius:10px;cursor:pointer;">Cerrar cámara</button>
-      </div>` : ''}
-      <button onclick="reqPackingSiguiente()"
-        style="width:100%;padding:20px;font-size:20px;font-weight:700;background:${colorBtn};color:#fff;border:none;border-radius:16px;cursor:pointer;margin-bottom:10px;">
-        ${labelBtn}
-      </button>
-      <button onclick="reqPackingManual()"
-        style="width:100%;padding:14px;font-size:15px;font-weight:600;background:#1a2a1a;color:#4ade80;border:1px solid #166534;border-radius:12px;cursor:pointer;">
-        ✓ Ingresar cantidad manual
-      </button>
-    </div>`;
-  if (!existente) document.body.appendChild(hud);
-}
-
-function reqPackingDelta(delta) {
-  if (!REQ_PACKING) return;
-  const item  = REQ_PACKING.items[REQ_PACKING.idx];
-  const max   = item.cantidad_enviada || item.cantidad_aprobada || 0;
-  const actual = REQ_PACKING.counts[item.item_id] || 0;
-  const nuevo  = Math.max(0, Math.min(actual + delta, max));
-  REQ_PACKING.counts[item.item_id] = nuevo;
-  const contEl = document.getElementById('req-pack-contador');
-  const barEl  = document.getElementById('req-pack-barra');
-  if (contEl) { contEl.textContent = `${nuevo}/${max}`; contEl.style.color = nuevo >= max ? '#22c55e' : '#fff'; }
-  if (barEl) {
-    const pct = max > 0 ? Math.min(nuevo / max * 100, 100) : 0;
-    barEl.style.width = pct + '%';
-    barEl.style.background = nuevo >= max ? '#22c55e' : (nuevo > 0 ? '#f59e0b' : '#4b5563');
+    const d = await get('/api/traslados/cola-packer');
+    const solicitudes = d.solicitudes || [];
+    if (!solicitudes.length) {
+      el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#666;">Sin traslados para verificar ✓<br><button onclick="_refreshBtn(event,trasPackerCargarCola)" style="margin-top:20px;background:#e2e8f0;border:none;color:#1a202c;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button></div>';
+      return;
+    }
+    el.innerHTML = '<div style="font-size:11px;font-weight:600;color:#718096;padding:16px 16px 8px;text-transform:uppercase;">TAREAS DE EMPAQUE</div>' +
+      solicitudes.map(s => {
+        const items = s.items || [];
+        return `<div onclick="trasPackerAbrirHUD(${s.id})" style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:16px;margin:0 12px 10px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.06);">
+          <div style="font-size:16px;font-weight:700;color:#1a202c;margin-bottom:4px;">${s.codigo}</div>
+          <div style="font-size:13px;color:#718096;margin-bottom:8px;">${items.length} producto(s) · 0/${items.length} verificados</div>
+          <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;background:#fff7ed;color:#ea580c;">Pendiente</span>
+        </div>`;
+      }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando tareas</div>';
   }
 }
 
-function reqPackingScan(codigo) {
-  if (!REQ_PACKING) return;
-  const item   = REQ_PACKING.items[REQ_PACKING.idx];
+async function trasPackerAbrirHUD(solicitudId) {
+  try {
+    const d = await get(`/api/traslados/${solicitudId}/items-picking`);
+    if (!d.items || !d.items.length) { alerta('Sin ítems para verificar', 'error'); return; }
+    TRAS_PACK = { solicitudId, codigo: d.codigo, items: d.items, idx: 0, counts: {} };
+    for (const it of d.items) TRAS_PACK.counts[it.item_id] = 0;
+    _trasPackerRenderHUD();
+    document.getElementById('tpack-hud').style.display = 'flex';
+  } catch (e) { alerta('Error cargando traslado', 'error'); }
+}
+
+function _trasPackerRenderHUD() {
+  if (!TRAS_PACK) return;
+  const { items, counts } = TRAS_PACK;
+  const pendientes  = items.filter(i => !(counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
+  const item        = pendientes[0] || items[0];
+  const cant        = counts[item.item_id] || 0;
+  const req         = item.cantidad_enviada || item.cantidad_aprobada || 0;
+  const verificados = items.filter(i => counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)).length;
+  const pct         = req > 0 ? Math.min(cant / req * 100, 100) : 0;
+  const todoListo   = verificados === items.length;
+  document.getElementById('tpack-hud-codigo').textContent      = TRAS_PACK.codigo;
+  document.getElementById('tpack-hud-prod-nombre').textContent = todoListo ? '¡Todo verificado! Confirma el empaque.' : (item.producto_nombre || item.producto_codigo);
+  const cEl = document.getElementById('tpack-hud-contador');
+  cEl.textContent = cant;
+  cEl.style.color = todoListo ? '#16a34a' : '#0d9488';
+  document.getElementById('tpack-hud-de').textContent          = 'de ' + req;
+  const bEl = document.getElementById('tpack-hud-barra');
+  bEl.style.width      = pct + '%';
+  bEl.style.background = todoListo ? '#16a34a' : '#0d9488';
+  document.getElementById('tpack-hud-items').textContent = verificados + ' de ' + items.length + ' ítems verificados';
+  const btnConf = document.getElementById('tpack-btn-confirmar');
+  if (btnConf) {
+    btnConf.textContent      = todoListo ? 'Confirmar empaque ✓' : '→ Siguiente';
+    btnConf.style.background = todoListo ? '#16a34a' : '#0d9488';
+  }
+}
+
+function trasPackerDelta(delta) {
+  if (!TRAS_PACK) return;
+  const pendientes = TRAS_PACK.items.filter(i => !(TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
+  const item = pendientes[0] || TRAS_PACK.items[0];
+  const max  = item.cantidad_enviada || item.cantidad_aprobada || 0;
+  TRAS_PACK.counts[item.item_id] = Math.max(0, Math.min((TRAS_PACK.counts[item.item_id] || 0) + delta, max));
+  _trasPackerRenderHUD();
+}
+
+function trasPackerScan(codigo) {
+  if (!TRAS_PACK) return;
+  const pendientes = TRAS_PACK.items.filter(i => !(TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
+  const item = pendientes[0];
+  if (!item) { beepOk(); return; }
   const limpio  = (codigo || '').trim().toUpperCase();
   const validos = [item.producto_codigo, item.producto_codigo_barras].filter(Boolean).map(c => c.toUpperCase());
-  if (!validos.includes(limpio)) { beepError(); alerta(`Código incorrecto — escanea ${item.producto_codigo}`, 'error'); return; }
-  vibrar(); beepOk();
-  reqPackingDelta(1);
+  if (!validos.includes(limpio)) { beepError(); alerta('Código incorrecto — escanea ' + item.producto_codigo, 'error'); return; }
+  vibrar(); beepOk(); trasPackerDelta(1);
 }
 
-function reqPackingManual() {
-  if (!REQ_PACKING) return;
-  const item    = REQ_PACKING.items[REQ_PACKING.idx];
-  const max     = item.cantidad_enviada || item.cantidad_aprobada || 0;
-  const cantStr = prompt(`¿Cuántas unidades de ${item.producto_codigo} verificaste? (máx. ${max})`);
-  if (cantStr === null) return;
-  const cant = parseInt(cantStr, 10);
-  if (isNaN(cant) || cant < 0 || cant > max) { alerta(`Ingresa un número entre 0 y ${max}`, 'error'); return; }
-  REQ_PACKING.counts[item.item_id] = cant;
-  _reqPackingRender();
+async function trasPackerSiguiente() {
+  if (!TRAS_PACK) return;
+  const todoListo = TRAS_PACK.items.every(i => TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0));
+  if (!todoListo) { _trasPackerRenderHUD(); return; }
+  await _trasPackerConfirmar();
 }
 
-async function reqPackingSiguiente() {
-  if (!REQ_PACKING) return;
-  if (REQ_PACKING.idx < REQ_PACKING.items.length - 1) { REQ_PACKING.idx++; _reqPackingRender(); return; }
-  await _reqPackingConfirmar();
-}
-
-async function _reqPackingConfirmar() {
-  if (!REQ_PACKING) return;
-  const { solicitudId } = REQ_PACKING;
+async function _trasPackerConfirmar() {
+  if (!TRAS_PACK) return;
   try {
-    const r = await fetch(API + `/api/traslados/${solicitudId}/confirmar-packing`, {
+    const r = await fetch(API + '/api/traslados/' + TRAS_PACK.solicitudId + '/confirmar-packing', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({})
@@ -9335,13 +9283,13 @@ async function _reqPackingConfirmar() {
     if (!r.ok) { alerta(d.error || 'Error al confirmar empaque', 'error'); return; }
     beepDone();
     alerta('Empaque verificado — listo para despachar ✓', 'exito');
-    reqCerrarPackingHUD();
-    await cargarRequisiciones();
+    trasPackerPausarHUD();
+    await trasPackerCargarCola();
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-function reqCerrarPackingHUD() {
-  cerrarCamara('req-pack-cambox');
-  document.getElementById('req-packing-hud')?.remove();
-  REQ_PACKING = null;
+function trasPackerPausarHUD() {
+  cerrarCamara('tpack-cambox');
+  document.getElementById('tpack-hud').style.display = 'none';
+  TRAS_PACK = null;
 }

@@ -657,6 +657,63 @@ def reintentar_recepcion_siesa(id):
         return jsonify({'error': str(e)}), 400
 
 
+@traslados_bp.route('/cola-picker', methods=['GET'])
+@jwt_required()
+def cola_picker():
+    """picker_traslado: solicitudes EN_PICKING disponibles para este operario."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    _roles = ('admin', 'supervisor', 'gerente', 'jefe_almacen', 'picker_traslado')
+    if not usuario or usuario.rol not in _roles:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    query = SolicitudTraslado.query\
+        .options(
+            joinedload(SolicitudTraslado.solicitante),
+            subqueryload(SolicitudTraslado.items)
+            .joinedload(ItemSolicitudTraslado.producto),
+        )\
+        .filter_by(estado='EN_PICKING')\
+        .order_by(SolicitudTraslado.fecha_aprobacion.asc())
+
+    if usuario.rol == 'picker_traslado':
+        query = query.filter(
+            (SolicitudTraslado.operario_id == usuario_id) |
+            (SolicitudTraslado.operario_id.is_(None))
+        )
+
+    solicitudes = query.all()
+    return jsonify({'solicitudes': [s.to_dict() for s in solicitudes]}), 200
+
+
+@traslados_bp.route('/cola-packer', methods=['GET'])
+@jwt_required()
+def cola_packer():
+    """packer_traslado: solicitudes EN_PACKING listas para verificar."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    _roles = ('admin', 'supervisor', 'gerente', 'jefe_almacen', 'packer_traslado')
+    if not usuario or usuario.rol not in _roles:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    solicitudes = SolicitudTraslado.query\
+        .options(
+            joinedload(SolicitudTraslado.solicitante),
+            subqueryload(SolicitudTraslado.items)
+            .joinedload(ItemSolicitudTraslado.producto),
+        )\
+        .filter_by(estado='EN_PACKING')\
+        .order_by(SolicitudTraslado.fecha_aprobacion.asc())\
+        .all()
+    return jsonify({'solicitudes': [s.to_dict() for s in solicitudes]}), 200
+
+
 @traslados_bp.route('/mis-traslados', methods=['GET'])
 @jwt_required()
 def mis_traslados():

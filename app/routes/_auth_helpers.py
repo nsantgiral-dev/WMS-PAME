@@ -8,11 +8,13 @@ class Roles:
     SUPERVISOR     = 'supervisor'
     JEFE_ALMACEN   = 'jefe_almacen'
     GERENTE        = 'gerente'
-    OPERARIO       = 'operario'
-    EMPACADOR      = 'empacador'
-    RECEPCIONISTA  = 'recepcionista'
-    TIENDA         = 'tienda'
-    CONDUCTOR      = 'conductor'
+    OPERARIO          = 'operario'
+    EMPACADOR         = 'empacador'
+    RECEPCIONISTA     = 'recepcionista'
+    TIENDA            = 'tienda'
+    CONDUCTOR         = 'conductor'
+    PICKER_TRASLADO   = 'picker_traslado'   # picking de solicitudes de traslado
+    PACKER_TRASLADO   = 'packer_traslado'   # packing/verificacion de solicitudes de traslado
 
     # Grupos reutilizables
     GESTION        = (ADMIN, SUPERVISOR, JEFE_ALMACEN, GERENTE)
@@ -22,6 +24,7 @@ class Roles:
     PACKING_ROLES  = (ADMIN, SUPERVISOR, EMPACADOR)
     RECEPCION_ROLES = (ADMIN, JEFE_ALMACEN, RECEPCIONISTA)
     LEAD           = (ADMIN, SUPERVISOR)
+    TRASLADO_OPS   = (PICKER_TRASLADO, PACKER_TRASLADO)
 
 
 def _puede_empacar(usuario) -> bool:
