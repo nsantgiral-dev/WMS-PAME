@@ -432,10 +432,12 @@ class MobileService:
                     return _res_cache
 
         if tipo == 'PICKING':
-            # [C5] SELECT FOR UPDATE + joinedload producto — evita lost-update y N+1
-            from sqlalchemy.orm import joinedload as _jl_scan
+            # [C5] SELECT FOR UPDATE — serializa confirmaciones concurrentes.
+            # selectinload en vez de joinedload: PostgreSQL no permite FOR UPDATE
+            # con LEFT OUTER JOIN (psycopg2.errors.FeatureNotSupported).
+            from sqlalchemy.orm import selectinload as _sl_scan
             tarea = (TareaPicking.query
-                     .options(_jl_scan(TareaPicking.producto))
+                     .options(_sl_scan(TareaPicking.producto))
                      .filter_by(id=tarea_id)
                      .with_for_update()
                      .first())
