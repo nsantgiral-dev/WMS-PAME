@@ -432,16 +432,19 @@ class MobileService:
                     return _res_cache
 
         if tipo == 'PICKING':
-            # [C5] SELECT FOR UPDATE — evita lost-update cuando dos workers (red inestable)
-            # leen cantidad_recogida al mismo tiempo y ambos suman sobre el mismo valor base.
-            tarea = TareaPicking.query.filter_by(id=tarea_id).with_for_update().first()
+            # [C5] SELECT FOR UPDATE + joinedload producto — evita lost-update y N+1
+            from sqlalchemy.orm import joinedload as _jl_scan
+            tarea = (TareaPicking.query
+                     .options(_jl_scan(TareaPicking.producto))
+                     .filter_by(id=tarea_id)
+                     .with_for_update()
+                     .first())
             if not tarea:
                 raise ValueError('Tarea no encontrada')
 
             # [P5] Bloquear picking si el pedido fue anulado en Siesa.
-            # TareaPacking lleva el flag pedido_anulado_siesa; TareaPicking usa
-            # referencia_documento (= numero_pedido_siesa) para enlazarlo.
-            if tarea.referencia_documento:
+            # Solo aplica a tareas PD — los traslados nunca tienen pedido_anulado_siesa.
+            if tarea.referencia_documento and tarea.tipo_documento != 'TRASLADO':
                 from app.models.packing import TareaPacking as _TP
                 _pk_anulado = _TP.query.filter_by(
                     numero_pedido_siesa=tarea.referencia_documento,
