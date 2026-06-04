@@ -7979,6 +7979,25 @@ async function tiendaCargarStock() {
   if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
 }
 
+async function tiendaActualizarStock() {
+  const btn = document.getElementById('tienda-btn-refresh');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.textContent = '…'; }
+  try {
+    const bodega = _TIENDA_ORIGEN.id || 'NB1';
+    await fetch(API + `/api/traslados/invalidar-cache-stock?bodega=${bodega}`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    _TIENDA_STOCK = [];
+    _TIENDA_STOCK_ESTADO = 'cargando';
+    await tiendaCargarStock();
+  } catch (e) {
+    alerta('Error actualizando stock', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '↻'; }
+  }
+}
+
 const _TIENDA_POR_PAGINA = 30;
 let _TIENDA_FILTRO = '';
 let _TIENDA_PAGINA = 1;

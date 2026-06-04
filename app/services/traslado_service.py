@@ -877,12 +877,19 @@ class TrasladoService:
                 logger.warning('[TRASLADO] stock Siesa vacío para bodega %s — usando WMS', bod)
                 return TrasladoService._get_stock_wms(bod)
 
-            # Siesa devuelve f120_referencia (código Siesa) y f400_cant_existencia_1
+            # Disponible = existencia_1 - comprometida_1 (pedidos activos) - salida_sin_conf_1 (tránsito)
+            # Mismo cálculo que Siesa muestra en pantalla de pedidos como "Disponible en UND".
             siesa_stock = {
-                str(r.get('f120_referencia', '')).strip(): int(r.get('f400_cant_existencia_1') or 0)
+                str(r.get('f120_referencia', '')).strip(): max(0,
+                    int(r.get('f400_cant_existencia_1') or 0)
+                    - int(r.get('f400_cant_comprometida_1') or 0)
+                    - int(r.get('f400_cant_salida_sin_conf_1') or 0)
+                )
                 for r in rows
                 if r.get('f120_referencia') and int(r.get('f400_cant_existencia_1') or 0) > 0
             }
+            # Excluir productos con disponible = 0 (todo el stock ya comprometido)
+            siesa_stock = {k: v for k, v in siesa_stock.items() if v > 0}
 
             if not siesa_stock:
                 return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'siesa'}

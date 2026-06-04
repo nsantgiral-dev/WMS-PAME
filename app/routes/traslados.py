@@ -774,6 +774,23 @@ def stock_disponible():
         return jsonify({'error': str(e)}), 500
 
 
+@traslados_bp.route('/invalidar-cache-stock', methods=['POST'])
+@jwt_required()
+def invalidar_cache_stock():
+    """Invalida el cache TTL de stock Siesa para forzar recarga en la próxima consulta."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    _roles = Roles.DESPACHO + (Roles.TIENDA, Roles.PICKER_TRASLADO, Roles.PACKER_TRASLADO)
+    if not usuario or usuario.rol not in _roles:
+        return jsonify({'error': 'Sin permiso'}), 403
+    bodega = request.args.get('bodega')
+    TrasladoService.invalidar_cache_stock(bodega)
+    return jsonify({'ok': True, 'bodega': bodega or 'todas'}), 200
+
+
 @traslados_bp.route('/bodegas-siesa', methods=['GET'])
 @jwt_required()
 def bodegas_siesa():
