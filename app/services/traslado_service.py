@@ -618,9 +618,20 @@ class TrasladoService:
             bodega_siesa_id=solicitud.bodega_origen_siesa
         ).first()
         if not almacen:
-            # Tienda sin gestión WMS (NS1, FC1, PC1…) — crear Almacen + Ubicacion
-            # virtuales y generar TareasPicking sin FEFO. El picker confirma
-            # manualmente lo que tiene físico en la tienda.
+            # Tienda sin gestión WMS — crear Almacen + Ubicacion virtuales
+            return TrasladoService._crear_picking_tienda(solicitud)
+
+        # Verificar si el almacen tiene inventario WMS gestionado (UbicacionProducto).
+        # Un almacen virtual de tienda (creado automáticamente para compatibilidad de FK)
+        # no tiene UbicacionProducto → tratar igual que si no existiera almacen.
+        from app.models.inventario import UbicacionProducto as _UP
+        from app.models.ubicacion import Ubicacion as _Ub
+        tiene_inventario_wms = (
+            _UP.query.join(_Ub, _UP.ubicacion_id == _Ub.id)
+            .filter(_Ub.almacen_id == almacen.id)
+            .limit(1).count() > 0
+        )
+        if not tiene_inventario_wms:
             return TrasladoService._crear_picking_tienda(solicitud)
 
         sin_stock = []
