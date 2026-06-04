@@ -122,6 +122,7 @@ class SolicitudTraslado(db.Model):
             'items': [i.to_dict() for i in self.items],
             'total_items': len(self.items),
             'picking_progreso': self._picking_progreso(),
+            'packing_info': self._packing_info(),
         }
 
     def _picking_progreso(self):
@@ -147,6 +148,21 @@ class SolicitudTraslado(db.Model):
             'completadas': completadas,
             'sin_tareas': False,
             'porcentaje': round(completadas / total * 100),
+        }
+
+    def _packing_info(self):
+        """TareaPacking activa — solo relevante en EN_PACKING."""
+        if self.estado != 'EN_PACKING':
+            return None
+        tareas = self.tareas_packing
+        if not tareas:
+            return None
+        t = tareas[0]
+        return {
+            'id': t.id,
+            'codigo': t.codigo,
+            'estado': t.estado,
+            'empacador': t.empacador.nombre if t.empacador else None,
         }
 
 

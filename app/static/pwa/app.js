@@ -1708,9 +1708,6 @@ async function procesarScan(codigo) {
   if (EMP_TAREA && document.getElementById('emp-hud')?.classList.contains('activo')) {
     await empProcesarEscaneo(codigo); return;
   }
-  // HUDs de traslados (picker_traslado y packer_traslado)
-  if (TRAS_PICK) { await trasPickerScan(codigo); return; }
-  if (TRAS_PACK) { trasPackerScan(codigo); return; }
   if (!TAREA_ACTUAL) return;
   vibrar(); flash();
 
@@ -4069,6 +4066,7 @@ async function cargarUsuarios() {
 }
 
 function _formUsuario(u = {}) {
+  const _TIENDA_ROLES = ['tienda', 'picker_traslado', 'packer_traslado'];
   return `
     <div style="font-size:15px;font-weight:700;margin-bottom:16px;">${u.id ? 'Editar usuario' : 'Nuevo usuario'}</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
@@ -4078,7 +4076,7 @@ function _formUsuario(u = {}) {
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
       <input id="u-password" placeholder="${u.id ? 'Nueva contraseña (dejar vacío para no cambiar)' : 'Contraseña'}" type="password"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-      <select id="u-rol" onchange="document.getElementById('u-tienda-fields').style.display=this.value==='tienda'?'block':'none';document.getElementById('u-conductor-fields').style.display=this.value==='conductor'?'block':'none';"
+      <select id="u-rol" onchange="(function(v){var tr=['tienda','picker_traslado','packer_traslado'];document.getElementById('u-tienda-fields').style.display=tr.includes(v)?'block':'none';document.getElementById('u-conductor-fields').style.display=v==='conductor'?'block':'none';var canPicar=document.getElementById('u-puede-picar').checked;document.getElementById('u-conteo-wrapper').style.display=(canPicar&&!tr.includes(v))?'block':'none';})(this.value)"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
         <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario (pedidos)</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
@@ -4111,8 +4109,8 @@ function _formUsuario(u = {}) {
           </div>
         </div>
       </div>
-      <!-- Campos tienda (solo si rol=tienda) -->
-      <div id="u-tienda-fields" style="display:${(u.rol==='tienda')?'block':'none'};">
+      <!-- Campos tienda / picker_traslado / packer_traslado -->
+      <div id="u-tienda-fields" style="display:${_TIENDA_ROLES.includes(u.rol)?'block':'none'};">
         <select id="u-bodega-siesa"
           onchange="(function(sel){const nombres={'NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito'};document.getElementById('u-nombre-pv').value=nombres[sel.value]||'';})(this)"
           style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
@@ -4132,7 +4130,7 @@ function _formUsuario(u = {}) {
       <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
         <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
-          <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;" onchange="document.getElementById('u-conteo-wrapper').style.display=this.checked?'block':'none'">
+          <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;" onchange="(function(cb){var tr=['tienda','picker_traslado','packer_traslado'];var v=document.getElementById('u-rol').value;document.getElementById('u-conteo-wrapper').style.display=(cb.checked&&!tr.includes(v))?'block':'none';})(this)">
           <div>
             <div style="font-size:14px;font-weight:600;color:#60a5fa;">Picker</div>
             <div style="font-size:11px;color:#555;">Puede recoger productos del almacén</div>
@@ -4159,7 +4157,7 @@ function _formUsuario(u = {}) {
             <div style="font-size:11px;color:#555;">Muestra botón de cámara en picking y recepción</div>
           </div>
         </label>
-        <div id="u-conteo-wrapper" style="margin-top:14px;padding-top:14px;border-top:1px solid #222;display:${u.puede_picar!==false?'block':'none'};">
+        <div id="u-conteo-wrapper" style="margin-top:14px;padding-top:14px;border-top:1px solid #222;display:${(u.puede_picar!==false && !_TIENDA_ROLES.includes(u.rol))?'block':'none'};">
           <label style="font-size:12px;color:#888;display:block;margin-bottom:6px;">Conteos cíclicos por día (0 = sin límite)</label>
           <input id="u-capacidad-conteo" type="number" min="0" max="200" step="1"
             value="${u.capacidad_diaria_conteo ?? 15}"
@@ -8971,7 +8969,10 @@ function _renderRequisicionCard(r) {
     : r.estado === 'EN_PICKING'
       ? `<span style="font-size:12px;color:#2563eb;font-weight:600;">🔍 Operario pickeando...</span>`
     : r.estado === 'EN_PACKING'
-      ? `<span style="font-size:12px;color:#ea580c;font-weight:600;">📦 Empacador verificando...</span>`
+      ? `<div style="text-align:right;">
+           <span style="font-size:12px;color:#ea580c;font-weight:600;">📦 Empacador verificando...</span>
+           ${r.packing_info ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${r.packing_info.codigo} · ${r.packing_info.empacador || 'sin asignar'}</div>` : ''}
+         </div>`
     : r.estado === 'PREPARADO'
       ? `<button onclick="despacharRequisicion(${r.id})"
            style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
