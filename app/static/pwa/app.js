@@ -8966,6 +8966,15 @@ async function cargarRequisiciones() {
   }
 }
 
+const _REQ_BODEGA_NOMBRES = {
+  'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
+  'NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro',
+  'PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito',
+};
+function _reqNombreBodega(id) {
+  return id ? (_REQ_BODEGA_NOMBRES[id] ? `${_REQ_BODEGA_NOMBRES[id]} (${id})` : id) : '—';
+}
+
 function _renderRequisicionCard(r) {
   const BADGE = {
     ENVIADA:    { color: '#d97706', bg: '#fef3c7', label: '⏳ Pendiente aprobar' },
@@ -9015,11 +9024,17 @@ function _renderRequisicionCard(r) {
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
           <div style="font-size:13px;font-weight:700;color:var(--tx1);">${r.codigo}</div>
-          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">
-            ${r.nombre_punto_venta || r.bodega_destino_siesa} · ${fecha}
+          <div style="display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap;">
+            <span style="font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:#1e3a5f;color:#93c5fd;">
+              📦 ${_reqNombreBodega(r.bodega_origen_siesa)}
+            </span>
+            <span style="font-size:12px;color:var(--tx3);">→</span>
+            <span style="font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:#431407;color:#fb923c;">
+              🏪 ${r.nombre_punto_venta ? `${r.nombre_punto_venta} (${r.bodega_destino_siesa || ''})` : _reqNombreBodega(r.bodega_destino_siesa)}
+            </span>
           </div>
-          <div style="font-size:11px;color:var(--tx3);">
-            Solicitado por: ${r.solicitante_nombre || '—'}
+          <div style="font-size:11px;color:var(--tx3);margin-top:3px;">
+            Solicita: <strong style="color:var(--tx2);">${r.solicitante_nombre || '—'}</strong> · ${fecha}
           </div>
         </div>
         <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;
