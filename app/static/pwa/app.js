@@ -3913,7 +3913,10 @@ async function bultosConfirmar() {
     EMP_ITEMS = [];
     alerta(`${data.bultos.length} pieza(s) registradas — Siesa procesó la factura`, 'exito');
     empCargarTareas();
-    empMostrarBotonFactura(tareaId, data.numero_pedido);
+    // Factura solo para empacadores NB1 con tareas PD — los packer_traslado
+    // cierran traslados (numero_pedido=null) y no generan factura/remisión.
+    const _esPacTras = OPERARIO && ['packer_traslado','picker_traslado'].includes(OPERARIO.rol);
+    if (data.numero_pedido && !_esPacTras) empMostrarBotonFactura(tareaId, data.numero_pedido);
 
   } catch (e) {
     errEl.textContent = 'Error de conexión';
