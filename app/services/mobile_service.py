@@ -204,21 +204,23 @@ class MobileService:
         )
 
         if not tarea:
-            # Sin picking pendiente — buscar conteo sin asignar
-            # with_for_update(skip_locked=True) evita que dos workers tomen el mismo conteo
-            conteo = (SesionConteo.query
-                      .filter_by(estado='PENDIENTE', operario_id=None)
-                      .order_by(SesionConteo.fecha_creacion.asc())
-                      .with_for_update(skip_locked=True)
-                      .first())
+            # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1
+            if not _solo_traslado:
+                # Sin picking pendiente — buscar conteo sin asignar
+                # with_for_update(skip_locked=True) evita que dos workers tomen el mismo conteo
+                conteo = (SesionConteo.query
+                          .filter_by(estado='PENDIENTE', operario_id=None)
+                          .order_by(SesionConteo.fecha_creacion.asc())
+                          .with_for_update(skip_locked=True)
+                          .first())
 
-            if conteo:
-                conteo.operario_id = operario_id
-                conteo.estado = EstadoConteo.EN_PROCESO
-                conteo.fecha_inicio = datetime.utcnow()
-                db.session.commit()
-                logger.info(f'[MOBILE] Conteo {conteo.codigo} asignado a operario {operario_id}')
-                return MobileService._conteo_a_dict(conteo)
+                if conteo:
+                    conteo.operario_id = operario_id
+                    conteo.estado = EstadoConteo.EN_PROCESO
+                    conteo.fecha_inicio = datetime.utcnow()
+                    db.session.commit()
+                    logger.info(f'[MOBILE] Conteo {conteo.codigo} asignado a operario {operario_id}')
+                    return MobileService._conteo_a_dict(conteo)
 
             # Sin picking ni conteo — verificar packing
             resultado = MobileService.get_tareas_operario(operario_id)
@@ -263,7 +265,7 @@ class MobileService:
                         f'({conteos_hoy}/{capacidad}) — no se inyecta conteo'
                     )
 
-            if bajo_tope:
+            if bajo_tope and not _solo_traslado:
                 from sqlalchemy.orm import joinedload as _jl_cm
                 conteo_mismo_lugar = (SesionConteo.query
                     .options(_jl_cm(SesionConteo.producto))

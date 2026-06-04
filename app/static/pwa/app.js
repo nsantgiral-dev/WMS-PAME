@@ -1217,7 +1217,17 @@ async function pedirTarea() {
     const d = await get('/api/mobile/tarea-actual');
     if (!d || d.sin_tareas) {
       TAREA_ACTUAL = null;
-      document.getElementById('contenido-tarea').innerHTML = `
+      const _esTiendaOp = OPERARIO && ['picker_traslado', 'packer_traslado'].includes(OPERARIO.rol);
+      document.getElementById('contenido-tarea').innerHTML = _esTiendaOp ? `
+        <div style="text-align:center;padding:40px 20px 16px;">
+          <div style="font-size:60px;">📦</div>
+          <div style="font-size:22px;font-weight:700;margin-top:12px;">No hay traslados pendientes</div>
+          <div style="font-size:14px;color:#666;margin-top:6px;">Serás asignado automáticamente cuando llegue una solicitud</div>
+          <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
+            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#431407;color:#fb923c;font-weight:700;">TRASLADO</span>
+          </div>
+        </div>
+        <div id="traslados-operario" style="padding:0 16px 16px;"></div>` : `
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">✓</div>
           <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin tareas pendientes</div>
