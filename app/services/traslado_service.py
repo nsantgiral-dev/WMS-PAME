@@ -213,7 +213,7 @@ class TrasladoService:
                     item.cantidad_enviada = max(0, mapa[item.id])
         else:
             for item in s.items:
-                if item.cantidad_enviada is None:
+                if not item.cantidad_enviada:
                     item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
 
         # ── Crear TareaPacking unificada (ST) ────────────────────────────────
