@@ -1847,10 +1847,14 @@ class ConnektaGateway:
             pages_in_batch = list(range(pag, min(pag + batch, 201)))
 
             def _fetch(p, _bod=bodega_id, _tam=tam):
-                return self._get(self.api_inventario, {
-                    'paginacion': f'numPag={p}|tamPag={_tam}',
-                    'parametros': f"f150_id = ''{_bod}'' AND f400_cant_existencia_1 > 0"
-                })
+                try:
+                    return self._get(self.api_inventario, {
+                        'paginacion': f'numPag={p}|tamPag={_tam}',
+                        'parametros': f"f150_id = ''{_bod}'' AND f400_cant_existencia_1 > 0"
+                    })
+                except Exception:
+                    # 400 / timeout en páginas más allá del fin del catálogo → sin datos
+                    return {'detalle': {'Table': []}}
 
             with ThreadPoolExecutor(max_workers=batch) as ex:
                 # map preserva orden: batch_results[i] == resultado de pages_in_batch[i]
