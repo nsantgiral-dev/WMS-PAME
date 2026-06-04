@@ -1824,25 +1824,53 @@ class ConnektaGateway:
     # Límite de página de Connekta para API_v2_Inventarios_InvFecha.
     # tamPag=120+ devuelve alerta "registros exceden el permitido"; 100 es el máximo seguro.
     _CONNEKTA_MAX_TAM_PAG = 100
+    # Páginas paralelas por bodega — 3 es seguro sin riesgo de 429 (backoff=5min).
+    _STOCK_BATCH_SIZE = 3
 
     def get_stock_bodega(self, bodega_id: str):
         """API_v2_Inventarios_InvFecha — existencia real en una bodega específica.
-        Pagina hasta 200 × 100 = 20 000 ítems — cubre catálogos de cualquier tamaño."""
-        all_rows = []
-        tam = self._CONNEKTA_MAX_TAM_PAG
-        for pag in range(1, 201):  # 200 págs × 100 = 20 000 ítems máx
-            res = self._get(self.api_inventario, {
-                'paginacion': f'numPag={pag}|tamPag={tam}',
+        Batches de 3 páginas en paralelo: ~3x más rápido, mismas cantidades."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        if self.modo_simulacion:
+            return self._get(self.api_inventario, {
+                'paginacion': 'numPag=1|tamPag=3',
                 'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0"
             })
-            if self.modo_simulacion:
-                return res
-            rows = res.get('detalle', {}).get('Table', [])
-            if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+
+        tam = self._CONNEKTA_MAX_TAM_PAG
+        batch = self._STOCK_BATCH_SIZE
+        all_rows = []
+        pag = 1
+
+        while pag <= 200:
+            pages_in_batch = list(range(pag, min(pag + batch, 201)))
+
+            def _fetch(p, _bod=bodega_id, _tam=tam):
+                return self._get(self.api_inventario, {
+                    'paginacion': f'numPag={p}|tamPag={_tam}',
+                    'parametros': f"f150_id = ''{_bod}'' AND f400_cant_existencia_1 > 0"
+                })
+
+            with ThreadPoolExecutor(max_workers=batch) as ex:
+                # map preserva orden: batch_results[i] == resultado de pages_in_batch[i]
+                batch_results = list(ex.map(_fetch, pages_in_batch))
+
+            done = False
+            for res in batch_results:
+                rows = res.get('detalle', {}).get('Table', [])
+                if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                    done = True
+                    break
+                all_rows.extend(rows)
+                if len(rows) < tam:
+                    done = True
+                    break
+
+            if done:
                 break
-            all_rows.extend(rows)
-            if len(rows) < tam:
-                break
+            pag += batch
+
         return {'detalle': {'Table': all_rows}}
 
     # ── Traslados entre bodegas ────────────────────────────────────────────────

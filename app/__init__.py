@@ -174,6 +174,7 @@ def create_app():
             ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
             ('app.services.reconciliacion_service',     'init_scheduler',          '[RECONCILIACION_SCHEDULER]'),
             ('app.services.alertas_service',            'init_scheduler',          '[ALERTAS_SCHEDULER]'),
+            ('app.services.traslado_service',           'init_scheduler',          '[STOCK_PREWARM]'),
         ]
         _app_logger = logging.getLogger(__name__)
         for _mod_path, _fn_name, _tag in _scheduler_modules:

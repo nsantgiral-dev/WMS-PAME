@@ -1026,3 +1026,37 @@ class TrasladoService:
                 logger.warning('[TRASLADO] Usando cache de bodegas expirado como fallback')
                 return cache['data']
             raise
+
+
+# ── Stock pre-warmer — carga cache de todas las bodegas al arrancar ───────────
+
+# Todas las bodegas configuradas en el selector "Pedir desde" del frontend.
+_BODEGAS_PREWARM = ['NB1', 'NS1', 'NS2', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
+
+
+def init_scheduler(app):
+    """Pre-calienta el cache de stock Siesa para todas las bodegas.
+    Corre al arrancar (next_run_time=ahora) y cada 4 min en background.
+    TTL del cache = 5 min → el scheduler siempre llega antes de que expire."""
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    def _warm_all():
+        with app.app_context():
+            for bod in _BODEGAS_PREWARM:
+                try:
+                    TrasladoService.invalidar_cache_stock(bod)
+                    TrasladoService.get_stock_disponible(bod)
+                except Exception as exc:
+                    logger.warning('[STOCK_PREWARM] %s: %s', bod, exc)
+
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(
+        _warm_all, 'interval', minutes=4,
+        id='stock_prewarm',
+        next_run_time=datetime.utcnow(),
+    )
+    scheduler.start()
+    logger.info(
+        '[STOCK_PREWARM] Scheduler iniciado — %d bodegas cada 4 min',
+        len(_BODEGAS_PREWARM),
+    )
