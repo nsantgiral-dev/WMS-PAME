@@ -1967,11 +1967,12 @@ class ConnektaGateway:
         return self._post(self.conector_requisicion_traslado,
                           'API_v1_Inventarios_Comercial_RequisicionesParaTransferir', payload)
 
-    def compromisos_desde_requisicion(self, consec_rit: int, bodega_destino: str,
-                                      items: list):
+    def compromisos_desde_requisicion(self, consec_rit: int, bodega_origen: str,
+                                      bodega_destino: str, items: list):
         """
         174720 — Registra compromisos sobre una RIT existente con cantidades y
         ubicaciones reales del packing. Dispara después del segundo conteo (EN_PACKING).
+        bodega_origen: bodega de salida real del traslado (f441_id_bodega).
         Cada item: {codigo_siesa, cantidad, unidad_medida, ubicacion_codigo, lote}
         """
         if not consec_rit:
@@ -1980,6 +1981,7 @@ class ConnektaGateway:
             raise ValueError(
                 'SIESA_TIPO_DOCTO_RIT no configurado — requerido en 174720 para f440_id_tipo_docto'
             )
+        _bodega_sal = bodega_origen or self.bodega
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Compromisos': [
@@ -1993,7 +1995,7 @@ class ConnektaGateway:
                     'f441_codigo_barras':           None,
                     'f441_id_ext1_detalle':         None,
                     'f441_id_ext2_detalle':         None,
-                    'f441_id_bodega':               self.bodega,
+                    'f441_id_bodega':               _bodega_sal,
                     'f441_id_ubicacion_aux':        item.get('ubicacion_codigo') or None,
                     'f441_id_lote':                 item.get('lote') or None,
                     'f441_id_unidad_medida':        item.get('unidad_medida') or self.uom_default,

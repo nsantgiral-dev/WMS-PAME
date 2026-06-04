@@ -84,16 +84,18 @@ class SiesaTrasladoAdapter:
 
     # ── 174720 — Compromisos desde RIT (packing) ─────────────────────────
 
-    def registrar_compromisos(self, consec_rit: int, bodega_destino: str,
-                               items: list, codigo: str) -> dict:
+    def registrar_compromisos(self, consec_rit: int, bodega_origen: str,
+                               bodega_destino: str, items: list, codigo: str) -> dict:
         """
         174720 — Registra cantidades y ubicaciones reales confirmadas en packing.
+        bodega_origen: bodega de salida real (f441_id_bodega en Siesa).
         Debe dispararse al confirmar packing (EN_PACKING → PREPARADO).
         """
-        logger.info('[TRASLADO_ADAPTER] compromisos %s  RIT=%s  (%d ítems)',
-                    codigo, consec_rit, len(items))
+        logger.info('[TRASLADO_ADAPTER] compromisos %s  RIT=%s  %s→%s  (%d ítems)',
+                    codigo, consec_rit, bodega_origen, bodega_destino, len(items))
         return connekta.compromisos_desde_requisicion(
             consec_rit=consec_rit,
+            bodega_origen=bodega_origen,
             bodega_destino=bodega_destino,
             items=items,
         )

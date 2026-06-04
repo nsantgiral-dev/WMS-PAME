@@ -311,6 +311,7 @@ class TrasladoService:
             try:
                 siesa_traslado.registrar_compromisos(
                     consec_rit=s.siesa_requisicion_consec,
+                    bodega_origen=s.bodega_origen_siesa,
                     bodega_destino=s.bodega_destino_siesa,
                     items=_comp_items,
                     codigo=s.codigo,

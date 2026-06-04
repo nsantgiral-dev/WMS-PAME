@@ -77,6 +77,7 @@ class TrasladoPackingCloser(IPackingCloser):
                 from app.services.siesa_traslado_adapter import siesa_traslado
                 siesa_traslado.registrar_compromisos(
                     consec_rit=solicitud.siesa_requisicion_consec,
+                    bodega_origen=solicitud.bodega_origen_siesa,
                     bodega_destino=solicitud.bodega_destino_siesa,
                     items=items_comp,
                     codigo=solicitud.codigo,
