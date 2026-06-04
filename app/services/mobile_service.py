@@ -695,6 +695,7 @@ class MobileService:
             cantidad = cantidad_manual if cantidad_manual is not None else tarea.cantidad_recogida
             # Capturar antes del commit — expire_on_commit invalida los atributos
             _ref_doc = tarea.referencia_documento
+            _tipo_doc = tarea.tipo_documento
             resultado = PickingService.confirmar_picking(
                 tarea_id=tarea_id,
                 cantidad_recogida=cantidad,
@@ -735,6 +736,30 @@ class MobileService:
                 _t.Thread(target=_run_vsp, args=(almacen_id, _app), daemon=True).start()
             except Exception as _e:
                 logger.warning(f'[MOBILE] verificar_stock_picking falló silenciosamente: {_e}')
+
+            # Auto-trigger: si todos los picks de un TRASLADO están completos,
+            # avanzar la solicitud → EN_PACKING y crear TareaPacking automáticamente.
+            # Nunca afecta el flujo PD (tipo_documento != 'TRASLADO').
+            if _tipo_doc == 'TRASLADO' and _ref_doc:
+                try:
+                    from app.models.traslado import SolicitudTraslado as _ST, EstadoTraslado as _ET
+                    _sol = _ST.query.filter_by(codigo=_ref_doc).first()
+                    if _sol and _sol.estado == _ET.EN_PICKING:
+                        _pendientes = TareaPicking.query.filter(
+                            TareaPicking.referencia_documento == _ref_doc,
+                            TareaPicking.tipo_documento == 'TRASLADO',
+                            TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+                        ).count()
+                        if _pendientes == 0:
+                            from app.services.traslado_service import TrasladoService as _TS
+                            _TS.confirmar_picking_traslado(
+                                solicitud_id=_sol.id,
+                                usuario_id=operario_id,
+                            )
+                            logger.info('[MOBILE] %s → EN_PACKING auto-trigger (todos los picks completos)', _ref_doc)
+                except Exception as _e_at:
+                    logger.warning('[MOBILE] auto-trigger confirmar_picking_traslado falló: %s', _e_at)
+
             return resultado
 
         elif tipo == 'PACKING':
