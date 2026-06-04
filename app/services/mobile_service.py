@@ -222,10 +222,25 @@ class MobileService:
                     logger.info(f'[MOBILE] Conteo {conteo.codigo} asignado a operario {operario_id}')
                     return MobileService._conteo_a_dict(conteo)
 
-            # Sin picking ni conteo — verificar packing
-            resultado = MobileService.get_tareas_operario(operario_id)
-            if resultado['tareas']:
-                return resultado['tareas'][0]
+                # Sin picking ni conteo — verificar packing
+                resultado = MobileService.get_tareas_operario(operario_id)
+                if resultado['tareas']:
+                    return resultado['tareas'][0]
+                return None
+
+            # picker_traslado / packer_traslado: liberar conteos mal asignados y retornar vacío
+            _erroneos = SesionConteo.query.filter(
+                SesionConteo.operario_id == operario_id,
+                SesionConteo.estado.in_([EstadoConteo.EN_PROCESO, EstadoConteo.PENDIENTE]),
+            ).all()
+            if _erroneos:
+                for c in _erroneos:
+                    c.operario_id = None
+                    c.estado = EstadoConteo.PENDIENTE
+                    c.fecha_inicio = None
+                db.session.commit()
+                logger.info('[MOBILE] %d conteo(s) liberados de picker_traslado %s',
+                            len(_erroneos), operario_id)
             return None
 
         # ── Task Interleaving ────────────────────────────────────────────────────
