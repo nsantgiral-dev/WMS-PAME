@@ -617,11 +617,10 @@ class TrasladoService:
             bodega_siesa_id=solicitud.bodega_origen_siesa
         ).first()
         if not almacen:
-            logger.warning(
-                f'[TRASLADO] No hay almacen WMS para bodega {solicitud.bodega_origen_siesa} '
-                f'— picking manual para toda la solicitud {solicitud.codigo}'
-            )
-            return [item.producto_codigo_siesa for item in solicitud.items]
+            # Tienda sin gestión WMS (NS1, FC1, PC1…) — crear Almacen + Ubicacion
+            # virtuales y generar TareasPicking sin FEFO. El picker confirma
+            # manualmente lo que tiene físico en la tienda.
+            return TrasladoService._crear_picking_tienda(solicitud)
 
         sin_stock = []
         for item in solicitud.items:
@@ -647,6 +646,71 @@ class TrasladoService:
                     f'en {solicitud.codigo}: {e}'
                 )
         return sin_stock
+
+    @staticmethod
+    def _crear_picking_tienda(solicitud: SolicitudTraslado) -> list:
+        """
+        Crea TareasPicking para traslados cuyo origen es una tienda sin bins WMS.
+        No usa FEFO — el picker confirma manualmente las cantidades físicas.
+        Crea Almacen + Ubicacion virtuales si no existen (idempotente).
+        """
+        from app.models.ubicacion import Ubicacion
+        from app.models.picking import TareaPicking
+
+        bodega = solicitud.bodega_origen_siesa
+
+        # Get-or-create Almacen virtual para la tienda
+        almacen = Almacen.query.filter_by(bodega_siesa_id=bodega).first()
+        if not almacen:
+            almacen = Almacen(
+                codigo=bodega,
+                nombre=f'Tienda {bodega}',
+                bodega_siesa_id=bodega,
+                activo=True,
+            )
+            db.session.add(almacen)
+            db.session.flush()
+            logger.info('[TRASLADO] Almacen virtual creado para tienda %s', bodega)
+
+        # Get-or-create Ubicacion virtual "TIENDA"
+        codigo_ub = f'{bodega}-TIENDA'
+        ubicacion = Ubicacion.query.filter_by(codigo=codigo_ub).first()
+        if not ubicacion:
+            ubicacion = Ubicacion(
+                codigo=codigo_ub,
+                almacen_id=almacen.id,
+                tipo_zona='GENERAL',
+                activo=True,
+            )
+            db.session.add(ubicacion)
+            db.session.flush()
+            logger.info('[TRASLADO] Ubicacion virtual creada: %s', codigo_ub)
+
+        # Crear TareasPicking directas (sin FEFO — tienda no tiene bins WMS)
+        for item in solicitud.items:
+            cantidad = item.cantidad_aprobada or item.cantidad_solicitada
+            if not cantidad or cantidad <= 0 or not item.producto_id:
+                continue
+            codigo = f'PICK-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{uuid.uuid4().hex[:6].upper()}'
+            tarea = TareaPicking(
+                codigo=codigo,
+                producto_id=item.producto_id,
+                cantidad_solicitada=cantidad,
+                ubicacion_id=ubicacion.id,
+                almacen_id=almacen.id,
+                estado='PENDIENTE',
+                prioridad=10,
+                referencia_documento=solicitud.codigo,
+                tipo_documento='TRASLADO',
+                bodega_origen_siesa=bodega,
+                operario_id=solicitud.operario_id,
+            )
+            db.session.add(tarea)
+            logger.info('[TRASLADO] %s TareaPicking tienda creada: %s × %s uds',
+                        solicitud.codigo, item.producto_id, cantidad)
+
+        db.session.commit()
+        return []  # Sin "sin_stock" — la tienda confirma lo que tiene físicamente
 
     @staticmethod
     def _liberar_reservas_traslado(solicitud: SolicitudTraslado):
