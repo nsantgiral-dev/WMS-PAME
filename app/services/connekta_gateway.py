@@ -1821,13 +1821,18 @@ class ConnektaGateway:
             payload,
         )
 
+    # Límite de página de Connekta para API_v2_Inventarios_InvFecha.
+    # tamPag=120+ devuelve alerta "registros exceden el permitido"; 100 es el máximo seguro.
+    _CONNEKTA_MAX_TAM_PAG = 100
+
     def get_stock_bodega(self, bodega_id: str):
         """API_v2_Inventarios_InvFecha — existencia real en una bodega específica.
-        Pagina hasta 10 × 500 = 5 000 ítems — cubre catálogos de hasta 5 000 SKU con stock."""
+        Pagina hasta 200 × 100 = 20 000 ítems — cubre catálogos de cualquier tamaño."""
         all_rows = []
-        for pag in range(1, 11):  # 10 págs × 500 = 5 000 ítems máx
+        tam = self._CONNEKTA_MAX_TAM_PAG
+        for pag in range(1, 201):  # 200 págs × 100 = 20 000 ítems máx
             res = self._get(self.api_inventario, {
-                'paginacion': f'numPag={pag}|tamPag=500',
+                'paginacion': f'numPag={pag}|tamPag={tam}',
                 'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0"
             })
             if self.modo_simulacion:
@@ -1836,7 +1841,7 @@ class ConnektaGateway:
             if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
                 break
             all_rows.extend(rows)
-            if len(rows) < 500:
+            if len(rows) < tam:
                 break
         return {'detalle': {'Table': all_rows}}
 
