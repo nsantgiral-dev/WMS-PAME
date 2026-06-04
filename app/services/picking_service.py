@@ -184,29 +184,35 @@ class PickingService:
             producto_id=tarea.producto_id
         ).with_for_update().first()
 
-        if not reg or reg.cantidad < cantidad_recogida:
-            raise ValueError('Stock insuficiente en ubicación')
+        # Tienda virtual (código *-TIENDA): sin UbicacionProducto en WMS.
+        # El stock se mueve en Siesa vía 174720/174930 al cerrar packing — no aquí.
+        _tienda_virtual = reg is None and tarea.tipo_documento == 'TRASLADO'
 
-        # Descontar stock real
-        saldo_antes = reg.cantidad
-        reg.cantidad -= cantidad_recogida
-        reg.reservado = max(0, reg.reservado - tarea.cantidad_solicitada)
-        reg.row_version += 1
+        if not _tienda_virtual:
+            if not reg or reg.cantidad < cantidad_recogida:
+                raise ValueError('Stock insuficiente en ubicación')
 
-        # Registrar movimiento
-        movimiento = MovimientoInventario(
-            producto_id=tarea.producto_id,
-            ubicacion_id=tarea.ubicacion_id,
-            almacen_id=tarea.almacen_id,
-            tipo='SALIDA',
-            cantidad=cantidad_recogida,
-            saldo_antes=saldo_antes,
-            saldo_despues=reg.cantidad,
-            motivo=f'Picking {tarea.codigo}',
-            numero_documento=tarea.referencia_documento,
-            usuario_id=usuario_id,
-            idempotency_key=f'PICK-{tarea.id}'
-        )
+            # Descontar stock real
+            saldo_antes = reg.cantidad
+            reg.cantidad -= cantidad_recogida
+            reg.reservado = max(0, reg.reservado - tarea.cantidad_solicitada)
+            reg.row_version += 1
+
+            # Registrar movimiento
+            movimiento = MovimientoInventario(
+                producto_id=tarea.producto_id,
+                ubicacion_id=tarea.ubicacion_id,
+                almacen_id=tarea.almacen_id,
+                tipo='SALIDA',
+                cantidad=cantidad_recogida,
+                saldo_antes=saldo_antes,
+                saldo_despues=reg.cantidad,
+                motivo=f'Picking {tarea.codigo}',
+                numero_documento=tarea.referencia_documento,
+                usuario_id=usuario_id,
+                idempotency_key=f'PICK-{tarea.id}'
+            )
+            db.session.add(movimiento)
 
         # Actualizar tarea
         tarea.cantidad_recogida = cantidad_recogida
@@ -218,7 +224,6 @@ class PickingService:
         # Capturar referencia_documento antes del commit — expire_on_commit la invalida
         _ref_doc_cp = tarea.referencia_documento
 
-        db.session.add(movimiento)
         db.session.commit()
 
         # Auto-sync packing asociado — ajusta cantidad_esperada al recogido real
