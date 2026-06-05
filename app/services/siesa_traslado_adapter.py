@@ -82,6 +82,10 @@ class SiesaTrasladoAdapter:
         """Recovery: consulta API v2 cuando el consecutivo de 173076 no llegó en la respuesta."""
         return connekta.get_consec_salida_transito_by_alterno(codigo)
 
+    def recuperar_consec_rit(self, codigo: str) -> 'int | None':
+        """Recovery: consulta API v2 cuando v3.1 no devuelve el consecutivo de la RIT."""
+        return connekta.get_consec_rit_by_referencia(codigo)
+
     # ── 174720 — Compromisos desde RIT (packing) ─────────────────────────
 
     def registrar_compromisos(self, consec_rit: int, bodega_origen: str,

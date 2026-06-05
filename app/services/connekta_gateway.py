@@ -2293,6 +2293,29 @@ class ConnektaGateway:
             logger.warning(f'[CONNEKTA] get_consec_salida_transito_by_alterno({codigo_solicitud}): {e}')
         return None
 
+    def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
+        """
+        API_v2_Inventarios_RequisicionesParaTransferir (GET)
+        Recovery: v3.1 no devuelve consecutivo en la respuesta; lo busca por
+        f440_referencia = codigo_solicitud.
+        Retorna f350_consec_docto o None si no encuentra o si la API no existe.
+        """
+        try:
+            res = self._get(
+                'API_v2_Inventarios_RequisicionesParaTransferir',
+                params_extra={
+                    'paginacion': 'numPag=1|tamPag=5',
+                    'parametros': f"f440_referencia = ''{codigo_solicitud}''",
+                }
+            )
+            tabla = (res.get('detalle') or {}).get('Table') or []
+            if tabla:
+                consec = tabla[0].get('f350_consec_docto')
+                return int(consec) if consec else None
+        except Exception as e:
+            logger.warning(f'[CONNEKTA] get_consec_rit_by_referencia({codigo_solicitud}): {e}')
+        return None
+
     def transferencia_directa(self, bodega_origen: str, bodega_destino: str,
                                items: list, codigo_solicitud: str):
         """

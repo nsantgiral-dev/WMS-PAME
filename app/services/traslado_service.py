@@ -219,7 +219,15 @@ class TrasladoService:
                             s.siesa_error = None
                             logger.info('[TRASLADO] %s RIT → consec %s', s.codigo, consec)
                         else:
-                            logger.warning('[TRASLADO] %s RIT sin consecutivo', s.codigo)
+                            # v3.1 no devuelve consecutivo; recovery via API v2
+                            consec_rec = siesa_traslado.recuperar_consec_rit(s.codigo)
+                            if consec_rec:
+                                s.siesa_requisicion_consec = consec_rec
+                                s.siesa_error = None
+                                logger.info('[TRASLADO] %s RIT consec recuperado API v2: %s',
+                                            s.codigo, consec_rec)
+                            else:
+                                logger.warning('[TRASLADO] %s RIT sin consecutivo', s.codigo)
                 except Exception as e_rit:
                     s.siesa_error = f'RIT 174646: {e_rit}'
                     logger.error('[TRASLADO] %s Error RIT: %s', s.codigo, e_rit)
