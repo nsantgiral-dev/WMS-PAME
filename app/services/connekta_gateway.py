@@ -1914,7 +1914,7 @@ class ConnektaGateway:
                     'f440_id_tipo_docto': self.tipo_docto_req_traslado,
                     'f440_consec_docto': 0,
                     'f440_fecha': fecha_hoy,
-                    'f440_id_tercero': self.nit_empresa or None,
+                    'f440_id_tercero': None,
                     'f440_id_solicitante': self.req_solicitante or None,  # [A12] None when empty — Siesa rejects ''
                     'f440_fecha_entrega': fecha_hoy,
                     'f440_num_dias_entrega': 0,
