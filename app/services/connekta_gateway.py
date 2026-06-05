@@ -1967,7 +1967,9 @@ class ConnektaGateway:
         logger.info(f'[CONNEKTA] Requisicion traslado {codigo_solicitud} '
                     f'{bodega_origen}→{bodega_destino} ({len(items)} items)')
         return self._post(self.conector_requisicion_traslado,
-                          self.nombre_conector_req_traslado, payload)
+                          self.nombre_conector_req_traslado, payload,
+                          url=self.url_post_dinamico,
+                          extra_params={'idSistema': self.id_sistema})
 
     def compromisos_desde_requisicion(self, consec_rit: int, bodega_origen: str,
                                       bodega_destino: str, items: list):
