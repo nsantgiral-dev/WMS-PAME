@@ -2109,8 +2109,6 @@ class ConnektaGateway:
                     'f462_notas': None,
                 }
             ],
-            # Spec 173076 incluye sección serial — vacío para productos sin número de serie
-            'Movimiento de Seriales': [],
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
@@ -2227,8 +2225,6 @@ class ConnektaGateway:
                     'f462_notas': None,
                 }
             ],
-            # Spec 173079 incluye sección serial — vacío para productos sin número de serie
-            'Movimiento de Seriales': [],
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
