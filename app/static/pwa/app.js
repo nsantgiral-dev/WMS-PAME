@@ -8958,7 +8958,12 @@ async function cargarRequisiciones() {
     const promesas = _REQ_ESTADOS.map(e => get(`/api/traslados/?estado=${e}`).catch(() => ({ solicitudes: [] })));
     const resultados = await Promise.all(promesas);
     const todas = resultados.flatMap(r => r.solicitudes || []);
-    todas.sort((a, b) => new Date(a.fecha_creacion) - new Date(b.fecha_creacion));
+    const _prioEstado = { 'ENVIADA': 0, 'EN_PICKING': 1, 'EN_PACKING': 2, 'PREPARADO': 3 };
+    todas.sort((a, b) => {
+      const ep = (_prioEstado[a.estado] ?? 99) - (_prioEstado[b.estado] ?? 99);
+      if (ep !== 0) return ep;
+      return new Date(b.fecha_creacion) - new Date(a.fecha_creacion);
+    });
     if (!todas.length) {
       lista.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones pendientes</div>';
       return;
