@@ -51,6 +51,8 @@ class ConnektaGateway:
         self.api_clasificacion = os.getenv('CONNEKTA_API_CLASIFICACION', '238920')  # CLASIFICACION DE ITEMS
         # Traslados entre bodegas (puntos de venta)
         self.conector_requisicion_traslado = os.getenv('CONNEKTA_CONECTOR_REQ_TRASLADO', '174646')
+        self.nombre_conector_req_traslado  = os.getenv('CONNEKTA_NOMBRE_REQ_TRASLADO',
+                                                        'API_v1_Inventarios_Comercial_RequisicionesParaTransferir')
         self.conector_transito_salida = os.getenv('CONNEKTA_CONECTOR_TRANSITO_SALIDA', '173076')
         self.conector_transito_entrada = os.getenv('CONNEKTA_CONECTOR_TRANSITO_ENTRADA', '173079')
         self.conector_transferencia_directa = os.getenv('CONNEKTA_CONECTOR_TRANSF_DIRECTA', '173066')
@@ -1965,7 +1967,7 @@ class ConnektaGateway:
         logger.info(f'[CONNEKTA] Requisicion traslado {codigo_solicitud} '
                     f'{bodega_origen}→{bodega_destino} ({len(items)} items)')
         return self._post(self.conector_requisicion_traslado,
-                          'API_v1_Inventarios_Comercial_RequisicionesParaTransferir', payload)
+                          self.nombre_conector_req_traslado, payload)
 
     def compromisos_desde_requisicion(self, consec_rit: int, bodega_origen: str,
                                       bodega_destino: str, items: list):
