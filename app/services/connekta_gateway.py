@@ -1952,10 +1952,10 @@ class ConnektaGateway:
                     'f441_id_proyecto': None,
                     'f441_notas': None,
                     'f441_id_un_movto': self.unidad_negocio,
-                    'f441_precio_unitario': 0,
-                    'f441_id_ubicacion_sal': item.get('ubicacion_codigo') or '',
-                    'f441_id_proy_etapa': '',
-                    'f441_id_rubro_pof': '',
+                    'f441_precio_unitario': 0.0,
+                    'f441_id_ubicacion_sal': item.get('ubicacion_codigo') or ' ',
+                    'f441_id_proy_etapa': ' ',
+                    'f441_id_rubro_pof': ' ',
                 }
                 for idx, item in enumerate(items)
             ],
