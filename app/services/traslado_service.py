@@ -4,8 +4,9 @@ y puntos de venta. Máquina de estados + Siesa triggers.
 
 Flujo normal (EN_TRANSITO):
   1. Tienda crea solicitud (BORRADOR) y envía (ENVIADA)
-  2. Admin bodega aprueba → fire 174646 (requisición Siesa) → tareas picking
-  3. Empacador sella cajas → despacho → fire 173076 (salida tránsito)
+  2. Admin bodega aprueba → tareas picking (sin RIT aún)
+  2b. Picker confirma → fire 174646 RIT con ubicaciones reales → tarea packing
+  3. Empacador sella cajas → despacho → fire 174930 (STS desde RIT)
   4. Conductor carga, llega a tienda
   5. Admin tienda confirma recepción → fire 173079 (entrada tránsito)
 
@@ -151,39 +152,6 @@ class TrasladoService:
                 f'({tareas_sin_stock}) — picking manual requerido para esos ítems'
             )
 
-        # ── 174646 (RIT) — reserva en SIESA al aprobar ──
-        # Se crea aquí con cantidades aprobadas para que SIESA blinde el inventario
-        # en "Comprometido" antes de que el operario empiece a recoger.
-        # Ubicaciones reales se envían luego en 174720 al confirmar packing.
-        _rit_items = [
-            {
-                'codigo_siesa':     item.producto_codigo_siesa,
-                'cantidad':         item.cantidad_aprobada or 0,
-                'unidad_medida':    (item.producto.unidad_medida if item.producto else '') or '',
-                'ubicacion_codigo': None,
-            }
-            for item in s.items
-            if (item.cantidad_aprobada or 0) > 0 and item.producto_codigo_siesa
-        ]
-        if _rit_items:
-            try:
-                res_rit = siesa_traslado.crear_rit(
-                    bodega_origen=s.bodega_origen_siesa,
-                    bodega_destino=s.bodega_destino_siesa,
-                    items=_rit_items,
-                    codigo=s.codigo,
-                )
-                if not res_rit.get('simulado') and not res_rit.get('modo_ensayo'):
-                    consec = TrasladoService._extraer_consec(res_rit)
-                    if consec:
-                        s.siesa_requisicion_consec = consec
-                        logger.info('[TRASLADO] %s RIT creada al aprobar → consec %s', s.codigo, consec)
-                    else:
-                        logger.warning('[TRASLADO] %s RIT aceptada sin consecutivo', s.codigo)
-            except Exception as e_rit:
-                s.siesa_error = f'RIT 174646: {e_rit}'
-                logger.error('[TRASLADO] %s Error RIT al aprobar: %s', s.codigo, e_rit)
-
         db.session.commit()
         logger.info(f'[TRASLADO] {s.codigo} → EN_PICKING (aprobado por {aprobador_id}, operario {operario_id})')
         return s
@@ -192,9 +160,9 @@ class TrasladoService:
     def confirmar_picking_traslado(solicitud_id: int, usuario_id: int,
                                    items_confirmados: list = None) -> SolicitudTraslado:
         """
-        Operario terminó el picking. Actualiza cantidades reales y transiciona
-        EN_PICKING → EN_PACKING. La RIT (174646) ya fue creada al aprobar;
-        174720 (Compromisos con ubicaciones reales) se dispara en confirmar_packing.
+        Operario terminó el picking. Actualiza cantidades reales, dispara RIT 174646
+        con ubicaciones reales y transiciona EN_PICKING → EN_PACKING.
+        174720 (Compromisos) se dispara en confirmar_packing.
         items_confirmados: [{'id': item_id, 'cantidad_confirmada': N}]
         """
         from app.models.picking import TareaPicking, EstadoPicking as _EP
@@ -215,6 +183,46 @@ class TrasladoService:
             for item in s.items:
                 if not item.cantidad_enviada:
                     item.cantidad_enviada = item.cantidad_aprobada or item.cantidad_solicitada
+
+        # ── 174646 RIT: reserva SIESA con ubicaciones reales del picking ──
+        if not s.siesa_requisicion_consec:
+            _tareas_rit = TareaPicking.query.filter_by(
+                referencia_documento=s.codigo,
+                tipo_documento='TRASLADO',
+                estado=_EP.COMPLETADO,
+            ).all()
+            _ubicaciones_rit = {
+                t.producto_id: t.ubicacion.codigo for t in _tareas_rit if t.ubicacion
+            }
+            _rit_items = [
+                {
+                    'codigo_siesa':     item.producto_codigo_siesa,
+                    'cantidad':         item.cantidad_enviada or 0,
+                    'unidad_medida':    (item.producto.unidad_medida if item.producto else '') or '',
+                    'ubicacion_codigo': _ubicaciones_rit.get(item.producto_id) or s.bodega_origen_siesa,
+                }
+                for item in s.items
+                if (item.cantidad_enviada or 0) > 0 and item.producto_codigo_siesa
+            ]
+            if _rit_items:
+                try:
+                    res_rit = siesa_traslado.crear_rit(
+                        bodega_origen=s.bodega_origen_siesa,
+                        bodega_destino=s.bodega_destino_siesa,
+                        items=_rit_items,
+                        codigo=s.codigo,
+                    )
+                    if not res_rit.get('simulado') and not res_rit.get('modo_ensayo'):
+                        consec = TrasladoService._extraer_consec(res_rit)
+                        if consec:
+                            s.siesa_requisicion_consec = consec
+                            s.siesa_error = None
+                            logger.info('[TRASLADO] %s RIT → consec %s', s.codigo, consec)
+                        else:
+                            logger.warning('[TRASLADO] %s RIT sin consecutivo', s.codigo)
+                except Exception as e_rit:
+                    s.siesa_error = f'RIT 174646: {e_rit}'
+                    logger.error('[TRASLADO] %s Error RIT: %s', s.codigo, e_rit)
 
         # ── Crear TareaPacking unificada (ST) ────────────────────────────────
         # El empacador la verá en la misma cola que los PD, con etiqueta [TRASLADO].
