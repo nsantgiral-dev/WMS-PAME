@@ -78,7 +78,7 @@ def listar_tareas():
                  # usamos CASE: PEDIDO=0, TRASLADO=1 para que PD siempre aparezca antes)
                  db.case({'PEDIDO': 0, 'TRASLADO': 1},
                          value=TareaPacking.tipo_documento, else_=0).asc(),
-                 TareaPacking.fecha_creacion.asc(),
+                 TareaPacking.fecha_creacion.desc(),
              ))
 
     query = scope_packing(u, query)
