@@ -65,6 +65,10 @@ class ConnektaGateway:
         # Tipo documento tránsito salida/entrada (verificar con consultor Siesa)
         self.tipo_docto_transito_salida = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_SALIDA', '')
         self.tipo_docto_transito_entrada = os.getenv('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', '')
+        # Datos de transporte para 173076/173079 — Siesa exige vehículo+transportador+conductor en STS/ETS
+        self.vehiculo_traslado = os.getenv('SIESA_VEHICULO_TRASLADO', '')
+        self.nit_transportador = os.getenv('SIESA_NIT_TRANSPORTADOR', '')
+        self.sucursal_transportador = os.getenv('SIESA_SUCURSAL_TRANSPORTADOR', '001')
         # Código del solicitante en requisiciones (Siesa: Inventarios → Solicitantes)
         self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')[:5]
         # Bodega de tránsito (verificar si existe en Siesa — si no, usar TransferenciaDirecta)
@@ -2095,6 +2099,12 @@ class ConnektaGateway:
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_transito,
                     'f450_docto_alterno': codigo_solicitud,
+                    'f462_id_vehiculo': self.vehiculo_traslado or None,
+                    'f462_id_tercero_transp': self.nit_transportador or None,
+                    'f462_id_sucursal_transp': self.sucursal_transportador or None,
+                    'f462_id_tercero_conductor': self.nit_transportador or None,
+                    'f462_nombre_conductor': None,
+                    'f462_identif_conductor': self.nit_transportador or None,
                 }
             ],
             'Movimientos': [
@@ -2199,6 +2209,12 @@ class ConnektaGateway:
                     'f350_id_co_base': self.centro_op if consec_salida else None,
                     'f350_id_tipo_docto_base': (self.tipo_docto_transito_salida or None) if consec_salida else None,
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
+                    'f462_id_vehiculo': self.vehiculo_traslado or None,
+                    'f462_id_tercero_transp': self.nit_transportador or None,
+                    'f462_id_sucursal_transp': self.sucursal_transportador or None,
+                    'f462_id_tercero_conductor': self.nit_transportador or None,
+                    'f462_nombre_conductor': None,
+                    'f462_identif_conductor': self.nit_transportador or None,
                 }
             ],
             'Movimientos': [
