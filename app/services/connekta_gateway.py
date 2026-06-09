@@ -54,7 +54,13 @@ class ConnektaGateway:
         self.nombre_conector_req_traslado  = os.getenv('CONNEKTA_NOMBRE_REQ_TRASLADO',
                                                         'API_v1_Inventarios_Comercial_RequisicionesParaTransferir')
         self.conector_transito_salida = os.getenv('CONNEKTA_CONECTOR_TRANSITO_SALIDA', '173076')
+        self.nombre_conector_transito_salida = os.getenv(
+            'CONNEKTA_NOMBRE_TRANSITO_SALIDA',
+            'API_v1_Inventarios_Comercial_TransferenciaEnTransitoSalida')
         self.conector_transito_entrada = os.getenv('CONNEKTA_CONECTOR_TRANSITO_ENTRADA', '173079')
+        self.nombre_conector_transito_entrada = os.getenv(
+            'CONNEKTA_NOMBRE_TRANSITO_ENTRADA',
+            'API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada')
         self.conector_transferencia_directa = os.getenv('CONNEKTA_CONECTOR_TRANSF_DIRECTA', '173066')
         # Tipo documento requisición de traslado (Siesa: clase 75 — distinto de clase 65 STS)
         # SIESA_TIPO_DOCTO_RIT toma precedencia; fallback a SIESA_TIPO_DOCTO_TRASLADO para
@@ -2147,7 +2153,7 @@ class ConnektaGateway:
         logger.info(f'[CONNEKTA] Tránsito salida {codigo_solicitud} '
                     f'{bodega_origen}→{bodega_transito}')
         return self._post(self.conector_transito_salida,
-                          'API_v1_Inventarios_Comercial_TransferenciaEnTransitoSalida', payload)
+                          self.nombre_conector_transito_salida, payload)
 
     def transferencia_desde_requisicion(self, consec_rit: int) -> dict:
         """
@@ -2294,7 +2300,7 @@ class ConnektaGateway:
         logger.info(f'[CONNEKTA] Tránsito entrada {codigo_solicitud} '
                     f'{bodega_transito}→{bodega_destino}')
         return self._post(self.conector_transito_entrada,
-                          'API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada', payload)
+                          self.nombre_conector_transito_entrada, payload)
 
     def get_consec_salida_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
