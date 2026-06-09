@@ -2149,6 +2149,44 @@ class ConnektaGateway:
         return self._post(self.conector_transito_salida,
                           'API_v1_Inventarios_Comercial_TransferenciaEnTransitoSalida', payload)
 
+    def transferencia_desde_requisicion(self, consec_rit: int) -> dict:
+        """
+        174930 → API_v1_Inventarios_Comercial_TransferenciasDesdeRequisicion
+        Crea el documento STS (clase 65) directamente desde la RIT existente.
+        Siesa hereda bodegas e ítems del RIT — no requiere Movimientos ni datos de transporte.
+        """
+        if not self.tipo_docto_transito_salida:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_TRANSITO_SALIDA no configurado — requerido para crear STS'
+            )
+        if not self.tipo_docto_req_traslado:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_RIT no configurado — requerido como referencia en 174930'
+            )
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        payload = {
+            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
+            'Documentos': [
+                {
+                    'F_CIA': int(self.id_cia_siesa),
+                    'F_CONSEC_AUTO_REG': 1,
+                    'f350_id_co': self.centro_op,
+                    'f350_id_tipo_docto': self.tipo_docto_transito_salida,
+                    'f350_consec_docto': 0,
+                    'f350_fecha': fecha_hoy,
+                    'f350_ind_estado': 1,
+                    'f350_ind_impresion': 0,
+                    'f440_id_co_req_int': self.centro_op,
+                    'f440_id_tipo_docto_req_int': self.tipo_docto_req_traslado,
+                    'f440_consec_docto_req_int': int(consec_rit),
+                }
+            ],
+            'Final': [{'F_CIA': int(self.id_cia_siesa)}],
+        }
+        logger.info(f'[CONNEKTA] TransferenciaDesdeRequisicion RIT={consec_rit} → STS')
+        return self._post('174930',
+                          'API_v1_Inventarios_Comercial_TransferenciasDesdeRequisicion', payload)
+
     def transferencia_transito_entrada(self, bodega_transito: str, bodega_destino: str,
                                         items: list, codigo_solicitud: str,
                                         consec_salida: int = None,
