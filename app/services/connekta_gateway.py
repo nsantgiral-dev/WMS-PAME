@@ -2152,8 +2152,13 @@ class ConnektaGateway:
 
         logger.info(f'[CONNEKTA] Tránsito salida {codigo_solicitud} '
                     f'{bodega_origen}→{bodega_transito}')
+        # Conectores UnoEE (Tecnocedi_*, WMS_PAME_*) usan endpoint dinámico v3.1.
+        # Conectores estándar (API_v1_*) usan endpoint estándar v3.
+        _sts_din = not self.nombre_conector_transito_salida.startswith('API_v1_')
         return self._post(self.conector_transito_salida,
-                          self.nombre_conector_transito_salida, payload)
+                          self.nombre_conector_transito_salida, payload,
+                          url=self.url_post_dinamico if _sts_din else None,
+                          extra_params={'idSistema': self.id_sistema} if _sts_din else None)
 
     def transferencia_desde_requisicion(self, consec_rit: int) -> dict:
         """
@@ -2299,8 +2304,11 @@ class ConnektaGateway:
 
         logger.info(f'[CONNEKTA] Tránsito entrada {codigo_solicitud} '
                     f'{bodega_transito}→{bodega_destino}')
+        _ets_din = not self.nombre_conector_transito_entrada.startswith('API_v1_')
         return self._post(self.conector_transito_entrada,
-                          self.nombre_conector_transito_entrada, payload)
+                          self.nombre_conector_transito_entrada, payload,
+                          url=self.url_post_dinamico if _ets_din else None,
+                          extra_params={'idSistema': self.id_sistema} if _ets_din else None)
 
     def get_consec_salida_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
