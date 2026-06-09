@@ -2128,6 +2128,9 @@ class ConnektaGateway:
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
                     'f470_id_ubicacion_aux': None,
+                    # El template UnoEE tiene estos campos con acento (ó) — enviar ambas
+                    # variantes para que Connekta v3.1 no los marque como "no enviados".
+                    'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': self.centro_op,
@@ -2142,6 +2145,7 @@ class ConnektaGateway:
                     # Si difiere, Connekta trunca el registro en pos 487 y Siesa rechaza.
                     'f470_desc_varible': None,
                     'f470_id_ubicacion_aux_ent': None,
+                    'f470_id_ubicación_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
                     'f470_referencia_item': item.get('codigo_siesa'),
@@ -2281,6 +2285,7 @@ class ConnektaGateway:
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida
                     'f470_id_ubicacion_aux': None,
+                    'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
@@ -2294,6 +2299,7 @@ class ConnektaGateway:
                     # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173079
                     'f470_desc_varible': None,
                     'f470_id_ubicacion_aux_ent': item.get('ubicacion_entrada') or self.ubicacion_entrada_default,
+                    'f470_id_ubicación_aux_ent': item.get('ubicacion_entrada') or self.ubicacion_entrada_default,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
                     'f470_referencia_item': item.get('codigo_siesa'),
