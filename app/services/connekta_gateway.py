@@ -202,6 +202,12 @@ class ConnektaGateway:
         return solo_digitos[:8] if len(solo_digitos) >= 8 else ''
 
     @staticmethod
+    def _fmt_alterno(codigo: str) -> str:
+        """Truncate to Siesa f450_docto_alterno max length (15 chars), keeping the tail for uniqueness."""
+        s = codigo or ''
+        return s[-15:] if len(s) > 15 else s
+
+    @staticmethod
     def _fmt_fecha_iso(valor: str) -> str:
         """Normaliza cualquier formato de fecha a YYYYMMDD (8 dígitos, sin separadores).
         Siesa exige exactamente 8 caracteres en f421_fecha_entrega — guiones causan rechazo."""
@@ -2104,7 +2110,7 @@ class ConnektaGateway:
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
                     'f450_id_bodega_entrada': bodega_transito,
-                    'f450_docto_alterno': codigo_solicitud,
+                    'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     'f462_id_vehiculo': self.vehiculo_traslado or None,
                     'f462_id_tercero_transp': self.nit_transportador or None,
                     'f462_id_sucursal_transp': self.sucursal_transportador or None,
@@ -2253,7 +2259,7 @@ class ConnektaGateway:
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_transito,
                     'f450_id_bodega_entrada': bodega_destino,
-                    'f450_docto_alterno': codigo_solicitud,
+                    'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     # Referencia obligatoria al doc 173076 de salida
                     'f350_id_co_base': self.centro_op if consec_salida else None,
                     'f350_id_tipo_docto_base': (self.tipo_docto_transito_salida or None) if consec_salida else None,
@@ -2322,7 +2328,7 @@ class ConnektaGateway:
                 'API_v2_Inventarios_Transferencia_Salida_Transito',
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
-                    'parametros': f"f450_docto_alterno = ''{codigo_solicitud}''",
+                    'parametros': f"f450_docto_alterno = ''{self._fmt_alterno(codigo_solicitud)}''",
                 }
             )
             tabla = (res.get('detalle') or {}).get('Table') or []
