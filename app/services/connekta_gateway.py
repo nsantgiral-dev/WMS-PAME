@@ -36,6 +36,7 @@ class ConnektaGateway:
         self.id_compania = os.getenv('CONNEKTA_ID_COMPANIA', '8215')
         self.bodega = os.getenv('CONNEKTA_BODEGA', 'NB1')
         self.centro_op = os.getenv('CONNEKTA_CENTRO_OP', '003')
+        self.centro_op_traslado = os.getenv('SIESA_CO_TRASLADO') or self.centro_op
 
         self.api_pedidos = os.getenv('CONNEKTA_API_PEDIDOS', 'API_v2_Ventas_Pedidos')
         self.api_ordenes = os.getenv('CONNEKTA_API_ORDENES', 'API_v2_Compras_Ordenes')
@@ -2057,7 +2058,7 @@ class ConnektaGateway:
             'Documentos': [{
                 'F_CIA':                      int(self.id_cia_siesa),
                 'F_CONSEC_AUTO_REG':          1,
-                'f350_id_co':                 self.centro_op,
+                'f350_id_co':                 self.centro_op_traslado,
                 'f350_id_tipo_docto':         self.tipo_docto_transito_salida,
                 'f350_consec_docto':          0,
                 'f350_fecha':                 fecha_hoy,
@@ -2101,7 +2102,7 @@ class ConnektaGateway:
                 {
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
-                    'f350_id_co': self.centro_op,
+                    'f350_id_co': self.centro_op_traslado,
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
@@ -2124,7 +2125,7 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'f470_id_co': self.centro_op,
+                    'f470_id_co': self.centro_op_traslado,
                     'f470_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
@@ -2135,7 +2136,7 @@ class ConnektaGateway:
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_id_co_movto': self.centro_op,
+                    'f470_id_co_movto': self.centro_op_traslado,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
@@ -2201,7 +2202,7 @@ class ConnektaGateway:
                 {
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
-                    'f350_id_co': self.centro_op,
+                    'f350_id_co': self.centro_op_traslado,
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
@@ -2275,7 +2276,7 @@ class ConnektaGateway:
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     # Referencia obligatoria al doc 173076 de salida
-                    'f350_id_co_base': self.centro_op if consec_salida else None,
+                    'f350_id_co_base': self.centro_op_traslado if consec_salida else None,
                     'f350_id_tipo_docto_base': (self.tipo_docto_transito_salida or None) if consec_salida else None,
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                     'f462_id_vehiculo': self.vehiculo_traslado or None,
