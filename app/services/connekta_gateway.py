@@ -2164,6 +2164,14 @@ class ConnektaGateway:
 
         logger.info(f'[CONNEKTA] Tránsito salida {codigo_solicitud} '
                     f'{bodega_origen}→{bodega_transito}')
+        _doc = payload['Documentos'][0]
+        logger.info(f'[DEBUG_STS_DOC] f462 en payload: '
+                    f'vehiculo={_doc.get("f462_id_vehiculo")!r} '
+                    f'transp={_doc.get("f462_id_tercero_transp")!r} '
+                    f'suc={_doc.get("f462_id_sucursal_transp")!r} '
+                    f'conductor={_doc.get("f462_id_tercero_conductor")!r} '
+                    f'nombre={_doc.get("f462_nombre_conductor")!r} '
+                    f'identif={_doc.get("f462_identif_conductor")!r}')
         # Conectores UnoEE (Tecnocedi_*, WMS_PAME_*) usan endpoint dinámico v3.1.
         # Conectores estándar (API_v1_*) usan endpoint estándar v3.
         _sts_din = not self.nombre_conector_transito_salida.startswith('API_v1_')
