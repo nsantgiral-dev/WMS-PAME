@@ -2336,25 +2336,32 @@ class ConnektaGateway:
 
     def get_consec_salida_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
-        API_v2_Inventarios_Transferencia_Salida_Transito (GET 176)
-        Recovery: cuando 173076 acepta pero no devuelve consecutivo, busca el
-        documento de salida por f450_docto_alterno = codigo_solicitud.
+        Recovery: consulta dinámica papeleriamedellin_WMS_STS_Consecutivo.
+        Bypass del 401 en endpoint estándar — usa url_get_dinamico con @alterno param.
         Retorna f350_consec_docto o None si no encuentra.
         """
+        alterno = self._fmt_alterno(codigo_solicitud)
+        if not alterno:
+            return None
         try:
             res = self._get(
-                'API_v2_Inventarios_Transferencia_Salida_Transito',
+                'papeleriamedellin_WMS_STS_Consecutivo',
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
-                    'parametros': f"f450_docto_alterno = ''{self._fmt_alterno(codigo_solicitud)}''",
-                }
+                    'alterno': alterno,
+                },
+                url=self.url_get_dinamico,
             )
-            tabla = (res.get('detalle') or {}).get('Table') or []
-            if tabla:
-                consec = tabla[0].get('f350_consec_docto')
+            rows = (
+                res.get('detalle', {}).get('Datos') or
+                res.get('detalle', {}).get('Table') or []
+            )
+            if rows:
+                consec = rows[0].get('f350_consec_docto')
                 return int(consec) if consec else None
         except Exception as e:
-            logger.warning(f'[CONNEKTA] get_consec_salida_transito_by_alterno({codigo_solicitud}): {e}')
+            logger.warning('[CONNEKTA] get_consec_salida_transito_by_alterno(%s): %s',
+                           codigo_solicitud, e)
         return None
 
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
