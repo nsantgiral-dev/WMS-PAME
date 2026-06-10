@@ -75,6 +75,7 @@ class ConnektaGateway:
         self.vehiculo_traslado = os.getenv('SIESA_VEHICULO_TRASLADO', '')
         self.nit_transportador = os.getenv('SIESA_NIT_TRANSPORTADOR', '')
         self.sucursal_transportador = os.getenv('SIESA_SUCURSAL_TRANSPORTADOR', '001')
+        self.nombre_conductor = os.getenv('SIESA_NOMBRE_CONDUCTOR', '') or None
         # Código del solicitante en requisiciones (Siesa: Inventarios → Solicitantes)
         self.req_solicitante = os.getenv('SIESA_REQ_SOLICITANTE', '')[:5]
         # Bodega de tránsito (verificar si existe en Siesa — si no, usar TransferenciaDirecta)
@@ -2115,7 +2116,7 @@ class ConnektaGateway:
                     'f462_id_tercero_transp': self.nit_transportador or None,
                     'f462_id_sucursal_transp': self.sucursal_transportador or None,
                     'f462_id_tercero_conductor': self.nit_transportador or None,
-                    'f462_nombre_conductor': None,
+                    'f462_nombre_conductor': self.nombre_conductor,
                     'f462_identif_conductor': self.nit_transportador or None,
                 }
             ],
@@ -2272,7 +2273,7 @@ class ConnektaGateway:
                     'f462_id_tercero_transp': self.nit_transportador or None,
                     'f462_id_sucursal_transp': self.sucursal_transportador or None,
                     'f462_id_tercero_conductor': self.nit_transportador or None,
-                    'f462_nombre_conductor': None,
+                    'f462_nombre_conductor': self.nombre_conductor,
                     'f462_identif_conductor': self.nit_transportador or None,
                 }
             ],
