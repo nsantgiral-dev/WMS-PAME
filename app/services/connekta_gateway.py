@@ -2163,6 +2163,10 @@ class ConnektaGateway:
 
         logger.info(f'[CONNEKTA] Tránsito salida {codigo_solicitud} '
                     f'{bodega_origen}→{bodega_transito}')
+        logger.info(f'[CONNEKTA][DEBUG_STS] f462 payload: vehiculo={self.vehiculo_traslado!r} '
+                    f'transp={self.nit_transportador!r} suc={self.sucursal_transportador!r} '
+                    f'conductor={self.nit_transportador!r} nombre={self.nombre_conductor!r} '
+                    f'identif={self.nit_transportador!r}')
         # Conectores UnoEE (Tecnocedi_*, WMS_PAME_*) usan endpoint dinámico v3.1.
         # Conectores estándar (API_v1_*) usan endpoint estándar v3.
         _sts_din = not self.nombre_conector_transito_salida.startswith('API_v1_')
