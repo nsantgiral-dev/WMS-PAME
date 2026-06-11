@@ -2336,25 +2336,30 @@ class ConnektaGateway:
 
     def get_consec_salida_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
-        Recovery: consulta dinámica papeleriamedellin_WMS_STS_Consecutivo.
-        Retorna TOP 20 de t350_co_docto_contable CO 001, filtra por f350_notas en Python.
-        t450_cm_inv_docto no accesible en Connekta dinámico — usa tabla contable.
+        Recovery: API_v2_Inventarios_Transferencia_Salida_Transito filtrada por f450_docto_alterno.
+        Retorna f350_consec_docto del STS creado para este traslado.
         """
-        nota_esperada = f'WMS Despacho {codigo_solicitud}'
+        alterno = self._fmt_alterno(codigo_solicitud)
+        if not alterno:
+            return None
         try:
             res = self._get(
-                'papeleriamedellin_WMS_STS_Consecutivo',
-                params_extra={'paginacion': 'numPag=1|tamPag=20'},
-                url=self.url_get_dinamico,
+                'API_v2_Inventarios_Transferencia_Salida_Transito',
+                params_extra={
+                    'paginacion': 'numPag=1|tamPag=5',
+                    'parametros': (
+                        f"f350_id_co = ''{self.centro_op_traslado}''"
+                        f" AND f450_docto_alterno = ''{alterno}''"
+                    ),
+                },
             )
             rows = (
-                res.get('detalle', {}).get('Datos') or
-                res.get('detalle', {}).get('Table') or []
+                res.get('detalle', {}).get('Table') or
+                res.get('detalle', {}).get('Datos') or []
             )
-            for row in rows:
-                if str(row.get('f350_notas', '')).strip() == nota_esperada:
-                    consec = row.get('f350_consec_docto')
-                    return int(consec) if consec else None
+            if rows:
+                consec = rows[0].get('f350_consec_docto')
+                return int(consec) if consec else None
         except Exception as e:
             logger.warning('[CONNEKTA] get_consec_salida_transito_by_alterno(%s): %s',
                            codigo_solicitud, e)
