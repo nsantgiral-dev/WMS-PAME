@@ -2325,6 +2325,16 @@ class ConnektaGateway:
         Recovery: API_v2_Inventarios_Transferencia_Salida_Transito filtrada por f450_docto_alterno.
         Retorna f350_consec_docto del STS creado para este traslado.
         """
+        info = self.get_sts_info_by_alterno(codigo_solicitud)
+        return info.get('consec') if info else None
+
+    def get_sts_info_by_alterno(self, codigo_solicitud: str) -> dict | None:
+        """
+        Consulta el STS por f450_docto_alterno y devuelve consec + bodega_transito real.
+        Útil para diagnosticar/corregir mismatch entre bodega_transito_siesa en WMS
+        y la bodega_entrada que Siesa asignó al STS.
+        Retorna {'consec': int, 'bodega_transito': str} o None si no encuentra.
+        """
         alterno = self._fmt_alterno(codigo_solicitud)
         if not alterno:
             return None
@@ -2344,10 +2354,19 @@ class ConnektaGateway:
                 res.get('detalle', {}).get('Datos') or []
             )
             if rows:
-                consec = rows[0].get('f350_consec_docto')
-                return int(consec) if consec else None
+                row = rows[0]
+                consec = row.get('f350_consec_docto')
+                bodega_ent = row.get('f450_id_bodega_entrada')
+                logger.info(
+                    '[CONNEKTA] STS %s: consec=%s bodega_entrada=%s',
+                    codigo_solicitud, consec, bodega_ent,
+                )
+                return {
+                    'consec': int(consec) if consec else None,
+                    'bodega_transito': bodega_ent,
+                }
         except Exception as e:
-            logger.warning('[CONNEKTA] get_consec_salida_transito_by_alterno(%s): %s',
+            logger.warning('[CONNEKTA] get_sts_info_by_alterno(%s): %s',
                            codigo_solicitud, e)
         return None
 
