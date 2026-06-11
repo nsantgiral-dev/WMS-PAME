@@ -638,9 +638,8 @@ def reintentar_recepcion_siesa(id):
     _co_destino = _solicitante.siesa_co_id if _solicitante else None
 
     try:
-        bodega_transito = s.bodega_transito_siesa or connekta.bodega_transito
         res = connekta.transferencia_transito_entrada(
-            bodega_transito=bodega_transito,
+            bodega_origen=s.bodega_origen_siesa,
             bodega_destino=s.bodega_destino_siesa,
             items=items_payload,
             codigo_solicitud=s.codigo,

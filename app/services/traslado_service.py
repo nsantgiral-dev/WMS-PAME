@@ -650,23 +650,8 @@ class TrasladoService:
                 for item in s.items
             ]
             try:
-                bodega_transito = s.bodega_transito_siesa or siesa_traslado.bodega_transito
-                # Si hay un STS registrado, verificar que la bodega_transito coincide
-                # con la bodega_entrada real que Siesa asignó al STS.
-                # Mismatch aquí → ETS falla con "sin cantidad disponible".
-                if s.siesa_salida_consec and s.codigo:
-                    sts_info = connekta.get_sts_info_by_alterno(s.codigo)
-                    if sts_info and sts_info.get('bodega_transito'):
-                        bodega_real = sts_info['bodega_transito']
-                        if bodega_real != bodega_transito:
-                            logger.warning(
-                                '[TRASLADO] %s: bodega_transito_siesa=%s pero STS usó bodega_entrada=%s '
-                                '— usando bodega real del STS para ETS',
-                                s.codigo, bodega_transito, bodega_real,
-                            )
-                            bodega_transito = bodega_real
                 res = siesa_traslado.registrar_entrada(
-                    bodega_transito=bodega_transito,
+                    bodega_origen=s.bodega_origen_siesa,
                     bodega_destino=s.bodega_destino_siesa,
                     items=items_payload,
                     codigo=s.codigo,
