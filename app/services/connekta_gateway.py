@@ -2337,12 +2337,10 @@ class ConnektaGateway:
     def get_consec_salida_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
         Recovery: consulta dinámica papeleriamedellin_WMS_STS_Consecutivo.
-        Retorna TOP 20 STS del CO 001, filtra por f450_docto_alterno en Python.
-        Sin @param en SQL — Connekta sustituye sin comillas → error aritmético en SQL Server.
+        Retorna TOP 20 de t350_co_docto_contable CO 001, filtra por f350_notas en Python.
+        t450_cm_inv_docto no accesible en Connekta dinámico — usa tabla contable.
         """
-        alterno = self._fmt_alterno(codigo_solicitud)
-        if not alterno:
-            return None
+        nota_esperada = f'WMS Despacho {codigo_solicitud}'
         try:
             res = self._get(
                 'papeleriamedellin_WMS_STS_Consecutivo',
@@ -2354,8 +2352,8 @@ class ConnektaGateway:
                 res.get('detalle', {}).get('Table') or []
             )
             for row in rows:
-                if str(row.get('f450_docto_alterno', '')).strip() == alterno:
-                    consec = row.get('f450_consec_docto')
+                if str(row.get('f350_notas', '')).strip() == nota_esperada:
+                    consec = row.get('f350_consec_docto')
                     return int(consec) if consec else None
         except Exception as e:
             logger.warning('[CONNEKTA] get_consec_salida_transito_by_alterno(%s): %s',
