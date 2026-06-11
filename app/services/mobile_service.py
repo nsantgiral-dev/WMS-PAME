@@ -173,7 +173,7 @@ class MobileService:
         # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
         _ids_validos = db.session.query(Ubicacion.id).filter(
             Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL'])
-        ).subquery()
+        ).scalar_subquery()
         # Sin JOIN — with_for_update solo lockea tareas_picking (evita error PostgreSQL
         # "FOR UPDATE cannot be applied to the nullable side of an outer join")
         _filtros_base = [
