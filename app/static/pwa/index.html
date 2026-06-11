@@ -1958,11 +1958,16 @@
     </div>
 
     <!-- Panel: Recibir -->
-    <div id="tienda-panel-recibir" style="padding:14px;display:none;">
-      <div style="font-size:13px;color:#666;margin-bottom:12px;">Traslados que llegaron — confirmá la recepción</div>
-      <div id="tienda-lista-recibir">
-        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+    <div id="tienda-panel-recibir" style="display:none;">
+      <!-- Vista: lista de traslados pendientes -->
+      <div id="tienda-recibir-lista-view" style="padding:14px;">
+        <div style="font-size:13px;color:#666;margin-bottom:12px;">Traslados que llegaron — contá producto por producto antes de confirmar</div>
+        <div id="tienda-lista-recibir">
+          <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+        </div>
       </div>
+      <!-- Vista: picking ítem por ítem -->
+      <div id="tienda-recibir-picking-view" style="display:none;padding:14px;"></div>
     </div>
   </div>
 

@@ -3246,7 +3246,6 @@ function volverListaDevoluciones() {
   DEVOLUCION_ACTUAL = null;
   cargarDevoluciones();
 }
-// ─────────────────────────────────────────────────────────────
 // EMPACADOR — Estado global
 // ─────────────────────────────────────────────────────────────
 
@@ -7885,6 +7884,11 @@ let _TIENDA_STOCK_ESTADO = 'cargando'; // 'cargando' | 'listo' | 'error'
 let _TIENDA_CARRITO = []; // [{producto_id, codigo_siesa, nombre, cantidad, disponible}]
 let _TIENDA_ORIGEN = { id: 'NB1', nombre: 'Bodega Principal' }; // bodega fuente del pedido
 
+// Estado de recepción de traslados (picking ítem por ítem)
+let _TIENDA_PENDIENTES = [];       // cache traslados EN_TRANSITO+DESPACHADA
+let _TIENDA_TRASLADO_ACTIVO = null; // solicitud abierta en picking
+let _TIENDA_CONTEOS = {};          // {producto_id: cantidad_contada}
+
 function tiendaIniciar() {
   _TIENDA_STOCK = [];
   _TIENDA_STOCK_ESTADO = 'cargando';
@@ -8209,7 +8213,17 @@ async function tiendaEnviarSolicitudId(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+// ─────────────────────────────────────────────────────────────
+// TIENDA — Recepción de traslados (picking ítem por ítem)
+// ─────────────────────────────────────────────────────────────
+
 async function tiendaCargarRecibir() {
+  const listaView = document.getElementById('tienda-recibir-lista-view');
+  const pickingView = document.getElementById('tienda-recibir-picking-view');
+  if (listaView) listaView.style.display = 'block';
+  if (pickingView) pickingView.style.display = 'none';
+  _TIENDA_TRASLADO_ACTIVO = null;
+
   const el = document.getElementById('tienda-lista-recibir');
   if (!el) return;
   el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando...</div>';
@@ -8218,49 +8232,202 @@ async function tiendaCargarRecibir() {
       get('/api/traslados/?estado=EN_TRANSITO'),
       get('/api/traslados/?estado=DESPACHADA'),
     ]);
-    const pendientes = [...(r1.solicitudes || []), ...(r2.solicitudes || [])];
+    _TIENDA_PENDIENTES = [...(r1.solicitudes || []), ...(r2.solicitudes || [])];
 
     const badgeEl = document.getElementById('badge-recibir');
     if (badgeEl) {
-      badgeEl.style.display = pendientes.length ? 'inline' : 'none';
-      badgeEl.textContent = pendientes.length;
+      badgeEl.style.display = _TIENDA_PENDIENTES.length ? 'inline' : 'none';
+      badgeEl.textContent = _TIENDA_PENDIENTES.length;
     }
 
-    if (!pendientes.length) {
+    if (!_TIENDA_PENDIENTES.length) {
       el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Nada pendiente de recibir</div>';
       return;
     }
-    el.innerHTML = pendientes.map(s => `
-    <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
-      <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${s.codigo}</div>
-      <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${s.total_items} ítem${s.total_items !== 1?'s':''}</div>
-      ${(s.items || []).map(i => `
-        <div style="font-size:11px;color:#aaa;padding:2px 0;">${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada} und</div>
-      `).join('')}
-      <button onclick="tiendaRecibirSolicitud(${s.id})"
-        style="width:100%;padding:13px;margin-top:12px;background:#4ade80;color:#000;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
-        ✓ Confirmar recepción
-      </button>
-    </div>`).join('');
+    el.innerHTML = _TIENDA_PENDIENTES.map(s => {
+      const totalEsperado = (s.items || []).reduce((a, i) => a + (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0), 0);
+      return `
+      <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+          <div style="font-size:14px;font-weight:700;">${s.codigo}</div>
+          <div style="font-size:11px;color:#4ade80;font-weight:600;">${s.bodega_origen_siesa || ''}</div>
+        </div>
+        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${s.total_items} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsperado} und esperadas</div>
+        ${(s.items || []).slice(0, 3).map(i => `
+          <div style="font-size:11px;color:#aaa;padding:2px 0;">
+            ${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada} und
+          </div>
+        `).join('')}
+        ${(s.items || []).length > 3 ? `<div style="font-size:11px;color:#555;padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
+        <button onclick="tiendaAbrirPickingTraslado(${s.id})"
+          style="width:100%;padding:13px;margin-top:12px;background:#1E8395;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+          📋 Contar productos
+        </button>
+      </div>`;
+    }).join('');
   } catch (e) {
-    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error</div>';
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando traslados</div>';
   }
 }
 
-async function tiendaRecibirSolicitud(id) {
-  if (!confirm('¿Confirmar que recibiste todos los productos del almacén?')) return;
+function tiendaAbrirPickingTraslado(id) {
+  const s = _TIENDA_PENDIENTES.find(x => x.id === id);
+  if (!s) return;
+  _TIENDA_TRASLADO_ACTIVO = s;
+  // Inicializar conteos en 0
+  _TIENDA_CONTEOS = {};
+  (s.items || []).forEach(i => { _TIENDA_CONTEOS[i.producto_id] = 0; });
+
+  const listaView = document.getElementById('tienda-recibir-lista-view');
+  const pickingView = document.getElementById('tienda-recibir-picking-view');
+  if (listaView) listaView.style.display = 'none';
+  if (pickingView) { pickingView.style.display = 'block'; _tiendaRenderPickingTraslado(); }
+}
+
+function tiendaVolverListaRecibir() {
+  _TIENDA_TRASLADO_ACTIVO = null;
+  _TIENDA_CONTEOS = {};
+  tiendaCargarRecibir();
+}
+
+function _tiendaRenderPickingTraslado() {
+  const s = _TIENDA_TRASLADO_ACTIVO;
+  const el = document.getElementById('tienda-recibir-picking-view');
+  if (!s || !el) return;
+
+  const items = s.items || [];
+  const todoContado = items.every(i => (_TIENDA_CONTEOS[i.producto_id] || 0) >= (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0));
+  const algoContado = items.some(i => (_TIENDA_CONTEOS[i.producto_id] || 0) > 0);
+  const btnColor = todoContado ? '#16a34a' : '#b45309';
+  const btnTexto = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial';
+
+  el.innerHTML = `
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <button onclick="tiendaVolverListaRecibir()"
+          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
+          ← Volver
+        </button>
+        <div style="min-width:0;">
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.codigo}</div>
+          <div style="font-size:12px;color:#666;">Desde ${s.bodega_origen_siesa || '—'} → ${s.bodega_destino_siesa || '—'}</div>
+        </div>
+      </div>
+
+      <div style="font-size:12px;color:#555;text-align:center;margin-bottom:12px;">
+        Contá físicamente cada producto y ajustá la cantidad antes de confirmar
+      </div>
+
+      <div id="tienda-picking-items" style="margin-bottom:14px;">
+        ${_tiendaRenderItemsPickingTraslado(items)}
+      </div>
+
+      <button id="btn-confirmar-traslado" onclick="tiendaConfirmarRecepcionTraslado()"
+        ${algoContado || todoContado ? '' : 'disabled'}
+        style="width:100%;padding:18px;font-size:18px;font-weight:700;background:${algoContado || todoContado ? btnColor : '#222'};color:#fff;border:none;border-radius:14px;cursor:${algoContado || todoContado ? 'pointer' : 'default'};margin-bottom:10px;">
+        ${algoContado || todoContado ? btnTexto : 'Contá al menos un ítem para continuar'}
+      </button>
+
+      <button onclick="tiendaVolverListaRecibir()"
+        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        Cancelar — volver a la lista
+      </button>
+    </div>`;
+}
+
+function _tiendaRenderItemsPickingTraslado(items) {
+  return items.map(i => {
+    const esperado = i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0;
+    const contado = _TIENDA_CONTEOS[i.producto_id] || 0;
+    const completo = contado >= esperado;
+    const pct = esperado > 0 ? Math.min((contado / esperado) * 100, 100) : 0;
+    return `
+      <div id="tienda-item-pick-${i.producto_id}"
+        style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i.producto_nombre || i.producto_codigo}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">${i.producto_codigo_siesa || i.producto_codigo}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
+            <button onclick="tiendaContarItem(${i.producto_id}, -1)"
+              style="width:34px;height:34px;background:#222;border:1px solid #333;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
+            <div style="text-align:center;min-width:54px;">
+              <div style="font-size:26px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${contado}</div>
+              <div style="font-size:10px;color:#6b7280;">/ ${esperado}</div>
+            </div>
+            <button onclick="tiendaContarItem(${i.producto_id}, 1)"
+              style="width:34px;height:34px;background:#1E8395;border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
+          </div>
+        </div>
+        <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
+          <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.2s;"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function tiendaContarItem(productoId, delta) {
+  if (!_TIENDA_TRASLADO_ACTIVO) return;
+  const item = (_TIENDA_TRASLADO_ACTIVO.items || []).find(i => i.producto_id === productoId);
+  if (!item) return;
+  const actual = _TIENDA_CONTEOS[productoId] || 0;
+  _TIENDA_CONTEOS[productoId] = Math.max(0, actual + delta);
+  // Re-render solo los ítems y el botón para no perder el scroll
+  const itemsEl = document.getElementById('tienda-picking-items');
+  if (itemsEl) itemsEl.innerHTML = _tiendaRenderItemsPickingTraslado(_TIENDA_TRASLADO_ACTIVO.items || []);
+  // Actualizar botón confirmar
+  const items = _TIENDA_TRASLADO_ACTIVO.items || [];
+  const todoContado = items.every(i => (_TIENDA_CONTEOS[i.producto_id] || 0) >= (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0));
+  const algoContado = items.some(i => (_TIENDA_CONTEOS[i.producto_id] || 0) > 0);
+  const btn = document.getElementById('btn-confirmar-traslado');
+  if (btn) {
+    btn.disabled = !(algoContado || todoContado);
+    btn.style.background = !algoContado && !todoContado ? '#222' : (todoContado ? '#16a34a' : '#b45309');
+    btn.textContent = !algoContado && !todoContado ? 'Contá al menos un ítem para continuar' : (todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial');
+    btn.style.cursor = algoContado || todoContado ? 'pointer' : 'default';
+  }
+}
+
+async function tiendaConfirmarRecepcionTraslado() {
+  const s = _TIENDA_TRASLADO_ACTIVO;
+  if (!s) return;
+
+  const items = s.items || [];
+  const todoContado = items.every(i => (_TIENDA_CONTEOS[i.producto_id] || 0) >= (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0));
+
+  if (!todoContado) {
+    const ok = await _confirmarModal(
+      '⚠ Recepción incompleta',
+      'Hay ítems sin contar o con cantidad menor a la esperada. ¿Confirmar como <strong>recepción parcial</strong>?',
+      'Sí, confirmar parcial', 'Cancelar'
+    );
+    if (!ok) return;
+  }
+
+  const btn = document.getElementById('btn-confirmar-traslado');
+  if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
+
   try {
-    const r = await fetch(API + `/api/traslados/${id}/recibir`, {
+    const r = await fetch(API + `/api/traslados/${s.id}/recibir`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
       body: JSON.stringify({})
     });
     const d = await r.json();
     if (r.ok) {
-      alerta('Recepción confirmada — stock actualizado en Siesa', 'exito');
-      tiendaCargarRecibir();
-    } else { alerta(d.error || 'Error', 'error'); }
-  } catch (e) { alerta('Error de conexión', 'error'); }
+      alerta('Recepción confirmada — Siesa registró la entrada en tránsito', 'exito');
+      _TIENDA_TRASLADO_ACTIVO = null;
+      _TIENDA_CONTEOS = {};
+      setTimeout(tiendaCargarRecibir, 1200);
+    } else {
+      alerta(d.error || 'Error al confirmar', 'error');
+      if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+    if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
+  }
 }
 
 // _condConfirmarEntrega eliminado — reemplazado por el flujo por parada

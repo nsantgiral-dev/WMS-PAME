@@ -2056,38 +2056,6 @@ class ConnektaGateway:
         return self._post('174720',
                           'API_v1_Inventarios_Comercial_CompromisosDesdeRequisicion', payload)
 
-    def transferencia_desde_requisicion(self, consec_rit: int):
-        """
-        174930 — Crea STS (Salida en Tránsito) desde una RIT comprometida.
-        Siesa lee los ítems directamente de la RIT — no se envían movimientos.
-        Dispara al despachar cuando existe siesa_requisicion_consec.
-        """
-        if not consec_rit:
-            raise ValueError('transferencia_desde_requisicion: consec_rit obligatorio')
-        if not self.tipo_docto_transito_salida:
-            raise ValueError('SIESA_TIPO_DOCTO_TRANSITO_SALIDA no configurado')
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
-        payload = {
-            'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
-            'Documentos': [{
-                'F_CIA':                      int(self.id_cia_siesa),
-                'F_CONSEC_AUTO_REG':          1,
-                'f350_id_co':                 self.centro_op_traslado,
-                'f350_id_tipo_docto':         self.tipo_docto_transito_salida,
-                'f350_consec_docto':          0,
-                'f350_fecha':                 fecha_hoy,
-                'f350_ind_estado':            1,
-                'f350_ind_impresion':         0,
-                'f440_id_co_req_int':         self.centro_op,
-                'f440_id_tipo_docto_req_int': self.tipo_docto_req_traslado,
-                'f440_consec_docto_req_int':  consec_rit,
-            }],
-            'Final': [{'F_CIA': int(self.id_cia_siesa)}],
-        }
-        logger.info('[CONNEKTA] transferencia_desde_requisicion RIT=%s', consec_rit)
-        return self._post('174930',
-                          'API_v1_Inventarios_Comercial_TransferenciasDesdeRequisicion', payload)
-
     def transferencia_transito_salida(self, bodega_origen: str, bodega_transito: str,
                                        items: list, codigo_solicitud: str,
                                        consec_requisicion: int = None):
@@ -2336,8 +2304,8 @@ class ConnektaGateway:
                     'f470_notas': None,
                     # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173079
                     'f470_desc_varible': None,
-                    'f470_id_ubicacion_aux_ent': item.get('ubicacion_entrada') or self.ubicacion_entrada_default,
-                    'f470_id_ubicación_aux_ent': item.get('ubicacion_entrada') or self.ubicacion_entrada_default,
+                    'f470_id_ubicacion_aux_ent': None,
+                    'f470_id_ubicación_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
                     'f470_referencia_item': item.get('codigo_siesa'),
