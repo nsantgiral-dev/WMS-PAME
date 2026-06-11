@@ -1,7 +1,7 @@
 """set centro_op_siesa en almacenes según mapeo oficial Siesa PAME
 
-Revision ID: a8b9c0d1e2f3
-Revises: z7a8b9c0d1e2
+Revision ID: c1d2e3f4g5h6
+Revises: b3c4d5e6f7g8
 Create Date: 2026-06-11
 
 Mapeo certificado por consultor Siesa:
@@ -11,8 +11,8 @@ Mapeo certificado por consultor Siesa:
 from alembic import op
 import sqlalchemy as sa
 
-revision = 'a8b9c0d1e2f3'
-down_revision = 'z7a8b9c0d1e2'
+revision = 'c1d2e3f4g5h6'
+down_revision = 'b3c4d5e6f7g8'
 branch_labels = None
 depends_on = None
 
