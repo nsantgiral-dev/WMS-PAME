@@ -2337,8 +2337,8 @@ class ConnektaGateway:
     def get_consec_salida_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
         Recovery: consulta dinámica papeleriamedellin_WMS_STS_Consecutivo.
-        Bypass del 401 en endpoint estándar — usa url_get_dinamico con @alterno param.
-        Retorna f350_consec_docto o None si no encuentra.
+        Retorna TOP 20 STS del CO 001, filtra por f450_docto_alterno en Python.
+        Sin @param en SQL — Connekta sustituye sin comillas → error aritmético en SQL Server.
         """
         alterno = self._fmt_alterno(codigo_solicitud)
         if not alterno:
@@ -2346,19 +2346,17 @@ class ConnektaGateway:
         try:
             res = self._get(
                 'papeleriamedellin_WMS_STS_Consecutivo',
-                params_extra={
-                    'paginacion': 'numPag=1|tamPag=5',
-                    'alterno': alterno,
-                },
+                params_extra={'paginacion': 'numPag=1|tamPag=20'},
                 url=self.url_get_dinamico,
             )
             rows = (
                 res.get('detalle', {}).get('Datos') or
                 res.get('detalle', {}).get('Table') or []
             )
-            if rows:
-                consec = rows[0].get('f350_consec_docto')
-                return int(consec) if consec else None
+            for row in rows:
+                if str(row.get('f450_docto_alterno', '')).strip() == alterno:
+                    consec = row.get('f450_consec_docto')
+                    return int(consec) if consec else None
         except Exception as e:
             logger.warning('[CONNEKTA] get_consec_salida_transito_by_alterno(%s): %s',
                            codigo_solicitud, e)
@@ -2367,25 +2365,23 @@ class ConnektaGateway:
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
         """
         Recovery: consulta dinámica papeleriamedellin_WMS_RIT_Consecutivo.
-        Bypass del 401 en endpoint estándar — usa url_get_dinamico con @referencia param.
-        Retorna f440_consec_docto o None si no encuentra.
+        Retorna TOP 20 RIT del CO 003, filtra por f440_referencia en Python.
+        Sin @param en SQL — misma razón que get_consec_salida_transito_by_alterno.
         """
         try:
             res = self._get(
                 'papeleriamedellin_WMS_RIT_Consecutivo',
-                params_extra={
-                    'paginacion': 'numPag=1|tamPag=5',
-                    'referencia': codigo_solicitud,
-                },
+                params_extra={'paginacion': 'numPag=1|tamPag=20'},
                 url=self.url_get_dinamico,
             )
             rows = (
                 res.get('detalle', {}).get('Datos') or
                 res.get('detalle', {}).get('Table') or []
             )
-            if rows:
-                consec = rows[0].get('f440_consec_docto')
-                return int(consec) if consec else None
+            for row in rows:
+                if str(row.get('f440_referencia', '')).strip() == codigo_solicitud:
+                    consec = row.get('f440_consec_docto')
+                    return int(consec) if consec else None
         except Exception as e:
             logger.warning('[CONNEKTA] get_consec_rit_by_referencia(%s): %s',
                            codigo_solicitud, e)
