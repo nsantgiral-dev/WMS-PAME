@@ -3269,11 +3269,37 @@ async function empCargarTareas() {
     );
 
     if (!tareas.length) {
+      const modoBar = document.getElementById('emp-modo-bar');
+      if (modoBar) modoBar.style.display = 'none';
       el.innerHTML = `<div style="text-align:center;padding:60px 20px;color:#555;">
         Sin tareas de empaque pendientes ✓<br>
         <button onclick="_refreshBtn(event, empCargarTareas)" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
       </div>`;
       return;
+    }
+
+    // Barra de contexto: muestra el tipo de flujo activo
+    const hayTraslados = tareas.some(t => t.tipo_documento === 'TRASLADO');
+    const hayPedidos   = tareas.some(t => t.tipo_documento !== 'TRASLADO');
+    const modoBar = document.getElementById('emp-modo-bar');
+    if (modoBar) {
+      modoBar.style.display = 'block';
+      if (hayTraslados && !hayPedidos) {
+        modoBar.style.background = '#431407';
+        modoBar.style.color = '#fb923c';
+        modoBar.style.borderBottom = '1px solid #7c2d12';
+        modoBar.textContent = '📦 Packing Traslado';
+      } else if (hayPedidos && !hayTraslados) {
+        modoBar.style.background = '#1e3a5f';
+        modoBar.style.color = '#93c5fd';
+        modoBar.style.borderBottom = '1px solid #1e40af';
+        modoBar.textContent = '🛒 Packing Pedido';
+      } else {
+        modoBar.style.background = '#1a1a1a';
+        modoBar.style.color = '#9ca3af';
+        modoBar.style.borderBottom = '1px solid #333';
+        modoBar.textContent = '📦 Packing · Traslados & Pedidos';
+      }
     }
 
     el.innerHTML = `
