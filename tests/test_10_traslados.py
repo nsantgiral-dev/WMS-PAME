@@ -713,6 +713,11 @@ class TestConnektaGatewayTraslados:
         with app.app_context():
             from app.services.connekta_gateway import connekta
             connekta.tipo_docto_transito_salida = 'TTS'
+            # Limpiar env defaults para aislar el test de la configuración del servidor
+            connekta.sucursal_transportador = None
+            connekta.vehiculo_traslado = None
+            connekta.nit_transportador = None
+            connekta.nombre_conductor = None
 
             payloads = []
             with patch.object(connekta, '_post',
@@ -722,12 +727,18 @@ class TestConnektaGatewayTraslados:
                     items=self._items_validos(1), codigo_solicitud='ST-005',
                 )
 
-            # f462_ van dentro de Documentos (no sección separada) — spec 173076
+            # Campos de identidad del transportador deben ir como None cuando no hay transporte
+            # (f462_cajas, f462_peso, etc. son numéricos con valor 0 — son válidos)
             doc = payloads[0]['Documentos'][0]
-            campos_f462 = [k for k in doc if k.startswith('f462_')]
-            assert len(campos_f462) > 0
-            for campo in campos_f462:
-                assert doc[campo] is None, f'{campo} debe ser None, no string vacío'
+            campos_identidad = [
+                'f462_id_vehiculo', 'f462_id_vehículo',
+                'f462_id_tercero_transp', 'f462_id_sucursal_transp',
+                'f462_id_tercero_conductor', 'f462_nombre_conductor',
+                'f462_identif_conductor', 'f462_numero_guia', 'f462_notas',
+            ]
+            for campo in campos_identidad:
+                if campo in doc:
+                    assert doc[campo] is None, f'{campo} debe ser None cuando no hay transportador'
 
     def test_173076_item_sin_codigo_siesa_lanza_valueerror(self, app):
         with app.app_context():
@@ -774,15 +785,15 @@ class TestConnektaGatewayTraslados:
             numeros = [m['f470_nro_registro'] for m in payloads[0]['Movimientos']]
             assert numeros == [1, 2, 3, 4]
 
-    def test_173079_ubicacion_entrada_desde_item(self, app):
+    def test_173079_ubicacion_aux_ent_siempre_none_aunque_item_tenga_ubicacion(self, app):
+        """Bodegas destino (NC1, FC1, etc.) no tienen Multi-Ubicaciones — siempre None."""
         with app.app_context():
             from app.services.connekta_gateway import connekta
             connekta.tipo_docto_transito_salida = 'TTS'
             connekta.tipo_docto_transito_entrada = 'TTE'
-            connekta.ubicacion_entrada_default = None
 
             items = self._items_validos(1)
-            items[0]['ubicacion_entrada'] = 'ENT-TC1'
+            items[0]['ubicacion_entrada'] = 'ENT-TC1'  # ignorado — no aplica
 
             payloads = []
             with patch.object(connekta, '_post',
@@ -793,15 +804,17 @@ class TestConnektaGatewayTraslados:
                     consec_salida=1001,
                 )
 
-            ubi = payloads[0]['Movimientos'][0]['f470_id_ubicacion_aux_ent']
-            assert ubi == 'ENT-TC1'
+            mov = payloads[0]['Movimientos'][0]
+            assert mov['f470_id_ubicacion_aux_ent'] is None
+            assert mov['f470_id_ubicación_aux_ent'] is None
 
-    def test_173079_ubicacion_entrada_fallback_a_gateway_default(self, app):
+    def test_173079_ubicacion_aux_ent_siempre_none_aunque_haya_default(self, app):
+        """El default del gateway tampoco aplica — las bodegas destino no tienen multi-ubi."""
         with app.app_context():
             from app.services.connekta_gateway import connekta
             connekta.tipo_docto_transito_salida = 'TTS'
             connekta.tipo_docto_transito_entrada = 'TTE'
-            connekta.ubicacion_entrada_default = 'ENT'
+            connekta.ubicacion_entrada_default = 'ENT'  # configurado pero ignorado
 
             payloads = []
             with patch.object(connekta, '_post',
@@ -812,10 +825,11 @@ class TestConnektaGatewayTraslados:
                     consec_salida=1001,
                 )
 
-            ubi = payloads[0]['Movimientos'][0]['f470_id_ubicacion_aux_ent']
-            assert ubi == 'ENT'
+            mov = payloads[0]['Movimientos'][0]
+            assert mov['f470_id_ubicacion_aux_ent'] is None
+            assert mov['f470_id_ubicación_aux_ent'] is None
 
-    def test_173079_sin_ubicacion_env_manda_none(self, app):
+    def test_173079_ubicacion_aux_ent_none_sin_default(self, app):
         with app.app_context():
             from app.services.connekta_gateway import connekta
             connekta.tipo_docto_transito_salida = 'TTS'
@@ -831,8 +845,8 @@ class TestConnektaGatewayTraslados:
                     consec_salida=1001,
                 )
 
-            ubi = payloads[0]['Movimientos'][0]['f470_id_ubicacion_aux_ent']
-            assert ubi is None
+            mov = payloads[0]['Movimientos'][0]
+            assert mov['f470_id_ubicacion_aux_ent'] is None
 
     def test_173079_referencia_al_doc_salida(self, app):
         with app.app_context():
@@ -1121,3 +1135,289 @@ class TestEndpointsTraslados:
         )
         assert resp.status_code == 400
         assert 'EN_TRANSITO' in resp.get_json()['error']
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E. Unit tests — fixes sesión 2026-06-11
+#    1. f470_id_ubicacion_aux_ent siempre None (ambas variantes con/sin acento)
+#    2. Una sola definición de transferencia_desde_requisicion
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestFixesSesion20260611:
+
+    def _items_validos(self, n=1):
+        return [
+            {
+                'codigo_siesa': f'SKU-FIX-{i}',
+                'codigo': f'INT-FIX-{i}',
+                'cantidad': 5,
+                'unidad_medida': 'UND',
+                'unidad_negocio_id': 'UN1',
+            }
+            for i in range(1, n + 1)
+        ]
+
+    def test_ets_ubicacion_aux_ent_ninguna_variante_sale_con_valor(self, app):
+        """Ambas claves (con y sin acento) deben ser None — Siesa rechaza cualquier valor."""
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_transito_salida = 'TTS'
+            connekta.tipo_docto_transito_entrada = 'TTE'
+            connekta.ubicacion_entrada_default = 'ENT-BODEGA'  # valor no None — debe ignorarse
+
+            items = self._items_validos(2)
+            items[0]['ubicacion_entrada'] = 'ZONA-A'  # también ignorado
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.transferencia_transito_entrada(
+                    bodega_transito='TR', bodega_destino='NC1',
+                    items=items, codigo_solicitud='ST-FIX-001',
+                    consec_salida=2001,
+                )
+
+            for mov in payloads[0]['Movimientos']:
+                assert mov['f470_id_ubicacion_aux_ent'] is None, \
+                    'f470_id_ubicacion_aux_ent no debe enviar valor — bodega sin multi-ubicaciones'
+                assert mov['f470_id_ubicación_aux_ent'] is None, \
+                    'f470_id_ubicación_aux_ent (con acento) no debe enviar valor'
+
+    def test_ets_ind_estado_es_1(self, app):
+        """f350_ind_estado=1 (Comprometido) es requerido por Siesa para ETS."""
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_transito_salida = 'TTS'
+            connekta.tipo_docto_transito_entrada = 'TTE'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.transferencia_transito_entrada(
+                    bodega_transito='TR', bodega_destino='NC1',
+                    items=self._items_validos(), codigo_solicitud='ST-FIX-002',
+                    consec_salida=2002,
+                )
+
+            assert payloads[0]['Documentos'][0]['f350_ind_estado'] == 1
+
+    def test_ets_rowid_movto_es_0(self, app):
+        """f470_rowid_movto=0 — Siesa lo requiere explícito para ETS."""
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_transito_salida = 'TTS'
+            connekta.tipo_docto_transito_entrada = 'TTE'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.transferencia_transito_entrada(
+                    bodega_transito='TR', bodega_destino='NC1',
+                    items=self._items_validos(), codigo_solicitud='ST-FIX-003',
+                    consec_salida=2003,
+                )
+
+            assert payloads[0]['Movimientos'][0]['f470_rowid_movto'] == 0
+
+    def test_solo_una_definicion_de_transferencia_desde_requisicion(self, app):
+        """Python usa la última definición cuando hay duplicados — verificar que no hay dos."""
+        import inspect
+        import ast
+        import pathlib
+
+        gw_path = pathlib.Path(__file__).parent.parent / 'app' / 'services' / 'connekta_gateway.py'
+        tree = ast.parse(gw_path.read_text(encoding='utf-8'))
+
+        definiciones = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == 'transferencia_desde_requisicion'
+        ]
+        assert len(definiciones) == 1, (
+            f'Se encontraron {len(definiciones)} definiciones de transferencia_desde_requisicion '
+            f'— solo debe haber una (Python usa la última, la primera queda muerta)'
+        )
+
+    def test_ets_consec_auto_reg_es_1(self, app):
+        """F_CONSEC_AUTO_REG=1 indica a Siesa que asigne el consecutivo automáticamente."""
+        with app.app_context():
+            from app.services.connekta_gateway import connekta
+            connekta.tipo_docto_transito_salida = 'TTS'
+            connekta.tipo_docto_transito_entrada = 'TTE'
+
+            payloads = []
+            with patch.object(connekta, '_post',
+                               side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
+                connekta.transferencia_transito_entrada(
+                    bodega_transito='TR', bodega_destino='NC1',
+                    items=self._items_validos(), codigo_solicitud='ST-FIX-004',
+                    consec_salida=2004,
+                )
+
+            assert payloads[0]['Documentos'][0]['F_CONSEC_AUTO_REG'] == 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F. E2E — Flujo recepción de traslados desde tienda (picking ítem por ítem)
+#    Simula el ciclo completo: tienda lista sus traslados EN_TRANSITO,
+#    confirma recepción → ETS se dispara → estado ENTREGADA
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestE2ERecepcionTienda:
+
+    @pytest.fixture
+    def usuario_tienda2(self, db, almacen):
+        """Segunda tienda — para verificar aislamiento entre usuarios."""
+        from app.models.usuario import Usuario
+        from werkzeug.security import generate_password_hash
+        u = Usuario(
+            nombre='Tienda Sur',
+            email='tienda2@test.com',
+            password_hash=generate_password_hash('test123'),
+            rol='tienda',
+            almacen_id=almacen.id,
+            activo=True,
+        )
+        db.session.add(u)
+        db.session.commit()
+        return u
+
+    @pytest.fixture
+    def jwt_token_tienda2(self, app, usuario_tienda2):
+        from flask_jwt_extended import create_access_token
+        with app.app_context():
+            return create_access_token(identity=str(usuario_tienda2.id))
+
+    @pytest.fixture
+    def solicitud_en_transito_tienda(self, db, usuario_tienda, producto_con_unidad):
+        """Traslado EN_TRANSITO perteneciente a usuario_tienda con siesa_salida_consec."""
+        from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado
+        s = SolicitudTraslado(
+            codigo='ST-E2E-RECV-001',
+            bodega_origen_siesa='NB1',
+            bodega_destino_siesa='NC1',
+            nombre_punto_venta='Neiva Centro',
+            estado='EN_TRANSITO',
+            modo_transferencia='EN_TRANSITO',
+            bodega_transito_siesa='TR',
+            solicitante_id=usuario_tienda.id,
+            siesa_salida_consec=9001,
+        )
+        db.session.add(s)
+        db.session.flush()
+        item = ItemSolicitudTraslado(
+            solicitud_id=s.id,
+            producto_id=producto_con_unidad.id,
+            producto_codigo_siesa=producto_con_unidad.codigo_siesa,
+            cantidad_solicitada=10,
+            cantidad_aprobada=10,
+            cantidad_enviada=10,
+        )
+        db.session.add(item)
+        db.session.commit()
+        return s
+
+    def test_tienda_lista_solo_sus_traslados_en_transito(
+            self, app, db, client, jwt_token_tienda, jwt_token_tienda2,
+            solicitud_en_transito_tienda):
+        """GET /api/traslados/?estado=EN_TRANSITO filtra por solicitante — cada tienda ve solo las suyas."""
+        resp_tienda1 = client.get(
+            '/api/traslados/?estado=EN_TRANSITO',
+            headers={'Authorization': f'Bearer {jwt_token_tienda}'},
+        )
+        assert resp_tienda1.status_code == 200
+        ids_tienda1 = [s['id'] for s in resp_tienda1.get_json()['solicitudes']]
+        assert solicitud_en_transito_tienda.id in ids_tienda1
+
+        # tienda2 no debe ver el traslado de tienda1
+        resp_tienda2 = client.get(
+            '/api/traslados/?estado=EN_TRANSITO',
+            headers={'Authorization': f'Bearer {jwt_token_tienda2}'},
+        )
+        assert resp_tienda2.status_code == 200
+        ids_tienda2 = [s['id'] for s in resp_tienda2.get_json()['solicitudes']]
+        assert solicitud_en_transito_tienda.id not in ids_tienda2
+
+    def test_tienda_confirma_recepcion_dispara_ets_y_entrega(
+            self, app, db, client, jwt_token_tienda,
+            solicitud_en_transito_tienda):
+        """POST /api/traslados/<id>/recibir → ETS se llama → estado ENTREGADA → 200."""
+        from app.services.connekta_gateway import connekta
+
+        ets_calls = []
+
+        def _post_spy(conector, nombre, payload, **kwargs):
+            ets_calls.append({'conector': conector, 'payload': payload})
+            return {'detalle': {'Table': [{'f350_consec_docto': 9999}]}}
+
+        with patch.object(connekta, '_post', side_effect=_post_spy):
+            resp = client.post(
+                f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
+                json={},
+                headers={'Authorization': f'Bearer {jwt_token_tienda}'},
+            )
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['estado'] == 'ENTREGADA'
+        # ETS fue llamado exactamente una vez
+        assert len(ets_calls) == 1
+        # El payload ETS incluye f350_consec_docto_base = siesa_salida_consec del traslado
+        doc = ets_calls[0]['payload']['Documentos'][0]
+        assert doc['f350_consec_docto_base'] == 9001
+        # ubicacion_aux_ent es None en todos los movimientos
+        for mov in ets_calls[0]['payload']['Movimientos']:
+            assert mov['f470_id_ubicacion_aux_ent'] is None
+
+    def test_tienda_no_puede_confirmar_recepcion_ajena(
+            self, app, db, client, jwt_token_tienda2,
+            solicitud_en_transito_tienda):
+        """Una tienda no puede confirmar recepción de traslados que no son suyos."""
+        from app.services.connekta_gateway import connekta
+
+        with patch.object(connekta, '_post', return_value={'detalle': {'Table': [{'f350_consec_docto': 1}]}}):
+            resp = client.post(
+                f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
+                json={},
+                headers={'Authorization': f'Bearer {jwt_token_tienda2}'},
+            )
+
+        assert resp.status_code in (403, 404)
+
+    def test_confirmar_recepcion_sin_token_401(
+            self, app, db, client, solicitud_en_transito_tienda):
+        resp = client.post(
+            f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
+            json={},
+        )
+        assert resp.status_code == 401
+
+    def test_confirmar_recepcion_estado_no_en_transito_falla(
+            self, app, db, client, jwt_token_tienda, solicitud_borrador):
+        """Solo traslados EN_TRANSITO se pueden recibir."""
+        resp = client.post(
+            f'/api/traslados/{solicitud_borrador.id}/recibir',
+            json={},
+            headers={'Authorization': f'Bearer {jwt_token_tienda}'},
+        )
+        # La tienda solo ve sus propias solicitudes; si no es su traslado → 404
+        # Si es suya pero en estado incorrecto → 400
+        assert resp.status_code in (400, 403, 404)
+
+    def test_siesa_consec_entrada_guardado_en_bd(
+            self, app, db, client, jwt_token_tienda,
+            solicitud_en_transito_tienda):
+        """Después de confirmar, siesa_entrada_consec debe quedar persistido en BD."""
+        from app.services.connekta_gateway import connekta
+        from app.models.traslado import SolicitudTraslado
+
+        with patch.object(connekta, '_post',
+                          return_value={'detalle': {'Table': [{'f350_consec_docto': 7654}]}}):
+            client.post(
+                f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
+                json={},
+                headers={'Authorization': f'Bearer {jwt_token_tienda}'},
+            )
+
+        s = SolicitudTraslado.query.get(solicitud_en_transito_tienda.id)
+        assert s.siesa_entrada_consec == 7654
