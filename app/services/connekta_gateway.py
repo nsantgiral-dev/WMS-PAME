@@ -2367,24 +2367,27 @@ class ConnektaGateway:
 
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
         """
-        Recovery: consulta dinámica papeleriamedellin_WMS_RIT_Consecutivo.
-        Retorna TOP 20 RIT del CO 003, filtra por f440_referencia en Python.
-        Sin @param en SQL — misma razón que get_consec_salida_transito_by_alterno.
+        Recovery: API_v2_Inventarios_RequisicionesParaTransferir filtrada por f440_referencia.
+        Retorna f440_consec_docto de la RIT creada para este traslado.
         """
         try:
             res = self._get(
-                'papeleriamedellin_WMS_RIT_Consecutivo',
-                params_extra={'paginacion': 'numPag=1|tamPag=20'},
-                url=self.url_get_dinamico,
+                'API_v2_Inventarios_RequisicionesParaTransferir',
+                params_extra={
+                    'paginacion': 'numPag=1|tamPag=5',
+                    'parametros': (
+                        f"f440_id_co = ''{self.centro_op}''"
+                        f" AND f440_referencia = ''{codigo_solicitud}''"
+                    ),
+                },
             )
             rows = (
-                res.get('detalle', {}).get('Datos') or
-                res.get('detalle', {}).get('Table') or []
+                res.get('detalle', {}).get('Table') or
+                res.get('detalle', {}).get('Datos') or []
             )
-            for row in rows:
-                if str(row.get('f440_referencia', '')).strip() == codigo_solicitud:
-                    consec = row.get('f440_consec_docto')
-                    return int(consec) if consec else None
+            if rows:
+                consec = rows[0].get('f440_consec_docto')
+                return int(consec) if consec else None
         except Exception as e:
             logger.warning('[CONNEKTA] get_consec_rit_by_referencia(%s): %s',
                            codigo_solicitud, e)
