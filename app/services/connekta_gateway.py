@@ -2356,10 +2356,18 @@ class ConnektaGateway:
             if rows:
                 row = rows[0]
                 consec = row.get('f350_consec_docto')
-                bodega_ent = row.get('f450_id_bodega_entrada')
+                # Loguear todas las claves para diagnosticar el nombre real del campo
+                logger.info('[CONNEKTA] STS %s row keys: %s', codigo_solicitud, list(row.keys()))
+                # Intentar varios nombres posibles del campo bodega_transito
+                bodega_ent = (
+                    row.get('f450_id_bodega_entrada')
+                    or row.get('f350_id_bodega_entrada')
+                    or row.get('bodega_entrada')
+                    or row.get('f450_id_bodega_salida')  # fallback: bodega_salida = origen
+                )
                 logger.info(
-                    '[CONNEKTA] STS %s: consec=%s bodega_entrada=%s',
-                    codigo_solicitud, consec, bodega_ent,
+                    '[CONNEKTA] STS %s: consec=%s bodega_ent_raw=%s row=%s',
+                    codigo_solicitud, consec, bodega_ent, dict(row),
                 )
                 return {
                     'consec': int(consec) if consec else None,
