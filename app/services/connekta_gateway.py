@@ -2366,25 +2366,29 @@ class ConnektaGateway:
 
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
         """
-        API_v2_Inventarios_RequisicionesParaTransferir (GET)
-        Recovery: v3.1 no devuelve consecutivo en la respuesta; lo busca por
-        f440_referencia = codigo_solicitud.
-        Retorna f350_consec_docto o None si no encuentra o si la API no existe.
+        Recovery: consulta dinámica papeleriamedellin_WMS_RIT_Consecutivo.
+        Bypass del 401 en endpoint estándar — usa url_get_dinamico con @referencia param.
+        Retorna f440_consec_docto o None si no encuentra.
         """
         try:
             res = self._get(
-                'API_v2_Inventarios_RequisicionesParaTransferir',
+                'papeleriamedellin_WMS_RIT_Consecutivo',
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
-                    'parametros': f"f440_referencia = ''{codigo_solicitud}''",
-                }
+                    'referencia': codigo_solicitud,
+                },
+                url=self.url_get_dinamico,
             )
-            tabla = (res.get('detalle') or {}).get('Table') or []
-            if tabla:
-                consec = tabla[0].get('f350_consec_docto')
+            rows = (
+                res.get('detalle', {}).get('Datos') or
+                res.get('detalle', {}).get('Table') or []
+            )
+            if rows:
+                consec = rows[0].get('f440_consec_docto')
                 return int(consec) if consec else None
         except Exception as e:
-            logger.warning(f'[CONNEKTA] get_consec_rit_by_referencia({codigo_solicitud}): {e}')
+            logger.warning('[CONNEKTA] get_consec_rit_by_referencia(%s): %s',
+                           codigo_solicitud, e)
         return None
 
     def transferencia_directa(self, bodega_origen: str, bodega_destino: str,
