@@ -8251,7 +8251,8 @@ async function tiendaCargarRecibir() {
       get('/api/traslados/?estado=EN_TRANSITO'),
       get('/api/traslados/?estado=DESPACHADA'),
     ]);
-    _TIENDA_PENDIENTES = [...(r1.solicitudes || []), ...(r2.solicitudes || [])];
+    _TIENDA_PENDIENTES = [...(r1.solicitudes || []), ...(r2.solicitudes || [])]
+      .sort((a, b) => new Date(b.fecha_creacion) - new Date(a.fecha_creacion));
 
     const badgeEl = document.getElementById('badge-recibir');
     if (badgeEl) {
