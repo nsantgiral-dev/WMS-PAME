@@ -163,6 +163,15 @@ def verificar_y_alertar_huerfanas(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_huerfanas: {e}', exc_info=True)
+            try:
+                _enviar_email_con_dlq(
+                    '[WMS] Scheduler verificar_huerfanas falló',
+                    f'<p><b>Error:</b> {str(e)[:400]}</p>',
+                    f'Error: {str(e)[:400]}',
+                    'alertas_scheduler_huerfanas_fallo',
+                )
+            except Exception:
+                pass
         finally:
             try:
                 _db.session.rollback()
@@ -468,6 +477,15 @@ def verificar_y_alertar_stock_critico(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en verificar_y_alertar_stock_critico: {e}', exc_info=True)
+            try:
+                _enviar_email_con_dlq(
+                    '[WMS] Scheduler stock_critico falló',
+                    f'<p><b>Error:</b> {str(e)[:400]}</p>',
+                    f'Error: {str(e)[:400]}',
+                    'alertas_scheduler_stock_critico_fallo',
+                )
+            except Exception:
+                pass
         finally:
             try:
                 _db.session.rollback()
@@ -647,6 +665,23 @@ def enviar_resumen_diario(app=None):
                     anomalias.append(f'⚠ {_fallidos_viejos} job(s) Siesa FALLIDO >24h sin resolver')
             except Exception:
                 logger.error('[RESUMEN] Sweep jobs FALLIDO >24h falló', exc_info=True)
+            try:
+                # INV_BULTO_UNA_RUTA: bultos asignados a >1 ruta activa
+                from app.models.ruta_despacho import RutaDespacho
+                from sqlalchemy import func as _fn
+                _estados_activos = ('PROGRAMADO', 'EN_CARGUE', 'EN_TRANSITO')
+                _dupes = (
+                    db.session.query(Bulto.id)
+                    .join(RutaDespacho, Bulto.ruta_despacho_id == RutaDespacho.id)
+                    .filter(RutaDespacho.estado.in_(_estados_activos))
+                    .group_by(Bulto.id)
+                    .having(_fn.count(RutaDespacho.id) > 1)
+                    .count()
+                )
+                if _dupes:
+                    anomalias.append(f'🚨 {_dupes} bulto(s) asignados a >1 ruta activa')
+            except Exception:
+                logger.error('[RESUMEN] Sweep INV_BULTO_UNA_RUTA falló', exc_info=True)
             if anomalias:
                 logger.warning(f'[RESUMEN] Anomalías detectadas: {anomalias}')
 
@@ -656,6 +691,15 @@ def enviar_resumen_diario(app=None):
 
         except Exception as e:
             logger.error(f'[ALERTAS] Error en enviar_resumen_diario: {e}', exc_info=True)
+            try:
+                _enviar_email_con_dlq(
+                    '[WMS] Scheduler resumen_diario falló',
+                    f'<p><b>Error:</b> {str(e)[:400]}</p>',
+                    f'Error: {str(e)[:400]}',
+                    'alertas_scheduler_resumen_fallo',
+                )
+            except Exception:
+                pass
         finally:
             try:
                 _db.session.rollback()

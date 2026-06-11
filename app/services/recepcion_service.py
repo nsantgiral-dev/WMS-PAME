@@ -566,10 +566,18 @@ class RecepcionService:
                 continue
 
             if i.tipo == 'BONIFICACION':
+                # Guard: bonificación sin codigo_siesa genera un job FALLIDO permanente
+                # porque Siesa rechaza referencias desconocidas (f470_referencia_item).
+                if not (i.producto.codigo_siesa or '').strip():
+                    logger.warning(
+                        '[RECEPCION] Bonificación producto=%s sin codigo_siesa — omitida del payload Siesa',
+                        i.producto.codigo,
+                    )
+                    continue
                 # Obsequio/bonificación: usa su propio código, bodega y uom del fallback de la OC.
                 # Precio $0, motivo 04 — nunca debe heredar la referencia de otro ítem.
                 items_payload.append({
-                    'producto_codigo': i.producto.codigo_siesa or i.producto.codigo,
+                    'producto_codigo': i.producto.codigo_siesa,
                     'cantidad_recibida': i.cantidad_recibida,
                     'cantidad_ordenada': 0,
                     'lote': i.lote,

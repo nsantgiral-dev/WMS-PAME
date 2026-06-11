@@ -484,6 +484,7 @@ def debug_ubicaciones_raw():
             'raw': resp,
         }), 200
     except Exception as e:
+        logger.exception('[REPOSICION] debug_ubicaciones_raw error bodega=%s', bodega_id)
         return jsonify({'error': str(e)}), 500
 
 
@@ -515,6 +516,7 @@ def test_alerta_email():
             _enviar_alerta_huerfanas(huerfanas_reales)
             return jsonify({'ok': True, 'mensaje': f'Email enviado con {len(huerfanas_reales)} huérfana(s) real(es)'}), 200
         except Exception as e:
+            logger.exception('[REPOSICION] test_alerta_email huérfanas reales')
             return jsonify({'ok': False, 'error': str(e)}), 500
 
     # Sin huérfanas → email de prueba
@@ -543,6 +545,7 @@ def test_alerta_email():
         enviar_email(asunto, cuerpo_html, cuerpo_texto)
         return jsonify({'ok': True, 'mensaje': 'Email de prueba enviado — revisa la bandeja'}), 200
     except Exception as e:
+        logger.exception('[REPOSICION] test_alerta_email prueba')
         return jsonify({'ok': False, 'error': str(e)}), 500
 
 

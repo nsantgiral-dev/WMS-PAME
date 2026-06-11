@@ -364,12 +364,15 @@ def audit_trail():
 
     busqueda = request.args.get('q', '').strip()
     almacen_id = request.args.get('almacen_id', type=int)
-    dias = int(request.args.get('dias', 90))
+    dias = request.args.get('dias', 90, type=int) or 90
     desde = datetime.utcnow() - timedelta(days=dias)
-    limite = int(request.args.get('limite', 50))
+    limite = min(request.args.get('limite', 50, type=int) or 50, 500)
 
     if not busqueda:
         return jsonify({'error': 'Parámetro q requerido (OC, proveedor, o código producto)'}), 400
+
+    # Escapar metacaracteres LIKE para evitar bypass con % o _
+    _b = busqueda.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
 
     # Buscar recepciones que matcheen — eager-load items+producto para evitar N+1
     q = RecepcionMercancia.query.options(
@@ -382,11 +385,11 @@ def audit_trail():
 
     # Buscar por OC, proveedor o remisión
     q = q.filter(db.or_(
-        RecepcionMercancia.numero_oc_siesa.ilike(f'%{busqueda}%'),
-        RecepcionMercancia.proveedor_codigo.ilike(f'%{busqueda}%'),
-        RecepcionMercancia.proveedor_nombre.ilike(f'%{busqueda}%'),
-        RecepcionMercancia.num_remision_prov.ilike(f'%{busqueda}%'),
-        RecepcionMercancia.codigo.ilike(f'%{busqueda}%'),
+        RecepcionMercancia.numero_oc_siesa.ilike(f'%{_b}%', escape='\\'),
+        RecepcionMercancia.proveedor_codigo.ilike(f'%{_b}%', escape='\\'),
+        RecepcionMercancia.proveedor_nombre.ilike(f'%{_b}%', escape='\\'),
+        RecepcionMercancia.num_remision_prov.ilike(f'%{_b}%', escape='\\'),
+        RecepcionMercancia.codigo.ilike(f'%{_b}%', escape='\\'),
     ))
 
     recepciones = q.order_by(RecepcionMercancia.fecha_creacion.desc()).limit(limite).all()

@@ -9,7 +9,7 @@ from flask import Blueprint, Response, jsonify
 from flask_jwt_extended import jwt_required
 
 from app.models.packing import TareaPacking, EstadoPacking
-from app.routes._auth_helpers import _es_gestion
+from app.routes._auth_helpers import _es_gestion, _solo_admin
 from app.services.factura_fe_service import FacturaFEService
 
 factura_admin_bp = Blueprint('factura_admin', __name__)
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 @jwt_required()
 def debug_tablas():
     """GET /api/admin/factura/debug-tablas — lista tablas accesibles en Siesa (solo admin)."""
-    u = _es_gestion()
+    u = _solo_admin()
     if not u:
         return jsonify({'error': 'Sin permiso'}), 403
     try:
@@ -44,7 +44,7 @@ def debug_campos_fe(packing_id: int):
     de los campos de API_v2_Ventas_Facturas_DesdePedido.
     Usar en QA para validar field mapping antes de desplegar a producción.
     """
-    u = _es_gestion()
+    u = _solo_admin()
     if not u:
         return jsonify({'error': 'Sin permiso'}), 403
 

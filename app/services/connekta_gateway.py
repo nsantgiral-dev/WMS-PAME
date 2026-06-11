@@ -169,6 +169,8 @@ class ConnektaGateway:
                 _faltantes.append('SIESA_MOTIVO_TRASLADO')
             if not self.lista_precio:
                 _faltantes.append('SIESA_LISTA_PRECIO')
+            if not self.unidad_negocio:
+                _faltantes.append('SIESA_UNIDAD_NEGOCIO')
             if _faltantes:
                 raise EnvironmentError(
                     f'[CONNEKTA] Variables obligatorias no configuradas: {", ".join(_faltantes)}. '
@@ -897,6 +899,10 @@ class ConnektaGateway:
 
     def get_compromisos_t405(self) -> dict:
         """
+        NOTA: Código no invocado en producción — get_pedido_rowid_map usa
+        get_compromisos_pedido en su lugar. Conservado por si se necesita
+        para reportes bulk. Paginación secuencial hasta 50 páginas.
+
         papeleriamedellin_compromisos_wms — mapeo {f431_rowid: f405_rowid}.
 
         T405 no expone claves naturales (co, consec, referencia) directamente.
@@ -1257,8 +1263,12 @@ class ConnektaGateway:
                 'Maestro del cliente %s en Siesa sin condición de pago asignada.',
                 tipo_docto_rm, consec_rm, cond_pago, _tercero_alerta
             )
+            # Encolar alerta asincrona via DLQ — NO enviar email sync desde el hot
+            # path de facturación (el POST HTTP a Resend tiene timeout 15s y bloquea
+            # el worker; esta alerta no es operacionalmente urgente).
             try:
-                from app.services.alertas_service import _enviar_email_con_dlq
+                from app.models.siesa_job import SiesaJob
+                from app.extensions import db as _db_alert
                 _cuerpo = (
                     f'El pedido RM-{consec_rm} del cliente {_tercero_alerta} fue facturado '
                     f'automáticamente como CONTADO ({cond_pago}) porque Siesa no devolvió '
@@ -1268,12 +1278,16 @@ class ConnektaGateway:
                     f'futuras facturas incorrectas y posibles fricciones con el cliente.\n\n'
                     f'Documento: {tipo_docto_rm}-{consec_rm}'
                 )
-                _enviar_email_con_dlq(
-                    asunto='[WMS ALERTA] Factura emitida como CONTADO por data incompleta en Siesa',
-                    cuerpo_html=f'<pre>{_cuerpo}</pre>',
-                    cuerpo_texto=_cuerpo,
-                    tipo_alerta='DATA_MAESTRA_COND_PAGO'
+                SiesaJob.encolar(
+                    'ALERTA_EMAIL',
+                    {
+                        'tipo_alerta': 'DATA_MAESTRA_COND_PAGO',
+                        'asunto': '[WMS ALERTA] Factura emitida como CONTADO por data incompleta en Siesa',
+                        'cuerpo_html': f'<pre>{_cuerpo}</pre>',
+                        'cuerpo_texto': _cuerpo,
+                    },
                 )
+                _db_alert.session.commit()
             except Exception as _e_alert:
                 logger.error('[CONNEKTA] Email alerta data maestra falló: %s', _e_alert)
         moneda_docto = cabecera.get('f430_id_moneda_docto') or 'COP'
@@ -2034,7 +2048,7 @@ class ConnektaGateway:
                 for idx, item in enumerate(items)
                 if item.get('codigo_siesa') and item.get('cantidad', 0) > 0
             ],
-            'Movto seriales': [],
+            'Movimiento de Seriales': [],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }
         logger.info('[CONNEKTA] compromisos_desde_requisicion RIT=%s (%d ítems)',
@@ -2120,6 +2134,12 @@ class ConnektaGateway:
                     'f462_id_tercero_conductor': self.nit_transportador or None,
                     'f462_nombre_conductor': self.nombre_conductor,
                     'f462_identif_conductor': self.nit_transportador or None,
+                    'f462_numero_guia': None,
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
+                    'f462_notas': None,
                 }
             ],
             'Movimientos': [
@@ -2286,6 +2306,12 @@ class ConnektaGateway:
                     'f462_id_tercero_conductor': self.nit_transportador or None,
                     'f462_nombre_conductor': self.nombre_conductor,
                     'f462_identif_conductor': self.nit_transportador or None,
+                    'f462_numero_guia': None,
+                    'f462_cajas': 0,
+                    'f462_peso': 0.0,
+                    'f462_volumen': 0.0,
+                    'f462_valor_seguros': 0.0,
+                    'f462_notas': None,
                 }
             ],
             'Movimientos': [

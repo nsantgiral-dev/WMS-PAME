@@ -227,10 +227,20 @@ class TrasladoService:
                                 logger.info('[TRASLADO] %s RIT consec recuperado API v2: %s',
                                             s.codigo, consec_rec)
                             else:
-                                logger.warning('[TRASLADO] %s RIT sin consecutivo', s.codigo)
+                                # RIT existe en Siesa pero WMS no tiene el consec → huérfana.
+                                # Guardar siesa_error para que despachar() use fallback 173076
+                                # en vez de 174930 sin consec, y ops sepa que hay RIT suelta.
+                                s.siesa_error = (
+                                    'AVISO: 174646 aceptada por Siesa pero el WMS no pudo leer el consecutivo. '
+                                    'El despacho usará 173076 (fallback). La RIT huérfana en Siesa debe '
+                                    'cerrarse manualmente (Inventarios → Requisiciones → buscar por referencia).'
+                                )
+                                logger.warning('[TRASLADO] %s RIT aceptada sin consecutivo — siesa_error guardado', s.codigo)
+                    if not s.siesa_error:
+                        s.siesa_error = None
                 except Exception as e_rit:
                     s.siesa_error = f'RIT 174646: {e_rit}'
-                    logger.error('[TRASLADO] %s Error RIT: %s', s.codigo, e_rit)
+                    logger.error('[TRASLADO] %s Error RIT en picking: %s', s.codigo, e_rit)
 
         # ── Crear TareaPacking unificada (ST) ────────────────────────────────
         # El empacador la verá en la misma cola que los PD, con etiqueta [TRASLADO].
@@ -337,6 +347,25 @@ class TrasladoService:
             except Exception as e_comp:
                 s.siesa_error = f'174720: {e_comp}'
                 logger.error('[TRASLADO] %s Error compromisos: %s', s.codigo, e_comp)
+                # Encolar en DLQ para reintento automático — sin esto, despachar()
+                # usaría 174930 con cantidades originales de 174646 en vez de las
+                # confirmadas por packing.
+                try:
+                    from app.models.siesa_job import SiesaJob
+                    SiesaJob.encolar(
+                        tipo='COMPROMISOS_RIT',
+                        payload={
+                            'solicitud_id': s.id,
+                            'consec_rit': s.siesa_requisicion_consec,
+                            'bodega_destino': s.bodega_destino_siesa,
+                            'items': _comp_items,
+                            'codigo': s.codigo,
+                        },
+                        referencia_tipo='SolicitudTraslado',
+                        referencia_id=s.id,
+                    )
+                except Exception as _e_dlq:
+                    logger.critical('[TRASLADO] %s DLQ 174720 también falló: %s', s.codigo, _e_dlq)
         else:
             logger.warning('[TRASLADO] %s sin RIT consec — 174720 omitido', s.codigo)
 
@@ -381,6 +410,9 @@ class TrasladoService:
                 f'Despacho ya registrado en Siesa (consec={s.siesa_salida_consec}). '
                 f'Si necesitas reintentar, usa el endpoint de reintento.'
             )
+        # Guard recovery: emergency commit guardó consec pero commit principal falló
+        # (estado sigue PREPARADO). Saltar Siesa y solo completar estado+inventario+LPNs.
+        _skip_siesa = bool(s.siesa_salida_consec)
 
         # Usar cantidad_enviada si fue confirmada por picking; si no, caer a aprobada.
         # Esto permite que el picking parcial (menos ítems de los aprobados) sea correcto.
@@ -413,7 +445,12 @@ class TrasladoService:
             raise ValueError('No hay ítems con cantidad para despachar')
 
         try:
-            if s.siesa_requisicion_consec:
+            if _skip_siesa:
+                logger.info(
+                    '[TRASLADO] %s: siesa_salida_consec=%s ya existe (recovery) — saltando Siesa',
+                    s.codigo, s.siesa_salida_consec,
+                )
+            elif s.siesa_requisicion_consec:
                 # Flujo completo: 174646 + 174720 ya disparados — usar 174930
                 res = siesa_traslado.despachar_desde_rit(
                     consec_rit=s.siesa_requisicion_consec,
@@ -439,10 +476,35 @@ class TrasladoService:
                     codigo=s.codigo,
                 )
 
-            if not res.get('simulado') and not res.get('modo_ensayo'):
+            if _skip_siesa:
+                pass  # consec ya persistido — nada que procesar
+            elif not res.get('simulado') and not res.get('modo_ensayo'):
                 consec = TrasladoService._extraer_consec(res)
                 if consec:
                     s.siesa_salida_consec = consec
+                    # ── P_EMERGENCY_COMMIT: persistir consec aislado ──────────
+                    # Si el commit principal (estado+inventario+LPNs) falla después,
+                    # el guard de idempotencia detectará el consec y evitará un
+                    # segundo HTTP a Siesa → sin STS/STD duplicado.
+                    try:
+                        db.session.commit()
+                    except Exception as _e_ec:
+                        db.session.rollback()
+                        logger.critical(
+                            '[TRASLADO] EMERGENCY COMMIT falló para siesa_salida_consec %s en %s: %s',
+                            consec, s.codigo, _e_ec,
+                        )
+                        try:
+                            s = db.session.merge(s)
+                            s.siesa_salida_consec = consec
+                            db.session.commit()
+                        except Exception as _e_ec2:
+                            db.session.rollback()
+                            logger.critical(
+                                '[TRASLADO] EMERGENCY COMMIT retry falló %s: %s',
+                                s.codigo, _e_ec2,
+                            )
+                            raise
                 else:
                     # 173076 aceptado pero consecutivo no vino en la respuesta.
                     # Auto-recovery: consulta API v2 (176) por f450_docto_alterno.
@@ -546,6 +608,8 @@ class TrasladoService:
                 f'Recepción ya registrada en Siesa (consec={s.siesa_entrada_consec}). '
                 f'El traslado ya fue confirmado.'
             )
+        # Guard recovery: emergency commit guardó consec pero commit principal falló
+        _skip_siesa_entrada = bool(s.siesa_entrada_consec)
 
         # Actualizar cantidades recibidas.
         # Fallback: cantidad_enviada (lo que salió) > cantidad_aprobada > solicitada.
@@ -561,6 +625,12 @@ class TrasladoService:
 
         # ── Trigger Siesa: Entrada tránsito ──
         if s.modo_transferencia == 'EN_TRANSITO':
+          if _skip_siesa_entrada:
+            logger.info(
+                '[TRASLADO] %s: siesa_entrada_consec=%s ya existe (recovery) — saltando 173079',
+                s.codigo, s.siesa_entrada_consec,
+            )
+          else:
             # CO de la sede destino — necesario para f350_id_co / f470_id_co_movto en 173079
             from app.models.usuario import Usuario
             _solicitante = Usuario.query.get(s.solicitante_id) if s.solicitante_id else None
@@ -593,6 +663,26 @@ class TrasladoService:
                     consec = TrasladoService._extraer_consec(res)
                     if consec:
                         s.siesa_entrada_consec = consec
+                        # ── P_EMERGENCY_COMMIT: persistir consec aislado ──
+                        try:
+                            db.session.commit()
+                        except Exception as _e_ec:
+                            db.session.rollback()
+                            logger.critical(
+                                '[TRASLADO] EMERGENCY COMMIT falló siesa_entrada_consec %s en %s: %s',
+                                consec, s.codigo, _e_ec,
+                            )
+                            try:
+                                s = db.session.merge(s)
+                                s.siesa_entrada_consec = consec
+                                db.session.commit()
+                            except Exception as _e_ec2:
+                                db.session.rollback()
+                                logger.critical(
+                                    '[TRASLADO] EMERGENCY COMMIT retry falló %s: %s',
+                                    s.codigo, _e_ec2,
+                                )
+                                raise
                 s.siesa_error = None
             except Exception as e:
                 s.siesa_error = f'173079: {str(e)}'

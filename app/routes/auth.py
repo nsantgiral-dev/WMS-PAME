@@ -43,7 +43,7 @@ def me():
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     usuario = Usuario.query.get(usuario_id)
-    if not usuario:
+    if not usuario or not usuario.activo:
         return jsonify({'error': 'Usuario no encontrado'}), 404
     return jsonify(usuario.to_dict()), 200
 

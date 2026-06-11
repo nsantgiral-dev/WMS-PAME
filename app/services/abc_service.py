@@ -700,18 +700,27 @@ class ABCService:
                         f'[ABC] Pre-turno prewarm (5:55am): {len(sesiones_pendientes)} sesiones PENDIENTE'
                     )
                     # Prewarm: consultar existencia Siesa para cada producto pendiente
+                    # Paralelizado (max_workers=3) para completar dentro del
+                    # misfire_grace_time=300s cuando hay backlog >100 sesiones.
+                    from concurrent.futures import ThreadPoolExecutor
                     _warmed = 0
-                    for _s in sesiones_pendientes:
-                        if _s.producto and _s.producto.codigo_siesa:
+
+                    def _warm_one(_s):
+                        _bodega = _s.ubicacion.almacen.bodega_siesa if _s.ubicacion and _s.ubicacion.almacen else None
+                        ConteoService.consultar_existencia_siesa(
+                            _s.producto.codigo_siesa, bodega=_bodega
+                        )
+
+                    _targets = [s for s in sesiones_pendientes if s.producto and s.producto.codigo_siesa]
+                    with ThreadPoolExecutor(max_workers=3) as pool:
+                        futures = {pool.submit(_warm_one, s): s for s in _targets}
+                        for fut in futures:
                             try:
-                                _bodega = _s.ubicacion.almacen.bodega_siesa if _s.ubicacion and _s.ubicacion.almacen else None
-                                ConteoService.consultar_existencia_siesa(
-                                    _s.producto.codigo_siesa, bodega=_bodega
-                                )
+                                fut.result(timeout=10)
                                 _warmed += 1
                             except Exception:
                                 pass  # prewarm best-effort — no bloquea
-                    logger.info(f'[ABC] Pre-turno prewarm completado: {_warmed}/{len(sesiones_pendientes)} productos')
+                    logger.info(f'[ABC] Pre-turno prewarm completado: {_warmed}/{len(_targets)} productos')
                 except Exception as e:
                     logger.error(f'[ABC] Pre-turno prewarm falló: {e}', exc_info=True)
 
@@ -723,6 +732,16 @@ class ABCService:
                     ConteoService.liberar_tareas_zombi(timeout_horas=2)
                 except Exception as e:
                     logger.error(f'[ABC] Liberación de tareas zombi falló: {e}', exc_info=True)
+                    try:
+                        from app.services.alertas_service import _enviar_email_con_dlq
+                        _enviar_email_con_dlq(
+                            '[WMS] Job liberar_zombis falló',
+                            f'<p><b>Error:</b> {str(e)[:400]}</p>',
+                            f'Error: {str(e)[:400]}',
+                            'conteo_liberar_zombis_fallo',
+                        )
+                    except Exception:
+                        pass
 
         from apscheduler.triggers.interval import IntervalTrigger
 
