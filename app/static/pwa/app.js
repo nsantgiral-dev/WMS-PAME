@@ -8300,7 +8300,15 @@ function tiendaAbrirPickingTraslado(id) {
   const listaView = document.getElementById('tienda-recibir-lista-view');
   const pickingView = document.getElementById('tienda-recibir-picking-view');
   if (listaView) listaView.style.display = 'none';
-  if (pickingView) { pickingView.style.display = 'block'; _tiendaRenderPickingTraslado(); }
+  if (pickingView) {
+    pickingView.style.display = 'block';
+    _tiendaRenderPickingTraslado();
+    // Autofocus para que el scanner físico funcione sin tocar la pantalla
+    setTimeout(() => {
+      const inp = document.getElementById('tienda-scan-input');
+      if (inp) inp.focus();
+    }, 150);
+  }
 }
 
 function tiendaVolverListaRecibir() {
@@ -8333,8 +8341,17 @@ function _tiendaRenderPickingTraslado() {
         </div>
       </div>
 
-      <div style="font-size:12px;color:#555;text-align:center;margin-bottom:12px;">
-        Contá físicamente cada producto y ajustá la cantidad antes de confirmar
+      <!-- Escaneo / entrada manual -->
+      <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:14px;">
+        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">Escanea el código de barras o usá los botones +/−</div>
+        <div style="display:flex;gap:8px;">
+          <input id="tienda-scan-input" type="text" placeholder="Escanea o escribe el código..."
+            style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+            onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ tiendaScanTraslado(v); this.value=''; } }"
+            autocomplete="off" autocorrect="off" spellcheck="false">
+          <button onclick="const v=document.getElementById('tienda-scan-input').value.trim();if(v){tiendaScanTraslado(v);document.getElementById('tienda-scan-input').value='';}"
+            style="padding:10px 14px;background:#1E8395;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+        </div>
       </div>
 
       <div id="tienda-picking-items" style="margin-bottom:14px;">
@@ -8384,6 +8401,37 @@ function _tiendaRenderItemsPickingTraslado(items) {
         </div>
       </div>`;
   }).join('');
+}
+
+async function tiendaScanTraslado(codigo) {
+  if (!_TIENDA_TRASLADO_ACTIVO) return;
+  const items = _TIENDA_TRASLADO_ACTIVO.items || [];
+
+  // 1. Match directo por codigo_siesa o producto_codigo
+  let item = items.find(i =>
+    i.producto_codigo_siesa === codigo ||
+    i.producto_codigo === codigo
+  );
+
+  // 2. Si no hay match directo, resolver via API (codigo de barras del producto)
+  if (!item) {
+    try {
+      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+      if (prod && prod.producto_id) {
+        item = items.find(i => i.producto_id === prod.producto_id);
+      }
+    } catch (_) { /* continúa con item=undefined */ }
+  }
+
+  if (!item) {
+    alerta('Código no encontrado en este traslado: ' + codigo, 'error');
+    return;
+  }
+
+  tiendaContarItem(item.producto_id, 1);
+  // Re-enfocar el input para el próximo escaneo
+  const inp = document.getElementById('tienda-scan-input');
+  if (inp) inp.focus();
 }
 
 function tiendaContarItem(productoId, delta) {
