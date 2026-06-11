@@ -631,10 +631,12 @@ class TrasladoService:
                 s.codigo, s.siesa_entrada_consec,
             )
           else:
-            # CO de la sede destino — necesario para f350_id_co / f470_id_co_movto en 173079
-            from app.models.usuario import Usuario
-            _solicitante = Usuario.query.get(s.solicitante_id) if s.solicitante_id else None
-            _co_destino = _solicitante.siesa_co_id if _solicitante else None
+            # CO de la sede destino — se lee de Almacen por bodega_siesa_id para no depender
+            # de que el usuario solicitante tenga siesa_co_id correctamente configurado.
+            _almacen_dest = Almacen.query.filter_by(
+                bodega_siesa_id=s.bodega_destino_siesa
+            ).first()
+            _co_destino = _almacen_dest.centro_op_siesa if _almacen_dest else None
 
             # Pre-cargar productos para evitar N+1
             _prod_ids = [i.producto_id for i in s.items if i.producto_id]

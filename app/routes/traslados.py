@@ -633,9 +633,9 @@ def reintentar_recepcion_siesa(id):
         if (item.cantidad_recibida or item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada)
     ]
 
-    from app.models.usuario import Usuario as _Usuario
-    _solicitante = _Usuario.query.get(s.solicitante_id) if s.solicitante_id else None
-    _co_destino = _solicitante.siesa_co_id if _solicitante else None
+    from app.models.almacen import Almacen as _Almacen
+    _almacen_dest = _Almacen.query.filter_by(bodega_siesa_id=s.bodega_destino_siesa).first()
+    _co_destino = _almacen_dest.centro_op_siesa if _almacen_dest else None
 
     try:
         res = connekta.transferencia_transito_entrada(
