@@ -8506,8 +8506,16 @@ async function tiendaConfirmarRecepcionTraslado() {
       _TIENDA_CONTEOS = {};
       setTimeout(tiendaCargarRecibir, 1200);
     } else {
-      alerta(d.error || 'Error al confirmar', 'error');
-      if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
+      const yaEntregado = (d.error || '').toLowerCase().includes('entregada');
+      if (yaEntregado) {
+        alerta('Este traslado ya fue recibido — actualizando lista', 'info');
+        _TIENDA_TRASLADO_ACTIVO = null;
+        _TIENDA_CONTEOS = {};
+        setTimeout(tiendaCargarRecibir, 800);
+      } else {
+        alerta(d.error || 'Error al confirmar', 'error');
+        if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
+      }
     }
   } catch (e) {
     alerta('Error de conexión', 'error');
