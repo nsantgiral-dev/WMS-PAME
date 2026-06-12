@@ -56,20 +56,10 @@ def scope_packing(usuario, query):
             TareaPacking.bodega_origen_siesa == usuario.bodega_siesa_id,
             TareaPacking.tipo_documento == 'TRASLADO',
         )
-    # Empacador / operario NB1:
-    #   - PEDIDO: filtrar por almacen_id (igual que siempre)
-    #   - TRASLADO: mostrar TODOS — el packing de traslados siempre es en la bodega origen (NB1)
-    #     y la TareaPacking puede tener un almacen_id distinto al del empacador si el almacén
-    #     virtual de picking (creado por _crear_picking_tienda) tiene un id diferente al almacén
-    #     principal (id=1) que usan los empacadores. Incluir todos los TRASLADO es seguro porque
-    #     las tiendas quedan excluidas por la rama _ROLES_TIENDA anterior.
+    # Empacador / operario: filtra por almacen_id.
+    # Tanto las TareasPackings de PEDIDO como las de TRASLADO tienen almacen_id
+    # igual al almacén origen (el que empaca). Un mismo filtro cubre ambos tipos —
+    # no hay necesidad de separar por tipo_documento.
     if usuario.almacen_id:
-        from app.models.packing import TareaPacking
-        from sqlalchemy import or_
-        return query.filter(
-            or_(
-                TareaPacking.almacen_id == usuario.almacen_id,
-                TareaPacking.tipo_documento == 'TRASLADO',
-            )
-        )
+        return query.filter_by(almacen_id=usuario.almacen_id)
     return query
