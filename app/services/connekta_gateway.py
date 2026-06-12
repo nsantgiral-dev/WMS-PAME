@@ -2214,7 +2214,9 @@ class ConnektaGateway:
           f470_id_bodega = bodega_origen (NS1) — liquida el saldo de tránsito del STS.
           f470_ind_naturaleza = 1 (Entrada) — sin esto Siesa asume Salida y busca
             stock físico en TRA1 (bodega lógica, siempre 0) → bloquea.
-          El destino final (NC1) lo determina Siesa por el CO (_co_ent = co_destino).
+          f350_id_co = centro_op_traslado (CO del CD, mismo que STS) para pasar la
+            validación: "CO de bodega_entrada (TRA1) debe = CO del documento".
+          f470_id_co = _co_ent (CO de NC1) — los movimientos van a la tienda.
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2239,8 +2241,10 @@ class ConnektaGateway:
                 )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
-        # co_destino: CO de la sede que recibe. En 173079 el movimiento debe
-        # quedar atribuido al CO destino, no al CO003 del CD que genera el documento.
+        # co_destino: CO de la sede que recibe.
+        # f350_id_co del documento debe coincidir con el CO de bodega_entrada (TRA1 = CD),
+        # igual que en el STS. Los movimientos (f470) usan _co_ent (NC1) para que el
+        # inventario quede acreditado en la tienda, no en el CD.
         _co_ent = co_destino or self.centro_op
 
         payload = {
@@ -2249,7 +2253,7 @@ class ConnektaGateway:
                 {
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
-                    'f350_id_co': _co_ent,
+                    'f350_id_co': self.centro_op_traslado,
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
