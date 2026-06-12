@@ -265,8 +265,8 @@ class PickingService:
                         )
                         logger.info('[PICKING] TRASLADO %s: todos los pickings completados → EN_PACKING auto-trigger', _ref_doc_cp)
             except Exception as _e_trs:
-                logger.warning('[PICKING] Auto-trigger confirmar_picking_traslado falló para %s: %s',
-                               _ref_doc_cp, _e_trs)
+                logger.error('[PICKING] Auto-trigger confirmar_picking_traslado falló para %s: %s',
+                             _ref_doc_cp, _e_trs, exc_info=True)
 
         return tarea
 

@@ -763,7 +763,7 @@ class MobileService:
                             )
                             logger.info('[MOBILE] %s → EN_PACKING auto-trigger (todos los picks completos)', _ref_doc)
                 except Exception as _e_at:
-                    logger.warning('[MOBILE] auto-trigger confirmar_picking_traslado falló: %s', _e_at)
+                    logger.error('[MOBILE] auto-trigger confirmar_picking_traslado falló: %s', _e_at, exc_info=True)
 
             return resultado
 

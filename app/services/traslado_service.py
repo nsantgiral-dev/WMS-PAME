@@ -262,6 +262,25 @@ class TrasladoService:
             ).first()
             almacen_id_pk = almacen_obj.id if almacen_obj else None
 
+            # Fallback: usar almacen_id de TareasPicking ya completadas para este traslado.
+            # Cubre el caso en que el Almacen de NB1 no tiene bodega_siesa_id configurado.
+            if not almacen_id_pk:
+                _pick_ref = _TP.query.filter_by(
+                    referencia_documento=s.codigo,
+                    tipo_documento='TRASLADO',
+                ).first()
+                if _pick_ref and _pick_ref.almacen_id:
+                    almacen_id_pk = _pick_ref.almacen_id
+                    logger.info('[TRASLADO] %s almacen_id resuelto desde TareaPicking: %s',
+                                s.codigo, almacen_id_pk)
+
+            if not almacen_id_pk:
+                logger.error('[TRASLADO] %s No se pudo resolver almacen_id (bodega_origen=%s) — TareaPacking no creada',
+                             s.codigo, s.bodega_origen_siesa)
+                s.estado = EstadoTraslado.EN_PACKING
+                db.session.commit()
+                return s
+
             tareas_ok = _TP.query.filter_by(
                 referencia_documento=s.codigo,
                 tipo_documento='TRASLADO',
@@ -279,7 +298,7 @@ class TrasladoService:
                 solicitud_id=s.id,
                 tienda_destino=s.nombre_punto_venta or s.bodega_destino_siesa,
                 bodega_origen_siesa=s.bodega_origen_siesa,
-                almacen_id=almacen_id_pk or 1,
+                almacen_id=almacen_id_pk,
                 estado='PENDIENTE',
             )
             db.session.add(tarea_pack)
