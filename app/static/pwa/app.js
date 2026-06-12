@@ -3262,7 +3262,7 @@ async function empCargarTareas() {
   const el = document.getElementById('emp-lista');
   if (!el) return;
   try {
-    const d = await get('/api/packing/?per_page=50');
+    const d = await get('/api/packing/?activas=true');
     const tareas = (d.tareas || []).filter(t =>
       ['PENDIENTE', 'EN_PROCESO'].includes(t.estado) ||
       (t.estado === 'VERIFICADO' && !t.siesa_triggered)  // Siesa falló — permitir reintento

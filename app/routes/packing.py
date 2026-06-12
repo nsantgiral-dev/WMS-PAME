@@ -63,6 +63,7 @@ def listar_tareas():
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para listar tareas de packing'}), 403
     estado = request.args.get('estado')
+    activas = request.args.get('activas', '').lower() in ('1', 'true', 'yes')
     page = request.args.get('page', 1, type=int)
 
     from sqlalchemy.orm import selectinload as _sl, joinedload as _jl
@@ -83,10 +84,23 @@ def listar_tareas():
 
     query = scope_packing(u, query)
 
-    if estado:
+    if activas:
+        # Solo tareas que el empacador necesita atender: PENDIENTE, EN_PROCESO,
+        # y VERIFICADO sin Siesa (reintento). Excluye DESPACHADO/CANCELADO históricos.
+        from sqlalchemy import or_ as _or
+        query = query.filter(
+            _or(
+                TareaPacking.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+                db.and_(
+                    TareaPacking.estado == 'VERIFICADO',
+                    TareaPacking.siesa_triggered == False,
+                )
+            )
+        )
+    elif estado:
         query = query.filter_by(estado=estado)
 
-    tareas = query.paginate(page=page, per_page=50, error_out=False)
+    tareas = query.paginate(page=page, per_page=100, error_out=False)
 
     # Una sola query para todos los pickings de la página — sin N+1
     numeros = [t.numero_pedido_siesa for t in tareas.items]
