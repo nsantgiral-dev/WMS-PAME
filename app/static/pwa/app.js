@@ -7500,12 +7500,12 @@ let _TRAS_SUBTAB = 'pendientes';
 const TRAS_ESTADO = {
   pendientes: ['BORRADOR','ENVIADA','EN_PICKING','PREPARADO'],
   transito:   ['EN_TRANSITO'],
-  historial:  ['ENTREGADA','RECHAZADA','CANCELADA']
+  historial:  ['ENTREGADA','RECHAZADA','CANCELADA','REVERTIDA']
 };
 const TRAS_COL = {
   BORRADOR:'#374151', ENVIADA:'#1d4ed8', EN_PICKING:'#7c3aed', PREPARADO:'#166534',
   EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46',
-  RECHAZADA:'#7f1d1d', CANCELADA:'#374151'
+  RECHAZADA:'#7f1d1d', CANCELADA:'#374151', REVERTIDA:'#4b5563'
 };
 
 function trasSubtab(nombre) {
@@ -7615,6 +7615,7 @@ function _renderTrasladoCard(s) {
   if (s.estado === 'EN_TRANSITO') {
     acciones.push(`<button onclick="trasConfirmarRecepcion(${s.id})" style="flex:1;padding:10px;background:#065f46;color:#4ade80;border:1px solid #166534;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✓ Confirmar Recepción</button>`);
     acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs en ruta</button>`);
+    acciones.push(`<button onclick="trasRevertir(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;font-size:11px;cursor:pointer;">↩ Revertir</button>`);
   }
   if (s.siesa_necesita_atencion && s.estado === 'EN_TRANSITO') {
     acciones.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="flex:1;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">⚠ Reintentar Siesa</button>`);
@@ -7849,6 +7850,22 @@ async function trasConfirmarRecepcion(id) {
     const d = await r.json();
     if (r.ok) { alerta('Recepción confirmada — inventario en tienda', 'exito'); cargarTrasladosAdmin(); }
     else { alerta(d.error || 'Error', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function trasRevertir(id) {
+  const motivo = prompt('Motivo de la reversión (opcional):\nEj: "Camión regresó — mercancía no entregada"', '');
+  if (motivo === null) return;
+  if (!confirm(`¿Revertir este traslado?\n\nLas unidades volverán al inventario del almacén.\n⚠ Deberás anular manualmente el STS en Siesa.`)) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/revertir`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo })
+    });
+    const d = await r.json();
+    if (r.ok) { alerta(d.mensaje || 'Traslado revertido — unidades devueltas al inventario', 'exito'); cargarTrasladosAdmin(); }
+    else { alerta(d.error || 'Error al revertir', 'error'); }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
