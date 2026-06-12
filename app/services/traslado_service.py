@@ -212,9 +212,18 @@ class TrasladoService:
             ]
             if _rit_items:
                 try:
+                    # Para EN_TRANSITO: la RIT debe apuntar a bodega_transito (TRA1),
+                    # no al destino final (NC1). El 174930 crea el STS desde la RIT
+                    # heredando su bodega_entrada; si apunta a NC1, el STS tiene
+                    # bodega_entrada=NC1 y TRA1 nunca recibe inventario físico → ETS falla.
+                    _rit_destino = (
+                        s.bodega_transito_siesa or siesa_traslado.bodega_transito
+                        if s.modo_transferencia == 'EN_TRANSITO'
+                        else s.bodega_destino_siesa
+                    ) or s.bodega_destino_siesa
                     res_rit = siesa_traslado.crear_rit(
                         bodega_origen=s.bodega_origen_siesa,
-                        bodega_destino=s.bodega_destino_siesa,
+                        bodega_destino=_rit_destino,
                         items=_rit_items,
                         codigo=s.codigo,
                     )

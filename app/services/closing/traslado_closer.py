@@ -75,10 +75,17 @@ class TrasladoPackingCloser(IPackingCloser):
         if solicitud.siesa_requisicion_consec and items_comp:
             try:
                 from app.services.siesa_traslado_adapter import siesa_traslado
+                # Compromisos deben coincidir con la bodega_entrada de la RIT.
+                # Para EN_TRANSITO la RIT apunta a TRA1 (no NC1 final) — ver crear_rit.
+                _comp_destino = (
+                    solicitud.bodega_transito_siesa or siesa_traslado.bodega_transito
+                    if solicitud.modo_transferencia == 'EN_TRANSITO'
+                    else solicitud.bodega_destino_siesa
+                ) or solicitud.bodega_destino_siesa
                 siesa_traslado.registrar_compromisos(
                     consec_rit=solicitud.siesa_requisicion_consec,
                     bodega_origen=solicitud.bodega_origen_siesa,
-                    bodega_destino=solicitud.bodega_destino_siesa,
+                    bodega_destino=_comp_destino,
                     items=items_comp,
                     codigo=solicitud.codigo,
                 )
