@@ -416,6 +416,25 @@ class TrasladoService:
                 f'Despacho ya registrado en Siesa (consec={s.siesa_salida_consec}). '
                 f'Si necesitas reintentar, usa el endpoint de reintento.'
             )
+        # Guard STS duplicado: el packing closer ya encoló un job DESPACHO_TRASLADO activo.
+        # Si admin presiona "Despachar" mientras el job async aún no termina (solicitud sigue
+        # PREPARADO pero tarea = DESPACHADO), se crearían dos STS en Siesa → doble deducción.
+        from app.models.packing import TareaPacking as _TPC
+        from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+        _pack_despachado = _TPC.query.filter_by(solicitud_id=s.id, estado='DESPACHADO').first()
+        if _pack_despachado:
+            _job_activo = SiesaJob.query.filter(
+                SiesaJob.tipo == 'DESPACHO_TRASLADO',
+                SiesaJob.referencia_tipo == 'TareaPacking',
+                SiesaJob.referencia_id == _pack_despachado.id,
+                SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS)),
+            ).first()
+            if _job_activo:
+                raise ValueError(
+                    'El packing ya fue cerrado y el despacho se está procesando '
+                    f'automáticamente (job {_job_activo.id}). '
+                    'Actualiza la página en unos segundos.'
+                )
         # Guard recovery: emergency commit guardó consec pero commit principal falló
         # (estado sigue PREPARADO). Saltar Siesa y solo completar estado+inventario+LPNs.
         _skip_siesa = bool(s.siesa_salida_consec)

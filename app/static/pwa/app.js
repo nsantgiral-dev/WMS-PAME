@@ -7608,7 +7608,12 @@ function _renderTrasladoCard(s) {
   }
 
   if (s.estado === 'PREPARADO') {
-    acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
+    const packDespachado = s.packing_info && s.packing_info.estado === 'DESPACHADO';
+    if (packDespachado) {
+      acciones.push(`<div style="flex:1;padding:10px;color:#9ca3af;font-size:12px;text-align:center;background:#1a1a1a;border:1px solid #374151;border-radius:8px;">⏳ Despacho en proceso...</div>`);
+    } else {
+      acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
+    }
     acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs</button>`);
   }
 

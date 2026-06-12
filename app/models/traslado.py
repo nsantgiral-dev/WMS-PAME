@@ -153,8 +153,8 @@ class SolicitudTraslado(db.Model):
         }
 
     def _packing_info(self):
-        """TareaPacking activa — solo relevante en EN_PACKING."""
-        if self.estado != 'EN_PACKING':
+        """TareaPacking activa — relevante en EN_PACKING y PREPARADO (despacho pendiente)."""
+        if self.estado not in ('EN_PACKING', 'PREPARADO'):
             return None
         tareas = self.tareas_packing
         if not tareas:
