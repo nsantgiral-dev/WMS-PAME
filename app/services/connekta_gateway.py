@@ -2290,7 +2290,9 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'f470_id_co': _co_ent,
+                    # f470_id_co debe coincidir con f350_id_co (centro_op=003)
+                    # o Connekta v3.1 stripea el movimiento → "sin movimientos".
+                    'f470_id_co': self.centro_op,
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
