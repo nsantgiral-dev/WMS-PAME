@@ -2208,12 +2208,13 @@ class ConnektaGateway:
         173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
         Confirma llegada: bodega_transito → bodega_destino.
 
-        TRA1 es bodega lógica de tránsito — no tiene stock físico.
-        El STS deja un saldo de tránsito en la cuenta contable, originado en bodega_origen (NS1).
-        f470_id_bodega en Movimientos debe ser bodega_origen (NS1), no TRA1:
-          así Siesa liquida el saldo de tránsito sin buscar stock físico en TRA1.
-        f470_ind_naturaleza=1 indica Entrada (no Salida), evita el bloqueo de disponible.
-        f450_id_bodega_salida en cabecera sigue siendo TRA1 (puente contable).
+        ETS es espejo del STS (Clase 65):
+          f450_id_bodega_salida = bodega_origen (NS1) — Siesa valida que coincida
+            con el origen del STS base; si llega TRA1 o NC1 rechaza con 400.
+          f450_id_bodega_entrada = bodega_destino (NC1) — destino final.
+          f470_id_bodega = bodega_origen (NS1) — debe == f450_id_bodega_salida.
+          f470_ind_naturaleza = 1 (Entrada) — sin esto Siesa asume Salida (2) y
+            busca stock físico en TRA1 (bodega lógica, siempre 0) → bloquea.
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2256,7 +2257,9 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
-                    'f450_id_bodega_salida': bodega_transito,
+                    # NS1 (bodega_origen): Siesa valida que el origen del ETS coincida
+                    # con el origen del STS base. TRA1/NC1 causan 400.
+                    'f450_id_bodega_salida': bodega_origen or bodega_transito,
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     # Referencia obligatoria al doc 173076 de salida
