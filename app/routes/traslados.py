@@ -851,3 +851,113 @@ def bodegas_siesa():
     except Exception as e:
         logger.exception(str(e))
         return jsonify({'error': str(e)}), 500
+
+
+@traslados_bp.route('/debug-packing', methods=['GET'])
+@jwt_required()
+def debug_packing():
+    """Admin — diagnóstico de TareasPackings de traslados y solicitudes stuck."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin'}), 403
+
+    from app.models.packing import TareaPacking
+    from app.models.almacen import Almacen
+    from app.extensions import db
+
+    packs = TareaPacking.query.filter_by(tipo_documento='TRASLADO').order_by(TareaPacking.id.desc()).limit(20).all()
+    solicitudes_stuck = SolicitudTraslado.query.filter(
+        SolicitudTraslado.estado.in_(['EN_PICKING', 'EN_PACKING'])
+    ).order_by(SolicitudTraslado.id.desc()).limit(20).all()
+
+    almacenes = {a.id: {'id': a.id, 'codigo': a.codigo, 'bodega_siesa_id': a.bodega_siesa_id}
+                 for a in Almacen.query.all()}
+
+    return jsonify({
+        'usuario': {
+            'id': usuario.id,
+            'rol': usuario.rol,
+            'almacen_id': usuario.almacen_id,
+            'puede_empacar': usuario.puede_empacar,
+            'almacen': almacenes.get(usuario.almacen_id),
+        },
+        'traslado_packings': [
+            {
+                'id': p.id,
+                'codigo': p.codigo,
+                'referencia_doc': p.referencia_doc,
+                'solicitud_id': p.solicitud_id,
+                'almacen_id': p.almacen_id,
+                'bodega_origen_siesa': p.bodega_origen_siesa,
+                'estado': p.estado,
+                'fecha_creacion': p.fecha_creacion.isoformat() if p.fecha_creacion else None,
+            }
+            for p in packs
+        ],
+        'solicitudes_stuck': [
+            {
+                'id': s.id,
+                'codigo': s.codigo,
+                'estado': s.estado,
+                'bodega_origen': s.bodega_origen_siesa,
+                'tiene_packing': bool(TareaPacking.query.filter_by(solicitud_id=s.id).first()),
+            }
+            for s in solicitudes_stuck
+        ],
+        'almacenes': list(almacenes.values()),
+    }), 200
+
+
+@traslados_bp.route('/recuperar-packing', methods=['POST'])
+@jwt_required()
+def recuperar_packing():
+    """
+    Admin — crea TareasPackings faltantes para solicitudes en EN_PICKING o EN_PACKING
+    que no tienen TareaPacking. Útil para recuperar traslados stuck por fallo del auto-trigger.
+    """
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+        return jsonify({'error': 'Solo admin'}), 403
+
+    from app.models.packing import TareaPacking
+    from app.extensions import db
+
+    candidatas = SolicitudTraslado.query.filter(
+        SolicitudTraslado.estado.in_(['EN_PICKING', 'EN_PACKING'])
+    ).all()
+
+    recuperadas = []
+    errores = []
+    for s in candidatas:
+        tiene_pack = TareaPacking.query.filter_by(solicitud_id=s.id).first()
+        if tiene_pack:
+            continue
+        try:
+            TrasladoService.confirmar_picking_traslado(
+                solicitud_id=s.id,
+                usuario_id=usuario_id,
+            )
+            recuperadas.append(s.codigo)
+            logger.info('[TRASLADO] %s TareaPacking creada por recuperar-packing', s.codigo)
+        except ValueError as e:
+            if 'EN_PICKING' in str(e):
+                logger.warning('[TRASLADO] %s ya está en %s — skip', s.codigo, s.estado)
+            else:
+                errores.append({'codigo': s.codigo, 'error': str(e)})
+        except Exception as e:
+            logger.error('[TRASLADO] recuperar-packing error en %s: %s', s.codigo, e, exc_info=True)
+            errores.append({'codigo': s.codigo, 'error': str(e)})
+
+    return jsonify({
+        'recuperadas': recuperadas,
+        'errores': errores,
+        'total_recuperadas': len(recuperadas),
+    }), 200
