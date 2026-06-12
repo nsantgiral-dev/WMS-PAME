@@ -2,9 +2,12 @@
 Servicio de Picking con lógica FEFO
 (First Expired First Out — primero vence, primero sale)
 """
+import logging
 from datetime import datetime
 import uuid
 from app.extensions import db
+
+logger = logging.getLogger(__name__)
 from app.models.picking import TareaPicking, EstadoPicking
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.producto import Producto
@@ -226,7 +229,7 @@ class PickingService:
 
         db.session.commit()
 
-        # Auto-sync packing asociado — ajusta cantidad_esperada al recogido real
+        # Auto-sync packing asociado — ajusta cantidad_esperada al recogido real (solo PEDIDO)
         try:
             from app.models.packing import TareaPacking as _TPSync
             from app.services.packing_picking_sync_service import PackingPickingSyncService as _PPSync
@@ -239,6 +242,30 @@ class PickingService:
                     _PPSync.sincronizar(_sync_pk.id)
         except Exception as _e_sync:
             logger.warning('[PICKING] Sync packing falló — cantidad_esperada puede estar desactualizada: %s', _e_sync)
+
+        # Auto-trigger confirmar_picking_traslado cuando el último picking TRASLADO se completa.
+        # Crea TareaPacking y mueve solicitud EN_PICKING → EN_PACKING para que el empacador la vea.
+        if tarea.tipo_documento == 'TRASLADO' and _ref_doc_cp:
+            try:
+                pendientes = TareaPicking.query.filter_by(
+                    referencia_documento=_ref_doc_cp,
+                    tipo_documento='TRASLADO',
+                ).filter(
+                    TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO])
+                ).count()
+                if pendientes == 0:
+                    from app.models.traslado import SolicitudTraslado as _ST, EstadoTraslado as _ET
+                    _sol = _ST.query.filter_by(codigo=_ref_doc_cp).first()
+                    if _sol and _sol.estado == _ET.EN_PICKING:
+                        from app.services.traslado_service import TrasladoService as _TS
+                        _TS.confirmar_picking_traslado(
+                            solicitud_id=_sol.id,
+                            usuario_id=usuario_id,
+                        )
+                        logger.info('[PICKING] TRASLADO %s: todos los pickings completados → EN_PACKING auto-trigger', _ref_doc_cp)
+            except Exception as _e_trs:
+                logger.warning('[PICKING] Auto-trigger confirmar_picking_traslado falló para %s: %s',
+                               _ref_doc_cp, _e_trs)
 
         return tarea
 
