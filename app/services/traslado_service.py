@@ -812,6 +812,7 @@ class TrasladoService:
                     codigo=s.codigo,
                     consec_salida=s.siesa_salida_consec,
                     co_destino=_co_destino,
+                    bodega_origen=s.bodega_origen_siesa,
                 )
                 if not res.get('simulado') and not res.get('modo_ensayo'):
                     consec = TrasladoService._extraer_consec(res)

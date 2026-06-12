@@ -118,15 +118,16 @@ class SiesaTrasladoAdapter:
 
     def registrar_entrada(self, bodega_transito: str, bodega_destino: str,
                           items: list, codigo: str,
-                          consec_salida: int, co_destino: str = None) -> dict:
+                          consec_salida: int, co_destino: str = None,
+                          bodega_origen: str = None) -> dict:
         """
         173079 — Transferencia en Tránsito Entrada (clase 66).
         Carga Cuenta 14 destino y cierra la Cuenta Tránsito.
-        Requiere el consecutivo del 173076 (consec_salida).
-        bodega_transito = bodega intermedia (TRA1) — == STS.bodega_entrada, validado por Siesa.
+        bodega_origen (NS1): f470_id_bodega en Movimientos para liquidar el saldo de
+        tránsito sin validar inventario físico de TRA1 (bodega lógica).
         """
-        logger.info('[TRASLADO_ADAPTER] entrada_transito %s  consec_salida=%s',
-                    codigo, consec_salida)
+        logger.info('[TRASLADO_ADAPTER] entrada_transito %s  consec_salida=%s  origen=%s',
+                    codigo, consec_salida, bodega_origen)
         return connekta.transferencia_transito_entrada(
             bodega_transito=bodega_transito,
             bodega_destino=bodega_destino,
@@ -134,6 +135,7 @@ class SiesaTrasladoAdapter:
             codigo_solicitud=codigo,
             consec_salida=consec_salida,
             co_destino=co_destino,
+            bodega_origen=bodega_origen,
         )
 
 

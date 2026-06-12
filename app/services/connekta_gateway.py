@@ -2202,12 +2202,18 @@ class ConnektaGateway:
     def transferencia_transito_entrada(self, bodega_transito: str, bodega_destino: str,
                                         items: list, codigo_solicitud: str,
                                         consec_salida: int = None,
-                                        co_destino: str = None):
+                                        co_destino: str = None,
+                                        bodega_origen: str = None):
         """
         173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
         Confirma llegada: bodega_transito → bodega_destino.
-        f450_id_bodega_salida y f470_id_bodega = bodega_transito (TRA1).
-        Siesa valida: ETS.bodega_salida == STS.bodega_entrada.
+
+        TRA1 es bodega lógica de tránsito — no tiene stock físico.
+        El STS deja un saldo de tránsito en la cuenta contable, originado en bodega_origen (NS1).
+        f470_id_bodega en Movimientos debe ser bodega_origen (NS1), no TRA1:
+          así Siesa liquida el saldo de tránsito sin buscar stock físico en TRA1.
+        f470_ind_naturaleza=1 indica Entrada (no Salida), evita el bloqueo de disponible.
+        f450_id_bodega_salida en cabecera sigue siendo TRA1 (puente contable).
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2279,7 +2285,12 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida (== STS bodega_entrada)
+                    # NS1 (bodega_origen): Siesa liquida el saldo de tránsito que
+                    # el STS dejó volando desde NS1. TRA1 no tiene stock físico.
+                    'f470_id_bodega': bodega_origen or bodega_transito,
+                    # Naturaleza 1 = Entrada. Sin esto Siesa asume Salida (2) y
+                    # busca stock físico en TRA1 → "sin cantidad disponible".
+                    'f470_ind_naturaleza': 1,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
