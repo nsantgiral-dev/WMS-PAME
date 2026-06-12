@@ -686,6 +686,7 @@ def reintentar_recepcion_siesa(id):
             codigo_solicitud=s.codigo,
             consec_salida=s.siesa_salida_consec,
             co_destino=_co_destino,
+            bodega_origen=s.bodega_origen_siesa or connekta.bodega,
         )
         from app.services.traslado_service import TrasladoService
         if not res.get('simulado') and not res.get('modo_ensayo'):
