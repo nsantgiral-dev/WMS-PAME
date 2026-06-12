@@ -2253,7 +2253,9 @@ class ConnektaGateway:
                 {
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
-                    'f350_id_co': self.centro_op_traslado,
+                    # TRA1 pertenece al CO del CD (centro_op=003), no al CO de NS1
+                    # (centro_op_traslado=001). Siesa valida: CO(bodega_entrada)==CO(doc).
+                    'f350_id_co': self.centro_op,
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
