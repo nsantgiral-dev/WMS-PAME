@@ -48,10 +48,12 @@ class SiesaTrasladoAdapter:
 
     def registrar_salida_transito(self, bodega_origen: str, bodega_transito: str,
                                   items: list, codigo: str,
-                                  consec_requisicion: int = None) -> dict:
+                                  consec_requisicion: int = None,
+                                  bodega_destino: str = None) -> dict:
         """
         173076 — Transferencia en Tránsito Salida (clase 65).
         Descarga Cuenta 14 origen → Cuenta Tránsito.
+        bodega_destino (NC1): f450_id_bodega_entrada del STS — el ETS lo espeja.
         """
         logger.info('[TRASLADO_ADAPTER] salida_transito %s  %s→%s',
                     codigo, bodega_origen, bodega_transito)
@@ -61,6 +63,7 @@ class SiesaTrasladoAdapter:
             items=items,
             codigo_solicitud=codigo,
             consec_requisicion=consec_requisicion,
+            bodega_destino=bodega_destino,
         )
 
     def registrar_salida_directa(self, bodega_origen: str, bodega_destino: str,

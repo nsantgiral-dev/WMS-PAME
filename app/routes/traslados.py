@@ -618,7 +618,8 @@ def reintentar_despacho(id):
                 bodega_transito=bodega_transito,
                 items=items_payload,
                 codigo_solicitud=s.codigo,
-                consec_requisicion=s.siesa_requisicion_consec
+                consec_requisicion=s.siesa_requisicion_consec,
+                bodega_destino=s.bodega_destino_siesa,
             )
         else:
             res = connekta.transferencia_directa(

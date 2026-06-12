@@ -492,6 +492,7 @@ class TrasladoService:
                     items=items_payload,
                     codigo=s.codigo,
                     consec_requisicion=None,
+                    bodega_destino=s.bodega_destino_siesa,
                 )
             else:
                 res = siesa_traslado.registrar_salida_directa(

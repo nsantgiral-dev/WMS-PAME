@@ -631,6 +631,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 items=items,
                 codigo=solicitud.codigo,
                 consec_requisicion=None,
+                bodega_destino=solicitud.bodega_destino_siesa,
             )
 
         if not res.get('simulado') and not res.get('modo_ensayo'):

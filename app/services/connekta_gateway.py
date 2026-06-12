@@ -2058,11 +2058,14 @@ class ConnektaGateway:
 
     def transferencia_transito_salida(self, bodega_origen: str, bodega_transito: str,
                                        items: list, codigo_solicitud: str,
-                                       consec_requisicion: int = None):
+                                       consec_requisicion: int = None,
+                                       bodega_destino: str = None):
         """
         173076 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoSalida
         Sale de bodega_origen → queda en bodega_transito (limbo contable).
-        El inventario NO está en la tienda hasta que se confirme la entrada (173079).
+        bodega_destino (NC1): se usa como f450_id_bodega_entrada; el tránsito es
+        propiedad de la Clase 65, no requiere bodega física. El ETS espeja este
+        campo para la validación 62485 y NC1 tiene stock físico (TRA1 no tiene).
         NO lleva f350_id_co_base/f350_id_tipo_docto_base — esas son solo de 173079.
         """
         if not self.tipo_docto_transito_salida:
@@ -2093,7 +2096,9 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
-                    'f450_id_bodega_entrada': bodega_transito,
+                    # NC1 (bodega_destino): el ETS espeja este valor para validación 62485.
+                    # Usar TRA1 haría que el ETS falle con 46035 (TRA1 sin stock físico).
+                    'f450_id_bodega_entrada': bodega_destino or bodega_transito,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     'f462_id_vehiculo': self.vehiculo_traslado or None,
                     'f462_id_vehículo': self.vehiculo_traslado or None,
