@@ -2208,13 +2208,13 @@ class ConnektaGateway:
         173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
         Confirma llegada: bodega_transito → bodega_destino.
 
-        ETS es espejo del STS (Clase 65):
-          f450_id_bodega_salida = bodega_origen (NS1) — Siesa valida que coincida
-            con el origen del STS base; si llega TRA1 o NC1 rechaza con 400.
-          f450_id_bodega_entrada = bodega_destino (NC1) — destino final.
-          f470_id_bodega = bodega_origen (NS1) — debe == f450_id_bodega_salida.
-          f470_ind_naturaleza = 1 (Entrada) — sin esto Siesa asume Salida (2) y
-            busca stock físico en TRA1 (bodega lógica, siempre 0) → bloquea.
+        ETS es espejo del STS (Clase 65) — Siesa valida que ambos campos coincidan:
+          f450_id_bodega_salida = bodega_origen (NS1) = STS.bodega_salida ✓
+          f450_id_bodega_entrada = bodega_transito (TRA1) = STS.bodega_entrada ✓
+          f470_id_bodega = bodega_origen (NS1) — liquida el saldo de tránsito del STS.
+          f470_ind_naturaleza = 1 (Entrada) — sin esto Siesa asume Salida y busca
+            stock físico en TRA1 (bodega lógica, siempre 0) → bloquea.
+          El destino final (NC1) lo determina Siesa por el CO (_co_ent = co_destino).
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2257,10 +2257,10 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
-                    # NS1 (bodega_origen): Siesa valida que el origen del ETS coincida
-                    # con el origen del STS base. TRA1/NC1 causan 400.
+                    # Siesa valida que ETS.bodega_salida == STS.bodega_salida (NS1)
                     'f450_id_bodega_salida': bodega_origen or bodega_transito,
-                    'f450_id_bodega_entrada': bodega_destino,
+                    # Siesa valida que ETS.bodega_entrada == STS.bodega_entrada (TRA1)
+                    'f450_id_bodega_entrada': bodega_transito,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     # Referencia obligatoria al doc 173076 de salida
                     'f350_id_co_base': self.centro_op_traslado if consec_salida else None,
