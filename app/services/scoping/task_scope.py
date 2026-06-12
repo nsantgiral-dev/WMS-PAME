@@ -42,7 +42,7 @@ def scope_packing(usuario, query):
     """
     Aplica el filtro de bodega/tipo al query de TareaPacking según el rol del usuario.
       - Admin / gestión:            ve todo
-      - Empacador NB1:              filtra por almacen_id (ve PD + ST)
+      - Empacador NB1:              filtra por almacen_id (PD) + bodega_origen_siesa (ST)
       - Tienda / picker_traslado
         / packer_traslado:          filtra por bodega_siesa_id + solo TRASLADO
     """
@@ -56,7 +56,22 @@ def scope_packing(usuario, query):
             TareaPacking.bodega_origen_siesa == usuario.bodega_siesa_id,
             TareaPacking.tipo_documento == 'TRASLADO',
         )
-    # Empacador / operario NB1
+    # Empacador / operario NB1 — PD por almacen_id, ST por bodega_origen_siesa
     if usuario.almacen_id:
+        from app.models.packing import TareaPacking
+        from app.models.almacen import Almacen
+        from sqlalchemy import or_, and_
+        _alm = Almacen.query.get(usuario.almacen_id)
+        _bodega = _alm.bodega_siesa_id if _alm else None
+        if _bodega:
+            return query.filter(
+                or_(
+                    TareaPacking.almacen_id == usuario.almacen_id,
+                    and_(
+                        TareaPacking.tipo_documento == 'TRASLADO',
+                        TareaPacking.bodega_origen_siesa == _bodega,
+                    ),
+                )
+            )
         return query.filter_by(almacen_id=usuario.almacen_id)
     return query

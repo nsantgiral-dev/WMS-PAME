@@ -224,8 +224,9 @@ class PickingService:
         if not tarea.fecha_inicio:
             tarea.fecha_inicio = datetime.utcnow()
 
-        # Capturar referencia_documento antes del commit — expire_on_commit la invalida
+        # Capturar antes del commit — expire_on_commit invalida atributos post-commit
         _ref_doc_cp = tarea.referencia_documento
+        _tipo_doc_cp = tarea.tipo_documento
 
         db.session.commit()
 
@@ -245,7 +246,7 @@ class PickingService:
 
         # Auto-trigger confirmar_picking_traslado cuando el último picking TRASLADO se completa.
         # Crea TareaPacking y mueve solicitud EN_PICKING → EN_PACKING para que el empacador la vea.
-        if tarea.tipo_documento == 'TRASLADO' and _ref_doc_cp:
+        if _tipo_doc_cp == 'TRASLADO' and _ref_doc_cp:
             try:
                 pendientes = TareaPicking.query.filter_by(
                     referencia_documento=_ref_doc_cp,
