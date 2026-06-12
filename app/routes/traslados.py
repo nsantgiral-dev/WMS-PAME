@@ -940,6 +940,18 @@ def recuperar_packing():
         tiene_pack = TareaPacking.query.filter_by(solicitud_id=s.id).first()
         if tiene_pack:
             continue
+        # Si está EN_PACKING sin TareaPacking (stuck: confirmar_picking_traslado falló
+        # después de setear el estado), resetear a EN_PICKING para que el recovery funcione.
+        if s.estado == 'EN_PACKING':
+            try:
+                s.estado = 'EN_PICKING'
+                db.session.commit()
+                logger.info('[TRASLADO] recuperar-packing: %s reseteado EN_PACKING → EN_PICKING', s.codigo)
+            except Exception as e_reset:
+                db.session.rollback()
+                logger.error('[TRASLADO] recuperar-packing no pudo resetear %s: %s', s.codigo, e_reset)
+                errores.append({'codigo': s.codigo, 'error': f'Reset estado falló: {e_reset}'})
+                continue
         try:
             TrasladoService.confirmar_picking_traslado(
                 solicitud_id=s.id,
@@ -947,11 +959,6 @@ def recuperar_packing():
             )
             recuperadas.append(s.codigo)
             logger.info('[TRASLADO] %s TareaPacking creada por recuperar-packing', s.codigo)
-        except ValueError as e:
-            if 'EN_PICKING' in str(e):
-                logger.warning('[TRASLADO] %s ya está en %s — skip', s.codigo, s.estado)
-            else:
-                errores.append({'codigo': s.codigo, 'error': str(e)})
         except Exception as e:
             logger.error('[TRASLADO] recuperar-packing error en %s: %s', s.codigo, e, exc_info=True)
             errores.append({'codigo': s.codigo, 'error': str(e)})
