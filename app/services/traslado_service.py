@@ -596,6 +596,130 @@ class TrasladoService:
         return s
 
     @staticmethod
+    def reversar_traslado(solicitud_id: int, usuario_id: int,
+                          motivo: str = '') -> SolicitudTraslado:
+        """
+        Admin revierte un traslado EN_TRANSITO: devuelve unidades al inventario origen.
+
+        Lógica:
+        - Si hubo picking mobile (TareasPicking COMPLETADO): devuelve a esas ubicaciones.
+        - Si fue admin-only (sin picking mobile o fallback): devuelve a la ubicacion general
+          del almacen origen; si no existe, la crea.
+        - Crea MovimientoInventario tipo REVERSA_TRASLADO por cada ítem.
+        - Limpia reservas de TareasPicking que quedaron pendientes (fix de leak).
+        - El documento Siesa (STS) debe anularse manualmente en Siesa.
+        """
+        from app.models.picking import TareaPicking, EstadoPicking as _EP
+        from app.models.ubicacion import Ubicacion
+
+        s = SolicitudTraslado.query.filter_by(id=solicitud_id).with_for_update().first()
+        if not s:
+            from flask import abort; abort(404)
+        if s.estado != EstadoTraslado.EN_TRANSITO:
+            raise ValueError(
+                f'Solo se puede revertir un traslado EN_TRANSITO (estado actual: {s.estado})'
+            )
+
+        # ── Obtener almacen origen ──────────────────────────────────────────
+        almacen = Almacen.query.filter_by(
+            bodega_siesa_id=s.bodega_origen_siesa
+        ).first()
+        if not almacen:
+            raise ValueError(
+                f'No se encontró almacen WMS para bodega {s.bodega_origen_siesa}. '
+                f'El traslado se marcará como REVERTIDA pero el inventario debe ajustarse manualmente.'
+            )
+
+        # ── Ubicaciones de retorno por producto ───────────────────────────
+        # Preferir la ubicacion del picking mobile si existe.
+        tareas_ok = TareaPicking.query.filter_by(
+            referencia_documento=s.codigo,
+            tipo_documento='TRASLADO',
+            estado='COMPLETADO',
+        ).all()
+        ubicacion_por_producto = {t.producto_id: t.ubicacion_id for t in tareas_ok if t.ubicacion_id}
+
+        # Ubicacion general del almacen origen (fallback de retorno)
+        ub_general = (
+            Ubicacion.query
+            .filter_by(almacen_id=almacen.id, activo=True)
+            .order_by(Ubicacion.id.asc())
+            .first()
+        )
+        if not ub_general:
+            raise ValueError(
+                f'Almacen {s.bodega_origen_siesa} no tiene ubicaciones activas. '
+                f'Crea al menos una ubicacion antes de revertir.'
+            )
+
+        # ── Devolver inventario por ítem ──────────────────────────────────
+        for item in s.items:
+            cantidad = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
+            if not cantidad or cantidad <= 0 or not item.producto_id:
+                continue
+
+            ub_id = ubicacion_por_producto.get(item.producto_id) or ub_general.id
+
+            reg = UbicacionProducto.query.filter_by(
+                ubicacion_id=ub_id,
+                producto_id=item.producto_id,
+            ).with_for_update().first()
+
+            if reg:
+                saldo_antes = reg.cantidad
+                reg.cantidad += cantidad
+                reg.row_version += 1
+            else:
+                reg = UbicacionProducto(
+                    ubicacion_id=ub_id,
+                    producto_id=item.producto_id,
+                    cantidad=cantidad,
+                    fecha_ingreso=datetime.utcnow(),
+                )
+                db.session.add(reg)
+                saldo_antes = 0
+
+            db.session.add(MovimientoInventario(
+                producto_id=item.producto_id,
+                ubicacion_id=ub_id,
+                almacen_id=almacen.id,
+                tipo='REVERSA_TRASLADO',
+                cantidad=cantidad,
+                saldo_antes=saldo_antes,
+                saldo_despues=saldo_antes + cantidad,
+                motivo=f'Reversa traslado {s.codigo} — {motivo}' if motivo else f'Reversa traslado {s.codigo}',
+                numero_documento=s.codigo,
+                usuario_id=usuario_id,
+                idempotency_key=f'REV-{s.id}-{item.producto_id}',
+            ))
+
+        # ── Limpiar reservas filtradas de TareasPicking pendientes ────────
+        tareas_pendientes = TareaPicking.query.filter(
+            TareaPicking.referencia_documento == s.codigo,
+            TareaPicking.tipo_documento == 'TRASLADO',
+            TareaPicking.estado.in_([_EP.PENDIENTE, _EP.EN_PROCESO]),
+        ).all()
+        for t in tareas_pendientes:
+            reg_res = UbicacionProducto.query.filter_by(
+                ubicacion_id=t.ubicacion_id,
+                producto_id=t.producto_id,
+            ).with_for_update().first()
+            if reg_res:
+                reg_res.reservado = max(0, reg_res.reservado - t.cantidad_solicitada)
+            t.estado = _EP.CANCELADO
+
+        s.estado = EstadoTraslado.REVERTIDA
+        s.siesa_error = (
+            'REVERSA WMS: unidades devueltas al inventario origen. '
+            'Anular manualmente el STS en Siesa (Inventarios → Transferencias).'
+        )
+        db.session.commit()
+
+        TrasladoService.invalidar_cache_stock(s.bodega_origen_siesa)
+        logger.info('[TRASLADO] %s → REVERTIDA por usuario %s: %s', s.codigo, usuario_id, motivo or '—')
+        return s
+
+    @staticmethod
     def confirmar_recepcion(solicitud_id: int, usuario_id: int,
                              items_recibidos: list = None) -> SolicitudTraslado:
         """

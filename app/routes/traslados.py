@@ -377,6 +377,44 @@ def despachar(id):
         return jsonify({'error': str(e)}), 500
 
 
+@traslados_bp.route('/<int:id>/revertir', methods=['POST'])
+@jwt_required()
+def revertir_traslado(id):
+    """
+    Admin revierte un traslado EN_TRANSITO: devuelve unidades al inventario origen.
+    Body: {"motivo": "texto opcional"}
+    IMPORTANTE: el documento STS en Siesa debe anularse manualmente.
+    """
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    if not usuario or usuario.rol not in Roles.DESPACHO:
+        return jsonify({'error': 'Solo administradores pueden revertir traslados'}), 403
+    data = request.get_json() or {}
+    motivo = data.get('motivo', '').strip()
+    try:
+        s = TrasladoService.reversar_traslado(
+            solicitud_id=id,
+            usuario_id=usuario_id,
+            motivo=motivo,
+        )
+        return jsonify({
+            'ok': True,
+            'mensaje': (
+                f'Traslado {s.codigo} revertido. Unidades devueltas al inventario origen. '
+                f'Recuerda anular el STS en Siesa manualmente.'
+            ),
+            'solicitud': s.to_dict(),
+        }), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f'[TRASLADO] Error revertir {id}: {e}', exc_info=True)
+        return jsonify({'error': 'Error interno — reintenta'}), 500
+
+
 @traslados_bp.route('/<int:id>/recibir', methods=['POST'])
 @jwt_required()
 def confirmar_recepcion(id):

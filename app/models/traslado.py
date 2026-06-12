@@ -3,7 +3,7 @@ Traslados entre Bodega Principal y Puntos de Venta.
 
 Máquina de estados:
   BORRADOR → ENVIADA → EN_PICKING → EN_PACKING → PREPARADO → EN_TRANSITO → ENTREGADA
-                     ↘ RECHAZADA
+                     ↘ RECHAZADA                                          ↘ REVERTIDA
            ↘ CANCELADA  (tienda: BORRADOR/ENVIADA; admin: hasta PREPARADO)
 
   BORRADOR:    Tienda arma la solicitud
@@ -13,6 +13,7 @@ Máquina de estados:
   PREPARADO:   Packing confirmado + Compromisos 174720 disparados; listo para despachar
   EN_TRANSITO: Admin despacha con 174930; mercancía en camino al PV
   ENTREGADA:   Tienda confirma recepción; ETS 173079 disparada
+  REVERTIDA:   Admin revierte un traslado EN_TRANSITO; unidades devueltas al inventario origen
 """
 from datetime import datetime
 from app.extensions import db
@@ -29,6 +30,7 @@ class EstadoTraslado:
     ENTREGADA   = 'ENTREGADA'
     RECHAZADA   = 'RECHAZADA'
     CANCELADA   = 'CANCELADA'
+    REVERTIDA   = 'REVERTIDA'
 
 
 class SolicitudTraslado(db.Model):
@@ -86,7 +88,7 @@ class SolicitudTraslado(db.Model):
         # consecutivo de cierre — significa que el movimiento nunca llegó a Siesa.
         consec_cierre = (self.siesa_entrada_consec if self.modo_transferencia == 'EN_TRANSITO'
                          else self.siesa_salida_consec)
-        estados_terminales = ('ENTREGADA', 'RECHAZADA', 'CANCELADA')
+        estados_terminales = ('ENTREGADA', 'RECHAZADA', 'CANCELADA', 'REVERTIDA')
         siesa_necesita_atencion = (
             bool(self.siesa_error) and
             not consec_cierre and
