@@ -2199,16 +2199,15 @@ class ConnektaGateway:
         return self._post('174930',
                           'API_v1_Inventarios_Comercial_TransferenciasDesdeRequisicion', payload)
 
-    def transferencia_transito_entrada(self, bodega_origen: str, bodega_destino: str,
+    def transferencia_transito_entrada(self, bodega_transito: str, bodega_destino: str,
                                         items: list, codigo_solicitud: str,
                                         consec_salida: int = None,
                                         co_destino: str = None):
         """
         173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
-        Confirma llegada: bodega_origen → bodega_destino.
-        f450_id_bodega_salida y f470_id_bodega deben ser la bodega ORIGEN del STS
-        (donde se hizo el picking), NO la bodega de tránsito intermedia.
-        Siesa valida el cruce contra el documento base (STS) por consecutivo.
+        Confirma llegada: bodega_transito → bodega_destino.
+        f450_id_bodega_salida y f470_id_bodega = bodega_transito (TRA1).
+        Siesa valida: ETS.bodega_salida == STS.bodega_entrada.
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2251,7 +2250,7 @@ class ConnektaGateway:
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
-                    'f450_id_bodega_salida': bodega_origen,
+                    'f450_id_bodega_salida': bodega_transito,
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     # Referencia obligatoria al doc 173076 de salida
@@ -2280,7 +2279,7 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_origen,  # debe == f450_id_bodega_salida (origen STS)
+                    'f470_id_bodega': bodega_transito,  # debe == f450_id_bodega_salida (== STS bodega_entrada)
                     'f470_id_ubicacion_aux': None,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
@@ -2312,7 +2311,7 @@ class ConnektaGateway:
         }
 
         logger.info(f'[CONNEKTA] Tránsito entrada {codigo_solicitud} '
-                    f'{bodega_origen}→{bodega_destino}')
+                    f'{bodega_transito}→{bodega_destino}')
         _ets_din = not self.nombre_conector_transito_entrada.startswith('API_v1_')
         return self._post(self.conector_transito_entrada,
                           self.nombre_conector_transito_entrada, payload,

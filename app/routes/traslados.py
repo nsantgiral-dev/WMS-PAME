@@ -642,7 +642,7 @@ def reintentar_recepcion_siesa(id):
 
     try:
         res = connekta.transferencia_transito_entrada(
-            bodega_origen=s.bodega_origen_siesa,
+            bodega_transito=s.bodega_transito_siesa or connekta.bodega_transito,
             bodega_destino=s.bodega_destino_siesa,
             items=items_payload,
             codigo_solicitud=s.codigo,

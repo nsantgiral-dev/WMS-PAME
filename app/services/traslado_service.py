@@ -654,7 +654,7 @@ class TrasladoService:
             ]
             try:
                 res = siesa_traslado.registrar_entrada(
-                    bodega_origen=s.bodega_origen_siesa,
+                    bodega_transito=s.bodega_transito_siesa or siesa_traslado.bodega_transito,
                     bodega_destino=s.bodega_destino_siesa,
                     items=items_payload,
                     codigo=s.codigo,

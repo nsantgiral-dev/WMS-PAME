@@ -762,7 +762,7 @@ class TestConnektaGatewayTraslados:
 
             with pytest.raises(ValueError, match='consec_salida obligatorio'):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='TC1',
+                    bodega_transito='TR', bodega_destino='TC1',
                     items=self._items_validos(1), codigo_solicitud='ST-007',
                     consec_salida=None,
                 )
@@ -777,7 +777,7 @@ class TestConnektaGatewayTraslados:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='TC1',
+                    bodega_transito='TR', bodega_destino='TC1',
                     items=self._items_validos(4), codigo_solicitud='ST-008',
                     consec_salida=1001,
                 )
@@ -799,7 +799,7 @@ class TestConnektaGatewayTraslados:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='TC1',
+                    bodega_transito='TR', bodega_destino='TC1',
                     items=items, codigo_solicitud='ST-009',
                     consec_salida=1001,
                 )
@@ -820,7 +820,7 @@ class TestConnektaGatewayTraslados:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='TC1',
+                    bodega_transito='TR', bodega_destino='TC1',
                     items=self._items_validos(1), codigo_solicitud='ST-010',
                     consec_salida=1001,
                 )
@@ -840,7 +840,7 @@ class TestConnektaGatewayTraslados:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='TC1',
+                    bodega_transito='TR', bodega_destino='TC1',
                     items=self._items_validos(1), codigo_solicitud='ST-011',
                     consec_salida=1001,
                 )
@@ -848,9 +848,9 @@ class TestConnektaGatewayTraslados:
             mov = payloads[0]['Movimientos'][0]
             assert mov['f470_id_ubicacion_aux_ent'] is None
 
-    def test_173079_bodega_salida_es_origen_no_transito(self, app):
-        """ETS debe usar bodega ORIGEN en f450_id_bodega_salida y f470_id_bodega,
-        NO la bodega de tránsito. Siesa cruza contra el STS por consecutivo."""
+    def test_173079_bodega_salida_es_transito_no_origen(self, app):
+        """ETS debe usar bodega_transito (TRA1) en f450_id_bodega_salida y f470_id_bodega.
+        Siesa valida: ETS.bodega_salida == STS.bodega_entrada (error 62485 si no coincide)."""
         with app.app_context():
             from app.services.connekta_gateway import connekta
             connekta.tipo_docto_transito_salida = 'TTS'
@@ -860,16 +860,16 @@ class TestConnektaGatewayTraslados:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='NC1',
+                    bodega_transito='TR', bodega_destino='NC1',
                     items=self._items_validos(1), codigo_solicitud='ST-BGO',
                     consec_salida=5000,
                 )
 
             doc = payloads[0]['Documentos'][0]
             mov = payloads[0]['Movimientos'][0]
-            assert doc['f450_id_bodega_salida'] == 'NB1', 'debe ser origen, no TRA1'
+            assert doc['f450_id_bodega_salida'] == 'TR', 'debe ser la bodega de tránsito, no el origen'
             assert doc['f450_id_bodega_entrada'] == 'NC1'
-            assert mov['f470_id_bodega'] == 'NB1', 'debe coincidir con f450_id_bodega_salida'
+            assert mov['f470_id_bodega'] == 'TR', 'debe coincidir con f450_id_bodega_salida'
 
     def test_173079_referencia_al_doc_salida(self, app):
         with app.app_context():
@@ -881,7 +881,7 @@ class TestConnektaGatewayTraslados:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='TC1',
+                    bodega_transito='TR', bodega_destino='TC1',
                     items=self._items_validos(1), codigo_solicitud='ST-012',
                     consec_salida=9999,
                 )
@@ -1195,7 +1195,7 @@ class TestFixesSesion20260611:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='NC1',
+                    bodega_transito='TR', bodega_destino='NC1',
                     items=items, codigo_solicitud='ST-FIX-001',
                     consec_salida=2001,
                 )
@@ -1217,7 +1217,7 @@ class TestFixesSesion20260611:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='NC1',
+                    bodega_transito='TR', bodega_destino='NC1',
                     items=self._items_validos(), codigo_solicitud='ST-FIX-002',
                     consec_salida=2002,
                 )
@@ -1235,7 +1235,7 @@ class TestFixesSesion20260611:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='NC1',
+                    bodega_transito='TR', bodega_destino='NC1',
                     items=self._items_validos(), codigo_solicitud='ST-FIX-003',
                     consec_salida=2003,
                 )
@@ -1272,7 +1272,7 @@ class TestFixesSesion20260611:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_origen='NB1', bodega_destino='NC1',
+                    bodega_transito='TR', bodega_destino='NC1',
                     items=self._items_validos(), codigo_solicitud='ST-FIX-004',
                     consec_salida=2004,
                 )
