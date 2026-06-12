@@ -87,6 +87,12 @@ class TrasladoPackingCloser(IPackingCloser):
                 logger.error('[TRASLADO_CLOSER] %s 174720 falló: %s', solicitud.codigo, e)
                 solicitud.siesa_error = f'174720: {e}'
 
+        # ── Descontar inventario WMS ─────────────────────────────────────────
+        # Los bienes salen físicamente al cerrar caja; se descuenta ahora
+        # independientemente del resultado del job Siesa (el camión ya salió).
+        from app.services.traslado_service import TrasladoService
+        TrasladoService._descontar_inventario_wms(solicitud)
+
         # ── Encolar DESPACHO_TRASLADO → 174930 (DLQ con retry) ───────────────
         self._encolar_job_traslado(tarea_id, solicitud, items_comp)
 

@@ -858,27 +858,40 @@ class TrasladoService:
     @staticmethod
     def _descontar_inventario_wms(solicitud: SolicitudTraslado):
         """
-        Descuenta las cantidades despachadas de ubicaciones_productos y registra
+        Descuenta las cantidades despachadas de UbicacionProducto y registra
         un MovimientoInventario de tipo SALIDA_TRASLADO.
-        Solo opera sobre la bodega origen (NB1 en WMS); la bodega destino es un
-        punto de venta externo no gestionado por este WMS.
 
-        Si existe TareaPicking para este traslado, PickingService.confirmar_picking
-        ya decrementó 'cantidad' al confirmar cada ítem — solo se cancelan las
-        tareas pendientes (liberando reservas) y se retorna para evitar doble descuento.
+        Lógica de guards (orden de evaluación):
+          A. Si ya existe un mov SALIDA_TRASLADO para este código → idempotente, retorna.
+          B. Si hay TareasPicking con estado COMPLETADO → picking mobile ya decrementó
+             `cantidad`; solo cancela tareas pendientes/libera reservas y retorna.
+          C. Si hay TareasPicking solo PENDIENTE/CANCELADO → picking mobile NO corrió;
+             libera reservas y cae al fallback para descontar `cantidad`.
+          D. Sin tareas → fallback directo.
         """
         from app.models.picking import TareaPicking, EstadoPicking as _EP2
 
-        # ── Anti-double-decrement: detectar si picking ya corrió ──
+        # ── Guard A: fallback ya corrió (idempotencia) ──────────────────────────
+        # Si existe un MovimientoInventario SALIDA_TRASLADO para este código,
+        # el fallback ya decrementó `cantidad` en una ejecución anterior.
+        _mov_previo = MovimientoInventario.query.filter_by(
+            tipo='SALIDA_TRASLADO',
+            numero_documento=solicitud.codigo,
+        ).first()
+        if _mov_previo:
+            logger.info('[TRASLADO] %s: SALIDA_TRASLADO ya registrado — omitido.', solicitud.codigo)
+            return
+
+        # ── Guard B: detectar si picking mobile ya decrementó `cantidad` ─────
         tareas_traslado = TareaPicking.query.filter_by(
             referencia_documento=solicitud.codigo,
             tipo_documento='TRASLADO',
         ).all()
 
         if tareas_traslado:
-            # Picking formal creó tareas. PickingService.confirmar_picking ya
-            # decrementó 'cantidad'. Solo cancelar las que quedaron pendientes
-            # (items no recogidos — el operario no llegó, o picking parcial).
+            hay_picking_mobile = any(t.estado == _EP2.COMPLETADO for t in tareas_traslado)
+
+            # Liberar reservas de tareas pendientes en ambos casos
             for t in tareas_traslado:
                 if t.estado in (_EP2.PENDIENTE, _EP2.EN_PROCESO):
                     reg = UbicacionProducto.query.filter_by(
@@ -888,11 +901,21 @@ class TrasladoService:
                     if reg:
                         reg.reservado = max(0, reg.reservado - t.cantidad_solicitada)
                     t.estado = _EP2.CANCELADO
+
+            if hay_picking_mobile:
+                # PickingService.confirmar_picking ya decrementó `cantidad` → no fallback.
+                logger.info(
+                    '[TRASLADO] %s: picking mobile detectado (%d tareas) — fallback omitido.',
+                    solicitud.codigo, len(tareas_traslado),
+                )
+                return
+
+            # Sin picking mobile: reservas liberadas arriba, caer al fallback para
+            # descontar `cantidad` (los bienes salieron físicamente sin scan WMS).
             logger.info(
-                f'[TRASLADO] {solicitud.codigo}: stock descontado vía picking formal '
-                f'({len(tareas_traslado)} tareas). _descontar_inventario_wms omitido.'
+                '[TRASLADO] %s: sin picking mobile — reservas liberadas, aplicando fallback.',
+                solicitud.codigo,
             )
-            return
 
         # ── Fallback: no hubo picking formal → descontar manualmente ──
         almacen = Almacen.query.filter_by(
