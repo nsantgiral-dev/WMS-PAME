@@ -2208,15 +2208,15 @@ class ConnektaGateway:
         173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
         Confirma llegada: bodega_transito → bodega_destino.
 
-        ETS es espejo del STS (Clase 65) — Siesa valida que ambos campos coincidan:
-          f450_id_bodega_salida = bodega_origen (NS1) = STS.bodega_salida ✓
-          f450_id_bodega_entrada = bodega_transito (TRA1) = STS.bodega_entrada ✓
-          f470_id_bodega = bodega_origen (NS1) — liquida el saldo de tránsito del STS.
-          f470_ind_naturaleza = 1 (Entrada) — sin esto Siesa asume Salida y busca
-            stock físico en TRA1 (bodega lógica, siempre 0) → bloquea.
-          f350_id_co = centro_op_traslado (CO del CD, mismo que STS) para pasar la
-            validación: "CO de bodega_entrada (TRA1) debe = CO del documento".
-          f470_id_co = _co_ent (CO de NC1) — los movimientos van a la tienda.
+        ETS referencia el STS via f350_consec_docto_base. Siesa valida:
+          f450_id_bodega_salida = bodega_origen (NS1) == STS.bodega_salida.
+          f450_id_bodega_entrada = bodega_destino (NC1) — destino final; CO(NC1)==CO(doc).
+            No se usa TRA1 aquí: TRA1 es bodega lógica con 0 stock físico y
+            Siesa haría chequeo 46035 si la ponemos como bodega_entrada.
+          f350_id_co = _co_ent (CO de NC1) para satisfacer CO(bodega_entrada)==CO(doc).
+          f470_id_co = _co_ent — debe coincidir con f350_id_co.
+          f470_id_bodega = bodega_origen (NS1) — liquida el saldo de tránsito.
+          f470_ind_naturaleza = 1 (Entrada) — evita chequeo de stock salida.
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2253,9 +2253,9 @@ class ConnektaGateway:
                 {
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
-                    # TRA1 pertenece al CO del CD (centro_op=003), no al CO de NS1
-                    # (centro_op_traslado=001). Siesa valida: CO(bodega_entrada)==CO(doc).
-                    'f350_id_co': self.centro_op,
+                    # CO del documento == CO de bodega_entrada (NC1=002).
+                    # Siesa también valida CO(bodega_entrada)==CO(doc).
+                    'f350_id_co': _co_ent,
                     'f350_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
@@ -2265,8 +2265,8 @@ class ConnektaGateway:
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
                     # Siesa valida que ETS.bodega_salida == STS.bodega_salida (NS1)
                     'f450_id_bodega_salida': bodega_origen or self.bodega,
-                    # Siesa valida que ETS.bodega_entrada == STS.bodega_entrada (TRA1)
-                    'f450_id_bodega_entrada': bodega_transito,
+                    # NC1: destino final. CO(NC1)==CO(doc)==_co_ent. Sin stock check.
+                    'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     # Referencia obligatoria al doc 173076 de salida
                     'f350_id_co_base': self.centro_op_traslado if consec_salida else None,
@@ -2290,9 +2290,8 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    # f470_id_co debe coincidir con f350_id_co (centro_op=003)
-                    # o Connekta v3.1 stripea el movimiento → "sin movimientos".
-                    'f470_id_co': self.centro_op,
+                    # f470_id_co debe coincidir con f350_id_co (_co_ent=002).
+                    'f470_id_co': _co_ent,
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
