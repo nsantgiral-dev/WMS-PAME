@@ -1632,6 +1632,7 @@ class ConnektaGateway:
                     'f470_nro_registro': 1,
                     'f470_id_bodega': _bodega,
                     'f470_id_ubicacion_aux': None,
+                    'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
                     'f470_id_motivo': siesa_motivo,
@@ -1643,10 +1644,14 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': '',
-                    'f470_desc_variable': '',
+                    # Typo intencional: 'varible' — nombre exacto del spec 142951 (pos 487, 2000 chars).
+                    # Si se escribe 'variable' (correcto), Connekta omite el campo y Siesa rechaza
+                    # por tamaño de registro (692 vs 2692).
+                    'f470_desc_varible': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': self.uom_default,
                     'f470_id_ubicacion_aux_ent': None,
+                    'f470_id_ubicación_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
                     'f470_referencia_item': item_codigo,
@@ -1732,7 +1737,8 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': '',
-                    'f470_desc_variable': '',
+                    # Typo intencional: 'varible' — nombre exacto del spec 142951.
+                    'f470_desc_varible': '',
                     'F_DESC_ITEM': '',
                     'F_ID_UM_INVENTARIO': self.uom_default,   # consistente con enviar_ajuste_inventario
                     'f470_id_ubicacion_aux_ent': None,
