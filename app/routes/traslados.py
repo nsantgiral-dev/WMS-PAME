@@ -837,9 +837,10 @@ def items_picking_detail(id):
 @jwt_required()
 def stock_disponible():
     """
-    Stock disponible en bodega principal para armar solicitud de traslado.
-    Devuelve todos los productos con disponible > 0 sin paginar — el filtrado
-    es client-side en la tienda (buscador local sobre _TIENDA_STOCK).
+    Stock disponible en bodega para armar solicitud de traslado.
+    ?bodega=NC1  — filtra por bodega origen (default BODEGA_ORIGEN_DEFAULT)
+    ?debug=true  — incluye detalle de lo que Siesa devolvió vs WMS (solo admin)
+    ?forzar=true — invalida cache y recarga desde Siesa
     """
     try:
         usuario_id = int(get_jwt_identity())
@@ -848,9 +849,26 @@ def stock_disponible():
     usuario = Usuario.query.get(usuario_id)
     if not usuario or usuario.rol not in Roles.DESPACHO + (Roles.TIENDA,):
         return jsonify({'error': 'Sin permiso para ver stock disponible'}), 403
+
     bodega = request.args.get('bodega')
+    debug = request.args.get('debug', '').lower() == 'true'
+    forzar = request.args.get('forzar', '').lower() == 'true'
+
+    if forzar:
+        TrasladoService.invalidar_cache_stock(bodega)
+
     try:
         resultado = TrasladoService.get_stock_disponible(bodega)
+        if debug and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
+            # Expone métricas de diagnóstico sin datos sensibles adicionales
+            resultado['_debug'] = {
+                'bodega': resultado.get('bodega'),
+                'fuente': resultado.get('fuente'),
+                'siesa_total_rows': resultado.get('siesa_total_rows'),
+                'siesa_con_stock': resultado.get('siesa_con_stock'),
+                'wms_mapeados': resultado.get('total'),
+                'sin_mapeo': (resultado.get('siesa_con_stock') or 0) - (resultado.get('total') or 0),
+            }
         return jsonify(resultado), 200
     except Exception as e:
         logger.exception(str(e))

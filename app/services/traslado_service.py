@@ -1250,51 +1250,124 @@ class TrasladoService:
 
             # Disponible = existencia_1 - comprometida_1 (pedidos activos) - salida_sin_conf_1 (tránsito)
             # Mismo cálculo que Siesa muestra en pantalla de pedidos como "Disponible en UND".
-            siesa_stock = {
-                str(r.get('f120_referencia', '')).strip(): max(0,
-                    int(r.get('f400_cant_existencia_1') or 0)
-                    - int(r.get('f400_cant_comprometida_1') or 0)
-                    - int(r.get('f400_cant_salida_sin_conf_1') or 0)
-                )
-                for r in rows
-                if r.get('f120_referencia') and int(r.get('f400_cant_existencia_1') or 0) > 0
-            }
-            # Excluir productos con disponible = 0 (todo el stock ya comprometido)
+            # También capturamos descripcion y unidad desde el response de inventario (si la API los incluye).
+            siesa_stock = {}
+            siesa_meta = {}  # {codigo_siesa: {descripcion, unidad_medida, existencia_raw}}
+            for r in rows:
+                ref = str(r.get('f120_referencia', '')).strip()
+                if not ref:
+                    continue
+                existencia = int(r.get('f400_cant_existencia_1') or 0)
+                if existencia <= 0:
+                    continue
+                comprometida = int(r.get('f400_cant_comprometida_1') or 0)
+                salida_sin_conf = int(r.get('f400_cant_salida_sin_conf_1') or 0)
+                disponible = max(0, existencia - comprometida - salida_sin_conf)
+                siesa_stock[ref] = disponible
+                siesa_meta[ref] = {
+                    'descripcion': str(r.get('f120_descripcion') or r.get('f120_id_descripcion') or '').strip(),
+                    'unidad_medida': str(r.get('f120_id_unidad_medida_inventario') or r.get('f400_id_unidad_medida') or '').strip() or 'UND',
+                    'existencia_raw': existencia,
+                    'comprometida': comprometida,
+                    'salida_sin_conf': salida_sin_conf,
+                }
+
+            # Excluir productos con disponible = 0 (todo el stock ya comprometido o en tránsito)
             siesa_stock = {k: v for k, v in siesa_stock.items() if v > 0}
 
             if not siesa_stock:
                 return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'siesa'}
 
-            # Cross-reference con catálogo local para nombre, producto_id y unidad
+            # Cross-reference con catálogo local — intenta por codigo_siesa primero
             productos = {
                 p.codigo_siesa: p
                 for p in Producto.query.filter(
                     Producto.codigo_siesa.in_(list(siesa_stock.keys())),
-                    Producto.activo == True,
                 ).all()
                 if p.codigo_siesa
             }
+
+            # Fallback: buscar por campo 'codigo' para productos donde codigo_siesa es NULL
+            codigos_faltantes = [c for c in siesa_stock if c not in productos]
+            if codigos_faltantes:
+                por_codigo = {
+                    p.codigo: p
+                    for p in Producto.query.filter(
+                        Producto.codigo.in_(codigos_faltantes),
+                    ).all()
+                }
+                for cod, p in por_codigo.items():
+                    productos[cod] = p
+                    if not p.codigo_siesa:
+                        p.codigo_siesa = cod
+                codigos_faltantes = [c for c in siesa_stock if c not in productos]
+
+            # Auto-upsert: productos que Siesa tiene pero WMS no conoce.
+            # La API de inventario puede devolver f120_descripcion — lo usamos para crear el registro.
+            # Esto mantiene el catálogo WMS sincronizado con Siesa sin requerir intervención manual.
+            if codigos_faltantes:
+                logger.warning(
+                    '[TRASLADO] %d producto(s) en Siesa bodega %s sin espejo WMS — auto-upsert: %s',
+                    len(codigos_faltantes), bod, codigos_faltantes[:10],
+                )
+                nuevos = []
+                for cod in codigos_faltantes:
+                    meta = siesa_meta.get(cod, {})
+                    nombre = meta.get('descripcion') or f'Producto {cod}'
+                    unidad = meta.get('unidad_medida') or 'UND'
+                    try:
+                        prod = Producto(
+                            codigo=cod,
+                            nombre=nombre,
+                            codigo_siesa=cod,
+                            activo=True,
+                            clasificacion_abc='C',
+                            unidad_medida=unidad,
+                        )
+                        db.session.add(prod)
+                        nuevos.append((cod, prod))
+                    except Exception as _e:
+                        logger.error('[TRASLADO] auto-upsert falló para %s: %s', cod, _e)
+                if nuevos:
+                    try:
+                        db.session.flush()
+                        for cod, prod in nuevos:
+                            productos[cod] = prod
+                        db.session.commit()
+                        logger.info('[TRASLADO] auto-upsert OK: %d nuevos productos en WMS', len(nuevos))
+                    except Exception as _e2:
+                        db.session.rollback()
+                        logger.error('[TRASLADO] auto-upsert commit falló: %s', _e2)
 
             items = []
             for codigo_siesa, cantidad in siesa_stock.items():
                 prod = productos.get(codigo_siesa)
                 if not prod:
-                    # Producto en Siesa sin espejo en WMS — omitir (no tiene producto_id)
+                    logger.debug('[TRASLADO] %s sin producto_id en WMS — omitido del listado', codigo_siesa)
                     continue
+                meta = siesa_meta.get(codigo_siesa, {})
                 items.append({
                     'codigo_siesa': codigo_siesa,
                     'nombre': prod.nombre,
                     'producto_id': prod.id,
                     'disponible': cantidad,
-                    'existencia': cantidad,
-                    'unidad_medida': prod.unidad_medida,
+                    'existencia': meta.get('existencia_raw', cantidad),
+                    'comprometida': meta.get('comprometida', 0),
+                    'unidad_medida': prod.unidad_medida or meta.get('unidad_medida', 'UND'),
                 })
 
             items.sort(key=lambda x: x['nombre'])
-            resultado = {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'siesa'}
+            resultado = {
+                'items': items,
+                'bodega': bod,
+                'total': len(items),
+                'fuente': 'siesa',
+                'siesa_total_rows': len(rows),
+                'siesa_con_stock': len(siesa_stock),
+            }
 
             TrasladoService._stock_siesa_cache[bod] = {'data': resultado, 'ts': time.time()}
-            logger.info('[TRASLADO] stock Siesa cargado: %d ítems en %s', len(items), bod)
+            logger.info('[TRASLADO] stock Siesa cargado: %d ítems en %s (de %d en Siesa)', len(items), bod, len(siesa_stock))
             return resultado
 
         except Exception as exc:
