@@ -205,6 +205,21 @@ class ConnektaGateway:
         solo_digitos = ''.join(c for c in str(valor) if c.isdigit())
         return solo_digitos[:8] if len(solo_digitos) >= 8 else ''
 
+    def _co_de_bodega(self, bodega_siesa_id: str) -> str:
+        """CO Siesa de una bodega desde el modelo Almacen.
+        Siesa exige CO(documento) == CO(bodega_salida) — errores 46089/46090.
+        Fallback a centro_op_traslado si no hay registro configurado."""
+        if not bodega_siesa_id:
+            return self.centro_op_traslado
+        try:
+            from app.models.almacen import Almacen
+            alm = Almacen.query.filter_by(bodega_siesa_id=bodega_siesa_id).first()
+            if alm and alm.centro_op_siesa:
+                return alm.centro_op_siesa
+        except Exception:
+            pass
+        return self.centro_op_traslado
+
     @staticmethod
     def _fmt_alterno(codigo: str) -> str:
         """Truncate to Siesa f450_docto_alterno max length (15 chars), keeping the tail for uniqueness."""
@@ -2086,6 +2101,9 @@ class ConnektaGateway:
                     'Nunca usar código interno WMS como fallback hacia Siesa.'
                 )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        # CO del documento debe coincidir con el CO de la bodega de salida (46089).
+        # _co_de_bodega resuelve desde Almacen.centro_op_siesa: NB1→003, NS1→001, etc.
+        _co_sts = self._co_de_bodega(bodega_origen)
 
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
@@ -2093,7 +2111,7 @@ class ConnektaGateway:
                 {
                     'F_CIA': int(self.id_cia_siesa),
                     'F_CONSEC_AUTO_REG': 1,
-                    'f350_id_co': self.centro_op_traslado,
+                    'f350_id_co': _co_sts,
                     'f350_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
@@ -2124,7 +2142,7 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    'f470_id_co': self.centro_op_traslado,
+                    'f470_id_co': _co_sts,
                     'f470_id_tipo_docto': self.tipo_docto_transito_salida,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
@@ -2135,7 +2153,7 @@ class ConnektaGateway:
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_motivo': self.motivo_traslado,
-                    'f470_id_co_movto': self.centro_op_traslado,
+                    'f470_id_co_movto': _co_sts,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
@@ -2252,11 +2270,11 @@ class ConnektaGateway:
                 )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
 
-        # co_destino: CO de la sede que recibe.
-        # f350_id_co del documento debe coincidir con el CO de bodega_entrada (TRA1 = CD),
-        # igual que en el STS. Los movimientos (f470) usan _co_ent (NC1) para que el
-        # inventario quede acreditado en la tienda, no en el CD.
+        # CO del documento destino (bodega_entrada = NC1, NS1, etc.)
         _co_ent = co_destino or self.centro_op
+        # CO del STS base: debe coincidir con el CO usado al crear el STS (bodega_origen).
+        # Si NB1→003, si NS1→001. El ETS usa este valor en f350_id_co_base para el vínculo.
+        _co_sts_base = self._co_de_bodega(bodega_origen) if bodega_origen else self.centro_op_traslado
 
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
@@ -2280,7 +2298,7 @@ class ConnektaGateway:
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     # Referencia obligatoria al doc 173076 de salida
-                    'f350_id_co_base': self.centro_op_traslado if consec_salida else None,
+                    'f350_id_co_base': _co_sts_base if consec_salida else None,
                     'f350_id_tipo_docto_base': (self.tipo_docto_transito_salida or None) if consec_salida else None,
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                     'f462_id_vehiculo': self.vehiculo_traslado or None,
