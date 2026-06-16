@@ -2578,4 +2578,37 @@ class ConnektaGateway:
         }
 
 
+    def get_terceros_contacto(self, nit: str = None, pagina: int = 1,
+                              tam_pagina: int = 100) -> list[dict]:
+        """
+        API_custom_TercerosContacto (ID 8232) — Connekta Consultas Dinámicas.
+        JOIN T200 × T015: devuelve clientes activos con celular, teléfono y email.
+        Parámetros opcionales:
+          nit       — filtra por NIT exacto
+          pagina    — número de página (paginación Connekta)
+          tam_pagina — registros por página (máx 100 recomendado)
+        Retorna lista de dicts con: f200_id, f200_nit, f200_razon_social,
+          f200_nombres, f200_apellido1, f200_apellido2,
+          f015_celular, f015_telefono, f015_email
+        """
+        parametros_extra = f"t200.f200_nit = ''{nit}''" if nit else None
+        try:
+            res = self._get(
+                'papeleriamedellin_API_custom_TercerosContacto',
+                params_extra={
+                    'paginacion': f'numPag={pagina}|tamPag={tam_pagina}',
+                    **(({'parametros': parametros_extra}) if parametros_extra else {}),
+                },
+            )
+            rows = (
+                res.get('detalle', {}).get('Table') or
+                res.get('detalle', {}).get('Datos') or []
+            )
+            logger.info('[CONNEKTA] get_terceros_contacto: %d registros (pag %d)', len(rows), pagina)
+            return rows
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_terceros_contacto(nit=%s): %s', nit, e)
+            return []
+
+
 connekta = ConnektaGateway()
