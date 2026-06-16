@@ -424,9 +424,14 @@ def confirmar_recepcion(id):
         return jsonify({'error': 'Token inválido'}), 401
     s = SolicitudTraslado.query.get_or_404(id)
     usuario = Usuario.query.get(usuario_id)
-    # Tienda solo puede confirmar sus propias recepciones; admin puede confirmar cualquiera
     es_admin = usuario and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen')
-    if not es_admin and s.solicitante_id != usuario_id:
+    # Recepcionista puede confirmar si su bodega_siesa_id == bodega_destino del traslado
+    es_recep_destino = (
+        usuario and usuario.rol == 'recepcionista' and
+        usuario.bodega_siesa_id and
+        usuario.bodega_siesa_id == s.bodega_destino_siesa
+    )
+    if not es_admin and not es_recep_destino and s.solicitante_id != usuario_id:
         return jsonify({'error': 'Solo puedes confirmar la recepción de tus propios traslados'}), 403
     data = request.get_json() or {}
     try:
@@ -701,6 +706,42 @@ def reintentar_recepcion_siesa(id):
         s.siesa_error = f'173079 retry: {str(e)}'
         db.session.commit()
         return jsonify({'error': str(e)}), 400
+
+
+@traslados_bp.route('/pendientes-recepcion', methods=['GET'])
+@jwt_required()
+def pendientes_recepcion():
+    """Recepcionista NB1: traslados EN_TRANSITO/DESPACHADA cuyo destino es su bodega."""
+    try:
+        usuario_id = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    usuario = Usuario.query.get(usuario_id)
+    _roles_rec = ('admin', 'supervisor', 'gerente', 'jefe_almacen', 'recepcionista')
+    if not usuario or usuario.rol not in _roles_rec:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    bodega = request.args.get('bodega') or (usuario.bodega_siesa_id if usuario.rol == 'recepcionista' else None)
+    if not bodega:
+        return jsonify({'solicitudes': []}), 200
+
+    solicitudes = (
+        SolicitudTraslado.query
+        .options(
+            joinedload(SolicitudTraslado.solicitante),
+            joinedload(SolicitudTraslado.aprobador),
+            joinedload(SolicitudTraslado.operario),
+            subqueryload(SolicitudTraslado.items)
+            .joinedload(ItemSolicitudTraslado.producto),
+        )
+        .filter(
+            SolicitudTraslado.bodega_destino_siesa == bodega,
+            SolicitudTraslado.estado.in_(['EN_TRANSITO', 'DESPACHADA']),
+        )
+        .order_by(SolicitudTraslado.fecha_creacion.desc())
+        .all()
+    )
+    return jsonify({'solicitudes': [s.to_dict() for s in solicitudes]}), 200
 
 
 @traslados_bp.route('/mis-traslados', methods=['GET'])

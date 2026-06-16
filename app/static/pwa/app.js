@@ -3008,27 +3008,263 @@ function volverListaRecepciones() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// RECEPCIONISTA — Tabs (Recepciones / Devoluciones)
+// RECEPCIONISTA — Recepción de Traslados (NB1)
+// ─────────────────────────────────────────────────────────────
+let _REC_TRASLADO_ACTIVO    = null;  // ST abierto en conteo
+let _REC_CONTEOS            = {};    // {producto_id: cantidad_contada}
+let _REC_TRASLADOS_PENDIENTES = [];  // lista cargada desde API
+
+async function recepCargarTraslados(silencioso = false) {
+  if (_REC_TRASLADO_ACTIVO) return;
+  const el = document.getElementById('contenido-traslados-rec');
+  if (!el) return;
+  if (!silencioso) el.innerHTML = '<div style="text-align:center;padding:40px;color:#666;">Cargando...</div>';
+  try {
+    const r = await get('/api/traslados/pendientes-recepcion');
+    _REC_TRASLADOS_PENDIENTES = r.solicitudes || [];
+    const badge = document.getElementById('badge-traslados-rec');
+    if (badge) {
+      badge.style.display = _REC_TRASLADOS_PENDIENTES.length ? 'inline' : 'none';
+      badge.textContent   = _REC_TRASLADOS_PENDIENTES.length;
+    }
+    if (!_REC_TRASLADOS_PENDIENTES.length) {
+      el.innerHTML = `<div style="text-align:center;padding:50px 20px;">
+        <div style="font-size:40px;">✓</div>
+        <div style="font-size:18px;font-weight:700;margin-top:10px;color:#4ade80;">Sin traslados pendientes</div>
+        <button onclick="_refreshBtn(event, recepCargarTraslados)" style="margin-top:20px;padding:12px 24px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Actualizar</button>
+      </div>`;
+      return;
+    }
+    el.innerHTML = _REC_TRASLADOS_PENDIENTES.map(s => {
+      const totalEsp = (s.items || []).reduce((a, i) => a + (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0), 0);
+      return `
+      <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
+          <div style="font-size:15px;font-weight:800;">${s.codigo}</div>
+          <div style="font-size:11px;color:#4ade80;font-weight:600;">Desde ${s.bodega_origen_siesa || '—'}</div>
+        </div>
+        <div style="font-size:12px;color:#4ade80;margin-bottom:8px;">📦 ${s.total_items} ítem${s.total_items !== 1 ? 's' : ''} · ${totalEsp} und esperadas</div>
+        ${(s.items || []).slice(0, 3).map(i => `
+          <div style="font-size:11px;color:#aaa;padding:2px 0;">
+            ${i.producto_nombre || i.producto_codigo} · ${i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0} und
+          </div>`).join('')}
+        ${(s.items || []).length > 3 ? `<div style="font-size:11px;color:#555;padding:2px 0;">+ ${s.items.length - 3} más...</div>` : ''}
+        <button onclick="recepAbrirConteoTraslado(${s.id})"
+          style="width:100%;padding:13px;margin-top:12px;background:#1E8395;color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+          📋 Contar productos
+        </button>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    if (!silencioso) el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando traslados</div>';
+  }
+}
+
+function recepAbrirConteoTraslado(id) {
+  const s = _REC_TRASLADOS_PENDIENTES.find(x => x.id === id);
+  if (!s) return;
+  _REC_TRASLADO_ACTIVO = s;
+  _REC_CONTEOS = {};
+  (s.items || []).forEach(i => { _REC_CONTEOS[i.producto_id] = 0; });
+  _recepRenderPickingTraslado();
+  setTimeout(() => { const inp = document.getElementById('rec-tras-scan-input'); if (inp) inp.focus(); }, 150);
+}
+
+function recepVolverListaTraslados() {
+  _REC_TRASLADO_ACTIVO = null;
+  _REC_CONTEOS = {};
+  recepCargarTraslados();
+}
+
+function _recepRenderPickingTraslado() {
+  const el = document.getElementById('contenido-traslados-rec');
+  if (!el || !_REC_TRASLADO_ACTIVO) return;
+  const s = _REC_TRASLADO_ACTIVO;
+  const items = s.items || [];
+  const todoContado = items.every(i => (_REC_CONTEOS[i.producto_id] || 0) >= (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0));
+  const algoContado = items.some(i => (_REC_CONTEOS[i.producto_id] || 0) > 0);
+  const btnColor  = todoContado ? '#16a34a' : '#b45309';
+  const btnTexto  = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial';
+
+  el.innerHTML = `
+    <div style="padding:0;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <button onclick="recepVolverListaTraslados()"
+          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
+          ← Volver
+        </button>
+        <div style="min-width:0;">
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${s.codigo}</div>
+          <div style="font-size:12px;color:#666;">Desde ${s.bodega_origen_siesa || '—'} → ${s.bodega_destino_siesa || '—'}</div>
+        </div>
+      </div>
+
+      <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:14px;">
+        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">Escanea el código o usá los botones +/−</div>
+        <div style="display:flex;gap:8px;">
+          <input id="rec-tras-scan-input" type="text" placeholder="Escanea o escribe el código..."
+            style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+            onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ recepScanTraslado(v); this.value=''; } }"
+            autocomplete="off" autocorrect="off" spellcheck="false">
+          <button onclick="const v=document.getElementById('rec-tras-scan-input').value.trim();if(v){recepScanTraslado(v);document.getElementById('rec-tras-scan-input').value='';}"
+            style="padding:10px 14px;background:#1E8395;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+        </div>
+      </div>
+
+      <div id="rec-tras-items" style="margin-bottom:14px;">
+        ${_recepRenderItemsTraslado(items)}
+      </div>
+
+      <button id="btn-confirmar-rec-traslado" onclick="recepConfirmarTraslado()"
+        ${algoContado || todoContado ? '' : 'disabled'}
+        style="width:100%;padding:18px;font-size:18px;font-weight:700;background:${algoContado || todoContado ? btnColor : '#222'};color:#fff;border:none;border-radius:14px;cursor:${algoContado || todoContado ? 'pointer' : 'default'};margin-bottom:10px;">
+        ${algoContado || todoContado ? btnTexto : 'Contá al menos un ítem para continuar'}
+      </button>
+
+      <button onclick="recepVolverListaTraslados()"
+        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        Cancelar — volver a la lista
+      </button>
+    </div>`;
+}
+
+function _recepRenderItemsTraslado(items) {
+  return items.map(i => {
+    const esperado = i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0;
+    const contado  = _REC_CONTEOS[i.producto_id] || 0;
+    const completo = contado >= esperado;
+    const pct = esperado > 0 ? Math.min((contado / esperado) * 100, 100) : 0;
+    return `
+      <div id="rec-tras-item-${i.producto_id}"
+        style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${i.producto_nombre || i.producto_codigo}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">${i.producto_codigo_siesa || i.producto_codigo}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;padding-left:8px;">
+            <button onclick="recepContarItem(${i.producto_id}, -1)"
+              style="width:34px;height:34px;background:#222;border:1px solid #333;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">−</button>
+            <div style="text-align:center;min-width:54px;">
+              <div style="font-size:26px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${contado}</div>
+              <div style="font-size:10px;color:#6b7280;">/ ${esperado}</div>
+            </div>
+            <button onclick="recepContarItem(${i.producto_id}, 1)"
+              style="width:34px;height:34px;background:#1E8395;border:none;color:#fff;border-radius:8px;font-size:20px;font-weight:700;cursor:pointer;line-height:1;">+</button>
+          </div>
+        </div>
+        <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
+          <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.2s;"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function recepScanTraslado(codigo) {
+  if (!_REC_TRASLADO_ACTIVO) return;
+  const items = _REC_TRASLADO_ACTIVO.items || [];
+  let item = items.find(i => i.producto_codigo_siesa === codigo || i.producto_codigo === codigo);
+  if (!item) {
+    try {
+      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+      if (prod && prod.producto_id) item = items.find(i => i.producto_id === prod.producto_id);
+    } catch (_) {}
+  }
+  if (!item) { beepError(); alerta('Código no encontrado en este traslado: ' + codigo, 'error'); return; }
+  beepOk(); vibrar();
+  recepContarItem(item.producto_id, 1);
+  const inp = document.getElementById('rec-tras-scan-input');
+  if (inp) inp.focus();
+}
+
+function recepContarItem(productoId, delta) {
+  if (!_REC_TRASLADO_ACTIVO) return;
+  const item = (_REC_TRASLADO_ACTIVO.items || []).find(i => i.producto_id === productoId);
+  if (!item) return;
+  _REC_CONTEOS[productoId] = Math.max(0, (_REC_CONTEOS[productoId] || 0) + delta);
+  const itemsEl = document.getElementById('rec-tras-items');
+  if (itemsEl) itemsEl.innerHTML = _recepRenderItemsTraslado(_REC_TRASLADO_ACTIVO.items || []);
+  const items = _REC_TRASLADO_ACTIVO.items || [];
+  const todoContado = items.every(i => (_REC_CONTEOS[i.producto_id] || 0) >= (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0));
+  const algoContado = items.some(i => (_REC_CONTEOS[i.producto_id] || 0) > 0);
+  const btn = document.getElementById('btn-confirmar-rec-traslado');
+  if (btn) {
+    btn.disabled = !(algoContado || todoContado);
+    btn.style.background = !algoContado && !todoContado ? '#222' : (todoContado ? '#16a34a' : '#b45309');
+    btn.textContent = !algoContado && !todoContado ? 'Contá al menos un ítem para continuar' : (todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial');
+    btn.style.cursor = algoContado || todoContado ? 'pointer' : 'default';
+  }
+}
+
+async function recepConfirmarTraslado() {
+  const s = _REC_TRASLADO_ACTIVO;
+  if (!s) return;
+  const items = s.items || [];
+  const todoContado = items.every(i => (_REC_CONTEOS[i.producto_id] || 0) >= (i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0));
+  if (!todoContado) {
+    const ok = await _confirmarModal(
+      '⚠ Recepción incompleta',
+      'Hay ítems sin contar o con cantidad menor a la esperada. ¿Confirmar como <strong>recepción parcial</strong>?',
+      'Sí, confirmar parcial', 'Cancelar'
+    );
+    if (!ok) return;
+  }
+  const btn = document.getElementById('btn-confirmar-rec-traslado');
+  if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
+  try {
+    const r = await fetch(API + `/api/traslados/${s.id}/recibir`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (r.ok) {
+      beepDone();
+      alerta('✓ Recepción confirmada — ETS generado en Siesa', 'exito');
+      _REC_TRASLADO_ACTIVO = null;
+      _REC_CONTEOS = {};
+      setTimeout(recepCargarTraslados, 1200);
+    } else {
+      alerta(d.error || 'Error al confirmar', 'error');
+      if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+    if (btn) { btn.textContent = todoContado ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial'; btn.disabled = false; }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// RECEPCIONISTA — Tabs (OCs / Traslados / Devoluciones)
 // ─────────────────────────────────────────────────────────────
 
 function recTab(tab) {
   REC_TAB_ACTIVO = tab;
-  const tabOcs = document.getElementById('rec-tab-ocs');
-  const tabDev = document.getElementById('rec-tab-dev');
-  const contOcs = document.getElementById('contenido-recepcion');
-  const contDev = document.getElementById('contenido-devoluciones');
-  if (!tabOcs || !tabDev) return;
+  const tabOcs  = document.getElementById('rec-tab-ocs');
+  const tabTras = document.getElementById('rec-tab-traslados');
+  const tabDev  = document.getElementById('rec-tab-dev');
+  const contOcs  = document.getElementById('contenido-recepcion');
+  const contTras = document.getElementById('contenido-traslados-rec');
+  const contDev  = document.getElementById('contenido-devoluciones');
+  if (!tabOcs) return;
 
-  const activo = 'border-bottom:2px solid #1E8395;color:#1E8395;font-weight:600;';
+  const activo  = 'border-bottom:2px solid #1E8395;color:#1E8395;font-weight:600;';
   const inactivo = 'border-bottom:2px solid transparent;color:#415A70;';
-  tabOcs.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;${tab==='ocs' ? activo : inactivo}`;
-  tabDev.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;position:relative;${tab==='dev' ? activo : inactivo}`;
-  // re-append badge (se pierde al resetear cssText)
-  const badge = document.getElementById('badge-dev');
-  if (badge && tabDev) tabDev.appendChild(badge);
+  if (tabOcs)  tabOcs.style.cssText  = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;${tab==='ocs' ? activo : inactivo}`;
+  if (tabTras) tabTras.style.cssText = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;position:relative;${tab==='traslados' ? activo : inactivo}`;
+  if (tabDev)  tabDev.style.cssText  = `flex:1;padding:11px;font-size:13px;text-align:center;cursor:pointer;position:relative;${tab==='dev' ? activo : inactivo}`;
+  // re-append badges (se pierden al resetear cssText)
+  const badgeTras = document.getElementById('badge-traslados-rec');
+  const badgeDev  = document.getElementById('badge-dev');
+  if (badgeTras && tabTras) tabTras.appendChild(badgeTras);
+  if (badgeDev  && tabDev)  tabDev.appendChild(badgeDev);
 
-  if (contOcs) contOcs.style.display = tab === 'ocs' ? 'block' : 'none';
-  if (contDev) contDev.style.display = tab === 'dev' ? 'block' : 'none';
+  if (contOcs)  contOcs.style.display  = tab === 'ocs'       ? 'block' : 'none';
+  if (contTras) contTras.style.display  = tab === 'traslados' ? 'block' : 'none';
+  if (contDev)  contDev.style.display   = tab === 'dev'       ? 'block' : 'none';
+
+  if (tab === 'traslados' && !_REC_TRASLADO_ACTIVO) recepCargarTraslados();
+  if (tab === 'dev') cargarDevoluciones();
 }
 
 // ─────────────────────────────────────────────────────────────
