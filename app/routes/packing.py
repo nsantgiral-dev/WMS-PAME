@@ -74,13 +74,7 @@ def listar_tareas():
                  _sl(TareaPacking.bultos),
                  _jl(TareaPacking.empacador),
              )
-             .order_by(
-                 # PD primero (PEDIDO < TRASLADO alfabéticamente inverso con desc no aplica;
-                 # usamos CASE: PEDIDO=0, TRASLADO=1 para que PD siempre aparezca antes)
-                 db.case({'PEDIDO': 0, 'TRASLADO': 1},
-                         value=TareaPacking.tipo_documento, else_=0).asc(),
-                 TareaPacking.fecha_creacion.desc(),
-             ))
+             .order_by(TareaPacking.fecha_creacion.desc()))
 
     query = scope_packing(u, query)
 
