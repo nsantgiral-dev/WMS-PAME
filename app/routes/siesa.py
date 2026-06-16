@@ -1187,3 +1187,24 @@ def trigger_dlq_manual():
         'mensaje': 'DLQ disparado — procesando jobs en hilo daemon',
         'jobs_elegibles': elegibles
     }), 200
+
+
+@siesa_bp.route('/terceros-contacto', methods=['GET'])
+@jwt_required()
+def terceros_contacto():
+    """
+    Prueba API_custom_TercerosContacto (8232).
+    ?nit=900123456  — filtra por NIT exacto
+    ?pagina=1&tam=10 — paginación
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    nit = request.args.get('nit')
+    pagina = request.args.get('pagina', 1, type=int)
+    tam = request.args.get('tam', 10, type=int)
+    rows = connekta.get_terceros_contacto(nit=nit, pagina=pagina, tam_pagina=tam)
+    return jsonify({
+        'total': len(rows),
+        'pagina': pagina,
+        'datos': rows,
+    }), 200
