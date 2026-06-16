@@ -1208,3 +1208,84 @@ def terceros_contacto():
         'pagina': pagina,
         'datos': rows,
     }), 200
+
+
+@siesa_bp.route('/debug-stock-bodega', methods=['GET'])
+@jwt_required()
+def debug_stock_bodega():
+    """
+    Diagnóstico directo del stock Siesa para una bodega.
+    ?bodega=NC1   — bodega a consultar (default: BODEGA_ORIGEN_DEFAULT)
+    ?pag=1        — página de la API a leer (default 1)
+    ?sin_filtro=true — consulta sin parámetro f150_id (descarga todo y filtra en Python)
+
+    Muestra las primeras 5 filas y estadísticas para confirmar qué devuelve Siesa.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
+
+    from app.services.traslado_service import BODEGA_ORIGEN_DEFAULT
+    bodega = request.args.get('bodega') or BODEGA_ORIGEN_DEFAULT
+    pag = request.args.get('pag', 1, type=int)
+    sin_filtro = request.args.get('sin_filtro', '').lower() == 'true'
+
+    api = connekta.api_inventario
+    tam = 100
+
+    try:
+        if sin_filtro:
+            # Descarga sin filtro y filtra en Python (igual que _descargar_inventario_siesa)
+            resp = connekta._get(api, {'paginacion': f'numPag={pag}|tamPag={tam}'})
+        else:
+            # Con filtro f150_id (igual que get_stock_bodega)
+            resp = connekta._get(api, {
+                'paginacion': f'numPag={pag}|tamPag={tam}',
+                'parametros': f"f150_id = ''{bodega}'' AND f400_cant_existencia_1 > 0",
+            })
+    except Exception as exc:
+        return jsonify({'error': str(exc), 'bodega': bodega, 'modo': 'sin_filtro' if sin_filtro else 'con_filtro_f150_id'}), 502
+
+    rows = resp.get('detalle', {}).get('Table', []) or []
+
+    # Estadísticas
+    bodegas_vistas = {}
+    refs_con_stock = []
+    for r in rows:
+        bid = (r.get('f150_id') or '').strip()
+        bodegas_vistas[bid] = bodegas_vistas.get(bid, 0) + 1
+
+    if sin_filtro:
+        rows_bodega = [r for r in rows if (r.get('f150_id') or '').strip() == bodega]
+    else:
+        rows_bodega = rows
+
+    for r in rows_bodega:
+        ref = (r.get('f120_referencia') or '').strip()
+        if ref:
+            existencia = int(r.get('f400_cant_existencia_1') or 0)
+            comprometida = int(r.get('f400_cant_comprometida_1') or 0)
+            salida = int(r.get('f400_cant_salida_sin_conf_1') or 0)
+            refs_con_stock.append({
+                'referencia': ref,
+                'descripcion': (r.get('f120_descripcion') or '').strip(),
+                'existencia': existencia,
+                'comprometida': comprometida,
+                'salida_sin_conf': salida,
+                'disponible': max(0, existencia - comprometida - salida),
+            })
+
+    # Campos disponibles en la primera fila (para saber qué devuelve la API)
+    campos = list(rows[0].keys()) if rows else []
+
+    return jsonify({
+        'bodega': bodega,
+        'modo': 'sin_filtro_python' if sin_filtro else 'con_filtro_f150_id',
+        'api': api,
+        'pagina': pag,
+        'total_filas_retornadas': len(rows),
+        'filas_para_bodega': len(rows_bodega),
+        'refs_con_stock_en_bodega': len(refs_con_stock),
+        'bodegas_en_respuesta': bodegas_vistas,
+        'campos_disponibles': campos,
+        'muestra_5': refs_con_stock[:5],
+    }), 200
