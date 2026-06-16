@@ -2391,10 +2391,9 @@ class ConnektaGateway:
                 'API_v2_Inventarios_Transferencia_Salida_Transito',
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
-                    'parametros': (
-                        f"f350_id_co = ''{self.centro_op_traslado}''"
-                        f" AND f450_docto_alterno = ''{alterno}''"
-                    ),
+                    # f450_docto_alterno es único por traslado — no filtrar por CO para
+                    # soportar traslados desde distintas bodegas (NB1→003, NS1→001, etc.)
+                    'parametros': f"f450_docto_alterno = ''{alterno}''",
                 },
             )
             rows = (
