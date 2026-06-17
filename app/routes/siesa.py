@@ -1215,9 +1215,10 @@ def terceros_contacto():
 def debug_stock_bodega():
     """
     Diagnóstico directo del stock Siesa para una bodega.
-    ?bodega=NC1   — bodega a consultar (default: BODEGA_ORIGEN_DEFAULT)
-    ?pag=1        — página de la API a leer (default 1)
-    ?sin_filtro=true — consulta sin parámetro f150_id (descarga todo y filtra en Python)
+    ?bodega=NC1    — bodega a consultar (default: BODEGA_ORIGEN_DEFAULT)
+    ?pag=1         — página de la API a leer (default 1)
+    ?sin_filtro=true — sin filtro f150_id (descarga todo y filtra en Python)
+    ?buscar=PAPELSP9218 — busca referencia exacta en TODAS las páginas (hasta 200)
 
     Muestra las primeras 5 filas y estadísticas para confirmar qué devuelve Siesa.
     """
@@ -1228,6 +1229,47 @@ def debug_stock_bodega():
     bodega = request.args.get('bodega') or BODEGA_ORIGEN_DEFAULT
     pag = request.args.get('pag', 1, type=int)
     sin_filtro = request.args.get('sin_filtro', '').lower() == 'true'
+    buscar = (request.args.get('buscar') or '').strip().upper()
+
+    # Modo buscar: recorre TODAS las páginas buscando una referencia específica
+    if buscar:
+        api = connekta.api_inventario
+        tam = 100
+        encontrado = None
+        paginas_revisadas = 0
+        for p in range(1, 201):
+            try:
+                resp = connekta._get(api, {
+                    'paginacion': f'numPag={p}|tamPag={tam}',
+                    'parametros': f"f150_id = ''{bodega}'' AND f400_cant_existencia_1 > 0",
+                })
+                rows = resp.get('detalle', {}).get('Table', []) or []
+                paginas_revisadas += 1
+                if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                    break
+                for r in rows:
+                    ref = (r.get('f120_referencia') or '').strip().upper()
+                    if ref == buscar:
+                        encontrado = {k: v for k, v in r.items()}
+                        break
+                if encontrado or len(rows) < tam:
+                    break
+            except Exception as _e:
+                return jsonify({'error': str(_e), 'pagina_error': p}), 502
+        return jsonify({
+            'buscar': buscar,
+            'bodega': bodega,
+            'paginas_revisadas': paginas_revisadas,
+            'encontrado': encontrado,
+            'en_siesa': encontrado is not None,
+            'disponible_calculado': (
+                max(0,
+                    int(encontrado.get('f400_cant_existencia_1') or 0)
+                    - int(encontrado.get('f400_cant_comprometida_1') or 0)
+                    - int(encontrado.get('f400_cant_salida_sin_conf_1') or 0)
+                ) if encontrado else None
+            ),
+        }), 200
 
     api = connekta.api_inventario
     tam = 100
