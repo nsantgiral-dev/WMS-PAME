@@ -271,14 +271,30 @@ def _descargar_inventario_siesa_raw(forzar=False):
 def obtener_stock_bodega(bodega_id: str, forzar=False):
     """
     Retorna inventario de UNA bodega desde el cache multi-bodega.
-    Siempre sirve datos del cache (aunque estén vencidos) — el refresh
-    periódico los renueva cada 30 min en background.
-    Solo retorna {} si el cache nunca se ha llenado (cold start).
+    Si el cache tiene datos para esa bodega, los sirve inmediatamente.
+    Si no (cold start o bodega no cargada), descarga SOLO esa bodega
+    al instante (~2-3 min) y la mete en el cache mientras el refresh
+    periódico llena el resto en background.
     """
+    global _cache_inventario_multibodega
     data = _cache_inventario_multibodega['data']
-    if data is not None:
-        return data.get(bodega_id, {})
-    precalentar_cache_multibodega()
+
+    if data is not None and bodega_id in data:
+        return data[bodega_id]
+
+    # Cache frío o bodega no cargada: descargar solo esta bodega al instante
+    logger.info('[INV-SIESA] Cache miss para %s — descarga individual', bodega_id)
+    try:
+        inv = _descargar_bodega_individual(bodega_id)
+        if inv:
+            if _cache_inventario_multibodega['data'] is None:
+                _cache_inventario_multibodega['data'] = {}
+            _cache_inventario_multibodega['data'][bodega_id] = inv
+            logger.info('[INV-SIESA] Bodega %s cargada on-demand: %d productos', bodega_id, len(inv))
+            return inv
+    except Exception as exc:
+        logger.error('[INV-SIESA] Descarga on-demand %s falló: %s', bodega_id, exc)
+
     return {}
 
 
