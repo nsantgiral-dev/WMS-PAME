@@ -177,13 +177,11 @@ def _obtener_bodegas():
 def _descargar_bodega_individual(bodega_id: str):
     """Descarga inventario de UNA bodega con filtro f150_id (datos completos).
 
-    Escanea hasta 200 páginas sin optimizar parada — corre en background
-    sin timeout HTTP, así que la completitud es más importante que la velocidad.
+    Barre las 200 páginas completas sin parar — la API de Connekta tiene
+    huecos impredecibles en la paginación. Corre en background sin timeout.
     """
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
-    _errores_consecutivos = 0
-    _vacias_seguidas = 0
 
     for pag in range(1, 201):
         try:
@@ -191,22 +189,14 @@ def _descargar_bodega_individual(bodega_id: str):
                 'paginacion': f'numPag={pag}|tamPag=100',
                 'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0",
             })
-            _errores_consecutivos = 0
-        except Exception as _e:
-            _errores_consecutivos += 1
-            if _errores_consecutivos >= 3:
-                logger.error('[INV-SIESA] Bodega %s: 3 errores consecutivos en pág %d', bodega_id, pag)
-                break
+        except Exception:
             continue
 
         rows = resp.get('detalle', {}).get('Table', [])
-        if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
-            _vacias_seguidas += 1
-            if _vacias_seguidas >= 20:
-                break
+        if not rows:
             continue
-
-        _vacias_seguidas = 0
+        if len(rows) == 1 and 'alerta' in (rows[0] or {}):
+            continue
 
         for row in rows:
             codigo = (row.get('f120_referencia') or '').strip()
