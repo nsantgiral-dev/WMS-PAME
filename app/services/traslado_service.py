@@ -1218,17 +1218,19 @@ class TrasladoService:
             TrasladoService._stock_siesa_cache.clear()
 
     @staticmethod
-    def get_stock_disponible(bodega_id: str = None):
+    def get_stock_disponible(bodega_id: str = None, trace_ref: str = None):
         """
         Consulta stock disponible directamente en Siesa (API_v2_Inventarios_InvFecha).
         Fuente de verdad: f400_cant_existencia_1 de la bodega origen en tiempo real.
         Cache TTL 5 min para no saturar Connekta en cada apertura del tab Pedir.
         Fallback automático a WMS local si Siesa no responde.
+        trace_ref: si se pasa, registra en _trace cada paso para esa referencia.
         """
         import time
         from app.models.producto import Producto
 
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
+        _trace = {} if trace_ref else None
 
         # Servir desde cache si está vigente
         entrada = TrasladoService._stock_siesa_cache.get(bod)
@@ -1248,11 +1250,24 @@ class TrasladoService:
                 logger.warning('[TRASLADO] stock Siesa vacío para bodega %s — usando WMS', bod)
                 return TrasladoService._get_stock_wms(bod)
 
-            # Disponible = existencia_1 - comprometida_1 (pedidos activos) - salida_sin_conf_1 (tránsito)
-            # Mismo cálculo que Siesa muestra en pantalla de pedidos como "Disponible en UND".
-            # También capturamos descripcion y unidad desde el response de inventario (si la API los incluye).
+            if _trace is not None:
+                _trace['total_rows'] = len(rows)
+                tr = trace_ref.strip().upper()
+                for i, r in enumerate(rows):
+                    raw = r.get('f120_referencia')
+                    if str(raw or '').strip().upper() == tr:
+                        _trace['en_rows_crudas'] = {
+                            'indice': i, 'raw_ref': repr(raw),
+                            'existencia': r.get('f400_cant_existencia_1'),
+                            'comprometida': r.get('f400_cant_comprometida_1'),
+                            'salida': r.get('f400_cant_salida_sin_conf_1'),
+                        }
+                        break
+                else:
+                    _trace['en_rows_crudas'] = None
+
             siesa_stock = {}
-            siesa_meta = {}  # {codigo_siesa: {descripcion, unidad_medida, existencia_raw}}
+            siesa_meta = {}
             for r in rows:
                 ref = str(r.get('f120_referencia', '')).strip()
                 if not ref:
@@ -1273,7 +1288,16 @@ class TrasladoService:
                 }
 
             # Excluir productos con disponible = 0 (todo el stock ya comprometido o en tránsito)
+            if _trace is not None:
+                tr = trace_ref.strip().upper()
+                _trace['en_siesa_stock_pre_filtro'] = tr in siesa_stock
+                _trace['disponible_pre_filtro'] = siesa_stock.get(tr)
+
             siesa_stock = {k: v for k, v in siesa_stock.items() if v > 0}
+
+            if _trace is not None:
+                _trace['en_siesa_stock_post_filtro'] = tr in siesa_stock
+                _trace['total_con_stock'] = len(siesa_stock)
 
             if not siesa_stock:
                 return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'siesa'}
@@ -1286,6 +1310,9 @@ class TrasladoService:
                 ).all()
                 if p.codigo_siesa
             }
+
+            if _trace is not None:
+                _trace['en_productos_por_siesa'] = tr in productos
 
             # Fallback: buscar por campo 'codigo' para productos donde codigo_siesa es NULL
             codigos_faltantes = [c for c in siesa_stock if c not in productos]
@@ -1365,6 +1392,13 @@ class TrasladoService:
                 'siesa_total_rows': len(rows),
                 'siesa_con_stock': len(siesa_stock),
             }
+
+            if _trace is not None:
+                _trace['en_items_final'] = any(
+                    i.get('codigo_siesa', '').strip().upper() == tr
+                    for i in items
+                )
+                resultado['_trace'] = _trace
 
             TrasladoService._stock_siesa_cache[bod] = {'data': resultado, 'ts': time.time()}
             logger.info('[TRASLADO] stock Siesa cargado: %d ítems en %s (de %d en Siesa)', len(items), bod, len(siesa_stock))
