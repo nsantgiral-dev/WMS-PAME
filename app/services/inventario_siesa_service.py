@@ -86,7 +86,7 @@ _cache_inventario_siesa = {'data': None, 'ts': None}
 _cache_inventario_multibodega = {'data': None, 'ts': None}
 _descarga_multibodega_en_curso = False
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
-_REFRESH_INTERVALO = 1800   # 30 min — refresh periódico del cache multi-bodega
+_REFRESH_INTERVALO = 2700   # 45 min — refresh periódico del cache multi-bodega
 _refresh_timer = None
 
 
@@ -177,16 +177,15 @@ def _obtener_bodegas():
 def _descargar_bodega_individual(bodega_id: str):
     """Descarga inventario de UNA bodega con filtro f150_id (datos completos).
 
-    No para inmediatamente por páginas parciales (<100 filas) — la API puede
-    devolver páginas incompletas sin que sea el final real del dataset.
-    Para cuando llevamos 5+ páginas sin datos nuevos desde la última productiva.
+    Escanea hasta 200 páginas sin optimizar parada — corre en background
+    sin timeout HTTP, así que la completitud es más importante que la velocidad.
     """
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
     _errores_consecutivos = 0
-    _ultima_pag_productiva = 0
+    _vacias_seguidas = 0
 
-    for pag in range(1, 301):
+    for pag in range(1, 201):
         try:
             resp = connekta._get(api, {
                 'paginacion': f'numPag={pag}|tamPag=100',
@@ -202,11 +201,12 @@ def _descargar_bodega_individual(bodega_id: str):
 
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
-            if pag - _ultima_pag_productiva >= 5:
+            _vacias_seguidas += 1
+            if _vacias_seguidas >= 20:
                 break
             continue
 
-        _ultima_pag_productiva = pag
+        _vacias_seguidas = 0
 
         for row in rows:
             codigo = (row.get('f120_referencia') or '').strip()
