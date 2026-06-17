@@ -1361,6 +1361,38 @@ def debug_cache_status():
     }), 200
 
 
+@siesa_bp.route('/debug-cache-ref', methods=['GET'])
+@jwt_required()
+def debug_cache_ref():
+    """Busca una referencia en el cache multi-bodega. ?ref=PAPELSP9218&bodega=NS1"""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.services.inventario_siesa_service import _cache_inventario_multibodega
+    ref = (request.args.get('ref') or '').strip().upper()
+    bodega = (request.args.get('bodega') or '').strip().upper()
+    if not ref:
+        return jsonify({'error': 'Param ref requerido'}), 400
+
+    multi = _cache_inventario_multibodega.get('data') or {}
+    resultado = {}
+    bodegas_buscar = [bodega] if bodega else sorted(multi.keys())
+    for bod in bodegas_buscar:
+        inv = multi.get(bod, {})
+        if ref in inv:
+            resultado[bod] = inv[ref]
+        ref_lower = ref.lower()
+        for cod, datos in inv.items():
+            if cod.upper() == ref:
+                resultado[bod] = datos
+                break
+    return jsonify({
+        'ref': ref,
+        'bodega_filtro': bodega or 'todas',
+        'encontrado_en': list(resultado.keys()),
+        'datos': resultado,
+    }), 200
+
+
 @siesa_bp.route('/debug-traza-ref', methods=['GET'])
 @jwt_required()
 def debug_traza_ref():
