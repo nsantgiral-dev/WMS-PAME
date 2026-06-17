@@ -1331,3 +1331,98 @@ def debug_stock_bodega():
         'campos_disponibles': campos,
         'muestra_5': refs_con_stock[:5],
     }), 200
+
+
+@siesa_bp.route('/debug-traza-ref', methods=['GET'])
+@jwt_required()
+def debug_traza_ref():
+    """
+    Traza el pipeline completo para una referencia específica.
+    Ejecuta get_stock_bodega() (mismo path que get_stock_disponible)
+    y muestra en qué punto la referencia aparece o desaparece.
+    ?bodega=NC1&ref=PAPELSP9218
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+
+    from app.services.traslado_service import BODEGA_ORIGEN_DEFAULT
+    from app.models.producto import Producto
+
+    bodega = request.args.get('bodega') or BODEGA_ORIGEN_DEFAULT
+    ref_buscar = (request.args.get('ref') or '').strip().upper()
+    if not ref_buscar:
+        return jsonify({'error': 'Param ref requerido (ej: ?ref=PAPELSP9218)'}), 400
+
+    traza = {'ref': ref_buscar, 'bodega': bodega, 'pasos': []}
+
+    # Paso 1: get_stock_bodega (paginación paralela — mismo code path)
+    try:
+        res_siesa = connekta.get_stock_bodega(bodega)
+        rows = res_siesa.get('detalle', {}).get('Table', []) or []
+        traza['pasos'].append({
+            'paso': '1_get_stock_bodega',
+            'total_rows': len(rows),
+        })
+    except Exception as exc:
+        traza['pasos'].append({'paso': '1_get_stock_bodega', 'error': str(exc)})
+        return jsonify(traza), 502
+
+    # Paso 2: buscar ref en filas crudas
+    filas_ref = []
+    for i, r in enumerate(rows):
+        raw_ref = r.get('f120_referencia')
+        ref_limpio = str(raw_ref or '').strip().upper()
+        if ref_limpio == ref_buscar:
+            filas_ref.append({
+                'indice_fila': i,
+                'pagina_estimada': (i // 100) + 1,
+                'f120_referencia_raw': raw_ref,
+                'f120_referencia_stripped': ref_limpio,
+                'f400_cant_existencia_1': r.get('f400_cant_existencia_1'),
+                'f400_cant_comprometida_1': r.get('f400_cant_comprometida_1'),
+                'f400_cant_salida_sin_conf_1': r.get('f400_cant_salida_sin_conf_1'),
+                'f120_descripcion': r.get('f120_descripcion'),
+                'f400_id_lote': r.get('f400_id_lote'),
+            })
+    traza['pasos'].append({
+        'paso': '2_buscar_en_rows_crudas',
+        'encontrado': len(filas_ref) > 0,
+        'ocurrencias': len(filas_ref),
+        'filas': filas_ref,
+    })
+
+    # Paso 3: simular el procesamiento de get_stock_disponible
+    if filas_ref:
+        for fila in filas_ref:
+            existencia = int(fila['f400_cant_existencia_1'] or 0)
+            comprometida = int(fila['f400_cant_comprometida_1'] or 0)
+            salida = int(fila['f400_cant_salida_sin_conf_1'] or 0)
+            disponible = max(0, existencia - comprometida - salida)
+            fila['existencia_int'] = existencia
+            fila['comprometida_int'] = comprometida
+            fila['salida_int'] = salida
+            fila['disponible_calculado'] = disponible
+            fila['pasaria_filtro_existencia_gt0'] = existencia > 0
+            fila['pasaria_filtro_disponible_gt0'] = disponible > 0
+
+    # Paso 4: buscar en tabla productos WMS
+    prod_por_siesa = Producto.query.filter_by(codigo_siesa=ref_buscar).first()
+    prod_por_codigo = Producto.query.filter_by(codigo=ref_buscar).first()
+    traza['pasos'].append({
+        'paso': '4_buscar_producto_wms',
+        'por_codigo_siesa': {
+            'encontrado': prod_por_siesa is not None,
+            'id': prod_por_siesa.id if prod_por_siesa else None,
+            'nombre': prod_por_siesa.nombre if prod_por_siesa else None,
+            'activo': prod_por_siesa.activo if prod_por_siesa else None,
+        } if prod_por_siesa else {'encontrado': False},
+        'por_codigo': {
+            'encontrado': prod_por_codigo is not None,
+            'id': prod_por_codigo.id if prod_por_codigo else None,
+            'nombre': prod_por_codigo.nombre if prod_por_codigo else None,
+            'codigo_siesa': prod_por_codigo.codigo_siesa if prod_por_codigo else None,
+            'activo': prod_por_codigo.activo if prod_por_codigo else None,
+        } if prod_por_codigo else {'encontrado': False},
+    })
+
+    return jsonify(traza), 200
