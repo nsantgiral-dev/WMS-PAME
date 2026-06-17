@@ -169,22 +169,28 @@ def _descargar_inventario_siesa_raw(forzar=False):
             and (ahora - _cache_inventario_multibodega['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
         return _cache_inventario_multibodega['data']
 
+    import time as _time
     api = 'API_v2_Inventarios_InvFecha'
     filas_unicas = {}
-    _errores_consecutivos = 0
 
     for pag in range(1, 501):
-        try:
-            resp = connekta._get(api, {
-                'paginacion': f'numPag={pag}|tamPag=100'
-            })
-            _errores_consecutivos = 0
-        except Exception as _e_pag:
-            _errores_consecutivos += 1
-            logger.warning('[INV-SIESA] Error pág %d: %s (%d consecutivos)', pag, _e_pag, _errores_consecutivos)
-            if _errores_consecutivos >= 3:
-                logger.error('[INV-SIESA] 3 errores consecutivos — abortando en pág %d', pag)
+        resp = None
+        for intento in range(4):
+            try:
+                resp = connekta._get(api, {
+                    'paginacion': f'numPag={pag}|tamPag=100'
+                })
                 break
+            except Exception as _e_pag:
+                if '429' in str(_e_pag) or 'rate' in str(_e_pag).lower():
+                    wait = 15 * (intento + 1)
+                    logger.warning('[INV-SIESA] Pág %d: 429 rate-limit — espera %ds (intento %d)', pag, wait, intento + 1)
+                    _time.sleep(wait)
+                else:
+                    logger.warning('[INV-SIESA] Pág %d: error %s (intento %d)', pag, _e_pag, intento + 1)
+                    _time.sleep(2)
+        if resp is None:
+            logger.error('[INV-SIESA] Pág %d: falló tras 4 intentos — saltando', pag)
             continue
 
         rows = resp.get('detalle', {}).get('Table', [])
