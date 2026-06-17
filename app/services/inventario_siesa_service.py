@@ -114,7 +114,7 @@ def iniciar_refresh_periodico(app):
         _refresh_timer.daemon = True
         _refresh_timer.start()
 
-    _ciclo()
+    threading.Thread(target=_ciclo, daemon=True).start()
 
 
 def precalentar_cache_multibodega(app=None):
@@ -150,13 +150,87 @@ def precalentar_cache_multibodega(app=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
+_BODEGAS_INVENTARIO = None  # cache de IDs de bodegas en Siesa
+
+
+def _obtener_bodegas():
+    """Descubre las bodegas activas en Siesa (cachea en memoria)."""
+    global _BODEGAS_INVENTARIO
+    if _BODEGAS_INVENTARIO:
+        return _BODEGAS_INVENTARIO
+    try:
+        resp = connekta.get_bodegas_siesa()
+        rows = resp.get('detalle', {}).get('Table', []) or []
+        bodegas = [
+            (r.get('f150_id') or '').strip()
+            for r in rows if (r.get('f150_id') or '').strip()
+        ]
+        if bodegas:
+            _BODEGAS_INVENTARIO = bodegas
+            logger.info('[INV-SIESA] Bodegas descubiertas: %s', bodegas)
+            return bodegas
+    except Exception as exc:
+        logger.warning('[INV-SIESA] No se pudo listar bodegas: %s — usando fallback', exc)
+    return ['NB1', 'NC1', 'NS1', 'FC1', 'FN1', 'FF1', 'BC99', 'FP1', 'ND1']
+
+
+def _descargar_bodega_individual(bodega_id: str):
+    """Descarga inventario de UNA bodega con filtro f150_id (datos completos)."""
+    api = 'API_v2_Inventarios_InvFecha'
+    inventario = {}
+    _errores_consecutivos = 0
+
+    for pag in range(1, 201):
+        try:
+            resp = connekta._get(api, {
+                'paginacion': f'numPag={pag}|tamPag=100',
+                'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0",
+            })
+            _errores_consecutivos = 0
+        except Exception as _e:
+            _errores_consecutivos += 1
+            if _errores_consecutivos >= 3:
+                logger.error('[INV-SIESA] Bodega %s: 3 errores consecutivos en pág %d', bodega_id, pag)
+                break
+            continue
+
+        rows = resp.get('detalle', {}).get('Table', [])
+        if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+            break
+
+        for row in rows:
+            codigo = (row.get('f120_referencia') or '').strip()
+            if not codigo:
+                continue
+            existencia = float(row.get('f400_cant_existencia_1') or 0)
+            comprometido = float(row.get('f400_cant_comprometida_1') or 0)
+            salida_sin_conf = float(row.get('f400_cant_salida_sin_conf_1') or 0)
+            descripcion = (row.get('f120_descripcion') or row.get('f120_id_descripcion') or '').strip()
+            unidad = (row.get('f120_id_unidad_inventario') or row.get('f120_id_unidad_medida_inventario') or '').strip() or 'UND'
+
+            if codigo not in inventario:
+                inventario[codigo] = {
+                    'existencia': 0.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0,
+                    'descripcion': descripcion, 'unidad': unidad,
+                    'ubicacion_aux': (row.get('f400_id_ubicacion_aux') or '').strip(),
+                }
+            inventario[codigo]['existencia'] += existencia
+            inventario[codigo]['comprometido'] += comprometido
+            inventario[codigo]['salida_sin_conf'] += salida_sin_conf
+
+        if len(rows) < 100:
+            break
+
+    return inventario
+
+
 def _descargar_inventario_siesa_raw(forzar=False):
     """
-    Descarga existencias de Siesa SIN filtro y retorna inventario para TODAS las bodegas.
+    Descarga inventario de TODAS las bodegas con filtro f150_id individual.
+    Cada bodega se descarga secuencialmente con su propio filtro para garantizar
+    datos completos (la descarga sin filtro pierde filas).
 
-    Retorna dict {bodega: {codigo: {existencia, comprometido, salida_sin_conf, descripcion, unidad}}}
-    agregado por producto (un producto puede aparecer en múltiples lotes/ubicaciones).
-    Cubre catálogos de hasta 50 000 filas de inventario.
+    Retorna dict {bodega: {codigo: {existencia, comprometido, salida_sin_conf, ...}}}
     Cachea 1 hora en _cache_inventario_multibodega.
     """
     global _cache_inventario_multibodega
@@ -167,71 +241,20 @@ def _descargar_inventario_siesa_raw(forzar=False):
             and (ahora - _cache_inventario_multibodega['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
         return _cache_inventario_multibodega['data']
 
-    api = 'API_v2_Inventarios_InvFecha'
-    inventario_global = {}  # {bodega: {codigo: {...}}}
-    _errores_consecutivos = 0
+    bodegas = _obtener_bodegas()
+    inventario_global = {}
 
-    for pag in range(1, 501):
+    for bod in bodegas:
         try:
-            resp = connekta._get(api, {
-                'paginacion': f'numPag={pag}|tamPag=100'
-            })
-            _errores_consecutivos = 0
-        except Exception as _e_pag:
-            _errores_consecutivos += 1
-            logger.warning(
-                f'[INV-SIESA] Error en página {pag}: {_e_pag} '
-                f'({_errores_consecutivos} consecutivos)'
-            )
-            if _errores_consecutivos >= 3:
-                raise ValueError(
-                    f'Siesa falló {_errores_consecutivos} veces consecutivas en página {pag}: {_e_pag}'
-                ) from _e_pag
-            continue
-
-        rows = resp.get('detalle', {}).get('Table', [])
-        if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
-            break
-
-        for row in rows:
-            bodega = (row.get('f150_id') or '').strip()
-            if not bodega:
-                continue
-            codigo = (row.get('f120_referencia') or '').strip()
-            if not codigo:
-                continue
-
-            existencia = float(row.get('f400_cant_existencia_1') or 0)
-            comprometido = float(row.get('f400_cant_comprometida_1') or 0)
-            salida_sin_conf = float(row.get('f400_cant_salida_sin_conf_1') or 0)
-            descripcion = (row.get('f120_descripcion') or row.get('f120_id_descripcion') or '').strip()
-            unidad = (row.get('f120_id_unidad_inventario') or row.get('f120_id_unidad_medida_inventario') or '').strip() or 'UND'
-
-            if bodega not in inventario_global:
-                inventario_global[bodega] = {}
-            inv_bodega = inventario_global[bodega]
-
-            if codigo not in inv_bodega:
-                inv_bodega[codigo] = {
-                    'existencia': 0.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0,
-                    'descripcion': descripcion, 'unidad': unidad,
-                    'ubicacion_aux': (row.get('f400_id_ubicacion_aux') or '').strip(),
-                }
-            inv_bodega[codigo]['existencia'] += existencia
-            inv_bodega[codigo]['comprometido'] += comprometido
-            inv_bodega[codigo]['salida_sin_conf'] += salida_sin_conf
-            if descripcion and not inv_bodega[codigo]['descripcion']:
-                inv_bodega[codigo]['descripcion'] = descripcion
-
-        if pag % 50 == 0:
-            total_prods = sum(len(v) for v in inventario_global.values())
-            logger.info(f'[INV-SIESA] Página {pag}: {len(inventario_global)} bodegas, {total_prods} productos total')
-        if len(rows) < 100:
-            break
+            inv = _descargar_bodega_individual(bod)
+            if inv:
+                inventario_global[bod] = inv
+                logger.info('[INV-SIESA] Bodega %s: %d productos', bod, len(inv))
+        except Exception as exc:
+            logger.error('[INV-SIESA] Bodega %s falló: %s', bod, exc)
 
     total_prods = sum(len(v) for v in inventario_global.values())
-    bodegas = sorted(inventario_global.keys())
-    logger.info(f'[INV-SIESA] Descarga completa: {total_prods} productos en {len(bodegas)} bodegas: {bodegas}')
+    logger.info('[INV-SIESA] Descarga completa: %d productos en %d bodegas', total_prods, len(inventario_global))
 
     _cache_inventario_multibodega['data'] = inventario_global
     _cache_inventario_multibodega['ts'] = datetime.utcnow()
