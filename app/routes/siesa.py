@@ -1333,6 +1333,34 @@ def debug_stock_bodega():
     }), 200
 
 
+@siesa_bp.route('/debug-cache-status', methods=['GET'])
+@jwt_required()
+def debug_cache_status():
+    """Estado de los caches de inventario Siesa."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.services.inventario_siesa_service import (
+        _cache_inventario_multibodega, _cache_inventario_siesa,
+        _descarga_multibodega_en_curso,
+    )
+    multi = _cache_inventario_multibodega
+    mono = _cache_inventario_siesa
+    return jsonify({
+        'multibodega': {
+            'tiene_data': multi['data'] is not None,
+            'bodegas': sorted(multi['data'].keys()) if multi['data'] else [],
+            'productos_por_bodega': {k: len(v) for k, v in (multi['data'] or {}).items()},
+            'ts': str(multi['ts']) if multi['ts'] else None,
+        },
+        'monobodega': {
+            'tiene_data': mono['data'] is not None,
+            'productos': len(mono['data']) if mono['data'] else 0,
+            'ts': str(mono['ts']) if mono['ts'] else None,
+        },
+        'descarga_en_curso': _descarga_multibodega_en_curso,
+    }), 200
+
+
 @siesa_bp.route('/debug-traza-ref', methods=['GET'])
 @jwt_required()
 def debug_traza_ref():
