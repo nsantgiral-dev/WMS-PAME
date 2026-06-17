@@ -90,31 +90,57 @@ _REFRESH_INTERVALO = 2700   # 45 min — refresh periódico del cache multi-bode
 _refresh_timer = None
 
 
+_HORA_CARGA_DIARIA = 7  # 7am Colombia (UTC-5 = 12:00 UTC)
+_ZONA_UTC_OFFSET = -5
+
+
 def iniciar_refresh_periodico(app):
-    """Inicia el ciclo de refresh cada 30 min. Llamar una vez desde app startup."""
+    """Inicia refresh cada 45 min + carga diaria a las 7am Colombia."""
     global _refresh_timer
 
-    def _ciclo():
-        global _refresh_timer, _descarga_multibodega_en_curso
+    def _ejecutar_descarga():
+        global _descarga_multibodega_en_curso
         if _descarga_multibodega_en_curso:
-            _refresh_timer = threading.Timer(_REFRESH_INTERVALO, _ciclo)
-            _refresh_timer.daemon = True
-            _refresh_timer.start()
             return
         _descarga_multibodega_en_curso = True
         try:
             with app.app_context():
                 _descargar_inventario_siesa_raw(forzar=True)
-                logger.info('[INV-SIESA] Refresh periódico completado')
+                logger.info('[INV-SIESA] Refresh completado')
         except Exception as exc:
-            logger.error('[INV-SIESA] Refresh periódico falló: %s', exc)
+            logger.error('[INV-SIESA] Refresh falló: %s', exc)
         finally:
             _descarga_multibodega_en_curso = False
-        _refresh_timer = threading.Timer(_REFRESH_INTERVALO, _ciclo)
+
+    def _ciclo_refresh():
+        """Refresh cada 45 min."""
+        _ejecutar_descarga()
+        _refresh_timer = threading.Timer(_REFRESH_INTERVALO, _ciclo_refresh)
         _refresh_timer.daemon = True
         _refresh_timer.start()
 
-    threading.Thread(target=_ciclo, daemon=True).start()
+    def _programar_carga_diaria():
+        """Programa la carga diaria a las 7am Colombia."""
+        ahora = datetime.utcnow()
+        hora_utc_objetivo = _HORA_CARGA_DIARIA - _ZONA_UTC_OFFSET
+        proxima = ahora.replace(hour=hora_utc_objetivo, minute=0, second=0, microsecond=0)
+        if proxima <= ahora:
+            proxima += timedelta(days=1)
+        segundos = (proxima - ahora).total_seconds()
+        logger.info('[INV-SIESA] Carga diaria programada a las %d:00 Colombia (en %.0f min)',
+                    _HORA_CARGA_DIARIA, segundos / 60)
+
+        def _carga_y_reprogramar():
+            logger.info('[INV-SIESA] === CARGA DIARIA 7AM INICIADA ===')
+            _ejecutar_descarga()
+            _programar_carga_diaria()
+
+        t = threading.Timer(segundos, _carga_y_reprogramar)
+        t.daemon = True
+        t.start()
+
+    threading.Thread(target=_ciclo_refresh, daemon=True).start()
+    _programar_carga_diaria()
 
 
 def precalentar_cache_multibodega(app=None):
