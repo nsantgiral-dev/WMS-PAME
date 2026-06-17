@@ -1232,10 +1232,11 @@ class TrasladoService:
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
         _trace = {} if trace_ref else None
 
-        # Servir desde cache si está vigente
-        entrada = TrasladoService._stock_siesa_cache.get(bod)
-        if entrada and (time.time() - entrada['ts']) < TrasladoService._STOCK_SIESA_TTL:
-            return entrada['data']
+        # Servir desde cache si está vigente (trace_ref siempre fuerza recarga)
+        if not trace_ref:
+            entrada = TrasladoService._stock_siesa_cache.get(bod)
+            if entrada and (time.time() - entrada['ts']) < TrasladoService._STOCK_SIESA_TTL:
+                return entrada['data']
 
         # Consulta real a Siesa
         try:
