@@ -1240,7 +1240,7 @@ class TrasladoService:
             if connekta.modo_simulacion:
                 return TrasladoService._get_stock_wms(bod)
 
-            inv_bodega = obtener_stock_bodega(bod, forzar=forzar)
+            inv_bodega = obtener_stock_bodega(bod)
             if not inv_bodega:
                 logger.warning('[TRASLADO] stock Siesa vacío para bodega %s — usando WMS', bod)
                 return TrasladoService._get_stock_wms(bod)
