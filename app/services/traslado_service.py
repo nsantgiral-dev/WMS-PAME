@@ -1218,92 +1218,56 @@ class TrasladoService:
             TrasladoService._stock_siesa_cache.clear()
 
     @staticmethod
-    def get_stock_disponible(bodega_id: str = None, trace_ref: str = None):
+    def get_stock_disponible(bodega_id: str = None, forzar: bool = False):
         """
-        Consulta stock disponible directamente en Siesa (API_v2_Inventarios_InvFecha).
-        Fuente de verdad: f400_cant_existencia_1 de la bodega origen en tiempo real.
-        Cache TTL 5 min para no saturar Connekta en cada apertura del tab Pedir.
+        Stock disponible de una bodega usando el cache multi-bodega de Siesa.
+        Lee de _descargar_inventario_siesa_raw que descarga TODO el inventario
+        sin filtro y lo cachea 1 hora — sin problemas de paginación.
         Fallback automático a WMS local si Siesa no responde.
-        trace_ref: si se pasa, registra en _trace cada paso para esa referencia.
         """
         import time
         from app.models.producto import Producto
+        from app.services.inventario_siesa_service import obtener_stock_bodega
 
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
-        _trace = {} if trace_ref else None
 
-        # Servir desde cache si está vigente (trace_ref siempre fuerza recarga)
-        if not trace_ref:
+        if not forzar:
             entrada = TrasladoService._stock_siesa_cache.get(bod)
             if entrada and (time.time() - entrada['ts']) < TrasladoService._STOCK_SIESA_TTL:
                 return entrada['data']
 
-        # Consulta real a Siesa
         try:
-            res_siesa = connekta.get_stock_bodega(bod)
-
             if connekta.modo_simulacion:
-                # En modo simulación no hay datos reales — usar WMS local
                 return TrasladoService._get_stock_wms(bod)
 
-            rows = res_siesa.get('detalle', {}).get('Table', []) or []
-            if not rows:
+            inv_bodega = obtener_stock_bodega(bod, forzar=forzar)
+            if not inv_bodega:
                 logger.warning('[TRASLADO] stock Siesa vacío para bodega %s — usando WMS', bod)
                 return TrasladoService._get_stock_wms(bod)
 
-            if _trace is not None:
-                _trace['total_rows'] = len(rows)
-                tr = trace_ref.strip().upper()
-                for i, r in enumerate(rows):
-                    raw = r.get('f120_referencia')
-                    if str(raw or '').strip().upper() == tr:
-                        _trace['en_rows_crudas'] = {
-                            'indice': i, 'raw_ref': repr(raw),
-                            'existencia': r.get('f400_cant_existencia_1'),
-                            'comprometida': r.get('f400_cant_comprometida_1'),
-                            'salida': r.get('f400_cant_salida_sin_conf_1'),
-                        }
-                        break
-                else:
-                    _trace['en_rows_crudas'] = None
-
             siesa_stock = {}
             siesa_meta = {}
-            for r in rows:
-                ref = str(r.get('f120_referencia', '')).strip()
-                if not ref:
-                    continue
-                existencia = int(r.get('f400_cant_existencia_1') or 0)
+            for codigo, datos in inv_bodega.items():
+                existencia = int(datos.get('existencia', 0))
                 if existencia <= 0:
                     continue
-                comprometida = int(r.get('f400_cant_comprometida_1') or 0)
-                salida_sin_conf = int(r.get('f400_cant_salida_sin_conf_1') or 0)
+                comprometida = int(datos.get('comprometido', 0))
+                salida_sin_conf = int(datos.get('salida_sin_conf', 0))
                 disponible = max(0, existencia - comprometida - salida_sin_conf)
-                siesa_stock[ref] = disponible
-                siesa_meta[ref] = {
-                    'descripcion': str(r.get('f120_descripcion') or r.get('f120_id_descripcion') or '').strip(),
-                    'unidad_medida': str(r.get('f120_id_unidad_medida_inventario') or r.get('f400_id_unidad_medida') or '').strip() or 'UND',
+                if disponible <= 0:
+                    continue
+                siesa_stock[codigo] = disponible
+                siesa_meta[codigo] = {
+                    'descripcion': datos.get('descripcion', ''),
+                    'unidad_medida': datos.get('unidad', 'UND'),
                     'existencia_raw': existencia,
                     'comprometida': comprometida,
                     'salida_sin_conf': salida_sin_conf,
                 }
 
-            # Excluir productos con disponible = 0 (todo el stock ya comprometido o en tránsito)
-            if _trace is not None:
-                tr = trace_ref.strip().upper()
-                _trace['en_siesa_stock_pre_filtro'] = tr in siesa_stock
-                _trace['disponible_pre_filtro'] = siesa_stock.get(tr)
-
-            siesa_stock = {k: v for k, v in siesa_stock.items() if v > 0}
-
-            if _trace is not None:
-                _trace['en_siesa_stock_post_filtro'] = tr in siesa_stock
-                _trace['total_con_stock'] = len(siesa_stock)
-
             if not siesa_stock:
                 return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'siesa'}
 
-            # Cross-reference con catálogo local — intenta por codigo_siesa primero
             productos = {
                 p.codigo_siesa: p
                 for p in Producto.query.filter(
@@ -1312,10 +1276,6 @@ class TrasladoService:
                 if p.codigo_siesa
             }
 
-            if _trace is not None:
-                _trace['en_productos_por_siesa'] = tr in productos
-
-            # Fallback: buscar por campo 'codigo' para productos donde codigo_siesa es NULL
             codigos_faltantes = [c for c in siesa_stock if c not in productos]
             if codigos_faltantes:
                 por_codigo = {
@@ -1330,9 +1290,6 @@ class TrasladoService:
                         p.codigo_siesa = cod
                 codigos_faltantes = [c for c in siesa_stock if c not in productos]
 
-            # Auto-upsert: productos que Siesa tiene pero WMS no conoce.
-            # La API de inventario puede devolver f120_descripcion — lo usamos para crear el registro.
-            # Esto mantiene el catálogo WMS sincronizado con Siesa sin requerir intervención manual.
             if codigos_faltantes:
                 logger.warning(
                     '[TRASLADO] %d producto(s) en Siesa bodega %s sin espejo WMS — auto-upsert: %s',
@@ -1371,7 +1328,6 @@ class TrasladoService:
             for codigo_siesa, cantidad in siesa_stock.items():
                 prod = productos.get(codigo_siesa)
                 if not prod:
-                    logger.debug('[TRASLADO] %s sin producto_id en WMS — omitido del listado', codigo_siesa)
                     continue
                 meta = siesa_meta.get(codigo_siesa, {})
                 items.append({
@@ -1390,16 +1346,9 @@ class TrasladoService:
                 'bodega': bod,
                 'total': len(items),
                 'fuente': 'siesa',
-                'siesa_total_rows': len(rows),
+                'siesa_total_productos': len(inv_bodega),
                 'siesa_con_stock': len(siesa_stock),
             }
-
-            if _trace is not None:
-                _trace['en_items_final'] = any(
-                    i.get('codigo_siesa', '').strip().upper() == tr
-                    for i in items
-                )
-                resultado['_trace'] = _trace
 
             TrasladoService._stock_siesa_cache[bod] = {'data': resultado, 'ts': time.time()}
             logger.info('[TRASLADO] stock Siesa cargado: %d ítems en %s (de %d en Siesa)', len(items), bod, len(siesa_stock))

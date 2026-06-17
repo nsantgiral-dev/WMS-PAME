@@ -83,42 +83,63 @@ def _get_o_crear_ubicacion_general(almacen_id: int) -> Ubicacion:
 
 
 _cache_inventario_siesa = {'data': None, 'ts': None}
+_cache_inventario_multibodega = {'data': None, 'ts': None}
+_descarga_multibodega_en_curso = False
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
 
 
-def _descargar_inventario_siesa(forzar=False):
-    """
-    Descarga existencias de Siesa SIN filtro en la API (el API rechaza f150_id
-    como parámetro igual que en OCs). Filtra por bodega en Python.
+def precalentar_cache_multibodega():
+    """Lanza descarga en background. Llamar desde app startup o primer request."""
+    global _descarga_multibodega_en_curso
+    if _descarga_multibodega_en_curso:
+        return
+    if _cache_inventario_multibodega['data'] is not None:
+        return
+    _descarga_multibodega_en_curso = True
 
-    Retorna dict {codigo_producto: {existencia, comprometido, ubicacion_aux}}
+    def _worker():
+        global _descarga_multibodega_en_curso
+        try:
+            from flask import current_app
+            app = current_app._get_current_object()
+            with app.app_context():
+                _descargar_inventario_siesa_raw(forzar=True)
+                logger.info('[INV-SIESA] Cache multi-bodega pre-calentado en background')
+        except Exception as exc:
+            logger.error('[INV-SIESA] Pre-calentamiento falló: %s', exc)
+        finally:
+            _descarga_multibodega_en_curso = False
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
+def _descargar_inventario_siesa_raw(forzar=False):
+    """
+    Descarga existencias de Siesa SIN filtro y retorna inventario para TODAS las bodegas.
+
+    Retorna dict {bodega: {codigo: {existencia, comprometido, salida_sin_conf, descripcion, unidad}}}
     agregado por producto (un producto puede aparecer en múltiples lotes/ubicaciones).
     Cubre catálogos de hasta 50 000 filas de inventario.
-    Cachea el resultado 1 hora para evitar 500 requests HTTP duplicados.
-
-    forzar=True: ignora el cache y descarga datos frescos (usado en reconciliación
-    para evitar comparar contra datos de la carga inicial y generar TareaDevolucion falsas).
+    Cachea 1 hora en _cache_inventario_multibodega.
     """
-    global _cache_inventario_siesa
+    global _cache_inventario_multibodega
     ahora = datetime.utcnow()
     if (not forzar
-            and _cache_inventario_siesa['data'] is not None
-            and _cache_inventario_siesa['ts'] is not None
-            and (ahora - _cache_inventario_siesa['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
-        logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h)')
-        return _cache_inventario_siesa['data']
+            and _cache_inventario_multibodega['data'] is not None
+            and _cache_inventario_multibodega['ts'] is not None
+            and (ahora - _cache_inventario_multibodega['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
+        return _cache_inventario_multibodega['data']
 
     api = 'API_v2_Inventarios_InvFecha'
-    inventario = {}
-    bodega = connekta.bodega  # filtro Python
+    inventario_global = {}  # {bodega: {codigo: {...}}}
     _errores_consecutivos = 0
 
-    for pag in range(1, 501):  # hasta 50 000 filas (500 págs × 100)
+    for pag in range(1, 501):
         try:
             resp = connekta._get(api, {
                 'paginacion': f'numPag={pag}|tamPag=100'
             })
-            _errores_consecutivos = 0  # reset en éxito
+            _errores_consecutivos = 0
         except Exception as _e_pag:
             _errores_consecutivos += 1
             logger.warning(
@@ -126,7 +147,6 @@ def _descargar_inventario_siesa(forzar=False):
                 f'({_errores_consecutivos} consecutivos)'
             )
             if _errores_consecutivos >= 3:
-                # 3 timeouts/errores seguidos — abortar para activar el guard de respuesta parcial
                 raise ValueError(
                     f'Siesa falló {_errores_consecutivos} veces consecutivas en página {pag}: {_e_pag}'
                 ) from _e_pag
@@ -137,46 +157,98 @@ def _descargar_inventario_siesa(forzar=False):
             break
 
         for row in rows:
-            # Filtrar por bodega en Python
-            if (row.get('f150_id') or '').strip() != bodega:
+            bodega = (row.get('f150_id') or '').strip()
+            if not bodega:
                 continue
-
             codigo = (row.get('f120_referencia') or '').strip()
             if not codigo:
                 continue
 
             existencia = float(row.get('f400_cant_existencia_1') or 0)
             comprometido = float(row.get('f400_cant_comprometida_1') or 0)
-            ubicacion_aux = (row.get('f400_id_ubicacion_aux') or '').strip()
+            salida_sin_conf = float(row.get('f400_cant_salida_sin_conf_1') or 0)
+            descripcion = (row.get('f120_descripcion') or row.get('f120_id_descripcion') or '').strip()
+            unidad = (row.get('f120_id_unidad_inventario') or row.get('f120_id_unidad_medida_inventario') or '').strip() or 'UND'
 
-            if codigo not in inventario:
-                inventario[codigo] = {'existencia': 0.0, 'comprometido': 0.0, 'ubicacion_aux': ubicacion_aux}
-            inventario[codigo]['existencia'] += existencia
-            inventario[codigo]['comprometido'] += comprometido
+            if bodega not in inventario_global:
+                inventario_global[bodega] = {}
+            inv_bodega = inventario_global[bodega]
 
-        logger.info(f'[INV-SIESA] Página {pag}: {len(rows)} filas totales · {len(inventario)} productos en {bodega}')
+            if codigo not in inv_bodega:
+                inv_bodega[codigo] = {
+                    'existencia': 0.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0,
+                    'descripcion': descripcion, 'unidad': unidad,
+                    'ubicacion_aux': (row.get('f400_id_ubicacion_aux') or '').strip(),
+                }
+            inv_bodega[codigo]['existencia'] += existencia
+            inv_bodega[codigo]['comprometido'] += comprometido
+            inv_bodega[codigo]['salida_sin_conf'] += salida_sin_conf
+            if descripcion and not inv_bodega[codigo]['descripcion']:
+                inv_bodega[codigo]['descripcion'] = descripcion
+
+        if pag % 50 == 0:
+            total_prods = sum(len(v) for v in inventario_global.values())
+            logger.info(f'[INV-SIESA] Página {pag}: {len(inventario_global)} bodegas, {total_prods} productos total')
         if len(rows) < 100:
             break
 
-    logger.info(f'[INV-SIESA] Total descargado: {len(inventario)} productos en bodega {connekta.bodega}')
+    total_prods = sum(len(v) for v in inventario_global.values())
+    bodegas = sorted(inventario_global.keys())
+    logger.info(f'[INV-SIESA] Descarga completa: {total_prods} productos en {len(bodegas)} bodegas: {bodegas}')
 
-    # Guard: respuesta parcial de Siesa (red cortada a mitad de paginación).
-    # Si descargamos < 70% de los productos del cache anterior, rechazamos
-    # para evitar que reconciliación genere cientos de SIESA_MAYOR falsos.
+    _cache_inventario_multibodega['data'] = inventario_global
+    _cache_inventario_multibodega['ts'] = datetime.utcnow()
+    return inventario_global
+
+
+def obtener_stock_bodega(bodega_id: str, forzar=False):
+    """
+    Retorna inventario de UNA bodega desde el cache multi-bodega.
+    {codigo: {existencia, comprometido, salida_sin_conf, descripcion, unidad}}
+    Si el cache está frío, lanza pre-calentamiento en background y retorna {}.
+    """
+    if not forzar and _cache_inventario_multibodega['data'] is None:
+        precalentar_cache_multibodega()
+        return {}
+    multi = _descargar_inventario_siesa_raw(forzar=forzar)
+    return multi.get(bodega_id, {})
+
+
+def obtener_bodegas_disponibles():
+    """Retorna lista de bodegas que tienen inventario en Siesa."""
+    multi = _descargar_inventario_siesa_raw()
+    return sorted(multi.keys())
+
+
+def _descargar_inventario_siesa(forzar=False):
+    """
+    Retorna inventario de la bodega principal (connekta.bodega) para
+    compatibilidad con carga inicial y reconciliación existentes.
+    """
+    global _cache_inventario_siesa
+    ahora = datetime.utcnow()
+    if (not forzar
+            and _cache_inventario_siesa['data'] is not None
+            and _cache_inventario_siesa['ts'] is not None
+            and (ahora - _cache_inventario_siesa['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
+        logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h)')
+        return _cache_inventario_siesa['data']
+
+    bodega = connekta.bodega
+    multi = _descargar_inventario_siesa_raw(forzar=forzar)
+    inventario = multi.get(bodega, {})
+
+    logger.info(f'[INV-SIESA] Bodega {bodega}: {len(inventario)} productos')
+
     _prev_count = len(_cache_inventario_siesa['data']) if _cache_inventario_siesa['data'] else 0
     if not _prev_count:
-        # Primera ejecución (cache frío): usar conteo de UbicacionProducto en DB como referencia
         try:
             from app.models.inventario import UbicacionProducto as _UP
             _prev_count = _UP.query.filter(_UP.cantidad > 0).count()
         except Exception as _e_prev:
-            # [M17] NO operar sin baseline: si la DB falla y no tenemos cache previo,
-            # el guard queda a 0 y una respuesta parcial de Siesa pasaría sin detección.
             raise ValueError(
                 f'No se pudo obtener baseline de inventario (cache frío + DB inaccesible): {_e_prev}'
             ) from _e_prev
-    # [M20] Umbral absoluto: < 50 productos nunca es válido, independiente del baseline.
-    # Protege contra respuestas vacías/truncadas cuando _prev_count es pequeño.
     if len(inventario) < 50:
         raise ValueError(
             f'Respuesta de Siesa sospechosamente pequeña: {len(inventario)} productos '

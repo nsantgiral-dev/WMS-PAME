@@ -192,4 +192,11 @@ def create_app():
         except Exception as e:
             logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}', exc_info=True)
 
+        # Pre-calentar cache multi-bodega de Siesa en background al iniciar
+        try:
+            from app.services.inventario_siesa_service import precalentar_cache_multibodega
+            precalentar_cache_multibodega()
+        except Exception as e:
+            logging.getLogger(__name__).error(f'[INV-SIESA] Pre-calentamiento startup falló: {e}')
+
     return app

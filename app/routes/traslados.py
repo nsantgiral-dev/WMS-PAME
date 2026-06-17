@@ -853,13 +853,12 @@ def stock_disponible():
     bodega = request.args.get('bodega')
     debug = request.args.get('debug', '').lower() == 'true'
     forzar = request.args.get('forzar', '').lower() == 'true'
-    trace_ref = request.args.get('trace_ref', '').strip() or None
 
     if forzar:
         TrasladoService.invalidar_cache_stock(bodega)
 
     try:
-        resultado = TrasladoService.get_stock_disponible(bodega, trace_ref=trace_ref)
+        resultado = TrasladoService.get_stock_disponible(bodega, forzar=forzar)
         if debug and usuario.rol in ('admin', 'supervisor', 'gerente', 'jefe_almacen'):
             # Expone métricas de diagnóstico sin datos sensibles adicionales
             resultado['_debug'] = {
