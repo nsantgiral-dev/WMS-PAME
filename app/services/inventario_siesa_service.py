@@ -188,8 +188,10 @@ def _descargar_inventario_siesa_raw(forzar=False):
             continue
 
         rows = resp.get('detalle', {}).get('Table', [])
-        if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
-            break
+        if not rows:
+            continue
+        if len(rows) == 1 and 'alerta' in (rows[0] or {}):
+            continue
 
         for row in rows:
             fid = row.get('f120_id')
@@ -201,8 +203,6 @@ def _descargar_inventario_siesa_raw(forzar=False):
 
         if pag % 50 == 0:
             logger.info('[INV-SIESA] Pág %d: %d filas únicas', pag, len(filas_unicas))
-        if len(rows) < 100:
-            break
 
     logger.info('[INV-SIESA] Descarga cruda: %d filas únicas en %d páginas', len(filas_unicas), pag)
 
