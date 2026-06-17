@@ -86,6 +86,35 @@ _cache_inventario_siesa = {'data': None, 'ts': None}
 _cache_inventario_multibodega = {'data': None, 'ts': None}
 _descarga_multibodega_en_curso = False
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
+_REFRESH_INTERVALO = 1800   # 30 min — refresh periódico del cache multi-bodega
+_refresh_timer = None
+
+
+def iniciar_refresh_periodico(app):
+    """Inicia el ciclo de refresh cada 30 min. Llamar una vez desde app startup."""
+    global _refresh_timer
+
+    def _ciclo():
+        global _refresh_timer, _descarga_multibodega_en_curso
+        if _descarga_multibodega_en_curso:
+            _refresh_timer = threading.Timer(_REFRESH_INTERVALO, _ciclo)
+            _refresh_timer.daemon = True
+            _refresh_timer.start()
+            return
+        _descarga_multibodega_en_curso = True
+        try:
+            with app.app_context():
+                _descargar_inventario_siesa_raw(forzar=True)
+                logger.info('[INV-SIESA] Refresh periódico completado')
+        except Exception as exc:
+            logger.error('[INV-SIESA] Refresh periódico falló: %s', exc)
+        finally:
+            _descarga_multibodega_en_curso = False
+        _refresh_timer = threading.Timer(_REFRESH_INTERVALO, _ciclo)
+        _refresh_timer.daemon = True
+        _refresh_timer.start()
+
+    _ciclo()
 
 
 def precalentar_cache_multibodega(app=None):
@@ -212,14 +241,15 @@ def _descargar_inventario_siesa_raw(forzar=False):
 def obtener_stock_bodega(bodega_id: str, forzar=False):
     """
     Retorna inventario de UNA bodega desde el cache multi-bodega.
-    {codigo: {existencia, comprometido, salida_sin_conf, descripcion, unidad}}
-    Si el cache está frío, lanza pre-calentamiento en background y retorna {}.
+    Siempre sirve datos del cache (aunque estén vencidos) — el refresh
+    periódico los renueva cada 30 min en background.
+    Solo retorna {} si el cache nunca se ha llenado (cold start).
     """
-    if not forzar and _cache_inventario_multibodega['data'] is None:
-        precalentar_cache_multibodega()
-        return {}
-    multi = _descargar_inventario_siesa_raw(forzar=forzar)
-    return multi.get(bodega_id, {})
+    data = _cache_inventario_multibodega['data']
+    if data is not None:
+        return data.get(bodega_id, {})
+    precalentar_cache_multibodega()
+    return {}
 
 
 def obtener_bodegas_disponibles():
