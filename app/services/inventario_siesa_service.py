@@ -268,34 +268,58 @@ def _descargar_inventario_siesa_raw(forzar=False):
     return inventario_global
 
 
+_descargas_bodega_en_curso = set()
+
+
 def obtener_stock_bodega(bodega_id: str, forzar=False):
     """
     Retorna inventario de UNA bodega desde el cache multi-bodega.
     Si el cache tiene datos para esa bodega, los sirve inmediatamente.
-    Si no (cold start o bodega no cargada), descarga SOLO esa bodega
-    al instante (~2-3 min) y la mete en el cache mientras el refresh
-    periódico llena el resto en background.
+    Si no (cold start), lanza descarga de ESA bodega en background
+    y retorna {} (el caller usará fallback WMS). La siguiente llamada
+    ya tendrá datos.
     """
-    global _cache_inventario_multibodega
     data = _cache_inventario_multibodega['data']
 
     if data is not None and bodega_id in data:
         return data[bodega_id]
 
-    # Cache frío o bodega no cargada: descargar solo esta bodega al instante
-    logger.info('[INV-SIESA] Cache miss para %s — descarga individual', bodega_id)
-    try:
-        inv = _descargar_bodega_individual(bodega_id)
-        if inv:
-            if _cache_inventario_multibodega['data'] is None:
-                _cache_inventario_multibodega['data'] = {}
-            _cache_inventario_multibodega['data'][bodega_id] = inv
-            logger.info('[INV-SIESA] Bodega %s cargada on-demand: %d productos', bodega_id, len(inv))
-            return inv
-    except Exception as exc:
-        logger.error('[INV-SIESA] Descarga on-demand %s falló: %s', bodega_id, exc)
-
+    _lanzar_descarga_bodega_background(bodega_id)
     return {}
+
+
+def _lanzar_descarga_bodega_background(bodega_id: str):
+    """Descarga una bodega en background y la mete en el cache."""
+    if bodega_id in _descargas_bodega_en_curso:
+        return
+    _descargas_bodega_en_curso.add(bodega_id)
+    logger.info('[INV-SIESA] Cache miss %s — descarga background iniciada', bodega_id)
+
+    def _worker():
+        try:
+            from flask import current_app
+            app = current_app._get_current_object()
+        except RuntimeError:
+            app = None
+
+        try:
+            ctx = app.app_context() if app else None
+            if ctx:
+                ctx.__enter__()
+            inv = _descargar_bodega_individual(bodega_id)
+            if inv:
+                if _cache_inventario_multibodega['data'] is None:
+                    _cache_inventario_multibodega['data'] = {}
+                _cache_inventario_multibodega['data'][bodega_id] = inv
+                logger.info('[INV-SIESA] Bodega %s on-demand OK: %d productos', bodega_id, len(inv))
+            if ctx:
+                ctx.__exit__(None, None, None)
+        except Exception as exc:
+            logger.error('[INV-SIESA] Descarga on-demand %s falló: %s', bodega_id, exc)
+        finally:
+            _descargas_bodega_en_curso.discard(bodega_id)
+
+    threading.Thread(target=_worker, daemon=True).start()
 
 
 def obtener_bodegas_disponibles():
