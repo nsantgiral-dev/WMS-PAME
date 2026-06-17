@@ -88,21 +88,29 @@ _descarga_multibodega_en_curso = False
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
 
 
-def precalentar_cache_multibodega():
+def precalentar_cache_multibodega(app=None):
     """Lanza descarga en background. Llamar desde app startup o primer request."""
     global _descarga_multibodega_en_curso
     if _descarga_multibodega_en_curso:
         return
     if _cache_inventario_multibodega['data'] is not None:
         return
+
+    if app is None:
+        try:
+            from flask import current_app
+            app = current_app._get_current_object()
+        except RuntimeError:
+            logger.warning('[INV-SIESA] No hay app context para pre-calentamiento')
+            return
+
     _descarga_multibodega_en_curso = True
+    _app = app
 
     def _worker():
         global _descarga_multibodega_en_curso
         try:
-            from flask import current_app
-            app = current_app._get_current_object()
-            with app.app_context():
+            with _app.app_context():
                 _descargar_inventario_siesa_raw(forzar=True)
                 logger.info('[INV-SIESA] Cache multi-bodega pre-calentado en background')
         except Exception as exc:

@@ -195,7 +195,7 @@ def create_app():
         # Pre-calentar cache multi-bodega de Siesa en background al iniciar
         try:
             from app.services.inventario_siesa_service import precalentar_cache_multibodega
-            precalentar_cache_multibodega()
+            precalentar_cache_multibodega(app=app)
         except Exception as e:
             logging.getLogger(__name__).error(f'[INV-SIESA] Pre-calentamiento startup falló: {e}')
 
