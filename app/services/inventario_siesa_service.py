@@ -176,17 +176,32 @@ def _obtener_bodegas():
 
 def _scan_una_pasada(bodega_id: str, max_pag: int = 200):
     """Una pasada completa de paginación secuencial para una bodega."""
+    import time as _time
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
     filas_totales = 0
 
     for pag in range(1, max_pag + 1):
-        try:
-            resp = connekta._get(api, {
-                'paginacion': f'numPag={pag}|tamPag=100',
-                'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0",
-            })
-        except Exception:
+        for intento in range(3):
+            try:
+                resp = connekta._get(api, {
+                    'paginacion': f'numPag={pag}|tamPag=100',
+                    'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0",
+                })
+                break
+            except Exception as _e:
+                if '429' in str(_e) or 'rate' in str(_e).lower():
+                    wait = 30 * (intento + 1)
+                    logger.warning('[INV-SIESA] %s pág %d: rate-limit — espera %ds', bodega_id, pag, wait)
+                    _time.sleep(wait)
+                elif intento == 2:
+                    resp = None
+                    break
+                else:
+                    _time.sleep(2)
+        else:
+            continue
+        if resp is None:
             continue
 
         rows = resp.get('detalle', {}).get('Table', [])
