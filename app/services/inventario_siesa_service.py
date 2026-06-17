@@ -177,16 +177,16 @@ def _obtener_bodegas():
 def _descargar_bodega_individual(bodega_id: str):
     """Descarga inventario de UNA bodega con filtro f150_id (datos completos).
 
-    No para por páginas parciales (<100 filas) — la API de Connekta puede
+    No para inmediatamente por páginas parciales (<100 filas) — la API puede
     devolver páginas incompletas sin que sea el final real del dataset.
-    Solo para con 2+ páginas vacías consecutivas.
+    Para cuando llevamos 5+ páginas sin datos nuevos desde la última productiva.
     """
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
     _errores_consecutivos = 0
-    _vacias_consecutivas = 0
+    _ultima_pag_productiva = 0
 
-    for pag in range(1, 501):
+    for pag in range(1, 301):
         try:
             resp = connekta._get(api, {
                 'paginacion': f'numPag={pag}|tamPag=100',
@@ -202,12 +202,11 @@ def _descargar_bodega_individual(bodega_id: str):
 
         rows = resp.get('detalle', {}).get('Table', [])
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
-            _vacias_consecutivas += 1
-            if _vacias_consecutivas >= 2:
+            if pag - _ultima_pag_productiva >= 5:
                 break
             continue
 
-        _vacias_consecutivas = 0
+        _ultima_pag_productiva = pag
 
         for row in rows:
             codigo = (row.get('f120_referencia') or '').strip()
