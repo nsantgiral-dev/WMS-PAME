@@ -291,19 +291,83 @@ def _descargar_inventario_siesa_raw(forzar=False):
 
     _cache_inventario_multibodega['data'] = inventario_global
     _cache_inventario_multibodega['ts'] = datetime.utcnow()
+
+    _guardar_stock_en_bd(inventario_global)
+
     return inventario_global
+
+
+def _guardar_stock_en_bd(inventario_global: dict):
+    """Persiste el inventario descargado en la tabla stock_siesa (upsert)."""
+    from app.models.stock_siesa import StockSiesa
+    try:
+        for bod, productos in inventario_global.items():
+            for codigo, datos in productos.items():
+                reg = StockSiesa.query.filter_by(bodega=bod, codigo_siesa=codigo).first()
+                if reg:
+                    reg.existencia = datos['existencia']
+                    reg.comprometido = datos['comprometido']
+                    reg.salida_sin_conf = datos['salida_sin_conf']
+                    reg.descripcion = datos.get('descripcion', '')
+                    reg.unidad_medida = datos.get('unidad', 'UND')
+                    reg.updated_at = datetime.utcnow()
+                else:
+                    db.session.add(StockSiesa(
+                        bodega=bod,
+                        codigo_siesa=codigo,
+                        existencia=datos['existencia'],
+                        comprometido=datos['comprometido'],
+                        salida_sin_conf=datos['salida_sin_conf'],
+                        descripcion=datos.get('descripcion', ''),
+                        unidad_medida=datos.get('unidad', 'UND'),
+                    ))
+            db.session.commit()
+            logger.info('[INV-SIESA] BD: %s guardado (%d productos)', bod, len(productos))
+    except Exception as exc:
+        db.session.rollback()
+        logger.error('[INV-SIESA] Error guardando en BD: %s', exc)
+
+
+def _leer_stock_de_bd(bodega_id: str) -> dict:
+    """Lee inventario de una bodega desde PostgreSQL (sobrevive deploys)."""
+    from app.models.stock_siesa import StockSiesa
+    try:
+        rows = StockSiesa.query.filter_by(bodega=bodega_id).all()
+        if not rows:
+            return {}
+        inv = {}
+        for r in rows:
+            inv[r.codigo_siesa] = {
+                'existencia': r.existencia or 0,
+                'comprometido': r.comprometido or 0,
+                'salida_sin_conf': r.salida_sin_conf or 0,
+                'descripcion': r.descripcion or '',
+                'unidad': r.unidad_medida or 'UND',
+            }
+        logger.info('[INV-SIESA] BD: %s leído (%d productos)', bodega_id, len(inv))
+        return inv
+    except Exception as exc:
+        logger.error('[INV-SIESA] Error leyendo BD para %s: %s', bodega_id, exc)
+        return {}
 
 
 def obtener_stock_bodega(bodega_id: str, forzar=False):
     """
-    Retorna inventario de UNA bodega desde el cache multi-bodega.
-    Si el cache tiene datos, sirve inmediatamente (aunque la bodega
-    específica no esté — retorna {}).
-    Si cache frío (cold start), lanza precalentamiento y retorna {}.
+    1. Cache en memoria → instantáneo
+    2. Si cache vacío → lee de PostgreSQL (sobrevive deploys) → instantáneo
+    3. Si BD vacía → lanza precalentamiento background → retorna {}
     """
     data = _cache_inventario_multibodega['data']
-    if data is not None:
-        return data.get(bodega_id, {})
+    if data is not None and bodega_id in data:
+        return data[bodega_id]
+
+    inv_bd = _leer_stock_de_bd(bodega_id)
+    if inv_bd:
+        if _cache_inventario_multibodega['data'] is None:
+            _cache_inventario_multibodega['data'] = {}
+        _cache_inventario_multibodega['data'][bodega_id] = inv_bd
+        return inv_bd
+
     precalentar_cache_multibodega()
     return {}
 
