@@ -174,16 +174,13 @@ def _obtener_bodegas():
     return ['NB1', 'NC1', 'NS1', 'FC1', 'FN1', 'FF1', 'BC99', 'FP1', 'ND1']
 
 
-def _descargar_bodega_individual(bodega_id: str):
-    """Descarga inventario de UNA bodega con filtro f150_id (datos completos).
-
-    Barre las 200 páginas completas sin parar — la API de Connekta tiene
-    huecos impredecibles en la paginación. Corre en background sin timeout.
-    """
+def _scan_una_pasada(bodega_id: str, max_pag: int = 200):
+    """Una pasada completa de paginación secuencial para una bodega."""
     api = 'API_v2_Inventarios_InvFecha'
     inventario = {}
+    filas_totales = 0
 
-    for pag in range(1, 201):
+    for pag in range(1, max_pag + 1):
         try:
             resp = connekta._get(api, {
                 'paginacion': f'numPag={pag}|tamPag=100',
@@ -198,6 +195,7 @@ def _descargar_bodega_individual(bodega_id: str):
         if len(rows) == 1 and 'alerta' in (rows[0] or {}):
             continue
 
+        filas_totales += len(rows)
         for row in rows:
             codigo = (row.get('f120_referencia') or '').strip()
             if not codigo:
@@ -218,7 +216,40 @@ def _descargar_bodega_individual(bodega_id: str):
             inventario[codigo]['comprometido'] += comprometido
             inventario[codigo]['salida_sin_conf'] += salida_sin_conf
 
-    return inventario
+    return inventario, filas_totales
+
+
+def _descargar_bodega_individual(bodega_id: str):
+    """Descarga inventario de UNA bodega con múltiples pasadas + merge.
+
+    La API de Connekta retorna datos no-determinísticos en cada llamada
+    para bodegas grandes (NC1). Cada pasada captura ~70-80% de los
+    productos. Con 3 pasadas y merge, la cobertura sube a ~99%.
+    """
+    inv_final, filas_p1 = _scan_una_pasada(bodega_id)
+    count_p1 = len(inv_final)
+
+    for pasada in range(2, 4):
+        inv_extra, filas_extra = _scan_una_pasada(bodega_id)
+        nuevos = 0
+        for cod, datos in inv_extra.items():
+            if cod not in inv_final:
+                inv_final[cod] = datos
+                nuevos += 1
+        logger.info(
+            '[INV-SIESA] %s pasada %d: +%d nuevos (total %d)',
+            bodega_id, pasada, nuevos, len(inv_final),
+        )
+        if nuevos == 0:
+            break
+
+    if len(inv_final) > count_p1:
+        logger.info(
+            '[INV-SIESA] %s merge: %d→%d productos (+%d recuperados)',
+            bodega_id, count_p1, len(inv_final), len(inv_final) - count_p1,
+        )
+
+    return inv_final
 
 
 def _descargar_inventario_siesa_raw(forzar=False):
