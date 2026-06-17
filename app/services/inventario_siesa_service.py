@@ -150,7 +150,7 @@ def precalentar_cache_multibodega(app=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-_BODEGAS_PV = ['NB1', 'NC1', 'NS1']
+_BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'FC1', 'PC1', 'FN1']
 
 
 def _descargar_una_bodega(bodega_id: str):
