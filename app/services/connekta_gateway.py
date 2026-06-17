@@ -1884,8 +1884,8 @@ class ConnektaGateway:
 
     def get_stock_bodega(self, bodega_id: str):
         """API_v2_Inventarios_InvFecha — existencia real en una bodega específica.
-        Batches de 3 páginas en paralelo: ~3x más rápido, mismas cantidades."""
-        from concurrent.futures import ThreadPoolExecutor
+        Paginación secuencial para evitar filas perdidas por inestabilidad
+        de la API offset-based bajo requests concurrentes."""
 
         if self.modo_simulacion:
             return self._get(self.api_inventario, {
@@ -1894,42 +1894,25 @@ class ConnektaGateway:
             })
 
         tam = self._CONNEKTA_MAX_TAM_PAG
-        batch = self._STOCK_BATCH_SIZE
         all_rows = []
-        pag = 1
 
-        while pag <= 200:
-            pages_in_batch = list(range(pag, min(pag + batch, 201)))
-
-            def _fetch(p, _bod=bodega_id, _tam=tam):
-                try:
-                    return self._get(self.api_inventario, {
-                        'paginacion': f'numPag={p}|tamPag={_tam}',
-                        'parametros': f"f150_id = ''{_bod}'' AND f400_cant_existencia_1 > 0"
-                    })
-                except Exception:
-                    # 400 / timeout en páginas más allá del fin del catálogo → sin datos
-                    return {'detalle': {'Table': []}}
-
-            with ThreadPoolExecutor(max_workers=batch) as ex:
-                # map preserva orden: batch_results[i] == resultado de pages_in_batch[i]
-                batch_results = list(ex.map(_fetch, pages_in_batch))
-
-            done = False
-            for res in batch_results:
-                rows = res.get('detalle', {}).get('Table', [])
-                if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
-                    done = True
-                    break
-                all_rows.extend(rows)
-                if len(rows) < tam:
-                    done = True
-                    break
-
-            if done:
+        for pag in range(1, 201):
+            try:
+                res = self._get(self.api_inventario, {
+                    'paginacion': f'numPag={pag}|tamPag={tam}',
+                    'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0"
+                })
+            except Exception:
                 break
-            pag += batch
 
+            rows = res.get('detalle', {}).get('Table', [])
+            if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                break
+            all_rows.extend(rows)
+            if len(rows) < tam:
+                break
+
+        logger.info('[CONNEKTA] stock bodega %s: %d filas en %d páginas', bodega_id, len(all_rows), pag)
         return {'detalle': {'Table': all_rows}}
 
     # ── Traslados entre bodegas ────────────────────────────────────────────────
