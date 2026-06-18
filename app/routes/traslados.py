@@ -747,12 +747,16 @@ def pendientes_recepcion():
 @traslados_bp.route('/mis-traslados', methods=['GET'])
 @jwt_required()
 def mis_traslados():
-    """Operario: lista sus solicitudes de traslado asignadas en estado EN_PICKING."""
+    """Picker: traslados EN_PICKING asignados a mí O de mi bodega origen."""
     try:
         operario_id = int(get_jwt_identity())
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
-    solicitudes = SolicitudTraslado.query\
+    usuario = Usuario.query.get(operario_id)
+    if not usuario:
+        return jsonify({'error': 'Usuario no encontrado'}), 404
+    from sqlalchemy import or_
+    base = SolicitudTraslado.query\
         .options(
             joinedload(SolicitudTraslado.solicitante),
             joinedload(SolicitudTraslado.aprobador),
@@ -760,8 +764,14 @@ def mis_traslados():
             subqueryload(SolicitudTraslado.items)
             .joinedload(ItemSolicitudTraslado.producto),
         )\
-        .filter_by(operario_id=operario_id, estado='EN_PICKING')\
-        .order_by(SolicitudTraslado.fecha_aprobacion.desc()).all()
+        .filter_by(estado='EN_PICKING')
+    filtro_asignado = SolicitudTraslado.operario_id == operario_id
+    if usuario.bodega_siesa_id:
+        filtro_bodega = SolicitudTraslado.bodega_origen_siesa == usuario.bodega_siesa_id
+        solicitudes = base.filter(or_(filtro_asignado, filtro_bodega))
+    else:
+        solicitudes = base.filter(filtro_asignado)
+    solicitudes = solicitudes.order_by(SolicitudTraslado.fecha_aprobacion.desc()).all()
     return jsonify({'traslados': [s.to_dict() for s in solicitudes]}), 200
 
 
