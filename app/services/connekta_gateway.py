@@ -2032,21 +2032,25 @@ class ConnektaGateway:
                     'f441_id_ext1_detalle': None,
                     'f441_id_ext2_detalle': None,
                     'f441_id_bodega': bodega_origen,
+                    'f441_id_concepto': 607,
                     'f441_id_motivo': self.motivo_traslado,
-                    'f441_id_unidad_medida': item.get('unidad_medida') or self.uom_default,  # obligatorio en 174646 — fallback a SIESA_UOM_DEFAULT
-                    'f441_cant_base': round(float(abs(item.get('cantidad', 0))), 4),  # número con precisión decimal — Connekta serializa a 20 chars fixed-width
+                    'f441_id_unidad_medida': item.get('unidad_medida') or self.uom_default,
+                    'f441_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f441_cant_2': 0,
                     'f441_fecha_entrega': fecha_hoy,
                     'f441_num_dias_entrega': 0,
                     'f441_id_co_movto': self.centro_op,
+                    'f_campo': None,
                     'f441_id_ccosto_movto': None,
                     'f441_id_proyecto': None,
                     'f441_notas': None,
+                    'f441_desc_varible': None,
                     'f441_id_un_movto': self.unidad_negocio,
                     'f441_precio_unitario': 0.0,
                     'f441_id_ubicacion_sal': None,
                     'f441_id_proy_etapa': None,
                     'f441_id_rubro_pof': None,
+                    'f441_id_moneda_sug': None,
                 }
                 for idx, item in enumerate(items)
             ],
