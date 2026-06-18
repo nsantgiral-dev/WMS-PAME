@@ -181,16 +181,13 @@ _BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'FC1', 'PC1', 'FN1']
 
 def _descargar_una_bodega(bodega_id: str):
     """
-    Descarga inventario de UNA bodega usando solo f150_id como filtro
-    (documentado oficialmente en API_v2_Inventarios_InvFecha).
-    NO usa f400_cant_existencia_1 > 0 — ese filtro no está documentado
-    y causa paginación inestable. Filtra existencia > 0 en Python.
-
-    Dedup por (f120_id, lote, ubicacion) para manejar paginación offset-based.
+    Descarga inventario de UNA bodega usando consulta dinámica custom
+    papeleriamedellin_WMS_Stock_Bodega (ID 8280 en Connekta).
+    ORDER BY f120_id ASC en el SQL garantiza paginación determinística.
     Retorna dict {codigo: {existencia, comprometido, salida_sin_conf, ...}}
     """
     import time as _time
-    api = 'API_v2_Inventarios_InvFecha'
+    api_custom = 'papeleriamedellin_WMS_Stock_Bodega'
     filas_unicas = {}
     _errores_consecutivos = 0
 
@@ -198,10 +195,10 @@ def _descargar_una_bodega(bodega_id: str):
         resp = None
         for intento in range(3):
             try:
-                resp = connekta._get(api, {
+                resp = connekta._get(api_custom, {
                     'paginacion': f'numPag={pag}|tamPag=100',
-                    'parametros': f"f150_id = ''{bodega_id}''",
-                })
+                    'bodega': bodega_id,
+                }, url=connekta.url_get_dinamico)
                 _errores_consecutivos = 0
                 break
             except Exception as _e:
@@ -219,17 +216,18 @@ def _descargar_una_bodega(bodega_id: str):
                 break
             continue
 
-        rows = resp.get('detalle', {}).get('Table', [])
+        rows = (
+            resp.get('detalle', {}).get('Datos')
+            or resp.get('detalle', {}).get('Table')
+            or []
+        )
         if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
             break
 
         for row in rows:
             fid = row.get('f120_id')
-            lote = (row.get('f400_id_lote') or '').strip()
-            ub = (row.get('f400_id_ubicacion_aux') or '').strip()
-            clave = (fid, lote, ub)
-            if clave not in filas_unicas:
-                filas_unicas[clave] = row
+            if fid not in filas_unicas:
+                filas_unicas[fid] = row
 
         if len(rows) < 100:
             break
@@ -242,14 +240,12 @@ def _descargar_una_bodega(bodega_id: str):
         existencia = float(row.get('f400_cant_existencia_1') or 0)
         comprometido = float(row.get('f400_cant_comprometida_1') or 0)
         salida_sin_conf = float(row.get('f400_cant_salida_sin_conf_1') or 0)
-        descripcion = (row.get('f120_descripcion') or row.get('f120_id_descripcion') or '').strip()
-        unidad = (row.get('f120_id_unidad_inventario') or row.get('f120_id_unidad_medida_inventario') or '').strip() or 'UND'
+        unidad = (row.get('f120_id_unidad_inventario') or '').strip() or 'UND'
 
         if codigo not in inventario:
             inventario[codigo] = {
                 'existencia': 0.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0,
-                'descripcion': descripcion, 'unidad': unidad,
-                'ubicacion_aux': (row.get('f400_id_ubicacion_aux') or '').strip(),
+                'descripcion': '', 'unidad': unidad,
             }
         inventario[codigo]['existencia'] += existencia
         inventario[codigo]['comprometido'] += comprometido
