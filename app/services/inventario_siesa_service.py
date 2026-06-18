@@ -230,15 +230,15 @@ def _descargar_todas_bodegas_custom():
                 continue
             if bodega not in _BODEGAS_PV:
                 continue
-            existencia = float(row.get('f400_cant_existencia_1') or 0)
             if bodega not in inventario_global:
                 inventario_global[bodega] = {}
-            if codigo not in inventario_global[bodega]:
-                inventario_global[bodega][codigo] = {
-                    'existencia': 0.0, 'comprometido': 0.0, 'salida_sin_conf': 0.0,
-                    'descripcion': '', 'unidad': 'UND',
-                }
-            inventario_global[bodega][codigo]['existencia'] += existencia
+            if codigo in inventario_global[bodega]:
+                continue
+            inventario_global[bodega][codigo] = {
+                'existencia': float(row.get('f400_cant_existencia_1') or 0),
+                'comprometido': 0.0, 'salida_sin_conf': 0.0,
+                'descripcion': '', 'unidad': 'UND',
+            }
 
         if len(rows) < 1000:
             break
