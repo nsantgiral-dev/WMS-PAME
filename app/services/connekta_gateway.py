@@ -2055,10 +2055,11 @@ class ConnektaGateway:
 
         logger.info(f'[CONNEKTA] Requisicion traslado {codigo_solicitud} '
                     f'{bodega_origen}→{bodega_destino} ({len(items)} items)')
+        _es_estandar = self.conector_requisicion_traslado in ('174646',)
         return self._post(self.conector_requisicion_traslado,
                           self.nombre_conector_req_traslado, payload,
-                          url=self.url_post_dinamico,
-                          extra_params={'idSistema': self.id_sistema})
+                          url=self.url_post if _es_estandar else self.url_post_dinamico,
+                          extra_params=None if _es_estandar else {'idSistema': self.id_sistema})
 
     def compromisos_desde_requisicion(self, consec_rit: int, bodega_origen: str,
                                       bodega_destino: str, items: list):
