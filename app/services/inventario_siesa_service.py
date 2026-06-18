@@ -143,6 +143,24 @@ def iniciar_refresh_periodico(app):
     _programar_carga_diaria()
 
 
+_bd_limpiada = False
+
+def _limpiar_bd_duplicados():
+    """One-shot: borra tabla stock_siesa para repoblar sin duplicados."""
+    global _bd_limpiada
+    if _bd_limpiada:
+        return
+    _bd_limpiada = True
+    try:
+        from app.models.stock_siesa import StockSiesa
+        n = StockSiesa.query.delete()
+        db.session.commit()
+        logger.info('[INV-SIESA] BD limpiada: %d registros eliminados (repoblación limpia)', n)
+    except Exception as exc:
+        db.session.rollback()
+        logger.error('[INV-SIESA] Error limpiando BD: %s', exc)
+
+
 def precalentar_cache_multibodega(app=None):
     """Lanza descarga en background. Llamar desde app startup o primer request."""
     global _descarga_multibodega_en_curso
@@ -253,7 +271,8 @@ def _descargar_inventario_siesa_raw(forzar=False):
     """
     Descarga inventario de todas las bodegas PV.
     Primero intenta consulta custom (una sola llamada, ~36s, 100% cobertura).
-    Si falla, cae a API estándar por bodega (más lento, paginación no determinística).
+    Si falla, lee de BD como fallback.
+    Merge API + BD para cobertura máxima.
 
     Retorna dict {bodega: {codigo: {existencia, comprometido, salida_sin_conf, ...}}}
     """
@@ -264,6 +283,8 @@ def _descargar_inventario_siesa_raw(forzar=False):
             and _cache_inventario_multibodega['ts'] is not None
             and (ahora - _cache_inventario_multibodega['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
         return _cache_inventario_multibodega['data']
+
+    _limpiar_bd_duplicados()
 
     api_data = _descargar_todas_bodegas_custom()
 
