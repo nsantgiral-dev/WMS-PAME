@@ -265,15 +265,27 @@ def _descargar_inventario_siesa_raw(forzar=False):
             and (ahora - _cache_inventario_multibodega['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
         return _cache_inventario_multibodega['data']
 
-    inventario_global = _descargar_todas_bodegas_custom()
+    api_data = _descargar_todas_bodegas_custom()
 
-    if inventario_global is None:
-        logger.warning('[INV-SIESA] Custom query falló — usando datos de BD')
-        inventario_global = {}
-        for bod in _BODEGAS_PV:
-            inv_bd = _leer_stock_de_bd(bod)
-            if inv_bd:
-                inventario_global[bod] = inv_bd
+    if api_data is None:
+        logger.warning('[INV-SIESA] Custom query falló — usando solo BD')
+        api_data = {}
+
+    inventario_global = {}
+    for bod in _BODEGAS_PV:
+        inv_bd = _leer_stock_de_bd(bod)
+        inv_api = api_data.get(bod, {})
+        if inv_bd and inv_api:
+            merged = dict(inv_bd)
+            merged.update(inv_api)
+            inventario_global[bod] = merged
+            if len(merged) > len(inv_api):
+                logger.info('[INV-SIESA] %s: merge BD(%d) + API(%d) = %d',
+                            bod, len(inv_bd), len(inv_api), len(merged))
+        elif inv_api:
+            inventario_global[bod] = inv_api
+        elif inv_bd:
+            inventario_global[bod] = inv_bd
 
     total = sum(len(v) for v in inventario_global.values())
     logger.info('[INV-SIESA] Descarga completa: %d productos en %s', total, sorted(inventario_global.keys()))
