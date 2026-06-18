@@ -907,6 +907,8 @@ class TrasladoService:
             return TrasladoService._crear_picking_tienda(solicitud)
 
         sin_stock = []
+        from app.models.picking import TareaPicking as _TP
+        from app.models.ubicacion import Ubicacion as _UbPick
         for item in solicitud.items:
             cantidad = item.cantidad_aprobada or item.cantidad_solicitada
             if not cantidad or cantidad <= 0 or not item.producto_id:
@@ -923,12 +925,36 @@ class TrasladoService:
                     bodega_origen_siesa=solicitud.bodega_origen_siesa,
                 )
             except ValueError as e:
-                # Stock insuficiente en WMS para este ítem — picking manual
                 sin_stock.append(item.producto_codigo_siesa)
                 logger.warning(
                     f'[TRASLADO] Sin stock WMS para {item.producto_codigo_siesa} '
-                    f'en {solicitud.codigo}: {e}'
+                    f'en {solicitud.codigo}: {e} — creando picking manual'
                 )
+                ub_general = _UbPick.query.filter_by(
+                    almacen_id=almacen.id, tipo_zona='GENERAL'
+                ).first()
+                if not ub_general:
+                    from app.models.ubicacion import Ubicacion as _UbNew
+                    ub_general = _UbNew(
+                        codigo=f'{solicitud.bodega_origen_siesa}-GENERAL',
+                        almacen_id=almacen.id, tipo_zona='GENERAL', activo=True,
+                    )
+                    db.session.add(ub_general)
+                    db.session.flush()
+                tarea = _TP(
+                    codigo=f'PICK-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{uuid.uuid4().hex[:6].upper()}',
+                    producto_id=item.producto_id,
+                    cantidad_solicitada=cantidad,
+                    ubicacion_id=ub_general.id,
+                    almacen_id=almacen.id,
+                    estado='PENDIENTE',
+                    prioridad=10,
+                    referencia_documento=solicitud.codigo,
+                    tipo_documento='TRASLADO',
+                    bodega_origen_siesa=solicitud.bodega_origen_siesa,
+                    operario_id=solicitud.operario_id,
+                )
+                db.session.add(tarea)
         return sin_stock
 
     @staticmethod
