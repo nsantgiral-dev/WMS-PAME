@@ -197,16 +197,11 @@ def precalentar_cache_multibodega(app=None):
 _BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'FC1', 'PC1', 'FN1']
 
 
-def _descargar_todas_bodegas_custom():
-    """
-    Descarga inventario de TODAS las bodegas en una sola consulta usando
-    papeleriamedellin_WMS_Stock_Bodega (vista V400_ITEM_REF).
-    ~35,000 productos en ~36 segundos vs ~30 min con API estándar.
-    Retorna dict {bodega: {codigo: {existencia, ...}}} o None si falla.
-    """
+def _descargar_una_pasada_custom():
+    """Una pasada completa de la consulta custom. Retorna dict {bodega: {codigo: {...}}}."""
     import time as _time
     api_custom = 'papeleriamedellin_WMS_Stock_Bodega'
-    inventario_global = {}
+    inventario = {}
     _errores_consecutivos = 0
 
     for pag in range(1, 200):
@@ -229,7 +224,6 @@ def _descargar_todas_bodegas_custom():
 
         if resp is None:
             if _errores_consecutivos >= 3:
-                logger.warning('[INV-SIESA] CUSTOM falló en pág %d — fallback a API estándar', pag)
                 return None
             continue
 
@@ -244,27 +238,50 @@ def _descargar_todas_bodegas_custom():
         for row in rows:
             bodega = (row.get('f150_id') or '').strip()
             codigo = (row.get('f120_referencia') or '').strip()
-            if not bodega or not codigo:
+            if not bodega or not codigo or bodega not in _BODEGAS_PV:
                 continue
-            if bodega not in _BODEGAS_PV:
-                continue
-            if bodega not in inventario_global:
-                inventario_global[bodega] = {}
-            if codigo in inventario_global[bodega]:
-                continue
-            inventario_global[bodega][codigo] = {
-                'existencia': float(row.get('f400_cant_existencia_1') or 0),
-                'comprometido': 0.0, 'salida_sin_conf': 0.0,
-                'descripcion': '', 'unidad': 'UND',
-            }
+            if bodega not in inventario:
+                inventario[bodega] = {}
+            if codigo not in inventario[bodega]:
+                inventario[bodega][codigo] = {
+                    'existencia': float(row.get('f400_cant_existencia_1') or 0),
+                    'comprometido': 0.0, 'salida_sin_conf': 0.0,
+                    'descripcion': '', 'unidad': 'UND',
+                }
 
         if len(rows) < 1000:
             break
 
-    total = sum(len(v) for v in inventario_global.values())
-    bodegas = sorted(inventario_global.keys())
-    logger.info('[INV-SIESA] CUSTOM descarga completa: %d productos en %s', total, bodegas)
-    return inventario_global if inventario_global else None
+    return inventario if inventario else None
+
+
+def _descargar_todas_bodegas_custom():
+    """
+    3 pasadas consecutivas para compensar paginación no determinística.
+    Cada pasada devuelve un subconjunto diferente; al acumular se acerca al 100%.
+    ~36s × 3 = ~2 min total.
+    """
+    acumulado = {}
+    for pasada in range(1, 4):
+        resultado = _descargar_una_pasada_custom()
+        if resultado is None:
+            logger.warning('[INV-SIESA] CUSTOM pasada %d falló', pasada)
+            continue
+        nuevos = 0
+        for bod, productos in resultado.items():
+            if bod not in acumulado:
+                acumulado[bod] = {}
+            for codigo, datos in productos.items():
+                if codigo not in acumulado[bod]:
+                    nuevos += 1
+                acumulado[bod][codigo] = datos
+        total = sum(len(v) for v in acumulado.values())
+        logger.info('[INV-SIESA] CUSTOM pasada %d: +%d nuevos → %d total acumulado', pasada, nuevos, total)
+
+    total = sum(len(v) for v in acumulado.values())
+    bodegas = sorted(acumulado.keys())
+    logger.info('[INV-SIESA] CUSTOM 3 pasadas completas: %d productos en %s', total, bodegas)
+    return acumulado if acumulado else None
 
 
 def _descargar_inventario_siesa_raw(forzar=False):
