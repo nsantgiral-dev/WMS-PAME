@@ -179,12 +179,10 @@ def precalentar_cache_multibodega(app=None):
 _BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'FC1', 'PC1', 'FN1']
 
 
-def _descargar_una_bodega(bodega_id: str):
+def _descargar_una_bodega_custom(bodega_id: str):
     """
-    Descarga inventario de UNA bodega usando consulta dinámica custom
-    papeleriamedellin_WMS_Stock_Bodega (ID 8280 en Connekta).
-    ORDER BY f120_id ASC en el SQL garantiza paginación determinística.
-    Retorna dict {codigo: {existencia, comprometido, salida_sin_conf, ...}}
+    Intenta descargar con consulta dinámica custom (paginación determinística).
+    Retorna None si la consulta falla (fallback a API estándar).
     """
     import time as _time
     api_custom = 'papeleriamedellin_WMS_Stock_Bodega'
@@ -204,16 +202,16 @@ def _descargar_una_bodega(bodega_id: str):
             except Exception as _e:
                 if '429' in str(_e) or 'rate' in str(_e).lower():
                     wait = 10 * (intento + 1)
-                    logger.warning('[INV-SIESA] %s pág %d: 429 — espera %ds', bodega_id, pag, wait)
+                    logger.warning('[INV-SIESA] CUSTOM %s pág %d: 429 — espera %ds', bodega_id, pag, wait)
                     _time.sleep(wait)
                 else:
                     _errores_consecutivos += 1
                     _time.sleep(2)
 
         if resp is None:
-            if _errores_consecutivos >= 5:
-                logger.error('[INV-SIESA] %s: 5 errores — abortando en pág %d', bodega_id, pag)
-                break
+            if _errores_consecutivos >= 3:
+                logger.warning('[INV-SIESA] CUSTOM %s falló en pág %d — fallback a API estándar', bodega_id, pag)
+                return None
             continue
 
         rows = (
@@ -232,6 +230,68 @@ def _descargar_una_bodega(bodega_id: str):
         if len(rows) < 100:
             break
 
+    inventario = _parsear_filas(filas_unicas)
+    logger.info('[INV-SIESA] CUSTOM %s: %d filas → %d productos', bodega_id, len(filas_unicas), len(inventario))
+    return inventario
+
+
+def _descargar_una_bodega_estandar(bodega_id: str):
+    """
+    Descarga con API estándar API_v2_Inventarios_InvFecha (fallback).
+    Paginación no determinística pero funciona siempre.
+    """
+    import time as _time
+    api = 'API_v2_Inventarios_InvFecha'
+    filas_unicas = {}
+    _errores_consecutivos = 0
+
+    for pag in range(1, 201):
+        resp = None
+        for intento in range(3):
+            try:
+                resp = connekta._get(api, {
+                    'paginacion': f'numPag={pag}|tamPag=100',
+                    'parametros': f"f150_id = ''{bodega_id}''",
+                })
+                _errores_consecutivos = 0
+                break
+            except Exception as _e:
+                if '429' in str(_e) or 'rate' in str(_e).lower():
+                    wait = 10 * (intento + 1)
+                    logger.warning('[INV-SIESA] %s pág %d: 429 — espera %ds', bodega_id, pag, wait)
+                    _time.sleep(wait)
+                else:
+                    _errores_consecutivos += 1
+                    _time.sleep(2)
+
+        if resp is None:
+            if _errores_consecutivos >= 5:
+                logger.error('[INV-SIESA] %s: 5 errores — abortando en pág %d', bodega_id, pag)
+                break
+            continue
+
+        rows = resp.get('detalle', {}).get('Table', [])
+        if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+            break
+
+        for row in rows:
+            fid = row.get('f120_id')
+            lote = (row.get('f400_id_lote') or '').strip()
+            ub = (row.get('f400_id_ubicacion_aux') or '').strip()
+            clave = (fid, lote, ub)
+            if clave not in filas_unicas:
+                filas_unicas[clave] = row
+
+        if len(rows) < 100:
+            break
+
+    inventario = _parsear_filas(filas_unicas)
+    logger.info('[INV-SIESA] ESTANDAR %s: %d filas → %d productos', bodega_id, len(filas_unicas), len(inventario))
+    return inventario
+
+
+def _parsear_filas(filas_unicas: dict) -> dict:
+    """Convierte filas raw de cualquier API en dict {codigo: {existencia, ...}}."""
     inventario = {}
     for row in filas_unicas.values():
         codigo = (row.get('f120_referencia') or '').strip()
@@ -240,7 +300,7 @@ def _descargar_una_bodega(bodega_id: str):
         existencia = float(row.get('f400_cant_existencia_1') or 0)
         comprometido = float(row.get('f400_cant_comprometida_1') or 0)
         salida_sin_conf = float(row.get('f400_cant_salida_sin_conf_1') or 0)
-        unidad = (row.get('f120_id_unidad_inventario') or '').strip() or 'UND'
+        unidad = (row.get('f120_id_unidad_inventario') or row.get('f120_id_unidad_medida_inventario') or '').strip() or 'UND'
 
         if codigo not in inventario:
             inventario[codigo] = {
@@ -250,9 +310,29 @@ def _descargar_una_bodega(bodega_id: str):
         inventario[codigo]['existencia'] += existencia
         inventario[codigo]['comprometido'] += comprometido
         inventario[codigo]['salida_sin_conf'] += salida_sin_conf
-
-    logger.info('[INV-SIESA] %s: %d filas únicas → %d productos', bodega_id, len(filas_unicas), len(inventario))
     return inventario
+
+
+def _descargar_una_bodega(bodega_id: str):
+    """
+    Intenta consulta custom (determinística) primero.
+    Si falla, usa API estándar como fallback.
+    Merge con BD existente para acumular productos.
+    """
+    inv = _descargar_una_bodega_custom(bodega_id)
+    if inv is None:
+        inv = _descargar_una_bodega_estandar(bodega_id)
+
+    inv_bd = _leer_stock_de_bd(bodega_id)
+    if inv_bd:
+        merged = dict(inv_bd)
+        merged.update(inv)
+        if len(merged) > len(inv):
+            logger.info('[INV-SIESA] %s: merge BD (%d) + API (%d) = %d productos',
+                        bodega_id, len(inv_bd), len(inv), len(merged))
+        return merged
+
+    return inv
 
 
 def _descargar_inventario_siesa_raw(forzar=False):
