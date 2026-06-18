@@ -1226,8 +1226,7 @@ async function pedirTarea() {
           <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
             <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#431407;color:#fb923c;font-weight:700;">TRASLADO</span>
           </div>
-        </div>
-        <div id="traslados-operario" style="padding:0 16px 16px;"></div>` : `
+        </div>` : `
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">✓</div>
           <div style="font-size:24px;font-weight:700;margin-top:12px;">Sin tareas pendientes</div>
@@ -1236,9 +1235,7 @@ async function pedirTarea() {
             <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#1e3a5f;color:#93c5fd;font-weight:700;">PEDIDO</span>
             <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#431407;color:#fb923c;font-weight:700;">TRASLADO</span>
           </div>
-        </div>
-        <div id="traslados-operario" style="padding:0 16px 16px;"></div>`;
-      cargarTrasladosOperario();
+        </div>`;
       return;
     }
     TAREA_ACTUAL = d;
