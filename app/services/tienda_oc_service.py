@@ -36,18 +36,11 @@ class TiendaOCService:
             return resultado
 
         items_raw = resultado.get('detalle', {}).get('Table', [])
-        logger.info(
-            f'[TIENDA-OC] listar_ocs co={co!r} bodega={bodega!r} — '
-            f'API retornó {len(items_raw)} filas totales. '
-            f'COs en respuesta: {set(r.get("f420_id_co","").strip() for r in items_raw[:50])} '
-            f'Bodegas en respuesta: {set(r.get("f150_id","").strip() for r in items_raw[:50])}'
-        )
         items_raw = [
             r for r in items_raw
             if r.get('f420_id_co', '').strip() == co
             and r.get('f150_id', '').strip() == bodega
         ]
-        logger.info(f'[TIENDA-OC] Después de filtrar: {len(items_raw)} filas para {co}/{bodega}')
 
         ordenes = {}
         for row in items_raw:
