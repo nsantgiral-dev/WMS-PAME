@@ -47,10 +47,12 @@ def _get_tienda_user():
 def _validar_recepcion_tienda(recepcion_id, usuario):
     """Valida que la recepción existe y pertenece a la bodega de la tienda."""
     from app.models.recepcion import RecepcionMercancia
+    from app.models.almacen import Almacen
     recepcion = RecepcionMercancia.query.get(recepcion_id)
     if not recepcion:
         return None, 'Recepción no encontrada'
-    if recepcion.co_oc_siesa != usuario.siesa_co_id:
+    almacen = Almacen.query.get(recepcion.almacen_id) if recepcion.almacen_id else None
+    if almacen and almacen.bodega_siesa_id != usuario.bodega_siesa_id:
         return None, 'Esta recepción no pertenece a tu punto de venta'
     return recepcion, None
 
