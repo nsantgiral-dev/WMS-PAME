@@ -7730,9 +7730,8 @@ async function conteoConfirmarAjuste() {
 // TRASLADOS — Admin tab
 // ══════════════════════════════════════════════════════════════════
 
-let _TRAS_SUBTAB = 'pendientes';
+let _TRAS_SUBTAB = 'transito';
 const TRAS_ESTADO = {
-  pendientes: ['BORRADOR','ENVIADA','EN_PICKING','PREPARADO'],
   transito:   ['EN_TRANSITO'],
   historial:  ['ENTREGADA','RECHAZADA','CANCELADA','REVERTIDA']
 };
@@ -7744,7 +7743,7 @@ const TRAS_COL = {
 
 function trasSubtab(nombre) {
   _TRAS_SUBTAB = nombre;
-  ['pendientes','transito','historial'].forEach(k => {
+  ['transito','historial'].forEach(k => {
     const el = document.getElementById(`tras-tab-${k}`);
     if (!el) return;
     const activo = k === nombre;
@@ -7852,15 +7851,7 @@ function _renderTrasladoCard(s) {
   }
 
   if (s.estado === 'EN_TRANSITO') {
-    acciones.push(`<button onclick="trasConfirmarRecepcion(${s.id})" style="flex:1;padding:10px;background:#065f46;color:#4ade80;border:1px solid #166534;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✓ Confirmar Recepción</button>`);
-    acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs en ruta</button>`);
-    acciones.push(`<button onclick="trasRevertir(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#f87171;border:1px solid #7f1d1d;border-radius:8px;font-size:11px;cursor:pointer;">↩ Revertir</button>`);
-  }
-  if (s.siesa_necesita_atencion && s.estado === 'EN_TRANSITO') {
-    acciones.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="flex:1;padding:10px;background:#7c3aed;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">⚠ Reintentar Siesa</button>`);
-  }
-  if (s.estado === 'ENTREGADA' && s.modo_transferencia === 'EN_TRANSITO' && !s.siesa_entrada_consec) {
-    acciones.push(`<button onclick="trasReintentarRecepcionSiesa(${s.id})" style="flex:1;padding:10px;background:#7c2d12;color:#fed7aa;border:1px solid #9a3412;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">⚠ Reintentar entrada Siesa</button>`);
+    acciones.push(`<span style="font-size:12px;color:#f59e0b;font-weight:600;">🚚 Mercancía en camino — la tienda confirma recepción</span>`);
   }
 
   const operarioTag = s.operario_nombre
