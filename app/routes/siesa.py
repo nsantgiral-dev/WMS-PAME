@@ -715,7 +715,7 @@ def ordenes_compra():
     for numero_oc, oc in ordenes.items():
         oc['recepcion_wms_estado'] = estado_por_oc.get(numero_oc)
 
-    lista = list(ordenes.values())
+    lista = sorted(ordenes.values(), key=lambda o: int(o.get('consec_docto') or 0), reverse=True)
     return jsonify({'ordenes': lista, 'total': len(lista)}), 200
 
 
