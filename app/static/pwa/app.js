@@ -9024,27 +9024,24 @@ async function tiendaOCProcesarScan(codigo) {
 
   const items = _TIENDA_OC_RECEPCION.items || [];
 
-  // 1. Match directo contra items de la OC (por codigo o codigo_siesa)
-  let item = items.find(i =>
+  // Resolver siempre via API para detectar empaques (factor_conversion)
+  try {
+    const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+    if (prod && prod.producto_id) {
+      const esEmpaque = prod.es_empaque || false;
+      const factor = prod.factor_conversion || 1;
+
+      await _tiendaOCRegistrarScan(prod.producto_id, 1, esEmpaque, false);
+      if (esEmpaque && factor > 1) alerta(`Empaque escaneado → +${factor} UND`, 'info');
+      return;
+    }
+  } catch (_) { /* API falló — intentar match directo */ }
+
+  // Fallback: match directo contra items (sin detección de empaque)
+  const item = items.find(i =>
     i.producto_codigo === codigo ||
     (i.producto_codigo_siesa && i.producto_codigo_siesa === codigo)
   );
-
-  // 2. Si no hay match directo, resolver via API (código de barras)
-  if (!item) {
-    try {
-      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
-      if (prod && prod.producto_id) {
-        item = items.find(i => i.producto_id === prod.producto_id);
-        if (!item) {
-          // Producto existe pero no está en la OC — puede ser bonificación
-          await _tiendaOCRegistrarScan(prod.producto_id, 1, prod.es_empaque || false, false);
-          if (prod.es_empaque && prod.factor_conversion > 1) alerta(`Empaque → +${prod.factor_conversion} UND`, 'info');
-          return;
-        }
-      }
-    } catch (_) { /* continúa con item=undefined */ }
-  }
 
   if (!item) {
     beepError();
