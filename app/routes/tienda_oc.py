@@ -48,10 +48,9 @@ def listar_ocs():
     try:
         _uid = int(get_jwt_identity())
         _usr = _U.query.get(_uid)
-        logger.info(
-            f'[TIENDA-OC] GET / — uid={_uid} rol={_usr.rol if _usr else "?"} '
-            f'co={_usr.siesa_co_id!r if _usr else "?"} bodega={_usr.bodega_siesa_id!r if _usr else "?"}'
-        )
+        _co = repr(_usr.siesa_co_id) if _usr else '?'
+        _bod = repr(_usr.bodega_siesa_id) if _usr else '?'
+        logger.info(f'[TIENDA-OC] GET / — uid={_uid} rol={_usr.rol if _usr else "?"} co={_co} bodega={_bod}')
     except Exception:
         pass
 
