@@ -1709,6 +1709,7 @@ function loadScript(src) {
 }
 
 async function procesarScan(codigo) {
+  if (_TIENDA_OC_RECEPCION) { await tiendaOCProcesarScan(codigo); return; }
   if (DEVOLUCION_ACTUAL) { await procesarScanDevolucion(codigo); return; }
   if (RECEPCION_ACTUAL) { await procesarScanRecepcion(codigo); return; }
   // HUD del empacador activo
