@@ -9952,11 +9952,23 @@ function _renderRequisicionCard(r) {
 
   const accionBtn =
     r.estado === 'ENVIADA'
-      ? `<button onclick="aprobarRequisicion(${r.id})"
-           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
-                  background:#16a34a;color:#fff;border:1px solid #16a34a;">
-           ✓ Aprobar
-         </button>`
+      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+           <button onclick="reqRechazar(${r.id})"
+             style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                    background:#dc2626;color:#fff;border:none;">
+             ✕ Rechazar
+           </button>
+           <button onclick="reqEditarAprobar(${r.id})"
+             style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                    background:#1d4ed8;color:#fff;border:none;">
+             ✏ Editar
+           </button>
+           <button onclick="aprobarRequisicion(${r.id})"
+             style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                    background:#16a34a;color:#fff;border:none;">
+             ✓ Aprobar
+           </button>
+         </div>`
     : r.estado === 'EN_PICKING'
       ? `<span style="font-size:12px;color:#2563eb;font-weight:600;">🔍 Operario pickeando...</span>`
     : r.estado === 'EN_PACKING'
@@ -10038,6 +10050,98 @@ async function aprobarRequisicion(id) {
   } catch (e) {
     alerta('Error de conexión', 'error');
   }
+}
+
+async function reqRechazar(id) {
+  const motivo = prompt('Motivo del rechazo:');
+  if (!motivo) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/rechazar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo })
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Solicitud rechazada', 'advertencia'); cargarRequisiciones(); }
+    else { alerta(d.error || 'Error al rechazar', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function reqEditarAprobar(id) {
+  let solicitud, operariosData;
+  try {
+    [solicitud, operariosData] = await Promise.all([
+      fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+      fetch(API + `/api/traslados/operarios-disponibles`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+    ]);
+  } catch (e) { alerta('Error de conexión', 'error'); return; }
+
+  const items = solicitud.items || [];
+  const operarios = operariosData.operarios || [];
+
+  const filasItems = items.map(i => `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <div style="flex:1;font-size:12px;">
+        <div style="font-weight:600;">${i.producto_nombre || i.producto_codigo}</div>
+        <div style="color:#666;font-size:11px;">Solicitado: ${i.cantidad_solicitada} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <label style="font-size:11px;color:#999;">Aprobar:</label>
+        <input type="number" id="req-apr-${i.id}" value="${i.cantidad_solicitada}" min="0"
+          style="width:70px;padding:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
+      </div>
+    </div>
+  `).join('');
+
+  const opcionesOperarios = operarios.length
+    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('')
+    : `<option value="">No hay operarios disponibles</option>`;
+
+  const modal = document.createElement('div');
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:440px;border:1px solid #166534;max-height:85vh;overflow-y:auto;">
+        <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Editar y aprobar requisición</div>
+        <div style="font-size:12px;color:#666;margin-bottom:16px;">${solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa || '—'}</div>
+
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:#aaa;">CANTIDADES A ENVIAR</div>
+        ${filasItems}
+
+        <div style="font-size:12px;font-weight:600;margin-top:14px;margin-bottom:8px;color:#aaa;">OPERARIO QUE RECOGE</div>
+        <select id="req-apr-operario"
+          style="width:100%;padding:10px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;margin-bottom:16px;">
+          ${opcionesOperarios}
+        </select>
+
+        <div style="display:flex;gap:8px;">
+          <button id="btn-req-apr-ok" style="flex:1;padding:12px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">Aprobar</button>
+          <button onclick="this.closest('[style*=fixed]').parentElement.remove()" style="padding:12px 16px;background:#222;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">Cancelar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  modal.querySelector('#btn-req-apr-ok').onclick = async () => {
+    const items_aprobados = items.map(i => ({
+      id: i.id,
+      cantidad_aprobada: Number(document.getElementById(`req-apr-${i.id}`).value) || 0
+    }));
+    const operario_id = document.getElementById('req-apr-operario').value
+      ? Number(document.getElementById('req-apr-operario').value) : null;
+    modal.remove();
+    try {
+      const r = await fetch(API + `/api/traslados/${id}/aprobar`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items_aprobados, operario_id })
+      });
+      const d = await r.json();
+      if (r.ok) {
+        alerta(operario_id ? 'Aprobado — operario notificado' : 'Aprobado — sin operario asignado', 'exito');
+        cargarRequisiciones();
+      } else { alerta(d.error || 'Error', 'error'); }
+    } catch (e) { alerta('Error de conexión', 'error'); }
+  };
 }
 
 async function confirmarPickingTraslado(id) {
