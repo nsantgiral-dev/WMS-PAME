@@ -8205,7 +8205,7 @@ function tiendaCambiarOrigen(sel) {
 
 function tiendaSubtab(nombre) {
   _TIENDA_SUBTAB = nombre;
-  ['solicitudes','nueva','recibir'].forEach(k => {
+  ['solicitudes','nueva','recibir','recibir-oc'].forEach(k => {
     const tab = document.getElementById(`tienda-tab-${k}`);
     const panel = document.getElementById(`tienda-panel-${k}`);
     const activo = k === nombre;
@@ -8219,6 +8219,7 @@ function tiendaSubtab(nombre) {
   if (nombre === 'solicitudes') tiendaCargarSolicitudes();
   if (nombre === 'nueva') tiendaRenderStock();
   if (nombre === 'recibir') tiendaCargarRecibir();
+  if (nombre === 'recibir-oc') tiendaOCCargar();
 }
 
 async function tiendaCargarSolicitudes() {
@@ -8762,6 +8763,471 @@ async function tiendaConfirmarRecepcionTraslado() {
 }
 
 // _condConfirmarEntrega eliminado — reemplazado por el flujo por parada
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TIENDA — Recepción de OCs (Órdenes de Compra)
+// Flujo SOLID independiente: usa /api/tienda-oc/ (no toca recepcion)
+// ══════════════════════════════════════════════════════════════════════════════
+
+let _TIENDA_OCS = [];
+let _TIENDA_OC_RECEPCION = null;
+
+async function tiendaOCCargar() {
+  const listaView = document.getElementById('tienda-oc-lista-view');
+  const scanView = document.getElementById('tienda-oc-scan-view');
+  if (listaView) listaView.style.display = 'block';
+  if (scanView) scanView.style.display = 'none';
+  _TIENDA_OC_RECEPCION = null;
+
+  const el = document.getElementById('tienda-oc-lista');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Cargando OCs...</div>';
+
+  try {
+    const siesa = await get('/api/tienda-oc/').catch(() => ({ ordenes: [] }));
+    _TIENDA_OCS = siesa.ordenes || [];
+
+    const badgeEl = document.getElementById('badge-recibir-oc');
+    if (badgeEl) {
+      const pendientes = _TIENDA_OCS.filter(oc => !oc.recepcion_wms_estado || oc.recepcion_wms_estado === 'ABIERTA' || oc.recepcion_wms_estado === 'EN_PROCESO');
+      badgeEl.style.display = pendientes.length ? 'inline' : 'none';
+      badgeEl.textContent = pendientes.length;
+    }
+
+    if (siesa.simulado) {
+      el.innerHTML = `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">
+        Connekta en simulación — conecta credenciales para ver OCs reales de Siesa
+      </div>`;
+      return;
+    }
+
+    if (!_TIENDA_OCS.length) {
+      el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">No hay OCs pendientes para este punto de venta</div>';
+      return;
+    }
+
+    let html = '<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">OCs PENDIENTES EN SIESA</div>';
+    html += _TIENDA_OCS.map((oc, i) => {
+      const sinProd = oc.items.filter(it => !it.producto_id).length;
+      const totalUds = oc.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
+      const wmsEstado = oc.recepcion_wms_estado;
+
+      if (wmsEstado === 'CONFIRMADA') {
+        return `
+          <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;opacity:0.6;">
+            <div style="font-size:16px;font-weight:800;">OC: ${oc.numero_oc}</div>
+            <div style="font-size:12px;color:#888;margin-bottom:8px;">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+            <div style="padding:10px;background:#0d1a0d;border-radius:8px;font-size:14px;font-weight:700;color:#4ade80;text-align:center;">
+              Recepcionada en WMS
+            </div>
+          </div>`;
+      }
+
+      const enProceso = wmsEstado === 'EN_PROCESO' && oc.recepcion_wms_id;
+      const btnLabel = enProceso ? 'Continuar recepción' : 'Iniciar recepción';
+      const btnBg = enProceso ? '#1d4ed8' : '#1E8395';
+      const btnClick = enProceso ? `tiendaOCContinuar(${oc.recepcion_wms_id})` : `tiendaOCIniciar(${i})`;
+      return `
+        <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:10px;">
+          <div style="font-size:16px;font-weight:800;">OC: ${oc.numero_oc}</div>
+          <div style="font-size:12px;color:#888;margin-bottom:4px;">${oc.proveedor || 'Sin proveedor'} · ${oc.items.length} productos · ${totalUds} uds</div>
+          ${sinProd ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:4px;">${sinProd} producto(s) sin registrar en WMS</div>` : ''}
+          <button onclick="${btnClick}"
+            style="width:100%;padding:14px;margin-top:8px;background:${btnBg};color:#fff;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">
+            ${btnLabel}
+          </button>
+        </div>`;
+    }).join('');
+    el.innerHTML = html;
+  } catch (e) {
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando OCs</div>';
+  }
+}
+
+async function tiendaOCIniciar(idx) {
+  const oc = _TIENDA_OCS[idx];
+  if (!oc) return;
+
+  const itemsValidos = oc.items.filter(it => it.producto_id);
+  if (!itemsValidos.length) {
+    alerta('Ningún producto está registrado en el WMS', 'error');
+    return;
+  }
+
+  try {
+    const r = await post('/api/tienda-oc/iniciar', {
+      numero_oc: oc.numero_oc,
+      tipo_docto: oc.tipo_docto,
+      consec_docto: oc.consec_docto,
+      co: oc.co,
+      proveedor: oc.proveedor,
+      proveedor_codigo: oc.proveedor_codigo,
+      sucursal_prov: oc.sucursal_prov,
+      cond_pago: oc.cond_pago,
+      items: itemsValidos
+    });
+    if (r.error) { alerta(r.error, 'error'); return; }
+    _TIENDA_OC_RECEPCION = r.recepcion;
+    _tiendaOCRenderScan();
+  } catch (e) {
+    alerta(e.message || 'Error iniciando recepción', 'error');
+  }
+}
+
+async function tiendaOCContinuar(id) {
+  try {
+    const r = await get('/api/tienda-oc/' + id);
+    if (r.error) { alerta(r.error, 'error'); return; }
+    _TIENDA_OC_RECEPCION = r;
+    _tiendaOCRenderScan();
+  } catch (e) { alerta('Error cargando recepción', 'error'); }
+}
+
+function _tiendaOCRenderScan() {
+  const rec = _TIENDA_OC_RECEPCION;
+  if (!rec) return;
+  const listaView = document.getElementById('tienda-oc-lista-view');
+  const scanView = document.getElementById('tienda-oc-scan-view');
+  if (listaView) listaView.style.display = 'none';
+  if (scanView) scanView.style.display = 'block';
+
+  const itemsOC = (rec.items || []).filter(it => it.tipo !== 'BONIFICACION');
+  const todoCompleto = itemsOC.length > 0 && itemsOC.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+  const algoEscaneado = (rec.items || []).some(it => it.cantidad_recibida > 0);
+  const btnColor = todoCompleto ? '#16a34a' : '#b45309';
+  const btnTexto = todoCompleto ? 'Confirmar recepción' : 'Confirmar recepción parcial';
+  const btnActivo = algoEscaneado || todoCompleto;
+
+  scanView.innerHTML = `
+    <div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <button onclick="tiendaOCVolverLista()"
+          style="background:#222;border:1px solid #333;color:#fff;padding:8px 14px;border-radius:8px;cursor:pointer;font-size:14px;flex-shrink:0;">
+          ← Volver
+        </button>
+        <div style="min-width:0;">
+          <div style="font-size:16px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">OC: ${rec.numero_oc_siesa}</div>
+          <div style="font-size:12px;color:#666;">${rec.proveedor_nombre || ''}</div>
+        </div>
+      </div>
+
+      <div style="background:#111;border-radius:10px;padding:12px;margin-bottom:12px;">
+        <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Escanea unidad, caja o paca — el sistema calcula las unidades</div>
+        <button onclick="abrirCamara('lector-qr-toc','camara-box-toc', cod => { cerrarCamara('camara-box-toc'); tiendaOCProcesarScan(cod); })"
+          style="width:100%;padding:13px;font-size:16px;background:#fff;color:#000;border:2px solid #000;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+          📷 Escanear con cámara
+        </button>
+        <div id="camara-box-toc" style="display:none;margin-bottom:8px;">
+          <div id="lector-qr-toc" style="border-radius:10px;overflow:hidden;"></div>
+          <button onclick="cerrarCamara('camara-box-toc')" style="width:100%;padding:9px;margin-top:6px;font-size:14px;background:#333;color:#fff;border:none;border-radius:8px;cursor:pointer;">Cerrar cámara</button>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <input id="toc-codigo-manual" type="text" placeholder="O escribe / pega el código aquí"
+            style="flex:1;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;"
+            onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ tiendaOCProcesarScan(v); this.value=''; } }"
+            autocomplete="off" autocorrect="off" spellcheck="false">
+          <button onclick="const v=document.getElementById('toc-codigo-manual').value.trim();if(v){tiendaOCProcesarScan(v);document.getElementById('toc-codigo-manual').value='';}"
+            style="padding:10px 14px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+        </div>
+        <button onclick="tiendaOCBuscarManual()"
+          style="width:100%;padding:10px;font-size:14px;background:#1a1a1a;color:#9ca3af;border:1px solid #333;border-radius:8px;cursor:pointer;">
+          📦 Sin código — buscar producto manualmente
+        </button>
+      </div>
+
+      <div id="toc-items-list" style="margin-bottom:14px;">
+        ${_tiendaOCRenderItems(rec.items || [])}
+      </div>
+
+      <button id="btn-confirmar-toc" onclick="tiendaOCConfirmar()" ${btnActivo ? '' : 'disabled'}
+        style="width:100%;padding:18px;font-size:20px;font-weight:700;background:${btnActivo ? btnColor : '#222'};color:#fff;border:none;border-radius:14px;cursor:${btnActivo ? 'pointer' : 'default'};margin-bottom:10px;">
+        ${btnActivo ? (todoCompleto ? '✓ ' : '⚠ ') + btnTexto : 'Escanea al menos un ítem para continuar'}
+      </button>
+
+      <button onclick="tiendaOCModalObsequio()"
+        style="width:100%;padding:13px;font-size:15px;font-weight:600;background:#1a1a2e;color:#a78bfa;border:1px solid #4c1d95;border-radius:10px;cursor:pointer;margin-bottom:8px;">
+        🎁 Registrar Obsequio / Bonificación
+      </button>
+
+      <button onclick="tiendaOCVolverLista()"
+        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        Guardar y salir (continuar más tarde)
+      </button>
+    </div>`;
+
+  setTimeout(() => {
+    const inp = document.getElementById('toc-codigo-manual');
+    if (inp) inp.focus();
+  }, 150);
+}
+
+function _tiendaOCRenderItems(items) {
+  return items.map(it => {
+    const esBono = it.tipo === 'BONIFICACION';
+    if (esBono) {
+      return `
+        <div style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:12px;padding:14px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="min-width:0;flex:1;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="background:#4c1d95;color:#a78bfa;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;">🎁 BONO</span>
+                <div style="font-size:14px;font-weight:600;color:#a78bfa;">${it.producto_nombre || it.producto_codigo}</div>
+              </div>
+              <div style="font-size:11px;color:#555;margin-top:2px;">${it.producto_codigo}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;padding-left:8px;">
+              <div style="font-size:28px;font-weight:900;color:#a78bfa;">${it.cantidad_recibida}</div>
+              <div style="font-size:10px;color:#6b7280;">und recibidas</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    const pct = it.cantidad_ordenada > 0 ? Math.min((it.cantidad_recibida / it.cantidad_ordenada) * 100, 100) : 0;
+    const completo = it.cantidad_recibida >= it.cantidad_ordenada;
+    const factor = it.factor_conversion || 1;
+    const empaques = it.empaques_escaneados || 0;
+    const unidadEmpaque = (it.unidad_empaque || '').trim() || 'emp';
+    const modoEmpaque = factor > 1;
+
+    const contadorDerecha = modoEmpaque ? `
+      <div style="text-align:right;flex-shrink:0;padding-left:8px;">
+        <div style="font-size:42px;font-weight:900;line-height:1;color:${completo ? '#4ade80' : '#fff'};">${empaques}</div>
+        <div style="font-size:13px;font-weight:700;color:${completo ? '#4ade80' : '#facc15'};">${it.cantidad_recibida}/${it.cantidad_ordenada} und</div>
+        <div style="font-size:10px;color:#6b7280;">${unidadEmpaque} · ×${factor}</div>
+      </div>` : `
+      <div style="text-align:right;flex-shrink:0;padding-left:8px;">
+        <div style="font-size:28px;font-weight:900;color:${completo ? '#4ade80' : '#fff'};">${it.cantidad_recibida}/${it.cantidad_ordenada}</div>
+      </div>`;
+
+    return `
+      <div style="background:${completo ? '#0d1a0d' : '#111'};border:1px solid ${completo ? '#166534' : '#222'};border-radius:12px;padding:14px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:14px;font-weight:600;color:${completo ? '#4ade80' : '#fff'};">${it.producto_nombre || it.producto_codigo}</div>
+            <div style="font-size:11px;color:#555;">${it.producto_codigo}</div>
+          </div>
+          ${contadorDerecha}
+        </div>
+        <div style="height:5px;background:#222;border-radius:3px;margin-top:8px;">
+          <div style="height:100%;background:${completo ? '#16a34a' : '#2563eb'};border-radius:3px;width:${pct}%;transition:width 0.3s;"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function tiendaOCProcesarScan(codigo) {
+  if (!_TIENDA_OC_RECEPCION) return;
+  vibrar(); flash();
+
+  try {
+    const scan = await get('/api/empaques/scan/' + encodeURIComponent(codigo) +
+      '?almacen_id=' + (_TIENDA_OC_RECEPCION.almacen_id || ''));
+
+    if (scan.tipo === 'GS1_AMBIGUO') {
+      alerta('Código ambiguo — usa búsqueda manual', 'advertencia');
+      return;
+    }
+
+    if (scan.tipo === 'NO_ENCONTRADO') {
+      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+      if (prod.error || !prod.producto_id) {
+        alerta('Código no reconocido: ' + codigo, 'error');
+        beepError();
+        return;
+      }
+      const esEmp = prod.es_empaque || false;
+      await _tiendaOCRegistrarScan(prod.producto_id, 1, esEmp, false);
+      if (esEmp && prod.factor_conversion > 1) alerta(`Empaque → +${prod.factor_conversion} UND`, 'info');
+      return;
+    }
+
+    const productoId = scan.producto ? scan.producto.id : null;
+    if (!productoId) { alerta('Producto no identificado', 'error'); return; }
+
+    const factor = scan.factor || 1;
+    const esEmpaqueScan = factor > 1;
+    const unidad = scan.empaque ? scan.empaque.unidad_medida : 'UND';
+
+    if (scan.tipo === 'LPN') {
+      await _tiendaOCRegistrarScan(productoId, scan.lpn.cantidad_actual, false, false);
+      alerta(`LPN ${codigo} → +${scan.lpn.cantidad_actual} UND`, 'exito');
+      return;
+    }
+
+    await _tiendaOCRegistrarScan(productoId, 1, esEmpaqueScan, false);
+    if (esEmpaqueScan) alerta(`${unidad} escaneada → +${factor} UND`, 'info');
+
+  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+}
+
+async function _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, esBonificacion) {
+  let r;
+  try {
+    r = await post('/api/tienda-oc/' + _TIENDA_OC_RECEPCION.id + '/escanear', {
+      producto_id: productoId,
+      cantidad: cantidad,
+      es_empaque: esEmpaque,
+      es_bonificacion: esBonificacion
+    });
+  } catch (e) {
+    const body = e.body || {};
+    if ((e.status === 400 || e.status === 409) && body.tipo === 'PRODUCTO_NO_EN_OC' && !esBonificacion) {
+      const ok = await _confirmarModal(
+        '⚠ Producto fuera de OC',
+        'Este producto no está en la orden de compra.<br><br>¿Es un <strong>obsequio o bonificación</strong> del proveedor?',
+        'Sí, registrar como bonificación', 'No, cancelar'
+      );
+      if (ok) await _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, true);
+      return;
+    }
+    beepError();
+    alerta(e.message || 'Error al escanear', 'error');
+    return;
+  }
+
+  if (r.tipo === 'PRODUCTO_NO_EN_OC' && !esBonificacion) {
+    const ok = await _confirmarModal(
+      '⚠ Producto fuera de OC',
+      'Este producto no está en la orden de compra.<br><br>¿Es un <strong>obsequio o bonificación</strong> del proveedor?',
+      'Sí, registrar como bonificación', 'No, cancelar'
+    );
+    if (ok) await _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, true);
+    return;
+  }
+
+  if (r.error) {
+    const msg = typeof r.error === 'object' ? r.error.mensaje : r.error;
+    alerta(msg, 'error');
+    beepError();
+    return;
+  }
+
+  beepOk();
+  const idx = _TIENDA_OC_RECEPCION.items.findIndex(it => it.producto_id === productoId);
+  if (idx >= 0) {
+    _TIENDA_OC_RECEPCION.items[idx] = r.item;
+  } else {
+    _TIENDA_OC_RECEPCION.items.push(r.item);
+  }
+
+  const lista = document.getElementById('toc-items-list');
+  if (lista) lista.innerHTML = _tiendaOCRenderItems(_TIENDA_OC_RECEPCION.items);
+
+  if (r.alerta) {
+    const tipo = r.alerta.includes('EXCESO') ? 'error' : r.alerta.includes('CROSS') ? 'advertencia' : 'info';
+    alerta(r.alerta, tipo);
+  }
+
+  const itemsOC = _TIENDA_OC_RECEPCION.items.filter(it => it.tipo !== 'BONIFICACION');
+  const todoCompleto = itemsOC.length > 0 && itemsOC.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+  const btn = document.getElementById('btn-confirmar-toc');
+  if (btn) {
+    btn.disabled = false;
+    btn.style.background = todoCompleto ? '#16a34a' : '#b45309';
+    btn.style.cursor = 'pointer';
+    btn.textContent = todoCompleto ? '✓ Confirmar recepción' : '⚠ Confirmar recepción parcial';
+    if (todoCompleto) alerta('Todo escaneado — confirma la recepción', 'exito');
+  }
+}
+
+async function tiendaOCBuscarManual() {
+  const codigo = prompt('Ingresa el código WMS del producto:');
+  if (!codigo) return;
+  try {
+    const prod = await get('/api/productos/?search=' + encodeURIComponent(codigo));
+    if (!prod || !prod.productos || prod.productos.length === 0) { alerta('Producto no encontrado', 'error'); return; }
+    const p = prod.productos[0];
+    await _tiendaOCRegistrarScan(p.id, 1, false, false);
+  } catch (e) { alerta('Error buscando producto', 'error'); }
+}
+
+function tiendaOCModalObsequio() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
+  overlay.innerHTML = `
+    <div style="background:#0d0d1a;border:1px solid #4c1d95;border-radius:16px;padding:28px;max-width:360px;width:100%;text-align:center;">
+      <div style="font-size:40px;margin-bottom:12px;">🎁</div>
+      <div style="font-size:18px;font-weight:800;color:#a78bfa;margin-bottom:10px;">¿Hay obsequios o bonificaciones?</div>
+      <div style="font-size:14px;color:#9ca3af;margin-bottom:24px;">¿El proveedor envió productos adicionales que <strong style="color:#fff;">no están en la OC</strong>?</div>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input id="toc-bono-codigo" type="text" placeholder="Código del producto"
+          style="flex:1;padding:10px;background:#0a0a0a;border:1px solid #4c1d95;border-radius:8px;color:#fff;font-size:14px;"
+          onkeydown="if(event.key==='Enter'){ const v=this.value.trim(); if(v){ _tiendaOCEscanearBono(v); this.closest('div[style*=fixed]').remove(); } }">
+        <button onclick="const v=document.getElementById('toc-bono-codigo').value.trim();if(v){_tiendaOCEscanearBono(v);this.closest('div[style*=fixed]').remove();}"
+          style="padding:10px 14px;background:#4c1d95;color:#fff;border:none;border-radius:8px;font-size:18px;cursor:pointer;">↵</button>
+      </div>
+      <button onclick="this.closest('div[style*=fixed]').remove()"
+        style="width:100%;padding:12px;font-size:14px;background:#1a1a1a;color:#555;border:1px solid #222;border-radius:10px;cursor:pointer;">
+        Cancelar
+      </button>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => overlay.querySelector('#toc-bono-codigo').focus(), 100);
+}
+
+async function _tiendaOCEscanearBono(codigo) {
+  vibrar(); flash();
+  try {
+    const scan = await get('/api/empaques/scan/' + encodeURIComponent(codigo) +
+      '?almacen_id=' + (_TIENDA_OC_RECEPCION.almacen_id || ''));
+    let productoId;
+    if (scan.tipo === 'NO_ENCONTRADO') {
+      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+      if (prod.error || !prod.producto_id) { alerta('Código no reconocido', 'error'); return; }
+      productoId = prod.producto_id;
+    } else {
+      productoId = scan.producto ? scan.producto.id : null;
+      if (!productoId) { alerta('Producto no identificado', 'error'); return; }
+    }
+    await _tiendaOCRegistrarScan(productoId, 1, false, true);
+  } catch (e) { beepError(); alerta('Error al escanear bonificación', 'error'); }
+}
+
+async function tiendaOCConfirmar() {
+  if (!_TIENDA_OC_RECEPCION) return;
+
+  const itemsOC = _TIENDA_OC_RECEPCION.items.filter(it => it.tipo !== 'BONIFICACION');
+  const todoCompleto = itemsOC.every(it => it.cantidad_recibida >= it.cantidad_ordenada);
+
+  if (!todoCompleto) {
+    const ok = await _confirmarModal(
+      '⚠ Recepción incompleta',
+      'Hay ítems sin completar. ¿Confirmar como <strong>recepción parcial</strong>?',
+      'Sí, confirmar parcial', 'Cancelar'
+    );
+    if (!ok) return;
+  }
+
+  const remision = await _pedirRemision();
+  if (remision === null) return;
+
+  const btn = document.getElementById('btn-confirmar-toc');
+  if (btn) { btn.textContent = 'Confirmando...'; btn.disabled = true; }
+
+  try {
+    const r = await put('/api/tienda-oc/' + _TIENDA_OC_RECEPCION.id + '/confirmar', {
+      num_remision_prov: remision
+    });
+    if (r.error) {
+      alerta(r.error, 'error');
+      if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
+      return;
+    }
+    alerta('Recepción confirmada — entrada enviada a Siesa', 'exito');
+    _TIENDA_OC_RECEPCION = null;
+    setTimeout(tiendaOCCargar, 1500);
+  } catch (e) {
+    alerta(e.message || 'Error confirmando', 'error');
+    if (btn) { btn.textContent = '✓ Confirmar recepción'; btn.disabled = false; }
+  }
+}
+
+function tiendaOCVolverLista() {
+  _TIENDA_OC_RECEPCION = null;
+  tiendaOCCargar();
+}
 
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -1490,7 +1490,7 @@ class ConnektaGateway:
                 {
                     'F_CIA': cia,
                     'F_CONSEC_AUTO_REG': 1,                                          # 1 = Siesa auto-asigna consecutivo
-                    'f350_id_co': self.centro_op,                                    # CO del documento
+                    'f350_id_co': f'{int(id_co_oc or self.centro_op):03d}',            # CO del documento (usa CO de la OC para multi-bodega)
                     'f350_id_tipo_docto': self.tipo_docto_entrada_oc or None,        # tipo doc entrada OC (SIESA_TIPO_DOCTO_ENTRADA_OC)
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
@@ -1531,7 +1531,7 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     'F_CIA': cia,
-                    'f470_id_co': self.centro_op,
+                    'f470_id_co': f'{int(id_co_oc or self.centro_op):03d}',
                     'f470_id_tipo_docto': self.tipo_docto_entrada_oc or None,        # tipo doc movimiento (pos 22-25)
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,

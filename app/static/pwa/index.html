@@ -1906,8 +1906,13 @@
       </div>
       <div id="tienda-tab-recibir" onclick="tiendaSubtab('recibir')"
         style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
-        Recibir
-        <span id="badge-recibir" style="display:none;position:absolute;top:6px;right:14px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;"></span>
+        Recibir Traslado
+        <span id="badge-recibir" style="display:none;position:absolute;top:6px;right:4px;background:#ef4444;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;"></span>
+      </div>
+      <div id="tienda-tab-recibir-oc" onclick="tiendaSubtab('recibir-oc')"
+        style="flex:1;padding:11px;font-size:13px;color:var(--tx3);text-align:center;border-bottom:2px solid transparent;cursor:pointer;position:relative;">
+        Recibir OC
+        <span id="badge-recibir-oc" style="display:none;position:absolute;top:6px;right:4px;background:#1E8395;color:#fff;font-size:10px;font-weight:700;padding:1px 5px;border-radius:10px;"></span>
       </div>
     </div>
 
@@ -1968,6 +1973,18 @@
       </div>
       <!-- Vista: picking ítem por ítem -->
       <div id="tienda-recibir-picking-view" style="display:none;padding:14px;"></div>
+    </div>
+
+    <!-- Panel: Recibir OC -->
+    <div id="tienda-panel-recibir-oc" style="display:none;">
+      <!-- Vista: lista de OCs pendientes -->
+      <div id="tienda-oc-lista-view" style="padding:14px;">
+        <div id="tienda-oc-lista">
+          <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+        </div>
+      </div>
+      <!-- Vista: escaneo de OC -->
+      <div id="tienda-oc-scan-view" style="display:none;padding:14px;"></div>
     </div>
   </div>
 
