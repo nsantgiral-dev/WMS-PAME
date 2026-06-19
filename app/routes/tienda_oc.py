@@ -14,6 +14,13 @@ tienda_oc_bp = Blueprint('tienda_oc', __name__)
 logger = logging.getLogger(__name__)
 
 
+_BODEGA_CO_MAP = {
+    'NC1': '002', 'NS1': '001', 'PC1': '004', 'FC1': '006',
+    'FF1': '009', 'FN1': '007', 'NB1': '003', 'PT1': '005',
+    'NS2': '001', 'FP1': '008',
+}
+
+
 def _get_tienda_user():
     """Retorna el usuario si tiene rol tienda con bodega configurada, None si no."""
     from app.models.usuario import Usuario
@@ -24,7 +31,15 @@ def _get_tienda_user():
     u = Usuario.query.get(uid)
     if not u or u.rol != 'tienda':
         return None
-    if not u.bodega_siesa_id or not u.siesa_co_id:
+    if not u.bodega_siesa_id:
+        return None
+    if not u.siesa_co_id:
+        u.siesa_co_id = _BODEGA_CO_MAP.get(u.bodega_siesa_id)
+        if u.siesa_co_id:
+            from app.extensions import db
+            db.session.commit()
+            logger.info(f'[TIENDA-OC] Auto-asignado siesa_co_id={u.siesa_co_id} a usuario {u.id} ({u.bodega_siesa_id})')
+    if not u.siesa_co_id:
         return None
     return u
 
