@@ -33,12 +33,12 @@ def _get_tienda_user():
         return None
     if not u.bodega_siesa_id:
         return None
-    if not u.siesa_co_id:
-        u.siesa_co_id = _BODEGA_CO_MAP.get(u.bodega_siesa_id)
-        if u.siesa_co_id:
-            from app.extensions import db
-            db.session.commit()
-            logger.info(f'[TIENDA-OC] Auto-asignado siesa_co_id={u.siesa_co_id} a usuario {u.id} ({u.bodega_siesa_id})')
+    co_correcto = _BODEGA_CO_MAP.get(u.bodega_siesa_id)
+    if co_correcto and u.siesa_co_id != co_correcto:
+        u.siesa_co_id = co_correcto
+        from app.extensions import db
+        db.session.commit()
+        logger.info(f'[TIENDA-OC] Corregido siesa_co_id={co_correcto} para usuario {u.id} ({u.bodega_siesa_id})')
     if not u.siesa_co_id:
         return None
     return u
