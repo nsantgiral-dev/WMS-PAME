@@ -4303,28 +4303,48 @@ async function cargarUsuarios() {
       el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios</div>';
       return;
     }
-    el.innerHTML = usuarios.map(u => {
-      const rolColor = u.rol === 'admin' ? '#f87171' : '#aaa';
-      return `
-      <div class="tabla-card" style="margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-          <div>
-            <div style="font-size:15px;font-weight:700;">${u.nombre}</div>
-            <div style="font-size:12px;color:#555;margin-top:2px;">${u.email}</div>
-            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-              <span style="font-size:11px;font-weight:600;color:${rolColor};background:#1a1a1a;padding:2px 8px;border-radius:8px;">${u.rol}</span>
-              ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
-              ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
-              ${u.puede_abastecer ? `<span style="font-size:11px;font-weight:600;color:#fed7aa;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
+    const _NOMBRES_BOD = {
+      'NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación',
+      'FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal',
+      'FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito',
+    };
+    const grupos = {};
+    usuarios.forEach(u => {
+      const clave = u.bodega_siesa_id || '_CD';
+      if (!grupos[clave]) grupos[clave] = [];
+      grupos[clave].push(u);
+    });
+    const ordenGrupos = ['_CD', ...Object.keys(_NOMBRES_BOD)];
+    let html = '';
+    for (const clave of ordenGrupos) {
+      const lista = grupos[clave];
+      if (!lista || !lista.length) continue;
+      const titulo = clave === '_CD' ? '🏭 Centro de Distribución (NB1)' : `🏪 ${_NOMBRES_BOD[clave] || clave} (${clave})`;
+      html += `<div style="font-size:13px;font-weight:700;color:var(--tx2);padding:10px 0 6px;border-bottom:1px solid var(--brd);margin-bottom:8px;margin-top:${clave === '_CD' ? '0' : '16px'};">${titulo} · ${lista.length}</div>`;
+      html += lista.map(u => {
+        const rolColor = u.rol === 'admin' ? '#f87171' : '#aaa';
+        return `
+        <div class="tabla-card" style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div style="font-size:15px;font-weight:700;">${u.nombre}</div>
+              <div style="font-size:12px;color:#555;margin-top:2px;">${u.email}</div>
+              <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                <span style="font-size:11px;font-weight:600;color:${rolColor};background:#1a1a1a;padding:2px 8px;border-radius:8px;">${u.rol}</span>
+                ${u.puede_picar ? `<span style="font-size:11px;font-weight:600;color:#60a5fa;background:#1e3a5f;padding:2px 8px;border-radius:8px;">Picker</span>` : ''}
+                ${u.puede_empacar ? `<span style="font-size:11px;font-weight:600;color:#c084fc;background:#1a0a2e;padding:2px 8px;border-radius:8px;">Empacador</span>` : ''}
+                ${u.puede_abastecer ? `<span style="font-size:11px;font-weight:600;color:#fed7aa;background:#7c2d12;padding:2px 8px;border-radius:8px;">Abastecedor</span>` : ''}
+              </div>
             </div>
+            <button onclick="editarUsuario(${u.id})"
+              style="background:#222;border:1px solid #333;color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;flex-shrink:0;">
+              Editar
+            </button>
           </div>
-          <button onclick="editarUsuario(${u.id})"
-            style="background:#222;border:1px solid #333;color:#fff;padding:6px 12px;border-radius:8px;font-size:12px;cursor:pointer;flex-shrink:0;">
-            Editar
-          </button>
-        </div>
-      </div>`;
-    }).join('');
+        </div>`;
+      }).join('');
+    }
+    el.innerHTML = html;
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando usuarios</div>';
   }
