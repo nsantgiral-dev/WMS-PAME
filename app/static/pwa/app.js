@@ -9022,45 +9022,37 @@ async function tiendaOCProcesarScan(codigo) {
   if (!_TIENDA_OC_RECEPCION) return;
   vibrar(); flash();
 
-  try {
-    const scan = await get('/api/empaques/scan/' + encodeURIComponent(codigo) +
-      '?almacen_id=' + (_TIENDA_OC_RECEPCION.almacen_id || ''));
+  const items = _TIENDA_OC_RECEPCION.items || [];
 
-    if (scan.tipo === 'GS1_AMBIGUO') {
-      alerta('Código ambiguo — usa búsqueda manual', 'advertencia');
-      return;
-    }
+  // 1. Match directo contra items de la OC (por codigo o codigo_siesa)
+  let item = items.find(i =>
+    i.producto_codigo === codigo ||
+    (i.producto_codigo_siesa && i.producto_codigo_siesa === codigo)
+  );
 
-    if (scan.tipo === 'NO_ENCONTRADO') {
+  // 2. Si no hay match directo, resolver via API (código de barras)
+  if (!item) {
+    try {
       const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
-      if (prod.error || !prod.producto_id) {
-        alerta('Código no reconocido: ' + codigo, 'error');
-        beepError();
-        return;
+      if (prod && prod.producto_id) {
+        item = items.find(i => i.producto_id === prod.producto_id);
+        if (!item) {
+          // Producto existe pero no está en la OC — puede ser bonificación
+          await _tiendaOCRegistrarScan(prod.producto_id, 1, prod.es_empaque || false, false);
+          if (prod.es_empaque && prod.factor_conversion > 1) alerta(`Empaque → +${prod.factor_conversion} UND`, 'info');
+          return;
+        }
       }
-      const esEmp = prod.es_empaque || false;
-      await _tiendaOCRegistrarScan(prod.producto_id, 1, esEmp, false);
-      if (esEmp && prod.factor_conversion > 1) alerta(`Empaque → +${prod.factor_conversion} UND`, 'info');
-      return;
-    }
+    } catch (_) { /* continúa con item=undefined */ }
+  }
 
-    const productoId = scan.producto ? scan.producto.id : null;
-    if (!productoId) { alerta('Producto no identificado', 'error'); return; }
+  if (!item) {
+    beepError();
+    alerta('Código no reconocido: ' + codigo, 'error');
+    return;
+  }
 
-    const factor = scan.factor || 1;
-    const esEmpaqueScan = factor > 1;
-    const unidad = scan.empaque ? scan.empaque.unidad_medida : 'UND';
-
-    if (scan.tipo === 'LPN') {
-      await _tiendaOCRegistrarScan(productoId, scan.lpn.cantidad_actual, false, false);
-      alerta(`LPN ${codigo} → +${scan.lpn.cantidad_actual} UND`, 'exito');
-      return;
-    }
-
-    await _tiendaOCRegistrarScan(productoId, 1, esEmpaqueScan, false);
-    if (esEmpaqueScan) alerta(`${unidad} escaneada → +${factor} UND`, 'info');
-
-  } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
+  await _tiendaOCRegistrarScan(item.producto_id, 1, false, false);
 }
 
 async function _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, esBonificacion) {
@@ -9171,18 +9163,9 @@ function tiendaOCModalObsequio() {
 async function _tiendaOCEscanearBono(codigo) {
   vibrar(); flash();
   try {
-    const scan = await get('/api/empaques/scan/' + encodeURIComponent(codigo) +
-      '?almacen_id=' + (_TIENDA_OC_RECEPCION.almacen_id || ''));
-    let productoId;
-    if (scan.tipo === 'NO_ENCONTRADO') {
-      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
-      if (prod.error || !prod.producto_id) { alerta('Código no reconocido', 'error'); return; }
-      productoId = prod.producto_id;
-    } else {
-      productoId = scan.producto ? scan.producto.id : null;
-      if (!productoId) { alerta('Producto no identificado', 'error'); return; }
-    }
-    await _tiendaOCRegistrarScan(productoId, 1, false, true);
+    const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+    if (prod.error || !prod.producto_id) { alerta('Código no reconocido', 'error'); beepError(); return; }
+    await _tiendaOCRegistrarScan(prod.producto_id, 1, false, true);
   } catch (e) { beepError(); alerta('Error al escanear bonificación', 'error'); }
 }
 
