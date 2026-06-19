@@ -443,6 +443,8 @@ class RecepcionService:
             consec = recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa
             resultado_oc = connekta.get_ordenes_compra_aprobadas(consec=consec)
             rows_oc = resultado_oc.get('detalle', {}).get('Table', [])
+            if recepcion.co_oc_siesa and rows_oc:
+                rows_oc = [r for r in rows_oc if r.get('f420_id_co', '').strip() == recepcion.co_oc_siesa]
             if not rows_oc:
                 logger.warning(f'[RECEPCION] OC {consec} devolvió Table vacía — sin datos de bodega/UOM')
             header_leido = False
