@@ -1966,7 +1966,11 @@
     <div id="tienda-panel-recibir" style="display:none;">
       <!-- Vista: lista de traslados pendientes -->
       <div id="tienda-recibir-lista-view" style="padding:14px;">
-        <div style="font-size:13px;color:#666;margin-bottom:12px;">Traslados que llegaron — contá producto por producto antes de confirmar</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <div style="font-size:13px;color:#666;">Traslados que llegaron — contá producto por producto antes de confirmar</div>
+          <button onclick="tiendaCargarRecibir()" title="Actualizar"
+            style="padding:8px 12px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0;line-height:1;">↻</button>
+        </div>
         <div id="tienda-lista-recibir">
           <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
         </div>
@@ -1979,6 +1983,10 @@
     <div id="tienda-panel-recibir-oc" style="display:none;">
       <!-- Vista: lista de OCs pendientes -->
       <div id="tienda-oc-lista-view" style="padding:14px;">
+        <div style="display:flex;justify-content:flex-end;margin-bottom:10px;">
+          <button onclick="tiendaOCCargar()" title="Actualizar OCs"
+            style="padding:8px 12px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:18px;cursor:pointer;line-height:1;">↻</button>
+        </div>
         <div id="tienda-oc-lista">
           <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
         </div>
