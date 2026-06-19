@@ -44,12 +44,22 @@ def _validar_recepcion_tienda(recepcion_id, usuario):
 @jwt_required()
 def listar_ocs():
     """Lista OCs pendientes de Siesa filtradas por la bodega/CO de la tienda."""
+    from app.models.usuario import Usuario as _U
+    try:
+        _uid = int(get_jwt_identity())
+        _usr = _U.query.get(_uid)
+        logger.info(
+            f'[TIENDA-OC] GET / — uid={_uid} rol={_usr.rol if _usr else "?"} '
+            f'co={_usr.siesa_co_id!r if _usr else "?"} bodega={_usr.bodega_siesa_id!r if _usr else "?"}'
+        )
+    except Exception:
+        pass
+
     u = _get_tienda_user()
     if not u:
         return jsonify({'error': 'Sin permiso — se requiere rol tienda con bodega configurada'}), 403
 
     try:
-        logger.info(f'[TIENDA-OC] GET / — user={u.id} co={u.siesa_co_id!r} bodega={u.bodega_siesa_id!r}')
         resultado = TiendaOCService.listar_ocs(u.siesa_co_id, u.bodega_siesa_id)
         return jsonify(resultado), 200
     except Exception as e:
