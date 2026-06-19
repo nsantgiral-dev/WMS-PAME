@@ -8675,21 +8675,26 @@ function _tiendaRenderItemsPickingTraslado(items) {
 async function tiendaScanTraslado(codigo) {
   if (!_TIENDA_TRASLADO_ACTIVO) return;
   const items = _TIENDA_TRASLADO_ACTIVO.items || [];
+  let item = null;
+  let delta = 1;
 
-  // 1. Match directo por codigo_siesa o producto_codigo
-  let item = items.find(i =>
-    i.producto_codigo_siesa === codigo ||
-    i.producto_codigo === codigo
-  );
-
-  // 2. Si no hay match directo, resolver via API (codigo de barras del producto)
-  if (!item) {
-    try {
-      const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
-      if (prod && prod.producto_id) {
-        item = items.find(i => i.producto_id === prod.producto_id);
+  // Resolver siempre via API para detectar empaques (factor_conversion)
+  try {
+    const prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
+    if (prod && prod.producto_id) {
+      item = items.find(i => i.producto_id === prod.producto_id);
+      if (prod.es_empaque && prod.factor_conversion > 1) {
+        delta = prod.factor_conversion;
       }
-    } catch (_) { /* continúa con item=undefined */ }
+    }
+  } catch (_) { /* API falló — intentar match directo */ }
+
+  // Fallback: match directo por codigo (sin detección de empaque)
+  if (!item) {
+    item = items.find(i =>
+      i.producto_codigo_siesa === codigo ||
+      i.producto_codigo === codigo
+    );
   }
 
   if (!item) {
@@ -8697,7 +8702,8 @@ async function tiendaScanTraslado(codigo) {
     return;
   }
 
-  tiendaContarItem(item.producto_id, 1);
+  tiendaContarItem(item.producto_id, delta);
+  if (delta > 1) alerta(`Empaque escaneado → +${delta} UND`, 'info');
   // Re-enfocar el input para el próximo escaneo
   const inp = document.getElementById('tienda-scan-input');
   if (inp) inp.focus();
