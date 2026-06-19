@@ -83,7 +83,8 @@ class TiendaOCService:
 
         numeros_oc = list(ordenes.keys())
         recepciones_wms = RecepcionMercancia.query.filter(
-            RecepcionMercancia.numero_oc_siesa.in_(numeros_oc)
+            RecepcionMercancia.numero_oc_siesa.in_(numeros_oc),
+            RecepcionMercancia.co_oc_siesa == co,
         ).filter(RecepcionMercancia.estado.notin_(['CANCELADA'])).all()
         estado_por_oc = {r.numero_oc_siesa: r.estado for r in recepciones_wms}
         id_por_oc = {r.numero_oc_siesa: r.id for r in recepciones_wms}
@@ -166,8 +167,10 @@ class TiendaOCService:
                     f'generar entradas de inventario.'
                 )
 
+        co = oc_data.get('co', usuario.siesa_co_id or '')
         existente = RecepcionMercancia.query.filter_by(
-            numero_oc_siesa=oc_data['numero_oc']
+            numero_oc_siesa=oc_data['numero_oc'],
+            co_oc_siesa=co,
         ).filter(RecepcionMercancia.estado.notin_(['CANCELADA'])).first()
 
         if existente:

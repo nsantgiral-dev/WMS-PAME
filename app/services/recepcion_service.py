@@ -37,8 +37,11 @@ class RecepcionService:
         items: [{'producto_id', 'cantidad_ordenada', 'tolerancia_exceso_pct'}]
         Solo acepta OCs en estado Aprobado — validar antes de llamar este método.
         """
+        filtro = {'numero_oc_siesa': numero_oc_siesa}
+        if co_oc_siesa:
+            filtro['co_oc_siesa'] = co_oc_siesa
         existente = RecepcionMercancia.query.filter_by(
-            numero_oc_siesa=numero_oc_siesa
+            **filtro
         ).filter(RecepcionMercancia.estado.notin_(['CANCELADA'])).first()
 
         if existente:
