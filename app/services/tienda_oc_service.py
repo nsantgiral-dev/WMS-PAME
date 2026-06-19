@@ -36,15 +36,11 @@ class TiendaOCService:
             return resultado
 
         items_raw = resultado.get('detalle', {}).get('Table', [])
-        cos_api = set(r.get('f420_id_co', '').strip() for r in items_raw[:100])
-        bods_api = set(r.get('f150_id', '').strip() for r in items_raw[:100])
-        logger.info(f'[TIENDA-OC] API total={len(items_raw)} COs={cos_api} Bodegas={bods_api} filtro_co={co} filtro_bod={bodega}')
         items_raw = [
             r for r in items_raw
             if r.get('f420_id_co', '').strip() == co
             and r.get('f150_id', '').strip() == bodega
         ]
-        logger.info(f'[TIENDA-OC] Post-filtro={len(items_raw)}')
 
         ordenes = {}
         for row in items_raw:
@@ -96,7 +92,7 @@ class TiendaOCService:
             oc['recepcion_wms_estado'] = estado_por_oc.get(numero_oc)
             oc['recepcion_wms_id'] = id_por_oc.get(numero_oc)
 
-        lista = list(ordenes.values())
+        lista = sorted(ordenes.values(), key=lambda o: int(o.get('consec_docto') or 0), reverse=True)
         return {'ordenes': lista, 'total': len(lista)}
 
     @staticmethod
