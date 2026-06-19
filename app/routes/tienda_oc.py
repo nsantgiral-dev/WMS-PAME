@@ -64,6 +64,7 @@ def listar_ocs():
         return jsonify({'error': 'Sin permiso — se requiere rol tienda con bodega configurada'}), 403
 
     try:
+        logger.info(f'[TIENDA-OC] GET / FINAL — uid={u.id} co={u.siesa_co_id} bodega={u.bodega_siesa_id}')
         resultado = TiendaOCService.listar_ocs(u.siesa_co_id, u.bodega_siesa_id)
         return jsonify(resultado), 200
     except Exception as e:
