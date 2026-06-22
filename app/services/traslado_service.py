@@ -19,6 +19,7 @@ from datetime import datetime
 from app.extensions import db
 from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado, EstadoTraslado
 from app.models.producto import Producto
+from app.models.producto_empaque import ProductoEmpaque
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
@@ -34,6 +35,21 @@ logger = logging.getLogger(__name__)
 
 # Bodega origen por defecto (bodega principal WMS)
 BODEGA_ORIGEN_DEFAULT = connekta.bodega  # NB1
+
+
+def _resolver_empaque(prod):
+    """Retorna (unidad_empaque, factor) desde Producto o ProductoEmpaque."""
+    if prod and prod.unidad_empaque and (prod.factor_conversion or 1) > 1:
+        return prod.unidad_empaque, prod.factor_conversion
+    if prod:
+        emp = ProductoEmpaque.query.filter(
+            ProductoEmpaque.producto_id == prod.id,
+            ProductoEmpaque.factor_conversion > 1,
+            ProductoEmpaque.activo.is_(True),
+        ).order_by(ProductoEmpaque.factor_conversion).first()
+        if emp:
+            return emp.unidad_medida, emp.factor_conversion
+    return '', 1
 
 
 class TrasladoService:
@@ -477,14 +493,15 @@ class TrasladoService:
             if not cantidad or cantidad <= 0:
                 continue
             prod = prods_map.get(item.producto_id)
+            uom_emp, factor_emp = _resolver_empaque(prod)
             items_payload.append({
                 'codigo_siesa': item.producto_codigo_siesa,
                 'codigo': prod.codigo if prod else '',
                 'cantidad': cantidad,
                 'unidad_medida': prod.unidad_medida if prod else '',
                 'unidad_negocio_id': prod.unidad_negocio_id if prod else '',
-                'factor_empaque': (prod.factor_conversion or 1) if prod and prod.unidad_empaque else 1,
-                'unidad_empaque': prod.unidad_empaque if prod and prod.unidad_empaque and (prod.factor_conversion or 1) > 1 else '',
+                'factor_empaque': factor_emp,
+                'unidad_empaque': uom_emp,
             })
 
         if not items_payload:
@@ -807,23 +824,19 @@ class TrasladoService:
             # Pre-cargar productos para evitar N+1
             _prod_ids = [i.producto_id for i in s.items if i.producto_id]
             _prods = {p.id: p for p in Producto.query.filter(Producto.id.in_(_prod_ids)).all()} if _prod_ids else {}
-            items_payload = [
-                {
+            items_payload = []
+            for item in s.items:
+                _p = _prods.get(item.producto_id)
+                _uom_emp, _factor_emp = _resolver_empaque(_p)
+                items_payload.append({
                     'codigo_siesa': item.producto_codigo_siesa,
-                    'codigo': _prods[item.producto_id].codigo if item.producto_id in _prods else '',
+                    'codigo': _p.codigo if _p else '',
                     'cantidad': item.cantidad_recibida,
-                    'unidad_medida': _prods[item.producto_id].unidad_medida if item.producto_id in _prods else '',
-                    'unidad_negocio_id': _prods[item.producto_id].unidad_negocio_id if item.producto_id in _prods else '',
-                    'factor_empaque': (_prods[item.producto_id].factor_conversion or 1)
-                        if item.producto_id in _prods and _prods[item.producto_id].unidad_empaque
-                        else 1,
-                    'unidad_empaque': _prods[item.producto_id].unidad_empaque
-                        if item.producto_id in _prods and _prods[item.producto_id].unidad_empaque
-                        and (_prods[item.producto_id].factor_conversion or 1) > 1
-                        else '',
-                }
-                for item in s.items
-            ]
+                    'unidad_medida': _p.unidad_medida if _p else '',
+                    'unidad_negocio_id': _p.unidad_negocio_id if _p else '',
+                    'factor_empaque': _factor_emp,
+                    'unidad_empaque': _uom_emp,
+                })
             try:
                 res = siesa_traslado.registrar_entrada(
                     bodega_transito=s.bodega_transito_siesa or siesa_traslado.bodega_transito,
