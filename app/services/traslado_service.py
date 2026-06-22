@@ -40,6 +40,8 @@ BODEGA_ORIGEN_DEFAULT = connekta.bodega  # NB1
 def _resolver_empaque(prod):
     """Retorna (unidad_empaque, factor) desde Producto o ProductoEmpaque."""
     if prod and prod.unidad_empaque and (prod.factor_conversion or 1) > 1:
+        logger.info('[EMPAQUE] %s resuelto desde Producto: uom=%s factor=%s',
+                     prod.codigo_siesa, prod.unidad_empaque, prod.factor_conversion)
         return prod.unidad_empaque, prod.factor_conversion
     if prod:
         emp = ProductoEmpaque.query.filter(
@@ -48,7 +50,11 @@ def _resolver_empaque(prod):
             ProductoEmpaque.activo.is_(True),
         ).order_by(ProductoEmpaque.factor_conversion).first()
         if emp:
+            logger.info('[EMPAQUE] %s resuelto desde ProductoEmpaque: uom=%s factor=%s',
+                         prod.codigo_siesa, emp.unidad_medida, emp.factor_conversion)
             return emp.unidad_medida, emp.factor_conversion
+        logger.warning('[EMPAQUE] %s (id=%s) sin empaque en Producto ni ProductoEmpaque',
+                        prod.codigo_siesa, prod.id)
     return '', 1
 
 
