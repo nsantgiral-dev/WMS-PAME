@@ -2378,9 +2378,9 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # Liquida el saldo de tránsito del STS. Debe ser el origen real
-                    # (NS1). Fallback a self.bodega, nunca a bodega_transito (TRA1).
-                    'f470_id_bodega': bodega_origen or self.bodega,
+                    # ETS = entrada al destino. f470_id_bodega debe ser la bodega
+                    # que recibe (NS1/PC1), no la que despachó (NC1/NB1).
+                    'f470_id_bodega': bodega_destino,
                     # Naturaleza 1 = Entrada. Sin esto Siesa asume Salida (2) y
                     # busca stock físico en TRA1 → "sin cantidad disponible".
                     'f470_ind_naturaleza': 1,
