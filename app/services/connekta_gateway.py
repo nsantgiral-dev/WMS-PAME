@@ -2141,6 +2141,17 @@ class ConnektaGateway:
                     f'Item sin codigo_siesa en transferencia_transito_salida: {_item.get("codigo") or _item}. '
                     'Nunca usar código interno WMS como fallback hacia Siesa.'
                 )
+            logger.info(
+                '[CONNEKTA] STS item debug: codigo=%s cant=%s factor=%s uom_empaque=%s → uom=%s cant_base=%s',
+                _item.get('codigo_siesa'),
+                _item.get('cantidad'),
+                _item.get('factor_empaque', 1),
+                _item.get('unidad_empaque', ''),
+                _item.get('unidad_empaque') or _item.get('unidad_medida') or 'UND',
+                round(float(abs(_item.get('cantidad', 0))) / _item.get('factor_empaque', 1), 4)
+                if _item.get('factor_empaque', 1) > 1
+                else round(float(abs(_item.get('cantidad', 0))), 4),
+            )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         # CO del documento debe coincidir con el CO de la bodega de salida (46089).
         # _co_de_bodega resuelve desde Almacen.centro_op_siesa: NB1→003, NS1→001, etc.
