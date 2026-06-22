@@ -199,4 +199,29 @@ def create_app():
         except Exception as e:
             logging.getLogger(__name__).error(f'[INV-SIESA] Refresh periódico no se pudo iniciar: {e}')
 
+    # ── ONE-SHOT: ajustar stock WMS para prueba empaque (ELIMINAR DESPUÉS) ──
+    with app.app_context():
+        try:
+            from app.models.producto import Producto
+            from app.models.ubicacion import Ubicacion
+            from app.models.inventario import UbicacionProducto
+            _prod = Producto.query.filter_by(codigo_siesa='PAPELSP6741').first()
+            _ubic = Ubicacion.query.filter_by(codigo='NS1-TIENDA').first()
+            if _prod and _ubic:
+                _reg = UbicacionProducto.query.filter_by(
+                    producto_id=_prod.id, ubicacion_id=_ubic.id
+                ).first()
+                _antes = _reg.cantidad if _reg else 0
+                if _antes < 12:
+                    if not _reg:
+                        _reg = UbicacionProducto(producto_id=_prod.id, ubicacion_id=_ubic.id, cantidad=12)
+                        db.session.add(_reg)
+                    else:
+                        _reg.cantidad = 12
+                    db.session.commit()
+                    logging.getLogger(__name__).info(
+                        '[ONE-SHOT] PAPELSP6741 NS1-TIENDA stock %s → 12', _antes)
+        except Exception as _e:
+            logging.getLogger(__name__).warning('[ONE-SHOT] falló: %s', _e)
+
     return app
