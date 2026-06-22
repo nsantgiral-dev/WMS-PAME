@@ -2390,10 +2390,10 @@ class ConnektaGateway:
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
-                    'f470_id_unidad_medida': item.get('unidad_empaque') or item.get('unidad_medida') or self.uom_default,
-                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))) / item.get('factor_empaque', 1), 4)
-                        if item.get('factor_empaque', 1) > 1
-                        else round(float(abs(item.get('cantidad', 0))), 4),
+                    # ETS siempre en UND — STS envía PQ pero ETS recibe en
+                    # unidad base. La RESMA funciona en UND; empaque igual.
+                    'f470_id_unidad_medida': item.get('unidad_medida') or self.uom_default,
+                    'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
