@@ -140,6 +140,7 @@ class TrasladoPackingCloser(IPackingCloser):
 
     def _construir_items_packing(self, tarea: TareaPacking, solicitud) -> list:
         from app.models.picking import TareaPicking
+        from app.services.traslado_service import _resolver_empaque
         tareas_picking = TareaPicking.query.filter_by(
             referencia_documento=solicitud.codigo,
             tipo_documento='TRASLADO',
@@ -156,11 +157,14 @@ class TrasladoPackingCloser(IPackingCloser):
             cantidad = i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada
             if not cantidad or cantidad <= 0:
                 continue
+            uom_emp, factor_emp = _resolver_empaque(i.producto)
             items.append({
                 'codigo_siesa':     i.producto.codigo_siesa,
                 'cantidad':         cantidad,
                 'cantidad_packing': cantidad,
                 'unidad_medida':    i.producto.unidad_medida or '',
+                'unidad_empaque':   uom_emp,
+                'factor_empaque':   factor_emp,
                 'ubicacion_codigo': ubicacion_por_producto.get(i.producto_id),
             })
         return items
