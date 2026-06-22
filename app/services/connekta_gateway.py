@@ -2378,12 +2378,11 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # ETS = entrada al destino. f470_id_bodega debe ser la bodega
-                    # que recibe (NS1/PC1), no la que despachó (NC1/NB1).
+                    # ETS = entrada al destino (NS1/PC1). Siesa suma stock aquí.
                     'f470_id_bodega': bodega_destino,
-                    # Naturaleza 1 = Entrada. Sin esto Siesa asume Salida (2) y
-                    # busca stock físico en TRA1 → "sin cantidad disponible".
-                    'f470_ind_naturaleza': 1,
+                    # Naturaleza 2 = Crédito/Entrada. Con 1 Siesa validaba stock
+                    # como si fuera salida — causaba "sin cantidad disponible".
+                    'f470_ind_naturaleza': 2,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
