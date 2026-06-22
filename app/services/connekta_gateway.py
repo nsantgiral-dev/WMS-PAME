@@ -2199,7 +2199,8 @@ class ConnektaGateway:
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': item.get('unidad_medida') or 'UND',
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
-                    'f470_cant_2': None,
+                    'f470_cant_2': round(float(abs(item.get('cantidad', 0))) / item.get('factor_empaque', 1), 4)
+                        if item.get('factor_empaque', 1) > 1 else None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
                     # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173076.
@@ -2380,7 +2381,8 @@ class ConnektaGateway:
                     'f470_id_proyecto': None,
                     'f470_id_unidad_medida': item.get('unidad_medida') or self.uom_default,
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))), 4),
-                    'f470_cant_2': None,
+                    'f470_cant_2': round(float(abs(item.get('cantidad', 0))) / item.get('factor_empaque', 1), 4)
+                        if item.get('factor_empaque', 1) > 1 else None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
                     # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173079
