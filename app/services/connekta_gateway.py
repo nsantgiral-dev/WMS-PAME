@@ -2378,10 +2378,11 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # Siesa valida stock en esta bodega. Usar bodega_origen (NB1)
-                    # porque es la que tiene stock. Con PQ resuelto, error 46035
-                    # original ya no aplica.
+                    # bodega_origen (NB1): liquida el saldo de tránsito del STS.
                     'f470_id_bodega': bodega_origen or self.bodega,
+                    # 1 = Entrada. Sin esto Siesa defaultea a 2 (Salida) y valida
+                    # stock como si fuera despacho → "sin cantidad disponible".
+                    'f470_ind_naturaleza': 1,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
