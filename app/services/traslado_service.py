@@ -484,6 +484,7 @@ class TrasladoService:
                 'unidad_medida': prod.unidad_medida if prod else '',
                 'unidad_negocio_id': prod.unidad_negocio_id if prod else '',
                 'factor_empaque': (prod.factor_conversion or 1) if prod and prod.unidad_empaque else 1,
+                'unidad_empaque': prod.unidad_empaque if prod and prod.unidad_empaque and (prod.factor_conversion or 1) > 1 else '',
             })
 
         if not items_payload:
@@ -816,6 +817,10 @@ class TrasladoService:
                     'factor_empaque': (_prods[item.producto_id].factor_conversion or 1)
                         if item.producto_id in _prods and _prods[item.producto_id].unidad_empaque
                         else 1,
+                    'unidad_empaque': _prods[item.producto_id].unidad_empaque
+                        if item.producto_id in _prods and _prods[item.producto_id].unidad_empaque
+                        and (_prods[item.producto_id].factor_conversion or 1) > 1
+                        else '',
                 }
                 for item in s.items
             ]
