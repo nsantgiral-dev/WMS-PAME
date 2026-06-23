@@ -2378,9 +2378,9 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # ETS-3 exitoso usa bodega_destino (NS1) — donde entran los
-                    # bienes. Con STS huérfanos anulados, disponible debe estar libre.
-                    'f470_id_bodega': bodega_destino,
+                    # bodega_origen (NB1): liquida el saldo de tránsito que nació
+                    # en NB1. Con NS1 Siesa no encuentra el tránsito y valida stock.
+                    'f470_id_bodega': bodega_origen or self.bodega,
                     # 1 = Entrada. Sin esto Siesa defaultea a 2 (Salida) y valida
                     # stock como si fuera despacho → "sin cantidad disponible".
                     'f470_ind_naturaleza': 1,
