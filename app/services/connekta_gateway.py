@@ -1482,9 +1482,6 @@ class ConnektaGateway:
                 'nada que enviar a Siesa. Verificar recepción antes de confirmar.'
             )
 
-        logger.info('[CONNEKTA] EntradaOC docto_referencia=%r proveedor=%s',
-                    num_docto_referencia, proveedor_id)
-
         payload = {
             'Inicial': [
                 {'F_CIA': cia}
