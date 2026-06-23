@@ -3179,7 +3179,9 @@ function recepContarItem(productoId, delta) {
   if (!_REC_TRASLADO_ACTIVO) return;
   const item = (_REC_TRASLADO_ACTIVO.items || []).find(i => i.producto_id === productoId);
   if (!item) return;
-  _REC_CONTEOS[productoId] = Math.max(0, (_REC_CONTEOS[productoId] || 0) + delta);
+  const esperado = item.cantidad_enviada || item.cantidad_aprobada || item.cantidad_solicitada || 0;
+  const nuevo = (_REC_CONTEOS[productoId] || 0) + delta;
+  _REC_CONTEOS[productoId] = Math.max(0, Math.min(nuevo, esperado));
   const itemsEl = document.getElementById('rec-tras-items');
   if (itemsEl) itemsEl.innerHTML = _recepRenderItemsTraslado(_REC_TRASLADO_ACTIVO.items || []);
   const items = _REC_TRASLADO_ACTIVO.items || [];
@@ -3213,7 +3215,12 @@ async function recepConfirmarTraslado() {
     const r = await fetch(API + `/api/traslados/${s.id}/recibir`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+      body: JSON.stringify({
+        items_recibidos: items.map(i => ({
+          id: i.id,
+          cantidad_recibida: _REC_CONTEOS[i.producto_id] || 0
+        }))
+      })
     });
     const d = await r.json();
     if (r.ok) {
