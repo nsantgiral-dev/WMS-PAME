@@ -2419,6 +2419,17 @@ class ConnektaGateway:
             'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
+        for _dbg_item in items:
+            logger.info(
+                '[CONNEKTA] ETS item debug: codigo=%s cant=%s factor=%s uom_emp=%s → uom=%s cant_base=%s bodega_mov=%s',
+                _dbg_item.get('codigo_siesa'), _dbg_item.get('cantidad'),
+                _dbg_item.get('factor_empaque', 1), _dbg_item.get('unidad_empaque', ''),
+                _dbg_item.get('unidad_empaque') or _dbg_item.get('unidad_medida') or self.uom_default,
+                round(float(abs(_dbg_item.get('cantidad', 0))) / _dbg_item.get('factor_empaque', 1), 4)
+                    if _dbg_item.get('factor_empaque', 1) > 1
+                    else round(float(abs(_dbg_item.get('cantidad', 0))), 4),
+                bodega_destino,
+            )
         logger.info(f'[CONNEKTA] Tránsito entrada {codigo_solicitud} '
                     f'{bodega_transito}→{bodega_destino}')
         _ets_din = not self.nombre_conector_transito_entrada.startswith('API_v1_')
