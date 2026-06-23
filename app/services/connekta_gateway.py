@@ -2383,12 +2383,9 @@ class ConnektaGateway:
                     # bodega_origen (NB1): liquida el saldo de tránsito que nació
                     # en NB1. Con NS1 Siesa no encuentra el tránsito y valida stock.
                     'f470_id_bodega': bodega_origen or self.bodega,
-                    # 1 = Entrada. Sin esto Siesa defaultea a 2 (Salida) y valida
-                    # stock como si fuera despacho → "sin cantidad disponible".
-                    'f470_ind_naturaleza': 1,
-                    'f470_id_ubicacion_aux': None,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
+                    'f470_id_concepto': 605,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
