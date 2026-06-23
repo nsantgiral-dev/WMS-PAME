@@ -2382,9 +2382,9 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # bodega_origen (NB1): liquida el saldo de tránsito que nació
-                    # en NB1. Con NS1 Siesa no encuentra el tránsito y valida stock.
-                    'f470_id_bodega': bodega_origen or self.bodega,
+                    # bodega_destino (NS1): el movimiento de entrada es EN la bodega
+                    # que recibe. Con NB1 Siesa restaba de NS1 en vez de sumar.
+                    'f470_id_bodega': bodega_destino,
                     'f470_ind_naturaleza': 1,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
