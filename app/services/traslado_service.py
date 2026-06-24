@@ -834,10 +834,14 @@ class TrasladoService:
             for item in s.items:
                 _p = _prods.get(item.producto_id)
                 _uom_emp, _factor_emp = _resolver_empaque(_p)
+                _cant = (item.cantidad_recibida
+                         or item.cantidad_enviada
+                         or item.cantidad_aprobada
+                         or item.cantidad_solicitada)
                 items_payload.append({
                     'codigo_siesa': item.producto_codigo_siesa,
                     'codigo': _p.codigo if _p else '',
-                    'cantidad': item.cantidad_recibida,
+                    'cantidad': _cant,
                     'unidad_medida': _p.unidad_medida if _p else '',
                     'unidad_negocio_id': _p.unidad_negocio_id if _p else '',
                     'factor_empaque': _factor_emp,
