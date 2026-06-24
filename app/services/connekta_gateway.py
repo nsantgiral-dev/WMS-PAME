@@ -2124,11 +2124,9 @@ class ConnektaGateway:
                                        bodega_destino: str = None):
         """
         173076 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoSalida
-        Sale de bodega_origen → queda en bodega_transito (limbo contable).
-        bodega_destino (NC1): se usa como f450_id_bodega_entrada; el tránsito es
-        propiedad de la Clase 65, no requiere bodega física. El ETS espeja este
-        campo para la validación 62485 y NC1 tiene stock físico (TRA1 no tiene).
-        NO lleva f350_id_co_base/f350_id_tipo_docto_base — esas son solo de 173079.
+        Conector estándar (v3) — mismo motor que el ETS 173079.
+        f450_id_bodega_entrada = bodega_destino: validación 62485 del ETS
+        exige que ambos coincidan.
         """
         if not self.tipo_docto_transito_salida:
             raise ValueError(
@@ -2172,7 +2170,7 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
-                    'f450_id_bodega_entrada': bodega_transito,
+                    'f450_id_bodega_entrada': bodega_destino or bodega_transito,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     'f462_id_vehiculo': self.vehiculo_traslado or None,
                     'f462_id_vehículo': self.vehiculo_traslado or None,
@@ -2198,16 +2196,11 @@ class ConnektaGateway:
                     'f470_nro_registro': idx + 1,
                     'f470_id_bodega': bodega_origen,
                     'f470_id_ubicacion_aux': None,
-                    # El template UnoEE tiene estos campos con acento (ó) — enviar ambas
-                    # variantes para que Connekta v3.1 no los marque como "no enviados".
-                    'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_sts,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
-                    # Empaque: si el ítem tiene PQ, enviar PQ/1 en vez de UND/10.
-                    # Simetría STS/ETS: ambos deben usar la misma unidad.
                     'f470_id_unidad_medida': item.get('unidad_empaque') or item.get('unidad_medida') or 'UND',
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))) / item.get('factor_empaque', 1), 4)
                         if item.get('factor_empaque', 1) > 1
@@ -2215,11 +2208,8 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
-                    # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173076.
-                    # Si difiere, Connekta trunca el registro en pos 487 y Siesa rechaza.
                     'f470_desc_varible': None,
                     'f470_id_ubicacion_aux_ent': None,
-                    'f470_id_ubicación_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
                     'f470_referencia_item': item.get('codigo_siesa'),
@@ -2375,7 +2365,6 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
-                    'f470_ind_naturaleza': 2,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
