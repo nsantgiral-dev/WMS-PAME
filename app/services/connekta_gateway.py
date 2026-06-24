@@ -2377,13 +2377,12 @@ class ConnektaGateway:
                     # salida del documento" → f450_id_bodega_salida.
                     'f470_id_bodega': bodega_origen or self.bodega,
                     # f470_ind_naturaleza y f470_id_concepto son FIJO en 247339.
-                    'f470_id_ubicación_aux': None,
+                    'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
-                    # Simetría STS/ETS: ambos en la misma unidad (PQ si hay empaque).
                     'f470_id_unidad_medida': item.get('unidad_empaque') or item.get('unidad_medida') or self.uom_default,
                     'f470_cant_base': round(float(abs(item.get('cantidad', 0))) / item.get('factor_empaque', 1), 4)
                         if item.get('factor_empaque', 1) > 1
@@ -2391,9 +2390,8 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
-                    # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173079
                     'f470_desc_varible': None,
-                    'f470_id_ubicación_aux_ent': None,
+                    'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
                     'f470_referencia_item': item.get('codigo_siesa'),
