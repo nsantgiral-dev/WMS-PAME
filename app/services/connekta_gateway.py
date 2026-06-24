@@ -2290,18 +2290,12 @@ class ConnektaGateway:
                                         co_destino: str = None,
                                         bodega_origen: str = None):
         """
-        173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
+        247339 → WMS_PAME_ETS_v2 (basado en template 09_Wms_Transferencia_Entrada_Transito)
         Confirma llegada: bodega_transito → bodega_destino.
 
-        ETS referencia el STS via f350_consec_docto_base. Siesa valida:
-          f450_id_bodega_salida = bodega_origen (NS1) == STS.bodega_salida.
-          f450_id_bodega_entrada = bodega_destino (NC1) — destino final; CO(NC1)==CO(doc).
-            No se usa TRA1 aquí: TRA1 es bodega lógica con 0 stock físico y
-            Siesa haría chequeo 46035 si la ponemos como bodega_entrada.
-          f350_id_co = _co_ent (CO de NC1) para satisfacer CO(bodega_entrada)==CO(doc).
-          f470_id_co = _co_ent — debe coincidir con f350_id_co.
-          f470_id_bodega = bodega_origen (NS1) — liquida el saldo de tránsito.
-          f470_ind_naturaleza = 1 (Entrada) — evita chequeo de stock salida.
+        El conector tiene FIJO: f350_id_clase_docto=66, f450_id_concepto=605,
+        f470_id_concepto=605. No se envían desde el payload.
+        f470_id_bodega = bodega_origen (== f450_id_bodega_salida per spec).
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2345,12 +2339,11 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': self.nit_empresa or None,
-                    'f350_id_clase_docto': 66,
+                    # f350_id_clase_docto=66 y f450_id_concepto=605 son FIJO
+                    # en el conector 247339 (WMS_PAME_ETS_v2) — no enviar.
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
-                    'f450_id_concepto': 605,
-                    # Siesa valida que ETS.bodega_salida == STS.bodega_salida (NS1)
                     'f450_id_bodega_salida': bodega_origen or self.bodega,
                     # NC1: destino final. CO(NC1)==CO(doc)==_co_ent. Sin stock check.
                     'f450_id_bodega_entrada': bodega_destino,
@@ -2360,7 +2353,6 @@ class ConnektaGateway:
                     'f350_id_tipo_docto_base': (self.tipo_docto_transito_salida or None) if consec_salida else None,
                     'f350_consec_docto_base': int(consec_salida) if consec_salida else 0,
                     'f462_id_vehiculo': self.vehiculo_traslado or None,
-                    'f462_id_vehículo': self.vehiculo_traslado or None,
                     'f462_id_tercero_transp': self.nit_transportador or None,
                     'f462_id_sucursal_transp': self.sucursal_transportador or None,
                     'f462_id_tercero_conductor': self.nit_transportador or None,
@@ -2377,18 +2369,16 @@ class ConnektaGateway:
             'Movimientos': [
                 {
                     'F_CIA': int(self.id_cia_siesa),
-                    # f470_id_co debe coincidir con f350_id_co (_co_ent=002).
                     'f470_id_co': _co_ent,
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # Spec 173079: "Si es transferencia debe ser igual a la Bodega
-                    # salida del documento" → f450_id_bodega_salida = bodega_origen.
+                    # Spec: "Si es transferencia debe ser igual a la Bodega
+                    # salida del documento" → f450_id_bodega_salida.
                     'f470_id_bodega': bodega_origen or self.bodega,
-                    'f470_ind_naturaleza': 1,
+                    # f470_ind_naturaleza y f470_id_concepto son FIJO en 247339.
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
-                    'f470_id_concepto': 605,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
@@ -2403,7 +2393,6 @@ class ConnektaGateway:
                     'f470_notas': None,
                     # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173079
                     'f470_desc_varible': None,
-                    'f470_id_ubicacion_aux_ent': None,
                     'f470_id_ubicación_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
@@ -2411,7 +2400,7 @@ class ConnektaGateway:
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
                     'f470_id_ext2_detalle': None,
-                    'f470_id_un_movto': self.unidad_negocio,  # SIESA_UNIDAD_NEGOCIO — obligatorio
+                    'f470_id_un_movto': self.unidad_negocio,
                     'f470_rowid_movto': 0,
                 }
                 for idx, item in enumerate(items)
@@ -2419,19 +2408,8 @@ class ConnektaGateway:
             'Final': [{'F_CIA': int(self.id_cia_siesa)}]
         }
 
-        for _dbg_item in items:
-            logger.info(
-                '[CONNEKTA] ETS item debug: codigo=%s cant=%s factor=%s uom_emp=%s → uom=%s cant_base=%s bodega_mov=%s',
-                _dbg_item.get('codigo_siesa'), _dbg_item.get('cantidad'),
-                _dbg_item.get('factor_empaque', 1), _dbg_item.get('unidad_empaque', ''),
-                _dbg_item.get('unidad_empaque') or _dbg_item.get('unidad_medida') or self.uom_default,
-                round(float(abs(_dbg_item.get('cantidad', 0))) / _dbg_item.get('factor_empaque', 1), 4)
-                    if _dbg_item.get('factor_empaque', 1) > 1
-                    else round(float(abs(_dbg_item.get('cantidad', 0))), 4),
-                bodega_origen or self.bodega,
-            )
         logger.info(f'[CONNEKTA] Tránsito entrada {codigo_solicitud} '
-                    f'{bodega_transito}→{bodega_destino} (f470_bodega={bodega_origen or self.bodega})')
+                    f'{bodega_transito}→{bodega_destino}')
         _ets_din = not self.nombre_conector_transito_entrada.startswith('API_v1_')
         return self._post(self.conector_transito_entrada,
                           self.nombre_conector_transito_entrada, payload,
