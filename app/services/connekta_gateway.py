@@ -2290,11 +2290,12 @@ class ConnektaGateway:
                                         co_destino: str = None,
                                         bodega_origen: str = None):
         """
-        247339 → WMS_PAME_ETS_v2 (basado en template 09_Wms_Transferencia_Entrada_Transito)
+        173079 → API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada
         Confirma llegada: bodega_transito → bodega_destino.
 
-        El conector tiene FIJO: f350_id_clase_docto=66, f450_id_concepto=605,
-        f470_id_concepto=605. No se envían desde el payload.
+        Conector estándar (v3) — único que ejecuta la lógica de liquidación
+        de tránsito de Clase 66. El registro plano debe medir exactamente
+        2700 bytes; todos los campos Dep van como None.
         f470_id_bodega = bodega_origen (== f450_id_bodega_salida per spec).
         """
         if not self.tipo_docto_transito_entrada:
@@ -2339,11 +2340,11 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': self.nit_empresa or None,
-                    # f350_id_clase_docto=66 y f450_id_concepto=605 son FIJO
-                    # en el conector 247339 (WMS_PAME_ETS_v2) — no enviar.
+                    'f350_id_clase_docto': 66,
                     'f350_ind_estado': 1,
-                    'f350_ind_impresion': 0,
+                    'f350_ind_impresión': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
+                    'f450_id_concepto': 605,
                     'f450_id_bodega_salida': bodega_origen or self.bodega,
                     # NC1: destino final. CO(NC1)==CO(doc)==_co_ent. Sin stock check.
                     'f450_id_bodega_entrada': bodega_destino,
@@ -2373,12 +2374,11 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # Clase 66 (Entrada Tránsito): el movimiento es ENTRADA en
-                    # bodega_destino. Con bodega_origen Siesa restaba de NS1.
-                    'f470_id_bodega': bodega_destino,
-                    # f470_ind_naturaleza y f470_id_concepto son FIJO en 247339.
-                    'f470_id_ubicacion_aux': None,
+                    # 173079 spec: "debe ser igual a la Bodega salida del documento"
+                    'f470_id_bodega': bodega_origen or self.bodega,
+                    'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
+                    'f470_id_concepto': 605,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
@@ -2391,7 +2391,9 @@ class ConnektaGateway:
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
                     'f470_desc_varible': None,
-                    'f470_id_ubicacion_aux_ent': None,
+                    'F_DESC_ITEM': None,
+                    'F_ID_UM_INVENTARIO': None,
+                    'f470_id_ubicación_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
                     'f470_referencia_item': item.get('codigo_siesa'),
