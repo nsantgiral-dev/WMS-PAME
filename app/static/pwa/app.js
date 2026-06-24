@@ -7770,7 +7770,7 @@ const TRAS_COL = {
 
 function trasSubtab(nombre) {
   _TRAS_SUBTAB = nombre;
-  ['transito','historial'].forEach(k => {
+  ['pedir','transito','historial'].forEach(k => {
     const el = document.getElementById(`tras-tab-${k}`);
     if (!el) return;
     const activo = k === nombre;
@@ -7778,7 +7778,17 @@ function trasSubtab(nombre) {
     el.style.color = activo ? '#fff' : '#415A70';
     el.style.fontWeight = activo ? '700' : '400';
   });
-  cargarTrasladosAdmin();
+  const lista = document.getElementById('tras-lista');
+  const panelPedir = document.getElementById('tras-panel-pedir');
+  if (nombre === 'pedir') {
+    if (lista) lista.style.display = 'none';
+    if (panelPedir) panelPedir.style.display = 'block';
+    adminPedirIniciar();
+  } else {
+    if (lista) lista.style.display = 'block';
+    if (panelPedir) panelPedir.style.display = 'none';
+    cargarTrasladosAdmin();
+  }
 }
 
 async function cargarTrasladosAdmin() {
@@ -7900,6 +7910,210 @@ function _renderTrasladoCard(s) {
     ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
     ${acciones.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">${acciones.join('')}</div>` : ''}
   </div>`;
+}
+
+// ── Admin Pedir — solicitar traslado hacia NB1 ──────────────────
+let _AP_STOCK = [];
+let _AP_STOCK_ESTADO = 'idle';
+let _AP_CARRITO = [];
+let _AP_ORIGEN = null;
+let _AP_FILTRO = '';
+let _AP_PAGINA = 1;
+const _AP_POR_PAGINA = 30;
+let _AP_INICIADO = false;
+
+function adminPedirIniciar() {
+  if (_AP_INICIADO) return;
+  _AP_INICIADO = true;
+  const sel = document.getElementById('admin-pedir-origen');
+  if (!sel) return;
+  const opciones = _BODEGAS_ORIGEN.filter(b => b.id !== 'NB1');
+  sel.innerHTML = opciones.map(b =>
+    `<option value="${b.id}" data-nombre="${b.nombre}" style="background:#0d2137;color:#fff;">${b.nombre} (${b.id})</option>`
+  ).join('');
+  const def = opciones[0];
+  if (def) {
+    sel.value = def.id;
+    _AP_ORIGEN = { id: def.id, nombre: def.nombre };
+  }
+  adminPedirCargarStock();
+}
+
+function adminPedirCambiarOrigen(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  _AP_ORIGEN = { id: sel.value, nombre: opt.dataset.nombre || sel.value };
+  _AP_CARRITO = [];
+  adminPedirActualizarCarrito();
+  _AP_STOCK = [];
+  _AP_STOCK_ESTADO = 'cargando';
+  adminPedirCargarStock();
+}
+
+async function adminPedirCargarStock() {
+  _AP_STOCK_ESTADO = 'cargando';
+  adminPedirRenderStock();
+  try {
+    const d = await get(`/api/traslados/stock-disponible?bodega=${_AP_ORIGEN?.id || 'NS1'}`);
+    _AP_STOCK = (d.items || []).filter(i => i.producto_id && i.disponible > 0);
+    _AP_STOCK_ESTADO = 'listo';
+  } catch (e) {
+    _AP_STOCK_ESTADO = 'error';
+  }
+  adminPedirRenderStock();
+}
+
+async function adminPedirActualizarStock() {
+  const btn = document.getElementById('admin-pedir-btn-refresh');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.textContent = '…'; }
+  try {
+    await fetch(API + `/api/traslados/invalidar-cache-stock?bodega=${_AP_ORIGEN?.id || 'NS1'}`, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    _AP_STOCK = [];
+    _AP_STOCK_ESTADO = 'cargando';
+    await adminPedirCargarStock();
+  } catch (e) { alerta('Error actualizando stock', 'error'); }
+  finally { if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '↻'; } }
+}
+
+function adminPedirFiltrarStock() {
+  _AP_FILTRO = (document.getElementById('admin-pedir-buscar')?.value || '').toLowerCase();
+  _AP_PAGINA = 1;
+  adminPedirRenderStock();
+}
+
+function adminPedirIrPagina(p) {
+  _AP_PAGINA = p;
+  adminPedirRenderStock();
+  document.getElementById('admin-pedir-stock-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function adminPedirRenderStock() {
+  const el = document.getElementById('admin-pedir-stock-lista');
+  if (!el) return;
+  if (_AP_STOCK_ESTADO === 'cargando') {
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:#555;">Consultando stock...</div>';
+    return;
+  }
+  if (_AP_STOCK_ESTADO === 'error') {
+    el.innerHTML = `<div style="text-align:center;padding:40px;"><div style="color:#f87171;margin-bottom:12px;">No se pudo cargar el stock</div>
+      <button onclick="adminPedirCargarStock()" style="padding:10px 20px;background:#1d4ed8;color:#fff;border:none;border-radius:8px;cursor:pointer;">Reintentar</button></div>`;
+    return;
+  }
+  if (!_AP_STOCK.length) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin productos disponibles</div>';
+    return;
+  }
+  const filtrado = _AP_FILTRO
+    ? _AP_STOCK.filter(i => (i.nombre||'').toLowerCase().includes(_AP_FILTRO) || (i.codigo_siesa||'').toLowerCase().includes(_AP_FILTRO))
+    : _AP_STOCK;
+  if (!filtrado.length) {
+    el.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Sin resultados</div>';
+    return;
+  }
+  const totalPags = Math.ceil(filtrado.length / _AP_POR_PAGINA);
+  _AP_PAGINA = Math.max(1, Math.min(_AP_PAGINA, totalPags));
+  const inicio = (_AP_PAGINA - 1) * _AP_POR_PAGINA;
+  const pagina = filtrado.slice(inicio, inicio + _AP_POR_PAGINA);
+
+  const rango = 2, desde = Math.max(1, _AP_PAGINA - rango), hasta = Math.min(totalPags, _AP_PAGINA + rango);
+  const nums = [];
+  if (desde > 1) nums.push('<span style="color:#555;">…</span>');
+  for (let p = desde; p <= hasta; p++) {
+    nums.push(`<button onclick="adminPedirIrPagina(${p})" style="min-width:32px;padding:6px 8px;background:${p===_AP_PAGINA?'#1E8395':'#222'};color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:${p===_AP_PAGINA?'700':'400'};cursor:pointer;">${p}</button>`);
+  }
+  if (hasta < totalPags) nums.push('<span style="color:#555;">…</span>');
+  const nav = totalPags > 1 ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 0 14px;flex-wrap:wrap;">
+    <button onclick="adminPedirIrPagina(${_AP_PAGINA-1})" ${_AP_PAGINA===1?'disabled':''} style="padding:7px 14px;background:#222;color:${_AP_PAGINA===1?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">← Ant</button>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">${nums.join('')}</div>
+    <button onclick="adminPedirIrPagina(${_AP_PAGINA+1})" ${_AP_PAGINA===totalPags?'disabled':''} style="padding:7px 14px;background:#222;color:${_AP_PAGINA===totalPags?'#444':'#fff'};border:none;border-radius:8px;font-size:13px;cursor:pointer;">Sig →</button>
+  </div><div style="text-align:center;font-size:11px;color:#555;margin-bottom:10px;">${filtrado.length} productos · pág ${_AP_PAGINA}/${totalPags}</div>` : '';
+
+  el.innerHTML = nav + pagina.map(item => {
+    const enCarrito = _AP_CARRITO.find(c => c.codigo_siesa === item.codigo_siesa);
+    const qid = 'ap-qty-' + (item.codigo_siesa || '').replace(/[^a-zA-Z0-9]/g, '-');
+    const nombreEsc = (item.nombre || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return `<div style="background:#111;border:1px solid ${enCarrito?'#4ade80':'#222'};border-radius:10px;padding:12px;margin-bottom:8px;display:flex;align-items:center;gap:12px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.nombre||'—'}</div>
+        <div style="font-size:11px;color:#666;">${item.codigo_siesa||''} · Disponible: <span style="color:#4ade80;font-weight:700;">${item.disponible}</span></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+        <input type="number" min="1" max="${item.disponible}" value="${enCarrito?.cantidad||1}" id="${qid}"
+          style="width:56px;padding:7px;background:#000;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
+        <button onclick="adminPedirAgregarCarrito('${item.codigo_siesa}','${nombreEsc}',${item.disponible},${item.producto_id||'null'})"
+          style="padding:8px 12px;background:${enCarrito?'#4ade80':'#fff'};color:#000;border:none;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">${enCarrito?'✓':'+'}</button>
+      </div>
+    </div>`;
+  }).join('') + nav;
+}
+
+function adminPedirAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
+  const inp = document.getElementById(`ap-qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`);
+  const cantidad = Math.min(parseInt(inp?.value || 1), disponible);
+  if (cantidad < 1) return;
+  const idx = _AP_CARRITO.findIndex(c => c.codigo_siesa === codigoSiesa);
+  if (idx >= 0) _AP_CARRITO[idx].cantidad = cantidad;
+  else _AP_CARRITO.push({ codigo_siesa: codigoSiesa, nombre, disponible, cantidad, producto_id: productoId });
+  adminPedirActualizarCarrito();
+  adminPedirRenderStock();
+}
+
+function adminPedirActualizarCarrito() {
+  const header = document.getElementById('admin-pedir-carrito-header');
+  const items = document.getElementById('admin-pedir-carrito-items');
+  if (!header || !items) return;
+  if (!_AP_CARRITO.length) { header.style.display = 'none'; return; }
+  header.style.display = 'block';
+  items.innerHTML = _AP_CARRITO.map(c =>
+    `<div style="display:flex;justify-content:space-between;padding:3px 0;">
+      <span>${c.nombre}</span>
+      <span style="color:#4ade80;font-weight:700;">${c.cantidad} und
+        <button onclick="adminPedirQuitarCarrito('${c.codigo_siesa}')" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:11px;margin-left:4px;">✕</button>
+      </span>
+    </div>`
+  ).join('');
+}
+
+function adminPedirQuitarCarrito(codigoSiesa) {
+  _AP_CARRITO = _AP_CARRITO.filter(c => c.codigo_siesa !== codigoSiesa);
+  adminPedirActualizarCarrito();
+  adminPedirRenderStock();
+}
+
+async function adminPedirEnviarSolicitud() {
+  if (!_AP_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
+  const origen = _AP_ORIGEN?.nombre || _AP_ORIGEN?.id || 'la bodega';
+  if (!confirm(`¿Solicitar ${_AP_CARRITO.length} producto${_AP_CARRITO.length!==1?'s':''} desde ${origen} para Bodega Principal (NB1)?`)) return;
+  const items = _AP_CARRITO.filter(c => c.producto_id).map(c => ({
+    producto_id: c.producto_id,
+    cantidad_solicitada: c.cantidad,
+    disponible_siesa: c.disponible,
+  }));
+  if (!items.length) { alerta('No se encontraron productos válidos', 'error'); return; }
+  try {
+    const r = await fetch(API + '/api/traslados/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        items,
+        bodega_origen_siesa: _AP_ORIGEN.id,
+        bodega_destino_siesa: 'NB1',
+        nombre_punto_venta: 'Bodega Principal (NB1)',
+      })
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error creando solicitud', 'error'); return; }
+    const r2 = await fetch(API + `/api/traslados/${d.id}/enviar`, {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    if (r2.ok) {
+      alerta('Pedido enviado', 'exito');
+      _AP_CARRITO = [];
+      adminPedirActualizarCarrito();
+      adminPedirRenderStock();
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function trasConfirmarRecogida(id) {
