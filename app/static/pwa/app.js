@@ -8721,7 +8721,8 @@ function tiendaContarItem(productoId, delta) {
   const item = (_TIENDA_TRASLADO_ACTIVO.items || []).find(i => i.producto_id === productoId);
   if (!item) return;
   const actual = _TIENDA_CONTEOS[productoId] || 0;
-  _TIENDA_CONTEOS[productoId] = Math.max(0, actual + delta);
+  const esperado = item.cantidad_enviada || item.cantidad_aprobada || item.cantidad_solicitada || 0;
+  _TIENDA_CONTEOS[productoId] = Math.max(0, Math.min(actual + delta, esperado));
   // Re-render solo los ítems y el botón para no perder el scroll
   const itemsEl = document.getElementById('tienda-picking-items');
   if (itemsEl) itemsEl.innerHTML = _tiendaRenderItemsPickingTraslado(_TIENDA_TRASLADO_ACTIVO.items || []);
