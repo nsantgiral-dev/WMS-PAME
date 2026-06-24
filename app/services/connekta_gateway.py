@@ -2376,9 +2376,9 @@ class ConnektaGateway:
                     'f470_nro_registro': idx + 1,
                     # 173079 spec: "debe ser igual a la Bodega salida del documento"
                     'f470_id_bodega': bodega_origen or self.bodega,
-                    'f470_id_ubicación_aux': None,
+                    'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
-                    # f470_id_concepto NO existe en 173079 — pos 128 es interno.
+                    'f470_ind_naturaleza': 1,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
