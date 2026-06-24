@@ -2342,7 +2342,7 @@ class ConnektaGateway:
                     'f350_id_tercero': self.nit_empresa or None,
                     'f350_id_clase_docto': 66,
                     'f350_ind_estado': 1,
-                    'f350_ind_impresión': 0,
+                    'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
                     'f450_id_concepto': 605,
                     'f450_id_bodega_salida': bodega_origen or self.bodega,
