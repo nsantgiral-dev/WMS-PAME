@@ -2373,9 +2373,9 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # Spec: "Si es transferencia debe ser igual a la Bodega
-                    # salida del documento" → f450_id_bodega_salida.
-                    'f470_id_bodega': bodega_origen or self.bodega,
+                    # Clase 66 (Entrada Tránsito): el movimiento es ENTRADA en
+                    # bodega_destino. Con bodega_origen Siesa restaba de NS1.
+                    'f470_id_bodega': bodega_destino,
                     # f470_ind_naturaleza y f470_id_concepto son FIJO en 247339.
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
