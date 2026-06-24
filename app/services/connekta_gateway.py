@@ -2382,9 +2382,9 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # bodega_destino (NS1): el movimiento de entrada es EN la bodega
-                    # que recibe. Con NB1 Siesa restaba de NS1 en vez de sumar.
-                    'f470_id_bodega': bodega_destino,
+                    # Spec 173079: "Si es transferencia debe ser igual a la Bodega
+                    # salida del documento" → f450_id_bodega_salida = bodega_origen.
+                    'f470_id_bodega': bodega_origen or self.bodega,
                     'f470_ind_naturaleza': 1,
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
@@ -2428,10 +2428,10 @@ class ConnektaGateway:
                 round(float(abs(_dbg_item.get('cantidad', 0))) / _dbg_item.get('factor_empaque', 1), 4)
                     if _dbg_item.get('factor_empaque', 1) > 1
                     else round(float(abs(_dbg_item.get('cantidad', 0))), 4),
-                bodega_destino,
+                bodega_origen or self.bodega,
             )
         logger.info(f'[CONNEKTA] Tránsito entrada {codigo_solicitud} '
-                    f'{bodega_transito}→{bodega_destino}')
+                    f'{bodega_transito}→{bodega_destino} (f470_bodega={bodega_origen or self.bodega})')
         _ets_din = not self.nombre_conector_transito_entrada.startswith('API_v1_')
         return self._post(self.conector_transito_entrada,
                           self.nombre_conector_transito_entrada, payload,
