@@ -2172,9 +2172,7 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Despacho {codigo_solicitud}',
                     'f450_id_bodega_salida': bodega_origen,
-                    # NC1 (bodega_destino): el ETS espeja este valor para validación 62485.
-                    # Usar TRA1 haría que el ETS falle con 46035 (TRA1 sin stock físico).
-                    'f450_id_bodega_entrada': bodega_destino or bodega_transito,
+                    'f450_id_bodega_entrada': bodega_transito,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
                     'f462_id_vehiculo': self.vehiculo_traslado or None,
                     'f462_id_vehículo': self.vehiculo_traslado or None,
@@ -2374,7 +2372,6 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    # 173079 spec: "debe ser igual a la Bodega salida del documento"
                     'f470_id_bodega': bodega_origen or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
