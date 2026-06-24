@@ -2365,6 +2365,7 @@ class ConnektaGateway:
                     'f470_id_bodega': bodega_origen or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
+                    'f470_ind_naturaleza': 1,
                     'f470_id_motivo': self.motivo_traslado,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
