@@ -129,6 +129,7 @@ class ConnektaGateway:
         # Sin default — SIESA_MOTIVO_TRASLADO es obligatorio en producción.
         # '01' era un fallback genérico que generaba rechazos en Siesas que usan otro código.
         self.motivo_traslado = os.getenv('SIESA_MOTIVO_TRASLADO', '')
+        self.motivo_traslado_entrada = os.getenv('SIESA_MOTIVO_TRASLADO_ENTRADA', '02')
         # Motivo específico para transferencias a bodega de averías (142951).
         # El maestro "Conceptos y Motivos" de Siesa puede tener un código distinto al de traslados
         # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
@@ -2366,7 +2367,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
                     'f470_ind_naturaleza': 1,
-                    'f470_id_motivo': self.motivo_traslado,
+                    'f470_id_motivo': self.motivo_traslado_entrada,
                     'f470_id_co_movto': _co_ent,
                     'f470_id_ccosto_movto': None,
                     'f470_id_proyecto': None,
