@@ -233,6 +233,14 @@ class MobileService:
             # Liberar conteos de OTRA bodega asignados erróneamente.
             # Los de la propia bodega son válidos — los gestiona _next_conteo_tienda.
             _almacen_propio = _u_pick.almacen_id if _u_pick else None
+            # Fallback: picker_traslado puede no tener almacen_id (FK) asignado,
+            # pero sí bodega_siesa_id ('NC1'). Resolver por lookup en almacenes.
+            if not _almacen_propio and _u_pick and _u_pick.bodega_siesa_id:
+                from app.models.almacen import Almacen as _Alm
+                _alm_ref = _Alm.query.filter_by(
+                    bodega_siesa_id=_u_pick.bodega_siesa_id
+                ).first()
+                _almacen_propio = _alm_ref.id if _alm_ref else None
             _q_err = SesionConteo.query.filter(
                 SesionConteo.operario_id == operario_id,
                 SesionConteo.estado.in_([EstadoConteo.EN_PROCESO, EstadoConteo.PENDIENTE]),
