@@ -187,11 +187,13 @@ class PickingService:
             producto_id=tarea.producto_id
         ).with_for_update().first()
 
-        # Tienda virtual (código *-TIENDA): sin UbicacionProducto en WMS.
-        # El stock se mueve en Siesa vía 174720/174930 al cerrar packing — no aquí.
-        _tienda_virtual = reg is None and tarea.tipo_documento == 'TRASLADO'
+        # Traslados: el inventario real vive en Siesa (STS/ETS lo mueve al cerrar packing).
+        # Si WMS no tiene reg o tiene menos stock del recogido, dejamos pasar sin bloquear.
+        _skip_stock = tarea.tipo_documento == 'TRASLADO' and (
+            reg is None or reg.cantidad < cantidad_recogida
+        )
 
-        if not _tienda_virtual:
+        if not _skip_stock:
             if not reg or reg.cantidad < cantidad_recogida:
                 raise ValueError('Stock insuficiente en ubicación')
 
@@ -258,10 +260,25 @@ class PickingService:
                     from app.models.traslado import SolicitudTraslado as _ST, EstadoTraslado as _ET
                     _sol = _ST.query.filter_by(codigo=_ref_doc_cp).first()
                     if _sol and _sol.estado == _ET.EN_PICKING:
+                        _picks_ok = TareaPicking.query.filter_by(
+                            referencia_documento=_ref_doc_cp,
+                            tipo_documento='TRASLADO',
+                            estado=EstadoPicking.COMPLETADO,
+                        ).all()
+                        _recogido = {}
+                        for _pk in _picks_ok:
+                            _recogido[_pk.producto_id] = (
+                                _recogido.get(_pk.producto_id, 0) + (_pk.cantidad_recogida or 0)
+                            )
+                        _items_conf = [
+                            {'id': _it.id, 'cantidad_confirmada': _recogido.get(_it.producto_id, 0)}
+                            for _it in _sol.items
+                        ]
                         from app.services.traslado_service import TrasladoService as _TS
                         _TS.confirmar_picking_traslado(
                             solicitud_id=_sol.id,
                             usuario_id=usuario_id,
+                            items_confirmados=_items_conf,
                         )
                         logger.info('[PICKING] TRASLADO %s: todos los pickings completados → EN_PACKING auto-trigger', _ref_doc_cp)
             except Exception as _e_trs:
