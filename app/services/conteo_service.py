@@ -377,22 +377,24 @@ class ConteoService:
         bodega_siesa = almacen.bodega_siesa_id if almacen else None
         centro_op_siesa = almacen.centro_op_siesa if almacen else None
 
-        # Consultar existencia fiscal en Siesa AHORA (no durante el conteo del operario).
-        # Esto da al admin datos frescos para validar el ajuste.
+        # Fuente de verdad: Siesa en tiempo real. Si no responde, fallback a WMS.
         existencia_siesa = ConteoService.consultar_existencia_siesa(
             producto_codigo_siesa=sesion.producto_codigo_siesa,
             bodega=bodega_siesa,
         )
-        # existencia_siesa puede ser None si Siesa no responde — se permite continuar
-        # porque la diferencia se calcula contra WMS (existencia_siesa en la sesion).
-        # El admin ya validó visualmente; el log registra el valor fiscal para auditoría.
         if existencia_siesa is not None:
+            sesion.existencia_siesa = existencia_siesa  # sobrescribir WMS con valor fiscal real
             logger.info(
                 f'[CONTEO] Existencia fiscal Siesa para sesion {sesion_id}: '
-                f'{existencia_siesa} (bodega={bodega_siesa})'
+                f'{existencia_siesa} (bodega={bodega_siesa}) — base del ajuste'
+            )
+        else:
+            logger.warning(
+                f'[CONTEO] Siesa no respondió para sesion {sesion_id} '
+                f'— diferencia calculada contra WMS ({sesion.existencia_siesa}). '
+                f'Posible drift entre WMS y Siesa.'
             )
 
-        # La diferencia se calcula contra WMS (guardado en existencia_siesa de la sesión)
         diferencia = sesion.cantidad_fisica - sesion.existencia_siesa
 
         if diferencia > 0:
