@@ -169,6 +169,8 @@ class MobileService:
         # picker_traslado y roles de tienda: solo ven tareas TRASLADO de su bodega
         _solo_traslado = _u_pick and _u_pick.rol in ('picker_traslado', 'packer_traslado')
         _bodega_tienda = _u_pick.bodega_siesa_id if _solo_traslado and _u_pick else None
+        # picker_traslado (no packer) recibe conteo cíclico cuando no hay traslados
+        _picker_tienda = _u_pick and _u_pick.rol == 'picker_traslado'
 
         # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
         _ids_validos = db.session.query(Ubicacion.id).filter(
@@ -228,19 +230,35 @@ class MobileService:
                     return resultado['tareas'][0]
                 return None
 
-            # picker_traslado / packer_traslado: liberar conteos mal asignados y retornar vacío
-            _erroneos = SesionConteo.query.filter(
+            # Liberar conteos de OTRA bodega asignados erróneamente.
+            # Los de la propia bodega son válidos — los gestiona _next_conteo_tienda.
+            _almacen_propio = _u_pick.almacen_id if _u_pick else None
+            _q_err = SesionConteo.query.filter(
                 SesionConteo.operario_id == operario_id,
                 SesionConteo.estado.in_([EstadoConteo.EN_PROCESO, EstadoConteo.PENDIENTE]),
-            ).all()
+            )
+            if _almacen_propio:
+                _q_err = _q_err.filter(
+                    db.or_(
+                        SesionConteo.almacen_id.is_(None),
+                        SesionConteo.almacen_id != _almacen_propio,
+                    )
+                )
+            _erroneos = _q_err.all()
             if _erroneos:
                 for c in _erroneos:
                     c.operario_id = None
                     c.estado = EstadoConteo.PENDIENTE
                     c.fecha_inicio = None
                 db.session.commit()
-                logger.info('[MOBILE] %d conteo(s) liberados de picker_traslado %s',
+                logger.info('[MOBILE] %d conteo(s) de otra bodega liberados de picker_traslado %s',
                             len(_erroneos), operario_id)
+
+            if _picker_tienda and _almacen_propio:
+                conteo = MobileService._next_conteo_tienda(operario_id, _almacen_propio)
+                if conteo:
+                    return conteo
+
             return None
 
         # ── Task Interleaving ────────────────────────────────────────────────────
@@ -371,6 +389,41 @@ class MobileService:
             'clasificacion_abc': c.clasificacion_abc,
             'conteo_intercalado': None,
         }
+
+    @staticmethod
+    def _next_conteo_tienda(operario_id: int, almacen_id: int):
+        """
+        SRP: única responsabilidad — asignar el próximo conteo cíclico de la bodega
+        a un picker_traslado cuando no hay traslados pendientes.
+        Prioridad A → B → C, más antigua primero dentro de cada clase.
+        Usa skip_locked para evitar colisiones entre workers concurrentes.
+        """
+        from sqlalchemy import case as _sa_case
+        _prioridad_abc = _sa_case(
+            {'A': 1, 'B': 2, 'C': 3},
+            value=SesionConteo.clasificacion_abc,
+            else_=4,
+        )
+        sesion = (
+            SesionConteo.query
+            .filter(
+                SesionConteo.almacen_id == almacen_id,
+                SesionConteo.estado == EstadoConteo.PENDIENTE,
+                SesionConteo.operario_id.is_(None),
+            )
+            .order_by(_prioridad_abc, SesionConteo.fecha_creacion.asc())
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if not sesion:
+            return None
+        sesion.operario_id = operario_id
+        sesion.estado = EstadoConteo.EN_PROCESO
+        sesion.fecha_inicio = datetime.utcnow()
+        db.session.commit()
+        logger.info('[MOBILE] Conteo %s asignado a picker_traslado %s (bodega almacen_id=%s)',
+                    sesion.codigo, operario_id, almacen_id)
+        return MobileService._conteo_a_dict(sesion)
 
     @staticmethod
     def _normalizar(codigo: str) -> str:

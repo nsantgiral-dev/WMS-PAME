@@ -1221,10 +1221,11 @@ async function pedirTarea() {
       document.getElementById('contenido-tarea').innerHTML = _esTiendaOp ? `
         <div style="text-align:center;padding:40px 20px 16px;">
           <div style="font-size:60px;">📦</div>
-          <div style="font-size:22px;font-weight:700;margin-top:12px;">No hay traslados pendientes</div>
-          <div style="font-size:14px;color:#666;margin-top:6px;">Serás asignado automáticamente cuando llegue una solicitud</div>
+          <div style="font-size:22px;font-weight:700;margin-top:12px;">No hay tareas pendientes</div>
+          <div style="font-size:14px;color:#666;margin-top:6px;">Serás asignado automáticamente cuando haya traslados o conteos disponibles</div>
           <div style="display:flex;gap:10px;justify-content:center;margin-top:14px;">
             <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#431407;color:#fb923c;font-weight:700;">TRASLADO</span>
+            <span style="font-size:11px;padding:3px 10px;border-radius:10px;background:#78350f;color:#fcd34d;font-weight:700;">CONTEO</span>
           </div>
         </div>` : `
         <div style="text-align:center;padding:40px 20px 16px;">
