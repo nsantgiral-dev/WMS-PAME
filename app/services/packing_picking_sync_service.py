@@ -31,9 +31,12 @@ class PackingPickingSyncService:
                 f'actual: {tarea.estado}'
             )
 
-        # Sumar cantidad_recogida por producto para el pedido
+        ref_doc = tarea.numero_pedido_siesa or tarea.referencia_doc
+        if not ref_doc:
+            return {'sincronizado': False, 'razon': 'Sin referencia de documento'}
+
         pickings = TareaPicking.query.filter(
-            TareaPicking.referencia_documento == tarea.numero_pedido_siesa,
+            TareaPicking.referencia_documento == ref_doc,
             db.or_(
                 TareaPicking.estado == 'COMPLETADO',
                 db.and_(

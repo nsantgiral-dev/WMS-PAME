@@ -505,8 +505,9 @@ def sincronizar_picking(id):
     Solo actúa si hay picking COMPLETADO o BLOQUEADO con unidades recogidas.
     Idempotente: se puede llamar varias veces sin efecto secundario.
     """
-    if not _solo_admin():
-        return jsonify({'error': 'Solo admin puede sincronizar picking con packing'}), 403
+    from app.routes._auth_helpers import _es_personal_almacen
+    if not _solo_admin() and not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para sincronizar picking con packing'}), 403
     from app.services.packing_picking_sync_service import PackingPickingSyncService
     try:
         resultado = PackingPickingSyncService.sincronizar(id)

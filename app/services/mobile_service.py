@@ -756,10 +756,26 @@ class MobileService:
                             TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO']),
                         ).count()
                         if _pendientes == 0:
+                            _picks_ok = TareaPicking.query.filter_by(
+                                referencia_documento=_ref_doc,
+                                tipo_documento='TRASLADO',
+                                estado='COMPLETADO',
+                            ).all()
+                            _recogido = {}
+                            for _pk in _picks_ok:
+                                _recogido[_pk.producto_id] = (
+                                    _recogido.get(_pk.producto_id, 0)
+                                    + (_pk.cantidad_recogida or 0)
+                                )
+                            _items_conf = [
+                                {'id': _it.id, 'cantidad_confirmada': _recogido.get(_it.producto_id, 0)}
+                                for _it in _sol.items
+                            ]
                             from app.services.traslado_service import TrasladoService as _TS
                             _TS.confirmar_picking_traslado(
                                 solicitud_id=_sol.id,
                                 usuario_id=operario_id,
+                                items_confirmados=_items_conf,
                             )
                             logger.info('[MOBILE] %s → EN_PACKING auto-trigger (todos los picks completos)', _ref_doc)
                 except Exception as _e_at:
