@@ -3018,7 +3018,8 @@ async function recepCargarTraslados(silencioso = false) {
   if (!el) return;
   if (!silencioso) el.innerHTML = '<div style="text-align:center;padding:40px;color:#666;">Cargando...</div>';
   try {
-    const r = await get('/api/traslados/pendientes-recepcion');
+    const _bodRec = OPERARIO?.bodega_siesa_id || 'NB1';
+    const r = await get(`/api/traslados/pendientes-recepcion?bodega=${_bodRec}`);
     _REC_TRASLADOS_PENDIENTES = r.solicitudes || [];
     const badge = document.getElementById('badge-traslados-rec');
     if (badge) {
@@ -4358,7 +4359,7 @@ async function cargarUsuarios() {
 }
 
 function _formUsuario(u = {}) {
-  const _TIENDA_ROLES = ['tienda', 'picker_traslado', 'packer_traslado'];
+  const _TIENDA_ROLES = ['tienda', 'picker_traslado', 'packer_traslado', 'recepcionista'];
   return `
     <div style="font-size:15px;font-weight:700;margin-bottom:16px;">${u.id ? 'Editar usuario' : 'Nuevo usuario'}</div>
     <div style="display:flex;flex-direction:column;gap:12px;">
@@ -4368,7 +4369,7 @@ function _formUsuario(u = {}) {
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
       <input id="u-password" placeholder="${u.id ? 'Nueva contraseña (dejar vacío para no cambiar)' : 'Contraseña'}" type="password"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
-      <select id="u-rol" onchange="(function(v){var tr=['tienda','picker_traslado','packer_traslado'];document.getElementById('u-tienda-fields').style.display=tr.includes(v)?'block':'none';document.getElementById('u-conductor-fields').style.display=v==='conductor'?'block':'none';var canPicar=document.getElementById('u-puede-picar').checked;document.getElementById('u-conteo-wrapper').style.display=(canPicar&&!tr.includes(v))?'block':'none';})(this.value)"
+      <select id="u-rol" onchange="(function(v){var tr=['tienda','picker_traslado','packer_traslado','recepcionista'];document.getElementById('u-tienda-fields').style.display=tr.includes(v)?'block':'none';document.getElementById('u-conductor-fields').style.display=v==='conductor'?'block':'none';var canPicar=document.getElementById('u-puede-picar').checked;document.getElementById('u-conteo-wrapper').style.display=(canPicar&&!tr.includes(v))?'block':'none';})(this.value)"
         style="padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;">
         <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario (pedidos)</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
@@ -4404,9 +4405,10 @@ function _formUsuario(u = {}) {
       <!-- Campos tienda / picker_traslado / packer_traslado -->
       <div id="u-tienda-fields" style="display:${_TIENDA_ROLES.includes(u.rol)?'block':'none'};">
         <select id="u-bodega-siesa"
-          onchange="(function(sel){const nombres={'NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito'};document.getElementById('u-nombre-pv').value=nombres[sel.value]||'';})(this)"
+          onchange="(function(sel){const nombres={'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito'};document.getElementById('u-nombre-pv').value=nombres[sel.value]||'';})(this)"
           style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
-          <option value="">— Seleccionar punto de venta —</option>
+          <option value="">— Seleccionar bodega —</option>
+          <option value="NB1" ${u.bodega_siesa_id==='NB1'?'selected':''}>NB1 — Bodega Principal</option>
           <option value="NC1" ${u.bodega_siesa_id==='NC1'?'selected':''}>NC1 — Neiva Centro</option>
           <option value="NS1" ${u.bodega_siesa_id==='NS1'?'selected':''}>NS1 — Neiva Sur Principal</option>
           <option value="NS2" ${u.bodega_siesa_id==='NS2'?'selected':''}>NS2 — Neiva Sur Fundación</option>
@@ -4422,7 +4424,7 @@ function _formUsuario(u = {}) {
       <div style="background:#1a1a1a;border:1px solid #333;border-radius:8px;padding:14px;">
         <div style="font-size:12px;font-weight:600;color:#aaa;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.05em;">Capacidades operativas</div>
         <label style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:10px;">
-          <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;" onchange="(function(cb){var tr=['tienda','picker_traslado','packer_traslado'];var v=document.getElementById('u-rol').value;document.getElementById('u-conteo-wrapper').style.display=(cb.checked&&!tr.includes(v))?'block':'none';})(this)">
+          <input type="checkbox" id="u-puede-picar" ${u.puede_picar!==false?'checked':''} style="width:20px;height:20px;accent-color:#60a5fa;" onchange="(function(cb){var tr=['tienda','picker_traslado','packer_traslado','recepcionista'];var v=document.getElementById('u-rol').value;document.getElementById('u-conteo-wrapper').style.display=(cb.checked&&!tr.includes(v))?'block':'none';})(this)">
           <div>
             <div style="font-size:14px;font-weight:600;color:#60a5fa;">Picker</div>
             <div style="font-size:11px;color:#555;">Puede recoger productos del almacén</div>
