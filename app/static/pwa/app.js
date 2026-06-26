@@ -6982,15 +6982,9 @@ function conteoVista(v) {
     const btn = document.getElementById(`cv-tab-${k}`);
     if (!btn) return;
     const activo = k === v;
-    if (k === 'accion') {
-      btn.style.background = activo ? '#b45309' : '#111';
-      btn.style.color      = activo ? '#fff'    : '#94a3b8';
-      btn.style.border     = activo ? 'none'    : '1px solid #333';
-    } else {
-      btn.style.background = activo ? '#1E8395' : '#111';
-      btn.style.color      = activo ? '#fff'    : '#94a3b8';
-      btn.style.border     = activo ? 'none'    : '1px solid #333';
-    }
+    btn.style.background = activo ? 'var(--pm)' : 'var(--bg-s)';
+    btn.style.color      = activo ? '#fff'       : 'var(--tx2)';
+    btn.style.border     = activo ? 'none'       : '1px solid var(--brd)';
   });
   cargarConteos();
 }

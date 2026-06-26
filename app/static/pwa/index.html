@@ -1388,70 +1388,70 @@
     <!-- Panel Conteos -->
     <div id="inv-panel-conteos">
       <!-- Dashboard de deuda -->
-      <div id="conteo-stats-bar" style="display:none;background:#121C26;border:1px solid #1C2B3A;border-radius:10px;padding:10px 12px;margin-bottom:10px;">
+      <div id="conteo-stats-bar" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:10px 12px;margin-bottom:10px;">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">
           <div style="display:flex;gap:12px;flex-wrap:wrap;">
-            <span style="font-size:11px;color:#415A70;">Pendientes: <span id="cs-pendientes" style="color:#FBBF24;font-weight:700;">0</span></span>
-            <span style="font-size:11px;color:#415A70;">En curso: <span id="cs-en-curso" style="color:#60A5FA;font-weight:700;">0</span></span>
-            <span style="font-size:11px;color:#415A70;">Hoy: <span id="cs-hoy" style="color:#22C55E;font-weight:700;">0</span></span>
-            <span id="cs-atrasados-wrap" style="font-size:11px;color:#415A70;display:none;">Atrasados: <span id="cs-atrasados" style="color:#F87171;font-weight:700;">0</span></span>
+            <span style="font-size:11px;color:var(--tx3);">Pendientes: <span id="cs-pendientes" style="color:var(--yellow);font-weight:700;">0</span></span>
+            <span style="font-size:11px;color:var(--tx3);">En curso: <span id="cs-en-curso" style="color:var(--blue);font-weight:700;">0</span></span>
+            <span style="font-size:11px;color:var(--tx3);">Hoy: <span id="cs-hoy" style="color:var(--green);font-weight:700;">0</span></span>
+            <span id="cs-atrasados-wrap" style="font-size:11px;color:var(--tx3);display:none;">Atrasados: <span id="cs-atrasados" style="color:var(--red);font-weight:700;">0</span></span>
           </div>
-          <button id="cs-btn-asignar" onclick="conteoMostrarAsignar()" style="display:none;padding:4px 10px;background:#0B3038;border:1px solid #164F5A;color:#1E8395;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          <button id="cs-btn-asignar" onclick="conteoMostrarAsignar()" style="display:none;padding:4px 10px;background:var(--pm-dim);border:1px solid var(--pm-border);color:var(--pm);border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
             Asignar <span id="cs-sin-asignar">0</span> pendientes
           </button>
           <span id="cs-fallos-wrap" style="display:none;align-items:center;gap:4px;">
-            <span onclick="conteoReintentarFallos()" style="padding:4px 10px;background:#1A0606;border:1px solid #7F1D1D;color:#F87171;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
+            <span onclick="conteoReintentarFallos()" style="padding:4px 10px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
               <span id="cs-fallos">0</span> fallos Siesa — Reintentar
             </span>
-            <span onclick="conteoDescartarFallos()" title="Descartar fallos y resetear sesiones a DESCUADRE" style="padding:4px 8px;background:#1A0606;border:1px solid #7F1D1D;color:#7A96B0;border-radius:6px;font-size:10px;cursor:pointer;white-space:nowrap;">✕ Descartar</span>
+            <span onclick="conteoDescartarFallos()" title="Descartar fallos y resetear sesiones a DESCUADRE" style="padding:4px 8px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--tx2);border-radius:6px;font-size:10px;cursor:pointer;white-space:nowrap;">✕ Descartar</span>
           </span>
-          <button onclick="conteoExportar()" style="padding:4px 10px;background:#121C26;border:1px solid #1C2B3A;color:#415A70;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">Exportar CSV</button>
+          <button onclick="conteoExportar()" style="padding:4px 10px;background:var(--bg-s);border:1px solid var(--brd);color:var(--tx3);border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">Exportar CSV</button>
         </div>
       </div>
 
       <!-- Modal asignar lote -->
-      <div id="conteo-asignar-panel" style="display:none;background:#121C26;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:10px;">
-        <div style="font-size:12px;font-weight:700;color:#1E8395;margin-bottom:8px;">Asignar tareas pendientes a operario</div>
+      <div id="conteo-asignar-panel" style="display:none;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:10px;">
+        <div style="font-size:12px;font-weight:700;color:var(--pm);margin-bottom:8px;">Asignar tareas pendientes a operario</div>
         <div style="display:flex;gap:8px;align-items:flex-end;">
           <div style="flex:2;">
-            <label style="font-size:10px;color:#415A70;display:block;margin-bottom:3px;">Operario</label>
-            <select id="conteo-asignar-operario" style="width:100%;padding:8px;background:#0D1622;border:1px solid #1C2B3A;border-radius:6px;color:#E2EEF8;font-size:13px;"></select>
+            <label style="font-size:10px;color:var(--tx3);display:block;margin-bottom:3px;">Operario</label>
+            <select id="conteo-asignar-operario" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;"></select>
           </div>
           <div style="flex:1;">
-            <label style="font-size:10px;color:#415A70;display:block;margin-bottom:3px;">Cantidad</label>
-            <input id="conteo-asignar-limite" type="number" value="10" min="1" max="50" style="width:100%;padding:8px;background:#0D1622;border:1px solid #1C2B3A;border-radius:6px;color:#E2EEF8;font-size:13px;box-sizing:border-box;">
+            <label style="font-size:10px;color:var(--tx3);display:block;margin-bottom:3px;">Cantidad</label>
+            <input id="conteo-asignar-limite" type="number" value="10" min="1" max="50" style="width:100%;padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;">
           </div>
-          <button onclick="conteoAsignarLote()" style="padding:8px 14px;background:#1E8395;border:none;color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Asignar</button>
-          <button onclick="conteoCerrarAsignar()" style="padding:8px 10px;background:#0D1622;border:1px solid #1C2B3A;color:#7A96B0;border-radius:6px;font-size:12px;cursor:pointer;">X</button>
+          <button onclick="conteoAsignarLote()" style="padding:8px 14px;background:var(--pm);border:none;color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Asignar</button>
+          <button onclick="conteoCerrarAsignar()" style="padding:8px 10px;background:var(--bg-input);border:1px solid var(--brd);color:var(--tx2);border-radius:6px;font-size:12px;cursor:pointer;">X</button>
         </div>
       </div>
 
       <!-- 3 vistas operacionales -->
       <div style="display:flex;gap:6px;margin-bottom:10px;">
         <button id="cv-tab-accion" onclick="conteoVista('accion')"
-          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:none;cursor:pointer;background:#1E8395;color:#fff;">
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:none;cursor:pointer;background:var(--pm);color:#fff;">
           ⚠ Acción <span id="cv-badge-accion" style="background:rgba(0,0,0,.3);border-radius:10px;padding:1px 5px;font-size:10px;margin-left:2px;"></span>
         </button>
         <button id="cv-tab-progreso" onclick="conteoVista('progreso')"
-          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid #1C2B3A;cursor:pointer;background:#121C26;color:#7A96B0;">
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid var(--brd);cursor:pointer;background:var(--bg-s);color:var(--tx2);">
           ▶ En progreso
         </button>
         <button id="cv-tab-resueltos" onclick="conteoVista('resueltos')"
-          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid #1C2B3A;cursor:pointer;background:#121C26;color:#7A96B0;">
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid var(--brd);cursor:pointer;background:var(--bg-s);color:var(--tx2);">
           ✓ Resueltos
         </button>
         <button onclick="conteosMostrarFormManual()" title="Crear conteo manual"
-          style="padding:8px 10px;background:#0B3038;border:1px solid #164F5A;color:#1E8395;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          style="padding:8px 10px;background:var(--pm-dim);border:1px solid var(--pm-border);color:var(--pm);border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">
           + Manual
         </button>
       </div>
       <!-- Filtros secundarios -->
       <div style="display:flex;gap:8px;margin-bottom:12px;">
         <input id="inv-filtro-marca" type="text" placeholder="Filtrar por marca..."
-          style="flex:1;padding:8px 10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;"
+          style="flex:1;padding:8px 10px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;"
           oninput="conteosFiltrar()">
         <select id="inv-filtro-clase" onchange="conteosFiltrar()"
-          style="padding:8px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;">
+          style="padding:8px;background:var(--bg-input);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
           <option value="">A+B+C</option>
           <option value="A">Solo A</option>
           <option value="B">Solo B</option>
