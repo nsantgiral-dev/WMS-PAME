@@ -1399,8 +1399,11 @@
           <button id="cs-btn-asignar" onclick="conteoMostrarAsignar()" style="display:none;padding:4px 10px;background:#0B3038;border:1px solid #164F5A;color:#1E8395;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
             Asignar <span id="cs-sin-asignar">0</span> pendientes
           </button>
-          <span id="cs-fallos-wrap" onclick="conteoReintentarFallos()" style="display:none;align-items:center;gap:3px;padding:4px 10px;background:#1A0606;border:1px solid #7F1D1D;color:#F87171;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
-            <span id="cs-fallos">0</span> fallos Siesa — Reintentar
+          <span id="cs-fallos-wrap" style="display:none;align-items:center;gap:4px;">
+            <span onclick="conteoReintentarFallos()" style="padding:4px 10px;background:#1A0606;border:1px solid #7F1D1D;color:#F87171;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;">
+              <span id="cs-fallos">0</span> fallos Siesa — Reintentar
+            </span>
+            <span onclick="conteoDescartarFallos()" title="Descartar fallos y resetear sesiones a DESCUADRE" style="padding:4px 8px;background:#1A0606;border:1px solid #7F1D1D;color:#7A96B0;border-radius:6px;font-size:10px;cursor:pointer;white-space:nowrap;">✕ Descartar</span>
           </span>
           <button onclick="conteoExportar()" style="padding:4px 10px;background:#121C26;border:1px solid #1C2B3A;color:#415A70;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">Exportar CSV</button>
         </div>

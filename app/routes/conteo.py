@@ -749,6 +749,65 @@ def reintentar_fallos_dlq():
     return jsonify({'reencolados': reencolados}), 200
 
 
+@conteo_bp.route('/descartar-fallos', methods=['POST'])
+@jwt_required()
+def descartar_fallos_dlq():
+    """
+    Descarta todos los jobs AJUSTE_CONTEO FALLIDO y resetea sus sesiones
+    de AJUSTANDO → DESCUADRE para que el admin pueda re-aprobar o cancelar.
+    """
+    import json as _json
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+    from app.models.conteo import SesionConteo, EstadoConteo
+    from app.models.usuario import Usuario
+
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.LEAD:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    fallidos = SiesaJob.query.filter(
+        SiesaJob.tipo == 'AJUSTE_CONTEO',
+        SiesaJob.estado == EstadoSiesaJob.FALLIDO,
+    ).all()
+
+    sesiones_ids = set()
+    ahora = datetime.utcnow()
+    for job in fallidos:
+        p = job.get_payload()
+        sid = p.get('sesion_id')
+        if sid:
+            sesiones_ids.add(int(sid))
+        job.estado = EstadoSiesaJob.COMPLETADO
+        job.resultado = _json.dumps({
+            'descartado': True,
+            'por_usuario': uid,
+            'fecha': ahora.isoformat(),
+        })
+        job.fecha_completado = ahora
+
+    # Sesiones atascadas en AJUSTANDO → DESCUADRE para que el admin decida
+    sesiones_reset = 0
+    for sid in sesiones_ids:
+        s = SesionConteo.query.get(sid)
+        if s and s.estado == EstadoConteo.AJUSTANDO and not s.siesa_triggered:
+            s.estado = EstadoConteo.DESCUADRE
+            sesiones_reset += 1
+
+    descartados = len(fallidos)
+    if descartados:
+        db.session.commit()
+        logger.info(
+            f'[CONTEO DLQ] {descartados} jobs descartados por usuario #{uid} '
+            f'— {sesiones_reset} sesiones reseteadas a DESCUADRE'
+        )
+
+    return jsonify({'descartados': descartados, 'sesiones_reset': sesiones_reset}), 200
+
+
 @conteo_bp.route('/exportar', methods=['GET'])
 @jwt_required()
 def exportar_conteos():

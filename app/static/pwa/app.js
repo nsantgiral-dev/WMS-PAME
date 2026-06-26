@@ -7172,6 +7172,24 @@ async function conteoReintentarFallos() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+async function conteoDescartarFallos() {
+  if (!confirm('Descartar los ajustes fallidos?\n\nLas sesiones atascadas en AJUSTANDO vuelven a DESCUADRE para que puedas re-aprobar o cancelar.')) return;
+  try {
+    const r = await fetch(API + '/api/conteo/descartar-fallos', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`${d.descartados} jobs descartados · ${d.sesiones_reset} sesiones a DESCUADRE`, 'exito');
+      await cargarConteoStats();
+      await cargarConteosAdmin();
+    } else {
+      alerta(d.error || 'Error', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
 async function conteoExportar() {
   const almId = document.getElementById('inv-abc-almacen')?.value;
   const desde = prompt('Desde (YYYY-MM-DD, vacío = todo):', '')?.trim() || '';
