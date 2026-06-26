@@ -1903,13 +1903,13 @@ async function confirmar() {
       const esMatch = r.resultado === 'MATCH';
       const overlay = document.createElement('div');
       overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;';
-      overlay.style.background = esMatch ? '#052e16' : '#1c1400';
+      overlay.style.background = esMatch ? '#091F12' : '#0B1117';
       overlay.innerHTML = `
         <div style="font-size:80px;">${esMatch ? '✅' : '⚠️'}</div>
-        <div style="font-size:28px;font-weight:900;color:${esMatch ? '#4ade80' : '#fbbf24'};text-align:center;padding:0 20px;">
+        <div style="font-size:28px;font-weight:900;color:${esMatch ? '#22C55E' : '#FBBF24'};text-align:center;padding:0 20px;">
           ${esMatch ? 'Inventario correcto' : 'Diferencia detectada'}
         </div>
-        <div style="font-size:15px;color:${esMatch ? '#166534' : '#92400e'};text-align:center;padding:0 30px;line-height:1.5;">
+        <div style="font-size:15px;color:${esMatch ? '#14532D' : '#415A70'};text-align:center;padding:0 30px;line-height:1.5;">
           ${esMatch ? 'El conteo cuadra con el sistema.' : 'Se asignó un segundo conteo\npara verificación.'}
         </div>`;
       document.body.appendChild(overlay);
@@ -7004,9 +7004,9 @@ function conteosFiltrar() {
 
 function _tipoTag(s) {
   if (s.tipo === 'EXCEPCION_PICKING')
-    return `<span style="background:#1a0a0a;color:#f87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">PICKING</span>`;
+    return `<span style="background:#1A0606;color:#F87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">PICKING</span>`;
   if (s.tipo === 'MANUAL')
-    return `<span style="background:#1a1a2a;color:#a78bfa;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">MANUAL</span>`;
+    return `<span style="background:#0B3038;color:#1E8395;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">MANUAL</span>`;
   return '';
 }
 
@@ -7015,49 +7015,49 @@ function _renderCardAccion(s) {
   const TERMINADOS = ['MATCH','DESCUADRE','SEGUNDO_CONTEO','AJUSTADO','CANCELADO'];
   const hijoPendiente = hijo ? !TERMINADOS.includes(hijo.estado) : (s.estado !== 'DESCUADRE');
   const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?';
-  const difCol = (s.diferencia || 0) > 0 ? '#4ade80' : '#f87171';
+  const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : '#F87171';
   const puedeAjustar = s.estado === 'DESCUADRE' || (s.estado === 'SEGUNDO_CONTEO' && hijo && !hijoPendiente);
   const coinciden = hijo && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
-  const bordColor = s.estado === 'DESCUADRE' ? '#7c2d12' : '#2d1b69';
+  const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : '#164F5A';
 
-  return `<div style="background:#111;border:1px solid ${bordColor};border-radius:12px;padding:14px;margin-bottom:10px;">
+  return `<div style="background:#121C26;border:1px solid ${bordColor};border-radius:12px;padding:14px;margin-bottom:10px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:700;">${s.producto_codigo || '—'}${_tipoTag(s)}${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;">ABC-${s.clasificacion_abc}</span>` : ''}</div>
-        <div style="font-size:11px;color:#555;margin-top:1px;">${s.producto_nombre || ''}</div>
-        <div style="font-size:11px;color:#444;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+        <div style="font-size:13px;font-weight:700;">${s.producto_codigo || '—'}${_tipoTag(s)}${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;margin-left:4px;">ABC-${s.clasificacion_abc}</span>` : ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">${s.producto_nombre || ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
       </div>
-      <span style="background:${s.estado==='DESCUADRE'?'#7c2d12':'#4c1d95'};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${s.estado}</span>
+      <span style="background:${s.estado==='DESCUADRE'?'#7F1D1D':'#1E8395'};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${s.estado}</span>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#0a0a0a;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#0B1117;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
       <div>
-        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">WMS</div>
-        <div style="font-size:20px;font-weight:800;color:#60a5fa;line-height:1;">${s.existencia_siesa != null ? s.existencia_siesa : '—'}</div>
-        <div style="font-size:9px;color:#374151;margin-top:2px;">${s.bodega_siesa_id || 'stock'}</div>
+        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">Siesa</div>
+        <div style="font-size:20px;font-weight:800;color:#60A5FA;line-height:1;">${s.existencia_siesa != null ? s.existencia_siesa : '—'}</div>
+        <div style="font-size:9px;color:#415A70;margin-top:2px;">${s.bodega_siesa_id || 'stock'}</div>
       </div>
-      <div style="border-left:1px solid #1f2937;border-right:1px solid #1f2937;">
-        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er Conteo</div>
-        <div style="font-size:20px;font-weight:800;color:#f59e0b;line-height:1;">${s.cantidad_fisica != null ? s.cantidad_fisica : '—'}</div>
-        <div style="font-size:9px;color:#374151;margin-top:2px;">${s.operario_id ? `Op #${s.operario_id}` : '—'}</div>
+      <div style="border-left:1px solid #1C2B3A;border-right:1px solid #1C2B3A;">
+        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">1er Conteo</div>
+        <div style="font-size:20px;font-weight:800;color:#FBBF24;line-height:1;">${s.cantidad_fisica != null ? s.cantidad_fisica : '—'}</div>
+        <div style="font-size:9px;color:#415A70;margin-top:2px;">${s.operario_id ? `Op #${s.operario_id}` : '—'}</div>
       </div>
       <div>
-        <div style="font-size:9px;color:#4b5563;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2do Conteo</div>
+        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2do Conteo</div>
         ${hijo && !hijoPendiente
-          ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#4ade80':'#f87171'};line-height:1;">${hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—'}</div>
-             <div style="font-size:9px;color:#374151;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—')}</div>`
-          : `<div style="font-size:16px;color:#374151;padding:2px 0;">⏳</div>
-             <div style="font-size:9px;color:#374151;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar'}</div>`
+          ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#22C55E':'#F87171'};line-height:1;">${hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—'}</div>
+             <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—')}</div>`
+          : `<div style="font-size:16px;color:#415A70;padding:2px 0;">⏳</div>
+             <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar'}</div>`
         }
       </div>
     </div>
 
-    <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#555;margin-bottom:10px;">
-      <span>Δ <span style="color:${difCol};font-weight:700;">${dif} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#4ade80':'#f87171'};">${s.motivo_codigo}</span>` : ''}</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#415A70;margin-bottom:10px;">
+      <span>Δ <span style="color:${difCol};font-weight:700;">${dif} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#22C55E':'#F87171'};">${s.motivo_codigo}</span>` : ''}</span>
       ${!hijoPendiente && hijo
         ? coinciden
-          ? `<span style="color:#4ade80;font-size:10px;">✓ Ambos coinciden</span>`
-          : `<span style="color:#f87171;font-size:10px;">⚠ Operarios no coinciden</span>`
+          ? `<span style="color:#22C55E;font-size:10px;">✓ Ambos coinciden</span>`
+          : `<span style="color:#F87171;font-size:10px;">⚠ Operarios no coinciden</span>`
         : ''
       }
     </div>
@@ -7065,56 +7065,56 @@ function _renderCardAccion(s) {
     <div style="display:flex;gap:6px;">
       ${s.estado !== 'AJUSTADO' && s.estado !== 'AJUSTANDO'
         ? `<button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
-             style="flex:1;padding:8px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-radius:8px;font-size:12px;cursor:pointer;">✏ Corregir</button>`
+             style="flex:1;padding:8px;background:#0D1622;color:#7A96B0;border:1px solid #1C2B3A;border-radius:8px;font-size:12px;cursor:pointer;">✏ Corregir</button>`
         : ''
       }
       <button onclick="${puedeAjustar ? `conteoAbrirAjuste(${JSON.stringify(s).replace(/"/g,'&quot;')})` : 'void(0)'}"
         ${!puedeAjustar ? 'disabled' : ''}
-        style="flex:2;padding:8px;background:${puedeAjustar?'#b45309':'#1a1a1a'};color:${puedeAjustar?'#fff':'#374151'};border:${puedeAjustar?'none':'1px solid #1f2937'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};">
+        style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'#0D1622'};color:${puedeAjustar?'#fff':'#415A70'};border:${puedeAjustar?'none':'1px solid #1C2B3A'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};">
         ${hijoPendiente ? '⏳ Esperando 2do conteo' : '✓ Confirmar ajuste →'}
       </button>
-      <button onclick="conteoCancelar(${s.id})" style="padding:8px;background:none;border:1px solid #7f1d1d;color:#ef4444;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
+      <button onclick="conteoCancelar(${s.id})" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
     </div>
-    ${s.editado_en ? `<div style="font-size:10px;color:#78350f;margin-top:6px;">✏ Editado: ${s.motivo_edicion}</div>` : ''}
+    ${s.editado_en ? `<div style="font-size:10px;color:#415A70;margin-top:6px;">✏ Editado: ${s.motivo_edicion}</div>` : ''}
   </div>`;
 }
 
 function _renderCardProgreso(s) {
-  const col = s.estado === 'EN_PROCESO' ? '#1d4ed8' : '#374151';
-  return `<div style="background:#111;border:1px solid #1f2937;border-radius:10px;padding:12px;margin-bottom:6px;">
+  const col = s.estado === 'EN_PROCESO' ? '#164F5A' : '#253A4A';
+  return `<div style="background:#121C26;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:6px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;">
       <div style="flex:1;min-width:0;">
         <div style="font-size:12px;font-weight:700;">${s.producto_codigo || '—'}${_tipoTag(s)}</div>
-        <div style="font-size:11px;color:#555;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
-        <div style="font-size:11px;color:#444;margin-top:2px;">📍 ${s.ubicacion_codigo || '—'}${s.operario_id ? ` · 👤 Op #${s.operario_id}` : ''}</div>
+        <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:2px;">📍 ${s.ubicacion_codigo || '—'}${s.operario_id ? ` · 👤 Op #${s.operario_id}` : ''}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0;margin-left:8px;">
-        ${s.clasificacion_abc ? `<span style="background:#1c1a0a;color:#f59e0b;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${s.clasificacion_abc}</span>` : ''}
+        ${s.clasificacion_abc ? `<span style="background:#1C2B3A;color:#FBBF24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:6px;">ABC-${s.clasificacion_abc}</span>` : ''}
         <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
-        <button onclick="conteoCancelar(${s.id})" style="background:none;border:1px solid #7f1d1d;color:#ef4444;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
+        <button onclick="conteoCancelar(${s.id})" style="background:none;border:1px solid #7F1D1D;color:#F87171;font-size:9px;padding:1px 6px;border-radius:6px;cursor:pointer;">Cancelar</button>
       </div>
     </div>
   </div>`;
 }
 
 function _renderCardResuelto(s) {
-  const colMap = { MATCH:'#166534', AJUSTADO:'#065f46', AJUSTANDO:'#7c2d12', CANCELADO:'#374151' };
-  const col = colMap[s.estado] || '#333';
+  const colMap = { MATCH:'#14532D', AJUSTADO:'#14532D', AJUSTANDO:'#7F1D1D', CANCELADO:'#253A4A' };
+  const col = colMap[s.estado] || '#253A4A';
   const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : null;
-  const difCol = (s.diferencia || 0) > 0 ? '#4ade80' : (s.diferencia || 0) < 0 ? '#f87171' : '#aaa';
-  return `<div style="background:#0a0a0a;border:1px solid #111;border-radius:10px;padding:12px;margin-bottom:6px;">
+  const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : (s.diferencia || 0) < 0 ? '#F87171' : '#415A70';
+  return `<div style="background:#0B1117;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:6px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;">
       <div style="flex:1;min-width:0;">
-        <div style="font-size:12px;font-weight:700;color:#4b5563;">${s.producto_codigo || '—'}</div>
-        <div style="font-size:11px;color:#374151;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
-        <div style="font-size:11px;color:#2d3748;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
+        <div style="font-size:12px;font-weight:700;color:#415A70;">${s.producto_codigo || '—'}</div>
+        <div style="font-size:11px;color:#415A70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.producto_nombre || ''}</div>
+        <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
       </div>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0;margin-left:8px;">
         <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;">${s.estado}</span>
         ${dif ? `<span style="color:${difCol};font-size:11px;font-weight:700;">Δ ${dif}</span>` : ''}
       </div>
     </div>
-    ${s.aprobador_nombre ? `<div style="font-size:10px;color:#374151;margin-top:4px;">✓ ${s.aprobador_nombre}</div>` : ''}
+    ${s.aprobador_nombre ? `<div style="font-size:10px;color:#415A70;margin-top:4px;">✓ ${s.aprobador_nombre}</div>` : ''}
   </div>`;
 }
 
