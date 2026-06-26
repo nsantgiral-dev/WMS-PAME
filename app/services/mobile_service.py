@@ -418,6 +418,7 @@ class MobileService:
                 SesionConteo.almacen_id == almacen_id,
                 SesionConteo.estado == EstadoConteo.PENDIENTE,
                 SesionConteo.operario_id.is_(None),
+                SesionConteo.es_segundo_conteo.is_(False),  # CC2 va al admin, no al dispatcher cíclico
             )
             .order_by(_prioridad_abc, SesionConteo.fecha_creacion.asc())
             .with_for_update(skip_locked=True)

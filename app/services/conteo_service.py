@@ -1,8 +1,7 @@
 """
 Servicio de Conteo Cíclico con Double-Blind Check.
 Regla inquebrantable: el operario NUNCA ve la cantidad esperada.
-La conciliación se hace contra el stock WMS (UbicacionProducto.cantidad).
-Siesa solo se consulta al momento de aprobar el ajuste (confirmar_ajuste).
+Fuente de verdad: Siesa (consultado al registrar el conteo). WMS solo como fallback si Siesa no responde.
 """
 import uuid
 import logging
@@ -76,13 +75,37 @@ class ConteoService:
         if sesion_pre.maneja_lote and not lote_id:
             raise ValueError('Este producto maneja lotes. El campo lote_id es obligatorio.')
 
-        # Obtener stock WMS actual — lectura directa de DB, sin HTTP, sin caché.
-        # UbicacionProducto.cantidad es la fuente de verdad operativa del WMS.
-        reg_inv = UbicacionProducto.query.filter_by(
-            ubicacion_id=sesion_pre.ubicacion_id,
-            producto_id=sesion_pre.producto_id,
-        ).first()
-        existencia_wms = float(reg_inv.cantidad) if reg_inv else 0.0
+        # Siesa es la fuente de verdad. Se consulta antes del lock para no
+        # mantener la transacción abierta durante la llamada HTTP.
+        _bodega_siesa = None
+        if sesion_pre.almacen_id:
+            from app.models.almacen import Almacen as _Alm
+            _alm = _Alm.query.get(sesion_pre.almacen_id)
+            _bodega_siesa = _alm.bodega_siesa_id if _alm else None
+
+        existencia_ref = None
+        if sesion_pre.producto_codigo_siesa and _bodega_siesa:
+            existencia_ref = ConteoService.consultar_existencia_siesa(
+                producto_codigo_siesa=sesion_pre.producto_codigo_siesa,
+                bodega=_bodega_siesa,
+            )
+
+        if existencia_ref is None:
+            # Fallback a WMS si Siesa no responde
+            reg_inv = UbicacionProducto.query.filter_by(
+                ubicacion_id=sesion_pre.ubicacion_id,
+                producto_id=sesion_pre.producto_id,
+            ).first()
+            existencia_ref = float(reg_inv.cantidad) if reg_inv else 0.0
+            logger.warning(
+                f'[CONTEO] Siesa no respondió para {sesion_pre.codigo} '
+                f'— diferencia calculada contra WMS ({existencia_ref})'
+            )
+        else:
+            logger.info(
+                f'[CONTEO] Referencia Siesa para {sesion_pre.codigo}: '
+                f'{existencia_ref} und (bodega={_bodega_siesa})'
+            )
 
         # Adquirir lock pesimista para el update atómico
         sesion = (SesionConteo.query
@@ -98,15 +121,12 @@ class ConteoService:
         if sesion.operario_id and sesion.operario_id != operario_id:
             raise ValueError('Esta tarea no está asignada a ti')
 
-        # Guardar conteo — existencia_siesa almacena el stock WMS de referencia
-        # (reutilizamos la columna para no requerir migration)
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = cantidad_fisica
-        sesion.existencia_siesa = existencia_wms
+        sesion.existencia_siesa = existencia_ref
         sesion.lote_id = lote_id
         sesion.fecha_inicio = sesion.fecha_inicio or datetime.utcnow()
 
-        # Conciliar contra WMS
         resultado_conciliacion = ConteoService.reconciliar_cantidad(sesion, cantidad_fisica)
         diferencia = resultado_conciliacion['diferencia']
 
@@ -235,16 +255,24 @@ class ConteoService:
             sesion_origen_id=sesion_origen.id
         )
 
-        # Buscar operario disponible diferente al primero — mismo almacén
+        # Buscar segundo operario — mismo almacén primero, luego admin global.
+        # Sin segundo operario el CC2 queda sin asignar y se escala al panel admin.
         from app.models.usuario import Usuario
-        _q = Usuario.query.filter(
+        _base = Usuario.query.filter(
             Usuario.id != operario_excluido,
             Usuario.activo == True,
-            Usuario.rol.in_(['operario', 'jefe_almacen', 'admin'])
         )
+        otro_operario = None
         if sesion_origen.almacen_id:
-            _q = _q.filter(Usuario.almacen_id == sesion_origen.almacen_id)
-        otro_operario = _q.first()
+            otro_operario = _base.filter(
+                Usuario.almacen_id == sesion_origen.almacen_id,
+                Usuario.rol.in_(['operario', 'jefe_almacen', 'admin']),
+            ).first()
+        if not otro_operario:
+            # Fallback: cualquier admin/jefe_almacen independiente del almacén
+            otro_operario = _base.filter(
+                Usuario.rol.in_(['jefe_almacen', 'admin']),
+            ).first()
 
         if otro_operario:
             segundo.operario_id = otro_operario.id
