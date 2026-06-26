@@ -6883,12 +6883,13 @@ async function cargarInventario() {
       const r = await fetch(API + '/api/almacenes/', { headers: { Authorization: 'Bearer ' + TOKEN } });
       if (r.ok) {
         _INV_ALMACENES = await r.json();
+        const opts = _INV_ALMACENES.map(a =>
+          `<option value="${a.id}">${a.nombre}${a.bodega_siesa_id ? ` (${a.bodega_siesa_id})` : ''}</option>`
+        ).join('');
         const sel = document.getElementById('inv-abc-almacen');
-        if (sel) {
-          sel.innerHTML = _INV_ALMACENES.map(a =>
-            `<option value="${a.id}">${a.nombre}${a.bodega_siesa_id ? ` (${a.bodega_siesa_id})` : ''}</option>`
-          ).join('');
-        }
+        if (sel) sel.innerHTML = opts;
+        const selM = document.getElementById('conteo-manual-almacen');
+        if (selM) selM.innerHTML = opts;
         mostrarConfigBodega();
       }
     } catch (e) { /* silencioso */ }
@@ -7367,12 +7368,12 @@ function conteosOcultarFormManual() {
   document.getElementById('conteo-manual-error').textContent = '';
 }
 async function crearConteoManual() {
-  const almacenId = document.getElementById('inv-abc-almacen')?.value || _INV_ALMACENES[0]?.id;
+  const almacenId = document.getElementById('conteo-manual-almacen')?.value;
   const codigo = document.getElementById('conteo-manual-codigo')?.value.trim().toUpperCase();
   const errorEl = document.getElementById('conteo-manual-error');
   errorEl.textContent = '';
   if (!codigo) { errorEl.textContent = 'Ingresa el código del producto'; return; }
-  if (!almacenId) { errorEl.textContent = 'Selecciona un almacén en la pestaña ABC'; return; }
+  if (!almacenId) { errorEl.textContent = 'Selecciona un almacén'; return; }
   try {
     const r = await fetch(API + '/api/conteo/manual', {
       method: 'POST',
