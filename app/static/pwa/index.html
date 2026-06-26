@@ -172,6 +172,19 @@
       color: var(--tx) !important;
     }
 
+    /* 1b. Tokens oscuros del sistema de diseño → blanco en claro (cards conteo cíclico) */
+    body.light [style*="background:#121C26"],
+    body.light [style*="background:#0B1117"] {
+      background-color: var(--bg-s) !important;
+      color: var(--tx) !important;
+    }
+    body.light [style*="background:#121C26"] *[style*="color:#fff"],
+    body.light [style*="background:#0B1117"] *[style*="color:#fff"] {
+      color: var(--tx) !important;
+    }
+    /* Texto casi-blanco (E2EEF8) sería invisible sobre fondo claro */
+    body.light [style*="color:#E2EEF8"] { color: var(--tx) !important; }
+
     /* 2. Fondos de inputs / secundarios oscuros → gris claro */
     body.light [style*="background:#1a1a1a"],
     body.light [style*="background:#1e293b"],
@@ -246,6 +259,13 @@
       background-color: var(--bbg) !important;
       color: var(--blue) !important;
       border-color: var(--bbrd) !important;
+    }
+
+    /* 9b. Acento teal dim (#0B3038) → light-teal en claro (botones Asignar / Manual) */
+    body.light [style*="background:#0B3038"] {
+      background-color: var(--pm-dim) !important;
+      color: var(--pm) !important;
+      border-color: var(--pm-border) !important;
     }
 
     /* 9. Estado ÁMBAR / NARANJA */
