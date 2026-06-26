@@ -7059,12 +7059,12 @@ function _renderCardAccion(s) {
     <div style="display:flex;gap:6px;">
       ${s.estado !== 'AJUSTADO' && s.estado !== 'AJUSTANDO'
         ? `<button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
-             style="flex:1;padding:8px;background:#0D1622;color:#7A96B0;border:1px solid #1C2B3A;border-radius:8px;font-size:12px;cursor:pointer;">✏ Corregir</button>`
+             style="flex:1;padding:8px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:12px;cursor:pointer;">✏ Corregir</button>`
         : ''
       }
       <button onclick="${puedeAjustar ? `conteoAbrirAjuste(${JSON.stringify(s).replace(/"/g,'&quot;')})` : 'void(0)'}"
         ${!puedeAjustar ? 'disabled' : ''}
-        style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'#0D1622'};color:${puedeAjustar?'#fff':'#415A70'};border:${puedeAjustar?'none':'1px solid #1C2B3A'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};">
+        style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'var(--bg-input)'};color:${puedeAjustar?'#fff':'var(--tx3)'};border:${puedeAjustar?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};">
         ${hijoPendiente ? '⏳ Esperando 2do conteo' : '✓ Confirmar ajuste →'}
       </button>
       <button onclick="conteoCancelar(${s.id})" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
