@@ -504,8 +504,42 @@ def _ejecutar_job(job: SiesaJob) -> dict:
 
         item_codigo = payload.get('item_codigo')
         if not item_codigo:
-            raise ValueError(
-                f'AJUSTE_CONTEO job={job.id}: item_codigo faltante en payload'
+            # Payload mínimo (jobs creados antes del formato extendido).
+            # Reconstruir todos los campos desde la SesionConteo.
+            from app.models.almacen import Almacen as _AlmRec
+            item_codigo = sesion_cteo.producto_codigo_siesa
+            if not item_codigo:
+                raise ValueError(
+                    f'AJUSTE_CONTEO job={job.id}: item_codigo faltante en payload '
+                    f'y sesion {sesion_id} sin producto_codigo_siesa'
+                )
+            _alm_r = _AlmRec.query.get(sesion_cteo.almacen_id)
+            _dif_r = (
+                sesion_cteo.diferencia
+                if sesion_cteo.diferencia is not None
+                else (sesion_cteo.cantidad_fisica or 0) - (sesion_cteo.existencia_siesa or 0)
+            )
+            if _dif_r == 0:
+                logger.info(
+                    f'[DLQ] AJUSTE_CONTEO job={job.id}: diferencia=0 para sesion {sesion_id} '
+                    f'— sin ajuste que enviar a Siesa'
+                )
+                return {'idempotente': True, 'diferencia_cero': True}
+            payload = {
+                **payload,
+                'item_codigo': item_codigo,
+                'motivo_codigo': sesion_cteo.motivo_codigo or ('AJ-ENT' if _dif_r > 0 else 'AJ-SAL'),
+                'cantidad': abs(_dif_r),
+                'referencia': sesion_cteo.codigo or f'CC-{sesion_id}',
+                'bodega': _alm_r.bodega_siesa_id if _alm_r else None,
+                'centro_op': _alm_r.centro_op_siesa if _alm_r else None,
+                'ubicacion_id': sesion_cteo.ubicacion_id,
+                'producto_id': sesion_cteo.producto_id,
+                'tarea_picking_id': sesion_cteo.tarea_picking_id,
+            }
+            logger.warning(
+                f'[DLQ] AJUSTE_CONTEO job={job.id}: payload mínimo — reconstruido desde '
+                f'sesion {sesion_id}: {payload["motivo_codigo"]} {item_codigo} {payload["cantidad"]} uds'
             )
 
         resultado = connekta.enviar_ajuste_inventario(
