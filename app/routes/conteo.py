@@ -553,6 +553,7 @@ def stats_conteo():
     pendientes = counts.get('PENDIENTE', 0)
     en_proceso = counts.get('EN_PROCESO', 0)
     segundo_conteo = counts.get('SEGUNDO_CONTEO', 0)
+    tercer_conteo = counts.get('TERCER_CONTEO', 0)
     descuadre = counts.get('DESCUADRE', 0)
     match = counts.get('MATCH', 0)
     ajustado = counts.get('AJUSTADO', 0)
@@ -602,7 +603,7 @@ def stats_conteo():
         'hoy_completados': hoy_completados,
         'atrasados_2d': atrasados,
         'sin_asignar': sin_asignar,
-        'accion_requerida': segundo_conteo + descuadre,
+        'accion_requerida': segundo_conteo + tercer_conteo + descuadre,
         'resueltos': match + ajustado + ajustando,
         'fallos_dlq': fallos_dlq,
     }), 200
@@ -747,6 +748,46 @@ def reintentar_fallos_dlq():
         logger.info(f'[CONTEO DLQ] {reencolados} jobs FALLIDO re-encolados por usuario #{uid}')
 
     return jsonify({'reencolados': reencolados}), 200
+
+
+@conteo_bp.route('/<int:id>/omitir-segundo', methods=['POST'])
+@jwt_required()
+def omitir_segundo_conteo(id):
+    """
+    Admin omite el CC2 (o CC3) pendiente y mueve el padre directo a DESCUADRE.
+    Útil cuando no hay segundo operario disponible o en entornos de prueba.
+    El ajuste queda pendiente de aprobación manual del admin.
+    """
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.LEAD:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    sesion = SesionConteo.query.get(id)
+    if not sesion:
+        return jsonify({'error': 'Sesión no encontrada'}), 404
+    if sesion.estado not in ('SEGUNDO_CONTEO', 'TERCER_CONTEO'):
+        return jsonify({'error': f'Solo se puede omitir en estado SEGUNDO_CONTEO o TERCER_CONTEO, actual: {sesion.estado}'}), 400
+
+    # Cancelar el hijo activo (CC2 o CC3)
+    hijo = sesion.hijo_conteo
+    if hijo and hijo.estado in ('PENDIENTE', 'EN_PROCESO'):
+        hijo.estado = 'CANCELADO'
+        hijo.fecha_cierre = datetime.utcnow()
+        # Si hijo tenía su propio hijo (CC3), cancelarlo también
+        nieto = hijo.hijo_conteo
+        if nieto and nieto.estado in ('PENDIENTE', 'EN_PROCESO'):
+            nieto.estado = 'CANCELADO'
+            nieto.fecha_cierre = datetime.utcnow()
+
+    sesion.estado = 'DESCUADRE'
+    db.session.commit()
+    logger.info(f'[CONTEO] Sesión {sesion.id} omitió CC2/CC3 — movida a DESCUADRE por usuario #{uid}')
+    return jsonify({'ok': True, 'sesion_id': id, 'estado': 'DESCUADRE'}), 200
 
 
 @conteo_bp.route('/descartar-fallos', methods=['POST'])

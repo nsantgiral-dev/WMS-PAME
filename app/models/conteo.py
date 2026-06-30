@@ -9,7 +9,8 @@ class EstadoConteo:
     MATCH           = 'MATCH'
     DESCUADRE       = 'DESCUADRE'
     SEGUNDO_CONTEO  = 'SEGUNDO_CONTEO'
-    AJUSTANDO       = 'AJUSTANDO'   # transición: lock liberado, Siesa en vuelo
+    TERCER_CONTEO   = 'TERCER_CONTEO'   # CC1 esperando CC3 porque CC1≠CC2
+    AJUSTANDO       = 'AJUSTANDO'       # transición: lock liberado, Siesa en vuelo
     AJUSTADO        = 'AJUSTADO'
     CANCELADO       = 'CANCELADO'
 
@@ -152,8 +153,8 @@ class SesionConteo(db.Model):
             'editado_por_nombre': self.editor.nombre if self.editor else None,
             'editado_en': self.editado_en.isoformat() if self.editado_en else None,
             'motivo_edicion': self.motivo_edicion,
-            # Datos del segundo conteo (hijo) para que el admin pueda comparar
-            # sin necesitar un request adicional.
+            # Datos del segundo conteo (hijo) embebidos para evitar N+1.
+            # Si CC1≠CC2, hijo_conteo.hijo_conteo es el CC3.
             'segundo_conteo': {
                 'id': self.hijo_conteo.id,
                 'estado': self.hijo_conteo.estado,
@@ -167,5 +168,15 @@ class SesionConteo(db.Model):
                     self.hijo_conteo.fecha_cierre.isoformat()
                     if self.hijo_conteo.fecha_cierre else None
                 ),
+                'tercer_conteo': {
+                    'id': self.hijo_conteo.hijo_conteo.id,
+                    'estado': self.hijo_conteo.hijo_conteo.estado,
+                    'cantidad_fisica': self.hijo_conteo.hijo_conteo.cantidad_fisica,
+                    'operario_id': self.hijo_conteo.hijo_conteo.operario_id,
+                    'operario_nombre': (
+                        self.hijo_conteo.hijo_conteo.operario.nombre
+                        if self.hijo_conteo.hijo_conteo.operario else None
+                    ),
+                } if self.hijo_conteo.hijo_conteo else None,
             } if self.hijo_conteo else None,
         }

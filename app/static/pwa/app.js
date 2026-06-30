@@ -7006,14 +7006,44 @@ function _tipoTag(s) {
 }
 
 function _renderCardAccion(s) {
-  const hijo = s.segundo_conteo;
-  const TERMINADOS = ['MATCH','DESCUADRE','SEGUNDO_CONTEO','AJUSTADO','CANCELADO'];
-  const hijoPendiente = hijo ? !TERMINADOS.includes(hijo.estado) : (s.estado !== 'DESCUADRE');
+  const hijo = s.segundo_conteo;           // CC2
+  const cc3  = hijo?.tercer_conteo;        // CC3 (cuando CC1≠CC2)
+  const TERMINADOS = ['MATCH','DESCUADRE','SEGUNDO_CONTEO','TERCER_CONTEO','AJUSTADO','CANCELADO'];
+  const esTercerConteo = s.estado === 'TERCER_CONTEO';
+  const cc2Pendiente = hijo ? !TERMINADOS.includes(hijo.estado) : true;
+  const cc3Pendiente = cc3 ? !TERMINADOS.includes(cc3.estado) : true;
+  const hijoPendiente = esTercerConteo ? cc3Pendiente : cc2Pendiente;
+  const puedeAjustar = s.estado === 'DESCUADRE';
+  const coinciden = hijo && !cc2Pendiente && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
+  const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#7F4010' : '#164F5A';
+  const badgeColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : s.estado === 'TERCER_CONTEO' ? '#92400E' : '#1E8395';
   const dif = s.diferencia != null ? (s.diferencia > 0 ? `+${s.diferencia}` : `${s.diferencia}`) : '?';
   const difCol = (s.diferencia || 0) > 0 ? '#22C55E' : '#F87171';
-  const puedeAjustar = s.estado === 'DESCUADRE' || (s.estado === 'SEGUNDO_CONTEO' && hijo && !hijoPendiente);
-  const coinciden = hijo && hijo.cantidad_fisica != null && hijo.cantidad_fisica === s.cantidad_fisica;
-  const bordColor = s.estado === 'DESCUADRE' ? '#7F1D1D' : '#164F5A';
+  const mostrarOmitir = ['SEGUNDO_CONTEO','TERCER_CONTEO'].includes(s.estado) && hijoPendiente;
+  const btnTexto = hijoPendiente
+    ? (esTercerConteo ? '⏳ Esperando 3er conteo' : '⏳ Esperando 2do conteo')
+    : '✓ Confirmar ajuste →';
+
+  // Columna 3 del grid varía según estado
+  let col3Html;
+  if (esTercerConteo) {
+    const cc2Val = hijo?.cantidad_fisica != null ? hijo.cantidad_fisica : '—';
+    const cc3Hecho = cc3 && !cc3Pendiente;
+    col3Html = `
+      <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:2px;">CC2 / CC3</div>
+      <div style="font-size:14px;font-weight:700;color:#F87171;line-height:1.4;">${cc2Val}<span style="font-size:9px;color:#415A70;margin-left:3px;">CC2</span></div>
+      ${cc3Hecho
+        ? `<div style="font-size:14px;font-weight:700;color:#FBBF24;line-height:1.4;">${cc3.cantidad_fisica ?? '—'}<span style="font-size:9px;color:#415A70;margin-left:3px;">CC3</span></div>`
+        : `<div style="font-size:13px;color:#415A70;">⏳ CC3</div>`}`;
+  } else {
+    col3Html = `
+      <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2do Conteo</div>
+      ${hijo && !cc2Pendiente
+        ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#22C55E':'#F87171'};line-height:1;">${hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—'}</div>
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—')}</div>`
+        : `<div style="font-size:16px;color:#415A70;padding:2px 0;">⏳</div>
+           <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar'}</div>`}`;
+  }
 
   return `<div style="background:#121C26;border:1px solid ${bordColor};border-radius:12px;padding:14px;margin-bottom:10px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px;">
@@ -7022,7 +7052,7 @@ function _renderCardAccion(s) {
         <div style="font-size:11px;color:#415A70;margin-top:1px;">${s.producto_nombre || ''}</div>
         <div style="font-size:11px;color:#415A70;margin-top:1px;">📍 ${s.ubicacion_codigo || '—'}</div>
       </div>
-      <span style="background:${s.estado==='DESCUADRE'?'#7F1D1D':'#1E8395'};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${s.estado}</span>
+      <span style="background:${badgeColor};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;flex-shrink:0;margin-left:8px;">${s.estado}</span>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;background:#0B1117;border-radius:8px;padding:10px;margin-bottom:10px;text-align:center;">
@@ -7036,37 +7066,32 @@ function _renderCardAccion(s) {
         <div style="font-size:20px;font-weight:800;color:#FBBF24;line-height:1;">${s.cantidad_fisica != null ? s.cantidad_fisica : '—'}</div>
         <div style="font-size:9px;color:#415A70;margin-top:2px;">${s.operario_id ? `Op #${s.operario_id}` : '—'}</div>
       </div>
-      <div>
-        <div style="font-size:9px;color:#415A70;font-weight:700;text-transform:uppercase;margin-bottom:3px;">2do Conteo</div>
-        ${hijo && !hijoPendiente
-          ? `<div style="font-size:20px;font-weight:800;color:${coinciden?'#22C55E':'#F87171'};line-height:1;">${hijo.cantidad_fisica != null ? hijo.cantidad_fisica : '—'}</div>
-             <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : '—')}</div>`
-          : `<div style="font-size:16px;color:#415A70;padding:2px 0;">⏳</div>
-             <div style="font-size:9px;color:#415A70;margin-top:2px;">${hijo ? (hijo.operario_nombre || (hijo.operario_id ? `Op #${hijo.operario_id}` : 'asignado')) : 'sin asignar'}</div>`
-        }
-      </div>
+      <div>${col3Html}</div>
     </div>
 
     <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#415A70;margin-bottom:10px;">
       <span>Δ <span style="color:${difCol};font-weight:700;">${dif} uds</span>${s.motivo_codigo ? ` · <span style="color:${s.motivo_codigo==='AJ-ENT'?'#22C55E':'#F87171'};">${s.motivo_codigo}</span>` : ''}</span>
-      ${!hijoPendiente && hijo
-        ? coinciden
-          ? `<span style="color:#22C55E;font-size:10px;">✓ Ambos coinciden</span>`
-          : `<span style="color:#F87171;font-size:10px;">⚠ Operarios no coinciden</span>`
-        : ''
-      }
+      ${s.estado === 'DESCUADRE' && coinciden
+        ? `<span style="color:#22C55E;font-size:10px;">✓ CC1==CC2 confirmado</span>`
+        : s.estado === 'DESCUADRE' && !coinciden && hijo && !cc2Pendiente
+          ? `<span style="color:#FBBF24;font-size:10px;">✓ CC3 definitivo</span>`
+          : ''}
     </div>
 
-    <div style="display:flex;gap:6px;">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
       ${s.estado !== 'AJUSTADO' && s.estado !== 'AJUSTANDO'
         ? `<button onclick="conteoAbrirEdicion(${JSON.stringify(s).replace(/"/g,'&quot;')})"
-             style="flex:1;padding:8px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:12px;cursor:pointer;">✏ Corregir</button>`
-        : ''
-      }
+             style="padding:8px 10px;background:var(--bg-input);color:var(--tx2);border:1px solid var(--brd);border-radius:8px;font-size:12px;cursor:pointer;">✏</button>`
+        : ''}
+      ${mostrarOmitir
+        ? `<button onclick="conteoOmitirSegundo(${s.id})"
+             title="Saltar CC2/CC3 y mover a DESCUADRE para revisión admin"
+             style="padding:8px 10px;background:none;border:1px solid #415A70;color:#415A70;border-radius:8px;font-size:11px;cursor:pointer;white-space:nowrap;">Omitir CC2</button>`
+        : ''}
       <button onclick="${puedeAjustar ? `conteoAbrirAjuste(${JSON.stringify(s).replace(/"/g,'&quot;')})` : 'void(0)'}"
         ${!puedeAjustar ? 'disabled' : ''}
-        style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'var(--bg-input)'};color:${puedeAjustar?'#fff':'var(--tx3)'};border:${puedeAjustar?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};">
-        ${hijoPendiente ? '⏳ Esperando 2do conteo' : '✓ Confirmar ajuste →'}
+        style="flex:2;padding:8px;background:${puedeAjustar?'#1E8395':'var(--bg-input)'};color:${puedeAjustar?'#fff':'var(--tx3)'};border:${puedeAjustar?'none':'1px solid var(--brd)'};border-radius:8px;font-size:12px;font-weight:700;cursor:${puedeAjustar?'pointer':'not-allowed'};min-width:120px;">
+        ${btnTexto}
       </button>
       <button onclick="conteoCancelar(${s.id})" style="padding:8px;background:none;border:1px solid #7F1D1D;color:#F87171;border-radius:8px;font-size:11px;cursor:pointer;">✕</button>
     </div>
@@ -7185,6 +7210,24 @@ async function conteoDescartarFallos() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+async function conteoOmitirSegundo(id) {
+  if (!confirm('¿Omitir el CC2/CC3 pendiente y mover esta sesión a DESCUADRE para revisión?\n\nEl conteo pendiente se cancelará. Podrás aprobar o rechazar el ajuste manualmente.')) return;
+  try {
+    const r = await fetch(API + '/api/conteo/' + id + '/omitir-segundo', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta('Sesión movida a DESCUADRE — revisa y confirma el ajuste', 'exito');
+      await cargarConteoStats();
+      await cargarConteosAdmin();
+    } else {
+      alerta(d.error || 'Error', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
 async function conteoExportar() {
   const almId = document.getElementById('inv-abc-almacen')?.value;
   const desde = prompt('Desde (YYYY-MM-DD, vacío = todo):', '')?.trim() || '';
@@ -7295,7 +7338,7 @@ async function cargarConteos(page) {
   const clase = document.getElementById('inv-filtro-clase')?.value || '';
 
   const VISTA_ESTADOS = {
-    accion:    'SEGUNDO_CONTEO,DESCUADRE',
+    accion:    'SEGUNDO_CONTEO,TERCER_CONTEO,DESCUADRE',
     progreso:  'PENDIENTE,EN_PROCESO',
     resueltos: 'MATCH,AJUSTADO,AJUSTANDO,CANCELADO',
   };

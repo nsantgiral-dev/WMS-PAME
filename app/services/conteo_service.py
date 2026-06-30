@@ -131,6 +131,17 @@ class ConteoService:
         diferencia = resultado_conciliacion['diferencia']
 
         if resultado_conciliacion['es_match']:
+            # CC2 o CC3 cuadra con Siesa → cierra también el padre (sin ajuste)
+            if sesion.es_segundo_conteo and sesion.sesion_origen_id:
+                origen = SesionConteo.query.get(sesion.sesion_origen_id)
+                if origen:
+                    # CC3: raíz es el padre del padre (CC1)
+                    es_tercer = origen.es_segundo_conteo and origen.sesion_origen_id
+                    raiz = SesionConteo.query.get(origen.sesion_origen_id) if es_tercer else origen
+                    if raiz and raiz.estado in (EstadoConteo.SEGUNDO_CONTEO, EstadoConteo.TERCER_CONTEO):
+                        raiz.estado = EstadoConteo.MATCH
+                        raiz.fecha_cierre = datetime.utcnow()
+                        logger.info(f'[CONTEO] CC{"3" if es_tercer else "2"} MATCH — raíz {raiz.codigo} → MATCH')
             try:
                 db.session.commit()
             except Exception as e_commit:
@@ -150,30 +161,84 @@ class ConteoService:
 
         else:
             if sesion.es_segundo_conteo:
-                sesion.estado = EstadoConteo.DESCUADRE
-                try:
-                    db.session.commit()
-                except Exception as e_desc:
-                    db.session.rollback()
-                    logger.error(f'[CONTEO] Error al marcar DESCUADRE para sesión {sesion_id}: {e_desc}')
-                    raise ValueError(f'Error al registrar descuadre: {e_desc}')
+                origen = SesionConteo.query.get(sesion.sesion_origen_id) if sesion.sesion_origen_id else None
+                es_tercer = origen is not None and origen.es_segundo_conteo
 
+                if es_tercer:
+                    # CC3 es definitivo: propaga su cantidad a la raíz (CC1) y cierra
+                    raiz = SesionConteo.query.get(origen.sesion_origen_id) if origen.sesion_origen_id else None
+                    sesion.estado = EstadoConteo.DESCUADRE
+                    if raiz and raiz.estado == EstadoConteo.TERCER_CONTEO:
+                        raiz.estado = EstadoConteo.DESCUADRE
+                        raiz.cantidad_fisica = cantidad_fisica  # CC3 es la verdad definitiva
+                        raiz.diferencia = diferencia
+                        raiz.existencia_siesa = existencia_ref
+                        raiz.motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
+                        logger.warning(f'[CONTEO] CC3 DESCUADRE — raíz {raiz.codigo} → DESCUADRE, cantidad={cantidad_fisica}')
+                    try:
+                        db.session.commit()
+                    except Exception as e:
+                        db.session.rollback()
+                        raise ValueError(f'Error al registrar descuadre CC3: {e}')
+                    return {
+                        'resultado': 'DESCUADRE',
+                        'mensaje': 'Tercer conteo registrado — el administrador debe revisar y aprobar el ajuste',
+                        'sesion_id': sesion.id,
+                    }
+
+                # CC2 no cuadra con Siesa — comparar CC1 vs CC2
+                cc1_cantidad = origen.cantidad_fisica if origen else None
+                sesion.estado = EstadoConteo.DESCUADRE
+
+                if cc1_cantidad is not None and cantidad_fisica == cc1_cantidad:
+                    # CC1 == CC2: "verdad de bodega" confirmada → DESCUADRE para admin
+                    if origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO:
+                        origen.estado = EstadoConteo.DESCUADRE
+                        logger.warning(
+                            f'[CONTEO] CC2 confirma CC1 ({cc1_cantidad} uds) — '
+                            f'padre {origen.codigo} → DESCUADRE'
+                        )
+                    try:
+                        db.session.commit()
+                    except Exception as e:
+                        db.session.rollback()
+                        raise ValueError(f'Error al marcar DESCUADRE: {e}')
+                    return {
+                        'resultado': 'DESCUADRE',
+                        'mensaje': 'Ambos conteos coinciden — el administrador debe aprobar el ajuste',
+                        'sesion_id': sesion.id,
+                    }
+
+                # CC1 ≠ CC2: conteos discordantes → necesita CC3
+                if origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO:
+                    origen.estado = EstadoConteo.TERCER_CONTEO
+                try:
+                    cc3 = ConteoService._crear_conteo_verificacion(
+                        sesion_origen=sesion,
+                        operario_excluido=operario_id,
+                    )
+                    db.session.commit()
+                except Exception as e:
+                    db.session.rollback()
+                    logger.error(f'[CONTEO] Error al crear CC3 para sesión {sesion_id}: {e}')
+                    raise ValueError(f'Error al crear tercer conteo: {e}')
                 logger.warning(
-                    f'[CONTEO] DESCUADRE confirmado en {sesion.codigo} — '
-                    f'diferencia: {diferencia}. Escalado a admin.'
+                    f'[CONTEO] CC1≠CC2 ({cc1_cantidad} vs {cantidad_fisica}) — '
+                    f'CC3 creado: {cc3.codigo}'
                 )
                 return {
-                    'resultado': 'DESCUADRE',
-                    'mensaje': 'Diferencia confirmada en segundo conteo — el administrador debe revisar y aprobar el ajuste',
+                    'resultado': 'TERCER_CONTEO',
+                    'mensaje': 'Los dos conteos no coinciden — se requiere un tercer conteo definitivo',
                     'sesion_id': sesion.id,
+                    'tercer_conteo_id': cc3.id,
                 }
 
-            # Primer conteo con diferencia — generar segundo conteo
+            # Primer conteo con diferencia — generar segundo conteo (CC2)
             sesion.estado = EstadoConteo.SEGUNDO_CONTEO
             try:
-                segundo_conteo = ConteoService._crear_segundo_conteo(
+                segundo_conteo = ConteoService._crear_conteo_verificacion(
                     sesion_origen=sesion,
-                    operario_excluido=operario_id
+                    operario_excluido=operario_id,
                 )
                 db.session.commit()
             except Exception as e_segundo:
@@ -183,11 +248,11 @@ class ConteoService:
 
             logger.warning(
                 f'[CONTEO] DESCUADRE en {sesion.codigo} — '
-                f'diferencia: {diferencia}. Segundo conteo: {segundo_conteo.codigo}'
+                f'diferencia: {diferencia}. CC2: {segundo_conteo.codigo}'
             )
             return {
                 'resultado': 'SEGUNDO_CONTEO',
-                'mensaje': 'Diferencia detectada — se generó un segundo conteo para verificación',
+                'mensaje': 'Diferencia detectada — se asignó un segundo conteo para verificación',
                 'sesion_id': sesion.id,
                 'segundo_conteo_id': segundo_conteo.id
             }
@@ -234,12 +299,13 @@ class ConteoService:
         return {'es_match': False, 'diferencia': diferencia}
 
     @staticmethod
-    def _crear_segundo_conteo(sesion_origen: SesionConteo, operario_excluido: int):
+    def _crear_conteo_verificacion(sesion_origen: SesionConteo, operario_excluido: int):
         """
-        Crea segundo conteo asignado a un operario diferente (double-blind).
-        El nuevo operario no sabe el resultado del primero.
+        Crea CC2 o CC3 asignado a un operario diferente al excluido (double-blind).
+        sesion_origen: CC1 para CC2, CC2 para CC3.
         """
-        codigo = f'CC2-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        numero = 3 if (sesion_origen.es_segundo_conteo) else 2
+        codigo = f'CC{numero}-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
         segundo = SesionConteo(
             codigo=codigo,
@@ -394,8 +460,8 @@ class ConteoService:
             db.session.commit()
             return sesion
 
-        if sesion.estado not in ['SEGUNDO_CONTEO', 'DESCUADRE']:
-            raise ValueError(f'No se puede ajustar en estado {sesion.estado}')
+        if sesion.estado != EstadoConteo.DESCUADRE:
+            raise ValueError(f'No se puede ajustar en estado {sesion.estado} — debe estar en DESCUADRE')
 
         if sesion.cantidad_fisica is None:
             raise ValueError('Faltan datos del conteo para generar ajuste')
