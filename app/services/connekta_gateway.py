@@ -1596,7 +1596,9 @@ class ConnektaGateway:
         _centro_op = centro_op or self.centro_op
 
         es_entrada = motivo_codigo == 'AJ-ENT'
-        siesa_motivo   = '01' if es_entrada else '02'
+        # AJ-ENT → motivo 'AJ-ENT' (naturaleza 1=Entrada — no valida stock disponible)
+        # AJ-SAL → motivo '02'     (naturaleza 2=Salida — confirmado funcional con ADI-00000008)
+        siesa_motivo = 'AJ-ENT' if es_entrada else '02'
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         cia = int(self.id_cia_siesa)
@@ -1619,8 +1621,10 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
                     'f450_id_concepto': self.concepto_ajustes,
-                    'f450_id_bodega_salida': _bodega if not es_entrada else None,
-                    'f450_id_bodega_entrada': _bodega if es_entrada else None,
+                    # ADI (Clase 63): bodegas de cabecera no aplican — la bodega real
+                    # va únicamente en f470_id_bodega del bloque Movimientos.
+                    'f450_id_bodega_salida': None,
+                    'f450_id_bodega_entrada': None,
                     'f450_docto_alterno': None,
                     'f350_id_co_base': None,
                     'f350_id_tipo_docto_base': None,
@@ -1651,6 +1655,7 @@ class ConnektaGateway:
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
+                    'f470_ind_naturaleza': 1 if es_entrada else 2,                   # 1=Entrada (suma al kárdex), 2=Salida (resta del kárdex)
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': _centro_op,
                     'f470_id_ccosto_movto': None,
