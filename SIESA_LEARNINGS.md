@@ -116,11 +116,11 @@
 
 - **Categoría**: Formato de datos
 - **Síntoma observado**: Ajustes de inventario (142951) y transferencias a averías enviados con `f350_id_clase_docto: ''` — Siesa rechazaba silenciosamente o creaba documentos de clase incorrecta.
-- **Causa raíz**: El campo es obligatorio como entero. La spec confirma: **66 = Ajustes de Inventario** (DocumentoInv/AFI), **67 = Transferencias** (AveríaDocInv). Un string vacío no es equivalente.
-- **Corrección**: Clase 63 (documentada inicialmente) fue incorrecta para tipo AFI en PAME — Siesa respondió HTTP 400 "El tipo de documento no esta autorizado para moverse en la clase de importación". El consultor Siesa confirmó que debe ser **66**.
-- **Solución implementada**: `'f350_id_clase_docto': 66` en ajustes (AFI) y `'f350_id_clase_docto': 67` en transferencias a averías.
-- **Archivo(s) relevante(s)**: `app/services/connekta_gateway.py` — `enviar_ajuste_inventario` y `enviar_averia_inventario`
-- **Commit**: `8598d56` (inicial) → corregido en conteo cíclico e2e
+- **Causa raíz**: El campo es obligatorio como entero y el tipo de documento debe ser el correcto para esa clase. La spec PAME: **63 = Ajustes** (código `ADI`), **66 = Tránsito** (RIT/ETS), **67 = Transferencias a averías**. Un string vacío no es equivalente.
+- **Corrección crítica**: El código `AFI` en PAME QA está configurado como Clase 66 (tránsito), NO como ajuste. Usar `AFI` provoca errores en cascada de "transferencia tránsito salida". El código correcto para ajustes en PAME es **`ADI` (AJUSTE DE INVENTARIO)** con `f350_id_clase_docto: 63` y concepto 603.
+- **Solución implementada**: `'f350_id_clase_docto': 63` + `SIESA_TIPO_DOCTO_AJUSTE=ADI` en Railway.
+- **Archivo(s) relevante(s)**: `app/services/connekta_gateway.py` — `enviar_ajuste_inventario`; Railway env var `SIESA_TIPO_DOCTO_AJUSTE`
+- **Commit**: `8598d56` → `4df67a6` → corregido definitivamente en conteo cíclico e2e
 - **Nivel de riesgo si se ignora**: **Alto**
 
 ---
