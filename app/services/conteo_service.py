@@ -397,6 +397,22 @@ class ConteoService:
 
         if otro_operario:
             segundo.operario_id = otro_operario.id
+            # Si el par ya tiene un CC1 activo sin contar aún, lo liberamos al pool
+            # para que el CC2 sea su tarea inmediata en el siguiente get_tarea_actual.
+            cc1_en_curso = SesionConteo.query.filter(
+                SesionConteo.operario_id == otro_operario.id,
+                SesionConteo.estado == EstadoConteo.EN_PROCESO,
+                SesionConteo.es_segundo_conteo.is_(False),
+                SesionConteo.cantidad_fisica.is_(None),
+            ).first()
+            if cc1_en_curso:
+                cc1_en_curso.operario_id = None
+                cc1_en_curso.estado = EstadoConteo.PENDIENTE
+                cc1_en_curso.fecha_inicio = None
+                logger.info(
+                    '[CONTEO] CC1 %s liberado de picker %s para priorizar CC2 %s',
+                    cc1_en_curso.codigo, otro_operario.id, segundo.codigo,
+                )
 
         db.session.add(segundo)
         # No commit aquí — el caller (registrar_conteo) hace un único commit
