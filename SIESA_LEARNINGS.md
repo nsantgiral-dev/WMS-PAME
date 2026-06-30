@@ -116,10 +116,11 @@
 
 - **Categoría**: Formato de datos
 - **Síntoma observado**: Ajustes de inventario (142951) y transferencias a averías enviados con `f350_id_clase_docto: ''` — Siesa rechazaba silenciosamente o creaba documentos de clase incorrecta.
-- **Causa raíz**: El campo es obligatorio como entero. La spec indica: **63 = Ajustes** (DocumentoInv), **67 = Transferencias** (AveríaDocInv). Un string vacío no es equivalente.
-- **Solución implementada**: `'f350_id_clase_docto': 63` en ajustes y `'f350_id_clase_docto': 67` en transferencias a averías.
+- **Causa raíz**: El campo es obligatorio como entero. La spec confirma: **66 = Ajustes de Inventario** (DocumentoInv/AFI), **67 = Transferencias** (AveríaDocInv). Un string vacío no es equivalente.
+- **Corrección**: Clase 63 (documentada inicialmente) fue incorrecta para tipo AFI en PAME — Siesa respondió HTTP 400 "El tipo de documento no esta autorizado para moverse en la clase de importación". El consultor Siesa confirmó que debe ser **66**.
+- **Solución implementada**: `'f350_id_clase_docto': 66` en ajustes (AFI) y `'f350_id_clase_docto': 67` en transferencias a averías.
 - **Archivo(s) relevante(s)**: `app/services/connekta_gateway.py` — `enviar_ajuste_inventario` y `enviar_averia_inventario`
-- **Commit**: `8598d56`
+- **Commit**: `8598d56` (inicial) → corregido en conteo cíclico e2e
 - **Nivel de riesgo si se ignora**: **Alto**
 
 ---

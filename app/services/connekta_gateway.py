@@ -1614,7 +1614,7 @@ class ConnektaGateway:
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': self.nit_empresa or None,
-                    'f350_id_clase_docto': 63,
+                    'f350_id_clase_docto': 66,
                     'f350_ind_estado': 1,
                     'f350_ind_impresion': 0,
                     'f350_notas': referencia,
