@@ -191,21 +191,28 @@ class ConteoService:
                 sesion.estado = EstadoConteo.DESCUADRE
 
                 if cc1_cantidad is not None and cantidad_fisica == cc1_cantidad:
-                    # CC1 == CC2: "verdad de bodega" confirmada → DESCUADRE para admin
+                    # CC1 == CC2: "verdad de bodega" — ajuste automático sin esperar admin
                     if origen and origen.estado == EstadoConteo.SEGUNDO_CONTEO:
                         origen.estado = EstadoConteo.DESCUADRE
-                        logger.warning(
-                            f'[CONTEO] CC2 confirma CC1 ({cc1_cantidad} uds) — '
-                            f'padre {origen.codigo} → DESCUADRE'
-                        )
+                        try:
+                            ConteoService._encolar_ajuste_fisico(origen, aprobador_id=None)
+                            logger.warning(
+                                f'[CONTEO] CC2 confirma CC1 ({cc1_cantidad} uds) — '
+                                f'padre {origen.codigo} → AJUSTANDO (auto)'
+                            )
+                        except Exception as e_enq:
+                            logger.error(
+                                f'[CONTEO] Error al auto-encolar ajuste CC1==CC2 '
+                                f'para sesion {origen.id}: {e_enq} — queda en DESCUADRE para revisión admin'
+                            )
                     try:
                         db.session.commit()
                     except Exception as e:
                         db.session.rollback()
-                        raise ValueError(f'Error al marcar DESCUADRE: {e}')
+                        raise ValueError(f'Error al marcar DESCUADRE y encolar ajuste: {e}')
                     return {
                         'resultado': 'DESCUADRE',
-                        'mensaje': 'Ambos conteos coinciden — el administrador debe aprobar el ajuste',
+                        'mensaje': 'Ambos conteos coinciden — ajuste encolado automáticamente',
                         'sesion_id': sesion.id,
                     }
 
@@ -321,24 +328,62 @@ class ConteoService:
             sesion_origen_id=sesion_origen.id
         )
 
-        # Buscar segundo operario — mismo almacén primero, luego admin global.
-        # Sin segundo operario el CC2 queda sin asignar y se escala al panel admin.
         from app.models.usuario import Usuario
-        _base = Usuario.query.filter(
-            Usuario.id != operario_excluido,
-            Usuario.activo == True,
+        from sqlalchemy import or_ as _or, and_ as _and
+
+        # Determinar si el CC1 picker es un "picker par" que puede verificar en tienda.
+        cc1_picker = Usuario.query.get(operario_excluido)
+        _es_par = (
+            cc1_picker is not None and (
+                cc1_picker.rol == 'picker_traslado'
+                or (cc1_picker.rol == 'operario' and bool(cc1_picker.puede_picar))
+            )
         )
+
         otro_operario = None
-        if sesion_origen.almacen_id:
-            otro_operario = _base.filter(
-                Usuario.almacen_id == sesion_origen.almacen_id,
-                Usuario.rol.in_(['operario', 'jefe_almacen', 'admin']),
-            ).first()
-        if not otro_operario:
-            # Fallback: cualquier admin/jefe_almacen independiente del almacén
-            otro_operario = _base.filter(
-                Usuario.rol.in_(['jefe_almacen', 'admin']),
-            ).first()
+
+        if _es_par and sesion_origen.almacen_id:
+            # Pickers en conflicto: ya tienen tarea activa sobre el mismo producto+ubicación
+            _ids_en_conflicto = (
+                db.session.query(SesionConteo.operario_id)
+                .filter(
+                    SesionConteo.producto_id == sesion_origen.producto_id,
+                    SesionConteo.ubicacion_id == sesion_origen.ubicacion_id,
+                    SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+                    SesionConteo.operario_id.isnot(None),
+                )
+            )
+            otro_operario = (
+                Usuario.query
+                .filter(
+                    Usuario.id != operario_excluido,
+                    Usuario.activo == True,
+                    Usuario.almacen_id == sesion_origen.almacen_id,
+                    _or(
+                        Usuario.rol == 'picker_traslado',
+                        _and(Usuario.rol == 'operario', Usuario.puede_picar == True),
+                    ),
+                    ~Usuario.id.in_(_ids_en_conflicto),
+                )
+                .first()
+            )
+            # Sin par disponible → queda sin asignar (PENDIENTE, panel admin lo escala)
+
+        else:
+            # Lógica existente para roles no-picker (jefe_almacen, admin, operario sin picar)
+            _base = Usuario.query.filter(
+                Usuario.id != operario_excluido,
+                Usuario.activo == True,
+            )
+            if sesion_origen.almacen_id:
+                otro_operario = _base.filter(
+                    Usuario.almacen_id == sesion_origen.almacen_id,
+                    Usuario.rol.in_(['operario', 'jefe_almacen', 'admin']),
+                ).first()
+            if not otro_operario:
+                otro_operario = _base.filter(
+                    Usuario.rol.in_(['jefe_almacen', 'admin']),
+                ).first()
 
         if otro_operario:
             segundo.operario_id = otro_operario.id
@@ -347,6 +392,77 @@ class ConteoService:
         # No commit aquí — el caller (registrar_conteo) hace un único commit
         # que incluye tanto el estado SEGUNDO_CONTEO del padre como este hijo.
         return segundo
+
+    @staticmethod
+    def _encolar_ajuste_fisico(sesion: SesionConteo, aprobador_id: int = None) -> None:
+        """
+        SRP: única responsabilidad — consultar Siesa, calcular diferencia y encolar
+        job AJUSTE_CONTEO en DLQ. No hace commit — el caller lo hace.
+        Pre-condición: sesion.estado == DESCUADRE y sesion.cantidad_fisica is not None.
+        """
+        from app.models.almacen import Almacen
+        from app.models.siesa_job import SiesaJob
+
+        if not sesion.producto_codigo_siesa:
+            raise ValueError(
+                'Este producto no tiene código Siesa configurado — '
+                'el ajuste de inventario no puede enviarse a Siesa.'
+            )
+
+        almacen = Almacen.query.get(sesion.almacen_id)
+        bodega_siesa = almacen.bodega_siesa_id if almacen else None
+        centro_op_siesa = almacen.centro_op_siesa if almacen else None
+
+        existencia_siesa = ConteoService.consultar_existencia_siesa(
+            producto_codigo_siesa=sesion.producto_codigo_siesa,
+            bodega=bodega_siesa,
+        )
+        if existencia_siesa is not None:
+            sesion.existencia_siesa = existencia_siesa
+            logger.info(
+                f'[CONTEO] Existencia fiscal Siesa para sesion {sesion.id}: '
+                f'{existencia_siesa} (bodega={bodega_siesa}) — base del ajuste'
+            )
+        else:
+            logger.warning(
+                f'[CONTEO] Siesa no respondió para sesion {sesion.id} '
+                f'— diferencia calculada contra WMS ({sesion.existencia_siesa}).'
+            )
+
+        diferencia = sesion.cantidad_fisica - sesion.existencia_siesa
+        motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
+        cantidad_ajuste = abs(diferencia)
+
+        sesion.diferencia = diferencia
+        sesion.motivo_codigo = motivo_codigo
+        sesion.aprobador_id = aprobador_id
+        sesion.idempotency_key = f'ADJ-{sesion.id}'
+        sesion.estado = EstadoConteo.AJUSTANDO
+
+        SiesaJob.encolar(
+            'AJUSTE_CONTEO',
+            {
+                'sesion_id': sesion.id,
+                'motivo_codigo': motivo_codigo,
+                'item_codigo': sesion.producto_codigo_siesa,
+                'cantidad': cantidad_ajuste,
+                'referencia': sesion.codigo,
+                'tarea_picking_id': sesion.tarea_picking_id,
+                'ubicacion_id': sesion.ubicacion_id,
+                'producto_id': sesion.producto_id,
+                'bodega': bodega_siesa,
+                'centro_op': centro_op_siesa,
+            },
+            referencia_tipo='SesionConteo',
+            referencia_id=sesion.id,
+            creado_por_id=aprobador_id,
+        )
+        logger.info(
+            f'[CONTEO] Ajuste {motivo_codigo} encolado en DLQ '
+            f'(aprobador={aprobador_id or "AUTO"}) — '
+            f'{cantidad_ajuste} uds de {sesion.producto_codigo_siesa} — '
+            f'bodega={bodega_siesa} — idempotency_key: ADJ-{sesion.id}'
+        )
 
     @staticmethod
     def generar_auditoria_por_excepcion(
@@ -466,81 +582,8 @@ class ConteoService:
         if sesion.cantidad_fisica is None:
             raise ValueError('Faltan datos del conteo para generar ajuste')
 
-        # Resolver bodega Siesa dinámicamente desde el almacén de la sesión
-        almacen = Almacen.query.get(sesion.almacen_id)
-        bodega_siesa = almacen.bodega_siesa_id if almacen else None
-        centro_op_siesa = almacen.centro_op_siesa if almacen else None
+        ConteoService._encolar_ajuste_fisico(sesion, aprobador_id=supervisor_id)
 
-        # Fuente de verdad: Siesa en tiempo real. Si no responde, fallback a WMS.
-        existencia_siesa = ConteoService.consultar_existencia_siesa(
-            producto_codigo_siesa=sesion.producto_codigo_siesa,
-            bodega=bodega_siesa,
-        )
-        if existencia_siesa is not None:
-            sesion.existencia_siesa = existencia_siesa  # sobrescribir WMS con valor fiscal real
-            logger.info(
-                f'[CONTEO] Existencia fiscal Siesa para sesion {sesion_id}: '
-                f'{existencia_siesa} (bodega={bodega_siesa}) — base del ajuste'
-            )
-        else:
-            logger.warning(
-                f'[CONTEO] Siesa no respondió para sesion {sesion_id} '
-                f'— diferencia calculada contra WMS ({sesion.existencia_siesa}). '
-                f'Posible drift entre WMS y Siesa.'
-            )
-
-        diferencia = sesion.cantidad_fisica - sesion.existencia_siesa
-
-        if diferencia > 0:
-            motivo_codigo = 'AJ-ENT'
-            cantidad_ajuste = diferencia
-        else:
-            motivo_codigo = 'AJ-SAL'
-            cantidad_ajuste = abs(diferencia)
-
-        sesion.diferencia = diferencia
-        sesion.motivo_codigo = motivo_codigo
-
-        idem_key = f'ADJ-{sesion_id}'
-        sesion.idempotency_key = idem_key
-        sesion.aprobador_id = supervisor_id
-        sesion.estado = EstadoConteo.AJUSTANDO
-
-        if not sesion.producto_codigo_siesa:
-            raise ValueError(
-                'Este producto no tiene código Siesa configurado — '
-                'el ajuste de inventario no puede enviarse a Siesa.'
-            )
-        producto_ref = sesion.producto
-        item_codigo = sesion.producto_codigo_siesa
-        sesion_codigo = sesion.codigo
-        ubicacion_id = sesion.ubicacion_id
-        producto_id = sesion.producto_id
-        tarea_picking_id = sesion.tarea_picking_id
-        producto_codigo_log = producto_ref.codigo if producto_ref else item_codigo
-
-        # Payload DLQ — incluye bodega y centro_op para multi-bodega
-        payload_dlq = {
-            'sesion_id': sesion_id,
-            'motivo_codigo': motivo_codigo,
-            'item_codigo': item_codigo,
-            'cantidad': cantidad_ajuste,
-            'referencia': sesion_codigo,
-            'tarea_picking_id': tarea_picking_id,
-            'ubicacion_id': ubicacion_id,
-            'producto_id': producto_id,
-            'bodega': bodega_siesa,
-            'centro_op': centro_op_siesa,
-        }
-
-        from app.models.siesa_job import SiesaJob
-        SiesaJob.encolar(
-            'AJUSTE_CONTEO',
-            payload_dlq,
-            referencia_tipo='SesionConteo',
-            referencia_id=sesion_id,
-            creado_por_id=supervisor_id,
-        )
         try:
             db.session.commit()
         except Exception as e_lock_release:
@@ -548,9 +591,8 @@ class ConteoService:
             raise ValueError(f'Error al registrar estado de conteo: {e_lock_release}') from e_lock_release
 
         logger.info(
-            f'[SUPERVISOR_GUARD] Ajuste {motivo_codigo} encolado en DLQ por usuario #{supervisor_id} '
-            f'— {cantidad_ajuste} unidades de {producto_codigo_log} '
-            f'— bodega={bodega_siesa} — idempotency_key: {idem_key}'
+            f'[SUPERVISOR_GUARD] Ajuste encolado en DLQ por usuario #{supervisor_id} '
+            f'— sesion {sesion_id} — idempotency_key: ADJ-{sesion_id}'
         )
 
         return sesion

@@ -208,6 +208,11 @@ class MobileService:
         if not tarea:
             # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1
             if not _solo_traslado:
+                # CC2 pre-asignado (doble ciego): tiene operario_id pero sigue en PENDIENTE
+                _cc2 = MobileService._get_conteo_preassignado(operario_id)
+                if _cc2:
+                    return _cc2
+
                 # Sin picking pendiente — buscar conteo sin asignar
                 # with_for_update(skip_locked=True) evita que dos workers tomen el mismo conteo
                 conteo = (SesionConteo.query
@@ -263,6 +268,10 @@ class MobileService:
                             len(_erroneos), operario_id)
 
             if _picker_tienda and _almacen_propio:
+                # CC2 pre-asignado tiene prioridad sobre el dispatcher cíclico
+                _cc2 = MobileService._get_conteo_preassignado(operario_id)
+                if _cc2:
+                    return _cc2
                 conteo = MobileService._next_conteo_tienda(operario_id, _almacen_propio)
                 if conteo:
                     return conteo
@@ -432,6 +441,33 @@ class MobileService:
         db.session.commit()
         logger.info('[MOBILE] Conteo %s asignado a picker_traslado %s (bodega almacen_id=%s)',
                     sesion.codigo, operario_id, almacen_id)
+        return MobileService._conteo_a_dict(sesion)
+
+    @staticmethod
+    def _get_conteo_preassignado(operario_id: int):
+        """
+        SRP: activa y retorna un conteo pre-asignado PENDIENTE (ej: CC2 de doble ciego).
+        A diferencia de _next_conteo_tienda, no busca operario_id=None — busca tareas
+        que ya tienen este picker asignado pero aún no han sido iniciadas.
+        """
+        from app.models.conteo import EstadoConteo as _EC
+        sesion = (
+            SesionConteo.query
+            .filter(
+                SesionConteo.operario_id == operario_id,
+                SesionConteo.estado == _EC.PENDIENTE,
+            )
+            .order_by(SesionConteo.fecha_creacion.asc())
+            .with_for_update(skip_locked=True)
+            .first()
+        )
+        if not sesion:
+            return None
+        sesion.estado = _EC.EN_PROCESO
+        sesion.fecha_inicio = datetime.utcnow()
+        db.session.commit()
+        logger.info('[MOBILE] Conteo pre-asignado %s activado para picker %s',
+                    sesion.codigo, operario_id)
         return MobileService._conteo_a_dict(sesion)
 
     @staticmethod
