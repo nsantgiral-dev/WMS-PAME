@@ -1584,7 +1584,8 @@ class ConnektaGateway:
         bodega: código bodega Siesa (ej 'NB1','NB2'). Si None usa self.bodega.
         centro_op: centro de operación Siesa. Si None usa self.centro_op.
         """
-        if not self.tipo_docto_ajuste:
+        _tipo_docto_ajuste = self.tipo_docto_ajuste or os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
+        if not _tipo_docto_ajuste:
             raise ValueError(
                 'SIESA_TIPO_DOCTO_AJUSTE no está configurado en variables de entorno. '
                 'Agrega la variable en Railway con el código de tipo de documento de ajuste en Siesa.'
@@ -1612,7 +1613,7 @@ class ConnektaGateway:
                     'F_CIA': cia,
                     'F_CONSEC_AUTO_REG': 1,
                     'f350_id_co': _centro_op,
-                    'f350_id_tipo_docto': self.tipo_docto_ajuste,
+                    'f350_id_tipo_docto': _tipo_docto_ajuste,
                     'f350_consec_docto': 0,
                     'f350_fecha': fecha_hoy,
                     'f350_id_tercero': self.nit_empresa or None,
@@ -1647,7 +1648,7 @@ class ConnektaGateway:
                 {
                     'F_CIA': cia,
                     'f470_id_co': _centro_op,
-                    'f470_id_tipo_docto': self.tipo_docto_ajuste,
+                    'f470_id_tipo_docto': _tipo_docto_ajuste,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': 1,
                     'f470_id_bodega': _bodega,
