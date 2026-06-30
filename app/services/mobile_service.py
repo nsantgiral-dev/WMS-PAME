@@ -160,6 +160,13 @@ class MobileService:
                 'lote': tarea_activa.lote,
             }
 
+        # Conteo activo — el picker ya tiene un conteo en curso (p.ej. recargó la PWA)
+        conteo_activo = (SesionConteo.query
+                         .filter_by(operario_id=operario_id, estado=EstadoConteo.EN_PROCESO)
+                         .first())
+        if conteo_activo:
+            return MobileService._conteo_a_dict(conteo_activo)
+
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
         # REGLA ESTRICTA: el picker solo puede ir a ubicaciones tipo_zona = PICKING o GENERAL.
         # Las zonas RESERVA (pacas selladas en alto) son exclusivas del Abastecedor.
