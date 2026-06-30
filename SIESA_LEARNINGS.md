@@ -112,15 +112,21 @@
 
 ---
 
-### [SIESA-009] `f350_id_clase_docto` debe ser un entero específico en 142951, no string vacío
+### [SIESA-009] ADI (Clase 63): motivo, naturaleza y estructura correcta para AJ-ENT y AJ-SAL
 
-- **Categoría**: Formato de datos
-- **Síntoma observado**: Ajustes de inventario (142951) y transferencias a averías enviados con `f350_id_clase_docto: ''` — Siesa rechazaba silenciosamente o creaba documentos de clase incorrecta.
-- **Causa raíz**: El campo es obligatorio como entero y el tipo de documento debe ser el correcto para esa clase. La spec PAME: **63 = Ajustes** (código `ADI`), **66 = Tránsito** (RIT/ETS), **67 = Transferencias a averías**. Un string vacío no es equivalente.
-- **Corrección crítica**: El código `AFI` en PAME QA está configurado como Clase 66 (tránsito), NO como ajuste. Usar `AFI` provoca errores en cascada de "transferencia tránsito salida". El código correcto para ajustes en PAME es **`ADI` (AJUSTE DE INVENTARIO)** con `f350_id_clase_docto: 63` y concepto 603.
-- **Solución implementada**: `'f350_id_clase_docto': 63` + `SIESA_TIPO_DOCTO_AJUSTE=ADI` en Railway.
-- **Archivo(s) relevante(s)**: `app/services/connekta_gateway.py` — `enviar_ajuste_inventario`; Railway env var `SIESA_TIPO_DOCTO_AJUSTE`
-- **Commit**: `8598d56` → `4df67a6` → corregido definitivamente en conteo cíclico e2e
+- **Categoría**: Lógica de negocio / Configuración PAME
+- **Síntoma observado**: AJ-ENT (sobrante) rechazado con HTTP 400 "Item sin cantidad disponible Faltante Inv.: -13". AJ-SAL funcionaba. `f350_id_clase_docto: ''` causaba rechazo silencioso.
+- **Causa raíz (motivo)**: El motivo `'01'` en PAME tiene **naturaleza 2 (Salida)** — activa validación de stock disponible. Siesa la bloquea porque no hay nada que salir cuando es un sobrante. El motivo correcto para AJ-ENT es **`'AJ-ENT'`** (naturaleza 1=Entrada, suma al kárdex sin validar stock).
+- **Causa raíz (bodegas cabecera)**: `f450_id_bodega_salida` y `f450_id_bodega_entrada` en el bloque 450 son solo para transferencias (Clase 65/66). Para ADI (Clase 63) deben ir en `None`. La bodega real va **únicamente** en `f470_id_bodega` del bloque 470.
+- **Causa raíz (AFI)**: El código `AFI` en PAME está configurado como Clase 66 (tránsito). Usarlo provoca "transferencia tránsito salida" en cascada. El código correcto es **`ADI`** (`SIESA_TIPO_DOCTO_AJUSTE=ADI` en Railway).
+- **Solución implementada**:
+  - `f350_id_clase_docto: 63`
+  - `f450_id_bodega_salida: None`, `f450_id_bodega_entrada: None` (siempre para ADI)
+  - `f470_ind_naturaleza: 1` para AJ-ENT, `2` para AJ-SAL
+  - `f470_id_motivo: 'AJ-ENT'` para sobrante, `'02'` para faltante
+  - Concepto `603` en `f450_id_concepto` y `f470_id_concepto`
+- **Archivo(s) relevante(s)**: `app/services/connekta_gateway.py` — `enviar_ajuste_inventario`; Railway env var `SIESA_TIPO_DOCTO_AJUSTE=ADI`
+- **Commit**: `8598d56` → `4df67a6` → `0b52d14`
 - **Nivel de riesgo si se ignora**: **Alto**
 
 ---
