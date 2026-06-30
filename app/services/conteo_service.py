@@ -343,6 +343,16 @@ class ConteoService:
         otro_operario = None
 
         if _es_par and sesion_origen.almacen_id:
+            from app.models.almacen import Almacen as _Alm
+            _alm_sesion = _Alm.query.get(sesion_origen.almacen_id)
+            _bodega_siesa = _alm_sesion.bodega_siesa_id if _alm_sesion else None
+
+            # picker_traslado puede tener almacen_id=NULL y solo bodega_siesa_id='NS1'
+            _filtros_almacen = [Usuario.almacen_id == sesion_origen.almacen_id]
+            if _bodega_siesa:
+                _filtros_almacen.append(Usuario.bodega_siesa_id == _bodega_siesa)
+            _filtro_almacen = _or(*_filtros_almacen)
+
             # Pickers en conflicto: ya tienen tarea activa sobre el mismo producto+ubicación
             _ids_en_conflicto = (
                 db.session.query(SesionConteo.operario_id)
@@ -358,7 +368,7 @@ class ConteoService:
                 .filter(
                     Usuario.id != operario_excluido,
                     Usuario.activo == True,
-                    Usuario.almacen_id == sesion_origen.almacen_id,
+                    _filtro_almacen,
                     _or(
                         Usuario.rol == 'picker_traslado',
                         _and(Usuario.rol == 'operario', Usuario.puede_picar == True),
