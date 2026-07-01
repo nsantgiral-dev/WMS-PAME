@@ -1704,7 +1704,7 @@ class ConnektaGateway:
             ]
         }
 
-        logger.info(f'[CONNEKTA] Ajuste {motivo_codigo} {item_codigo}:{cantidad}')
+        logger.info(f'[CONNEKTA] Ajuste {motivo_codigo} {item_codigo}:{cantidad} f470_id_item={item_id_siesa!r} f470_id_un_movto={self.unidad_negocio!r}')
         return self._post(self.conector_ajuste, 'API_v1_Inventarios_Comercial_DocumentoInv', payload)
 
     def transferir_a_averias(self, item_codigo: str, cantidad: int, referencia: str = ''):
