@@ -1602,9 +1602,10 @@ class ConnektaGateway:
         _centro_op = centro_op or self.centro_op
 
         es_entrada = motivo_codigo == 'AJ-ENT'
-        # Códigos 2-char del maestro Siesa (Concepto 603). Configurable vía Railway:
-        # SIESA_MOTIVO_AJUSTE_ENTRADA (default '01') / SIESA_MOTIVO_AJUSTE_SALIDA (default '02')
-        siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
+        # Para AJ-ENT: no enviar motivo — dejar que f470_ind_naturaleza=1 controle la dirección.
+        # '01' y '02' en PAME tienen ambos naturaleza Salida y activan validación de stock.
+        # Para AJ-SAL: '02' confirmado funcional. Configurable: SIESA_MOTIVO_AJUSTE_SALIDA
+        siesa_motivo = None if es_entrada else self.motivo_ajuste_salida
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         cia = int(self.id_cia_siesa)
