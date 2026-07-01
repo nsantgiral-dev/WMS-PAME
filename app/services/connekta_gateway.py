@@ -135,11 +135,11 @@ class ConnektaGateway:
         # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
         # Si no se configura, cae al motivo_traslado genérico (puede causar rechazo en Siesa).
         self.motivo_averia = os.getenv('SIESA_MOTIVO_AVERIA', '') or self.motivo_traslado
-        # Motivos para ajuste físico ADI (Clase 63, Concepto 603).
-        # '01' y '02' son los códigos estándar Siesa Enterprise para Entrada/Salida de ajuste.
+        # Motivos para ajuste físico ADI (Clase 63, Concepto 603) en PAME:
+        # '02' = Entrada (Sobrante), '01' = Salida (Faltante).
         # Verificar en Siesa: Inventarios → Maestros → Conceptos y Motivos → Concepto 603.
-        self.motivo_ajuste_entrada = os.getenv('SIESA_MOTIVO_AJUSTE_ENTRADA', '01')
-        self.motivo_ajuste_salida  = os.getenv('SIESA_MOTIVO_AJUSTE_SALIDA',  '02')
+        self.motivo_ajuste_entrada = os.getenv('SIESA_MOTIVO_AJUSTE_ENTRADA', '02')
+        self.motivo_ajuste_salida  = os.getenv('SIESA_MOTIVO_AJUSTE_SALIDA',  '01')
         # Conceptos de movimiento en Siesa (Inventarios → Maestros → Conceptos y Motivos).
         # Los valores por defecto son los estándar de Siesa Enterprise; pueden variar por compañía.
         # Verificar en Siesa si los conceptos fueron renumerados antes de cambiar estos valores.
@@ -1613,10 +1613,8 @@ class ConnektaGateway:
         _centro_op = centro_op or self.centro_op
 
         es_entrada = motivo_codigo == 'AJ-ENT'
-        # Para AJ-ENT: no enviar motivo — dejar que f470_ind_naturaleza=1 controle la dirección.
-        # '01' y '02' en PAME tienen ambos naturaleza Salida y activan validación de stock.
-        # Para AJ-SAL: '02' confirmado funcional. Configurable: SIESA_MOTIVO_AJUSTE_SALIDA
-        siesa_motivo = None if es_entrada else self.motivo_ajuste_salida
+        # PAME Concepto 603: '02'=Entrada (Sobrante), '01'=Salida (Faltante).
+        siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         cia = int(self.id_cia_siesa)
