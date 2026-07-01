@@ -128,7 +128,10 @@ def _run_dlq_jobs():
         for _ss in _stuck_sesiones:
             _tiene_job = SiesaJob.query.filter_by(
                 referencia_tipo='SesionConteo', referencia_id=_ss.id,
-            ).filter(SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS))).first()
+                tipo='AJUSTE_CONTEO',
+            ).filter(SiesaJob.estado.in_(
+                list(EstadoSiesaJob.ACTIVOS) + [EstadoSiesaJob.FALLIDO]
+            )).first()
             if not _tiene_job:
                 logger.warning(f'[DLQ] SesionConteo {_ss.id} stuck AJUSTANDO >15min sin job — re-encolando')
                 SiesaJob.encolar(

@@ -124,7 +124,7 @@ class ConnektaGateway:
         # Si no se configura y la API tampoco lo devuelve, trigger_factura_desde_remision lanza ValueError.
         self.punto_envio_default = os.getenv('SIESA_PUNTO_ENVIO_DEFAULT', '') or None
         # Tipo documento ajuste físico en Siesa (Inventarios → Tipos de documento)
-        self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', '')
+        self.tipo_docto_ajuste = os.getenv('SIESA_TIPO_DOCTO_AJUSTE', 'ADI')
         self.tipo_docto_traslado = os.getenv('SIESA_TIPO_DOCTO_TRASLADO', 'TRA')
         # Sin default — SIESA_MOTIVO_TRASLADO es obligatorio en producción.
         # '01' era un fallback genérico que generaba rechazos en Siesas que usan otro código.
