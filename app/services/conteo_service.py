@@ -427,7 +427,21 @@ class ConteoService:
         Pre-condición: sesion.estado == DESCUADRE y sesion.cantidad_fisica is not None.
         """
         from app.models.almacen import Almacen
-        from app.models.siesa_job import SiesaJob
+        from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+
+        # Guard idempotencia: no crear job duplicado si ya hay uno activo para esta sesión
+        job_activo = SiesaJob.query.filter(
+            SiesaJob.referencia_tipo == 'SesionConteo',
+            SiesaJob.referencia_id == sesion.id,
+            SiesaJob.tipo == 'AJUSTE_CONTEO',
+            SiesaJob.estado.in_([EstadoSiesaJob.PENDIENTE, EstadoSiesaJob.PROCESANDO]),
+        ).first()
+        if job_activo:
+            logger.warning(
+                '[CONTEO] Job AJUSTE_CONTEO ya existe (id=%s, estado=%s) para sesion %s — skip',
+                job_activo.id, job_activo.estado, sesion.id,
+            )
+            return
 
         if not sesion.producto_codigo_siesa:
             raise ValueError(
