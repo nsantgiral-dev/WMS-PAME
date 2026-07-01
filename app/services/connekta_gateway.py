@@ -178,9 +178,10 @@ class ConnektaGateway:
             if not self.unidad_negocio:
                 _faltantes.append('SIESA_UNIDAD_NEGOCIO')
             if _faltantes:
-                raise EnvironmentError(
-                    f'[CONNEKTA] Variables obligatorias no configuradas: {", ".join(_faltantes)}. '
-                    'Configurar en Railway antes de desplegar.'
+                logger.critical(
+                    '[CONNEKTA] Variables obligatorias no configuradas: %s. '
+                    'Las operaciones que las requieran fallarán en tiempo de ejecución.',
+                    ', '.join(_faltantes),
                 )
 
     @staticmethod
