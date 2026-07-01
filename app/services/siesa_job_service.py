@@ -551,6 +551,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             _PedidoSiesa.item_id_siesa.isnot(None),
         ).first()
         _item_id_siesa = _ps.item_id_siesa if _ps else None
+        logger.info(f'[DLQ] AJUSTE_CONTEO item_id_siesa lookup: item={item_codigo} → {_item_id_siesa!r}')
 
         resultado = connekta.enviar_ajuste_inventario(
             motivo_codigo=payload['motivo_codigo'],
