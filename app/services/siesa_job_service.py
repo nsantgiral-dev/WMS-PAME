@@ -545,9 +545,17 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'sesion {sesion_id}: {payload["motivo_codigo"]} {item_codigo} {payload["cantidad"]} uds'
             )
 
+        from app.models.pedido_siesa import PedidoSiesa as _PedidoSiesa
+        _ps = _PedidoSiesa.query.filter(
+            _PedidoSiesa.item_codigo == item_codigo,
+            _PedidoSiesa.item_id_siesa.isnot(None),
+        ).first()
+        _item_id_siesa = _ps.item_id_siesa if _ps else None
+
         resultado = connekta.enviar_ajuste_inventario(
             motivo_codigo=payload['motivo_codigo'],
             item_codigo=item_codigo,
+            item_id_siesa=_item_id_siesa,
             cantidad=payload['cantidad'],
             referencia=payload.get('referencia', ''),
             bodega=payload.get('bodega'),

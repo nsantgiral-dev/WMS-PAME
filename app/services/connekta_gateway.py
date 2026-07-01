@@ -1592,7 +1592,8 @@ class ConnektaGateway:
 
     def enviar_ajuste_inventario(self, motivo_codigo: str, item_codigo: str,
                                   cantidad: int, referencia: str,
-                                  bodega: str = None, centro_op: str = None):
+                                  bodega: str = None, centro_op: str = None,
+                                  item_id_siesa: str = None):
         """
         142951 → API_v1_Inventarios_Comercial_DocumentoInv
         Ajuste físico tras conteo cíclico double-blind.
@@ -1690,7 +1691,7 @@ class ConnektaGateway:
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_ubicación_aux_ent': None,
                     'f470_id_lote_ent': None,
-                    'f470_id_item': None,
+                    'f470_id_item': item_id_siesa,
                     'f470_referencia_item': item_codigo,
                     'f470_codigo_barras': None,
                     'f470_id_ext1_detalle': None,
