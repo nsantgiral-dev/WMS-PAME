@@ -136,10 +136,10 @@ class ConnektaGateway:
         # Si no se configura, cae al motivo_traslado genérico (puede causar rechazo en Siesa).
         self.motivo_averia = os.getenv('SIESA_MOTIVO_AVERIA', '') or self.motivo_traslado
         # Motivos para ajuste físico ADI (Clase 63, Concepto 603) en PAME:
-        # '02' = Entrada (Sobrante), '01' = Salida (Faltante).
+        # '01' = Entrada Ajuste (Sobrante), '02' = Salida Ajuste (Faltante).
         # Verificar en Siesa: Inventarios → Maestros → Conceptos y Motivos → Concepto 603.
-        self.motivo_ajuste_entrada = os.getenv('SIESA_MOTIVO_AJUSTE_ENTRADA', '02')
-        self.motivo_ajuste_salida  = os.getenv('SIESA_MOTIVO_AJUSTE_SALIDA',  '01')
+        self.motivo_ajuste_entrada = os.getenv('SIESA_MOTIVO_AJUSTE_ENTRADA', '01')
+        self.motivo_ajuste_salida  = os.getenv('SIESA_MOTIVO_AJUSTE_SALIDA',  '02')
         # Conceptos de movimiento en Siesa (Inventarios → Maestros → Conceptos y Motivos).
         # Los valores por defecto son los estándar de Siesa Enterprise; pueden variar por compañía.
         # Verificar en Siesa si los conceptos fueron renumerados antes de cambiar estos valores.
