@@ -1614,7 +1614,9 @@ class ConnektaGateway:
         _centro_op = centro_op or self.centro_op
 
         es_entrada = motivo_codigo == 'AJ-ENT'
-        # PAME Concepto 603: '02'=Entrada (Sobrante), '01'=Salida (Faltante).
+        # PAME Concepto 603: la dirección la determina el motivo en el maestro de Siesa (no ind_naturaleza).
+        # '02'=Entrada/Sobrante (Naturaleza 1 en DB), '01'=Salida/Faltante (Naturaleza 2 en DB).
+        # La UI de Siesa muestra etiquetas inversas — el bit real está en el maestro interno.
         siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
@@ -1672,7 +1674,6 @@ class ConnektaGateway:
                     'f470_id_ubicación_aux': None,
                     'f470_id_lote': None,
                     'f470_id_concepto': self.concepto_ajustes,                       # 603 = Ajustes (spec 142951, obligatorio), override: SIESA_CONCEPTO_AJUSTES
-                    'f470_ind_naturaleza': 1 if es_entrada else 2,                   # 1=Entrada (suma al kárdex), 2=Salida (resta del kárdex)
                     'f470_id_motivo': siesa_motivo,
                     'f470_id_co_movto': _centro_op,
                     'f470_id_ccosto_movto': None,
@@ -1704,7 +1705,7 @@ class ConnektaGateway:
             ]
         }
 
-        logger.info(f'[CONNEKTA] Ajuste {motivo_codigo} {item_codigo}:{cantidad} f470_id_item={item_id_siesa!r} f470_id_un_movto={self.unidad_negocio!r}')
+        logger.info(f'[CONNEKTA] Ajuste {motivo_codigo} {item_codigo}:{cantidad} siesa_motivo={siesa_motivo!r} f470_id_item={item_id_siesa!r} f470_id_un_movto={self.unidad_negocio!r}')
         return self._post(self.conector_ajuste, 'API_v1_Inventarios_Comercial_DocumentoInv', payload)
 
     def transferir_a_averias(self, item_codigo: str, cantidad: int, referencia: str = ''):
