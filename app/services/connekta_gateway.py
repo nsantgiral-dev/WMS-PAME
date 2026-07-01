@@ -285,6 +285,16 @@ class ConnektaGateway:
 
     def _post(self, id_conector: str, nombre_conector: str, payload: dict,
               url: str = None, extra_params: dict = None):
+        # Si el singleton arrancó sin credenciales (Railway timing issue), reintenta leer del entorno.
+        if self.modo_simulacion:
+            _ikey_env  = os.getenv('CONNEKTA_IKEY', '')
+            _itoken_env = os.getenv('CONNEKTA_ITOKEN', '')
+            if _ikey_env and _itoken_env:
+                self.ikey = _ikey_env
+                self.itoken = _itoken_env
+                self.modo_simulacion = False
+                logger.warning('[CONNEKTA] Credenciales cargadas en diferido — modo producción activado')
+
         if self.modo_simulacion:
             return self._simular(f'POST_{id_conector}', payload)
 
