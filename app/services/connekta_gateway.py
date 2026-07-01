@@ -135,6 +135,11 @@ class ConnektaGateway:
         # normales. Verificar: Maestros Asociados → Conceptos y Motivos → código para averías.
         # Si no se configura, cae al motivo_traslado genérico (puede causar rechazo en Siesa).
         self.motivo_averia = os.getenv('SIESA_MOTIVO_AVERIA', '') or self.motivo_traslado
+        # Motivos para ajuste físico ADI (Clase 63, Concepto 603).
+        # '01' y '02' son los códigos estándar Siesa Enterprise para Entrada/Salida de ajuste.
+        # Verificar en Siesa: Inventarios → Maestros → Conceptos y Motivos → Concepto 603.
+        self.motivo_ajuste_entrada = os.getenv('SIESA_MOTIVO_AJUSTE_ENTRADA', '01')
+        self.motivo_ajuste_salida  = os.getenv('SIESA_MOTIVO_AJUSTE_SALIDA',  '02')
         # Conceptos de movimiento en Siesa (Inventarios → Maestros → Conceptos y Motivos).
         # Los valores por defecto son los estándar de Siesa Enterprise; pueden variar por compañía.
         # Verificar en Siesa si los conceptos fueron renumerados antes de cambiar estos valores.
@@ -1597,9 +1602,9 @@ class ConnektaGateway:
         _centro_op = centro_op or self.centro_op
 
         es_entrada = motivo_codigo == 'AJ-ENT'
-        # AJ-ENT → motivo 'AJ-ENT' (naturaleza 1=Entrada — no valida stock disponible)
-        # AJ-SAL → motivo '02'     (naturaleza 2=Salida — confirmado funcional con ADI-00000008)
-        siesa_motivo = 'AJ-ENT' if es_entrada else '02'
+        # Códigos 2-char del maestro Siesa (Concepto 603). Configurable vía Railway:
+        # SIESA_MOTIVO_AJUSTE_ENTRADA (default '01') / SIESA_MOTIVO_AJUSTE_SALIDA (default '02')
+        siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         cia = int(self.id_cia_siesa)
