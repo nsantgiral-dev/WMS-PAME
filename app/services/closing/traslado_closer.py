@@ -69,9 +69,12 @@ class TrasladoPackingCloser(IPackingCloser):
         # Construir ítems con cantidades reales y ubicaciones del picking
         items_comp = self._construir_items_packing(tarea, solicitud)
 
-        # ── 174720 Compromisos (sync — sin DLQ) ──────────────────────────────
+        # ── 174720 Compromisos (sync — con abort on failure) ────────────────
         # Registra cantidades reales + ubicaciones físicas sobre la RIT ya creada.
-        # Es idempotente: si falla, se puede reintentar sin duplicar el documento.
+        # Es idempotente: Siesa actualiza compromisos existentes, no duplica.
+        # Si falla, NO podemos continuar con DESPACHO_TRASLADO (174930) porque
+        # el STS heredaría cantidades planificadas del RIT en vez de las reales.
+        _compromisos_ok = False
         if solicitud.siesa_requisicion_consec and items_comp:
             try:
                 from app.services.siesa_traslado_adapter import siesa_traslado
@@ -83,9 +86,21 @@ class TrasladoPackingCloser(IPackingCloser):
                     codigo=solicitud.codigo,
                 )
                 logger.info('[TRASLADO_CLOSER] %s compromisos 174720 OK', solicitud.codigo)
+                _compromisos_ok = True
             except Exception as e:
-                logger.error('[TRASLADO_CLOSER] %s 174720 falló: %s', solicitud.codigo, e)
+                logger.error('[TRASLADO_CLOSER] %s 174720 falló: %s — '
+                             'abortando cierre para evitar STS con cantidades incorrectas',
+                             solicitud.codigo, e)
                 solicitud.siesa_error = f'174720: {e}'
+                db.session.commit()
+                return CierreResult(
+                    exitoso=False,
+                    error=f'Error registrando compromisos en Siesa (174720): {e}. '
+                          f'Reintente el cierre cuando Siesa esté disponible.',
+                    mensaje='Error de comunicación con Siesa — reintente en unos minutos')
+        else:
+            # Sin RIT o sin items → no requiere compromisos
+            _compromisos_ok = True
 
         # ── Descontar inventario WMS ─────────────────────────────────────────
         # Los bienes salen físicamente al cerrar caja; se descuenta ahora
@@ -141,18 +156,29 @@ class TrasladoPackingCloser(IPackingCloser):
     def _construir_items_packing(self, tarea: TareaPacking, solicitud) -> list:
         from app.models.picking import TareaPicking
         from app.services.traslado_service import _resolver_empaque
-        tareas_picking = TareaPicking.query.filter_by(
-            referencia_documento=solicitud.codigo,
-            tipo_documento='TRASLADO',
-            estado='COMPLETADO',
-        ).all()
-        ubicacion_por_producto = {
-            t.producto_id: (t.ubicacion.codigo if t.ubicacion else None)
-            for t in tareas_picking
-        }
+        from sqlalchemy.orm import selectinload
+        tareas_picking = (TareaPicking.query
+            .options(selectinload(TareaPicking.ubicacion))
+            .filter_by(
+                referencia_documento=solicitud.codigo,
+                tipo_documento='TRASLADO',
+                estado='COMPLETADO',
+            ).all())
+        # setdefault: si un producto se pickó de varias ubicaciones, conservar
+        # la primera (la más común). Dict comprehension sobreescribía con la última.
+        ubicacion_por_producto = {}
+        for t in tareas_picking:
+            ubicacion_por_producto.setdefault(
+                t.producto_id,
+                t.ubicacion.codigo if t.ubicacion else None
+            )
         items = []
         for i in tarea.items:
             if not i.producto or not i.producto.codigo_siesa:
+                logger.warning(
+                    '[TRASLADO_CLOSER] Item %s (producto_id=%s) sin codigo_siesa — '
+                    'omitido de compromisos 174720. WMS descontará pero Siesa no lo verá.',
+                    i.id, i.producto_id)
                 continue
             cantidad = i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada
             if not cantidad or cantidad <= 0:
@@ -170,11 +196,16 @@ class TrasladoPackingCloser(IPackingCloser):
         return items
 
     def _encolar_job_traslado(self, tarea_id: int, solicitud, items_comp: list):
+        # Incluir COMPLETADO en el filtro: si el DLQ ya procesó el job pero
+        # siesa_triggered no se persistió (crash entre commit y post_completado),
+        # no crear un job duplicado que generaría un STS duplicado en Siesa.
         job = SiesaJob.query.filter(
             SiesaJob.tipo == 'DESPACHO_TRASLADO',
             SiesaJob.referencia_tipo == 'TareaPacking',
             SiesaJob.referencia_id == tarea_id,
-            SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS) + [EstadoSiesaJob.FALLIDO]),
+            SiesaJob.estado.in_(
+                list(EstadoSiesaJob.ACTIVOS) + [EstadoSiesaJob.FALLIDO, EstadoSiesaJob.COMPLETADO]
+            ),
         ).first()
         payload_dict = {
             'tarea_id':     tarea_id,

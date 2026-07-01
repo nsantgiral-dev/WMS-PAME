@@ -243,7 +243,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # (timeout de red) y reintentamos, creamos un doble movimiento de inventario.
         # Solución conservadora: abortar el reintento y dejar que la reconciliación nocturna
         # detecte la discrepancia, en lugar de arriesgar duplicar el traslado en Siesa.
-        if job.intentos > 0:
+        # NOTA: usamos error_ultimo (no intentos) porque el stuck-sweep incrementa intentos
+        # sin llamar a Siesa — un job interrumpido por Railway tendría intentos>0 pero
+        # error_ultimo vacío (nunca se ejecutó realmente).
+        if job.intentos > 0 and job.error_ultimo:
             logger.warning(
                 f'[DLQ] TRANSFERENCIA_UBICACIONES job={job.id} intento={job.intentos + 1} '
                 f'abortado por riesgo de duplicado — la reconciliación nocturna detectará '

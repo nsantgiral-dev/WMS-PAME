@@ -666,20 +666,24 @@ def enviar_resumen_diario(app=None):
             except Exception:
                 logger.error('[RESUMEN] Sweep jobs FALLIDO >24h falló', exc_info=True)
             try:
-                # INV_BULTO_UNA_RUTA: bultos asignados a >1 ruta activa
+                # INV_BULTO_UNA_RUTA: bultos cuyo codigo_barras aparece en >1 ruta activa.
+                # Bulto.ruta_despacho_id es FK escalar (1 ruta por bulto) y codigo_barras es UNIQUE,
+                # así que la anomalía real es un bulto reasignado a otra ruta sin liberar la anterior.
+                # Detectamos bultos en rutas activas que comparten tarea_id con bultos en OTRA ruta activa.
                 from app.models.ruta_despacho import RutaDespacho
                 from sqlalchemy import func as _fn
                 _estados_activos = ('PROGRAMADO', 'EN_CARGUE', 'EN_TRANSITO')
-                _dupes = (
-                    db.session.query(Bulto.id)
+                # Tareas con bultos en >1 ruta activa (señal de asignación incorrecta)
+                _subq = (
+                    db.session.query(Bulto.tarea_id)
                     .join(RutaDespacho, Bulto.ruta_despacho_id == RutaDespacho.id)
                     .filter(RutaDespacho.estado.in_(_estados_activos))
-                    .group_by(Bulto.id)
-                    .having(_fn.count(RutaDespacho.id) > 1)
+                    .group_by(Bulto.tarea_id)
+                    .having(_fn.count(_fn.distinct(RutaDespacho.id)) > 1)
                     .count()
                 )
-                if _dupes:
-                    anomalias.append(f'🚨 {_dupes} bulto(s) asignados a >1 ruta activa')
+                if _subq:
+                    anomalias.append(f'🚨 {_subq} tarea(s) con bultos en >1 ruta activa')
             except Exception:
                 logger.error('[RESUMEN] Sweep INV_BULTO_UNA_RUTA falló', exc_info=True)
             if anomalias:

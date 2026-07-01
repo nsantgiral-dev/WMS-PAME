@@ -88,7 +88,10 @@ class SolicitudTraslado(db.Model):
         # consecutivo de cierre — significa que el movimiento nunca llegó a Siesa.
         consec_cierre = (self.siesa_entrada_consec if self.modo_transferencia == 'EN_TRANSITO'
                          else self.siesa_salida_consec)
-        estados_terminales = ('ENTREGADA', 'RECHAZADA', 'CANCELADA', 'REVERTIDA')
+        estados_terminales = (
+            EstadoTraslado.ENTREGADA, EstadoTraslado.RECHAZADA,
+            EstadoTraslado.CANCELADA, EstadoTraslado.REVERTIDA,
+        )
         siesa_necesita_atencion = (
             bool(self.siesa_error) and
             not consec_cierre and
@@ -131,7 +134,7 @@ class SolicitudTraslado(db.Model):
         """Progreso de TareasPicking — solo relevante en EN_PICKING/PREPARADO.
         [M9] Single query with conditional count instead of 2 separate COUNT queries.
         """
-        if self.estado not in ('EN_PICKING', 'PREPARADO'):
+        if self.estado not in (EstadoTraslado.EN_PICKING, EstadoTraslado.PREPARADO):
             return None
         from sqlalchemy import func as _func, case as _case
         from app.extensions import db as _db
@@ -154,7 +157,7 @@ class SolicitudTraslado(db.Model):
 
     def _packing_info(self):
         """TareaPacking activa — relevante en EN_PACKING y PREPARADO (despacho pendiente)."""
-        if self.estado not in ('EN_PACKING', 'PREPARADO'):
+        if self.estado not in (EstadoTraslado.EN_PACKING, EstadoTraslado.PREPARADO):
             return None
         tareas = self.tareas_packing
         if not tareas:

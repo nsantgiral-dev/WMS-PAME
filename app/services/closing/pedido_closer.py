@@ -92,21 +92,44 @@ class PedidoPackingCloser(IPackingCloser):
         return total if total >= 1 else 'Total de piezas debe ser al menos 1'
 
     def _precheck_siesa(self, tarea_pre: TareaPacking):
-        estado = connekta.get_estado_pedido(
-            tarea_pre.tipo_docto_pedido_siesa,
-            tarea_pre.consec_docto_pedido_siesa
-        )
-        if estado is not None and str(estado) in ('-1', '5', '9'):
-            return (f'Pedido {tarea_pre.numero_pedido_siesa} anulado en Siesa '
-                    f'(estado {estado}) — no se puede facturar')
-        facturas = connekta.get_factura_desde_pedido(
-            tarea_pre.tipo_docto_pedido_siesa,
-            tarea_pre.consec_docto_pedido_siesa
-        )
-        if facturas:
-            f0 = facturas[0]
-            return (f'Pedido {tarea_pre.numero_pedido_siesa} ya tiene factura '
-                    f'{f0.get("f350_id_tipo_docto","?")}{f0.get("f350_consec_docto","?")} en Siesa')
+        # Cada llamada HTTP a Siesa puede tardar hasta 30s (timeout de Connekta).
+        # Ejecutar ambas en paralelo con timeout total de 8s para no bloquear el
+        # request thread. Si Siesa no responde, el precheck se omite y el DLQ
+        # handler maneja el rechazo (reconciliación automática ya lo cubre).
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
+
+        _PRECHECK_TIMEOUT = 8  # segundos — suficiente para QA y prod en condiciones normales
+
+        tipo = tarea_pre.tipo_docto_pedido_siesa
+        consec = tarea_pre.consec_docto_pedido_siesa
+
+        pool = ThreadPoolExecutor(max_workers=2)
+        try:
+            fut_estado = pool.submit(connekta.get_estado_pedido, tipo, consec)
+            fut_factura = pool.submit(connekta.get_factura_desde_pedido, tipo, consec)
+
+            estado = fut_estado.result(timeout=_PRECHECK_TIMEOUT)
+            if estado is not None and str(estado) in ('-1', '5', '9'):
+                fut_factura.cancel()
+                return (f'Pedido {tarea_pre.numero_pedido_siesa} anulado en Siesa '
+                        f'(estado {estado}) — no se puede facturar')
+
+            facturas = fut_factura.result(timeout=_PRECHECK_TIMEOUT)
+            if facturas:
+                f0 = facturas[0]
+                return (f'Pedido {tarea_pre.numero_pedido_siesa} ya tiene factura '
+                        f'{f0.get("f350_id_tipo_docto","?")}{f0.get("f350_consec_docto","?")} en Siesa')
+        except (FutTimeout, Exception) as e:
+            logger.warning(
+                '[PEDIDO_CLOSER] precheck Siesa timeout/error para %s%s: %s — '
+                'continuando (DLQ reconciliará si hay conflicto)',
+                tipo, consec, e
+            )
+        finally:
+            # shutdown(wait=False) evita bloquear hasta 30s si un future aún
+            # espera respuesta HTTP de Connekta después de nuestro timeout de 8s.
+            # cancel_futures=True (Python 3.9+) cancela futures pendientes.
+            pool.shutdown(wait=False, cancel_futures=True)
         return None
 
     def _crear_bultos(self, tarea: TareaPacking, tarea_id: int,
@@ -158,11 +181,15 @@ class PedidoPackingCloser(IPackingCloser):
         return items, None
 
     def _encolar_job(self, tarea: TareaPacking, tarea_id: int, items_payload: list):
+        # Incluir COMPLETADO: si el DLQ completó el job pero siesa_triggered no se
+        # persistió (crash window), no crear duplicado que generaría doble factura.
         job = SiesaJob.query.filter(
             SiesaJob.tipo == 'DESPACHO_F470',
             SiesaJob.referencia_tipo == 'TareaPacking',
             SiesaJob.referencia_id == tarea_id,
-            SiesaJob.estado.in_(list(EstadoSiesaJob.ACTIVOS) + [EstadoSiesaJob.FALLIDO]),
+            SiesaJob.estado.in_(
+                list(EstadoSiesaJob.ACTIVOS) + [EstadoSiesaJob.FALLIDO, EstadoSiesaJob.COMPLETADO]
+            ),
         ).first()
         payload_dict = {
             'tarea_id': tarea_id,

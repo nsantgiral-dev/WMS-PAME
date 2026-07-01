@@ -321,7 +321,7 @@ def registrar_faltante_info():
     if not _es_personal_almacen():
         return jsonify({'error': 'Sin permiso'}), 403
 
-    operario_id = _operario_id()  # noqa: F841 — futuro: adjuntar al reporte
+    operario_id = _operario_id()
     data = request.get_json() or {}
 
     tarea_id = data.get('tarea_id')
@@ -336,6 +336,7 @@ def registrar_faltante_info():
             tarea_id=tarea_id,
             cantidad_recogida=cantidad_recogida,
             cantidad_solicitada=cantidad_solicitada,
+            operario_id=operario_id,
         )
         return jsonify(resultado), 200
     except ValueError as e:

@@ -692,7 +692,7 @@ class ABCService:
                     from sqlalchemy.orm import selectinload
                     sesiones_pendientes = SesionConteo.query.options(
                         selectinload(SesionConteo.producto),
-                        selectinload(SesionConteo.ubicacion),
+                        selectinload(SesionConteo.ubicacion).selectinload(Ubicacion.almacen),
                     ).filter(
                         SesionConteo.estado == EstadoConteo.PENDIENTE
                     ).all()

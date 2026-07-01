@@ -492,35 +492,6 @@ class ConnektaGateway:
                 'Reintenta cuando Connekta esté disponible.'
             )
 
-    def get_detalle_factura(self, tipo_docto_rm: str, consec_rm) -> list:
-        """
-        GET API_v2_Ventas_Facturas_DesdePedido — detalle completo de la FE para impresión.
-        Retorna todas las líneas con precios, IVA y totales.
-        Falla silenciosamente (retorna []) — uso exclusivo de display, nunca de anti-duplicado.
-        Campos clave: f350_consec_docto, f350_id_tipo_docto, f350_fecha,
-          f200_nit_fact, f120_referencia, f470_cant_base, f470_precio_uni,
-          f470_vlr_imp, f461_vlr_neto.
-        """
-        if self.modo_simulacion:
-            return []
-        if not tipo_docto_rm or not str(tipo_docto_rm).strip():
-            return []
-        try:
-            consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
-            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
-                    f"AND f460_consec_docto = {consec_int}"
-                )
-            })
-            rows = res.get('detalle', {}).get('Table', [])
-            return [r for r in rows if 'alerta' not in r]
-        except Exception as e:
-            logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
-            return []
-
     def get_punto_envio_factura(self, f350_rowid) -> dict:
         """
         Consulta dinámica papeleriamedellin_WMS_PuntoEnvio_FE.
@@ -1319,7 +1290,10 @@ class ConnektaGateway:
                         'cuerpo_texto': _cuerpo,
                     },
                 )
-                _db_alert.session.commit()
+                # flush (no commit) — el job se persiste cuando el caller haga commit.
+                # Un commit aquí flusheaba estado intermedio del DLQ handler si esta
+                # función era invocada dentro de _ejecutar_job().
+                _db_alert.session.flush()
             except Exception as _e_alert:
                 logger.error('[CONNEKTA] Email alerta data maestra falló: %s', _e_alert)
         moneda_docto = cabecera.get('f430_id_moneda_docto') or 'COP'
@@ -2232,7 +2206,10 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
-                    'f470_desc_varible': None,
+                    # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173076.
+                    # Si difiere, Connekta trunca el registro en pos 487 y Siesa rechaza.
+                    # DEBE ser '' (no None): None omite el campo y Siesa rechaza por tamaño de registro.
+                    'f470_desc_varible': '',
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,
@@ -2401,7 +2378,9 @@ class ConnektaGateway:
                     'f470_cant_2': None,
                     'f470_costo_prom_uni': None,
                     'f470_notas': None,
-                    'f470_desc_varible': None,
+                    # Typo intencional: 'varible' no 'variable' — nombre exacto del spec 173079.
+                    # DEBE ser '' (no None): None omite el campo y Siesa rechaza por tamaño de registro.
+                    'f470_desc_varible': '',
                     'f470_id_ubicacion_aux_ent': None,
                     'f470_id_lote_ent': None,
                     'f470_id_item': None,

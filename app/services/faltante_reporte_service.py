@@ -12,7 +12,8 @@ class FaltanteReporteService:
     """
 
     @staticmethod
-    def registrar(tarea_id: int, cantidad_recogida: int, cantidad_solicitada: int) -> dict:
+    def registrar(tarea_id: int, cantidad_recogida: int, cantidad_solicitada: int,
+                  operario_id: int = None) -> dict:
         from app.models.picking import TareaPicking
         from app.services.conteo_service import ConteoService
 
@@ -35,10 +36,16 @@ class FaltanteReporteService:
 
         logger.warning(
             f'[FALTANTE] Tarea {tarea.codigo} — recogido {cantidad_recogida}/{cantidad_solicitada} '
-            f'— faltaron {faltante} uds — auditoría {sesion.codigo}'
+            f'— faltaron {faltante} uds — auditoría {sesion.codigo} — operario_id={operario_id}'
         )
 
-        _enviar_email_faltante(tarea, cantidad_recogida, cantidad_solicitada, faltante, sesion.codigo)
+        try:
+            _enviar_email_faltante(tarea, cantidad_recogida, cantidad_solicitada, faltante, sesion.codigo)
+        except Exception as mail_err:
+            # Email es best-effort: la auditoría ya se creó y commitió.
+            # No propagar al operario — el admin verá la auditoría en el panel.
+            logger.error('[FALTANTE] email falló (auditoría %s ya registrada): %s',
+                         sesion.codigo, mail_err)
 
         return {'ok': True, 'auditoria_id': sesion.id, 'faltante': faltante}
 

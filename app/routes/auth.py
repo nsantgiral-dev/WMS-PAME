@@ -171,8 +171,6 @@ def actualizar_usuario(uid):
     if 'password' in data and data['password']:
         usuario.set_password(data['password'])
 
-    db.session.commit()
-
     if usuario.rol == 'conductor':
         from app.models.conductor import Conductor
         conductor = Conductor.query.filter_by(usuario_id=usuario.id).first()
@@ -183,7 +181,6 @@ def actualizar_usuario(uid):
                 conductor.nombre = usuario.nombre
             if telefono_c is not None:
                 conductor.telefono = telefono_c
-            db.session.commit()
         elif cedula:
             db.session.add(Conductor(
                 nombre=usuario.nombre,
@@ -191,6 +188,7 @@ def actualizar_usuario(uid):
                 telefono=telefono_c,
                 usuario_id=usuario.id,
             ))
-            db.session.commit()
+
+    db.session.commit()
 
     return jsonify(usuario.to_dict()), 200
