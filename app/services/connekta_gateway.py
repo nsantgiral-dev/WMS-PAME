@@ -1588,9 +1588,9 @@ class ConnektaGateway:
         _centro_op = centro_op or self.centro_op
 
         es_entrada = motivo_codigo == 'AJ-ENT'
-        # PAME Concepto 603: la dirección la determina el motivo en el maestro de Siesa (no ind_naturaleza).
-        # '02'=Entrada/Sobrante (Naturaleza 1 en DB), '01'=Salida/Faltante (Naturaleza 2 en DB).
-        # La UI de Siesa muestra etiquetas inversas — el bit real está en el maestro interno.
+        # PAME Concepto 603: '01'=Entrada/Sobrante, '02'=Salida/Faltante — confirmado en UI Siesa 2026-07-01.
+        # ADVERTENCIA: el conector 142951 valida disponible incluso para Entrada cuando disponible < 0
+        # (comportamiento distinto a la UI Enterprise). Pendiente aclaración con Connekta.
         siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
