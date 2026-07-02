@@ -1215,6 +1215,9 @@ async function verReconciliacion() {
 async function pedirTarea() {
   try {
     const d = await get('/api/mobile/tarea-actual');
+    if (d && d.avisos_pendientes && d.avisos_pendientes.length) {
+      d.avisos_pendientes.forEach(a => alerta(a.mensaje, a.tipo || 'advertencia'));
+    }
     if (!d || d.sin_tareas) {
       TAREA_ACTUAL = null;
       const _esTiendaOp = OPERARIO && ['picker_traslado', 'packer_traslado'].includes(OPERARIO.rol);

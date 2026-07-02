@@ -2,6 +2,7 @@ import logging
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.mobile_service import MobileService
+from app.services.avisos_conteo_service import obtener_avisos_pendientes
 from app.routes._auth_helpers import Roles
 
 logger = logging.getLogger(__name__)
@@ -67,8 +68,11 @@ def tarea_actual():
     except Exception as e:
         current_app.logger.error(f'[MOBILE] /tarea-actual error: {e}', exc_info=True)
         return jsonify({'error': str(e)}), 500
+
+    avisos = obtener_avisos_pendientes(operario_id)
     if not resultado:
-        return jsonify({'sin_tareas': True, 'mensaje': 'No tienes tareas pendientes'}), 200
+        return jsonify({'sin_tareas': True, 'mensaje': 'No tienes tareas pendientes', 'avisos_pendientes': avisos}), 200
+    resultado['avisos_pendientes'] = avisos
     return jsonify(resultado), 200
 
 
