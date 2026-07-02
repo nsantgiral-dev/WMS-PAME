@@ -1591,10 +1591,15 @@ class ConnektaGateway:
         # PAME Concepto 0603: '01'=Entrada Ajuste a inventario (Naturaleza Entrada),
         # '02'=Salida Ajuste a inventario (Naturaleza Salida) — verificado en Siesa Enterprise
         # (Maestros > Conceptos y motivos > 0603), captura 2026-07-02. NO invertir.
-        # ADVERTENCIA: el conector 142951 valida disponible incluso con motivo '01' (Entrada real)
-        # cuando disponible < 0 por compromisos — probado 2026-07-01, item PAPELSP9218/NS1
-        # (existencia 110, comprometida 76, salida_sin_conf 47 → disponible -13). No es un problema
-        # de mapeo de motivo: Siesa rechaza el ADI mientras el déficit de disponible no se resuelva.
+        # REGLA REAL DEL CONECTOR 142951 (verificada 2026-07-02, item PAPELSP9218/NS1):
+        # rechaza el ADI si el disponible RESULTANTE tras aplicar el movimiento sigue siendo
+        # negativo, sin importar la dirección (entrada o salida). No es un problema de mapeo
+        # de motivo. Prueba 1: existencia 110, comprometida 76, salida_sin_conf 47 (disponible
+        # -13); AJ-ENT +5 → resultante -8 → RECHAZADO (HTTP 400 Faltante Inv). Prueba 2: mismo
+        # estado, AJ-ENT +15 → resultante +2 → ACEPTADO (HTTP 200, existencia 110→125).
+        # Implicación operativa: en una bodega con disponible negativo por compromisos, un
+        # sobrante de conteo cíclico solo se registra si alcanza a cubrir todo el déficit; un
+        # faltante ahí nunca podrá registrarse hasta que los compromisos se liberen.
         siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
