@@ -1588,9 +1588,13 @@ class ConnektaGateway:
         _centro_op = centro_op or self.centro_op
 
         es_entrada = motivo_codigo == 'AJ-ENT'
-        # PAME Concepto 603: '01'=Entrada/Sobrante, '02'=Salida/Faltante — confirmado en UI Siesa 2026-07-01.
-        # ADVERTENCIA: el conector 142951 valida disponible incluso para Entrada cuando disponible < 0
-        # (comportamiento distinto a la UI Enterprise). Pendiente aclaración con Connekta.
+        # PAME Concepto 0603: '01'=Entrada Ajuste a inventario (Naturaleza Entrada),
+        # '02'=Salida Ajuste a inventario (Naturaleza Salida) — verificado en Siesa Enterprise
+        # (Maestros > Conceptos y motivos > 0603), captura 2026-07-02. NO invertir.
+        # ADVERTENCIA: el conector 142951 valida disponible incluso con motivo '01' (Entrada real)
+        # cuando disponible < 0 por compromisos — probado 2026-07-01, item PAPELSP9218/NS1
+        # (existencia 110, comprometida 76, salida_sin_conf 47 → disponible -13). No es un problema
+        # de mapeo de motivo: Siesa rechaza el ADI mientras el déficit de disponible no se resuelva.
         siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
 
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
