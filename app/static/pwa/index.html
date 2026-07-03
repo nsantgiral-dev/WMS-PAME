@@ -861,6 +861,7 @@
       <div class="nav-tab" onclick="tab('tab-rutas')">🗺️ Rutas</div>
       <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
       <div class="nav-tab" onclick="tab('tab-reposicion')">📦 Reposición</div>
+      <div class="nav-tab" onclick="tab('tab-layout')">🧭 Layout</div>
       <div class="nav-tab" onclick="tab('tab-compras')">🛒 Compras</div>
     </div>
 
@@ -1724,6 +1725,77 @@
     </div>
   </div><!-- /tab-reposicion -->
 
+  <!-- ═══════════ TAB LAYOUT ═══════════ -->
+  <div id="tab-layout" class="admin-content" style="display:none;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">🧭 Layout de bodega</div>
+    <div style="font-size:12px;color:var(--tx3);margin-bottom:16px;">
+      Las ubicaciones se crean y clasifican 100% en el WMS — pasillos, filas y zonas no dependen de Siesa.
+    </div>
+
+    <!-- Sub-nav de secciones -->
+    <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;flex-wrap:wrap;">
+      <div id="layout-sub-ubicaciones" onclick="layoutSubtab('ubicaciones')"
+        style="flex:1;min-width:100px;padding:10px 6px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;background:var(--pm);color:#fff;">
+        Ubicaciones
+      </div>
+      <div id="layout-sub-importar" onclick="layoutSubtab('importar')"
+        style="flex:1;min-width:100px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        Importar Excel
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: UBICACIONES ─────────────────────────────────────── -->
+    <div id="layout-sec-ubicaciones">
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+        <button onclick="layoutAbrirModalFila()"
+          style="padding:10px 16px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+          + Crear fila
+        </button>
+        <button onclick="layoutCrearAverias()"
+          style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
+          + Ubicación AVERIAS
+        </button>
+        <button onclick="layoutCargarUbicaciones()"
+          style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
+          Actualizar
+        </button>
+      </div>
+
+      <!-- Leyenda de zonas -->
+      <div style="display:flex;gap:14px;margin-bottom:12px;flex-wrap:wrap;">
+        <span style="font-size:11px;color:var(--tx3);"><span style="color:#60a5fa;font-weight:700;">● PICKING</span></span>
+        <span style="font-size:11px;color:var(--tx3);"><span style="color:#22c55e;font-weight:700;">● RESERVA</span></span>
+        <span style="font-size:11px;color:var(--tx3);"><span style="color:#ef4444;font-weight:700;">● AVERIAS</span></span>
+        <span style="font-size:11px;color:var(--tx3);"><span style="color:#555;font-weight:700;">● GENERAL</span> sin clasificar</span>
+      </div>
+
+      <div id="layout-resumen" style="font-size:12px;color:var(--tx3);margin-bottom:12px;"></div>
+
+      <div id="layout-lista-ubicaciones">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: IMPORTAR EXCEL ──────────────────────────────────── -->
+    <div id="layout-sec-importar" style="display:none;">
+      <div style="background:#1c1c1c;border:1px solid #333;border-radius:10px;padding:16px;margin-bottom:14px;">
+        <div style="font-size:13px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Poblamiento inicial masivo</div>
+        <div style="font-size:11px;color:var(--tx3);margin-bottom:14px;line-height:1.5;">
+          Excel con 3 columnas en este orden: <strong>ubicacion_codigo</strong>, <strong>producto_codigo</strong>, <strong>cantidad</strong>.
+          No se detiene en la primera fila con error — reporta éxito/error fila por fila, pensado para migrar
+          miles de SKUs desde el bucket genérico de una sola vez.
+        </div>
+        <input type="file" id="layout-import-file" accept=".xlsx"
+          style="display:block;margin-bottom:12px;color:var(--tx2);font-size:13px;">
+        <button onclick="layoutImportarExcel(this)"
+          style="padding:11px 18px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+          Importar
+        </button>
+      </div>
+      <div id="layout-import-resultado"></div>
+    </div>
+  </div><!-- /tab-layout -->
+
   <!-- ═══════════ TAB COMPRAS ═══════════ -->
   <div id="tab-compras" class="admin-content" style="display:none;">
     <div style="font-size:16px;font-weight:700;margin-bottom:4px;">🛒 Panel de Compras</div>
@@ -2441,12 +2513,131 @@
     </div>
   </div>
 
+  <!-- Modal Layout: Crear fila (Nivel 1 del Mecanismo A) -->
+  <div id="modal-layout-fila" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:16px;">Crear fila</div>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Pasillo</label>
+      <select id="layout-fila-pasillo"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+      </select>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Fila (número)</label>
+      <input id="layout-fila-numero" type="number" min="1" placeholder="ej. 3"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad de posiciones en esta fila</label>
+      <input id="layout-fila-cantidad" type="number" min="1" placeholder="ej. 4"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Zona</label>
+      <select id="layout-fila-zona"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:16px;">
+        <option value="PICKING">PICKING</option>
+        <option value="RESERVA">RESERVA</option>
+      </select>
+
+      <button id="layout-fila-btn-repetir" onclick="layoutRepetirFilaAnterior()" style="display:none;width:100%;padding:9px;margin-bottom:12px;background:transparent;border:1px dashed var(--brd);border-radius:8px;color:var(--tx3);font-size:12px;cursor:pointer;">
+        ↻ Repetir como la fila anterior
+      </button>
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="layoutGuardarFila()"
+          style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+          Crear
+        </button>
+        <button onclick="layoutCerrarModalFila()"
+          style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Layout: Asignar SKU (Mecanismo B) -->
+  <div id="modal-layout-asignar" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Asignar SKU</div>
+      <div id="layout-asignar-ub-codigo" style="font-size:13px;font-weight:700;color:var(--tx);font-family:monospace;margin-bottom:16px;"></div>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Escanear o escribir código de producto</label>
+      <input id="layout-asignar-codigo" type="text" placeholder="Código o código de barras" autocomplete="off"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProducto();}"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:8px;">
+      <button onclick="layoutBuscarProducto()"
+        style="width:100%;padding:9px;margin-bottom:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:12px;cursor:pointer;">
+        Buscar
+      </button>
+
+      <!-- Confirmación visual post-escaneo — antes de escribir cantidad -->
+      <div id="layout-asignar-confirmacion" style="display:none;background:#0f2e1c;border:1px solid #16532f;border-radius:8px;padding:10px 12px;margin-bottom:12px;">
+        <div style="font-size:12px;font-weight:700;color:#4ade80;" id="layout-asignar-prod-codigo"></div>
+        <div style="font-size:12px;color:var(--tx2);" id="layout-asignar-prod-nombre"></div>
+      </div>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad contada</label>
+      <input id="layout-asignar-cantidad" type="number" min="1" placeholder="ej. 50"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:16px;">
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="layoutConfirmarAsignar()"
+          style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+          Confirmar
+        </button>
+        <button onclick="layoutCerrarModalAsignar()"
+          style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Layout: Reclasificar ubicación -->
+  <div id="modal-layout-reclasificar" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Reclasificar ubicación</div>
+      <div id="layout-reclasificar-codigo" style="font-size:13px;font-weight:700;color:var(--tx);font-family:monospace;margin-bottom:16px;"></div>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Zona</label>
+      <select id="layout-reclasificar-zona"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+        <option value="PICKING">PICKING</option>
+        <option value="RESERVA">RESERVA</option>
+        <option value="AVERIAS">AVERIAS</option>
+        <option value="GENERAL">GENERAL</option>
+      </select>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima (opcional)</label>
+      <input id="layout-reclasificar-capacidad" type="number" min="0" placeholder="ej. 100"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--tx2);margin-bottom:12px;cursor:pointer;">
+        <input id="layout-reclasificar-liberar" type="checkbox">
+        Liberar slot de PICKING asignado
+      </label>
+
+      <div id="layout-reclasificar-advertencias" style="font-size:12px;color:#fbbf24;margin-bottom:12px;"></div>
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="layoutGuardarReclasificar()"
+          style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+          Guardar
+        </button>
+        <button onclick="layoutCerrarModalReclasificar()"
+          style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div class="offline-badge" id="offline-badge">⚡ <span id="offline-count">0</span> en cola</div>
 
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260514"></script>
+  <script src="/static/pwa/app.js?v=20260703"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');

@@ -394,11 +394,12 @@ async function cargarAdmin() {
   else if (TAB === 'tab-inventario') await cargarInventario();
   else if (TAB === 'tab-traslados') await cargarTrasladosAdmin();
   else if (TAB === 'tab-reposicion') await cargarReposicion();
+  else if (TAB === 'tab-layout') await cargarLayout();
   else if (TAB === 'tab-compras') await cargarCompras();
 }
 
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-compras'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-layout','tab-compras'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';
@@ -10183,6 +10184,338 @@ async function repTestEmail(btn) {
     alerta(`Error: ${e.message || 'no se pudo conectar al servidor'}`, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Enviar email de prueba ahora'; }
+  }
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO LAYOUT — ubicaciones gestionadas 100% en el WMS, independiente de
+// Reposición. Este módulo es el cimiento (crear/clasificar/poblar); Reposición,
+// Picking, Recepción, Averías y Compras son consumidores de estos datos.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _layoutSubActual = 'ubicaciones';
+let _layoutUbicacionesCache = [];
+let _layoutUltimaFila = null;   // { pasillo, fila, cantidad, zona } — para "repetir"
+let _layoutUbAsignarId = null;
+let _layoutProductoId = null;
+
+const _ZONA_COLOR = { PICKING: '#60a5fa', RESERVA: '#22c55e', AVERIAS: '#ef4444', GENERAL: '#555' };
+
+function layoutSubtab(sec) {
+  _layoutSubActual = sec;
+  ['ubicaciones', 'importar'].forEach(s => {
+    const cont = document.getElementById(`layout-sec-${s}`);
+    const btn  = document.getElementById(`layout-sub-${s}`);
+    if (!cont || !btn) return;
+    const activo = s === sec;
+    cont.style.display = activo ? 'block' : 'none';
+    btn.style.background = activo ? 'var(--pm)' : 'transparent';
+    btn.style.color = activo ? '#fff' : 'var(--tx3)';
+    btn.style.fontWeight = activo ? '700' : '400';
+  });
+  if (sec === 'ubicaciones') layoutCargarUbicaciones();
+}
+
+async function cargarLayout() {
+  layoutSubtab(_layoutSubActual);
+}
+
+async function layoutCargarUbicaciones() {
+  const el = document.getElementById('layout-lista-ubicaciones');
+  if (!el) return;
+  el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
+  try {
+    const d = await get(`/api/almacenes/${ALMACEN_ID}/layout`);
+    _layoutUbicacionesCache = d.ubicaciones || [];
+
+    const resumen = document.getElementById('layout-resumen');
+    if (resumen) {
+      resumen.textContent = `${d.total} ubicación(es) — ${d.sin_clasificar} sin clasificar (GENERAL)`;
+    }
+
+    if (!_layoutUbicacionesCache.length) {
+      el.innerHTML = `
+        <div style="text-align:center;padding:40px;color:#555;">
+          <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">🧭</div>
+          <div style="font-size:15px;font-weight:600;">Sin ubicaciones registradas</div>
+          <div style="font-size:12px;margin-top:6px;">Usa "+ Crear fila" para empezar a armar el layout de esta bodega</div>
+        </div>`;
+      return;
+    }
+
+    el.innerHTML = _layoutUbicacionesCache.map(u => {
+      const color = _ZONA_COLOR[u.tipo_zona] || '#888';
+      const skuLabel = u.producto_asignado_codigo
+        ? `📦 ${u.producto_asignado_codigo}`
+        : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
+
+      return `
+        <div class="tabla-card" style="margin-bottom:10px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+            <div>
+              <div style="font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
+              ${skuLabel ? `<div style="font-size:11px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#555'};margin-top:3px;font-weight:600;">${skuLabel}</div>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+              <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${u.tipo_zona}</span>
+              ${!u.activo ? `<span style="font-size:10px;color:#888;background:#88888822;padding:3px 8px;border-radius:20px;">INACTIVA</span>` : ''}
+            </div>
+          </div>
+          <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);margin-bottom:10px;">
+            <span>Stock <strong style="color:var(--tx);">${u.stock_actual ?? 0}</strong></span>
+            ${u.capacidad_maxima != null ? `<span>Capacidad <strong style="color:var(--tx);">${u.capacidad_maxima}</strong></span>` : ''}
+            <span style="color:#666;">${u.origen === 'MANUAL' ? 'WMS' : 'Siesa'}</span>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button onclick="layoutAbrirModalAsignar(${u.id}, '${u.codigo}')"
+              style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+              Asignar SKU
+            </button>
+            <button onclick="layoutAbrirModalReclasificar(${u.id})"
+              style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+              Reclasificar
+            </button>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando el layout</div>';
+  }
+}
+
+// ── Modal: Crear fila (Nivel 1) ──────────────────────────────────────────────
+
+async function layoutAbrirModalFila() {
+  const m = document.getElementById('modal-layout-fila');
+  if (!m) return;
+
+  const existentes = [...new Set(_layoutUbicacionesCache.map(u => u.pasillo).filter(Boolean))].sort();
+  let disponibles = [];
+  try {
+    const d = await get(`/api/almacenes/${ALMACEN_ID}/pasillos-disponibles?cantidad=5`);
+    disponibles = d.letras || [];
+  } catch (_) {}
+
+  const sel = document.getElementById('layout-fila-pasillo');
+  let html = '';
+  if (existentes.length) {
+    html += `<optgroup label="Pasillos existentes">` +
+      existentes.map(p => `<option value="${p}">${p}</option>`).join('') + `</optgroup>`;
+  }
+  html += `<optgroup label="Pasillos nuevos">` +
+    disponibles.map(p => `<option value="${p}">${p} (nuevo)</option>`).join('') + `</optgroup>`;
+  sel.innerHTML = html;
+
+  document.getElementById('layout-fila-numero').value = '';
+  document.getElementById('layout-fila-cantidad').value = '';
+  document.getElementById('layout-fila-zona').value = 'PICKING';
+
+  const btnRepetir = document.getElementById('layout-fila-btn-repetir');
+  if (btnRepetir) btnRepetir.style.display = _layoutUltimaFila ? 'block' : 'none';
+
+  m.style.display = 'flex';
+}
+
+function layoutCerrarModalFila() {
+  const m = document.getElementById('modal-layout-fila');
+  if (m) m.style.display = 'none';
+}
+
+function layoutRepetirFilaAnterior() {
+  if (!_layoutUltimaFila) return;
+  document.getElementById('layout-fila-pasillo').value = _layoutUltimaFila.pasillo;
+  document.getElementById('layout-fila-numero').value = _layoutUltimaFila.fila + 1;
+  document.getElementById('layout-fila-cantidad').value = _layoutUltimaFila.cantidad;
+  document.getElementById('layout-fila-zona').value = _layoutUltimaFila.zona;
+}
+
+async function layoutGuardarFila() {
+  const pasillo = document.getElementById('layout-fila-pasillo').value;
+  const fila = parseInt(document.getElementById('layout-fila-numero').value);
+  const cantidad_posiciones = parseInt(document.getElementById('layout-fila-cantidad').value);
+  const tipo_zona = document.getElementById('layout-fila-zona').value;
+
+  if (!pasillo || isNaN(fila) || isNaN(cantidad_posiciones)) {
+    alerta('Completa pasillo, fila y cantidad de posiciones', 'error');
+    return;
+  }
+
+  try {
+    await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/fila`, { pasillo, fila, cantidad_posiciones, tipo_zona });
+    _layoutUltimaFila = { pasillo, fila, cantidad: cantidad_posiciones, zona: tipo_zona };
+    alerta(`${cantidad_posiciones} posición(es) creada(s) en ${pasillo}${String(fila).padStart(2,'0')}`, 'ok');
+    layoutCerrarModalFila();
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta(e.message || 'Error creando la fila', 'error');
+  }
+}
+
+// ── AVERIAS numeradas ─────────────────────────────────────────────────────
+
+async function layoutCrearAverias() {
+  try {
+    const d = await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/averias`, {});
+    alerta(`${d.codigo} creada`, 'ok');
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta(e.message || 'Error creando la ubicación de averías', 'error');
+  }
+}
+
+// ── Modal: Asignar SKU (Mecanismo B) ─────────────────────────────────────────
+
+function layoutAbrirModalAsignar(ubId, codigo) {
+  _layoutUbAsignarId = ubId;
+  _layoutProductoId = null;
+  const m = document.getElementById('modal-layout-asignar');
+  if (!m) return;
+  document.getElementById('layout-asignar-ub-codigo').textContent = codigo;
+  document.getElementById('layout-asignar-codigo').value = '';
+  document.getElementById('layout-asignar-cantidad').value = '';
+  document.getElementById('layout-asignar-confirmacion').style.display = 'none';
+  m.style.display = 'flex';
+  setTimeout(() => document.getElementById('layout-asignar-codigo')?.focus(), 50);
+}
+
+function layoutCerrarModalAsignar() {
+  const m = document.getElementById('modal-layout-asignar');
+  if (m) m.style.display = 'none';
+  _layoutUbAsignarId = null;
+  _layoutProductoId = null;
+}
+
+async function layoutBuscarProducto() {
+  const codigo = document.getElementById('layout-asignar-codigo').value.trim();
+  if (!codigo) return;
+  try {
+    const d = await get(`/api/productos/?q=${encodeURIComponent(codigo)}&per_page=1`);
+    const prod = (d.productos || [])[0];
+    const conf = document.getElementById('layout-asignar-confirmacion');
+    if (!prod) {
+      conf.style.display = 'none';
+      _layoutProductoId = null;
+      alerta('Producto no encontrado — verifica el código o búscalo por nombre', 'error');
+      return;
+    }
+    _layoutProductoId = prod.id;
+    document.getElementById('layout-asignar-prod-codigo').textContent = prod.codigo;
+    document.getElementById('layout-asignar-prod-nombre').textContent = prod.nombre;
+    conf.style.display = 'block';
+    document.getElementById('layout-asignar-cantidad')?.focus();
+  } catch (e) {
+    alerta('Error buscando el producto', 'error');
+  }
+}
+
+async function layoutConfirmarAsignar() {
+  if (!_layoutUbAsignarId) return;
+  if (!_layoutProductoId) { alerta('Busca y confirma el producto antes de continuar', 'error'); return; }
+  const cantidad = parseInt(document.getElementById('layout-asignar-cantidad').value);
+  if (isNaN(cantidad) || cantidad <= 0) { alerta('Ingresa una cantidad válida', 'error'); return; }
+
+  try {
+    const d = await post(`/api/almacenes/ubicaciones/${_layoutUbAsignarId}/asignar`, {
+      producto_id: _layoutProductoId, cantidad,
+    });
+    alerta(`${d.producto_codigo} asignado — total ${d.cantidad_total} UNDs`, 'ok');
+    layoutCerrarModalAsignar();
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta(e.message || 'Error asignando el producto', 'error');
+  }
+}
+
+// ── Modal: Reclasificar ubicación ────────────────────────────────────────────
+
+function layoutAbrirModalReclasificar(ubId) {
+  const ub = _layoutUbicacionesCache.find(u => u.id === ubId);
+  if (!ub) return;
+  _layoutUbAsignarId = ubId; // reutilizamos la misma variable de "ubicación activa"
+  const m = document.getElementById('modal-layout-reclasificar');
+  if (!m) return;
+  document.getElementById('layout-reclasificar-codigo').textContent = ub.codigo;
+  document.getElementById('layout-reclasificar-zona').value = ub.tipo_zona;
+  document.getElementById('layout-reclasificar-capacidad').value = ub.capacidad_maxima ?? '';
+  document.getElementById('layout-reclasificar-liberar').checked = false;
+  document.getElementById('layout-reclasificar-advertencias').textContent = '';
+  m.style.display = 'flex';
+}
+
+function layoutCerrarModalReclasificar() {
+  const m = document.getElementById('modal-layout-reclasificar');
+  if (m) m.style.display = 'none';
+  _layoutUbAsignarId = null;
+}
+
+async function layoutGuardarReclasificar() {
+  if (!_layoutUbAsignarId) return;
+  const tipo_zona = document.getElementById('layout-reclasificar-zona').value;
+  const capRaw = document.getElementById('layout-reclasificar-capacidad').value;
+  const liberar_slot = document.getElementById('layout-reclasificar-liberar').checked;
+
+  const payload = { tipo_zona, liberar_slot };
+  if (capRaw !== '') payload.capacidad_maxima = parseInt(capRaw);
+
+  try {
+    const r = await fetch(API + `/api/almacenes/ubicaciones/${_layoutUbAsignarId}`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error reclasificando', 'error'); return; }
+
+    if (d.advertencias && d.advertencias.length) {
+      document.getElementById('layout-reclasificar-advertencias').textContent = '⚠ ' + d.advertencias.join(' · ');
+    }
+    alerta('Ubicación actualizada', 'ok');
+    layoutCargarUbicaciones();
+    setTimeout(layoutCerrarModalReclasificar, d.advertencias?.length ? 1400 : 200);
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+// ── Importador Excel (Mecanismo A, opción masiva) ────────────────────────────
+
+async function layoutImportarExcel(btn) {
+  const input = document.getElementById('layout-import-file');
+  const file = input?.files?.[0];
+  if (!file) { alerta('Selecciona un archivo .xlsx', 'error'); return; }
+
+  const resultado = document.getElementById('layout-import-resultado');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importando...'; }
+
+  const form = new FormData();
+  form.append('archivo', file);
+
+  try {
+    const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/importar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+      body: form,
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error procesando el archivo', 'error'); return; }
+
+    const erroresHtml = (d.errores || []).map(e =>
+      `<div style="font-size:12px;color:#f87171;padding:4px 0;">Fila ${e.fila}: ${e.error}</div>`
+    ).join('');
+
+    resultado.innerHTML = `
+      <div class="tabla-card">
+        <div style="font-size:13px;font-weight:700;color:#4ade80;margin-bottom:8px;">✓ ${d.ok} fila(s) importada(s) correctamente</div>
+        ${d.errores?.length ? `<div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">${d.errores.length} fila(s) con error:</div>${erroresHtml}` : ''}
+      </div>`;
+    alerta(`Importación completa — ${d.ok} ok, ${d.errores?.length || 0} error(es)`, d.errores?.length ? 'advertencia' : 'ok');
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta('Error de conexión subiendo el archivo', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Importar'; }
+    input.value = '';
   }
 }
 

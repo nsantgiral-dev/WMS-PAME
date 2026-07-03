@@ -25,7 +25,8 @@ def listar_productos():
         query = query.filter(
             db.or_(
                 Producto.nombre.ilike(f'%{buscar_safe}%', escape='\\'),
-                Producto.codigo.ilike(f'%{buscar_safe}%', escape='\\')
+                Producto.codigo.ilike(f'%{buscar_safe}%', escape='\\'),
+                Producto.codigo_barras.ilike(f'%{buscar_safe}%', escape='\\'),
             )
         )
 

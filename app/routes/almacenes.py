@@ -268,8 +268,28 @@ def layout_completo(id):
     ubicaciones = Ubicacion.query.filter_by(almacen_id=id).order_by(
         Ubicacion.tipo_zona, Ubicacion.pasillo, Ubicacion.estante, Ubicacion.codigo
     ).all()
+
+    # Stock actual por ubicación en una sola query — evita N+1.
+    from app.models.inventario import UbicacionProducto
+    ub_ids = [u.id for u in ubicaciones]
+    stock_map = {}
+    if ub_ids:
+        filas = db.session.query(
+            UbicacionProducto.ubicacion_id,
+            db.func.coalesce(db.func.sum(UbicacionProducto.cantidad), 0),
+        ).filter(UbicacionProducto.ubicacion_id.in_(ub_ids)).group_by(
+            UbicacionProducto.ubicacion_id
+        ).all()
+        stock_map = {ubid: total for ubid, total in filas}
+
+    resultado = []
+    for u in ubicaciones:
+        d = u.to_dict()
+        d['stock_actual'] = stock_map.get(u.id, 0)
+        resultado.append(d)
+
     return jsonify({
-        'ubicaciones': [u.to_dict() for u in ubicaciones],
-        'total': len(ubicaciones),
+        'ubicaciones': resultado,
+        'total': len(resultado),
         'sin_clasificar': sum(1 for u in ubicaciones if u.tipo_zona == 'GENERAL'),
     }), 200
