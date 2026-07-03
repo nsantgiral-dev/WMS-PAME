@@ -26,11 +26,20 @@ class Ubicacion(db.Model):
     # capacidad_maxima se mantiene por retrocompatibilidad; stock_maximo es el campo canónico
     capacidad_maxima = db.Column(db.Integer)
 
+    # origen: SIESA (la crea/clasifica el sync nocturno) | MANUAL (la crea el jefe de
+    # bodega desde el módulo de Layout). El sync nunca toca una ubicación MANUAL.
+    origen = db.Column(db.String(10), nullable=False, default='MANUAL')
+
+    # Slot fijo de PICKING: 1 SKU ↔ 1 ubicación PICKING por almacén. Solo se usa
+    # cuando tipo_zona='PICKING' — en RESERVA/AVERIAS queda en None.
+    producto_asignado_id = db.Column(db.Integer, db.ForeignKey('productos.id'), nullable=True)
+
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relaciones
     productos = db.relationship('UbicacionProducto', backref='ubicacion', lazy=True)
+    producto_asignado = db.relationship('Producto', foreign_keys=[producto_asignado_id], lazy=True)
 
     @property
     def es_picking(self):
@@ -55,5 +64,8 @@ class Ubicacion(db.Model):
             'stock_maximo': self.stock_maximo,
             'secuencia_ruteo': self.secuencia_ruteo,
             'capacidad_maxima': self.capacidad_maxima,
+            'origen': self.origen,
+            'producto_asignado_id': self.producto_asignado_id,
+            'producto_asignado_codigo': self.producto_asignado.codigo if self.producto_asignado else None,
             'activo': self.activo,
         }

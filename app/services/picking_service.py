@@ -17,6 +17,38 @@ from app.models.ubicacion import Ubicacion
 class PickingService:
 
     @staticmethod
+    def _ubicacion_averias_disponible(almacen_id: int, cantidad_necesaria: int):
+        """
+        Recorre las ubicaciones AVERIAS del almacén en orden de llenado
+        (AVE1, AVE2...) y devuelve la primera con capacidad disponible.
+        Si ninguna tiene capacidad_maxima configurada, no bloquea el registro
+        de la avería — usa la primera del orden como respaldo.
+        """
+        import re
+
+        def _orden(ub):
+            m = re.match(r'^AVE(\d+)', ub.codigo, re.IGNORECASE)
+            return (int(m.group(1)) if m else 0, ub.codigo)
+
+        candidatas = sorted(
+            Ubicacion.query.filter_by(
+                almacen_id=almacen_id, tipo_zona='AVERIAS', activo=True
+            ).all(),
+            key=_orden,
+        )
+
+        for ub in candidatas:
+            if ub.capacidad_maxima is None:
+                return ub
+            ocupado = db.session.query(
+                db.func.coalesce(db.func.sum(UbicacionProducto.cantidad), 0)
+            ).filter_by(ubicacion_id=ub.id).scalar()
+            if ocupado + cantidad_necesaria <= ub.capacidad_maxima:
+                return ub
+
+        return candidatas[0] if candidatas else None
+
+    @staticmethod
     def calcular_fefo(producto_id: int, cantidad_necesaria: int, almacen_id: int):
         """
         Calcula qué ubicaciones usar según FEFO.
@@ -435,10 +467,9 @@ class PickingService:
 
         elif resultado == 'AVERIA':
             if reg and cantidad_hallada > 0:
-                from app.models.ubicacion import Ubicacion
-                averia_ub = Ubicacion.query.filter_by(
-                    almacen_id=tarea.almacen_id, tipo_zona='AVERIAS'
-                ).first()
+                averia_ub = PickingService._ubicacion_averias_disponible(
+                    tarea.almacen_id, cantidad_hallada
+                )
                 if averia_ub:
                     reg_averia = UbicacionProducto.query.filter_by(
                         ubicacion_id=averia_ub.id, producto_id=tarea.producto_id

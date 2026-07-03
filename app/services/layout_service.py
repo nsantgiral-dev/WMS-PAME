@@ -1,0 +1,356 @@
+"""
+Módulo de Layout — las ubicaciones se crean y gestionan 100% en el WMS.
+
+Independiente de Reposición: este servicio es el cimiento (crear, clasificar y
+poblar ubicaciones); Reposición, Picking, Recepción, Averías y Compras son
+consumidores de ese cimiento, no dueños de la lógica de ubicaciones.
+
+Piezas:
+  1. letras_disponibles()   — pasillos: A-Z y luego AA, AB... (revelado progresivo)
+  2. crear_fila()           — Nivel 1 del Mecanismo A: posiciones de una fila, en bloque
+  3. crear_ubicacion_averias() — AVE1, AVE2... numeradas, fuera de la grilla pasillo/fila
+  4. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING
+  5. reclasificar_ubicacion() — cambiar zona/capacidad/activo/slot, con guardarraíles
+  6. importar_excel()       — Mecanismo A, opción masiva (reusa asignar_producto)
+
+Todas las ubicaciones que crea este módulo nacen con origen='MANUAL' — el sync
+de Siesa (ubicaciones_sync_service.py) nunca las toca.
+"""
+import re
+from datetime import datetime
+from app.extensions import db
+from app.models.ubicacion import Ubicacion
+from app.models.producto import Producto
+from app.models.inventario import UbicacionProducto, MovimientoInventario
+from app.models.picking import TareaPicking
+from app.models.tarea_reposicion import TareaReposicion
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. Pasillos — A-Z y luego AA, AB... (esquema de columnas de Excel)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _generar_letras(cantidad: int):
+    """A, B, ... Z, AA, AB, ... — bijective base-26, orden de generación real."""
+    letras = []
+    n = 1
+    while len(letras) < cantidad:
+        letras.append(_indice_a_letra(n))
+        n += 1
+    return letras
+
+
+def _indice_a_letra(n: int) -> str:
+    """1→A, 26→Z, 27→AA, 28→AB... (bijective base-26, sin dígito cero)."""
+    letras = ''
+    while n > 0:
+        n, resto = divmod(n - 1, 26)
+        letras = chr(65 + resto) + letras
+    return letras
+
+
+def letras_disponibles(almacen_id: int, minimo_a_mostrar: int = 5):
+    """
+    Devuelve las letras de pasillo aún no usadas en este almacén.
+    Revelado progresivo: solo abre AA, AB... cuando las simples (A-Z) ya se agotaron.
+    """
+    usadas = {
+        p for (p,) in db.session.query(Ubicacion.pasillo)
+        .filter(Ubicacion.almacen_id == almacen_id, Ubicacion.pasillo.isnot(None))
+        .distinct().all()
+    }
+
+    disponibles = []
+    n = 1
+    # Tope defensivo (26 simples + 676 dobles = 702) — nunca triples.
+    while len(disponibles) < minimo_a_mostrar and n <= 702:
+        letra = _indice_a_letra(n)
+        if letra not in usadas:
+            disponibles.append(letra)
+        n += 1
+    return disponibles
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. Nivel 1 del Mecanismo A — crear las posiciones de una fila, en bloque
+# ──────────────────────────────────────────────────────────────────────────────
+
+ZONAS_VALIDAS = ('PICKING', 'RESERVA', 'AVERIAS')
+_PREFIJO_ZONA = {'PICKING': 'PIK', 'RESERVA': 'RES', 'AVERIAS': 'AVE'}
+
+
+def crear_fila(almacen_id: int, pasillo: str, fila: int, cantidad_posiciones: int,
+               tipo_zona: str, capacidad_maxima: int = None):
+    """
+    Crea las N posiciones de una fila de una vez — nunca asume que la siguiente
+    fila tendrá la misma cantidad (esa decisión la toma quien está parado ahí).
+
+    Código generado: {PREFIJO}-{PASILLO}{FILA:02d}-{POSICION:02d}  ej. PIK-A03-02
+    """
+    if tipo_zona not in ZONAS_VALIDAS:
+        raise ValueError(f'tipo_zona debe ser una de {ZONAS_VALIDAS}')
+    if cantidad_posiciones < 1:
+        raise ValueError('cantidad_posiciones debe ser mayor a 0')
+
+    prefijo = _PREFIJO_ZONA[tipo_zona]
+    pasillo = pasillo.strip().upper()
+    if not re.fullmatch(r'[A-Z]{1,2}', pasillo):
+        raise ValueError('pasillo debe ser una letra o combinación A-Z / AA-ZZ')
+
+    creadas = []
+    for pos in range(1, cantidad_posiciones + 1):
+        codigo = f'{prefijo}-{pasillo}{fila:02d}-{pos:02d}'
+        if Ubicacion.query.filter_by(codigo=codigo).first():
+            raise ValueError(f'La ubicación {codigo} ya existe')
+
+        ub = Ubicacion(
+            codigo=codigo,
+            almacen_id=almacen_id,
+            pasillo=pasillo,
+            estante=str(fila),
+            tipo_zona=tipo_zona,
+            tipo='estanteria',
+            capacidad_maxima=capacidad_maxima,
+            origen='MANUAL',
+            activo=True,
+        )
+        db.session.add(ub)
+        creadas.append(ub)
+
+    db.session.commit()
+    return creadas
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. AVERIAS — numeradas (AVE1, AVE2...), fuera de la grilla pasillo/fila
+# ──────────────────────────────────────────────────────────────────────────────
+
+def crear_ubicacion_averias(almacen_id: int, capacidad_maxima: int = None):
+    """Crea la siguiente ubicación AVERIAS disponible (AVE1, AVE2...)."""
+    existentes = Ubicacion.query.filter_by(
+        almacen_id=almacen_id, tipo_zona='AVERIAS'
+    ).all()
+
+    numeros = []
+    for ub in existentes:
+        m = re.match(r'^AVE(\d+)$', ub.codigo, re.IGNORECASE)
+        if m:
+            numeros.append(int(m.group(1)))
+    siguiente = (max(numeros) + 1) if numeros else 1
+    codigo = f'AVE{siguiente}'
+
+    ub = Ubicacion(
+        codigo=codigo,
+        almacen_id=almacen_id,
+        tipo_zona='AVERIAS',
+        tipo='estanteria',
+        capacidad_maxima=capacidad_maxima,
+        origen='MANUAL',
+        activo=True,
+    )
+    db.session.add(ub)
+    db.session.commit()
+    return ub
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4. Mecanismo B — asignar(ubicacion_id, producto_id, cantidad)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario_id: int = None):
+    """
+    Amarra un SKU a una ubicación y suma la cantidad contada.
+
+    En PICKING aplica la regla 1 SKU ↔ 1 ubicación por almacén: rechaza si la
+    ubicación ya tiene otro SKU asignado, o si el SKU ya tiene otra ubicación
+    PICKING asignada en el mismo almacén — hay que liberar el slot primero
+    (ver reclasificar_ubicacion).
+    En RESERVA/AVERIAS no hay restricción — N:N libre.
+    """
+    if cantidad <= 0:
+        raise ValueError('cantidad debe ser mayor a 0')
+
+    ubicacion = Ubicacion.query.get(ubicacion_id)
+    if not ubicacion:
+        raise ValueError(f'Ubicación {ubicacion_id} no encontrada')
+    if not ubicacion.activo:
+        raise ValueError(f'Ubicación {ubicacion.codigo} está inactiva')
+
+    producto = Producto.query.get(producto_id)
+    if not producto:
+        raise ValueError(f'Producto {producto_id} no encontrado')
+
+    if ubicacion.tipo_zona == 'PICKING':
+        if ubicacion.producto_asignado_id and ubicacion.producto_asignado_id != producto_id:
+            otro = Producto.query.get(ubicacion.producto_asignado_id)
+            raise ValueError(
+                f'{ubicacion.codigo} ya está asignada a {otro.codigo if otro else ubicacion.producto_asignado_id} '
+                f'— libera el slot antes de reasignarlo'
+            )
+        otra_ub = Ubicacion.query.filter(
+            Ubicacion.almacen_id == ubicacion.almacen_id,
+            Ubicacion.tipo_zona == 'PICKING',
+            Ubicacion.producto_asignado_id == producto_id,
+            Ubicacion.id != ubicacion.id,
+        ).first()
+        if otra_ub:
+            raise ValueError(
+                f'{producto.codigo} ya tiene un slot de PICKING asignado en {otra_ub.codigo} '
+                f'— libéralo antes de asignar uno nuevo'
+            )
+        ubicacion.producto_asignado_id = producto_id
+
+    reg = UbicacionProducto.query.filter_by(
+        ubicacion_id=ubicacion_id, producto_id=producto_id, lote=None,
+    ).with_for_update().first()
+
+    if not reg:
+        reg = UbicacionProducto(
+            ubicacion_id=ubicacion_id, producto_id=producto_id, cantidad=0,
+            fecha_ingreso=datetime.utcnow(),
+        )
+        db.session.add(reg)
+        db.session.flush()
+
+    saldo_antes = reg.cantidad
+    reg.cantidad += cantidad
+    reg.row_version += 1
+
+    db.session.add(MovimientoInventario(
+        producto_id=producto_id,
+        ubicacion_id=ubicacion_id,
+        almacen_id=ubicacion.almacen_id,
+        tipo='ASIGNACION_LAYOUT',
+        cantidad=cantidad,
+        saldo_antes=saldo_antes,
+        saldo_despues=reg.cantidad,
+        motivo=f'Layout: {producto.codigo} asignado a {ubicacion.codigo}',
+        usuario_id=usuario_id,
+        siesa_sync='OMITIDO',  # movimiento 100% interno del WMS, Siesa no se entera
+    ))
+
+    db.session.commit()
+    return {
+        'ubicacion': ubicacion.to_dict(),
+        'producto_id': producto_id,
+        'producto_codigo': producto.codigo,
+        'cantidad_total': reg.cantidad,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Reclasificación — con guardarraíles
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _stock_activo(ubicacion_id: int) -> int:
+    return db.session.query(
+        db.func.coalesce(db.func.sum(UbicacionProducto.cantidad), 0)
+    ).filter_by(ubicacion_id=ubicacion_id).scalar()
+
+
+def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
+                            capacidad_maxima: int = None, activo: bool = None,
+                            liberar_slot: bool = False):
+    """
+    Cambia zona/capacidad/estado de una ubicación ya existente.
+
+    Guardarraíles:
+      - No reclasifica zona ni desactiva si hay stock activo (cantidad > 0) —
+        hay que mover ese stock antes.
+      - Avisa (no bloquea) si hay TareaPicking/TareaReposicion PENDIENTE/EN_PROCESO
+        apuntando a esta ubicación.
+    """
+    ubicacion = Ubicacion.query.get(ubicacion_id)
+    if not ubicacion:
+        raise ValueError(f'Ubicación {ubicacion_id} no encontrada')
+
+    stock = _stock_activo(ubicacion_id)
+    cambia_zona = tipo_zona is not None and tipo_zona != ubicacion.tipo_zona
+    desactiva = activo is False and ubicacion.activo
+
+    if (cambia_zona or desactiva) and stock > 0:
+        raise ValueError(
+            f'{ubicacion.codigo} tiene {stock} unidades activas — muévelas antes de '
+            f'reclasificar o desactivar esta ubicación'
+        )
+
+    if liberar_slot:
+        if stock > 0:
+            raise ValueError(
+                f'{ubicacion.codigo} tiene {stock} unidades activas — no se puede '
+                f'liberar el slot con stock presente'
+            )
+        ubicacion.producto_asignado_id = None
+
+    if tipo_zona is not None:
+        if tipo_zona not in ZONAS_VALIDAS and tipo_zona != 'GENERAL':
+            raise ValueError(f'tipo_zona debe ser una de {ZONAS_VALIDAS} o GENERAL')
+        ubicacion.tipo_zona = tipo_zona
+    if capacidad_maxima is not None:
+        ubicacion.capacidad_maxima = capacidad_maxima
+    if activo is not None:
+        ubicacion.activo = activo
+
+    advertencias = []
+    tareas_picking = TareaPicking.query.filter_by(
+        ubicacion_id=ubicacion_id
+    ).filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).count()
+    if tareas_picking:
+        advertencias.append(f'{tareas_picking} tarea(s) de Picking pendiente(s) en esta ubicación')
+
+    tareas_reposicion = TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        ),
+        TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+    ).count()
+    if tareas_reposicion:
+        advertencias.append(f'{tareas_reposicion} tarea(s) de Reposición pendiente(s) en esta ubicación')
+
+    db.session.commit()
+    return {'ubicacion': ubicacion.to_dict(), 'advertencias': advertencias}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6. Mecanismo A (opción masiva) — importador Excel
+# ──────────────────────────────────────────────────────────────────────────────
+
+def importar_excel(almacen_id: int, file_stream, usuario_id: int = None):
+    """
+    Carga masiva: columnas ubicacion_codigo | producto_codigo | cantidad.
+    No aborta en la primera fila mala — reporta éxito/error fila por fila,
+    igual que necesita una migración de miles de SKUs desde SIESA-GENERAL.
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(file_stream, read_only=True, data_only=True)
+    ws = wb.active
+
+    filas = list(ws.iter_rows(min_row=2, values_only=True))
+    resultados = {'ok': 0, 'errores': []}
+
+    for i, fila in enumerate(filas, start=2):
+        if not fila or all(c is None for c in fila):
+            continue
+        try:
+            codigo_ub, codigo_prod, cantidad = fila[0], fila[1], fila[2]
+            if not codigo_ub or not codigo_prod or cantidad is None:
+                raise ValueError('faltan columnas (ubicacion_codigo, producto_codigo, cantidad)')
+
+            ubicacion = Ubicacion.query.filter_by(
+                codigo=str(codigo_ub).strip(), almacen_id=almacen_id
+            ).first()
+            if not ubicacion:
+                raise ValueError(f'ubicación "{codigo_ub}" no existe en este almacén')
+
+            producto = Producto.query.filter_by(codigo=str(codigo_prod).strip()).first()
+            if not producto:
+                raise ValueError(f'producto "{codigo_prod}" no existe')
+
+            asignar_producto(ubicacion.id, producto.id, int(cantidad), usuario_id)
+            resultados['ok'] += 1
+        except Exception as e:
+            resultados['errores'].append({'fila': i, 'error': str(e)})
+
+    return resultados

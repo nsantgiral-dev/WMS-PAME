@@ -16,6 +16,10 @@ El tipo_zona se deduce del prefijo del código (Fail-Fast):
   PIK-* → PICKING | RES-* → RESERVA | AVE-* → AVERIAS
   Cualquier otro prefijo → cuarentena en ubicaciones_huerfanas (NUNCA GENERAL)
 
+Ubicaciones con origen='MANUAL' (creadas desde el módulo de Layout, para bodegas
+sin multi-ubicación real en Siesa) nunca se tocan aquí — este sync solo crea y
+actualiza ubicaciones con origen='SIESA'.
+
 El worker nocturno llama a sync_ubicaciones_desde_siesa().
 """
 
@@ -160,6 +164,11 @@ def _run_sync(app, bodega_id: str = None):
                             ).first()
 
                             if ub:
+                                # Una ubicación MANUAL la clasificó el jefe de bodega desde
+                                # el módulo de Layout — el sync nunca la pisa, ni siquiera si
+                                # Siesa manda un código con prefijo válido para ese mismo code.
+                                if ub.origen == 'MANUAL':
+                                    continue
                                 # Siesa manda nomenclatura y estado — solo eso actualizamos.
                                 # stock_minimo / stock_maximo / secuencia_ruteo son configuración
                                 # local del WMS — NO los tocamos en el sync.
@@ -176,6 +185,7 @@ def _run_sync(app, bodega_id: str = None):
                                     activo=activo,
                                     zona=descripcion,
                                     tipo='estanteria',
+                                    origen='SIESA',
                                     # stock_minimo / stock_maximo: el jefe los configura
                                     # en el WMS admin tras el primer sync
                                 )
