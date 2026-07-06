@@ -8129,8 +8129,8 @@ function adminPedirActualizarCarrito() {
   if (!_AP_CARRITO.length) { header.style.display = 'none'; return; }
   header.style.display = 'block';
   items.innerHTML = _AP_CARRITO.map(c =>
-    `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #1a3a5c;">
-      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#fff;">${c.nombre}</span>
+    `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--brd);">
+      <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--tx);">${c.nombre}</span>
       <span style="flex-shrink:0;color:#4ade80;font-weight:700;font-size:13px;">${c.cantidad}</span>
       <button onclick="adminPedirQuitarCarrito('${c.codigo_siesa}')" style="flex-shrink:0;background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px;padding:2px 4px;">✕</button>
     </div>`
