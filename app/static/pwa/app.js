@@ -1419,9 +1419,11 @@ function renderTarea(t) {
   const _etiquetaTipoDoc = _tipoDoc === 'TRASLADO'
     ? `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:10px;background:#431407;color:#fb923c;margin-left:8px;letter-spacing:.5px;">TRASLADO</span>`
     : `<span style="font-size:11px;font-weight:700;padding:2px 9px;border-radius:10px;background:#1e3a5f;color:#93c5fd;margin-left:8px;letter-spacing:.5px;">PEDIDO</span>`;
+  // Misma franja lateral que en Packing Mixto — naranja traslado, azul pedido.
+  const _acentoTipoDoc = esPicking ? `border-left:4px solid ${_tipoDoc === 'TRASLADO' ? '#c2410c' : '#1d4ed8'};` : '';
 
   document.getElementById('contenido-tarea').innerHTML = `
-    <div style="padding:16px;">
+    <div style="padding:16px;${_acentoTipoDoc}">
       <div style="background:${color};color:#fff;border-radius:12px;padding:10px 16px;font-size:20px;font-weight:700;text-align:center;margin-bottom:16px;display:flex;align-items:center;justify-content:center;">${t.tipo}${esPicking ? _etiquetaTipoDoc : ''}</div>
 
       <div style="background:#000;border:1px solid #222;border-radius:16px;padding:20px;margin-bottom:12px;">
@@ -3580,9 +3582,12 @@ async function empCargarTareas() {
           : `<span style="font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;background:#1e3a5f;color:#93c5fd;letter-spacing:.5px;margin-left:8px;">PEDIDO</span>`;
         const destinoHtml = esTraslado && t.tienda_destino
           ? `<div style="font-size:11px;color:#fb923c;margin-top:2px;">→ ${t.tienda_destino}</div>` : '';
+        // Franja lateral: naranja = traslado, azul = pedido — mismo lenguaje de color del badge,
+        // solo se omite si la tarjeta ya tiene su propio borde de error (pedido anulado).
+        const acentoLateral = `border-left:4px solid ${esTraslado ? '#c2410c' : '#1d4ed8'};`;
         return `
         <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${t.id})`}"
-          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border-color:#7f1d1d;background:#110505;' : ''}${esTraslado ? 'border-color:#431407;' : ''}">
+          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border-color:#7f1d1d;background:#110505;' : acentoLateral}">
           <div class="emp-task-pedido" style="display:flex;align-items:center;">${refDisplay}${etiquetaHtml}</div>
           ${destinoHtml}
           <div class="emp-task-sub">${total} producto(s) · ${t.items_verificados || 0}/${total} verificados</div>
