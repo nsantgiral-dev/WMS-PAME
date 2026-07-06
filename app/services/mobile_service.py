@@ -172,12 +172,21 @@ class MobileService:
         # Las zonas RESERVA (pacas selladas en alto) son exclusivas del Abastecedor.
         from app.models.ubicacion import Ubicacion
         from app.models.usuario import Usuario as _U
+        from app.models.almacen import Almacen as _Alm
         _u_pick = _U.query.get(operario_id)
         # picker_traslado y roles de tienda: solo ven tareas TRASLADO de su bodega
         _solo_traslado = _u_pick and _u_pick.rol in ('picker_traslado', 'packer_traslado')
-        _bodega_tienda = _u_pick.bodega_siesa_id if _solo_traslado and _u_pick else None
         # picker_traslado (no packer) recibe conteo cíclico cuando no hay traslados
         _picker_tienda = _u_pick and _u_pick.rol == 'picker_traslado'
+
+        # Bodega propia del operario — por bodega_siesa_id directo (roles de tienda)
+        # o resuelta desde su almacen_id (roles NB1 como 'operario'). Se usa para que
+        # un operario de NB1 nunca reciba un TRASLADO cuyo origen es otra bodega
+        # (ej. NC1 → NB1): NB1 solo debe pickear traslados donde NB1 es el origen.
+        _bodega_propia = _u_pick.bodega_siesa_id if _u_pick else None
+        if not _bodega_propia and _u_pick and _u_pick.almacen_id:
+            _almacen_propio = _Alm.query.get(_u_pick.almacen_id)
+            _bodega_propia = _almacen_propio.bodega_siesa_id if _almacen_propio else None
 
         # Subquery: IDs de ubicaciones permitidas para pickers (no RESERVA)
         _ids_validos = db.session.query(Ubicacion.id).filter(
@@ -195,8 +204,13 @@ class MobileService:
         ]
         if _solo_traslado:
             _filtros_base.append(TareaPicking.tipo_documento == 'TRASLADO')
-            if _bodega_tienda:
-                _filtros_base.append(TareaPicking.bodega_origen_siesa == _bodega_tienda)
+        if _bodega_propia:
+            _filtros_base.append(
+                db.or_(
+                    db.func.coalesce(TareaPicking.tipo_documento, '') != 'TRASLADO',
+                    TareaPicking.bodega_origen_siesa == _bodega_propia,
+                )
+            )
 
         tarea = (
             TareaPicking.query
