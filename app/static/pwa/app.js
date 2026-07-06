@@ -1403,7 +1403,7 @@ function renderTarea(t) {
     : esConteo
       ? `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">
           <div style="font-size:13px;color:#666;">CONTEO CIEGO</div>
-          <div id="contador" style="font-size:64px;font-weight:900;">0</div>
+          <div id="contador" style="font-size:64px;font-weight:900;">${t.cantidad_escaneada || 0}</div>
           <div style="font-size:13px;color:#555;margin-top:6px;">Cuenta sin ver cantidad esperada</div>
         </div>`
       : `<div style="background:#1a1a1a;border-radius:16px;padding:20px;margin-bottom:12px;text-align:center;">

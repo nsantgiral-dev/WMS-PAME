@@ -160,13 +160,6 @@ class MobileService:
                 'lote': tarea_activa.lote,
             }
 
-        # Conteo activo — el picker ya tiene un conteo en curso (p.ej. recargó la PWA)
-        conteo_activo = (SesionConteo.query
-                         .filter_by(operario_id=operario_id, estado=EstadoConteo.EN_PROCESO)
-                         .first())
-        if conteo_activo:
-            return MobileService._conteo_a_dict(conteo_activo)
-
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
         # REGLA ESTRICTA: el picker solo puede ir a ubicaciones tipo_zona = PICKING o GENERAL.
         # Las zonas RESERVA (pacas selladas en alto) son exclusivas del Abastecedor.
@@ -178,6 +171,19 @@ class MobileService:
         _solo_traslado = _u_pick and _u_pick.rol in ('picker_traslado', 'packer_traslado')
         # picker_traslado (no packer) recibe conteo cíclico cuando no hay traslados
         _picker_tienda = _u_pick and _u_pick.rol == 'picker_traslado'
+
+        # Conteo activo — el picker ya tiene un conteo en curso (p.ej. recargó la PWA).
+        # Solo se devuelve de inmediato para roles de tienda/traslado (comportamiento
+        # sin cambios). Para el resto (ej. 'operario' de NB1) se pospone: un picking o
+        # traslado pendiente tiene prioridad y debe atenderse ya — el conteo se queda
+        # intacto en EN_PROCESO (con su cantidad_fisica acumulada) y se retoma más abajo,
+        # exactamente donde quedó, en cuanto no haya más trabajo pendiente.
+        if _solo_traslado:
+            conteo_activo = (SesionConteo.query
+                             .filter_by(operario_id=operario_id, estado=EstadoConteo.EN_PROCESO)
+                             .first())
+            if conteo_activo:
+                return MobileService._conteo_a_dict(conteo_activo)
 
         # Bodega propia del operario — por bodega_siesa_id directo (roles de tienda)
         # o resuelta desde su almacen_id (roles NB1 como 'operario'). Se usa para que
@@ -229,6 +235,15 @@ class MobileService:
         if not tarea:
             # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1
             if not _solo_traslado:
+                # Retomar el conteo propio en curso (pospuesto arriba porque un
+                # picking/traslado nuevo tiene prioridad). Ya no hay nada pendiente,
+                # así que se le devuelve tal cual quedó, con lo ya contado intacto.
+                conteo_activo = (SesionConteo.query
+                                 .filter_by(operario_id=operario_id, estado=EstadoConteo.EN_PROCESO)
+                                 .first())
+                if conteo_activo:
+                    return MobileService._conteo_a_dict(conteo_activo)
+
                 # CC2 pre-asignado (doble ciego): tiene operario_id pero sigue en PENDIENTE
                 _cc2 = MobileService._get_conteo_preassignado(operario_id)
                 if _cc2:
@@ -420,7 +435,7 @@ class MobileService:
             'producto_codigo': c.producto.codigo if c.producto else '',
             'producto_nombre': c.producto.nombre if c.producto else '',
             'cantidad_requerida': None,
-            'cantidad_escaneada': 0,
+            'cantidad_escaneada': c.cantidad_fisica or 0,
             'estado': c.estado,
             'referencia': c.codigo,
             'maneja_lote': c.maneja_lote,
