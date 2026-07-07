@@ -10562,7 +10562,7 @@ async function layoutImportarExcel(btn) {
 // No comparte estado ni funciones con tab-pedidos ni tab-traslados.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'EN_PACKING', 'PREPARADO'];
+const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'EN_PACKING', 'PREPARADO', 'EN_TRANSITO', 'ENTREGADA'];
 
 async function cargarRequisiciones() {
   const lista = document.getElementById('req-lista');
@@ -10571,8 +10571,12 @@ async function cargarRequisiciones() {
   try {
     const promesas = _REQ_ESTADOS.map(e => get(`/api/traslados/?estado=${e}`).catch(() => ({ solicitudes: [] })));
     const resultados = await Promise.all(promesas);
-    const todas = resultados.flatMap(r => r.solicitudes || []);
-    const _prioEstado = { 'ENVIADA': 0, 'EN_PICKING': 1, 'EN_PACKING': 2, 'PREPARADO': 3 };
+    // ENTREGADA ya está resuelta — solo mostramos las últimas para confirmar recepción sin saturar la cola
+    const todas = resultados.flatMap((r, i) => {
+      const items = r.solicitudes || [];
+      return _REQ_ESTADOS[i] === 'ENTREGADA' ? items.slice(0, 5) : items;
+    });
+    const _prioEstado = { 'ENVIADA': 0, 'EN_PICKING': 1, 'EN_PACKING': 2, 'PREPARADO': 3, 'EN_TRANSITO': 4, 'ENTREGADA': 5 };
     todas.sort((a, b) => {
       const ep = (_prioEstado[a.estado] ?? 99) - (_prioEstado[b.estado] ?? 99);
       if (ep !== 0) return ep;
@@ -10599,10 +10603,12 @@ function _reqNombreBodega(id) {
 
 function _renderRequisicionCard(r) {
   const BADGE = {
-    ENVIADA:    { color: '#d97706', bg: '#fef3c7', label: '⏳ Pendiente aprobar' },
-    EN_PICKING: { color: '#2563eb', bg: '#dbeafe', label: '🔍 En picking' },
-    EN_PACKING: { color: '#ea580c', bg: '#fff7ed', label: '📦 En empaque' },
-    PREPARADO:  { color: '#7c3aed', bg: '#ede9fe', label: '✅ Listo despachar' },
+    ENVIADA:     { color: '#d97706', bg: '#fef3c7', label: '⏳ Pendiente aprobar' },
+    EN_PICKING:  { color: '#2563eb', bg: '#dbeafe', label: '🔍 En picking' },
+    EN_PACKING:  { color: '#ea580c', bg: '#fff7ed', label: '📦 En empaque' },
+    PREPARADO:   { color: '#7c3aed', bg: '#ede9fe', label: '✅ Listo despachar' },
+    EN_TRANSITO: { color: '#0891b2', bg: '#cffafe', label: '🚚 En tránsito' },
+    ENTREGADA:   { color: '#16a34a', bg: '#dcfce7', label: '✓ Recibido' },
   };
   const badge  = BADGE[r.estado] || { color: '#6b7280', bg: '#f3f4f6', label: r.estado };
   const fecha  = r.fecha_creacion ? new Date(r.fecha_creacion).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
@@ -10642,7 +10648,7 @@ function _renderRequisicionCard(r) {
       ? `<span style="font-size:12px;color:#2563eb;font-weight:600;">🔍 Operario pickeando...</span>`
     : r.estado === 'EN_PACKING'
       ? `<div style="text-align:right;">
-           <span style="font-size:12px;color:#ea580c;font-weight:600;">📦 Empacador verificando...</span>
+           <span style="font-size:12px;color:#ea580c;font-weight:600;">📦 Empacando en ${_reqNombreBodega(r.bodega_origen_siesa)}...</span>
            ${r.packing_info ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${r.packing_info.codigo} · ${r.packing_info.empacador || 'sin asignar'}</div>` : ''}
          </div>`
     : r.estado === 'PREPARADO'
@@ -10651,6 +10657,10 @@ function _renderRequisicionCard(r) {
                   background:#111;color:#fff;border:1px solid #111;">
            🚚 Despachar
          </button>`
+    : r.estado === 'EN_TRANSITO'
+      ? `<span style="font-size:12px;color:#0891b2;font-weight:600;">🚚 En camino a ${_reqNombreBodega(r.bodega_destino_siesa)}</span>`
+    : r.estado === 'ENTREGADA'
+      ? `<span style="font-size:12px;color:#16a34a;font-weight:600;">✓ Recibido${r.fecha_entrega ? ' · ' + new Date(r.fecha_entrega).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : ''}</span>`
     : '';
 
   return `

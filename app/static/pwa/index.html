@@ -1015,7 +1015,7 @@
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
         <div>
           <div style="font-size:16px;font-weight:700;">📋 Requisiciones</div>
-          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">Solicitudes enviadas desde puntos de venta — pendientes de despacho</div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:2px;">Solicitudes enviadas desde puntos de venta — desde aprobación hasta recepción confirmada</div>
         </div>
         <button onclick="_refreshBtn(event, cargarRequisiciones)" style="background:var(--bg-s2);border:1px solid var(--brd);color:var(--tx2);padding:6px 12px;border-radius:8px;cursor:pointer;font-size:12px;">↻</button>
       </div>
@@ -2653,7 +2653,7 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260707"></script>
+  <script src="/static/pwa/app.js?v=20260707b"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
