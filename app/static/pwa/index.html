@@ -1105,6 +1105,7 @@
         </button>
       </div>
       <div id="form-nuevo-usuario" style="display:none;background:var(--bg-s);border-radius:16px;padding:20px;border:1px solid var(--brd);margin-bottom:16px;"></div>
+      <div id="usuarios-tabs" class="subtabs"></div>
       <div id="lista-usuarios">Cargando...</div>
     </div>
 
@@ -2655,7 +2656,7 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260707d"></script>
+  <script src="/static/pwa/app.js?v=20260707e"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');

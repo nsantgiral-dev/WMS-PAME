@@ -4377,35 +4377,37 @@ function empImprimirEtiquetas(bultos, meta) {
 // ADMIN — Gestión de usuarios (tab-usuarios)
 // ─────────────────────────────────────────────────────────────
 
+const _USR_NOMBRES_BOD = {
+  'NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación',
+  'FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal',
+  'FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito',
+};
+let USUARIOS_GRUPOS = [];       // [{clave, titulo, count, html}] — solo bodegas con usuarios
+let USUARIOS_TAB_ACTIVA = null; // clave del grupo/pestaña activa
+
 async function cargarUsuarios() {
   const el = document.getElementById('lista-usuarios');
   if (!el) return;
   try {
     const d = await get('/api/auth/usuarios');
     const usuarios = d.usuarios || [];
+    const tabsEl = document.getElementById('usuarios-tabs');
     if (!usuarios.length) {
+      if (tabsEl) tabsEl.innerHTML = '';
       el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios</div>';
       return;
     }
-    const _NOMBRES_BOD = {
-      'NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación',
-      'FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal',
-      'FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito',
-    };
     const grupos = {};
     usuarios.forEach(u => {
       const clave = u.bodega_siesa_id || '_CD';
       if (!grupos[clave]) grupos[clave] = [];
       grupos[clave].push(u);
     });
-    const ordenGrupos = ['_CD', ...Object.keys(_NOMBRES_BOD)];
-    let html = '';
-    for (const clave of ordenGrupos) {
+    const ordenGrupos = ['_CD', ...Object.keys(_USR_NOMBRES_BOD)];
+    USUARIOS_GRUPOS = ordenGrupos.filter(clave => grupos[clave] && grupos[clave].length).map(clave => {
       const lista = grupos[clave];
-      if (!lista || !lista.length) continue;
-      const titulo = clave === '_CD' ? '🏭 Centro de Distribución (NB1)' : `🏪 ${_NOMBRES_BOD[clave] || clave} (${clave})`;
-      html += `<div style="font-size:13px;font-weight:700;color:var(--tx2);padding:10px 0 6px;border-bottom:1px solid var(--brd);margin-bottom:8px;margin-top:${clave === '_CD' ? '0' : '16px'};">${titulo} · ${lista.length}</div>`;
-      html += lista.map(u => {
+      const titulo = clave === '_CD' ? '🏭 Centro de Distribución (NB1)' : `🏪 ${_USR_NOMBRES_BOD[clave] || clave} (${clave})`;
+      const html = lista.map(u => {
         const rolColor = u.rol === 'admin' ? '#f87171' : '#aaa';
         return `
         <div class="tabla-card" style="margin-bottom:10px;">
@@ -4427,11 +4429,33 @@ async function cargarUsuarios() {
           </div>
         </div>`;
       }).join('');
+      return { clave, titulo, count: lista.length, html };
+    });
+    if (!USUARIOS_GRUPOS.some(g => g.clave === USUARIOS_TAB_ACTIVA)) {
+      USUARIOS_TAB_ACTIVA = USUARIOS_GRUPOS.length ? USUARIOS_GRUPOS[0].clave : null;
     }
-    el.innerHTML = html;
+    renderUsuariosTabsYLista();
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando usuarios</div>';
   }
+}
+
+function renderUsuariosTabsYLista() {
+  const tabsEl = document.getElementById('usuarios-tabs');
+  const el = document.getElementById('lista-usuarios');
+  if (!tabsEl || !el) return;
+
+  tabsEl.innerHTML = USUARIOS_GRUPOS.map(g =>
+    `<div class="subtab${g.clave === USUARIOS_TAB_ACTIVA ? ' active' : ''}" onclick="usuariosCambiarTab('${g.clave}')">${g.titulo} · ${g.count}</div>`
+  ).join('');
+
+  const activo = USUARIOS_GRUPOS.find(g => g.clave === USUARIOS_TAB_ACTIVA);
+  el.innerHTML = activo ? activo.html : '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios en esta bodega</div>';
+}
+
+function usuariosCambiarTab(clave) {
+  USUARIOS_TAB_ACTIVA = clave;
+  renderUsuariosTabsYLista();
 }
 
 function _formUsuario(u = {}) {
