@@ -44,6 +44,9 @@ let _pickingTotal = 0;         // acumulador local de picking — sincronizado c
 let REC_TAB_ACTIVO = 'ocs';   // tab activo en pantalla recepcionista
 let TIMER_REC = null;          // polling recepcionista (30 seg)
 let SIESA_PEDIDOS = [];        // pedidos cargados desde Siesa (admin tab-pedidos)
+let PEDIDOS_TAB_ACTIVO = 0;    // sub-tab activo en tab-pedidos (0=Por despachar..3=Error Siesa)
+let PEDIDOS_GRUPOS_HTML = ['', '', '', ''];  // cache del HTML de cada grupo, para cambiar de tab sin refetch
+let PEDIDOS_GRUPOS_COUNT = [0, 0, 0, 0];     // cache del conteo de cada grupo
 let SIESA_OCS = [];            // OCs cargadas desde Siesa (pantalla recepcionista)
 let RUTA_ACTIVA_ID = null;     // ruta EN_CARGUE seleccionada en tab-muelle
 let RUTAS_TIPO_SEL = 'Urbana'; // tipo seleccionado en form nueva ruta
@@ -658,22 +661,27 @@ async function cargarPedidos() {
       get('/api/siesa/pedidos').catch(() => ({ pedidos: [] }))
     ]);
     SIESA_PEDIDOS = siesa.pedidos || [];
-    SIESA_PEDIDOS.sort((a, b) => {
-      const g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
-      return g(a) - g(b);
-    });
-    let html = '';
+    const _g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
+    SIESA_PEDIDOS.sort((a, b) => _g(a) - _g(b));
+
+    const tabsEl = document.getElementById('ped-tabs');
 
     if (siesa.simulado) {
-      html += `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">⚡ Connekta en simulación — conecta credenciales para ver pedidos reales</div>`;
-    } else if (SIESA_PEDIDOS.length) {
-      const _g = p => p.siesa_triggered ? 2 : (p.packing_estado === 'VERIFICADO' && !p.siesa_triggered) ? 3 : (p.picking_iniciado || p.packing_estado) ? 1 : 0;
-      const _GL = [['POR DESPACHAR','#aaa'],['EN PROCESO','#93c5fd'],['DESPACHADO EN SIESA','#4ade80'],['ERROR SIESA','#fca5a5']];
-      let _ga = -1;
-      html += SIESA_PEDIDOS.map((p, i) => {
+      if (tabsEl) tabsEl.innerHTML = '';
+      el.innerHTML = `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">⚡ Connekta en simulación — conecta credenciales para ver pedidos reales</div>`;
+      return;
+    }
+
+    if (!SIESA_PEDIDOS.length) {
+      if (tabsEl) tabsEl.innerHTML = '';
+      el.innerHTML = `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin pedidos pendientes en Siesa</div>`;
+      return;
+    }
+
+    {
+      const grupos = [[], [], [], []];
+      SIESA_PEDIDOS.forEach((p, i) => {
         const _gp = _g(p);
-        let _header = '';
-        if (_gp !== _ga) { _ga = _gp; _header = `<div style="font-size:11px;font-weight:700;color:${_GL[_gp][1]};text-transform:uppercase;letter-spacing:0.8px;padding:12px 0 5px;border-bottom:1px solid #222;margin-bottom:6px;margin-top:${_gp===0?'0':'14px'};">${_GL[_gp][0]}</div>`; }
         const sinProd = p.items.filter(it => !it.producto_id).length;
         const totalUds = p.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
 
@@ -723,7 +731,7 @@ async function cargarPedidos() {
           </button>`;
         }
 
-        return _header + `
+        grupos[_gp].push(`
           <div class="tabla-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
               <div style="min-width:0;">
@@ -734,17 +742,40 @@ async function cargarPedidos() {
               </div>
               ${accionBtn}
             </div>
-          </div>`;
-      }).join('');
-    } else {
-      html += `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin pedidos pendientes en Siesa</div>`;
-    }
+          </div>`);
+      });
 
-    if (!html) html = '<div style="color:#555;text-align:center;padding:40px;">Sin actividad ✓</div>';
-    el.innerHTML = html;
+      PEDIDOS_GRUPOS_HTML = grupos.map(arr => arr.join(''));
+      PEDIDOS_GRUPOS_COUNT = grupos.map(arr => arr.length);
+      renderPedidosTabsYLista();
+    }
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;">Error cargando pedidos</div>';
   }
+}
+
+const PEDIDOS_TAB_LABELS = ['POR DESPACHAR', 'EN PROCESO', 'DESPACHADO EN SIESA', 'ERROR SIESA'];
+
+function renderPedidosTabsYLista() {
+  const tabsEl = document.getElementById('ped-tabs');
+  const el = document.getElementById('lista-pedidos');
+  if (!tabsEl || !el) return;
+
+  tabsEl.innerHTML = PEDIDOS_TAB_LABELS.map((label, i) => {
+    const count = PEDIDOS_GRUPOS_COUNT[i] || 0;
+    const badge = i === 3
+      ? (count ? `<span class="ped-tab-badge">${count}</span>` : '')
+      : (count ? ` (${count})` : '');
+    return `<div class="ped-tab${i === PEDIDOS_TAB_ACTIVO ? ' active' : ''}" onclick="pedidosCambiarTab(${i})">${label}${badge}</div>`;
+  }).join('');
+
+  el.innerHTML = PEDIDOS_GRUPOS_HTML[PEDIDOS_TAB_ACTIVO]
+    || '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos en esta pestaña ✓</div>';
+}
+
+function pedidosCambiarTab(idx) {
+  PEDIDOS_TAB_ACTIVO = idx;
+  renderPedidosTabsYLista();
 }
 
 async function cargarTareasBodega() {

@@ -431,6 +431,20 @@
 
     .admin-content { padding: 16px; }
 
+    /* ── Sub-tabs Pedidos ── */
+    .ped-tabs { display:flex; gap:6px; margin-bottom:14px; overflow-x:auto; }
+    .ped-tab {
+      flex-shrink:0; padding:8px 14px; font-size:12px; font-weight:600;
+      color:var(--tx3); background:var(--bg-s); border:1px solid var(--brd); border-radius:20px;
+      cursor:pointer; white-space:nowrap; transition:color .15s, border-color .15s, background .15s;
+    }
+    .ped-tab:hover  { color:var(--tx2); }
+    .ped-tab.active { color:var(--pm); border-color:var(--pm); background:var(--bg-s2); }
+    .ped-tab-badge {
+      display:inline-block; margin-left:6px; background:#ef4444; color:#fff; border-radius:10px;
+      font-size:10px; font-weight:700; padding:1px 6px; line-height:1.4;
+    }
+
     /* ── Semáforo módulos ── */
     .sem-item { display:flex;align-items:center;gap:6px;padding:6px 8px;background:var(--bg-s);border-radius:8px;border:1px solid var(--brd); }
     .sem-dot  { font-size:14px;line-height:1; }
@@ -992,6 +1006,7 @@
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:12px;margin-bottom:12px;font-size:12px;color:var(--tx3);">
         Las tareas se asignan automáticamente cuando un operario queda libre. Cuando Connekta esté activo, los pedidos de Siesa aparecerán aquí solos.
       </div>
+      <div id="ped-tabs" class="ped-tabs"></div>
       <div id="lista-pedidos">Cargando...</div>
     </div>
 
@@ -2638,7 +2653,7 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260703"></script>
+  <script src="/static/pwa/app.js?v=20260707"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
