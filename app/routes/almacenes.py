@@ -206,6 +206,32 @@ def editar_fila(id):
         return jsonify({'error': str(e)}), 400
 
 
+@almacenes_bp.route('/<int:id>/ubicaciones/fila', methods=['DELETE'])
+@jwt_required()
+def eliminar_fila(id):
+    """
+    Elimina en bloque las posiciones de una fila que nunca se usaron (sin stock,
+    sin historial de picking/reposición/movimientos). Pensado para deshacer una
+    fila creada por error, no para dar de baja infraestructura en operación.
+    Payload: { pasillo, fila }
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    Almacen.query.get_or_404(id)
+    data = request.get_json() or {}
+    if not data.get('pasillo') or not data.get('fila'):
+        return jsonify({'error': 'Requeridos: pasillo, fila'}), 400
+    try:
+        resultado = layout_service.eliminar_fila(
+            almacen_id=id,
+            pasillo=data['pasillo'],
+            fila=int(data['fila']),
+        )
+        return jsonify(resultado), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @almacenes_bp.route('/<int:id>/ubicaciones/averias', methods=['POST'])
 @jwt_required()
 def crear_averias(id):

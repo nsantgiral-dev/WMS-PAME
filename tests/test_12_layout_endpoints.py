@@ -122,6 +122,73 @@ def test_editar_fila_endpoint_no_encontrada(client, jwt_token_admin, almacen):
     assert 'No hay posiciones' in resp.get_json()['error']
 
 
+def test_eliminar_fila_endpoint(client, jwt_token_admin, almacen):
+    client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 5, 'cantidad_posiciones': 2, 'tipo_zona': 'RESERVA'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    resp = client.delete(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 5},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert len(body['eliminadas']) == 2
+    assert body['bloqueadas'] == {}
+
+    # Confirmar que ya no aparece en el layout
+    layout = client.get(
+        f'/api/almacenes/{almacen.id}/layout',
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert layout.get_json()['total'] == 0
+
+
+def test_eliminar_fila_bloquea_con_stock_endpoint(client, jwt_token_admin, almacen, producto):
+    r1 = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 1, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    ub_id = r1.get_json()['ubicaciones'][0]['id']
+    client.post(
+        f'/api/almacenes/ubicaciones/{ub_id}/asignar',
+        json={'producto_id': producto.id, 'cantidad': 10},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+
+    resp = client.delete(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 1},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['eliminadas'] == []
+    assert 'stock activo' in body['bloqueadas']['PIK-A01-01']
+
+
+def test_eliminar_fila_rechaza_sin_admin(client, jwt_token, almacen):
+    resp = client.delete(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 1},
+        headers={'Authorization': f'Bearer {jwt_token}'},
+    )
+    assert resp.status_code == 403
+
+
+def test_eliminar_fila_endpoint_no_encontrada(client, jwt_token_admin, almacen):
+    resp = client.delete(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'Z', 'fila': 9},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert 'No hay posiciones' in resp.get_json()['error']
+
+
 def test_layout_completo_endpoint(client, jwt_token_admin, almacen):
     client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/fila',

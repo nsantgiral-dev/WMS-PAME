@@ -163,6 +163,67 @@ def editar_fila(almacen_id: int, pasillo: str, fila: int, tipo_zona: str = None,
     }
 
 
+def _motivo_no_eliminable(ubicacion_id: int) -> str | None:
+    """
+    Ninguna posición con historial operativo se puede borrar — solo filas creadas
+    por error y nunca usadas. Distinto (más estricto) que reclasificar_ubicacion:
+    aquí no basta con stock=0, porque TareaPicking/TareaReposicion/MovimientoInventario
+    tienen FK NOT NULL hacia ubicaciones — dejar huérfanos rompería el historial.
+    """
+    if _stock_activo(ubicacion_id) > 0:
+        return 'tiene stock activo — muévelo antes de eliminar'
+    if TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene historial de tareas de Picking — no se puede eliminar'
+    if TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        )
+    ).first():
+        return 'tiene historial de tareas de Reposición — no se puede eliminar'
+    if MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene movimientos de inventario registrados — no se puede eliminar'
+    return None
+
+
+def eliminar_fila(almacen_id: int, pasillo: str, fila: int):
+    """
+    Elimina en bloque las posiciones de una fila que nunca se usaron. Pensado
+    para deshacer una fila creada por error, no para dar de baja infraestructura
+    en operación — por eso el guardarraíl es duro (bloquea, no solo advierte) y
+    no aborta el lote si una posición sí tiene historial.
+    """
+    pasillo = pasillo.strip().upper()
+    ubicaciones = Ubicacion.query.filter_by(
+        almacen_id=almacen_id, pasillo=pasillo, estante=str(fila)
+    ).order_by(Ubicacion.codigo).all()
+
+    if not ubicaciones:
+        raise ValueError(f'No hay posiciones creadas en {pasillo}{fila:02d}')
+
+    eliminadas = []
+    bloqueadas = {}
+    for ub in ubicaciones:
+        motivo = _motivo_no_eliminable(ub.id)
+        if motivo:
+            bloqueadas[ub.codigo] = motivo
+            continue
+        # Filas nunca usadas pueden tener registros de UbicacionProducto en 0
+        # (ej. se asignó y luego se vació) — se limpian junto con la ubicación.
+        UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
+        eliminadas.append(ub.codigo)
+        db.session.delete(ub)
+
+    db.session.commit()
+    return {
+        'pasillo': pasillo,
+        'fila': fila,
+        'total_posiciones': len(ubicaciones),
+        'eliminadas': eliminadas,
+        'bloqueadas': bloqueadas,
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. AVERIAS — numeradas (AVE1, AVE2...), fuera de la grilla pasillo/fila
 # ──────────────────────────────────────────────────────────────────────────────

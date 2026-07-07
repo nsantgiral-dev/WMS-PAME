@@ -174,3 +174,63 @@ def test_editar_fila_solo_cambia_el_campo_indicado(db, almacen):
 def test_editar_fila_rechaza_fila_inexistente(db, almacen):
     with pytest.raises(ValueError, match='No hay posiciones'):
         svc.editar_fila(almacen.id, 'Z', 9, tipo_zona='RESERVA')
+
+
+def test_eliminar_fila_borra_posiciones_nunca_usadas(db, almacen):
+    svc.crear_fila(almacen.id, 'A', 5, 3, 'RESERVA')
+    resultado = svc.eliminar_fila(almacen.id, 'A', 5)
+
+    assert resultado['total_posiciones'] == 3
+    assert len(resultado['eliminadas']) == 3
+    assert resultado['bloqueadas'] == {}
+    assert Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', estante='5').count() == 0
+
+
+def test_eliminar_fila_bloquea_con_stock_activo(db, almacen, producto):
+    creadas = svc.crear_fila(almacen.id, 'A', 1, 2, 'PICKING')
+    svc.asignar_producto(creadas[0].id, producto.id, 50)
+
+    resultado = svc.eliminar_fila(almacen.id, 'A', 1)
+
+    assert len(resultado['eliminadas']) == 1  # la posición 02, sin usar
+    assert list(resultado['bloqueadas'].keys()) == ['PIK-A01-01']
+    assert 'stock activo' in resultado['bloqueadas']['PIK-A01-01']
+    # La bloqueada sigue existiendo
+    assert Ubicacion.query.get(creadas[0].id) is not None
+
+
+def test_eliminar_fila_bloquea_por_historial_aunque_stock_sea_cero(db, almacen, producto):
+    creadas = svc.crear_fila(almacen.id, 'A', 1, 1, 'PICKING')
+    svc.asignar_producto(creadas[0].id, producto.id, 50)
+    # Vaciar el stock a 0 pero el MovimientoInventario del asignar_producto queda como historial
+    from app.extensions import db as _db
+    from app.models.inventario import UbicacionProducto
+    up = UbicacionProducto.query.filter_by(ubicacion_id=creadas[0].id).first()
+    up.cantidad = 0
+    _db.session.commit()
+
+    resultado = svc.eliminar_fila(almacen.id, 'A', 1)
+
+    assert resultado['eliminadas'] == []
+    assert 'movimientos de inventario' in resultado['bloqueadas']['PIK-A01-01']
+
+
+def test_eliminar_fila_bloquea_con_tarea_picking(db, almacen, producto):
+    from app.extensions import db as _db
+    from app.models.picking import TareaPicking
+
+    ub = svc.crear_fila(almacen.id, 'A', 1, 1, 'PICKING')[0]
+    _db.session.add(TareaPicking(
+        codigo='PICK-TEST-1', producto_id=producto.id, cantidad_solicitada=5,
+        ubicacion_id=ub.id, almacen_id=almacen.id, estado='COMPLETADO',
+    ))
+    _db.session.commit()
+
+    resultado = svc.eliminar_fila(almacen.id, 'A', 1)
+    assert resultado['eliminadas'] == []
+    assert 'Picking' in resultado['bloqueadas']['PIK-A01-01']
+
+
+def test_eliminar_fila_rechaza_fila_inexistente(db, almacen):
+    with pytest.raises(ValueError, match='No hay posiciones'):
+        svc.eliminar_fila(almacen.id, 'Z', 9)

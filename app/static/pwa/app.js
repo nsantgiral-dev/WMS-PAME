@@ -10529,6 +10529,74 @@ async function layoutGuardarEditarFila() {
   }
 }
 
+// ── Modal: Eliminar fila (solo posiciones sin historial) ─────────────────────
+
+function layoutAbrirModalEliminarFila() {
+  const m = document.getElementById('modal-layout-eliminar-fila');
+  if (!m) return;
+
+  const grupos = {};
+  (_layoutUbicacionesCache || []).forEach(u => {
+    if (!u.pasillo || !u.estante) return; // AVERIAS y sin clasificar no tienen fila
+    const clave = `${u.pasillo}|${u.estante}`;
+    if (!grupos[clave]) grupos[clave] = { pasillo: u.pasillo, fila: u.estante, zona: u.tipo_zona, count: 0 };
+    grupos[clave].count++;
+  });
+
+  const sel = document.getElementById('layout-eliminar-fila-select');
+  const claves = Object.keys(grupos).sort();
+  if (!claves.length) {
+    sel.innerHTML = '<option value="">— No hay filas creadas todavía —</option>';
+  } else {
+    sel.innerHTML = claves.map(c => {
+      const g = grupos[c];
+      const codigoFila = `${g.pasillo}${String(g.fila).padStart(2, '0')}`;
+      return `<option value="${c}">${codigoFila} · ${g.zona} · ${g.count} posición(es)</option>`;
+    }).join('');
+  }
+
+  document.getElementById('layout-eliminar-fila-resultado').innerHTML = '';
+  m.style.display = 'flex';
+}
+
+function layoutCerrarModalEliminarFila() {
+  const m = document.getElementById('modal-layout-eliminar-fila');
+  if (m) m.style.display = 'none';
+}
+
+async function layoutGuardarEliminarFila() {
+  const claveSel = document.getElementById('layout-eliminar-fila-select').value;
+  if (!claveSel) {
+    alerta('Selecciona una fila para eliminar', 'error');
+    return;
+  }
+  const [pasillo, fila] = claveSel.split('|');
+  const codigoFila = `${pasillo}${String(fila).padStart(2, '0')}`;
+  if (!confirm(`¿Eliminar la fila ${codigoFila}? Esta acción no se puede deshacer. Solo se borrarán las posiciones sin stock ni historial.`)) return;
+
+  try {
+    const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/fila`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pasillo, fila: parseInt(fila) }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error eliminando la fila', 'error'); return; }
+
+    const resEl = document.getElementById('layout-eliminar-fila-resultado');
+    const bloqueadasCodigos = Object.keys(d.bloqueadas || {});
+    let html = `<div style="color:#4ade80;">✓ ${d.eliminadas.length}/${d.total_posiciones} posición(es) eliminada(s)</div>`;
+    if (bloqueadasCodigos.length) {
+      html += bloqueadasCodigos.map(c => `<div style="color:#f87171;margin-top:4px;">✗ ${c}: ${d.bloqueadas[c]}</div>`).join('');
+    }
+    resEl.innerHTML = html;
+    alerta(`${d.eliminadas.length}/${d.total_posiciones} posición(es) eliminada(s)`, bloqueadasCodigos.length ? 'advertencia' : 'ok');
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta(e.message || 'Error eliminando la fila', 'error');
+  }
+}
+
 // ── AVERIAS numeradas ─────────────────────────────────────────────────────
 
 async function layoutCrearAverias() {
