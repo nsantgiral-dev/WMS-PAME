@@ -10339,13 +10339,38 @@ async function layoutCargarUbicaciones() {
       return;
     }
 
-    el.innerHTML = _layoutUbicacionesCache.map(u => {
+    let html = '';
+    let filaActual = null;
+    _layoutUbicacionesCache.forEach(u => {
+      const claveFila = (u.pasillo && u.estante) ? `${u.pasillo}|${u.estante}` : null;
+      if (claveFila && claveFila !== filaActual) {
+        filaActual = claveFila;
+        const codigoFila = `${u.pasillo}${String(u.estante).padStart(2, '0')}`;
+        const countEnFila = _layoutUbicacionesCache.filter(x => x.pasillo === u.pasillo && x.estante === u.estante).length;
+        html += `
+          <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
+            <div style="font-size:12px;font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${u.tipo_zona} · ${countEnFila} posición(es)</div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="layoutAbrirModalEditarFila('${u.pasillo}','${u.estante}')"
+                style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
+                ✏ Editar
+              </button>
+              <button onclick="layoutAbrirModalEliminarFila('${u.pasillo}','${u.estante}')"
+                style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
+                🗑 Eliminar
+              </button>
+            </div>
+          </div>`;
+      } else if (!claveFila) {
+        filaActual = null; // AVERIAS/GENERAL — sin fila, resetea para no "heredar" el header de la anterior
+      }
+
       const color = _ZONA_COLOR[u.tipo_zona] || '#888';
       const skuLabel = u.producto_asignado_codigo
         ? `📦 ${u.producto_asignado_codigo}`
         : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
 
-      return `
+      html += `
         <div class="tabla-card" style="margin-bottom:10px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
             <div>
@@ -10373,7 +10398,8 @@ async function layoutCargarUbicaciones() {
             </button>
           </div>
         </div>`;
-    }).join('');
+    });
+    el.innerHTML = html;
   } catch (e) {
     el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando el layout</div>';
   }
@@ -10449,29 +10475,16 @@ async function layoutGuardarFila() {
 
 // ── Modal: Editar fila (bloque ya creado) ────────────────────────────────────
 
-function layoutAbrirModalEditarFila() {
+let _layoutFilaEnEdicion = null; // { pasillo, fila }
+
+function layoutAbrirModalEditarFila(pasillo, fila) {
   const m = document.getElementById('modal-layout-editar-fila');
   if (!m) return;
 
-  const grupos = {};
-  (_layoutUbicacionesCache || []).forEach(u => {
-    if (!u.pasillo || !u.estante) return; // AVERIAS y sin clasificar no tienen fila
-    const clave = `${u.pasillo}|${u.estante}`;
-    if (!grupos[clave]) grupos[clave] = { pasillo: u.pasillo, fila: u.estante, zona: u.tipo_zona, count: 0 };
-    grupos[clave].count++;
-  });
-
-  const sel = document.getElementById('layout-editar-fila-select');
-  const claves = Object.keys(grupos).sort();
-  if (!claves.length) {
-    sel.innerHTML = '<option value="">— No hay filas creadas todavía —</option>';
-  } else {
-    sel.innerHTML = claves.map(c => {
-      const g = grupos[c];
-      const codigoFila = `${g.pasillo}${String(g.fila).padStart(2, '0')}`;
-      return `<option value="${c}">${codigoFila} · ${g.zona} · ${g.count} posición(es)</option>`;
-    }).join('');
-  }
+  _layoutFilaEnEdicion = { pasillo, fila };
+  const codigoFila = `${pasillo}${String(fila).padStart(2, '0')}`;
+  const count = (_layoutUbicacionesCache || []).filter(u => u.pasillo === pasillo && u.estante === fila).length;
+  document.getElementById('layout-editar-fila-titulo').textContent = `Editando fila ${codigoFila} · ${count} posición(es)`;
 
   document.getElementById('layout-editar-fila-zona').value = '';
   document.getElementById('layout-editar-fila-capacidad').value = '';
@@ -10487,12 +10500,8 @@ function layoutCerrarModalEditarFila() {
 }
 
 async function layoutGuardarEditarFila() {
-  const claveSel = document.getElementById('layout-editar-fila-select').value;
-  if (!claveSel) {
-    alerta('Selecciona una fila para editar', 'error');
-    return;
-  }
-  const [pasillo, fila] = claveSel.split('|');
+  if (!_layoutFilaEnEdicion) return;
+  const { pasillo, fila } = _layoutFilaEnEdicion;
   const tipo_zona = document.getElementById('layout-editar-fila-zona').value || null;
   const capacidadRaw = document.getElementById('layout-editar-fila-capacidad').value;
   const capacidad_maxima = capacidadRaw !== '' ? parseInt(capacidadRaw) : null;
@@ -10531,29 +10540,16 @@ async function layoutGuardarEditarFila() {
 
 // ── Modal: Eliminar fila (solo posiciones sin historial) ─────────────────────
 
-function layoutAbrirModalEliminarFila() {
+let _layoutFilaEnBorrado = null; // { pasillo, fila }
+
+function layoutAbrirModalEliminarFila(pasillo, fila) {
   const m = document.getElementById('modal-layout-eliminar-fila');
   if (!m) return;
 
-  const grupos = {};
-  (_layoutUbicacionesCache || []).forEach(u => {
-    if (!u.pasillo || !u.estante) return; // AVERIAS y sin clasificar no tienen fila
-    const clave = `${u.pasillo}|${u.estante}`;
-    if (!grupos[clave]) grupos[clave] = { pasillo: u.pasillo, fila: u.estante, zona: u.tipo_zona, count: 0 };
-    grupos[clave].count++;
-  });
-
-  const sel = document.getElementById('layout-eliminar-fila-select');
-  const claves = Object.keys(grupos).sort();
-  if (!claves.length) {
-    sel.innerHTML = '<option value="">— No hay filas creadas todavía —</option>';
-  } else {
-    sel.innerHTML = claves.map(c => {
-      const g = grupos[c];
-      const codigoFila = `${g.pasillo}${String(g.fila).padStart(2, '0')}`;
-      return `<option value="${c}">${codigoFila} · ${g.zona} · ${g.count} posición(es)</option>`;
-    }).join('');
-  }
+  _layoutFilaEnBorrado = { pasillo, fila };
+  const codigoFila = `${pasillo}${String(fila).padStart(2, '0')}`;
+  const count = (_layoutUbicacionesCache || []).filter(u => u.pasillo === pasillo && u.estante === fila).length;
+  document.getElementById('layout-eliminar-fila-titulo').textContent = `Eliminar fila ${codigoFila} · ${count} posición(es)`;
 
   document.getElementById('layout-eliminar-fila-resultado').innerHTML = '';
   m.style.display = 'flex';
@@ -10565,12 +10561,8 @@ function layoutCerrarModalEliminarFila() {
 }
 
 async function layoutGuardarEliminarFila() {
-  const claveSel = document.getElementById('layout-eliminar-fila-select').value;
-  if (!claveSel) {
-    alerta('Selecciona una fila para eliminar', 'error');
-    return;
-  }
-  const [pasillo, fila] = claveSel.split('|');
+  if (!_layoutFilaEnBorrado) return;
+  const { pasillo, fila } = _layoutFilaEnBorrado;
   const codigoFila = `${pasillo}${String(fila).padStart(2, '0')}`;
   if (!confirm(`¿Eliminar la fila ${codigoFila}? Esta acción no se puede deshacer. Solo se borrarán las posiciones sin stock ni historial.`)) return;
 
