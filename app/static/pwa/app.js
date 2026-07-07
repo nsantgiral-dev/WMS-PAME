@@ -778,16 +778,51 @@ function pedidosCambiarTab(idx) {
   renderPedidosTabsYLista();
 }
 
+const BODEGA_TAB_LABELS = ['PEDIDOS', 'TRASLADOS'];
+let BODEGA_TAB_ACTIVO = 0;
+let BODEGA_GRUPOS_HTML = ['', ''];
+let BODEGA_GRUPOS_COUNT = [0, 0];
+
 async function cargarTareasBodega() {
   const el = document.getElementById('lista-tareas-bodega');
   if (!el) return;
   try {
     const d = await get('/api/picking/?activas=true&per_page=50');
     const tareas = d.tareas || [];
-    if (!tareas.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin tareas activas en bodega ✓</div>';
-      return;
-    }
+    const porTipo = [
+      tareas.filter(t => t.tipo_documento !== 'TRASLADO'),
+      tareas.filter(t => t.tipo_documento === 'TRASLADO'),
+    ];
+    BODEGA_GRUPOS_COUNT = porTipo.map(ts => ts.length);
+    BODEGA_GRUPOS_HTML = porTipo.map(ts => _renderTareasBodegaHTML(ts));
+    renderBodegaTabsYLista();
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando tareas de bodega</div>';
+  }
+}
+
+function renderBodegaTabsYLista() {
+  const tabsEl = document.getElementById('bodega-tabs');
+  const el = document.getElementById('lista-tareas-bodega');
+  if (!tabsEl || !el) return;
+
+  tabsEl.innerHTML = BODEGA_TAB_LABELS.map((label, i) => {
+    const count = BODEGA_GRUPOS_COUNT[i] || 0;
+    return `<div class="subtab${i === BODEGA_TAB_ACTIVO ? ' active' : ''}" onclick="bodegaCambiarTab(${i})">${label}${count ? ` (${count})` : ''}</div>`;
+  }).join('');
+
+  el.innerHTML = BODEGA_GRUPOS_HTML[BODEGA_TAB_ACTIVO]
+    || '<div style="color:#555;text-align:center;padding:40px;">Sin tareas activas en esta pestaña ✓</div>';
+}
+
+function bodegaCambiarTab(idx) {
+  BODEGA_TAB_ACTIVO = idx;
+  renderBodegaTabsYLista();
+}
+
+function _renderTareasBodegaHTML(tareas) {
+  if (!tareas.length) return '';
+  try {
     const MOTIVO_LABEL = {
       UBICACION_VACIA:    '📦 Ubicación vacía',
       FALTANTE:           '📉 Faltante parcial',
@@ -878,9 +913,9 @@ async function cargarTareasBodega() {
           </div>` : ''}
         </div>`).join('');
     });
-    el.innerHTML = html;
+    return html;
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando tareas de bodega</div>';
+    return '<div style="color:#ef4444;text-align:center;">Error mostrando tareas de bodega</div>';
   }
 }
 
