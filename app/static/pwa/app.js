@@ -10447,6 +10447,88 @@ async function layoutGuardarFila() {
   }
 }
 
+// ── Modal: Editar fila (bloque ya creado) ────────────────────────────────────
+
+function layoutAbrirModalEditarFila() {
+  const m = document.getElementById('modal-layout-editar-fila');
+  if (!m) return;
+
+  const grupos = {};
+  (_layoutUbicacionesCache || []).forEach(u => {
+    if (!u.pasillo || !u.estante) return; // AVERIAS y sin clasificar no tienen fila
+    const clave = `${u.pasillo}|${u.estante}`;
+    if (!grupos[clave]) grupos[clave] = { pasillo: u.pasillo, fila: u.estante, zona: u.tipo_zona, count: 0 };
+    grupos[clave].count++;
+  });
+
+  const sel = document.getElementById('layout-editar-fila-select');
+  const claves = Object.keys(grupos).sort();
+  if (!claves.length) {
+    sel.innerHTML = '<option value="">— No hay filas creadas todavía —</option>';
+  } else {
+    sel.innerHTML = claves.map(c => {
+      const g = grupos[c];
+      const codigoFila = `${g.pasillo}${String(g.fila).padStart(2, '0')}`;
+      return `<option value="${c}">${codigoFila} · ${g.zona} · ${g.count} posición(es)</option>`;
+    }).join('');
+  }
+
+  document.getElementById('layout-editar-fila-zona').value = '';
+  document.getElementById('layout-editar-fila-capacidad').value = '';
+  document.getElementById('layout-editar-fila-activo').value = '';
+  document.getElementById('layout-editar-fila-resultado').innerHTML = '';
+
+  m.style.display = 'flex';
+}
+
+function layoutCerrarModalEditarFila() {
+  const m = document.getElementById('modal-layout-editar-fila');
+  if (m) m.style.display = 'none';
+}
+
+async function layoutGuardarEditarFila() {
+  const claveSel = document.getElementById('layout-editar-fila-select').value;
+  if (!claveSel) {
+    alerta('Selecciona una fila para editar', 'error');
+    return;
+  }
+  const [pasillo, fila] = claveSel.split('|');
+  const tipo_zona = document.getElementById('layout-editar-fila-zona').value || null;
+  const capacidadRaw = document.getElementById('layout-editar-fila-capacidad').value;
+  const capacidad_maxima = capacidadRaw !== '' ? parseInt(capacidadRaw) : null;
+  const activoRaw = document.getElementById('layout-editar-fila-activo').value;
+  const activo = activoRaw !== '' ? activoRaw === '1' : null;
+
+  if (tipo_zona === null && capacidad_maxima === null && activo === null) {
+    alerta('Cambia al menos un campo: zona, capacidad o estado', 'error');
+    return;
+  }
+
+  try {
+    const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/fila`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pasillo, fila: parseInt(fila), tipo_zona, capacidad_maxima, activo }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error editando la fila', 'error'); return; }
+    const resEl = document.getElementById('layout-editar-fila-resultado');
+    const bloqueadasCodigos = Object.keys(d.bloqueadas || {});
+    let html = `<div style="color:#4ade80;">✓ ${d.actualizadas.length}/${d.total_posiciones} posición(es) actualizada(s)</div>`;
+    if (bloqueadasCodigos.length) {
+      html += bloqueadasCodigos.map(c => `<div style="color:#f87171;margin-top:4px;">✗ ${c}: ${d.bloqueadas[c]}</div>`).join('');
+    }
+    if (d.advertencias && d.advertencias.length) {
+      html += d.advertencias.map(a => `<div style="color:#facc15;margin-top:4px;">⚠ ${a}</div>`).join('');
+    }
+    resEl.innerHTML = html;
+    alerta(`${d.actualizadas.length}/${d.total_posiciones} posición(es) actualizada(s)`, bloqueadasCodigos.length ? 'advertencia' : 'ok');
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta(e.message || 'Error editando la fila', 'error');
+  }
+}
+
 // ── AVERIAS numeradas ─────────────────────────────────────────────────────
 
 async function layoutCrearAverias() {

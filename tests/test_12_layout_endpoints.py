@@ -71,6 +71,57 @@ def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, produ
     assert 'activas' in r3.get_json()['error']
 
 
+def test_editar_fila_endpoint(client, jwt_token_admin, almacen):
+    client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 3, 'cantidad_posiciones': 3, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 3, 'tipo_zona': 'RESERVA'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body['total_posiciones'] == 3
+    assert len(body['actualizadas']) == 3
+    assert body['bloqueadas'] == {}
+
+
+def test_editar_fila_rechaza_sin_campos_a_cambiar(client, jwt_token_admin, almacen):
+    client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 1, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 1},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+
+
+def test_editar_fila_rechaza_sin_admin(client, jwt_token, almacen):
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'A', 'fila': 1, 'tipo_zona': 'RESERVA'},
+        headers={'Authorization': f'Bearer {jwt_token}'},
+    )
+    assert resp.status_code == 403
+
+
+def test_editar_fila_endpoint_no_encontrada(client, jwt_token_admin, almacen):
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
+        json={'pasillo': 'Z', 'fila': 9, 'tipo_zona': 'RESERVA'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert 'No hay posiciones' in resp.get_json()['error']
+
+
 def test_layout_completo_endpoint(client, jwt_token_admin, almacen):
     client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/fila',

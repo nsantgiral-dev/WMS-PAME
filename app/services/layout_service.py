@@ -121,6 +121,48 @@ def crear_fila(almacen_id: int, pasillo: str, fila: int, cantidad_posiciones: in
     return creadas
 
 
+def editar_fila(almacen_id: int, pasillo: str, fila: int, tipo_zona: str = None,
+                capacidad_maxima: int = None, activo: bool = None):
+    """
+    Edita en bloque todas las posiciones de una fila ya creada (mismo pasillo+fila).
+    Reutiliza reclasificar_ubicacion() posición por posición para heredar sus
+    guardarraíles (bloquea si hay stock activo, no aborta el lote si una posición
+    falla — igual que importar_excel).
+    """
+    pasillo = pasillo.strip().upper()
+    ubicaciones = Ubicacion.query.filter_by(
+        almacen_id=almacen_id, pasillo=pasillo, estante=str(fila)
+    ).order_by(Ubicacion.codigo).all()
+
+    if not ubicaciones:
+        raise ValueError(f'No hay posiciones creadas en {pasillo}{fila:02d}')
+
+    actualizadas = []
+    bloqueadas = {}
+    advertencias = []
+    for ub in ubicaciones:
+        try:
+            resultado = reclasificar_ubicacion(
+                ubicacion_id=ub.id,
+                tipo_zona=tipo_zona,
+                capacidad_maxima=capacidad_maxima,
+                activo=activo,
+            )
+            actualizadas.append(ub.codigo)
+            advertencias.extend(resultado['advertencias'])
+        except ValueError as e:
+            bloqueadas[ub.codigo] = str(e)
+
+    return {
+        'pasillo': pasillo,
+        'fila': fila,
+        'total_posiciones': len(ubicaciones),
+        'actualizadas': actualizadas,
+        'bloqueadas': bloqueadas,
+        'advertencias': advertencias,
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. AVERIAS — numeradas (AVE1, AVE2...), fuera de la grilla pasillo/fila
 # ──────────────────────────────────────────────────────────────────────────────

@@ -134,3 +134,43 @@ def test_reclasificar_liberar_slot_bloquea_con_stock(db, almacen, producto):
 
     with pytest.raises(ValueError, match='no se puede'):
         svc.reclasificar_ubicacion(ub.id, liberar_slot=True)
+
+
+def test_editar_fila_cambia_zona_de_todas_las_posiciones(db, almacen):
+    svc.crear_fila(almacen.id, 'A', 3, 4, 'PICKING')
+    resultado = svc.editar_fila(almacen.id, 'A', 3, tipo_zona='RESERVA')
+
+    assert resultado['total_posiciones'] == 4
+    assert len(resultado['actualizadas']) == 4
+    assert resultado['bloqueadas'] == {}
+    for u in Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', estante='3').all():
+        assert u.tipo_zona == 'RESERVA'
+
+
+def test_editar_fila_no_aborta_lote_si_una_posicion_tiene_stock(db, almacen, producto):
+    creadas = svc.crear_fila(almacen.id, 'A', 1, 3, 'PICKING')
+    svc.asignar_producto(creadas[0].id, producto.id, 50)  # solo la posición 01 tiene stock
+
+    resultado = svc.editar_fila(almacen.id, 'A', 1, tipo_zona='RESERVA')
+
+    assert resultado['total_posiciones'] == 3
+    assert len(resultado['actualizadas']) == 2
+    assert list(resultado['bloqueadas'].keys()) == ['PIK-A01-01']
+    # Las que sí se pudieron cambiar, quedaron en RESERVA; la bloqueada sigue en PICKING
+    assert Ubicacion.query.get(creadas[0].id).tipo_zona == 'PICKING'
+    assert Ubicacion.query.get(creadas[1].id).tipo_zona == 'RESERVA'
+    assert Ubicacion.query.get(creadas[2].id).tipo_zona == 'RESERVA'
+
+
+def test_editar_fila_solo_cambia_el_campo_indicado(db, almacen):
+    svc.crear_fila(almacen.id, 'A', 1, 2, 'PICKING', capacidad_maxima=100)
+    svc.editar_fila(almacen.id, 'A', 1, capacidad_maxima=250)
+
+    for u in Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', estante='1').all():
+        assert u.capacidad_maxima == 250
+        assert u.tipo_zona == 'PICKING'  # no se tocó porque no se pidió
+
+
+def test_editar_fila_rechaza_fila_inexistente(db, almacen):
+    with pytest.raises(ValueError, match='No hay posiciones'):
+        svc.editar_fila(almacen.id, 'Z', 9, tipo_zona='RESERVA')

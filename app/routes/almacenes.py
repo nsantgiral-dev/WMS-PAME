@@ -176,6 +176,36 @@ def crear_fila(id):
         return jsonify({'error': str(e)}), 400
 
 
+@almacenes_bp.route('/<int:id>/ubicaciones/fila', methods=['PATCH'])
+@jwt_required()
+def editar_fila(id):
+    """
+    Edita en bloque todas las posiciones de una fila ya creada.
+    Payload: { pasillo, fila, tipo_zona?, capacidad_maxima?, activo? }
+    Al menos uno de tipo_zona/capacidad_maxima/activo debe venir presente.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    Almacen.query.get_or_404(id)
+    data = request.get_json() or {}
+    if not data.get('pasillo') or not data.get('fila'):
+        return jsonify({'error': 'Requeridos: pasillo, fila'}), 400
+    if data.get('tipo_zona') is None and data.get('capacidad_maxima') is None and data.get('activo') is None:
+        return jsonify({'error': 'Indica al menos un campo a cambiar: tipo_zona, capacidad_maxima o activo'}), 400
+    try:
+        resultado = layout_service.editar_fila(
+            almacen_id=id,
+            pasillo=data['pasillo'],
+            fila=int(data['fila']),
+            tipo_zona=data.get('tipo_zona'),
+            capacidad_maxima=data.get('capacidad_maxima'),
+            activo=data.get('activo'),
+        )
+        return jsonify(resultado), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @almacenes_bp.route('/<int:id>/ubicaciones/averias', methods=['POST'])
 @jwt_required()
 def crear_averias(id):

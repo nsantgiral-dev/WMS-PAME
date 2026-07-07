@@ -1770,6 +1770,10 @@
           style="padding:10px 16px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
           + Crear fila
         </button>
+        <button onclick="layoutAbrirModalEditarFila()"
+          style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
+          ✏ Editar fila
+        </button>
         <button onclick="layoutCrearAverias()"
           style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
           + Ubicación AVERIAS
@@ -2574,6 +2578,53 @@
     </div>
   </div>
 
+  <!-- Modal Layout: Editar fila (bloque ya creado) -->
+  <div id="modal-layout-editar-fila" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Editar fila</div>
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:16px;">Cambia solo los campos que necesites — el resto queda igual en cada posición.</div>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Fila a editar</label>
+      <select id="layout-editar-fila-select"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+      </select>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Zona</label>
+      <select id="layout-editar-fila-zona"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+        <option value="">No cambiar</option>
+        <option value="PICKING">PICKING</option>
+        <option value="RESERVA">RESERVA</option>
+        <option value="AVERIAS">AVERIAS</option>
+      </select>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima</label>
+      <input id="layout-editar-fila-capacidad" type="number" min="0" placeholder="Dejar vacío = no cambiar"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Estado</label>
+      <select id="layout-editar-fila-activo"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:16px;">
+        <option value="">No cambiar</option>
+        <option value="1">Activar</option>
+        <option value="0">Desactivar</option>
+      </select>
+
+      <div id="layout-editar-fila-resultado" style="font-size:12px;color:var(--tx3);margin-bottom:12px;"></div>
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="layoutGuardarEditarFila()"
+          style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+          Guardar cambios
+        </button>
+        <button onclick="layoutCerrarModalEditarFila()"
+          style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Layout: Asignar SKU (Mecanismo B) -->
   <div id="modal-layout-asignar" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
@@ -2656,7 +2707,7 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260707e"></script>
+  <script src="/static/pwa/app.js?v=20260707f"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
