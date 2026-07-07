@@ -764,9 +764,9 @@ function renderPedidosTabsYLista() {
   tabsEl.innerHTML = PEDIDOS_TAB_LABELS.map((label, i) => {
     const count = PEDIDOS_GRUPOS_COUNT[i] || 0;
     const badge = i === 3
-      ? (count ? `<span class="ped-tab-badge">${count}</span>` : '')
+      ? (count ? `<span class="subtab-badge">${count}</span>` : '')
       : (count ? ` (${count})` : '');
-    return `<div class="ped-tab${i === PEDIDOS_TAB_ACTIVO ? ' active' : ''}" onclick="pedidosCambiarTab(${i})">${label}${badge}</div>`;
+    return `<div class="subtab${i === PEDIDOS_TAB_ACTIVO ? ' active' : ''}" onclick="pedidosCambiarTab(${i})">${label}${badge}</div>`;
   }).join('');
 
   el.innerHTML = PEDIDOS_GRUPOS_HTML[PEDIDOS_TAB_ACTIVO]
@@ -10563,6 +10563,10 @@ async function layoutImportarExcel(btn) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'EN_PACKING', 'PREPARADO', 'EN_TRANSITO', 'ENTREGADA'];
+const REQ_TAB_LABELS = ['PENDIENTE APROBAR', 'EN PICKING', 'EN EMPAQUE', 'LISTO DESPACHAR', 'EN TRÁNSITO', 'RECIBIDO'];
+let REQ_TAB_ACTIVO = 0;
+let REQ_GRUPOS_HTML = ['', '', '', '', '', ''];
+let REQ_GRUPOS_COUNT = [0, 0, 0, 0, 0, 0];
 
 async function cargarRequisiciones() {
   const lista = document.getElementById('req-lista');
@@ -10571,25 +10575,35 @@ async function cargarRequisiciones() {
   try {
     const promesas = _REQ_ESTADOS.map(e => get(`/api/traslados/?estado=${e}`).catch(() => ({ solicitudes: [] })));
     const resultados = await Promise.all(promesas);
-    // ENTREGADA ya está resuelta — solo mostramos las últimas para confirmar recepción sin saturar la cola
-    const todas = resultados.flatMap((r, i) => {
-      const items = r.solicitudes || [];
-      return _REQ_ESTADOS[i] === 'ENTREGADA' ? items.slice(0, 5) : items;
+    REQ_GRUPOS_HTML = resultados.map((r, i) => {
+      // ENTREGADA ya está resuelta — solo mostramos las últimas para confirmar recepción sin saturar la cola
+      const visibles = _REQ_ESTADOS[i] === 'ENTREGADA' ? (r.solicitudes || []).slice(0, 5) : (r.solicitudes || []);
+      REQ_GRUPOS_COUNT[i] = visibles.length;
+      return visibles.map(s => _renderRequisicionCard(s)).join('');
     });
-    const _prioEstado = { 'ENVIADA': 0, 'EN_PICKING': 1, 'EN_PACKING': 2, 'PREPARADO': 3, 'EN_TRANSITO': 4, 'ENTREGADA': 5 };
-    todas.sort((a, b) => {
-      const ep = (_prioEstado[a.estado] ?? 99) - (_prioEstado[b.estado] ?? 99);
-      if (ep !== 0) return ep;
-      return new Date(b.fecha_creacion) - new Date(a.fecha_creacion);
-    });
-    if (!todas.length) {
-      lista.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones pendientes</div>';
-      return;
-    }
-    lista.innerHTML = todas.map(r => _renderRequisicionCard(r)).join('');
+    renderReqTabsYLista();
   } catch (e) {
     lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando requisiciones</div>';
   }
+}
+
+function renderReqTabsYLista() {
+  const tabsEl = document.getElementById('req-tabs');
+  const lista = document.getElementById('req-lista');
+  if (!tabsEl || !lista) return;
+
+  tabsEl.innerHTML = REQ_TAB_LABELS.map((label, i) => {
+    const count = REQ_GRUPOS_COUNT[i] || 0;
+    return `<div class="subtab${i === REQ_TAB_ACTIVO ? ' active' : ''}" onclick="reqCambiarTab(${i})">${label}${count ? ` (${count})` : ''}</div>`;
+  }).join('');
+
+  lista.innerHTML = REQ_GRUPOS_HTML[REQ_TAB_ACTIVO]
+    || '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones en esta pestaña ✓</div>';
+}
+
+function reqCambiarTab(idx) {
+  REQ_TAB_ACTIVO = idx;
+  renderReqTabsYLista();
 }
 
 const _REQ_BODEGA_NOMBRES = {
