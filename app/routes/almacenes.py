@@ -232,6 +232,22 @@ def eliminar_fila(id):
         return jsonify({'error': str(e)}), 400
 
 
+@almacenes_bp.route('/ubicaciones/<int:ubicacion_id>', methods=['DELETE'])
+@jwt_required()
+def eliminar_ubicacion(ubicacion_id):
+    """
+    Elimina una sola ubicación que nunca se usó (sin stock ni historial).
+    Mismo guardarraíl que eliminar_fila, a nivel de una sola posición.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    try:
+        resultado = layout_service.eliminar_ubicacion(ubicacion_id)
+        return jsonify(resultado), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @almacenes_bp.route('/<int:id>/ubicaciones/averias', methods=['POST'])
 @jwt_required()
 def crear_averias(id):

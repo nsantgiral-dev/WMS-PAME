@@ -10387,13 +10387,21 @@ async function layoutCargarUbicaciones() {
             ${u.capacidad_maxima != null ? `<span>Capacidad <strong style="color:var(--tx);">${u.capacidad_maxima}</strong></span>` : ''}
             <span style="color:#666;">${u.origen === 'MANUAL' ? 'WMS' : 'Siesa'}</span>
           </div>
-          <div style="display:flex;gap:8px;">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <button onclick="layoutAbrirModalAsignar(${u.id}, '${u.codigo}')"
-              style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
               Asignar SKU
             </button>
+            <button onclick="layoutAbrirModalEditarUbicacion(${u.id})"
+              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+              Editar
+            </button>
+            <button onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')"
+              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:12px;cursor:pointer;">
+              Eliminar
+            </button>
             <button onclick="layoutAbrirModalReclasificar(${u.id})"
-              style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
               Reclasificar
             </button>
           </div>
@@ -10661,6 +10669,82 @@ async function layoutConfirmarAsignar() {
     layoutCargarUbicaciones();
   } catch (e) {
     alerta(e.message || 'Error asignando el producto', 'error');
+  }
+}
+
+// ── Modal: Editar ubicación individual ───────────────────────────────────────
+
+let _layoutUbEditarId = null;
+
+function layoutAbrirModalEditarUbicacion(ubId) {
+  const ub = _layoutUbicacionesCache.find(u => u.id === ubId);
+  if (!ub) return;
+  _layoutUbEditarId = ubId;
+  const m = document.getElementById('modal-layout-editar-ubicacion');
+  if (!m) return;
+  document.getElementById('layout-editar-ub-titulo').textContent = `Editar ${ub.codigo}`;
+  document.getElementById('layout-editar-ub-zona').value = '';
+  document.getElementById('layout-editar-ub-capacidad').value = '';
+  document.getElementById('layout-editar-ub-activo').value = '';
+  document.getElementById('layout-editar-ub-resultado').innerHTML = '';
+  m.style.display = 'flex';
+}
+
+function layoutCerrarModalEditarUbicacion() {
+  const m = document.getElementById('modal-layout-editar-ubicacion');
+  if (m) m.style.display = 'none';
+  _layoutUbEditarId = null;
+}
+
+async function layoutGuardarEditarUbicacion() {
+  if (!_layoutUbEditarId) return;
+  const tipo_zona = document.getElementById('layout-editar-ub-zona').value || null;
+  const capRaw = document.getElementById('layout-editar-ub-capacidad').value;
+  const capacidad_maxima = capRaw !== '' ? parseInt(capRaw) : null;
+  const activoRaw = document.getElementById('layout-editar-ub-activo').value;
+  const activo = activoRaw !== '' ? activoRaw === '1' : null;
+
+  if (tipo_zona === null && capacidad_maxima === null && activo === null) {
+    alerta('Cambia al menos un campo: zona, capacidad o estado', 'error');
+    return;
+  }
+
+  try {
+    const r = await fetch(API + `/api/almacenes/ubicaciones/${_layoutUbEditarId}`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tipo_zona, capacidad_maxima, activo }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error editando la ubicación', 'error'); return; }
+
+    const resEl = document.getElementById('layout-editar-ub-resultado');
+    resEl.innerHTML = (d.advertencias && d.advertencias.length)
+      ? d.advertencias.map(a => `<div style="color:#facc15;margin-top:4px;">⚠ ${a}</div>`).join('')
+      : '';
+    alerta('Ubicación actualizada', 'ok');
+    layoutCargarUbicaciones();
+    setTimeout(layoutCerrarModalEditarUbicacion, d.advertencias?.length ? 1400 : 200);
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+// ── Eliminar ubicación individual (sin stock ni historial) ──────────────────
+
+async function layoutEliminarUbicacion(ubId, codigo) {
+  if (!confirm(`¿Eliminar la ubicación ${codigo}? Esta acción no se puede deshacer. Solo se puede eliminar si no tiene stock ni historial.`)) return;
+  try {
+    const r = await fetch(API + `/api/almacenes/ubicaciones/${ubId}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error eliminando la ubicación', 'error'); return; }
+    alerta(`${d.codigo || codigo} eliminada`, 'ok');
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
   }
 }
 

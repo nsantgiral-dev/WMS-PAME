@@ -186,6 +186,27 @@ def _motivo_no_eliminable(ubicacion_id: int) -> str | None:
     return None
 
 
+def eliminar_ubicacion(ubicacion_id: int):
+    """
+    Elimina una sola ubicación que nunca se usó — versión de eliminar_fila()
+    para una posición individual, con el mismo guardarraíl duro (bloquea si
+    tiene stock o historial, no solo advierte).
+    """
+    ubicacion = Ubicacion.query.get(ubicacion_id)
+    if not ubicacion:
+        raise ValueError(f'Ubicación {ubicacion_id} no encontrada')
+
+    motivo = _motivo_no_eliminable(ubicacion_id)
+    if motivo:
+        raise ValueError(f'{ubicacion.codigo} {motivo}')
+
+    codigo = ubicacion.codigo
+    UbicacionProducto.query.filter_by(ubicacion_id=ubicacion.id).delete()
+    db.session.delete(ubicacion)
+    db.session.commit()
+    return {'codigo': codigo}
+
+
 def eliminar_fila(almacen_id: int, pasillo: str, fila: int):
     """
     Elimina en bloque las posiciones de una fila que nunca se usaron. Pensado
