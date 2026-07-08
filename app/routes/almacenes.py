@@ -148,27 +148,29 @@ def pasillos_disponibles(id):
     return jsonify({'letras': layout_service.letras_disponibles(id, cantidad)}), 200
 
 
-@almacenes_bp.route('/<int:id>/ubicaciones/fila', methods=['POST'])
+@almacenes_bp.route('/<int:id>/ubicaciones/cuerpo', methods=['POST'])
 @jwt_required()
-def crear_fila(id):
+def crear_cuerpo(id):
     """
-    Nivel 1 del Mecanismo A: crea las N posiciones de una fila en bloque.
-    Payload: { pasillo, fila, cantidad_posiciones, tipo_zona, capacidad_maxima? }
+    Mecanismo A: crea un Cuerpo completo — sus Entrepaños (Nivel) y Huecos, en
+    bloque. La Zona de cada Entrepaño se sugiere sola por su Nivel, no se pide.
+    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_entrepano?, capacidad_maxima? }
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
-    campos = ('pasillo', 'fila', 'cantidad_posiciones', 'tipo_zona')
+    campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos')
     if not all(data.get(c) for c in campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     try:
-        creadas = layout_service.crear_fila(
+        creadas = layout_service.crear_cuerpo(
             almacen_id=id,
             pasillo=data['pasillo'],
             fila=int(data['fila']),
-            cantidad_posiciones=int(data['cantidad_posiciones']),
-            tipo_zona=data['tipo_zona'],
+            cuerpo=int(data['cuerpo']),
+            cantidad_entrepanos=int(data['cantidad_entrepanos']),
+            huecos_por_entrepano=int(data.get('huecos_por_entrepano') or 1),
             capacidad_maxima=data.get('capacidad_maxima'),
         )
         return jsonify({'ubicaciones': [u.to_dict() for u in creadas]}), 201

@@ -11,8 +11,19 @@ class Ubicacion(db.Model):
     zona = db.Column(db.String(50))
     pasillo = db.Column(db.String(10))
     estante = db.Column(db.String(10))
-    nivel = db.Column(db.String(10))
     tipo = db.Column(db.String(30), default='estanteria')
+
+    # ── Direccion fisica de 5 ejes (Layout) ──────────────────────────────
+    # Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahia) -> Nivel
+    # (entrepano, altura relativa dentro del cuerpo) -> Hueco (espacio
+    # dentro del entrepano — varios SKUs pueden compartir un mismo Nivel).
+    # 'estante' es el campo legado (fila plana pre-rediseño) — las
+    # ubicaciones creadas con el mecanismo nuevo no lo usan, quedan solo
+    # con fila/cuerpo/nivel/hueco.
+    fila = db.Column(db.Integer, nullable=True)      # 1 o 2 — lado del pasillo
+    cuerpo = db.Column(db.Integer, nullable=True)     # bahia dentro de la fila
+    nivel = db.Column(db.Integer, nullable=True)      # entrepano, 1 = piso
+    hueco = db.Column(db.Integer, nullable=True)      # espacio dentro del entrepano
 
     # ── Campos maestros sincronizados desde Siesa (API_v2_Ubicaciones ID 43) ──
     # Siesa es el dueño — el WMS solo obedece. No editar manualmente.
@@ -57,7 +68,10 @@ class Ubicacion(db.Model):
             'zona': self.zona,
             'pasillo': self.pasillo,
             'estante': self.estante,
+            'fila': self.fila,
+            'cuerpo': self.cuerpo,
             'nivel': self.nivel,
+            'hueco': self.hueco,
             'tipo': self.tipo,
             'tipo_zona': self.tipo_zona,
             'stock_minimo': self.stock_minimo,

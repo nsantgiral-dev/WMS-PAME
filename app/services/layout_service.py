@@ -5,13 +5,22 @@ Independiente de Reposición: este servicio es el cimiento (crear, clasificar y
 poblar ubicaciones); Reposición, Picking, Recepción, Averías y Compras son
 consumidores de ese cimiento, no dueños de la lógica de ubicaciones.
 
+Dirección física de 5 ejes: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo
+(bahía) -> Nivel (entrepaño, 1 = piso) -> Hueco (espacio dentro del entrepaño).
+
 Piezas:
   1. letras_disponibles()   — pasillos: A-Z y luego AA, AB... (revelado progresivo)
-  2. crear_fila()           — Nivel 1 del Mecanismo A: posiciones de una fila, en bloque
+  2. crear_cuerpo()         — Mecanismo A: entrepaños+huecos de un Cuerpo, en bloque,
+                              con Zona sugerida por Nivel (piso->PICKING, alto->RESERVA)
   3. crear_ubicacion_averias() — AVE1, AVE2... numeradas, fuera de la grilla pasillo/fila
   4. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING
   5. reclasificar_ubicacion() — cambiar zona/capacidad/activo/slot, con guardarraíles
   6. importar_excel()       — Mecanismo A, opción masiva (reusa asignar_producto)
+
+editar_fila()/eliminar_fila() operan sobre el campo legado 'estante' (fila
+plana previa a este rediseño) — siguen intactas para gestionar en bloque las
+ubicaciones creadas antes del esquema de 5 ejes. Las ubicaciones nuevas no
+usan 'estante' y se gestionan individualmente (editar/eliminar por id).
 
 Todas las ubicaciones que crea este módulo nacen con origen='MANUAL' — el sync
 de Siesa (ubicaciones_sync_service.py) nunca las toca.
@@ -79,43 +88,67 @@ ZONAS_VALIDAS = ('PICKING', 'RESERVA', 'AVERIAS')
 _PREFIJO_ZONA = {'PICKING': 'PIK', 'RESERVA': 'RES', 'AVERIAS': 'AVE'}
 
 
-def crear_fila(almacen_id: int, pasillo: str, fila: int, cantidad_posiciones: int,
-               tipo_zona: str, capacidad_maxima: int = None):
-    """
-    Crea las N posiciones de una fila de una vez — nunca asume que la siguiente
-    fila tendrá la misma cantidad (esa decisión la toma quien está parado ahí).
+def _zona_sugerida_por_nivel(nivel: int) -> str:
+    """Nivel 1-2 = piso/zona dorada baja -> PICKING. Nivel 3 en adelante = alto -> RESERVA."""
+    return 'PICKING' if nivel <= 2 else 'RESERVA'
 
-    Código generado: {PREFIJO}-{PASILLO}{FILA:02d}-{POSICION:02d}  ej. PIK-A03-02
-    """
-    if tipo_zona not in ZONAS_VALIDAS:
-        raise ValueError(f'tipo_zona debe ser una de {ZONAS_VALIDAS}')
-    if cantidad_posiciones < 1:
-        raise ValueError('cantidad_posiciones debe ser mayor a 0')
 
-    prefijo = _PREFIJO_ZONA[tipo_zona]
+def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
+                 cantidad_entrepanos: int, huecos_por_entrepano: int = 1,
+                 capacidad_maxima: int = None):
+    """
+    Crea un Cuerpo completo de una vez: sus N Entrepaños (Nivel 1 = piso, subiendo)
+    y, dentro de cada Entrepaño, M Huecos (M=1 por defecto — un SKU por Hueco es
+    el caso normal; solo se sube huecos_por_entrepano si ese Cuerpo va a compartir
+    varios SKUs distintos en el mismo Entrepaño).
+
+    La Zona de cada Entrepaño se sugiere sola según su Nivel — no se pide zona
+    por fuera, porque PICKING (piso) y RESERVA (alto) conviven verticalmente
+    dentro de un mismo Cuerpo, no son cuerpos separados.
+
+    Dirección física: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahía)
+    -> Nivel (entrepaño) -> Hueco.
+    Código generado: {PREFIJO}-{PASILLO}{FILA}-{CUERPO:02d}-{NIVEL:02d}-{HUECO:02d}
+    ej. PIK-A1-03-02-01
+    """
+    if fila not in (1, 2):
+        raise ValueError('fila debe ser 1 o 2 — cada pasillo tiene exactamente 2 filas')
+    if cuerpo < 1:
+        raise ValueError('cuerpo debe ser mayor a 0')
+    if cantidad_entrepanos < 1:
+        raise ValueError('cantidad_entrepanos debe ser mayor a 0')
+    if huecos_por_entrepano < 1:
+        raise ValueError('huecos_por_entrepano debe ser mayor a 0')
+
     pasillo = pasillo.strip().upper()
     if not re.fullmatch(r'[A-Z]{1,2}', pasillo):
         raise ValueError('pasillo debe ser una letra o combinación A-Z / AA-ZZ')
 
     creadas = []
-    for pos in range(1, cantidad_posiciones + 1):
-        codigo = f'{prefijo}-{pasillo}{fila:02d}-{pos:02d}'
-        if Ubicacion.query.filter_by(codigo=codigo).first():
-            raise ValueError(f'La ubicación {codigo} ya existe')
+    for nivel in range(1, cantidad_entrepanos + 1):
+        tipo_zona = _zona_sugerida_por_nivel(nivel)
+        prefijo = _PREFIJO_ZONA[tipo_zona]
+        for hueco in range(1, huecos_por_entrepano + 1):
+            codigo = f'{prefijo}-{pasillo}{fila}-{cuerpo:02d}-{nivel:02d}-{hueco:02d}'
+            if Ubicacion.query.filter_by(codigo=codigo).first():
+                raise ValueError(f'La ubicación {codigo} ya existe')
 
-        ub = Ubicacion(
-            codigo=codigo,
-            almacen_id=almacen_id,
-            pasillo=pasillo,
-            estante=str(fila),
-            tipo_zona=tipo_zona,
-            tipo='estanteria',
-            capacidad_maxima=capacidad_maxima,
-            origen='MANUAL',
-            activo=True,
-        )
-        db.session.add(ub)
-        creadas.append(ub)
+            ub = Ubicacion(
+                codigo=codigo,
+                almacen_id=almacen_id,
+                pasillo=pasillo,
+                fila=fila,
+                cuerpo=cuerpo,
+                nivel=nivel,
+                hueco=hueco,
+                tipo_zona=tipo_zona,
+                tipo='estanteria',
+                capacidad_maxima=capacidad_maxima,
+                origen='MANUAL',
+                activo=True,
+            )
+            db.session.add(ub)
+            creadas.append(ub)
 
     db.session.commit()
     return creadas

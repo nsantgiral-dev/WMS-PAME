@@ -1,8 +1,30 @@
 """
 Tests de los endpoints HTTP del módulo de Layout (/api/almacenes/...).
+
+editar_fila/eliminar_fila siguen siendo el mecanismo legado sobre el campo
+'estante' — ya ningún endpoint de creación lo escribe, así que sus tests
+insertan las ubicaciones directo en la BD (igual que haría una fila creada
+antes del rediseño de 5 ejes) en vez de pasar por el endpoint de creación.
 """
 import io
 from openpyxl import Workbook
+from app.extensions import db as _db
+from app.models.ubicacion import Ubicacion
+
+
+def _crear_legacy_fila(almacen_id, pasillo, fila_legacy, cantidad, tipo_zona):
+    prefijo = {'PICKING': 'PIK', 'RESERVA': 'RES'}[tipo_zona]
+    creadas = []
+    for pos in range(1, cantidad + 1):
+        ub = Ubicacion(
+            codigo=f'{prefijo}-{pasillo}{fila_legacy:02d}-{pos:02d}',
+            almacen_id=almacen_id, pasillo=pasillo, estante=str(fila_legacy),
+            tipo_zona=tipo_zona, tipo='estanteria', origen='MANUAL', activo=True,
+        )
+        _db.session.add(ub)
+        creadas.append(ub)
+    _db.session.commit()
+    return creadas
 
 
 def test_pasillos_disponibles(client, jwt_token_admin, almacen):
@@ -14,25 +36,38 @@ def test_pasillos_disponibles(client, jwt_token_admin, almacen):
     assert resp.get_json()['letras'] == ['A', 'B', 'C']
 
 
-def test_crear_fila_endpoint(client, jwt_token_admin, almacen):
+def test_crear_cuerpo_endpoint(client, jwt_token_admin, almacen):
     resp = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 3, 'tipo_zona': 'PICKING'},
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 201
     ubs = resp.get_json()['ubicaciones']
     assert len(ubs) == 3
-    assert ubs[0]['codigo'] == 'PIK-A01-01'
+    assert ubs[0]['codigo'] == 'PIK-A1-01-01-01'
+    # Nivel 1-2 = PICKING, nivel 3 = RESERVA (zona sugerida por nivel)
+    zonas = sorted(u['tipo_zona'] for u in ubs)
+    assert zonas == ['PICKING', 'PICKING', 'RESERVA']
 
 
-def test_crear_fila_rechaza_sin_admin(client, jwt_token, almacen):
+def test_crear_cuerpo_rechaza_sin_admin(client, jwt_token, almacen):
     resp = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 3, 'tipo_zona': 'PICKING'},
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3},
         headers={'Authorization': f'Bearer {jwt_token}'},
     )
     assert resp.status_code == 403
+
+
+def test_crear_cuerpo_rechaza_fila_invalida(client, jwt_token_admin, almacen):
+    resp = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 3, 'cuerpo': 1, 'cantidad_entrepanos': 2},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert 'fila' in resp.get_json()['error']
 
 
 def test_crear_averias_endpoint(client, jwt_token_admin, almacen):
@@ -47,8 +82,8 @@ def test_crear_averias_endpoint(client, jwt_token_admin, almacen):
 
 def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, producto):
     r1 = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 1, 'tipo_zona': 'PICKING'},
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     ub_id = r1.get_json()['ubicaciones'][0]['id']
@@ -72,11 +107,7 @@ def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, produ
 
 
 def test_editar_fila_endpoint(client, jwt_token_admin, almacen):
-    client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 3, 'cantidad_posiciones': 3, 'tipo_zona': 'PICKING'},
-        headers={'Authorization': f'Bearer {jwt_token_admin}'},
-    )
+    _crear_legacy_fila(almacen.id, 'A', 3, 3, 'PICKING')
     resp = client.patch(
         f'/api/almacenes/{almacen.id}/ubicaciones/fila',
         json={'pasillo': 'A', 'fila': 3, 'tipo_zona': 'RESERVA'},
@@ -90,11 +121,7 @@ def test_editar_fila_endpoint(client, jwt_token_admin, almacen):
 
 
 def test_editar_fila_rechaza_sin_campos_a_cambiar(client, jwt_token_admin, almacen):
-    client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 1, 'tipo_zona': 'PICKING'},
-        headers={'Authorization': f'Bearer {jwt_token_admin}'},
-    )
+    _crear_legacy_fila(almacen.id, 'A', 1, 1, 'PICKING')
     resp = client.patch(
         f'/api/almacenes/{almacen.id}/ubicaciones/fila',
         json={'pasillo': 'A', 'fila': 1},
@@ -123,11 +150,7 @@ def test_editar_fila_endpoint_no_encontrada(client, jwt_token_admin, almacen):
 
 
 def test_eliminar_fila_endpoint(client, jwt_token_admin, almacen):
-    client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 5, 'cantidad_posiciones': 2, 'tipo_zona': 'RESERVA'},
-        headers={'Authorization': f'Bearer {jwt_token_admin}'},
-    )
+    _crear_legacy_fila(almacen.id, 'A', 5, 2, 'RESERVA')
     resp = client.delete(
         f'/api/almacenes/{almacen.id}/ubicaciones/fila',
         json={'pasillo': 'A', 'fila': 5},
@@ -147,14 +170,9 @@ def test_eliminar_fila_endpoint(client, jwt_token_admin, almacen):
 
 
 def test_eliminar_fila_bloquea_con_stock_endpoint(client, jwt_token_admin, almacen, producto):
-    r1 = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 1, 'tipo_zona': 'PICKING'},
-        headers={'Authorization': f'Bearer {jwt_token_admin}'},
-    )
-    ub_id = r1.get_json()['ubicaciones'][0]['id']
+    ub = _crear_legacy_fila(almacen.id, 'A', 1, 1, 'PICKING')[0]
     client.post(
-        f'/api/almacenes/ubicaciones/{ub_id}/asignar',
+        f'/api/almacenes/ubicaciones/{ub.id}/asignar',
         json={'producto_id': producto.id, 'cantidad': 10},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
@@ -189,10 +207,49 @@ def test_eliminar_fila_endpoint_no_encontrada(client, jwt_token_admin, almacen):
     assert 'No hay posiciones' in resp.get_json()['error']
 
 
+def test_eliminar_ubicacion_individual_endpoint(client, jwt_token_admin, almacen):
+    r1 = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    ub_id = r1.get_json()['ubicaciones'][0]['id']
+
+    resp = client.delete(
+        f'/api/almacenes/ubicaciones/{ub_id}',
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()['codigo'] == 'PIK-A1-01-01-01'
+    assert Ubicacion.query.get(ub_id) is None
+
+
+def test_eliminar_ubicacion_individual_bloquea_con_stock(client, jwt_token_admin, almacen, producto):
+    r1 = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    ub_id = r1.get_json()['ubicaciones'][0]['id']
+    client.post(
+        f'/api/almacenes/ubicaciones/{ub_id}/asignar',
+        json={'producto_id': producto.id, 'cantidad': 10},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+
+    resp = client.delete(
+        f'/api/almacenes/ubicaciones/{ub_id}',
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert 'stock activo' in resp.get_json()['error']
+    assert Ubicacion.query.get(ub_id) is not None
+
+
 def test_layout_completo_endpoint(client, jwt_token_admin, almacen):
     client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 2, 'tipo_zona': 'PICKING'},
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     resp = client.get(
@@ -206,8 +263,8 @@ def test_layout_completo_endpoint(client, jwt_token_admin, almacen):
 
 def test_importar_excel_endpoint(client, jwt_token_admin, almacen, producto):
     r1 = client.post(
-        f'/api/almacenes/{almacen.id}/ubicaciones/fila',
-        json={'pasillo': 'A', 'fila': 1, 'cantidad_posiciones': 1, 'tipo_zona': 'RESERVA'},
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     codigo_ub = r1.get_json()['ubicaciones'][0]['codigo']

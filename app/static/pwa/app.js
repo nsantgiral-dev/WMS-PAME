@@ -10291,7 +10291,7 @@ async function repTestEmail(btn) {
 
 let _layoutSubActual = 'ubicaciones';
 let _layoutUbicacionesCache = [];
-let _layoutUltimaFila = null;   // { pasillo, fila, cantidad, zona } — para "repetir"
+let _layoutUltimoCuerpo = null;   // { pasillo, fila, cuerpo, entrepanos, huecos, capacidad } — para "repetir"
 let _layoutUbAsignarId = null;
 let _layoutProductoId = null;
 
@@ -10413,10 +10413,12 @@ async function layoutCargarUbicaciones() {
   }
 }
 
-// ── Modal: Crear ubicación (Nivel 1) ──────────────────────────────────────────
+// ── Modal: Crear ubicación — Cuerpo completo (Mecanismo A) ───────────────────
+// Dirección de 5 ejes: Pasillo -> Fila (1/2) -> Cuerpo -> Entrepaños -> Huecos.
+// La zona se sugiere sola por entrepaño (piso->PICKING, alto->RESERVA) — no se pide.
 
-async function layoutAbrirModalFila() {
-  const m = document.getElementById('modal-layout-fila');
+async function layoutAbrirModalCuerpo() {
+  const m = document.getElementById('modal-layout-cuerpo');
   if (!m) return;
 
   const existentes = [...new Set(_layoutUbicacionesCache.map(u => u.pasillo).filter(Boolean))].sort();
@@ -10426,7 +10428,7 @@ async function layoutAbrirModalFila() {
     disponibles = d.letras || [];
   } catch (_) {}
 
-  const sel = document.getElementById('layout-fila-pasillo');
+  const sel = document.getElementById('layout-cuerpo-pasillo');
   let html = '';
   if (existentes.length) {
     html += `<optgroup label="Pasillos existentes">` +
@@ -10436,48 +10438,57 @@ async function layoutAbrirModalFila() {
     disponibles.map(p => `<option value="${p}">${p} (nuevo)</option>`).join('') + `</optgroup>`;
   sel.innerHTML = html;
 
-  document.getElementById('layout-fila-numero').value = '';
-  document.getElementById('layout-fila-cantidad').value = '';
-  document.getElementById('layout-fila-zona').value = 'PICKING';
+  document.getElementById('layout-cuerpo-fila').value = '1';
+  document.getElementById('layout-cuerpo-numero').value = '';
+  document.getElementById('layout-cuerpo-entrepanos').value = '';
+  document.getElementById('layout-cuerpo-huecos').value = '1';
+  document.getElementById('layout-cuerpo-capacidad').value = '';
 
-  const btnRepetir = document.getElementById('layout-fila-btn-repetir');
-  if (btnRepetir) btnRepetir.style.display = _layoutUltimaFila ? 'block' : 'none';
+  const btnRepetir = document.getElementById('layout-cuerpo-btn-repetir');
+  if (btnRepetir) btnRepetir.style.display = _layoutUltimoCuerpo ? 'block' : 'none';
 
   m.style.display = 'flex';
 }
 
-function layoutCerrarModalFila() {
-  const m = document.getElementById('modal-layout-fila');
+function layoutCerrarModalCuerpo() {
+  const m = document.getElementById('modal-layout-cuerpo');
   if (m) m.style.display = 'none';
 }
 
-function layoutRepetirFilaAnterior() {
-  if (!_layoutUltimaFila) return;
-  document.getElementById('layout-fila-pasillo').value = _layoutUltimaFila.pasillo;
-  document.getElementById('layout-fila-numero').value = _layoutUltimaFila.fila + 1;
-  document.getElementById('layout-fila-cantidad').value = _layoutUltimaFila.cantidad;
-  document.getElementById('layout-fila-zona').value = _layoutUltimaFila.zona;
+function layoutRepetirCuerpoAnterior() {
+  if (!_layoutUltimoCuerpo) return;
+  document.getElementById('layout-cuerpo-pasillo').value = _layoutUltimoCuerpo.pasillo;
+  document.getElementById('layout-cuerpo-fila').value = _layoutUltimoCuerpo.fila;
+  document.getElementById('layout-cuerpo-numero').value = _layoutUltimoCuerpo.cuerpo + 1;
+  document.getElementById('layout-cuerpo-entrepanos').value = _layoutUltimoCuerpo.entrepanos;
+  document.getElementById('layout-cuerpo-huecos').value = _layoutUltimoCuerpo.huecos;
+  document.getElementById('layout-cuerpo-capacidad').value = _layoutUltimoCuerpo.capacidad ?? '';
 }
 
-async function layoutGuardarFila() {
-  const pasillo = document.getElementById('layout-fila-pasillo').value;
-  const fila = parseInt(document.getElementById('layout-fila-numero').value);
-  const cantidad_posiciones = parseInt(document.getElementById('layout-fila-cantidad').value);
-  const tipo_zona = document.getElementById('layout-fila-zona').value;
+async function layoutGuardarCuerpo() {
+  const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
+  const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
+  const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
+  const cantidad_entrepanos = parseInt(document.getElementById('layout-cuerpo-entrepanos').value);
+  const huecos_por_entrepano = parseInt(document.getElementById('layout-cuerpo-huecos').value) || 1;
+  const capRaw = document.getElementById('layout-cuerpo-capacidad').value;
+  const capacidad_maxima = capRaw !== '' ? parseInt(capRaw) : null;
 
-  if (!pasillo || isNaN(fila) || isNaN(cantidad_posiciones)) {
-    alerta('Completa pasillo, fila y cantidad de posiciones', 'error');
+  if (!pasillo || isNaN(fila) || isNaN(cuerpo) || isNaN(cantidad_entrepanos)) {
+    alerta('Completa pasillo, fila, cuerpo y cantidad de entrepaños', 'error');
     return;
   }
 
   try {
-    await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/fila`, { pasillo, fila, cantidad_posiciones, tipo_zona });
-    _layoutUltimaFila = { pasillo, fila, cantidad: cantidad_posiciones, zona: tipo_zona };
-    alerta(`${cantidad_posiciones} posición(es) creada(s) en ${pasillo}${String(fila).padStart(2,'0')}`, 'ok');
-    layoutCerrarModalFila();
+    const payload = { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_entrepano };
+    if (capacidad_maxima !== null) payload.capacidad_maxima = capacidad_maxima;
+    await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, payload);
+    _layoutUltimoCuerpo = { pasillo, fila, cuerpo, entrepanos: cantidad_entrepanos, huecos: huecos_por_entrepano, capacidad: capacidad_maxima };
+    alerta(`Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2,'0')} creado — ${cantidad_entrepanos} entrepaño(s)`, 'ok');
+    layoutCerrarModalCuerpo();
     layoutCargarUbicaciones();
   } catch (e) {
-    alerta(e.message || 'Error creando la fila', 'error');
+    alerta(e.message || 'Error creando el cuerpo', 'error');
   }
 }
 
