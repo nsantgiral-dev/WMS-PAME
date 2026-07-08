@@ -10334,7 +10334,7 @@ async function layoutCargarUbicaciones() {
         <div style="text-align:center;padding:40px;color:#555;">
           <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">🧭</div>
           <div style="font-size:15px;font-weight:600;">Sin ubicaciones registradas</div>
-          <div style="font-size:12px;margin-top:6px;">Usa "+ Crear fila" para empezar a armar el layout de esta bodega</div>
+          <div style="font-size:12px;margin-top:6px;">Usa "+ Crear ubicación" para empezar a armar el layout de esta bodega</div>
         </div>`;
       return;
     }
@@ -10405,7 +10405,7 @@ async function layoutCargarUbicaciones() {
   }
 }
 
-// ── Modal: Crear fila (Nivel 1) ──────────────────────────────────────────────
+// ── Modal: Crear ubicación (Nivel 1) ──────────────────────────────────────────
 
 async function layoutAbrirModalFila() {
   const m = document.getElementById('modal-layout-fila');
