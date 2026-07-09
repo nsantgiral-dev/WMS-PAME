@@ -176,13 +176,13 @@ def precalentar_cache_multibodega(app=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-_BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'FC1', 'PC1', 'FN1']
+_BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'NS2', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
 
 
 def _descargar_una_pasada_custom():
     """Una pasada completa de la consulta custom. Retorna dict {bodega: {codigo: {...}}}."""
     import time as _time
-    api_custom = 'papeleriamedellin_WMS_Stock_Bodega'
+    api_custom = 'papeleriamedellin_WMS_Stock_Bodega_v2'
     inventario = {}
     _errores_consecutivos = 0
 
@@ -227,7 +227,8 @@ def _descargar_una_pasada_custom():
             if codigo not in inventario[bodega]:
                 inventario[bodega][codigo] = {
                     'existencia': float(row.get('f400_cant_existencia_1') or 0),
-                    'comprometido': 0.0, 'salida_sin_conf': 0.0,
+                    'comprometido': float(row.get('f400_cant_comprometida_1') or 0),
+                    'salida_sin_conf': float(row.get('f400_cant_salida_sin_conf_1') or 0),
                     'descripcion': '', 'unidad': 'UND',
                 }
 
