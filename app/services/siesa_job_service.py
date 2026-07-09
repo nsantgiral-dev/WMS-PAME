@@ -344,7 +344,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             cond_pago=payload.get('cond_pago', ''),
         )
         # Persistir flag — misma protección que DESPACHO_F470 (emergency block)
-        if rec and not rec.siesa_triggered:
+        # No marcar triggered en modo ensayo: el POST fue bloqueado, no hay entrada real en Siesa.
+        if rec and not rec.siesa_triggered and not resultado.get('modo_ensayo'):
             try:
                 rec.siesa_triggered = True
                 rec.siesa_response = _json.dumps(resultado)
@@ -404,7 +405,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             referencia=payload.get('referencia', ''),
         )
         # Marcar triggered — emergency block para bloquear reintento duplicado
-        if tarea_dev:
+        # No marcar triggered en modo ensayo: el POST fue bloqueado, no hay traslado real en Siesa.
+        if tarea_dev and not resultado.get('modo_ensayo'):
             try:
                 tarea_dev.siesa_triggered = True
                 tarea_dev.siesa_triggered_at = datetime.utcnow()
@@ -572,11 +574,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Sin esto, un crash entre el HTTP 200 de Siesa y el commit completo
         # deja siesa_triggered=False → el retry genera un doble ajuste de inventario.
         _now = datetime.utcnow()
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
         try:
             sesion_cteo = _SesionConteo.query.get(sesion_id)
-            sesion_cteo.siesa_triggered = True
-            sesion_cteo.siesa_triggered_at = _now
-            db.session.commit()
+            if not _es_ensayo:
+                sesion_cteo.siesa_triggered = True
+                sesion_cteo.siesa_triggered_at = _now
+                db.session.commit()
         except Exception as _e_flag:
             db.session.rollback()
             logger.critical(

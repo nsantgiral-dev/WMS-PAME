@@ -197,6 +197,18 @@ class DespachoParialService:
             # 142945 formato sectioned requiere v3; v3.1 rechaza con "Error en la Estructura"
         )
 
+        # Modo ensayo: el POST fue bloqueado en el gateway, no hay RM real en Siesa.
+        # Cortar aquí — no intentar parsear ni consultar Siesa (no hay nada que encontrar)
+        # y no avanzar a 142943, que también quedaría bloqueado.
+        if resp_rm.get('modo_ensayo'):
+            logger.info(
+                '[DESPACHO_PARCIAL] 142945 en modo ensayo — POST bloqueado, sin RM real. '
+                'tarea=%s pedido=%s', tarea.id, tarea.numero_pedido_siesa,
+            )
+            return DespachoParialService._persistir_resultado(
+                tarea, 'ENSAYO', resp_rm
+            )
+
         # La URL estándar v3 solo devuelve {'codigo':0,'mensaje':'Transacción Exitosa'} sin consecutivo.
         # Estrategia 1: extraer RM del response (funciona si Connekta configura respuesta enriquecida).
         # Estrategia 2: fallback GET papeleriamedellin_WMS_Remision_DesdePedido — busca la RM recién creada.
@@ -370,10 +382,12 @@ class DespachoParialService:
         """Persiste el estado final de la tarea tras despacho exitoso."""
         from app.models.packing import EstadoPacking
         resultado = {'rm': rm_str, 'fe_response': fe_response}
-        tarea.siesa_triggered    = True
-        tarea.siesa_triggered_at = datetime.utcnow()
-        tarea.estado             = EstadoPacking.DESPACHADO
-        tarea.fecha_despachado   = tarea.fecha_despachado or datetime.utcnow()
+        _es_ensayo = bool(fe_response.get('modo_ensayo'))
+        if not _es_ensayo:
+            tarea.siesa_triggered    = True
+            tarea.siesa_triggered_at = datetime.utcnow()
+            tarea.estado             = EstadoPacking.DESPACHADO
+            tarea.fecha_despachado   = tarea.fecha_despachado or datetime.utcnow()
         tarea.siesa_response     = json.dumps(resultado)
         try:
             db.session.commit()
@@ -384,20 +398,22 @@ class DespachoParialService:
                 'siesa_triggered tarea=%s: %s', tarea.id, _e_persist,
             )
             # P_EMERGENCY_COMMIT: al menos persistir siesa_triggered para bloquear retry duplicado
-            try:
-                tarea = db.session.merge(tarea)
-                tarea.siesa_triggered    = True
-                tarea.siesa_triggered_at = datetime.utcnow()
-                db.session.commit()
-            except Exception as _e_persist2:
-                db.session.rollback()
-                logger.critical(
-                    '[DESPACHO_PARCIAL] DOBLE FALLO — siesa_triggered NO persistido '
-                    'tarea=%s: %s. RIESGO DE FE DUPLICADA en retry.',
-                    tarea.id, _e_persist2,
-                )
-                raise
-        logger.info('[DESPACHO_PARCIAL] tarea=%s → %s FE=ok', tarea.id, rm_str)
+            # (no aplica en modo ensayo — no hubo POST real que proteger de reintento)
+            if not _es_ensayo:
+                try:
+                    tarea = db.session.merge(tarea)
+                    tarea.siesa_triggered    = True
+                    tarea.siesa_triggered_at = datetime.utcnow()
+                    db.session.commit()
+                except Exception as _e_persist2:
+                    db.session.rollback()
+                    logger.critical(
+                        '[DESPACHO_PARCIAL] DOBLE FALLO — siesa_triggered NO persistido '
+                        'tarea=%s: %s. RIESGO DE FE DUPLICADA en retry.',
+                        tarea.id, _e_persist2,
+                    )
+                    raise
+        logger.info('[DESPACHO_PARCIAL] tarea=%s → %s FE=ok (ensayo=%s)', tarea.id, rm_str, _es_ensayo)
         return resultado
 
     @staticmethod
