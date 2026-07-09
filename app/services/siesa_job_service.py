@@ -714,9 +714,11 @@ def _post_completado(job: SiesaJob):
         tarea = TareaReposicion.query.get(job.referencia_id)
         if tarea:
             resultado = json.loads(job.resultado or '{}')
-            tarea.siesa_enviado = True
-            tarea.siesa_job_id = str(resultado.get('consecutivo') or resultado.get('id') or job.id)
-            db.session.commit()
+            # No marcar enviado en modo ensayo: el POST fue bloqueado, no hay transferencia real en Siesa.
+            if not resultado.get('modo_ensayo'):
+                tarea.siesa_enviado = True
+                tarea.siesa_job_id = str(resultado.get('consecutivo') or resultado.get('id') or job.id)
+                db.session.commit()
 
 
 def _crear_alerta_admin(job: SiesaJob):
