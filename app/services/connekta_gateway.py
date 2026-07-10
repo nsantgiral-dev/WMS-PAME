@@ -747,11 +747,14 @@ class ConnektaGateway:
     def buscar_barras_por_referencia(self, referencia: str):
         """
         Camino inverso de get_item_por_barras(): dada la referencia de un ítem
-        (f120_referencia), busca su(s) código(s) de barras EAN reales en
-        API_v2_ItemsBarras. La referencia (ej. 'ARTESA898') es el SKU interno
-        de Siesa — nunca es el EAN, que es numérico. Usa los mismos alias de
-        campo que siesa_barcode_sync_service.py para tolerar variaciones del
-        conector Connekta.
+        (f120_referencia), busca su(s) código(s) de barras en
+        API_v2_ItemsBarras — campo f131_id, confirmado 1:1 contra la pantalla
+        "Código de barras del ítem" en Siesa (Otros → Código de barras).
+
+        Siesa permite códigos de barras alfanuméricos libres, no solo EAN
+        numérico (verificado con el maestro real: el ítem ARTESA898 tiene
+        registrado 'F1P' como código de barras, U.M. UND, cantidad fija 1.00)
+        — por eso no se valida formato, solo que el campo no esté vacío.
         """
         if self.modo_simulacion:
             return []
@@ -765,11 +768,9 @@ class ConnektaGateway:
         tabla = resultado.get('detalle', {}).get('Table', [])
         barras = []
         for row in tabla:
-            for campo in ('f131_id', 'f120_codigo_barras', 'f121_id', 'f131_barras'):
-                valor = (row.get(campo) or '').strip()
-                if valor:
-                    barras.append(valor)
-                    break
+            valor = (row.get('f131_id') or '').strip()
+            if valor and valor not in barras:
+                barras.append(valor)
         return barras
 
     def get_items_catalogo(self, pagina: int = 1):
