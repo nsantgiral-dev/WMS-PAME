@@ -803,6 +803,7 @@ def buscar_producto(codigo):
         'codigo': prod.codigo,
         'nombre': prod.nombre,
         'codigo_siesa': prod.codigo_siesa,
+        'codigo_barras': prod.codigo_barras,
         'clasificacion_abc': prod.clasificacion_abc,
         'es_empaque': es_empaque,
         'factor_conversion': factor,
@@ -824,6 +825,8 @@ def buscar_producto_siesa_vivo(codigo):
     item = connekta.buscar_item_por_referencia(codigo)
     if not item:
         return jsonify({'error': f"'{codigo}' no existe en el maestro de ítems de Siesa"}), 404
+    barras = connekta.buscar_barras_por_referencia(item['codigo_siesa'])
+    item['codigo_barras'] = barras[0] if barras else None
     return jsonify(item), 200
 
 

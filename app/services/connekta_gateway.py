@@ -744,6 +744,34 @@ class ConnektaGateway:
             'parametros': f"f131_id = ''{codigo_barras}''"
         })
 
+    def buscar_barras_por_referencia(self, referencia: str):
+        """
+        Camino inverso de get_item_por_barras(): dada la referencia de un ítem
+        (f120_referencia), busca su(s) código(s) de barras EAN reales en
+        API_v2_ItemsBarras. La referencia (ej. 'ARTESA898') es el SKU interno
+        de Siesa — nunca es el EAN, que es numérico. Usa los mismos alias de
+        campo que siesa_barcode_sync_service.py para tolerar variaciones del
+        conector Connekta.
+        """
+        if self.modo_simulacion:
+            return []
+        ref = (referencia or '').strip().replace("'", "")
+        if not ref:
+            return []
+        resultado = self._get(self.api_barras, {
+            'paginacion': 'numPag=1|tamPag=5',
+            'parametros': f"f120_referencia = ''{ref}''"
+        })
+        tabla = resultado.get('detalle', {}).get('Table', [])
+        barras = []
+        for row in tabla:
+            for campo in ('f131_id', 'f120_codigo_barras', 'f121_id', 'f131_barras'):
+                valor = (row.get(campo) or '').strip()
+                if valor:
+                    barras.append(valor)
+                    break
+        return barras
+
     def get_items_catalogo(self, pagina: int = 1):
         """API_v2_Items — catálogo completo de productos Siesa (para sync)."""
         api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')

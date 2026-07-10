@@ -47,12 +47,23 @@ async function etqBuscarProducto() {
     return;
   }
 
-  ETQ_PRODUCTO_ACTUAL = prod;
+  // Preferir el EAN real (API_v2_ItemsBarras). La referencia (codigo_siesa,
+  // ej. 'ARTESA898') es el SKU interno — solo se usa como respaldo cuando
+  // Siesa no tiene un EAN asignado para el ítem.
+  const codigoParaBarra = prod.codigo_barras || prod.codigo_siesa;
+  const esReferenciaFallback = !prod.codigo_barras;
+
+  ETQ_PRODUCTO_ACTUAL = { ...prod, codigo_para_barra: codigoParaBarra };
   resultado.innerHTML = `
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:16px;max-width:320px;">
       ${enVivo ? '<div style="font-size:11px;color:#f59e0b;font-weight:700;margin-bottom:6px;">🔴 EN VIVO — aún no sincronizado en el catálogo local</div>' : ''}
       <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${prod.nombre || ''}</div>
-      <div style="font-size:12px;color:var(--tx3);margin-bottom:10px;">Código Siesa: ${prod.codigo_siesa}</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:2px;">Referencia Siesa: ${prod.codigo_siesa}</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:10px;">
+        ${esReferenciaFallback
+          ? '<span style="color:#d97706;">Sin EAN en Siesa — se imprimirá la referencia interna</span>'
+          : 'Código de barras EAN: ' + prod.codigo_barras}
+      </div>
       <svg id="etq-preview-svg" style="width:100%;height:60px;"></svg>
       <button onclick="etqImprimir()"
         style="width:100%;margin-top:10px;padding:10px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
@@ -61,7 +72,7 @@ async function etqBuscarProducto() {
     </div>`;
 
   try {
-    JsBarcode('#etq-preview-svg', prod.codigo_siesa, {
+    JsBarcode('#etq-preview-svg', codigoParaBarra, {
       format: 'CODE128', displayValue: true, height: 50, margin: 0, fontSize: 12
     });
   } catch (_) {}
@@ -69,7 +80,7 @@ async function etqBuscarProducto() {
 
 function etqImprimir() {
   const prod = ETQ_PRODUCTO_ACTUAL;
-  if (!prod || !prod.codigo_siesa) return;
+  if (!prod || !prod.codigo_para_barra) return;
 
   const area = document.getElementById('print-area');
   if (!area) return;
@@ -81,13 +92,13 @@ function etqImprimir() {
     <div class="etiqueta-lpn">
       <div class="el-titulo">PRODUCTO — PAPELERÍA MEDELLÍN</div>
       <svg id="${uid}"></svg>
-      <div class="el-codigo">${prod.codigo_siesa}</div>
+      <div class="el-codigo">${prod.codigo_para_barra}</div>
       <div class="el-producto">${prod.nombre || ''}</div>
       <div class="el-fecha">${hoy}</div>
     </div>`;
 
   try {
-    JsBarcode(`#${uid}`, prod.codigo_siesa, {
+    JsBarcode(`#${uid}`, prod.codigo_para_barra, {
       format: 'CODE128', displayValue: false, height: 55, margin: 0
     });
   } catch (_) {}
