@@ -751,6 +751,38 @@ class ConnektaGateway:
             'paginacion': f'numPag={pagina}|tamPag=100'
         })
 
+    def buscar_item_por_referencia(self, referencia: str):
+        """
+        Consulta EN VIVO un único ítem en API_v2_Items filtrado por referencia
+        exacta — para la herramienta de Etiquetas cuando el catálogo local
+        (sync periódico) aún no trae un ítem recién creado en Siesa.
+
+        No usar en rutas calientes de picking/packing: es una llamada HTTP en
+        tiempo real (hasta 30s), a diferencia de get_items_catalogo() que
+        alimenta el sync de fondo hacia la tabla local `productos`.
+        """
+        if self.modo_simulacion:
+            return None
+        ref = (referencia or '').strip().replace("'", "")
+        if not ref:
+            return None
+        api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
+        resultado = self._get(api_items, {
+            'paginacion': 'numPag=1|tamPag=5',
+            'parametros': f"f120_referencia = ''{ref}''"
+        })
+        tabla = resultado.get('detalle', {}).get('Table', [])
+        if not tabla:
+            return None
+        row = tabla[0]
+        codigo_siesa = (row.get('f120_referencia') or '').strip()
+        if not codigo_siesa:
+            return None
+        return {
+            'codigo_siesa': codigo_siesa,
+            'nombre': (row.get('f120_descripcion') or '').strip(),
+        }
+
     def get_items_unidades_medida(self, pagina: int = 1):
         """API_v2_ItemsUnidadesMedida — factores de conversión de empaques por ítem.
         Campos esperados: f120_referencia, f120_id_unidad_medida, factor (o f120_factor),

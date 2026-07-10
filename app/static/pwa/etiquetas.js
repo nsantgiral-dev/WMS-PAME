@@ -6,9 +6,11 @@
  * y el contenedor compartido #print-area que ya usan las etiquetas de
  * LPN/bulto/canasto — mismo contrato, sin tocar su lógica.
  *
- * Backend: reutiliza GET /api/siesa/producto/<codigo> (routes/siesa.py),
- * que ya busca por codigo, codigo_siesa o codigo_barras. Cero endpoints
- * nuevos, cero escritura en BD.
+ * Backend: intenta primero GET /api/siesa/producto/<codigo> (catálogo local,
+ * rápido). Si el ítem aún no sincronizó (recién creado en Siesa), cae a
+ * GET /api/siesa/producto-siesa-vivo/<codigo> — consulta en vivo a Connekta,
+ * exclusiva de esta herramienta. Ninguna de las dos rutas usadas por
+ * picking/packing en caliente se modificó.
  */
 
 let ETQ_PRODUCTO_ACTUAL = null;
@@ -24,12 +26,18 @@ async function etqBuscarProducto() {
   ETQ_PRODUCTO_ACTUAL = null;
   resultado.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Buscando...</div>';
 
-  let prod;
+  let prod, enVivo = false;
   try {
     prod = await get('/api/siesa/producto/' + encodeURIComponent(codigo));
-  } catch (e) {
-    resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#dc2626;">${e.message}</div>`;
-    return;
+  } catch (eLocal) {
+    resultado.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">No está en el catálogo local — consultando Siesa en vivo (puede tardar unos segundos)...</div>';
+    try {
+      prod = await get('/api/siesa/producto-siesa-vivo/' + encodeURIComponent(codigo));
+      enVivo = true;
+    } catch (eVivo) {
+      resultado.innerHTML = `<div style="text-align:center;padding:20px;color:#dc2626;">${eVivo.message}</div>`;
+      return;
+    }
   }
 
   if (!prod.codigo_siesa) {
@@ -42,6 +50,7 @@ async function etqBuscarProducto() {
   ETQ_PRODUCTO_ACTUAL = prod;
   resultado.innerHTML = `
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;padding:16px;max-width:320px;">
+      ${enVivo ? '<div style="font-size:11px;color:#f59e0b;font-weight:700;margin-bottom:6px;">🔴 EN VIVO — aún no sincronizado en el catálogo local</div>' : ''}
       <div style="font-size:14px;font-weight:700;margin-bottom:4px;">${prod.nombre || ''}</div>
       <div style="font-size:12px;color:var(--tx3);margin-bottom:10px;">Código Siesa: ${prod.codigo_siesa}</div>
       <svg id="etq-preview-svg" style="width:100%;height:60px;"></svg>

@@ -810,6 +810,23 @@ def buscar_producto(codigo):
     }), 200
 
 
+@siesa_bp.route('/producto-siesa-vivo/<codigo>', methods=['GET'])
+@jwt_required()
+def buscar_producto_siesa_vivo(codigo):
+    """
+    Lookup EN VIVO contra Connekta (API_v2_Items) — respaldo exclusivo de la
+    herramienta de Etiquetas cuando el catálogo local todavía no sincronizó
+    un ítem recién creado en Siesa. No usar en picking/packing: puede tardar
+    hasta 30s (ver /producto/<codigo>, que es la ruta local usada en caliente).
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede consultar Siesa en vivo'}), 403
+    item = connekta.buscar_item_por_referencia(codigo)
+    if not item:
+        return jsonify({'error': f"'{codigo}' no existe en el maestro de ítems de Siesa"}), 404
+    return jsonify(item), 200
+
+
 # ──────────────────────────────────────────────
 # POSTs — arrancan los flujos operativos
 # ──────────────────────────────────────────────
