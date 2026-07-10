@@ -1710,10 +1710,14 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
         }
       },
       decoder: {
+        // ean_8_reader y upc_e_reader (formatos de 8 dígitos) quitados: no se
+        // usan en el catálogo (todos los EAN son de 13 dígitos) y generaban
+        // falsos positivos al confundir una lectura parcial/borrosa de un
+        // EAN-13 real con un código corto inexistente.
         readers: [
-          'ean_reader', 'ean_8_reader',
+          'ean_reader',
           'code_128_reader', 'code_39_reader',
-          'upc_reader', 'upc_e_reader'
+          'upc_reader'
         ],
         multiple: false
       },
