@@ -1746,19 +1746,6 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
       target.style.overflow = 'hidden';
       target.style.borderRadius = '10px';
 
-      // Rectángulo de enfoque sobre el video
-      const ov = document.createElement('div');
-      ov.className = '_scan-overlay';
-      ov.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;';
-      ov.innerHTML = `
-        <div style="width:260px;height:80px;border:2px solid #00e5ff;border-radius:4px;
-          box-shadow:0 0 0 9999px rgba(0,0,0,.45);position:relative;">
-          <span style="position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);
-            color:#00e5ff;font-size:11px;font-weight:600;white-space:nowrap;
-            text-shadow:0 1px 4px rgba(0,0,0,.9);">Centra el barcode aquí</span>
-        </div>`;
-      target.appendChild(ov);
-
       resolve();
     });
   });
