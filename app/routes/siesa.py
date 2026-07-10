@@ -501,16 +501,25 @@ def debug_barras_raw():
     """
     Debug: prueba API_v2_ItemsBarras con un código de barras específico.
     GET /api/siesa/debug-barras-raw?codigo=49218787
-    Sin código: muestra los primeros 5 registros del conector completo.
+    GET /api/siesa/debug-barras-raw?referencia=ARTESA898 — filtra por f120_referencia
+    en vez de f131_id, para inspeccionar los campos crudos que trae Siesa para
+    un ítem puntual (ej. confirmar cuál campo es el EAN real).
+    Sin parámetros: muestra los primeros 5 registros del conector completo.
     Solo admin.
     """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede usar endpoints de debug'}), 403
     codigo = request.args.get('codigo', '').strip()
+    referencia = request.args.get('referencia', '').strip()
     if codigo:
         resultado = connekta._get(connekta.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
             'parametros': f"f131_id = ''{codigo}''"
+        })
+    elif referencia:
+        resultado = connekta._get(connekta.api_barras, {
+            'paginacion': 'numPag=1|tamPag=5',
+            'parametros': f"f120_referencia = ''{referencia}''"
         })
     else:
         resultado = connekta._get(connekta.api_barras, {
