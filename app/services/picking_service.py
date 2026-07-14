@@ -449,19 +449,25 @@ class PickingService:
                 db.session.add(MovimientoInventario(
                     producto_id=tarea.producto_id,
                     ubicacion_id=tarea.ubicacion_id,
+                    almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
                     cantidad=-diferencia,
                     motivo=f'Auditoría tarea {tarea.codigo}: hallado {cantidad_hallada} de {tarea.cantidad_solicitada} solicitadas',
+                    numero_documento=tarea.referencia_documento,
+                    usuario_id=admin_id,
                 ))
 
         elif resultado == 'NO_ENCONTRADO':
-            if reg:
+            if reg and reg.cantidad:
                 db.session.add(MovimientoInventario(
                     producto_id=tarea.producto_id,
                     ubicacion_id=tarea.ubicacion_id,
+                    almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
                     cantidad=-reg.cantidad,
                     motivo=f'Auditoría tarea {tarea.codigo}: faltante confirmado, unidades no encontradas',
+                    numero_documento=tarea.referencia_documento,
+                    usuario_id=admin_id,
                 ))
                 reg.cantidad = 0
 
@@ -486,9 +492,12 @@ class PickingService:
                 db.session.add(MovimientoInventario(
                     producto_id=tarea.producto_id,
                     ubicacion_id=tarea.ubicacion_id,
+                    almacen_id=tarea.almacen_id,
                     tipo='AJUSTE_AUDITORIA',
                     cantidad=-cantidad_hallada,
                     motivo=f'Auditoría tarea {tarea.codigo}: mercancía averiada trasladada a zona AVERIAS',
+                    numero_documento=tarea.referencia_documento,
+                    usuario_id=admin_id,
                 ))
 
         elif resultado == 'DISCREPANCIA_SIESA':
