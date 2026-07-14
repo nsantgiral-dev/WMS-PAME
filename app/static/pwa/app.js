@@ -3626,6 +3626,7 @@ async function empCargarTareas() {
         const pct = total ? Math.round(verificados / total * 100) : 0;
         const pickingListo = t.picking_listo !== false;
         const pedidoAnulado = t.pedido_anulado_siesa === true;
+        const _puedeCancelarPacking = OPERARIO && ['admin', 'supervisor'].includes(OPERARIO.rol);
         const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered && !pedidoAnulado;
         const enProceso = t.estado === 'EN_PROCESO';
         const bloqueado = (!pickingListo && t.estado === 'PENDIENTE') || pedidoAnulado;
@@ -3637,12 +3638,13 @@ async function empCargarTareas() {
             <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${t.pedido_estado_siesa_detectado || '9'})</div>
             <div style="font-size:11px;color:var(--tx2);line-height:1.4;">
               El área comercial anuló este pedido en el ERP.<br>
-              <strong>Acción:</strong> Cancelar este packing y esperar el nuevo pedido clonado.
+              <strong>Acción:</strong> ${_puedeCancelarPacking ? 'Cancelar este packing y esperar el nuevo pedido clonado.' : 'Avisa a tu supervisor para que cancele este packing.'}
             </div>
+            ${_puedeCancelarPacking ? `
             <button onclick="event.stopPropagation();empCancelarPacking(${t.id})"
               style="margin-top:8px;width:100%;padding:8px;background:var(--red);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">
               Cancelar packing
-            </button>
+            </button>` : ''}
           </div>` : '';
         const limpiarBtn = siesaFallo ? `
           <button onclick="event.stopPropagation();empLimpiarSiesa(${t.id})"
