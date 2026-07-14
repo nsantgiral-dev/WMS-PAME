@@ -825,7 +825,7 @@ function _renderTareasBodegaHTML(tareas) {
   try {
     const MOTIVO_LABEL = {
       UBICACION_VACIA:    '📦 Ubicación vacía',
-      FALTANTE:           '📉 Faltante parcial',
+      FALTANTE:           '📉 Agotado',
       MERCANCIA_AVERIADA: '🚫 Mercancía averiada',
       PRODUCTO_INCORRECTO:'❌ Producto incorrecto'
     };
@@ -2134,6 +2134,11 @@ async function reportarProblema(tareaId) {
           📦 Ubicación vacía — no había nada
         </button>
 
+        <button onclick="confirmarProblema(${tareaId},'FALTANTE',0)"
+          style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
+          📉 Agotado — hay ubicación pero no queda stock
+        </button>
+
         <button onclick="confirmarProblema(${tareaId},'MERCANCIA_AVERIADA',0)"
           style="width:100%;padding:14px;margin-bottom:8px;font-size:14px;font-weight:600;background:#7f1d1d;color:#f87171;border:none;border-radius:10px;cursor:pointer;text-align:left;">
           🚫 Mercancía averiada
@@ -2207,7 +2212,7 @@ async function cargarAuditoriasUrgentes() {
               <div style="font-size:13px;font-weight:700;color:#f87171;">${a.codigo}</div>
               <div style="font-size:11px;color:#555;margin-top:2px;">${a.producto_nombre || ''} · ${a.ubicacion_codigo || ''}</div>
               ${a.tarea_picking_id ? `<div style="font-size:10px;color:#444;margin-top:1px;">Originó: tarea picking #${a.tarea_picking_id}</div>` : ''}
-              ${a.motivo_codigo && !['AJ-ENT','AJ-SAL'].includes(a.motivo_codigo) ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${({'UBICACION_VACIA':'📦 Ubicación vacía','FALTANTE':'📉 Faltante parcial','MERCANCIA_AVERIADA':'🚫 Mercancía averiada','PRODUCTO_INCORRECTO':'❌ Producto incorrecto'})[a.motivo_codigo] || a.motivo_codigo}</div>` : ''}
+              ${a.motivo_codigo && !['AJ-ENT','AJ-SAL'].includes(a.motivo_codigo) ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${({'UBICACION_VACIA':'📦 Ubicación vacía','FALTANTE':'📉 Agotado','MERCANCIA_AVERIADA':'🚫 Mercancía averiada','PRODUCTO_INCORRECTO':'❌ Producto incorrecto'})[a.motivo_codigo] || a.motivo_codigo}</div>` : ''}
             </div>
             <span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">${a.estado}</span>
           </div>
