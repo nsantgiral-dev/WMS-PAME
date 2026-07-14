@@ -891,6 +891,7 @@ def iniciar_despacho():
         }), 409
 
     tareas_picking_ids = []
+    items_ok = []
     errores = []
 
     for item in items:
@@ -904,14 +905,27 @@ def iniciar_despacho():
                 prioridad=2
             )
             tareas_picking_ids.extend([t.id for t in tareas])
+            items_ok.append(item)
         except (ValueError, TypeError) as e:
-            errores.append(str(e))
+            errores.append({
+                'producto_id': item.get('producto_id'),
+                'item_codigo': item.get('item_codigo'),
+                'producto_nombre': item.get('producto_nombre_wms'),
+                'error': str(e),
+            })
 
     if not tareas_picking_ids:
         return jsonify({'error': 'Stock insuficiente para todos los ítems', 'detalle': errores}), 400
 
     # Crear packing con las llaves del documento Siesa — usar crear_manual porque
     # el picking aún está PENDIENTE (los operarios lo completarán después).
+    #
+    # Solo se arma con items_ok (los que sí lograron tarea de picking) — nunca con
+    # `items` completo. Antes se armaba con `items`, así que una línea sin stock
+    # (crear_tareas lanzó ValueError arriba y nunca se creó su TareaPicking) igual
+    # entraba al packing esperando una cantidad que nadie iba a recoger físicamente:
+    # el pedido quedaba parcial en picking pero completo en packing, sin relación
+    # entre ambos. Ver errores[] para las líneas excluidas (backorder pendiente).
     #
     # NORMALIZACIÓN A UND: Siesa devuelve f431_cant1_pedida en la unidad1 del pedido,
     # que puede ser PQ (empaque) o UND según cómo se parametrizó el pedido.
@@ -920,7 +934,7 @@ def iniciar_despacho():
     # Heurístico: si cant_raw < factor_conversion → la cantidad está en unidades de empaque.
     from app.models.producto import Producto as _ProdPack
     items_packing = []
-    for _ip in items:
+    for _ip in items_ok:
         _pp = _ProdPack.query.get(_ip['producto_id'])
         _fc = (_pp.factor_conversion or 1) if _pp else 1
         _cq = int(_ip['cantidad_pendiente'])

@@ -2402,7 +2402,12 @@ async function iniciarDespachoDesdeSiesa(idx) {
       items: itemsValidos
     });
     if (r.error) { alerta(r.error, 'error'); return; }
-    alerta(`Despacho iniciado — Packing ${r.packing_codigo}`, 'exito');
+    if (r.errores && r.errores.length) {
+      console.warn(`[DESPACHO] ${pedido.numero_pedido} — ${r.errores.length} línea(s) sin stock, excluidas de picking y packing:`, r.errores);
+      alerta(`Despacho iniciado — ${r.errores.length} línea(s) sin stock quedaron fuera (pedido parcial). Detalle en consola.`, 'advertencia');
+    } else {
+      alerta(`Despacho iniciado — Packing ${r.packing_codigo}`, 'exito');
+    }
     setTimeout(cargarPedidos, 800);
   } catch (e) { alerta('Error iniciando despacho', 'error'); }
 }
