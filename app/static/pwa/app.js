@@ -788,7 +788,10 @@ async function cargarTareasBodega() {
   if (!el) return;
   try {
     const d = await get('/api/picking/?activas=true&per_page=50');
-    const tareas = d.tareas || [];
+    // Más recientes primero — solo afecta esta pantalla, el endpoint sigue
+    // devolviendo oldest-first por defecto para el resto de consumidores.
+    const tareas = (d.tareas || []).slice().sort((a, b) =>
+      new Date(b.fecha_creacion) - new Date(a.fecha_creacion));
     const porTipo = [
       tareas.filter(t => t.tipo_documento !== 'TRASLADO'),
       tareas.filter(t => t.tipo_documento === 'TRASLADO'),
