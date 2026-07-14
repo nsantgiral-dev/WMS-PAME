@@ -218,10 +218,16 @@ def confirmar_ajuste(id):
 @jwt_required()
 def auditorias_urgentes():
     """
-    Auditorías EXCEPCION_PICKING pendientes de resolución.
-    Solo visibles para admin/supervisor — aparecen en "Auditorías Urgentes".
+    Tareas de picking BLOQUEADAS pendientes de que el admin/supervisor las
+    audite directamente (ver PickingService.auditar_tarea). Reemplaza el
+    conteo doble-ciego para excepciones puntuales de picking — el admin
+    confirma si el producto está realmente agotado (el pedido sigue parcial)
+    o si estaba mal ubicado (se completa la línea), sin esperar turno de
+    otro operario en la cola de conteo cíclico.
     """
     from app.models.usuario import Usuario
+    from app.models.picking import TareaPicking
+    from sqlalchemy.orm import selectinload as _sl
     try:
         uid = int(get_jwt_identity())
     except (TypeError, ValueError):
@@ -230,22 +236,15 @@ def auditorias_urgentes():
     if not usuario or usuario.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Solo admin o supervisor puede ver las auditorías urgentes'}), 403
     almacen_id = request.args.get('almacen_id', type=int)
-    from sqlalchemy.orm import selectinload as _sl
-    q = (SesionConteo.query
-         .options(
-             _sl(SesionConteo.producto),
-             _sl(SesionConteo.ubicacion),
-             _sl(SesionConteo.operario),
-             _sl(SesionConteo.segundo_operario),
-         )
-         .filter_by(tipo='EXCEPCION_PICKING')
-         .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE'])))
+    q = (TareaPicking.query
+         .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
+         .filter(TareaPicking.estado == 'BLOQUEADO'))
     if almacen_id:
         q = q.filter_by(almacen_id=almacen_id)
-    sesiones = q.order_by(SesionConteo.fecha_creacion.desc()).all()
+    tareas = q.order_by(TareaPicking.fecha_creacion.desc()).all()
     return jsonify({
-        'auditorias': [s.to_dict() for s in sesiones],
-        'total': len(sesiones),
+        'auditorias': [t.to_dict() for t in tareas],
+        'total': len(tareas),
     }), 200
 
 

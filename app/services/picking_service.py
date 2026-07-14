@@ -504,6 +504,41 @@ class PickingService:
         tarea.estado                      = EstadoPicking.CANCELADO
         tarea.operario_id                 = None
 
+        # 4. Sincronizar el packing del pedido con el resultado de la auditoría.
+        # total_disponible = lo que ya se había recogido antes del bloqueo
+        # (short-pick previo, si lo hubo) + lo que la auditoría suma ahora.
+        # Si el total es 0 (agotado real / avería total), se elimina la línea
+        # del packing para que el pedido siga parcial — Siesa factura por lo
+        # empacado, no por lo pedido (ver packing_service.cerrar_packing).
+        # Dejarla en 0 en vez de eliminarla enviaría cantidad_empacada=0 sin
+        # probar contra el conector de Siesa. Si el total es > 0, se ajusta
+        # cantidad_esperada para que el empacador complete esa línea.
+        if tarea.referencia_documento and resultado != 'DISCREPANCIA_SIESA':
+            from app.models.packing import TareaPacking as _TP, ItemPacking as _IP
+            ya_recogido = tarea.cantidad_recogida or 0
+            if resultado == 'ENCONTRADO_COMPLETO':
+                total_disponible = tarea.cantidad_solicitada
+            elif resultado == 'ENCONTRADO_PARCIAL':
+                total_disponible = ya_recogido + cantidad_hallada
+            else:  # NO_ENCONTRADO, AVERIA
+                total_disponible = ya_recogido
+
+            packing = _TP.query.filter(
+                _TP.numero_pedido_siesa == tarea.referencia_documento,
+                _TP.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+            ).first()
+            if packing:
+                item = _IP.query.filter_by(
+                    tarea_id=packing.id, producto_id=tarea.producto_id
+                ).first()
+                if item:
+                    if total_disponible <= 0:
+                        db.session.delete(item)
+                    else:
+                        item.cantidad_esperada = total_disponible
+                        item.cantidad_real = 0
+                        item.verificado = False
+
         db.session.commit()
         return tarea
 
@@ -512,10 +547,12 @@ class PickingService:
                            cantidad_encontrada: int = 0, observaciones: str = None) -> dict:
         """
         Lógica compartida entre /picking/<id>/reportar-problema y /mobile/reportar-problema.
-        Bloquea la tarea, registra short-pick si aplica, genera auditoría urgente.
+        Bloquea la tarea y registra short-pick si aplica. La tarea BLOQUEADA queda
+        pendiente de resolución directa del admin/supervisor vía auditar_tarea()
+        (pestaña Bodega) — sin conteo doble-ciego intermedio: es una excepción
+        puntual, no un conteo cíclico de rutina.
         """
         from app.models.inventario import UbicacionProducto, MovimientoInventario
-        from app.services.conteo_service import ConteoService
         from datetime import datetime as _dt
 
         tarea = TareaPicking.query.get(tarea_id)
@@ -560,17 +597,6 @@ class PickingService:
         tarea.motivo_bloqueo = motivo
         tarea.observaciones_bloqueo = observaciones
 
-        auditoria_id = None
-        if cantidad_faltante > 0:
-            sesion = ConteoService.generar_auditoria_por_excepcion(
-                tarea_picking_id=tarea.id,
-                ubicacion_id=tarea.ubicacion_id,
-                producto_id=tarea.producto_id,
-                almacen_id=tarea.almacen_id,
-            )
-            sesion.motivo_codigo = motivo
-            auditoria_id = sesion.id
-
         # Capturar referencia antes del commit
         _ref_doc_rp = tarea.referencia_documento
 
@@ -597,5 +623,4 @@ class PickingService:
             'tarea_id': tarea_id,
             'cantidad_encontrada': cantidad_encontrada,
             'cantidad_faltante': cantidad_faltante,
-            'auditoria_id': auditoria_id,
         }

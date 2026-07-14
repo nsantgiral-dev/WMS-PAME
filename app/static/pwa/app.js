@@ -2195,60 +2195,64 @@ async function cargarAuditoriasUrgentes() {
   if (!el) return;
   try {
     const d = await get('/api/conteo/auditorias-urgentes?almacen_id=' + ALMACEN_ID);
-    const auds = d.auditorias || [];
-    if (!auds.length) {
+    const tareas = d.auditorias || [];
+    if (!tareas.length) {
       el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:20px;font-size:13px;">✓ Sin auditorías pendientes</div>';
       return;
     }
-    el.innerHTML = auds.map(a => {
-      const diff = a.diferencia;
-      const diffColor = diff === null ? '#666' : diff < 0 ? '#f87171' : '#fb923c';
-      const diffTxt  = diff === null ? 'Pendiente de conteo' : `Diferencia: ${diff > 0 ? '+' : ''}${diff} uds`;
-      const puedAprobar = ['SEGUNDO_CONTEO','DESCUADRE'].includes(a.estado) && diff !== null;
-      return `
+    const MOTIVOS = {'UBICACION_VACIA':'📦 Ubicación vacía','FALTANTE':'📉 Agotado','MERCANCIA_AVERIADA':'🚫 Mercancía averiada','PRODUCTO_INCORRECTO':'❌ Producto incorrecto'};
+    el.innerHTML = tareas.map(t => `
         <div style="background:#111;border:1px solid #7f1d1d;border-radius:12px;padding:14px;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">
-            <div>
-              <div style="font-size:13px;font-weight:700;color:#f87171;">${a.codigo}</div>
-              <div style="font-size:11px;color:#555;margin-top:2px;">${a.producto_nombre || ''} · ${a.ubicacion_codigo || ''}</div>
-              ${a.tarea_picking_id ? `<div style="font-size:10px;color:#444;margin-top:1px;">Originó: tarea picking #${a.tarea_picking_id}</div>` : ''}
-              ${a.motivo_codigo && !['AJ-ENT','AJ-SAL'].includes(a.motivo_codigo) ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${({'UBICACION_VACIA':'📦 Ubicación vacía','FALTANTE':'📉 Agotado','MERCANCIA_AVERIADA':'🚫 Mercancía averiada','PRODUCTO_INCORRECTO':'❌ Producto incorrecto'})[a.motivo_codigo] || a.motivo_codigo}</div>` : ''}
-            </div>
-            <span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">${a.estado}</span>
+          <div style="margin-bottom:8px;">
+            <div style="font-size:13px;font-weight:700;color:#f87171;">${t.codigo}</div>
+            <div style="font-size:11px;color:#555;margin-top:2px;">${t.producto_nombre || ''} · ${t.ubicacion_codigo || ''}</div>
+            <div style="font-size:10px;color:#444;margin-top:1px;">Pedido ${t.referencia_documento || '—'} · pedía ${t.cantidad_solicitada} uds</div>
+            ${t.motivo_bloqueo ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${MOTIVOS[t.motivo_bloqueo] || t.motivo_bloqueo}</div>` : ''}
           </div>
-          <div style="font-size:12px;color:${diffColor};margin-bottom:8px;">${diffTxt}</div>
-          ${puedAprobar ? `
-            <div style="background:#0a0a0a;border-radius:8px;padding:10px;margin-bottom:8px;font-size:12px;color:#aaa;">
-              ${diff < 0 ? `<b style="color:#f87171;">AJ-SAL</b> — faltan ${Math.abs(diff)} uds en Siesa` : `<b style="color:#4ade80;">AJ-ENT</b> — sobran ${diff} uds en Siesa`}
-            </div>
-            <button onclick="aprobarAjusteConteo(${a.id})"
-              style="width:100%;padding:11px;background:#7f1d1d;color:#fca5a5;border:1px solid #f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-              ✓ Aprobar ajuste → Siesa
-            </button>` : `
-            <div style="font-size:11px;color:#444;">Esperando que un operario complete el conteo físico</div>`}
-        </div>`;
-    }).join('');
+          <select id="da-resultado-${t.id}"
+            style="width:100%;padding:9px;margin-bottom:6px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;">
+            <option value="">¿Qué encontraste al verificar?</option>
+            <option value="NO_ENCONTRADO">Confirmo: agotado — no hay nada</option>
+            <option value="ENCONTRADO_COMPLETO">Encontré todo lo pedido (mal ubicado)</option>
+            <option value="ENCONTRADO_PARCIAL">Encontré una parte</option>
+            <option value="AVERIA">Está averiado</option>
+            <option value="DISCREPANCIA_SIESA">Discrepancia con Siesa — ajusto manual</option>
+          </select>
+          <input id="da-cantidad-${t.id}" type="number" min="0" placeholder="Cantidad hallada"
+            style="width:100%;padding:9px;margin-bottom:8px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;box-sizing:border-box;">
+          <button onclick="dashAuditarTarea(${t.id})"
+            style="width:100%;padding:11px;background:#7f1d1d;color:#fca5a5;border:1px solid #f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            ✓ Confirmar auditoría
+          </button>
+        </div>`).join('');
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando auditorías</div>';
   }
 }
 
-async function aprobarAjusteConteo(sesionId) {
-  if (!confirm('¿Confirmar envío del ajuste a Siesa? Esta acción es contable e irreversible.')) return;
+async function dashAuditarTarea(tareaId) {
+  const resultado = document.getElementById(`da-resultado-${tareaId}`)?.value;
+  const cantidad_hallada = parseInt(document.getElementById(`da-cantidad-${tareaId}`)?.value || '0', 10);
+  if (!resultado) { alerta('Selecciona qué encontraste', 'error'); return; }
+  const avisoParcial = resultado === 'NO_ENCONTRADO' || resultado === 'AVERIA'
+    ? '\n\nEsta línea se retira del pedido y el pedido sigue parcial con el resto.'
+    : '';
+  if (!confirm('¿Confirmar esta auditoría? Ajusta el inventario y el estado del pedido.' + avisoParcial)) return;
   try {
-    const r = await fetch(API + '/api/conteo/' + sesionId + '/ajustar', {
-      method: 'PUT',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+    const r = await fetch(API + `/api/picking/${tareaId}/auditar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ resultado, cantidad_hallada }),
     });
     const d = await r.json();
     if (r.ok) {
-      alerta(`Ajuste ${d.motivo_codigo} enviado a Siesa ✓`, 'exito');
+      alerta('Auditoría registrada ✓', 'exito');
       cargarAuditoriasUrgentes();
       cargarDashboard();
     } else {
-      alert(d.error || 'Error al enviar ajuste');
+      alerta(d.error || 'Error al guardar auditoría', 'error');
     }
-  } catch (e) { alert('Error de conexión'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
 async function cargarRecepciones(silencioso = false) {
