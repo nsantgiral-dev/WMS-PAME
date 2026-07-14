@@ -237,7 +237,7 @@ def debug_pedidos_raw():
     elif consec:
         filtros = [f'f430_consec_docto={consec}']
         if co:
-            filtros.append(f'f430_id_co="{co}"')
+            filtros.append(f"f430_id_co = ''{co}''")
         if not sin_estado:
             filtros.append('f430_ind_estado=1')
         params['parametros'] = ' AND '.join(filtros)
