@@ -3629,18 +3629,18 @@ async function empCargarTareas() {
         const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered && !pedidoAnulado;
         const enProceso = t.estado === 'EN_PROCESO';
         const bloqueado = (!pickingListo && t.estado === 'PENDIENTE') || pedidoAnulado;
-        const color = pedidoAnulado ? '#fca5a5' : bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
-        const bg    = pedidoAnulado ? '#7f1d1d'  : bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
+        const color = pedidoAnulado ? 'var(--red)' : bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
+        const bg    = pedidoAnulado ? 'var(--rbg)' : bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
         const label = pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         const anulado_banner = pedidoAnulado ? `
-          <div style="margin-top:10px;background:#1a0505;border:1px solid #7f1d1d;border-radius:8px;padding:10px 12px;">
-            <div style="font-size:12px;font-weight:700;color:#ef4444;margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${t.pedido_estado_siesa_detectado || '9'})</div>
-            <div style="font-size:11px;color:#fca5a5;line-height:1.4;">
+          <div style="margin-top:10px;background:var(--rbg);border:1px solid var(--rbrd);border-radius:8px;padding:10px 12px;">
+            <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${t.pedido_estado_siesa_detectado || '9'})</div>
+            <div style="font-size:11px;color:var(--tx2);line-height:1.4;">
               El área comercial anuló este pedido en el ERP.<br>
               <strong>Acción:</strong> Cancelar este packing y esperar el nuevo pedido clonado.
             </div>
             <button onclick="event.stopPropagation();empCancelarPacking(${t.id})"
-              style="margin-top:8px;width:100%;padding:8px;background:#7f1d1d;border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">
+              style="margin-top:8px;width:100%;padding:8px;background:var(--red);border:none;color:#fff;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;">
               Cancelar packing
             </button>
           </div>` : '';
@@ -3661,7 +3661,7 @@ async function empCargarTareas() {
         const acentoLateral = `border-left:4px solid ${esTraslado ? '#c2410c' : '#1d4ed8'};`;
         return `
         <div class="emp-task-card" onclick="${(bloqueado || pedidoAnulado) ? '' : `empIniciarHUD(${t.id})`}"
-          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border-color:#7f1d1d;background:#110505;' : acentoLateral}">
+          style="${(bloqueado || pedidoAnulado) ? 'cursor:default;' : 'cursor:pointer;'}${pedidoAnulado ? 'border:2px solid var(--red);' : acentoLateral}">
           <div class="emp-task-pedido" style="display:flex;align-items:center;">${refDisplay}${etiquetaHtml}</div>
           ${destinoHtml}
           <div class="emp-task-sub">${total} producto(s) · ${t.items_verificados || 0}/${total} verificados</div>
