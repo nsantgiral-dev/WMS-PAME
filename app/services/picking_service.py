@@ -582,7 +582,14 @@ class PickingService:
                .with_for_update().first())
 
         if inv and cantidad_faltante > 0:
+            # La porción no recogida deja de estar "reservada para picking en
+            # curso" y pasa a "bloqueada pendiente de auditoría" — es la misma
+            # unidad cambiando de estado, no una reserva nueva. Sin esto,
+            # cantidad_disponible() (cantidad - reservado - bloqueado) la resta
+            # dos veces, dejando el producto con menos disponible del real para
+            # cualquier otro pedido que lo necesite.
             inv.bloqueado = inv.bloqueado + cantidad_faltante
+            inv.reservado = max(0, inv.reservado - cantidad_faltante)
 
         if cantidad_encontrada > 0:
             tarea.cantidad_recogida = cantidad_encontrada
