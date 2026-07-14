@@ -242,7 +242,7 @@ def auditorias_urgentes():
          .filter(SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO', 'DESCUADRE'])))
     if almacen_id:
         q = q.filter_by(almacen_id=almacen_id)
-    sesiones = q.order_by(SesionConteo.fecha_creacion.asc()).all()
+    sesiones = q.order_by(SesionConteo.fecha_creacion.desc()).all()
     return jsonify({
         'auditorias': [s.to_dict() for s in sesiones],
         'total': len(sesiones),
