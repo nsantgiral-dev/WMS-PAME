@@ -124,11 +124,35 @@ class DespachoParialService:
 
         logger.info('[DESPACHO_PARCIAL] rowid_map tarea=%s: %s', tarea.id, rowid_map)
 
+        # Líneas confirmadas agotadas por auditoría (NO_ENCONTRADO) — deben zerarse
+        # explícitamente en Siesa (244328 con cant_por_remisionar=0). Sin esto, T405
+        # conserva la cantidad original del pedido y esa línea reaparece completa en
+        # la RM/FE aunque nunca se haya picado ni pasado por packing. Distinto de una
+        # línea simplemente aún no despachada (despacho parcial legítimo), que sí debe
+        # seguir intacta para una oleada futura — por eso se filtra por auditoría
+        # NO_ENCONTRADO específicamente, no por "ausente en cantidades".
+        from app.models.picking import TareaPicking
+        _referencias_agotadas = {
+            _tp.producto.codigo_siesa
+            for _tp in TareaPicking.query.filter(
+                TareaPicking.referencia_documento == tarea.numero_pedido_siesa,
+                TareaPicking.estado == 'CANCELADO',
+                TareaPicking.auditoria_resultado == 'NO_ENCONTRADO',
+            ).all()
+            if _tp.producto and _tp.producto.codigo_siesa
+        }
+        if _referencias_agotadas:
+            logger.info(
+                '[DESPACHO_PARCIAL] referencias agotadas (auditoría) tarea=%s: %s',
+                tarea.id, _referencias_agotadas,
+            )
+
         # 3. Actualizar cantidades reales en Siesa con conector 244328.
         # f120_id viene en el response de API_v2_Ventas_Pedidos_Compromisos (JOIN T431→T120).
         # Tras esta actualización, automation Siesa crea RM + FE automáticamente.
         _compromisos_payload = DespachoParialService._build_compromisos_244328(
-            cantidades, rowid_map, compromisos_siesa, uom_map=_uom_pref
+            cantidades, rowid_map, compromisos_siesa, uom_map=_uom_pref,
+            referencias_agotadas=_referencias_agotadas,
         )
         if _compromisos_payload:
             connekta.trigger_comprometer_pedido(consec_docto, _compromisos_payload)
@@ -463,7 +487,8 @@ class DespachoParialService:
     @staticmethod
     def _build_compromisos_244328(cantidades: dict, rowid_map: dict,
                                    compromisos_siesa: list,
-                                   uom_map: dict = None) -> list:
+                                   uom_map: dict = None,
+                                   referencias_agotadas: set = None) -> list:
         """
         Construye el payload de Compromisos para el conector 244328.
 
@@ -476,14 +501,20 @@ class DespachoParialService:
           f405_cant_por_remisionar_base = cant. REAL picada (del WMS)
 
         Solo incluye ítems donde:
-          · el admin envió cantidad > 0 en el body
+          · el admin envió cantidad > 0 en el body, O la línea está en
+            referencias_agotadas (auditoría confirmó agotado → se envía en 0 explícito
+            para que Siesa no la remisione con la cantidad original del pedido)
           · existe f431_rowid en rowid_map (línea identificada en T431)
           · f120_id está presente en compromisos_siesa (garantiza lookup en 244328)
 
         uom_map: {codigo_siesa: unidad_empaque} — para desambiguar productos dual-unit
           que aparecen con 2 líneas en compromisos (PQ y UND). Se prefiere la línea
           cuya f405_id_unidad_medida coincida; si no hay match, la de mayor cantidad.
+
+        referencias_agotadas: {codigo_siesa} confirmados NO_ENCONTRADO en auditoría —
+          ver despachar_parcial() para el porqué se distingue de "aún no despachado".
         """
+        _agotadas = referencias_agotadas or set()
         # Mapa {referencia: fila_completa} — f120_id y f405_cant_por_remisionar_base
         # vienen directamente del response de API_v2_Ventas_Pedidos_Compromisos.
         # Misma lógica de desambiguación dual-unit que rowid_map en despachar_parcial():
@@ -507,8 +538,10 @@ class DespachoParialService:
         result = []
         for ref, rowid in rowid_map.items():
             cant_real = float(cantidades.get(ref, 0))
-            if cant_real <= 0 or not rowid:
+            if not rowid:
                 continue
+            if cant_real <= 0 and ref not in _agotadas:
+                continue  # aún no despachado — sigue comprometido para oleada futura
             comp_row  = _comp_por_ref.get(ref, {})
             cant_orig = float(comp_row.get('f405_cant_por_remisionar_base') or cant_real)
             id_item   = comp_row.get('f120_id')          # ID numérico de T120 — fuente primaria
