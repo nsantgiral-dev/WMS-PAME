@@ -10301,7 +10301,7 @@ async function repTestEmail(btn) {
 
 let _layoutSubActual = 'ubicaciones';
 let _layoutUbicacionesCache = [];
-let _layoutUltimoCuerpo = null;   // { pasillo, fila, cuerpo, entrepanos, huecos, capacidad } — para "repetir"
+let _layoutUltimoCuerpo = null;   // { pasillo, fila, cuerpo, entrepanos, huecosPorNivel } — para "repetir"
 let _layoutUbAsignarId = null;
 let _layoutProductoId = null;
 
@@ -10324,6 +10324,50 @@ function layoutSubtab(sec) {
 
 async function cargarLayout() {
   layoutSubtab(_layoutSubActual);
+}
+
+function _layoutRenderUbicacionCard(u) {
+  const color = _ZONA_COLOR[u.tipo_zona] || '#888';
+  const skuLabel = u.producto_asignado_codigo
+    ? `📦 ${u.producto_asignado_codigo}`
+    : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
+
+  return `
+    <div class="tabla-card" style="margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <div style="font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
+          ${skuLabel ? `<div style="font-size:11px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#555'};margin-top:3px;font-weight:600;">${skuLabel}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${u.tipo_zona}</span>
+          ${!u.activo ? `<span style="font-size:10px;color:#888;background:#88888822;padding:3px 8px;border-radius:20px;">INACTIVA</span>` : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);margin-bottom:10px;">
+        <span>Stock <strong style="color:var(--tx);">${u.stock_actual ?? 0}</strong></span>
+        ${u.capacidad_maxima != null ? `<span>Capacidad <strong style="color:var(--tx);">${u.capacidad_maxima}</strong></span>` : ''}
+        <span style="color:#666;">${u.origen === 'MANUAL' ? 'WMS' : 'Siesa'}</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button onclick="layoutAbrirModalAsignar(${u.id}, '${u.codigo}', '${u.tipo_zona}')"
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+          Asignar SKU
+        </button>
+        <button onclick="layoutAbrirModalEditarUbicacion(${u.id})"
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+          Editar
+        </button>
+        <button onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')"
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:12px;cursor:pointer;">
+          Eliminar
+        </button>
+        <button onclick="layoutAbrirModalReclasificar(${u.id})"
+          style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+          Reclasificar
+        </button>
+      </div>
+    </div>`;
 }
 
 async function layoutCargarUbicaciones() {
@@ -10349,14 +10393,40 @@ async function layoutCargarUbicaciones() {
       return;
     }
 
-    let html = '';
-    let filaActual = null;
+    // ── Agrupar por lo que cada ubicación realmente es, no por el orden que llegó ──
+    // legado: fila plana (estante) — mecanismo anterior al rediseño de 5 ejes.
+    // cuerpos: Cuerpo -> Entrepaño (nivel) -> Huecos — mecanismo nuevo (Mecanismo A).
+    // sueltas: AVERIAS/GENERAL sin dirección física de cuerpo.
+    const legacy = [];
+    const cuerpos = new Map(); // "pasillo|fila|cuerpo" -> { pasillo, fila, cuerpo, niveles: Map(nivel -> [ub...]) }
+    const sueltas = [];
+
     _layoutUbicacionesCache.forEach(u => {
-      const claveFila = (u.pasillo && u.estante) ? `${u.pasillo}|${u.estante}` : null;
-      if (claveFila && claveFila !== filaActual) {
+      if (u.pasillo && u.estante) {
+        legacy.push(u);
+      } else if (u.pasillo && u.fila != null && u.cuerpo != null) {
+        const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
+        if (!cuerpos.has(clave)) {
+          cuerpos.set(clave, { pasillo: u.pasillo, fila: u.fila, cuerpo: u.cuerpo, niveles: new Map() });
+        }
+        const niveles = cuerpos.get(clave).niveles;
+        if (!niveles.has(u.nivel)) niveles.set(u.nivel, []);
+        niveles.get(u.nivel).push(u);
+      } else {
+        sueltas.push(u);
+      }
+    });
+
+    let html = '';
+
+    // Filas legadas — header + Editar/Eliminar fila en bloque (mecanismo anterior, intacto)
+    let filaActual = null;
+    legacy.forEach(u => {
+      const claveFila = `${u.pasillo}|${u.estante}`;
+      if (claveFila !== filaActual) {
         filaActual = claveFila;
         const codigoFila = `${u.pasillo}${String(u.estante).padStart(2, '0')}`;
-        const countEnFila = _layoutUbicacionesCache.filter(x => x.pasillo === u.pasillo && x.estante === u.estante).length;
+        const countEnFila = legacy.filter(x => x.pasillo === u.pasillo && x.estante === u.estante).length;
         html += `
           <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
             <div style="font-size:12px;font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${u.tipo_zona} · ${countEnFila} posición(es)</div>
@@ -10371,61 +10441,50 @@ async function layoutCargarUbicaciones() {
               </button>
             </div>
           </div>`;
-      } else if (!claveFila) {
-        filaActual = null; // AVERIAS/GENERAL — sin fila, resetea para no "heredar" el header de la anterior
       }
-
-      const color = _ZONA_COLOR[u.tipo_zona] || '#888';
-      const skuLabel = u.producto_asignado_codigo
-        ? `📦 ${u.producto_asignado_codigo}`
-        : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
-
-      html += `
-        <div class="tabla-card" style="margin-bottom:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-            <div>
-              <div style="font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${u.codigo}</div>
-              ${skuLabel ? `<div style="font-size:11px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#555'};margin-top:3px;font-weight:600;">${skuLabel}</div>` : ''}
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-              <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${u.tipo_zona}</span>
-              ${!u.activo ? `<span style="font-size:10px;color:#888;background:#88888822;padding:3px 8px;border-radius:20px;">INACTIVA</span>` : ''}
-            </div>
-          </div>
-          <div style="display:flex;gap:16px;font-size:11px;color:var(--tx3);margin-bottom:10px;">
-            <span>Stock <strong style="color:var(--tx);">${u.stock_actual ?? 0}</strong></span>
-            ${u.capacidad_maxima != null ? `<span>Capacidad <strong style="color:var(--tx);">${u.capacidad_maxima}</strong></span>` : ''}
-            <span style="color:#666;">${u.origen === 'MANUAL' ? 'WMS' : 'Siesa'}</span>
-          </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button onclick="layoutAbrirModalAsignar(${u.id}, '${u.codigo}')"
-              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
-              Asignar SKU
-            </button>
-            <button onclick="layoutAbrirModalEditarUbicacion(${u.id})"
-              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
-              Editar
-            </button>
-            <button onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')"
-              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:12px;cursor:pointer;">
-              Eliminar
-            </button>
-            <button onclick="layoutAbrirModalReclasificar(${u.id})"
-              style="flex:1;min-width:90px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
-              Reclasificar
-            </button>
-          </div>
-        </div>`;
+      html += _layoutRenderUbicacionCard(u);
     });
+
+    // Cuerpos nuevos — un header por Cuerpo, y dentro un sub-header por Entrepaño
+    // (nivel 1 = piso primero, subiendo), en vez de una tarjeta suelta por hueco.
+    [...cuerpos.values()]
+      .sort((a, b) => a.pasillo.localeCompare(b.pasillo) || a.fila - b.fila || a.cuerpo - b.cuerpo)
+      .forEach(grupo => {
+        const codigoCuerpo = `${grupo.pasillo}${grupo.fila}-${String(grupo.cuerpo).padStart(2, '0')}`;
+        const totalHuecos = [...grupo.niveles.values()].reduce((n, arr) => n + arr.length, 0);
+        html += `
+          <div style="font-size:12px;font-weight:700;color:var(--tx2);background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
+            Cuerpo ${codigoCuerpo} · ${grupo.niveles.size} entrepaño(s) · ${totalHuecos} hueco(s)
+          </div>`;
+        [...grupo.niveles.keys()].sort((a, b) => a - b).forEach(nivel => {
+          const huecos = grupo.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
+          const zona = huecos[0].tipo_zona;
+          html += `
+            <div style="font-size:11px;font-weight:600;color:var(--tx3);padding:4px 4px;margin:8px 0 4px;">
+              Entrepaño ${nivel} <span style="color:${_ZONA_COLOR[zona] || '#888'};">· ${zona}</span> · ${huecos.length} hueco(s)
+            </div>`;
+          huecos.forEach(u => { html += _layoutRenderUbicacionCard(u); });
+        });
+      });
+
+    // Sueltas — AVERIAS/GENERAL, sin agrupar
+    sueltas.forEach(u => { html += _layoutRenderUbicacionCard(u); });
+
     el.innerHTML = html;
   } catch (e) {
     el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando el layout</div>';
   }
 }
 
-// ── Modal: Crear ubicación — Cuerpo completo (Mecanismo A) ───────────────────
+// ── Modal: Crear ubicación — Cuerpo completo (Mecanismo A), wizard de 2 pasos ─
 // Dirección de 5 ejes: Pasillo -> Fila (1/2) -> Cuerpo -> Entrepaños -> Huecos.
 // La zona se sugiere sola por entrepaño (piso->PICKING, alto->RESERVA) — no se pide.
+// Paso 1 define el cuerpo (pasillo/fila/número/cantidad de entrepaños); paso 2
+// pide, entrepaño por entrepaño, cuántos huecos tiene — variable, no un único
+// número para todo el cuerpo, porque la profundidad física no es uniforme.
+// El SKU de cada hueco se asigna después, aparte (Asignar SKU, Mecanismo B).
+
+let _layoutCuerpoHuecosPrevios = null; // huecosPorNivel del último cuerpo creado, para "repetir"
 
 async function layoutAbrirModalCuerpo() {
   const m = document.getElementById('modal-layout-cuerpo');
@@ -10451,12 +10510,14 @@ async function layoutAbrirModalCuerpo() {
   document.getElementById('layout-cuerpo-fila').value = '1';
   document.getElementById('layout-cuerpo-numero').value = '';
   document.getElementById('layout-cuerpo-entrepanos').value = '';
-  document.getElementById('layout-cuerpo-huecos').value = '1';
-  document.getElementById('layout-cuerpo-capacidad').value = '';
+  document.getElementById('layout-cuerpo-huecos-container').innerHTML = '';
+  _layoutCuerpoHuecosPrevios = null;
 
   const btnRepetir = document.getElementById('layout-cuerpo-btn-repetir');
   if (btnRepetir) btnRepetir.style.display = _layoutUltimoCuerpo ? 'block' : 'none';
 
+  document.getElementById('layout-cuerpo-paso1').style.display = 'block';
+  document.getElementById('layout-cuerpo-paso2').style.display = 'none';
   m.style.display = 'flex';
 }
 
@@ -10471,8 +10532,44 @@ function layoutRepetirCuerpoAnterior() {
   document.getElementById('layout-cuerpo-fila').value = _layoutUltimoCuerpo.fila;
   document.getElementById('layout-cuerpo-numero').value = _layoutUltimoCuerpo.cuerpo + 1;
   document.getElementById('layout-cuerpo-entrepanos').value = _layoutUltimoCuerpo.entrepanos;
-  document.getElementById('layout-cuerpo-huecos').value = _layoutUltimoCuerpo.huecos;
-  document.getElementById('layout-cuerpo-capacidad').value = _layoutUltimoCuerpo.capacidad ?? '';
+  _layoutCuerpoHuecosPrevios = _layoutUltimoCuerpo.huecosPorNivel;
+}
+
+function layoutCuerpoIrAPaso2() {
+  const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
+  const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
+  const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
+  const cantidad_entrepanos = parseInt(document.getElementById('layout-cuerpo-entrepanos').value);
+
+  if (!pasillo || isNaN(fila) || isNaN(cuerpo) || isNaN(cantidad_entrepanos) || cantidad_entrepanos < 1) {
+    alerta('Completa pasillo, fila, cuerpo y cantidad de entrepaños', 'error');
+    return;
+  }
+
+  document.getElementById('layout-cuerpo-paso2-titulo').textContent =
+    `Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2, '0')} — huecos por entrepaño`;
+
+  const cont = document.getElementById('layout-cuerpo-huecos-container');
+  let html = '';
+  for (let nivel = 1; nivel <= cantidad_entrepanos; nivel++) {
+    const zona = nivel <= 2 ? 'PICKING · piso' : 'RESERVA · alto';
+    const valor = (_layoutCuerpoHuecosPrevios && _layoutCuerpoHuecosPrevios[nivel - 1]) || 1;
+    html += `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;font-size:12px;color:var(--tx2);">Entrepaño ${nivel} <span style="color:var(--tx3);">(${zona})</span></div>
+        <input id="layout-cuerpo-hueco-nivel-${nivel}" type="number" min="1" value="${valor}"
+          style="width:72px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;box-sizing:border-box;text-align:center;">
+      </div>`;
+  }
+  cont.innerHTML = html;
+
+  document.getElementById('layout-cuerpo-paso1').style.display = 'none';
+  document.getElementById('layout-cuerpo-paso2').style.display = 'block';
+}
+
+function layoutCuerpoVolverAPaso1() {
+  document.getElementById('layout-cuerpo-paso2').style.display = 'none';
+  document.getElementById('layout-cuerpo-paso1').style.display = 'block';
 }
 
 async function layoutGuardarCuerpo() {
@@ -10480,21 +10577,19 @@ async function layoutGuardarCuerpo() {
   const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
   const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
   const cantidad_entrepanos = parseInt(document.getElementById('layout-cuerpo-entrepanos').value);
-  const huecos_por_entrepano = parseInt(document.getElementById('layout-cuerpo-huecos').value) || 1;
-  const capRaw = document.getElementById('layout-cuerpo-capacidad').value;
-  const capacidad_maxima = capRaw !== '' ? parseInt(capRaw) : null;
 
-  if (!pasillo || isNaN(fila) || isNaN(cuerpo) || isNaN(cantidad_entrepanos)) {
-    alerta('Completa pasillo, fila, cuerpo y cantidad de entrepaños', 'error');
-    return;
+  const huecos_por_nivel = [];
+  for (let nivel = 1; nivel <= cantidad_entrepanos; nivel++) {
+    const valor = parseInt(document.getElementById(`layout-cuerpo-hueco-nivel-${nivel}`)?.value);
+    huecos_por_nivel.push(isNaN(valor) || valor < 1 ? 1 : valor);
   }
 
   try {
-    const payload = { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_entrepano };
-    if (capacidad_maxima !== null) payload.capacidad_maxima = capacidad_maxima;
+    const payload = { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_nivel };
     await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, payload);
-    _layoutUltimoCuerpo = { pasillo, fila, cuerpo, entrepanos: cantidad_entrepanos, huecos: huecos_por_entrepano, capacidad: capacidad_maxima };
-    alerta(`Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2,'0')} creado — ${cantidad_entrepanos} entrepaño(s)`, 'ok');
+    _layoutUltimoCuerpo = { pasillo, fila, cuerpo, entrepanos: cantidad_entrepanos, huecosPorNivel: huecos_por_nivel };
+    const totalHuecos = huecos_por_nivel.reduce((a, b) => a + b, 0);
+    alerta(`Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2,'0')} creado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s)`, 'ok');
     layoutCerrarModalCuerpo();
     layoutCargarUbicaciones();
   } catch (e) {
@@ -10632,7 +10727,7 @@ async function layoutCrearAverias() {
 
 // ── Modal: Asignar SKU (Mecanismo B) ─────────────────────────────────────────
 
-function layoutAbrirModalAsignar(ubId, codigo) {
+function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   _layoutUbAsignarId = ubId;
   _layoutProductoId = null;
   const m = document.getElementById('modal-layout-asignar');
@@ -10641,6 +10736,11 @@ function layoutAbrirModalAsignar(ubId, codigo) {
   document.getElementById('layout-asignar-codigo').value = '';
   document.getElementById('layout-asignar-cantidad').value = '';
   document.getElementById('layout-asignar-confirmacion').style.display = 'none';
+  const capWrap = document.getElementById('layout-asignar-capacidad-wrap');
+  if (capWrap) {
+    capWrap.style.display = tipoZona === 'PICKING' ? 'block' : 'none';
+    document.getElementById('layout-asignar-capacidad').value = '';
+  }
   m.style.display = 'flex';
   setTimeout(() => document.getElementById('layout-asignar-codigo')?.focus(), 50);
 }
@@ -10681,10 +10781,13 @@ async function layoutConfirmarAsignar() {
   const cantidad = parseInt(document.getElementById('layout-asignar-cantidad').value);
   if (isNaN(cantidad) || cantidad <= 0) { alerta('Ingresa una cantidad válida', 'error'); return; }
 
+  const capRaw = document.getElementById('layout-asignar-capacidad')?.value;
+  const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
+
   try {
-    const d = await post(`/api/almacenes/ubicaciones/${_layoutUbAsignarId}/asignar`, {
-      producto_id: _layoutProductoId, cantidad,
-    });
+    const payload = { producto_id: _layoutProductoId, cantidad };
+    if (capacidad_maxima !== null && !isNaN(capacidad_maxima)) payload.capacidad_maxima = capacidad_maxima;
+    const d = await post(`/api/almacenes/ubicaciones/${_layoutUbAsignarId}/asignar`, payload);
     alerta(`${d.producto_codigo} asignado — total ${d.cantidad_total} UNDs`, 'ok');
     layoutCerrarModalAsignar();
     layoutCargarUbicaciones();

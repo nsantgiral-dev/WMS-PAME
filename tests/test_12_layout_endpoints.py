@@ -51,6 +51,19 @@ def test_crear_cuerpo_endpoint(client, jwt_token_admin, almacen):
     assert zonas == ['PICKING', 'PICKING', 'RESERVA']
 
 
+def test_crear_cuerpo_endpoint_huecos_por_nivel_variables(client, jwt_token_admin, almacen):
+    resp = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2, 'huecos_por_nivel': [3, 1]},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 201
+    ubs = resp.get_json()['ubicaciones']
+    assert len(ubs) == 4
+    codigos_nivel_1 = sorted(u['codigo'] for u in ubs if u['nivel'] == 1)
+    assert codigos_nivel_1 == ['PIK-A1-01-01-01', 'PIK-A1-01-01-02', 'PIK-A1-01-01-03']
+
+
 def test_crear_cuerpo_rechaza_sin_admin(client, jwt_token, almacen):
     resp = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
@@ -104,6 +117,33 @@ def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, produ
     )
     assert r3.status_code == 400
     assert 'activas' in r3.get_json()['error']
+
+
+def test_asignar_endpoint_capacidad_maxima_solo_picking(client, jwt_token_admin, almacen, producto):
+    r1 = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3, 'huecos_por_nivel': [1, 1, 1]},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    ubs = r1.get_json()['ubicaciones']
+    ub_picking_id = next(u['id'] for u in ubs if u['tipo_zona'] == 'PICKING')
+    ub_reserva_id = next(u['id'] for u in ubs if u['tipo_zona'] == 'RESERVA')
+
+    r2 = client.post(
+        f'/api/almacenes/ubicaciones/{ub_picking_id}/asignar',
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert r2.status_code == 200
+    assert r2.get_json()['ubicacion']['capacidad_maxima'] == 50
+
+    r3 = client.post(
+        f'/api/almacenes/ubicaciones/{ub_reserva_id}/asignar',
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert r3.status_code == 400
+    assert 'capacidad_maxima solo aplica a Huecos PICKING' in r3.get_json()['error']
 
 
 def test_editar_fila_endpoint(client, jwt_token_admin, almacen):

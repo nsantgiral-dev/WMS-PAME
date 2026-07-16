@@ -154,7 +154,9 @@ def crear_cuerpo(id):
     """
     Mecanismo A: crea un Cuerpo completo — sus Entrepaños (Nivel) y Huecos, en
     bloque. La Zona de cada Entrepaño se sugiere sola por su Nivel, no se pide.
-    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_entrepano?, capacidad_maxima? }
+    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_nivel? }
+    huecos_por_nivel es una lista de N enteros (uno por entrepaño, N=cantidad_entrepanos,
+    en orden de Nivel 1..N); si no viene, cada entrepaño nace con 1 hueco.
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
@@ -164,14 +166,16 @@ def crear_cuerpo(id):
     if not all(data.get(c) for c in campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     try:
+        huecos_por_nivel = data.get('huecos_por_nivel')
+        if huecos_por_nivel is not None:
+            huecos_por_nivel = [int(h) for h in huecos_por_nivel]
         creadas = layout_service.crear_cuerpo(
             almacen_id=id,
             pasillo=data['pasillo'],
             fila=int(data['fila']),
             cuerpo=int(data['cuerpo']),
             cantidad_entrepanos=int(data['cantidad_entrepanos']),
-            huecos_por_entrepano=int(data.get('huecos_por_entrepano') or 1),
-            capacidad_maxima=data.get('capacidad_maxima'),
+            huecos_por_nivel=huecos_por_nivel,
         )
         return jsonify({'ubicaciones': [u.to_dict() for u in creadas]}), 201
     except ValueError as e:
@@ -291,7 +295,8 @@ def reclasificar_ubicacion(ubicacion_id):
 def asignar_ubicacion(ubicacion_id):
     """
     Mecanismo B: amarra un SKU a una ubicación y suma la cantidad contada.
-    Payload: { producto_id, cantidad }
+    Payload: { producto_id, cantidad, capacidad_maxima? }
+    capacidad_maxima solo se acepta si la ubicación es PICKING (ver asignar_producto).
     """
     usuario = _es_admin_o_jefe()
     if not usuario:
@@ -300,11 +305,13 @@ def asignar_ubicacion(ubicacion_id):
     if not data.get('producto_id') or data.get('cantidad') is None:
         return jsonify({'error': 'producto_id y cantidad son requeridos'}), 400
     try:
+        capacidad_maxima = data.get('capacidad_maxima')
         resultado = layout_service.asignar_producto(
             ubicacion_id=ubicacion_id,
             producto_id=int(data['producto_id']),
             cantidad=int(data['cantidad']),
             usuario_id=usuario.id,
+            capacidad_maxima=int(capacidad_maxima) if capacidad_maxima is not None else None,
         )
         return jsonify(resultado), 200
     except ValueError as e:

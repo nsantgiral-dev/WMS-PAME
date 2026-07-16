@@ -55,10 +55,31 @@ def test_crear_cuerpo_genera_codigos_y_zona_sugerida_por_nivel(db, almacen):
 
 
 def test_crear_cuerpo_crea_varios_huecos_por_entrepano(db, almacen):
-    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, huecos_por_entrepano=3)
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, huecos_por_nivel=[3])
     codigos = sorted(u.codigo for u in creadas)
     assert codigos == ['PIK-A1-01-01-01', 'PIK-A1-01-01-02', 'PIK-A1-01-01-03']
     assert all(u.nivel == 1 and u.cuerpo == 1 and u.fila == 1 for u in creadas)
+
+
+def test_crear_cuerpo_huecos_variables_por_nivel(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3, huecos_por_nivel=[3, 2, 4])
+    huecos_por_nivel = {}
+    for u in creadas:
+        huecos_por_nivel.setdefault(u.nivel, []).append(u.hueco)
+
+    assert sorted(huecos_por_nivel[1]) == [1, 2, 3]
+    assert sorted(huecos_por_nivel[2]) == [1, 2]
+    assert sorted(huecos_por_nivel[3]) == [1, 2, 3, 4]
+
+
+def test_crear_cuerpo_rechaza_huecos_por_nivel_longitud_incorrecta(db, almacen):
+    with pytest.raises(ValueError, match='huecos_por_nivel debe traer un valor'):
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3, huecos_por_nivel=[1, 2])
+
+
+def test_crear_cuerpo_rechaza_huecos_por_nivel_con_cero(db, almacen):
+    with pytest.raises(ValueError, match='al menos 1 hueco'):
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, huecos_por_nivel=[1, 0])
 
 
 def test_crear_cuerpo_rechaza_fila_invalida(db, almacen):
@@ -117,6 +138,19 @@ def test_asignar_producto_picking_permite_sumar_al_mismo_slot(db, almacen, produ
     svc.asignar_producto(ub.id, producto.id, 50)
     resultado = svc.asignar_producto(ub.id, producto.id, 20)
     assert resultado['cantidad_total'] == 70
+
+
+def test_asignar_producto_picking_permite_capacidad_maxima(db, almacen, producto):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=80)
+
+    assert Ubicacion.query.get(ub.id).capacidad_maxima == 80
+
+
+def test_asignar_producto_reserva_rechaza_capacidad_maxima(db, almacen, producto):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3)[-1]  # nivel 3 -> RESERVA
+    with pytest.raises(ValueError, match='capacidad_maxima solo aplica a Huecos PICKING'):
+        svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=80)
 
 
 def test_asignar_producto_reserva_sin_restriccion_1a1(db, almacen, producto):

@@ -94,13 +94,17 @@ def _zona_sugerida_por_nivel(nivel: int) -> str:
 
 
 def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
-                 cantidad_entrepanos: int, huecos_por_entrepano: int = 1,
-                 capacidad_maxima: int = None):
+                 cantidad_entrepanos: int, huecos_por_nivel: list = None):
     """
     Crea un Cuerpo completo de una vez: sus N Entrepaños (Nivel 1 = piso, subiendo)
-    y, dentro de cada Entrepaño, M Huecos (M=1 por defecto — un SKU por Hueco es
-    el caso normal; solo se sube huecos_por_entrepano si ese Cuerpo va a compartir
-    varios SKUs distintos en el mismo Entrepaño).
+    y, dentro de cada Entrepaño, sus Huecos. huecos_por_nivel es una lista de N
+    enteros (uno por Entrepaño, en orden de Nivel) — cada Entrepaño declara su
+    propia cantidad de Huecos porque la profundidad física varía entrepaño a
+    entrepaño. Si no se pasa, cada Entrepaño nace con 1 Hueco (el caso normal:
+    un SKU por Hueco).
+
+    Este mecanismo solo arma el mapa físico vacío — el SKU y la capacidad de
+    cada Hueco se amarran después, uno por uno, con asignar_producto().
 
     La Zona de cada Entrepaño se sugiere sola según su Nivel — no se pide zona
     por fuera, porque PICKING (piso) y RESERVA (alto) conviven verticalmente
@@ -117,8 +121,13 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         raise ValueError('cuerpo debe ser mayor a 0')
     if cantidad_entrepanos < 1:
         raise ValueError('cantidad_entrepanos debe ser mayor a 0')
-    if huecos_por_entrepano < 1:
-        raise ValueError('huecos_por_entrepano debe ser mayor a 0')
+
+    if huecos_por_nivel is None:
+        huecos_por_nivel = [1] * cantidad_entrepanos
+    if len(huecos_por_nivel) != cantidad_entrepanos:
+        raise ValueError('huecos_por_nivel debe traer un valor por cada entrepaño')
+    if any(h < 1 for h in huecos_por_nivel):
+        raise ValueError('huecos_por_nivel: cada entrepaño necesita al menos 1 hueco')
 
     pasillo = pasillo.strip().upper()
     if not re.fullmatch(r'[A-Z]{1,2}', pasillo):
@@ -128,7 +137,7 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     for nivel in range(1, cantidad_entrepanos + 1):
         tipo_zona = _zona_sugerida_por_nivel(nivel)
         prefijo = _PREFIJO_ZONA[tipo_zona]
-        for hueco in range(1, huecos_por_entrepano + 1):
+        for hueco in range(1, huecos_por_nivel[nivel - 1] + 1):
             codigo = f'{prefijo}-{pasillo}{fila}-{cuerpo:02d}-{nivel:02d}-{hueco:02d}'
             if Ubicacion.query.filter_by(codigo=codigo).first():
                 raise ValueError(f'La ubicación {codigo} ya existe')
@@ -143,7 +152,6 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
                 hueco=hueco,
                 tipo_zona=tipo_zona,
                 tipo='estanteria',
-                capacidad_maxima=capacidad_maxima,
                 origen='MANUAL',
                 activo=True,
             )
@@ -314,7 +322,8 @@ def crear_ubicacion_averias(almacen_id: int, capacidad_maxima: int = None):
 # 4. Mecanismo B — asignar(ubicacion_id, producto_id, cantidad)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario_id: int = None):
+def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario_id: int = None,
+                     capacidad_maxima: int = None):
     """
     Amarra un SKU a una ubicación y suma la cantidad contada.
 
@@ -323,6 +332,12 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
     PICKING asignada en el mismo almacén — hay que liberar el slot primero
     (ver reclasificar_ubicacion).
     En RESERVA/AVERIAS no hay restricción — N:N libre.
+
+    capacidad_maxima (opcional) solo aplica en PICKING: como ahí el Hueco
+    nunca se comparte con otro SKU, "capacidad del Hueco" y "capacidad para
+    este SKU" son la misma cosa. En RESERVA/AVERIAS un Hueco puede tener
+    varios SKUs a la vez, así que un solo valor de capacidad por Hueco no
+    representa nada — se rechaza para no pisar silenciosamente el dato.
     """
     if cantidad <= 0:
         raise ValueError('cantidad debe ser mayor a 0')
@@ -336,6 +351,12 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
     producto = Producto.query.get(producto_id)
     if not producto:
         raise ValueError(f'Producto {producto_id} no encontrado')
+
+    if capacidad_maxima is not None and ubicacion.tipo_zona != 'PICKING':
+        raise ValueError(
+            'capacidad_maxima solo aplica a Huecos PICKING — en RESERVA/AVERIAS '
+            'el Hueco puede compartirse entre varios SKUs'
+        )
 
     if ubicacion.tipo_zona == 'PICKING':
         if ubicacion.producto_asignado_id and ubicacion.producto_asignado_id != producto_id:
@@ -356,6 +377,9 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
                 f'— libéralo antes de asignar uno nuevo'
             )
         ubicacion.producto_asignado_id = producto_id
+
+    if capacidad_maxima is not None:
+        ubicacion.capacidad_maxima = capacidad_maxima
 
     reg = UbicacionProducto.query.filter_by(
         ubicacion_id=ubicacion_id, producto_id=producto_id, lote=None,
