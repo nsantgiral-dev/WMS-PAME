@@ -134,7 +134,7 @@ function mostrarSegunRol(rol) {
     pantalla('pantalla-admin');
     if (OPERARIO) actualizarUI(OPERARIO);
     cargarAdmin();
-    TIMER_ADMIN = setInterval(cargarAdmin, 30000);
+    TIMER_ADMIN = setInterval(() => cargarAdmin(true), 30000);
   } else if (esRecepcion) {
     pantalla('pantalla-recepcion');
     if (OPERARIO) actualizarUI(OPERARIO);
@@ -383,7 +383,7 @@ function salir(porExpiracion = false) {
   if (porExpiracion) alerta('Sesión expirada — vuelve a ingresar', 'advertencia');
 }
 
-async function cargarAdmin() {
+async function cargarAdmin(desdeTimer = false) {
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
   else if (TAB === 'tab-requisiciones') await cargarRequisiciones();
@@ -397,7 +397,10 @@ async function cargarAdmin() {
   else if (TAB === 'tab-inventario') await cargarInventario();
   else if (TAB === 'tab-traslados') await cargarTrasladosAdmin();
   else if (TAB === 'tab-reposicion') await cargarReposicion();
-  else if (TAB === 'tab-layout') await cargarLayout();
+  // Layout es un módulo de configuración, no de datos en vivo — no se autorefresca
+  // cada 30s (rompía el scroll y cualquier modal abierto mientras se revisaba).
+  // Solo carga al entrar manualmente a la pestaña.
+  else if (TAB === 'tab-layout') { if (!desdeTimer) await cargarLayout(); }
   else if (TAB === 'tab-compras') await cargarCompras();
 }
 
@@ -10300,12 +10303,27 @@ async function repTestEmail(btn) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 let _layoutSubActual = 'ubicaciones';
+let _layoutZonaActual = 'PICKING';
 let _layoutUbicacionesCache = [];
 let _layoutUltimoCuerpo = null;   // { pasillo, fila, cuerpo, entrepanos, huecosPorNivel } — para "repetir"
 let _layoutUbAsignarId = null;
 let _layoutProductoId = null;
 
 const _ZONA_COLOR = { PICKING: '#60a5fa', RESERVA: '#22c55e', AVERIAS: '#ef4444', GENERAL: '#555' };
+const _ZONAS_TABS = ['PICKING', 'RESERVA', 'AVERIAS', 'GENERAL'];
+
+function layoutZonaTab(zona) {
+  _layoutZonaActual = zona;
+  _ZONAS_TABS.forEach(z => {
+    const btn = document.getElementById(`layout-zona-tab-${z}`);
+    if (!btn) return;
+    const activo = z === zona;
+    const color = _ZONA_COLOR[z];
+    btn.style.background = activo ? color : 'transparent';
+    btn.style.color = activo ? '#fff' : color;
+  });
+  layoutRenderUbicaciones();
+}
 
 function layoutSubtab(sec) {
   _layoutSubActual = sec;
@@ -10377,103 +10395,124 @@ async function layoutCargarUbicaciones() {
   try {
     const d = await get(`/api/almacenes/${ALMACEN_ID}/layout`);
     _layoutUbicacionesCache = d.ubicaciones || [];
-
-    const resumen = document.getElementById('layout-resumen');
-    if (resumen) {
-      resumen.textContent = `${d.total} ubicación(es) — ${d.sin_clasificar} sin clasificar (GENERAL)`;
-    }
-
-    if (!_layoutUbicacionesCache.length) {
-      el.innerHTML = `
-        <div style="text-align:center;padding:40px;color:#555;">
-          <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">🧭</div>
-          <div style="font-size:15px;font-weight:600;">Sin ubicaciones registradas</div>
-          <div style="font-size:12px;margin-top:6px;">Usa "+ Crear ubicación" para empezar a armar el layout de esta bodega</div>
-        </div>`;
-      return;
-    }
-
-    // ── Agrupar por lo que cada ubicación realmente es, no por el orden que llegó ──
-    // legado: fila plana (estante) — mecanismo anterior al rediseño de 5 ejes.
-    // cuerpos: Cuerpo -> Entrepaño (nivel) -> Huecos — mecanismo nuevo (Mecanismo A).
-    // sueltas: AVERIAS/GENERAL sin dirección física de cuerpo.
-    const legacy = [];
-    const cuerpos = new Map(); // "pasillo|fila|cuerpo" -> { pasillo, fila, cuerpo, niveles: Map(nivel -> [ub...]) }
-    const sueltas = [];
-
-    _layoutUbicacionesCache.forEach(u => {
-      if (u.pasillo && u.estante) {
-        legacy.push(u);
-      } else if (u.pasillo && u.fila != null && u.cuerpo != null) {
-        const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
-        if (!cuerpos.has(clave)) {
-          cuerpos.set(clave, { pasillo: u.pasillo, fila: u.fila, cuerpo: u.cuerpo, niveles: new Map() });
-        }
-        const niveles = cuerpos.get(clave).niveles;
-        if (!niveles.has(u.nivel)) niveles.set(u.nivel, []);
-        niveles.get(u.nivel).push(u);
-      } else {
-        sueltas.push(u);
-      }
-    });
-
-    let html = '';
-
-    // Filas legadas — header + Editar/Eliminar fila en bloque (mecanismo anterior, intacto)
-    let filaActual = null;
-    legacy.forEach(u => {
-      const claveFila = `${u.pasillo}|${u.estante}`;
-      if (claveFila !== filaActual) {
-        filaActual = claveFila;
-        const codigoFila = `${u.pasillo}${String(u.estante).padStart(2, '0')}`;
-        const countEnFila = legacy.filter(x => x.pasillo === u.pasillo && x.estante === u.estante).length;
-        html += `
-          <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
-            <div style="font-size:12px;font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${u.tipo_zona} · ${countEnFila} posición(es)</div>
-            <div style="display:flex;gap:6px;">
-              <button onclick="layoutAbrirModalEditarFila('${u.pasillo}','${u.estante}')"
-                style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
-                ✏ Editar
-              </button>
-              <button onclick="layoutAbrirModalEliminarFila('${u.pasillo}','${u.estante}')"
-                style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
-                🗑 Eliminar
-              </button>
-            </div>
-          </div>`;
-      }
-      html += _layoutRenderUbicacionCard(u);
-    });
-
-    // Cuerpos nuevos — un header por Cuerpo, y dentro un sub-header por Entrepaño
-    // (nivel 1 = piso primero, subiendo), en vez de una tarjeta suelta por hueco.
-    [...cuerpos.values()]
-      .sort((a, b) => a.pasillo.localeCompare(b.pasillo) || a.fila - b.fila || a.cuerpo - b.cuerpo)
-      .forEach(grupo => {
-        const codigoCuerpo = `${grupo.pasillo}${grupo.fila}-${String(grupo.cuerpo).padStart(2, '0')}`;
-        const totalHuecos = [...grupo.niveles.values()].reduce((n, arr) => n + arr.length, 0);
-        html += `
-          <div style="font-size:12px;font-weight:700;color:var(--tx2);background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
-            Cuerpo ${codigoCuerpo} · ${grupo.niveles.size} entrepaño(s) · ${totalHuecos} hueco(s)
-          </div>`;
-        [...grupo.niveles.keys()].sort((a, b) => a - b).forEach(nivel => {
-          const huecos = grupo.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
-          const zona = huecos[0].tipo_zona;
-          html += `
-            <div style="font-size:11px;font-weight:600;color:var(--tx3);padding:4px 4px;margin:8px 0 4px;">
-              Entrepaño ${nivel} <span style="color:${_ZONA_COLOR[zona] || '#888'};">· ${zona}</span> · ${huecos.length} hueco(s)
-            </div>`;
-          huecos.forEach(u => { html += _layoutRenderUbicacionCard(u); });
-        });
-      });
-
-    // Sueltas — AVERIAS/GENERAL, sin agrupar
-    sueltas.forEach(u => { html += _layoutRenderUbicacionCard(u); });
-
-    el.innerHTML = html;
+    layoutZonaTab(_layoutZonaActual);
   } catch (e) {
     el.innerHTML = '<div style="text-align:center;padding:30px;color:#ef4444;">Error cargando el layout</div>';
   }
+}
+
+// Pinta solo la zona activa (pestaña). Dentro de ella, cada grupo — fila legada,
+// Cuerpo, o ubicación suelta (AVERIAS/GENERAL) — se ordena por la fecha de
+// creación de su miembro más nuevo: lo que se acaba de crear queda primero.
+function layoutRenderUbicaciones() {
+  const el = document.getElementById('layout-lista-ubicaciones');
+  if (!el) return;
+
+  _ZONAS_TABS.forEach(z => {
+    const count = _layoutUbicacionesCache.filter(u => u.tipo_zona === z).length;
+    const badge = document.getElementById(`layout-zona-count-${z}`);
+    if (badge) badge.textContent = `(${count})`;
+  });
+
+  const items = _layoutUbicacionesCache.filter(u => u.tipo_zona === _layoutZonaActual);
+
+  const resumen = document.getElementById('layout-resumen');
+  if (resumen) resumen.textContent = `${items.length} ubicación(es) en ${_layoutZonaActual}`;
+
+  if (!items.length) {
+    el.innerHTML = `
+      <div style="text-align:center;padding:40px;color:#555;">
+        <div style="font-size:32px;margin-bottom:12px;opacity:0.4;">🧭</div>
+        <div style="font-size:15px;font-weight:600;">Sin ubicaciones en ${_layoutZonaActual}</div>
+        <div style="font-size:12px;margin-top:6px;">Usa "+ Crear ubicación" para empezar a armar el layout de esta bodega</div>
+      </div>`;
+    return;
+  }
+
+  const ts = u => u.fecha_creacion ? new Date(u.fecha_creacion).getTime() : 0;
+
+  // legado: fila plana (estante) — mecanismo anterior al rediseño de 5 ejes.
+  // cuerpo: Cuerpo -> Entrepaño (nivel) -> Huecos — mecanismo nuevo (Mecanismo A).
+  //         un Cuerpo puede tener entrepaños en varias zonas; al filtrar `items`
+  //         por zona antes de agrupar, cada grupo de cuerpo queda ya con solo
+  //         los entrepaños de la pestaña activa.
+  // suelta: AVERIAS/GENERAL sin dirección física de cuerpo, una por grupo.
+  const grupos = [];
+  const filasPorClave = new Map();
+  const cuerposPorClave = new Map();
+
+  items.forEach(u => {
+    if (u.pasillo && u.estante) {
+      const clave = `${u.pasillo}|${u.estante}`;
+      let g = filasPorClave.get(clave);
+      if (!g) {
+        g = { tipo: 'legado', pasillo: u.pasillo, estante: u.estante, items: [] };
+        filasPorClave.set(clave, g);
+        grupos.push(g);
+      }
+      g.items.push(u);
+    } else if (u.pasillo && u.fila != null && u.cuerpo != null) {
+      const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
+      let g = cuerposPorClave.get(clave);
+      if (!g) {
+        g = { tipo: 'cuerpo', pasillo: u.pasillo, fila: u.fila, cuerpo: u.cuerpo, niveles: new Map(), items: [] };
+        cuerposPorClave.set(clave, g);
+        grupos.push(g);
+      }
+      if (!g.niveles.has(u.nivel)) g.niveles.set(u.nivel, []);
+      g.niveles.get(u.nivel).push(u);
+      g.items.push(u);
+    } else {
+      grupos.push({ tipo: 'suelta', items: [u] });
+    }
+  });
+
+  grupos.forEach(g => {
+    g.items.sort((a, b) => a.codigo.localeCompare(b.codigo));
+    g.masReciente = Math.max(...g.items.map(ts));
+  });
+  grupos.sort((a, b) => b.masReciente - a.masReciente);
+
+  let html = '';
+  grupos.forEach(g => {
+    if (g.tipo === 'legado') {
+      const codigoFila = `${g.pasillo}${String(g.estante).padStart(2, '0')}`;
+      html += `
+        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
+          <div style="font-size:12px;font-weight:700;color:var(--tx2);">Fila ${codigoFila} · ${_layoutZonaActual} · ${g.items.length} posición(es)</div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="layoutAbrirModalEditarFila('${g.pasillo}','${g.estante}')"
+              style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
+              ✏ Editar
+            </button>
+            <button onclick="layoutAbrirModalEliminarFila('${g.pasillo}','${g.estante}')"
+              style="padding:5px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;cursor:pointer;">
+              🗑 Eliminar
+            </button>
+          </div>
+        </div>`;
+      g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
+    } else if (g.tipo === 'cuerpo') {
+      const codigoCuerpo = `${g.pasillo}${g.fila}-${String(g.cuerpo).padStart(2, '0')}`;
+      const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
+      html += `
+        <div style="font-size:12px;font-weight:700;color:var(--tx2);background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
+          Cuerpo ${codigoCuerpo} · ${nivelesEnZona.length} entrepaño(s) en ${_layoutZonaActual} · ${g.items.length} hueco(s)
+        </div>`;
+      nivelesEnZona.forEach(nivel => {
+        const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
+        html += `
+          <div style="font-size:11px;font-weight:600;color:var(--tx3);padding:4px 4px;margin:8px 0 4px;">
+            Entrepaño ${nivel} · ${huecos.length} hueco(s)
+          </div>`;
+        huecos.forEach(u => { html += _layoutRenderUbicacionCard(u); });
+      });
+    } else {
+      g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
+    }
+  });
+
+  el.innerHTML = html;
 }
 
 // ── Modal: Crear ubicación — Cuerpo completo (Mecanismo A), wizard de 2 pasos ─
