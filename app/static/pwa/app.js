@@ -10491,6 +10491,40 @@ function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
     </div>`;
 }
 
+// Imprime una etiqueta física (80mm, mismo formato que LPN/canasto) por cada
+// Hueco del Cuerpo — con su código completo (incluye el H de hueco, a
+// diferencia del título de la tarjeta que solo muestra Pasillo+Fila+Cuerpo).
+function layoutImprimirEtiquetasCuerpo(idsCsv) {
+  const ids = idsCsv.split(',').map(Number);
+  const huecos = ids
+    .map(id => _layoutUbicacionesCache.find(u => u.id === id))
+    .filter(Boolean)
+    .sort((a, b) => a.codigo.localeCompare(b.codigo));
+  if (!huecos.length) return;
+
+  const area = document.getElementById('print-area');
+  if (!area) return;
+
+  area.innerHTML = huecos.map(u => `
+    <div class="etiqueta-ubicacion">
+      <div class="eu-titulo">UBICACIÓN — BODEGA</div>
+      <svg id="ub-bc-${u.id}"></svg>
+      <div class="eu-codigo">${u.codigo}</div>
+      <div class="eu-zona">${u.tipo_zona}</div>
+    </div>`).join('');
+
+  huecos.forEach(u => {
+    try {
+      JsBarcode(`#ub-bc-${u.id}`, u.codigo, { format: 'CODE128', displayValue: false, height: 55, margin: 0 });
+    } catch (e) { /* JsBarcode no disponible aún */ }
+  });
+
+  setTimeout(() => {
+    window.print();
+    setTimeout(() => { area.innerHTML = ''; }, 1000);
+  }, 300);
+}
+
 async function layoutCargarUbicaciones() {
   const el = document.getElementById('layout-lista-ubicaciones');
   if (!el) return;
@@ -10599,7 +10633,15 @@ function layoutRenderUbicaciones() {
       // Nomenclatura real del código: {PREFIJO_ZONA}-{PASILLO}{FILA}-C{CUERPO} — ej. PIK-A1-C01.
       const codigoCuerpo = g.items[0].codigo.split('-').slice(0, 3).join('-');
       const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
-      let cuerpoHtml = `<div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);margin-bottom:14px;">${codigoCuerpo}</div>`;
+      const idsCuerpoCsv = g.items.map(u => u.id).join(',');
+      let cuerpoHtml = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+          <div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
+          <button onclick="layoutImprimirEtiquetasCuerpo('${idsCuerpoCsv}')"
+            style="padding:7px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+            🖨 Imprimir etiquetas
+          </button>
+        </div>`;
       nivelesEnZona.forEach((nivel, idx) => {
         const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
         cuerpoHtml += _layoutRenderEntrepanoSeccion(huecos, idx === 0);
