@@ -702,6 +702,197 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     job.id, solicitud.codigo)
         return {'solicitud_id': solicitud_id, 'consec': solicitud.siesa_salida_consec}
 
+    # ── Liquidación de ruta: conectores financieros ─────────────
+
+    if job.tipo == 'NOTA_CREDITO_FACTURA':
+        # 142946 — Nota crédito amarrada a factura (devolución parcial/total)
+        from app.models.recaudo_entrega import RecaudoEntrega as _RE
+        recaudo = _RE.query.get(payload.get('recaudo_id'))
+
+        if recaudo and recaudo.siesa_nc_triggered:
+            logger.info(
+                '[DLQ] NOTA_CREDITO_FACTURA job=%s: recaudo %s ya tiene '
+                'siesa_nc_triggered=True — idempotente', job.id, recaudo.id
+            )
+            return {'idempotente': True, 'recaudo_id': recaudo.id}
+
+        tipo_docto_fe = payload['tipo_docto_fe']
+        consec_fe = payload['consec_fe']
+
+        # Paso 1: GET f470_rowid de cada línea de la factura
+        rowids_data = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
+        if not rowids_data:
+            raise Exception(
+                f'No se obtuvieron rowids para FE {tipo_docto_fe}-{consec_fe} — '
+                'la factura puede no existir en Siesa'
+            )
+
+        # Paso 2: construir líneas para la NC
+        items_devueltos = payload.get('items_devueltos', [])
+        es_total = payload.get('es_total', False)
+        causal = payload.get('causal_devolucion') or connekta.causal_devolucion_default
+
+        lineas_nc = []
+        if es_total:
+            # Devolución total — todas las líneas con cantidad completa
+            for row in rowids_data:
+                lineas_nc.append({
+                    'f470_rowid_movto': row['f470_rowid'],
+                    'f470_cant_base': row.get('f470_cant_base', 1),
+                    'f470_id_bodega': row.get('f150_id') or connekta.bodega,
+                    'f470_id_motivo': connekta.motivo_ventas,
+                    'f470_id_causal_devol': causal,
+                    'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or connekta.uom_default,
+                    'f120_referencia': row.get('f120_referencia', ''),
+                })
+        else:
+            # Devolución parcial — match por código de producto
+            devueltos_map = {
+                it['codigo']: int(it['cantidad_devuelta'])
+                for it in items_devueltos
+                if int(it.get('cantidad_devuelta', 0)) > 0
+            }
+            for row in rowids_data:
+                ref = row.get('f120_referencia', '')
+                cant_dev = devueltos_map.get(ref, 0)
+                if cant_dev > 0:
+                    lineas_nc.append({
+                        'f470_rowid_movto': row['f470_rowid'],
+                        'f470_cant_base': cant_dev,
+                        'f470_id_bodega': row.get('f150_id') or connekta.bodega,
+                        'f470_id_motivo': connekta.motivo_ventas,
+                        'f470_id_causal_devol': causal,
+                        'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or connekta.uom_default,
+                        'f120_referencia': ref,
+                    })
+
+        if not lineas_nc:
+            logger.warning(
+                '[DLQ] NOTA_CREDITO_FACTURA job=%s: sin líneas para devolver — '
+                'posible mismatch de códigos entre items_devueltos y factura Siesa',
+                job.id
+            )
+            return {'sin_lineas': True, 'recaudo_id': payload.get('recaudo_id')}
+
+        # Paso 3: POST 142946
+        resultado = connekta.trigger_nota_factura(
+            tipo_docto_fe=tipo_docto_fe,
+            consec_fe=consec_fe,
+            lineas=lineas_nc,
+            notas=payload.get('notas', ''),
+        )
+
+        # Marcar idempotencia
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
+        if recaudo and not _es_ensayo:
+            try:
+                recaudo.siesa_nc_triggered = True
+                db.session.commit()
+            except Exception as _e:
+                db.session.rollback()
+                logger.critical(
+                    '[DLQ] NOTA_CREDITO_FACTURA job=%s: Siesa OK pero fallo '
+                    'siesa_nc_triggered — recaudo %s en riesgo de NC duplicada: %s',
+                    job.id, recaudo.id, _e
+                )
+                try:
+                    recaudo.siesa_nc_triggered = True
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+        return resultado
+
+    if job.tipo == 'RECIBO_CAJA':
+        # 142888 — Recibo de caja (cobro del conductor)
+        from app.models.recaudo_entrega import RecaudoEntrega as _RE
+        recaudo = _RE.query.get(payload.get('recaudo_id'))
+
+        if recaudo and recaudo.siesa_rc_triggered:
+            logger.info(
+                '[DLQ] RECIBO_CAJA job=%s: recaudo %s ya tiene '
+                'siesa_rc_triggered=True — idempotente', job.id, recaudo.id
+            )
+            return {'idempotente': True, 'recaudo_id': recaudo.id}
+
+        # Secuencialidad: si depende de NC, verificar que NC ya pasó
+        if payload.get('depende_de_nc') and recaudo and not recaudo.siesa_nc_triggered:
+            # NC aún no procesada — reintento con backoff
+            raise Exception(
+                f'RECIBO_CAJA job={job.id}: RC depende de NC pendiente para '
+                f'recaudo {recaudo.id} — reintento en próximo ciclo DLQ'
+            )
+
+        resultado = connekta.trigger_recibo_caja(
+            tercero_nit=payload['tercero_nit'],
+            sucursal=payload.get('sucursal', '001'),
+            monto=float(payload['monto']),
+            forma_pago=payload.get('forma_pago', 'EFECTIVO'),
+            tipo_docto_fe=payload['tipo_docto_fe'],
+            consec_fe=payload['consec_fe'],
+            notas=payload.get('notas', ''),
+        )
+
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
+        if recaudo and not _es_ensayo:
+            try:
+                recaudo.siesa_rc_triggered = True
+                db.session.commit()
+            except Exception as _e:
+                db.session.rollback()
+                logger.critical(
+                    '[DLQ] RECIBO_CAJA job=%s: Siesa OK pero fallo '
+                    'siesa_rc_triggered — recaudo %s en riesgo de RC duplicado: %s',
+                    job.id, recaudo.id, _e
+                )
+                try:
+                    recaudo.siesa_rc_triggered = True
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+        return resultado
+
+    if job.tipo == 'DOCUMENTO_CONTABLE_RET':
+        # 142882 — Documento contable para retenciones
+        from app.models.recaudo_entrega import RecaudoEntrega as _RE
+        recaudo = _RE.query.get(payload.get('recaudo_id'))
+
+        if recaudo and recaudo.siesa_dc_triggered:
+            logger.info(
+                '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: recaudo %s ya tiene '
+                'siesa_dc_triggered=True — idempotente', job.id, recaudo.id
+            )
+            return {'idempotente': True, 'recaudo_id': recaudo.id}
+
+        resultado = connekta.trigger_documento_contable(
+            tercero_nit=payload['tercero_nit'],
+            sucursal=payload.get('sucursal', '001'),
+            cuenta_puc=payload['cuenta_puc'],
+            monto=float(payload['monto']),
+            base_gravable=float(payload.get('base_gravable', 0)),
+            tipo_docto_fe=payload['tipo_docto_fe'],
+            consec_fe=payload['consec_fe'],
+            notas=payload.get('notas', ''),
+        )
+
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
+        if recaudo and not _es_ensayo:
+            try:
+                recaudo.siesa_dc_triggered = True
+                db.session.commit()
+            except Exception as _e:
+                db.session.rollback()
+                logger.critical(
+                    '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: Siesa OK pero fallo '
+                    'siesa_dc_triggered — recaudo %s en riesgo de DC duplicado: %s',
+                    job.id, recaudo.id, _e
+                )
+                try:
+                    recaudo.siesa_dc_triggered = True
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+        return resultado
+
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
 
 

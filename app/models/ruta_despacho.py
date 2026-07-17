@@ -32,6 +32,7 @@ class RutaDespacho(db.Model):
     estado            = db.Column(db.String(20), default='EN_CARGUE')  # PROGRAMADO | EN_CARGUE | EN_TRANSITO | ENTREGADA
     estado_financiero = db.Column(db.String(20), default='PENDIENTE')  # PENDIENTE | EN_LIQUIDACION | LIQUIDADA
     notas           = db.Column(db.Text)
+    numero_guia     = db.Column(db.String(50), nullable=True)   # No. guía transportadora
     fecha_creacion  = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_cierre    = db.Column(db.DateTime)    # cuando pasa a EN_TRANSITO
     fecha_entregada = db.Column(db.DateTime)    # cuando pasa a ENTREGADA
@@ -98,6 +99,7 @@ class RutaDespacho(db.Model):
             'total_confirmados':  self.total_confirmados(),
             'pedidos':            self.pedidos(),
             'fecha_creacion':     self.fecha_creacion.isoformat(),
+            'numero_guia':        self.numero_guia or '',
             'fecha_cierre':       self.fecha_cierre.isoformat() if self.fecha_cierre else None,
             'fecha_entregada':    self.fecha_entregada.isoformat() if self.fecha_entregada else None,
         }

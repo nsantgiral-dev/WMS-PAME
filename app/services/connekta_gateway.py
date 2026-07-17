@@ -50,6 +50,19 @@ class ConnektaGateway:
         self.conector_entrada  = os.getenv('CONNEKTA_CONECTOR_ENTRADA',  '142948')
         self.conector_ajuste   = os.getenv('CONNEKTA_CONECTOR_AJUSTE',   '142951')
         self.api_clasificacion = os.getenv('CONNEKTA_API_CLASIFICACION', '238920')  # CLASIFICACION DE ITEMS
+        # Liquidación de ruta — conectores financieros
+        self.conector_recibo_caja     = os.getenv('CONNEKTA_CONECTOR_RECIBO_CAJA',     '142888')
+        self.conector_nota_factura    = os.getenv('CONNEKTA_CONECTOR_NOTA_FACTURA',    '142946')
+        self.conector_nota_directa    = os.getenv('CONNEKTA_CONECTOR_NOTA_DIRECTA',    '142903')
+        self.conector_docto_contable  = os.getenv('CONNEKTA_CONECTOR_DOCTO_CONTABLE',  '142882')
+        # Tipo documento nota crédito electrónica en Siesa
+        self.tipo_docto_nota_credito  = os.getenv('SIESA_TIPO_DOCTO_NOTA_CREDITO', 'NCE')
+        # Tipo documento recibo de caja en Siesa
+        self.tipo_docto_recibo_caja   = os.getenv('SIESA_TIPO_DOCTO_RECIBO_CAJA', 'RC')
+        # Tipo documento de causación en Siesa (retenciones)
+        self.tipo_docto_docto_contable = os.getenv('SIESA_TIPO_DOCTO_DOCTO_CONTABLE', 'DC')
+        # Causal de devolución por defecto para nota crédito (verificar en Siesa maestros)
+        self.causal_devolucion_default = os.getenv('SIESA_CAUSAL_DEVOLUCION', '01')
         # Traslados entre bodegas (puntos de venta)
         self.conector_requisicion_traslado = os.getenv('CONNEKTA_CONECTOR_REQ_TRASLADO', '174646')
         self.nombre_conector_req_traslado  = os.getenv('CONNEKTA_NOMBRE_REQ_TRASLADO',
@@ -2715,6 +2728,267 @@ class ConnektaGateway:
         except Exception as e:
             logger.warning('[CONNEKTA] get_terceros_contacto(nit=%s): %s', nit, e)
             return []
+
+
+    # ==========================================
+    # Liquidación de ruta — conectores financieros
+    # ==========================================
+
+    def get_rowids_factura(self, tipo_docto_fe: str, consec_fe) -> list:
+        """
+        GET API_v2_Ventas_Facturas_DesdePedido — obtiene f470_rowid por línea de factura.
+        Se necesita para 142946 (NotaFactura): cada movimiento requiere f470_rowid_movto
+        que vincula la nota crédito al renglón exacto de la factura original.
+        Retorna lista de dicts con al menos: f470_rowid, f120_referencia, f470_cant_base,
+        f470_id_unidad_medida, f150_id (bodega).
+        """
+        if self.modo_simulacion:
+            return []
+
+        if not tipo_docto_fe or not str(tipo_docto_fe).strip():
+            raise ValueError('tipo_docto_fe requerido para obtener f470_rowid')
+
+        try:
+            consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
+                'paginacion': 'numPag=1|tamPag=200',
+                'parametros': (
+                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"AND f350_id_tipo_docto = ''{tipo_docto_fe}'' "
+                    f"AND f350_consec_docto = {consec_int}"
+                )
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            rows = [r for r in rows if 'alerta' not in r]
+            if rows:
+                logger.info(
+                    '[CONNEKTA] get_rowids_factura: FE %s-%s → %d líneas, keys=%s',
+                    tipo_docto_fe, consec_fe, len(rows), list(rows[0].keys())
+                )
+            else:
+                logger.warning(
+                    '[CONNEKTA] get_rowids_factura: FE %s-%s → 0 líneas',
+                    tipo_docto_fe, consec_fe
+                )
+            return rows
+        except Exception as e:
+            logger.error('[CONNEKTA] get_rowids_factura falló: %s', e)
+            raise Exception(
+                f'No se pudo obtener rowids de FE {tipo_docto_fe}-{consec_fe}: {e}. '
+                'Sin rowids no se puede crear nota crédito.'
+            )
+
+    def trigger_nota_factura(self, tipo_docto_fe: str, consec_fe,
+                              lineas: list, notas: str = '') -> dict:
+        """
+        142946 → API_v1_Ventas_Comercial_NotaFactura
+        Nota crédito amarrada a factura para devoluciones parciales o totales.
+        lineas: lista de dicts con:
+          - f470_rowid_movto: rowid del renglón de la FE (del GET)
+          - f470_cant_base: cantidad a devolver
+          - f470_id_bodega: bodega donde reingresa la mercancía
+          - f470_id_motivo: motivo del movimiento
+          - f470_id_causal_devol: causal de devolución DIAN
+          - f120_referencia: código del producto (para log)
+        """
+        if not self.tipo_docto_nota_credito:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_NOTA_CREDITO no configurado — requerido para 142946'
+            )
+
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        cia = int(self.id_cia_siesa)
+        consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+
+        movimientos = []
+        for i, lin in enumerate(lineas, 1):
+            movimientos.append({
+                'F_CIA': cia,
+                'f470_id_co': self.centro_op,
+                'f470_id_tipo_docto': self.tipo_docto_nota_credito,
+                'f470_consec_docto': 0,
+                'f470_nro_registro': i,
+                'f470_id_bodega': lin.get('f470_id_bodega') or self.bodega,
+                'f470_id_co_movto': self.centro_op,
+                'f470_id_concepto': self.concepto_ventas,
+                'f470_id_motivo': lin.get('f470_id_motivo') or self.motivo_ventas,
+                'f470_id_unidad_medida': lin.get('f470_id_unidad_medida') or self.uom_default,
+                'f470_cant_base': round(float(lin['f470_cant_base']), 4),
+                'f470_id_causal_devol': lin.get('f470_id_causal_devol') or self.causal_devolucion_default,
+                'f470_rowid_movto': int(lin['f470_rowid_movto']),
+                'f470_notas': lin.get('f470_notas') or '',
+                'f470_desc_variable': '',
+                'f470_id_un_movto': self.unidad_negocio,
+            })
+
+        payload = {
+            'Inicial': [{'F_CIA': cia}],
+            'Docto_ventas_comercial': [{
+                'F_CIA': cia,
+                'F_CONSEC_AUTO_REG': 1,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_nota_credito,
+                'F350_CONSEC_DOCTO': 0,
+                'F350_FECHA': fecha_hoy,
+                'F350_IND_ESTADO': 1,
+                'F350_NOTAS': notas[:2000] if notas else '',
+                'F430_ID_TIPO_DOCTO': tipo_docto_fe,
+                'F430_CONSEC_DOCTO': consec_int,
+            }],
+            'Movtoventascomercial': movimientos,
+            'Final': [{'F_CIA': cia}],
+        }
+
+        logger.info(
+            '[CONNEKTA] NotaFactura 142946: FE %s-%s, %d líneas, notas=%s',
+            tipo_docto_fe, consec_fe, len(lineas), notas[:80] if notas else ''
+        )
+        return self._post(
+            self.conector_nota_factura,
+            'API_v1_Ventas_Comercial_NotaFactura',
+            payload,
+        )
+
+    def trigger_recibo_caja(self, tercero_nit: str, sucursal: str,
+                             monto: float, forma_pago: str,
+                             tipo_docto_fe: str, consec_fe,
+                             notas: str = '') -> dict:
+        """
+        142888 → ReciboCaja
+        Registra cobro del conductor. Cruza automáticamente contra la factura (CxC).
+        forma_pago: EFECTIVO | TRANSFERENCIA | CHEQUE → mapea a medio de pago Siesa.
+        """
+        if not self.tipo_docto_recibo_caja:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_RECIBO_CAJA no configurado — requerido para 142888'
+            )
+
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        cia = int(self.id_cia_siesa)
+        consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+
+        # Formato Siesa para valores: +000000000000000.0000
+        def _fmt_valor(v):
+            signo = '+' if v >= 0 else '-'
+            return f'{signo}{abs(v):018.4f}'
+
+        payload = {
+            'Inicial': [{'F_CIA': cia}],
+            'Documentorecibocaja': [{
+                'F_CIA': cia,
+                'F_CONSEC_AUTO_REG': 1,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
+                'F350_CONSEC_DOCTO': 0,
+                'F350_FECHA': fecha_hoy,
+                'F350_IND_ESTADO': 1,
+                'F350_NOTAS': notas[:2000] if notas else '',
+                'f353_id_tercero': tercero_nit,
+                'f353_id_sucursal': sucursal or '001',
+            }],
+            'MovimientoCxC': [{
+                'F_CIA': cia,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
+                'F350_CONSEC_DOCTO': 0,
+                'F353_NRO_REGISTRO': 1,
+                'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
+                'F353_CONSEC_DOCTO_CRUCE': consec_int,
+                'F353_VALOR_APLICADO': _fmt_valor(monto),
+            }],
+            'Caja': [{
+                'F_CIA': cia,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
+                'F350_CONSEC_DOCTO': 0,
+                'F351_NRO_REGISTRO': 1,
+                'F351_VALOR': _fmt_valor(monto),
+            }],
+            'Final': [{'F_CIA': cia}],
+        }
+
+        logger.info(
+            '[CONNEKTA] ReciboCaja 142888: tercero=%s FE=%s-%s monto=%.2f pago=%s',
+            tercero_nit, tipo_docto_fe, consec_fe, monto, forma_pago
+        )
+        return self._post(
+            self.conector_recibo_caja,
+            'ReciboCaja',
+            payload,
+        )
+
+    def trigger_documento_contable(self, tercero_nit: str, sucursal: str,
+                                     cuenta_puc: str, monto: float,
+                                     base_gravable: float,
+                                     tipo_docto_fe: str, consec_fe,
+                                     notas: str = '') -> dict:
+        """
+        142882 → DocumentoContable
+        Registra retenciones (retefuente, reteIVA, ICA) como documento contable.
+        Cruza contra la factura en MovimientoCxC.
+        cuenta_puc: cuenta auxiliar PUC (ej. '13551501' para retefuente compras 2.5%)
+        """
+        if not self.tipo_docto_docto_contable:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_DOCTO_CONTABLE no configurado — requerido para 142882'
+            )
+
+        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        cia = int(self.id_cia_siesa)
+        consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+
+        def _fmt_valor(v):
+            signo = '+' if v >= 0 else '-'
+            return f'{signo}{abs(v):018.4f}'
+
+        payload = {
+            'Inicial': [{'F_CIA': cia}],
+            'Documentocontable': [{
+                'F_CIA': cia,
+                'F_CONSEC_AUTO_REG': 1,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
+                'F350_CONSEC_DOCTO': 0,
+                'F350_FECHA': fecha_hoy,
+                'F350_IND_ESTADO': 1,
+                'F350_NOTAS': notas[:2000] if notas else '',
+            }],
+            'Movimientocontable': [{
+                'F_CIA': cia,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
+                'F350_CONSEC_DOCTO': 0,
+                'F351_NRO_REGISTRO': 1,
+                'F351_ID_AUXILIAR': cuenta_puc,
+                'F351_ID_CO_MOVTO': self.centro_op,
+                'F351_VALOR_DB': _fmt_valor(monto),
+                'F351_VALOR_CR': _fmt_valor(0),
+                'F351_BASE_GRAVABLE': _fmt_valor(base_gravable),
+                'F351_ID_TERCERO': tercero_nit,
+                'F351_ID_SUCURSAL': sucursal or '001',
+            }],
+            'MovimientoCxC': [{
+                'F_CIA': cia,
+                'F350_ID_CO': self.centro_op,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
+                'F350_CONSEC_DOCTO': 0,
+                'F353_NRO_REGISTRO': 1,
+                'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
+                'F353_CONSEC_DOCTO_CRUCE': consec_int,
+                'F353_VALOR_APLICADO': _fmt_valor(monto),
+            }],
+            'Final': [{'F_CIA': cia}],
+        }
+
+        logger.info(
+            '[CONNEKTA] DoctoContable 142882: tercero=%s PUC=%s FE=%s-%s monto=%.2f base=%.2f',
+            tercero_nit, cuenta_puc, tipo_docto_fe, consec_fe, monto, base_gravable
+        )
+        return self._post(
+            self.conector_docto_contable,
+            'DocumentoContable',
+            payload,
+        )
 
 
 connekta = ConnektaGateway()

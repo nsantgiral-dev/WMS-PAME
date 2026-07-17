@@ -476,3 +476,22 @@ def forzar_cierre_ruta(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify(resultado), 200
+
+
+@rutas_bp.route('/<int:id>/liquidar-siesa', methods=['POST'])
+@jwt_required()
+def liquidar_ruta_siesa(id):
+    """Dispara la liquidación financiera: encola jobs Siesa (142888/142946/142882)."""
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede liquidar rutas en Siesa'}), 403
+    uid = _uid()
+    if not uid:
+        return jsonify({'error': 'Token inválido'}), 401
+    try:
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.liquidar_ruta_siesa(id, admin_id=uid)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **resultado}), 200

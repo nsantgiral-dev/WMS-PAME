@@ -32,6 +32,19 @@ class RecaudoEntrega(db.Model):
     # [{"codigo": "REF001", "nombre": "Papel A4", "pedido": 10, "entregado": 7, "devuelto": 3}]
     items_entregados = db.Column(db.JSON, nullable=True)
 
+    # ── Liquidación Siesa ────────────────────────────────────────────
+    # Causal de devolución DIAN para 142946 (NotaFactura)
+    causal_devolucion = db.Column(db.String(10), nullable=True)
+    # Tipo de descuento/retención (RETEFUENTE | RETEIVA | ICA | OTRO)
+    motivo_descuento  = db.Column(db.String(30), nullable=True)
+    # Monto del descuento/retención aplicado
+    monto_descuento   = db.Column(db.Numeric(12, 2), default=0)
+
+    # Idempotencia Siesa — flags independientes por conector
+    siesa_rc_triggered  = db.Column(db.Boolean, default=False)   # 142888 ReciboCaja
+    siesa_nc_triggered  = db.Column(db.Boolean, default=False)   # 142946 NotaFactura
+    siesa_dc_triggered  = db.Column(db.Boolean, default=False)   # 142882 DocumentoContable
+
     # Trazabilidad
     confirmado_por  = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
     editado_por     = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
@@ -57,6 +70,12 @@ class RecaudoEntrega(db.Model):
             'observaciones':         self.observaciones or '',
             'bultos_rechazados_ids': self.bultos_rechazados_ids or [],
             'items_entregados':      self.items_entregados or [],
+            'causal_devolucion':     self.causal_devolucion or '',
+            'motivo_descuento':      self.motivo_descuento or '',
+            'monto_descuento':       float(self.monto_descuento) if self.monto_descuento else 0,
+            'siesa_rc_triggered':    self.siesa_rc_triggered or False,
+            'siesa_nc_triggered':    self.siesa_nc_triggered or False,
+            'siesa_dc_triggered':    self.siesa_dc_triggered or False,
             'confirmado_por':        self.confirmado_por,
             'editado_por':           self.editado_por,
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,
