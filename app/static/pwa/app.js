@@ -10455,12 +10455,11 @@ function _layoutRenderUbicacionCard(u) {
     </div>`;
 }
 
-// Tarjeta por Entrepaño — mismo formato que la tarjeta vieja por Hueco (título,
-// subtítulo, badge de zona, botones de ancho completo), pero representa el
-// Entrepaño completo, no un Hueco suelto. El detalle hueco por hueco (código,
-// SKU, iconos de editar/eliminar/reclasificar) vive en el modal "Ver" — no en
-// la tarjeta — para que la lista no se vuelva inmanejable con 30+ Cuerpos.
-function _layoutRenderEntrepanoCard(huecos) {
+// Sección por Entrepaño (título, subtítulo, badge de zona, botones de ancho
+// completo) — dentro de la tarjeta blanca única del Cuerpo, no una tarjeta
+// aparte cada una. El detalle hueco por hueco (código, SKU, iconos de editar/
+// eliminar/reclasificar) vive en el modal "Ver", no acá.
+function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
   const zona = huecos[0].tipo_zona;
   const color = _ZONA_COLOR[zona] || '#888';
   const nivel = huecos[0].nivel;
@@ -10471,7 +10470,7 @@ function _layoutRenderEntrepanoCard(huecos) {
     : `${huecos.length} hueco(s) · todos asignados`;
 
   return `
-    <div class="tabla-card" style="margin-bottom:10px;">
+    <div style="${esPrimero ? '' : 'border-top:1px solid var(--brd);margin-top:14px;padding-top:14px;'}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
         <div>
           <div style="font-size:15px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
@@ -10600,14 +10599,12 @@ function layoutRenderUbicaciones() {
       // Nomenclatura real del código: {PREFIJO_ZONA}-{PASILLO}{FILA}-C{CUERPO} — ej. PIK-A1-C01.
       const codigoCuerpo = g.items[0].codigo.split('-').slice(0, 3).join('-');
       const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
-      html += `
-        <div style="font-size:12px;font-weight:700;color:var(--tx2);background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;font-family:monospace;">
-          ${codigoCuerpo}
-        </div>`;
-      nivelesEnZona.forEach(nivel => {
+      let cuerpoHtml = `<div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);margin-bottom:14px;">${codigoCuerpo}</div>`;
+      nivelesEnZona.forEach((nivel, idx) => {
         const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
-        html += _layoutRenderEntrepanoCard(huecos);
+        cuerpoHtml += _layoutRenderEntrepanoSeccion(huecos, idx === 0);
       });
+      html += `<div class="tabla-card" style="margin-top:16px;">${cuerpoHtml}</div>`;
     } else {
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     }
