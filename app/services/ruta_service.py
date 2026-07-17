@@ -121,7 +121,8 @@ class RutaService:
         if Vehiculo.query.filter_by(placa=placa).first():
             raise ConflictError(f'Ya existe un vehículo con placa {placa}')
         v = Vehiculo(placa=placa, tipo=data['tipo'].strip(),
-                     capacidad_kg=data.get('capacidad_kg') or None)
+                     capacidad_kg=data.get('capacidad_kg') or None,
+                     codigo_siesa=data.get('codigo_siesa', '').strip() or None)
         db.session.add(v)
         db.session.commit()
         return v
@@ -133,6 +134,7 @@ class RutaService:
             raise LookupError('Vehículo no encontrado')
         if 'tipo'         in data: v.tipo         = data['tipo'].strip()
         if 'capacidad_kg' in data: v.capacidad_kg = data['capacidad_kg'] or None
+        if 'codigo_siesa' in data: v.codigo_siesa = (data['codigo_siesa'] or '').strip() or None
         if 'activo'       in data: v.activo       = bool(data['activo'])
         db.session.commit()
         return v

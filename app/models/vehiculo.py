@@ -13,6 +13,9 @@ class Vehiculo(db.Model):
     placa          = db.Column(db.String(10), unique=True, nullable=False)
     tipo           = db.Column(db.String(30), nullable=False)   # NHR | Turbo | Moto | Van | Camión
     capacidad_kg   = db.Column(db.Numeric(10, 2), nullable=True)
+    # Código maestro en Siesa (ej. "DOMICILIOS") — NO es la placa.
+    # Usado en PCF y transporte de conectores 142946/142888.
+    codigo_siesa   = db.Column(db.String(30), nullable=True)
     activo         = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
@@ -24,6 +27,7 @@ class Vehiculo(db.Model):
             'placa':          self.placa,
             'tipo':           self.tipo,
             'capacidad_kg':   float(self.capacidad_kg) if self.capacidad_kg is not None else None,
+            'codigo_siesa':   self.codigo_siesa or '',
             'activo':         self.activo,
             'fecha_creacion': self.fecha_creacion.isoformat(),
         }
