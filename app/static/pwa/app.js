@@ -10597,18 +10597,15 @@ function layoutRenderUbicaciones() {
         </div>`;
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     } else if (g.tipo === 'cuerpo') {
-      const codigoCuerpo = `${g.pasillo}${g.fila}-${String(g.cuerpo).padStart(2, '0')}`;
+      // Nomenclatura real del código: {PREFIJO_ZONA}-{PASILLO}{FILA}-C{CUERPO} — ej. PIK-A1-C01.
+      const codigoCuerpo = g.items[0].codigo.split('-').slice(0, 3).join('-');
       const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
       html += `
-        <div style="font-size:12px;font-weight:700;color:var(--tx2);background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
-          Cuerpo ${codigoCuerpo} · ${nivelesEnZona.length} entrepaño(s) en ${_layoutZonaActual} · ${g.items.length} hueco(s)
+        <div style="font-size:12px;font-weight:700;color:var(--tx2);background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;font-family:monospace;">
+          ${codigoCuerpo}
         </div>`;
       nivelesEnZona.forEach(nivel => {
         const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
-        html += `
-          <div style="font-size:11px;font-weight:600;color:var(--tx3);padding:4px 4px;margin:8px 0 4px;">
-            Entrepaño ${nivel} · ${huecos.length} hueco(s)
-          </div>`;
         html += _layoutRenderEntrepanoCard(huecos);
       });
     } else {
