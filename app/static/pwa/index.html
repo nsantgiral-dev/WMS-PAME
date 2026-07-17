@@ -2750,6 +2750,28 @@
     </div>
   </div>
 
+  <!-- Modal Layout: Asignar SKU — Entrepaño completo, todos sus huecos de una vez -->
+  <div id="modal-layout-asignar-entrepano" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Asignar SKU — Entrepaño</div>
+      <div id="layout-asignar-ent-titulo" style="font-size:11px;color:var(--tx3);margin-bottom:14px;"></div>
+
+      <div id="layout-asignar-ent-filas"></div>
+      <div id="layout-asignar-ent-resultado" style="margin-top:6px;"></div>
+
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button onclick="layoutConfirmarAsignarEntrepano()"
+          style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+          Confirmar
+        </button>
+        <button onclick="layoutCerrarModalAsignarEntrepano()"
+          style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Layout: Reclasificar ubicación -->
   <div id="modal-layout-reclasificar" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">

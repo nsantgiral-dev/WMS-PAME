@@ -10455,6 +10455,41 @@ function _layoutRenderUbicacionCard(u) {
     </div>`;
 }
 
+// Tarjeta compacta por Entrepaño — una fila por Hueco (código corto, SKU o
+// "Sin SKU", e iconos de Editar/Eliminar/Reclasificar), y un solo botón para
+// abrir el modal de asignación masiva de todo el Entrepaño. Reemplaza pintar
+// una tarjeta completa por Hueco, que con 30+ Cuerpos se vuelve inmanejable.
+function _layoutRenderEntrepanoCard(huecos) {
+  const zona = huecos[0].tipo_zona;
+  const idsCsv = huecos.map(u => u.id).join(',');
+
+  const filas = huecos.map(u => {
+    const huecoLabel = u.codigo.split('-').pop();
+    const skuLabel = u.producto_asignado_codigo
+      ? `📦 ${u.producto_asignado_codigo} · ${u.stock_actual ?? 0}`
+      : 'Sin SKU';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--brd);">
+        <div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div>
+        <div style="flex:1;font-size:11px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div>
+        <div style="display:flex;gap:4px;flex-shrink:0;">
+          <button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${u.id})" style="padding:4px 7px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button>
+          <button title="Eliminar" onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')" style="padding:4px 7px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button>
+          <button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${u.id})" style="padding:4px 7px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">⇄</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="tabla-card" style="margin-bottom:10px;">
+      ${filas}
+      <button onclick="layoutAbrirModalAsignarEntrepano('${idsCsv}', '${zona}')"
+        style="width:100%;margin-top:10px;padding:9px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+        Asignar SKU (todo el entrepaño)
+      </button>
+    </div>`;
+}
+
 async function layoutCargarUbicaciones() {
   const el = document.getElementById('layout-lista-ubicaciones');
   if (!el) return;
@@ -10572,7 +10607,7 @@ function layoutRenderUbicaciones() {
           <div style="font-size:11px;font-weight:600;color:var(--tx3);padding:4px 4px;margin:8px 0 4px;">
             Entrepaño ${nivel} · ${huecos.length} hueco(s)
           </div>`;
-        huecos.forEach(u => { html += _layoutRenderUbicacionCard(u); });
+        html += _layoutRenderEntrepanoCard(huecos);
       });
     } else {
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
@@ -10909,6 +10944,136 @@ async function layoutConfirmarAsignar() {
     layoutCargarUbicaciones();
   } catch (e) {
     alerta(e.message || 'Error asignando el producto', 'error');
+  }
+}
+
+// ── Modal: Asignar SKU — Entrepaño completo (todos sus huecos de una vez) ───
+// Se abre desde la tarjeta de Entrepaño en vez de hueco por hueco. Cada fila
+// se resuelve al presionar Enter (como un lector de código de barras) y salta
+// sola a la siguiente — fila que quede vacía simplemente se ignora al confirmar,
+// no hay que llenar los 10 huecos de un tirón.
+
+let _layoutAsignarEntHuecos = [];   // [{id, codigo, tipo_zona, producto_asignado_codigo, ...}]
+let _layoutAsignarEntProductos = {}; // huecoId -> producto_id resuelto
+
+function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
+  const ids = idsCsv.split(',').map(Number);
+  const huecos = ids
+    .map(id => _layoutUbicacionesCache.find(u => u.id === id))
+    .filter(Boolean)
+    .sort((a, b) => a.codigo.localeCompare(b.codigo));
+  if (!huecos.length) return;
+
+  _layoutAsignarEntHuecos = huecos;
+  _layoutAsignarEntProductos = {};
+
+  const m = document.getElementById('modal-layout-asignar-entrepano');
+  if (!m) return;
+
+  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  document.getElementById('layout-asignar-ent-titulo').textContent =
+    `${codigoCuerpo} · ${huecos.length} hueco(s) — deja en blanco los que no vayas a asignar hoy`;
+
+  const cont = document.getElementById('layout-asignar-ent-filas');
+  cont.innerHTML = huecos.map(u => {
+    const huecoLabel = u.codigo.split('-').pop();
+    const yaAsignado = u.producto_asignado_codigo ? `Ya tiene: ${u.producto_asignado_codigo}` : '';
+    return `
+      <div class="tabla-card" style="margin-bottom:8px;padding:10px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+          <div style="font-size:12px;font-weight:700;font-family:monospace;color:var(--tx);">${huecoLabel}</div>
+          <div id="layout-asignar-ent-estado-${u.id}" style="font-size:11px;color:#60a5fa;">${yaAsignado}</div>
+        </div>
+        <div style="display:flex;gap:6px;">
+          <input id="layout-asignar-ent-codigo-${u.id}" type="text" placeholder="Código o código de barras" autocomplete="off"
+            onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProductoEntrepano(${u.id});}"
+            style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;">
+          <input id="layout-asignar-ent-cantidad-${u.id}" type="number" min="1" placeholder="Cant."
+            onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}"
+            style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;">
+        </div>
+        ${zona === 'PICKING' ? `
+        <input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)"
+          style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}
+      </div>`;
+  }).join('');
+
+  const resEl = document.getElementById('layout-asignar-ent-resultado');
+  if (resEl) resEl.innerHTML = '';
+
+  m.style.display = 'flex';
+  setTimeout(() => document.getElementById(`layout-asignar-ent-codigo-${huecos[0].id}`)?.focus(), 50);
+}
+
+function layoutCerrarModalAsignarEntrepano() {
+  const m = document.getElementById('modal-layout-asignar-entrepano');
+  if (m) m.style.display = 'none';
+  _layoutAsignarEntHuecos = [];
+  _layoutAsignarEntProductos = {};
+}
+
+async function layoutBuscarProductoEntrepano(huecoId) {
+  const inp = document.getElementById(`layout-asignar-ent-codigo-${huecoId}`);
+  const estado = document.getElementById(`layout-asignar-ent-estado-${huecoId}`);
+  const codigo = inp?.value.trim();
+  if (!codigo) return;
+  try {
+    const d = await get(`/api/productos/?q=${encodeURIComponent(codigo)}&per_page=1`);
+    const prod = (d.productos || [])[0];
+    if (!prod) {
+      delete _layoutAsignarEntProductos[huecoId];
+      if (estado) { estado.textContent = 'No encontrado'; estado.style.color = '#f87171'; }
+      return;
+    }
+    _layoutAsignarEntProductos[huecoId] = prod.id;
+    if (estado) { estado.textContent = `✓ ${prod.codigo} — ${prod.nombre}`; estado.style.color = '#4ade80'; }
+    document.getElementById(`layout-asignar-ent-cantidad-${huecoId}`)?.focus();
+  } catch (e) {
+    if (estado) { estado.textContent = 'Error buscando'; estado.style.color = '#f87171'; }
+  }
+}
+
+function layoutAsignarEntSiguiente(huecoId) {
+  const idx = _layoutAsignarEntHuecos.findIndex(u => u.id === huecoId);
+  const siguiente = _layoutAsignarEntHuecos[idx + 1];
+  if (siguiente) document.getElementById(`layout-asignar-ent-codigo-${siguiente.id}`)?.focus();
+}
+
+async function layoutConfirmarAsignarEntrepano() {
+  let ok = 0;
+  const errores = [];
+
+  for (const u of _layoutAsignarEntHuecos) {
+    const productoId = _layoutAsignarEntProductos[u.id];
+    const cantidad = parseInt(document.getElementById(`layout-asignar-ent-cantidad-${u.id}`)?.value);
+    if (!productoId || isNaN(cantidad) || cantidad <= 0) continue; // fila vacía — se salta, no bloquea el resto
+
+    const capRaw = document.getElementById(`layout-asignar-ent-capacidad-${u.id}`)?.value;
+    const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
+
+    try {
+      const payload = { producto_id: productoId, cantidad };
+      if (capacidad_maxima !== null && !isNaN(capacidad_maxima)) payload.capacidad_maxima = capacidad_maxima;
+      await post(`/api/almacenes/ubicaciones/${u.id}/asignar`, payload);
+      ok++;
+    } catch (e) {
+      errores.push(`${u.codigo.split('-').pop()}: ${e.message || 'error'}`);
+    }
+  }
+
+  if (ok === 0 && errores.length === 0) {
+    alerta('No hay ninguna fila completa (código + cantidad) para asignar', 'error');
+    return;
+  }
+
+  alerta(`${ok} hueco(s) asignado(s)${errores.length ? ` — ${errores.length} error(es)` : ''}`, errores.length ? 'advertencia' : 'ok');
+  layoutCargarUbicaciones();
+
+  if (errores.length === 0) {
+    layoutCerrarModalAsignarEntrepano();
+  } else {
+    const resEl = document.getElementById('layout-asignar-ent-resultado');
+    if (resEl) resEl.innerHTML = errores.map(e => `<div style="color:#f87171;font-size:11px;margin-top:2px;">✗ ${e}</div>`).join('');
   }
 }
 
