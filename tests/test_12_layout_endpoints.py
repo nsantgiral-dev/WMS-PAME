@@ -45,7 +45,7 @@ def test_crear_cuerpo_endpoint(client, jwt_token_admin, almacen):
     assert resp.status_code == 201
     ubs = resp.get_json()['ubicaciones']
     assert len(ubs) == 3
-    assert ubs[0]['codigo'] == 'PIK-A1-01-01-01'
+    assert ubs[0]['codigo'] == 'PIK-A1-C01-N01-H01'
     # Nivel 1-2 = PICKING, nivel 3 = RESERVA (zona sugerida por nivel)
     zonas = sorted(u['tipo_zona'] for u in ubs)
     assert zonas == ['PICKING', 'PICKING', 'RESERVA']
@@ -61,7 +61,7 @@ def test_crear_cuerpo_endpoint_huecos_por_nivel_variables(client, jwt_token_admi
     ubs = resp.get_json()['ubicaciones']
     assert len(ubs) == 4
     codigos_nivel_1 = sorted(u['codigo'] for u in ubs if u['nivel'] == 1)
-    assert codigos_nivel_1 == ['PIK-A1-01-01-01', 'PIK-A1-01-01-02', 'PIK-A1-01-01-03']
+    assert codigos_nivel_1 == ['PIK-A1-C01-N01-H01', 'PIK-A1-C01-N01-H02', 'PIK-A1-C01-N01-H03']
 
 
 def test_crear_cuerpo_rechaza_sin_admin(client, jwt_token, almacen):
@@ -260,7 +260,7 @@ def test_eliminar_ubicacion_individual_endpoint(client, jwt_token_admin, almacen
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 200
-    assert resp.get_json()['codigo'] == 'PIK-A1-01-01-01'
+    assert resp.get_json()['codigo'] == 'PIK-A1-C01-N01-H01'
     assert Ubicacion.query.get(ub_id) is None
 
 
