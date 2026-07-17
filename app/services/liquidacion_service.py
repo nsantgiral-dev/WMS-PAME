@@ -74,15 +74,10 @@ class LiquidacionService:
         ruta = RutaDespacho.query.get(ruta_id)
         if not ruta:
             raise LookupError('Ruta no encontrada')
-        if ruta.estado_financiero == EstadoFinancieroRuta.LIQUIDADA:
-            raise ValueError('La ruta ya fue liquidada')
 
         recaudos = RecaudoEntrega.query.filter_by(ruta_id=ruta_id).all()
         if not recaudos:
             raise ValueError('No hay recaudos registrados en esta ruta')
-
-        ruta.estado_financiero = EstadoFinancieroRuta.EN_LIQUIDACION
-        db.session.flush()
 
         conductor = ruta.conductor
         vehiculo = ruta.vehiculo
@@ -115,7 +110,6 @@ class LiquidacionService:
                     'error': str(e),
                 })
 
-        ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
         db.session.commit()
 
         # Disparar DLQ inmediato para procesar los jobs sin esperar el cron
