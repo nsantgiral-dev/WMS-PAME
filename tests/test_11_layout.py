@@ -47,7 +47,7 @@ def test_crear_cuerpo_genera_codigos_y_zona_sugerida_por_nivel(db, almacen):
     creadas = svc.crear_cuerpo(almacen.id, 'a', 1, 3, 4)
     codigos = sorted(u.codigo for u in creadas)
     assert codigos == [
-        'PIK-A1-C03-N01-H01', 'PIK-A1-C03-N02-H01', 'RES-A1-C03-N03-H01', 'RES-A1-C03-N04-H01',
+        'PIK-A1-C03-E01-H01', 'PIK-A1-C03-E02-H01', 'RES-A1-C03-E03-H01', 'RES-A1-C03-E04-H01',
     ]
     assert all(u.origen == 'MANUAL' for u in creadas)
     zonas_por_nivel = {u.nivel: u.tipo_zona for u in creadas}
@@ -57,7 +57,7 @@ def test_crear_cuerpo_genera_codigos_y_zona_sugerida_por_nivel(db, almacen):
 def test_crear_cuerpo_crea_varios_huecos_por_entrepano(db, almacen):
     creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, huecos_por_nivel=[3])
     codigos = sorted(u.codigo for u in creadas)
-    assert codigos == ['PIK-A1-C01-N01-H01', 'PIK-A1-C01-N01-H02', 'PIK-A1-C01-N01-H03']
+    assert codigos == ['PIK-A1-C01-E01-H01', 'PIK-A1-C01-E01-H02', 'PIK-A1-C01-E01-H03']
     assert all(u.nivel == 1 and u.cuerpo == 1 and u.fila == 1 for u in creadas)
 
 

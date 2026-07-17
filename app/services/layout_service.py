@@ -112,9 +112,10 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
 
     Dirección física: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahía)
     -> Nivel (entrepaño) -> Hueco.
-    Código generado: {PREFIJO}-{PASILLO}{FILA}-C{CUERPO:02d}-N{NIVEL:02d}-H{HUECO:02d}
-    ej. PIK-A1-C03-N02-H01 — la letra por eje (C/N/H) evita confundir Cuerpo con
-    Nivel al leer el código (ambos eran dos dígitos seguidos, indistinguibles).
+    Código generado: {PREFIJO}-{PASILLO}{FILA}-C{CUERPO:02d}-E{NIVEL:02d}-H{HUECO:02d}
+    ej. PIK-A1-C03-E02-H01 — la letra por eje (C/E/H = Cuerpo/Entrepaño/Hueco)
+    evita confundir Cuerpo con Nivel al leer el código (antes eran dos dígitos
+    seguidos, indistinguibles sin memorizar la posición).
     """
     if fila not in (1, 2):
         raise ValueError('fila debe ser 1 o 2 — cada pasillo tiene exactamente 2 filas')
@@ -139,7 +140,7 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         tipo_zona = _zona_sugerida_por_nivel(nivel)
         prefijo = _PREFIJO_ZONA[tipo_zona]
         for hueco in range(1, huecos_por_nivel[nivel - 1] + 1):
-            codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-N{nivel:02d}-H{hueco:02d}'
+            codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
             if Ubicacion.query.filter_by(codigo=codigo).first():
                 raise ValueError(f'La ubicación {codigo} ya existe')
 
