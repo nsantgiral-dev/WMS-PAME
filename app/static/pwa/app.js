@@ -10515,19 +10515,29 @@ function layoutRenderUbicaciones() {
   el.innerHTML = html;
 }
 
-// ── Modal: Crear ubicación — Cuerpo completo (Mecanismo A), wizard de 2 pasos ─
+// ── Modal: Crear Cuerpo completo (Mecanismo A), wizard de 2 pasos ────────────
 // Dirección de 5 ejes: Pasillo -> Fila (1/2) -> Cuerpo -> Entrepaños -> Huecos.
-// La zona se sugiere sola por entrepaño (piso->PICKING, alto->RESERVA) — no se pide.
-// Paso 1 define el cuerpo (pasillo/fila/número/cantidad de entrepaños); paso 2
-// pide, entrepaño por entrepaño, cuántos huecos tiene — variable, no un único
-// número para todo el cuerpo, porque la profundidad física no es uniforme.
-// El SKU de cada hueco se asigna después, aparte (Asignar SKU, Mecanismo B).
+// Un Cuerpo es 100% de una sola zona — PICKING y RESERVA se arman como Cuerpos
+// separados (botones "+ Crear picking" / "+ Crear reserva"), no mezclados por
+// Nivel dentro del mismo Cuerpo: así cada Cuerpo se revisa completo en una sola
+// pestaña de zona. Paso 1 define el cuerpo (pasillo/fila/número/cantidad de
+// entrepaños); paso 2 pide, entrepaño por entrepaño, cuántos huecos tiene —
+// variable, no un único número para todo el cuerpo, porque la profundidad
+// física no es uniforme. El SKU de cada hueco se asigna después, aparte
+// (Asignar SKU, Mecanismo B).
 
+let _layoutCuerpoZona = 'PICKING';
 let _layoutCuerpoHuecosPrevios = null; // huecosPorNivel del último cuerpo creado, para "repetir"
 
-async function layoutAbrirModalCuerpo() {
+async function layoutAbrirModalCuerpo(zona) {
   const m = document.getElementById('modal-layout-cuerpo');
   if (!m) return;
+  _layoutCuerpoZona = zona;
+
+  document.getElementById('layout-cuerpo-titulo').textContent =
+    zona === 'RESERVA' ? 'Crear Cuerpo — RESERVA' : 'Crear Cuerpo — PICKING';
+  document.getElementById('layout-cuerpo-zona-hint').textContent =
+    `El entrepaño 1 es el más bajo (piso) y sube desde ahí. Todo este Cuerpo queda en zona ${zona}.`;
 
   const existentes = [...new Set(_layoutUbicacionesCache.map(u => u.pasillo).filter(Boolean))].sort();
   let disponibles = [];
@@ -10552,8 +10562,9 @@ async function layoutAbrirModalCuerpo() {
   document.getElementById('layout-cuerpo-huecos-container').innerHTML = '';
   _layoutCuerpoHuecosPrevios = null;
 
+  // "Repetir" solo tiene sentido si el último cuerpo creado fue de la misma zona.
   const btnRepetir = document.getElementById('layout-cuerpo-btn-repetir');
-  if (btnRepetir) btnRepetir.style.display = _layoutUltimoCuerpo ? 'block' : 'none';
+  if (btnRepetir) btnRepetir.style.display = (_layoutUltimoCuerpo && _layoutUltimoCuerpo.zona === zona) ? 'block' : 'none';
 
   document.getElementById('layout-cuerpo-paso1').style.display = 'block';
   document.getElementById('layout-cuerpo-paso2').style.display = 'none';
@@ -10591,11 +10602,10 @@ function layoutCuerpoIrAPaso2() {
   const cont = document.getElementById('layout-cuerpo-huecos-container');
   let html = '';
   for (let nivel = 1; nivel <= cantidad_entrepanos; nivel++) {
-    const zona = nivel <= 2 ? 'PICKING · piso' : 'RESERVA · alto';
     const valor = (_layoutCuerpoHuecosPrevios && _layoutCuerpoHuecosPrevios[nivel - 1]) || 1;
     html += `
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-        <div style="flex:1;font-size:12px;color:var(--tx2);">Entrepaño ${nivel} <span style="color:var(--tx3);">(${zona})</span></div>
+        <div style="flex:1;font-size:12px;color:var(--tx2);">Entrepaño ${nivel}</div>
         <input id="layout-cuerpo-hueco-nivel-${nivel}" type="number" min="1" value="${valor}"
           style="width:72px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;box-sizing:border-box;text-align:center;">
       </div>`;
@@ -10624,11 +10634,11 @@ async function layoutGuardarCuerpo() {
   }
 
   try {
-    const payload = { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_nivel };
+    const payload = { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona: _layoutCuerpoZona, huecos_por_nivel };
     await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, payload);
-    _layoutUltimoCuerpo = { pasillo, fila, cuerpo, entrepanos: cantidad_entrepanos, huecosPorNivel: huecos_por_nivel };
+    _layoutUltimoCuerpo = { pasillo, fila, cuerpo, zona: _layoutCuerpoZona, entrepanos: cantidad_entrepanos, huecosPorNivel: huecos_por_nivel };
     const totalHuecos = huecos_por_nivel.reduce((a, b) => a + b, 0);
-    alerta(`Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2,'0')} creado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s)`, 'ok');
+    alerta(`Cuerpo ${pasillo}${fila}-${String(cuerpo).padStart(2,'0')} (${_layoutCuerpoZona}) creado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s)`, 'ok');
     layoutCerrarModalCuerpo();
     layoutCargarUbicaciones();
   } catch (e) {

@@ -153,16 +153,18 @@ def pasillos_disponibles(id):
 def crear_cuerpo(id):
     """
     Mecanismo A: crea un Cuerpo completo — sus Entrepaños (Nivel) y Huecos, en
-    bloque. La Zona de cada Entrepaño se sugiere sola por su Nivel, no se pide.
-    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_nivel? }
-    huecos_por_nivel es una lista de N enteros (uno por entrepaño, N=cantidad_entrepanos,
-    en orden de Nivel 1..N); si no viene, cada entrepaño nace con 1 hueco.
+    bloque. Un Cuerpo es 100% de una sola Zona (tipo_zona) — PICKING y RESERVA
+    se arman como Cuerpos separados, no mezclados por Nivel dentro del mismo Cuerpo.
+    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel? }
+    tipo_zona debe ser PICKING o RESERVA. huecos_por_nivel es una lista de N
+    enteros (uno por entrepaño, N=cantidad_entrepanos, en orden de Nivel 1..N);
+    si no viene, cada entrepaño nace con 1 hueco.
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
     Almacen.query.get_or_404(id)
     data = request.get_json() or {}
-    campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos')
+    campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos', 'tipo_zona')
     if not all(data.get(c) for c in campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
     try:
@@ -175,6 +177,7 @@ def crear_cuerpo(id):
             fila=int(data['fila']),
             cuerpo=int(data['cuerpo']),
             cantidad_entrepanos=int(data['cantidad_entrepanos']),
+            tipo_zona=data['tipo_zona'],
             huecos_por_nivel=huecos_por_nivel,
         )
         return jsonify({'ubicaciones': [u.to_dict() for u in creadas]}), 201

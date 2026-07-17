@@ -3,8 +3,9 @@ Tests del módulo de Layout — ubicaciones gestionadas 100% en el WMS.
 
 Cubre: letras de pasillo disponibles (A-Z + AA, AB...), creación de un Cuerpo
 completo en bloque (Pasillo -> Fila -> Cuerpo -> Entrepaños -> Huecos, con
-zona sugerida por nivel), numeración de AVERIAS, la regla 1 SKU ↔ 1 ubicación
-PICKING y sus guardarraíles, y los guardarraíles de reclasificación.
+zona fija para todo el Cuerpo — PICKING o RESERVA, no mezclada por nivel),
+numeración de AVERIAS, la regla 1 SKU ↔ 1 ubicación PICKING y sus
+guardarraíles, y los guardarraíles de reclasificación.
 
 editar_fila()/eliminar_fila() son el mecanismo legado sobre el campo 'estante'
 (fila plana previa al rediseño de 5 ejes) — ningún mecanismo nuevo lo escribe,
@@ -21,7 +22,7 @@ def test_letras_disponibles_empieza_en_A(db, almacen):
 
 
 def test_letras_disponibles_excluye_usadas(db, almacen):
-    svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2)
+    svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')
     letras = svc.letras_disponibles(almacen.id, minimo_a_mostrar=3)
     assert 'A' not in letras
     assert letras == ['B', 'C', 'D']
@@ -43,26 +44,40 @@ def test_letras_disponibles_revela_dobles_al_agotar_simples(db, almacen):
     assert letras == ['AA', 'AB', 'AC']
 
 
-def test_crear_cuerpo_genera_codigos_y_zona_sugerida_por_nivel(db, almacen):
-    creadas = svc.crear_cuerpo(almacen.id, 'a', 1, 3, 4)
+def test_crear_cuerpo_genera_codigos_y_aplica_zona_a_todo_el_cuerpo(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'a', 1, 3, 4, 'PICKING')
     codigos = sorted(u.codigo for u in creadas)
     assert codigos == [
-        'PIK-A1-C03-E01-H01', 'PIK-A1-C03-E02-H01', 'RES-A1-C03-E03-H01', 'RES-A1-C03-E04-H01',
+        'PIK-A1-C03-E01-H01', 'PIK-A1-C03-E02-H01', 'PIK-A1-C03-E03-H01', 'PIK-A1-C03-E04-H01',
     ]
     assert all(u.origen == 'MANUAL' for u in creadas)
-    zonas_por_nivel = {u.nivel: u.tipo_zona for u in creadas}
-    assert zonas_por_nivel == {1: 'PICKING', 2: 'PICKING', 3: 'RESERVA', 4: 'RESERVA'}
+    # Un Cuerpo es 100% de una sola zona — los 4 entrepaños heredan PICKING, ninguno pasa a RESERVA solo.
+    assert all(u.tipo_zona == 'PICKING' for u in creadas)
+
+
+def test_crear_cuerpo_reserva_aplica_zona_a_todo_el_cuerpo(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3, 'RESERVA')
+    codigos = sorted(u.codigo for u in creadas)
+    assert codigos == [
+        'RES-A1-C01-E01-H01', 'RES-A1-C01-E02-H01', 'RES-A1-C01-E03-H01',
+    ]
+    assert all(u.tipo_zona == 'RESERVA' for u in creadas)
+
+
+def test_crear_cuerpo_rechaza_zona_invalida(db, almacen):
+    with pytest.raises(ValueError, match='tipo_zona debe ser una de'):
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'AVERIAS')
 
 
 def test_crear_cuerpo_crea_varios_huecos_por_entrepano(db, almacen):
-    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, huecos_por_nivel=[3])
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING', huecos_por_nivel=[3])
     codigos = sorted(u.codigo for u in creadas)
     assert codigos == ['PIK-A1-C01-E01-H01', 'PIK-A1-C01-E01-H02', 'PIK-A1-C01-E01-H03']
     assert all(u.nivel == 1 and u.cuerpo == 1 and u.fila == 1 for u in creadas)
 
 
 def test_crear_cuerpo_huecos_variables_por_nivel(db, almacen):
-    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3, huecos_por_nivel=[3, 2, 4])
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3, 'PICKING', huecos_por_nivel=[3, 2, 4])
     huecos_por_nivel = {}
     for u in creadas:
         huecos_por_nivel.setdefault(u.nivel, []).append(u.hueco)
@@ -74,28 +89,28 @@ def test_crear_cuerpo_huecos_variables_por_nivel(db, almacen):
 
 def test_crear_cuerpo_rechaza_huecos_por_nivel_longitud_incorrecta(db, almacen):
     with pytest.raises(ValueError, match='huecos_por_nivel debe traer un valor'):
-        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3, huecos_por_nivel=[1, 2])
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3, 'PICKING', huecos_por_nivel=[1, 2])
 
 
 def test_crear_cuerpo_rechaza_huecos_por_nivel_con_cero(db, almacen):
     with pytest.raises(ValueError, match='al menos 1 hueco'):
-        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, huecos_por_nivel=[1, 0])
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING', huecos_por_nivel=[1, 0])
 
 
 def test_crear_cuerpo_rechaza_fila_invalida(db, almacen):
     with pytest.raises(ValueError, match='fila debe ser 1 o 2'):
-        svc.crear_cuerpo(almacen.id, 'A', 3, 1, 2)
+        svc.crear_cuerpo(almacen.id, 'A', 3, 1, 2, 'PICKING')
 
 
 def test_crear_cuerpo_rechaza_pasillo_invalido(db, almacen):
     with pytest.raises(ValueError, match='pasillo'):
-        svc.crear_cuerpo(almacen.id, 'A1', 1, 1, 2)
+        svc.crear_cuerpo(almacen.id, 'A1', 1, 1, 2, 'PICKING')
 
 
 def test_crear_cuerpo_rechaza_codigo_duplicado(db, almacen):
-    svc.crear_cuerpo(almacen.id, 'A', 1, 3, 2)
+    svc.crear_cuerpo(almacen.id, 'A', 1, 3, 2, 'PICKING')
     with pytest.raises(ValueError, match='ya existe'):
-        svc.crear_cuerpo(almacen.id, 'A', 1, 3, 2)
+        svc.crear_cuerpo(almacen.id, 'A', 1, 3, 2, 'PICKING')
 
 
 def test_crear_ubicacion_averias_numera_secuencial(db, almacen):
@@ -108,7 +123,7 @@ def test_crear_ubicacion_averias_numera_secuencial(db, almacen):
 
 
 def test_asignar_producto_picking_ok(db, almacen, producto):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     resultado = svc.asignar_producto(ub.id, producto.id, 50)
     assert resultado['cantidad_total'] == 50
 
@@ -117,7 +132,7 @@ def test_asignar_producto_picking_ok(db, almacen, producto):
 
 
 def test_asignar_producto_picking_rechaza_ubicacion_ocupada(db, almacen, producto, producto2):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub.id, producto.id, 50)
 
     with pytest.raises(ValueError, match='ya está asignada'):
@@ -125,8 +140,8 @@ def test_asignar_producto_picking_rechaza_ubicacion_ocupada(db, almacen, product
 
 
 def test_asignar_producto_picking_rechaza_producto_con_otro_slot(db, almacen, producto):
-    ub1 = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
-    ub2 = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1)[0]
+    ub1 = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    ub2 = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub1.id, producto.id, 50)
 
     with pytest.raises(ValueError, match='ya tiene un slot'):
@@ -134,28 +149,28 @@ def test_asignar_producto_picking_rechaza_producto_con_otro_slot(db, almacen, pr
 
 
 def test_asignar_producto_picking_permite_sumar_al_mismo_slot(db, almacen, producto):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub.id, producto.id, 50)
     resultado = svc.asignar_producto(ub.id, producto.id, 20)
     assert resultado['cantidad_total'] == 70
 
 
 def test_asignar_producto_picking_permite_capacidad_maxima(db, almacen, producto):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=80)
 
     assert Ubicacion.query.get(ub.id).capacidad_maxima == 80
 
 
 def test_asignar_producto_reserva_rechaza_capacidad_maxima(db, almacen, producto):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3)[-1]  # nivel 3 -> RESERVA
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'RESERVA')[0]
     with pytest.raises(ValueError, match='capacidad_maxima solo aplica a Huecos PICKING'):
         svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=80)
 
 
 def test_asignar_producto_reserva_sin_restriccion_1a1(db, almacen, producto):
-    ub1 = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 3)[-1]  # nivel 3 -> RESERVA
-    ub2 = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 3)[-1]
+    ub1 = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'RESERVA')[0]
+    ub2 = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'RESERVA')[0]
     assert ub1.tipo_zona == 'RESERVA' and ub2.tipo_zona == 'RESERVA'
     # Mismo producto en dos ubicaciones RESERVA distintas — no debe fallar.
     svc.asignar_producto(ub1.id, producto.id, 100)
@@ -165,7 +180,7 @@ def test_asignar_producto_reserva_sin_restriccion_1a1(db, almacen, producto):
 
 
 def test_reclasificar_bloquea_con_stock_activo(db, almacen, producto):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub.id, producto.id, 50)
 
     with pytest.raises(ValueError, match='unidades activas'):
@@ -173,13 +188,13 @@ def test_reclasificar_bloquea_con_stock_activo(db, almacen, producto):
 
 
 def test_reclasificar_permite_sin_stock(db, almacen):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     resultado = svc.reclasificar_ubicacion(ub.id, tipo_zona='RESERVA')
     assert resultado['ubicacion']['tipo_zona'] == 'RESERVA'
 
 
 def test_reclasificar_liberar_slot_bloquea_con_stock(db, almacen, producto):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub.id, producto.id, 50)
 
     with pytest.raises(ValueError, match='no se puede'):
@@ -187,14 +202,14 @@ def test_reclasificar_liberar_slot_bloquea_con_stock(db, almacen, producto):
 
 
 def test_eliminar_ubicacion_individual_borra_nunca_usada(db, almacen):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     resultado = svc.eliminar_ubicacion(ub.id)
     assert resultado['codigo'] == ub.codigo
     assert Ubicacion.query.get(ub.id) is None
 
 
 def test_eliminar_ubicacion_individual_bloquea_con_stock(db, almacen, producto):
-    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1)[0]
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub.id, producto.id, 50)
 
     with pytest.raises(ValueError, match='stock activo'):

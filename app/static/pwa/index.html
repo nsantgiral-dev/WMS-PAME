@@ -1767,9 +1767,13 @@
     <!-- ── SECCIÓN: UBICACIONES ─────────────────────────────────────── -->
     <div id="layout-sec-ubicaciones">
       <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-        <button onclick="layoutAbrirModalCuerpo()"
+        <button onclick="layoutAbrirModalCuerpo('PICKING')"
           style="padding:10px 16px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
-          + Crear ubicación
+          + Crear picking
+        </button>
+        <button onclick="layoutAbrirModalCuerpo('RESERVA')"
+          style="padding:10px 16px;background:#22c55e;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+          + Crear reserva
         </button>
         <button onclick="layoutCrearAverias()"
           style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
@@ -2570,7 +2574,7 @@
   <!-- Modal Layout: Crear ubicación — Cuerpo completo (Mecanismo A), wizard de 2 pasos -->
   <div id="modal-layout-cuerpo" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;max-height:90vh;overflow-y:auto;">
-      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Crear ubicación</div>
+      <div id="layout-cuerpo-titulo" style="font-size:15px;font-weight:700;margin-bottom:4px;">Crear ubicación</div>
       <div style="font-size:11px;color:var(--tx3);margin-bottom:16px;">Pasillo → Fila → Cuerpo → Entrepaños → Huecos</div>
 
       <!-- Paso 1: dirección del cuerpo -->
@@ -2594,7 +2598,7 @@
         <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad de entrepaños</label>
         <input id="layout-cuerpo-entrepanos" type="number" min="1" placeholder="ej. 4"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:4px;">
-        <div style="font-size:11px;color:var(--tx3);margin-bottom:16px;">El entrepaño 1 es el más bajo (piso) y sube desde ahí. La zona se sugiere sola: 1-2 = PICKING, 3 en adelante = RESERVA.</div>
+        <div id="layout-cuerpo-zona-hint" style="font-size:11px;color:var(--tx3);margin-bottom:16px;">El entrepaño 1 es el más bajo (piso) y sube desde ahí.</div>
 
         <button id="layout-cuerpo-btn-repetir" onclick="layoutRepetirCuerpoAnterior()" style="display:none;width:100%;padding:9px;margin-bottom:12px;background:transparent;border:1px dashed var(--brd);border-radius:8px;color:var(--tx3);font-size:12px;cursor:pointer;">
           ↻ Repetir como el cuerpo anterior

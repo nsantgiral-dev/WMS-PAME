@@ -36,25 +36,50 @@ def test_pasillos_disponibles(client, jwt_token_admin, almacen):
     assert resp.get_json()['letras'] == ['A', 'B', 'C']
 
 
-def test_crear_cuerpo_endpoint(client, jwt_token_admin, almacen):
+def test_crear_cuerpo_endpoint_picking(client, jwt_token_admin, almacen):
     resp = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 201
     ubs = resp.get_json()['ubicaciones']
     assert len(ubs) == 3
     assert ubs[0]['codigo'] == 'PIK-A1-C01-E01-H01'
-    # Nivel 1-2 = PICKING, nivel 3 = RESERVA (zona sugerida por nivel)
-    zonas = sorted(u['tipo_zona'] for u in ubs)
-    assert zonas == ['PICKING', 'PICKING', 'RESERVA']
+    # Un Cuerpo es 100% de una sola zona — los 3 entrepaños quedan en PICKING.
+    assert all(u['tipo_zona'] == 'PICKING' for u in ubs)
+
+
+def test_crear_cuerpo_endpoint_reserva(client, jwt_token_admin, almacen):
+    resp = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3, 'tipo_zona': 'RESERVA'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 201
+    ubs = resp.get_json()['ubicaciones']
+    assert len(ubs) == 3
+    assert ubs[0]['codigo'] == 'RES-A1-C01-E01-H01'
+    assert all(u['tipo_zona'] == 'RESERVA' for u in ubs)
+
+
+def test_crear_cuerpo_endpoint_rechaza_zona_invalida(client, jwt_token_admin, almacen):
+    resp = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'AVERIAS'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert 'tipo_zona' in resp.get_json()['error']
 
 
 def test_crear_cuerpo_endpoint_huecos_por_nivel_variables(client, jwt_token_admin, almacen):
     resp = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2, 'huecos_por_nivel': [3, 1]},
+        json={
+            'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2,
+            'tipo_zona': 'PICKING', 'huecos_por_nivel': [3, 1],
+        },
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 201
@@ -67,7 +92,7 @@ def test_crear_cuerpo_endpoint_huecos_por_nivel_variables(client, jwt_token_admi
 def test_crear_cuerpo_rechaza_sin_admin(client, jwt_token, almacen):
     resp = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token}'},
     )
     assert resp.status_code == 403
@@ -76,7 +101,7 @@ def test_crear_cuerpo_rechaza_sin_admin(client, jwt_token, almacen):
 def test_crear_cuerpo_rechaza_fila_invalida(client, jwt_token_admin, almacen):
     resp = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 3, 'cuerpo': 1, 'cantidad_entrepanos': 2},
+        json={'pasillo': 'A', 'fila': 3, 'cuerpo': 1, 'cantidad_entrepanos': 2, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert resp.status_code == 400
@@ -96,7 +121,7 @@ def test_crear_averias_endpoint(client, jwt_token_admin, almacen):
 def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, producto):
     r1 = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     ub_id = r1.get_json()['ubicaciones'][0]['id']
@@ -122,12 +147,17 @@ def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, produ
 def test_asignar_endpoint_capacidad_maxima_solo_picking(client, jwt_token_admin, almacen, producto):
     r1 = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3, 'huecos_por_nivel': [1, 1, 1]},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
-    ubs = r1.get_json()['ubicaciones']
-    ub_picking_id = next(u['id'] for u in ubs if u['tipo_zona'] == 'PICKING')
-    ub_reserva_id = next(u['id'] for u in ubs if u['tipo_zona'] == 'RESERVA')
+    ub_picking_id = r1.get_json()['ubicaciones'][0]['id']
+
+    r2_setup = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'B', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'RESERVA'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    ub_reserva_id = r2_setup.get_json()['ubicaciones'][0]['id']
 
     r2 = client.post(
         f'/api/almacenes/ubicaciones/{ub_picking_id}/asignar',
@@ -250,7 +280,7 @@ def test_eliminar_fila_endpoint_no_encontrada(client, jwt_token_admin, almacen):
 def test_eliminar_ubicacion_individual_endpoint(client, jwt_token_admin, almacen):
     r1 = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     ub_id = r1.get_json()['ubicaciones'][0]['id']
@@ -267,7 +297,7 @@ def test_eliminar_ubicacion_individual_endpoint(client, jwt_token_admin, almacen
 def test_eliminar_ubicacion_individual_bloquea_con_stock(client, jwt_token_admin, almacen, producto):
     r1 = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     ub_id = r1.get_json()['ubicaciones'][0]['id']
@@ -289,7 +319,7 @@ def test_eliminar_ubicacion_individual_bloquea_con_stock(client, jwt_token_admin
 def test_layout_completo_endpoint(client, jwt_token_admin, almacen):
     client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     resp = client.get(
@@ -304,7 +334,7 @@ def test_layout_completo_endpoint(client, jwt_token_admin, almacen):
 def test_importar_excel_endpoint(client, jwt_token_admin, almacen, producto):
     r1 = client.post(
         f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
-        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3},
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3, 'tipo_zona': 'PICKING'},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     codigo_ub = r1.get_json()['ubicaciones'][0]['codigo']

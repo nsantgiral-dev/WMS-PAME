@@ -86,15 +86,11 @@ def letras_disponibles(almacen_id: int, minimo_a_mostrar: int = 5):
 
 ZONAS_VALIDAS = ('PICKING', 'RESERVA', 'AVERIAS')
 _PREFIJO_ZONA = {'PICKING': 'PIK', 'RESERVA': 'RES', 'AVERIAS': 'AVE'}
-
-
-def _zona_sugerida_por_nivel(nivel: int) -> str:
-    """Nivel 1-2 = piso/zona dorada baja -> PICKING. Nivel 3 en adelante = alto -> RESERVA."""
-    return 'PICKING' if nivel <= 2 else 'RESERVA'
+_ZONAS_CUERPO = ('PICKING', 'RESERVA')  # zonas que se arman con Mecanismo A (Cuerpo completo)
 
 
 def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
-                 cantidad_entrepanos: int, huecos_por_nivel: list = None):
+                 cantidad_entrepanos: int, tipo_zona: str, huecos_por_nivel: list = None):
     """
     Crea un Cuerpo completo de una vez: sus N Entrepaños (Nivel 1 = piso, subiendo)
     y, dentro de cada Entrepaño, sus Huecos. huecos_por_nivel es una lista de N
@@ -106,9 +102,10 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     Este mecanismo solo arma el mapa físico vacío — el SKU y la capacidad de
     cada Hueco se amarran después, uno por uno, con asignar_producto().
 
-    La Zona de cada Entrepaño se sugiere sola según su Nivel — no se pide zona
-    por fuera, porque PICKING (piso) y RESERVA (alto) conviven verticalmente
-    dentro de un mismo Cuerpo, no son cuerpos separados.
+    Un Cuerpo es 100% de una sola Zona (tipo_zona) — todos sus Entrepaños la
+    heredan. PICKING y RESERVA se arman como Cuerpos separados (Crear picking /
+    Crear reserva en el front), no mezclados por Nivel dentro del mismo Cuerpo:
+    así cada Cuerpo se revisa completo en una sola pestaña de zona.
 
     Dirección física: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahía)
     -> Nivel (entrepaño) -> Hueco.
@@ -123,6 +120,8 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         raise ValueError('cuerpo debe ser mayor a 0')
     if cantidad_entrepanos < 1:
         raise ValueError('cantidad_entrepanos debe ser mayor a 0')
+    if tipo_zona not in _ZONAS_CUERPO:
+        raise ValueError(f'tipo_zona debe ser una de {_ZONAS_CUERPO}')
 
     if huecos_por_nivel is None:
         huecos_por_nivel = [1] * cantidad_entrepanos
@@ -135,10 +134,9 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     if not re.fullmatch(r'[A-Z]{1,2}', pasillo):
         raise ValueError('pasillo debe ser una letra o combinación A-Z / AA-ZZ')
 
+    prefijo = _PREFIJO_ZONA[tipo_zona]
     creadas = []
     for nivel in range(1, cantidad_entrepanos + 1):
-        tipo_zona = _zona_sugerida_por_nivel(nivel)
-        prefijo = _PREFIJO_ZONA[tipo_zona]
         for hueco in range(1, huecos_por_nivel[nivel - 1] + 1):
             codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
             if Ubicacion.query.filter_by(codigo=codigo).first():
