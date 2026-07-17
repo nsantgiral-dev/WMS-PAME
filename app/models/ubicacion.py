@@ -81,6 +81,7 @@ class Ubicacion(db.Model):
             'origen': self.origen,
             'producto_asignado_id': self.producto_asignado_id,
             'producto_asignado_codigo': self.producto_asignado.codigo if self.producto_asignado else None,
+            'producto_asignado_nombre': self.producto_asignado.nombre if self.producto_asignado else None,
             'activo': self.activo,
             'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,
         }

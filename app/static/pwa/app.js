@@ -11136,12 +11136,12 @@ function layoutAbrirModalVerEntrepano(idsCsv) {
   cont.innerHTML = huecos.map(u => {
     const huecoLabel = u.codigo.split('-').pop();
     const skuLabel = u.producto_asignado_codigo
-      ? `📦 ${u.producto_asignado_codigo} · ${u.stock_actual ?? 0} UND`
+      ? `📦 ${u.producto_asignado_nombre || u.producto_asignado_codigo} · ${u.stock_actual ?? 0} UND`
       : 'Sin SKU asignado';
     return `
       <div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--brd);">
         <div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div>
-        <div style="flex:1;font-size:12px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div>
+        <div style="flex:1;font-size:12px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${u.producto_asignado_codigo ? `${u.producto_asignado_codigo} — ${u.producto_asignado_nombre || ''}` : ''}">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div>
         <div style="display:flex;gap:4px;flex-shrink:0;">
           <button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${u.id})" style="padding:5px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button>
           <button title="Eliminar" onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')" style="padding:5px 8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button>
