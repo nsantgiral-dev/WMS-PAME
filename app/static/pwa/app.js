@@ -10455,38 +10455,40 @@ function _layoutRenderUbicacionCard(u) {
     </div>`;
 }
 
-// Tarjeta compacta por Entrepaño — una fila por Hueco (código corto, SKU o
-// "Sin SKU", e iconos de Editar/Eliminar/Reclasificar), y un solo botón para
-// abrir el modal de asignación masiva de todo el Entrepaño. Reemplaza pintar
-// una tarjeta completa por Hueco, que con 30+ Cuerpos se vuelve inmanejable.
+// Tarjeta por Entrepaño — mismo formato que la tarjeta vieja por Hueco (título,
+// subtítulo, badge de zona, botones de ancho completo), pero representa el
+// Entrepaño completo, no un Hueco suelto. El detalle hueco por hueco (código,
+// SKU, iconos de editar/eliminar/reclasificar) vive en el modal "Ver" — no en
+// la tarjeta — para que la lista no se vuelva inmanejable con 30+ Cuerpos.
 function _layoutRenderEntrepanoCard(huecos) {
   const zona = huecos[0].tipo_zona;
+  const color = _ZONA_COLOR[zona] || '#888';
+  const nivel = huecos[0].nivel;
   const idsCsv = huecos.map(u => u.id).join(',');
-
-  const filas = huecos.map(u => {
-    const huecoLabel = u.codigo.split('-').pop();
-    const skuLabel = u.producto_asignado_codigo
-      ? `📦 ${u.producto_asignado_codigo} · ${u.stock_actual ?? 0}`
-      : 'Sin SKU';
-    return `
-      <div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-top:1px solid var(--brd);">
-        <div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div>
-        <div style="flex:1;font-size:11px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div>
-        <div style="display:flex;gap:4px;flex-shrink:0;">
-          <button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${u.id})" style="padding:4px 7px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button>
-          <button title="Eliminar" onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')" style="padding:4px 7px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button>
-          <button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${u.id})" style="padding:4px 7px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">⇄</button>
-        </div>
-      </div>`;
-  }).join('');
+  const sinAsignar = huecos.filter(u => !u.producto_asignado_codigo).length;
+  const subtitulo = sinAsignar
+    ? `${huecos.length} hueco(s) · ${sinAsignar} sin SKU asignado`
+    : `${huecos.length} hueco(s) · todos asignados`;
 
   return `
     <div class="tabla-card" style="margin-bottom:10px;">
-      ${filas}
-      <button onclick="layoutAbrirModalAsignarEntrepano('${idsCsv}', '${zona}')"
-        style="width:100%;margin-top:10px;padding:9px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
-        Asignar SKU (todo el entrepaño)
-      </button>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <div style="font-size:15px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
+          <div style="font-size:11px;color:${sinAsignar ? '#555' : '#60a5fa'};margin-top:3px;font-weight:600;">${subtitulo}</div>
+        </div>
+        <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${zona}</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button onclick="layoutAbrirModalAsignarEntrepano('${idsCsv}', '${zona}')"
+          style="flex:1;min-width:120px;padding:10px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+          Asignar SKU
+        </button>
+        <button onclick="layoutAbrirModalVerEntrepano('${idsCsv}')"
+          style="flex:1;min-width:90px;padding:10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">
+          Ver
+        </button>
+      </div>
     </div>`;
 }
 
@@ -11075,6 +11077,49 @@ async function layoutConfirmarAsignarEntrepano() {
     const resEl = document.getElementById('layout-asignar-ent-resultado');
     if (resEl) resEl.innerHTML = errores.map(e => `<div style="color:#f87171;font-size:11px;margin-top:2px;">✗ ${e}</div>`).join('');
   }
+}
+
+// ── Modal: Ver huecos de un Entrepaño (detalle + editar/eliminar/reclasificar) ─
+
+function layoutAbrirModalVerEntrepano(idsCsv) {
+  const ids = idsCsv.split(',').map(Number);
+  const huecos = ids
+    .map(id => _layoutUbicacionesCache.find(u => u.id === id))
+    .filter(Boolean)
+    .sort((a, b) => a.codigo.localeCompare(b.codigo));
+  if (!huecos.length) return;
+
+  const m = document.getElementById('modal-layout-ver-entrepano');
+  if (!m) return;
+
+  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  document.getElementById('layout-ver-ent-titulo').textContent =
+    `${codigoCuerpo} · Entrepaño ${huecos[0].nivel} · ${huecos.length} hueco(s)`;
+
+  const cont = document.getElementById('layout-ver-ent-filas');
+  cont.innerHTML = huecos.map(u => {
+    const huecoLabel = u.codigo.split('-').pop();
+    const skuLabel = u.producto_asignado_codigo
+      ? `📦 ${u.producto_asignado_codigo} · ${u.stock_actual ?? 0} UND`
+      : 'Sin SKU asignado';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--brd);">
+        <div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div>
+        <div style="flex:1;font-size:12px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div>
+        <div style="display:flex;gap:4px;flex-shrink:0;">
+          <button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${u.id})" style="padding:5px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button>
+          <button title="Eliminar" onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')" style="padding:5px 8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button>
+          <button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${u.id})" style="padding:5px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">⇄</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  m.style.display = 'flex';
+}
+
+function layoutCerrarModalVerEntrepano() {
+  const m = document.getElementById('modal-layout-ver-entrepano');
+  if (m) m.style.display = 'none';
 }
 
 // ── Modal: Editar ubicación individual ───────────────────────────────────────
