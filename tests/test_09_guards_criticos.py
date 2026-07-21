@@ -120,12 +120,14 @@ class TestGuardsAntiDuplicadoFE:
         """
         with app.app_context():
             from app.services.connekta_gateway import connekta
-            # Desactivar modo simulación y resetear circuit breaker
+            import requests as _req
             connekta.modo_simulacion = False
             connekta._cb_state = 'CLOSED'
             connekta._cb_failures.clear()
             try:
-                with patch.object(connekta, '_get', side_effect=Exception('Connection timeout')):
+                # Mock requests.get directamente — más robusto que mockear _get
+                # porque atraviesa toda la cadena real (CB check → HTTP → Exception)
+                with patch.object(_req, 'get', side_effect=_req.exceptions.ConnectionError('Connection refused')):
                     with pytest.raises(Exception, match='No se pudo verificar'):
                         connekta.get_factura_desde_pedido('FP', '12345')
             finally:
@@ -140,11 +142,12 @@ class TestGuardsAntiDuplicadoFE:
         """
         with app.app_context():
             from app.services.connekta_gateway import connekta
+            import requests as _req
             connekta.modo_simulacion = False
             connekta._cb_state = 'CLOSED'
             connekta._cb_failures.clear()
             try:
-                with patch.object(connekta, '_get', side_effect=Exception('Connection timeout')):
+                with patch.object(_req, 'get', side_effect=_req.exceptions.ConnectionError('Connection refused')):
                     with pytest.raises(Exception, match='No se pudo verificar'):
                         connekta.get_factura_desde_remision('RM', '999')
             finally:

@@ -1,8 +1,7 @@
 [build]
 builder = "nixpacks"
 buildCommand = """python -m pytest tests/ -x -q --tb=short \
-  --deselect=tests/test_10_traslados.py::TestConnektaGatewayTraslados::test_173079_bodega_salida_es_transito_no_origen \
-  --deselect=tests/test_09_guards_criticos.py::TestGuardsAntiDuplicadoFE::test_get_factura_desde_pedido_falla_red_lanza_excepcion"""
+  --deselect=tests/test_10_traslados.py::TestConnektaGatewayTraslados::test_173079_bodega_salida_es_transito_no_origen"""
 
 [deploy]
 startCommand = "gunicorn wsgi:app --workers=1 --threads=4 --timeout=120"
