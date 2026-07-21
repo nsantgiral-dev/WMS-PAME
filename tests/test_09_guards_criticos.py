@@ -155,33 +155,37 @@ class TestGuardsAntiDuplicadoFE:
     def test_get_factura_desde_pedido_exitoso_retorna_lista(self, app):
         """Cuando Connekta responde OK con facturas, retorna lista correctamente."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
-            connekta.modo_simulacion = False
-            try:
-                mock_response = {
-                    'detalle': {
-                        'Table': [{'f350_ind_estado': '1', 'f350_consec_docto': 5001}]
-                    }
+            from app.services.connekta_gateway import ConnektaGateway
+            gw = ConnektaGateway()
+            gw.modo_simulacion = False
+            gw.ikey = 'test'
+            gw.itoken = 'test'
+            gw._CB_FAILURE_THRESHOLD = 999
+
+            mock_response = {
+                'detalle': {
+                    'Table': [{'f350_ind_estado': '1', 'f350_consec_docto': 5001}]
                 }
-                with patch.object(connekta, '_get', return_value=mock_response):
-                    result = connekta.get_factura_desde_pedido('FP', '12345')
-                assert len(result) == 1
-                assert result[0]['f350_consec_docto'] == 5001
-            finally:
-                connekta.modo_simulacion = True
+            }
+            with patch.object(gw, '_get', return_value=mock_response):
+                result = gw.get_factura_desde_pedido('FP', '12345')
+            assert len(result) == 1
+            assert result[0]['f350_consec_docto'] == 5001
 
     def test_get_factura_desde_pedido_sin_facturas_retorna_lista_vacia(self, app):
         """Cuando no hay FE previa, retorna [] para que el caller proceda."""
         with app.app_context():
-            from app.services.connekta_gateway import connekta
-            connekta.modo_simulacion = False
-            try:
-                mock_response = {'detalle': {'Table': []}}
-                with patch.object(connekta, '_get', return_value=mock_response):
-                    result = connekta.get_factura_desde_pedido('FP', '12345')
-                assert result == []
-            finally:
-                connekta.modo_simulacion = True
+            from app.services.connekta_gateway import ConnektaGateway
+            gw = ConnektaGateway()
+            gw.modo_simulacion = False
+            gw.ikey = 'test'
+            gw.itoken = 'test'
+            gw._CB_FAILURE_THRESHOLD = 999
+
+            mock_response = {'detalle': {'Table': []}}
+            with patch.object(gw, '_get', return_value=mock_response):
+                result = gw.get_factura_desde_pedido('FP', '12345')
+            assert result == []
 
 
 class TestInvPackingBultoGuard:

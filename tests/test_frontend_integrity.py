@@ -119,7 +119,10 @@ class TestScriptIntegrity:
             assert '?v=' in script, f'{script} sin cache bust version param'
 
     def test_all_js_files_parse(self):
-        """Cada archivo JS parsea sin errores de sintaxis."""
+        """Cada archivo JS parsea sin errores de sintaxis (skip si node no disponible)."""
+        import shutil
+        if not shutil.which('node'):
+            pytest.skip('node no disponible en este entorno (Railway solo tiene Python)')
         for f in _all_js_files():
             path = os.path.join(_PWA, f)
             result = subprocess.run(
