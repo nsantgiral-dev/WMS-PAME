@@ -1,12 +1,10 @@
 [build]
 builder = "nixpacks"
-buildCommand = """python -m pytest tests/ -x -q --tb=short \
-  --deselect=tests/test_10_traslados.py::TestConnektaGatewayTraslados::test_173079_bodega_salida_es_transito_no_origen \
-  --deselect=tests/test_packing_service.py::TestCrearTareaPacking::test_crear_tarea_packing"""
+buildCommand = "python -m pytest tests/ -x -q --tb=short --deselect=tests/test_10_traslados.py::TestConnektaGatewayTraslados::test_173079_bodega_salida_es_transito_no_origen --deselect=tests/test_packing_service.py::TestCrearTareaPacking::test_crear_tarea_packing"
 
 [deploy]
 releaseCommand = "flask db upgrade"
-startCommand = "gunicorn wsgi:app --workers=1 --threads=8 --timeout=120"
+startCommand = "gunicorn wsgi:app --workers=2 --threads=4 --timeout=60 --preload"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
