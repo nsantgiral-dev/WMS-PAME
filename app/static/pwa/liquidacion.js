@@ -45,23 +45,25 @@ function liqSubtab(sec) {
   else if (sec === 'jobs') liqCargarJobs();
 }
 
-/** Set today's date as default and load the liquidacion dashboard. */
+/** Set today's date range as default and load the liquidacion dashboard. */
 async function cargarLiquidacion() {
-  // Poner fecha de hoy por defecto si no hay fecha seleccionada
-  const fechaInput = document.getElementById('liq-fecha');
-  if (fechaInput && !fechaInput.value) {
-    fechaInput.value = new Date().toISOString().split('T')[0];
-  }
+  const hoy = new Date().toISOString().split('T')[0];
+  const desde = document.getElementById('liq-fecha-desde');
+  const hasta = document.getElementById('liq-fecha-hasta');
+  if (desde && !desde.value) desde.value = hoy;
+  if (hasta && !hasta.value) hasta.value = hoy;
   await liqCargarDashboard();
 }
 
 // ── Dashboard + KPIs ────────────────────────────────────────────────────────
 
-/** Fetch liquidacion dashboard data for the selected date and render KPIs. */
+/** Fetch liquidacion dashboard data for the selected date range and render KPIs. */
 async function liqCargarDashboard() {
-  const fecha = document.getElementById('liq-fecha')?.value || new Date().toISOString().split('T')[0];
+  const hoy = new Date().toISOString().split('T')[0];
+  const desde = document.getElementById('liq-fecha-desde')?.value || hoy;
+  const hasta = document.getElementById('liq-fecha-hasta')?.value || hoy;
   try {
-    _liqDashboard = await get(`/api/rutas/liquidacion/dashboard?fecha=${fecha}`);
+    _liqDashboard = await get(`/api/rutas/liquidacion/dashboard?fecha_desde=${desde}&fecha_hasta=${hasta}`);
     _liqRenderKpis(_liqDashboard.resumen || {});
     if (_liqSubActual === 'pendientes') liqCargarPendientes();
     else if (_liqSubActual === 'liquidadas') liqCargarLiquidadas();
@@ -120,7 +122,7 @@ function liqCargarLiquidadas() {
   if (!el || !_liqDashboard) return;
   const rutas = (_liqDashboard.rutas || []).filter(r => r.estado_financiero === 'LIQUIDADA');
   if (!rutas.length) {
-    el.innerHTML = '<div style="text-align:center;padding:40px;color:#555;">Sin rutas liquidadas para esta fecha</div>';
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:#555;">Sin rutas liquidadas para este rango de fechas</div>';
     return;
   }
   el.innerHTML = rutas.map(r => _liqRutaCard(r, true)).join('');

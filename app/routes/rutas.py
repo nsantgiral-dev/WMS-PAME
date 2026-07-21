@@ -517,13 +517,19 @@ def liquidacion_dashboard():
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
 
-    fecha_str = request.args.get('fecha')
+    # Soporta rango de fechas (fecha_desde/fecha_hasta) o fecha única (backwards compatible)
+    fecha_desde_str = request.args.get('fecha_desde') or request.args.get('fecha')
+    fecha_hasta_str = request.args.get('fecha_hasta')
     try:
-        fecha = _date.fromisoformat(fecha_str) if fecha_str else _date.today()
+        fecha_desde = _date.fromisoformat(fecha_desde_str) if fecha_desde_str else _date.today()
+        fecha_hasta = _date.fromisoformat(fecha_hasta_str) if fecha_hasta_str else fecha_desde
     except ValueError:
         return jsonify({'error': 'Formato de fecha inválido — usar YYYY-MM-DD'}), 400
 
-    # Rutas entregadas o con procesamiento financiero en esa fecha
+    if fecha_hasta < fecha_desde:
+        fecha_desde, fecha_hasta = fecha_hasta, fecha_desde
+
+    # Rutas entregadas o con procesamiento financiero en el rango
     # Eager load recaudos + bultos→tarea para evitar N+1 (~125 queries → 3)
     rutas = (RutaDespacho.query
              .options(
@@ -533,7 +539,8 @@ def liquidacion_dashboard():
                  joinedload(RutaDespacho.vehiculo),
                  joinedload(RutaDespacho.ruta_maestra),
              )
-             .filter(RutaDespacho.fecha_programada == fecha)
+             .filter(RutaDespacho.fecha_programada >= fecha_desde)
+             .filter(RutaDespacho.fecha_programada <= fecha_hasta)
              .filter(or_(
                  RutaDespacho.estado == 'ENTREGADA',
                  RutaDespacho.estado_financiero != 'PENDIENTE',

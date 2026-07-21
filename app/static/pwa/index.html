@@ -1768,9 +1768,13 @@
     <!-- KPIs rápidos -->
     <div id="liq-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;"></div>
 
-    <!-- Filtro de fecha -->
+    <!-- Filtro de fecha (rango) -->
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
-      <input type="date" id="liq-fecha"
+      <label for="liq-fecha-desde" style="font-size:12px;color:var(--tx3);">Desde</label>
+      <input type="date" id="liq-fecha-desde"
+        style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+      <label for="liq-fecha-hasta" style="font-size:12px;color:var(--tx3);">Hasta</label>
+      <input type="date" id="liq-fecha-hasta"
         style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
       <button onclick="liqCargarDashboard()"
         style="padding:8px 14px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
@@ -2985,7 +2989,7 @@
   <script src="/static/pwa/traslados.js?v=20260720a"></script>
   <script src="/static/pwa/conteo.js?v=20260720a"></script>
   <script src="/static/pwa/reposicion.js?v=20260720a"></script>
-  <script src="/static/pwa/liquidacion.js?v=20260720a"></script>
+  <script src="/static/pwa/liquidacion.js?v=20260721a"></script>
   <script src="/static/pwa/layout.js?v=20260720a"></script>
   <script src="/static/pwa/etiquetas.js?v=20260710a"></script>
   <script>
