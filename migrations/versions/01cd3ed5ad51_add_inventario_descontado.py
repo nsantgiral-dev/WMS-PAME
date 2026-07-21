@@ -1,7 +1,7 @@
 """add inventario_descontado flag to solicitudes_traslado
 
-Revision ID: a1b2c3d4e5f6
-Revises: z7a8b9c0d1e2
+Revision ID: 01cd3ed5ad51
+Revises: d9e0f1a2b3c4
 Create Date: 2026-07-17
 
 Guard de idempotencia para evitar doble decremento de stock WMS
@@ -10,8 +10,8 @@ cuando ejecutar_cierre se reintenta tras Gunicorn timeout.
 from alembic import op
 import sqlalchemy as sa
 
-revision = 'a1b2c3d4e5f6'
-down_revision = 'z7a8b9c0d1e2'
+revision = '01cd3ed5ad51'
+down_revision = 'd9e0f1a2b3c4'
 branch_labels = None
 depends_on = None
 

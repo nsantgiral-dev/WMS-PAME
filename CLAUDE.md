@@ -327,8 +327,8 @@ Railway detecta push a main automáticamente. Pipeline: install deps → pytest 
 
 ### Migraciones pendientes
 
-- `a1b2c3d4e5f6` — `inventario_descontado` flag en solicitudes_traslado
-- `b2c3d4e5f6a7` — unique partial index en sesiones_conteo
+- `01cd3ed5ad51` — `inventario_descontado` flag en solicitudes_traslado
+- `f4b84ad06843` — unique partial index en sesiones_conteo
 
 ### Health Check
 

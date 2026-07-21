@@ -1,7 +1,7 @@
 """add partial unique index on sesiones_conteo to prevent duplicate active CC1
 
-Revision ID: b2c3d4e5f6a7
-Revises: a1b2c3d4e5f6
+Revision ID: f4b84ad06843
+Revises: 01cd3ed5ad51
 Create Date: 2026-07-17
 
 Prevents race condition where API + scheduler create duplicate CC1 sessions
@@ -10,8 +10,8 @@ are excluded — multiple verification counts are valid.
 """
 from alembic import op
 
-revision = 'b2c3d4e5f6a7'
-down_revision = 'a1b2c3d4e5f6'
+revision = 'f4b84ad06843'
+down_revision = '01cd3ed5ad51'
 branch_labels = None
 depends_on = None
 
