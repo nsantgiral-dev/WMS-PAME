@@ -175,6 +175,46 @@ class TestScriptIntegrity:
                 f'{tab} está en TABS array pero no tiene handler en cargarAdmin()'
             )
 
+    def test_cross_module_calls_resolve(self):
+        """Funciones llamadas en un módulo que están definidas en OTRO módulo deben existir.
+        Previene que una limpieza de duplicados borre una función que otro módulo necesita."""
+        # Critical cross-module dependencies (module → functions it calls from other modules)
+        cross_deps = {
+            'app.js': [
+                # Tab dispatchers → module entry points
+                'cargarLiquidacion', 'cargarReposicion', 'cargarInventario',
+                'cargarMuelle', 'cargarRutas', 'cargarTrasladosAdmin',
+                'cargarLayout', 'cargarRecepciones', 'cargarDevoluciones',
+                'cargarRutasConductor', 'cargarTrasladosOperario',
+                'pedirTarea', 'empCargarTareas', 'empIniciarHUD',
+            ],
+            'picking.js': [
+                # Scan dispatcher → other modules
+                'empProcesarEscaneo', 'procesarScanRecepcion',
+                'procesarScanDevolucion', 'imprimirEtiquetaLPN',
+            ],
+            'recepcion.js': [
+                'imprimirEtiquetaLPN',
+            ],
+            'liquidacion.js': [
+                'repReintentar',
+            ],
+        }
+        all_funcs = self._extract_all_functions()
+        missing = []
+        for caller, deps in cross_deps.items():
+            for fn in deps:
+                if fn not in all_funcs:
+                    missing.append(f'{caller} → {fn}() NOT FOUND in any file')
+        assert not missing, (
+            f'{len(missing)} cross-module call(s) broken:\n'
+            + '\n'.join(f'  {m}' for m in missing)
+        )
+
+    def _extract_all_functions(self):
+        code = _all_code()
+        return set(re.findall(r'(?:async\s+)?function\s+(\w+)', code))
+
     def test_no_duplicate_functions_across_files(self):
         """Ninguna función está definida en más de un archivo."""
         func_locations = {}
