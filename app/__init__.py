@@ -32,9 +32,10 @@ def create_app():
     _engine_opts = {'pool_pre_ping': True}
     if not _db_url.startswith('sqlite'):
         _engine_opts.update({
-            'pool_size': int(os.getenv('DB_POOL_SIZE', '10')),
-            'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '5')),
-            'pool_recycle': 1800,   # reciclar conexiones cada 30min (Railway puede cerrar idle)
+            'pool_size': int(os.getenv('DB_POOL_SIZE', '20')),
+            'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '10')),
+            'pool_timeout': 10,    # fail fast si no hay conexión en 10s (evita "Cargando..." eterno)
+            'pool_recycle': 1800,  # reciclar conexiones cada 30min (Railway puede cerrar idle)
         })
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = _engine_opts
     app.config['JWT_SECRET_KEY'] = secret_key
@@ -164,39 +165,59 @@ def create_app():
 
     # ── Scheduler: sync automático cada hora 7am–8pm (Bogotá) ─────────────
     if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
-        _scheduler_modules = [
-            ('app.services.siesa_sync_service',         'init_scheduler',          '[SCHEDULER]'),
+        # Schedulers livianos: arrancan inmediatamente (no saturan DB)
+        _scheduler_inmediatos = [
             ('app.services.pedidos_sync_service',       'init_scheduler',          '[PEDIDOS_SCHEDULER]'),
-            ('app.services.siesa_barcode_sync_service', 'init_scheduler',          '[BARCODE_SCHEDULER]'),
+            ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
+            ('app.services.alertas_service',            'init_scheduler',          '[ALERTAS_SCHEDULER]'),
             ('app.services.traslado_monitor_service',   'init_scheduler',          '[TRASLADO_MONITOR]'),
+        ]
+        # Schedulers pesados: arrancan 90s después para que HTTP sirva primero
+        _scheduler_diferidos = [
+            ('app.services.siesa_sync_service',         'init_scheduler',          '[SCHEDULER]'),
+            ('app.services.siesa_barcode_sync_service', 'init_scheduler',          '[BARCODE_SCHEDULER]'),
             ('app.services.empaques_sync_service',      'init_scheduler',          '[EMPAQUES_SCHEDULER]'),
             ('app.services.ubicaciones_sync_service',   'init_scheduler',          '[UBICACIONES_SCHEDULER]'),
-            ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
             ('app.services.reconciliacion_service',     'init_scheduler',          '[RECONCILIACION_SCHEDULER]'),
-            ('app.services.alertas_service',            'init_scheduler',          '[ALERTAS_SCHEDULER]'),
             ('app.services.traslado_service',           'init_scheduler',          '[STOCK_PREWARM]'),
         ]
+
         _app_logger = logging.getLogger(__name__)
-        for _mod_path, _fn_name, _tag in _scheduler_modules:
+        import importlib as _il
+
+        for _mod_path, _fn_name, _tag in _scheduler_inmediatos:
             try:
-                import importlib as _il
                 _mod = _il.import_module(_mod_path)
                 getattr(_mod, _fn_name)(app)
             except Exception as e:
                 _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
 
-        # ABCService tiene una interfaz diferente (método de clase en vez de función suelta)
-        try:
-            from app.services.abc_service import ABCService
-            ABCService.init_scheduler(app)
-        except Exception as e:
-            logging.getLogger(__name__).error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}', exc_info=True)
+        def _iniciar_pesados():
+            """Arranca schedulers pesados con retardo para no saturar al startup."""
+            _app_logger.info('[STARTUP] Iniciando schedulers pesados (retardo 90s cumplido)')
+            for _mod_path, _fn_name, _tag in _scheduler_diferidos:
+                try:
+                    _mod = _il.import_module(_mod_path)
+                    getattr(_mod, _fn_name)(app)
+                except Exception as e:
+                    _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
+            # ABCService
+            try:
+                from app.services.abc_service import ABCService
+                ABCService.init_scheduler(app)
+            except Exception as e:
+                _app_logger.error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}', exc_info=True)
+            # Refresh inventario multi-bodega
+            try:
+                from app.services.inventario_siesa_service import iniciar_refresh_periodico
+                iniciar_refresh_periodico(app=app)
+            except Exception as e:
+                _app_logger.error(f'[INV-SIESA] Refresh periódico no se pudo iniciar: {e}')
 
-        # Refresh periódico del inventario multi-bodega desde Siesa (cada 30 min)
-        try:
-            from app.services.inventario_siesa_service import iniciar_refresh_periodico
-            iniciar_refresh_periodico(app=app)
-        except Exception as e:
-            logging.getLogger(__name__).error(f'[INV-SIESA] Refresh periódico no se pudo iniciar: {e}')
+        import threading
+        _t = threading.Timer(90, _iniciar_pesados)
+        _t.daemon = True
+        _t.start()
+        _app_logger.info('[STARTUP] Schedulers pesados programados para arrancar en 90s')
 
     return app

@@ -5,7 +5,7 @@ buildCommand = """python -m pytest tests/ -x -q --tb=short \
 
 [deploy]
 releaseCommand = "flask db upgrade"
-startCommand = "gunicorn wsgi:app --workers=1 --threads=4 --timeout=120"
+startCommand = "gunicorn wsgi:app --workers=1 --threads=8 --timeout=120"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "on_failure"
