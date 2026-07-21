@@ -35,3 +35,4 @@ diag_*.py
 reset_*.py
 check_*.py
 facturar_rm_*.py
+# CI cache bust 1784656642
