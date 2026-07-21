@@ -120,14 +120,18 @@ class TestGuardsAntiDuplicadoFE:
         """
         with app.app_context():
             from app.services.connekta_gateway import connekta
-            # Desactivar modo simulación para que llegue al try/except real
+            # Desactivar modo simulación y resetear circuit breaker
             connekta.modo_simulacion = False
+            connekta._cb_state = 'CLOSED'
+            connekta._cb_failures.clear()
             try:
                 with patch.object(connekta, '_get', side_effect=Exception('Connection timeout')):
                     with pytest.raises(Exception, match='No se pudo verificar'):
                         connekta.get_factura_desde_pedido('FP', '12345')
             finally:
                 connekta.modo_simulacion = True
+                connekta._cb_state = 'CLOSED'
+                connekta._cb_failures.clear()
 
     def test_get_factura_desde_remision_falla_red_lanza_excepcion(self, app):
         """
@@ -137,12 +141,16 @@ class TestGuardsAntiDuplicadoFE:
         with app.app_context():
             from app.services.connekta_gateway import connekta
             connekta.modo_simulacion = False
+            connekta._cb_state = 'CLOSED'
+            connekta._cb_failures.clear()
             try:
                 with patch.object(connekta, '_get', side_effect=Exception('Connection timeout')):
                     with pytest.raises(Exception, match='No se pudo verificar'):
                         connekta.get_factura_desde_remision('RM', '999')
             finally:
                 connekta.modo_simulacion = True
+                connekta._cb_state = 'CLOSED'
+                connekta._cb_failures.clear()
 
     def test_get_factura_desde_pedido_exitoso_retorna_lista(self, app):
         """Cuando Connekta responde OK con facturas, retorna lista correctamente."""
