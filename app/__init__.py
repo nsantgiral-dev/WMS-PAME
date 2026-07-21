@@ -34,7 +34,6 @@ def create_app():
         _engine_opts.update({
             'pool_size': int(os.getenv('DB_POOL_SIZE', '20')),
             'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '10')),
-            'pool_timeout': 10,    # fail fast si no hay conexión en 10s (evita "Cargando..." eterno)
             'pool_recycle': 1800,  # reciclar conexiones cada 30min (Railway puede cerrar idle)
         })
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = _engine_opts
@@ -53,15 +52,26 @@ def create_app():
     # Flask-JWT-Extended llama esto en cada @jwt_required() antes de continuar.
     from app.extensions import jwt as _jwt
 
+    # Cache en memoria para evitar query DB en cada request (TTL 60s)
+    _blocklist_cache = {}  # {uid: (activo, timestamp)}
+    _BLOCKLIST_TTL = 60
+
     @_jwt.token_in_blocklist_loader
     def _check_usuario_activo(jwt_header, jwt_payload):
         uid = jwt_payload.get('sub')
         if not uid:
             return True   # token inválido — revocar
+        import time
+        ahora = time.time()
+        cached = _blocklist_cache.get(uid)
+        if cached and (ahora - cached[1]) < _BLOCKLIST_TTL:
+            return not cached[0]  # cached[0] = activo, retorna True si NO activo
         try:
             from app.models.usuario import Usuario
             u = Usuario.query.get(int(uid))
-            return u is None or not u.activo
+            activo = u is not None and u.activo
+            _blocklist_cache[uid] = (activo, ahora)
+            return not activo
         except Exception as _e:
             logging.getLogger(__name__).warning(
                 f'[JWT] Error al verificar blocklist para uid={uid}: {_e} — bloqueando (fail-closed)'
@@ -215,9 +225,9 @@ def create_app():
                 _app_logger.error(f'[INV-SIESA] Refresh periódico no se pudo iniciar: {e}')
 
         import threading
-        _t = threading.Timer(90, _iniciar_pesados)
+        _t = threading.Timer(180, _iniciar_pesados)
         _t.daemon = True
         _t.start()
-        _app_logger.info('[STARTUP] Schedulers pesados programados para arrancar en 90s')
+        _app_logger.info('[STARTUP] Schedulers pesados programados para arrancar en 180s')
 
     return app
