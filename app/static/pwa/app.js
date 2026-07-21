@@ -1786,8 +1786,6 @@ async function iniciarDespachoDesdeSiesa(idx) {
 
 
 
-let _buscarModalTimer;
-
 /**
  * Show modal to request the supplier's remision/invoice number (required by Siesa).
  * @returns {Promise<string|null>} Remision number, or null if cancelled.
@@ -1798,9 +1796,6 @@ let _buscarModalTimer;
 // ─────────────────────────────────────────────────────────────
 // RECEPCIONISTA — Recepción de Traslados (NB1)
 // ─────────────────────────────────────────────────────────────
-let _REC_TRASLADO_ACTIVO    = null;  // ST abierto en conteo
-let _REC_CONTEOS            = {};    // {producto_id: cantidad_contada}
-let _REC_TRASLADOS_PENDIENTES = [];  // lista cargada desde API
 
 
 
@@ -1821,10 +1816,6 @@ let _REC_TRASLADOS_PENDIENTES = [];  // lista cargada desde API
 // EMPACADOR — Estado global
 // ─────────────────────────────────────────────────────────────
 
-let EMP_TAREA = null;       // TareaPacking activa en el HUD
-let EMP_ITEMS = [];         // ItemPacking[] con progreso actual
-let EMP_ITEM_IDX = 0;       // índice del ítem que se está escaneando
-let EMP_EMPAQUES = {};      // producto_id → { factor, unidad } — cargado al iniciar HUD
 
 // ─────────────────────────────────────────────────────────────
 // EMPACADOR — Lista de tareas
@@ -1864,7 +1855,6 @@ let EMP_EMPAQUES = {};      // producto_id → { factor, unidad } — cargado al
 // MODAL BULTOS — declaración de piezas físicas al cerrar packing
 // ─────────────────────────────────────────────────────────────
 
-let _BULTOS_LINEAS = [];
 
 
 
@@ -2162,15 +2152,12 @@ async function _guardarUsuario(uid) {
 }
 
 // ─── MONITOR DE MUELLE ────────────────────────────────────────────────────────
-const MUELLE_ORDEN_KEY = 'wms_muelle_orden'; // localStorage key
 
 
 /** @param {Array<Object>} grupos - Muelle groups to render as sortable cards. */
 
 // Referencia a los grupos actuales para poder reordenarlos sin ir al servidor
-let _MUELLE_GRUPOS_ACTUALES = [];
 // Manifiesto de la ruta activa (grupos ordenados) para reordenamiento en memoria
-let _RUTA_MANIFIESTO_ACTUAL = [];
 
 /**
  * Move a muelle group up or down in the loading order.
@@ -2216,20 +2203,14 @@ let _RUTA_MANIFIESTO_ACTUAL = [];
 
 // ── Entrega por bulto ────────────────────────────────────────
 
-let _ENTREGA_RUTA_ID = null;
-let _ENTREGA_BULTOS  = [];   // [{ id, codigo_barras, tipo, numero, total, cliente, numero_pedido, entregado, motivo_rechazo }]
 
-const MOTIVOS_RECHAZO = ['Cliente rechazó', 'Dirección incorrecta', 'Mercancía averiada', 'No había nadie', 'Pedido duplicado'];
 
 
 
 
 
 // Paradas dinámicas en el form
-let _MAESTRAS_PARADAS = [];
-let _MUNICIPIOS_CACHE = [];
 
-let _municipiosPromise = null;
 
 
 
@@ -2254,60 +2235,7 @@ let _municipiosPromise = null;
 // CONDUCTOR — Pantalla de confirmación de entregas en campo
 // ─────────────────────────────────────────────────────────────
 
-let _COND_RUTAS = [];
-let _COND_RUTA_ACTIVA = null;   // ruta seleccionada
-let _COND_PARADAS = [];         // paradas de la ruta activa
-let _COND_PARADA_FORM = null;   // parada en formulario de confirmación
-let _COND_SYNCING = false;
-let _COND_OFFLINE_INIT = false;
 
-// ── IndexedDB helper (módulo conductor) ──────────────────────────
-const _condDB = (() => {
-  let _db = null;
-  return {
-    async get(key) {
-      const db = await _open();
-      return new Promise(res => {
-        const r = db.transaction('cache').objectStore('cache').get(key);
-        r.onsuccess = () => res(r.result ? r.result.v : null);
-        r.onerror   = () => res(null);
-      });
-    },
-    async set(key, val) {
-      const db = await _open();
-      return new Promise((res, rej) => {
-        const tx = db.transaction('cache', 'readwrite');
-        tx.objectStore('cache').put({ k: key, v: val, ts: Date.now() });
-        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
-      });
-    },
-    async enqueue(item) {
-      const db = await _open();
-      return new Promise((res, rej) => {
-        const tx = db.transaction('queue', 'readwrite');
-        const r  = tx.objectStore('queue').add({ ...item, ts: Date.now() });
-        r.onsuccess = () => res(r.result);
-        r.onerror   = () => rej(r.error);
-      });
-    },
-    async queue() {
-      const db = await _open();
-      return new Promise(res => {
-        const r = db.transaction('queue').objectStore('queue').getAll();
-        r.onsuccess = () => res(r.result || []);
-        r.onerror   = () => res([]);
-      });
-    },
-    async dequeue(id) {
-      const db = await _open();
-      return new Promise((res, rej) => {
-        const tx = db.transaction('queue', 'readwrite');
-        tx.objectStore('queue').delete(id);
-        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
-      });
-    }
-  };
-})();
 
 // ── Lista de rutas del conductor ──────────────────────────────────
 
@@ -2330,7 +2258,6 @@ const _condDB = (() => {
 // PLANILLA DE CUADRE — Admin
 // ══════════════════════════════════════════════════════════════════
 
-let _PLAN_RUTA_ID = null;
 
 /** @param {number} id - Route ID to force-close from admin (bypasses driver confirmation). */
 
@@ -2368,14 +2295,11 @@ async function rutaLiquidarSiesa(id) {
 // ── Config bodega por almacén ─────────────────────────────────────────────────
 
 
-let _CONTEO_PAGE = 1;
-let _CONTEO_VISTA = 'accion';  // 'accion' | 'progreso' | 'resueltos'
 
 
 
 
 
-let _CONTEO_OPERARIOS = [];
 
 
 
@@ -2385,27 +2309,9 @@ let _CONTEO_OPERARIOS = [];
 // TRASLADOS — Admin tab
 // ══════════════════════════════════════════════════════════════════
 
-let _TRAS_SUBTAB = 'transito';
-const TRAS_ESTADO = {
-  transito:   ['EN_TRANSITO'],
-  historial:  ['ENTREGADA','RECHAZADA','CANCELADA','REVERTIDA']
-};
-const TRAS_COL = {
-  BORRADOR:'#374151', ENVIADA:'#1d4ed8', EN_PICKING:'#7c3aed', PREPARADO:'#166534',
-  EN_TRANSITO:'#9a3412', ENTREGADA:'#065f46',
-  RECHAZADA:'#7f1d1d', CANCELADA:'#374151', REVERTIDA:'#4b5563'
-};
 
 
 // ── Admin Pedir — solicitar traslado hacia NB1 ──────────────────
-let _AP_STOCK = [];
-let _AP_STOCK_ESTADO = 'idle';
-let _AP_CARRITO = [];
-let _AP_ORIGEN = null;
-let _AP_FILTRO = '';
-let _AP_PAGINA = 1;
-const _AP_POR_PAGINA = 30;
-let _AP_INICIADO = false;
 
 
 
@@ -3760,8 +3666,6 @@ function abastVerificarBotonModo() {
 // PANEL ADMIN — REPOSICIÓN
 // ══════════════════════════════════════════════════════════════════════════════
 
-let _repSubActual = 'ubicaciones';
-let _repModalUbId = null;
 
 // ── Navegación interna ────────────────────────────────────────────────────────
 
@@ -3788,15 +3692,7 @@ let _repModalUbId = null;
 // Picking, Recepción, Averías y Compras son consumidores de estos datos.
 // ─────────────────────────────────────────────────────────────────────────────
 
-let _layoutSubActual = 'ubicaciones';
-let _layoutZonaActual = 'PICKING';
-let _layoutUbicacionesCache = [];
-let _layoutUltimoCuerpo = null;   // { pasillo, fila, cuerpo, entrepanos, huecosPorNivel } — para "repetir"
-let _layoutUbAsignarId = null;
-let _layoutProductoId = null;
 
-const _ZONA_COLOR = { PICKING: '#60a5fa', RESERVA: '#22c55e', AVERIAS: '#ef4444', GENERAL: '#555' };
-const _ZONAS_TABS = ['PICKING', 'RESERVA', 'AVERIAS', 'GENERAL'];
 
 
 // Sección por Entrepaño (título, subtítulo, badge de zona, botones de ancho
@@ -3894,7 +3790,6 @@ function layoutImprimirEtiquetasCuerpo(idsCsv) {
 // (Asignar SKU, Mecanismo B).
 
 let _layoutCuerpoZona = 'PICKING';
-let _layoutCuerpoHuecosPrevios = null; // huecosPorNivel del último cuerpo creado, para "repetir"
 
 
 
@@ -4090,7 +3985,6 @@ function layoutCerrarModalVerEntrepano() {
 
 // ── Modal: Editar ubicación individual ───────────────────────────────────────
 
-let _layoutUbEditarId = null;
 
 
 // ── Importador Excel (Mecanismo A, opción masiva) ────────────────────────────
