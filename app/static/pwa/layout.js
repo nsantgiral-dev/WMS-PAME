@@ -789,4 +789,141 @@ async function layoutImportarExcel(btn) {
 }
 
 
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Entrepaño: render, asignar SKU batch, ver detalle, imprimir ─────────────
+// Post-modularización: gestión de entrepaños como unidad. Movidas desde app.js.
+
+let _layoutCuerpoZona = 'PICKING';
+let _layoutAsignarEntHuecos = [];
+let _layoutAsignarEntProductos = {};
+
+function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
+  const zona = huecos[0].tipo_zona;
+  const color = _ZONA_COLOR[zona] || '#888';
+  const nivel = huecos[0].nivel;
+  const idsCsv = huecos.map(u => u.id).join(',');
+  const sinAsignar = huecos.filter(u => !u.producto_asignado_codigo).length;
+  const subtitulo = sinAsignar
+    ? `${huecos.length} hueco(s) · ${sinAsignar} sin SKU asignado`
+    : `${huecos.length} hueco(s) · todos asignados`;
+  return `
+    <div style="${esPrimero ? '' : 'border-top:1px solid var(--brd);margin-top:14px;padding-top:14px;'}">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <div style="font-size:15px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
+          <div style="font-size:11px;color:${sinAsignar ? '#555' : '#60a5fa'};margin-top:3px;font-weight:600;">${subtitulo}</div>
+        </div>
+        <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${zona}</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button onclick="layoutAbrirModalAsignarEntrepano('${idsCsv}', '${zona}')"
+          style="flex:1;min-width:120px;padding:10px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Asignar SKU</button>
+        <button onclick="layoutAbrirModalVerEntrepano('${idsCsv}')"
+          style="flex:1;min-width:90px;padding:10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">Ver</button>
+      </div>
+    </div>`;
+}
+
+function layoutImprimirEtiquetasCuerpo(idsCsv) {
+  const ids = idsCsv.split(',').map(Number);
+  const huecos = ids.map(id => _layoutUbicacionesCache.find(u => u.id === id)).filter(Boolean).sort((a, b) => a.codigo.localeCompare(b.codigo));
+  if (!huecos.length) return;
+  const area = document.getElementById('print-area');
+  if (!area) return;
+  area.innerHTML = huecos.map(u => `<div class="etiqueta-ubicacion"><div class="eu-titulo">UBICACIÓN — BODEGA</div><svg id="ub-bc-${u.id}"></svg><div class="eu-codigo">${u.codigo}</div><div class="eu-zona">${u.tipo_zona}</div></div>`).join('');
+  huecos.forEach(u => { try { JsBarcode(`#ub-bc-${u.id}`, u.codigo, { format: 'CODE128', displayValue: false, height: 55, margin: 0 }); } catch (e) {} });
+  setTimeout(() => { window.print(); setTimeout(() => { area.innerHTML = ''; }, 1000); }, 300);
+}
+
+function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
+  const ids = idsCsv.split(',').map(Number);
+  const huecos = ids.map(id => _layoutUbicacionesCache.find(u => u.id === id)).filter(Boolean).sort((a, b) => a.codigo.localeCompare(b.codigo));
+  if (!huecos.length) return;
+  _layoutAsignarEntHuecos = huecos;
+  _layoutAsignarEntProductos = {};
+  const m = document.getElementById('modal-layout-asignar-entrepano');
+  if (!m) return;
+  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  document.getElementById('layout-asignar-ent-titulo').textContent = `${codigoCuerpo} · ${huecos.length} hueco(s) — deja en blanco los que no vayas a asignar hoy`;
+  const cont = document.getElementById('layout-asignar-ent-filas');
+  cont.innerHTML = huecos.map(u => {
+    const huecoLabel = u.codigo.split('-').pop();
+    const yaAsignado = u.producto_asignado_codigo ? `Ya tiene: ${u.producto_asignado_codigo}` : '';
+    return `<div class="tabla-card" style="margin-bottom:8px;padding:10px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-size:12px;font-weight:700;font-family:monospace;color:var(--tx);">${huecoLabel}</div><div id="layout-asignar-ent-estado-${u.id}" style="font-size:11px;color:#60a5fa;">${yaAsignado}</div></div><div style="display:flex;gap:6px;"><input id="layout-asignar-ent-codigo-${u.id}" type="text" placeholder="Código o código de barras" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProductoEntrepano(${u.id});}" style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;"><input id="layout-asignar-ent-cantidad-${u.id}" type="number" min="1" placeholder="Cant." onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}" style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;"></div>${zona === 'PICKING' ? `<input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}</div>`;
+  }).join('');
+  const resEl = document.getElementById('layout-asignar-ent-resultado');
+  if (resEl) resEl.innerHTML = '';
+  m.style.display = 'flex';
+  setTimeout(() => document.getElementById(`layout-asignar-ent-codigo-${huecos[0].id}`)?.focus(), 50);
+}
+
+function layoutCerrarModalAsignarEntrepano() {
+  const m = document.getElementById('modal-layout-asignar-entrepano');
+  if (m) m.style.display = 'none';
+  _layoutAsignarEntHuecos = [];
+  _layoutAsignarEntProductos = {};
+}
+
+async function layoutBuscarProductoEntrepano(huecoId) {
+  const inp = document.getElementById(`layout-asignar-ent-codigo-${huecoId}`);
+  const estado = document.getElementById(`layout-asignar-ent-estado-${huecoId}`);
+  const codigo = inp?.value.trim();
+  if (!codigo) return;
+  try {
+    const d = await get(`/api/productos/?q=${encodeURIComponent(codigo)}&per_page=1`);
+    const prod = (d.productos || [])[0];
+    if (!prod) { delete _layoutAsignarEntProductos[huecoId]; if (estado) { estado.textContent = 'No encontrado'; estado.style.color = '#f87171'; } return; }
+    _layoutAsignarEntProductos[huecoId] = prod.id;
+    if (estado) { estado.textContent = `✓ ${prod.codigo} — ${prod.nombre}`; estado.style.color = '#4ade80'; }
+    document.getElementById(`layout-asignar-ent-cantidad-${huecoId}`)?.focus();
+  } catch (e) { if (estado) { estado.textContent = 'Error buscando'; estado.style.color = '#f87171'; } }
+}
+
+function layoutAsignarEntSiguiente(huecoId) {
+  const idx = _layoutAsignarEntHuecos.findIndex(u => u.id === huecoId);
+  const siguiente = _layoutAsignarEntHuecos[idx + 1];
+  if (siguiente) document.getElementById(`layout-asignar-ent-codigo-${siguiente.id}`)?.focus();
+}
+
+async function layoutConfirmarAsignarEntrepano() {
+  let ok = 0; const errores = [];
+  for (const u of _layoutAsignarEntHuecos) {
+    const productoId = _layoutAsignarEntProductos[u.id];
+    const cantidad = parseInt(document.getElementById(`layout-asignar-ent-cantidad-${u.id}`)?.value);
+    if (!productoId || isNaN(cantidad) || cantidad <= 0) continue;
+    const capRaw = document.getElementById(`layout-asignar-ent-capacidad-${u.id}`)?.value;
+    const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
+    try {
+      const payload = { producto_id: productoId, cantidad };
+      if (capacidad_maxima !== null && !isNaN(capacidad_maxima)) payload.capacidad_maxima = capacidad_maxima;
+      await post(`/api/almacenes/ubicaciones/${u.id}/asignar`, payload);
+      ok++;
+    } catch (e) { errores.push(`${u.codigo.split('-').pop()}: ${e.message || 'error'}`); }
+  }
+  if (ok === 0 && errores.length === 0) { alerta('No hay ninguna fila completa (código + cantidad) para asignar', 'error'); return; }
+  alerta(`${ok} hueco(s) asignado(s)${errores.length ? ` — ${errores.length} error(es)` : ''}`, errores.length ? 'advertencia' : 'ok');
+  layoutCargarUbicaciones();
+  if (errores.length === 0) { layoutCerrarModalAsignarEntrepano(); }
+  else { const resEl = document.getElementById('layout-asignar-ent-resultado'); if (resEl) resEl.innerHTML = errores.map(e => `<div style="color:#f87171;font-size:11px;margin-top:2px;">✗ ${e}</div>`).join(''); }
+}
+
+function layoutAbrirModalVerEntrepano(idsCsv) {
+  const ids = idsCsv.split(',').map(Number);
+  const huecos = ids.map(id => _layoutUbicacionesCache.find(u => u.id === id)).filter(Boolean).sort((a, b) => a.codigo.localeCompare(b.codigo));
+  if (!huecos.length) return;
+  const m = document.getElementById('modal-layout-ver-entrepano');
+  if (!m) return;
+  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  document.getElementById('layout-ver-ent-titulo').textContent = `${codigoCuerpo} · Entrepaño ${huecos[0].nivel} · ${huecos.length} hueco(s)`;
+  const cont = document.getElementById('layout-ver-ent-filas');
+  cont.innerHTML = huecos.map(u => {
+    const huecoLabel = u.codigo.split('-').pop();
+    const skuLabel = u.producto_asignado_codigo ? `📦 ${u.producto_asignado_nombre || u.producto_asignado_codigo} · ${u.stock_actual ?? 0} UND` : 'Sin SKU asignado';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--brd);"><div style="font-size:12px;font-family:monospace;font-weight:700;color:var(--tx);min-width:34px;">${huecoLabel}</div><div style="flex:1;font-size:12px;color:${u.producto_asignado_codigo ? '#60a5fa' : '#888'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuLabel}${!u.activo ? ' · INACTIVA' : ''}</div><div style="display:flex;gap:4px;flex-shrink:0;"><button title="Editar" onclick="layoutAbrirModalEditarUbicacion(${u.id})" style="padding:5px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">✏</button><button title="Eliminar" onclick="layoutEliminarUbicacion(${u.id}, '${u.codigo}')" style="padding:5px 8px;background:var(--bg);border:1px solid #7f1d1d;border-radius:5px;color:#f87171;font-size:11px;cursor:pointer;">🗑</button><button title="Reclasificar" onclick="layoutAbrirModalReclasificar(${u.id})" style="padding:5px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;">⇄</button></div></div>`;
+  }).join('');
+  m.style.display = 'flex';
+}
+
+function layoutCerrarModalVerEntrepano() {
+  const m = document.getElementById('modal-layout-ver-entrepano');
+  if (m) m.style.display = 'none';
+}
