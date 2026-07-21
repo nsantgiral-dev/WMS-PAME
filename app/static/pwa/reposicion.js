@@ -8,6 +8,10 @@ let _repModalUbId = null;
 
 // ── Navegación interna ────────────────────────────────────────────────────────
 
+/**
+ * Switch the active reposicion sub-tab and load its section content.
+ * @param {string} sec - Section key: 'ubicaciones', 'tareas', 'huerfanas', or 'jobs'.
+ */
 function repSubtab(sec) {
   _repSubActual = sec;
   ['ubicaciones','tareas','huerfanas','jobs'].forEach(s => {
@@ -26,6 +30,7 @@ function repSubtab(sec) {
   else if (sec === 'jobs')     repCargarJobs();
 }
 
+/** Check for failed Siesa jobs alert and load the active reposicion section. */
 async function cargarReposicion() {
   // Revisar alerta de jobs fallidos en paralelo
   try {
@@ -48,6 +53,7 @@ async function cargarReposicion() {
 
 // ── SECCIÓN 1: Ubicaciones PICKING ───────────────────────────────────────────
 
+/** Fetch and render all PICKING-type ubicaciones with stock semaphore indicators. */
 async function repCargarUbicaciones() {
   const el = document.getElementById('rep-lista-ubicaciones');
   if (!el) return;
@@ -136,6 +142,15 @@ async function repCargarUbicaciones() {
 }
 
 // Modal configurar límites
+/**
+ * Open the limits configuration modal for a PICKING ubicacion.
+ * @param {number} ubId - Ubicacion ID.
+ * @param {string} codigo - Ubicacion code.
+ * @param {number|string} min - Current stock minimum or empty string.
+ * @param {number|string} max - Current stock maximum or empty string.
+ * @param {number|string} seq - Current routing sequence or empty string.
+ * @param {string} sku - Assigned SKU label or empty string.
+ */
 function repAbrirModal(ubId, codigo, min, max, seq, sku) {
   _repModalUbId = ubId;
   const m = document.getElementById('modal-rep-limites');
@@ -149,12 +164,14 @@ function repAbrirModal(ubId, codigo, min, max, seq, sku) {
   m.style.display = 'flex';
 }
 
+/** Close the limits configuration modal. */
 function repCerrarModal() {
   const m = document.getElementById('modal-rep-limites');
   if (m) m.style.display = 'none';
   _repModalUbId = null;
 }
 
+/** Save min/max stock limits and routing sequence for the active ubicacion. */
 async function repGuardarLimites() {
   if (!_repModalUbId) return;
   const min = parseInt(document.getElementById('rep-modal-min')?.value);
@@ -185,6 +202,7 @@ async function repGuardarLimites() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Trigger stock level verification and generate reposicion tasks if needed. */
 async function repVerificarStock() {
   try {
     const r = await fetch(API + '/api/reposicion/verificar-stock', {
@@ -201,6 +219,7 @@ async function repVerificarStock() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Start a background sync of PIK-* ubicaciones from Siesa. */
 async function repSyncUbicaciones() {
   try {
     const r = await fetch(API + '/api/reposicion/sync-ubicaciones', {
@@ -217,6 +236,7 @@ async function repSyncUbicaciones() {
 
 // ── SECCIÓN 2: Tareas de Reposición ─────────────────────────────────────────
 
+/** Fetch and render reposicion tasks filtered by the selected status. */
 async function repCargarTareas() {
   const el = document.getElementById('rep-lista-tareas');
   if (!el) return;
@@ -279,6 +299,11 @@ async function repCargarTareas() {
   }
 }
 
+/**
+ * Cancel a reposicion task after confirmation.
+ * @param {number} id - Reposicion task ID.
+ * @param {string} codigo - Task code for the confirmation prompt.
+ */
 async function repCancelarTarea(id, codigo) {
   if (!confirm(`¿Cancelar tarea ${codigo}?`)) return;
   try {
@@ -295,6 +320,7 @@ async function repCancelarTarea(id, codigo) {
 
 // ── SECCIÓN 3: Ubicaciones Huérfanas ─────────────────────────────────────────
 
+/** Fetch and render orphaned ubicaciones that lack a valid prefix in Siesa. */
 async function repCargarHuerfanas() {
   const el = document.getElementById('rep-lista-huerfanas');
   if (!el) return;
@@ -341,6 +367,7 @@ async function repCargarHuerfanas() {
 
 // ── SECCIÓN 4: Jobs Siesa (DLQ) ──────────────────────────────────────────────
 
+/** Fetch and render Siesa DLQ jobs filtered by the selected status. */
 async function repCargarJobs() {
   const el = document.getElementById('rep-lista-jobs');
   if (!el) return;
@@ -379,6 +406,12 @@ async function repCargarJobs() {
   }
 }
 
+/**
+ * Build the HTML card for a Siesa DLQ job.
+ * @param {Object} j - Job object with estado, intentos, error_ultimo, etc.
+ * @param {boolean} mostrarReintentar - Whether to show the retry button.
+ * @returns {string} HTML string for the job card.
+ */
 function _repJobCard(j, mostrarReintentar) {
   const estadoColor = { PENDIENTE: '#f59e0b', COMPLETADO: '#22c55e', FALLIDO: '#ef4444' };
   const color = estadoColor[j.estado] || '#888';
@@ -419,6 +452,10 @@ function _repJobCard(j, mostrarReintentar) {
     </div>`;
 }
 
+/**
+ * Retry a specific failed Siesa job immediately.
+ * @param {number} jobId - Siesa job ID.
+ */
 async function repReintentar(jobId) {
   try {
     const r = await fetch(API + `/api/reposicion/siesa-jobs/${jobId}/reintentar`, {
@@ -432,6 +469,10 @@ async function repReintentar(jobId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Retry all failed DESPACHO_F470 Siesa jobs at once.
+ * @param {HTMLButtonElement} btn - Button element to disable during processing.
+ */
 async function repReintentarTodosFallidos(btn) {
   if (!confirm('¿Reintentar TODOS los jobs DESPACHO_F470 fallidos? Esto enviará las facturas pendientes a Siesa.')) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
@@ -454,6 +495,10 @@ async function repReintentarTodosFallidos(btn) {
   }
 }
 
+/**
+ * Send a test email via the reposicion alerts SMTP endpoint.
+ * @param {HTMLButtonElement} btn - Button element to disable during sending.
+ */
 async function repTestEmail(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {

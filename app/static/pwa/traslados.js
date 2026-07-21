@@ -19,6 +19,10 @@ const TRAS_COL = {
   RECHAZADA:'#7f1d1d', CANCELADA:'#374151', REVERTIDA:'#4b5563'
 };
 
+/**
+ * Switch the active traslados sub-tab and load its content.
+ * @param {string} nombre - Sub-tab key: 'pedir', 'transito', or 'historial'.
+ */
 function trasSubtab(nombre) {
   _TRAS_SUBTAB = nombre;
   ['pedir','transito','historial'].forEach(k => {
@@ -42,6 +46,7 @@ function trasSubtab(nombre) {
   }
 }
 
+/** Fetch and render traslado cards for the current admin sub-tab. */
 async function cargarTrasladosAdmin() {
   const lista = document.getElementById('tras-lista');
   if (!lista) return;
@@ -64,6 +69,11 @@ async function cargarTrasladosAdmin() {
   }
 }
 
+/**
+ * Build the HTML card for a single traslado solicitud.
+ * @param {Object} s - Solicitud object from the API.
+ * @returns {string} HTML string for the card.
+ */
 function _renderTrasladoCard(s) {
   const col = TRAS_COL[s.estado] || '#333';
   const fechaCreacion = s.fecha_creacion ? new Date(s.fecha_creacion) : null;
@@ -173,6 +183,7 @@ let _AP_PAGINA = 1;
 const _AP_POR_PAGINA = 30;
 let _AP_INICIADO = false;
 
+/** Initialize the "Pedir" panel: populate origin selector and load stock. */
 function adminPedirIniciar() {
   if (_AP_INICIADO) return;
   _AP_INICIADO = true;
@@ -190,6 +201,10 @@ function adminPedirIniciar() {
   adminPedirCargarStock();
 }
 
+/**
+ * Handle origin bodega change; reset cart and reload stock.
+ * @param {HTMLSelectElement} sel - The origin bodega dropdown.
+ */
 function adminPedirCambiarOrigen(sel) {
   const opt = sel.options[sel.selectedIndex];
   _AP_ORIGEN = { id: sel.value, nombre: opt.dataset.nombre || sel.value };
@@ -200,6 +215,7 @@ function adminPedirCambiarOrigen(sel) {
   adminPedirCargarStock();
 }
 
+/** Fetch available stock from the selected origin bodega. */
 async function adminPedirCargarStock() {
   _AP_STOCK_ESTADO = 'cargando';
   adminPedirRenderStock();
@@ -213,6 +229,7 @@ async function adminPedirCargarStock() {
   adminPedirRenderStock();
 }
 
+/** Invalidate stock cache on the server and reload fresh data. */
 async function adminPedirActualizarStock() {
   const btn = document.getElementById('admin-pedir-btn-refresh');
   if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.textContent = '…'; }
@@ -227,18 +244,24 @@ async function adminPedirActualizarStock() {
   finally { if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '↻'; } }
 }
 
+/** Apply text filter from the search input to the stock list. */
 function adminPedirFiltrarStock() {
   _AP_FILTRO = (document.getElementById('admin-pedir-buscar')?.value || '').toLowerCase();
   _AP_PAGINA = 1;
   adminPedirRenderStock();
 }
 
+/**
+ * Navigate to a specific page in the stock list.
+ * @param {number} p - Page number to display.
+ */
 function adminPedirIrPagina(p) {
   _AP_PAGINA = p;
   adminPedirRenderStock();
   document.getElementById('admin-pedir-stock-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/** Render the paginated stock grid with filter and cart state applied. */
 function adminPedirRenderStock() {
   const el = document.getElementById('admin-pedir-stock-lista');
   if (!el) return;
@@ -299,6 +322,13 @@ function adminPedirRenderStock() {
   }).join('') + nav;
 }
 
+/**
+ * Add or update a product in the request cart.
+ * @param {string} codigoSiesa - Siesa product code.
+ * @param {string} nombre - Product display name.
+ * @param {number} disponible - Maximum available quantity.
+ * @param {number|null} productoId - WMS product ID.
+ */
 function adminPedirAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
   const inp = document.getElementById(`ap-qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`);
   const cantidad = Math.min(parseInt(inp?.value || 1), disponible);
@@ -310,6 +340,7 @@ function adminPedirAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
   adminPedirRenderStock();
 }
 
+/** Re-render the cart summary panel with current items. */
 function adminPedirActualizarCarrito() {
   const header = document.getElementById('admin-pedir-carrito-header');
   const items = document.getElementById('admin-pedir-carrito-items');
@@ -325,12 +356,17 @@ function adminPedirActualizarCarrito() {
   ).join('');
 }
 
+/**
+ * Remove a product from the request cart by its Siesa code.
+ * @param {string} codigoSiesa - Siesa product code to remove.
+ */
 function adminPedirQuitarCarrito(codigoSiesa) {
   _AP_CARRITO = _AP_CARRITO.filter(c => c.codigo_siesa !== codigoSiesa);
   adminPedirActualizarCarrito();
   adminPedirRenderStock();
 }
 
+/** Create and immediately send a traslado solicitud from the current cart. */
 async function adminPedirEnviarSolicitud() {
   if (!_AP_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
   const origen = _AP_ORIGEN?.nombre || _AP_ORIGEN?.id || 'la bodega';
@@ -366,6 +402,7 @@ async function adminPedirEnviarSolicitud() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Fetch and render traslados assigned to the current operario. */
 async function cargarTrasladosOperario() {
   const contenedor = document.getElementById('traslados-operario');
   if (!contenedor) return;
@@ -386,6 +423,11 @@ async function cargarTrasladosOperario() {
   }
 }
 
+/**
+ * Build the HTML card for a traslado assigned to an operario.
+ * @param {Object} t - Traslado object with items and metadata.
+ * @returns {string} HTML string for the operario card.
+ */
 function _renderTrasladoOperario(t) {
   const itemsHtml = (t.items || []).map(i => {
     const cant = i.cantidad_aprobada || i.cantidad_solicitada;
@@ -405,6 +447,10 @@ function _renderTrasladoOperario(t) {
     </div>`;
 }
 
+/**
+ * Confirm picking completion for a traslado, advancing it to PREPARADO.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasConfirmarRecogida(id) {
   if (!confirm('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrás despacharlo.')) return;
   try {
@@ -414,6 +460,10 @@ async function trasConfirmarRecogida(id) {
   } catch (e) { alerta(e.message || 'Error', 'error'); }
 }
 
+/**
+ * Dispatch a traslado directly, skipping picking confirmation.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasDespacharDirecto(id) {
   if (!confirm('¿Despachar directamente sin confirmar picking? Se usarán las cantidades aprobadas como enviadas.')) return;
   try {
@@ -423,6 +473,10 @@ async function trasDespacharDirecto(id) {
   } catch (e) { alerta(e.message || 'Error', 'error'); }
 }
 
+/**
+ * Show a modal to reassign a different operario to a traslado.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasReasignarOperario(id) {
   let operariosData;
   try {
@@ -458,6 +512,10 @@ async function trasReasignarOperario(id) {
   };
 }
 
+/**
+ * Open the approval modal to approve quantities and assign an operario.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasAprobar(id) {
   // Carga solicitud y operarios en paralelo
   let solicitud, operariosData;
@@ -536,6 +594,10 @@ async function trasAprobar(id) {
   };
 }
 
+/**
+ * Reject a traslado solicitud with a reason prompt.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasRechazar(id) {
   const motivo = prompt('Motivo del rechazo:');
   if (!motivo) return;
@@ -551,6 +613,10 @@ async function trasRechazar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Display a bottom-sheet modal with LPNs linked to a traslado.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasVerLPNs(id) {
   let data;
   try {
@@ -586,6 +652,10 @@ async function trasVerLPNs(id) {
   document.body.appendChild(modal);
 }
 
+/**
+ * Confirm dispatch of a prepared traslado and notify Siesa.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasDespachar(id) {
   if (!confirm('¿Confirmar despacho? El operario ya preparó los ítems. Se notificará a Siesa (salida de bodega).')) return;
   try {
@@ -599,6 +669,10 @@ async function trasDespachar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Confirm reception of a traslado at the destination store.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasConfirmarRecepcion(id) {
   if (!confirm('¿Confirmar recepción? Se notificará a Siesa (entrada en tienda).')) return;
   try {
@@ -613,6 +687,10 @@ async function trasConfirmarRecepcion(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Revert a traslado, returning units to the source warehouse inventory.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasRevertir(id) {
   const motivo = prompt('Motivo de la reversión (opcional):\nEj: "Camión regresó — mercancía no entregada"', '');
   if (motivo === null) return;
@@ -629,6 +707,10 @@ async function trasRevertir(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Retry the Siesa reception entry (connector 173079) for a traslado.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasReintentarRecepcionSiesa(id) {
   if (!confirm('¿Reintentar registro de entrada en Siesa (173079)? Solo usar si la recepción física ya fue confirmada.')) return;
   try {
@@ -643,6 +725,10 @@ async function trasReintentarRecepcionSiesa(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Retry the Siesa dispatch notification for a traslado without changing state.
+ * @param {number} id - Traslado solicitud ID.
+ */
 async function trasReintentarDespachoSiesa(id) {
   if (!confirm('¿Reintentar notificación a Siesa del despacho? No mueve el estado.')) return;
   try {

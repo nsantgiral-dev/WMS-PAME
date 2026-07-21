@@ -7,11 +7,13 @@
   }
 })();
 
+/** @param {boolean} isLight - Whether light theme is active. */
 function _actualizarLogo(isLight) {
   const src = isLight ? '/static/pwa/logo-h.png' : '/static/pwa/logo-white.png';
   document.querySelectorAll('.header-logo img, .login-logo img').forEach(img => { img.src = src; });
 }
 
+/** Toggle between dark and light theme, persisting choice to localStorage. */
 function toggleTheme() {
   const isLight = document.body.classList.toggle('light');
   localStorage.setItem('wms_theme', isLight ? 'light' : 'dark');
@@ -53,6 +55,7 @@ let RUTAS_TIPO_SEL = 'Urbana'; // tipo seleccionado en form nueva ruta
 let RUTAS_SUBTAB = 'rutas';    // sub-tab activo en tab-rutas
 let MUELLE_TIMER = null;
 
+/** @param {ServiceWorkerRegistration} reg - SW registration with a waiting worker. */
 function _mostrarBannerSW(reg) {
   if (document.getElementById('sw-update-banner')) return;
   const div = document.createElement('div');
@@ -98,6 +101,10 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
+/**
+ * Route user to the correct screen and start timers based on their role.
+ * @param {string} rol - User role (admin, operario, recepcionista, conductor, tienda, compras, etc.).
+ */
 function mostrarSegunRol(rol) {
   pararTimers();
   const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
@@ -182,6 +189,7 @@ function mostrarSegunRol(rol) {
   }
 }
 
+/** Clear all polling intervals and reset active reception/return state. */
 function pararTimers() {
   clearInterval(TIMER_ADMIN);
   clearInterval(TIMER_OPERARIO);
@@ -191,6 +199,7 @@ function pararTimers() {
   DEVOLUCION_ACTUAL = null;
 }
 
+/** Set up online/offline listeners and update connection status indicators. */
 function monitorRed() {
   const update = () => {
     const on = navigator.onLine;
@@ -205,6 +214,7 @@ function monitorRed() {
   update();
 }
 
+/** Send queued offline actions to the server and clear the local queue on success. */
 async function syncOffline() {
   try {
     const r = await post('/api/mobile/sync', { cola: COLA_OFFLINE });
@@ -216,12 +226,14 @@ async function syncOffline() {
   } catch (e) {}
 }
 
+/** @param {Object} datos - Action payload to enqueue for later sync. */
 function guardarOffline(datos) {
   COLA_OFFLINE.push({ ...datos, ts: Date.now() });
   localStorage.setItem('wms_cola_offline', JSON.stringify(COLA_OFFLINE));
   alerta('Sin WiFi — guardado para sincronizar', 'advertencia');
 }
 
+/** Initialize laser/Bluetooth scanner input listener with keystroke buffering. */
 function scannerLaser() {
   const inp = document.getElementById('scanner-input');
   if (!inp) return;
@@ -255,6 +267,11 @@ function scannerLaser() {
   });
 }
 
+/**
+ * Validate fetch response: handle 401, parse JSON, throw on error.
+ * @param {Response} r - Fetch response.
+ * @returns {Promise<Object>} Parsed JSON body.
+ */
 async function _checkResp(r) {
   if (r.status === 401) { salir(true); throw new Error('401'); }
   if (!r.ok) {
@@ -276,6 +293,11 @@ async function _checkResp(r) {
   return r.json();
 }
 
+/**
+ * Authenticated GET request.
+ * @param {string} url - API path (relative to origin).
+ * @returns {Promise<Object>} Parsed JSON response.
+ */
 async function get(url) {
   const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });
   return _checkResp(r);
@@ -299,6 +321,12 @@ async function _refreshBtn(event, fn) {
   }
 }
 
+/**
+ * Authenticated POST request with JSON body.
+ * @param {string} url - API path.
+ * @param {Object} body - Request payload.
+ * @returns {Promise<Object>} Parsed JSON response.
+ */
 async function post(url, body) {
   const r = await fetch(API + url, {
     method: 'POST',
@@ -308,6 +336,12 @@ async function post(url, body) {
   return _checkResp(r);
 }
 
+/**
+ * Authenticated PUT request with JSON body.
+ * @param {string} url - API path.
+ * @param {Object} [body={}] - Request payload.
+ * @returns {Promise<Object>} Parsed JSON response.
+ */
 async function put(url, body = {}) {
   const r = await fetch(API + url, {
     method: 'PUT',
@@ -317,6 +351,7 @@ async function put(url, body = {}) {
   return _checkResp(r);
 }
 
+/** Authenticate user with email/password, store token, and route to role screen. */
 async function login() {
   const email = document.getElementById('login-email').value.trim();
   const pass = document.getElementById('login-password').value.trim();
@@ -369,11 +404,16 @@ async function login() {
   }
 }
 
+/** @param {Object} op - Operario object with nombre and rol fields. */
 function actualizarUI(op) {
   ['op-nombre','admin-nombre','rec-nombre','abast-nombre','emp-nombre'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.nombre; });
   ['op-rol','admin-rol'].forEach(id => { const el = document.getElementById(id); if (el) el.textContent = op.rol; });
 }
 
+/**
+ * Log out: clear tokens, stop timers, return to login screen.
+ * @param {boolean} [porExpiracion=false] - True if logout was caused by token expiration.
+ */
 function salir(porExpiracion = false) {
   pararTimers();
   TOKEN = null; OPERARIO = null; TAREA_ACTUAL = null;
@@ -383,6 +423,10 @@ function salir(porExpiracion = false) {
   if (porExpiracion) alerta('Sesión expirada — vuelve a ingresar', 'advertencia');
 }
 
+/**
+ * Refresh the currently active admin tab content.
+ * @param {boolean} [desdeTimer=false] - True when called from the 30s polling timer.
+ */
 async function cargarAdmin(desdeTimer = false) {
   if (TAB === 'tab-dashboard') await cargarDashboard();
   else if (TAB === 'tab-pedidos') await cargarPedidos();
@@ -404,6 +448,7 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-compras') await cargarCompras();
 }
 
+/** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
   const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-layout','tab-compras','tab-etiquetas'];
   TABS.forEach(t => {
@@ -417,6 +462,7 @@ function tab(id) {
   cargarAdmin();
 }
 
+/** Fetch and render the full admin dashboard (KPIs, chart, alerts, productivity). */
 async function cargarDashboard() {
   try {
     const d = await get('/api/dashboard/resumen-completo?almacen_id=' + ALMACEN_ID);
@@ -539,6 +585,12 @@ async function cargarDashboard() {
   } catch (e) { console.error('[Dashboard]', e); }
 }
 
+/**
+ * Update a traffic-light status indicator.
+ * @param {string} id - DOM element ID of the semaphore.
+ * @param {string} color - Status color key (verde, amarillo, rojo, gris).
+ * @param {string} texto - Label text to display.
+ */
 function _semaforo(id, color, texto) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -547,6 +599,7 @@ function _semaforo(id, color, texto) {
   if (lbl) lbl.textContent = el.querySelector('.sem-lbl').textContent.split('\n')[0].split(':')[0] + ': ' + texto;
 }
 
+/** @param {Array<Object>} dias - 7-day trend data with fecha, picking, conteos, traslados, rutas. */
 function graficaTendencia(dias) {
   const ctx = document.getElementById('chart-tendencia');
   if (!ctx || !window.Chart) return;
@@ -579,6 +632,7 @@ function graficaTendencia(dias) {
   });
 }
 
+/** @param {Array<Object>} lista - Recent inventory movements to render. */
 function movimientos(lista) {
   const el = document.getElementById('movimientos-recientes');
   if (!el) return;
@@ -595,6 +649,7 @@ function movimientos(lista) {
   }).join('');
 }
 
+/** @param {number} id - Picking task ID to reopen back into the pool. */
 async function reabrirTareaPicking(id) {
   if (!confirm('¿Reabrir esta tarea al pool de picking? El operario que llegue a esa ubicación la tomará de nuevo.')) return;
   try {
@@ -605,6 +660,7 @@ async function reabrirTareaPicking(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Picking task ID to cancel (prompts for reason). */
 async function cancelarTareaPicking(id) {
   const motivo = prompt('Motivo de cancelación (obligatorio):');
   if (!motivo || !motivo.trim()) return;
@@ -621,14 +677,17 @@ async function cancelarTareaPicking(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Task ID whose inline audit form to show. */
 function auditoriaMostrarPanel(id) {
   document.getElementById(`auditoria-panel-${id}`).style.display = 'block';
 }
 
+/** @param {number} id - Task ID whose inline audit form to hide. */
 function auditoriaCancelarPanel(id) {
   document.getElementById(`auditoria-panel-${id}`).style.display = 'none';
 }
 
+/** @param {number} id - Task ID to submit audit result for. */
 async function auditoriaGuardar(id) {
   const resultado       = document.getElementById(`auditoria-resultado-${id}`)?.value;
   const cantidadHallada = parseInt(document.getElementById(`auditoria-cantidad-${id}`)?.value || '0', 10);
@@ -658,6 +717,7 @@ async function auditoriaGuardar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Fetch Siesa orders and render grouped pedidos list with action buttons. */
 async function cargarPedidos() {
   const el = document.getElementById('lista-pedidos');
   if (!el) return;
@@ -766,6 +826,7 @@ async function cargarPedidos() {
 
 const PEDIDOS_TAB_LABELS = ['POR DESPACHAR', 'EN PROCESO', 'DESPACHADO EN SIESA', 'ERROR SIESA'];
 
+/** Render pedidos sub-tabs and the HTML for the currently active group. */
 function renderPedidosTabsYLista() {
   const tabsEl = document.getElementById('ped-tabs');
   const el = document.getElementById('lista-pedidos');
@@ -783,6 +844,7 @@ function renderPedidosTabsYLista() {
     || '<div style="color:#555;text-align:center;padding:40px;">Sin pedidos en esta pestaña ✓</div>';
 }
 
+/** @param {number} idx - Index of the pedidos sub-tab to activate (0-3). */
 function pedidosCambiarTab(idx) {
   PEDIDOS_TAB_ACTIVO = idx;
   renderPedidosTabsYLista();
@@ -793,6 +855,7 @@ let BODEGA_TAB_ACTIVO = 0;
 let BODEGA_GRUPOS_HTML = ['', ''];
 let BODEGA_GRUPOS_COUNT = [0, 0];
 
+/** Fetch active picking tasks and render them grouped by type (pedidos/traslados). */
 async function cargarTareasBodega() {
   const el = document.getElementById('lista-tareas-bodega');
   if (!el) return;
@@ -814,6 +877,7 @@ async function cargarTareasBodega() {
   }
 }
 
+/** Render bodega sub-tabs and the HTML for the currently active task group. */
 function renderBodegaTabsYLista() {
   const tabsEl = document.getElementById('bodega-tabs');
   const el = document.getElementById('lista-tareas-bodega');
@@ -828,11 +892,17 @@ function renderBodegaTabsYLista() {
     || '<div style="color:#555;text-align:center;padding:40px;">Sin tareas activas en esta pestaña ✓</div>';
 }
 
+/** @param {number} idx - Index of the bodega sub-tab to activate (0=pedidos, 1=traslados). */
 function bodegaCambiarTab(idx) {
   BODEGA_TAB_ACTIVO = idx;
   renderBodegaTabsYLista();
 }
 
+/**
+ * Build HTML for a list of bodega tasks grouped by status.
+ * @param {Array<Object>} tareas - Picking tasks to render.
+ * @returns {string} HTML string.
+ */
 function _renderTareasBodegaHTML(tareas) {
   if (!tareas.length) return '';
   try {
@@ -932,6 +1002,7 @@ function _renderTareasBodegaHTML(tareas) {
   }
 }
 
+/** Fetch and render operator list with 7-day productivity metrics. */
 async function cargarOperarios() {
   const el = document.getElementById('lista-operarios');
   if (!el) return;
@@ -986,6 +1057,7 @@ async function cargarOperarios() {
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
+/** Fetch stock alerts and load the product catalog. */
 async function cargarStock() {
   const el = document.getElementById('lista-alertas');
   if (!el) return;
@@ -1011,6 +1083,7 @@ async function cargarStock() {
 }
 
 let _catalogoPag = 1;
+/** @param {number} pag - Page number for the paginated product catalog. */
 async function cargarCatalogo(pag) {
   _catalogoPag = pag || 1;
   const el = document.getElementById('lista-productos');
@@ -1049,11 +1122,13 @@ async function cargarCatalogo(pag) {
 }
 
 let _buscarTimer;
+/** Debounced search trigger for the product catalog filter input. */
 function buscarProductos() {
   clearTimeout(_buscarTimer);
   _buscarTimer = setTimeout(() => cargarCatalogo(1), 400);
 }
 
+/** Fetch and render Connekta/Siesa connection status panel. */
 async function cargarConnekta() {
   const el = document.getElementById('estado-connekta');
   if (!el) return;
@@ -1133,6 +1208,7 @@ async function cargarConnekta() {
   } catch (e) { el.innerHTML = '<div style="color:#ef4444;">Error</div>'; }
 }
 
+/** Trigger catalog sync + initial stock load from Siesa, polling for progress. */
 async function setupInicial() {
   const btn = document.getElementById('btn-setup-inicial');
   const res = document.getElementById('setup-resultado');
@@ -1189,6 +1265,7 @@ async function setupInicial() {
   }
 }
 
+/** Trigger EAN barcode sync from Siesa and poll for completion. */
 async function syncBarcodes() {
   const res = document.getElementById('sync-barras-resultado');
   if (!res) return;
@@ -1219,6 +1296,7 @@ async function syncBarcodes() {
   }
 }
 
+/** Diagnose a barcode by querying Siesa API_v2_ItemsBarras directly. */
 async function testBarras() {
   const inp = document.getElementById('debug-barras-input');
   const res = document.getElementById('debug-barras-resultado');
@@ -1243,6 +1321,7 @@ async function testBarras() {
   }
 }
 
+/** Start WMS vs Siesa stock reconciliation and poll for results. */
 async function verReconciliacion() {
   const res = document.getElementById('inv-resultado');
   const panel = document.getElementById('panel-reconciliacion');
@@ -1292,6 +1371,7 @@ async function verReconciliacion() {
   } catch(e) { res.style.color = '#ef4444'; res.textContent = 'Error: ' + (e.message || e); }
 }
 
+/** Request the next assigned task for the current operator and render it. */
 async function pedirTarea() {
   try {
     const d = await get('/api/mobile/tarea-actual');
@@ -1339,6 +1419,7 @@ async function pedirTarea() {
   }
 }
 
+/** Fetch and render transfer tasks assigned to the current operator. */
 async function cargarTrasladosOperario() {
   const contenedor = document.getElementById('traslados-operario');
   if (!contenedor) return;
@@ -1359,6 +1440,11 @@ async function cargarTrasladosOperario() {
   }
 }
 
+/**
+ * Build HTML card for a single operator transfer task.
+ * @param {Object} t - Transfer solicitud object.
+ * @returns {string} HTML string.
+ */
 function _renderTrasladoOperario(t) {
   const itemsHtml = (t.items || []).map(i => {
     const cant = i.cantidad_aprobada || i.cantidad_solicitada;
@@ -1378,6 +1464,7 @@ function _renderTrasladoOperario(t) {
     </div>`;
 }
 
+/** @param {number} id - Transfer solicitud ID to confirm item pickup for (operario modal). */
 async function trasConfirmarRecogida(id) {
   let solicitud;
   try {
@@ -1446,6 +1533,7 @@ async function trasConfirmarRecogida(id) {
   };
 }
 
+/** @param {Object} t - Task object (PICKING/CONTEO/PACKING) to render in operator HUD. */
 function renderTarea(t) {
   _pickingTotal = t.cantidad_escaneada || 0;
   const colores = { PICKING: '#1d4ed8', PACKING: '#7c3aed', CONTEO: '#b45309' };
@@ -1577,6 +1665,12 @@ function renderTarea(t) {
   }
 }
 
+/**
+ * Load packaging decomposition for the picking task and display suggested packages.
+ * @param {number} productoId - Product ID.
+ * @param {number} almacenId - Warehouse ID.
+ * @param {number} cantidad - Required quantity in units.
+ */
 async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
   const cardTexto = document.getElementById('descomp-texto');
   const cardHint  = document.getElementById('descomp-hint');
@@ -1633,6 +1727,7 @@ async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
   }
 }
 
+/** Generate an LPN label for an unlabeled pack detected during picking. */
 async function _generarLPNEnPicking() {
   const btn = document.getElementById('btn-generar-lpn-picking');
   if (!btn || !TAREA_ACTUAL) return;
@@ -1666,6 +1761,7 @@ async function _generarLPNEnPicking() {
 }
 
 // ─── Quagga2 — debounce interno ───────────────────────────────────────────────
+/** @param {Object} result - Quagga2 detection result with codeResult and confidence data. */
 function _onQuaggaDetect(result) {
   const code = result && result.codeResult && result.codeResult.code;
   if (!code) return;
@@ -1685,12 +1781,19 @@ function _onQuaggaDetect(result) {
   if (_QUAGGA_CB) _QUAGGA_CB(code);
 }
 
+/** Stop Quagga2 barcode scanner and remove detection listener. */
 async function _quaggaStop() {
   if (!window.Quagga) return;
   try { Quagga.offDetected(_onQuaggaDetect); } catch (_) {}
   try { Quagga.stop(); } catch (_) {}
 }
 
+/**
+ * Open camera barcode scanner using Quagga2.
+ * @param {string} [lectorDivId='lector-qr'] - ID of the video container div.
+ * @param {string} [boxDivId='camara-box'] - ID of the wrapper div to show/hide.
+ * @param {Function|null} [onScan=null] - Callback on successful scan; defaults to procesarScan.
+ */
 async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', onScan = null) {
   // Cerrar cámara previa si hay alguna
   if (_QUAGGA_BOX) await cerrarCamara(_QUAGGA_BOX);
@@ -1764,6 +1867,7 @@ async function abrirCamara(lectorDivId = 'lector-qr', boxDivId = 'camara-box', o
   });
 }
 
+/** @param {string} [boxDivId='camara-box'] - ID of the camera wrapper div to close. */
 async function cerrarCamara(boxDivId = 'camara-box') {
   await _quaggaStop();
   CAMARA_ACTIVA = false;
@@ -1777,6 +1881,11 @@ async function cerrarCamara(boxDivId = 'camara-box') {
   }
 }
 
+/**
+ * Dynamically load an external script.
+ * @param {string} src - Script URL.
+ * @returns {Promise<void>}
+ */
 function loadScript(src) {
   return new Promise((res, rej) => {
     const s = document.createElement('script');
@@ -1785,6 +1894,10 @@ function loadScript(src) {
   });
 }
 
+/**
+ * Global scan dispatcher: routes barcode to the active context (recepcion, devolucion, packing, picking).
+ * @param {string} codigo - Scanned barcode string.
+ */
 async function procesarScan(codigo) {
   if (_TIENDA_OC_RECEPCION) { await tiendaOCProcesarScan(codigo); return; }
   if (DEVOLUCION_ACTUAL) { await procesarScanDevolucion(codigo); return; }
@@ -1816,6 +1929,7 @@ async function procesarScan(codigo) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/** @param {string} codigo - Barcode to resolve and register for the active picking task. */
 async function _procesarScanPicking(codigo) {
   // 1. Preguntar al sistema qué es este código
   let scan;
@@ -1873,6 +1987,7 @@ async function _procesarScanPicking(codigo) {
   } catch (e) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/** @param {Object} r - Server scan response with quantity/progress to update the HUD. */
 function _actualizarContadorPicking(r) {
   if (TAREA_ACTUAL) TAREA_ACTUAL.cantidad_escaneada = r.cantidad_actual || 0;
   const pkgEl = document.getElementById('contador-pkg');
@@ -1913,6 +2028,11 @@ function _actualizarContadorPicking(r) {
   }
 }
 
+/**
+ * Show modal to disambiguate a barcode matching multiple packaging levels (picking context).
+ * @param {string} codigo - Ambiguous barcode.
+ * @param {Array<Object>} empaques - List of matching ProductoEmpaque entries.
+ */
 function _modalAmbiguedadPicking(codigo, empaques) {
   // empaques: array de ProductoEmpaque.to_dict() — incluye producto_codigo
   const opciones = empaques.map(e => `
@@ -1938,6 +2058,13 @@ function _modalAmbiguedadPicking(codigo, empaques) {
   document.body.appendChild(modal);
 }
 
+/**
+ * Register a picking scan after operator chose a specific packaging level.
+ * @param {string} productoCodigo - Product code to send to backend.
+ * @param {number} factor - Units per package.
+ * @param {string} unidad - Unit of measure label.
+ * @param {HTMLElement} modal - Modal element to remove.
+ */
 async function _elegirEmpaquePicking(productoCodigo, factor, unidad, modal) {
   // productoCodigo ya es el código del producto (no el DUN-14) — el backend lo acepta
   if (modal) modal.remove();
@@ -1955,6 +2082,7 @@ async function _elegirEmpaquePicking(productoCodigo, factor, unidad, modal) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/** Confirm the current task (picking/conteo/packing) and handle results. */
 async function confirmar() {
   if (!TAREA_ACTUAL) return;
   const btn = document.getElementById('btn-ok');
@@ -2008,6 +2136,7 @@ async function confirmar() {
   }
 }
 
+/** @param {Object} canasto - Basket data for printing basket labels after picking completion. */
 function _modalEtiquetaCanasto(canasto) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -2060,6 +2189,7 @@ function _modalEtiquetaCanasto(canasto) {
   };
 }
 
+/** Confirm picking with short-pick guard: warns if scanned qty < required. */
 async function confirmarConGuard() {
   if (!TAREA_ACTUAL) return;
   const unds    = TAREA_ACTUAL.cantidad_escaneada || 0;
@@ -2078,6 +2208,12 @@ async function confirmarConGuard() {
   _reportarFaltanteInfo(tareaId, unds, req).catch(() => {});
 }
 
+/**
+ * Show confirmation modal for partial pick (short-pick).
+ * @param {number} encontradas - Units actually found.
+ * @param {number} requeridas - Units required.
+ * @returns {Promise<boolean>} True if operator confirms.
+ */
 function _modalFaltanteParcial(encontradas, requeridas) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -2101,6 +2237,12 @@ function _modalFaltanteParcial(encontradas, requeridas) {
   });
 }
 
+/**
+ * Notify the server about a short-pick for admin awareness.
+ * @param {number} tareaId - Task ID.
+ * @param {number} cantRecogida - Units actually picked.
+ * @param {number} cantSolicitada - Units originally requested.
+ */
 async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
   await post('/api/mobile/faltante-info', {
     tarea_id: tareaId,
@@ -2109,6 +2251,11 @@ async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
   });
 }
 
+/**
+ * Confirm task with a manually entered quantity (no scanner).
+ * @param {number} tareaId - Task ID.
+ * @param {number} cantMax - Maximum allowed quantity.
+ */
 async function confirmarManual(tareaId, cantMax) {
   const cantStr = prompt(`¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})`);
   if (cantStr === null) return;
@@ -2133,6 +2280,7 @@ async function confirmarManual(tareaId, cantMax) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} tareaId - Task ID to report a problem for (shows motivo selection modal). */
 async function reportarProblema(tareaId) {
   const modal = document.createElement('div');
   modal.id = 'modal-problema';
@@ -2177,6 +2325,12 @@ async function reportarProblema(tareaId) {
   document.body.appendChild(modal);
 }
 
+/**
+ * Submit a problem report for a task, blocking it and creating an urgent audit.
+ * @param {number} tareaId - Task ID.
+ * @param {string} motivo - Problem reason code (UBICACION_VACIA, FALTANTE, etc.).
+ * @param {number} cantidadEncontrada - Units found (0 if none).
+ */
 async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
   const observaciones = document.getElementById('obs-problema')?.value?.trim() || '';
   const modal = document.getElementById('modal-problema');
@@ -2203,6 +2357,7 @@ async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
 
 // ── Auditorías Urgentes (admin) ──────────────────────
 
+/** Fetch and render urgent audit tasks on the admin dashboard. */
 async function cargarAuditoriasUrgentes() {
   const el = document.getElementById('lista-auditorias-urgentes');
   if (!el) return;
@@ -2243,6 +2398,7 @@ async function cargarAuditoriasUrgentes() {
   }
 }
 
+/** @param {number} tareaId - Task ID to submit dashboard audit result for. */
 async function dashAuditarTarea(tareaId) {
   const resultado = document.getElementById(`da-resultado-${tareaId}`)?.value;
   const cantidad_hallada = parseInt(document.getElementById(`da-cantidad-${tareaId}`)?.value || '0', 10);
@@ -2268,6 +2424,10 @@ async function dashAuditarTarea(tareaId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Fetch OCs from Siesa and in-process receptions from DB, then render the list.
+ * @param {boolean} [silencioso=false] - Skip loading spinner when true (polling mode).
+ */
 async function cargarRecepciones(silencioso = false) {
   if (RECEPCION_ACTUAL) return;
   const el = document.getElementById('contenido-recepcion');
@@ -2290,6 +2450,7 @@ async function cargarRecepciones(silencioso = false) {
   }
 }
 
+/** @param {string} id - Screen element ID to show (hides all others). */
 function pantalla(id) {
   ['pantalla-login','pantalla-operario','pantalla-admin','pantalla-recepcion',
    'pantalla-empacador','pantalla-conductor','pantalla-tienda','pantalla-abastecedor',
@@ -2299,11 +2460,21 @@ function pantalla(id) {
   });
 }
 
+/**
+ * Set textContent of a DOM element by ID.
+ * @param {string} id - Element ID.
+ * @param {*} val - Value to display (falls back to '—').
+ */
 function set(id, val) {
   const el = document.getElementById(id);
   if (el) el.textContent = val ?? '—';
 }
 
+/**
+ * Show a toast notification at the top of the screen.
+ * @param {string} msg - Message text.
+ * @param {string} [tipo='info'] - Type: exito, error, advertencia, or info.
+ */
 function alerta(msg, tipo = 'info') {
   const c = { exito: '#16a34a', error: '#dc2626', advertencia: '#d97706', info: '#2563eb' }[tipo] || '#2563eb';
   const d = document.createElement('div');
@@ -2313,6 +2484,7 @@ function alerta(msg, tipo = 'info') {
   setTimeout(() => d.remove(), 2500);
 }
 
+/** Brief white screen flash for scan feedback. */
 function flash() {
   const d = document.createElement('div');
   d.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.25);z-index:9998;pointer-events:none;';
@@ -2320,14 +2492,23 @@ function flash() {
   setTimeout(() => d.remove(), 120);
 }
 
+/** Trigger a short haptic vibration (40ms). */
 function vibrar() { if (navigator.vibrate) navigator.vibrate(40); }
 
 // ── Feedback auditivo (Web Audio API — sin dependencias) ─────
 let _audioCtx = null;
+/** @returns {AudioContext} Lazily initialized Web Audio context. */
 function _getAudioCtx() {
   if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return _audioCtx;
 }
+/**
+ * Play a single tone via Web Audio API.
+ * @param {number} frecuencia - Frequency in Hz.
+ * @param {number} duracion - Duration in seconds.
+ * @param {string} [tipo='sine'] - Oscillator type.
+ * @param {number} [ganancia=0.35] - Volume gain.
+ */
 function _tono(frecuencia, duracion, tipo = 'sine', ganancia = 0.35) {
   try {
     const ctx = _getAudioCtx();
@@ -2342,14 +2523,18 @@ function _tono(frecuencia, duracion, tipo = 'sine', ganancia = 0.35) {
     osc.stop(ctx.currentTime + duracion);
   } catch (_) {}
 }
-function beepOk()    { _tono(880, 0.12); }                                   // agudo corto — scan OK
-function beepError() { _tono(220, 0.18, 'square', 0.3); setTimeout(() => _tono(180, 0.18, 'square', 0.3), 200); } // grave doble — error
-function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); setTimeout(() => _tono(784, 0.25), 240); } // fanfarria — tarea completa
+/** High-pitched short beep for successful scan. */
+function beepOk()    { _tono(880, 0.12); }
+/** Low double beep for scan error. */
+function beepError() { _tono(220, 0.18, 'square', 0.3); setTimeout(() => _tono(180, 0.18, 'square', 0.3), 200); }
+/** Ascending fanfare for task completion. */
+function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); setTimeout(() => _tono(784, 0.25), 240); }
 
 // ─────────────────────────────────────────────────────────────
 // ADMIN — Factura de despacho (pedidos ya confirmados en Siesa)
 // ─────────────────────────────────────────────────────────────
 
+/** @param {number} packingId - Packing task ID to fetch and print the invoice for. */
 async function imprimirFacturaAdmin(packingId) {
   try {
     const res = await fetch(`/api/admin/factura/${packingId}`, {
@@ -2376,6 +2561,7 @@ async function imprimirFacturaAdmin(packingId) {
 // ADMIN — Facturar remisión existente (carril de recuperación 142943)
 // ─────────────────────────────────────────────────────────────
 
+/** @param {number} packingId - Packing ID to generate FE from an existing Siesa remision (recovery lane). */
 async function facturarRemisionExistente(packingId) {
   if (!confirm('¿Facturar la remisión detectada en Siesa?\nEsto generará la Factura Electrónica (142943) desde la RM existente.')) return;
   try {
@@ -2394,6 +2580,7 @@ async function facturarRemisionExistente(packingId) {
 // ADMIN — Despacho desde Siesa
 // ─────────────────────────────────────────────────────────────
 
+/** @param {number} idx - Index into SIESA_PEDIDOS array for the order to dispatch. */
 async function iniciarDespachoDesdeSiesa(idx) {
   const pedido = SIESA_PEDIDOS[idx];
   if (!pedido) return;
@@ -2432,6 +2619,11 @@ async function iniciarDespachoDesdeSiesa(idx) {
 // RECEPCIONISTA — Lista de OCs y recepciones en proceso
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Render the combined reception list (Siesa OCs + in-process DB receptions).
+ * @param {Object} siesa - Siesa response with ordenes and simulado flag.
+ * @param {Array<Object>} dbRecs - In-process receptions from DB.
+ */
 function renderListaRecepciones(siesa, dbRecs) {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
@@ -2513,6 +2705,7 @@ function renderListaRecepciones(siesa, dbRecs) {
   el.innerHTML = html;
 }
 
+/** @param {number} idx - Index into SIESA_OCS array for the purchase order to start receiving. */
 async function crearRecepcionDesdeSiesa(idx) {
   const oc = SIESA_OCS[idx];
   if (!oc) return;
@@ -2542,6 +2735,7 @@ async function crearRecepcionDesdeSiesa(idx) {
   } catch (e) { alerta(e.message || 'Error iniciando recepción', 'error'); cargarRecepciones(); }
 }
 
+/** @param {number} id - Reception ID to resume scanning for. */
 async function continuarRecepcion(id) {
   try {
     const r = await get('/api/recepcion/' + id);
@@ -2554,6 +2748,7 @@ async function continuarRecepcion(id) {
 // RECEPCIONISTA — Pantalla de escaneo ciego
 // ─────────────────────────────────────────────────────────────
 
+/** @param {Object} rec - Reception object to render the blind scanning screen for. */
 function renderEscaneoRecepcion(rec) {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
@@ -2620,6 +2815,11 @@ function renderEscaneoRecepcion(rec) {
     </div>`;
 }
 
+/**
+ * Build HTML for the reception item list showing scan progress.
+ * @param {Array<Object>} items - Reception items with quantities and empaque info.
+ * @returns {string} HTML string.
+ */
 function renderItemsRecepcion(items) {
   return items.map(it => {
     const esBono = it.tipo === 'BONIFICACION';
@@ -2679,6 +2879,7 @@ function renderItemsRecepcion(items) {
   }).join('');
 }
 
+/** @param {string} codigo - Barcode scanned during reception (resolves empaque then registers). */
 async function procesarScanRecepcion(codigo) {
   if (!RECEPCION_ACTUAL) return;
   vibrar(); flash();
@@ -2734,6 +2935,14 @@ async function procesarScanRecepcion(codigo) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/**
+ * Register a scan in the active reception.
+ * @param {number} productoId - Product ID.
+ * @param {number} cantidad - Quantity (units or package count).
+ * @param {boolean} esEmpaque - True if scanning a multi-unit package.
+ * @param {string|null} unidad - Unit of measure label.
+ * @param {boolean} [esBonificacion=false] - True if this is a bonus/gift item.
+ */
 async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, esBonificacion = false) {
   let r;
   try {
@@ -2805,6 +3014,7 @@ async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unida
 }
 
 // Muestra aviso y abre flujo de escaneo para obsequios/bonificaciones
+/** Show modal asking if there are bonus/gift items to register during reception. */
 function modalObsequio() {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
@@ -2830,6 +3040,7 @@ function modalObsequio() {
 }
 
 // Panel de escaneo exclusivo para bonificaciones
+/** Open a dedicated scan panel for scanning bonus/gift items. */
 function _panelScanBonificacion() {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
@@ -2863,6 +3074,11 @@ function _panelScanBonificacion() {
   document.body.appendChild(overlay);
 }
 
+/**
+ * Process a barcode scan for a bonus item during reception.
+ * @param {string} codigo - Scanned barcode.
+ * @param {HTMLElement} panelEl - Panel overlay element to close on success.
+ */
 async function _escanearBono(codigo, panelEl) {
   vibrar(); flash();
   try {
@@ -2885,6 +3101,7 @@ async function _escanearBono(codigo, panelEl) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/** @param {HTMLElement} panelEl - Overlay to close after manual bonus product search. */
 async function abrirBusquedaManualBono(panelEl) {
   const codigo = prompt('Ingresa el código WMS del producto:');
   if (!codigo) return;
@@ -2896,6 +3113,14 @@ async function abrirBusquedaManualBono(panelEl) {
 }
 
 // Helper: modal de confirmación reutilizable — devuelve Promise<boolean>
+/**
+ * Reusable confirmation modal.
+ * @param {string} titulo - Modal title.
+ * @param {string} cuerpoHtml - Body HTML content.
+ * @param {string} txtSi - Confirm button text.
+ * @param {string} txtNo - Cancel button text.
+ * @returns {Promise<boolean>} True if confirmed.
+ */
 function _confirmarModal(titulo, cuerpoHtml, txtSi, txtNo) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -2913,6 +3138,11 @@ function _confirmarModal(titulo, cuerpoHtml, txtSi, txtNo) {
   });
 }
 
+/**
+ * Show disambiguation modal for a barcode matching multiple packaging levels (reception context).
+ * @param {string} codigo - Ambiguous barcode.
+ * @param {Array<Object>} ambiguos - Matching empaque entries.
+ */
 function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   // El mismo código de barras corresponde a múltiples niveles de empaque
   // El operario debe decir qué está escaneando
@@ -2941,12 +3171,21 @@ function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   document.body.appendChild(modal);
 }
 
+/**
+ * Register a reception scan after operator chose a specific packaging level.
+ * @param {string} codigo - Original barcode.
+ * @param {number} productoId - Product ID.
+ * @param {number} factor - Units per package.
+ * @param {string} unidad - Unit of measure label.
+ * @param {HTMLElement} modal - Modal element to remove.
+ */
 async function _elegirEmpaque(codigo, productoId, factor, unidad, modal) {
   if (modal) modal.remove();
   await _registrarEscaneoRecepcion(productoId, factor, false, unidad);
   alerta(`${unidad} × ${factor} UND registrada`, 'exito');
 }
 
+/** Open a product search modal for items without a scannable barcode (reception). */
 async function abrirBusquedaManualRecepcion() {
   // Busca producto por texto para pacas sin ningún código
   const modal = document.createElement('div');
@@ -2969,6 +3208,7 @@ async function abrirBusquedaManualRecepcion() {
 }
 
 let _buscarModalTimer;
+/** @param {string} q - Search query for debounced product lookup in the manual search modal. */
 async function _buscarProductoModal(q) {
   clearTimeout(_buscarModalTimer);
   if (q.length < 2) { document.getElementById('modal-buscar-resultados').innerHTML = ''; return; }
@@ -2987,6 +3227,12 @@ async function _buscarProductoModal(q) {
   }, 350);
 }
 
+/**
+ * Handle product selection from manual search modal: prompt qty, generate LPN if pack.
+ * @param {number} productoId - Selected product ID.
+ * @param {string} nombre - Product name for display.
+ * @param {HTMLElement} modal - Modal element to close.
+ */
 async function _seleccionarProductoManual(productoId, nombre, modal) {
   // Producto seleccionado sin código → preguntar cantidad y generar LPN
   const cant = prompt(`¿Cuántas unidades tiene esta paca de "${nombre}"?\n(Deja vacío si es 1 unidad suelta)`);
@@ -3016,6 +3262,7 @@ async function _seleccionarProductoManual(productoId, nombre, modal) {
   }
 }
 
+/** Confirm the active reception (complete or partial), prompting for supplier remision number. */
 async function confirmarRecepcionActiva() {
   if (!RECEPCION_ACTUAL) return;
 
@@ -3059,6 +3306,10 @@ async function confirmarRecepcionActiva() {
   }
 }
 
+/**
+ * Show modal to request the supplier's remision/invoice number (required by Siesa).
+ * @returns {Promise<string|null>} Remision number, or null if cancelled.
+ */
 function _pedirRemision() {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -3091,6 +3342,7 @@ function _pedirRemision() {
   });
 }
 
+/** Exit active reception scan and return to the reception list. */
 function volverListaRecepciones() {
   RECEPCION_ACTUAL = null;
   cargarRecepciones();
@@ -3103,6 +3355,10 @@ let _REC_TRASLADO_ACTIVO    = null;  // ST abierto en conteo
 let _REC_CONTEOS            = {};    // {producto_id: cantidad_contada}
 let _REC_TRASLADOS_PENDIENTES = [];  // lista cargada desde API
 
+/**
+ * Fetch pending transfer receptions for the receptionist's warehouse.
+ * @param {boolean} [silencioso=false] - Skip loading spinner when true.
+ */
 async function recepCargarTraslados(silencioso = false) {
   if (_REC_TRASLADO_ACTIVO) return;
   const el = document.getElementById('contenido-traslados-rec');
@@ -3150,6 +3406,7 @@ async function recepCargarTraslados(silencioso = false) {
   }
 }
 
+/** @param {number} id - Transfer solicitud ID to open the counting screen for. */
 function recepAbrirConteoTraslado(id) {
   const s = _REC_TRASLADOS_PENDIENTES.find(x => x.id === id);
   if (!s) return;
@@ -3160,12 +3417,14 @@ function recepAbrirConteoTraslado(id) {
   setTimeout(() => { const inp = document.getElementById('rec-tras-scan-input'); if (inp) inp.focus(); }, 150);
 }
 
+/** Exit transfer counting and return to the transfer list. */
 function recepVolverListaTraslados() {
   _REC_TRASLADO_ACTIVO = null;
   _REC_CONTEOS = {};
   recepCargarTraslados();
 }
 
+/** Render the transfer reception counting screen with scan input and item list. */
 function _recepRenderPickingTraslado() {
   const el = document.getElementById('contenido-traslados-rec');
   if (!el || !_REC_TRASLADO_ACTIVO) return;
@@ -3218,6 +3477,11 @@ function _recepRenderPickingTraslado() {
     </div>`;
 }
 
+/**
+ * Build HTML for transfer reception item cards with count controls.
+ * @param {Array<Object>} items - Transfer items to render.
+ * @returns {string} HTML string.
+ */
 function _recepRenderItemsTraslado(items) {
   return items.map(i => {
     const esperado = i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0;
@@ -3250,6 +3514,7 @@ function _recepRenderItemsTraslado(items) {
   }).join('');
 }
 
+/** @param {string} codigo - Barcode scanned during transfer reception counting. */
 async function recepScanTraslado(codigo) {
   if (!_REC_TRASLADO_ACTIVO) return;
   const items = _REC_TRASLADO_ACTIVO.items || [];
@@ -3267,6 +3532,11 @@ async function recepScanTraslado(codigo) {
   if (inp) inp.focus();
 }
 
+/**
+ * Adjust the count for a product in the active transfer reception.
+ * @param {number} productoId - Product ID.
+ * @param {number} delta - Amount to add (or subtract if negative).
+ */
 function recepContarItem(productoId, delta) {
   if (!_REC_TRASLADO_ACTIVO) return;
   const item = (_REC_TRASLADO_ACTIVO.items || []).find(i => i.producto_id === productoId);
@@ -3288,6 +3558,7 @@ function recepContarItem(productoId, delta) {
   }
 }
 
+/** Confirm the active transfer reception (sends counted items to the server). */
 async function recepConfirmarTraslado() {
   const s = _REC_TRASLADO_ACTIVO;
   if (!s) return;
@@ -3335,6 +3606,7 @@ async function recepConfirmarTraslado() {
 // RECEPCIONISTA — Tabs (OCs / Traslados / Devoluciones)
 // ─────────────────────────────────────────────────────────────
 
+/** @param {string} tab - Receptionist sub-tab to activate ('ocs', 'traslados', or 'dev'). */
 function recTab(tab) {
   REC_TAB_ACTIVO = tab;
   const tabOcs  = document.getElementById('rec-tab-ocs');
@@ -3368,6 +3640,10 @@ function recTab(tab) {
 // RECEPCIONISTA — Lista de Devoluciones
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Fetch return tasks and rejected delivery bultos, render list.
+ * @param {boolean} [silencioso=false] - Skip loading spinner when true.
+ */
 async function cargarDevoluciones(silencioso = false) {
   if (DEVOLUCION_ACTUAL) return;
   const el = document.getElementById('contenido-devoluciones');
@@ -3446,6 +3722,7 @@ async function cargarDevoluciones(silencioso = false) {
 // RECEPCIONISTA — Flujo de ubicación de devolución
 // ─────────────────────────────────────────────────────────────
 
+/** @param {number} id - Return task ID to open the location assignment screen for. */
 async function abrirDevolucion(id) {
   try {
     const d = await get('/api/devoluciones/?almacen_id=' + ALMACEN_ID);
@@ -3456,6 +3733,7 @@ async function abrirDevolucion(id) {
   } catch (e) { alerta('Error cargando tarea', 'error'); }
 }
 
+/** @param {Object} tarea - Return task to render the location assignment UI for. */
 function renderEscaneoDevolucion(tarea) {
   // Cambiar al tab devoluciones si no está ahí
   recTab('dev');
@@ -3516,6 +3794,7 @@ function renderEscaneoDevolucion(tarea) {
     </div>`;
 }
 
+/** Confirm the scanned/entered location for the active return item placement. */
 async function confirmarUbicacionDev() {
   if (!DEVOLUCION_ACTUAL) return;
   const inp = document.getElementById('input-ubicacion-dev');
@@ -3538,6 +3817,7 @@ async function confirmarUbicacionDev() {
   }
 }
 
+/** @param {string} codigo - Location barcode scanned during return flow. */
 async function procesarScanDevolucion(codigo) {
   // En flujo devolución el escáner llena el campo de ubicación
   const inp = document.getElementById('input-ubicacion-dev');
@@ -3548,6 +3828,7 @@ async function procesarScanDevolucion(codigo) {
   }
 }
 
+/** @param {number} tareaId - Return task ID to mark as damaged and transfer to AV1 in Siesa. */
 async function confirmarAveria(tareaId) {
   const tarea = DEVOLUCION_ACTUAL;
   if (!tarea) return;
@@ -3575,6 +3856,7 @@ async function confirmarAveria(tareaId) {
   }
 }
 
+/** Exit active return flow and return to the returns list. */
 function volverListaDevoluciones() {
   DEVOLUCION_ACTUAL = null;
   cargarDevoluciones();
@@ -3591,6 +3873,7 @@ let EMP_EMPAQUES = {};      // producto_id → { factor, unidad } — cargado al
 // EMPACADOR — Lista de tareas
 // ─────────────────────────────────────────────────────────────
 
+/** Fetch and render the packing task list for the packer screen. */
 async function empCargarTareas() {
   const el = document.getElementById('emp-lista');
   if (!el) return;
@@ -3694,6 +3977,7 @@ async function empCargarTareas() {
 // EMPACADOR — HUD: iniciar tarea y mostrar primer ítem
 // ─────────────────────────────────────────────────────────────
 
+/** @param {number} packingId - Packing task ID to open in the packer HUD. */
 async function empIniciarHUD(packingId) {
   try {
     // Cargar detalle completo de la tarea
@@ -3755,6 +4039,7 @@ async function empIniciarHUD(packingId) {
   } catch (e) { alerta('Error iniciando tarea', 'error'); }
 }
 
+/** @param {number} packingId - Packing ID to cancel (used when order is voided in Siesa). */
 async function empCancelarPacking(packingId) {
   if (!confirm('¿Cancelar este packing? El pedido fue anulado en Siesa. La mercancía que ya fue pickeada debe devolverse a la ubicación o esperar el nuevo pedido.')) return;
   try {
@@ -3770,6 +4055,7 @@ async function empCancelarPacking(packingId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} packingId - Packing ID to reset bultos and re-declare items. */
 async function empLimpiarSiesa(packingId) {
   if (!confirm('¿Eliminar los bultos registrados y volver a declarar las piezas?')) return;
   try {
@@ -3785,6 +4071,7 @@ async function empLimpiarSiesa(packingId) {
 }
 
 
+/** Dispatch packing with unverified items marked as zero (partial dispatch). */
 async function empDespacharConFaltantes() {
   if (!EMP_TAREA) return;
   const sinEscanear = EMP_ITEMS.filter(i => !i.verificado);
@@ -3827,6 +4114,7 @@ async function empDespacharConFaltantes() {
   }
 }
 
+/** @param {Object} t - Packing task to retry Siesa dispatch for (bultos already exist). */
 async function empReintentarSiesa(t) {
   // Los bultos ya existen — el backend los reutiliza, solo reintenta Siesa
   const bultoResumen = t.bultos.reduce((acc, b) => {
@@ -3862,6 +4150,7 @@ async function empReintentarSiesa(t) {
 }
 
 
+/** Close the packer HUD and return to the task list. */
 function empCerrarHUD() {
   document.getElementById('emp-hud').classList.remove('activo');
   EMP_TAREA = null;
@@ -3875,6 +4164,7 @@ function empCerrarHUD() {
 // EMPACADOR — HUD: renderizar ítem actual
 // ─────────────────────────────────────────────────────────────
 
+/** Render the current packing item in the HUD with progress bar and counters. */
 function empRenderHUDItem() {
   if (!EMP_TAREA || !EMP_ITEMS.length) return;
 
@@ -3948,6 +4238,7 @@ function empRenderHUDItem() {
 // EMPACADOR — HUD: procesar escaneo láser
 // ─────────────────────────────────────────────────────────────
 
+/** @param {string} codigo - Barcode scanned in the packer HUD (resolves empaque, verifies item). */
 async function empProcesarEscaneo(codigo) {
   if (!EMP_TAREA) return;
 
@@ -4023,6 +4314,11 @@ async function empProcesarEscaneo(codigo) {
 // EMPACADOR — HUD: flash visual verde/rojo
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Flash a colored feedback overlay on the packer HUD.
+ * @param {string} color - Flash color key (verde, rojo, or other).
+ * @param {string} mensaje - Message to display briefly.
+ */
 function empFlash(color, mensaje) {
   const flash = document.getElementById('emp-flash');
   const hud = document.getElementById('emp-hud');
@@ -4066,6 +4362,11 @@ function empFlash(color, mensaje) {
 // EMPACADOR — Modal ambigüedad de empaque en packing
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Show disambiguation modal for barcode matching multiple packaging levels (packing context).
+ * @param {string} codigo - Ambiguous barcode.
+ * @param {Array<Object>} ambiguos - Matching empaque entries.
+ */
 function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   // ambiguos: array de ProductoEmpaque.to_dict()
   const opciones = ambiguos.map(e => `
@@ -4091,6 +4392,14 @@ function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   document.body.appendChild(modal);
 }
 
+/**
+ * Register a packing scan after operator chose a specific packaging level.
+ * @param {string} codigoBarras - Original barcode scanned.
+ * @param {string} productoCodigo - Product code.
+ * @param {number} factor - Units per package.
+ * @param {string} unidad - Unit of measure label.
+ * @param {HTMLElement} modal - Modal element to remove.
+ */
 async function _elegirEmpaquePacking(codigoBarras, productoCodigo, factor, unidad, modal) {
   if (modal) modal.remove();
   if (!EMP_TAREA) return;
@@ -4117,6 +4426,7 @@ async function _elegirEmpaquePacking(codigoBarras, productoCodigo, factor, unida
 // EMPACADOR — HUD: confirmar packing → Siesa se dispara solo
 // ─────────────────────────────────────────────────────────────
 
+/** Confirm all packing items are verified and show the bultos declaration modal. */
 async function empConfirmarPacking() {
   if (!EMP_TAREA) return;
   const btn = document.getElementById('emp-btn-cerrar-caja');
@@ -4183,6 +4493,7 @@ async function empConfirmarPacking() {
 
 let _BULTOS_LINEAS = [];
 
+/** @param {string} tipo - Package type to add (CAJA, BOLSA, PACA, etc.). */
 function bultosAgregarLinea(tipo) {
   const existing = _BULTOS_LINEAS.find(l => l.tipo === tipo);
   if (existing) { existing.cantidad++; }
@@ -4190,6 +4501,7 @@ function bultosAgregarLinea(tipo) {
   bultosRenderLineas();
 }
 
+/** Render the current list of bultos lines in the declaration modal. */
 function bultosRenderLineas() {
   const el = document.getElementById('modal-bultos-lineas');
   if (!el) return;
@@ -4207,21 +4519,28 @@ function bultosRenderLineas() {
     </div>`).join('');
 }
 
+/**
+ * @param {number} idx - Bulto line index.
+ * @param {number} delta - Amount to add (1) or subtract (-1).
+ */
 function bultosAjustarCantidad(idx, delta) {
   _BULTOS_LINEAS[idx].cantidad = Math.max(1, _BULTOS_LINEAS[idx].cantidad + delta);
   bultosRenderLineas();
 }
 
+/** @param {number} idx - Bulto line index to remove. */
 function bultosEliminarLinea(idx) {
   _BULTOS_LINEAS.splice(idx, 1);
   bultosRenderLineas();
 }
 
+/** Close the bultos declaration modal without sending. */
 function bultosCancelar() {
   document.getElementById('modal-bultos').style.display = 'none';
   _BULTOS_LINEAS = [];
 }
 
+/** Submit bultos declaration, trigger Siesa dispatch, print labels. */
 async function bultosConfirmar() {
   const errEl = document.getElementById('modal-bultos-error');
   errEl.textContent = '';
@@ -4284,6 +4603,11 @@ async function bultosConfirmar() {
 // FACTURA — botón flotante post-cierre e impresión con JWT
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Show the invoice print button in the packer HUD after successful dispatch.
+ * @param {number} packingId - Packing task ID.
+ * @param {string} numeroPedido - Order number for display.
+ */
 function empMostrarBotonFactura(packingId, numeroPedido) {
   const existing = document.getElementById('btn-remision-flotante');
   if (existing) existing.remove();
@@ -4306,6 +4630,7 @@ function empMostrarBotonFactura(packingId, numeroPedido) {
   document.body.appendChild(div);
 }
 
+/** @param {number} packingId - Packing ID to fetch and print the invoice in a popup window. */
 async function empImprimirFactura(packingId) {
   try {
     const resp = await fetch(`/api/packing/${packingId}/factura`, {
@@ -4332,6 +4657,11 @@ async function empImprimirFactura(packingId) {
 // (lazy labeling de inventario heredado sin etiqueta).
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Print an LPN label via the print area.
+ * @param {Object} lpn - LPN object with codigo and cantidad_actual.
+ * @param {string} productoNombre - Product name for the label.
+ */
 function imprimirEtiquetaLPN(lpn, productoNombre) {
   const area = document.getElementById('print-area');
   if (!area) return;
@@ -4361,6 +4691,11 @@ function imprimirEtiquetaLPN(lpn, productoNombre) {
   }, 300);
 }
 
+/**
+ * Print shipping labels for all bultos in a packing task.
+ * @param {Array<Object>} bultos - Bulto objects with tipo, numero, total, codigo_barras.
+ * @param {Object} meta - Order metadata (numero_pedido, cliente, municipio).
+ */
 function empImprimirEtiquetas(bultos, meta) {
   if (!bultos?.length) return;
 
@@ -4405,6 +4740,7 @@ const _USR_NOMBRES_BOD = {
 let USUARIOS_GRUPOS = [];       // [{clave, titulo, count, html}] — solo bodegas con usuarios
 let USUARIOS_TAB_ACTIVA = null; // clave del grupo/pestaña activa
 
+/** Fetch all users and render the user management list grouped by role. */
 async function cargarUsuarios() {
   const el = document.getElementById('lista-usuarios');
   if (!el) return;
@@ -4460,6 +4796,7 @@ async function cargarUsuarios() {
   }
 }
 
+/** Render user management sub-tabs and the list for the active group. */
 function renderUsuariosTabsYLista() {
   const tabsEl = document.getElementById('usuarios-tabs');
   const el = document.getElementById('lista-usuarios');
@@ -4473,11 +4810,17 @@ function renderUsuariosTabsYLista() {
   el.innerHTML = activo ? activo.html : '<div style="color:#555;text-align:center;padding:40px;">Sin usuarios en esta bodega</div>';
 }
 
+/** @param {string} clave - User group key to switch to. */
 function usuariosCambiarTab(clave) {
   USUARIOS_TAB_ACTIVA = clave;
   renderUsuariosTabsYLista();
 }
 
+/**
+ * Build HTML for the user creation/edit form.
+ * @param {Object} [u={}] - Existing user data for editing, or empty for new user.
+ * @returns {string} HTML string.
+ */
 function _formUsuario(u = {}) {
   const _TIENDA_ROLES = ['tienda', 'picker_traslado', 'packer_traslado', 'recepcionista'];
   return `
@@ -4592,6 +4935,7 @@ function _formUsuario(u = {}) {
     </div>`;
 }
 
+/** Show the new user creation form. */
 function mostrarFormNuevoUsuario() {
   const f = document.getElementById('form-nuevo-usuario');
   if (!f) return;
@@ -4600,6 +4944,7 @@ function mostrarFormNuevoUsuario() {
   f.scrollIntoView({ behavior: 'smooth' });
 }
 
+/** @param {number} uid - User ID to load into the edit form. */
 async function editarUsuario(uid) {
   try {
     const d = await get('/api/auth/usuarios');
@@ -4612,11 +4957,13 @@ async function editarUsuario(uid) {
   } catch (e) { alerta('Error cargando usuario', 'error'); }
 }
 
+/** Hide the user form and reload the user list. */
 function ocultarFormUsuario() {
   const f = document.getElementById('form-nuevo-usuario');
   if (f) { f.style.display = 'none'; f.innerHTML = ''; }
 }
 
+/** @param {number|null} uid - User ID to update, or null to create a new user. */
 async function _guardarUsuario(uid) {
   const nombre = document.getElementById('u-nombre')?.value.trim();
   const email  = document.getElementById('u-email')?.value.trim();
@@ -4669,15 +5016,22 @@ async function _guardarUsuario(uid) {
 // ─── MONITOR DE MUELLE ────────────────────────────────────────────────────────
 const MUELLE_ORDEN_KEY = 'wms_muelle_orden'; // localStorage key
 
+/** @returns {Array<number>} Saved muelle group sort order from localStorage. */
 function muelleGetOrden() {
   try { return JSON.parse(localStorage.getItem(MUELLE_ORDEN_KEY) || '[]'); }
   catch { return []; }
 }
 
+/** @param {Array<number>} orden - Muelle group sort order to persist to localStorage. */
 function muelleSetOrden(orden) {
   localStorage.setItem(MUELLE_ORDEN_KEY, JSON.stringify(orden));
 }
 
+/**
+ * Sort muelle groups according to saved order.
+ * @param {Array<Object>} grupos - Groups to sort.
+ * @returns {Array<Object>} Sorted groups.
+ */
 function muelleOrdenarGrupos(grupos) {
   const orden = muelleGetOrden();
   // Municipios conocidos primero (en su orden guardado), los nuevos al final
@@ -4689,6 +5043,7 @@ function muelleOrdenarGrupos(grupos) {
   return ordenFinal.map(m => grupos.find(g => g.destino === m)).filter(Boolean);
 }
 
+/** @param {Array<Object>} grupos - Muelle groups to render as sortable cards. */
 function muelleRenderGrupos(grupos) {
   const el = document.getElementById('lista-muelle');
   if (!el) return;
@@ -4734,6 +5089,11 @@ let _MUELLE_GRUPOS_ACTUALES = [];
 // Manifiesto de la ruta activa (grupos ordenados) para reordenamiento en memoria
 let _RUTA_MANIFIESTO_ACTUAL = [];
 
+/**
+ * Move a muelle group up or down in the loading order.
+ * @param {number} idx - Current index of the group.
+ * @param {number} dir - Direction (-1 = up, 1 = down).
+ */
 function muelleMoverGrupo(idx, dir) {
   const orden = _MUELLE_GRUPOS_ACTUALES.map(g => g.destino);
   const nuevoIdx = idx + dir;
@@ -4747,6 +5107,7 @@ function muelleMoverGrupo(idx, dir) {
   muelleRenderGrupos(reordenado);
 }
 
+/** Fetch EN_CARGUE routes and populate the route selector dropdown in muelle. */
 async function cargarRutaSelector() {
   const sel = document.getElementById('muelle-ruta-select');
   if (!sel) return;
@@ -4785,6 +5146,7 @@ async function cargarRutaSelector() {
   if (campo)      campo.style.display      = 'none';
 })();
 
+/** Activate the barcode scan input for muelle bulto scanning. */
 function muelleActivarScan() {
   const btnActivar = document.getElementById('muelle-scan-activar');
   const campo      = document.getElementById('muelle-scan-campo');
@@ -4794,6 +5156,7 @@ function muelleActivarScan() {
   if (input)      input.focus();
 }
 
+/** Open camera scanner for muelle bulto scanning. */
 async function abrirCamaraMuelle() {
   await abrirCamara('lector-qr-muelle', 'camara-box-muelle', async cod => {
     await cerrarCamara('camara-box-muelle');
@@ -4805,6 +5168,7 @@ async function abrirCamaraMuelle() {
   });
 }
 
+/** Handle muelle scan input blur: process the scanned barcode. */
 function muelleScanBlur() {
   // Al perder el foco en móvil, volvemos al botón si el campo está vacío
   const esMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
@@ -4819,6 +5183,7 @@ function muelleScanBlur() {
   }, 200); // pequeño delay para no interferir con click en ✓
 }
 
+/** @param {string} idStr - Route ID string from the selector dropdown. */
 function muelleSeleccionarRuta(idStr) {
   RUTA_ACTIVA_ID = idStr ? parseInt(idStr) : null;
 
@@ -4840,6 +5205,7 @@ function muelleSeleccionarRuta(idStr) {
 }
 
 // ── Orquestador principal ─────────────────────────────
+/** Load the muelle tab: route selector + groups (with or without route selected). */
 async function cargarMuelle() {
   const el = document.getElementById('lista-muelle');
   if (!el) return;
@@ -4868,6 +5234,7 @@ async function cargarMuelle() {
 }
 
 // ── Sin ruta seleccionada: vista informativa ──────────
+/** Load muelle view when no route is selected (all pending groups). */
 async function cargarMuelleSinRuta() {
   const el = document.getElementById('lista-muelle');
   const contador = document.getElementById('muelle-contador');
@@ -4904,6 +5271,7 @@ async function cargarMuelleSinRuta() {
 }
 
 // ── Con ruta seleccionada: planificación + confirmación ─
+/** @param {number} rutaId - Route ID to load muelle groups for. */
 async function cargarMuelleConRuta(rutaId) {
   const el = document.getElementById('lista-muelle');
   const contador = document.getElementById('muelle-contador');
@@ -4989,6 +5357,14 @@ async function cargarMuelleConRuta(rutaId) {
 
 // ── Helpers de renderizado ────────────────────────────
 
+/**
+ * Build HTML for a group already assigned to a route.
+ * @param {Object} grupo - Group with pedido, bultos, etc.
+ * @param {number} gi - Group index within the route.
+ * @param {number} totalGrupos - Total groups in the route.
+ * @param {number} rutaId - Route ID.
+ * @returns {string} HTML string.
+ */
 function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
   const confirmados = grupo.bultos.filter(b => b.estado === 'CARGADO').length;
   const totalGrupo = grupo.bultos.length;
@@ -5035,6 +5411,12 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
     </div>`;
 }
 
+/**
+ * Build HTML for a pending group not yet assigned to a route.
+ * @param {Object} grupo - Group with pedido and bultos.
+ * @param {number} rutaId - Route ID to assign to.
+ * @returns {string} HTML string.
+ */
 function _htmlGrupoPendiente(grupo, rutaId) {
   const numeroPedido = grupo.bultos[0]?.numero_pedido || '';
   return `
@@ -5065,6 +5447,12 @@ function _htmlGrupoPendiente(grupo, rutaId) {
 }
 
 // ── Reordenar paradas ─────────────────────────────────
+/**
+ * Reorder a group within a route.
+ * @param {number} idx - Current group index.
+ * @param {number} dir - Direction (-1 = up, 1 = down).
+ * @param {number} rutaId - Route ID.
+ */
 function rutaMoverGrupo(idx, dir, rutaId) {
   const nuevoIdx = idx + dir;
   if (nuevoIdx < 0 || nuevoIdx >= _RUTA_MANIFIESTO_ACTUAL.length) return;
@@ -5077,6 +5465,11 @@ function rutaMoverGrupo(idx, dir, rutaId) {
 }
 
 // ── Asignar / desasignar ──────────────────────────────
+/**
+ * Assign a bulto to the selected route.
+ * @param {number} bultoId - Bulto ID.
+ * @param {string} pedidoSiesa - Siesa order number for grouping.
+ */
 async function muelleAsignar(bultoId, pedidoSiesa) {
   if (!RUTA_ACTIVA_ID) {
     alerta('Selecciona una ruta primero', 'advertencia');
@@ -5098,6 +5491,7 @@ async function muelleAsignar(bultoId, pedidoSiesa) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} bultoId - Bulto ID to unassign from its route. */
 async function muelleDesasignar(bultoId) {
   if (!confirm('¿Quitar este bulto de la ruta?')) return;
   try {
@@ -5116,6 +5510,7 @@ async function muelleDesasignar(bultoId) {
 }
 
 // ── Confirmación de carga física (scan) ───────────────
+/** Process a muelle scan input to assign a bulto to the selected route. */
 async function muelleCargarCaja() {
   const input    = document.getElementById('muelle-scan-input');
   const feedback = document.getElementById('muelle-scan-feedback');
@@ -5177,6 +5572,7 @@ async function muelleCargarCaja() {
 //  MILLA CERO — RUTAS DE DESPACHO
 // ══════════════════════════════════════════════════════
 
+/** @param {string} nombre - Routes sub-tab to activate ('rutas', 'maestras', 'vehiculos', 'conductores'). */
 function rutasSubTab(nombre) {
   RUTAS_SUBTAB = nombre;
   const paneles = {
@@ -5199,6 +5595,7 @@ function rutasSubTab(nombre) {
   cargarRutas();
 }
 
+/** Load the active routes sub-tab content. */
 async function cargarRutas() {
   if      (RUTAS_SUBTAB === 'rutas')       await cargarListaRutas();
   else if (RUTAS_SUBTAB === 'maestras')    await cargarListaMaestras();
@@ -5208,6 +5605,7 @@ async function cargarRutas() {
 
 // ── Rutas ────────────────────────────────────────────
 
+/** Fetch and render the list of all routes. */
 async function cargarListaRutas() {
   const el = document.getElementById('lista-rutas');
   if (!el) return;
@@ -5224,6 +5622,11 @@ async function cargarListaRutas() {
   }
 }
 
+/**
+ * Build HTML card for a single route.
+ * @param {Object} r - Route object.
+ * @returns {string} HTML string.
+ */
 function rutaCard(r) {
   const estadoBadge = {
     PROGRAMADO:  '<span style="background:#2d1b69;color:#a78bfa;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">PROGRAMADO</span>',
@@ -5283,6 +5686,7 @@ function rutaCard(r) {
     </div>`;
 }
 
+/** @param {number} id - Route ID to start (transition to EN_TRANSITO). */
 async function rutaIniciar(id) {
   try {
     const r = await fetch(API + '/api/rutas/' + id + '/iniciar', {
@@ -5309,6 +5713,7 @@ async function rutaIniciar(id) {
   } catch (e) { alert('Error de conexión'); }
 }
 
+/** @param {number} id - Route ID to close (mark as ENTREGADA). */
 async function rutaCerrar(id) {
   if (!confirm(`¿Confirmar que la Ruta #${id} salió? Ya no se podrán agregar bultos.`)) return;
   try {
@@ -5332,6 +5737,7 @@ let _ENTREGA_BULTOS  = [];   // [{ id, codigo_barras, tipo, numero, total, clien
 
 const MOTIVOS_RECHAZO = ['Cliente rechazó', 'Dirección incorrecta', 'Mercancía averiada', 'No había nadie', 'Pedido duplicado'];
 
+/** @param {number} id - Route ID to open the delivery confirmation modal for. */
 async function rutaEntregar(id) {
   try {
     const d = await get('/api/rutas/' + id);
@@ -5356,6 +5762,7 @@ async function rutaEntregar(id) {
   } catch (e) { alerta('Error cargando bultos de la ruta', 'error'); }
 }
 
+/** Render the delivery checklist items in the delivery modal. */
 function _renderEntregaLista() {
   const el = document.getElementById('modal-entrega-lista');
   const rechazados = _ENTREGA_BULTOS.filter(b => !b.entregado).length;
@@ -5383,21 +5790,28 @@ function _renderEntregaLista() {
     </div>`).join('');
 }
 
+/** @param {number} i - Index of delivery item to toggle entregado/rechazado. */
 function _toggleEntrega(i) {
   _ENTREGA_BULTOS[i].entregado = !_ENTREGA_BULTOS[i].entregado;
   _renderEntregaLista();
 }
 
+/**
+ * @param {number} i - Delivery item index.
+ * @param {string} motivo - Rejection reason.
+ */
 function _setMotivo(i, motivo) {
   _ENTREGA_BULTOS[i].motivo_rechazo = motivo;
 }
 
+/** Close the delivery confirmation modal. */
 function cerrarModalEntrega() {
   document.getElementById('modal-entrega').style.display = 'none';
   _ENTREGA_RUTA_ID = null;
   _ENTREGA_BULTOS  = [];
 }
 
+/** Submit the delivery confirmation with accepted/rejected items. */
 async function confirmarEntregaFinal() {
   if (!_ENTREGA_RUTA_ID) return;
   const btn = document.getElementById('btn-confirmar-entrega');
@@ -5414,6 +5828,11 @@ async function confirmarEntregaFinal() {
   cerrarModalEntrega();
 }
 
+/**
+ * Send delivery confirmation to the server.
+ * @param {number} id - Route ID.
+ * @param {Object} payload - Delivery items with statuses.
+ */
 async function _enviarConfirmacionEntrega(id, payload) {
   try {
     const r = await fetch(API + '/api/rutas/' + id + '/entregar', {
@@ -5437,6 +5856,7 @@ async function _enviarConfirmacionEntrega(id, payload) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Route ID to display the loading manifest for. */
 async function rutaVerManifiesto(id) {
   try {
     const [dr, dp] = await Promise.all([
@@ -5527,6 +5947,7 @@ async function rutaVerManifiesto(id) {
   } catch (e) { alerta('Error cargando manifiesto', 'error'); }
 }
 
+/** Show the new route scheduling form. */
 function rutasMostrarForm() {
   document.getElementById('rutas-form').style.display = 'block';
   document.getElementById('rutas-form-error').textContent = '';
@@ -5538,10 +5959,12 @@ function rutasMostrarForm() {
   cargarListaVehiculosEnSelect('rutas-form-vehiculo');
 }
 
+/** Hide the new route form. */
 function rutasCancelarForm() {
   document.getElementById('rutas-form').style.display = 'none';
 }
 
+/** @param {string} tipo - Route type to select ('Urbana' or 'Rural'). */
 function rutasSeleccionarTipo(tipo) {
   RUTAS_TIPO_SEL = tipo;
   const isLight = document.body.classList.contains('light');
@@ -5561,6 +5984,7 @@ function rutasSeleccionarTipo(tipo) {
   if (btnM) apply(btnM, tipo === 'Municipal');
 }
 
+/** Submit the new route scheduling form. */
 async function rutasProgramar() {
   const errorEl    = document.getElementById('rutas-form-error');
   const maestraId  = document.getElementById('rutas-form-maestra')?.value;
@@ -5601,6 +6025,7 @@ async function rutasProgramar() {
 
 // ── Rutas Maestras ───────────────────────────────────
 
+/** @param {string} selectId - ID of the select element to populate with route templates. */
 async function cargarListaMaestrasEnSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -5616,6 +6041,7 @@ async function cargarListaMaestrasEnSelect(selectId) {
   } catch (e) {}
 }
 
+/** Fetch and render the list of route templates (maestras). */
 async function cargarListaMaestras() {
   const el = document.getElementById('lista-maestras');
   if (!el) return;
@@ -5670,6 +6096,7 @@ let _MUNICIPIOS_CACHE = [];
 
 let _municipiosPromise = null;
 
+/** Load the list of municipalities for the maestra stop autocomplete. */
 function _cargarMunicipios() {
   if (_MUNICIPIOS_CACHE.length) return Promise.resolve();
   if (_municipiosPromise) return _municipiosPromise;
@@ -5679,6 +6106,7 @@ function _cargarMunicipios() {
   return _municipiosPromise;
 }
 
+/** @param {HTMLInputElement} input - Municipality input field to show autocomplete for. */
 function maestraInputParada(input) {
   const q = (input.value || '').trim().toLowerCase();
   const el = document.getElementById('maestras-sugerencias');
@@ -5708,6 +6136,7 @@ function maestraInputParada(input) {
   el.style.display = 'block';
 }
 
+/** @param {HTMLElement} el - Clicked suggestion element to fill in the municipality input. */
 function maestraSeleccionarMunicipio(el) {
   const inp = document.getElementById('maestras-parada-input');
   if (inp) inp.value = el.dataset.municipio;
@@ -5715,6 +6144,7 @@ function maestraSeleccionarMunicipio(el) {
   if (drop) drop.style.display = 'none';
 }
 
+/** Hide the municipality autocomplete suggestions. */
 function maestraOcultarSugerencias() {
   setTimeout(() => {
     const el = document.getElementById('maestras-sugerencias');
@@ -5722,6 +6152,7 @@ function maestraOcultarSugerencias() {
   }, 150);
 }
 
+/** @param {KeyboardEvent} event - Keydown in municipality input (Tab hides suggestions). */
 function maestraInputKeydown(event) {
   if (event.key === 'Enter') { event.preventDefault(); maestraAgregarParada(); }
   if (event.key === 'Escape') {
@@ -5730,6 +6161,7 @@ function maestraInputKeydown(event) {
   }
 }
 
+/** Show the route template creation/edit form. */
 function maestraMostrarForm() {
   _MAESTRAS_PARADAS = [];
   document.getElementById('maestras-form-id').value = '';
@@ -5742,6 +6174,7 @@ function maestraMostrarForm() {
   _cargarMunicipios();
 }
 
+/** Hide the maestra form and reload the list. */
 function maestraCancelarForm() {
   document.getElementById('maestras-form').style.display = 'none';
   document.getElementById('maestras-form-id').value = '';
@@ -5749,6 +6182,7 @@ function maestraCancelarForm() {
   if (el) el.style.display = 'none';
 }
 
+/** @param {number} id - Route template ID to load into the edit form. */
 async function maestraEditar(id) {
   try {
     const d = await get('/api/rutas/maestras/' + id);
@@ -5767,6 +6201,7 @@ async function maestraEditar(id) {
   } catch (e) { alerta('Error cargando la ruta', 'error'); }
 }
 
+/** Add an empty stop row to the maestra form. */
 function maestraAgregarParada() {
   const val = document.getElementById('maestras-parada-input')?.value.trim();
   if (!val) return;
@@ -5777,11 +6212,16 @@ function maestraAgregarParada() {
   _maestraRenderParadas();
 }
 
+/** @param {number} idx - Index of the stop to remove from the maestra form. */
 function maestraQuitarParada(idx) {
   _MAESTRAS_PARADAS.splice(idx, 1);
   _maestraRenderParadas();
 }
 
+/**
+ * @param {number} idx - Stop index to move.
+ * @param {number} dir - Direction (-1 = up, 1 = down).
+ */
 function maestraMoverParada(idx, dir) {
   const nuevoIdx = idx + dir;
   if (nuevoIdx < 0 || nuevoIdx >= _MAESTRAS_PARADAS.length) return;
@@ -5790,6 +6230,7 @@ function maestraMoverParada(idx, dir) {
   _maestraRenderParadas();
 }
 
+/** Re-render the stops list in the maestra form. */
 function _maestraRenderParadas() {
   const el = document.getElementById('maestras-paradas-lista');
   if (!el) return;
@@ -5807,6 +6248,7 @@ function _maestraRenderParadas() {
     </div>`).join('');
 }
 
+/** Save the current maestra form (create or update). */
 async function maestrasGuardar() {
   const errorEl = document.getElementById('maestras-form-error');
   const nombre  = document.getElementById('maestra-form-nombre')?.value.trim();
@@ -5836,6 +6278,10 @@ async function maestrasGuardar() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/**
+ * @param {number} id - Maestra ID.
+ * @param {boolean} activar - True to activate, false to deactivate.
+ */
 async function maestraToggle(id, activar) {
   try {
     const r = await fetch(API + '/api/rutas/maestras/' + id, {
@@ -5852,6 +6298,10 @@ async function maestraToggle(id, activar) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * @param {number} id - Maestra ID.
+ * @param {string} nombre - Maestra name for confirmation prompt.
+ */
 async function maestraEliminar(id, nombre) {
   if (!confirm(`¿Eliminar la ruta "${nombre}"?\n\nEsta acción no se puede deshacer. Si tiene viajes asociados no se podrá eliminar.`)) return;
   try {
@@ -5871,6 +6321,7 @@ async function maestraEliminar(id, nombre) {
 
 // ── Vehículos ────────────────────────────────────────
 
+/** @param {string} selectId - ID of the select element to populate with vehicles. */
 async function cargarListaVehiculosEnSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -5886,6 +6337,7 @@ async function cargarListaVehiculosEnSelect(selectId) {
   } catch (e) {}
 }
 
+/** Fetch and render the vehicle management list. */
 async function cargarListaVehiculos() {
   const el = document.getElementById('lista-vehiculos');
   if (!el) return;
@@ -5917,15 +6369,18 @@ async function cargarListaVehiculos() {
   }
 }
 
+/** Show the new vehicle form. */
 function vehiculosMostrarForm() {
   document.getElementById('vehiculos-form').style.display = 'block';
   document.getElementById('vehiculos-form-error').textContent = '';
 }
 
+/** Hide the vehicle form. */
 function vehiculosCancelarForm() {
   document.getElementById('vehiculos-form').style.display = 'none';
 }
 
+/** Submit the new vehicle form. */
 async function vehiculosCrear() {
   const errorEl    = document.getElementById('vehiculos-form-error');
   const placa      = document.getElementById('veh-form-placa')?.value.trim().toUpperCase();
@@ -5955,6 +6410,10 @@ async function vehiculosCrear() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/**
+ * @param {number} id - Vehicle ID.
+ * @param {boolean} activar - True to activate, false to deactivate.
+ */
 async function vehiculoToggle(id, activar) {
   try {
     await fetch(API + '/api/rutas/vehiculos/' + id, {
@@ -5968,6 +6427,7 @@ async function vehiculoToggle(id, activar) {
 
 // ── Conductores ──────────────────────────────────────
 
+/** @param {string} selectId - ID of the select element to populate with drivers. */
 async function cargarListaConductoresEnSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -5983,6 +6443,7 @@ async function cargarListaConductoresEnSelect(selectId) {
   } catch (e) {}
 }
 
+/** Fetch and render the driver management list. */
 async function cargarListaConductores() {
   const el = document.getElementById('lista-conductores');
   if (!el) return;
@@ -6017,6 +6478,7 @@ async function cargarListaConductores() {
   }
 }
 
+/** Show the new driver form (loads users with conductor role). */
 async function conductoresMostrarForm() {
   document.getElementById('conductores-form').style.display = 'block';
   document.getElementById('conductores-form-error').textContent = '';
@@ -6031,10 +6493,12 @@ async function conductoresMostrarForm() {
   } catch (_) {}
 }
 
+/** Hide the driver form. */
 function conductoresCancelarForm() {
   document.getElementById('conductores-form').style.display = 'none';
 }
 
+/** Submit the new driver form. */
 async function conductoresCrear() {
   const errorEl  = document.getElementById('conductores-form-error');
   const nombre     = document.getElementById('cond-form-nombre')?.value.trim();
@@ -6065,6 +6529,10 @@ async function conductoresCrear() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/**
+ * @param {number} id - Driver ID.
+ * @param {boolean} activar - True to activate, false to deactivate.
+ */
 async function conductorToggle(id, activar) {
   try {
     const r = await fetch(API + '/api/rutas/conductores/' + id, {
@@ -6154,6 +6622,7 @@ const _condDB = (() => {
 
 // ── Lista de rutas del conductor ──────────────────────────────────
 
+/** Fetch and render the driver's assigned routes list. */
 async function cargarRutasConductor() {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
@@ -6208,6 +6677,7 @@ async function cargarRutasConductor() {
 
 // ── Lista de paradas de la ruta ───────────────────────────────────
 
+/** @param {number} rutaId - Route ID to load and display delivery stops for. */
 async function condAbrirParadas(rutaId) {
   const el = document.getElementById('cond-contenido');
   el.innerHTML = '<div style="text-align:center;padding:60px;color:#555;">Cargando paradas...</div>';
@@ -6229,6 +6699,7 @@ async function condAbrirParadas(rutaId) {
   _condRenderParadas(data);
 }
 
+/** @param {Object} d - Route detail with paradas array to render as delivery stops. */
 function _condRenderParadas(d) {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
@@ -6292,11 +6763,13 @@ function _condRenderParadas(d) {
 
 // ── Formulario de confirmación de parada ──────────────────────────
 
+/** @param {number} idx - Stop index to open the delivery form for. */
 function condAbrirFormParada(idx) {
   _COND_PARADA_FORM = { ..._COND_PARADAS[idx], _idx: idx };
   _condRenderFormParada();
 }
 
+/** Render the stop delivery form with payment, photo, and return options. */
 function _condRenderFormParada() {
   const el = document.getElementById('cond-contenido');
   const p = _COND_PARADA_FORM;
@@ -6437,6 +6910,7 @@ function _condRenderFormParada() {
   el._estadoSel = estadoActual;
 }
 
+/** @param {string} estado - Delivery status to select (ENTREGADO, PARCIAL, RECHAZADO, NO_VISITADO). */
 function condSelEstado(estado) {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
@@ -6466,6 +6940,7 @@ function condSelEstado(estado) {
   if (divMonto)     divMonto.style.display     = mostrarPago ? 'block' : 'none';
 }
 
+/** Preview the selected photo in the delivery form. */
 function condPrevisualizarFoto() {
   const input = document.getElementById('cond-foto');
   const preview = document.getElementById('cond-foto-preview');
@@ -6479,6 +6954,7 @@ function condPrevisualizarFoto() {
   reader.readAsDataURL(input.files[0]);
 }
 
+/** Remove the preview photo from the delivery form. */
 function condEliminarFoto() {
   const input = document.getElementById('cond-foto');
   const preview = document.getElementById('cond-foto-preview');
@@ -6486,6 +6962,10 @@ function condEliminarFoto() {
   if (preview) preview.style.display = 'none';
 }
 
+/**
+ * @param {number} idx - Item index in the return section.
+ * @param {string} pedido - Order number for the returned item.
+ */
 function condActualizarDevuelto(idx, pedido) {
   const inp = document.getElementById('item-entregado-' + idx);
   const div = document.getElementById('item-devuelto-' + idx);
@@ -6496,6 +6976,7 @@ function condActualizarDevuelto(idx, pedido) {
   div.textContent = pedido - val;
 }
 
+/** Save the current stop delivery form (payment, photo, status). */
 async function condGuardarParada() {
   const el = document.getElementById('cond-contenido');
   const p = _COND_PARADA_FORM;
@@ -6654,6 +7135,7 @@ async function condGuardarParada() {
   }
 }
 
+/** @param {boolean} [recargar=false] - Whether to refetch route data before rendering stops. */
 async function condVolverAParadas(recargar = false) {
   _COND_PARADA_FORM = null;
   if (recargar && _COND_RUTA_ACTIVA) {
@@ -6665,6 +7147,7 @@ async function condVolverAParadas(recargar = false) {
   }
 }
 
+/** Mark the current stop as failed delivery with a reason. */
 async function condNoSePudoEntregar() {
   const p = _COND_PARADA_FORM;
   if (!p) return;
@@ -6706,6 +7189,7 @@ async function condNoSePudoEntregar() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Close the current route from the driver screen (all stops must be completed). */
 async function condCerrarRuta() {
   if (!_COND_RUTA_ACTIVA) return;
   if (!confirm('¿Confirmar cierre de ruta? Ya no podrás agregar más confirmaciones de parada.')) return;
@@ -6738,6 +7222,7 @@ async function condCerrarRuta() {
 
 // ── Offline: init, barras de estado y motor de sync ──────────────
 
+/** Initialize offline barcode cache and sync queue for conductor mode. */
 function _condIniciarOffline() {
   if (!_COND_OFFLINE_INIT) {
     _COND_OFFLINE_INIT = true;
@@ -6747,6 +7232,7 @@ function _condIniciarOffline() {
   _condActualizarBarras();
 }
 
+/** Fetch and cache all product barcodes for offline conductor scanning. */
 async function _condActualizarBarras() {
   const offlineBar = document.getElementById('cond-offline-bar');
   const syncBar    = document.getElementById('cond-sync-bar');
@@ -6768,6 +7254,7 @@ async function _condActualizarBarras() {
   }
 }
 
+/** Sync the conductor's offline delivery queue to the server. */
 async function condSyncQueue() {
   if (_COND_SYNCING || !navigator.onLine) return;
   const items = await _condDB.queue();
@@ -6822,6 +7309,7 @@ async function condSyncQueue() {
 
 let _PLAN_RUTA_ID = null;
 
+/** @param {number} id - Route ID to force-close from admin (bypasses driver confirmation). */
 async function rutaForzarCierre(id) {
   if (!confirm('¿Forzar el cierre de esta ruta?\n\nLas paradas sin gestionar quedarán registradas como RECHAZADAS automáticamente.\nEsta acción es irreversible.')) return;
   try {
@@ -6839,6 +7327,7 @@ async function rutaForzarCierre(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Route ID to show the settlement sheet (planilla) for. */
 async function rutaVerPlanilla(id) {
   _PLAN_RUTA_ID = id;
   const modal = document.getElementById('modal-planilla');
@@ -6849,6 +7338,7 @@ async function rutaVerPlanilla(id) {
   await _cargarPlanilla(id);
 }
 
+/** @param {number} id - Route ID to fetch and render the settlement sheet for. */
 async function _cargarPlanilla(id) {
   try {
     const d = await get('/api/rutas/' + id + '/planilla');
@@ -6988,6 +7478,7 @@ async function _cargarPlanilla(id) {
   }
 }
 
+/** @param {number} id - Route ID to trigger financial liquidation for. */
 async function rutaLiquidar(id) {
   if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero y dispara los documentos en Siesa (NC, RC, DC).`)) return;
   try {
@@ -7026,6 +7517,7 @@ async function rutaLiquidar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Route ID to trigger Siesa liquidation (NCE+RC+DC jobs). */
 async function rutaLiquidarSiesa(id) {
   if (!confirm(`¿Re-enviar documentos de Ruta #${id} a Siesa?\nSolo se procesarán los que no se hayan enviado aún.`)) return;
   try {
@@ -7049,6 +7541,7 @@ async function rutaLiquidarSiesa(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Close the planilla/settlement modal. */
 function cerrarModalPlanilla() {
   const modal = document.getElementById('modal-planilla');
   if (modal) modal.style.display = 'none';
@@ -7062,6 +7555,7 @@ function cerrarModalPlanilla() {
 let _INV_SUBTAB = 'conteos';
 let _INV_ALMACENES = [];
 
+/** Load the inventory tab: bodega config + active sub-tab content. */
 async function cargarInventario() {
   // Cargar almacenes para el selector ABC (solo una vez)
   if (_INV_ALMACENES.length === 0) {
@@ -7086,6 +7580,7 @@ async function cargarInventario() {
 
 // ── Config bodega por almacén ─────────────────────────────────────────────────
 
+/** Show the warehouse configuration section (bodega name, Siesa ID). */
 function mostrarConfigBodega() {
   const sel = document.getElementById('inv-abc-almacen');
   const info = document.getElementById('inv-abc-bodega-info');
@@ -7100,6 +7595,7 @@ function mostrarConfigBodega() {
   document.getElementById('inv-abc-bodega-edit').style.display = 'none';
 }
 
+/** Toggle warehouse config between view and edit mode. */
 function toggleEditBodega() {
   const edit = document.getElementById('inv-abc-bodega-edit');
   if (!edit) return;
@@ -7113,6 +7609,7 @@ function toggleEditBodega() {
   edit.style.display = 'block';
 }
 
+/** Save warehouse configuration changes to the server. */
 async function guardarConfigBodega() {
   const sel = document.getElementById('inv-abc-almacen');
   const almId = sel?.value;
@@ -7139,6 +7636,7 @@ async function guardarConfigBodega() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {string} nombre - Inventory sub-tab to activate ('conteos', 'abc', 'config'). */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
   const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc' };
@@ -7162,6 +7660,7 @@ function invSubtab(nombre) {
 let _CONTEO_PAGE = 1;
 let _CONTEO_VISTA = 'accion';  // 'accion' | 'progreso' | 'resueltos'
 
+/** @param {string} v - Conteo view mode ('accion', 'progreso', 'resuelto'). */
 function conteoVista(v) {
   _CONTEO_VISTA = v;
   _CONTEO_PAGE = 1;
@@ -7176,6 +7675,7 @@ function conteoVista(v) {
   cargarConteos();
 }
 
+/** Apply text filter to the conteo session cards. */
 function conteosFiltrar() {
   _CONTEO_PAGE = 1;
   cargarConteos();
@@ -7183,6 +7683,10 @@ function conteosFiltrar() {
 
 // ── Render helpers por vista ──────────────────────────────────────────────────
 
+/**
+ * @param {Object} s - Conteo session.
+ * @returns {string} HTML badge for session type (CICLICO, SEGUNDO_CONTEO, MANUAL).
+ */
 function _tipoTag(s) {
   if (s.tipo === 'EXCEPCION_PICKING')
     return `<span style="background:#1A0606;color:#F87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">PICKING</span>`;
@@ -7191,6 +7695,10 @@ function _tipoTag(s) {
   return '';
 }
 
+/**
+ * @param {Object} s - Conteo session requiring action.
+ * @returns {string} HTML card with action buttons.
+ */
 function _renderCardAccion(s) {
   const hijo = s.segundo_conteo;           // CC2
   const cc3  = hijo?.tercer_conteo;        // CC3 (cuando CC1≠CC2)
@@ -7285,6 +7793,10 @@ function _renderCardAccion(s) {
   </div>`;
 }
 
+/**
+ * @param {Object} s - Conteo session in progress.
+ * @returns {string} HTML card showing progress.
+ */
 function _renderCardProgreso(s) {
   const col = s.estado === 'EN_PROCESO' ? '#164F5A' : '#253A4A';
   return `<div style="background:#121C26;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:6px;">
@@ -7303,6 +7815,10 @@ function _renderCardProgreso(s) {
   </div>`;
 }
 
+/**
+ * @param {Object} s - Resolved conteo session.
+ * @returns {string} HTML card showing resolution details.
+ */
 function _renderCardResuelto(s) {
   const colMap = { MATCH:'#14532D', AJUSTADO:'#14532D', AJUSTANDO:'#7F1D1D', CANCELADO:'#253A4A' };
   const col = colMap[s.estado] || '#253A4A';
@@ -7326,6 +7842,7 @@ function _renderCardResuelto(s) {
 
 // ── Stats dashboard + asignación en lote ─────────────────────────────────────
 
+/** Fetch and render conteo statistics (pending, matched, discrepancies, etc.). */
 async function cargarConteoStats() {
   const bar = document.getElementById('conteo-stats-bar');
   if (!bar) return;
@@ -7361,6 +7878,7 @@ async function cargarConteoStats() {
   } catch (e) { /* silencioso */ }
 }
 
+/** Retry all failed Siesa adjustment jobs for conteo sessions. */
 async function conteoReintentarFallos() {
   if (!confirm('Re-encolar todos los ajustes fallidos para reintentar con Siesa?')) return;
   try {
@@ -7378,6 +7896,7 @@ async function conteoReintentarFallos() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Discard all failed Siesa adjustment jobs for conteo sessions. */
 async function conteoDescartarFallos() {
   if (!confirm('Descartar los ajustes fallidos?\n\nLas sesiones atascadas en AJUSTANDO vuelven a DESCUADRE para que puedas re-aprobar o cancelar.')) return;
   try {
@@ -7396,6 +7915,7 @@ async function conteoDescartarFallos() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Conteo session ID to skip second count and accept first count. */
 async function conteoOmitirSegundo(id) {
   if (!confirm('¿Omitir el CC2/CC3 pendiente y mover esta sesión a DESCUADRE para revisión?\n\nEl conteo pendiente se cancelará. Podrás aprobar o rechazar el ajuste manualmente.')) return;
   try {
@@ -7414,6 +7934,7 @@ async function conteoOmitirSegundo(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Export conteo sessions as CSV and trigger download. */
 async function conteoExportar() {
   const almId = document.getElementById('inv-abc-almacen')?.value;
   const desde = prompt('Desde (YYYY-MM-DD, vacío = todo):', '')?.trim() || '';
@@ -7438,6 +7959,7 @@ async function conteoExportar() {
 
 let _CONTEO_OPERARIOS = [];
 
+/** Show the batch conteo assignment modal (load operators and pending products). */
 async function conteoMostrarAsignar() {
   const panel = document.getElementById('conteo-asignar-panel');
   if (!panel) return;
@@ -7462,11 +7984,13 @@ async function conteoMostrarAsignar() {
   panel.style.display = 'block';
 }
 
+/** Close the conteo batch assignment modal. */
 function conteoCerrarAsignar() {
   const panel = document.getElementById('conteo-asignar-panel');
   if (panel) panel.style.display = 'none';
 }
 
+/** Submit the batch conteo assignment. */
 async function conteoAsignarLote() {
   const operarioId = document.getElementById('conteo-asignar-operario')?.value;
   const limite = parseInt(document.getElementById('conteo-asignar-limite')?.value) || 10;
@@ -7490,6 +8014,7 @@ async function conteoAsignarLote() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Conteo session ID to cancel. */
 async function conteoCancelar(id) {
   const motivo = prompt('Motivo de cancelación:');
   if (!motivo || !motivo.trim()) return;
@@ -7512,6 +8037,7 @@ async function conteoCancelar(id) {
 
 // ── Carga principal ───────────────────────────────────────────────────────────
 
+/** @param {number} page - Page number for paginated conteo session list. */
 async function cargarConteos(page) {
   if (page !== undefined) _CONTEO_PAGE = page;
   const lista = document.getElementById('inv-conteos-lista');
@@ -7587,15 +8113,18 @@ async function cargarConteos(page) {
   }
 }
 
+/** Show the manual conteo creation form. */
 function conteosMostrarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'block';
   document.getElementById('conteo-manual-codigo').focus();
 }
+/** Hide the manual conteo creation form. */
 function conteosOcultarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'none';
   document.getElementById('conteo-manual-codigo').value = '';
   document.getElementById('conteo-manual-error').textContent = '';
 }
+/** Submit the manual conteo creation form. */
 async function crearConteoManual() {
   const almacenId = document.getElementById('conteo-manual-almacen')?.value;
   const codigo = document.getElementById('conteo-manual-codigo')?.value.trim().toUpperCase();
@@ -7624,6 +8153,7 @@ async function crearConteoManual() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/** Fetch and render the ABC classification summary with generation buttons. */
 async function cargarResumenAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) return;
@@ -7659,6 +8189,11 @@ async function cargarResumenAbc() {
   }
 }
 
+/**
+ * Generate cyclic count sessions for a specific ABC class.
+ * @param {string} clase - ABC class (A, B, or C).
+ * @param {boolean} [forzarTodo=false] - True to regenerate even if sessions exist.
+ */
 async function generarAbc(clase, forzarTodo = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -7687,6 +8222,7 @@ async function generarAbc(clase, forzarTodo = false) {
   }
 }
 
+/** @param {boolean} [forzarTodo=false] - Generate cyclic counts for all ABC classes at once. */
 async function generarTodasClases(forzarTodo = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -7717,6 +8253,7 @@ async function generarTodasClases(forzarTodo = false) {
   }
 }
 
+/** Cancel all pending cyclic count sessions. */
 async function limpiarPendientesAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -7748,6 +8285,7 @@ async function limpiarPendientesAbc() {
 
 let _CONTEO_EDICION_ID = null;
 
+/** @param {Object} s - Conteo session to open in the admin edit modal. */
 function conteoAbrirEdicion(s) {
   _CONTEO_EDICION_ID = s.id;
   const m = document.getElementById('modal-conteo-edicion');
@@ -7784,12 +8322,14 @@ function conteoAbrirEdicion(s) {
   m.style.display = 'flex';
 }
 
+/** Close the conteo edit modal. */
 function conteosCerrarEdicion() {
   const m = document.getElementById('modal-conteo-edicion');
   if (m) m.style.display = 'none';
   _CONTEO_EDICION_ID = null;
 }
 
+/** Save the conteo edit form (admin override of count or resolution). */
 async function conteoGuardarEdicion() {
   if (!_CONTEO_EDICION_ID) return;
   const cantRaw = document.getElementById('conteo-edit-cantidad')?.value;
@@ -7822,6 +8362,7 @@ async function conteoGuardarEdicion() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {HTMLInputElement} input - File input with CSV to import ABC classifications. */
 async function subirCsvAbc(input) {
   const archivo = input.files[0];
   if (!archivo) return;
@@ -7878,6 +8419,7 @@ async function subirCsvAbc(input) {
   input.value = '';
 }
 
+/** Trigger the conteo watchdog to detect stale sessions and reassign. */
 async function ejecutarWatchdog() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -7909,6 +8451,7 @@ async function ejecutarWatchdog() {
 
 let _CONTEO_AJUSTE_SESION = null;
 
+/** @param {Object} s - Conteo session to open in the inventory adjustment modal. */
 function conteoAbrirAjuste(s) {
   _CONTEO_AJUSTE_SESION = s;
   const m    = document.getElementById('modal-conteo-ajuste');
@@ -7959,12 +8502,14 @@ function conteoAbrirAjuste(s) {
   m.style.display = 'flex';
 }
 
+/** Close the inventory adjustment modal. */
 function conteosCerrarAjuste() {
   const m = document.getElementById('modal-conteo-ajuste');
   if (m) m.style.display = 'none';
   _CONTEO_AJUSTE_SESION = null;
 }
 
+/** Confirm and send the inventory adjustment to Siesa. */
 async function conteoConfirmarAjuste() {
   if (!_CONTEO_AJUSTE_SESION) return;
   const s    = _CONTEO_AJUSTE_SESION;
@@ -8013,6 +8558,7 @@ const TRAS_COL = {
   RECHAZADA:'#7f1d1d', CANCELADA:'#374151', REVERTIDA:'#4b5563'
 };
 
+/** @param {string} nombre - Traslados sub-tab to activate ('solicitudes', 'pedidos'). */
 function trasSubtab(nombre) {
   _TRAS_SUBTAB = nombre;
   ['pedir','transito','historial'].forEach(k => {
@@ -8036,6 +8582,7 @@ function trasSubtab(nombre) {
   }
 }
 
+/** Fetch and render the admin transfer management panel. */
 async function cargarTrasladosAdmin() {
   const lista = document.getElementById('tras-lista');
   if (!lista) return;
@@ -8058,6 +8605,11 @@ async function cargarTrasladosAdmin() {
   }
 }
 
+/**
+ * Build HTML card for a transfer solicitud in the admin panel.
+ * @param {Object} s - Transfer solicitud object.
+ * @returns {string} HTML string.
+ */
 function _renderTrasladoCard(s) {
   const col = TRAS_COL[s.estado] || '#333';
   const fechaCreacion = s.fecha_creacion ? new Date(s.fecha_creacion) : null;
@@ -8167,6 +8719,7 @@ let _AP_PAGINA = 1;
 const _AP_POR_PAGINA = 30;
 let _AP_INICIADO = false;
 
+/** Initialize the admin transfer request form (origin warehouse selector + stock). */
 function adminPedirIniciar() {
   if (_AP_INICIADO) return;
   _AP_INICIADO = true;
@@ -8184,6 +8737,7 @@ function adminPedirIniciar() {
   adminPedirCargarStock();
 }
 
+/** @param {HTMLSelectElement} sel - Origin warehouse selector that changed. */
 function adminPedirCambiarOrigen(sel) {
   const opt = sel.options[sel.selectedIndex];
   _AP_ORIGEN = { id: sel.value, nombre: opt.dataset.nombre || sel.value };
@@ -8194,6 +8748,7 @@ function adminPedirCambiarOrigen(sel) {
   adminPedirCargarStock();
 }
 
+/** Load available stock for the selected origin warehouse. */
 async function adminPedirCargarStock() {
   _AP_STOCK_ESTADO = 'cargando';
   adminPedirRenderStock();
@@ -8207,6 +8762,7 @@ async function adminPedirCargarStock() {
   adminPedirRenderStock();
 }
 
+/** Refresh stock from the server for the admin transfer request form. */
 async function adminPedirActualizarStock() {
   const btn = document.getElementById('admin-pedir-btn-refresh');
   if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.textContent = '…'; }
@@ -8221,18 +8777,21 @@ async function adminPedirActualizarStock() {
   finally { if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.textContent = '↻'; } }
 }
 
+/** Apply text filter to the admin transfer stock list. */
 function adminPedirFiltrarStock() {
   _AP_FILTRO = (document.getElementById('admin-pedir-buscar')?.value || '').toLowerCase();
   _AP_PAGINA = 1;
   adminPedirRenderStock();
 }
 
+/** @param {number} p - Page number to navigate to in the admin stock list. */
 function adminPedirIrPagina(p) {
   _AP_PAGINA = p;
   adminPedirRenderStock();
   document.getElementById('admin-pedir-stock-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/** Render the current page of admin transfer stock list with cart controls. */
 function adminPedirRenderStock() {
   const el = document.getElementById('admin-pedir-stock-lista');
   if (!el) return;
@@ -8293,6 +8852,12 @@ function adminPedirRenderStock() {
   }).join('') + nav;
 }
 
+/**
+ * @param {string} codigoSiesa - Siesa product code.
+ * @param {string} nombre - Product name.
+ * @param {number} disponible - Available stock.
+ * @param {number} productoId - Product ID.
+ */
 function adminPedirAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
   const inp = document.getElementById(`ap-qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`);
   const cantidad = Math.min(parseInt(inp?.value || 1), disponible);
@@ -8304,6 +8869,7 @@ function adminPedirAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
   adminPedirRenderStock();
 }
 
+/** Re-render the admin transfer cart summary. */
 function adminPedirActualizarCarrito() {
   const header = document.getElementById('admin-pedir-carrito-header');
   const items = document.getElementById('admin-pedir-carrito-items');
@@ -8319,12 +8885,14 @@ function adminPedirActualizarCarrito() {
   ).join('');
 }
 
+/** @param {string} codigoSiesa - Product code to remove from admin transfer cart. */
 function adminPedirQuitarCarrito(codigoSiesa) {
   _AP_CARRITO = _AP_CARRITO.filter(c => c.codigo_siesa !== codigoSiesa);
   adminPedirActualizarCarrito();
   adminPedirRenderStock();
 }
 
+/** Submit the admin transfer request with cart items. */
 async function adminPedirEnviarSolicitud() {
   if (!_AP_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
   const origen = _AP_ORIGEN?.nombre || _AP_ORIGEN?.id || 'la bodega';
@@ -8360,6 +8928,7 @@ async function adminPedirEnviarSolicitud() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to confirm full pickup from admin panel. */
 async function trasConfirmarRecogida(id) {
   if (!confirm('¿Confirmar recogida completa? El traslado pasará a PREPARADO y podrás despacharlo.')) return;
   try {
@@ -8369,6 +8938,7 @@ async function trasConfirmarRecogida(id) {
   } catch (e) { alerta(e.message || 'Error', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to dispatch directly without picking. */
 async function trasDespacharDirecto(id) {
   if (!confirm('¿Despachar directamente sin confirmar picking? Se usarán las cantidades aprobadas como enviadas.')) return;
   try {
@@ -8378,6 +8948,7 @@ async function trasDespacharDirecto(id) {
   } catch (e) { alerta(e.message || 'Error', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to reassign to a different picker operator. */
 async function trasReasignarOperario(id) {
   let operariosData;
   try {
@@ -8413,6 +8984,7 @@ async function trasReasignarOperario(id) {
   };
 }
 
+/** @param {number} id - Transfer solicitud ID to approve (with optional qty adjustments). */
 async function trasAprobar(id) {
   // Carga solicitud y operarios en paralelo
   let solicitud, operariosData;
@@ -8491,6 +9063,7 @@ async function trasAprobar(id) {
   };
 }
 
+/** @param {number} id - Transfer solicitud ID to reject. */
 async function trasRechazar(id) {
   const motivo = prompt('Motivo del rechazo:');
   if (!motivo) return;
@@ -8506,6 +9079,7 @@ async function trasRechazar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to show associated LPN labels for. */
 async function trasVerLPNs(id) {
   let data;
   try {
@@ -8541,6 +9115,7 @@ async function trasVerLPNs(id) {
   document.body.appendChild(modal);
 }
 
+/** @param {number} id - Transfer ID to dispatch (triggers Siesa STS). */
 async function trasDespachar(id) {
   if (!confirm('¿Confirmar despacho? El operario ya preparó los ítems. Se notificará a Siesa (salida de bodega).')) return;
   try {
@@ -8554,6 +9129,7 @@ async function trasDespachar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to confirm reception at destination. */
 async function trasConfirmarRecepcion(id) {
   if (!confirm('¿Confirmar recepción? Se notificará a Siesa (entrada en tienda).')) return;
   try {
@@ -8568,6 +9144,7 @@ async function trasConfirmarRecepcion(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to revert back to APROBADA state. */
 async function trasRevertir(id) {
   const motivo = prompt('Motivo de la reversión (opcional):\nEj: "Camión regresó — mercancía no entregada"', '');
   if (motivo === null) return;
@@ -8584,6 +9161,7 @@ async function trasRevertir(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to retry Siesa ETS (reception) job. */
 async function trasReintentarRecepcionSiesa(id) {
   if (!confirm('¿Reintentar registro de entrada en Siesa (173079)? Solo usar si la recepción física ya fue confirmada.')) return;
   try {
@@ -8598,6 +9176,7 @@ async function trasReintentarRecepcionSiesa(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Transfer ID to retry Siesa STS (dispatch) job. */
 async function trasReintentarDespachoSiesa(id) {
   if (!confirm('¿Reintentar notificación a Siesa del despacho? No mueve el estado.')) return;
   try {
@@ -8640,6 +9219,7 @@ let _TIENDA_PENDIENTES = [];       // cache traslados EN_TRANSITO+DESPACHADA
 let _TIENDA_TRASLADO_ACTIVO = null; // solicitud abierta en picking
 let _TIENDA_CONTEOS = {};          // {producto_id: cantidad_contada}
 
+/** Initialize the tienda (store) screen with stock and request panels. */
 function tiendaIniciar() {
   _TIENDA_STOCK = [];
   _TIENDA_STOCK_ESTADO = 'cargando';
@@ -8669,6 +9249,7 @@ function tiendaIniciar() {
   tiendaCargarStock();  // pre-carga stock en background
 }
 
+/** @param {HTMLSelectElement} sel - Origin warehouse selector that changed. */
 function tiendaCambiarOrigen(sel) {
   const opt = sel.options[sel.selectedIndex];
   _TIENDA_ORIGEN = { id: sel.value, nombre: opt.dataset.nombre || sel.value };
@@ -8680,6 +9261,7 @@ function tiendaCambiarOrigen(sel) {
   tiendaCargarStock();
 }
 
+/** @param {string} nombre - Tienda sub-tab to activate ('pedir', 'solicitudes', 'recibir', 'compras'). */
 function tiendaSubtab(nombre) {
   _TIENDA_SUBTAB = nombre;
   ['solicitudes','nueva','recibir','recibir-oc'].forEach(k => {
@@ -8699,6 +9281,7 @@ function tiendaSubtab(nombre) {
   if (nombre === 'recibir-oc') tiendaOCCargar();
 }
 
+/** Fetch and render the store's transfer request history. */
 async function tiendaCargarSolicitudes() {
   const el = document.getElementById('tienda-lista-solicitudes');
   if (!el) return;
@@ -8734,6 +9317,7 @@ async function tiendaCargarSolicitudes() {
   }
 }
 
+/** Fetch stock data for the store's selected origin warehouse. */
 async function tiendaCargarStock() {
   _TIENDA_STOCK_ESTADO = 'cargando';
   if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
@@ -8748,6 +9332,7 @@ async function tiendaCargarStock() {
   if (_TIENDA_SUBTAB === 'nueva') tiendaRenderStock();
 }
 
+/** Refresh stock from the server for the tienda request form. */
 async function tiendaActualizarStock() {
   const btn = document.getElementById('tienda-btn-refresh');
   if (btn) { btn.disabled = true; btn.style.opacity = '0.4'; btn.textContent = '…'; }
@@ -8771,18 +9356,21 @@ const _TIENDA_POR_PAGINA = 30;
 let _TIENDA_FILTRO = '';
 let _TIENDA_PAGINA = 1;
 
+/** Apply text filter to the tienda stock list. */
 function tiendaFiltrarStock() {
   _TIENDA_FILTRO = (document.getElementById('tienda-buscar')?.value || '').toLowerCase();
   _TIENDA_PAGINA = 1; // reset al filtrar
   tiendaRenderStock();
 }
 
+/** @param {number} p - Page number to navigate to in the tienda stock list. */
 function tiendaIrPagina(p) {
   _TIENDA_PAGINA = p;
   tiendaRenderStock();
   document.getElementById('tienda-stock-lista')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+/** Render the current page of tienda stock list with cart controls. */
 function tiendaRenderStock() {
   const el = document.getElementById('tienda-stock-lista');
   if (!el) return;
@@ -8872,6 +9460,12 @@ function tiendaRenderStock() {
   }).join('') + navHtml;
 }
 
+/**
+ * @param {string} codigoSiesa - Siesa product code.
+ * @param {string} nombre - Product name.
+ * @param {number} disponible - Available stock.
+ * @param {number} productoId - Product ID.
+ */
 function tiendaAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
   const inputId = `qty-${codigoSiesa.replace(/[^a-zA-Z0-9]/g,'-')}`;
   const cantidadInput = document.getElementById(inputId);
@@ -8888,6 +9482,7 @@ function tiendaAgregarCarrito(codigoSiesa, nombre, disponible, productoId) {
   tiendaRenderStock();
 }
 
+/** Re-render the tienda transfer cart summary. */
 function tiendaActualizarCarrito() {
   const header = document.getElementById('tienda-carrito-header');
   const itemsEl = document.getElementById('tienda-carrito-items');
@@ -8904,12 +9499,14 @@ function tiendaActualizarCarrito() {
   ).join('');
 }
 
+/** @param {string} codigoSiesa - Product code to remove from tienda cart. */
 function tiendaQuitarCarrito(codigoSiesa) {
   _TIENDA_CARRITO = _TIENDA_CARRITO.filter(c => c.codigo_siesa !== codigoSiesa);
   tiendaActualizarCarrito();
   tiendaRenderStock();
 }
 
+/** Submit the tienda transfer request with cart items. */
 async function tiendaEnviarSolicitud() {
   if (!_TIENDA_CARRITO.length) { alerta('El carrito está vacío', 'error'); return; }
   const origen = _TIENDA_ORIGEN.nombre || _TIENDA_ORIGEN.id || 'la bodega';
@@ -8954,6 +9551,7 @@ async function tiendaEnviarSolicitud() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Transfer solicitud ID to resend to the warehouse. */
 async function tiendaEnviarSolicitudId(id) {
   try {
     const r = await fetch(API + `/api/traslados/${id}/enviar`, {
@@ -8969,6 +9567,7 @@ async function tiendaEnviarSolicitudId(id) {
 // TIENDA — Recepción de traslados (picking ítem por ítem)
 // ─────────────────────────────────────────────────────────────
 
+/** Fetch and render transfers pending reception at the store. */
 async function tiendaCargarRecibir() {
   const listaView = document.getElementById('tienda-recibir-lista-view');
   const pickingView = document.getElementById('tienda-recibir-picking-view');
@@ -9023,6 +9622,7 @@ async function tiendaCargarRecibir() {
   }
 }
 
+/** @param {number} id - Transfer ID to open the store counting screen for. */
 function tiendaAbrirPickingTraslado(id) {
   const s = _TIENDA_PENDIENTES.find(x => x.id === id);
   if (!s) return;
@@ -9045,12 +9645,14 @@ function tiendaAbrirPickingTraslado(id) {
   }
 }
 
+/** Exit store transfer counting and return to the receive list. */
 function tiendaVolverListaRecibir() {
   _TIENDA_TRASLADO_ACTIVO = null;
   _TIENDA_CONTEOS = {};
   tiendaCargarRecibir();
 }
 
+/** Render the store transfer counting screen with scan input and item list. */
 function _tiendaRenderPickingTraslado() {
   const s = _TIENDA_TRASLADO_ACTIVO;
   const el = document.getElementById('tienda-recibir-picking-view');
@@ -9105,6 +9707,10 @@ function _tiendaRenderPickingTraslado() {
     </div>`;
 }
 
+/**
+ * @param {Array<Object>} items - Transfer items to render in store counting view.
+ * @returns {string} HTML string.
+ */
 function _tiendaRenderItemsPickingTraslado(items) {
   return items.map(i => {
     const esperado = i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0;
@@ -9137,6 +9743,7 @@ function _tiendaRenderItemsPickingTraslado(items) {
   }).join('');
 }
 
+/** @param {string} codigo - Barcode scanned during store transfer counting. */
 async function tiendaScanTraslado(codigo) {
   if (!_TIENDA_TRASLADO_ACTIVO) return;
   const items = _TIENDA_TRASLADO_ACTIVO.items || [];
@@ -9174,6 +9781,10 @@ async function tiendaScanTraslado(codigo) {
   if (inp) inp.focus();
 }
 
+/**
+ * @param {number} productoId - Product ID.
+ * @param {number} delta - Amount to add (or subtract).
+ */
 function tiendaContarItem(productoId, delta) {
   if (!_TIENDA_TRASLADO_ACTIVO) return;
   const item = (_TIENDA_TRASLADO_ACTIVO.items || []).find(i => i.producto_id === productoId);
@@ -9197,6 +9808,7 @@ function tiendaContarItem(productoId, delta) {
   }
 }
 
+/** Confirm the store's transfer reception with counted items. */
 async function tiendaConfirmarRecepcionTraslado() {
   const s = _TIENDA_TRASLADO_ACTIVO;
   if (!s) return;
@@ -9257,6 +9869,7 @@ async function tiendaConfirmarRecepcionTraslado() {
 let _TIENDA_OCS = [];
 let _TIENDA_OC_RECEPCION = null;
 
+/** Fetch and render pending purchase orders for the store. */
 async function tiendaOCCargar() {
   const listaView = document.getElementById('tienda-oc-lista-view');
   const scanView = document.getElementById('tienda-oc-scan-view');
@@ -9329,6 +9942,7 @@ async function tiendaOCCargar() {
   }
 }
 
+/** @param {number} idx - Index into SIESA_OCS for the store OC to start receiving. */
 async function tiendaOCIniciar(idx) {
   const oc = _TIENDA_OCS[idx];
   if (!oc) return;
@@ -9359,6 +9973,7 @@ async function tiendaOCIniciar(idx) {
   }
 }
 
+/** @param {number} id - Reception ID to resume store OC scanning. */
 async function tiendaOCContinuar(id) {
   try {
     const r = await get('/api/tienda-oc/' + id);
@@ -9368,6 +9983,7 @@ async function tiendaOCContinuar(id) {
   } catch (e) { alerta('Error cargando recepción', 'error'); }
 }
 
+/** Render the store OC blind scanning screen. */
 function _tiendaOCRenderScan() {
   const rec = _TIENDA_OC_RECEPCION;
   if (!rec) return;
@@ -9446,6 +10062,10 @@ function _tiendaOCRenderScan() {
   }, 150);
 }
 
+/**
+ * @param {Array<Object>} items - Store OC reception items to render.
+ * @returns {string} HTML string.
+ */
 function _tiendaOCRenderItems(items) {
   return items.map(it => {
     const esBono = it.tipo === 'BONIFICACION';
@@ -9501,6 +10121,7 @@ function _tiendaOCRenderItems(items) {
   }).join('');
 }
 
+/** @param {string} codigo - Barcode scanned during store OC reception. */
 async function tiendaOCProcesarScan(codigo) {
   if (!_TIENDA_OC_RECEPCION) return;
   vibrar(); flash();
@@ -9535,6 +10156,12 @@ async function tiendaOCProcesarScan(codigo) {
   await _tiendaOCRegistrarScan(item.producto_id, 1, false, false);
 }
 
+/**
+ * @param {number} productoId - Product ID.
+ * @param {number} cantidad - Quantity scanned.
+ * @param {boolean} esEmpaque - Whether scanning a package unit.
+ * @param {boolean} esBonificacion - Whether this is a bonus item.
+ */
 async function _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, esBonificacion) {
   let r;
   try {
@@ -9605,6 +10232,7 @@ async function _tiendaOCRegistrarScan(productoId, cantidad, esEmpaque, esBonific
   }
 }
 
+/** Open manual product search for store OC reception. */
 async function tiendaOCBuscarManual() {
   const codigo = prompt('Ingresa el código WMS del producto:');
   if (!codigo) return;
@@ -9616,6 +10244,7 @@ async function tiendaOCBuscarManual() {
   } catch (e) { alerta('Error buscando producto', 'error'); }
 }
 
+/** Show bonus/gift registration modal for store OC reception. */
 function tiendaOCModalObsequio() {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
@@ -9640,6 +10269,7 @@ function tiendaOCModalObsequio() {
   setTimeout(() => overlay.querySelector('#toc-bono-codigo').focus(), 100);
 }
 
+/** @param {string} codigo - Barcode scanned for a bonus item in store OC reception. */
 async function _tiendaOCEscanearBono(codigo) {
   vibrar(); flash();
   try {
@@ -9649,6 +10279,7 @@ async function _tiendaOCEscanearBono(codigo) {
   } catch (e) { beepError(); alerta('Error al escanear bonificación', 'error'); }
 }
 
+/** Confirm the store OC reception. */
 async function tiendaOCConfirmar() {
   if (!_TIENDA_OC_RECEPCION) return;
 
@@ -9688,6 +10319,7 @@ async function tiendaOCConfirmar() {
   }
 }
 
+/** Exit store OC scanning and return to the OC list. */
 function tiendaOCVolverLista() {
   _TIENDA_OC_RECEPCION = null;
   tiendaOCCargar();
@@ -9701,6 +10333,7 @@ function tiendaOCVolverLista() {
 let ABAST_TAREA = null;       // tarea activa del abastecedor
 let ABAST_TIMER = null;       // polling automático
 
+/** Initialize the replenisher (abastecedor) screen and load current task. */
 function abastIniciar() {
   pantalla('pantalla-abastecedor');
   if (OPERARIO) actualizarUI(OPERARIO);
@@ -9715,6 +10348,7 @@ function abastIniciar() {
   }, 8000);
 }
 
+/** Fetch and display the next replenishment task for the operator. */
 async function abastCargarTarea() {
   const cont = document.getElementById('abast-contenido');
   try {
@@ -9750,6 +10384,7 @@ async function abastCargarTarea() {
   }
 }
 
+/** @param {Object} tarea - Replenishment task to display in the operator HUD. */
 function abastMostrarHUD(tarea) {
   const hud = document.getElementById('abast-hud');
   const cont = document.getElementById('abast-contenido');
@@ -9786,6 +10421,7 @@ function abastMostrarHUD(tarea) {
   }
 }
 
+/** Close the replenisher HUD and load the next task. */
 function abastCerrarHUD() {
   const hud = document.getElementById('abast-hud');
   const cont = document.getElementById('abast-contenido');
@@ -9795,6 +10431,7 @@ function abastCerrarHUD() {
   abastCargarTarea();
 }
 
+/** Confirm the replenishment scan at the destination location. */
 async function abastConfirmarScan() {
   if (!ABAST_TAREA) return;
 
@@ -9838,6 +10475,7 @@ async function abastConfirmarScan() {
   }
 }
 
+/** @param {string} color - CSS color for the replenisher flash feedback. */
 function _abastFlash(color) {
   const f = document.getElementById('abast-flash');
   if (!f) return;
@@ -9845,6 +10483,7 @@ function _abastFlash(color) {
   setTimeout(() => { f.style.background = 'transparent'; }, 300);
 }
 
+/** @param {string} modo - Switch replenisher to 'picking' or 'abastecedor' mode. */
 function abastCambiarAModo(modo) {
   clearInterval(ABAST_TIMER);
   ABAST_TAREA = null;
@@ -9861,6 +10500,7 @@ function abastCambiarAModo(modo) {
 
 // Hook en pantalla-operario: si el usuario puede abastecer y no tiene tareas
 // de picking, mostrar el botón flotante de cambio de modo.
+/** Show or hide the mode switch button based on operator capabilities. */
 function abastVerificarBotonModo() {
   const contenido = document.getElementById('contenido-tarea');
   if (!contenido || !OPERARIO?.puede_abastecer) return;
@@ -9903,6 +10543,7 @@ let _repModalUbId = null;
 
 // ── Navegación interna ────────────────────────────────────────────────────────
 
+/** @param {string} sec - Reposicion sub-tab to activate ('ubicaciones', 'tareas', 'huerfanas', 'jobs'). */
 function repSubtab(sec) {
   _repSubActual = sec;
   ['ubicaciones','tareas','huerfanas','jobs'].forEach(s => {
@@ -9921,6 +10562,7 @@ function repSubtab(sec) {
   else if (sec === 'jobs')     repCargarJobs();
 }
 
+/** Load the active reposicion sub-tab content. */
 async function cargarReposicion() {
   // Revisar alerta de jobs fallidos en paralelo
   try {
@@ -9943,6 +10585,7 @@ async function cargarReposicion() {
 
 // ── SECCIÓN 1: Ubicaciones PICKING ───────────────────────────────────────────
 
+/** Fetch and render picking locations with min/max thresholds. */
 async function repCargarUbicaciones() {
   const el = document.getElementById('rep-lista-ubicaciones');
   if (!el) return;
@@ -10031,6 +10674,15 @@ async function repCargarUbicaciones() {
 }
 
 // Modal configurar límites
+/**
+ * Open the min/max threshold edit modal for a picking location.
+ * @param {number} ubId - Location ID.
+ * @param {string} codigo - Location code.
+ * @param {number} min - Current minimum threshold.
+ * @param {number} max - Current maximum threshold.
+ * @param {number} seq - Current sequence number.
+ * @param {string} sku - Product code assigned to this location.
+ */
 function repAbrirModal(ubId, codigo, min, max, seq, sku) {
   _repModalUbId = ubId;
   const m = document.getElementById('modal-rep-limites');
@@ -10044,12 +10696,14 @@ function repAbrirModal(ubId, codigo, min, max, seq, sku) {
   m.style.display = 'flex';
 }
 
+/** Close the reposicion threshold edit modal. */
 function repCerrarModal() {
   const m = document.getElementById('modal-rep-limites');
   if (m) m.style.display = 'none';
   _repModalUbId = null;
 }
 
+/** Save the edited min/max/seq thresholds for a picking location. */
 async function repGuardarLimites() {
   if (!_repModalUbId) return;
   const min = parseInt(document.getElementById('rep-modal-min')?.value);
@@ -10080,6 +10734,7 @@ async function repGuardarLimites() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Trigger a stock check and generate replenishment tasks for locations below minimum. */
 async function repVerificarStock() {
   try {
     const r = await fetch(API + '/api/reposicion/verificar-stock', {
@@ -10096,6 +10751,7 @@ async function repVerificarStock() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Sync picking location assignments from Siesa. */
 async function repSyncUbicaciones() {
   try {
     const r = await fetch(API + '/api/reposicion/sync-ubicaciones', {
@@ -10112,6 +10768,7 @@ async function repSyncUbicaciones() {
 
 // ── SECCIÓN 2: Tareas de Reposición ─────────────────────────────────────────
 
+/** Fetch and render active replenishment tasks. */
 async function repCargarTareas() {
   const el = document.getElementById('rep-lista-tareas');
   if (!el) return;
@@ -10174,6 +10831,10 @@ async function repCargarTareas() {
   }
 }
 
+/**
+ * @param {number} id - Replenishment task ID to cancel.
+ * @param {string} codigo - Task code for confirmation prompt.
+ */
 async function repCancelarTarea(id, codigo) {
   if (!confirm(`¿Cancelar tarea ${codigo}?`)) return;
   try {
@@ -10190,6 +10851,7 @@ async function repCancelarTarea(id, codigo) {
 
 // ── SECCIÓN 3: Ubicaciones Huérfanas ─────────────────────────────────────────
 
+/** Fetch and render orphan picking locations (assigned product with no stock source). */
 async function repCargarHuerfanas() {
   const el = document.getElementById('rep-lista-huerfanas');
   if (!el) return;
@@ -10236,6 +10898,7 @@ async function repCargarHuerfanas() {
 
 // ── SECCIÓN 4: Jobs Siesa (DLQ) ──────────────────────────────────────────────
 
+/** Fetch and render Siesa transfer jobs for replenishment. */
 async function repCargarJobs() {
   const el = document.getElementById('rep-lista-jobs');
   if (!el) return;
@@ -10274,6 +10937,11 @@ async function repCargarJobs() {
   }
 }
 
+/**
+ * @param {Object} j - Siesa job object.
+ * @param {boolean} mostrarReintentar - Whether to show retry button.
+ * @returns {string} HTML card string.
+ */
 function _repJobCard(j, mostrarReintentar) {
   const estadoColor = { PENDIENTE: '#f59e0b', COMPLETADO: '#22c55e', FALLIDO: '#ef4444' };
   const color = estadoColor[j.estado] || '#888';
@@ -10314,6 +10982,7 @@ function _repJobCard(j, mostrarReintentar) {
     </div>`;
 }
 
+/** @param {number} jobId - Siesa job ID to retry. */
 async function repReintentar(jobId) {
   try {
     const r = await fetch(API + `/api/reposicion/siesa-jobs/${jobId}/reintentar`, {
@@ -10327,6 +10996,7 @@ async function repReintentar(jobId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {HTMLButtonElement} btn - Button element to disable during retry of all failed jobs. */
 async function repReintentarTodosFallidos(btn) {
   if (!confirm('¿Reintentar TODOS los jobs DESPACHO_F470 fallidos? Esto enviará las facturas pendientes a Siesa.')) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Procesando...'; }
@@ -10349,6 +11019,7 @@ async function repReintentarTodosFallidos(btn) {
   }
 }
 
+/** @param {HTMLButtonElement} btn - Button element; sends a test alert email. */
 async function repTestEmail(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando...'; }
   try {
@@ -10386,6 +11057,7 @@ let _layoutProductoId = null;
 const _ZONA_COLOR = { PICKING: '#60a5fa', RESERVA: '#22c55e', AVERIAS: '#ef4444', GENERAL: '#555' };
 const _ZONAS_TABS = ['PICKING', 'RESERVA', 'AVERIAS', 'GENERAL'];
 
+/** @param {string} zona - Layout zone tab to activate ('PICKING', 'RESERVA', 'RECEPCION'). */
 function layoutZonaTab(zona) {
   _layoutZonaActual = zona;
   _ZONAS_TABS.forEach(z => {
@@ -10399,6 +11071,7 @@ function layoutZonaTab(zona) {
   layoutRenderUbicaciones();
 }
 
+/** @param {string} sec - Layout sub-tab to activate ('ubicaciones', 'crear'). */
 function layoutSubtab(sec) {
   _layoutSubActual = sec;
   ['ubicaciones', 'importar'].forEach(s => {
@@ -10414,10 +11087,15 @@ function layoutSubtab(sec) {
   if (sec === 'ubicaciones') layoutCargarUbicaciones();
 }
 
+/** Load the layout tab: fetch locations and render the layout view. */
 async function cargarLayout() {
   layoutSubtab(_layoutSubActual);
 }
 
+/**
+ * @param {Object} u - Location object.
+ * @returns {string} HTML card for a single warehouse location.
+ */
 function _layoutRenderUbicacionCard(u) {
   const color = _ZONA_COLOR[u.tipo_zona] || '#888';
   const skuLabel = u.producto_asignado_codigo
@@ -10466,6 +11144,11 @@ function _layoutRenderUbicacionCard(u) {
 // completo) — dentro de la tarjeta blanca única del Cuerpo, no una tarjeta
 // aparte cada una. El detalle hueco por hueco (código, SKU, iconos de editar/
 // eliminar/reclasificar) vive en el modal "Ver", no acá.
+/**
+ * @param {Array<Object>} huecos - Shelf slot objects.
+ * @param {boolean} esPrimero - Whether this is the first section (no top separator).
+ * @returns {string} HTML for a shelf section.
+ */
 function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
   const zona = huecos[0].tipo_zona;
   const color = _ZONA_COLOR[zona] || '#888';
@@ -10501,6 +11184,7 @@ function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
 // Imprime una etiqueta física (80mm, mismo formato que LPN/canasto) por cada
 // Hueco del Cuerpo — con su código completo (incluye el H de hueco, a
 // diferencia del título de la tarjeta que solo muestra Pasillo+Fila+Cuerpo).
+/** @param {string} idsCsv - Comma-separated location IDs to print labels for. */
 function layoutImprimirEtiquetasCuerpo(idsCsv) {
   const ids = idsCsv.split(',').map(Number);
   const huecos = ids
@@ -10532,6 +11216,7 @@ function layoutImprimirEtiquetasCuerpo(idsCsv) {
   }, 300);
 }
 
+/** Fetch all warehouse locations from the API. */
 async function layoutCargarUbicaciones() {
   const el = document.getElementById('layout-lista-ubicaciones');
   if (!el) return;
@@ -10548,6 +11233,7 @@ async function layoutCargarUbicaciones() {
 // Pinta solo la zona activa (pestaña). Dentro de ella, cada grupo — fila legada,
 // Cuerpo, o ubicación suelta (AVERIAS/GENERAL) — se ordena por la fecha de
 // creación de su miembro más nuevo: lo que se acaba de crear queda primero.
+/** Render locations grouped by zone, aisle, and row in the layout view. */
 function layoutRenderUbicaciones() {
   const el = document.getElementById('layout-lista-ubicaciones');
   if (!el) return;
@@ -10676,6 +11362,7 @@ function layoutRenderUbicaciones() {
 let _layoutCuerpoZona = 'PICKING';
 let _layoutCuerpoHuecosPrevios = null; // huecosPorNivel del último cuerpo creado, para "repetir"
 
+/** @param {string} zona - Zone type to create a new aisle/row body in. */
 async function layoutAbrirModalCuerpo(zona) {
   const m = document.getElementById('modal-layout-cuerpo');
   if (!m) return;
@@ -10718,11 +11405,13 @@ async function layoutAbrirModalCuerpo(zona) {
   m.style.display = 'flex';
 }
 
+/** Close the aisle/row creation modal. */
 function layoutCerrarModalCuerpo() {
   const m = document.getElementById('modal-layout-cuerpo');
   if (m) m.style.display = 'none';
 }
 
+/** Pre-fill the creation modal with the last used aisle/row parameters. */
 function layoutRepetirCuerpoAnterior() {
   if (!_layoutUltimoCuerpo) return;
   document.getElementById('layout-cuerpo-pasillo').value = _layoutUltimoCuerpo.pasillo;
@@ -10732,6 +11421,7 @@ function layoutRepetirCuerpoAnterior() {
   _layoutCuerpoHuecosPrevios = _layoutUltimoCuerpo.huecosPorNivel;
 }
 
+/** Advance the aisle/row creation modal from step 1 to step 2 (shelf config). */
 function layoutCuerpoIrAPaso2() {
   const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
   const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
@@ -10763,11 +11453,13 @@ function layoutCuerpoIrAPaso2() {
   document.getElementById('layout-cuerpo-paso2').style.display = 'block';
 }
 
+/** Return from step 2 to step 1 in the aisle/row creation modal. */
 function layoutCuerpoVolverAPaso1() {
   document.getElementById('layout-cuerpo-paso2').style.display = 'none';
   document.getElementById('layout-cuerpo-paso1').style.display = 'block';
 }
 
+/** Submit the aisle/row creation form to generate locations. */
 async function layoutGuardarCuerpo() {
   const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
   const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
@@ -10797,6 +11489,10 @@ async function layoutGuardarCuerpo() {
 
 let _layoutFilaEnEdicion = null; // { pasillo, fila }
 
+/**
+ * @param {string} pasillo - Aisle code.
+ * @param {string} fila - Row code to edit.
+ */
 function layoutAbrirModalEditarFila(pasillo, fila) {
   const m = document.getElementById('modal-layout-editar-fila');
   if (!m) return;
@@ -10814,11 +11510,13 @@ function layoutAbrirModalEditarFila(pasillo, fila) {
   m.style.display = 'flex';
 }
 
+/** Close the row edit modal. */
 function layoutCerrarModalEditarFila() {
   const m = document.getElementById('modal-layout-editar-fila');
   if (m) m.style.display = 'none';
 }
 
+/** Save the row edit form (add/remove levels). */
 async function layoutGuardarEditarFila() {
   if (!_layoutFilaEnEdicion) return;
   const { pasillo, fila } = _layoutFilaEnEdicion;
@@ -10862,6 +11560,10 @@ async function layoutGuardarEditarFila() {
 
 let _layoutFilaEnBorrado = null; // { pasillo, fila }
 
+/**
+ * @param {string} pasillo - Aisle code.
+ * @param {string} fila - Row code to delete.
+ */
 function layoutAbrirModalEliminarFila(pasillo, fila) {
   const m = document.getElementById('modal-layout-eliminar-fila');
   if (!m) return;
@@ -10875,11 +11577,13 @@ function layoutAbrirModalEliminarFila(pasillo, fila) {
   m.style.display = 'flex';
 }
 
+/** Close the row deletion modal. */
 function layoutCerrarModalEliminarFila() {
   const m = document.getElementById('modal-layout-eliminar-fila');
   if (m) m.style.display = 'none';
 }
 
+/** Confirm and execute the row deletion. */
 async function layoutGuardarEliminarFila() {
   if (!_layoutFilaEnBorrado) return;
   const { pasillo, fila } = _layoutFilaEnBorrado;
@@ -10911,6 +11615,7 @@ async function layoutGuardarEliminarFila() {
 
 // ── AVERIAS numeradas ─────────────────────────────────────────────────────
 
+/** Create the AV1 (damaged goods) location in the warehouse. */
 async function layoutCrearAverias() {
   try {
     const d = await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/averias`, {});
@@ -10923,6 +11628,11 @@ async function layoutCrearAverias() {
 
 // ── Modal: Asignar SKU (Mecanismo B) ─────────────────────────────────────────
 
+/**
+ * @param {number} ubId - Location ID.
+ * @param {string} codigo - Location code.
+ * @param {string} tipoZona - Zone type for the assignment.
+ */
 function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   _layoutUbAsignarId = ubId;
   _layoutProductoId = null;
@@ -10941,6 +11651,7 @@ function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   setTimeout(() => document.getElementById('layout-asignar-codigo')?.focus(), 50);
 }
 
+/** Close the product-to-location assignment modal. */
 function layoutCerrarModalAsignar() {
   const m = document.getElementById('modal-layout-asignar');
   if (m) m.style.display = 'none';
@@ -10948,6 +11659,7 @@ function layoutCerrarModalAsignar() {
   _layoutProductoId = null;
 }
 
+/** Search for a product to assign to a location. */
 async function layoutBuscarProducto() {
   const codigo = document.getElementById('layout-asignar-codigo').value.trim();
   if (!codigo) return;
@@ -10971,6 +11683,7 @@ async function layoutBuscarProducto() {
   }
 }
 
+/** Confirm the product-to-location assignment. */
 async function layoutConfirmarAsignar() {
   if (!_layoutUbAsignarId) return;
   if (!_layoutProductoId) { alerta('Busca y confirma el producto antes de continuar', 'error'); return; }
@@ -11001,6 +11714,10 @@ async function layoutConfirmarAsignar() {
 let _layoutAsignarEntHuecos = [];   // [{id, codigo, tipo_zona, producto_asignado_codigo, ...}]
 let _layoutAsignarEntProductos = {}; // huecoId -> producto_id resuelto
 
+/**
+ * @param {string} idsCsv - Comma-separated shelf slot IDs.
+ * @param {string} zona - Zone type for assignment context.
+ */
 function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
   const ids = idsCsv.split(',').map(Number);
   const huecos = ids
@@ -11050,6 +11767,7 @@ function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
   setTimeout(() => document.getElementById(`layout-asignar-ent-codigo-${huecos[0].id}`)?.focus(), 50);
 }
 
+/** Close the shelf slot assignment modal. */
 function layoutCerrarModalAsignarEntrepano() {
   const m = document.getElementById('modal-layout-asignar-entrepano');
   if (m) m.style.display = 'none';
@@ -11057,6 +11775,7 @@ function layoutCerrarModalAsignarEntrepano() {
   _layoutAsignarEntProductos = {};
 }
 
+/** @param {number} huecoId - Shelf slot ID to search a product for. */
 async function layoutBuscarProductoEntrepano(huecoId) {
   const inp = document.getElementById(`layout-asignar-ent-codigo-${huecoId}`);
   const estado = document.getElementById(`layout-asignar-ent-estado-${huecoId}`);
@@ -11078,12 +11797,14 @@ async function layoutBuscarProductoEntrepano(huecoId) {
   }
 }
 
+/** @param {number} huecoId - Current shelf slot ID; scroll to the next slot's assignment. */
 function layoutAsignarEntSiguiente(huecoId) {
   const idx = _layoutAsignarEntHuecos.findIndex(u => u.id === huecoId);
   const siguiente = _layoutAsignarEntHuecos[idx + 1];
   if (siguiente) document.getElementById(`layout-asignar-ent-codigo-${siguiente.id}`)?.focus();
 }
 
+/** Confirm all shelf slot product assignments. */
 async function layoutConfirmarAsignarEntrepano() {
   let ok = 0;
   const errores = [];
@@ -11124,6 +11845,7 @@ async function layoutConfirmarAsignarEntrepano() {
 
 // ── Modal: Ver huecos de un Entrepaño (detalle + editar/eliminar/reclasificar) ─
 
+/** @param {string} idsCsv - Comma-separated shelf slot IDs to view assignments for. */
 function layoutAbrirModalVerEntrepano(idsCsv) {
   const ids = idsCsv.split(',').map(Number);
   const huecos = ids
@@ -11160,6 +11882,7 @@ function layoutAbrirModalVerEntrepano(idsCsv) {
   m.style.display = 'flex';
 }
 
+/** Close the shelf slot view modal. */
 function layoutCerrarModalVerEntrepano() {
   const m = document.getElementById('modal-layout-ver-entrepano');
   if (m) m.style.display = 'none';
@@ -11169,6 +11892,7 @@ function layoutCerrarModalVerEntrepano() {
 
 let _layoutUbEditarId = null;
 
+/** @param {number} ubId - Location ID to open the edit form for. */
 function layoutAbrirModalEditarUbicacion(ubId) {
   const ub = _layoutUbicacionesCache.find(u => u.id === ubId);
   if (!ub) return;
@@ -11183,12 +11907,14 @@ function layoutAbrirModalEditarUbicacion(ubId) {
   m.style.display = 'flex';
 }
 
+/** Close the location edit modal. */
 function layoutCerrarModalEditarUbicacion() {
   const m = document.getElementById('modal-layout-editar-ubicacion');
   if (m) m.style.display = 'none';
   _layoutUbEditarId = null;
 }
 
+/** Save location edit form changes. */
 async function layoutGuardarEditarUbicacion() {
   if (!_layoutUbEditarId) return;
   const tipo_zona = document.getElementById('layout-editar-ub-zona').value || null;
@@ -11225,6 +11951,10 @@ async function layoutGuardarEditarUbicacion() {
 
 // ── Eliminar ubicación individual (sin stock ni historial) ──────────────────
 
+/**
+ * @param {number} ubId - Location ID to delete.
+ * @param {string} codigo - Location code for confirmation prompt.
+ */
 async function layoutEliminarUbicacion(ubId, codigo) {
   if (!confirm(`¿Eliminar la ubicación ${codigo}? Esta acción no se puede deshacer. Solo se puede eliminar si no tiene stock ni historial.`)) return;
   try {
@@ -11243,6 +11973,7 @@ async function layoutEliminarUbicacion(ubId, codigo) {
 
 // ── Modal: Reclasificar ubicación ────────────────────────────────────────────
 
+/** @param {number} ubId - Location ID to open the zone reclassification modal for. */
 function layoutAbrirModalReclasificar(ubId) {
   const ub = _layoutUbicacionesCache.find(u => u.id === ubId);
   if (!ub) return;
@@ -11257,12 +11988,14 @@ function layoutAbrirModalReclasificar(ubId) {
   m.style.display = 'flex';
 }
 
+/** Close the zone reclassification modal. */
 function layoutCerrarModalReclasificar() {
   const m = document.getElementById('modal-layout-reclasificar');
   if (m) m.style.display = 'none';
   _layoutUbAsignarId = null;
 }
 
+/** Save the zone reclassification for a location. */
 async function layoutGuardarReclasificar() {
   if (!_layoutUbAsignarId) return;
   const tipo_zona = document.getElementById('layout-reclasificar-zona').value;
@@ -11294,6 +12027,7 @@ async function layoutGuardarReclasificar() {
 
 // ── Importador Excel (Mecanismo A, opción masiva) ────────────────────────────
 
+/** @param {HTMLButtonElement} btn - Button element; imports locations from Excel file. */
 async function layoutImportarExcel(btn) {
   const input = document.getElementById('layout-import-file');
   const file = input?.files?.[0];
@@ -11346,6 +12080,7 @@ let REQ_TAB_ACTIVO = 0;
 let REQ_GRUPOS_HTML = ['', '', '', '', '', ''];
 let REQ_GRUPOS_COUNT = [0, 0, 0, 0, 0, 0];
 
+/** Fetch and render transfer requisitions (RIT) grouped by status. */
 async function cargarRequisiciones() {
   const lista = document.getElementById('req-lista');
   if (!lista) return;
@@ -11365,6 +12100,7 @@ async function cargarRequisiciones() {
   }
 }
 
+/** Render requisition sub-tabs and the HTML for the active group. */
 function renderReqTabsYLista() {
   const tabsEl = document.getElementById('req-tabs');
   const lista = document.getElementById('req-lista');
@@ -11379,6 +12115,7 @@ function renderReqTabsYLista() {
     || '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones en esta pestaña ✓</div>';
 }
 
+/** @param {number} idx - Requisition sub-tab index to activate. */
 function reqCambiarTab(idx) {
   REQ_TAB_ACTIVO = idx;
   renderReqTabsYLista();
@@ -11389,10 +12126,18 @@ const _REQ_BODEGA_NOMBRES = {
   'NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro',
   'PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito',
 };
+/**
+ * @param {number} id - Warehouse ID.
+ * @returns {string} Display name for the warehouse.
+ */
 function _reqNombreBodega(id) {
   return id ? (_REQ_BODEGA_NOMBRES[id] ? `${_REQ_BODEGA_NOMBRES[id]} (${id})` : id) : '—';
 }
 
+/**
+ * @param {Object} r - Requisition object.
+ * @returns {string} HTML card with status and action buttons.
+ */
 function _renderRequisicionCard(r) {
   const BADGE = {
     ENVIADA:     { color: '#d97706', bg: '#fef3c7', label: '⏳ Pendiente aprobar' },
@@ -11490,6 +12235,7 @@ function _renderRequisicionCard(r) {
     </div>`;
 }
 
+/** @param {number} id - Requisition ID to dispatch (triggers Siesa STS from RIT). */
 async function despacharRequisicion(id) {
   if (!confirm('¿Confirmar despacho de esta requisición?')) return;
   try {
@@ -11506,6 +12252,7 @@ async function despacharRequisicion(id) {
   }
 }
 
+/** @param {number} id - Requisition ID to approve. */
 async function aprobarRequisicion(id) {
   if (!confirm('¿Aprobar esta requisición? Se crearán las tareas de picking en Bodega.')) return;
   try {
@@ -11523,6 +12270,7 @@ async function aprobarRequisicion(id) {
   }
 }
 
+/** @param {number} id - Requisition ID to reject. */
 async function reqRechazar(id) {
   const motivo = prompt('Motivo del rechazo:');
   if (!motivo) return;
@@ -11538,6 +12286,7 @@ async function reqRechazar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** @param {number} id - Requisition ID to open the edit/approve modal for. */
 async function reqEditarAprobar(id) {
   let solicitud, operariosData;
   try {
@@ -11615,6 +12364,7 @@ async function reqEditarAprobar(id) {
   };
 }
 
+/** @param {number} id - Transfer ID to confirm picking completion for. */
 async function confirmarPickingTraslado(id) {
   if (!confirm('¿Confirmar que el picking de esta transferencia está completo?')) return;
   try {
@@ -11631,6 +12381,7 @@ async function confirmarPickingTraslado(id) {
   }
 }
 
+/** @param {number} id - Transfer ID to confirm packing completion for. */
 async function confirmarPackingTraslado(id) {
   if (!confirm('¿Confirmar verificación de empaque? Esto disparará los compromisos en Siesa.')) return;
   try {
@@ -11657,6 +12408,7 @@ async function confirmarPackingTraslado(id) {
 
 let TRAS_PICK = null;
 
+/** Fetch and render the transfer picking queue for the store picker. */
 async function trasPickerCargarCola() {
   const el = document.getElementById('tpick-lista');
   if (!el) return;
@@ -11684,6 +12436,7 @@ async function trasPickerCargarCola() {
   }
 }
 
+/** @param {number} solicitudId - Transfer solicitud ID to open the picker HUD for. */
 async function trasPickerAbrirHUD(solicitudId) {
   try {
     const d = await get(`/api/traslados/${solicitudId}/items-picking`);
@@ -11695,6 +12448,7 @@ async function trasPickerAbrirHUD(solicitudId) {
   } catch (e) { alerta('Error cargando traslado', 'error'); }
 }
 
+/** Render the current item in the transfer picker HUD. */
 function _trasPickerRenderHUD() {
   if (!TRAS_PICK) return;
   const { items, idx, counts, codigo } = TRAS_PICK;
@@ -11721,6 +12475,7 @@ function _trasPickerRenderHUD() {
   }
 }
 
+/** @param {number} delta - Amount to add/subtract from the current transfer picking item count. */
 function trasPickerDelta(delta) {
   if (!TRAS_PICK) return;
   const item = TRAS_PICK.items[TRAS_PICK.idx];
@@ -11728,6 +12483,7 @@ function trasPickerDelta(delta) {
   _trasPickerRenderHUD();
 }
 
+/** @param {string} codigo - Barcode scanned during transfer picking. */
 async function trasPickerScan(codigo) {
   if (!TRAS_PICK) return;
   const item = TRAS_PICK.items[TRAS_PICK.idx];
@@ -11749,6 +12505,7 @@ async function trasPickerScan(codigo) {
   }
 }
 
+/** Prompt for manual quantity entry in transfer picking. */
 function trasPickerManual() {
   if (!TRAS_PICK) return;
   const item = TRAS_PICK.items[TRAS_PICK.idx];
@@ -11760,12 +12517,14 @@ function trasPickerManual() {
   _trasPickerRenderHUD();
 }
 
+/** Advance to the next item in transfer picking. */
 async function trasPickerSiguiente() {
   if (!TRAS_PICK) return;
   if (TRAS_PICK.idx < TRAS_PICK.items.length - 1) { TRAS_PICK.idx++; _trasPickerRenderHUD(); return; }
   await _trasPickerConfirmar();
 }
 
+/** Submit all confirmed items for the transfer picking session. */
 async function _trasPickerConfirmar() {
   if (!TRAS_PICK) return;
   const { solicitudId, items, counts } = TRAS_PICK;
@@ -11785,12 +12544,14 @@ async function _trasPickerConfirmar() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Pause the transfer picker HUD and return to the queue. */
 function trasPickerPausarHUD() {
   cerrarCamara('tpick-cambox');
   document.getElementById('tpick-hud').style.display = 'none';
   TRAS_PICK = null;
 }
 
+/** Report a problem during transfer picking. */
 function trasPickerProblema() {
   if (!TRAS_PICK) return;
   alerta('Reporta el problema al supervisor — código: ' + TRAS_PICK.codigo, 'advertencia');
@@ -11801,6 +12562,7 @@ function trasPickerProblema() {
 
 let TRAS_PACK = null;
 
+/** Fetch and render the transfer packing queue for the store packer. */
 async function trasPackerCargarCola() {
   const el = document.getElementById('tpack-lista');
   if (!el) return;
@@ -11825,6 +12587,7 @@ async function trasPackerCargarCola() {
   }
 }
 
+/** @param {number} solicitudId - Transfer solicitud ID to open the packer HUD for. */
 async function trasPackerAbrirHUD(solicitudId) {
   try {
     const d = await get(`/api/traslados/${solicitudId}/items-picking`);
@@ -11836,6 +12599,7 @@ async function trasPackerAbrirHUD(solicitudId) {
   } catch (e) { alerta('Error cargando traslado', 'error'); }
 }
 
+/** Render the current item in the transfer packer HUD. */
 function _trasPackerRenderHUD() {
   if (!TRAS_PACK) return;
   const { items, counts } = TRAS_PACK;
@@ -11863,6 +12627,7 @@ function _trasPackerRenderHUD() {
   }
 }
 
+/** @param {number} delta - Amount to add/subtract from the current transfer packing item count. */
 function trasPackerDelta(delta) {
   if (!TRAS_PACK) return;
   const pendientes = TRAS_PACK.items.filter(i => !(TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
@@ -11872,6 +12637,7 @@ function trasPackerDelta(delta) {
   _trasPackerRenderHUD();
 }
 
+/** @param {string} codigo - Barcode scanned during transfer packing verification. */
 function trasPackerScan(codigo) {
   if (!TRAS_PACK) return;
   const pendientes = TRAS_PACK.items.filter(i => !(TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0)));
@@ -11883,6 +12649,7 @@ function trasPackerScan(codigo) {
   vibrar(); beepOk(); trasPackerDelta(1);
 }
 
+/** Advance to the next item in transfer packing. */
 async function trasPackerSiguiente() {
   if (!TRAS_PACK) return;
   const todoListo = TRAS_PACK.items.every(i => TRAS_PACK.counts[i.item_id] >= (i.cantidad_enviada || i.cantidad_aprobada || 0));
@@ -11890,6 +12657,7 @@ async function trasPackerSiguiente() {
   await _trasPackerConfirmar();
 }
 
+/** Submit all confirmed items for the transfer packing session. */
 async function _trasPackerConfirmar() {
   if (!TRAS_PACK) return;
   try {
@@ -11907,6 +12675,7 @@ async function _trasPackerConfirmar() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Pause the transfer packer HUD and return to the queue. */
 function trasPackerPausarHUD() {
   cerrarCamara('tpack-cambox');
   document.getElementById('tpack-hud').style.display = 'none';
@@ -11923,6 +12692,7 @@ let COMP_VELOCITY_DATA = [];    // cache para filtros client-side
 let COMP_TIMER = null;
 let COMP_PANTALLA = false;      // true si es pantalla-compras (rol compras)
 
+/** Initialize the purchasing (compras) screen and load data. */
 function compIniciarPantalla() {
   COMP_PANTALLA = true;
   compCargarResumen('comp2');
@@ -11932,6 +12702,7 @@ function compIniciarPantalla() {
   }, 60000);
 }
 
+/** Fetch and render the active purchasing sub-tab content. */
 async function cargarCompras() {
   COMP_PANTALLA = false;
   await Promise.all([
@@ -11941,6 +12712,7 @@ async function cargarCompras() {
 }
 
 // ── Sub-tabs (admin tab-compras) ──────────────────────────────────────────
+/** @param {string} id - Purchasing primary sub-tab to activate. */
 function compSubtab(id) {
   COMP_SUBTAB = id;
   const secs = ['velocity','dock','cuarentena','audit'];
@@ -11961,6 +12733,7 @@ function compSubtab(id) {
 }
 
 // ── Sub-tabs (pantalla-compras dedicada) ──────────────────────────────────
+/** @param {string} id - Purchasing secondary sub-tab to activate. */
 function compSubtab2(id) {
   COMP_SUBTAB = id;
   const secs = ['velocity','dock','cuarentena','audit'];
@@ -11981,6 +12754,7 @@ function compSubtab2(id) {
 }
 
 // ── RESUMEN (KPIs header) ─────────────────────────────────────────────────
+/** @param {string} prefix - DOM prefix for the purchasing summary panel to load. */
 async function compCargarResumen(prefix) {
   try {
     const r = await get('/api/compras/resumen?almacen_id=' + ALMACEN_ID);
@@ -11995,6 +12769,7 @@ async function compCargarResumen(prefix) {
 // VELOCITY + ABC
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** @param {string} prefix - DOM prefix for the velocity analytics panel to load. */
 async function compCargarVelocity(prefix) {
   prefix = prefix || 'comp';
   const target = prefix === 'comp2'
@@ -12023,6 +12798,10 @@ async function compCargarVelocity(prefix) {
   }
 }
 
+/**
+ * Build HTML for the velocity analytics filter controls.
+ * @returns {string} HTML string.
+ */
 function _compVelocityFiltersHtml() {
   return `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
     <select id="comp2-vel-dias" onchange="compCargarVelocity('comp2')"
@@ -12041,6 +12820,7 @@ function _compVelocityFiltersHtml() {
   </div>`;
 }
 
+/** @param {string} prefix - DOM prefix; apply ABC/text filters to the velocity list. */
 function compFiltrarVelocity(prefix) {
   prefix = prefix || 'comp';
   const abcSel = document.getElementById((prefix === 'comp2' ? 'comp2' : 'comp') + '-vel-abc');
@@ -12058,6 +12838,12 @@ function compFiltrarVelocity(prefix) {
   if (target) _compRenderVelocityList(target, filtered, { total_items: filtered.length, alertas_a: filtered.filter(i => i.alerta).length });
 }
 
+/**
+ * Render the velocity analytics product list.
+ * @param {HTMLElement} el - Container element.
+ * @param {Array<Object>} items - Velocity data items.
+ * @param {Object} meta - Metadata (totals, averages).
+ */
 function _compRenderVelocityList(el, items, meta) {
   if (!items.length) {
     el.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin datos de velocity en este período</div>';

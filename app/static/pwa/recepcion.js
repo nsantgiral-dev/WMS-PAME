@@ -7,6 +7,10 @@
 // Dependencias cross-module (de packing.js): imprimirEtiquetaLPN()
 // ══════════════════════════════════════════════════════════════════
 
+/**
+ * Carga y renderiza la lista de recepciones activas (OCs de Siesa + DB).
+ * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
+ */
 async function cargarRecepciones(silencioso = false) {
   if (RECEPCION_ACTUAL) return;
   const el = document.getElementById('contenido-recepcion');
@@ -34,6 +38,11 @@ async function cargarRecepciones(silencioso = false) {
 // RECEPCIONISTA — Lista de OCs y recepciones en proceso
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Renderiza el HTML de la lista de OCs pendientes y recepciones en proceso.
+ * @param {Object} siesa - Respuesta de la API de OCs (contiene .ordenes y .simulado)
+ * @param {Array<Object>} dbRecs - Recepciones en proceso desde la DB local
+ */
 function renderListaRecepciones(siesa, dbRecs) {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
@@ -115,6 +124,10 @@ function renderListaRecepciones(siesa, dbRecs) {
   el.innerHTML = html;
 }
 
+/**
+ * Inicia una recepcion en el WMS a partir de una OC de Siesa.
+ * @param {number} idx - Indice de la OC en el array global SIESA_OCS
+ */
 async function crearRecepcionDesdeSiesa(idx) {
   const oc = SIESA_OCS[idx];
   if (!oc) return;
@@ -144,6 +157,10 @@ async function crearRecepcionDesdeSiesa(idx) {
   } catch (e) { alerta(e.message || 'Error iniciando recepción', 'error'); cargarRecepciones(); }
 }
 
+/**
+ * Carga una recepcion existente desde la DB y abre la pantalla de escaneo.
+ * @param {number} id - ID de la recepcion en la base de datos
+ */
 async function continuarRecepcion(id) {
   try {
     const r = await get('/api/recepcion/' + id);
@@ -156,6 +173,10 @@ async function continuarRecepcion(id) {
 // RECEPCIONISTA — Pantalla de escaneo ciego
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Renderiza la pantalla de escaneo ciego para una recepcion activa.
+ * @param {Object} rec - Objeto de recepcion con items, numero_oc_siesa, proveedor_nombre, etc.
+ */
 function renderEscaneoRecepcion(rec) {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
@@ -222,6 +243,11 @@ function renderEscaneoRecepcion(rec) {
     </div>`;
 }
 
+/**
+ * Genera el HTML de la lista de items de una recepcion con barras de progreso.
+ * @param {Array<Object>} items - Items de la recepcion con cantidad_recibida, cantidad_ordenada, etc.
+ * @returns {string} HTML concatenado de todos los items
+ */
 function renderItemsRecepcion(items) {
   return items.map(it => {
     const esBono = it.tipo === 'BONIFICACION';
@@ -281,6 +307,10 @@ function renderItemsRecepcion(items) {
   }).join('');
 }
 
+/**
+ * Procesa un codigo escaneado o ingresado manualmente en la recepcion activa.
+ * @param {string} codigo - Codigo de barras, GS1 o EAN escaneado
+ */
 async function procesarScanRecepcion(codigo) {
   if (!RECEPCION_ACTUAL) return;
   vibrar(); flash();
@@ -336,6 +366,14 @@ async function procesarScanRecepcion(codigo) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/**
+ * Registra un escaneo de producto en la recepcion activa.
+ * @param {number} productoId - ID del producto en la DB
+ * @param {number} cantidad - Cantidad a registrar (1 para empaque, N para LPN/paca)
+ * @param {boolean} esEmpaque - true si el codigo escaneado es un empaque (DUN-14, caja)
+ * @param {string|null} unidad - Unidad de medida (UND, PACA, etc.) o null para default
+ * @param {boolean} [esBonificacion=false] - true si es un obsequio fuera de la OC
+ */
 async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unidad, esBonificacion = false) {
   let r;
   try {
@@ -406,7 +444,7 @@ async function _registrarEscaneoRecepcion(productoId, cantidad, esEmpaque, unida
   }
 }
 
-// Muestra aviso y abre flujo de escaneo para obsequios/bonificaciones
+/** Muestra modal preguntando si hay obsequios/bonificaciones del proveedor. */
 function modalObsequio() {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
@@ -431,7 +469,7 @@ function modalObsequio() {
   };
 }
 
-// Panel de escaneo exclusivo para bonificaciones
+/** Muestra panel overlay de escaneo exclusivo para bonificaciones. */
 function _panelScanBonificacion() {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
@@ -465,6 +503,11 @@ function _panelScanBonificacion() {
   document.body.appendChild(overlay);
 }
 
+/**
+ * Procesa un escaneo dentro del panel de bonificaciones.
+ * @param {string} codigo - Codigo de barras escaneado
+ * @param {HTMLElement} panelEl - Elemento overlay del panel para cerrarlo tras registrar
+ */
 async function _escanearBono(codigo, panelEl) {
   vibrar(); flash();
   try {
@@ -487,6 +530,10 @@ async function _escanearBono(codigo, panelEl) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/**
+ * Busqueda manual de producto para registrar como bonificacion.
+ * @param {HTMLElement} panelEl - Elemento overlay del panel para cerrarlo tras registrar
+ */
 async function abrirBusquedaManualBono(panelEl) {
   const codigo = prompt('Ingresa el código WMS del producto:');
   if (!codigo) return;
@@ -497,7 +544,14 @@ async function abrirBusquedaManualBono(panelEl) {
   if (panelEl) panelEl.remove();
 }
 
-// Helper: modal de confirmación reutilizable — devuelve Promise<boolean>
+/**
+ * Modal de confirmacion reutilizable con dos botones.
+ * @param {string} titulo - Titulo del modal
+ * @param {string} cuerpoHtml - Contenido HTML del cuerpo
+ * @param {string} txtSi - Texto del boton de confirmacion
+ * @param {string} txtNo - Texto del boton de cancelacion
+ * @returns {Promise<boolean>} true si el usuario confirma, false si cancela
+ */
 function _confirmarModal(titulo, cuerpoHtml, txtSi, txtNo) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -515,6 +569,11 @@ function _confirmarModal(titulo, cuerpoHtml, txtSi, txtNo) {
   });
 }
 
+/**
+ * Muestra modal para resolver ambiguedad cuando un codigo corresponde a multiples empaques.
+ * @param {string} codigo - Codigo de barras ambiguo
+ * @param {Array<Object>} ambiguos - Lista de empaques posibles con producto_id, factor_conversion, unidad_medida
+ */
 function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   // El mismo código de barras corresponde a múltiples niveles de empaque
   // El operario debe decir qué está escaneando
@@ -543,12 +602,21 @@ function _modalAmbiguedadRecepcion(codigo, ambiguos) {
   document.body.appendChild(modal);
 }
 
+/**
+ * Registra el empaque elegido por el operario tras resolver ambiguedad.
+ * @param {string} codigo - Codigo de barras original
+ * @param {number} productoId - ID del producto seleccionado
+ * @param {number} factor - Factor de conversion del empaque elegido
+ * @param {string} unidad - Unidad de medida del empaque (PQ, CJ, etc.)
+ * @param {HTMLElement} modal - Elemento del modal de ambiguedad para cerrarlo
+ */
 async function _elegirEmpaque(codigo, productoId, factor, unidad, modal) {
   if (modal) modal.remove();
   await _registrarEscaneoRecepcion(productoId, factor, false, unidad);
   alerta(`${unidad} × ${factor} UND registrada`, 'exito');
 }
 
+/** Abre modal de busqueda manual de producto para pacas sin codigo de barras. */
 async function abrirBusquedaManualRecepcion() {
   // Busca producto por texto para pacas sin ningún código
   const modal = document.createElement('div');
@@ -571,6 +639,10 @@ async function abrirBusquedaManualRecepcion() {
 }
 
 let _buscarModalTimer;
+/**
+ * Busca productos por texto con debounce y renderiza resultados en el modal.
+ * @param {string} q - Texto de busqueda ingresado por el operario
+ */
 async function _buscarProductoModal(q) {
   clearTimeout(_buscarModalTimer);
   if (q.length < 2) { document.getElementById('modal-buscar-resultados').innerHTML = ''; return; }
@@ -589,6 +661,12 @@ async function _buscarProductoModal(q) {
   }, 350);
 }
 
+/**
+ * Procesa la seleccion manual de un producto, pide cantidad y genera LPN si es paca.
+ * @param {number} productoId - ID del producto seleccionado
+ * @param {string} nombre - Nombre del producto para mostrar en el prompt
+ * @param {HTMLElement} modal - Elemento del modal de busqueda para cerrarlo
+ */
 async function _seleccionarProductoManual(productoId, nombre, modal) {
   // Producto seleccionado sin código → preguntar cantidad y generar LPN
   const cant = prompt(`¿Cuántas unidades tiene esta paca de "${nombre}"?\n(Deja vacío si es 1 unidad suelta)`);
@@ -618,6 +696,7 @@ async function _seleccionarProductoManual(productoId, nombre, modal) {
   }
 }
 
+/** Confirma la recepcion activa, pidiendo remision y validando completitud. */
 async function confirmarRecepcionActiva() {
   if (!RECEPCION_ACTUAL) return;
 
@@ -661,6 +740,10 @@ async function confirmarRecepcionActiva() {
   }
 }
 
+/**
+ * Muestra modal para capturar el numero de remision/factura fisica del proveedor.
+ * @returns {Promise<string|null>} Numero de remision ingresado, o null si el operario cancela
+ */
 function _pedirRemision() {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -693,6 +776,7 @@ function _pedirRemision() {
   });
 }
 
+/** Limpia la recepcion activa y vuelve a la lista de recepciones. */
 function volverListaRecepciones() {
   RECEPCION_ACTUAL = null;
   cargarRecepciones();
@@ -705,6 +789,10 @@ let _REC_TRASLADO_ACTIVO    = null;  // ST abierto en conteo
 let _REC_CONTEOS            = {};    // {producto_id: cantidad_contada}
 let _REC_TRASLADOS_PENDIENTES = [];  // lista cargada desde API
 
+/**
+ * Carga y renderiza la lista de traslados pendientes de recepcion (NB1).
+ * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
+ */
 async function recepCargarTraslados(silencioso = false) {
   if (_REC_TRASLADO_ACTIVO) return;
   const el = document.getElementById('contenido-traslados-rec');
@@ -752,6 +840,10 @@ async function recepCargarTraslados(silencioso = false) {
   }
 }
 
+/**
+ * Abre la pantalla de conteo para un traslado pendiente.
+ * @param {number} id - ID de la solicitud de traslado
+ */
 function recepAbrirConteoTraslado(id) {
   const s = _REC_TRASLADOS_PENDIENTES.find(x => x.id === id);
   if (!s) return;
@@ -762,12 +854,14 @@ function recepAbrirConteoTraslado(id) {
   setTimeout(() => { const inp = document.getElementById('rec-tras-scan-input'); if (inp) inp.focus(); }, 150);
 }
 
+/** Limpia el traslado activo y vuelve a la lista de traslados pendientes. */
 function recepVolverListaTraslados() {
   _REC_TRASLADO_ACTIVO = null;
   _REC_CONTEOS = {};
   recepCargarTraslados();
 }
 
+/** Renderiza la pantalla de conteo/escaneo del traslado activo. */
 function _recepRenderPickingTraslado() {
   const el = document.getElementById('contenido-traslados-rec');
   if (!el || !_REC_TRASLADO_ACTIVO) return;
@@ -820,6 +914,11 @@ function _recepRenderPickingTraslado() {
     </div>`;
 }
 
+/**
+ * Genera el HTML de los items de un traslado con contadores +/- y barras de progreso.
+ * @param {Array<Object>} items - Items del traslado con producto_id, cantidad_enviada, etc.
+ * @returns {string} HTML concatenado de todos los items
+ */
 function _recepRenderItemsTraslado(items) {
   return items.map(i => {
     const esperado = i.cantidad_enviada || i.cantidad_aprobada || i.cantidad_solicitada || 0;
@@ -852,6 +951,10 @@ function _recepRenderItemsTraslado(items) {
   }).join('');
 }
 
+/**
+ * Procesa un codigo escaneado en la recepcion de traslado, incrementando el conteo.
+ * @param {string} codigo - Codigo de barras o codigo Siesa del producto
+ */
 async function recepScanTraslado(codigo) {
   if (!_REC_TRASLADO_ACTIVO) return;
   const items = _REC_TRASLADO_ACTIVO.items || [];
@@ -869,6 +972,11 @@ async function recepScanTraslado(codigo) {
   if (inp) inp.focus();
 }
 
+/**
+ * Ajusta el conteo de un item del traslado y actualiza la UI.
+ * @param {number} productoId - ID del producto a ajustar
+ * @param {number} delta - Incremento (+1) o decremento (-1) a aplicar
+ */
 function recepContarItem(productoId, delta) {
   if (!_REC_TRASLADO_ACTIVO) return;
   const item = (_REC_TRASLADO_ACTIVO.items || []).find(i => i.producto_id === productoId);
@@ -890,6 +998,7 @@ function recepContarItem(productoId, delta) {
   }
 }
 
+/** Confirma la recepcion del traslado activo enviando los conteos al backend. */
 async function recepConfirmarTraslado() {
   const s = _REC_TRASLADO_ACTIVO;
   if (!s) return;
@@ -937,6 +1046,10 @@ async function recepConfirmarTraslado() {
 // RECEPCIONISTA — Tabs (OCs / Traslados / Devoluciones)
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Cambia el tab activo del modulo recepcionista (OCs, Traslados, Devoluciones).
+ * @param {string} tab - Identificador del tab: 'ocs', 'traslados' o 'dev'
+ */
 function recTab(tab) {
   REC_TAB_ACTIVO = tab;
   const tabOcs  = document.getElementById('rec-tab-ocs');
@@ -970,6 +1083,10 @@ function recTab(tab) {
 // RECEPCIONISTA — Lista de Devoluciones
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Carga y renderiza la lista de devoluciones pendientes y bultos rechazados.
+ * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
+ */
 async function cargarDevoluciones(silencioso = false) {
   if (DEVOLUCION_ACTUAL) return;
   const el = document.getElementById('contenido-devoluciones');
@@ -1048,6 +1165,10 @@ async function cargarDevoluciones(silencioso = false) {
 // RECEPCIONISTA — Flujo de ubicación de devolución
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Carga una tarea de devolucion y abre la pantalla de ubicacion.
+ * @param {number} id - ID de la tarea de devolucion
+ */
 async function abrirDevolucion(id) {
   try {
     const d = await get('/api/devoluciones/?almacen_id=' + ALMACEN_ID);
@@ -1058,6 +1179,10 @@ async function abrirDevolucion(id) {
   } catch (e) { alerta('Error cargando tarea', 'error'); }
 }
 
+/**
+ * Renderiza la pantalla de ubicacion de devolucion (buen estado o averia).
+ * @param {Object} tarea - Tarea de devolucion con producto_nombre, cantidad_diferencia, etc.
+ */
 function renderEscaneoDevolucion(tarea) {
   // Cambiar al tab devoluciones si no está ahí
   recTab('dev');
@@ -1118,6 +1243,7 @@ function renderEscaneoDevolucion(tarea) {
     </div>`;
 }
 
+/** Confirma la ubicacion de la devolucion activa en bodega (buen estado). */
 async function confirmarUbicacionDev() {
   if (!DEVOLUCION_ACTUAL) return;
   const inp = document.getElementById('input-ubicacion-dev');
@@ -1140,6 +1266,10 @@ async function confirmarUbicacionDev() {
   }
 }
 
+/**
+ * Procesa un escaneo de ubicacion en el flujo de devolucion.
+ * @param {string} codigo - Codigo de ubicacion escaneado
+ */
 async function procesarScanDevolucion(codigo) {
   // En flujo devolución el escáner llena el campo de ubicación
   const inp = document.getElementById('input-ubicacion-dev');
@@ -1150,6 +1280,10 @@ async function procesarScanDevolucion(codigo) {
   }
 }
 
+/**
+ * Reporta averia de mercancia y traslada inventario a bodega AV1 en Siesa.
+ * @param {number} tareaId - ID de la tarea de devolucion
+ */
 async function confirmarAveria(tareaId) {
   const tarea = DEVOLUCION_ACTUAL;
   if (!tarea) return;
@@ -1177,6 +1311,7 @@ async function confirmarAveria(tareaId) {
   }
 }
 
+/** Limpia la devolucion activa y vuelve a la lista de devoluciones. */
 function volverListaDevoluciones() {
   DEVOLUCION_ACTUAL = null;
   cargarDevoluciones();

@@ -19,6 +19,10 @@ let _layoutProductoId = null;
 const _ZONA_COLOR = { PICKING: '#60a5fa', RESERVA: '#22c55e', AVERIAS: '#ef4444', GENERAL: '#555' };
 const _ZONAS_TABS = ['PICKING', 'RESERVA', 'AVERIAS', 'GENERAL'];
 
+/**
+ * Switch the active zone tab and re-render ubicaciones for that zone.
+ * @param {string} zona - Zone key: 'PICKING', 'RESERVA', 'AVERIAS', or 'GENERAL'.
+ */
 function layoutZonaTab(zona) {
   _layoutZonaActual = zona;
   _ZONAS_TABS.forEach(z => {
@@ -32,6 +36,10 @@ function layoutZonaTab(zona) {
   layoutRenderUbicaciones();
 }
 
+/**
+ * Switch the layout sub-tab between ubicaciones and import views.
+ * @param {string} sec - Section key: 'ubicaciones' or 'importar'.
+ */
 function layoutSubtab(sec) {
   _layoutSubActual = sec;
   ['ubicaciones', 'importar'].forEach(s => {
@@ -47,10 +55,16 @@ function layoutSubtab(sec) {
   if (sec === 'ubicaciones') layoutCargarUbicaciones();
 }
 
+/** Entry point to load the layout module with the current sub-tab. */
 async function cargarLayout() {
   layoutSubtab(_layoutSubActual);
 }
 
+/**
+ * Build the HTML card for a single ubicacion with actions.
+ * @param {Object} u - Ubicacion object with code, zone, stock, and product data.
+ * @returns {string} HTML string for the ubicacion card.
+ */
 function _layoutRenderUbicacionCard(u) {
   const color = _ZONA_COLOR[u.tipo_zona] || '#888';
   const skuLabel = u.producto_asignado_codigo
@@ -95,6 +109,7 @@ function _layoutRenderUbicacionCard(u) {
     </div>`;
 }
 
+/** Fetch all ubicaciones for the current almacen and trigger zone rendering. */
 async function layoutCargarUbicaciones() {
   const el = document.getElementById('layout-lista-ubicaciones');
   if (!el) return;
@@ -111,6 +126,7 @@ async function layoutCargarUbicaciones() {
 // Pinta solo la zona activa (pestaña). Dentro de ella, cada grupo — fila legada,
 // Cuerpo, o ubicación suelta (AVERIAS/GENERAL) — se ordena por la fecha de
 // creación de su miembro más nuevo: lo que se acaba de crear queda primero.
+/** Render cached ubicaciones grouped by fila/cuerpo for the active zone tab. */
 function layoutRenderUbicaciones() {
   const el = document.getElementById('layout-lista-ubicaciones');
   if (!el) return;
@@ -232,6 +248,7 @@ function layoutRenderUbicaciones() {
 
 let _layoutCuerpoHuecosPrevios = null; // huecosPorNivel del último cuerpo creado, para "repetir"
 
+/** Open the 2-step wizard modal to create a full cuerpo (body) with entrepanos and huecos. */
 async function layoutAbrirModalCuerpo() {
   const m = document.getElementById('modal-layout-cuerpo');
   if (!m) return;
@@ -267,11 +284,13 @@ async function layoutAbrirModalCuerpo() {
   m.style.display = 'flex';
 }
 
+/** Close the cuerpo creation wizard modal. */
 function layoutCerrarModalCuerpo() {
   const m = document.getElementById('modal-layout-cuerpo');
   if (m) m.style.display = 'none';
 }
 
+/** Pre-fill the cuerpo form with the last created cuerpo's values (next number). */
 function layoutRepetirCuerpoAnterior() {
   if (!_layoutUltimoCuerpo) return;
   document.getElementById('layout-cuerpo-pasillo').value = _layoutUltimoCuerpo.pasillo;
@@ -281,6 +300,7 @@ function layoutRepetirCuerpoAnterior() {
   _layoutCuerpoHuecosPrevios = _layoutUltimoCuerpo.huecosPorNivel;
 }
 
+/** Validate step 1 inputs and advance to step 2 (huecos per entrepano). */
 function layoutCuerpoIrAPaso2() {
   const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
   const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
@@ -313,11 +333,13 @@ function layoutCuerpoIrAPaso2() {
   document.getElementById('layout-cuerpo-paso2').style.display = 'block';
 }
 
+/** Go back from step 2 to step 1 in the cuerpo creation wizard. */
 function layoutCuerpoVolverAPaso1() {
   document.getElementById('layout-cuerpo-paso2').style.display = 'none';
   document.getElementById('layout-cuerpo-paso1').style.display = 'block';
 }
 
+/** Submit the cuerpo creation with all entrepanos and huecos to the API. */
 async function layoutGuardarCuerpo() {
   const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
   const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
@@ -347,6 +369,11 @@ async function layoutGuardarCuerpo() {
 
 let _layoutFilaEnEdicion = null; // { pasillo, fila }
 
+/**
+ * Open the modal to bulk-edit all positions in a legacy fila (row).
+ * @param {string} pasillo - Aisle letter.
+ * @param {string} fila - Row number within the aisle.
+ */
 function layoutAbrirModalEditarFila(pasillo, fila) {
   const m = document.getElementById('modal-layout-editar-fila');
   if (!m) return;
@@ -364,11 +391,13 @@ function layoutAbrirModalEditarFila(pasillo, fila) {
   m.style.display = 'flex';
 }
 
+/** Close the fila edit modal. */
 function layoutCerrarModalEditarFila() {
   const m = document.getElementById('modal-layout-editar-fila');
   if (m) m.style.display = 'none';
 }
 
+/** Save bulk edits (zone, capacity, active) for all positions in the fila. */
 async function layoutGuardarEditarFila() {
   if (!_layoutFilaEnEdicion) return;
   const { pasillo, fila } = _layoutFilaEnEdicion;
@@ -412,6 +441,11 @@ async function layoutGuardarEditarFila() {
 
 let _layoutFilaEnBorrado = null; // { pasillo, fila }
 
+/**
+ * Open the modal to delete an entire fila (only positions without history).
+ * @param {string} pasillo - Aisle letter.
+ * @param {string} fila - Row number within the aisle.
+ */
 function layoutAbrirModalEliminarFila(pasillo, fila) {
   const m = document.getElementById('modal-layout-eliminar-fila');
   if (!m) return;
@@ -425,11 +459,13 @@ function layoutAbrirModalEliminarFila(pasillo, fila) {
   m.style.display = 'flex';
 }
 
+/** Close the fila deletion modal. */
 function layoutCerrarModalEliminarFila() {
   const m = document.getElementById('modal-layout-eliminar-fila');
   if (m) m.style.display = 'none';
 }
 
+/** Delete all eligible positions in the fila after confirmation. */
 async function layoutGuardarEliminarFila() {
   if (!_layoutFilaEnBorrado) return;
   const { pasillo, fila } = _layoutFilaEnBorrado;
@@ -461,6 +497,7 @@ async function layoutGuardarEliminarFila() {
 
 // ── AVERIAS numeradas ─────────────────────────────────────────────────────
 
+/** Create the next numbered AVERIAS ubicacion for the current almacen. */
 async function layoutCrearAverias() {
   try {
     const d = await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/averias`, {});
@@ -473,6 +510,12 @@ async function layoutCrearAverias() {
 
 // ── Modal: Asignar SKU (Mecanismo B) ─────────────────────────────────────────
 
+/**
+ * Open the SKU assignment modal for a ubicacion.
+ * @param {number} ubId - Ubicacion ID.
+ * @param {string} codigo - Ubicacion code for display.
+ * @param {string} tipoZona - Zone type to conditionally show capacity input.
+ */
 function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   _layoutUbAsignarId = ubId;
   _layoutProductoId = null;
@@ -491,6 +534,7 @@ function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   setTimeout(() => document.getElementById('layout-asignar-codigo')?.focus(), 50);
 }
 
+/** Close the SKU assignment modal and reset state. */
 function layoutCerrarModalAsignar() {
   const m = document.getElementById('modal-layout-asignar');
   if (m) m.style.display = 'none';
@@ -498,6 +542,7 @@ function layoutCerrarModalAsignar() {
   _layoutProductoId = null;
 }
 
+/** Search for a product by code and display confirmation if found. */
 async function layoutBuscarProducto() {
   const codigo = document.getElementById('layout-asignar-codigo').value.trim();
   if (!codigo) return;
@@ -521,6 +566,7 @@ async function layoutBuscarProducto() {
   }
 }
 
+/** Confirm and submit the SKU assignment with quantity and optional capacity. */
 async function layoutConfirmarAsignar() {
   if (!_layoutUbAsignarId) return;
   if (!_layoutProductoId) { alerta('Busca y confirma el producto antes de continuar', 'error'); return; }
@@ -546,6 +592,10 @@ async function layoutConfirmarAsignar() {
 
 let _layoutUbEditarId = null;
 
+/**
+ * Open the modal to edit an individual ubicacion's zone, capacity, or active state.
+ * @param {number} ubId - Ubicacion ID.
+ */
 function layoutAbrirModalEditarUbicacion(ubId) {
   const ub = _layoutUbicacionesCache.find(u => u.id === ubId);
   if (!ub) return;
@@ -560,12 +610,14 @@ function layoutAbrirModalEditarUbicacion(ubId) {
   m.style.display = 'flex';
 }
 
+/** Close the individual ubicacion edit modal. */
 function layoutCerrarModalEditarUbicacion() {
   const m = document.getElementById('modal-layout-editar-ubicacion');
   if (m) m.style.display = 'none';
   _layoutUbEditarId = null;
 }
 
+/** Save changes to an individual ubicacion (zone, capacity, active state). */
 async function layoutGuardarEditarUbicacion() {
   if (!_layoutUbEditarId) return;
   const tipo_zona = document.getElementById('layout-editar-ub-zona').value || null;
@@ -602,6 +654,11 @@ async function layoutGuardarEditarUbicacion() {
 
 // ── Eliminar ubicación individual (sin stock ni historial) ──────────────────
 
+/**
+ * Delete a single ubicacion if it has no stock or history.
+ * @param {number} ubId - Ubicacion ID.
+ * @param {string} codigo - Ubicacion code for the confirmation prompt.
+ */
 async function layoutEliminarUbicacion(ubId, codigo) {
   if (!confirm(`¿Eliminar la ubicación ${codigo}? Esta acción no se puede deshacer. Solo se puede eliminar si no tiene stock ni historial.`)) return;
   try {
@@ -620,6 +677,10 @@ async function layoutEliminarUbicacion(ubId, codigo) {
 
 // ── Modal: Reclasificar ubicación ────────────────────────────────────────────
 
+/**
+ * Open the reclassify modal to change a ubicacion's zone and optionally release its slot.
+ * @param {number} ubId - Ubicacion ID.
+ */
 function layoutAbrirModalReclasificar(ubId) {
   const ub = _layoutUbicacionesCache.find(u => u.id === ubId);
   if (!ub) return;
@@ -634,12 +695,14 @@ function layoutAbrirModalReclasificar(ubId) {
   m.style.display = 'flex';
 }
 
+/** Close the reclassify modal. */
 function layoutCerrarModalReclasificar() {
   const m = document.getElementById('modal-layout-reclasificar');
   if (m) m.style.display = 'none';
   _layoutUbAsignarId = null;
 }
 
+/** Save the reclassification (zone change + optional slot release) for the ubicacion. */
 async function layoutGuardarReclasificar() {
   if (!_layoutUbAsignarId) return;
   const tipo_zona = document.getElementById('layout-reclasificar-zona').value;
@@ -671,6 +734,10 @@ async function layoutGuardarReclasificar() {
 
 // ── Importador Excel (Mecanismo A, opción masiva) ────────────────────────────
 
+/**
+ * Upload an Excel file to bulk-import ubicaciones into the current almacen.
+ * @param {HTMLButtonElement} btn - Button element to disable during import.
+ */
 async function layoutImportarExcel(btn) {
   const input = document.getElementById('layout-import-file');
   const file = input?.files?.[0];

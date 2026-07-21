@@ -6,6 +6,7 @@
 let _INV_SUBTAB = 'conteos';
 let _INV_ALMACENES = [];
 
+/** Load almacenes for the ABC selector (once) and refresh the active inventory panel. */
 async function cargarInventario() {
   // Cargar almacenes para el selector ABC (solo una vez)
   if (_INV_ALMACENES.length === 0) {
@@ -30,6 +31,7 @@ async function cargarInventario() {
 
 // ── Config bodega por almacén ─────────────────────────────────────────────────
 
+/** Display the Siesa bodega/CO info for the currently selected almacen. */
 function mostrarConfigBodega() {
   const sel = document.getElementById('inv-abc-almacen');
   const info = document.getElementById('inv-abc-bodega-info');
@@ -44,6 +46,7 @@ function mostrarConfigBodega() {
   document.getElementById('inv-abc-bodega-edit').style.display = 'none';
 }
 
+/** Toggle the inline bodega/CO edit form visibility. */
 function toggleEditBodega() {
   const edit = document.getElementById('inv-abc-bodega-edit');
   if (!edit) return;
@@ -57,6 +60,7 @@ function toggleEditBodega() {
   edit.style.display = 'block';
 }
 
+/** Save the bodega_siesa_id and centro_op_siesa for the selected almacen. */
 async function guardarConfigBodega() {
   const sel = document.getElementById('inv-abc-almacen');
   const almId = sel?.value;
@@ -83,6 +87,10 @@ async function guardarConfigBodega() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Switch the inventory sub-tab between conteos and ABC views.
+ * @param {string} nombre - Sub-tab key: 'conteos' or 'abc'.
+ */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
   const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc' };
@@ -106,6 +114,10 @@ function invSubtab(nombre) {
 let _CONTEO_PAGE = 1;
 let _CONTEO_VISTA = 'accion';  // 'accion' | 'progreso' | 'resueltos'
 
+/**
+ * Switch the conteo view mode and reload data.
+ * @param {string} v - View key: 'accion', 'progreso', or 'resueltos'.
+ */
 function conteoVista(v) {
   _CONTEO_VISTA = v;
   _CONTEO_PAGE = 1;
@@ -120,6 +132,7 @@ function conteoVista(v) {
   cargarConteos();
 }
 
+/** Reset to page 1 and reload conteos with the current filter values. */
 function conteosFiltrar() {
   _CONTEO_PAGE = 1;
   cargarConteos();
@@ -127,6 +140,11 @@ function conteosFiltrar() {
 
 // ── Render helpers por vista ──────────────────────────────────────────────────
 
+/**
+ * Render a small colored badge indicating the conteo type (PICKING/MANUAL).
+ * @param {Object} s - Conteo session object.
+ * @returns {string} HTML badge string or empty string.
+ */
 function _tipoTag(s) {
   if (s.tipo === 'EXCEPCION_PICKING')
     return `<span style="background:#1A0606;color:#F87171;font-size:9px;font-weight:700;padding:1px 6px;border-radius:6px;margin-left:3px;">PICKING</span>`;
@@ -135,6 +153,11 @@ function _tipoTag(s) {
   return '';
 }
 
+/**
+ * Build the detailed action card for a conteo requiring admin review.
+ * @param {Object} s - Conteo session object with segundo_conteo/tercer_conteo.
+ * @returns {string} HTML string for the action card.
+ */
 function _renderCardAccion(s) {
   const hijo = s.segundo_conteo;           // CC2
   const cc3  = hijo?.tercer_conteo;        // CC3 (cuando CC1≠CC2)
@@ -229,6 +252,11 @@ function _renderCardAccion(s) {
   </div>`;
 }
 
+/**
+ * Build a compact card for a conteo in progress (PENDIENTE/EN_PROCESO).
+ * @param {Object} s - Conteo session object.
+ * @returns {string} HTML string for the progress card.
+ */
 function _renderCardProgreso(s) {
   const col = s.estado === 'EN_PROCESO' ? '#164F5A' : '#253A4A';
   return `<div style="background:#121C26;border:1px solid #1C2B3A;border-radius:10px;padding:12px;margin-bottom:6px;">
@@ -247,6 +275,11 @@ function _renderCardProgreso(s) {
   </div>`;
 }
 
+/**
+ * Build a muted card for a resolved conteo (MATCH/AJUSTADO/CANCELADO).
+ * @param {Object} s - Conteo session object.
+ * @returns {string} HTML string for the resolved card.
+ */
 function _renderCardResuelto(s) {
   const colMap = { MATCH:'#14532D', AJUSTADO:'#14532D', AJUSTANDO:'#7F1D1D', CANCELADO:'#253A4A' };
   const col = colMap[s.estado] || '#253A4A';
@@ -270,6 +303,7 @@ function _renderCardResuelto(s) {
 
 // ── Stats dashboard + asignación en lote ─────────────────────────────────────
 
+/** Fetch and display conteo KPI stats (pendientes, en curso, hoy, atrasados). */
 async function cargarConteoStats() {
   const bar = document.getElementById('conteo-stats-bar');
   if (!bar) return;
@@ -305,6 +339,7 @@ async function cargarConteoStats() {
   } catch (e) { /* silencioso */ }
 }
 
+/** Re-enqueue all failed Siesa adjustment jobs for retry. */
 async function conteoReintentarFallos() {
   if (!confirm('Re-encolar todos los ajustes fallidos para reintentar con Siesa?')) return;
   try {
@@ -322,6 +357,7 @@ async function conteoReintentarFallos() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Discard failed DLQ jobs and reset stuck AJUSTANDO sessions to DESCUADRE. */
 async function conteoDescartarFallos() {
   if (!confirm('Descartar los ajustes fallidos?\n\nLas sesiones atascadas en AJUSTANDO vuelven a DESCUADRE para que puedas re-aprobar o cancelar.')) return;
   try {
@@ -340,6 +376,10 @@ async function conteoDescartarFallos() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Skip the pending CC2/CC3 and move the session to DESCUADRE for admin review.
+ * @param {number} id - Conteo session ID.
+ */
 async function conteoOmitirSegundo(id) {
   if (!confirm('¿Omitir el CC2/CC3 pendiente y mover esta sesión a DESCUADRE para revisión?\n\nEl conteo pendiente se cancelará. Podrás aprobar o rechazar el ajuste manualmente.')) return;
   try {
@@ -358,6 +398,7 @@ async function conteoOmitirSegundo(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Export conteo sessions to a CSV file with optional date range filter. */
 async function conteoExportar() {
   const almId = document.getElementById('inv-abc-almacen')?.value;
   const desde = prompt('Desde (YYYY-MM-DD, vacío = todo):', '')?.trim() || '';
@@ -382,6 +423,7 @@ async function conteoExportar() {
 
 let _CONTEO_OPERARIOS = [];
 
+/** Show the batch-assign panel and load available operarios. */
 async function conteoMostrarAsignar() {
   const panel = document.getElementById('conteo-asignar-panel');
   if (!panel) return;
@@ -406,11 +448,13 @@ async function conteoMostrarAsignar() {
   panel.style.display = 'block';
 }
 
+/** Hide the batch-assign panel. */
 function conteoCerrarAsignar() {
   const panel = document.getElementById('conteo-asignar-panel');
   if (panel) panel.style.display = 'none';
 }
 
+/** Assign a batch of unassigned conteo tasks to the selected operario. */
 async function conteoAsignarLote() {
   const operarioId = document.getElementById('conteo-asignar-operario')?.value;
   const limite = parseInt(document.getElementById('conteo-asignar-limite')?.value) || 10;
@@ -434,6 +478,10 @@ async function conteoAsignarLote() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Cancel a conteo session with a required reason prompt.
+ * @param {number} id - Conteo session ID.
+ */
 async function conteoCancelar(id) {
   const motivo = prompt('Motivo de cancelación:');
   if (!motivo || !motivo.trim()) return;
@@ -456,6 +504,10 @@ async function conteoCancelar(id) {
 
 // ── Carga principal ───────────────────────────────────────────────────────────
 
+/**
+ * Fetch and render the paginated conteo list for the active view mode.
+ * @param {number} [page] - Page number; uses current page if omitted.
+ */
 async function cargarConteos(page) {
   if (page !== undefined) _CONTEO_PAGE = page;
   const lista = document.getElementById('inv-conteos-lista');
@@ -531,15 +583,18 @@ async function cargarConteos(page) {
   }
 }
 
+/** Show the manual conteo creation form and focus the code input. */
 function conteosMostrarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'block';
   document.getElementById('conteo-manual-codigo').focus();
 }
+/** Hide the manual conteo form and clear its inputs. */
 function conteosOcultarFormManual() {
   document.getElementById('conteo-form-manual').style.display = 'none';
   document.getElementById('conteo-manual-codigo').value = '';
   document.getElementById('conteo-manual-error').textContent = '';
 }
+/** Create a manual conteo task for a specific product code and almacen. */
 async function crearConteoManual() {
   const almacenId = document.getElementById('conteo-manual-almacen')?.value;
   const codigo = document.getElementById('conteo-manual-codigo')?.value.trim().toUpperCase();
@@ -568,6 +623,7 @@ async function crearConteoManual() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/** Fetch and render the ABC classification summary for the selected almacen. */
 async function cargarResumenAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) return;
@@ -603,6 +659,11 @@ async function cargarResumenAbc() {
   }
 }
 
+/**
+ * Generate conteo tasks for a single ABC class (daily batch or forced all).
+ * @param {string} clase - ABC class: 'A', 'B', or 'C'.
+ * @param {boolean} [forzarTodo=false] - If true, skip daily batch limits.
+ */
 async function generarAbc(clase, forzarTodo = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -631,6 +692,10 @@ async function generarAbc(clase, forzarTodo = false) {
   }
 }
 
+/**
+ * Generate conteo tasks for all ABC classes at once.
+ * @param {boolean} [forzarTodo=false] - If true, skip daily batch limits for all classes.
+ */
 async function generarTodasClases(forzarTodo = false) {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -661,6 +726,7 @@ async function generarTodasClases(forzarTodo = false) {
   }
 }
 
+/** Delete all PENDIENTE conteo tasks for a specific ABC class or all classes. */
 async function limpiarPendientesAbc() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -692,6 +758,10 @@ async function limpiarPendientesAbc() {
 
 let _CONTEO_EDICION_ID = null;
 
+/**
+ * Open the admin edit modal for a conteo session.
+ * @param {Object} s - Conteo session object with product, counts, and state.
+ */
 function conteoAbrirEdicion(s) {
   _CONTEO_EDICION_ID = s.id;
   const m = document.getElementById('modal-conteo-edicion');
@@ -728,12 +798,14 @@ function conteoAbrirEdicion(s) {
   m.style.display = 'flex';
 }
 
+/** Close the conteo edit modal and reset the editing state. */
 function conteosCerrarEdicion() {
   const m = document.getElementById('modal-conteo-edicion');
   if (m) m.style.display = 'none';
   _CONTEO_EDICION_ID = null;
 }
 
+/** Save the edited conteo quantity and reason, then refresh the list. */
 async function conteoGuardarEdicion() {
   if (!_CONTEO_EDICION_ID) return;
   const cantRaw = document.getElementById('conteo-edit-cantidad')?.value;
@@ -766,6 +838,10 @@ async function conteoGuardarEdicion() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Upload a CSV/Excel file with ABC classifications and update products.
+ * @param {HTMLInputElement} input - File input element with the selected file.
+ */
 async function subirCsvAbc(input) {
   const archivo = input.files[0];
   if (!archivo) return;
@@ -822,6 +898,7 @@ async function subirCsvAbc(input) {
   input.value = '';
 }
 
+/** Run the ABC watchdog to detect anomalous rotation and force conteos. */
 async function ejecutarWatchdog() {
   const almacenId = document.getElementById('inv-abc-almacen')?.value;
   if (!almacenId) { alerta('Selecciona un almacén primero', 'error'); return; }
@@ -853,6 +930,10 @@ async function ejecutarWatchdog() {
 
 let _CONTEO_AJUSTE_SESION = null;
 
+/**
+ * Open the adjustment confirmation modal for a DESCUADRE conteo.
+ * @param {Object} s - Conteo session object with difference and Siesa details.
+ */
 function conteoAbrirAjuste(s) {
   _CONTEO_AJUSTE_SESION = s;
   const m    = document.getElementById('modal-conteo-ajuste');
@@ -903,12 +984,14 @@ function conteoAbrirAjuste(s) {
   m.style.display = 'flex';
 }
 
+/** Close the adjustment modal and clear the active session reference. */
 function conteosCerrarAjuste() {
   const m = document.getElementById('modal-conteo-ajuste');
   if (m) m.style.display = 'none';
   _CONTEO_AJUSTE_SESION = null;
 }
 
+/** Confirm and enqueue the inventory adjustment to Siesa for the active session. */
 async function conteoConfirmarAjuste() {
   if (!_CONTEO_AJUSTE_SESION) return;
   const s    = _CONTEO_AJUSTE_SESION;

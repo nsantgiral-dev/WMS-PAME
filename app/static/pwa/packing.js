@@ -189,6 +189,7 @@ async function empIniciarHUD(packingId) {
   } catch (e) { alerta('Error iniciando tarea', 'error'); }
 }
 
+/** Cancela el packing activo y libera la tarea. @param {number} packingId */
 async function empCancelarPacking(packingId) {
   if (!confirm('¿Cancelar este packing? El pedido fue anulado en Siesa. La mercancía que ya fue pickeada debe devolverse a la ubicación o esperar el nuevo pedido.')) return;
   try {
@@ -204,6 +205,7 @@ async function empCancelarPacking(packingId) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Resetea flags Siesa de la tarea para reintento. @param {number} packingId */
 async function empLimpiarSiesa(packingId) {
   if (!confirm('¿Eliminar los bultos registrados y volver a declarar las piezas?')) return;
   try {
@@ -219,6 +221,7 @@ async function empLimpiarSiesa(packingId) {
 }
 
 
+/** Despacha con faltantes — cierra packing con cantidad real menor a esperada. */
 async function empDespacharConFaltantes() {
   if (!EMP_TAREA) return;
   const sinEscanear = EMP_ITEMS.filter(i => !i.verificado);
@@ -261,6 +264,7 @@ async function empDespacharConFaltantes() {
   }
 }
 
+/** Reintenta envío a Siesa para un packing fallido. @param {Object} t — tarea packing */
 async function empReintentarSiesa(t) {
   // Los bultos ya existen — el backend los reutiliza, solo reintenta Siesa
   const bultoResumen = t.bultos.reduce((acc, b) => {
@@ -296,6 +300,7 @@ async function empReintentarSiesa(t) {
 }
 
 
+/** Cierra el HUD de empaque y vuelve a la lista de tareas. */
 function empCerrarHUD() {
   document.getElementById('emp-hud').classList.remove('activo');
   EMP_TAREA = null;
@@ -309,6 +314,7 @@ function empCerrarHUD() {
 // EMPACADOR — HUD: renderizar ítem actual
 // ─────────────────────────────────────────────────────────────
 
+/** Renderiza el ítem actual en el HUD del empacador. */
 function empRenderHUDItem() {
   if (!EMP_TAREA || !EMP_ITEMS.length) return;
 
@@ -509,6 +515,7 @@ function empFlash(color, mensaje) {
 // EMPACADOR — Modal ambigüedad de empaque en packing
 // ─────────────────────────────────────────────────────────────
 
+/** Modal de ambigüedad de empaque en packing. @param {string} codigo @param {Array} ambiguos */
 function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   // ambiguos: array de ProductoEmpaque.to_dict()
   const opciones = ambiguos.map(e => `
@@ -534,6 +541,7 @@ function _modalAmbiguedadPackingEmp(codigo, ambiguos) {
   document.body.appendChild(modal);
 }
 
+/** @param {string} codigoBarras @param {string} productoCodigo @param {number} factor @param {string} unidad @param {HTMLElement} modal */
 async function _elegirEmpaquePacking(codigoBarras, productoCodigo, factor, unidad, modal) {
   if (modal) modal.remove();
   if (!EMP_TAREA) return;
@@ -627,6 +635,7 @@ async function empConfirmarPacking() {
 
 let _BULTOS_LINEAS = [];
 
+/** Agrega una línea de bulto al modal de declaración. @param {string} tipo — Caja|Bolsa|Rollo|Plancha|Estiba */
 function bultosAgregarLinea(tipo) {
   const existing = _BULTOS_LINEAS.find(l => l.tipo === tipo);
   if (existing) { existing.cantidad++; }
@@ -634,6 +643,7 @@ function bultosAgregarLinea(tipo) {
   bultosRenderLineas();
 }
 
+/** Renderiza las líneas de bultos en el modal. */
 function bultosRenderLineas() {
   const el = document.getElementById('modal-bultos-lineas');
   if (!el) return;
@@ -651,21 +661,25 @@ function bultosRenderLineas() {
     </div>`).join('');
 }
 
+/** @param {number} idx @param {number} delta — +1 o -1 */
 function bultosAjustarCantidad(idx, delta) {
   _BULTOS_LINEAS[idx].cantidad = Math.max(1, _BULTOS_LINEAS[idx].cantidad + delta);
   bultosRenderLineas();
 }
 
+/** Elimina una línea de bulto. @param {number} idx */
 function bultosEliminarLinea(idx) {
   _BULTOS_LINEAS.splice(idx, 1);
   bultosRenderLineas();
 }
 
+/** Cancela el modal de bultos sin cerrar la caja. */
 function bultosCancelar() {
   document.getElementById('modal-bultos').style.display = 'none';
   _BULTOS_LINEAS = [];
 }
 
+/** Confirma bultos → cierra caja → encola Siesa DLQ. */
 async function bultosConfirmar() {
   const errEl = document.getElementById('modal-bultos-error');
   errEl.textContent = '';
@@ -728,6 +742,7 @@ async function bultosConfirmar() {
 // FACTURA — botón flotante post-cierre e impresión con JWT
 // ─────────────────────────────────────────────────────────────
 
+/** Muestra botón flotante para imprimir factura. @param {number} packingId @param {string} numeroPedido */
 function empMostrarBotonFactura(packingId, numeroPedido) {
   const existing = document.getElementById('btn-remision-flotante');
   if (existing) existing.remove();
@@ -750,6 +765,7 @@ function empMostrarBotonFactura(packingId, numeroPedido) {
   document.body.appendChild(div);
 }
 
+/** Imprime factura electrónica en ventana emergente. @param {number} packingId */
 async function empImprimirFactura(packingId) {
   try {
     const resp = await fetch(`/api/packing/${packingId}/factura`, {
@@ -810,6 +826,7 @@ function imprimirEtiquetaLPN(lpn, productoNombre) {
   }, 300);
 }
 
+/** Imprime etiquetas de bultos y caja. @param {Array} bultos @param {Object} meta */
 function empImprimirEtiquetas(bultos, meta) {
   if (!bultos?.length) return;
 

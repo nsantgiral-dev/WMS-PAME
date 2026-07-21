@@ -461,6 +461,7 @@ function _modalAmbiguedadPicking(codigo, empaques) {
   document.body.appendChild(modal);
 }
 
+/** @param {string} productoCodigo @param {number} factor @param {string} unidad @param {HTMLElement} modal */
 async function _elegirEmpaquePicking(productoCodigo, factor, unidad, modal) {
   // productoCodigo ya es el código del producto (no el DUN-14) — el backend lo acepta
   if (modal) modal.remove();
@@ -532,6 +533,7 @@ async function confirmar() {
   }
 }
 
+/** Muestra modal de etiqueta canasto post-confirmación. @param {Object} canasto */
 function _modalEtiquetaCanasto(canasto) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.93);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
@@ -603,6 +605,7 @@ async function confirmarConGuard() {
   _reportarFaltanteInfo(tareaId, unds, req).catch(() => {});
 }
 
+/** Modal cuando cantidad < requerida. @param {number} encontradas @param {number} requeridas */
 function _modalFaltanteParcial(encontradas, requeridas) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
@@ -626,6 +629,7 @@ function _modalFaltanteParcial(encontradas, requeridas) {
   });
 }
 
+/** @param {number} tareaId @param {number} cantRecogida @param {number} cantSolicitada */
 async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
   await post('/api/mobile/faltante-info', {
     tarea_id: tareaId,

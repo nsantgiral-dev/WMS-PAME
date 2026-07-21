@@ -8,15 +8,25 @@
 // ─── MONITOR DE MUELLE ────────────────────────────────────────────────────────
 const MUELLE_ORDEN_KEY = 'wms_muelle_orden'; // localStorage key
 
+/** Recupera el orden de grupos de muelle guardado en localStorage. */
 function muelleGetOrden() {
   try { return JSON.parse(localStorage.getItem(MUELLE_ORDEN_KEY) || '[]'); }
   catch { return []; }
 }
 
+/**
+ * Persiste el orden de grupos de muelle en localStorage.
+ * @param {string[]} orden - Lista de nombres de destino en el orden deseado
+ */
 function muelleSetOrden(orden) {
   localStorage.setItem(MUELLE_ORDEN_KEY, JSON.stringify(orden));
 }
 
+/**
+ * Ordena los grupos de muelle segun el orden guardado, nuevos al final.
+ * @param {Object[]} grupos - Grupos con propiedad destino y bultos
+ * @returns {Object[]} Grupos reordenados
+ */
 function muelleOrdenarGrupos(grupos) {
   const orden = muelleGetOrden();
   // Municipios conocidos primero (en su orden guardado), los nuevos al final
@@ -28,6 +38,10 @@ function muelleOrdenarGrupos(grupos) {
   return ordenFinal.map(m => grupos.find(g => g.destino === m)).filter(Boolean);
 }
 
+/**
+ * Renderiza los grupos de muelle con sus bultos en el DOM.
+ * @param {Object[]} grupos - Grupos agrupados por destino con array de bultos
+ */
 function muelleRenderGrupos(grupos) {
   const el = document.getElementById('lista-muelle');
   if (!el) return;
@@ -73,6 +87,11 @@ let _MUELLE_GRUPOS_ACTUALES = [];
 // Manifiesto de la ruta activa (grupos ordenados) para reordenamiento en memoria
 let _RUTA_MANIFIESTO_ACTUAL = [];
 
+/**
+ * Mueve un grupo de muelle una posicion arriba o abajo y re-renderiza.
+ * @param {number} idx - Indice actual del grupo en la lista
+ * @param {number} dir - Direccion: -1 para arriba, 1 para abajo
+ */
 function muelleMoverGrupo(idx, dir) {
   const orden = _MUELLE_GRUPOS_ACTUALES.map(g => g.destino);
   const nuevoIdx = idx + dir;
@@ -86,6 +105,7 @@ function muelleMoverGrupo(idx, dir) {
   muelleRenderGrupos(reordenado);
 }
 
+/** Carga las rutas EN_CARGUE en el selector del muelle. */
 async function cargarRutaSelector() {
   const sel = document.getElementById('muelle-ruta-select');
   if (!sel) return;
@@ -124,6 +144,7 @@ async function cargarRutaSelector() {
   if (campo)      campo.style.display      = 'none';
 })();
 
+/** Muestra el campo de escaneo y oculta el boton de activacion en movil. */
 function muelleActivarScan() {
   const btnActivar = document.getElementById('muelle-scan-activar');
   const campo      = document.getElementById('muelle-scan-campo');
@@ -133,6 +154,7 @@ function muelleActivarScan() {
   if (input)      input.focus();
 }
 
+/** Abre la camara QR del muelle y procesa el codigo escaneado. */
 async function abrirCamaraMuelle() {
   await abrirCamara('lector-qr-muelle', 'camara-box-muelle', async cod => {
     await cerrarCamara('camara-box-muelle');
@@ -144,6 +166,7 @@ async function abrirCamaraMuelle() {
   });
 }
 
+/** En movil, oculta el campo de escaneo y muestra el boton si esta vacio. */
 function muelleScanBlur() {
   // Al perder el foco en móvil, volvemos al botón si el campo está vacío
   const esMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
@@ -158,6 +181,10 @@ function muelleScanBlur() {
   }, 200); // pequeño delay para no interferir con click en ✓
 }
 
+/**
+ * Selecciona o deselecciona la ruta activa del muelle y actualiza la UI.
+ * @param {string} idStr - ID de la ruta como string, o vacio para deseleccionar
+ */
 function muelleSeleccionarRuta(idStr) {
   RUTA_ACTIVA_ID = idStr ? parseInt(idStr) : null;
 
@@ -179,6 +206,7 @@ function muelleSeleccionarRuta(idStr) {
 }
 
 // ── Orquestador principal ─────────────────────────────
+/** Orquestador principal del muelle: carga selector, datos y auto-refresco. */
 async function cargarMuelle() {
   const el = document.getElementById('lista-muelle');
   if (!el) return;
@@ -207,6 +235,7 @@ async function cargarMuelle() {
 }
 
 // ── Sin ruta seleccionada: vista informativa ──────────
+/** Renderiza el muelle en modo informativo cuando no hay ruta seleccionada. */
 async function cargarMuelleSinRuta() {
   const el = document.getElementById('lista-muelle');
   const contador = document.getElementById('muelle-contador');
@@ -243,6 +272,10 @@ async function cargarMuelleSinRuta() {
 }
 
 // ── Con ruta seleccionada: planificación + confirmación ─
+/**
+ * Carga el muelle con manifiesto de la ruta y pendientes sin asignar.
+ * @param {number} rutaId - ID de la ruta seleccionada
+ */
 async function cargarMuelleConRuta(rutaId) {
   const el = document.getElementById('lista-muelle');
   const contador = document.getElementById('muelle-contador');
@@ -328,6 +361,14 @@ async function cargarMuelleConRuta(rutaId) {
 
 // ── Helpers de renderizado ────────────────────────────
 
+/**
+ * Genera el HTML de un grupo de parada dentro del manifiesto de la ruta.
+ * @param {Object} grupo - Grupo con destino y bultos
+ * @param {number} gi - Indice del grupo en la lista
+ * @param {number} totalGrupos - Cantidad total de grupos
+ * @param {number} rutaId - ID de la ruta activa
+ * @returns {string} HTML del grupo
+ */
 function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
   const confirmados = grupo.bultos.filter(b => b.estado === 'CARGADO').length;
   const totalGrupo = grupo.bultos.length;
@@ -374,6 +415,12 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
     </div>`;
 }
 
+/**
+ * Genera el HTML de un grupo de bultos pendientes por asignar a la ruta.
+ * @param {Object} grupo - Grupo con destino y bultos sin asignar
+ * @param {number} rutaId - ID de la ruta activa para asignacion
+ * @returns {string} HTML del grupo pendiente
+ */
 function _htmlGrupoPendiente(grupo, rutaId) {
   const numeroPedido = grupo.bultos[0]?.numero_pedido || '';
   return `
@@ -404,6 +451,12 @@ function _htmlGrupoPendiente(grupo, rutaId) {
 }
 
 // ── Reordenar paradas ─────────────────────────────────
+/**
+ * Reordena una parada del manifiesto y persiste el nuevo orden.
+ * @param {number} idx - Indice actual de la parada
+ * @param {number} dir - Direccion: -1 arriba, 1 abajo
+ * @param {number} rutaId - ID de la ruta activa
+ */
 function rutaMoverGrupo(idx, dir, rutaId) {
   const nuevoIdx = idx + dir;
   if (nuevoIdx < 0 || nuevoIdx >= _RUTA_MANIFIESTO_ACTUAL.length) return;
@@ -416,6 +469,11 @@ function rutaMoverGrupo(idx, dir, rutaId) {
 }
 
 // ── Asignar / desasignar ──────────────────────────────
+/**
+ * Asigna un bulto o todos los bultos de un pedido a la ruta activa.
+ * @param {number|null} bultoId - ID del bulto individual, o null para asignar por pedido
+ * @param {string|null} pedidoSiesa - Numero de pedido Siesa para asignar todos sus bultos
+ */
 async function muelleAsignar(bultoId, pedidoSiesa) {
   if (!RUTA_ACTIVA_ID) {
     alerta('Selecciona una ruta primero', 'advertencia');
@@ -437,6 +495,10 @@ async function muelleAsignar(bultoId, pedidoSiesa) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Quita un bulto de la ruta activa previa confirmacion del usuario.
+ * @param {number} bultoId - ID del bulto a desasignar
+ */
 async function muelleDesasignar(bultoId) {
   if (!confirm('¿Quitar este bulto de la ruta?')) return;
   try {
@@ -455,6 +517,7 @@ async function muelleDesasignar(bultoId) {
 }
 
 // ── Confirmación de carga física (scan) ───────────────
+/** Confirma la carga fisica de una caja escaneada en la ruta activa. */
 async function muelleCargarCaja() {
   const input    = document.getElementById('muelle-scan-input');
   const feedback = document.getElementById('muelle-scan-feedback');
@@ -516,6 +579,10 @@ async function muelleCargarCaja() {
 //  MILLA CERO — RUTAS DE DESPACHO
 // ══════════════════════════════════════════════════════
 
+/**
+ * Cambia el sub-tab activo en el modulo de rutas (rutas, maestras, vehiculos, conductores).
+ * @param {string} nombre - Nombre del sub-tab a activar
+ */
 function rutasSubTab(nombre) {
   RUTAS_SUBTAB = nombre;
   const paneles = {
@@ -538,6 +605,7 @@ function rutasSubTab(nombre) {
   cargarRutas();
 }
 
+/** Despacha la carga del sub-tab activo de rutas. */
 async function cargarRutas() {
   if      (RUTAS_SUBTAB === 'rutas')       await cargarListaRutas();
   else if (RUTAS_SUBTAB === 'maestras')    await cargarListaMaestras();
@@ -547,6 +615,7 @@ async function cargarRutas() {
 
 // ── Rutas ────────────────────────────────────────────
 
+/** Carga y renderiza la lista de rutas programadas del dia. */
 async function cargarListaRutas() {
   const el = document.getElementById('lista-rutas');
   if (!el) return;
@@ -563,6 +632,11 @@ async function cargarListaRutas() {
   }
 }
 
+/**
+ * Genera el HTML de una tarjeta de ruta con estado, botones de accion y detalles.
+ * @param {Object} r - Objeto ruta con id, estado, conductor_nombre, total_bultos, etc.
+ * @returns {string} HTML de la tarjeta
+ */
 function rutaCard(r) {
   const estadoBadge = {
     PROGRAMADO:  '<span style="background:#2d1b69;color:#a78bfa;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:700;">PROGRAMADO</span>',
@@ -622,6 +696,10 @@ function rutaCard(r) {
     </div>`;
 }
 
+/**
+ * Inicia el cargue de una ruta programada y redirige al muelle.
+ * @param {number} id - ID de la ruta a iniciar
+ */
 async function rutaIniciar(id) {
   try {
     const r = await fetch(API + '/api/rutas/' + id + '/iniciar', {
@@ -648,6 +726,10 @@ async function rutaIniciar(id) {
   } catch (e) { alert('Error de conexión'); }
 }
 
+/**
+ * Cierra una ruta en cargue marcandola como EN_TRANSITO.
+ * @param {number} id - ID de la ruta a cerrar
+ */
 async function rutaCerrar(id) {
   if (!confirm(`¿Confirmar que la Ruta #${id} salió? Ya no se podrán agregar bultos.`)) return;
   try {
@@ -671,6 +753,10 @@ let _ENTREGA_BULTOS  = [];   // [{ id, codigo_barras, tipo, numero, total, clien
 
 const MOTIVOS_RECHAZO = ['Cliente rechazó', 'Dirección incorrecta', 'Mercancía averiada', 'No había nadie', 'Pedido duplicado'];
 
+/**
+ * Abre el modal de entrega por bulto para una ruta en transito.
+ * @param {number} id - ID de la ruta a entregar
+ */
 async function rutaEntregar(id) {
   try {
     const d = await get('/api/rutas/' + id);
@@ -695,6 +781,7 @@ async function rutaEntregar(id) {
   } catch (e) { alerta('Error cargando bultos de la ruta', 'error'); }
 }
 
+/** Renderiza la lista de bultos en el modal de entrega con toggle entregado/rechazado. */
 function _renderEntregaLista() {
   const el = document.getElementById('modal-entrega-lista');
   const rechazados = _ENTREGA_BULTOS.filter(b => !b.entregado).length;
@@ -722,21 +809,32 @@ function _renderEntregaLista() {
     </div>`).join('');
 }
 
+/**
+ * Alterna el estado entregado/rechazado de un bulto en el modal de entrega.
+ * @param {number} i - Indice del bulto en _ENTREGA_BULTOS
+ */
 function _toggleEntrega(i) {
   _ENTREGA_BULTOS[i].entregado = !_ENTREGA_BULTOS[i].entregado;
   _renderEntregaLista();
 }
 
+/**
+ * Establece el motivo de rechazo de un bulto en el modal de entrega.
+ * @param {number} i - Indice del bulto en _ENTREGA_BULTOS
+ * @param {string} motivo - Motivo de rechazo seleccionado
+ */
 function _setMotivo(i, motivo) {
   _ENTREGA_BULTOS[i].motivo_rechazo = motivo;
 }
 
+/** Cierra el modal de entrega y limpia el estado temporal. */
 function cerrarModalEntrega() {
   document.getElementById('modal-entrega').style.display = 'none';
   _ENTREGA_RUTA_ID = null;
   _ENTREGA_BULTOS  = [];
 }
 
+/** Recopila los datos del modal de entrega y envia la confirmacion al servidor. */
 async function confirmarEntregaFinal() {
   if (!_ENTREGA_RUTA_ID) return;
   const btn = document.getElementById('btn-confirmar-entrega');
@@ -753,6 +851,11 @@ async function confirmarEntregaFinal() {
   cerrarModalEntrega();
 }
 
+/**
+ * Envia la confirmacion de entrega de la ruta al backend.
+ * @param {number} id - ID de la ruta
+ * @param {Object[]} payload - Array de bultos con id, entregado y motivo_rechazo
+ */
 async function _enviarConfirmacionEntrega(id, payload) {
   try {
     const r = await fetch(API + '/api/rutas/' + id + '/entregar', {
@@ -776,6 +879,10 @@ async function _enviarConfirmacionEntrega(id, payload) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Abre un modal con el manifiesto detallado de la ruta (paradas, bultos, estados).
+ * @param {number} id - ID de la ruta
+ */
 async function rutaVerManifiesto(id) {
   try {
     const [dr, dp] = await Promise.all([
@@ -866,6 +973,7 @@ async function rutaVerManifiesto(id) {
   } catch (e) { alerta('Error cargando manifiesto', 'error'); }
 }
 
+/** Muestra el formulario de programacion de una nueva ruta. */
 function rutasMostrarForm() {
   document.getElementById('rutas-form').style.display = 'block';
   document.getElementById('rutas-form-error').textContent = '';
@@ -877,10 +985,15 @@ function rutasMostrarForm() {
   cargarListaVehiculosEnSelect('rutas-form-vehiculo');
 }
 
+/** Oculta el formulario de programacion de ruta. */
 function rutasCancelarForm() {
   document.getElementById('rutas-form').style.display = 'none';
 }
 
+/**
+ * Selecciona el tipo de ruta (Urbana/Municipal) y actualiza los estilos de los botones.
+ * @param {string} tipo - 'Urbana' o 'Municipal'
+ */
 function rutasSeleccionarTipo(tipo) {
   RUTAS_TIPO_SEL = tipo;
   const isLight = document.body.classList.contains('light');
@@ -900,6 +1013,7 @@ function rutasSeleccionarTipo(tipo) {
   if (btnM) apply(btnM, tipo === 'Municipal');
 }
 
+/** Valida y envia la programacion de una nueva ruta al servidor. */
 async function rutasProgramar() {
   const errorEl    = document.getElementById('rutas-form-error');
   const maestraId  = document.getElementById('rutas-form-maestra')?.value;
@@ -940,6 +1054,10 @@ async function rutasProgramar() {
 
 // ── Rutas Maestras ───────────────────────────────────
 
+/**
+ * Carga las rutas maestras activas en un elemento select.
+ * @param {string} selectId - ID del elemento select en el DOM
+ */
 async function cargarListaMaestrasEnSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -955,6 +1073,7 @@ async function cargarListaMaestrasEnSelect(selectId) {
   } catch (e) {}
 }
 
+/** Carga y renderiza la lista completa de rutas maestras (activas e inactivas). */
 async function cargarListaMaestras() {
   const el = document.getElementById('lista-maestras');
   if (!el) return;
@@ -1009,6 +1128,10 @@ let _MUNICIPIOS_CACHE = [];
 
 let _municipiosPromise = null;
 
+/**
+ * Carga la lista de municipios desde el servidor (con cache en memoria).
+ * @returns {Promise<void>}
+ */
 function _cargarMunicipios() {
   if (_MUNICIPIOS_CACHE.length) return Promise.resolve();
   if (_municipiosPromise) return _municipiosPromise;
@@ -1018,6 +1141,10 @@ function _cargarMunicipios() {
   return _municipiosPromise;
 }
 
+/**
+ * Filtra y muestra sugerencias de municipios mientras el usuario escribe.
+ * @param {HTMLInputElement} input - Campo de texto de la parada
+ */
 function maestraInputParada(input) {
   const q = (input.value || '').trim().toLowerCase();
   const el = document.getElementById('maestras-sugerencias');
@@ -1047,6 +1174,10 @@ function maestraInputParada(input) {
   el.style.display = 'block';
 }
 
+/**
+ * Selecciona un municipio del dropdown de sugerencias y lo pone en el input.
+ * @param {HTMLElement} el - Elemento del dropdown con data-municipio
+ */
 function maestraSeleccionarMunicipio(el) {
   const inp = document.getElementById('maestras-parada-input');
   if (inp) inp.value = el.dataset.municipio;
@@ -1054,6 +1185,7 @@ function maestraSeleccionarMunicipio(el) {
   if (drop) drop.style.display = 'none';
 }
 
+/** Oculta el dropdown de sugerencias de municipios con un pequeno delay. */
 function maestraOcultarSugerencias() {
   setTimeout(() => {
     const el = document.getElementById('maestras-sugerencias');
@@ -1061,6 +1193,10 @@ function maestraOcultarSugerencias() {
   }, 150);
 }
 
+/**
+ * Maneja teclas especiales en el input de parada (Enter agrega, Escape cierra).
+ * @param {KeyboardEvent} event - Evento de teclado
+ */
 function maestraInputKeydown(event) {
   if (event.key === 'Enter') { event.preventDefault(); maestraAgregarParada(); }
   if (event.key === 'Escape') {
@@ -1069,6 +1205,7 @@ function maestraInputKeydown(event) {
   }
 }
 
+/** Muestra el formulario para crear una nueva ruta maestra. */
 function maestraMostrarForm() {
   _MAESTRAS_PARADAS = [];
   document.getElementById('maestras-form-id').value = '';
@@ -1081,6 +1218,7 @@ function maestraMostrarForm() {
   _cargarMunicipios();
 }
 
+/** Oculta el formulario de ruta maestra y limpia el estado. */
 function maestraCancelarForm() {
   document.getElementById('maestras-form').style.display = 'none';
   document.getElementById('maestras-form-id').value = '';
@@ -1088,6 +1226,10 @@ function maestraCancelarForm() {
   if (el) el.style.display = 'none';
 }
 
+/**
+ * Carga una ruta maestra existente en el formulario para edicion.
+ * @param {number} id - ID de la ruta maestra a editar
+ */
 async function maestraEditar(id) {
   try {
     const d = await get('/api/rutas/maestras/' + id);
@@ -1106,6 +1248,7 @@ async function maestraEditar(id) {
   } catch (e) { alerta('Error cargando la ruta', 'error'); }
 }
 
+/** Agrega el municipio del input a la lista de paradas de la ruta maestra. */
 function maestraAgregarParada() {
   const val = document.getElementById('maestras-parada-input')?.value.trim();
   if (!val) return;
@@ -1116,11 +1259,20 @@ function maestraAgregarParada() {
   _maestraRenderParadas();
 }
 
+/**
+ * Elimina una parada de la lista de la ruta maestra.
+ * @param {number} idx - Indice de la parada a eliminar
+ */
 function maestraQuitarParada(idx) {
   _MAESTRAS_PARADAS.splice(idx, 1);
   _maestraRenderParadas();
 }
 
+/**
+ * Mueve una parada de la ruta maestra una posicion arriba o abajo.
+ * @param {number} idx - Indice actual de la parada
+ * @param {number} dir - Direccion: -1 arriba, 1 abajo
+ */
 function maestraMoverParada(idx, dir) {
   const nuevoIdx = idx + dir;
   if (nuevoIdx < 0 || nuevoIdx >= _MAESTRAS_PARADAS.length) return;
@@ -1129,6 +1281,7 @@ function maestraMoverParada(idx, dir) {
   _maestraRenderParadas();
 }
 
+/** Renderiza la lista de paradas en el formulario de ruta maestra. */
 function _maestraRenderParadas() {
   const el = document.getElementById('maestras-paradas-lista');
   if (!el) return;
@@ -1146,6 +1299,7 @@ function _maestraRenderParadas() {
     </div>`).join('');
 }
 
+/** Valida y guarda (crea o actualiza) una ruta maestra en el servidor. */
 async function maestrasGuardar() {
   const errorEl = document.getElementById('maestras-form-error');
   const nombre  = document.getElementById('maestra-form-nombre')?.value.trim();
@@ -1175,6 +1329,11 @@ async function maestrasGuardar() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/**
+ * Activa o desactiva una ruta maestra.
+ * @param {number} id - ID de la ruta maestra
+ * @param {boolean} activar - true para activar, false para desactivar
+ */
 async function maestraToggle(id, activar) {
   try {
     const r = await fetch(API + '/api/rutas/maestras/' + id, {
@@ -1191,6 +1350,11 @@ async function maestraToggle(id, activar) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Elimina una ruta maestra previa confirmacion del usuario.
+ * @param {number} id - ID de la ruta maestra
+ * @param {string} nombre - Nombre de la ruta (para el mensaje de confirmacion)
+ */
 async function maestraEliminar(id, nombre) {
   if (!confirm(`¿Eliminar la ruta "${nombre}"?\n\nEsta acción no se puede deshacer. Si tiene viajes asociados no se podrá eliminar.`)) return;
   try {
@@ -1210,6 +1374,10 @@ async function maestraEliminar(id, nombre) {
 
 // ── Vehículos ────────────────────────────────────────
 
+/**
+ * Carga los vehiculos activos en un elemento select.
+ * @param {string} selectId - ID del elemento select en el DOM
+ */
 async function cargarListaVehiculosEnSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -1225,6 +1393,7 @@ async function cargarListaVehiculosEnSelect(selectId) {
   } catch (e) {}
 }
 
+/** Carga y renderiza la lista completa de vehiculos (activos e inactivos). */
 async function cargarListaVehiculos() {
   const el = document.getElementById('lista-vehiculos');
   if (!el) return;
@@ -1256,15 +1425,18 @@ async function cargarListaVehiculos() {
   }
 }
 
+/** Muestra el formulario para registrar un nuevo vehiculo. */
 function vehiculosMostrarForm() {
   document.getElementById('vehiculos-form').style.display = 'block';
   document.getElementById('vehiculos-form-error').textContent = '';
 }
 
+/** Oculta el formulario de registro de vehiculo. */
 function vehiculosCancelarForm() {
   document.getElementById('vehiculos-form').style.display = 'none';
 }
 
+/** Valida y crea un nuevo vehiculo en el servidor. */
 async function vehiculosCrear() {
   const errorEl    = document.getElementById('vehiculos-form-error');
   const placa      = document.getElementById('veh-form-placa')?.value.trim().toUpperCase();
@@ -1294,6 +1466,11 @@ async function vehiculosCrear() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/**
+ * Activa o desactiva un vehiculo.
+ * @param {number} id - ID del vehiculo
+ * @param {boolean} activar - true para activar, false para desactivar
+ */
 async function vehiculoToggle(id, activar) {
   try {
     await fetch(API + '/api/rutas/vehiculos/' + id, {
@@ -1307,6 +1484,10 @@ async function vehiculoToggle(id, activar) {
 
 // ── Conductores ──────────────────────────────────────
 
+/**
+ * Carga los conductores activos en un elemento select.
+ * @param {string} selectId - ID del elemento select en el DOM
+ */
 async function cargarListaConductoresEnSelect(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel) return;
@@ -1322,6 +1503,7 @@ async function cargarListaConductoresEnSelect(selectId) {
   } catch (e) {}
 }
 
+/** Carga y renderiza la lista completa de conductores (activos e inactivos). */
 async function cargarListaConductores() {
   const el = document.getElementById('lista-conductores');
   if (!el) return;
@@ -1356,6 +1538,7 @@ async function cargarListaConductores() {
   }
 }
 
+/** Muestra el formulario de registro de conductor y carga usuarios disponibles. */
 async function conductoresMostrarForm() {
   document.getElementById('conductores-form').style.display = 'block';
   document.getElementById('conductores-form-error').textContent = '';
@@ -1370,10 +1553,12 @@ async function conductoresMostrarForm() {
   } catch (_) {}
 }
 
+/** Oculta el formulario de registro de conductor. */
 function conductoresCancelarForm() {
   document.getElementById('conductores-form').style.display = 'none';
 }
 
+/** Valida y crea un nuevo conductor en el servidor. */
 async function conductoresCrear() {
   const errorEl  = document.getElementById('conductores-form-error');
   const nombre     = document.getElementById('cond-form-nombre')?.value.trim();
@@ -1404,6 +1589,11 @@ async function conductoresCrear() {
   } catch (e) { errorEl.textContent = 'Error de conexión'; }
 }
 
+/**
+ * Activa o desactiva un conductor.
+ * @param {number} id - ID del conductor
+ * @param {boolean} activar - true para activar, false para desactivar
+ */
 async function conductorToggle(id, activar) {
   try {
     const r = await fetch(API + '/api/rutas/conductores/' + id, {
@@ -1493,6 +1683,7 @@ const _condDB = (() => {
 
 // ── Lista de rutas del conductor ──────────────────────────────────
 
+/** Carga las rutas en transito asignadas al conductor con soporte offline. */
 async function cargarRutasConductor() {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
@@ -1547,6 +1738,10 @@ async function cargarRutasConductor() {
 
 // ── Lista de paradas de la ruta ───────────────────────────────────
 
+/**
+ * Carga y muestra las paradas de una ruta para el conductor con fallback offline.
+ * @param {number} rutaId - ID de la ruta
+ */
 async function condAbrirParadas(rutaId) {
   const el = document.getElementById('cond-contenido');
   el.innerHTML = '<div style="text-align:center;padding:60px;color:#555;">Cargando paradas...</div>';
@@ -1568,6 +1763,10 @@ async function condAbrirParadas(rutaId) {
   _condRenderParadas(data);
 }
 
+/**
+ * Renderiza la lista de paradas del conductor con estado y boton de cierre.
+ * @param {Object} d - Datos de paradas con paradas_gestionadas
+ */
 function _condRenderParadas(d) {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
@@ -1631,11 +1830,16 @@ function _condRenderParadas(d) {
 
 // ── Formulario de confirmación de parada ──────────────────────────
 
+/**
+ * Abre el formulario de confirmacion para una parada especifica.
+ * @param {number} idx - Indice de la parada en _COND_PARADAS
+ */
 function condAbrirFormParada(idx) {
   _COND_PARADA_FORM = { ..._COND_PARADAS[idx], _idx: idx };
   _condRenderFormParada();
 }
 
+/** Renderiza el formulario de confirmacion de parada con estado, pago, foto y items. */
 function _condRenderFormParada() {
   const el = document.getElementById('cond-contenido');
   const p = _COND_PARADA_FORM;
@@ -1776,6 +1980,10 @@ function _condRenderFormParada() {
   el._estadoSel = estadoActual;
 }
 
+/**
+ * Selecciona el estado de entrega en el formulario del conductor y ajusta la UI.
+ * @param {string} estado - 'ENTREGADO', 'PARCIAL' o 'RECHAZADO'
+ */
 function condSelEstado(estado) {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
@@ -1805,6 +2013,7 @@ function condSelEstado(estado) {
   if (divMonto)     divMonto.style.display     = mostrarPago ? 'block' : 'none';
 }
 
+/** Previsualiza la foto de evidencia seleccionada por el conductor. */
 function condPrevisualizarFoto() {
   const input = document.getElementById('cond-foto');
   const preview = document.getElementById('cond-foto-preview');
@@ -1818,6 +2027,7 @@ function condPrevisualizarFoto() {
   reader.readAsDataURL(input.files[0]);
 }
 
+/** Elimina la foto de evidencia seleccionada y oculta la previsualizacion. */
 function condEliminarFoto() {
   const input = document.getElementById('cond-foto');
   const preview = document.getElementById('cond-foto-preview');
@@ -1825,6 +2035,11 @@ function condEliminarFoto() {
   if (preview) preview.style.display = 'none';
 }
 
+/**
+ * Recalcula la cantidad devuelta cuando el conductor cambia la cantidad entregada.
+ * @param {number} idx - Indice del item en la lista de referencias
+ * @param {number} pedido - Cantidad original pedida
+ */
 function condActualizarDevuelto(idx, pedido) {
   const inp = document.getElementById('item-entregado-' + idx);
   const div = document.getElementById('item-devuelto-' + idx);
@@ -1835,6 +2050,7 @@ function condActualizarDevuelto(idx, pedido) {
   div.textContent = pedido - val;
 }
 
+/** Valida, recopila datos del formulario y guarda la confirmacion de parada (online u offline). */
 async function condGuardarParada() {
   const el = document.getElementById('cond-contenido');
   const p = _COND_PARADA_FORM;
@@ -1993,6 +2209,10 @@ async function condGuardarParada() {
   }
 }
 
+/**
+ * Vuelve a la vista de paradas desde el formulario de confirmacion.
+ * @param {boolean} [recargar=false] - Si true, recarga los datos del servidor
+ */
 async function condVolverAParadas(recargar = false) {
   _COND_PARADA_FORM = null;
   if (recargar && _COND_RUTA_ACTIVA) {
@@ -2004,6 +2224,7 @@ async function condVolverAParadas(recargar = false) {
   }
 }
 
+/** Registra una parada como no entregada (rechazo rapido) con motivo opcional. */
 async function condNoSePudoEntregar() {
   const p = _COND_PARADA_FORM;
   if (!p) return;
@@ -2045,6 +2266,7 @@ async function condNoSePudoEntregar() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Cierra la ruta del conductor marcandola como entregada (online u offline). */
 async function condCerrarRuta() {
   if (!_COND_RUTA_ACTIVA) return;
   if (!confirm('¿Confirmar cierre de ruta? Ya no podrás agregar más confirmaciones de parada.')) return;
@@ -2077,6 +2299,7 @@ async function condCerrarRuta() {
 
 // ── Offline: init, barras de estado y motor de sync ──────────────
 
+/** Registra los listeners de online/offline para el modulo conductor. */
 function _condIniciarOffline() {
   if (!_COND_OFFLINE_INIT) {
     _COND_OFFLINE_INIT = true;
@@ -2086,6 +2309,7 @@ function _condIniciarOffline() {
   _condActualizarBarras();
 }
 
+/** Actualiza las barras de estado offline y sincronizacion pendiente. */
 async function _condActualizarBarras() {
   const offlineBar = document.getElementById('cond-offline-bar');
   const syncBar    = document.getElementById('cond-sync-bar');
@@ -2107,6 +2331,7 @@ async function _condActualizarBarras() {
   }
 }
 
+/** Sincroniza la cola offline de confirmaciones pendientes con el servidor. */
 async function condSyncQueue() {
   if (_COND_SYNCING || !navigator.onLine) return;
   const items = await _condDB.queue();
@@ -2161,6 +2386,10 @@ async function condSyncQueue() {
 
 let _PLAN_RUTA_ID = null;
 
+/**
+ * Fuerza el cierre de una ruta en transito, auto-rechazando paradas sin gestionar.
+ * @param {number} id - ID de la ruta
+ */
 async function rutaForzarCierre(id) {
   if (!confirm('¿Forzar el cierre de esta ruta?\n\nLas paradas sin gestionar quedarán registradas como RECHAZADAS automáticamente.\nEsta acción es irreversible.')) return;
   try {
@@ -2178,6 +2407,10 @@ async function rutaForzarCierre(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Abre el modal de planilla de cuadre financiero para una ruta.
+ * @param {number} id - ID de la ruta
+ */
 async function rutaVerPlanilla(id) {
   _PLAN_RUTA_ID = id;
   const modal = document.getElementById('modal-planilla');
@@ -2188,6 +2421,10 @@ async function rutaVerPlanilla(id) {
   await _cargarPlanilla(id);
 }
 
+/**
+ * Carga y renderiza el contenido de la planilla de cuadre dentro del modal.
+ * @param {number} id - ID de la ruta
+ */
 async function _cargarPlanilla(id) {
   try {
     const d = await get('/api/rutas/' + id + '/planilla');
@@ -2308,6 +2545,10 @@ async function _cargarPlanilla(id) {
   }
 }
 
+/**
+ * Liquida financieramente una ruta previa confirmacion del usuario.
+ * @param {number} id - ID de la ruta a liquidar
+ */
 async function rutaLiquidar(id) {
   if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero de la ruta.`)) return;
   try {
@@ -2328,6 +2569,7 @@ async function rutaLiquidar(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/** Cierra el modal de planilla de cuadre y limpia el estado. */
 function cerrarModalPlanilla() {
   const modal = document.getElementById('modal-planilla');
   if (modal) modal.style.display = 'none';

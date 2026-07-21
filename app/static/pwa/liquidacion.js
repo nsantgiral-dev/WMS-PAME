@@ -24,6 +24,10 @@ let _liqRetencionesDisponibles = [
 
 // ── Navegación interna ──────────────────────────────────────────────────────
 
+/**
+ * Switch the active liquidacion sub-tab and load its content.
+ * @param {string} sec - Section key: 'pendientes', 'liquidadas', or 'jobs'.
+ */
 function liqSubtab(sec) {
   _liqSubActual = sec;
   ['pendientes','liquidadas','jobs'].forEach(s => {
@@ -41,6 +45,7 @@ function liqSubtab(sec) {
   else if (sec === 'jobs') liqCargarJobs();
 }
 
+/** Set today's date as default and load the liquidacion dashboard. */
 async function cargarLiquidacion() {
   // Poner fecha de hoy por defecto si no hay fecha seleccionada
   const fechaInput = document.getElementById('liq-fecha');
@@ -52,6 +57,7 @@ async function cargarLiquidacion() {
 
 // ── Dashboard + KPIs ────────────────────────────────────────────────────────
 
+/** Fetch liquidacion dashboard data for the selected date and render KPIs. */
 async function liqCargarDashboard() {
   const fecha = document.getElementById('liq-fecha')?.value || new Date().toISOString().split('T')[0];
   try {
@@ -67,6 +73,10 @@ async function liqCargarDashboard() {
   }
 }
 
+/**
+ * Render the financial KPI cards (pendientes, liquidadas, totals by payment type).
+ * @param {Object} r - Resumen object with counts and totals.
+ */
 function _liqRenderKpis(r) {
   const el = document.getElementById('liq-kpis');
   if (!el) return;
@@ -85,6 +95,7 @@ function _liqRenderKpis(r) {
 
 // ── Lista de rutas pendientes ───────────────────────────────────────────────
 
+/** Filter and render ENTREGADA routes that are not yet financially settled. */
 function liqCargarPendientes() {
   const el = document.getElementById('liq-lista-pendientes');
   if (!el || !_liqDashboard) return;
@@ -103,6 +114,7 @@ function liqCargarPendientes() {
   el.innerHTML = rutas.map(r => _liqRutaCard(r, false)).join('');
 }
 
+/** Filter and render routes that have already been financially settled. */
 function liqCargarLiquidadas() {
   const el = document.getElementById('liq-lista-liquidadas');
   if (!el || !_liqDashboard) return;
@@ -114,6 +126,12 @@ function liqCargarLiquidadas() {
   el.innerHTML = rutas.map(r => _liqRutaCard(r, true)).join('');
 }
 
+/**
+ * Build the HTML card for a ruta in the liquidacion list.
+ * @param {Object} r - Ruta object with financials and Siesa flags.
+ * @param {boolean} esLiquidada - Whether the route is already settled.
+ * @returns {string} HTML string for the ruta card.
+ */
 function _liqRutaCard(r, esLiquidada) {
   const color = esLiquidada ? '#14532d' : '#78350f';
   const ncInfo = `NCE ${r.siesa_nc_enviados || 0}`;
@@ -158,6 +176,7 @@ function _liqRutaCard(r, esLiquidada) {
 
 // ── Jobs Siesa de liquidación ───────────────────────────────────────────────
 
+/** Fetch and render Siesa DLQ jobs related to liquidacion (NCE, RC, DC). */
 async function liqCargarJobs() {
   const el = document.getElementById('liq-lista-jobs');
   if (!el) return;
@@ -181,6 +200,12 @@ async function liqCargarJobs() {
   }
 }
 
+/**
+ * Build the HTML card for a liquidacion-related Siesa job.
+ * @param {Object} j - Job object with estado, intentos, error_ultimo, etc.
+ * @param {boolean} mostrarReintentar - Whether to show the retry button.
+ * @returns {string} HTML string for the job card.
+ */
 function _liqJobCard(j, mostrarReintentar) {
   const estadoColor = { PENDIENTE: '#f59e0b', COMPLETADO: '#22c55e', FALLIDO: '#ef4444' };
   const color = estadoColor[j.estado] || '#888';
@@ -216,6 +241,10 @@ function _liqJobCard(j, mostrarReintentar) {
 
 // ── Modal: detalle de ruta para liquidar ─────────────────────────────────────
 
+/**
+ * Open the route detail modal and fetch Siesa invoice data for liquidation.
+ * @param {number} id - Ruta ID.
+ */
 async function liqAbrirRuta(id) {
   const modal = document.getElementById('liq-modal-ruta');
   const body  = document.getElementById('liq-modal-body');
@@ -235,6 +264,7 @@ async function liqAbrirRuta(id) {
   }
 }
 
+/** Close the route detail modal and clear temporary state. */
 function liqCerrarModal() {
   const modal = document.getElementById('liq-modal-ruta');
   if (modal) modal.style.display = 'none';
@@ -242,6 +272,7 @@ function liqCerrarModal() {
   _liqRetenciones = {};
 }
 
+/** Render the full route detail view with recaudos, retenciones, and action button. */
 function _liqRenderDetalle() {
   const body = document.getElementById('liq-modal-body');
   if (!body || !_liqDetalleRuta) return;
@@ -397,6 +428,12 @@ function _liqRenderDetalle() {
   body.innerHTML = html;
 }
 
+/**
+ * Render the retenciones grid for a specific recaudo.
+ * @param {number} recaudoId - Recaudo ID to look up in _liqRetenciones.
+ * @param {number} baseGravable - Taxable base amount from Siesa invoice.
+ * @returns {string} HTML string for the retenciones table.
+ */
 function _liqRenderRetenciones(recaudoId, baseGravable) {
   const rets = _liqRetenciones[recaudoId] || [];
   if (!rets.length) return '<div style="font-size:11px;color:var(--tx3);padding:4px 0;">Sin retenciones</div>';
@@ -424,6 +461,12 @@ function _liqRenderRetenciones(recaudoId, baseGravable) {
   return html;
 }
 
+/**
+ * Add a tax retention to a recaudo and re-render the detail view.
+ * @param {number} recaudoId - Recaudo ID.
+ * @param {string} tipo - Retention type key from the catalog.
+ * @param {number} baseGravable - Taxable base amount for calculation.
+ */
 function liqAgregarRetencion(recaudoId, tipo, baseGravable) {
   if (!tipo) return;
   const catalogo = _liqRetencionesDisponibles.find(r => r.tipo === tipo);
@@ -454,6 +497,12 @@ function liqAgregarRetencion(recaudoId, tipo, baseGravable) {
   _liqRenderDetalle();
 }
 
+/**
+ * Remove a retention by index from a recaudo and re-render.
+ * @param {number} recaudoId - Recaudo ID.
+ * @param {number} idx - Index of the retention to remove.
+ * @param {number} baseGravable - Taxable base amount (unused, kept for onclick signature).
+ */
 function liqQuitarRetencion(recaudoId, idx, baseGravable) {
   if (_liqRetenciones[recaudoId]) {
     _liqRetenciones[recaudoId].splice(idx, 1);
@@ -463,6 +512,10 @@ function liqQuitarRetencion(recaudoId, idx, baseGravable) {
 
 // ── Liquidar ruta completa ──────────────────────────────────────────────────
 
+/**
+ * Execute full financial liquidation for a route, enqueuing NCE, RC, and DC to Siesa.
+ * @param {number} rutaId - Ruta ID to liquidate.
+ */
 async function liqLiquidarRuta(rutaId) {
   if (!_liqDetalleRuta) return;
   const recaudos = _liqDetalleRuta.recaudos || [];
