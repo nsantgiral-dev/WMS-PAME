@@ -191,6 +191,10 @@ class TestScriptIntegrity:
                 'cargarRutasConductor', 'cargarTrasladosOperario',
                 'pedirTarea', 'empCargarTareas', 'empIniciarHUD',
             ],
+            'layout.js': [
+                # Cross-module: layout.js calls entrepaño functions defined in app.js
+                '_layoutRenderEntrepanoSeccion', 'layoutImprimirEtiquetasCuerpo',
+            ],
             'picking.js': [
                 # Scan dispatcher → other modules
                 'empProcesarEscaneo', 'procesarScanRecepcion',
