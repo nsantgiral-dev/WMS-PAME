@@ -7,15 +7,20 @@
 // EMPACADOR — Estado global
 // ─────────────────────────────────────────────────────────────
 
-let EMP_TAREA = null;       // TareaPacking activa en el HUD
-let EMP_ITEMS = [];         // ItemPacking[] con progreso actual
-let EMP_ITEM_IDX = 0;       // índice del ítem que se está escaneando
-let EMP_EMPAQUES = {};      // producto_id → { factor, unidad } — cargado al iniciar HUD
+/** @type {Object|null} TareaPacking activa en el HUD */
+let EMP_TAREA = null;
+/** @type {{id: number, producto_codigo: string, cantidad_esperada: number, cantidad_real: number, verificado: boolean}[]} */
+let EMP_ITEMS = [];
+/** @type {number} Índice del ítem que se está escaneando */
+let EMP_ITEM_IDX = 0;
+/** @type {Object<number, {factor: number, unidad: string}>} producto_id → empaque info */
+let EMP_EMPAQUES = {};
 
 // ─────────────────────────────────────────────────────────────
 // EMPACADOR — Lista de tareas
 // ─────────────────────────────────────────────────────────────
 
+/** Carga y renderiza la lista de tareas de packing asignadas al empacador. */
 async function empCargarTareas() {
   const el = document.getElementById('emp-lista');
   if (!el) return;
@@ -119,6 +124,10 @@ async function empCargarTareas() {
 // EMPACADOR — HUD: iniciar tarea y mostrar primer ítem
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Inicia el HUD de empaque — carga items, sincroniza picking, muestra primer ítem.
+ * @param {number} packingId
+ */
 async function empIniciarHUD(packingId) {
   try {
     // Cargar detalle completo de la tarea
@@ -373,6 +382,10 @@ function empRenderHUDItem() {
 // EMPACADOR — HUD: procesar escaneo láser
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Procesa escaneo en packing — valida producto vs item esperado, maneja empaques.
+ * @param {string} codigo - Código escaneado
+ */
 async function empProcesarEscaneo(codigo) {
   if (!EMP_TAREA) return;
 
@@ -448,6 +461,11 @@ async function empProcesarEscaneo(codigo) {
 // EMPACADOR — HUD: flash visual verde/rojo
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Flash visual en el HUD de packing (verde=OK, rojo=error).
+ * @param {'verde'|'rojo'|'amarillo'} color
+ * @param {string} mensaje
+ */
 function empFlash(color, mensaje) {
   const flash = document.getElementById('emp-flash');
   const hud = document.getElementById('emp-hud');
@@ -542,6 +560,7 @@ async function _elegirEmpaquePacking(codigoBarras, productoCodigo, factor, unida
 // EMPACADOR — HUD: confirmar packing → Siesa se dispara solo
 // ─────────────────────────────────────────────────────────────
 
+/** Confirma el packing completo → abre modal de bultos → cierra caja → Siesa DLQ. */
 async function empConfirmarPacking() {
   if (!EMP_TAREA) return;
   const btn = document.getElementById('emp-btn-cerrar-caja');
@@ -757,6 +776,11 @@ async function empImprimirFactura(packingId) {
 // (lazy labeling de inventario heredado sin etiqueta).
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Imprime etiqueta de LPN (paca/caja física) con código de barras.
+ * @param {{codigo: string, cantidad_actual: number, factor_conversion: number}} lpn
+ * @param {string} productoNombre
+ */
 function imprimirEtiquetaLPN(lpn, productoNombre) {
   const area = document.getElementById('print-area');
   if (!area) return;

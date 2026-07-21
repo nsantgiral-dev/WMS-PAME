@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "strict": false,
+    "target": "ES2020",
+    "moduleResolution": "node"
+  },
+  "include": ["app/static/pwa/**/*.js"],
+  "exclude": ["node_modules", "venv"]
+}

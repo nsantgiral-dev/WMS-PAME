@@ -9,6 +9,7 @@
 //   recepcion.js: procesarScanRecepcion(), procesarScanDevolucion()
 // ══════════════════════════════════════════════════════════════════
 
+/** Solicita la siguiente tarea al dispensador automático. Asigna TAREA_ACTUAL. */
 async function pedirTarea() {
   try {
     const d = await get('/api/mobile/tarea-actual');
@@ -57,6 +58,10 @@ async function pedirTarea() {
 }
 
 
+/**
+ * Renderiza la tarea activa en el HUD del operario.
+ * @param {{tipo: string, producto_codigo: string, producto_nombre: string, cantidad_requerida: number, cantidad_escaneada: number, ubicacion: string, referencia: string, lote: string, factor_conversion: number, unidad_empaque: string, empaques_escaneados: number, conteo_intercalado: Object|null}} t
+ */
 function renderTarea(t) {
   _pickingTotal = t.cantidad_escaneada || 0;
   const colores = { PICKING: '#1d4ed8', PACKING: '#7c3aed', CONTEO: '#b45309' };
@@ -188,6 +193,12 @@ function renderTarea(t) {
   }
 }
 
+/**
+ * Carga y muestra la descomposición empaque→unidades para el producto actual.
+ * @param {number} productoId
+ * @param {number} almacenId
+ * @param {number} cantidad - Cantidad total requerida
+ */
 async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
   const cardTexto = document.getElementById('descomp-texto');
   const cardHint  = document.getElementById('descomp-hint');
@@ -244,6 +255,7 @@ async function _cargarDescomposicionPicking(productoId, almacenId, cantidad) {
   }
 }
 
+/** Genera un LPN (paca/caja) desde la tarea de picking actual e imprime etiqueta. */
 async function _generarLPNEnPicking() {
   const btn = document.getElementById('btn-generar-lpn-picking');
   if (!btn || !TAREA_ACTUAL) return;
@@ -276,6 +288,11 @@ async function _generarLPNEnPicking() {
   } catch (e) { alerta('Error generando LPN', 'error'); }
 }
 
+/**
+ * Dispatcher central de escaneo — enruta a picking, packing, recepción o devolución
+ * según el contexto activo (TAREA_ACTUAL, RECEPCION_ACTUAL, DEVOLUCION_ACTUAL).
+ * @param {string} codigo - Código escaneado (barras, QR, o manual)
+ */
 async function procesarScan(codigo) {
   if (_TIENDA_OC_RECEPCION) { await tiendaOCProcesarScan(codigo); return; }
   if (DEVOLUCION_ACTUAL) { await procesarScanDevolucion(codigo); return; }
@@ -307,6 +324,12 @@ async function procesarScan(codigo) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/**
+ * Procesa un escaneo dentro del flujo de picking. Valida código vs producto, detecta empaque,
+ * actualiza contadores, maneja total_acumulado idempotente.
+ * @param {string} codigo - Código escaneado
+ * @returns {Promise<{exito: boolean, cantidad_actual: number, cantidad_requerida: number, completado: boolean, es_empaque: boolean}>}
+ */
 async function _procesarScanPicking(codigo) {
   // 1. Preguntar al sistema qué es este código
   let scan;
@@ -364,6 +387,10 @@ async function _procesarScanPicking(codigo) {
   } catch (e) { beepError(); if (_scanResuelto) _pickingTotal -= cantidad; alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/**
+ * Actualiza el HUD visual del picking con el resultado del escaneo.
+ * @param {{cantidad_actual: number, cantidad_requerida: number, completado: boolean, es_empaque: boolean, empaques_escaneados: number, factor_conversion: number, unidad_empaque: string, mensaje: string}} r
+ */
 function _actualizarContadorPicking(r) {
   if (TAREA_ACTUAL) TAREA_ACTUAL.cantidad_escaneada = r.cantidad_actual || 0;
   const pkgEl = document.getElementById('contador-pkg');
@@ -404,6 +431,11 @@ function _actualizarContadorPicking(r) {
   }
 }
 
+/**
+ * Modal cuando un código de barras coincide con múltiples empaques del mismo producto.
+ * @param {string} codigo - Código escaneado
+ * @param {{producto_codigo: string, factor: number, unidad: string}[]} empaques
+ */
 function _modalAmbiguedadPicking(codigo, empaques) {
   // empaques: array de ProductoEmpaque.to_dict() — incluye producto_codigo
   const opciones = empaques.map(e => `
@@ -446,6 +478,7 @@ async function _elegirEmpaquePicking(productoCodigo, factor, unidad, modal) {
   } catch (e) { beepError(); alerta(e.status ? e.message : 'Error de conexión', 'error'); }
 }
 
+/** Confirma la tarea actual (picking/packing/conteo). Envía al backend y pide siguiente tarea. */
 async function confirmar() {
   if (!TAREA_ACTUAL) return;
   const btn = document.getElementById('btn-ok');
@@ -551,6 +584,7 @@ function _modalEtiquetaCanasto(canasto) {
   };
 }
 
+/** Confirmar con guard de faltante: si cantidad < requerida, muestra modal parcial. */
 async function confirmarConGuard() {
   if (!TAREA_ACTUAL) return;
   const unds    = TAREA_ACTUAL.cantidad_escaneada || 0;
@@ -600,6 +634,11 @@ async function _reportarFaltanteInfo(tareaId, cantRecogida, cantSolicitada) {
   });
 }
 
+/**
+ * Confirmación manual sin escáner — el operario introduce la cantidad físicamente contada.
+ * @param {number} tareaId
+ * @param {number} cantMax - Cantidad máxima permitida
+ */
 async function confirmarManual(tareaId, cantMax) {
   const cantStr = prompt(`¿Cuántas unidades encontraste físicamente? (máx. ${cantMax})`);
   if (cantStr === null) return;
@@ -624,6 +663,10 @@ async function confirmarManual(tareaId, cantMax) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+/**
+ * Abre modal para que el operario reporte un problema (ubicación vacía, avería, producto incorrecto).
+ * @param {number} tareaId
+ */
 async function reportarProblema(tareaId) {
   const modal = document.createElement('div');
   modal.id = 'modal-problema';
@@ -668,6 +711,12 @@ async function reportarProblema(tareaId) {
   document.body.appendChild(modal);
 }
 
+/**
+ * Confirma el reporte de problema — cierra el picking con faltante y genera auditoría urgente.
+ * @param {number} tareaId
+ * @param {string} motivo - 'UBICACION_VACIA' | 'FALTANTE' | 'MERCANCIA_AVERIADA' | 'PRODUCTO_INCORRECTO'
+ * @param {number} cantidadEncontrada - Lo que el operario encontró físicamente
+ */
 async function confirmarProblema(tareaId, motivo, cantidadEncontrada) {
   const observaciones = document.getElementById('obs-problema')?.value?.trim() || '';
   const modal = document.getElementById('modal-problema');
