@@ -1279,6 +1279,15 @@
           </div>
         </div>
 
+        <!-- Filtro de fecha -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+          <input type="date" id="rutas-fecha-filtro"
+            style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <button onclick="cargarListaRutas()"
+            style="padding:8px 14px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+            Filtrar
+          </button>
+        </div>
         <!-- Lista de rutas -->
         <div id="lista-rutas"><div style="color:#555;text-align:center;padding:40px;">Cargando...</div></div>
       </div>
@@ -1465,11 +1474,11 @@
       <!-- 3 vistas operacionales -->
       <div style="display:flex;gap:6px;margin-bottom:10px;">
         <button id="cv-tab-accion" onclick="conteoVista('accion')"
-          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:none;cursor:pointer;background:var(--pm);color:#fff;">
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid var(--brd);cursor:pointer;background:var(--bg-s);color:var(--tx2);">
           ⚠ Acción <span id="cv-badge-accion" style="background:rgba(0,0,0,.3);border-radius:10px;padding:1px 5px;font-size:10px;margin-left:2px;"></span>
         </button>
         <button id="cv-tab-progreso" onclick="conteoVista('progreso')"
-          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:1px solid var(--brd);cursor:pointer;background:var(--bg-s);color:var(--tx2);">
+          style="flex:1;padding:8px 4px;font-size:11px;font-weight:700;border-radius:8px;border:none;cursor:pointer;background:var(--pm);color:#fff;">
           ▶ En progreso
         </button>
         <button id="cv-tab-resueltos" onclick="conteoVista('resueltos')"
@@ -2985,9 +2994,9 @@
   <script src="/static/pwa/picking.js?v=20260720a"></script>
   <script src="/static/pwa/packing.js?v=20260720a"></script>
   <script src="/static/pwa/recepcion.js?v=20260720a"></script>
-  <script src="/static/pwa/rutas.js?v=20260720a"></script>
+  <script src="/static/pwa/rutas.js?v=20260721b"></script>
   <script src="/static/pwa/traslados.js?v=20260720a"></script>
-  <script src="/static/pwa/conteo.js?v=20260720a"></script>
+  <script src="/static/pwa/conteo.js?v=20260721b"></script>
   <script src="/static/pwa/reposicion.js?v=20260720a"></script>
   <script src="/static/pwa/liquidacion.js?v=20260721a"></script>
   <script src="/static/pwa/layout.js?v=20260720a"></script>

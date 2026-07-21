@@ -112,7 +112,7 @@ function invSubtab(nombre) {
 }
 
 let _CONTEO_PAGE = 1;
-let _CONTEO_VISTA = 'accion';  // 'accion' | 'progreso' | 'resueltos'
+let _CONTEO_VISTA = 'progreso';  // 'accion' | 'progreso' | 'resueltos'
 
 /**
  * Switch the conteo view mode and reload data.

@@ -295,8 +295,7 @@ class RutaService:
         if estado:
             q = q.filter_by(estado=estado)
         if fecha:
-            from sqlalchemy import func
-            q = q.filter(func.date(RutaDespacho.fecha_creacion) == fecha)
+            q = q.filter(RutaDespacho.fecha_programada == fecha)
         return q.paginate(page=page, per_page=50, error_out=False)
 
     @staticmethod

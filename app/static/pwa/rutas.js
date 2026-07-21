@@ -607,6 +607,9 @@ function rutasSubTab(nombre) {
 
 /** Despacha la carga del sub-tab activo de rutas. */
 async function cargarRutas() {
+  // Inicializar fecha si no tiene valor
+  const fechaInput = document.getElementById('rutas-fecha-filtro');
+  if (fechaInput && !fechaInput.value) fechaInput.value = new Date().toISOString().split('T')[0];
   if      (RUTAS_SUBTAB === 'rutas')       await cargarListaRutas();
   else if (RUTAS_SUBTAB === 'maestras')    await cargarListaMaestras();
   else if (RUTAS_SUBTAB === 'vehiculos')   await cargarListaVehiculos();
@@ -620,10 +623,12 @@ async function cargarListaRutas() {
   const el = document.getElementById('lista-rutas');
   if (!el) return;
   try {
-    const d = await get('/api/rutas/');
+    const fechaFiltro = document.getElementById('rutas-fecha-filtro')?.value
+      || new Date().toISOString().split('T')[0];
+    const d = await get('/api/rutas/?fecha=' + fechaFiltro);
     const rutas = d.rutas || [];
     if (!rutas.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas registradas hoy</div>';
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas para esta fecha</div>';
       return;
     }
     el.innerHTML = rutas.map(r => rutaCard(r)).join('');
