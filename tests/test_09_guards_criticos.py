@@ -119,21 +119,19 @@ class TestGuardsAntiDuplicadoFE:
         en vez de retornar [] silenciosamente (lo que causaría FE duplicada).
         """
         with app.app_context():
-            from app.services.connekta_gateway import connekta
-            import requests as _req
-            connekta.modo_simulacion = False
-            connekta._cb_state = 'CLOSED'
-            connekta._cb_failures.clear()
-            try:
-                # Mock requests.get directamente — más robusto que mockear _get
-                # porque atraviesa toda la cadena real (CB check → HTTP → Exception)
-                with patch.object(_req, 'get', side_effect=_req.exceptions.ConnectionError('Connection refused')):
-                    with pytest.raises(Exception, match='No se pudo verificar'):
-                        connekta.get_factura_desde_pedido('FP', '12345')
-            finally:
-                connekta.modo_simulacion = True
-                connekta._cb_state = 'CLOSED'
-                connekta._cb_failures.clear()
+            from app.services.connekta_gateway import ConnektaGateway
+            # Instancia NUEVA — aislada del singleton y su circuit breaker
+            gw = ConnektaGateway()
+            gw.modo_simulacion = False
+            gw.ikey = 'test'
+            gw.itoken = 'test'
+            gw._cb_state = 'CLOSED'
+            gw._cb_failures.clear()
+            gw._CB_FAILURE_THRESHOLD = 999  # nunca trip durante este test
+
+            with patch.object(gw, '_get', side_effect=Exception('Connection timeout')):
+                with pytest.raises(Exception, match='No se pudo verificar'):
+                    gw.get_factura_desde_pedido('FP', '12345')
 
     def test_get_factura_desde_remision_falla_red_lanza_excepcion(self, app):
         """
@@ -141,19 +139,18 @@ class TestGuardsAntiDuplicadoFE:
         en vez de retornar [] silenciosamente.
         """
         with app.app_context():
-            from app.services.connekta_gateway import connekta
-            import requests as _req
-            connekta.modo_simulacion = False
-            connekta._cb_state = 'CLOSED'
-            connekta._cb_failures.clear()
-            try:
-                with patch.object(_req, 'get', side_effect=_req.exceptions.ConnectionError('Connection refused')):
-                    with pytest.raises(Exception, match='No se pudo verificar'):
-                        connekta.get_factura_desde_remision('RM', '999')
-            finally:
-                connekta.modo_simulacion = True
-                connekta._cb_state = 'CLOSED'
-                connekta._cb_failures.clear()
+            from app.services.connekta_gateway import ConnektaGateway
+            gw = ConnektaGateway()
+            gw.modo_simulacion = False
+            gw.ikey = 'test'
+            gw.itoken = 'test'
+            gw._cb_state = 'CLOSED'
+            gw._cb_failures.clear()
+            gw._CB_FAILURE_THRESHOLD = 999
+
+            with patch.object(gw, '_get', side_effect=Exception('Connection timeout')):
+                with pytest.raises(Exception, match='No se pudo verificar'):
+                    gw.get_factura_desde_remision('RM', '999')
 
     def test_get_factura_desde_pedido_exitoso_retorna_lista(self, app):
         """Cuando Connekta responde OK con facturas, retorna lista correctamente."""
