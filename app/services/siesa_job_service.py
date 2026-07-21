@@ -77,6 +77,12 @@ _ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y ha
 def _procesar_jobs_pendientes_interno(_app):
     """Lógica interna de procesamiento — separada para permitir captura de errores DB externos."""
     with _app.app_context():
+        # Circuit breaker: si Connekta está caído, no gastar reintentos
+        from app.services.connekta_gateway import connekta
+        if connekta._cb_state == 'OPEN':
+            logger.info('[DLQ] Circuit breaker OPEN — pausando DLQ hasta que Siesa responda')
+            return 0
+
         # Advisory lock: solo un worker procesa la DLQ a la vez.
         # Sin esto, cuando Siesa se recupera y hay 100 jobs acumulados, N workers
         # los atacan simultáneamente saturando la API de Connekta.
@@ -211,6 +217,20 @@ def _run_dlq_jobs():
                 )
 
         except Exception as e:
+            from app.services.connekta_gateway import ConnektaCircuitOpenError
+            if isinstance(e, ConnektaCircuitOpenError):
+                # Circuit breaker abierto — NO gastar reintento.
+                # El job se queda en PROCESANDO/PENDIENTE y se reintenta
+                # cuando el circuit cierre.
+                job.estado = EstadoSiesaJob.PENDIENTE
+                job.proximo_intento = None  # será tomado en el próximo ciclo post-recovery
+                db.session.commit()
+                logger.info(
+                    '[DLQ] Job %s (%s) pausado por circuit breaker — no gasta reintento',
+                    job.id, job.tipo
+                )
+                continue
+
             error_msg = str(e)
             job.marcar_fallo(error_msg)
             db.session.commit()

@@ -22,6 +22,8 @@ Diccionario real Siesa confirmado:
 """
 import os
 import logging
+import threading
+import time
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -29,6 +31,12 @@ from zoneinfo import ZoneInfo
 _TZ_BOGOTA = ZoneInfo('America/Bogota')
 
 logger = logging.getLogger(__name__)
+
+
+class ConnektaCircuitOpenError(Exception):
+    """Raised when circuit breaker is OPEN — Siesa no disponible.
+    DLQ handlers catch this to NOT waste retries."""
+    pass
 
 
 class ConnektaGateway:
@@ -203,6 +211,19 @@ class ConnektaGateway:
         self.url_post_dinamico = f'{_base}/api/siesa/v3.1/conectoresimportar'
 
         self.modo_simulacion = not all([self.ikey, self.itoken])
+
+        # ── Circuit Breaker ──────────────────────────────────────────────
+        # Detecta caída de Connekta/Siesa y entra en modo degradado automáticamente.
+        # CLOSED (normal) → OPEN (5 fallos en 5 min) → HALF_OPEN (probe cada 60s) → CLOSED
+        self._cb_lock = threading.Lock()
+        self._cb_state = 'CLOSED'           # CLOSED | OPEN | HALF_OPEN
+        self._cb_failures = []              # timestamps de fallos recientes
+        self._cb_opened_at = None           # cuándo se abrió el circuit
+        self._cb_last_probe = time.monotonic()  # monotonic timestamp del último probe
+        self._CB_FAILURE_THRESHOLD = 5      # fallos para trip
+        self._CB_WINDOW_SECONDS = 300       # ventana de 5 minutos
+        self._CB_PROBE_INTERVAL = 60        # probe cada 60s en OPEN
+
         # MODO_ENSAYO: credenciales reales, GETs reales, POSTs bloqueados en servidor.
         # Activar con variable de entorno MODO_ENSAYO=true en Railway para pruebas UX.
         # Desactivar (borrar la variable) para producción real.
@@ -244,6 +265,106 @@ class ConnektaGateway:
         Spec: signo(1) + enteros(15) + punto(1) + decimales(4) = 21 chars exactos."""
         signo = '+' if v >= 0 else '-'
         return f'{signo}{abs(v):020.4f}'
+
+    # ── Circuit Breaker Methods ───────────────────────────────────────────────
+
+    def _cb_record_failure(self):
+        """Registra un fallo. Si alcanza el threshold, trip a OPEN."""
+        now = time.monotonic()
+        with self._cb_lock:
+            self._cb_failures.append(now)
+            # Limpiar fallos fuera de la ventana
+            cutoff = now - self._CB_WINDOW_SECONDS
+            self._cb_failures = [t for t in self._cb_failures if t > cutoff]
+
+            if len(self._cb_failures) >= self._CB_FAILURE_THRESHOLD and self._cb_state == 'CLOSED':
+                self._cb_state = 'OPEN'
+                self._cb_opened_at = datetime.now(_TZ_BOGOTA).isoformat()
+                logger.critical(
+                    '[CONNEKTA CB] CIRCUIT OPEN — %d fallos en %ds. '
+                    'Siesa no disponible. DLQ pausado. Probe cada %ds.',
+                    len(self._cb_failures), self._CB_WINDOW_SECONDS, self._CB_PROBE_INTERVAL
+                )
+                self._cb_trip_alert()
+
+    def _cb_record_success(self):
+        """Registra un éxito. Si estamos en HALF_OPEN, cierra el circuit."""
+        with self._cb_lock:
+            if self._cb_state == 'HALF_OPEN':
+                self._cb_state = 'CLOSED'
+                self._cb_failures.clear()
+                self._cb_opened_at = None
+                logger.info('[CONNEKTA CB] CIRCUIT CLOSED — Siesa recuperado. DLQ reanudado.')
+            elif self._cb_state == 'CLOSED':
+                # Éxito en operación normal — limpiar fallos acumulados
+                self._cb_failures.clear()
+
+    def _cb_should_allow(self) -> bool:
+        """Decide si permitir la llamada HTTP."""
+        with self._cb_lock:
+            if self._cb_state == 'CLOSED':
+                return True
+            if self._cb_state == 'OPEN':
+                # ¿Ya pasó el intervalo de probe?
+                now = time.monotonic()
+                if now - self._cb_last_probe >= self._CB_PROBE_INTERVAL:
+                    self._cb_state = 'HALF_OPEN'
+                    self._cb_last_probe = now
+                    logger.info('[CONNEKTA CB] HALF_OPEN — enviando probe a Siesa')
+                    return True
+                return False
+            # HALF_OPEN — ya se permitió una llamada, bloquear las demás
+            return False
+
+    def _cb_trip_alert(self):
+        """Alerta inmediata cuando el circuit se abre (CLOSED → OPEN)."""
+        try:
+            from app.models.siesa_job import SiesaJob
+            from app.extensions import db as _db
+            # Deduplicar: no crear otra alerta si ya hay una pendiente
+            existente = SiesaJob.query.filter(
+                SiesaJob.tipo == 'ALERTA_EMAIL',
+                SiesaJob.estado.in_(['PENDIENTE', 'PROCESANDO']),
+            ).filter(SiesaJob.payload.contains('CIRCUIT_BREAKER_OPEN')).first()
+            if existente:
+                return
+            SiesaJob.encolar(
+                'ALERTA_EMAIL',
+                {
+                    'tipo_alerta': 'CIRCUIT_BREAKER_OPEN',
+                    'asunto': '[WMS ALERTA CRÍTICA] Siesa/Connekta no disponible — circuit breaker activado',
+                    'cuerpo_html': (
+                        '<h2>Circuit Breaker OPEN</h2>'
+                        f'<p>Siesa no responde después de {self._CB_FAILURE_THRESHOLD} fallos '
+                        f'consecutivos en {self._CB_WINDOW_SECONDS // 60} minutos.</p>'
+                        '<p>El WMS sigue operando (picking, packing, recepción) pero los '
+                        'jobs Siesa están PAUSADOS hasta que Connekta responda.</p>'
+                        '<p>El sistema intentará reconectar automáticamente cada '
+                        f'{self._CB_PROBE_INTERVAL} segundos.</p>'
+                    ),
+                    'cuerpo_texto': (
+                        f'Circuit Breaker OPEN — {self._CB_FAILURE_THRESHOLD} fallos en '
+                        f'{self._CB_WINDOW_SECONDS // 60} min. DLQ pausado. '
+                        f'Probe cada {self._CB_PROBE_INTERVAL}s.'
+                    ),
+                },
+            )
+            _db.session.flush()
+        except Exception as e:
+            logger.error('[CONNEKTA CB] Error creando alerta de circuit breaker: %s', e)
+
+    def circuit_state(self) -> dict:
+        """Estado actual del circuit breaker para health check y dashboard."""
+        with self._cb_lock:
+            now = time.monotonic()
+            cutoff = now - self._CB_WINDOW_SECONDS
+            recent = len([t for t in self._cb_failures if t > cutoff])
+            return {
+                'state': self._cb_state,
+                'failures_recent': recent,
+                'failure_threshold': self._CB_FAILURE_THRESHOLD,
+                'opened_at': self._cb_opened_at,
+            }
 
     @staticmethod
     def _safe_int_env(var_name: str, default: int) -> int:
@@ -314,8 +435,19 @@ class ConnektaGateway:
         }
 
     def _get(self, nombre_api: str, params_extra: dict = None, timeout: int = 30, url: str = None):
+        # Circuit breaker: check ANTES de simulación — si Siesa está caído, no simular
+        if self._cb_state != 'CLOSED' and not self.modo_simulacion:
+            if not self._cb_should_allow():
+                logger.warning('[CONNEKTA CB] GET %s bloqueado — circuit %s', nombre_api, self._cb_state)
+                return None
+
         if self.modo_simulacion:
             return self._simular(f'GET_{nombre_api}', params_extra)
+
+        # Circuit breaker: si OPEN, fail-fast sin HTTP (redundante para claridad)
+        if not self._cb_should_allow():
+            logger.warning('[CONNEKTA CB] GET %s bloqueado — circuit %s', nombre_api, self._cb_state)
+            return None
 
         params = {'idCompania': self.id_compania, 'descripcion': nombre_api}
         if params_extra:
@@ -330,18 +462,19 @@ class ConnektaGateway:
                 raise Exception(f'Connekta rate-limit (429) — reintento en {retry_after}s')
             r.raise_for_status()
             data = r.json()
-            # [A21] Connekta puede devolver HTTP 200 con body de error interno.
-            # Verificar campo 'codigo' (0 = éxito, !=0 = error) igual que en _post().
             if isinstance(data, dict):
                 _codigo = data.get('codigo')
                 if _codigo is not None and _codigo != 0:
                     _msg = data.get('mensaje') or data.get('descripcion') or f'codigo={_codigo}'
                     logger.warning(f'[CONNEKTA] GET {nombre_api}: error interno Siesa — {_msg}')
                     raise Exception(f'Siesa retornó error interno (codigo={_codigo}): {_msg}')
+            self._cb_record_success()
             return data
         except requests.exceptions.Timeout:
+            self._cb_record_failure()
             raise Exception('Connekta no respondió — reintenta')
         except requests.exceptions.RequestException as e:
+            self._cb_record_failure()
             logger.error(f'[CONNEKTA] GET {nombre_api}: {e}')
             raise Exception(f'Error consultando Siesa: {e}')
 
@@ -373,6 +506,13 @@ class ConnektaGateway:
                 'payload': payload,
                 'timestamp': datetime.utcnow().isoformat()
             }
+
+        # Circuit breaker: si OPEN, fail-fast sin HTTP
+        if not self._cb_should_allow():
+            raise ConnektaCircuitOpenError(
+                f'Circuit breaker OPEN — POST {id_conector} bloqueado. '
+                f'Siesa no disponible desde {self._cb_opened_at}'
+            )
 
         params = {
             'idCompania': self.id_compania,
@@ -439,11 +579,14 @@ class ConnektaGateway:
                             raise Exception(
                                 f'Siesa rechazó el documento (codigo={_cod}): {_msg}'
                             )
+            self._cb_record_success()
             return resp_json
         except requests.exceptions.Timeout:
+            self._cb_record_failure()
             logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
             raise Exception('Siesa no respondió en 30s — la recepción quedó EN_PROCESO, reintenta confirmar')
         except requests.exceptions.RequestException as e:
+            self._cb_record_failure()
             logger.error(f'[CONNEKTA] POST {id_conector}: {e}')
             raise Exception(f'Error inyectando en Siesa: {e}')
 

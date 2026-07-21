@@ -39,6 +39,7 @@ def health_ping():
         return jsonify({
             'ok': True,
             'modo_simulacion': connekta.modo_simulacion,
+            'circuit_breaker': connekta.circuit_state(),
         }), 200
     except Exception:
         return jsonify({'ok': False}), 503
@@ -131,6 +132,8 @@ def health_siesa():
         'Si Siesa lo rechaza en producción, el error llegará vía siesa_error en el traslado '
         'y email DLQ — no se necesita health-check dinámico de maestros.'
     )
+
+    resultado['circuit_breaker'] = connekta.circuit_state()
 
     status_code = 200 if resultado['ok'] else 503
     return jsonify(resultado), status_code

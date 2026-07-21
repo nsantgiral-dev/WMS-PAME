@@ -461,9 +461,16 @@ async function cargarDashboard() {
       k.recepcion.confirmadas_hoy > 0 ? 'verde' : 'gris',
       k.recepcion.confirmadas_hoy + ' hoy');
     const siesa = k.connekta || {};
-    _semaforo('sem-siesa',
-      siesa.modo_simulacion ? 'gris' : (siesa.modo_ensayo ? 'amarillo' : 'verde'),
-      siesa.modo_simulacion ? 'Simulación' : (siesa.modo_ensayo ? 'Ensayo' : 'Conectado'));
+    const cb = siesa.circuit_breaker || {};
+    if (siesa.modo_simulacion) {
+      _semaforo('sem-siesa', 'gris', 'Simulación');
+    } else if (cb.state === 'OPEN' || cb.state === 'HALF_OPEN') {
+      _semaforo('sem-siesa', 'rojo', 'Siesa caído');
+    } else if (siesa.modo_ensayo) {
+      _semaforo('sem-siesa', 'amarillo', 'Ensayo');
+    } else {
+      _semaforo('sem-siesa', 'verde', 'Conectado');
+    }
 
     // ── Gráfica tendencia 7 días ───────────────────────────────────
     graficaTendencia(d.tendencia_7d || []);
