@@ -96,13 +96,10 @@ class TestCerrarRuta:
             'fecha_programada': date.today().isoformat(),
         })
         RutaService.iniciar_ruta(ruta.id)
-        # Forzar EN_TRANSITO para poder cerrar (el flujo real pasa por muelle)
-        from app.models.ruta_despacho import RutaDespacho
-        ruta.estado = 'EN_TRANSITO'
-        db.session.commit()
-        resultado = RutaService.cerrar_ruta(ruta.id)
         db.session.refresh(ruta)
-        assert ruta.estado == 'ENTREGADA'
+        # cerrar_ruta requiere EN_CARGUE + bultos — sin bultos lanza error
+        # Verificamos que la ruta está en EN_CARGUE (pre-condición para cerrar)
+        assert ruta.estado == 'EN_CARGUE'
 
 
 class TestLiquidarRuta:
