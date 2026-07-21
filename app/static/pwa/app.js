@@ -441,6 +441,7 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-inventario') await cargarInventario();
   else if (TAB === 'tab-traslados') await cargarTrasladosAdmin();
   else if (TAB === 'tab-reposicion') await cargarReposicion();
+  else if (TAB === 'tab-liquidacion') await cargarLiquidacion();
   // Layout es un módulo de configuración, no de datos en vivo — no se autorefresca
   // cada 30s (rompía el scroll y cualquier modal abierto mientras se revisaba).
   // Solo carga al entrar manualmente a la pestaña.
@@ -450,7 +451,7 @@ async function cargarAdmin(desdeTimer = false) {
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-layout','tab-compras','tab-etiquetas'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-liquidacion','tab-layout','tab-compras','tab-etiquetas'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';

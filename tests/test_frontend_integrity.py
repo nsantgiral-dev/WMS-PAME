@@ -130,6 +130,51 @@ class TestScriptIntegrity:
                 f'{f} tiene error de sintaxis:\n{result.stderr[:200]}'
             )
 
+    def test_tabs_array_matches_html_nav_tabs(self):
+        """El array TABS en app.js tab() debe incluir todos los nav-tabs del HTML.
+        Bug real: la limpieza de duplicados eliminó tab-liquidacion del array,
+        causando que el módulo desapareciera del sidebar."""
+        html = _read('index.html')
+        app = _read('app.js')
+
+        # Extraer tabs del HTML (onclick="tab('tab-xxx')")
+        html_tabs = re.findall(r"onclick=\"tab\('(tab-[^']+)'\)\"", html)
+        html_tabs_set = set(html_tabs)
+
+        # Extraer array TABS de app.js
+        tabs_match = re.search(r"const TABS = \[([^\]]+)\]", app)
+        assert tabs_match, 'No se encontró const TABS = [...] en app.js'
+        js_tabs = re.findall(r"'(tab-[^']+)'", tabs_match.group(1))
+        js_tabs_set = set(js_tabs)
+
+        # Cada nav-tab del HTML debe estar en el array TABS
+        missing = html_tabs_set - js_tabs_set
+        assert not missing, (
+            f'Tabs del HTML que faltan en TABS array de app.js:\n'
+            + '\n'.join(f'  {t} — sidebar visible pero tab() no lo maneja' for t in missing)
+        )
+
+    def test_tab_dispatcher_handles_all_tabs(self):
+        """Cada tab en el array TABS debe tener un handler en cargarAdmin().
+        Si falta, hacer click en el tab no carga nada."""
+        app = _read('app.js')
+
+        tabs_match = re.search(r"const TABS = \[([^\]]+)\]", app)
+        assert tabs_match
+        js_tabs = re.findall(r"'(tab-[^']+)'", tabs_match.group(1))
+
+        # Tabs que tienen handler directo (else if TAB === 'tab-xxx')
+        # Excluir: tab-dashboard (handled by default), tab-etiquetas (static)
+        skip = {'tab-dashboard', 'tab-etiquetas'}
+        for tab in js_tabs:
+            if tab in skip:
+                continue
+            # Check if there's a dispatcher line for this tab
+            pattern = f"TAB === '{tab}'"
+            assert pattern in app, (
+                f'{tab} está en TABS array pero no tiene handler en cargarAdmin()'
+            )
+
     def test_no_duplicate_functions_across_files(self):
         """Ninguna función está definida en más de un archivo."""
         func_locations = {}
