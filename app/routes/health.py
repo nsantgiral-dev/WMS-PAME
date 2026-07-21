@@ -108,20 +108,58 @@ def health_diag():
         } catch(e) { log(`4. ${ep} → NETWORK ERROR: ${e.message}`, 'fail'); }
       }
 
-      // 5. Test get() function
-      log('5. Testing get() function from app.js...', 'wait');
+      // 5. Load app.js and check if functions are defined
+      log('5. Loading app.js to check function definitions...', 'wait');
       try {
-        if (typeof get === 'undefined') {
-          log('5. get() function NOT DEFINED — app.js no cargo correctamente', 'fail');
+        const appJs = await fetch('/static/pwa/app.js');
+        const appJsText = await appJs.text();
+        log(`5a. app.js downloaded: ${appJsText.length} bytes`);
+        // Check for key functions in the source
+        const fns = ['get','post','tab','cargarAdmin','mostrarSegunRol','salir'];
+        const missing = fns.filter(fn => !appJsText.includes('function ' + fn));
+        if (missing.length) {
+          log('5b. MISSING functions in app.js source: ' + missing.join(', '), 'fail');
         } else {
-          const t0 = Date.now();
-          const d = await get('/api/health/ping');
-          log(`5. get() works — ${Date.now()-t0}ms — result: ${JSON.stringify(d).substring(0,100)}`);
+          log('5b. All core functions found in app.js source');
         }
-      } catch(e) { log('5. get() ERROR: ' + e.message + ' (name: ' + e.name + ')', 'fail'); }
+        // Try to eval a subset to check runtime errors
+        try {
+          // Just check the globals section (first ~50 lines)
+          const lines = appJsText.split('\\n');
+          log('5c. app.js has ' + lines.length + ' lines, first line: ' + lines[0].substring(0,60));
+        } catch(e2) { log('5c. Parse check error: ' + e2.message, 'fail'); }
+      } catch(e) { log('5. app.js LOAD FAILED: ' + e.message, 'fail'); }
 
-      // 6. Check SW
-      log('6. Service Worker: ' + (navigator.serviceWorker?.controller ? 'ACTIVE' : 'none'));
+      // 6. Check error in browser console by trying to load all modules
+      log('6. Testing script execution...', 'wait');
+      const scripts = ['app.js','picking.js','packing.js','recepcion.js','rutas.js','traslados.js','conteo.js','reposicion.js','liquidacion.js','layout.js'];
+      window.onerror = function(msg, src, line, col) {
+        log('RUNTIME ERROR: ' + msg + ' at ' + (src||'?').split('/').pop() + ':' + line, 'fail');
+      };
+      for (const s of scripts) {
+        try {
+          const el = document.createElement('script');
+          el.src = '/static/pwa/' + s + '?diag=' + Date.now();
+          const p = new Promise((ok, fail) => { el.onload = ok; el.onerror = fail; });
+          document.head.appendChild(el);
+          await p;
+          log('6. ' + s + ' loaded OK');
+        } catch(e) { log('6. ' + s + ' FAILED TO LOAD', 'fail'); }
+      }
+
+      // 7. Check if functions are NOW defined after loading
+      log('7. Checking if functions are defined after loading...', 'wait');
+      const check = ['get','post','tab','cargarAdmin','cargarRutas','cargarListaRutas','cargarReposicion','cargarConteos','cargarInventario','cargarMuelle','cargarTrasladosAdmin','cargarLayout','cargarLiquidacion'];
+      for (const fn of check) {
+        if (typeof window[fn] === 'function') {
+          log('7. ' + fn + '() ✓');
+        } else {
+          log('7. ' + fn + '() NOT DEFINED ✗', 'fail');
+        }
+      }
+
+      // 8. SW
+      log('8. Service Worker: ' + (navigator.serviceWorker?.controller ? 'ACTIVE (' + navigator.serviceWorker.controller.scriptURL + ')' : 'none'));
 
       log('=== DIAGNOSTICO COMPLETO ===');
     }
