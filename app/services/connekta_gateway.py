@@ -1996,6 +1996,10 @@ class ConnektaGateway:
                 'f470_cant_2': None,                             # Dep — unidad adicional
                 'f470_costo_prom_uni': None,                     # Dep — costo unitario
                 'f470_notas': None,
+                # Typo intencional: 'varible' — nombre exacto del spec 173066 (pos 487, 2000 chars).
+                # Sin este campo el registro plano queda 2000 bytes más corto y Siesa
+                # malinterpreta todos los campos posteriores (ubicacion_aux_ent, item, etc.).
+                'f470_desc_varible': '',
                 'f470_id_ubicacion_aux_ent': ubicacion_destino,  # destino (ej. PIK-01-B)
                 'f470_id_lote_ent': None,
                 'f470_id_item': None,                            # Dep — usamos referencia_item
@@ -2678,6 +2682,7 @@ class ConnektaGateway:
                     'f470_cant_2': None,                 # Dep — si ítem maneja unidad adicional
                     'f470_costo_prom_uni': None,          # Dep — costo unitario
                     'f470_notas': None,
+                    'f470_desc_varible': '',              # Typo intencional: spec 173066 pos 487, 2000 chars
                     'f470_id_ubicacion_aux_ent': None,   # Dep — si bodega entrada maneja ubicaciones
                     'f470_id_lote_ent': None,             # Dep — si ítem+bodega entrada manejan lotes
                     'f470_id_item': None,                # Dep — usamos referencia_item
@@ -2866,15 +2871,26 @@ class ConnektaGateway:
                 'f470_consec_docto': 0,
                 'f470_nro_registro': i,
                 'f470_id_bodega': lin.get('f470_id_bodega') or self.bodega,
-                'f470_id_co_movto': self.centro_op,
-                'f470_id_concepto': self.concepto_ventas,
+                'f470_id_ubicacion_aux': None,
+                'f470_id_lote': None,
                 'f470_id_motivo': lin.get('f470_id_motivo') or self.motivo_ventas,
+                'f470_ind_obsequio': 0,
+                'f470_id_co_movto': self.centro_op,
+                'f470_id_ccosto_movto': None,
+                'f470_id_proyecto': None,
                 'f470_id_unidad_medida': lin.get('f470_id_unidad_medida') or self.uom_default,
                 'f470_cant_base': round(float(lin['f470_cant_base']), 4),
-                'f470_id_causal_devol': lin.get('f470_id_causal_devol') or self.causal_devolucion_default,
-                'f470_rowid_movto': int(lin['f470_rowid_movto']),
+                'f470_cant_2': None,
+                'f470_ind_impto_asumido': 0,
                 'f470_notas': lin.get('f470_notas') or '',
                 'f470_desc_variable': '',
+                'f470_id_causal_devol': lin.get('f470_id_causal_devol') or self.causal_devolucion_default,
+                'f470_rowid_movto': int(lin['f470_rowid_movto']),
+                'f470_id_item': None,
+                'f470_referencia_item': None,
+                'f470_codigo_barras': None,
+                'f470_id_ext1_detalle': None,
+                'f470_id_ext2_detalle': None,
                 'f470_id_un_movto': self.unidad_negocio,
             })
 
@@ -2888,6 +2904,7 @@ class ConnektaGateway:
                 'F350_CONSEC_DOCTO': 0,
                 'F350_FECHA': fecha_hoy,
                 'F350_IND_ESTADO': 1,
+                'F350_IND_IMPRESION': 0,
                 'F350_NOTAS': notas[:2000] if notas else '',
                 'F430_ID_TIPO_DOCTO': tipo_docto_fe,
                 'F430_CONSEC_DOCTO': consec_int,
