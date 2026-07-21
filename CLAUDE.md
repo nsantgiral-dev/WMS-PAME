@@ -347,7 +347,7 @@ Railway detecta push a main automáticamente. Pipeline: install deps → pytest 
 
 ## Specs DOCX del Consultor
 
-Los specs originales de cada conector están en `/Downloads/siesa/`. **Cada cambio a connekta_gateway.py DEBE cruzarse campo por campo contra el spec DOCX.**
+Los specs originales de cada conector están en `docs/siesa-specs/`. **Cada cambio a connekta_gateway.py DEBE cruzarse campo por campo contra el spec DOCX.**
 
 Conectores con spec verificado contra código (julio 2026):
 
