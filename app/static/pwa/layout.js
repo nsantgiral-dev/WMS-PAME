@@ -216,31 +216,23 @@ function layoutRenderUbicaciones() {
         </div>`;
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     } else if (g.tipo === 'cuerpo') {
-      const codigoCuerpo = `${g.pasillo}${g.fila}-${String(g.cuerpo).padStart(2, '0')}`;
+      // Nomenclatura real del código: {PREFIJO_ZONA}-{PASILLO}{FILA}-C{CUERPO} — ej. PIK-A1-C01.
+      const codigoCuerpo = g.items[0].codigo.split('-').slice(0, 3).join('-');
       const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
-      const allIds = g.items.map(u => u.id).join(',');
-      html += `
-        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-s2);border-radius:8px;padding:8px 12px;margin:16px 0 8px;">
-          <div style="font-size:12px;font-weight:700;color:var(--tx2);">
-            Cuerpo ${codigoCuerpo} · ${nivelesEnZona.length} entrepaño(s) en ${_layoutZonaActual} · ${g.items.length} hueco(s)
-          </div>
-          <button onclick="layoutImprimirEtiquetasCuerpo('${allIds}')"
-            style="padding:5px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;cursor:pointer;">
-            🏷 Imprimir
+      const idsCuerpoCsv = g.items.map(u => u.id).join(',');
+      let cuerpoHtml = `
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
+          <div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
+          <button onclick="layoutImprimirEtiquetasCuerpo('${idsCuerpoCsv}')"
+            style="padding:7px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+            🖨 Imprimir etiquetas
           </button>
         </div>`;
       nivelesEnZona.forEach((nivel, idx) => {
         const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
-        // Usa el render de entrepaño con botones "Asignar SKU" / "Ver"
-        if (typeof _layoutRenderEntrepanoSeccion === 'function') {
-          html += _layoutRenderEntrepanoSeccion(huecos, idx === 0);
-        } else {
-          // Fallback por si la función no está disponible
-          html += `<div style="font-size:11px;font-weight:600;color:var(--tx3);padding:4px 4px;margin:8px 0 4px;">
-            Entrepaño ${nivel} · ${huecos.length} hueco(s)</div>`;
-          huecos.forEach(u => { html += _layoutRenderUbicacionCard(u); });
-        }
+        cuerpoHtml += _layoutRenderEntrepanoSeccion(huecos, idx === 0);
       });
+      html += `<div class="tabla-card" style="margin-top:16px;">${cuerpoHtml}</div>`;
     } else {
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     }
