@@ -235,6 +235,94 @@ class TestScriptIntegrity:
             + '\n'.join(f'  {fn}() en {", ".join(files)}' for fn, files in dupes.items())
         )
 
+    def test_no_duplicate_variables_across_files(self):
+        """Ninguna variable top-level let/const está declarada en más de un archivo.
+
+        ROOT CAUSE del incidente 2026-07-21: la modularización extrajo variables
+        a módulos pero dejó las declaraciones originales en app.js. Con 'use strict',
+        redeclarar let/const en el scope global causa SyntaxError que mata el módulo
+        entero — todas sus funciones desaparecen y la PWA queda congelada.
+
+        Solo detecta declaraciones a nivel 0 de indentación (top-level del script),
+        que son las que viven en el scope global del browser.
+        """
+        var_locations = {}
+        for f in _all_js_files():
+            code = _read(f)
+            for line in code.split('\n'):
+                # Solo líneas sin indentación → top-level del script
+                if line and not line[0].isspace():
+                    m = re.match(r'^(?:let|const)\s+(\w+)', line)
+                    if m:
+                        var = m.group(1)
+                        if var in var_locations:
+                            var_locations[var].append(f)
+                        else:
+                            var_locations[var] = [f]
+        dupes = {v: files for v, files in var_locations.items() if len(files) > 1}
+        assert not dupes, (
+            f'{len(dupes)} variable(s) global(es) duplicada(s) — SyntaxError en strict mode:\n'
+            + '\n'.join(
+                f'  {v} en {", ".join(files)} — browser mata el módulo entero'
+                for v, files in sorted(dupes.items())
+            )
+        )
+
+    def test_modules_no_syntax_errors_node(self):
+        """Cada módulo JS parsea sin errores (simula carga en browser).
+
+        Si node no está disponible (Railway), se salta. La verificación real
+        se hace con test_no_duplicate_variables que detecta la causa raíz.
+        """
+        import shutil
+        if not shutil.which('node'):
+            pytest.skip('node no disponible')
+        for f in _all_js_files():
+            path = os.path.join(_PWA, f)
+            result = subprocess.run(
+                ['node', '--check', path],
+                capture_output=True, text=True, timeout=10
+            )
+            assert result.returncode == 0, (
+                f'{f} tiene error de sintaxis:\n{result.stderr[:300]}'
+            )
+
+    def test_strict_mode_redeclaration_simulation(self):
+        """Simula la carga secuencial de scripts y detecta redeclaraciones globales.
+
+        Recorre los scripts en el MISMO ORDEN que el browser los carga (según
+        los <script> tags en index.html) y detecta variables top-level (sin
+        indentación) que se declaran más de una vez. Estas causarían SyntaxError
+        en el browser y matarían el módulo.
+        """
+        html = _read('index.html')
+        script_order = re.findall(r'<script src="/static/pwa/(\w+\.js)', html)
+
+        seen_vars = {}  # var_name → first_file
+        conflicts = []
+
+        for f in script_order:
+            if f not in _all_js_files():
+                continue
+            code = _read(f)
+            for lineno, line in enumerate(code.split('\n'), 1):
+                # Solo top-level (sin indentación)
+                if line and not line[0].isspace():
+                    m = re.match(r'^(?:let|const)\s+(\w+)', line)
+                    if m:
+                        var = m.group(1)
+                        if var in seen_vars and seen_vars[var] != f:
+                            conflicts.append(
+                                f'  {var}: first in {seen_vars[var]}, redeclared in {f}:{lineno}'
+                            )
+                        elif var not in seen_vars:
+                            seen_vars[var] = f
+
+        assert not conflicts, (
+            f'{len(conflicts)} redeclaración(es) global(es) en orden de carga — '
+            f'SyntaxError en browser:\n' + '\n'.join(conflicts)
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════
 # NIVEL 3: Endpoints referenciados existen en Flask
