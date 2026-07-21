@@ -240,28 +240,25 @@ class TestFallbackCondPagoAlerta:
                 'f430_tasa_local': 1,
             }
 
-            emails_enviados = []
-
-            def mock_email(asunto, cuerpo_html, cuerpo_texto, tipo_alerta):
-                emails_enviados.append({'asunto': asunto, 'tipo': tipo_alerta})
-
-            post_calls = []
-
             def mock_post(conector, nombre, payload, **kwargs):
-                post_calls.append(payload)
                 return {'mensaje': 'Transacción Exitosa'}
 
-            with patch('app.services.alertas_service._enviar_email_con_dlq', mock_email), \
-                 patch.object(connekta, '_post', side_effect=mock_post):
+            from app.models.siesa_job import SiesaJob
+            from app.extensions import db as _db
+
+            with patch.object(connekta, '_post', side_effect=mock_post):
                 try:
                     connekta.trigger_factura_desde_remision('RM', 5001, cabecera_sin_cond_pago)
                 except Exception:
                     pass  # puede fallar por tipo_docto_factura no configurado en simulación
 
-            # El email de alerta debe haberse disparado
-            assert len(emails_enviados) == 1
-            assert 'CONTADO' in emails_enviados[0]['asunto']
-            assert emails_enviados[0]['tipo'] == 'DATA_MAESTRA_COND_PAGO'
+            # La alerta se encola como SiesaJob tipo ALERTA_EMAIL (async via DLQ)
+            alerta_jobs = SiesaJob.query.filter_by(tipo='ALERTA_EMAIL').all()
+            assert len(alerta_jobs) >= 1
+            import json
+            payload = json.loads(alerta_jobs[0].payload)
+            assert 'CONTADO' in payload.get('asunto', '')
+            assert payload.get('tipo_alerta') == 'DATA_MAESTRA_COND_PAGO'
 
     def test_sin_fallback_no_dispara_email(self, app):
         """

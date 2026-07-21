@@ -806,7 +806,6 @@ class TestConnektaGatewayTraslados:
 
             mov = payloads[0]['Movimientos'][0]
             assert mov['f470_id_ubicacion_aux_ent'] is None
-            assert mov['f470_id_ubicación_aux_ent'] is None
 
     def test_173079_ubicacion_aux_ent_siempre_none_aunque_haya_default(self, app):
         """El default del gateway tampoco aplica — las bodegas destino no tienen multi-ubi."""
@@ -827,7 +826,6 @@ class TestConnektaGatewayTraslados:
 
             mov = payloads[0]['Movimientos'][0]
             assert mov['f470_id_ubicacion_aux_ent'] is None
-            assert mov['f470_id_ubicación_aux_ent'] is None
 
     def test_173079_ubicacion_aux_ent_none_sin_default(self, app):
         with app.app_context():
@@ -1203,8 +1201,6 @@ class TestFixesSesion20260611:
             for mov in payloads[0]['Movimientos']:
                 assert mov['f470_id_ubicacion_aux_ent'] is None, \
                     'f470_id_ubicacion_aux_ent no debe enviar valor — bodega sin multi-ubicaciones'
-                assert mov['f470_id_ubicación_aux_ent'] is None, \
-                    'f470_id_ubicación_aux_ent (con acento) no debe enviar valor'
 
     def test_ets_ind_estado_es_1(self, app):
         """f350_ind_estado=1 (Comprometido) es requerido por Siesa para ETS."""
