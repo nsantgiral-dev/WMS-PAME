@@ -299,8 +299,15 @@ async function _checkResp(r) {
  * @returns {Promise<Object>} Parsed JSON response.
  */
 async function get(url) {
-  const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });
-  return _checkResp(r);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15000);
+  try {
+    const r = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN }, signal: ctrl.signal });
+    return _checkResp(r);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Tiempo de espera agotado — intenta de nuevo');
+    throw e;
+  } finally { clearTimeout(timer); }
 }
 
 /** Ejecuta fn() dando feedback visual al botón que disparó el evento. */

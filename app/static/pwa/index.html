@@ -1279,9 +1279,13 @@
           </div>
         </div>
 
-        <!-- Filtro de fecha -->
-        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
-          <input type="date" id="rutas-fecha-filtro"
+        <!-- Filtro de fecha (rango) -->
+        <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+          <label for="rutas-fecha-desde" style="font-size:12px;color:var(--tx3);">Desde</label>
+          <input type="date" id="rutas-fecha-desde"
+            style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <label for="rutas-fecha-hasta" style="font-size:12px;color:var(--tx3);">Hasta</label>
+          <input type="date" id="rutas-fecha-hasta"
             style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
           <button onclick="cargarListaRutas()"
             style="padding:8px 14px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
@@ -2990,11 +2994,11 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260720i"></script>
+  <script src="/static/pwa/app.js?v=20260721c"></script>
   <script src="/static/pwa/picking.js?v=20260720a"></script>
   <script src="/static/pwa/packing.js?v=20260720a"></script>
   <script src="/static/pwa/recepcion.js?v=20260720a"></script>
-  <script src="/static/pwa/rutas.js?v=20260721b"></script>
+  <script src="/static/pwa/rutas.js?v=20260721c"></script>
   <script src="/static/pwa/traslados.js?v=20260720a"></script>
   <script src="/static/pwa/conteo.js?v=20260721b"></script>
   <script src="/static/pwa/reposicion.js?v=20260720a"></script>

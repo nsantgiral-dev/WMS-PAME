@@ -607,9 +607,11 @@ function rutasSubTab(nombre) {
 
 /** Despacha la carga del sub-tab activo de rutas. */
 async function cargarRutas() {
-  // Inicializar fecha si no tiene valor
-  const fechaInput = document.getElementById('rutas-fecha-filtro');
-  if (fechaInput && !fechaInput.value) fechaInput.value = new Date().toISOString().split('T')[0];
+  const hoy = new Date().toISOString().split('T')[0];
+  const desde = document.getElementById('rutas-fecha-desde');
+  const hasta = document.getElementById('rutas-fecha-hasta');
+  if (desde && !desde.value) desde.value = hoy;
+  if (hasta && !hasta.value) hasta.value = hoy;
   if      (RUTAS_SUBTAB === 'rutas')       await cargarListaRutas();
   else if (RUTAS_SUBTAB === 'maestras')    await cargarListaMaestras();
   else if (RUTAS_SUBTAB === 'vehiculos')   await cargarListaVehiculos();
@@ -618,22 +620,23 @@ async function cargarRutas() {
 
 // ── Rutas ────────────────────────────────────────────
 
-/** Carga y renderiza la lista de rutas programadas del dia. */
+/** Carga y renderiza la lista de rutas del rango de fechas seleccionado. */
 async function cargarListaRutas() {
   const el = document.getElementById('lista-rutas');
   if (!el) return;
   try {
-    const fechaFiltro = document.getElementById('rutas-fecha-filtro')?.value
-      || new Date().toISOString().split('T')[0];
-    const d = await get('/api/rutas/?fecha=' + fechaFiltro);
+    const hoy = new Date().toISOString().split('T')[0];
+    const desde = document.getElementById('rutas-fecha-desde')?.value || hoy;
+    const hasta = document.getElementById('rutas-fecha-hasta')?.value || hoy;
+    const d = await get(`/api/rutas/?fecha_desde=${desde}&fecha_hasta=${hasta}`);
     const rutas = d.rutas || [];
     if (!rutas.length) {
-      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas para esta fecha</div>';
+      el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas para este rango de fechas</div>';
       return;
     }
     el.innerHTML = rutas.map(r => rutaCard(r)).join('');
   } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando rutas</div>';
+    el.innerHTML = `<div style="color:#ef4444;text-align:center;padding:40px;">${e.message || 'Error cargando rutas'}<br><button onclick="cargarListaRutas()" style="margin-top:10px;padding:8px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;cursor:pointer;">Reintentar</button></div>`;
   }
 }
 

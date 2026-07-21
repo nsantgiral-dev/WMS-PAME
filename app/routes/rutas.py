@@ -254,11 +254,16 @@ def listar_rutas():
         conductor = Conductor.query.filter_by(usuario_id=_uid()).first()
         conductor_id = conductor.id if conductor else -1  # fuerza lista vacía si no vinculado
 
+    # Soporta rango (fecha_desde/fecha_hasta) o fecha única (backwards compatible)
+    fecha_desde = request.args.get('fecha_desde') or request.args.get('fecha')
+    fecha_hasta = request.args.get('fecha_hasta')
+
     paginado = RutaService.listar_rutas(
         conductor_id=conductor_id,
         vehiculo_id=request.args.get('vehiculo_id', type=int),
         estado=request.args.get('estado'),
-        fecha=request.args.get('fecha'),
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
         page=request.args.get('page', 1, type=int),
     )
     return jsonify({'rutas': [r.to_dict() for r in paginado.items], 'total': paginado.total}), 200

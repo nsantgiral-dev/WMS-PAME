@@ -279,7 +279,9 @@ class RutaService:
     # ── Rutas de Despacho ────────────────────────────────────────────
 
     @staticmethod
-    def listar_rutas(conductor_id=None, vehiculo_id=None, estado=None, fecha=None, page=1):
+    def listar_rutas(conductor_id=None, vehiculo_id=None, estado=None,
+                     fecha_desde=None, fecha_hasta=None, page=1):
+        from datetime import date as _date
         q = (RutaDespacho.query
              .options(
                  _jl(RutaDespacho.conductor),
@@ -287,15 +289,25 @@ class RutaService:
                  _jl(RutaDespacho.ruta_maestra),
                  _sl(RutaDespacho.bultos).joinedload(Bulto.tarea),
              )
-             .order_by(RutaDespacho.fecha_creacion.desc()))
+             .order_by(RutaDespacho.fecha_programada.desc().nullslast(),
+                       RutaDespacho.fecha_creacion.desc()))
         if conductor_id:
             q = q.filter_by(conductor_id=conductor_id)
         if vehiculo_id:
             q = q.filter_by(vehiculo_id=vehiculo_id)
         if estado:
             q = q.filter_by(estado=estado)
-        if fecha:
-            q = q.filter(RutaDespacho.fecha_programada == fecha)
+        # Rango de fechas (default: hoy si no se especifica)
+        if fecha_desde or fecha_hasta:
+            fd = _date.fromisoformat(fecha_desde) if fecha_desde else _date.today()
+            fh = _date.fromisoformat(fecha_hasta) if fecha_hasta else fd
+            if fh < fd:
+                fd, fh = fh, fd
+            q = q.filter(RutaDespacho.fecha_programada >= fd,
+                         RutaDespacho.fecha_programada <= fh)
+        else:
+            # Sin filtro explícito → solo hoy para no cargar todo el histórico
+            q = q.filter(RutaDespacho.fecha_programada == _date.today())
         return q.paginate(page=page, per_page=50, error_out=False)
 
     @staticmethod
