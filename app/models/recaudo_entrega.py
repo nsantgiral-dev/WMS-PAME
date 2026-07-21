@@ -2,6 +2,13 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoEntrega:
+    ENTREGADO = 'ENTREGADO'
+    PARCIAL = 'PARCIAL'
+    RECHAZADO = 'RECHAZADO'
+    TODOS = (ENTREGADO, PARCIAL, RECHAZADO)
+
+
 class RecaudoEntrega(db.Model):
     """
     Captura de pago y estado de entrega por factura (TareaPacking) en una ruta.

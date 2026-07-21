@@ -120,7 +120,9 @@ def _run_sync(app):
                 _sync_estado['en_curso'] = False
                 return
         except Exception as e:
-            logger.warning(f'[EMPAQUES SYNC] Advisory lock no disponible: {e} — continuando sin él')
+            logger.error(f'[EMPAQUES SYNC] Error adquiriendo advisory lock: {e} — abortando')
+            _sync_estado['en_curso'] = False
+            return
 
         try:
             # ── Paso A: cargar productos en memoria ────────────────────────────

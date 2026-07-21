@@ -8,6 +8,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.models.conductor import Conductor
 from app.models.ruta_despacho import RutaDespacho
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin, Roles
+from app.models.recaudo_entrega import EstadoEntrega
 from app.services.ruta_service import RutaService, ConflictError
 
 logger = logging.getLogger(__name__)
@@ -364,6 +365,9 @@ def mis_rutas():
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
+    u = _usuario()
+    if u and u.rol not in Roles.GESTION + (Roles.CONDUCTOR,):
+        return jsonify({'error': 'Sin permiso'}), 403
     try:
         resultado = RutaService.mis_rutas(uid)
     except LookupError as e:
@@ -495,3 +499,311 @@ def liquidar_ruta_siesa(id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, **resultado}), 200
+
+
+# ── Liquidación — dashboard, detalle, one-click ───────────────────
+
+@rutas_bp.route('/liquidacion/dashboard', methods=['GET'])
+@jwt_required()
+def liquidacion_dashboard():
+    """Dashboard de liquidación: rutas del día agrupadas por estado financiero."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede ver el dashboard de liquidación'}), 403
+
+    from datetime import date as _date
+    from sqlalchemy import func, or_
+    from sqlalchemy.orm import selectinload, joinedload
+    from app.models.bulto import Bulto
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.siesa_job import SiesaJob
+
+    fecha_str = request.args.get('fecha')
+    try:
+        fecha = _date.fromisoformat(fecha_str) if fecha_str else _date.today()
+    except ValueError:
+        return jsonify({'error': 'Formato de fecha inválido — usar YYYY-MM-DD'}), 400
+
+    # Rutas entregadas o con procesamiento financiero en esa fecha
+    # Eager load recaudos + bultos→tarea para evitar N+1 (~125 queries → 3)
+    rutas = (RutaDespacho.query
+             .options(
+                 selectinload(RutaDespacho.recaudos),
+                 selectinload(RutaDespacho.bultos).selectinload(Bulto.tarea),
+                 joinedload(RutaDespacho.conductor),
+                 joinedload(RutaDespacho.vehiculo),
+                 joinedload(RutaDespacho.ruta_maestra),
+             )
+             .filter(RutaDespacho.fecha_programada == fecha)
+             .filter(or_(
+                 RutaDespacho.estado == 'ENTREGADA',
+                 RutaDespacho.estado_financiero != 'PENDIENTE',
+             ))
+             .all())
+
+    total_efectivo = 0
+    total_transferencia = 0
+    total_credito = 0
+    total_recaudado = 0
+    pendientes = 0
+    liquidadas = 0
+    rutas_out = []
+
+    for ruta in rutas:
+        recaudos = ruta.recaudos  # preloaded via selectinload
+        tareas = ruta.tareas_unicas()
+
+        # Contadores de paradas
+        total_paradas = len(tareas)
+        paradas_gestionadas = len(recaudos)
+        paradas_entregadas = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.ENTREGADO)
+        paradas_parciales = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.PARCIAL)
+        paradas_rechazadas = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.RECHAZADO)
+
+        # Contadores Siesa
+        siesa_nc = sum(1 for r in recaudos if r.siesa_nc_triggered)
+        siesa_rc = sum(1 for r in recaudos if r.siesa_rc_triggered)
+        siesa_dc = sum(1 for r in recaudos if r.siesa_dc_triggered)
+
+        # Jobs fallidos vinculados a recaudos de esta ruta
+        recaudo_ids = [r.id for r in recaudos]
+        jobs_fallidos = 0
+        if recaudo_ids:
+            jobs_fallidos = (SiesaJob.query
+                             .filter(
+                                 SiesaJob.referencia_tipo == 'RecaudoEntrega',
+                                 SiesaJob.referencia_id.in_(recaudo_ids),
+                                 SiesaJob.tipo.in_([
+                                     'NOTA_CREDITO_FACTURA', 'RECIBO_CAJA',
+                                     'DOCUMENTO_CONTABLE_RET',
+                                 ]),
+                                 SiesaJob.estado == 'FALLIDO',
+                             )
+                             .count())
+
+        # Montos por forma de pago
+        ruta_recaudado = 0
+        for r in recaudos:
+            monto = float(r.monto_cobrado or 0)
+            ruta_recaudado += monto
+            fp = (r.forma_pago or '').upper()
+            if fp == 'EFECTIVO':
+                total_efectivo += monto
+            elif fp == 'TRANSFERENCIA':
+                total_transferencia += monto
+            elif fp == 'CREDITO':
+                total_credito += monto
+
+        total_recaudado += ruta_recaudado
+
+        ef = ruta.estado_financiero or 'PENDIENTE'
+        if ef == 'LIQUIDADA':
+            liquidadas += 1
+        else:
+            pendientes += 1
+
+        rd = ruta.to_dict()
+        rd['total_recaudado'] = ruta_recaudado
+        rd['total_paradas'] = total_paradas
+        rd['paradas_gestionadas'] = paradas_gestionadas
+        rd['paradas_entregadas'] = paradas_entregadas
+        rd['paradas_parciales'] = paradas_parciales
+        rd['paradas_rechazadas'] = paradas_rechazadas
+        rd['siesa_nc_enviados'] = siesa_nc
+        rd['siesa_rc_enviados'] = siesa_rc
+        rd['siesa_dc_enviados'] = siesa_dc
+        rd['jobs_fallidos'] = jobs_fallidos
+        rutas_out.append(rd)
+
+    return jsonify({
+        'resumen': {
+            'total_rutas': len(rutas),
+            'pendientes': pendientes,
+            'liquidadas': liquidadas,
+            'total_recaudado': total_recaudado,
+            'total_efectivo': total_efectivo,
+            'total_transferencia': total_transferencia,
+            'total_credito': total_credito,
+        },
+        'rutas': rutas_out,
+    }), 200
+
+
+@rutas_bp.route('/<int:id>/liquidacion-detalle', methods=['GET'])
+@jwt_required()
+def liquidacion_detalle(id):
+    """Detalle de liquidación de una ruta: recaudos + datos de factura Siesa."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede ver detalle de liquidación'}), 403
+    try:
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.preparar_detalle_ruta(id)
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    return jsonify(resultado), 200
+
+
+@rutas_bp.route('/<int:id>/liquidar-completo', methods=['POST'])
+@jwt_required()
+def liquidar_completo(id):
+    """
+    One-click: verifica cantidades, aplica retenciones, cambia estado financiero
+    y dispara todos los conectores Siesa (NCE/RC/DC).
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede liquidar rutas'}), 403
+    uid = _uid()
+    if not uid:
+        return jsonify({'error': 'Token inválido'}), 401
+
+    from app.extensions import db
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.siesa_job import SiesaJob
+    from app.services.liquidacion_service import (
+        LiquidacionService, RETENCION_PUC, RETENCION_TASA, _obtener_tercero,
+    )
+
+    ruta = RutaDespacho.query.get(id)
+    if not ruta:
+        return jsonify({'error': 'Ruta no encontrada'}), 404
+    if ruta.estado != 'ENTREGADA':
+        return jsonify({'error': f'La ruta debe estar ENTREGADA para liquidar (estado actual: {ruta.estado})'}), 400
+
+    data = request.get_json() or {}
+    recaudos_payload = data.get('recaudos', [])
+    errores = []
+    retenciones_encoladas = 0
+
+    for rp in recaudos_payload:
+        recaudo_id = rp.get('recaudo_id')
+        recaudo = RecaudoEntrega.query.get(recaudo_id)
+        if not recaudo or recaudo.ruta_id != id:
+            errores.append(f'Recaudo {recaudo_id} no encontrado o no pertenece a la ruta')
+            continue
+
+        # (a) Actualizar cantidades verificadas por el Líder
+        cantidades_verificadas = rp.get('cantidades_verificadas', [])
+        if cantidades_verificadas and recaudo.items_entregados:
+            items = list(recaudo.items_entregados)  # copy from JSON
+            for cv in cantidades_verificadas:
+                codigo = cv.get('codigo', '')
+                cant_devuelta = int(cv.get('cantidad_devuelta', 0))
+                for it in items:
+                    if it.get('codigo') == codigo:
+                        it['cantidad_devuelta'] = cant_devuelta
+                        pedido = int(it.get('cantidad_pedida', 0))
+                        it['cantidad_entregada'] = max(0, pedido - cant_devuelta)
+                        break
+            recaudo.items_entregados = items
+
+        # (b) Retenciones
+        retenciones = rp.get('retenciones', [])
+        if retenciones:
+            tarea = recaudo.tarea
+            tipos_ret = []
+            monto_total_ret = 0
+
+            # Obtener base gravable desde Siesa si es posible, fallback a monto_cobrado
+            base_gravable = float(recaudo.monto_cobrado or 0)
+            if tarea and tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+                try:
+                    from app.services.connekta_gateway import connekta
+                    lineas_raw = connekta.get_rowids_factura(
+                        tarea.tipo_docto_pedido_siesa,
+                        tarea.consec_docto_pedido_siesa,
+                    )
+                    if lineas_raw:
+                        base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
+                except Exception as e:
+                    logger.warning(
+                        '[LIQUIDAR-COMPLETO] No se pudo obtener base gravable Siesa para '
+                        'recaudo %d: %s — usando monto_cobrado como base',
+                        recaudo.id, e,
+                    )
+
+            # Obtener tercero para los DCs — sin NIT los jobs DC fallarán en Siesa
+            tercero_nit, sucursal = '', '001'
+            if tarea:
+                try:
+                    tercero_nit, sucursal = _obtener_tercero(tarea)
+                except Exception as e:
+                    logger.warning(
+                        '[LIQUIDAR-COMPLETO] No se pudo obtener tercero para '
+                        'recaudo %d (tarea %d): %s — DCs se encolarán sin NIT',
+                        recaudo.id, tarea.id, e,
+                    )
+                    errores.append(
+                        f'Recaudo {recaudo.id}: no se pudo obtener NIT del tercero ({e}). '
+                        'Las retenciones se encolarán pero pueden fallar en Siesa.'
+                    )
+
+            tipo_docto_fe = tarea.tipo_docto_pedido_siesa or '' if tarea else ''
+            consec_fe = tarea.consec_docto_pedido_siesa or '' if tarea else ''
+            notas_base = f'WMS Ruta #{id} | Liquidación completa'
+
+            for ret in retenciones:
+                tipo_ret = ret.get('tipo', '')
+                if tipo_ret not in RETENCION_PUC:
+                    errores.append(f'Tipo de retención desconocido: {tipo_ret}')
+                    continue
+
+                tasa = RETENCION_TASA.get(tipo_ret, 0)
+                # Para RETEIVA se aplica sobre el IVA, no sobre la base
+                if tipo_ret == 'RETEIVA':
+                    monto_ret = round(base_gravable * 0.19 * tasa, 2)
+                else:
+                    monto_ret = round(base_gravable * tasa, 2)
+
+                if monto_ret <= 0:
+                    continue
+
+                tipos_ret.append(tipo_ret)
+                monto_total_ret += monto_ret
+
+                # Encolar DC directamente
+                SiesaJob.encolar(
+                    tipo='DOCUMENTO_CONTABLE_RET',
+                    payload={
+                        'recaudo_id': recaudo.id,
+                        'tipo_docto_fe': tipo_docto_fe,
+                        'consec_fe': str(consec_fe),
+                        'tercero_nit': tercero_nit,
+                        'sucursal': sucursal,
+                        'cuenta_puc': RETENCION_PUC[tipo_ret],
+                        'monto': monto_ret,
+                        'base_gravable': base_gravable,
+                        'notas': f'{notas_base} | Retención {tipo_ret}',
+                    },
+                    referencia_tipo='RecaudoEntrega',
+                    referencia_id=recaudo.id,
+                    creado_por_id=uid,
+                )
+                retenciones_encoladas += 1
+
+            if tipos_ret:
+                recaudo.motivo_descuento = ','.join(tipos_ret)
+                recaudo.monto_descuento = monto_total_ret
+                recaudo.siesa_dc_triggered = True  # prevent duplicate enqueue in liquidar_ruta_siesa
+
+    db.session.commit()
+
+    # Step 3: Set estado_financiero = LIQUIDADA
+    try:
+        resultado_liquidar = RutaService.liquidar_ruta(id)
+    except (LookupError, ValueError) as e:
+        errores.append(f'Error al liquidar ruta: {e}')
+        resultado_liquidar = {}
+
+    # Step 4: Fire Siesa connectors (NCE/RC — DCs already enqueued above)
+    try:
+        resultado_siesa = LiquidacionService.liquidar_ruta_siesa(id, admin_id=uid)
+    except (LookupError, ValueError) as e:
+        errores.append(f'Error en liquidación Siesa: {e}')
+        resultado_siesa = {}
+
+    return jsonify({
+        'ok': len(errores) == 0,
+        'liquidacion': resultado_liquidar,
+        'siesa': resultado_siesa,
+        'retenciones_encoladas': retenciones_encoladas,
+        'errores': errores,
+    }), 200

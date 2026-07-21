@@ -36,8 +36,10 @@ def health_ping():
     """Endpoint público mínimo — solo indica si el servicio está activo."""
     from app.services.connekta_gateway import connekta
     try:
-        ok = not connekta.modo_simulacion or True
-        return jsonify({'ok': ok}), 200
+        return jsonify({
+            'ok': True,
+            'modo_simulacion': connekta.modo_simulacion,
+        }), 200
     except Exception:
         return jsonify({'ok': False}), 503
 

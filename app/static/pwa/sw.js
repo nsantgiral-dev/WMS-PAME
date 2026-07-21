@@ -1,7 +1,7 @@
 // Service Worker — update detection con banner de notificación al usuario.
 // Flask inyecta "// v{mtime}" al inicio para que el browser detecte cambios en cada deploy.
 const CACHE_NAME = 'wms-shell-v1';
-const SHELL = ['/pwa', '/static/pwa/app.js'];
+const SHELL = ['/pwa', '/static/pwa/app.js', '/static/pwa/picking.js', '/static/pwa/packing.js', '/static/pwa/recepcion.js', '/static/pwa/rutas.js', '/static/pwa/traslados.js', '/static/pwa/conteo.js', '/static/pwa/reposicion.js', '/static/pwa/liquidacion.js', '/static/pwa/layout.js'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

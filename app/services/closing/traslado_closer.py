@@ -67,7 +67,10 @@ class TrasladoPackingCloser(IPackingCloser):
         self._crear_bultos(tarea, tarea_id, bultos_data, total)
 
         # Construir ítems con cantidades reales y ubicaciones del picking
-        items_comp = self._construir_items_packing(tarea, solicitud)
+        try:
+            items_comp = self._construir_items_packing(tarea, solicitud)
+        except ValueError as e:
+            return CierreResult(exitoso=False, error=str(e), mensaje=str(e))
 
         # ── 174720 Compromisos (sync — con abort on failure) ────────────────
         # Registra cantidades reales + ubicaciones físicas sobre la RIT ya creada.
@@ -105,8 +108,15 @@ class TrasladoPackingCloser(IPackingCloser):
         # ── Descontar inventario WMS ─────────────────────────────────────────
         # Los bienes salen físicamente al cerrar caja; se descuenta ahora
         # independientemente del resultado del job Siesa (el camión ya salió).
+        # Guard de idempotencia: en retry tras Gunicorn timeout, el inventario
+        # ya fue descontado en el primer intento exitoso (commit pasó, respuesta no llegó).
         from app.services.traslado_service import TrasladoService
-        TrasladoService._descontar_inventario_wms(solicitud)
+        if solicitud.inventario_descontado:
+            logger.info('[TRASLADO_CLOSER] %s inventario ya descontado — saltando',
+                        solicitud.codigo)
+        else:
+            TrasladoService._descontar_inventario_wms(solicitud)
+            solicitud.inventario_descontado = True
 
         # ── Encolar DESPACHO_TRASLADO → 174930 (DLQ con retry) ───────────────
         self._encolar_job_traslado(tarea_id, solicitud, items_comp)
@@ -175,11 +185,10 @@ class TrasladoPackingCloser(IPackingCloser):
         items = []
         for i in tarea.items:
             if not i.producto or not i.producto.codigo_siesa:
-                logger.warning(
-                    '[TRASLADO_CLOSER] Item %s (producto_id=%s) sin codigo_siesa — '
-                    'omitido de compromisos 174720. WMS descontará pero Siesa no lo verá.',
-                    i.id, i.producto_id)
-                continue
+                raise ValueError(
+                    f'Item {i.id} (producto_id={i.producto_id}) sin codigo_siesa — '
+                    f'no se puede cerrar traslado. Corregir producto en maestros antes de reintentar.'
+                )
             cantidad = i.cantidad_real if i.cantidad_real is not None else i.cantidad_esperada
             if not cantidad or cantidad <= 0:
                 continue
@@ -196,6 +205,11 @@ class TrasladoPackingCloser(IPackingCloser):
         return items
 
     def _encolar_job_traslado(self, tarea_id: int, solicitud, items_comp: list):
+        if not solicitud.siesa_requisicion_consec:
+            raise ValueError(
+                f'Traslado {solicitud.codigo} sin siesa_requisicion_consec — '
+                f'RIT 174646 no completada, no se puede encolar DESPACHO_TRASLADO'
+            )
         # Incluir COMPLETADO en el filtro: si el DLQ ya procesó el job pero
         # siesa_triggered no se persistió (crash entre commit y post_completado),
         # no crear un job duplicado que generaría un STS duplicado en Siesa.

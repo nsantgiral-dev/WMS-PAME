@@ -251,7 +251,11 @@ class MobileService:
 
                 # Sin picking pendiente — buscar conteo sin asignar
                 # with_for_update(skip_locked=True) evita que dos workers tomen el mismo conteo
+                # selectinload: pre-cargar producto/ubicacion antes del commit — después del
+                # commit expire_on_commit invalida todo y _conteo_a_dict necesita ambas relaciones.
+                from sqlalchemy.orm import selectinload as _sl_conteo_disp
                 conteo = (SesionConteo.query
+                          .options(_sl_conteo_disp(SesionConteo.producto), _sl_conteo_disp(SesionConteo.ubicacion))
                           .filter_by(estado='PENDIENTE', operario_id=None)
                           .order_by(SesionConteo.fecha_creacion.asc())
                           .with_for_update(skip_locked=True)
@@ -452,13 +456,17 @@ class MobileService:
         Usa skip_locked para evitar colisiones entre workers concurrentes.
         """
         from sqlalchemy import case as _sa_case
+        from sqlalchemy.orm import selectinload as _sl_tienda
         _prioridad_abc = _sa_case(
             {'A': 1, 'B': 2, 'C': 3},
             value=SesionConteo.clasificacion_abc,
             else_=4,
         )
+        # selectinload: pre-cargar producto/ubicacion antes del commit — expire_on_commit
+        # los invalida y _conteo_a_dict necesita ambas relaciones.
         sesion = (
             SesionConteo.query
+            .options(_sl_tienda(SesionConteo.producto), _sl_tienda(SesionConteo.ubicacion))
             .filter(
                 SesionConteo.almacen_id == almacen_id,
                 SesionConteo.estado == EstadoConteo.PENDIENTE,
@@ -487,8 +495,12 @@ class MobileService:
         que ya tienen este picker asignado pero aún no han sido iniciadas.
         """
         from app.models.conteo import EstadoConteo as _EC
+        from sqlalchemy.orm import selectinload as _sl_pre
+        # selectinload: pre-cargar producto/ubicacion antes del commit — expire_on_commit
+        # los invalida y _conteo_a_dict necesita ambas relaciones.
         sesion = (
             SesionConteo.query
+            .options(_sl_pre(SesionConteo.producto), _sl_pre(SesionConteo.ubicacion))
             .filter(
                 SesionConteo.operario_id == operario_id,
                 SesionConteo.estado == _EC.PENDIENTE,

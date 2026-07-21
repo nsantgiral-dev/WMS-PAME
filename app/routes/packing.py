@@ -125,6 +125,8 @@ def obtener_tarea(id):
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para ver tareas de packing'}), 403
     tarea = TareaPacking.query.get_or_404(id)
+    if u.almacen_id and tarea.almacen_id and u.almacen_id != tarea.almacen_id and u.rol not in ('admin', 'supervisor', 'gerente'):
+        return jsonify({'error': 'Sin acceso a esta tarea'}), 403
     d = tarea.to_dict()
     d['picking_listo'] = _picking_listo_batch([tarea.numero_pedido_siesa]).get(tarea.numero_pedido_siesa, True)
     return jsonify(d), 200
@@ -445,6 +447,8 @@ def imprimir_remision(id):
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para ver la remisión'}), 403
     tarea = TareaPacking.query.get_or_404(id)
+    if u.almacen_id and tarea.almacen_id and u.almacen_id != tarea.almacen_id and u.rol not in ('admin', 'supervisor', 'gerente'):
+        return jsonify({'error': 'Sin acceso a esta tarea'}), 403
     disponible, motivo = RemisionService.puede_generar(tarea)
     if not disponible:
         return jsonify({'error': motivo}), 409
@@ -467,6 +471,8 @@ def imprimir_factura(id):
     if not u or not _puede_empacar(u):
         return jsonify({'error': 'Sin permiso para ver la factura'}), 403
     tarea = TareaPacking.query.get_or_404(id)
+    if u.almacen_id and tarea.almacen_id and u.almacen_id != tarea.almacen_id and u.rol not in ('admin', 'supervisor', 'gerente'):
+        return jsonify({'error': 'Sin acceso a esta tarea'}), 403
     disponible, motivo = FacturaFEService.puede_generar(tarea)
     if not disponible:
         return jsonify({'error': motivo}), 409

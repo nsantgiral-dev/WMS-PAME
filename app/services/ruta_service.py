@@ -333,7 +333,12 @@ class RutaService:
     @staticmethod
     def obtener_ruta(id: int) -> RutaDespacho:
         ruta = (RutaDespacho.query
-                .options(_sl(RutaDespacho.bultos).joinedload(Bulto.tarea))
+                .options(
+                    _jl(RutaDespacho.conductor),
+                    _jl(RutaDespacho.vehiculo),
+                    _jl(RutaDespacho.ruta_maestra),
+                    _sl(RutaDespacho.bultos).joinedload(Bulto.tarea),
+                )
                 .get(id))
         if not ruta:
             raise LookupError('Ruta no encontrada')

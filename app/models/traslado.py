@@ -62,6 +62,7 @@ class SolicitudTraslado(db.Model):
     siesa_salida_consec = db.Column(db.Integer)       # 173076 o 173066
     siesa_entrada_consec = db.Column(db.Integer)      # 173079
     siesa_error = db.Column(db.Text)                  # último error de Siesa (para debug)
+    inventario_descontado = db.Column(db.Boolean, default=False, server_default='false')
 
     # Timestamps
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)

@@ -822,33 +822,44 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'recaudo {recaudo.id} — reintento en próximo ciclo DLQ'
             )
 
-        resultado = connekta.trigger_recibo_caja(
-            tercero_nit=payload['tercero_nit'],
-            sucursal=payload.get('sucursal', '001'),
-            monto=float(payload['monto']),
-            forma_pago=payload.get('forma_pago', 'EFECTIVO'),
-            tipo_docto_fe=payload['tipo_docto_fe'],
-            consec_fe=payload['consec_fe'],
-            notas=payload.get('notas', ''),
-        )
+        # Pre-flag: marcar ANTES del POST para cerrar el crash window.
+        # Si Railway reinicia entre POST exitoso y flag, sin pre-flag el DLQ
+        # reintentaría y crearía RC duplicado (incidente RC-00002744 en learnings).
+        # Si el POST falla, revertimos el flag.
+        if recaudo:
+            recaudo.siesa_rc_triggered = True
+            db.session.commit()
 
-        _es_ensayo = bool(resultado.get('modo_ensayo'))
-        if recaudo and not _es_ensayo:
-            try:
-                recaudo.siesa_rc_triggered = True
-                db.session.commit()
-            except Exception as _e:
-                db.session.rollback()
-                logger.critical(
-                    '[DLQ] RECIBO_CAJA job=%s: Siesa OK pero fallo '
-                    'siesa_rc_triggered — recaudo %s en riesgo de RC duplicado: %s',
-                    job.id, recaudo.id, _e
-                )
+        try:
+            resultado = connekta.trigger_recibo_caja(
+                tercero_nit=payload['tercero_nit'],
+                sucursal=payload.get('sucursal', '001'),
+                monto=float(payload['monto']),
+                forma_pago=payload.get('forma_pago', 'EFECTIVO'),
+                tipo_docto_fe=payload['tipo_docto_fe'],
+                consec_fe=payload['consec_fe'],
+                co_factura=payload.get('co_factura', ''),
+                cuenta_cxc=payload.get('cuenta_cxc', ''),
+                notas=payload.get('notas', ''),
+            )
+        except Exception as _e_post:
+            # POST falló — revertir pre-flag para permitir reintento DLQ
+            if recaudo:
                 try:
-                    recaudo.siesa_rc_triggered = True
+                    recaudo.siesa_rc_triggered = False
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
+            raise _e_post
+
+        # Si modo ensayo, revertir flag (no se creó nada en Siesa)
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
+        if recaudo and _es_ensayo:
+            try:
+                recaudo.siesa_rc_triggered = False
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
         return resultado
 
     if job.tipo == 'DOCUMENTO_CONTABLE_RET':
@@ -863,34 +874,49 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'idempotente': True, 'recaudo_id': recaudo.id}
 
-        resultado = connekta.trigger_documento_contable(
-            tercero_nit=payload['tercero_nit'],
-            sucursal=payload.get('sucursal', '001'),
-            cuenta_puc=payload['cuenta_puc'],
-            monto=float(payload['monto']),
-            base_gravable=float(payload.get('base_gravable', 0)),
-            tipo_docto_fe=payload['tipo_docto_fe'],
-            consec_fe=payload['consec_fe'],
-            notas=payload.get('notas', ''),
-        )
+        # Secuencialidad: NI de retenciones DEBE ir DESPUÉS del RC.
+        # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
+        # Siesa no ha reducido el saldo por el cash todavía.
+        if recaudo and not recaudo.siesa_rc_triggered:
+            raise Exception(
+                f'DOCUMENTO_CONTABLE_RET job={job.id}: DC depende de RC para '
+                f'recaudo {recaudo.id} — reintento en próximo ciclo DLQ'
+            )
 
-        _es_ensayo = bool(resultado.get('modo_ensayo'))
-        if recaudo and not _es_ensayo:
-            try:
-                recaudo.siesa_dc_triggered = True
-                db.session.commit()
-            except Exception as _e:
-                db.session.rollback()
-                logger.critical(
-                    '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: Siesa OK pero fallo '
-                    'siesa_dc_triggered — recaudo %s en riesgo de DC duplicado: %s',
-                    job.id, recaudo.id, _e
-                )
+        # Pre-flag: cerrar crash window (misma lógica que RC)
+        if recaudo:
+            recaudo.siesa_dc_triggered = True
+            db.session.commit()
+
+        try:
+            resultado = connekta.trigger_documento_contable(
+                tercero_nit=payload['tercero_nit'],
+                sucursal=payload.get('sucursal', '001'),
+                cuenta_puc=payload['cuenta_puc'],
+                monto=float(payload['monto']),
+                base_gravable=float(payload.get('base_gravable', 0)),
+                tipo_docto_fe=payload['tipo_docto_fe'],
+                consec_fe=payload['consec_fe'],
+                co_factura=payload.get('co_factura', ''),
+                cuenta_cxc=payload.get('cuenta_cxc', ''),
+                notas=payload.get('notas', ''),
+            )
+        except Exception as _e_post:
+            if recaudo:
                 try:
-                    recaudo.siesa_dc_triggered = True
+                    recaudo.siesa_dc_triggered = False
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
+            raise _e_post
+
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
+        if recaudo and _es_ensayo:
+            try:
+                recaudo.siesa_dc_triggered = False
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
         return resultado
 
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')

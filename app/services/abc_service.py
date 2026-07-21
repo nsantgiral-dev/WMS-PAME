@@ -728,6 +728,12 @@ class ABCService:
             """Libera tareas EN_PROCESO >2h sin progreso — cada 30 min."""
             with app.app_context():
                 try:
+                    from app.extensions import db as _db
+                    _lock = _db.session.execute(
+                        _db.text('SELECT pg_try_advisory_lock(2015)')
+                    ).scalar()
+                    if not _lock:
+                        return
                     from app.services.conteo_service import ConteoService
                     ConteoService.liberar_tareas_zombi(timeout_horas=2)
                 except Exception as e:

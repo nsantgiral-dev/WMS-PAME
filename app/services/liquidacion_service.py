@@ -19,7 +19,7 @@ financieros operan directamente contra facturas libres (sin amarre).
 import logging
 from datetime import datetime
 from app.extensions import db
-from app.models.recaudo_entrega import RecaudoEntrega
+from app.models.recaudo_entrega import RecaudoEntrega, EstadoEntrega
 from app.models.ruta_despacho import RutaDespacho, EstadoFinancieroRuta
 from app.models.siesa_job import SiesaJob
 
@@ -62,6 +62,95 @@ RETENCION_TASA = {
 
 
 class LiquidacionService:
+
+    @staticmethod
+    def preparar_detalle_ruta(ruta_id: int) -> dict:
+        """
+        Prepara datos detallados de liquidación para una ruta:
+        cada recaudo + info de factura Siesa (base gravable, IVA, líneas).
+        Incluye catálogo de retenciones disponibles.
+        """
+        ruta = RutaDespacho.query.get(ruta_id)
+        if not ruta:
+            raise LookupError('Ruta no encontrada')
+
+        recaudos = RecaudoEntrega.query.filter_by(ruta_id=ruta_id).all()
+        from app.services.connekta_gateway import connekta
+
+        retenciones_disponibles = [
+            {'tipo': k, 'nombre': _nombre_retencion(k), 'puc': RETENCION_PUC[k], 'tasa': v}
+            for k, v in RETENCION_TASA.items()
+        ]
+
+        resultado_recaudos = []
+        warnings = []
+
+        for recaudo in recaudos:
+            tarea = recaudo.tarea
+            rd = recaudo.to_dict()
+            rd['cliente'] = tarea.cliente or '' if tarea else ''
+            rd['numero_pedido'] = tarea.numero_pedido_siesa or '' if tarea else ''
+            rd['tipo_docto'] = tarea.tipo_docto_pedido_siesa or '' if tarea else ''
+            rd['consec_docto'] = tarea.consec_docto_pedido_siesa or '' if tarea else ''
+
+            factura_siesa = None
+            if tarea and tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+                try:
+                    lineas_raw = connekta.get_rowids_factura(
+                        tarea.tipo_docto_pedido_siesa,
+                        tarea.consec_docto_pedido_siesa,
+                    )
+                    if lineas_raw:
+                        lineas = []
+                        base_gravable = 0
+                        total_iva = 0
+                        total_neto = 0
+                        for ln in lineas_raw:
+                            vlr_bruto = float(ln.get('f470_vlr_bruto', 0))
+                            vlr_imp = float(ln.get('f470_vlr_imp', 0))
+                            vlr_neto = float(ln.get('f470_vlr_neto', 0))
+                            base_gravable += vlr_bruto
+                            total_iva += vlr_imp
+                            total_neto += vlr_neto
+                            lineas.append({
+                                'f120_referencia': ln.get('f120_referencia', ''),
+                                'f120_descripcion': ln.get('f120_descripcion', ''),
+                                'f470_cant_base': ln.get('f470_cant_base', 0),
+                                'f470_vlr_bruto': vlr_bruto,
+                                'f470_vlr_imp': vlr_imp,
+                                'f470_vlr_neto': vlr_neto,
+                                'f470_precio_uni': float(ln.get('f470_precio_uni', 0)),
+                                'f470_rowid': ln.get('f470_rowid', ''),
+                            })
+                        factura_siesa = {
+                            'base_gravable': base_gravable,
+                            'total_iva': total_iva,
+                            'total_neto': total_neto,
+                            'lineas': lineas,
+                        }
+                except Exception as e:
+                    logger.warning(
+                        '[LIQUIDACION] get_rowids_factura falló para recaudo %d '
+                        '(FE %s-%s): %s — continuando sin datos Siesa',
+                        recaudo.id, tarea.tipo_docto_pedido_siesa,
+                        tarea.consec_docto_pedido_siesa, e,
+                    )
+                    warnings.append(
+                        f'No se pudo obtener factura Siesa para pedido '
+                        f'{tarea.numero_pedido_siesa or "?"}: {e}'
+                    )
+
+            rd['factura_siesa'] = factura_siesa
+            rd['retenciones_disponibles'] = retenciones_disponibles
+            resultado_recaudos.append(rd)
+
+        result = {
+            'ruta': ruta.to_dict(),
+            'recaudos': resultado_recaudos,
+        }
+        if warnings:
+            result['warnings'] = warnings
+        return result
 
     @staticmethod
     def liquidar_ruta_siesa(ruta_id: int, admin_id: int = None) -> dict:
@@ -167,7 +256,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     resultado = {'rc': 0, 'nc': 0, 'dc': 0, 'credito': 0, 'ya_procesado': 0}
 
     # ── RECHAZADO: NC total ──────────────────────────────────────
-    if estado == 'RECHAZADO':
+    if estado == EstadoEntrega.RECHAZADO:
         if recaudo.siesa_nc_triggered:
             resultado['ya_procesado'] = 1
             return resultado
@@ -181,12 +270,12 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
         return resultado
 
     # ── CRÉDITO + ENTREGADO: noop ────────────────────────────────
-    if es_credito and estado == 'ENTREGADO':
+    if es_credito and estado == EstadoEntrega.ENTREGADO:
         resultado['credito'] = 1
         return resultado
 
     # ── CRÉDITO + PARCIAL: solo NC ───────────────────────────────
-    if es_credito and estado == 'PARCIAL':
+    if es_credito and estado == EstadoEntrega.PARCIAL:
         if recaudo.siesa_nc_triggered:
             resultado['ya_procesado'] = 1
             return resultado
@@ -200,7 +289,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
         return resultado
 
     # ── CONTADO + PARCIAL: NC → luego RC (secuencial) ────────────
-    if not es_credito and estado == 'PARCIAL':
+    if not es_credito and estado == EstadoEntrega.PARCIAL:
         if not recaudo.siesa_nc_triggered:
             _encolar_nota_credito(
                 recaudo, tipo_docto_fe, consec_fe,
@@ -233,7 +322,7 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
         return resultado
 
     # ── CONTADO + ENTREGADO: RC (+ DC si retención) ──────────────
-    if not es_credito and estado == 'ENTREGADO':
+    if not es_credito and estado == EstadoEntrega.ENTREGADO:
         if not recaudo.siesa_rc_triggered and monto > 0:
             _encolar_recibo_caja(
                 recaudo, tipo_docto_fe, consec_fe,
@@ -324,7 +413,8 @@ def _encolar_nota_credito(recaudo: RecaudoEntrega, tipo_docto_fe: str,
 def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                           consec_fe, tercero_nit: str, sucursal: str,
                           monto: float, forma_pago: str, notas: str,
-                          admin_id: int = None, depende_de_nc: bool = False):
+                          admin_id: int = None, depende_de_nc: bool = False,
+                          co_factura: str = '', cuenta_cxc: str = ''):
     """Encola job RECIBO_CAJA en la DLQ."""
     SiesaJob.encolar(
         tipo='RECIBO_CAJA',
@@ -336,6 +426,8 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             'sucursal': sucursal,
             'monto': monto,
             'forma_pago': forma_pago,
+            'co_factura': co_factura,
+            'cuenta_cxc': cuenta_cxc,
             'notas': notas,
             'depende_de_nc': depende_de_nc,
         },
@@ -351,7 +443,8 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
 
 def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                                   consec_fe, tercero_nit: str, sucursal: str,
-                                  notas: str, admin_id: int = None):
+                                  notas: str, admin_id: int = None,
+                                  co_factura: str = '', cuenta_cxc: str = ''):
     """Encola job DOCUMENTO_CONTABLE_RET en la DLQ."""
     motivo = recaudo.motivo_descuento or ''
     cuenta_puc = RETENCION_PUC.get(motivo, '')
@@ -386,6 +479,8 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             'cuenta_puc': cuenta_puc,
             'monto': monto_descuento,
             'base_gravable': float(recaudo.monto_cobrado or 0),
+            'co_factura': co_factura,
+            'cuenta_cxc': cuenta_cxc,
             'notas': notas,
         },
         referencia_tipo='RecaudoEntrega',
@@ -396,3 +491,25 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         '[LIQUIDACION] Encolado DOCUMENTO_CONTABLE_RET para recaudo %d (PUC %s, $%.2f)',
         recaudo.id, cuenta_puc, monto_descuento
     )
+
+
+# Nombres legibles para las retenciones
+_NOMBRES_RETENCION = {
+    'RETEFUENTE_2.5':   'Retefuente Compras 2.5%',
+    'RETEFUENTE_1.5':   'Retefuente Bancos 1.5%',
+    'RETEIVA':          'ReteIVA 15%',
+    'ICA_3':            'ICA 3x1000',
+    'ICA_4.14':         'ICA 4.14x1000',
+    'ICA_6.9':          'ICA 6.9x1000',
+    'ICA_8':            'ICA 8x1000',
+    'ICA_11.04':        'ICA 11.04x1000',
+    'AUTORETENCION_ICA_3':    'Autoretención ICA 3x1000',
+    'AUTORETENCION_ICA_4.14': 'Autoretención ICA 4.14x1000',
+    'AUTORETENCION_ICA_6.9':  'Autoretención ICA 6.9x1000',
+    'AUTORETENCION_ICA_8':    'Autoretención ICA 8x1000',
+    'AUTORETENCION_ICA_11.04':'Autoretención ICA 11.04x1000',
+}
+
+
+def _nombre_retencion(tipo: str) -> str:
+    return _NOMBRES_RETENCION.get(tipo, tipo)

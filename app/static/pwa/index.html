@@ -890,6 +890,7 @@
       <div class="nav-tab" onclick="tab('tab-rutas')">🗺️ Rutas</div>
       <div class="nav-tab" onclick="tab('tab-inventario')">📊 Inventario</div>
       <div class="nav-tab" onclick="tab('tab-reposicion')">📦 Reposición</div>
+      <div class="nav-tab" onclick="tab('tab-liquidacion')">💰 Liquidación</div>
       <div class="nav-tab" onclick="tab('tab-layout')">🧭 Layout</div>
       <div class="nav-tab" onclick="tab('tab-compras')">🛒 Compras</div>
       <div class="nav-tab" onclick="tab('tab-etiquetas')">🏷️ Etiquetas</div>
@@ -1758,6 +1759,92 @@
       </div>
     </div>
   </div><!-- /tab-reposicion -->
+
+  <!-- ═══════════ TAB LIQUIDACIÓN ═══════════ -->
+  <div id="tab-liquidacion" class="admin-content" style="display:none;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">💰 Liquidación Financiera</div>
+    <div style="font-size:12px;color:var(--tx3);margin-bottom:16px;">Cuadre financiero de rutas — el Líder verifica plata, devoluciones y retenciones. Un click dispara NCE/RC/DC en Siesa.</div>
+
+    <!-- KPIs rápidos -->
+    <div id="liq-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+    <!-- Filtro de fecha -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+      <input type="date" id="liq-fecha"
+        style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+      <button onclick="liqCargarDashboard()"
+        style="padding:8px 14px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+        Filtrar
+      </button>
+    </div>
+
+    <!-- Sub-nav de secciones -->
+    <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;flex-wrap:wrap;">
+      <div id="liq-sub-pendientes" onclick="liqSubtab('pendientes')"
+        style="flex:1;min-width:90px;padding:10px 6px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;background:var(--pm);color:#fff;">
+        Por Liquidar
+      </div>
+      <div id="liq-sub-liquidadas" onclick="liqSubtab('liquidadas')"
+        style="flex:1;min-width:90px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        Liquidadas
+      </div>
+      <div id="liq-sub-jobs" onclick="liqSubtab('jobs')"
+        style="flex:1;min-width:90px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        Jobs Siesa
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: POR LIQUIDAR ──────────────────────────────────── -->
+    <div id="liq-sec-pendientes">
+      <div id="liq-lista-pendientes">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: LIQUIDADAS ────────────────────────────────────── -->
+    <div id="liq-sec-liquidadas" style="display:none;">
+      <div id="liq-lista-liquidadas">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: JOBS SIESA ────────────────────────────────────── -->
+    <div id="liq-sec-jobs" style="display:none;">
+      <div style="font-size:13px;color:var(--tx3);margin-bottom:14px;">
+        Jobs de liquidación (NCE/RC/DC) enviados a Siesa. Reintento automático con backoff.
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
+        <select id="liq-filtro-job"
+          onchange="liqCargarJobs()"
+          style="padding:8px 12px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:13px;">
+          <option value="FALLIDO">Fallidos</option>
+          <option value="PENDIENTE">Pendientes (cola)</option>
+          <option value="COMPLETADO">Completados</option>
+        </select>
+        <button onclick="liqCargarJobs()"
+          style="padding:8px 14px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
+          Actualizar
+        </button>
+      </div>
+      <div id="liq-lista-jobs">
+        <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
+      </div>
+    </div>
+
+    <!-- ── MODAL: DETALLE DE RUTA PARA LIQUIDAR ───────────────────── -->
+    <div id="liq-modal-ruta" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:2000;overflow-y:auto;">
+      <div style="max-width:600px;margin:20px auto;padding:20px;background:var(--bg);border-radius:16px;min-height:80vh;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+          <div style="font-size:16px;font-weight:700;color:var(--tx);">Liquidar Ruta</div>
+          <button onclick="liqCerrarModal()" style="background:none;border:none;color:var(--tx3);font-size:24px;cursor:pointer;">&times;</button>
+        </div>
+        <div id="liq-modal-body">
+          <div style="text-align:center;padding:40px;color:#555;">Cargando datos de Siesa...</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /tab-liquidacion -->
 
   <!-- ═══════════ TAB LAYOUT ═══════════ -->
   <div id="tab-layout" class="admin-content" style="display:none;">
@@ -2890,7 +2977,16 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260707h"></script>
+  <script src="/static/pwa/app.js?v=20260720i"></script>
+  <script src="/static/pwa/picking.js?v=20260720a"></script>
+  <script src="/static/pwa/packing.js?v=20260720a"></script>
+  <script src="/static/pwa/recepcion.js?v=20260720a"></script>
+  <script src="/static/pwa/rutas.js?v=20260720a"></script>
+  <script src="/static/pwa/traslados.js?v=20260720a"></script>
+  <script src="/static/pwa/conteo.js?v=20260720a"></script>
+  <script src="/static/pwa/reposicion.js?v=20260720a"></script>
+  <script src="/static/pwa/liquidacion.js?v=20260720a"></script>
+  <script src="/static/pwa/layout.js?v=20260720a"></script>
   <script src="/static/pwa/etiquetas.js?v=20260710a"></script>
   <script>
     setInterval(() => {

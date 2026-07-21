@@ -392,13 +392,18 @@ class RecepcionService:
                     'uom': _oc_data.get('uom'),
                     'fecha_entrega': _oc_data.get('fecha_entrega'),
                 })
+            if not recepcion.tipo_docto_oc_siesa:
+                raise ValueError(
+                    f'Recepción {recepcion.id} sin tipo_docto_oc_siesa — '
+                    f'corregir en DB antes de re-encolar ENTRADA_OC'
+                )
             _job_rec = SiesaJob.encolar(
                 tipo='ENTRADA_OC',
                 payload={
                     'recepcion_id': recepcion.id,
                     'numero_oc_siesa': recepcion.numero_oc_siesa,
                     'id_co_oc': recepcion.co_oc_siesa or connekta.centro_op,
-                    'tipo_docto_oc': recepcion.tipo_docto_oc_siesa or '',
+                    'tipo_docto_oc': recepcion.tipo_docto_oc_siesa,
                     'consec_docto_oc': recepcion.consec_docto_oc_siesa or recepcion.numero_oc_siesa,
                     'items': _items_rec,
                     'es_parcial': recepcion.es_parcial,

@@ -27,3 +27,5 @@ urllib3==2.6.3
 Werkzeug==3.1.7
 openpyxl
 Pillow>=10.0
+pytest>=9.0
+pytest-flask>=1.3

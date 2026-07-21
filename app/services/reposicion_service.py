@@ -253,18 +253,23 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
     # el job queda sin crear y Siesa nunca se entera del movimiento RESERVA→PICKING.
     _encolar_siesa_job(tarea, lpn, unidades)
 
+    # Pre-capturar datos antes del commit — expire_on_commit invalida relaciones lazy
+    _ub_codigo = tarea.ubicacion_picking.codigo if tarea.ubicacion_picking else '?'
+    _tarea_dict = tarea.to_dict()
+    _almacen_id = tarea.almacen_id
+
     db.session.commit()
 
     # g) Re-evaluar stock (puede haber otra tarea necesaria)
     try:
-        verificar_stock_picking(almacen_id=tarea.almacen_id)
+        verificar_stock_picking(almacen_id=_almacen_id)
     except Exception as e:
         logger.error(f'[REPOSICION] Error re-evaluando stock post-reposición: {e}')
 
     return {
         'ok': True,
-        'mensaje': f'Reposición completada — {unidades} UNDs de {lpn.codigo} ahora en {tarea.ubicacion_picking.codigo}',
-        'tarea': tarea.to_dict(),
+        'mensaje': f'Reposición completada — {unidades} UNDs de {lpn.codigo} ahora en {_ub_codigo}',
+        'tarea': _tarea_dict,
     }
 
 

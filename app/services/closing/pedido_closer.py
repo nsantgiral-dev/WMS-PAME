@@ -97,14 +97,16 @@ class PedidoPackingCloser(IPackingCloser):
         # request thread. Si Siesa no responde, el precheck se omite y el DLQ
         # handler maneja el rechazo (reconciliación automática ya lo cubre).
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
+        import time as _time
 
-        _PRECHECK_TIMEOUT = 8  # segundos — suficiente para QA y prod en condiciones normales
+        _PRECHECK_TIMEOUT = 8  # segundos — presupuesto TOTAL para ambos futures
 
         tipo = tarea_pre.tipo_docto_pedido_siesa
         consec = tarea_pre.consec_docto_pedido_siesa
 
         pool = ThreadPoolExecutor(max_workers=2)
         try:
+            _t0 = _time.monotonic()
             fut_estado = pool.submit(connekta.get_estado_pedido, tipo, consec)
             fut_factura = pool.submit(connekta.get_factura_desde_pedido, tipo, consec)
 
@@ -114,7 +116,10 @@ class PedidoPackingCloser(IPackingCloser):
                 return (f'Pedido {tarea_pre.numero_pedido_siesa} anulado en Siesa '
                         f'(estado {estado}) — no se puede facturar')
 
-            facturas = fut_factura.result(timeout=_PRECHECK_TIMEOUT)
+            # Tiempo restante del presupuesto — evita que el segundo future
+            # duplique el timeout (8+8=16s bloqueando el worker).
+            _remaining = max(0.5, _PRECHECK_TIMEOUT - (_time.monotonic() - _t0))
+            facturas = fut_factura.result(timeout=_remaining)
             if facturas:
                 f0 = facturas[0]
                 return (f'Pedido {tarea_pre.numero_pedido_siesa} ya tiene factura '

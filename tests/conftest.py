@@ -27,6 +27,7 @@ def _register_pg_stubs(dbapi_conn, _connection_record):
     Permite correr los tests en SQLite sin modificar el código de producción.
     """
     dbapi_conn.create_function('pg_advisory_xact_lock', 1, lambda k: None)
+    dbapi_conn.create_function('pg_try_advisory_xact_lock', 1, lambda k: 1)
     dbapi_conn.create_function('pg_try_advisory_lock',  1, lambda k: 1)
     dbapi_conn.create_function('pg_advisory_unlock',    1, lambda k: 1)
 

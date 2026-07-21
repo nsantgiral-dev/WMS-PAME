@@ -24,6 +24,9 @@ import os
 import logging
 import requests
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_TZ_BOGOTA = ZoneInfo('America/Bogota')
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +66,37 @@ class ConnektaGateway:
         self.tipo_docto_docto_contable = os.getenv('SIESA_TIPO_DOCTO_DOCTO_CONTABLE', 'DC')
         # Causal de devolución por defecto para nota crédito (verificar en Siesa maestros)
         self.causal_devolucion_default = os.getenv('SIESA_CAUSAL_DEVOLUCION', '01')
+        # --- 142888 ReciboCaja: campos requeridos por spec ---
+        # Cobrador: código en Siesa (CxC → Maestros → Cobradores). "9876" = APP RECAUDO.
+        self.cobrador_rc = os.getenv('SIESA_COBRADOR', '9876')
+        # Flujo de efectivo: código en Siesa (Tesorería → Flujos de efectivo).
+        self.flujo_efectivo_rc = os.getenv('SIESA_FLUJO_EFECTIVO', '1103')
+        # Cuenta auxiliar CxC para cruces (CxC → Plan de cuentas). 13050501 = CxC comercial.
+        self.cxc_auxiliar = os.getenv('SIESA_CXC_AUXILIAR', '13050501')
+        # Medios de pago: código Siesa (CxC → Maestros → Medios de pago)
+        self.medio_pago_efectivo = os.getenv('SIESA_MEDIO_PAGO_EFECTIVO', 'EFE')
+        self.medio_pago_transferencia = os.getenv('SIESA_MEDIO_PAGO_TRANSFERENCIA', 'TBA')
+        self.medio_pago_tarjeta = os.getenv('SIESA_MEDIO_PAGO_TARJETA', 'TDC')
+        # Mapa CO → Caja (Siesa: Tesorería → Cajas). Cada CO tiene su caja asignada.
+        # Formato: JSON string o fallback a mapa hardcoded de SIESA_LEARNINGS.
+        self._co_caja_map = {
+            '001': '001', '002': '004', '003': '999', '004': '999',
+            '005': '999', '006': '013', '007': '999', '008': '999', '009': '999',
+        }
+        _co_caja_override = os.getenv('SIESA_CO_CAJA_MAP', '')
+        if _co_caja_override:
+            try:
+                import json
+                self._co_caja_map.update(json.loads(_co_caja_override))
+            except Exception:
+                logger.warning('[CONNEKTA] SIESA_CO_CAJA_MAP no es JSON válido, usando mapa por defecto')
+        # Mapa medio de pago WMS → código Siesa (para forma_pago del RecaudoEntrega)
+        self._forma_pago_map = {
+            'EFECTIVO': self.medio_pago_efectivo,
+            'TRANSFERENCIA': self.medio_pago_transferencia,
+            'TARJETA': self.medio_pago_tarjeta,
+            'CONSIGNACION': self.medio_pago_transferencia,
+        }
         # Traslados entre bodegas (puntos de venta)
         self.conector_requisicion_traslado = os.getenv('CONNEKTA_CONECTOR_REQ_TRASLADO', '174646')
         self.nombre_conector_req_traslado  = os.getenv('CONNEKTA_NOMBRE_REQ_TRASLADO',
@@ -196,6 +230,20 @@ class ConnektaGateway:
                     'Las operaciones que las requieran fallarán en tiempo de ejecución.',
                     ', '.join(_faltantes),
                 )
+
+    @staticmethod
+    def _fecha_hoy_bogota() -> str:
+        """Fecha actual en zona horaria Bogotá (UTC-5) formato YYYYMMDD.
+        Siesa rechaza documentos con fecha futura o período contable cerrado.
+        datetime.utcnow() causa fecha incorrecta después de 7PM Colombia."""
+        return datetime.now(_TZ_BOGOTA).strftime('%Y%m%d')
+
+    @staticmethod
+    def _fmt_valor(v) -> str:
+        """Formato DecimalConSigno requerido por Siesa: +000000000000000.0000 (21 chars).
+        Spec: signo(1) + enteros(15) + punto(1) + decimales(4) = 21 chars exactos."""
+        signo = '+' if v >= 0 else '-'
+        return f'{signo}{abs(v):020.4f}'
 
     @staticmethod
     def _safe_int_env(var_name: str, default: int) -> int:
@@ -334,6 +382,11 @@ class ConnektaGateway:
         if extra_params:
             params.update(extra_params)
 
+        # REGLA INQUEBRANTABLE: POST NUNCA reintenta en 5xx/timeout.
+        # Un timeout no significa que la operación falló — puede haber sido
+        # procesada por Siesa. Reintentar = duplicar (incidente RC-00002744).
+        # Solo se reintenta en 429 (rate-limit = request NO procesado).
+        # La DLQ maneja reintentos con pre-flag de idempotencia.
         logger.info(f'[CONNEKTA] POST → conector={id_conector} nombre={nombre_conector} url={url or self.url_post}')
         try:
             r = requests.post(
@@ -1901,6 +1954,10 @@ class ConnektaGateway:
           Movimientos: f470_id_ubicacion_aux (origen) + f470_id_ubicacion_aux_ent (destino)
           Sin f450_docto_alterno (eso es exclusivo de 173076).
         """
+        if not self.motivo_traslado:
+            raise ValueError(
+                'SIESA_MOTIVO_TRASLADO no configurado — requerido para transferencias internas 173066'
+            )
         fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
         tipo_docto = self.tipo_docto_traslado or 'TRA'
         _centro_op = centro_op or self.centro_op
@@ -1930,7 +1987,7 @@ class ConnektaGateway:
                 'f470_id_bodega': bodega_id,
                 'f470_id_ubicacion_aux': ubicacion_origen,       # origen (ej. RES-01-A)
                 'f470_id_lote': None,                            # Dep — si ítem maneja lotes
-                'f470_id_motivo': self.motivo_traslado or '01',
+                'f470_id_motivo': self.motivo_traslado,
                 'f470_id_co_movto': _centro_op,
                 'f470_id_ccosto_movto': None,                    # Dep — si cuenta contable exige ccosto
                 'f470_id_proyecto': None,
@@ -2796,7 +2853,7 @@ class ConnektaGateway:
                 'SIESA_TIPO_DOCTO_NOTA_CREDITO no configurado — requerido para 142946'
             )
 
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         cia = int(self.id_cia_siesa)
         consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
 
@@ -2823,7 +2880,7 @@ class ConnektaGateway:
 
         payload = {
             'Inicial': [{'F_CIA': cia}],
-            'Docto_ventas_comercial': [{
+            'Doctoventascomercial': [{
                 'F_CIA': cia,
                 'F_CONSEC_AUTO_REG': 1,
                 'F350_ID_CO': self.centro_op,
@@ -2852,68 +2909,128 @@ class ConnektaGateway:
     def trigger_recibo_caja(self, tercero_nit: str, sucursal: str,
                              monto: float, forma_pago: str,
                              tipo_docto_fe: str, consec_fe,
+                             co_factura: str = '',
+                             cuenta_cxc: str = '',
                              notas: str = '') -> dict:
         """
-        142888 → ReciboCaja
+        142888 → API_v1_ReciboCaja
         Registra cobro del conductor. Cruza automáticamente contra la factura (CxC).
-        forma_pago: EFECTIVO | TRANSFERENCIA | CHEQUE → mapea a medio de pago Siesa.
+
+        Secciones spec 142888: Inicial → RCyotrosingresos → Caja → CxC → Final
+        forma_pago: EFECTIVO | TRANSFERENCIA | TARJETA | CONSIGNACION → medio de pago Siesa.
+        co_factura: CO de la factura cruzada (puede diferir del CO del RC).
+        cuenta_cxc: f253_id real de la factura (ej '13050501'). Si vacío, usa self.cxc_auxiliar
+                    como fallback — pero el cruce puede no aplicar si la factura usa otra cuenta.
         """
         if not self.tipo_docto_recibo_caja:
             raise ValueError(
                 'SIESA_TIPO_DOCTO_RECIBO_CAJA no configurado — requerido para 142888'
             )
 
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         cia = int(self.id_cia_siesa)
         consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+        co = self.centro_op
+        co_fact = co_factura or co
 
-        # Formato Siesa para valores: +000000000000000.0000
-        def _fmt_valor(v):
-            signo = '+' if v >= 0 else '-'
-            return f'{signo}{abs(v):018.4f}'
+        # Medio de pago Siesa según forma de pago WMS
+        medio_pago = self._forma_pago_map.get(
+            (forma_pago or '').upper(), self.medio_pago_efectivo
+        )
+        # Caja según CO (Siesa: Tesorería → Cajas)
+        id_caja = self._co_caja_map.get(co, '999')
+
+        # --- Sección RCyotrosingresos (Header) ---
+        header = {
+            'F_CIA': cia,
+            'F_CONSEC_AUTO_REG': 1,
+            'F350_ID_CO': co,
+            'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
+            'F350_CONSEC_DOCTO': 0,
+            'F350_FECHA': fecha_hoy,
+            'F357_ID_CAJA': id_caja,
+            'F357_FECHA_RECAUDO': fecha_hoy,
+            'F350_ID_TERCERO': tercero_nit,
+            'F357_ID_MONEDA_INGRESO': 'COP',
+            'F357_VALOR_INGRESO': self._fmt_valor(monto),
+            'F357_ID_MONEDA_APLICAR': 'COP',
+            'F357_VALOR_APLICAR_REAL': self._fmt_valor(monto),
+            'F357_ID_COBRADOR': self.cobrador_rc,
+            'F357_ID_UN': self.unidad_negocio or '99',
+            'F357_ID_CCOSTO': '',
+            'F357_ID_FE': self.flujo_efectivo_rc,
+            'F350_ID_CLASE_DOCTO': 13,
+            'F350_IND_ESTADO': 1,
+            'F350_IND_IMPRESION': 0,
+            'F350_NOTAS': notas[:2000] if notas else '',
+            'F357_IND_VALIDA_MEDPAGO': 0,
+        }
+
+        # --- Sección Caja (Medio de Pago) ---
+        caja = {
+            'F_CIA': cia,
+            'F350_ID_CO': co,
+            'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
+            'F350_CONSEC_DOCTO': 0,
+            'F358_ID_MEDIOS_PAGO': medio_pago,
+            'F358_VALOR': self._fmt_valor(monto),
+            'F358_ID_BANCO': '',
+            'F358_NRO_CHEQUE': 0,
+            'F358_NRO_CUENTA': '',
+            'F358_COD_SEGURIDAD': '',
+            'F358_NRO_AUTORIZACION': '',
+            'F358_FECHA_VCTO': '',
+            'F358_REFERENCIA_OTROS': '',
+            'F358_FECHA_CONSIGNACION': '',
+            'f358_docto_banco_cg': '',
+        }
+
+        # Consignaciones: requieren referencia + fecha + tipo CG
+        forma_upper = (forma_pago or '').upper()
+        if forma_upper == 'CONSIGNACION' or medio_pago.startswith('T'):
+            if medio_pago != self.medio_pago_efectivo:
+                caja['F358_REFERENCIA_OTROS'] = notas[:30] if notas else 'APP'
+                caja['F358_FECHA_CONSIGNACION'] = fecha_hoy
+                caja['f358_docto_banco_cg'] = 'CG'
+
+        # --- Sección CxC (Cruce contra factura) ---
+        # F350_ID_CO, F350_ID_TIPO_DOCTO, F350_CONSEC_DOCTO son del RC (no de la factura)
+        # — obligatorios según spec DOCX 142888.
+        cxc = {
+            'F_CIA': cia,
+            'F350_ID_CO': co,
+            'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
+            'F350_CONSEC_DOCTO': 0,
+            'F353_ID_AUXILIAR_DOCTO_CRUCE': cuenta_cxc or self.cxc_auxiliar,
+            'F353_ID_CO_DOCTO_CRUCE': co_fact,
+            'F353_ID_UN_DOCTO_CRUCE': self.unidad_negocio or '99',
+            'F353_ID_SUCURSAL_DOCTO_CRUCE': sucursal or '001',
+            'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
+            'F353_CONSEC_DOCTO_CRUCE': consec_int,
+            'F353_NRO_CUOTA_CRUCE': 0,
+            'F354_VALOR_CR': self._fmt_valor(monto),
+            'F354_VALOR_APLICADO_PP': self._fmt_valor(0),
+            'F354_VALOR_APROVECHA': self._fmt_valor(0),
+            'F354_VALOR_RETENCION': self._fmt_valor(0),
+        }
 
         payload = {
             'Inicial': [{'F_CIA': cia}],
-            'Documentorecibocaja': [{
-                'F_CIA': cia,
-                'F_CONSEC_AUTO_REG': 1,
-                'F350_ID_CO': self.centro_op,
-                'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
-                'F350_CONSEC_DOCTO': 0,
-                'F350_FECHA': fecha_hoy,
-                'F350_IND_ESTADO': 1,
-                'F350_NOTAS': notas[:2000] if notas else '',
-                'f353_id_tercero': tercero_nit,
-                'f353_id_sucursal': sucursal or '001',
-            }],
-            'MovimientoCxC': [{
-                'F_CIA': cia,
-                'F350_ID_CO': self.centro_op,
-                'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
-                'F350_CONSEC_DOCTO': 0,
-                'F353_NRO_REGISTRO': 1,
-                'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
-                'F353_CONSEC_DOCTO_CRUCE': consec_int,
-                'F353_VALOR_APLICADO': _fmt_valor(monto),
-            }],
-            'Caja': [{
-                'F_CIA': cia,
-                'F350_ID_CO': self.centro_op,
-                'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
-                'F350_CONSEC_DOCTO': 0,
-                'F351_NRO_REGISTRO': 1,
-                'F351_VALOR': _fmt_valor(monto),
-            }],
+            'RCyotrosingresos': [header],
+            'Caja': [caja],
+            'CxC': [cxc],
             'Final': [{'F_CIA': cia}],
         }
 
         logger.info(
-            '[CONNEKTA] ReciboCaja 142888: tercero=%s FE=%s-%s monto=%.2f pago=%s',
-            tercero_nit, tipo_docto_fe, consec_fe, monto, forma_pago
+            '[CONNEKTA] ReciboCaja 142888: tercero=%s FE=%s-%s monto=%.2f '
+            'pago=%s medio=%s caja=%s co_fact=%s',
+            tercero_nit, tipo_docto_fe, consec_fe, monto,
+            forma_pago, medio_pago, id_caja, co_fact,
         )
         return self._post(
             self.conector_recibo_caja,
-            'ReciboCaja',
+            'API_v1_ReciboCaja',
             payload,
         )
 
@@ -2921,61 +3038,95 @@ class ConnektaGateway:
                                      cuenta_puc: str, monto: float,
                                      base_gravable: float,
                                      tipo_docto_fe: str, consec_fe,
+                                     co_factura: str = '',
+                                     cuenta_cxc: str = '',
                                      notas: str = '') -> dict:
         """
         142882 → DocumentoContable
         Registra retenciones (retefuente, reteIVA, ICA) como documento contable.
         Cruza contra la factura en MovimientoCxC.
-        cuenta_puc: cuenta auxiliar PUC (ej. '13551501' para retefuente compras 2.5%)
+        cuenta_puc: cuenta auxiliar PUC débito (ej. '13551501' para retefuente compras 2.5%)
+        co_factura: CO de la factura cruzada (puede diferir del CO del RC).
+        cuenta_cxc: f253_id real de la factura para cruce crédito. Fallback: self.cxc_auxiliar.
         """
         if not self.tipo_docto_docto_contable:
             raise ValueError(
                 'SIESA_TIPO_DOCTO_DOCTO_CONTABLE no configurado — requerido para 142882'
             )
 
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         cia = int(self.id_cia_siesa)
         consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
-
-        def _fmt_valor(v):
-            signo = '+' if v >= 0 else '-'
-            return f'{signo}{abs(v):018.4f}'
+        co = self.centro_op
+        co_fact = co_factura or co
+        auxiliar_cxc = cuenta_cxc or self.cxc_auxiliar
 
         payload = {
             'Inicial': [{'F_CIA': cia}],
             'Documentocontable': [{
                 'F_CIA': cia,
                 'F_CONSEC_AUTO_REG': 1,
-                'F350_ID_CO': self.centro_op,
+                'F350_ID_CO': co,
                 'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
                 'F350_CONSEC_DOCTO': 0,
                 'F350_FECHA': fecha_hoy,
+                'F350_ID_TERCERO': tercero_nit,
+                'F350_ID_CLASE_DOCTO': 30,
                 'F350_IND_ESTADO': 1,
+                'F350_IND_IMPRESION': 0,
                 'F350_NOTAS': notas[:2000] if notas else '',
             }],
             'Movimientocontable': [{
                 'F_CIA': cia,
-                'F350_ID_CO': self.centro_op,
+                'F350_ID_CO': co,
                 'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
                 'F350_CONSEC_DOCTO': 0,
                 'F351_NRO_REGISTRO': 1,
                 'F351_ID_AUXILIAR': cuenta_puc,
-                'F351_ID_CO_MOVTO': self.centro_op,
-                'F351_VALOR_DB': _fmt_valor(monto),
-                'F351_VALOR_CR': _fmt_valor(0),
-                'F351_BASE_GRAVABLE': _fmt_valor(base_gravable),
+                'F351_ID_CO_MOV': co,
+                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_CCOSTO': '',
+                'F351_VALOR_DB': self._fmt_valor(monto),
+                'F351_VALOR_CR': self._fmt_valor(0),
+                'F351_VALOR_DB_ALT': self._fmt_valor(monto),
+                'F351_VALOR_CR_ALT': self._fmt_valor(0),
+                'F351_BASE_GRAVABLE': self._fmt_valor(base_gravable),
+                'F351_NOTAS': '',
                 'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_SUCURSAL': sucursal or '001',
             }],
             'MovimientoCxC': [{
+                # Campos del spec DOCX 142882 — TODOS los del esquema MovimientoCxC.
+                # Cada campo faltante puede causar rechazo silencioso de Siesa.
                 'F_CIA': cia,
-                'F350_ID_CO': self.centro_op,
+                'F350_ID_CO': co,
                 'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
                 'F350_CONSEC_DOCTO': 0,
-                'F353_NRO_REGISTRO': 1,
+                'F351_ID_AUXILIAR': auxiliar_cxc,
+                'F351_ID_TERCERO': tercero_nit,
+                'F351_ID_CO_MOV': co,
+                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_CCOSTO': '',
+                'F351_VALOR_DB': self._fmt_valor(0),
+                'F351_VALOR_CR': self._fmt_valor(monto),
+                'F351_VALOR_DB_ALT': self._fmt_valor(0),
+                'F351_VALOR_CR_ALT': self._fmt_valor(monto),
+                'F351_NOTAS': '',
+                'F353_ID_SUCURSAL': sucursal or '001',
                 'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
                 'F353_CONSEC_DOCTO_CRUCE': consec_int,
-                'F353_VALOR_APLICADO': _fmt_valor(monto),
+                'F353_NRO_CUOTA_CRUCE': 0,
+                'F353_FECHA_VCTO': fecha_hoy,
+                'F353_FECHA_DSCTO_PP': fecha_hoy,
+                'F353_VLR_DSCTO_PP': self._fmt_valor(0),
+                'F354_VALOR_APLICADO_PP': self._fmt_valor(0),
+                'F354_VALOR_APLICADO_PP_ALT': self._fmt_valor(0),
+                'F354_VALOR_APROVECHA': self._fmt_valor(0),
+                'F354_VALOR_APROVECHA_ALT': self._fmt_valor(0),
+                'F354_VALOR_RETENCION': self._fmt_valor(0),
+                'F354_VALOR_RETENCION_ALT': self._fmt_valor(0),
+                'F354_TERCERO_VEND': tercero_nit,
+                'F354_NOTAS': '',
             }],
             'Final': [{'F_CIA': cia}],
         }

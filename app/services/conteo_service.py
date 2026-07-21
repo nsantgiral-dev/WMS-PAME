@@ -452,6 +452,16 @@ class ConteoService:
         almacen = Almacen.query.get(sesion.almacen_id)
         bodega_siesa = almacen.bodega_siesa_id if almacen else None
         centro_op_siesa = almacen.centro_op_siesa if almacen else None
+        if not bodega_siesa:
+            raise ValueError(
+                f'Almacén {sesion.almacen_id} sin bodega_siesa_id — '
+                f'configurar en /api/almacenes antes de aprobar ajustes'
+            )
+        if not centro_op_siesa:
+            raise ValueError(
+                f'Almacén {sesion.almacen_id} sin centro_op_siesa — '
+                f'configurar en /api/almacenes antes de aprobar ajustes'
+            )
 
         existencia_siesa = ConteoService.consultar_existencia_siesa(
             producto_codigo_siesa=sesion.producto_codigo_siesa,
@@ -518,6 +528,22 @@ class ConteoService:
         """
         from app.models.producto import Producto
         producto = Producto.query.get(producto_id)
+
+        # Evitar duplicados: si ya existe un conteo activo para este (producto, ubicacion)
+        # no crear otro — la excepción ya fue reportada.
+        existente = SesionConteo.query.filter(
+            SesionConteo.producto_id == producto_id,
+            SesionConteo.ubicacion_id == ubicacion_id,
+            SesionConteo.estado.in_(['PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO']),
+            SesionConteo.es_segundo_conteo.is_(False),
+        ).first()
+        if existente:
+            logger.info(
+                '[SUPERVISOR_GUARD] Auditoría omitida — ya existe %s para producto %s ubicación %s',
+                existente.codigo, producto_id, ubicacion_id,
+            )
+            return existente
+
         codigo = f'AUD-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
         sesion = SesionConteo(

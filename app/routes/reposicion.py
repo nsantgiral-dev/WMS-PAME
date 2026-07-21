@@ -420,9 +420,14 @@ def listar_jobs():
     if not u or u.rol not in Roles.SUPERVISION:
         return jsonify({'error': 'Sin permiso — solo admin/supervisor/jefe_almacen'}), 403
     estado = request.args.get('estado')
+    tipos = request.args.get('tipos')  # CSV: NOTA_CREDITO_FACTURA,RECIBO_CAJA,...
     q = SiesaJob.query.order_by(SiesaJob.fecha_creacion.desc())
     if estado:
         q = q.filter(SiesaJob.estado == estado.upper())
+    if tipos:
+        lista_tipos = [t.strip() for t in tipos.split(',') if t.strip()]
+        if lista_tipos:
+            q = q.filter(SiesaJob.tipo.in_(lista_tipos))
     jobs = q.limit(100).all()
     return jsonify({'jobs': [j.to_dict() for j in jobs], 'total': len(jobs)}), 200
 
