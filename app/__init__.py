@@ -204,7 +204,7 @@ def create_app():
                 _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
 
         # Schedulers pesados desactivados temporalmente — se activan con HEAVY_SCHEDULERS=true
-        if os.getenv('HEAVY_SCHEDULERS', 'true').lower() == 'true':
+        if os.getenv('HEAVY_SCHEDULERS', 'false').lower() == 'true':
             _scheduler_pesados = [
                 ('app.services.siesa_sync_service',         'init_scheduler',          '[SCHEDULER]'),
                 ('app.services.siesa_barcode_sync_service', 'init_scheduler',          '[BARCODE_SCHEDULER]'),
