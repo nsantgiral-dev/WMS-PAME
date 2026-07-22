@@ -323,14 +323,18 @@ function _liqRenderDetalle() {
           </div>
         </div>`;
 
-    // Siesa flags si ya liquidada
+    // Siesa flags + badges fallidos si ya liquidada
     if (esLiquidada) {
-      html += `
-        <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
-          ${rec.siesa_nc_triggered ? '<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#1e3a5f33;color:#60a5fa;">NCE ✓</span>' : ''}
-          ${rec.siesa_rc_triggered ? '<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#14532d33;color:#4ade80;">RC ✓</span>' : ''}
-          ${rec.siesa_dc_triggered ? '<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#3b076633;color:#c084fc;">DC ✓</span>' : ''}
-        </div>`;
+      const retDet = rec.retenciones_detalle || [];
+      html += `<div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;">`;
+      if (rec.siesa_nc_triggered) html += '<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#1e3a5f33;color:#60a5fa;">NC ✓</span>';
+      if (rec.siesa_rc_triggered) html += '<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#14532d33;color:#4ade80;">RC ✓</span>';
+      retDet.forEach(rd => {
+        if (rd.siesa_triggered) html += `<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#3b076633;color:#c084fc;">DC ${rd.tipo.replace('RETEFUENTE_','RF').replace('RETEIVA','RIVA').replace('ICA_','ICA')} ✓</span>`;
+      });
+      // Fallback: si siesa_dc_triggered pero no hay retenciones_detalle (flujo viejo)
+      if (rec.siesa_dc_triggered && !retDet.length) html += '<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#3b076633;color:#c084fc;">DC ✓</span>';
+      html += `</div>`;
     }
 
     // Detalle de devoluciones para PARCIAL / RECHAZADO
@@ -695,4 +699,24 @@ async function liqRegistrarCobro(rutaId, recaudoId) {
       alerta(d.error || 'Error al registrar cobro', 'error');
     }
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
+}
+
+async function liqReintentarJob(jobId) {
+  try {
+    const d = await get(`/api/siesa/jobs/${jobId}`);
+    const error = d.error_ultimo || 'Sin detalle de error';
+    const tipo = d.tipo || '—';
+    const intentos = d.intentos || 0;
+    if (!confirm(`Job ${tipo} #${jobId}\nIntentos: ${intentos}\nÚltimo error: ${error}\n\n¿Reintentar?`)) return;
+    const r = await fetch(API + `/api/siesa/jobs/${jobId}/reintentar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const res = await r.json();
+    if (r.ok) {
+      alerta('Job reintentado', 'exito');
+    } else {
+      alerta(res.error || 'Error al reintentar', 'error');
+    }
+  } catch (e) { alerta(e.message || 'Error', 'error'); }
 }

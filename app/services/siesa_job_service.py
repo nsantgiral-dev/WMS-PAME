@@ -842,10 +842,46 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'recaudo {recaudo.id} — reintento en próximo ciclo DLQ'
             )
 
+        # Re-read monto: si el recaudo fue editado post-enqueue, usar el valor actual
+        monto_payload = float(payload['monto'])
+        if recaudo:
+            monto_actual = float(recaudo.monto_cobrado or 0)
+            if abs(monto_actual - monto_payload) > 1 and monto_actual > 0:
+                logger.warning(
+                    '[DLQ] RECIBO_CAJA job=%s: monto payload=%.2f difiere de '
+                    'monto_cobrado actual=%.2f — usando actual',
+                    job.id, monto_payload, monto_actual
+                )
+                monto_payload = monto_actual
+
+        # Pre-flight API 21: verificar si ya existe RC (cross-flow WMS↔Cartera)
+        try:
+            nit_rc = payload.get('tercero_nit', '')
+            if nit_rc and hasattr(connekta, 'get_cxc_general'):
+                from datetime import date as _date_rc
+                cxc = connekta.get_cxc_general(nit_rc)
+                if cxc and isinstance(cxc, list):
+                    hoy_str = _date_rc.today().strftime('%Y%m%d')
+                    rc_existente = any(
+                        str(r.get('f350_id_tipo_docto', '')).strip() == 'RC'
+                        and abs(float(r.get('f354_valor', 0)) - monto_payload) < 100
+                        and str(r.get('f350_fecha', '')).startswith(hoy_str[:6])
+                        for r in cxc if isinstance(r, dict)
+                    )
+                    if rc_existente:
+                        logger.info(
+                            '[DLQ] RECIBO_CAJA job=%s: RC ya existe en Siesa '
+                            '(pre-flight API 21) — marcando completado sin enviar',
+                            job.id
+                        )
+                        if recaudo:
+                            recaudo.siesa_rc_triggered = True
+                            db.session.commit()
+                        return {'ya_existente': True, 'recaudo_id': payload.get('recaudo_id')}
+        except Exception as _e_preflight:
+            logger.debug('[DLQ] Pre-flight API 21 falló (no bloqueante): %s', _e_preflight)
+
         # Pre-flag: marcar ANTES del POST para cerrar el crash window.
-        # Si Railway reinicia entre POST exitoso y flag, sin pre-flag el DLQ
-        # reintentaría y crearía RC duplicado (incidente RC-00002744 en learnings).
-        # Si el POST falla, revertimos el flag.
         if recaudo:
             recaudo.siesa_rc_triggered = True
             db.session.commit()
@@ -854,7 +890,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             resultado = connekta.trigger_recibo_caja(
                 tercero_nit=payload['tercero_nit'],
                 sucursal=payload.get('sucursal', '001'),
-                monto=float(payload['monto']),
+                monto=monto_payload,
                 forma_pago=payload.get('forma_pago', 'EFECTIVO'),
                 tipo_docto_fe=payload['tipo_docto_fe'],
                 consec_fe=payload['consec_fe'],
@@ -863,7 +899,27 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 notas=payload.get('notas', ''),
             )
         except Exception as _e_post:
-            # POST falló — revertir pre-flag para permitir reintento DLQ
+            # POST falló — verificar API 21 antes de revertir (timeout que sí entró)
+            _rc_entro = False
+            try:
+                nit_rc = payload.get('tercero_nit', '')
+                if nit_rc and hasattr(connekta, 'get_cxc_general'):
+                    cxc = connekta.get_cxc_general(nit_rc)
+                    if cxc and isinstance(cxc, list):
+                        _rc_entro = any(
+                            str(r.get('f350_id_tipo_docto', '')).strip() == 'RC'
+                            and abs(float(r.get('f354_valor', 0)) - monto_payload) < 100
+                            for r in cxc if isinstance(r, dict)
+                        )
+            except Exception:
+                pass
+            if _rc_entro:
+                logger.info(
+                    '[DLQ] RECIBO_CAJA job=%s: POST falló pero API 21 confirma '
+                    'que RC sí entró a Siesa — manteniendo flag', job.id
+                )
+                return {'timeout_pero_exitoso': True}
+            # Realmente falló — revertir pre-flag
             if recaudo:
                 try:
                     recaudo.siesa_rc_triggered = False

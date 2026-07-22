@@ -348,6 +348,9 @@ class LiquidacionService:
             f'Estado: {estado} | Admin: {admin_id}'
         )
 
+        # Pre-flag ANTES de encolar (patrón pre-flag estándar)
+        recaudo.siesa_nc_triggered = True
+
         _encolar_nota_credito(
             recaudo, tipo_docto_fe, consec_fe,
             items_devueltos=items_devueltos,

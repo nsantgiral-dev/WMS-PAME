@@ -201,3 +201,116 @@ class TestRetencionesPUC:
         from app.models.siesa_job import SiesaJob
         dc = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').all()
         assert len(dc) == 0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Per-recaudo methods (liquidación guiada)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestEnviarNCRecaudo:
+
+    def test_rechazado_encola_nc(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='RECHAZADO', pago='EFECTIVO')
+        from app.services.liquidacion_service import LiquidacionService
+        mock_connekta = MagicMock()
+        mock_connekta.get_factura_desde_pedido.return_value = []
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.enviar_nc_recaudo(recaudo.id, admin_id=1)
+        assert resultado['ok'] is True
+        assert resultado['job_id'] is not None
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_nc_triggered is True
+
+    def test_entregado_rechaza_nc(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO')
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(ValueError, match='PARCIAL/RECHAZADO'):
+            LiquidacionService.enviar_nc_recaudo(recaudo.id, admin_id=1)
+
+    def test_nc_idempotente(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='RECHAZADO', pago='EFECTIVO', nc=True)
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(ValueError, match='idempotencia'):
+            LiquidacionService.enviar_nc_recaudo(recaudo.id, admin_id=1)
+
+
+class TestRegistrarCobroRecaudo:
+
+    def _mock_siesa(self):
+        """Mock Siesa API calls for registrar_cobro tests."""
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': 1680672, 'f470_vlr_imp': 319328, 'f470_vlr_neto': 2000000,
+             'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
+        ]
+        mock_connekta.get_pedido_cabecera.return_value = {
+            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
+            'f461_id_sucursal_pedido_rem': '001',
+        }
+        mock_connekta.get_cxc_general = MagicMock(return_value={'f253_id': '13050502'})
+        return mock_connekta
+
+    def test_contado_sin_retenciones_rc_bruto(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == 2000000  # sin retenciones = bruto
+        assert len(resultado['dc_jobs']) == 0
+
+    def test_contado_con_retenciones_rc_neto(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1,
+                retenciones=[{'tipo': 'RETEFUENTE_2.5'}, {'tipo': 'RETEIVA'}])
+        # RC = neto (bruto - retenciones)
+        ret_rf = round(1680672 * 0.025, 2)   # RetefFuente 2.5% de base gravable
+        ret_iva = round(319328 * 0.15, 2)    # ReteIVA 15% de IVA (NO de base)
+        expected_neto = round(2000000 - ret_rf - ret_iva, 2)
+        assert resultado['monto_neto_rc'] == expected_neto
+        assert len(resultado['dc_jobs']) == 2
+        # Verify RETEIVA base is IVA, not base_gravable
+        riva_job = [j for j in resultado['dc_jobs'] if j['tipo'] == 'RETEIVA'][0]
+        assert riva_job['monto'] == ret_iva
+
+    def test_credito_rechaza_cobro(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='CREDITO', monto=2000000)
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(ValueError, match='CREDITO'):
+            LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
+
+    def test_rc_idempotente(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', rc=True)
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(ValueError, match='idempotencia'):
+            LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
+
+    def test_parcial_sin_nc_rechaza(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', nc=False)
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(ValueError, match='NC debe ir primero'):
+            with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+                LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
+
+    def test_retenciones_detalle_guardado(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1,
+                retenciones=[{'tipo': 'RETEFUENTE_2.5'}])
+        db.session.refresh(recaudo)
+        det = recaudo.retenciones_detalle
+        assert det is not None
+        assert len(det) == 1
+        assert det[0]['tipo'] == 'RETEFUENTE_2.5'
+        assert det[0]['puc'] == '13551501'
+        assert det[0]['siesa_triggered'] is True
