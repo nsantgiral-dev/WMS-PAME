@@ -380,31 +380,37 @@ function _liqRenderDetalle() {
         </div>`;
     }
 
-    // Selector de retenciones (solo si CONTADO y no liquidada)
-    if (!esLiquidada && !esCred && estado !== 'RECHAZADO') {
-      html += `
-        <div style="margin-top:8px;border-top:1px solid var(--brd);padding-top:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <div style="font-size:11px;font-weight:700;color:var(--tx2);">Retenciones tributarias</div>
-            <select onchange="liqAgregarRetencion(${rec.id}, this.value, ${baseGravable}); this.value='';"
-              style="padding:4px 8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:11px;">
-              <option value="">+ Agregar retención...</option>
-              ${_liqRetencionesDisponibles.map(rt =>
-                `<option value="${rt.tipo}">${rt.nombre} (${rt.puc})</option>`
-              ).join('')}
-            </select>
-          </div>
-          <div id="liq-rets-${rec.id}">
-            ${_liqRenderRetenciones(rec.id, baseGravable)}
-          </div>
-        </div>`;
+    // ── FASE 2: Acciones per-parada (solo si LIQUIDADA) ──────────
+    if (esLiquidada) {
+      // Botones de acción por tipo de parada
+      if ((estado === 'RECHAZADO' || estado === 'PARCIAL') && !rec.siesa_nc_triggered) {
+        html += `
+          <button onclick="liqEnviarNC(${ruta.id}, ${rec.id})"
+            style="width:100%;margin-top:8px;padding:12px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Enviar Nota Crédito (NC)
+          </button>`;
+      }
+      if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO' && !rec.siesa_rc_triggered) {
+        const rcDisabled = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
+        html += `
+          <button onclick="liqToggleCobro(${ruta.id}, ${rec.id})" ${rcDisabled ? 'disabled' : ''}
+            style="width:100%;margin-top:8px;padding:12px;background:${rcDisabled ? '#333' : '#14532d'};color:${rcDisabled ? '#666' : '#4ade80'};border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            ${rcDisabled ? 'Registrar Cobro (espera NC)' : 'Registrar Cobro (RC)'}
+          </button>
+          <div id="liq-cobro-panel-${rec.id}" style="display:none;"></div>`;
+      }
+      if (esCred) {
+        html += '<div style="text-align:center;padding:8px;color:#60a5fa;font-size:12px;font-weight:700;margin-top:8px;background:#1e3a5f22;border-radius:8px;">A Cartera — sin acción requerida</div>';
+      }
+      if (fp === 'EXENTO') {
+        html += '<div style="text-align:center;padding:8px;color:var(--tx3);font-size:12px;margin-top:8px;">Exento</div>';
+      }
     }
 
     html += '</div>';
   });
 
-  // Resumen y botón de acción
-  const cashRecibir = totalFacturas - totalRetenciones;
+  // ── FASE 1: Botón de liquidación WMS (solo si NO liquidada) ────
   if (!esLiquidada) {
     html += `
       <div style="background:var(--bg-s);border:2px solid var(--pm);border-radius:12px;padding:16px;margin-top:16px;">
@@ -412,17 +418,13 @@ function _liqRenderDetalle() {
           <span style="color:var(--tx3);">Total facturas:</span>
           <span style="color:var(--tx);font-weight:700;">${_liqFmt(totalFacturas)}</span>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;">
-          <span style="color:#c084fc;">Retenciones:</span>
-          <span style="color:#c084fc;font-weight:700;">-${_liqFmt(totalRetenciones)}</span>
+        <div style="font-size:11px;color:var(--tx3);margin-bottom:12px;">
+          Paso 1: Confirma el cuadre financiero en WMS.<br>
+          Paso 2: Después de liquidar, documenta NC/RC/DC por parada.
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;margin-top:8px;padding-top:8px;border-top:1px solid var(--brd);">
-          <span style="color:var(--tx);">Cash a recibir:</span>
-          <span style="color:#4ade80;">${_liqFmt(cashRecibir)}</span>
-        </div>
-        <button onclick="liqLiquidarRuta(${ruta.id})"
-          style="width:100%;margin-top:14px;padding:16px;background:#14532d;color:#4ade80;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;">
-          💰 LIQUIDAR RUTA EN SIESA
+        <button onclick="liqLiquidarWMS(${ruta.id})"
+          style="width:100%;padding:16px;background:#14532d;color:#4ade80;border:none;border-radius:10px;font-size:15px;font-weight:800;cursor:pointer;">
+          💰 LIQUIDAR EN WMS
         </button>
       </div>`;
   }
@@ -512,67 +514,185 @@ function liqQuitarRetencion(recaudoId, idx, baseGravable) {
   _liqRenderDetalle();
 }
 
-// ── Liquidar ruta completa ──────────────────────────────────────────────────
+// ── Fase 1: Liquidar WMS (solo estado financiero) ─────────────────────────
 
-/**
- * Execute full financial liquidation for a route, enqueuing NCE, RC, and DC to Siesa.
- * @param {number} rutaId - Ruta ID to liquidate.
- */
-async function liqLiquidarRuta(rutaId) {
-  if (!_liqDetalleRuta) return;
-  const recaudos = _liqDetalleRuta.recaudos || [];
-
-  // Construir payload con cantidades verificadas y retenciones
-  const payload = { recaudos: [] };
-
-  recaudos.forEach((rec, idx) => {
-    const entry = { recaudo_id: rec.id, cantidades_verificadas: [], retenciones: [] };
-
-    // Recoger cantidades devueltas verificadas por el Líder (solo para PARCIAL)
-    if (rec.estado_entrega === 'PARCIAL' && rec.items_entregados) {
-      rec.items_entregados.forEach((it, itIdx) => {
-        const input = document.getElementById(`liq-dev-${rec.id}-${itIdx}`);
-        const cantDev = input ? parseInt(input.value || 0) : (it.cantidad_devuelta || 0);
-        entry.cantidades_verificadas.push({
-          codigo: it.codigo,
-          cantidad_devuelta: cantDev,
-        });
-      });
-    }
-
-    // Recoger retenciones seleccionadas
-    const rets = _liqRetenciones[rec.id] || [];
-    rets.forEach(r => {
-      entry.retenciones.push({ tipo: r.tipo });
-    });
-
-    payload.recaudos.push(entry);
-  });
-
-  if (!confirm(`¿Liquidar Ruta #${rutaId} en Siesa?\nEsto disparará NCE, RC y DC automáticamente.`)) return;
-
+async function liqLiquidarWMS(rutaId) {
+  if (!confirm(`¿Liquidar Ruta #${rutaId} en WMS?\nDespués podrás documentar NC/RC/DC por parada.`)) return;
   try {
-    const r = await fetch(API + `/api/rutas/${rutaId}/liquidar-completo`, {
+    const r = await fetch(API + `/api/rutas/${rutaId}/liquidar`, {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      headers: { Authorization: 'Bearer ' + TOKEN },
     });
     const d = await r.json();
-    if (r.ok && d.ok) {
-      const s = d.siesa || {};
-      const partes = [];
-      if (s.nc_encolados) partes.push(s.nc_encolados + ' NCE');
-      if (s.rc_encolados) partes.push(s.rc_encolados + ' RC');
-      if (s.dc_encolados || d.retenciones_encoladas) partes.push((s.dc_encolados || 0) + (d.retenciones_encoladas || 0) + ' DC');
-      if (s.credito_omitidos) partes.push(s.credito_omitidos + ' a cartera');
-      alerta(partes.length ? 'Siesa: ' + partes.join(', ') + ' encolados' : 'Ruta liquidada', 'exito');
-      if (d.errores && d.errores.length) alerta(d.errores.length + ' error(es) al encolar', 'error');
-      liqCerrarModal();
-      await liqCargarDashboard();
+    if (r.ok) {
+      alerta('Ruta liquidada en WMS — ahora documenta NC/RC/DC por parada', 'exito');
+      // Recargar detalle para mostrar Fase 2
+      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+      _liqRenderDetalle();
     } else {
       alerta(d.error || 'Error al liquidar', 'error');
     }
   } catch (e) {
     alerta('Error de conexión', 'error');
   }
+}
+
+// ── Fase 2: Acciones per-recaudo ──────────────────────────────────────────
+
+async function liqEnviarNC(rutaId, recaudoId) {
+  if (!confirm('¿Enviar Nota Crédito (NC) a Siesa para esta parada?')) return;
+  try {
+    const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/enviar-nc`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      alerta('NC encolada correctamente', 'exito');
+      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+      _liqRenderDetalle();
+    } else {
+      alerta(d.error || 'Error al enviar NC', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function liqToggleCobro(rutaId, recaudoId) {
+  const panel = document.getElementById(`liq-cobro-panel-${recaudoId}`);
+  if (!panel) return;
+  if (panel.style.display === 'block') {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  panel.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Consultando datos de Siesa...</div>';
+
+  try {
+    const preview = await get(`/api/rutas/${rutaId}/recaudos/${recaudoId}/preview-siesa`);
+    const df = preview.datos_factura || {};
+    const mCobrado = preview.monto_cobrado || 0;
+    const mSiesa = df.total_neto || 0;
+    const difieren = mSiesa > 0 && Math.abs(mSiesa - mCobrado) > 1;
+
+    if (!df.datos_disponibles) {
+      panel.innerHTML = `<div style="padding:12px;color:#f59e0b;background:#78350f22;border-radius:8px;margin-top:8px;">
+        No se pudo obtener datos de la factura en Siesa. Reintenta cuando Siesa esté disponible.
+      </div>`;
+      return;
+    }
+
+    let html = `<div style="background:var(--bg);border:1px solid var(--brd);border-radius:10px;padding:14px;margin-top:10px;">`;
+
+    // Montos: conductor vs Siesa
+    if (difieren) {
+      html += `
+        <div style="margin-bottom:10px;padding:8px;background:#78350f22;border-radius:6px;">
+          <div style="font-size:11px;color:#fbbf24;font-weight:700;margin-bottom:4px;">⚠ Montos difieren</div>
+          <div style="font-size:12px;color:var(--tx3);">Conductor: ${_liqFmt(mCobrado)} · Siesa: ${_liqFmt(mSiesa)}</div>
+          <div style="margin-top:6px;display:flex;gap:6px;">
+            <button onclick="document.getElementById('liq-monto-${recaudoId}').value=${mSiesa}" style="padding:4px 10px;background:var(--pm);color:#fff;border:none;border-radius:4px;font-size:11px;cursor:pointer;">Usar Siesa</button>
+            <button onclick="document.getElementById('liq-monto-${recaudoId}').value=${mCobrado}" style="padding:4px 10px;background:var(--bg-s);color:var(--tx2);border:1px solid var(--brd);border-radius:4px;font-size:11px;cursor:pointer;">Usar conductor</button>
+          </div>
+          <input type="number" id="liq-monto-${recaudoId}" value="${mSiesa}" step="0.01"
+            onchange="liqPreviewCobro(${recaudoId})"
+            style="width:100%;margin-top:6px;padding:6px;background:var(--bg-s);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:12px;">
+        </div>`;
+    } else {
+      html += `<input type="hidden" id="liq-monto-${recaudoId}" value="${mSiesa || mCobrado}">`;
+      html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mSiesa || mCobrado)} · CO: ${df.co_factura || '—'} · CxC: ${df.cuenta_cxc || 'fallback'}</div>`;
+    }
+
+    // Retenciones checkboxes
+    html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
+    (preview.retenciones_disponibles || []).forEach(ret => {
+      if (ret.monto_estimado <= 0) return;
+      html += `
+        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:var(--tx2);cursor:pointer;">
+          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" onchange="liqPreviewCobro(${recaudoId})">
+          ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
+        </label>`;
+    });
+
+    // Preview dinámico
+    html += `<div id="liq-preview-${recaudoId}" style="margin-top:10px;padding:8px;background:var(--bg-s);border-radius:6px;font-size:12px;"></div>`;
+
+    if (!preview.siesa_horario_ok) {
+      html += `<div style="color:#f59e0b;font-size:11px;margin-top:6px;">⚠ Siesa no opera después de 8PM — jobs quedarán en cola</div>`;
+    }
+
+    html += `
+      <button onclick="liqRegistrarCobro(${rutaId}, ${recaudoId})" id="liq-btn-cobro-${recaudoId}"
+        style="width:100%;margin-top:12px;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">
+        Confirmar y Enviar RC
+      </button>
+    </div>`;
+
+    panel.innerHTML = html;
+
+    // Store preview data for later use
+    panel.dataset.preview = JSON.stringify(preview);
+
+    // Initial preview render
+    liqPreviewCobro(recaudoId);
+  } catch (e) {
+    panel.innerHTML = `<div style="padding:12px;color:#ef4444;">${e.message || 'Error obteniendo preview'}</div>`;
+  }
+}
+
+function liqPreviewCobro(recaudoId) {
+  const montoInput = document.getElementById(`liq-monto-${recaudoId}`);
+  const previewDiv = document.getElementById(`liq-preview-${recaudoId}`);
+  if (!montoInput || !previewDiv) return;
+
+  const monto = parseFloat(montoInput.value) || 0;
+  const checks = document.querySelectorAll(`.liq-ret-check-${recaudoId}:checked`);
+  const panel = document.getElementById(`liq-cobro-panel-${recaudoId}`);
+  const preview = panel?.dataset.preview ? JSON.parse(panel.dataset.preview) : {};
+  const retsDisp = preview.retenciones_disponibles || [];
+
+  let totalRet = 0;
+  let detalleHtml = '';
+  checks.forEach(chk => {
+    const ret = retsDisp.find(r => r.tipo === chk.value);
+    if (ret) {
+      totalRet += ret.monto_estimado;
+      detalleHtml += `<div style="color:#c084fc;">• DC ${ret.nombre}: ${_liqFmt(ret.monto_estimado)} → PUC ${ret.puc}</div>`;
+    }
+  });
+
+  const neto = monto - totalRet;
+  previewDiv.innerHTML = `
+    <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:4px;">Se enviará a Siesa:</div>
+    <div style="color:#4ade80;">• RC por ${_liqFmt(neto)} (neto: ${_liqFmt(monto)} - ${_liqFmt(totalRet)} retenciones)</div>
+    ${detalleHtml}
+    <div style="margin-top:6px;font-weight:700;color:var(--tx);">Total CxC cerrado: ${_liqFmt(monto)}</div>`;
+}
+
+async function liqRegistrarCobro(rutaId, recaudoId) {
+  const montoInput = document.getElementById(`liq-monto-${recaudoId}`);
+  const monto = montoInput ? parseFloat(montoInput.value) : null;
+  const checks = document.querySelectorAll(`.liq-ret-check-${recaudoId}:checked`);
+  const retenciones = [];
+  checks.forEach(chk => retenciones.push({ tipo: chk.value }));
+
+  if (!confirm(`¿Registrar cobro${retenciones.length ? ' con ' + retenciones.length + ' retención(es)' : ''}?`)) return;
+
+  try {
+    const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/registrar-cobro`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ retenciones, monto_override: monto }),
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      const partes = [`RC por ${_liqFmt(d.monto_neto_rc)}`];
+      if (d.dc_jobs && d.dc_jobs.length) partes.push(`${d.dc_jobs.length} DC`);
+      alerta(partes.join(' + ') + ' encolados', 'exito');
+      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+      _liqRenderDetalle();
+    } else {
+      alerta(d.error || 'Error al registrar cobro', 'error');
+    }
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }

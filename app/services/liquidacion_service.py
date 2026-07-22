@@ -152,6 +152,516 @@ class LiquidacionService:
             result['warnings'] = warnings
         return result
 
+    # ──────────────────────────────────────────────────────────────────────
+    #  Per-recaudo liquidation methods
+    # ──────────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def preview_acciones_recaudo(recaudo_id: int) -> dict:
+        """
+        Returns pending Siesa actions + real financial data for a single recaudo.
+
+        Used by the frontend to show what will happen BEFORE the user confirms.
+        All Siesa calls are wrapped in try/except — if they fail, datos_disponibles=False.
+        """
+        recaudo = RecaudoEntrega.query.get(recaudo_id)
+        if not recaudo:
+            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
+
+        tarea = recaudo.tarea
+        if not tarea:
+            raise ValueError(f'Recaudo {recaudo_id} sin tarea asociada')
+
+        tipo_docto = tarea.tipo_docto_pedido_siesa or ''
+        consec_docto = tarea.consec_docto_pedido_siesa or ''
+        estado = recaudo.estado_entrega
+        forma_pago = (recaudo.forma_pago or '').upper()
+
+        # ── Siesa data fetching ─────────────────────────────────────
+        datos_disponibles = False
+        base_gravable = 0
+        total_iva = 0
+        total_neto = 0
+        co_factura = ''
+        cuenta_cxc = ''
+
+        if tipo_docto and consec_docto:
+            from app.services.connekta_gateway import connekta
+            try:
+                # Factura lines: base_gravable, IVA, neto
+                lineas_raw = connekta.get_rowids_factura(tipo_docto, consec_docto)
+                if lineas_raw:
+                    for ln in lineas_raw:
+                        base_gravable += float(ln.get('f470_vlr_bruto', 0))
+                        total_iva += float(ln.get('f470_vlr_imp', 0))
+                        total_neto += float(ln.get('f470_vlr_neto', 0))
+                    datos_disponibles = True
+
+                # Pedido cabecera: CO de la factura
+                cabecera = connekta.get_pedido_cabecera(tipo_docto, consec_docto)
+                if cabecera:
+                    co_factura = cabecera.get('f430_id_co', '')
+                    nit = cabecera.get('f200_id_pedido_fact', '')
+                    # CxC account from API if available
+                    try:
+                        if hasattr(connekta, 'get_cxc_general') and nit:
+                            cxc_data = connekta.get_cxc_general(nit)
+                            if cxc_data:
+                                cuenta_cxc = cxc_data.get('f253_id', '')
+                    except Exception as e_cxc:
+                        logger.warning(
+                            '[LIQUIDACION] get_cxc_general falló para recaudo %d (NIT %s): %s',
+                            recaudo_id, nit, e_cxc
+                        )
+            except Exception as e:
+                logger.warning(
+                    '[LIQUIDACION] preview_acciones_recaudo: Siesa data fetch falló '
+                    'para recaudo %d (FE %s-%s): %s',
+                    recaudo_id, tipo_docto, consec_docto, e
+                )
+                datos_disponibles = False
+
+        # ── Retenciones disponibles ─────────────────────────────────
+        retenciones_disponibles = []
+        for tipo_ret, tasa in RETENCION_TASA.items():
+            # RETEIVA: base = total_iva, all others: base = base_gravable
+            if tipo_ret == 'RETEIVA':
+                base_calculo = total_iva
+            else:
+                base_calculo = base_gravable
+            monto_estimado = round(base_calculo * tasa, 2) if datos_disponibles else 0
+            retenciones_disponibles.append({
+                'tipo': tipo_ret,
+                'nombre': _nombre_retencion(tipo_ret),
+                'puc': RETENCION_PUC[tipo_ret],
+                'tasa': tasa,
+                'base': base_calculo,
+                'monto_estimado': monto_estimado,
+            })
+
+        # ── Siesa horario check (7am-8pm Colombia) ──────────────────
+        try:
+            from datetime import timezone, timedelta
+            colombia_tz = timezone(timedelta(hours=-5))
+            hora_colombia = datetime.now(colombia_tz).hour
+            siesa_horario_ok = 7 <= hora_colombia < 20
+        except Exception:
+            siesa_horario_ok = True  # assume ok if tz check fails
+
+        # ── SiesaJob states for this recaudo ─────────────────────────
+        jobs_recaudo = SiesaJob.query.filter_by(
+            referencia_tipo='RecaudoEntrega',
+            referencia_id=recaudo_id,
+        ).all()
+        jobs_estado = {}
+        for j in jobs_recaudo:
+            jobs_estado[j.tipo] = {
+                'job_id': j.id,
+                'estado': j.estado,
+                'intentos': j.intentos,
+                'error_ultimo': j.error_ultimo,
+            }
+
+        # ── Determine pending actions ────────────────────────────────
+        acciones_pendientes = []
+        if estado in (EstadoEntrega.PARCIAL, EstadoEntrega.RECHAZADO):
+            if not recaudo.siesa_nc_triggered:
+                acciones_pendientes.append('NOTA_CREDITO_FACTURA')
+        if forma_pago not in ('CREDITO', 'EXENTO', '') and estado != EstadoEntrega.RECHAZADO:
+            if not recaudo.siesa_rc_triggered:
+                acciones_pendientes.append('RECIBO_CAJA')
+            if not recaudo.siesa_dc_triggered:
+                acciones_pendientes.append('DOCUMENTO_CONTABLE_RET')
+
+        return {
+            'recaudo_id': recaudo_id,
+            'estado_entrega': estado,
+            'forma_pago': forma_pago,
+            'datos_factura': {
+                'base_gravable': base_gravable,
+                'total_iva': total_iva,
+                'total_neto': total_neto,
+                'co_factura': co_factura,
+                'cuenta_cxc': cuenta_cxc,
+                'datos_disponibles': datos_disponibles,
+            },
+            'retenciones_disponibles': retenciones_disponibles,
+            'acciones_pendientes': acciones_pendientes,
+            'flags': {
+                'siesa_nc_triggered': recaudo.siesa_nc_triggered or False,
+                'siesa_rc_triggered': recaudo.siesa_rc_triggered or False,
+                'siesa_dc_triggered': recaudo.siesa_dc_triggered or False,
+            },
+            'jobs_estado': jobs_estado,
+            'siesa_horario_ok': siesa_horario_ok,
+        }
+
+    @staticmethod
+    def enviar_nc_recaudo(recaudo_id: int, admin_id: int = None,
+                          cantidades_verificadas: list = None) -> dict:
+        """
+        Enqueues NC (Nota Crédito) for a single recaudo.
+
+        Used in per-recaudo liquidation flow. Only valid for PARCIAL/RECHAZADO.
+        Idempotent: raises if NC already triggered.
+        """
+        recaudo = RecaudoEntrega.query.get(recaudo_id)
+        if not recaudo:
+            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
+
+        tarea = recaudo.tarea
+        if not tarea:
+            raise ValueError(f'Recaudo {recaudo_id} sin tarea asociada')
+
+        # Validate estado
+        estado = recaudo.estado_entrega
+        if estado not in (EstadoEntrega.PARCIAL, EstadoEntrega.RECHAZADO):
+            raise ValueError(
+                f'NC solo aplica para PARCIAL/RECHAZADO, recaudo {recaudo_id} '
+                f'está en estado {estado}'
+            )
+
+        # Idempotent guard
+        if recaudo.siesa_nc_triggered:
+            raise ValueError(
+                f'NC ya fue disparada para recaudo {recaudo_id} — '
+                'no se puede re-encolar (idempotencia)'
+            )
+
+        tipo_docto_fe = tarea.tipo_docto_pedido_siesa or ''
+        consec_fe = tarea.consec_docto_pedido_siesa or ''
+        if not tipo_docto_fe or not consec_fe:
+            raise ValueError(
+                f'Tarea {tarea.id} sin tipo_docto/consec_docto — '
+                'no se puede vincular a factura Siesa'
+            )
+
+        # If verified quantities provided, update items_entregados
+        if cantidades_verificadas is not None:
+            recaudo.items_entregados = cantidades_verificadas
+
+        # Determine items for NC
+        items_devueltos = recaudo.items_entregados if estado == EstadoEntrega.PARCIAL else None
+
+        notas = (
+            f'Liquidación per-recaudo | NC recaudo #{recaudo_id} | '
+            f'Estado: {estado} | Admin: {admin_id}'
+        )
+
+        _encolar_nota_credito(
+            recaudo, tipo_docto_fe, consec_fe,
+            items_devueltos=items_devueltos,
+            notas=notas,
+            admin_id=admin_id,
+        )
+
+        # Add accion_origen to the last enqueued job's payload
+        last_job = SiesaJob.query.filter_by(
+            referencia_tipo='RecaudoEntrega',
+            referencia_id=recaudo_id,
+            tipo='NOTA_CREDITO_FACTURA',
+        ).order_by(SiesaJob.id.desc()).first()
+
+        if last_job:
+            import json
+            payload = json.loads(last_job.payload)
+            payload['accion_origen'] = 'liquidacion_per_recaudo'
+            last_job.payload = json.dumps(payload, ensure_ascii=False)
+
+        db.session.commit()
+
+        # Trigger immediate DLQ processing
+        try:
+            from app.services.siesa_job_service import disparar_dlq_inmediato
+            disparar_dlq_inmediato()
+        except Exception:
+            pass
+
+        logger.info(
+            '[LIQUIDACION] enviar_nc_recaudo: recaudo %d, job %s encolado',
+            recaudo_id, last_job.id if last_job else '?'
+        )
+
+        return {
+            'ok': True,
+            'job_id': last_job.id if last_job else None,
+        }
+
+    @staticmethod
+    def registrar_cobro_recaudo(recaudo_id: int, admin_id: int = None,
+                                retenciones: list = None,
+                                monto_override: float = None) -> dict:
+        """
+        Enqueues RC + individual DCs for a single recaudo.
+
+        Uses with_for_update() for concurrency protection.
+        Validates sequencing (NC before RC for PARCIAL).
+        Calculates retentions with correct bases (RETEIVA on IVA, others on base_gravable).
+        """
+        if retenciones is None:
+            retenciones = []
+
+        recaudo = db.session.query(RecaudoEntrega).with_for_update().get(recaudo_id)
+        if not recaudo:
+            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
+
+        tarea = recaudo.tarea
+        if not tarea:
+            raise ValueError(f'Recaudo {recaudo_id} sin tarea asociada')
+
+        estado = recaudo.estado_entrega
+        forma_pago = (recaudo.forma_pago or '').upper()
+
+        # Validate: forma_pago not CREDITO/EXENTO
+        if forma_pago in ('CREDITO', 'EXENTO'):
+            raise ValueError(
+                f'No se puede registrar cobro para recaudo {recaudo_id} '
+                f'con forma_pago={forma_pago}'
+            )
+
+        # Idempotent guard
+        if recaudo.siesa_rc_triggered:
+            raise ValueError(
+                f'RC ya fue disparado para recaudo {recaudo_id} — '
+                'no se puede re-encolar (idempotencia)'
+            )
+
+        # If PARCIAL: NC must have been triggered first
+        if estado == EstadoEntrega.PARCIAL and not recaudo.siesa_nc_triggered:
+            raise ValueError(
+                f'Recaudo {recaudo_id} es PARCIAL pero NC no ha sido disparada — '
+                'secuencialidad: NC debe ir primero'
+            )
+
+        tipo_docto_fe = tarea.tipo_docto_pedido_siesa or ''
+        consec_fe = tarea.consec_docto_pedido_siesa or ''
+        if not tipo_docto_fe or not consec_fe:
+            raise ValueError(
+                f'Tarea {tarea.id} sin tipo_docto/consec_docto — '
+                'no se puede vincular a factura Siesa'
+            )
+
+        # ── Get real Siesa data ─────────────────────────────────────
+        from app.services.connekta_gateway import connekta
+        co_factura = ''
+        cuenta_cxc = ''
+        base_gravable = 0
+        total_iva = 0
+        total_neto = 0
+        datos_siesa_ok = False
+
+        try:
+            # Factura lines
+            lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
+            if lineas_raw:
+                for ln in lineas_raw:
+                    base_gravable += float(ln.get('f470_vlr_bruto', 0))
+                    total_iva += float(ln.get('f470_vlr_imp', 0))
+                    total_neto += float(ln.get('f470_vlr_neto', 0))
+                datos_siesa_ok = True
+
+            # Pedido cabecera: CO + NIT
+            cabecera = connekta.get_pedido_cabecera(tipo_docto_fe, consec_fe)
+            if cabecera:
+                co_factura = cabecera.get('f430_id_co', '')
+                nit = cabecera.get('f200_id_pedido_fact', '')
+                sucursal = cabecera.get('f461_id_sucursal_pedido_rem', '001')
+                # CxC account
+                try:
+                    if hasattr(connekta, 'get_cxc_general') and nit:
+                        cxc_data = connekta.get_cxc_general(nit)
+                        if cxc_data:
+                            cuenta_cxc = cxc_data.get('f253_id', '')
+                except Exception as e_cxc:
+                    logger.warning(
+                        '[LIQUIDACION] get_cxc_general falló para recaudo %d: %s',
+                        recaudo_id, e_cxc
+                    )
+            else:
+                nit = ''
+                sucursal = '001'
+        except Exception as e:
+            logger.error(
+                '[LIQUIDACION] registrar_cobro_recaudo: Siesa data fetch falló '
+                'para recaudo %d: %s', recaudo_id, e
+            )
+            raise ValueError(f'Datos de Siesa no disponibles: {e}')
+
+        # co_factura and cuenta_cxc are critical for RC cruce
+        if not co_factura:
+            raise ValueError(
+                'Datos de Siesa no disponibles: co_factura vacío — '
+                'no se puede crear cruce RC'
+            )
+        # cuenta_cxc can fall back to env var in connekta, but warn
+        if not cuenta_cxc:
+            logger.warning(
+                '[LIQUIDACION] cuenta_cxc vacía para recaudo %d — '
+                'RC usará fallback SIESA_CXC_AUXILIAR', recaudo_id
+            )
+
+        # ── Determine monto ─────────────────────────────────────────
+        if monto_override is not None:
+            monto = float(monto_override)
+        elif datos_siesa_ok and total_neto > 0:
+            monto = total_neto
+        else:
+            monto = float(recaudo.monto_cobrado or 0)
+
+        # ── Calculate retentions ────────────────────────────────────
+        import json
+        dc_jobs_info = []
+        retenciones_detalle = []
+        total_retenciones = 0
+
+        if retenciones:
+            # Validate base is available
+            if not datos_siesa_ok and base_gravable <= 0:
+                raise ValueError(
+                    'Base gravable no disponible — no se pueden calcular retenciones'
+                )
+
+            for ret in retenciones:
+                tipo_ret = ret.get('tipo', '')
+                cuenta_puc = RETENCION_PUC.get(tipo_ret, '')
+                tasa = RETENCION_TASA.get(tipo_ret, 0)
+
+                if not cuenta_puc:
+                    logger.error(
+                        '[LIQUIDACION] tipo retención %s sin PUC mapeado — omitido',
+                        tipo_ret
+                    )
+                    continue
+                if not tasa:
+                    logger.error(
+                        '[LIQUIDACION] tipo retención %s sin tasa — omitido',
+                        tipo_ret
+                    )
+                    continue
+
+                # RETEIVA: base = total_iva; others: base = base_gravable
+                if tipo_ret == 'RETEIVA':
+                    base_ret = total_iva
+                else:
+                    base_ret = base_gravable
+
+                monto_ret = round(base_ret * tasa, 2)
+                if monto_ret <= 0:
+                    logger.warning(
+                        '[LIQUIDACION] retención %s monto=0 (base=%.2f, tasa=%.4f) — omitido',
+                        tipo_ret, base_ret, tasa
+                    )
+                    continue
+
+                total_retenciones += monto_ret
+
+                # Enqueue individual DC SiesaJob directly
+                dc_notas = (
+                    f'Liquidación per-recaudo | DC recaudo #{recaudo_id} | '
+                    f'Retención {tipo_ret} | Admin: {admin_id}'
+                )
+                dc_job = SiesaJob.encolar(
+                    tipo='DOCUMENTO_CONTABLE_RET',
+                    payload={
+                        'recaudo_id': recaudo_id,
+                        'tipo_docto_fe': tipo_docto_fe,
+                        'consec_fe': str(consec_fe),
+                        'tercero_nit': nit,
+                        'sucursal': sucursal,
+                        'cuenta_puc': cuenta_puc,
+                        'monto': monto_ret,
+                        'base_gravable': base_ret,
+                        'co_factura': co_factura,
+                        'cuenta_cxc': cuenta_cxc,
+                        'notas': dc_notas,
+                        'accion_origen': 'liquidacion_per_recaudo',
+                    },
+                    referencia_tipo='RecaudoEntrega',
+                    referencia_id=recaudo_id,
+                    creado_por_id=admin_id,
+                )
+                # Flush to get dc_job.id
+                db.session.flush()
+
+                dc_jobs_info.append({
+                    'tipo': tipo_ret,
+                    'job_id': dc_job.id,
+                    'monto': monto_ret,
+                })
+                retenciones_detalle.append({
+                    'tipo': tipo_ret,
+                    'puc': cuenta_puc,
+                    'tasa': tasa,
+                    'monto': monto_ret,
+                    'base': base_ret,
+                    'siesa_triggered': True,
+                    'job_id': dc_job.id,
+                })
+
+                logger.info(
+                    '[LIQUIDACION] Encolado DC individual recaudo %d: %s PUC %s $%.2f',
+                    recaudo_id, tipo_ret, cuenta_puc, monto_ret
+                )
+
+        # ── Calculate monto_neto_rc ─────────────────────────────────
+        monto_neto_rc = round(monto - total_retenciones, 2)
+
+        # ── Enqueue RC ──────────────────────────────────────────────
+        rc_notas = (
+            f'Liquidación per-recaudo | RC recaudo #{recaudo_id} | '
+            f'Monto neto: ${monto_neto_rc:.2f} | Admin: {admin_id}'
+        )
+        depende_de_nc = (estado == EstadoEntrega.PARCIAL)
+
+        _encolar_recibo_caja(
+            recaudo, tipo_docto_fe, consec_fe,
+            nit, sucursal, monto_neto_rc, forma_pago,
+            notas=rc_notas,
+            admin_id=admin_id,
+            depende_de_nc=depende_de_nc,
+            co_factura=co_factura,
+            cuenta_cxc=cuenta_cxc,
+        )
+
+        # Add accion_origen to RC job payload
+        rc_job = SiesaJob.query.filter_by(
+            referencia_tipo='RecaudoEntrega',
+            referencia_id=recaudo_id,
+            tipo='RECIBO_CAJA',
+        ).order_by(SiesaJob.id.desc()).first()
+
+        if rc_job:
+            payload_rc = json.loads(rc_job.payload)
+            payload_rc['accion_origen'] = 'liquidacion_per_recaudo'
+            rc_job.payload = json.dumps(payload_rc, ensure_ascii=False)
+
+        # Save retenciones_detalle on recaudo
+        if retenciones_detalle:
+            recaudo.retenciones_detalle = retenciones_detalle
+
+        db.session.commit()
+
+        # Trigger immediate DLQ processing
+        try:
+            from app.services.siesa_job_service import disparar_dlq_inmediato
+            disparar_dlq_inmediato()
+        except Exception:
+            pass
+
+        logger.info(
+            '[LIQUIDACION] registrar_cobro_recaudo: recaudo %d — '
+            'RC job %s ($%.2f neto), %d DCs encolados',
+            recaudo_id, rc_job.id if rc_job else '?',
+            monto_neto_rc, len(dc_jobs_info)
+        )
+
+        return {
+            'ok': True,
+            'rc_job_id': rc_job.id if rc_job else None,
+            'dc_jobs': dc_jobs_info,
+            'monto_neto_rc': monto_neto_rc,
+        }
+
     @staticmethod
     def liquidar_ruta_siesa(ruta_id: int, admin_id: int = None) -> dict:
         """
