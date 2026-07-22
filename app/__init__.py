@@ -186,24 +186,27 @@ def create_app():
         resultado = ejecutar_sync()
         click.echo(resultado)
 
-    # ── Scheduler: sync automático cada hora 7am–8pm (Bogotá) ─────────────
+    # ── Schedulers ─────────────────────────────────────────────────────────
+    # Arquitectura: web server corre DLQ + pedidos. Worker separado corre
+    # los pesados (sync, inventory, prewarm). Nunca compiten por la DB.
     if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
         _app_logger = logging.getLogger(__name__)
         import importlib as _il
 
-        # Solo schedulers esenciales — DLQ (procesa jobs Siesa) y pedidos (sync pedidos)
-        _scheduler_esenciales = [
-            ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
-            ('app.services.pedidos_sync_service',       'init_scheduler',          '[PEDIDOS_SCHEDULER]'),
-        ]
-        for _mod_path, _fn_name, _tag in _scheduler_esenciales:
-            try:
-                _mod = _il.import_module(_mod_path)
-                getattr(_mod, _fn_name)(app)
-            except Exception as e:
-                _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
+        # Esenciales (DLQ + pedidos) — solo en web server, no en worker
+        if os.getenv('WORKER_SKIP_ESSENTIAL', 'false').lower() != 'true':
+            _scheduler_esenciales = [
+                ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
+                ('app.services.pedidos_sync_service',       'init_scheduler',          '[PEDIDOS_SCHEDULER]'),
+            ]
+            for _mod_path, _fn_name, _tag in _scheduler_esenciales:
+                try:
+                    _mod = _il.import_module(_mod_path)
+                    getattr(_mod, _fn_name)(app)
+                except Exception as e:
+                    _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
 
-        # Schedulers pesados desactivados temporalmente — se activan con HEAVY_SCHEDULERS=true
+        # Pesados — solo en worker separado (HEAVY_SCHEDULERS=true)
         if os.getenv('HEAVY_SCHEDULERS', 'false').lower() == 'true':
             _scheduler_pesados = [
                 ('app.services.siesa_sync_service',         'init_scheduler',          '[SCHEDULER]'),
@@ -231,8 +234,8 @@ def create_app():
                 iniciar_refresh_periodico(app=app)
             except Exception as e:
                 _app_logger.error(f'[INV-SIESA] No se pudo iniciar: {e}')
-            _app_logger.info('[STARTUP] TODOS los schedulers activos (HEAVY_SCHEDULERS=true)')
+            _app_logger.info('[STARTUP] Schedulers pesados activos (worker mode)')
         else:
-            _app_logger.info('[STARTUP] Solo DLQ + pedidos activos. Set HEAVY_SCHEDULERS=true para activar todos.')
+            _app_logger.info('[STARTUP] Solo DLQ + pedidos. Pesados corren en worker separado.')
 
     return app
