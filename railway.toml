@@ -5,7 +5,7 @@ buildCommand = "python -m pytest tests/ -x -q --tb=short --deselect=tests/test_1
 [deploy]
 releaseCommand = "flask db upgrade"
 startCommand = "gunicorn wsgi:app --workers=2 --threads=4 --timeout=60 --preload"
-healthcheckPath = "/health"
-healthcheckTimeout = 30
+# healthcheck configurado en Railway UI por servicio
+# (el worker no tiene healthcheck, el web sí)
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3
