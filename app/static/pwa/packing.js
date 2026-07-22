@@ -15,50 +15,108 @@ let EMP_ITEMS = [];
 let EMP_ITEM_IDX = 0;
 /** @type {Object<number, {factor: number, unidad: string}>} producto_id → empaque info */
 let EMP_EMPAQUES = {};
+/** @type {Object[]} Última lista de tareas de packing cargada del servidor, sin filtrar */
+let EMP_TAREAS_ALL = [];
+/** @type {'TODOS'|'PEDIDO'|'TRASLADO'} Pestaña activa en la lista de tareas */
+let EMP_FILTRO_TIPO = 'TODOS';
 
 // ─────────────────────────────────────────────────────────────
 // EMPACADOR — Lista de tareas
 // ─────────────────────────────────────────────────────────────
 
-/** Carga y renderiza la lista de tareas de packing asignadas al empacador. */
+/** Carga del servidor y renderiza la lista de tareas de packing asignadas al empacador. */
 async function empCargarTareas() {
   const el = document.getElementById('emp-lista');
   if (!el) return;
   try {
     const d = await get('/api/packing/?activas=true');
-    const tareas = (d.tareas || []).filter(t =>
+    EMP_TAREAS_ALL = (d.tareas || []).filter(t =>
       ['PENDIENTE', 'EN_PROCESO'].includes(t.estado) ||
       (t.estado === 'VERIFICADO' && !t.siesa_triggered)  // Siesa falló — permitir reintento
     );
 
-    if (!tareas.length) {
-      const titulo = document.getElementById('emp-modo-titulo');
-      if (titulo) titulo.textContent = '';
-      el.innerHTML = `<div style="text-align:center;padding:60px 20px;color:#555;">
-        Sin tareas de empaque pendientes ✓<br>
-        <button onclick="_refreshBtn(event, empCargarTareas)" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
-      </div>`;
-      return;
+    // Si la pestaña activa ya no tiene tareas de ese tipo, vuelve a "Todos"
+    const hayTrasladosTotal = EMP_TAREAS_ALL.some(t => t.tipo_documento === 'TRASLADO');
+    const hayPedidosTotal   = EMP_TAREAS_ALL.some(t => t.tipo_documento !== 'TRASLADO');
+    if ((EMP_FILTRO_TIPO === 'TRASLADO' && !hayTrasladosTotal) ||
+        (EMP_FILTRO_TIPO === 'PEDIDO' && !hayPedidosTotal)) {
+      EMP_FILTRO_TIPO = 'TODOS';
     }
 
-    // Título de contexto en el header blanco
-    const hayTraslados = tareas.some(t => t.tipo_documento === 'TRASLADO');
-    const hayPedidos   = tareas.some(t => t.tipo_documento !== 'TRASLADO');
+    empRenderListaTareas();
+  } catch (e) {
+    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando tareas</div>';
+  }
+}
+
+/** Cambia la pestaña de filtro (Todos/Pedidos/Traslados) y re-renderiza sin llamar al servidor. */
+function empSetFiltroTipo(tipo) {
+  EMP_FILTRO_TIPO = tipo;
+  empRenderListaTareas();
+}
+
+/** Renderiza pestañas + lista de tareas a partir de EMP_TAREAS_ALL, aplicando EMP_FILTRO_TIPO. */
+function empRenderListaTareas() {
+  const el = document.getElementById('emp-lista');
+  if (!el) return;
+
+  if (!EMP_TAREAS_ALL.length) {
     const titulo = document.getElementById('emp-modo-titulo');
-    if (titulo) {
-      if (hayTraslados && !hayPedidos) {
-        titulo.textContent = '📦 Packing Traslado';
-        titulo.style.color = '#c2410c';
-      } else if (hayPedidos && !hayTraslados) {
-        titulo.textContent = '🛒 Packing Pedido';
-        titulo.style.color = '#1d4ed8';
-      } else {
-        titulo.textContent = '📦 Packing Mixto';
-        titulo.style.color = 'var(--tx)';
-      }
-    }
+    if (titulo) titulo.textContent = '';
+    el.innerHTML = `<div style="text-align:center;padding:60px 20px;color:#555;">
+      Sin tareas de empaque pendientes ✓<br>
+      <button onclick="_refreshBtn(event, empCargarTareas)" style="margin-top:20px;background:#222;border:1px solid #333;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;">↻ Actualizar</button>
+    </div>`;
+    return;
+  }
 
-    el.innerHTML = `
+  // Título de contexto en el header blanco
+  const hayTraslados = EMP_TAREAS_ALL.some(t => t.tipo_documento === 'TRASLADO');
+  const hayPedidos   = EMP_TAREAS_ALL.some(t => t.tipo_documento !== 'TRASLADO');
+  const titulo = document.getElementById('emp-modo-titulo');
+  if (titulo) {
+    if (hayTraslados && !hayPedidos) {
+      titulo.textContent = '📦 Packing Traslado';
+      titulo.style.color = '#c2410c';
+    } else if (hayPedidos && !hayTraslados) {
+      titulo.textContent = '🛒 Packing Pedido';
+      titulo.style.color = '#1d4ed8';
+    } else {
+      titulo.textContent = '📦 Packing Mixto';
+      titulo.style.color = 'var(--tx)';
+    }
+  }
+
+  // Pestañas — solo si hay ambos tipos, si no no hay nada que separar
+  let tabsHtml = '';
+  if (hayTraslados && hayPedidos) {
+    const nPedidos = EMP_TAREAS_ALL.filter(t => t.tipo_documento !== 'TRASLADO').length;
+    const nTraslados = EMP_TAREAS_ALL.filter(t => t.tipo_documento === 'TRASLADO').length;
+    const tab = (tipo, label, count, colorActivo) => {
+      const activo = EMP_FILTRO_TIPO === tipo;
+      return `<button onclick="empSetFiltroTipo('${tipo}')"
+        style="flex:1;padding:9px 6px;border-radius:8px;border:1px solid ${activo ? colorActivo : '#333'};background:${activo ? colorActivo : 'transparent'};color:${activo ? '#fff' : '#aaa'};font-size:12px;font-weight:700;cursor:pointer;transition:.15s;">
+        ${label} (${count})
+      </button>`;
+    };
+    tabsHtml = `<div style="display:flex;gap:8px;padding:4px 0 12px;">
+      ${tab('TODOS', 'Todos', EMP_TAREAS_ALL.length, '#374151')}
+      ${tab('PEDIDO', '🛒 Pedidos', nPedidos, '#1d4ed8')}
+      ${tab('TRASLADO', '📦 Traslados', nTraslados, '#c2410c')}
+    </div>`;
+  }
+
+  const tareas = EMP_FILTRO_TIPO === 'TODOS'
+    ? EMP_TAREAS_ALL
+    : EMP_TAREAS_ALL.filter(t => (t.tipo_documento === 'TRASLADO') === (EMP_FILTRO_TIPO === 'TRASLADO'));
+
+  if (!tareas.length) {
+    el.innerHTML = `${tabsHtml}<div style="text-align:center;padding:40px 20px;color:#555;">Sin tareas en esta pestaña</div>`;
+    return;
+  }
+
+  el.innerHTML = `
+      ${tabsHtml}
       <div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 12px;">TAREAS DE EMPAQUE</div>
       ${tareas.map(t => {
         const verificados = t.items_verificados || 0;
@@ -115,9 +173,6 @@ async function empCargarTareas() {
           ${limpiarBtn}
         </div>`;
       }).join('')}`;
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:40px;">Error cargando tareas</div>';
-  }
 }
 
 // ─────────────────────────────────────────────────────────────
