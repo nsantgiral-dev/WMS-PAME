@@ -17,8 +17,8 @@ let EMP_ITEM_IDX = 0;
 let EMP_EMPAQUES = {};
 /** @type {Object[]} Última lista de tareas de packing cargada del servidor, sin filtrar */
 let EMP_TAREAS_ALL = [];
-/** @type {'TODOS'|'PEDIDO'|'TRASLADO'} Pestaña activa en la lista de tareas */
-let EMP_FILTRO_TIPO = 'TODOS';
+/** @type {'PEDIDO'|'TRASLADO'} Pestaña activa en la lista de tareas */
+let EMP_FILTRO_TIPO = 'PEDIDO';
 
 // ─────────────────────────────────────────────────────────────
 // EMPACADOR — Lista de tareas
@@ -35,12 +35,13 @@ async function empCargarTareas() {
       (t.estado === 'VERIFICADO' && !t.siesa_triggered)  // Siesa falló — permitir reintento
     );
 
-    // Si la pestaña activa ya no tiene tareas de ese tipo, vuelve a "Todos"
+    // Si la pestaña activa ya no tiene tareas de ese tipo, cambia a la que sí tenga
     const hayTrasladosTotal = EMP_TAREAS_ALL.some(t => t.tipo_documento === 'TRASLADO');
     const hayPedidosTotal   = EMP_TAREAS_ALL.some(t => t.tipo_documento !== 'TRASLADO');
-    if ((EMP_FILTRO_TIPO === 'TRASLADO' && !hayTrasladosTotal) ||
-        (EMP_FILTRO_TIPO === 'PEDIDO' && !hayPedidosTotal)) {
-      EMP_FILTRO_TIPO = 'TODOS';
+    if (EMP_FILTRO_TIPO === 'TRASLADO' && !hayTrasladosTotal && hayPedidosTotal) {
+      EMP_FILTRO_TIPO = 'PEDIDO';
+    } else if (EMP_FILTRO_TIPO === 'PEDIDO' && !hayPedidosTotal && hayTrasladosTotal) {
+      EMP_FILTRO_TIPO = 'TRASLADO';
     }
 
     empRenderListaTareas();
@@ -49,7 +50,7 @@ async function empCargarTareas() {
   }
 }
 
-/** Cambia la pestaña de filtro (Todos/Pedidos/Traslados) y re-renderiza sin llamar al servidor. */
+/** Cambia la pestaña de filtro (Pedidos/Traslados) y re-renderiza sin llamar al servidor. */
 function empSetFiltroTipo(tipo) {
   EMP_FILTRO_TIPO = tipo;
   empRenderListaTareas();
@@ -100,15 +101,12 @@ function empRenderListaTareas() {
       </button>`;
     };
     tabsHtml = `<div style="display:flex;gap:8px;padding:4px 0 12px;">
-      ${tab('TODOS', 'Todos', EMP_TAREAS_ALL.length, '#374151')}
       ${tab('PEDIDO', '🛒 Pedidos', nPedidos, '#1d4ed8')}
       ${tab('TRASLADO', '📦 Traslados', nTraslados, '#c2410c')}
     </div>`;
   }
 
-  const tareas = EMP_FILTRO_TIPO === 'TODOS'
-    ? EMP_TAREAS_ALL
-    : EMP_TAREAS_ALL.filter(t => (t.tipo_documento === 'TRASLADO') === (EMP_FILTRO_TIPO === 'TRASLADO'));
+  const tareas = EMP_TAREAS_ALL.filter(t => (t.tipo_documento === 'TRASLADO') === (EMP_FILTRO_TIPO === 'TRASLADO'));
 
   if (!tareas.length) {
     el.innerHTML = `${tabsHtml}<div style="text-align:center;padding:40px 20px;color:#555;">Sin tareas en esta pestaña</div>`;
