@@ -2498,6 +2498,11 @@ async function _cargarPlanilla(id) {
           </div>
           <div style="font-size:11px;color:#555;margin-top:6px;">
             ${p.bultos_entregados} entregado${p.bultos_entregados !== 1 ? 's' : ''} · ${p.bultos_rechazados} rechazado${p.bultos_rechazados !== 1 ? 's' : ''}
+            ${r && d.estado_financiero === 'LIQUIDADA' ? `<span style="margin-left:8px;">
+              ${r.siesa_nc_triggered ? '<span title="Nota crédito enviada" style="color:#60a5fa;">NC</span>' : ''}
+              ${r.siesa_rc_triggered ? '<span title="Recibo de caja enviado" style="color:#4ade80;margin-left:4px;">RC</span>' : ''}
+              ${r.siesa_dc_triggered ? '<span title="Documento contable enviado" style="color:#c084fc;margin-left:4px;">DC</span>' : ''}
+            </span>` : ''}
           </div>
           ${r && r.estado_entrega === 'RECHAZADO' ? `
           <div style="margin-top:10px;border-top:1px solid #3f1515;padding-top:10px;">
@@ -2535,10 +2540,24 @@ async function _cargarPlanilla(id) {
           </button>
         </div>`;
     } else if (d.estado_financiero === 'LIQUIDADA') {
-      html += `
-        <div style="background:#0d1a0d;border:1px solid #14532d;border-radius:10px;padding:12px;margin-top:8px;text-align:center;color:#4ade80;font-size:13px;font-weight:700;">
-          Ruta Liquidada — ${fmt(total)}
-        </div>`;
+      // Detectar si hay documentos Siesa pendientes de enviar
+      const hayPendientesSiesa = (d.paradas || []).some(p => {
+        const r = p.recaudo;
+        if (!r) return false;
+        if (r.estado_entrega === 'RECHAZADO' && !r.siesa_nc_triggered) return true;
+        if (r.estado_entrega === 'PARCIAL' && !r.siesa_nc_triggered) return true;
+        if (r.forma_pago && r.forma_pago !== 'CREDITO' && r.forma_pago !== 'EXENTO' && r.estado_entrega !== 'RECHAZADO' && !r.siesa_rc_triggered) return true;
+        return false;
+      });
+      if (hayPendientesSiesa) {
+        html += `
+          <div style="position:sticky;bottom:0;padding-top:12px;background:var(--bg,#0a0a0a);">
+            <button onclick="rutaLiquidarSiesa(${ruta.id})"
+              style="width:100%;padding:18px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:12px;font-size:16px;font-weight:800;cursor:pointer;">
+              Enviar a Siesa (NC/RC/DC)
+            </button>
+          </div>`;
+      }
     } else if (d.sin_gestionar > 0) {
       html += `
         <div style="background:#1a1a0d;border:1px solid #78350f;border-radius:10px;padding:12px;margin-top:8px;text-align:center;color:#fbbf24;font-size:13px;">
@@ -2558,7 +2577,7 @@ async function _cargarPlanilla(id) {
  * @param {number} id - ID de la ruta a liquidar
  */
 async function rutaLiquidar(id) {
-  if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero de la ruta.`)) return;
+  if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero y dispara los documentos en Siesa (NC, RC, DC).`)) return;
   try {
     // Paso 1: Liquidar en WMS
     const r = await fetch(API + '/api/rutas/' + id + '/liquidar', {
@@ -2572,8 +2591,49 @@ async function rutaLiquidar(id) {
     }
     alerta(`Ruta liquidada — Total: $${Number(d.total_recaudado || 0).toLocaleString('es-CO')}`, 'exito');
 
+    // Paso 2: Disparar liquidación Siesa automáticamente (NC/RC/DC)
+    try {
+      const rs = await fetch(API + '/api/rutas/' + id + '/liquidar-siesa', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN },
+      });
+      const ds = await rs.json();
+      if (rs.ok) {
+        const partes = [];
+        if (ds.nc_encolados) partes.push(ds.nc_encolados + ' NC');
+        if (ds.rc_encolados) partes.push(ds.rc_encolados + ' RC');
+        if (ds.dc_encolados) partes.push(ds.dc_encolados + ' DC');
+        if (ds.credito_omitidos) partes.push(ds.credito_omitidos + ' a cartera');
+        if (partes.length) alerta('Siesa: ' + partes.join(', ') + ' encolados', 'exito');
+        if (ds.errores && ds.errores.length) alerta(ds.errores.length + ' error(es) al encolar Siesa — ver planilla', 'error');
+      }
+    } catch (e) { /* silencioso — el WMS ya liquidó */ }
+
     await _cargarPlanilla(id);
     await cargarListaRutas();
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function rutaLiquidarSiesa(id) {
+  if (!confirm(`¿Re-enviar documentos de Ruta #${id} a Siesa?\nSolo se procesarán los que no se hayan enviado aún.`)) return;
+  try {
+    const r = await fetch(API + '/api/rutas/' + id + '/liquidar-siesa', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const d = await r.json();
+    if (r.ok) {
+      const partes = [];
+      if (d.nc_encolados) partes.push(d.nc_encolados + ' NC');
+      if (d.rc_encolados) partes.push(d.rc_encolados + ' RC');
+      if (d.dc_encolados) partes.push(d.dc_encolados + ' DC');
+      if (d.ya_procesados) partes.push(d.ya_procesados + ' ya procesados');
+      alerta(partes.length ? 'Siesa: ' + partes.join(', ') : 'Sin documentos nuevos por enviar', 'exito');
+      if (d.errores && d.errores.length) alerta(d.errores.length + ' error(es) — revisar Jobs Siesa', 'error');
+      await _cargarPlanilla(id);
+    } else {
+      alerta(d.error || 'Error al liquidar en Siesa', 'error');
+    }
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 

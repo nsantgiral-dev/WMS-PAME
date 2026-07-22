@@ -2267,29 +2267,7 @@ async function _guardarUsuario(uid) {
 
 /** @param {number} id - Route ID to trigger financial liquidation for. */
 
-/** @param {number} id - Route ID to trigger Siesa liquidation (NCE+RC+DC jobs). */
-async function rutaLiquidarSiesa(id) {
-  if (!confirm(`¿Re-enviar documentos de Ruta #${id} a Siesa?\nSolo se procesarán los que no se hayan enviado aún.`)) return;
-  try {
-    const r = await fetch(API + '/api/rutas/' + id + '/liquidar-siesa', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN },
-    });
-    const d = await r.json();
-    if (r.ok) {
-      const partes = [];
-      if (d.nc_encolados) partes.push(d.nc_encolados + ' NC');
-      if (d.rc_encolados) partes.push(d.rc_encolados + ' RC');
-      if (d.dc_encolados) partes.push(d.dc_encolados + ' DC');
-      if (d.ya_procesados) partes.push(d.ya_procesados + ' ya procesados');
-      alerta(partes.length ? 'Siesa: ' + partes.join(', ') : 'Sin documentos nuevos por enviar', 'exito');
-      if (d.errores && d.errores.length) alerta(d.errores.length + ' error(es) — revisar Jobs Siesa', 'error');
-      await _cargarPlanilla(id);
-    } else {
-      alerta(d.error || 'Error al liquidar en Siesa', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
-}
+// rutaLiquidarSiesa → movida a rutas.js
 
 
 // ── Config bodega por almacén ─────────────────────────────────────────────────
