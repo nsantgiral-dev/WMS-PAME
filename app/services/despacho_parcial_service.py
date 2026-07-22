@@ -124,20 +124,34 @@ class DespachoParialService:
 
         logger.info('[DESPACHO_PARCIAL] rowid_map tarea=%s: %s', tarea.id, rowid_map)
 
-        # Líneas confirmadas agotadas por auditoría (NO_ENCONTRADO) — deben zerarse
-        # explícitamente en Siesa (244328 con cant_por_remisionar=0). Sin esto, T405
-        # conserva la cantidad original del pedido y esa línea reaparece completa en
-        # la RM/FE aunque nunca se haya picado ni pasado por packing. Distinto de una
-        # línea simplemente aún no despachada (despacho parcial legítimo), que sí debe
-        # seguir intacta para una oleada futura — por eso se filtra por auditoría
-        # NO_ENCONTRADO específicamente, no por "ausente en cantidades".
+        # Líneas confirmadas agotadas — deben zerarse explícitamente en Siesa (244328
+        # con cant_por_remisionar=0). Sin esto, T405 conserva la cantidad original del
+        # pedido y esa línea reaparece completa en la RM/FE aunque nunca se haya picado
+        # ni pasado por packing. Distinto de una línea simplemente aún no despachada
+        # (despacho parcial legítimo, sigue PENDIENTE/EN_PROCESO), que sí debe seguir
+        # intacta para una oleada futura.
+        #
+        # Dos caminos consideran una referencia agotada:
+        #  1. Auditada: picking BLOQUEADO → admin audita NO_ENCONTRADO (estado=CANCELADO).
+        #  2. Confirmada en 0 directo: el operario recoge 0 y confirma sin pasar por
+        #     "reportar problema" (estado=COMPLETADO, cantidad_recogida=0). Sin este
+        #     camino, PD1325/PAPELSP9830 (caso real 2026-07-22) se hubiera facturado
+        #     con la cantidad original del pedido pese a recogida=0 confirmada.
         from app.models.picking import TareaPicking
         _referencias_agotadas = {
             _tp.producto.codigo_siesa
             for _tp in TareaPicking.query.filter(
                 TareaPicking.referencia_documento == tarea.numero_pedido_siesa,
-                TareaPicking.estado == 'CANCELADO',
-                TareaPicking.auditoria_resultado == 'NO_ENCONTRADO',
+                db.or_(
+                    db.and_(
+                        TareaPicking.estado == 'CANCELADO',
+                        TareaPicking.auditoria_resultado == 'NO_ENCONTRADO',
+                    ),
+                    db.and_(
+                        TareaPicking.estado == 'COMPLETADO',
+                        TareaPicking.cantidad_recogida == 0,
+                    ),
+                ),
             ).all()
             if _tp.producto and _tp.producto.codigo_siesa
         }
