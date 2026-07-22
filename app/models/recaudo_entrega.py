@@ -47,6 +47,10 @@ class RecaudoEntrega(db.Model):
     # Monto del descuento/retención aplicado
     monto_descuento   = db.Column(db.Numeric(12, 2), default=0)
 
+    # Retenciones detalladas (reemplaza motivo_descuento para multi-retención)
+    # [{tipo, puc, tasa, monto, base, siesa_triggered, job_id}]
+    retenciones_detalle = db.Column(db.JSON, nullable=True)
+
     # Idempotencia Siesa — flags independientes por conector
     siesa_rc_triggered  = db.Column(db.Boolean, default=False)   # 142888 ReciboCaja
     siesa_nc_triggered  = db.Column(db.Boolean, default=False)   # 142946 NotaFactura
@@ -83,6 +87,7 @@ class RecaudoEntrega(db.Model):
             'siesa_rc_triggered':    self.siesa_rc_triggered or False,
             'siesa_nc_triggered':    self.siesa_nc_triggered or False,
             'siesa_dc_triggered':    self.siesa_dc_triggered or False,
+            'retenciones_detalle':   self.retenciones_detalle or [],
             'confirmado_por':        self.confirmado_por,
             'editado_por':           self.editado_por,
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,

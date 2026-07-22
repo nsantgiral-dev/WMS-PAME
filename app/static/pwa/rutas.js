@@ -2577,9 +2577,8 @@ async function _cargarPlanilla(id) {
  * @param {number} id - ID de la ruta a liquidar
  */
 async function rutaLiquidar(id) {
-  if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero y dispara los documentos en Siesa (NC, RC, DC).`)) return;
+  if (!confirm(`¿Liquidar Ruta #${id}?\nEsto confirma el cuadre financiero en WMS.\nLuego usa el módulo Liquidación para documentar NC/RC/DC en Siesa por parada.`)) return;
   try {
-    // Paso 1: Liquidar en WMS
     const r = await fetch(API + '/api/rutas/' + id + '/liquidar', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN },
@@ -2589,26 +2588,8 @@ async function rutaLiquidar(id) {
       alerta(d.error || 'Error al liquidar', 'error');
       return;
     }
-    alerta(`Ruta liquidada — Total: $${Number(d.total_recaudado || 0).toLocaleString('es-CO')}`, 'exito');
-
-    // Paso 2: Disparar liquidación Siesa automáticamente (NC/RC/DC)
-    try {
-      const rs = await fetch(API + '/api/rutas/' + id + '/liquidar-siesa', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer ' + TOKEN },
-      });
-      const ds = await rs.json();
-      if (rs.ok) {
-        const partes = [];
-        if (ds.nc_encolados) partes.push(ds.nc_encolados + ' NC');
-        if (ds.rc_encolados) partes.push(ds.rc_encolados + ' RC');
-        if (ds.dc_encolados) partes.push(ds.dc_encolados + ' DC');
-        if (ds.credito_omitidos) partes.push(ds.credito_omitidos + ' a cartera');
-        if (partes.length) alerta('Siesa: ' + partes.join(', ') + ' encolados', 'exito');
-        if (ds.errores && ds.errores.length) alerta(ds.errores.length + ' error(es) al encolar Siesa — ver planilla', 'error');
-      }
-    } catch (e) { /* silencioso — el WMS ya liquidó */ }
-
+    alerta('Ruta liquidada en WMS — documenta NC/RC/DC desde el módulo Liquidación', 'exito');
+    // NO auto-fire Siesa — el operador decide per-parada en Liquidación
     await _cargarPlanilla(id);
     await cargarListaRutas();
   } catch (e) { alerta('Error de conexión', 'error'); }
