@@ -743,3 +743,302 @@ async function trasReintentarDespachoSiesa(id) {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
+
+
+// Requisiciones — movido desde app.js 2026-07-21
+// ─────────────────────────────────────────────────────────────────────────────
+// MÓDULO REQUISICIONES — Solicitudes de traslado enviadas desde tienda
+// Responsabilidad única: mostrar requisiciones y disparar despacho.
+// No comparte estado ni funciones con tab-pedidos ni tab-traslados.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const _REQ_ESTADOS = ['ENVIADA', 'EN_PICKING', 'EN_PACKING', 'PREPARADO', 'EN_TRANSITO', 'ENTREGADA'];
+const REQ_TAB_LABELS = ['PENDIENTE APROBAR', 'EN PICKING', 'EN EMPAQUE', 'LISTO DESPACHAR', 'EN TRÁNSITO', 'RECIBIDO'];
+let REQ_TAB_ACTIVO = 0;
+let REQ_GRUPOS_HTML = ['', '', '', '', '', ''];
+let REQ_GRUPOS_COUNT = [0, 0, 0, 0, 0, 0];
+
+/** Fetch and render transfer requisitions (RIT) grouped by status. */
+async function cargarRequisiciones() {
+  const lista = document.getElementById('req-lista');
+  if (!lista) return;
+  lista.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx3);">Cargando...</div>';
+  try {
+    const promesas = _REQ_ESTADOS.map(e => get(`/api/traslados/?estado=${e}`).catch(() => ({ solicitudes: [] })));
+    const resultados = await Promise.all(promesas);
+    REQ_GRUPOS_HTML = resultados.map((r, i) => {
+      // ENTREGADA ya está resuelta — solo mostramos las últimas para confirmar recepción sin saturar la cola
+      const visibles = _REQ_ESTADOS[i] === 'ENTREGADA' ? (r.solicitudes || []).slice(0, 5) : (r.solicitudes || []);
+      REQ_GRUPOS_COUNT[i] = visibles.length;
+      return visibles.map(s => _renderRequisicionCard(s)).join('');
+    });
+    renderReqTabsYLista();
+  } catch (e) {
+    lista.innerHTML = '<div style="text-align:center;padding:20px;color:#ef4444;">Error cargando requisiciones</div>';
+  }
+}
+
+/** Render requisition sub-tabs and the HTML for the active group. */
+function renderReqTabsYLista() {
+  const tabsEl = document.getElementById('req-tabs');
+  const lista = document.getElementById('req-lista');
+  if (!tabsEl || !lista) return;
+
+  tabsEl.innerHTML = REQ_TAB_LABELS.map((label, i) => {
+    const count = REQ_GRUPOS_COUNT[i] || 0;
+    return `<div class="subtab${i === REQ_TAB_ACTIVO ? ' active' : ''}" onclick="reqCambiarTab(${i})">${label}${count ? ` (${count})` : ''}</div>`;
+  }).join('');
+
+  lista.innerHTML = REQ_GRUPOS_HTML[REQ_TAB_ACTIVO]
+    || '<div style="text-align:center;padding:40px;color:var(--tx3);">Sin requisiciones en esta pestaña ✓</div>';
+}
+
+/** @param {number} idx - Requisition sub-tab index to activate. */
+function reqCambiarTab(idx) {
+  REQ_TAB_ACTIVO = idx;
+  renderReqTabsYLista();
+}
+
+const _REQ_BODEGA_NOMBRES = {
+  'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
+  'NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro',
+  'PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito',
+};
+/**
+ * @param {number} id - Warehouse ID.
+ * @returns {string} Display name for the warehouse.
+ */
+function _reqNombreBodega(id) {
+  return id ? (_REQ_BODEGA_NOMBRES[id] ? `${_REQ_BODEGA_NOMBRES[id]} (${id})` : id) : '—';
+}
+
+/**
+ * @param {Object} r - Requisition object.
+ * @returns {string} HTML card with status and action buttons.
+ */
+function _renderRequisicionCard(r) {
+  const BADGE = {
+    ENVIADA:     { color: '#d97706', bg: '#fef3c7', label: '⏳ Pendiente aprobar' },
+    EN_PICKING:  { color: '#2563eb', bg: '#dbeafe', label: '🔍 En picking' },
+    EN_PACKING:  { color: '#ea580c', bg: '#fff7ed', label: '📦 En empaque' },
+    PREPARADO:   { color: '#7c3aed', bg: '#ede9fe', label: '✅ Listo despachar' },
+    EN_TRANSITO: { color: '#0891b2', bg: '#cffafe', label: '🚚 En tránsito' },
+    ENTREGADA:   { color: '#16a34a', bg: '#dcfce7', label: '✓ Recibido' },
+  };
+  const badge  = BADGE[r.estado] || { color: '#6b7280', bg: '#f3f4f6', label: r.estado };
+  const fecha  = r.fecha_creacion ? new Date(r.fecha_creacion).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—';
+  const items  = (r.items || []);
+  const totalUnd = items.reduce((s, i) => s + (i.cantidad_solicitada || 0), 0);
+
+  const itemsHtml = items.slice(0, 4).map(i =>
+    `<div style="display:flex;justify-content:space-between;font-size:11px;color:var(--tx3);padding:2px 0;">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%;">${i.producto_nombre || i.producto_codigo_siesa || '—'}</span>
+      <span style="font-weight:600;color:var(--tx2);">${i.cantidad_solicitada}</span>
+    </div>`
+  ).join('');
+  const masItems = items.length > 4
+    ? `<div style="font-size:11px;color:var(--tx3);margin-top:2px;">+${items.length - 4} más</div>`
+    : '';
+
+  const accionBtn =
+    r.estado === 'ENVIADA'
+      ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+           <button onclick="reqRechazar(${r.id})"
+             style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                    background:#dc2626;color:#fff;border:none;">
+             ✕ Rechazar
+           </button>
+           <button onclick="reqEditarAprobar(${r.id})"
+             style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                    background:#1d4ed8;color:#fff;border:none;">
+             ✏ Editar
+           </button>
+           <button onclick="aprobarRequisicion(${r.id})"
+             style="padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                    background:#16a34a;color:#fff;border:none;">
+             ✓ Aprobar
+           </button>
+         </div>`
+    : r.estado === 'EN_PICKING'
+      ? `<span style="font-size:12px;color:#2563eb;font-weight:600;">🔍 Operario pickeando...</span>`
+    : r.estado === 'EN_PACKING'
+      ? `<div style="text-align:right;">
+           <span style="font-size:12px;color:#ea580c;font-weight:600;">📦 Empacando en ${_reqNombreBodega(r.bodega_origen_siesa)}...</span>
+           ${r.packing_info ? `<div style="font-size:10px;color:#6b7280;margin-top:2px;">${r.packing_info.codigo} · ${r.packing_info.empacador || 'sin asignar'}</div>` : ''}
+         </div>`
+    : r.estado === 'PREPARADO'
+      ? `<button onclick="despacharRequisicion(${r.id})"
+           style="padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;
+                  background:#111;color:#fff;border:1px solid #111;">
+           🚚 Despachar
+         </button>`
+    : r.estado === 'EN_TRANSITO'
+      ? `<span style="font-size:12px;color:#0891b2;font-weight:600;">🚚 En camino a ${_reqNombreBodega(r.bodega_destino_siesa)}</span>`
+    : r.estado === 'ENTREGADA'
+      ? `<span style="font-size:12px;color:#16a34a;font-weight:600;">✓ Recibido${r.fecha_entrega ? ' · ' + new Date(r.fecha_entrega).toLocaleString('es-CO', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : ''}</span>`
+    : '';
+
+  return `
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--tx1);">${r.codigo}</div>
+          <div style="display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap;">
+            <span style="font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:#1e3a5f;color:#93c5fd;">
+              📦 ${_reqNombreBodega(r.bodega_origen_siesa)}
+            </span>
+            <span style="font-size:12px;color:var(--tx3);">→</span>
+            <span style="font-size:11px;font-weight:600;padding:2px 7px;border-radius:4px;background:#431407;color:#fb923c;">
+              🏪 ${r.nombre_punto_venta ? `${r.nombre_punto_venta} (${r.bodega_destino_siesa || ''})` : _reqNombreBodega(r.bodega_destino_siesa)}
+            </span>
+          </div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:3px;">
+            Solicita: <strong style="color:var(--tx2);">${r.solicitante_nombre || '—'}</strong> · ${fecha}
+          </div>
+        </div>
+        <span style="font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;
+                     color:${badge.color};background:${badge.bg};">
+          ${badge.label}
+        </span>
+      </div>
+      <div style="background:var(--bg-s2);border-radius:8px;padding:8px;margin-bottom:10px;">
+        ${itemsHtml}${masItems}
+        <div style="font-size:11px;color:var(--tx3);margin-top:4px;border-top:1px solid var(--brd);padding-top:4px;">
+          ${items.length} producto${items.length !== 1 ? 's' : ''} · ${totalUnd} unidades
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;">
+        ${accionBtn}
+      </div>
+    </div>`;
+}
+
+/** @param {number} id - Requisition ID to dispatch (triggers Siesa STS from RIT). */
+async function despacharRequisicion(id) {
+  if (!confirm('¿Confirmar despacho de esta requisición?')) return;
+  try {
+    const r = await fetch(`/api/traslados/${id}/despachar`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al despachar', 'error'); return; }
+    alerta('Requisición despachada ✓', 'exito');
+    await cargarRequisiciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+/** @param {number} id - Requisition ID to approve. */
+async function aprobarRequisicion(id) {
+  if (!confirm('¿Aprobar esta requisición? Se crearán las tareas de picking en Bodega.')) return;
+  try {
+    const r = await fetch(`/api/traslados/${id}/aprobar`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error al aprobar', 'error'); return; }
+    alerta('Requisición aprobada — el operario de traslado puede iniciar el picking ✓', 'exito');
+    await cargarRequisiciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+/** @param {number} id - Requisition ID to reject. */
+async function reqRechazar(id) {
+  const motivo = prompt('Motivo del rechazo:');
+  if (!motivo) return;
+  try {
+    const r = await fetch(API + `/api/traslados/${id}/rechazar`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo })
+    });
+    const d = await r.json();
+    if (r.ok) { alerta('Solicitud rechazada', 'advertencia'); cargarRequisiciones(); }
+    else { alerta(d.error || 'Error al rechazar', 'error'); }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+/** @param {number} id - Requisition ID to open the edit/approve modal for. */
+async function reqEditarAprobar(id) {
+  let solicitud, operariosData;
+  try {
+    [solicitud, operariosData] = await Promise.all([
+      fetch(API + `/api/traslados/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+      fetch(API + `/api/traslados/operarios-disponibles`, { headers: { Authorization: 'Bearer ' + TOKEN } }).then(r => r.json()),
+    ]);
+  } catch (e) { alerta('Error de conexión', 'error'); return; }
+
+  const items = solicitud.items || [];
+  const operarios = operariosData.operarios || [];
+
+  const filasItems = items.map(i => `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <div style="flex:1;font-size:12px;">
+        <div style="font-weight:600;">${i.producto_nombre || i.producto_codigo}</div>
+        <div style="color:#666;font-size:11px;">Solicitado: ${i.cantidad_solicitada} · Disp. Siesa: ${i.disponible_siesa ?? '—'}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;">
+        <label style="font-size:11px;color:#999;">Aprobar:</label>
+        <input type="number" id="req-apr-${i.id}" value="${i.cantidad_solicitada}" min="0"
+          style="width:70px;padding:6px;background:#1a1a1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:13px;text-align:center;">
+      </div>
+    </div>
+  `).join('');
+
+  const opcionesOperarios = operarios.length
+    ? `<option value="">Sin asignar (admin recoge)</option>` + operarios.map(o => `<option value="${o.id}">${o.nombre}</option>`).join('')
+    : `<option value="">No hay operarios disponibles</option>`;
+
+  const modal = document.createElement('div');
+  modal.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#111;border-radius:16px;padding:24px;width:100%;max-width:440px;border:1px solid #166534;max-height:85vh;overflow-y:auto;">
+        <div style="font-size:17px;font-weight:700;margin-bottom:4px;">Editar y aprobar requisición</div>
+        <div style="font-size:12px;color:#666;margin-bottom:16px;">${solicitud.nombre_punto_venta || solicitud.bodega_destino_siesa || '—'}</div>
+
+        <div style="font-size:12px;font-weight:600;margin-bottom:8px;color:#aaa;">CANTIDADES A ENVIAR</div>
+        ${filasItems}
+
+        <div style="font-size:12px;font-weight:600;margin-top:14px;margin-bottom:8px;color:#aaa;">OPERARIO QUE RECOGE</div>
+        <select id="req-apr-operario"
+          style="width:100%;padding:10px;background:#1a1a1a;border:1px solid #333;border-radius:8px;color:#fff;font-size:14px;margin-bottom:16px;">
+          ${opcionesOperarios}
+        </select>
+
+        <div style="display:flex;gap:8px;">
+          <button id="btn-req-apr-ok" style="flex:1;padding:12px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;">Aprobar</button>
+          <button onclick="this.closest('[style*=fixed]').parentElement.remove()" style="padding:12px 16px;background:#222;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;">Cancelar</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  modal.querySelector('#btn-req-apr-ok').onclick = async () => {
+    const items_aprobados = items.map(i => ({
+      id: i.id,
+      cantidad_aprobada: Number(document.getElementById(`req-apr-${i.id}`).value) || 0
+    }));
+    const operario_id = document.getElementById('req-apr-operario').value
+      ? Number(document.getElementById('req-apr-operario').value) : null;
+    modal.remove();
+    try {
+      const r = await fetch(API + `/api/traslados/${id}/aprobar`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items_aprobados, operario_id })
+      });
+      const d = await r.json();
+      if (r.ok) {
+        alerta(operario_id ? 'Aprobado — operario notificado' : 'Aprobado — sin operario asignado', 'exito');
+        cargarRequisiciones();
+      } else { alerta(d.error || 'Error', 'error'); }
+    } catch (e) { alerta('Error de conexión', 'error'); }
+  };
+}
+
