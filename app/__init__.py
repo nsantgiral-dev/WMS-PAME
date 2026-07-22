@@ -35,6 +35,19 @@ def create_app():
             'pool_size': int(os.getenv('DB_POOL_SIZE', '20')),
             'max_overflow': int(os.getenv('DB_MAX_OVERFLOW', '10')),
             'pool_recycle': 1800,  # reciclar conexiones cada 30min (Railway puede cerrar idle)
+            # Sin esto, una query real puede quedar esperando indefinidamente detrás
+            # de una transacción larga de los schedulers de sync (ej. upsert de miles
+            # de productos con un solo commit por bodega) — incidente 2026-07-22: /health
+            # tardando 20-170s sin ninguna excepción ni WORKER TIMEOUT porque Postgres
+            # esperaba el lock sin límite. lock_timeout falla rápido si choca con una fila
+            # bloqueada; statement_timeout es la red de seguridad para cualquier otra query
+            # colgada. Ambos por sesión vía libpq 'options', configurables por env.
+            'connect_args': {
+                'options': (
+                    f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '25000')} "
+                    f"-c lock_timeout={os.getenv('DB_LOCK_TIMEOUT_MS', '8000')}"
+                ),
+            },
         })
     app.config['SQLALCHEMY_ENGINE_OPTIONS'] = _engine_opts
     app.config['JWT_SECRET_KEY'] = secret_key
