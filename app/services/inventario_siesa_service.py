@@ -345,6 +345,8 @@ def _guardar_stock_en_bd(inventario_global: dict):
                     ))
             db.session.commit()
             logger.info('[INV-SIESA] BD: %s guardado (%d productos)', bod, len(productos))
+            import time as _ti
+            _ti.sleep(1)  # throttle: respiro entre bodegas (cada una escribe miles de rows)
     except Exception as exc:
         db.session.rollback()
         logger.error('[INV-SIESA] Error guardando en BD: %s', exc)

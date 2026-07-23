@@ -1527,6 +1527,7 @@ def init_scheduler(app):
     from apscheduler.schedulers.background import BackgroundScheduler
 
     def _warm_all():
+        import time as _tw
         with app.app_context():
             for bod in _BODEGAS_PREWARM:
                 try:
@@ -1534,6 +1535,7 @@ def init_scheduler(app):
                     TrasladoService.get_stock_disponible(bod)
                 except Exception as exc:
                     logger.warning('[STOCK_PREWARM] %s: %s', bod, exc)
+                _tw.sleep(0.3)  # throttle: respiro entre bodegas
 
     scheduler = BackgroundScheduler()
     scheduler.add_job(

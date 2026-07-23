@@ -160,6 +160,10 @@ def _run_sync(app):
                 if len(rows) < 100:
                     break
 
+                # Throttle: dar respiro a la DB entre páginas (worker comparte pool)
+                import time as _time_sync
+                _time_sync.sleep(float(os.environ.get('SYNC_PAGE_DELAY_S', '0.5')))
+
         except Exception as e:
             logger.error(f'[SYNC] Error durante sync: {e}')
             db.session.rollback()
