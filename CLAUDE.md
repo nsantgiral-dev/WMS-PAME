@@ -34,8 +34,8 @@ Orden de carga: app → picking → packing → recepcion → rutas → traslado
 
 | ID | Nombre | Qué hace | Flujo WMS | Job DLQ | Función gateway |
 |----|--------|----------|-----------|---------|-----------------|
-| 238925 | FacturaDesdePedido | FE desde pedido comprometido | Cierre packing (pedido completo) | DESPACHO_F470 | `trigger_factura()` |
-| 142945 | RemisionPedido | Remisión (despacho parcial) | Cierre packing parcial | DESPACHO_F470 | `trigger_despacho()` |
+| 238925 | FacturaDesdePedido | FE directa desde pedido comprometido | **No usado** — `trigger_factura()` no tiene ningún caller; todo cierre (completo o parcial) pasa por 244328→142945→142943 | — | `trigger_factura()` (código muerto) |
+| 142945 | RemisionPedido | Remisión — descarga inventario cuenta 14 | Cierre packing, completo o parcial (unificado en `DespachoParialService`) | DESPACHO_F470 | `trigger_despacho()` |
 | 142943 | FacturaDesdeRemision | FE desde remisión existente | Post-142945 (cadena) | — (inline) | `trigger_factura_desde_remision()` |
 | 142948 | EntradaOC | Entrada por orden de compra | Recepción confirmada | ENTRADA_OC | `confirmar_entrada_compras()` |
 | 142951 | DocumentoInv | Ajuste físico / transferencia averías | Conteo cíclico / devolución | AJUSTE_CONTEO / TRASLADO_AVERIAS | `enviar_ajuste_inventario()` / `transferir_a_averias()` |
@@ -44,7 +44,7 @@ Orden de carga: app → picking → packing → recepcion → rutas → traslado
 | 173079 | TransitoEntrada (ETS) | Llegada en tránsito | Recepción traslado | — (inline) | `transferencia_transito_entrada()` |
 | 174646 | RequisicionTraslado (RIT) | Requisición de transferencia | Aprobación traslado | — (inline) | `crear_requisicion_traslado()` |
 | 174930 | TransferenciaDesdeRIT | STS desde RIT existente | Despacho traslado (con RIT) | DESPACHO_TRASLADO | `despachar_desde_requisicion()` |
-| 244328 | CompromisosPedido | Actualiza cantidades comprometidas | Pre-despacho parcial | — (inline) | `trigger_comprometer_pedido()` |
+| 244328 | CompromisosPedido | Actualiza cantidades comprometidas (paso 1 del cierre de pedido) | Cierre packing, completo o parcial (unificado en `DespachoParialService`) | DESPACHO_F470 | `trigger_comprometer_pedido()` |
 | 142946 | NotaFactura (NCE) | Nota crédito por devolución | Liquidación: PARCIAL/RECHAZADO | NOTA_CREDITO_FACTURA | `trigger_nota_factura()` |
 | 142888 | ReciboCaja (RC) | Registro de cobro del conductor | Liquidación: CONTADO | RECIBO_CAJA | `trigger_recibo_caja()` |
 | 142882 | DocumentoContable (DC) | Retenciones tributarias | Liquidación: con retención | DOCUMENTO_CONTABLE_RET | `trigger_documento_contable()` |
@@ -75,7 +75,7 @@ Orden de carga: app → picking → packing → recepcion → rutas → traslado
 | `CONNEKTA_ITOKEN` | `''` | Token (ConniToken header). Estáticos — no expiran |
 | `CONNEKTA_URL` | `https://serviciosqa.siesacloud.com` | QA o producción |
 | `CONNEKTA_ID_COMPANIA` | `8215` | Tenant Connekta (NO es F_CIA) |
-| `CONNEKTA_ID_SISTEMA` | `''` | Para conectores dinámicos v3.1 (238925, 244328) |
+| `CONNEKTA_ID_SISTEMA` | `''` | Para conectores dinámicos v3.1 (244328, 142945) |
 | `MODO_ENSAYO` | `''` | `'true'` = GETs reales, POSTs bloqueados |
 
 ### Identidad Empresa
@@ -93,7 +93,7 @@ Orden de carga: app → picking → packing → recepcion → rutas → traslado
 
 | Variable | Default | Clase | Conectores |
 |----------|---------|-------|------------|
-| `SIESA_TIPO_DOCTO_FACTURA` | `FEW` | FE | 238925, 142943 |
+| `SIESA_TIPO_DOCTO_FACTURA` | `FEW` | FE | 142943 |
 | `SIESA_TIPO_DOCTO_REMISION` | `''` | RM | 142945 |
 | `SIESA_TIPO_DOCTO_NOTA_CREDITO` | `NCE` | NC | 142946 |
 | `SIESA_TIPO_DOCTO_RECIBO_CAJA` | `RC` | 13 | 142888 |
@@ -252,7 +252,7 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 | Job tipo | Conector | Idempotencia | Secuencia |
 |----------|----------|-------------|-----------|
 | TRANSFERENCIA_UBICACIONES | 173066 | NON-idempotent (abort en retry) | — |
-| DESPACHO_F470 | 238925/142945→142943 | `tarea.siesa_triggered` | — |
+| DESPACHO_F470 | 244328→142945→142943 (`DespachoParialService`) | `tarea.siesa_triggered` | — |
 | ENTRADA_OC | 142948 | `recepcion.siesa_triggered` | — |
 | AJUSTE_CONTEO | 142951 | `sesion.siesa_triggered` | — |
 | TRASLADO_AVERIAS | 142951 | `tarea_dev.siesa_triggered` | — |
