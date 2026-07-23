@@ -91,15 +91,20 @@ class KardexService:
         if not fecha_hasta:
             fecha_hasta = date.today().strftime('%Y%m%d')
 
-        parametros = (
-            f"f054_id_estado_docto=1 "
-            f"AND f450_id_fecha>=''{fecha_desde}'' "
-            f"AND f450_id_fecha<=''{fecha_hasta}''"
-        )
+        from datetime import date as _date_k
+        try:
+            fecha_desde_dt = datetime.strptime(fecha_desde[:8], '%Y%m%d').date()
+        except (ValueError, TypeError):
+            fecha_desde_dt = _date_k(2025, 7, 23)
+        try:
+            fecha_hasta_dt = datetime.strptime(fecha_hasta[:8], '%Y%m%d').date() if fecha_hasta else _date_k.today()
+        except (ValueError, TypeError):
+            fecha_hasta_dt = _date_k.today()
 
         total = 0
         pagina = 1
         errores = 0
+        filtrados = 0
         inicio = datetime.utcnow()
         MAX_MINUTOS = 10
 
@@ -110,11 +115,12 @@ class KardexService:
                 break
 
             try:
+                # Sin parametros de filtro — la consulta dinámica no los soporta
+                # Filtramos en Python después de recibir los datos
                 res = connekta._get(
                     NOMBRE_CONSULTA,
                     params_extra={
                         'paginacion': f'numPag={pagina}|tamPag=100',
-                        'parametros': parametros,
                     },
                     url=connekta.url_get_dinamico,
                     timeout=60,
@@ -138,6 +144,17 @@ class KardexService:
                         fecha = datetime.strptime(fecha_str[:8], '%Y%m%d').date()
                     except (ValueError, TypeError):
                         errores += 1
+                        continue
+
+                    # Filtro por rango de fechas (en Python, no en Connekta)
+                    if fecha < fecha_desde_dt or fecha > fecha_hasta_dt:
+                        filtrados += 1
+                        continue
+
+                    # Filtro por estado aprobado
+                    estado = str(row.get('f054_id_estado_docto', '')).strip()
+                    if estado and estado != '1':
+                        filtrados += 1
                         continue
 
                     mov = KardexMovimiento(
