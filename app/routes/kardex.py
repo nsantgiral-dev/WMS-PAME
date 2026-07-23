@@ -52,16 +52,51 @@ def reconstruir_stock():
     return jsonify({'ok': True, **resultado}), 200
 
 
-@kardex_bp.route('/tasa-censurada', methods=['GET'])
+@kardex_bp.route('/reconciliar', methods=['GET'])
 @jwt_required()
-def tasa_censurada():
-    """Velocity censurada: picks reales / días con stock (12 meses móviles)."""
+def reconciliar():
+    """COMPUERTA: cruza kardex vs facturación para verificar completitud."""
     if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin puede ver tasa censurada'}), 403
+        return jsonify({'error': 'Solo admin puede reconciliar'}), 403
     meses = request.args.get('meses', 12, type=int)
     from app.services.kardex_service import KardexService
     try:
-        resultado = KardexService.calcular_tasa_censurada(meses)
+        resultado = KardexService.reconciliar_kardex(meses)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(resultado), 200
+
+
+@kardex_bp.route('/tasa-servida-corregida', methods=['GET'])
+@jwt_required()
+def tasa_servida_corregida():
+    """Tasa servida corregida: demanda neta / días con stock.
+    nivel=bodega para reposición, nivel=red para clasificación S-B."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede ver tasa servida'}), 403
+    meses = request.args.get('meses', 12, type=int)
+    nivel = request.args.get('nivel', 'bodega')  # 'bodega' o 'red'
+    from app.services.kardex_service import KardexService
+    try:
+        resultado = KardexService.calcular_tasa_servida_corregida(meses, nivel)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(resultado), 200
+
+
+@kardex_bp.route('/clasificacion-sb', methods=['GET'])
+@jwt_required()
+def clasificacion_sb():
+    """Clasificación Syntetos-Boylan a nivel de RED.
+    Excluye estacionales (pasar como ?estacionales=REF1,REF2)."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede clasificar'}), 403
+    meses = request.args.get('meses', 12, type=int)
+    est_raw = request.args.get('estacionales', '')
+    estacionales = [x.strip() for x in est_raw.split(',') if x.strip()] if est_raw else []
+    from app.services.kardex_service import KardexService
+    try:
+        resultado = KardexService.clasificar_syntetos_boylan(meses, estacionales)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify(resultado), 200

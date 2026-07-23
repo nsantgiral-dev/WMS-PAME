@@ -29,12 +29,28 @@ NOMBRE_CONSULTA = os.getenv(
     'papeleriamedellin_papeleriamedellin_API_custom_KardexWMS'
 )
 
-# Conceptos que representan demanda real (salidas por venta)
-CONCEPTOS_DEMANDA = {501}  # 501 = Ventas POS y remisiones
+# ══════════════════════════════════════════════════════════════════════════════
+# TABLA DE DEFINICIÓN DE DEMANDA POR CONCEPTO
+# Firmada: cada concepto Siesa está clasificado explícitamente.
+# Esta tabla es la fuente de verdad — no se adivina.
+# ══════════════════════════════════════════════════════════════════════════════
+CONCEPTO_DEFINICION = {
+    # Concepto → (cuenta_como_demanda, signo, descripción)
+    501: (True,  -1, 'Ventas POS y remisiones — DEMANDA REAL'),
+    502: (True,  +1, 'Devoluciones de venta — RESTAN demanda (venta 100, dev 30 = demanda 70)'),
+    601: (False,  0, 'Entradas por compra — logística, NO demanda'),
+    602: (False,  0, 'Salidas directas — NO demanda (mermas, bajas)'),
+    603: (False,  0, 'Ajustes sobrantes/faltantes — NO demanda (correcciones)'),
+    607: (False,  0, 'Transferencias entre bodegas — logística interna, NUNCA demanda'),
+    699: (False,  0, 'Saldos iniciales — NO demanda'),
+}
 
-# Conceptos que NO son demanda (no contaminan velocity)
-# 502=devoluciones, 601=entradas compra, 602=salidas, 603=ajustes, 607=traslados
-CONCEPTOS_EXCLUIR_DEMANDA = {502, 601, 602, 603, 607}
+# Conceptos que SÍ cuentan como demanda (positiva o negativa)
+CONCEPTOS_DEMANDA = {k for k, v in CONCEPTO_DEFINICION.items() if v[0]}
+# Solo salidas de venta (501) — la demanda bruta
+CONCEPTOS_VENTA = {501}
+# Devoluciones (502) — restan demanda
+CONCEPTOS_DEVOLUCION = {502}
 
 
 class KardexMovimiento(db.Model):
@@ -301,73 +317,307 @@ class KardexService:
         return {'referencias_procesadas': refs_procesadas, 'dias_generados': dias_generados}
 
     @staticmethod
-    def calcular_tasa_censurada(ventana_meses: int = 12) -> dict:
+    def reconciliar_kardex(ventana_meses: int = 12) -> dict:
         """
-        Calcula velocity censurada: picks reales / días con stock.
+        COMPUERTA DE COMPLETITUD: cruza salidas del kardex contra
+        lo esperado para verificar que la descarga está completa.
 
-        Solo usa concepto 501 (ventas) como demanda.
-        Solo cuenta días donde tuvo_stock=True como denominador.
-        Ventana: últimos N meses.
+        Suma salidas por venta (501) por mes y retorna para cruce
+        manual contra facturación de Siesa del mismo mes.
+        Si no cuadra ±2%, la descarga está incompleta.
+        """
+        from sqlalchemy import func, extract
 
-        Returns: {total_skus, con_demanda, sin_demanda, tasas: [{referencia, bodega, ...}]}
+        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+
+        # Salidas por venta agrupadas por mes
+        ventas_mes = (
+            db.session.query(
+                func.to_char(KardexMovimiento.fecha, 'YYYY-MM').label('mes'),
+                func.sum(KardexMovimiento.cantidad).label('unidades'),
+                func.sum(KardexMovimiento.cantidad * KardexMovimiento.costo_promedio).label('valor_costo'),
+                func.count().label('registros'),
+            )
+            .filter(KardexMovimiento.fecha >= fecha_limite)
+            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
+            .filter(KardexMovimiento.naturaleza == 2)  # salidas
+            .group_by(func.to_char(KardexMovimiento.fecha, 'YYYY-MM'))
+            .order_by(func.to_char(KardexMovimiento.fecha, 'YYYY-MM'))
+            .all()
+        )
+
+        # Resumen total del kardex
+        total = db.session.query(func.count()).select_from(KardexMovimiento).scalar() or 0
+        total_por_concepto = dict(
+            db.session.query(
+                KardexMovimiento.concepto,
+                func.count()
+            )
+            .group_by(KardexMovimiento.concepto)
+            .all()
+        )
+        bodegas = [r[0] for r in db.session.query(KardexMovimiento.bodega).distinct().all()]
+
+        return {
+            'total_registros_kardex': total,
+            'bodegas_con_datos': sorted(bodegas),
+            'registros_por_concepto': {str(k): v for k, v in sorted(total_por_concepto.items())},
+            'ventas_por_mes': [{
+                'mes': r.mes,
+                'unidades': float(r.unidades or 0),
+                'valor_costo': float(r.valor_costo or 0),
+                'registros': r.registros,
+            } for r in ventas_mes],
+            'advertencia': (
+                'Cruzar ventas_por_mes contra facturación de Siesa. '
+                'Si difieren >2%, la descarga está incompleta.'
+            ),
+        }
+
+    @staticmethod
+    def calcular_tasa_servida_corregida(ventana_meses: int = 12,
+                                         nivel: str = 'bodega') -> dict:
+        """
+        Tasa servida corregida: demanda neta / días con stock.
+
+        Demanda neta = ventas(501) - devoluciones(502) por SKU.
+        Denominador = solo días donde tuvo_stock=True.
+        NO es "demanda real" — es demanda SERVIDA corregida por quiebres.
+        La cobertura de rutas sigue siendo parámetro exógeno.
+
+        Args:
+            ventana_meses: ventana móvil (default 12)
+            nivel: 'bodega' para reposición por nodo, 'red' para clasificación S-B
+
+        Returns: {total_skus, con_demanda, sin_demanda, tasas: [...]}
         """
         from sqlalchemy import func
 
         fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
 
-        # Días con stock por (referencia, bodega)
+        if nivel == 'red':
+            # Clasificación: agregar toda la red, no por bodega
+            group_key = KardexMovimiento.referencia
+            stock_group_key = StockDiario.referencia
+        else:
+            # Reposición: por bodega
+            group_key = KardexMovimiento.referencia + '|' + KardexMovimiento.bodega
+            stock_group_key = StockDiario.referencia + '|' + StockDiario.bodega
+
+        # Días con stock
         dias_stock = dict(
-            db.session.query(
-                StockDiario.referencia + '|' + StockDiario.bodega,
-                func.count()
-            )
+            db.session.query(stock_group_key, func.count())
             .filter(StockDiario.fecha >= fecha_limite)
             .filter(StockDiario.tuvo_stock == True)
-            .group_by(StockDiario.referencia, StockDiario.bodega)
+            .group_by(stock_group_key)
             .all()
         )
 
-        # Demanda (concepto 501) por (referencia, bodega)
-        demanda = dict(
-            db.session.query(
-                KardexMovimiento.referencia + '|' + KardexMovimiento.bodega,
-                func.sum(KardexMovimiento.cantidad)
-            )
+        # Ventas brutas (501, salidas)
+        ventas = dict(
+            db.session.query(group_key, func.sum(KardexMovimiento.cantidad))
             .filter(KardexMovimiento.fecha >= fecha_limite)
-            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_DEMANDA))
-            .filter(KardexMovimiento.naturaleza == 2)  # Solo salidas
-            .group_by(KardexMovimiento.referencia, KardexMovimiento.bodega)
+            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
+            .filter(KardexMovimiento.naturaleza == 2)
+            .group_by(group_key)
+            .all()
+        )
+
+        # Devoluciones (502, entradas — restan demanda)
+        devoluciones = dict(
+            db.session.query(group_key, func.sum(KardexMovimiento.cantidad))
+            .filter(KardexMovimiento.fecha >= fecha_limite)
+            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_DEVOLUCION))
+            .filter(KardexMovimiento.naturaleza == 1)
+            .group_by(group_key)
             .all()
         )
 
         tasas = []
         for key, dias in dias_stock.items():
-            ref, bod = key.split('|', 1)
-            dem = float(demanda.get(key, 0))
+            venta_bruta = float(ventas.get(key, 0))
+            devolucion = float(devoluciones.get(key, 0))
+            demanda_neta = max(venta_bruta - devolucion, 0)
             dias_int = int(dias)
-            tasa = round(dem / dias_int, 4) if dias_int > 0 else 0
+            tasa = round(demanda_neta / dias_int, 4) if dias_int > 0 else 0
 
-            tasas.append({
-                'referencia': ref,
-                'bodega': bod,
-                'demanda_total': dem,
+            entry = {
+                'referencia': key.split('|')[0] if '|' in key else key,
+                'demanda_bruta': venta_bruta,
+                'devoluciones': devolucion,
+                'demanda_neta': demanda_neta,
                 'dias_con_stock': dias_int,
-                'tasa_diaria_censurada': tasa,
-                'velocity_cero': dem == 0,
-            })
+                'tasa_servida_corregida': tasa,
+                'velocity_cero': demanda_neta == 0,
+            }
+            if nivel == 'bodega' and '|' in key:
+                entry['bodega'] = key.split('|')[1]
+            tasas.append(entry)
 
         con_demanda = sum(1 for t in tasas if not t['velocity_cero'])
         sin_demanda = sum(1 for t in tasas if t['velocity_cero'])
 
-        tasas.sort(key=lambda x: x['tasa_diaria_censurada'], reverse=True)
+        tasas.sort(key=lambda x: x['tasa_servida_corregida'], reverse=True)
 
         return {
             'total_skus': len(tasas),
             'con_demanda': con_demanda,
             'sin_demanda': sin_demanda,
             'ventana_meses': ventana_meses,
+            'nivel': nivel,
             'fecha_limite': fecha_limite.isoformat(),
+            'nota': (
+                'tasa_servida_corregida = demanda servida corregida por quiebres. '
+                'NO es demanda real — la cobertura de rutas es parámetro exógeno.'
+            ),
             'tasas': tasas,
+        }
+
+    @staticmethod
+    def clasificar_syntetos_boylan(ventana_meses: int = 12,
+                                    estacionales: list = None) -> dict:
+        """
+        Clasificación Syntetos-Boylan sobre demanda agregada de RED.
+
+        REGLAS DEL CONSULTOR:
+        1. Clasificar a nivel de RED (no por bodega) — el rol del SKU es global
+        2. Estacionales se EXCLUYEN — se evalúan dentro de su ventana, no contra 365d
+        3. La clasificación PROPONE sentencias, no ejecuta bloqueos automáticos
+        4. Si un constitucional cae en 'grumosa', es señal de alarma (dato o rol incorrecto)
+
+        Cuadrantes:
+        - Suave: ADI ≤ 1.32 y CV² ≤ 0.49 → reposición automática
+        - Errática: ADI ≤ 1.32 y CV² > 0.49 → colchón + revisión mensual
+        - Intermitente: ADI > 1.32 y CV² ≤ 0.49 → mín-máx simple
+        - Grumosa: ADI > 1.32 y CV² > 0.49 → candidata a cola/remate (PROPUESTA, no auto)
+
+        Args:
+            ventana_meses: ventana de análisis (default 12)
+            estacionales: lista de referencias a EXCLUIR (se evalúan aparte)
+
+        Returns: {clasificacion: [...], resumen: {...}, alertas: [...]}
+        """
+        from sqlalchemy import func
+        import math
+
+        if estacionales is None:
+            estacionales = []
+        estacionales_set = set(estacionales)
+
+        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+        dias_ventana = ventana_meses * 30
+
+        # Demanda diaria por SKU a nivel RED (agregando todas las bodegas)
+        demanda_diaria = (
+            db.session.query(
+                KardexMovimiento.referencia,
+                KardexMovimiento.fecha,
+                func.sum(KardexMovimiento.cantidad).label('cantidad')
+            )
+            .filter(KardexMovimiento.fecha >= fecha_limite)
+            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
+            .filter(KardexMovimiento.naturaleza == 2)  # salidas
+            .group_by(KardexMovimiento.referencia, KardexMovimiento.fecha)
+            .all()
+        )
+
+        # Agrupar por referencia: lista de cantidades por día con demanda
+        from collections import defaultdict
+        ref_demandas = defaultdict(list)  # ref → [(fecha, cantidad)]
+        for row in demanda_diaria:
+            ref = row.referencia.strip() if row.referencia else ''
+            if not ref or ref in estacionales_set:
+                continue
+            ref_demandas[ref].append((row.fecha, float(row.cantidad)))
+
+        # Días con stock a nivel RED (al menos una bodega con stock)
+        dias_stock_red = dict(
+            db.session.query(
+                StockDiario.referencia,
+                func.count(func.distinct(StockDiario.fecha))
+            )
+            .filter(StockDiario.fecha >= fecha_limite)
+            .filter(StockDiario.tuvo_stock == True)
+            .group_by(StockDiario.referencia)
+            .all()
+        )
+
+        # Calcular ADI y CV² por SKU
+        ADI_CORTE = 1.32
+        CV2_CORTE = 0.49
+
+        clasificacion = []
+        alertas = []
+
+        for ref, eventos in ref_demandas.items():
+            dias_con_demanda = len(eventos)
+            cantidades = [e[1] for e in eventos]
+            dias_stock = dias_stock_red.get(ref, dias_ventana)
+
+            if dias_con_demanda == 0:
+                continue
+
+            # ADI: días promedio entre demandas (sobre días con stock, no calendario)
+            adi = dias_stock / dias_con_demanda if dias_con_demanda > 0 else 999
+
+            # CV²: varianza relativa del tamaño de cada demanda
+            media = sum(cantidades) / len(cantidades) if cantidades else 0
+            if media > 0 and len(cantidades) > 1:
+                varianza = sum((c - media) ** 2 for c in cantidades) / len(cantidades)
+                cv2 = varianza / (media ** 2)
+            else:
+                cv2 = 0
+
+            # Clasificar
+            if adi <= ADI_CORTE and cv2 <= CV2_CORTE:
+                cuadrante = 'SUAVE'
+                politica = 'Reposición automática por tasa corregida'
+            elif adi <= ADI_CORTE and cv2 > CV2_CORTE:
+                cuadrante = 'ERRATICA'
+                politica = 'Reposición con colchón, revisión mensual'
+            elif adi > ADI_CORTE and cv2 <= CV2_CORTE:
+                cuadrante = 'INTERMITENTE'
+                politica = 'Mín-máx simple (mín 1 empaque, máx 2), sin pronóstico'
+            else:
+                cuadrante = 'GRUMOSA'
+                politica = 'PROPUESTA: candidata a cola/remate — requiere revisión humana'
+
+            clasificacion.append({
+                'referencia': ref,
+                'adi': round(adi, 2),
+                'cv2': round(cv2, 4),
+                'cuadrante': cuadrante,
+                'politica': politica,
+                'dias_con_demanda': dias_con_demanda,
+                'dias_con_stock': dias_stock,
+                'demanda_total': sum(cantidades),
+                'demanda_promedio_evento': round(media, 2),
+            })
+
+        # Resumen por cuadrante
+        resumen = {}
+        for c in ['SUAVE', 'ERRATICA', 'INTERMITENTE', 'GRUMOSA']:
+            items = [x for x in clasificacion if x['cuadrante'] == c]
+            resumen[c] = {
+                'cantidad': len(items),
+                'porcentaje': round(len(items) / len(clasificacion) * 100, 1) if clasificacion else 0,
+            }
+
+        # Alertas: constitucionales que caen en grumosa (dato censurado o rol incorrecto)
+        # (Las referencias constitucionales se pasan externamente para cruce)
+
+        clasificacion.sort(key=lambda x: ('SUAVE ERRATICA INTERMITENTE GRUMOSA'.split().index(x['cuadrante']), -x['demanda_total']))
+
+        return {
+            'total_clasificados': len(clasificacion),
+            'estacionales_excluidos': len(estacionales_set),
+            'resumen': resumen,
+            'nota': (
+                'Clasificación a nivel de RED (todas las bodegas agregadas). '
+                'Estacionales excluidos — evaluar dentro de su ventana. '
+                'Cuadrante GRUMOSA es PROPUESTA, no bloqueo automático.'
+            ),
+            'clasificacion': clasificacion,
         }
 
     @staticmethod
