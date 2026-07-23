@@ -1240,16 +1240,21 @@ class ConnektaGateway:
         PREREQUISITO OBLIGATORIO antes de trigger_despacho() (142945).
         Reemplaza consulta 7811 + GRANT UPDATE — usa API oficial Siesa.
 
-        Payload confirmado en Postman QA (2026-05-26):
+        Payload confirmado en Postman QA (2026-05-26, corregido 2026-07-23):
           · No lleva Inicial / Final
           · No lleva f430_id_tipo_docto en el body (Siesa lo infiere)
           · f431_nro_registro = f431_rowid (confirmado: 470418 = rowid real de T431)
-          · f431_cant_base     = cant. comprometida original (Siesa)
+          · f431_cant_base     = MISMO valor que f405_cant_por_remisionar_base, no la
+            cantidad comprometida original (esa lectura de mayo era incorrecta — con
+            cant_base = original, T431 nunca liberaba el compromiso y el pedido se
+            quedaba en Comprometido pese a factura/remisión ok; caso real PD1320).
+            Confirmado en Postman 2026-07-23: cant_base = cant_por_remisionar en ambos
+            campos (0 y 8, pedido de 2 líneas) → pedido pasó a Cumplido correctamente.
           · f405_cant_por_remisionar_base = cant. REAL a despachar (WMS)
 
         compromisos: [{
             'referencia_item':     str,    # f431_referencia_item (codigo_siesa)
-            'cant_base':           float,  # cant. comprometida original en Siesa
+            'cant_base':           float,  # = cant_por_remisionar (ver nota arriba)
             'nro_registro':        int,    # f431_rowid de la línea en T431
             'cant_por_remisionar': float,  # cant. REAL picada (a despachar)
             'lote':                str|None,

@@ -506,12 +506,21 @@ class DespachoParialService:
         """
         Construye el payload de Compromisos para el conector 244328.
 
-        Mapeo de campos (confirmado Postman QA 2026-05-26):
+        Mapeo de campos (confirmado Postman QA 2026-05-26, corregido 2026-07-23):
           f431_id_item             = f120_id del response de API_v2_Ventas_Pedidos_Compromisos
                                      (campo nativo JOIN T431→T120 — confirmado en Postman 2026-05-26).
                                      El conector NO resuelve por f431_referencia_item (texto SKU).
           f431_nro_registro        = f431_rowid  (rowid de T431, no es 1,2,3)
-          f431_cant_base           = f405_cant_por_remisionar_base original en Siesa
+          f431_cant_base           = MISMO valor que f405_cant_por_remisionar_base (no la
+                                     cantidad original comprometida — esa lectura de mayo era
+                                     incorrecta). Confirmado con prueba real en Postman
+                                     2026-07-23: al mandar cant_base igual a cant_por_remisionar
+                                     en ambos campos (0 y 8 en un pedido de 2 líneas, una
+                                     agotada) el pedido pasó correctamente a Cumplido. Con
+                                     cant_base = cantidad original (comportamiento previo), el
+                                     compromiso en T431 nunca se libera — caso real PD1320:
+                                     ARTESA883 zerado en 244328 el 2026-07-15 y 8 días después
+                                     seguía 100% pendiente y el pedido en Comprometido.
           f405_cant_por_remisionar_base = cant. REAL picada (del WMS)
 
         Solo incluye ítems donde:
@@ -557,7 +566,6 @@ class DespachoParialService:
             if cant_real <= 0 and ref not in _agotadas:
                 continue  # aún no despachado — sigue comprometido para oleada futura
             comp_row  = _comp_por_ref.get(ref, {})
-            cant_orig = float(comp_row.get('f405_cant_por_remisionar_base') or cant_real)
             id_item   = comp_row.get('f120_id')          # ID numérico de T120 — fuente primaria
 
             if not id_item:
@@ -577,7 +585,7 @@ class DespachoParialService:
             result.append({
                 'referencia_item':     ref,
                 'id_item':             id_item,   # f431_id_item en 244328 — OBLIGATORIO numérico
-                'cant_base':           cant_orig,
+                'cant_base':           cant_real,  # = cant_por_remisionar, ver docstring (2026-07-23)
                 'nro_registro':        rowid,      # f431_nro_registro = f431_rowid
                 'cant_por_remisionar': cant_real,
                 'lote':                comp_row.get('f405_id_lote') or None,
