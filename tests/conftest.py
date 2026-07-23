@@ -74,6 +74,27 @@ def client(app, db):
     return app.test_client()
 
 
+@pytest.fixture(autouse=True)
+def _sin_hilos_dlq_reales(monkeypatch):
+    """
+    disparar_dlq_inmediato() no tiene guard de modo_simulacion (a diferencia de
+    los demás *_sync_service.iniciar_sync_background) — lanza un hilo daemon
+    real e incondicional. Como `app` es session-scoped (un solo SQLite en
+    memoria para toda la suite), un hilo que sigue vivo tras terminar un test
+    puede ejecutar queries/commits reales mientras el siguiente test trunca
+    las tablas en su fixture `db` — causa ObjectDeletedError en modelos
+    completamente ajenos al test que aparenta fallar (ej. Producto en
+    test_packing_service.py sin relación alguna con DLQ).
+    Los tests que sí quieren observar disparar_dlq_inmediato lo patchean
+    explícitamente con @patch — ese patch se aplica y se deshace por encima
+    de este no-op sin conflicto.
+    """
+    monkeypatch.setattr(
+        'app.services.siesa_job_service.disparar_dlq_inmediato',
+        lambda *a, **k: None,
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Factories de datos de prueba
 # ─────────────────────────────────────────────────────────────────────────────
