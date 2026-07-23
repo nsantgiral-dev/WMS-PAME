@@ -13,27 +13,61 @@ from app.routes._auth_helpers import _es_admin_o_jefe
 kardex_bp = Blueprint('kardex', __name__)
 
 
+_kardex_descarga_estado = {'en_curso': False, 'resultado': None}
+
 @kardex_bp.route('/descargar', methods=['POST', 'GET'])
 @jwt_required()
 def descargar_kardex():
-    """Descarga movimientos del kardex de Siesa (consulta dinámica T470+T350+T120)."""
+    """Lanza descarga de kardex en background thread (no bloquea HTTP)."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede descargar kardex'}), 403
+
+    if _kardex_descarga_estado['en_curso']:
+        return jsonify({'ok': True, 'mensaje': 'Descarga ya en curso — revisar logs'}), 200
+
     if request.method == 'GET':
-        fecha_desde = request.args.get('fecha_desde', '20250723')
+        fecha_desde = request.args.get('fecha_desde', '20240101')
         fecha_hasta = request.args.get('fecha_hasta')
     else:
         data = request.get_json() or {}
-        fecha_desde = data.get('fecha_desde')
+        fecha_desde = data.get('fecha_desde', '20240101')
         fecha_hasta = data.get('fecha_hasta')
-    if not fecha_desde:
-        return jsonify({'error': 'fecha_desde es requerido (YYYYMMDD)'}), 400
-    from app.services.kardex_service import KardexService
-    try:
-        resultado = KardexService.descargar_kardex(fecha_desde, fecha_hasta)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    return jsonify({'ok': True, **resultado}), 200
+
+    from flask import current_app
+    app = current_app._get_current_object()
+
+    import threading
+    def _run():
+        _kardex_descarga_estado['en_curso'] = True
+        _kardex_descarga_estado['resultado'] = None
+        try:
+            with app.app_context():
+                from app.services.kardex_service import KardexService
+                resultado = KardexService.descargar_kardex(fecha_desde, fecha_hasta)
+                _kardex_descarga_estado['resultado'] = resultado
+        except Exception as e:
+            _kardex_descarga_estado['resultado'] = {'error': str(e)}
+        finally:
+            _kardex_descarga_estado['en_curso'] = False
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return jsonify({
+        'ok': True,
+        'mensaje': 'Descarga iniciada en background — revisar logs de Railway',
+        'fecha_desde': fecha_desde,
+    }), 200
+
+
+@kardex_bp.route('/descargar/estado', methods=['GET'])
+@jwt_required()
+def estado_descarga():
+    """Verifica si la descarga está en curso o terminó."""
+    return jsonify({
+        'en_curso': _kardex_descarga_estado['en_curso'],
+        'resultado': _kardex_descarga_estado['resultado'],
+    }), 200
 
 
 @kardex_bp.route('/reconstruir', methods=['POST'])
