@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 NOMBRE_CONSULTA = os.getenv(
     'KARDEX_CONSULTA_NOMBRE',
-    'papeleriamedellin_API_custom_KardexWMS'
+    'papeleriamedellin_papeleriamedellin_API_custom_KardexWMS'
 )
 
 # Conceptos que representan demanda real (salidas por venta)
@@ -92,9 +92,9 @@ class KardexService:
             fecha_hasta = date.today().strftime('%Y%m%d')
 
         parametros = (
-            f"f350_ind_estado=1 "
-            f"AND f350_fecha>=''{fecha_desde}'' "
-            f"AND f350_fecha<=''{fecha_hasta}''"
+            f"f054_id_estado_docto=1 "
+            f"AND f450_id_fecha>=''{fecha_desde}'' "
+            f"AND f450_id_fecha<=''{fecha_hasta}''"
         )
 
         total = 0
@@ -129,11 +129,11 @@ class KardexService:
                     if not isinstance(row, dict):
                         continue
                     ref = (row.get('f120_referencia') or '').strip()
-                    bodega = (row.get('f470_id_bodega') or '').strip()
+                    bodega = (row.get('f150_id') or row.get('f470_id_bodega') or '').strip()
                     if not ref or not bodega:
                         continue
 
-                    fecha_str = str(row.get('f350_fecha', '')).strip()
+                    fecha_str = str(row.get('f450_id_fecha') or row.get('f350_fecha') or '').strip()
                     try:
                         fecha = datetime.strptime(fecha_str[:8], '%Y%m%d').date()
                     except (ValueError, TypeError):
