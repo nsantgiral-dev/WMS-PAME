@@ -22,6 +22,7 @@ def register_routes(app):
     from app.routes.factura_admin import factura_admin_bp
     from app.routes.despacho_parcial import despacho_parcial_bp
     from app.routes.compras import compras_bp
+    from app.routes.bloqueo_recompra import bloqueo_bp
     from app.routes.tienda_oc import tienda_oc_bp
 
     app.register_blueprint(health_bp, url_prefix='/api/health')
@@ -47,4 +48,5 @@ def register_routes(app):
     app.register_blueprint(factura_admin_bp, url_prefix='/api/admin/factura')
     app.register_blueprint(despacho_parcial_bp, url_prefix='/api/despacho_parcial')
     app.register_blueprint(compras_bp, url_prefix='/api/compras')
+    app.register_blueprint(bloqueo_bp, url_prefix='/api/compras')
     app.register_blueprint(tienda_oc_bp, url_prefix='/api/tienda-oc')

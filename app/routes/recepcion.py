@@ -157,12 +157,30 @@ def confirmar_recepcion(id):
             observaciones=data.get('observaciones'),
             num_remision_prov=data.get('num_remision_prov', '')
         )
+        # Detector de fugas: registrar si algún item recibido está bloqueado
+        fugas_detectadas = 0
+        try:
+            from app.services.bloqueo_recompra_service import BloqueoRecompraService
+            for item in (recepcion.items or []):
+                if item.producto_id:
+                    fuga = BloqueoRecompraService.registrar_fuga(
+                        producto_id=item.producto_id,
+                        recepcion_id=recepcion.id,
+                        oc_siesa=recepcion.oc_siesa or '',
+                        proveedor=recepcion.proveedor_codigo or '',
+                        cantidad=int(item.cantidad_recibida or 0),
+                    )
+                    if fuga:
+                        fugas_detectadas += 1
+        except Exception as _e_fuga:
+            logger.warning('[RECEPCION] Error verificando fugas: %s', _e_fuga)
         return jsonify({
             'mensaje': 'Recepción confirmada — Siesa está generando entrada contable',
             'recepcion': recepcion.to_dict(),
             'siesa_triggered': recepcion.siesa_triggered,
             'es_parcial': recepcion.es_parcial,
-            'tiene_cross_dock': recepcion.tiene_cross_dock
+            'tiene_cross_dock': recepcion.tiene_cross_dock,
+            'fugas_detectadas': fugas_detectadas,
         }), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
