@@ -106,7 +106,7 @@ class KardexService:
         errores = 0
         filtrados = 0
         inicio = datetime.utcnow()
-        MAX_MINUTOS = 10
+        MAX_MINUTOS = 30
 
         while True:
             elapsed = (datetime.utcnow() - inicio).total_seconds()
@@ -127,7 +127,14 @@ class KardexService:
                 )
 
                 # Consultas dinámicas usan "Datos", no "Table"
-                rows = (res or {}).get('detalle', {}).get('Datos', [])
+                detalle = (res or {}).get('detalle', {})
+                rows = detalle.get('Datos', []) or detalle.get('Table', []) or []
+
+                # Log de descubrimiento: mostrar keys del primer registro
+                if pagina == 1 and rows:
+                    first = rows[0] if isinstance(rows[0], dict) else {}
+                    logger.info('[KARDEX] Keys del primer registro: %s', list(first.keys()))
+                    logger.info('[KARDEX] Primer registro completo: %s', first)
                 if not rows:
                     break
 
