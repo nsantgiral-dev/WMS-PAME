@@ -146,9 +146,14 @@ class KardexService:
                     if not ref or not bodega:
                         continue
 
-                    fecha_str = str(row.get('f450_id_fecha') or row.get('f350_fecha') or '').strip()
+                    # Fecha: puede venir como 'f450_id_fecha ' (con espacio) o ISO format
+                    fecha_str = str(
+                        row.get('f450_id_fecha ') or row.get('f450_id_fecha') or
+                        row.get('f350_fecha') or ''
+                    ).strip()
                     try:
-                        fecha = datetime.strptime(fecha_str[:8], '%Y%m%d').date()
+                        # Soporta YYYYMMDD y YYYY-MM-DDTHH:MM:SS
+                        fecha = datetime.strptime(fecha_str[:10], '%Y-%m-%d').date() if '-' in fecha_str else datetime.strptime(fecha_str[:8], '%Y%m%d').date()
                     except (ValueError, TypeError):
                         errores += 1
                         continue
@@ -158,11 +163,12 @@ class KardexService:
                         filtrados += 1
                         continue
 
-                    # Filtro por estado aprobado
-                    estado = str(row.get('f054_id_estado_docto', '')).strip()
-                    if estado and estado != '1':
-                        filtrados += 1
-                        continue
+                    # Naturaleza: Connekta devuelve 'Entrada'/'Salida' (string), no 1/2
+                    nat_raw = row.get('f470_ind_naturaleza', '')
+                    if isinstance(nat_raw, str):
+                        naturaleza = 1 if 'ntrada' in nat_raw else 2  # Entrada=1, Salida=2
+                    else:
+                        naturaleza = int(nat_raw) if nat_raw else 0
 
                     mov = KardexMovimiento(
                         fecha=fecha,
@@ -170,7 +176,7 @@ class KardexService:
                         bodega=bodega,
                         referencia=ref,
                         concepto=int(row.get('f470_id_concepto', 0)),
-                        naturaleza=int(row.get('f470_ind_naturaleza', 0)),
+                        naturaleza=naturaleza,
                         cantidad=abs(float(row.get('f470_cant_base', 0))),
                         costo_promedio=float(row.get('f470_costo_prom_uni', 0)),
                     )
