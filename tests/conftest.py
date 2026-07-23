@@ -88,10 +88,34 @@ def _sin_hilos_dlq_reales(monkeypatch):
     Los tests que sí quieren observar disparar_dlq_inmediato lo patchean
     explícitamente con @patch — ese patch se aplica y se deshace por encima
     de este no-op sin conflicto.
+
+    Mismo problema con mobile_service._run_vsp (mobile_service.py:887): tras
+    confirmar picking desde el flujo móvil, dispara verificar_stock_picking()
+    en otro hilo daemon real, también sin guard. Confirmado como causa real
+    (no solo teórica) — test_confirmar_picking en test_mobile_service.py corre
+    justo antes de test_packing_service.py en orden alfabético, y el hilo de
+    verificar_stock_picking dejaba `ubicaciones`/`ubicaciones_productos` en
+    estado inconsistente para el siguiente test (UNIQUE constraint failed:
+    ubicaciones.codigo en la fixture ub_picking). No se puede no-opear
+    verificar_stock_picking directamente (test_03_reposicion.py::TestVerificarStockPicking
+    la llama de forma síncrona y sí espera que corra) — en vez de eso se
+    bloquea el semáforo que gatea el cuerpo real de _run_vsp, dejando el
+    hilo vivo pero inofensivo (no toca la BD).
     """
     monkeypatch.setattr(
         'app.services.siesa_job_service.disparar_dlq_inmediato',
         lambda *a, **k: None,
+    )
+
+    class _SemaforoSiempreOcupado:
+        def acquire(self, *a, **k):
+            return False
+        def release(self):
+            pass
+
+    monkeypatch.setattr(
+        'app.services.mobile_service._STOCK_VERIF_SEMAPHORE',
+        _SemaforoSiempreOcupado(),
     )
 
 
