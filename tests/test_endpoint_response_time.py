@@ -79,6 +79,11 @@ class TestEndpointResponseTime:
         resp, t = self._timed_get(client, '/api/rutas/liquidacion/dashboard?fecha_desde=2026-07-21&fecha_hasta=2026-07-21', h)
         assert resp.status_code == 200
 
+    def test_bloqueos_recompra(self, client, jwt_token_admin):
+        h = {'Authorization': f'Bearer {jwt_token_admin}'}
+        resp, t = self._timed_get(client, '/api/compras/bloqueados', h)
+        assert resp.status_code == 200
+
 
 class TestGunicornConfig:
     """Valida que la configuración de gunicorn en railway.toml sea segura."""

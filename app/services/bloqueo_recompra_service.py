@@ -31,7 +31,7 @@ class BloqueoRecompraService:
         Retorna: {bloqueados_nuevos, ya_bloqueados, total_capital_inmovilizado}
         """
         from app.models.producto import Producto
-        from app.models.ubicacion import UbicacionProducto
+        from app.models.inventario import UbicacionProducto
         from app.models.picking import TareaPicking
         from sqlalchemy import func
 
@@ -243,7 +243,7 @@ class BloqueoRecompraService:
         Ordenado por capital inmovilizado descendente (los 10 peores arriba).
         """
         from app.models.producto import Producto
-        from app.models.ubicacion import UbicacionProducto
+        from app.models.inventario import UbicacionProducto
         from sqlalchemy import func
 
         bloqueos = ProductoBloqueado.query.filter_by(activo=True).all()

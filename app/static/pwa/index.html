@@ -1993,6 +1993,10 @@
         style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         Audit Trail
       </div>
+      <div id="comp-sub-bloqueos" onclick="compSubtab('bloqueos')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🚫 Bloqueos
+      </div>
     </div>
 
     <!-- ── SECCIÓN: VELOCITY + ABC ──────────────────────────────── -->
@@ -2088,6 +2092,26 @@
       </div>
       <div id="comp-lista-audit">
         <div style="text-align:center;padding:30px;color:#555;">Escribe una OC, proveedor o remisión y presiona Buscar</div>
+      </div>
+    </div>
+
+    <!-- ── SECCIÓN: BLOQUEOS DE RECOMPRA ───────────────────────── -->
+    <div id="comp-sec-bloqueos" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-size:14px;font-weight:700;color:var(--tx);">Lista de Bloqueo de Recompra</div>
+          <div style="font-size:11px;color:var(--tx3);">SKUs con velocity=0 en 12 meses + stock existente. El sistema rechaza la recompra.</div>
+        </div>
+        <button onclick="compPoblarBloqueos()"
+          style="padding:8px 14px;background:#7f1d1d;border:none;border-radius:8px;color:#fca5a5;font-size:12px;font-weight:700;cursor:pointer;">
+          Generar lista inicial
+        </button>
+      </div>
+      <div id="comp-bloqueos-resumen"></div>
+      <div id="comp-bloqueos-lista"><div style="text-align:center;padding:30px;color:#555;">Cargando...</div></div>
+      <div style="margin-top:16px;border-top:1px solid var(--brd);padding-top:12px;">
+        <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">Fugas detectadas</div>
+        <div id="comp-fugas-lista"><div style="text-align:center;padding:20px;color:#555;">Sin fugas registradas</div></div>
       </div>
     </div>
   </div><!-- /tab-compras -->
@@ -2993,7 +3017,7 @@
   <script src="/static/pwa/app.js?v=20260721d"></script>
   <script src="/static/pwa/picking.js?v=20260720a"></script>
   <script src="/static/pwa/packing.js?v=20260720a"></script>
-  <script src="/static/pwa/recepcion.js?v=20260720a"></script>
+  <script src="/static/pwa/recepcion.js?v=20260722a"></script>
   <script src="/static/pwa/rutas.js?v=20260721d"></script>
   <script src="/static/pwa/traslados.js?v=20260720a"></script>
   <script src="/static/pwa/conteo.js?v=20260721b"></script>

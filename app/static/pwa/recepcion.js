@@ -1351,7 +1351,7 @@ async function cargarCompras() {
 /** @param {string} id - Purchasing primary sub-tab to activate. */
 function compSubtab(id) {
   COMP_SUBTAB = id;
-  const secs = ['velocity','dock','cuarentena','audit'];
+  const secs = ['velocity','dock','cuarentena','audit','bloqueos'];
   secs.forEach(s => {
     const el = document.getElementById('comp-sec-' + s);
     const tab = document.getElementById('comp-sub-' + s);
@@ -1365,6 +1365,7 @@ function compSubtab(id) {
   if (id === 'velocity') compCargarVelocity('comp');
   else if (id === 'dock') compCargarDock('comp');
   else if (id === 'cuarentena') compCargarCuarentena('comp');
+  else if (id === 'bloqueos') compCargarBloqueos();
   // audit: manual search — no auto-load
 }
 
@@ -1791,4 +1792,127 @@ async function compCargarAudit(prefix) {
   } catch (e) {
     target.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error en búsqueda</div>';
   }
+}
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// BLOQUEOS DE RECOMPRA — el sistema que dice NO
+// ══════════════════════════════════════════════════════════════════════════════
+
+const _liqFmtComp = v => '$' + Number(v || 0).toLocaleString('es-CO');
+
+async function compCargarBloqueos() {
+  const lista = document.getElementById('comp-bloqueos-lista');
+  const resumen = document.getElementById('comp-bloqueos-resumen');
+  if (!lista) return;
+  lista.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Cargando...</div>';
+  try {
+    const d = await get('/api/compras/bloqueados');
+    const items = d.items || [];
+
+    if (resumen) {
+      resumen.innerHTML = `
+        <div style="background:#110a0a;border:1px solid #7f1d1d;border-radius:12px;padding:16px;margin-bottom:16px;text-align:center;">
+          <div style="font-size:11px;color:#fca5a5;text-transform:uppercase;font-weight:700;margin-bottom:4px;">Capital inmovilizado en cadáveres</div>
+          <div style="font-size:28px;font-weight:800;color:#f87171;">${_liqFmtComp(d.total_inmovilizado)}</div>
+          <div style="font-size:12px;color:#fca5a5;margin-top:4px;">${d.total_skus} SKU${d.total_skus !== 1 ? 's' : ''} bloqueado${d.total_skus !== 1 ? 's' : ''}</div>
+        </div>`;
+    }
+
+    if (!items.length) {
+      lista.innerHTML = '<div style="text-align:center;padding:30px;color:#555;">Sin productos bloqueados — usa "Generar lista inicial" para poblar</div>';
+      return;
+    }
+
+    let html = '';
+    items.forEach((it, idx) => {
+      html += `
+        <div style="background:var(--bg-s);border:1px solid ${idx < 3 ? '#7f1d1d' : 'var(--brd)'};border-radius:10px;padding:12px;margin-bottom:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div style="font-size:13px;font-weight:700;color:var(--tx);">${it.codigo}</div>
+              <div style="font-size:11px;color:var(--tx3);margin-top:2px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${it.nombre}</div>
+            </div>
+            <div style="text-align:right;">
+              <div style="font-size:14px;font-weight:800;color:#f87171;">${_liqFmtComp(it.capital_inmovilizado)}</div>
+              <div style="font-size:10px;color:var(--tx3);">${it.stock} UND × ${_liqFmtComp(it.costo_unitario)}</div>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+            <span style="font-size:10px;padding:2px 8px;border-radius:20px;background:#7f1d1d33;color:#fca5a5;font-weight:700;">${it.motivo}</span>
+            <button onclick="compDesbloquear(${it.bloqueo_id},'${it.codigo}')"
+              style="padding:4px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx3);font-size:11px;cursor:pointer;">
+              Solicitar desbloqueo
+            </button>
+          </div>
+        </div>`;
+    });
+    lista.innerHTML = html;
+
+    // Cargar fugas
+    compCargarFugas();
+  } catch (e) {
+    lista.innerHTML = `<div style="color:#ef4444;text-align:center;padding:20px;">${e.message || 'Error cargando bloqueos'}</div>`;
+  }
+}
+
+async function compPoblarBloqueos() {
+  if (!confirm('¿Generar lista inicial de bloqueos?\nSe bloquearán todos los SKUs con velocity=0 en 12 meses y stock existente.')) return;
+  try {
+    const r = await fetch(API + '/api/compras/bloqueados/poblar', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      alerta(`${d.bloqueados_nuevos} SKU(s) bloqueado(s) — ${_liqFmtComp(d.total_capital_inmovilizado)} inmovilizado`, 'exito');
+      compCargarBloqueos();
+    } else {
+      alerta(d.error || 'Error al poblar', 'error');
+    }
+  } catch (e) { alerta('Error de conexión', 'error'); }
+}
+
+async function compDesbloquear(bloqueoId, codigo) {
+  const motivo = prompt(`¿Por qué desbloquear ${codigo}?\n(Motivo obligatorio — queda registrado)`);
+  if (!motivo || !motivo.trim()) return;
+  const cantidad = prompt('Cantidad máxima autorizada a comprar:');
+  if (!cantidad || isNaN(cantidad) || Number(cantidad) <= 0) { alerta('Cantidad inválida', 'error'); return; }
+  const vigencia = prompt('Vigencia del desbloqueo en días (default 30):', '30');
+  const dias = parseInt(vigencia) || 30;
+
+  try {
+    const r = await fetch(API + `/api/compras/bloqueados/${bloqueoId}/desbloquear`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ motivo: motivo.trim(), cantidad_autorizada: Number(cantidad), vigencia_dias: dias }),
+    });
+    const d = await r.json();
+    if (r.ok && d.ok) {
+      alerta(`${codigo} desbloqueado — máx ${cantidad} UND, vigencia ${dias} días`, 'exito');
+      compCargarBloqueos();
+    } else {
+      alerta(d.error || 'Error al desbloquear', 'error');
+    }
+  } catch (e) { alerta(e.message || 'Error', 'error'); }
+}
+
+async function compCargarFugas() {
+  const el = document.getElementById('comp-fugas-lista');
+  if (!el) return;
+  try {
+    const d = await get('/api/compras/bloqueados/fugas');
+    const fugas = d.fugas || [];
+    if (!fugas.length) {
+      el.innerHTML = '<div style="text-align:center;padding:20px;color:#22c55e;font-size:12px;">Sin fugas — todas las compras pasan por el sistema ✓</div>';
+      return;
+    }
+    el.innerHTML = fugas.map(f => `
+      <div style="display:flex;justify-content:space-between;padding:8px;background:#78350f22;border:1px solid #78350f;border-radius:8px;margin-bottom:6px;font-size:12px;">
+        <div>
+          <strong style="color:#fbbf24;">${f.producto_codigo}</strong> — ${f.producto_nombre || '—'}
+          <div style="font-size:11px;color:var(--tx3);">OC: ${f.oc_siesa || '—'} · Prov: ${f.proveedor || '—'} · ${f.cantidad_recibida} UND</div>
+        </div>
+        <span style="color:var(--tx3);font-size:11px;white-space:nowrap;">${new Date(f.fecha).toLocaleDateString('es-CO')}</span>
+      </div>`).join('');
+  } catch (e) {}
 }

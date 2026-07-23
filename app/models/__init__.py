@@ -20,3 +20,4 @@ from app.models.tarea_reposicion import TareaReposicion
 from app.models.siesa_job import SiesaJob
 from app.models.ubicacion_huerfana import UbicacionHuerfana
 from app.models.stock_siesa import StockSiesa
+from app.models.producto_bloqueado import ProductoBloqueado, FugaRecompra
