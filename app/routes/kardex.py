@@ -13,15 +13,19 @@ from app.routes._auth_helpers import _es_admin_o_jefe
 kardex_bp = Blueprint('kardex', __name__)
 
 
-@kardex_bp.route('/descargar', methods=['POST'])
+@kardex_bp.route('/descargar', methods=['POST', 'GET'])
 @jwt_required()
 def descargar_kardex():
     """Descarga movimientos del kardex de Siesa (consulta dinámica T470+T350+T120)."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede descargar kardex'}), 403
-    data = request.get_json() or {}
-    fecha_desde = data.get('fecha_desde')
-    fecha_hasta = data.get('fecha_hasta')
+    if request.method == 'GET':
+        fecha_desde = request.args.get('fecha_desde', '20250723')
+        fecha_hasta = request.args.get('fecha_hasta')
+    else:
+        data = request.get_json() or {}
+        fecha_desde = data.get('fecha_desde')
+        fecha_hasta = data.get('fecha_hasta')
     if not fecha_desde:
         return jsonify({'error': 'fecha_desde es requerido (YYYYMMDD)'}), 400
     from app.services.kardex_service import KardexService
