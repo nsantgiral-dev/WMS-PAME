@@ -88,15 +88,16 @@ def tasa_servida_corregida():
 @jwt_required()
 def clasificacion_sb():
     """Clasificación Syntetos-Boylan a nivel de RED.
-    Excluye estacionales (pasar como ?estacionales=REF1,REF2)."""
+    Lee estacionales de tabla ABC (rol=ESTACIONAL). Override adicional
+    con ?estacionales_extra=REF1,REF2 para etiquetado provisional."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede clasificar'}), 403
     meses = request.args.get('meses', 12, type=int)
-    est_raw = request.args.get('estacionales', '')
-    estacionales = [x.strip() for x in est_raw.split(',') if x.strip()] if est_raw else []
+    est_raw = request.args.get('estacionales_extra', '')
+    extras = [x.strip() for x in est_raw.split(',') if x.strip()] if est_raw else []
     from app.services.kardex_service import KardexService
     try:
-        resultado = KardexService.clasificar_syntetos_boylan(meses, estacionales)
+        resultado = KardexService.clasificar_syntetos_boylan(meses, extras)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify(resultado), 200

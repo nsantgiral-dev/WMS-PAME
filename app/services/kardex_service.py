@@ -249,12 +249,14 @@ class KardexService:
 
         refs_procesadas = 0
         dias_generados = 0
+        calidad = []  # reporte de calidad por SKU×bodega
+        UMBRAL_NEGATIVO = 0.10  # 10% — por encima, dato insuficiente
+
+        from collections import defaultdict
 
         for ref, bod in combos:
-            # Saldo actual (última foto conocida)
             saldo_actual = KardexService._obtener_saldo_actual(ref, bod)
 
-            # Movimientos ordenados del más reciente al más antiguo
             movimientos = (
                 KardexMovimiento.query
                 .filter_by(referencia=ref, bodega=bod)
@@ -265,21 +267,22 @@ class KardexService:
             if not movimientos:
                 continue
 
-            # Agrupar movimientos por día
-            from collections import defaultdict
             dias_mov = defaultdict(list)
             for m in movimientos:
                 dias_mov[m.fecha].append(m)
 
-            # Generar stock de cierre por día (hacia atrás)
             saldo = float(saldo_actual)
             fechas_ordenadas = sorted(dias_mov.keys(), reverse=True)
+            dias_negativos = 0
+            total_dias = len(fechas_ordenadas)
 
             for fecha in fechas_ordenadas:
-                # Stock al cierre de este día = saldo antes de restar los movimientos del día
                 stock_cierre = saldo
 
-                # Registrar
+                # Marcar saldos negativos (dato podrido — no corregir, solo marcar)
+                if stock_cierre < 0:
+                    dias_negativos += 1
+
                 existing = StockDiario.query.filter_by(
                     referencia=ref, bodega=bod, fecha=fecha
                 ).first()
@@ -294,83 +297,152 @@ class KardexService:
                     ))
                 dias_generados += 1
 
-                # Aritmética hacia atrás: deshacer los movimientos de este día
                 for m in dias_mov[fecha]:
                     cant = float(m.cantidad)
-                    if m.naturaleza == 1:  # Entrada → restar para ir hacia atrás
+                    if m.naturaleza == 1:
                         saldo -= cant
-                    elif m.naturaleza == 2:  # Salida → sumar para ir hacia atrás
+                    elif m.naturaleza == 2:
                         saldo += cant
 
             refs_procesadas += 1
 
-            # Commit cada 100 referencias para no acumular
+            pct_negativo = round(dias_negativos / total_dias * 100, 1) if total_dias > 0 else 0
+            dato_insuficiente = pct_negativo > UMBRAL_NEGATIVO * 100
+
+            if dato_insuficiente or dias_negativos > 0:
+                calidad.append({
+                    'referencia': ref,
+                    'bodega': bod,
+                    'dias_total': total_dias,
+                    'dias_negativos': dias_negativos,
+                    'pct_negativo': pct_negativo,
+                    'dato_insuficiente': dato_insuficiente,
+                })
+
             if refs_procesadas % 100 == 0:
                 db.session.commit()
                 logger.info('[KARDEX] Reconstruido %d referencias...', refs_procesadas)
 
         db.session.commit()
+
+        # Ordenar calidad por peor primero
+        calidad.sort(key=lambda x: x['pct_negativo'], reverse=True)
+        datos_insuficientes = sum(1 for c in calidad if c['dato_insuficiente'])
+
         logger.info(
-            '[KARDEX] Reconstrucción completa: %d referencias, %d días',
-            refs_procesadas, dias_generados
+            '[KARDEX] Reconstrucción completa: %d referencias, %d días, '
+            '%d con saldos negativos (%d dato insuficiente)',
+            refs_procesadas, dias_generados, len(calidad), datos_insuficientes
         )
-        return {'referencias_procesadas': refs_procesadas, 'dias_generados': dias_generados}
+
+        return {
+            'referencias_procesadas': refs_procesadas,
+            'dias_generados': dias_generados,
+            'reporte_calidad': {
+                'total_con_negativos': len(calidad),
+                'dato_insuficiente': datos_insuficientes,
+                'umbral_pct': UMBRAL_NEGATIVO * 100,
+                'nota': (
+                    'SKUs con >10% días negativos: dato insuficiente — '
+                    'heredan tasa de su categoría, no se finge precisión. '
+                    'Mapa de dónde el kardex está podrido → priorizar conteo cíclico.'
+                ),
+                'detalle': calidad[:50],  # top 50 peores
+            },
+        }
 
     @staticmethod
     def reconciliar_kardex(ventana_meses: int = 12) -> dict:
         """
-        COMPUERTA DE COMPLETITUD: cruza salidas del kardex contra
-        lo esperado para verificar que la descarga está completa.
+        COMPUERTA DE COMPLETITUD — 2 verificaciones:
 
-        Suma salidas por venta (501) por mes y retorna para cruce
-        manual contra facturación de Siesa del mismo mes.
-        Si no cuadra ±2%, la descarga está incompleta.
+        1. Reconciliación en UNIDADES (no pesos) × mes × bodega:
+           salidas netas (501-502) para cruzar contra facturas de Siesa.
+           En pesos no sirve: kardex valoriza a costo, factura a precio.
+
+        2. Auditoría de conceptos: SELECT DISTINCT concepto del kardex.
+           Todo concepto NO clasificado en CONCEPTO_DEFINICION detiene el cálculo.
+           Un concepto sin clasificar que se omite es un agujero invisible.
         """
-        from sqlalchemy import func, extract
+        from sqlalchemy import func
 
         fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
 
-        # Salidas por venta agrupadas por mes
-        ventas_mes = (
+        # ── 1. Reconciliación en UNIDADES × mes × bodega ──────────
+        ventas_mes_bodega = (
             db.session.query(
                 func.to_char(KardexMovimiento.fecha, 'YYYY-MM').label('mes'),
+                KardexMovimiento.bodega,
                 func.sum(KardexMovimiento.cantidad).label('unidades'),
-                func.sum(KardexMovimiento.cantidad * KardexMovimiento.costo_promedio).label('valor_costo'),
                 func.count().label('registros'),
             )
             .filter(KardexMovimiento.fecha >= fecha_limite)
             .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
-            .filter(KardexMovimiento.naturaleza == 2)  # salidas
-            .group_by(func.to_char(KardexMovimiento.fecha, 'YYYY-MM'))
-            .order_by(func.to_char(KardexMovimiento.fecha, 'YYYY-MM'))
+            .filter(KardexMovimiento.naturaleza == 2)
+            .group_by(
+                func.to_char(KardexMovimiento.fecha, 'YYYY-MM'),
+                KardexMovimiento.bodega,
+            )
+            .order_by(
+                func.to_char(KardexMovimiento.fecha, 'YYYY-MM'),
+                KardexMovimiento.bodega,
+            )
             .all()
         )
 
-        # Resumen total del kardex
+        # ── 2. Auditoría de conceptos desconocidos ────────────────
+        conceptos_en_kardex = set(
+            r[0] for r in
+            db.session.query(KardexMovimiento.concepto).distinct().all()
+        )
+        conceptos_conocidos = set(CONCEPTO_DEFINICION.keys())
+        conceptos_desconocidos = conceptos_en_kardex - conceptos_conocidos
+
+        # Resumen
         total = db.session.query(func.count()).select_from(KardexMovimiento).scalar() or 0
         total_por_concepto = dict(
-            db.session.query(
-                KardexMovimiento.concepto,
-                func.count()
-            )
+            db.session.query(KardexMovimiento.concepto, func.count())
             .group_by(KardexMovimiento.concepto)
             .all()
         )
-        bodegas = [r[0] for r in db.session.query(KardexMovimiento.bodega).distinct().all()]
+        bodegas = sorted(
+            r[0] for r in db.session.query(KardexMovimiento.bodega).distinct().all()
+        )
+
+        # Clasificar conceptos con su definición
+        conceptos_detalle = {}
+        for concepto, count in sorted(total_por_concepto.items()):
+            defn = CONCEPTO_DEFINICION.get(concepto)
+            conceptos_detalle[str(concepto)] = {
+                'registros': count,
+                'clasificado': defn is not None,
+                'es_demanda': defn[0] if defn else None,
+                'descripcion': defn[2] if defn else 'NO CLASIFICADO — CLASIFICAR ANTES DE CALCULAR',
+            }
+
+        compuerta_ok = len(conceptos_desconocidos) == 0
 
         return {
+            'compuerta_ok': compuerta_ok,
             'total_registros_kardex': total,
-            'bodegas_con_datos': sorted(bodegas),
-            'registros_por_concepto': {str(k): v for k, v in sorted(total_por_concepto.items())},
-            'ventas_por_mes': [{
+            'bodegas_con_datos': bodegas,
+            'conceptos_detalle': conceptos_detalle,
+            'conceptos_desconocidos': sorted(conceptos_desconocidos),
+            'alerta_conceptos': (
+                f'HAY {len(conceptos_desconocidos)} CONCEPTO(S) SIN CLASIFICAR: '
+                f'{sorted(conceptos_desconocidos)}. Agregar a CONCEPTO_DEFINICION '
+                f'antes de calcular tasas — el sistema NO debe ignorarlos.'
+            ) if conceptos_desconocidos else None,
+            'ventas_por_mes_bodega': [{
                 'mes': r.mes,
-                'unidades': float(r.unidades or 0),
-                'valor_costo': float(r.valor_costo or 0),
+                'bodega': r.bodega,
+                'unidades_vendidas': float(r.unidades or 0),
                 'registros': r.registros,
-            } for r in ventas_mes],
-            'advertencia': (
-                'Cruzar ventas_por_mes contra facturación de Siesa. '
-                'Si difieren >2%, la descarga está incompleta.'
+            } for r in ventas_mes_bodega],
+            'instruccion': (
+                'Cruzar unidades_vendidas por mes × bodega contra líneas de factura '
+                'de Siesa (no pesos — el kardex valoriza a costo, la factura a precio). '
+                'Si difieren >2% en alguna bodega, la descarga está incompleta.'
             ),
         }
 
@@ -379,6 +451,9 @@ class KardexService:
                                          nivel: str = 'bodega') -> dict:
         """
         Tasa servida corregida: demanda neta / días con stock.
+
+        PRECONDICIÓN: reconciliar_kardex().compuerta_ok == True.
+        Si hay conceptos sin clasificar, DETIENE con error.
 
         Demanda neta = ventas(501) - devoluciones(502) por SKU.
         Denominador = solo días donde tuvo_stock=True.
@@ -392,6 +467,18 @@ class KardexService:
         Returns: {total_skus, con_demanda, sin_demanda, tasas: [...]}
         """
         from sqlalchemy import func
+
+        # COMPUERTA: verificar que no hay conceptos sin clasificar
+        conceptos_en_kardex = set(
+            r[0] for r in db.session.query(KardexMovimiento.concepto).distinct().all()
+        )
+        conceptos_desconocidos = conceptos_en_kardex - set(CONCEPTO_DEFINICION.keys())
+        if conceptos_desconocidos:
+            raise ValueError(
+                f'HAY {len(conceptos_desconocidos)} CONCEPTO(S) SIN CLASIFICAR: '
+                f'{sorted(conceptos_desconocidos)}. Agregar a CONCEPTO_DEFINICION '
+                f'antes de calcular. El sistema prefiere no responder a responder con hueco.'
+            )
 
         fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
 
@@ -475,34 +562,45 @@ class KardexService:
 
     @staticmethod
     def clasificar_syntetos_boylan(ventana_meses: int = 12,
-                                    estacionales: list = None) -> dict:
+                                    estacionales_extra: list = None) -> dict:
         """
         Clasificación Syntetos-Boylan sobre demanda agregada de RED.
 
         REGLAS DEL CONSULTOR:
         1. Clasificar a nivel de RED (no por bodega) — el rol del SKU es global
-        2. Estacionales se EXCLUYEN — se evalúan dentro de su ventana, no contra 365d
+        2. Estacionales se EXCLUYEN — se leen de tabla producto_clasificacion_abc
+           (campo rol='ESTACIONAL') + parámetro extra para override
         3. La clasificación PROPONE sentencias, no ejecuta bloqueos automáticos
-        4. Si un constitucional cae en 'grumosa', es señal de alarma (dato o rol incorrecto)
+        4. Si un constitucional cae en 'grumosa', es señal de alarma
 
         Cuadrantes:
         - Suave: ADI ≤ 1.32 y CV² ≤ 0.49 → reposición automática
         - Errática: ADI ≤ 1.32 y CV² > 0.49 → colchón + revisión mensual
         - Intermitente: ADI > 1.32 y CV² ≤ 0.49 → mín-máx simple
-        - Grumosa: ADI > 1.32 y CV² > 0.49 → candidata a cola/remate (PROPUESTA, no auto)
-
-        Args:
-            ventana_meses: ventana de análisis (default 12)
-            estacionales: lista de referencias a EXCLUIR (se evalúan aparte)
+        - Grumosa: ADI > 1.32 y CV² > 0.49 → PROPUESTA cola/remate
 
         Returns: {clasificacion: [...], resumen: {...}, alertas: [...]}
         """
         from sqlalchemy import func
-        import math
 
-        if estacionales is None:
-            estacionales = []
-        estacionales_set = set(estacionales)
+        # Leer estacionales de tabla persistida (no parámetro volátil)
+        estacionales_set = set()
+        try:
+            from app.models.producto import Producto
+            from app.models.producto_clasificacion_abc import ProductoClasificacionABC
+            est_db = (
+                db.session.query(Producto.codigo_siesa)
+                .join(ProductoClasificacionABC, Producto.id == ProductoClasificacionABC.producto_id)
+                .filter(ProductoClasificacionABC.clasificacion == 'ESTACIONAL')
+                .all()
+            )
+            estacionales_set = {r[0].strip() for r in est_db if r[0]}
+        except Exception as e:
+            logger.warning('[KARDEX] No se pudo leer estacionales de DB: %s', e)
+
+        # Override: estacionales adicionales pasados explícitamente
+        if estacionales_extra:
+            estacionales_set.update(estacionales_extra)
 
         fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
         dias_ventana = ventana_meses * 30
