@@ -1,0 +1,63 @@
+{
+  "_doc": [
+    "Canon del test de reproducción de tubería del Vigía.",
+    "",
+    "Esto NO es la prueba de diseño del modelo ('¿detecta dentro del plazo de la",
+    "spec?'), que está cerrada y superada: la spec fijó 2-3 semanas como objetivo",
+    "para corrimientos de ~1σ, y Florencia resultó ser un desplome multi-σ (-63%),",
+    "detectado en la primera semana del declive agudo.",
+    "",
+    "Esto es la prueba de reproducción: '¿la producción reproduce lo que el entorno",
+    "original certificó, con los mismos insumos y los mismos parámetros?'. El",
+    "criterio es exacto y no se afloja. Si falla, se investiga la diferencia — nunca",
+    "se relaja el umbral para que pase.",
+    "",
+    "Existe como archivo y no como número recordado porque un canon en tradición",
+    "oral es el defecto que este proyecto existe para matar."
+  ],
+
+  "version": 1,
+
+  "procedencia": {
+    "origen": "Reporte forense del colapso de Florencia (C.O. 006)",
+    "fecha_corrida_original": "2026-07",
+    "hallazgo": "S- = 6.30 en semana 2025-12-29, cruzando h=4.5 desde la primera semana del declive agudo (411 facturas, -63% vs mu=1107)",
+    "nota": "Los valores son la salida registrada de la corrida certificada, no constantes de diseño."
+  },
+
+  "serie": {
+    "concepto": "facturas únicas por semana (frecuencia de servicio)",
+    "centro_operacion": "006",
+    "nombre_en_bd": "facturas_006"
+  },
+
+  "esperado": {
+    "semana_alarma": "2025-12-29",
+    "s_minus": 6.30,
+    "tolerancia_s_minus": 0.05,
+    "_tolerancia_nota": "±0.05 cubre error de punto flotante, no permisividad estadística."
+  },
+
+  "parametros": {
+    "k": 0.5,
+    "h_alarma": 4.5,
+    "h_aviso": 3.0,
+    "ventana_referencia_semanas": 26,
+    "estimadores": "robustos — mediana y MAD*1.4826, no media y desviación",
+    "_nota": "Si la producción corre con otros parámetros el resultado diverge legítimamente. El arnés los compara antes de juzgar la tubería."
+  },
+
+  "insumos": {
+    "_nota": [
+      "SHA-256 de los TXT del backtest original. Condición esencial: la prueba",
+      "solo juzga la tubería si los insumos son los mismos. Con archivos",
+      "distintos, una divergencia no prueba nada sobre el código.",
+      "",
+      "Pendientes de registrar: se llenan con",
+      "  venv/bin/python scripts/registrar_canon_insumos.py <archivos.txt>",
+      "ejecutado sobre los MISMOS archivos que alimentaron la corrida original."
+    ],
+    "registrado": false,
+    "archivos": []
+  }
+}

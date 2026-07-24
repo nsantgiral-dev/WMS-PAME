@@ -540,6 +540,128 @@ class VigiaService:
         return resultado
 
 
+CANON_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    'docs', 'canon_florencia.json')
+
+
+def cargar_canon(path=None):
+    """Lee el canon de reproducción desde el repo. None si no existe."""
+    import json
+    try:
+        with open(path or CANON_PATH, encoding='utf-8') as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError) as e:
+        logger.warning('[VIGIA] No se pudo leer el canon: %s', e)
+        return None
+
+
+def sha256_archivo(path):
+    """SHA-256 de un archivo, en bloques (los TXT de Siesa pueden ser grandes)."""
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for bloque in iter(lambda: f.read(65536), b''):
+            h.update(bloque)
+    return h.hexdigest()
+
+
+def _verificar_parametros(canon):
+    """Prueba 0 — Los parámetros de producción son los de la corrida certificada.
+
+    Va antes que todo: con k o ventana distintos, una divergencia en S- no dice
+    nada sobre la tubería. Se compara primero para no acusar al código de algo
+    que causó la configuración.
+    """
+    esperados = (canon or {}).get('parametros') or {}
+    actuales = {
+        'k': CUSUM_K,
+        'h_alarma': CUSUM_H_ALARMA,
+        'h_aviso': CUSUM_H_AVISO,
+        'ventana_referencia_semanas': VENTANA_REF,
+    }
+
+    fallos = []
+    for nombre, esperado in esperados.items():
+        if nombre.startswith('_') or nombre not in actuales:
+            continue
+        if float(actuales[nombre]) != float(esperado):
+            fallos.append(f'{nombre}: canon {esperado}, produccion {actuales[nombre]}')
+
+    return {
+        'prueba': '0. Parámetros',
+        'ok': not fallos,
+        'observado': actuales,
+        'esperado': {k: v for k, v in esperados.items() if not k.startswith('_')} or None,
+        'fallos': fallos,
+    }
+
+
+def _verificar_insumos(canon, insumos):
+    """Prueba 0b — Los TXT son los mismos del backtest original.
+
+    Condición esencial: la prueba de reproducción solo juzga la tubería si los
+    insumos coinciden. Con archivos distintos una divergencia es legítima y se
+    reporta como 'insumos distintos', nunca como fallo de tubería.
+    """
+    registro = (canon or {}).get('insumos') or {}
+    esperados = {a['sha256']: a.get('archivo') for a in registro.get('archivos', [])}
+
+    if not registro.get('registrado') or not esperados:
+        return {
+            'prueba': '0b. Insumos',
+            'ok': True,
+            'no_verificable': True,
+            'observado': None,
+            'fallos': [],
+            'aviso': ('El canon no tiene SHA-256 registrados. Regístralos con '
+                      'scripts/registrar_canon_insumos.py sobre los TXT originales; '
+                      'sin ellos la prueba 2 no puede distinguir un fallo de tubería '
+                      'de un cambio de insumos.'),
+        }
+
+    if not insumos:
+        return {
+            'prueba': '0b. Insumos',
+            'ok': True,
+            'no_verificable': True,
+            'observado': None,
+            'fallos': [],
+            'aviso': ('Canon con insumos registrados, pero no se pasaron archivos '
+                      'para comparar. Usa --insumos <archivos.txt>.'),
+        }
+
+    hallados, desconocidos = {}, []
+    for path in insumos:
+        try:
+            h = sha256_archivo(path)
+        except OSError as e:
+            desconocidos.append(f'{path}: {e}')
+            continue
+        hallados[h] = os.path.basename(path)
+
+    faltantes = [f'{nombre or "?"} ({h[:12]}...)'
+                 for h, nombre in esperados.items() if h not in hallados]
+    sobrantes = [f'{nombre} ({h[:12]}...)'
+                 for h, nombre in hallados.items() if h not in esperados]
+
+    fallos = list(desconocidos)
+    coinciden = not faltantes and not sobrantes
+
+    return {
+        'prueba': '0b. Insumos',
+        'ok': coinciden and not fallos,
+        'insumos_distintos': not coinciden,
+        'observado': {'archivos_comparados': len(hallados),
+                      'esperados': len(esperados),
+                      'faltantes': faltantes, 'sobrantes': sobrantes},
+        'fallos': fallos,
+        'aviso': ('Los insumos NO son los del backtest original. Una divergencia en '
+                  'la prueba 2 sería legítima y no prueba nada sobre la tubería.')
+        if not coinciden else None,
+    }
+
+
 def _verificar_conteo(esperado):
     """Prueba 1 — Conteo. Semanas, C.O.s y totales de la carga histórica."""
     from sqlalchemy import func
@@ -618,12 +740,14 @@ def _verificar_backtest(esperado):
         fallos.append('el CUSUM no detectó ninguna alarma BAJA en facturas_006')
 
     sem_esp, s_esp = esperado.get('semana_alarma'), esperado.get('s_minus')
+    tol = esperado.get('tolerancia_s_minus', 0.05)
     if sem_esp and obs['semana'] != sem_esp:
         fallos.append(f"semana de alarma: esperada {sem_esp}, obtenida {obs['semana']}")
     if s_esp is not None and obs['s_minus'] is not None:
-        # Tolerancia por redondeo de la tubería, no por permisividad estadística
-        if abs(float(obs['s_minus']) - float(s_esp)) > 0.01:
-            fallos.append(f"S-: esperado {s_esp}, obtenido {obs['s_minus']}")
+        # Tolerancia por punto flotante, no por permisividad estadística.
+        # Si falla, se investiga la diferencia — jamás se afloja el criterio.
+        if abs(float(obs['s_minus']) - float(s_esp)) > float(tol):
+            fallos.append(f"S-: esperado {s_esp} (±{tol}), obtenido {obs['s_minus']}")
     if not sem_esp and s_esp is None:
         pendiente = True
 
@@ -668,32 +792,81 @@ def _verificar_alarma_persiste():
     }
 
 
-def verificar_carga_historica(semanas=None, cos=None, semana_alarma=None, s_minus=None):
+def verificar_carga_historica(semanas=None, cos=None, semana_alarma=None,
+                              s_minus=None, insumos=None, canon_path=None):
     """
-    Arnés de verificación de la carga histórica — las tres pruebas, de una.
+    Arnés de verificación de la carga histórica.
 
     Se corre UNA VEZ, después de subir los TXT y antes de devolver
-    VIGIA_CARGAR_TXT a false. Si las tres pasan, la línea base está certificada
-    y la opción 3 (ingesta Connekta) puede construirse encima sabiendo qué
-    convenciones heredar.
+    VIGIA_CARGAR_TXT a false. Si pasa, la línea base está certificada y la
+    ingesta Connekta puede construirse encima sabiendo qué convenciones heredar.
 
-    Los valores de referencia son parámetros, no constantes: el canon vive en
-    el entorno donde se corrió el backtest original, no en este repo.
+    Orden deliberado — se descartan primero las causas que NO son la tubería:
+      0.  Parámetros — k, h, ventana iguales a los de la corrida certificada
+      0b. Insumos    — SHA-256 de los TXT iguales a los del backtest original
+      1.  Conteo     — semanas, C.O.s y totales de lo marcado HISTORICO
+      2.  Canon      — misma semana de alarma y mismo S- (±tolerancia)
+      3.  Alarma     — la alarma de Florencia queda abierta en producción
+
+    El canon (valores, parámetros, procedencia, hashes) se lee de
+    docs/canon_florencia.json. Los argumentos explícitos lo sobreescriben.
     """
-    esperado = {'semanas': semanas, 'cos': cos,
-                'semana_alarma': semana_alarma, 's_minus': s_minus}
+    canon = cargar_canon(canon_path)
+    c_esp = (canon or {}).get('esperado') or {}
+
+    esperado = {
+        'semanas': semanas,
+        'cos': cos,
+        'semana_alarma': semana_alarma or c_esp.get('semana_alarma'),
+        's_minus': s_minus if s_minus is not None else c_esp.get('s_minus'),
+        'tolerancia_s_minus': c_esp.get('tolerancia_s_minus', 0.05),
+    }
+
+    def _seguro(nombre, fn, *a):
+        """Una prueba que revienta debe reportarse, no tumbar el arnés.
+
+        Corre en un momento tenso: un traceback crudo cuesta minutos que no hay.
+        """
+        try:
+            return fn(*a)
+        except Exception as e:
+            msg = str(e)
+            if 'no such table' in msg or 'does not exist' in msg:
+                # Causa conocida: no merece traceback, el reporte ya lo explica
+                logger.warning('[VIGIA_VERIFICACION] %s: tablas ausentes', nombre)
+                msg = ('las tablas del Vigía no existen en esta base — '
+                       'falta correr flask db upgrade')
+            else:
+                logger.exception('[VIGIA_VERIFICACION] %s falló: %s', nombre, e)
+            return {'prueba': nombre, 'ok': False, 'observado': None,
+                    'fallos': [msg]}
+
+    p_param = _verificar_parametros(canon)
+    p_insumos = _seguro('0b. Insumos', _verificar_insumos, canon, insumos)
 
     pruebas = [
-        _verificar_conteo(esperado),
-        _verificar_backtest(esperado),
-        _verificar_alarma_persiste(),
+        p_param,
+        p_insumos,
+        _seguro('1. Conteo', _verificar_conteo, esperado),
+        _seguro('2. Reproducción del canon', _verificar_backtest, esperado),
+        _seguro('3. La alarma persiste', _verificar_alarma_persiste),
     ]
+
+    # Una divergencia con parámetros o insumos distintos no acusa a la tubería
+    contexto_valido = p_param['ok'] and not p_insumos.get('insumos_distintos')
 
     return {
         'certificado': all(p['ok'] for p in pruebas),
+        'contexto_comparable': contexto_valido,
+        'canon': {
+            'cargado': canon is not None,
+            'procedencia': (canon or {}).get('procedencia'),
+        },
         'pruebas': pruebas,
-        'nota': ('Certificado = las tres pruebas en verde. Solo entonces: '
-                 'VIGIA_CARGAR_TXT=false y arranque de la ingesta Connekta.'),
+        'nota': ('Certificado = todas las pruebas en verde. Solo entonces: '
+                 'VIGIA_CARGAR_TXT=false y arranque de la ingesta Connekta. '
+                 'Si la prueba 2 falla con contexto comparable, se investiga la '
+                 'diferencia — no se afloja el criterio.'),
     }
 
 

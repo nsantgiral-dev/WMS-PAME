@@ -52,17 +52,23 @@ def cargar_txt():
     if not file.filename:
         return jsonify({'error': 'Nombre de archivo vacío'}), 400
 
-    # Auditoría: quién cargó qué y cuándo. Mientras la variable esté en true
-    # este es el único rastro de por dónde entró la línea base.
     uid = _get_uid()
-    logger.warning('[VIGIA_BACKFILL] usuario_id=%s archivo=%s — carga manual habilitada',
-                   uid, file.filename)
 
     # Guardar temporalmente
     tmp_path = f'/tmp/vigia_{file.filename}'
     file.save(tmp_path)
 
-    from app.services.vigia_service import VigiaService
+    # Cadena de custodia: el hash identifica el archivo exacto que produjo la
+    # línea base. Es lo que permite despues distinguir un fallo de tuberia de
+    # un cambio de insumos en la prueba de reproduccion.
+    from app.services.vigia_service import VigiaService, sha256_archivo
+    try:
+        sha = sha256_archivo(tmp_path)
+    except OSError:
+        sha = 'no-calculable'
+    logger.warning('[VIGIA_BACKFILL] usuario_id=%s archivo=%s sha256=%s — carga manual habilitada',
+                   uid, file.filename, sha)
+
     try:
         resultado = VigiaService.cargar_ventas_desde_txt(tmp_path)
     except Exception as e:
@@ -73,11 +79,11 @@ def cargar_txt():
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-    logger.warning('[VIGIA_BACKFILL] usuario_id=%s archivo=%s OK — %s series nuevas, %s registros',
-                   uid, file.filename, resultado.get('series_creadas'),
+    logger.warning('[VIGIA_BACKFILL] usuario_id=%s archivo=%s sha256=%s OK — %s series nuevas, %s registros',
+                   uid, file.filename, sha, resultado.get('series_creadas'),
                    resultado.get('registros_procesados'))
 
-    return jsonify({'ok': True, **resultado}), 200
+    return jsonify({'ok': True, 'sha256': sha, **resultado}), 200
 
 
 @vigia_bp.route('/ejecutar/<nombre_serie>', methods=['POST'])
