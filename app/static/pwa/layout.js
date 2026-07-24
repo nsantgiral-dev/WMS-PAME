@@ -68,7 +68,7 @@ async function cargarLayout() {
 function _layoutRenderUbicacionCard(u) {
   const color = _ZONA_COLOR[u.tipo_zona] || '#888';
   const skuLabel = u.producto_asignado_codigo
-    ? `📦 ${u.producto_asignado_codigo}`
+    ? `📦 ${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`
     : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
 
   return `
@@ -849,7 +849,9 @@ function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
   const cont = document.getElementById('layout-asignar-ent-filas');
   cont.innerHTML = huecos.map(u => {
     const huecoLabel = u.codigo.split('-').pop();
-    const yaAsignado = u.producto_asignado_codigo ? `Ya tiene: ${u.producto_asignado_codigo}` : '';
+    const yaAsignado = u.producto_asignado_codigo
+      ? `Ya tiene: ${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`
+      : '';
     return `<div class="tabla-card" style="margin-bottom:8px;padding:10px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-size:12px;font-weight:700;font-family:monospace;color:var(--tx);">${huecoLabel}</div><div id="layout-asignar-ent-estado-${u.id}" style="font-size:11px;color:#60a5fa;">${yaAsignado}</div></div><div style="display:flex;gap:6px;"><input id="layout-asignar-ent-codigo-${u.id}" type="text" placeholder="Código o código de barras" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProductoEntrepano(${u.id});}" style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;"><input id="layout-asignar-ent-cantidad-${u.id}" type="number" min="1" placeholder="Cant." onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}" style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;"></div>${zona === 'PICKING' ? `<input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}</div>`;
   }).join('');
   const resEl = document.getElementById('layout-asignar-ent-resultado');
