@@ -28,6 +28,7 @@ de Siesa (ubicaciones_sync_service.py) nunca las toca.
 import re
 from datetime import datetime
 from app.extensions import db
+from app.models.almacen import Almacen
 from app.models.ubicacion import Ubicacion
 from app.models.producto import Producto
 from app.models.inventario import UbicacionProducto, MovimientoInventario
@@ -322,6 +323,46 @@ def crear_ubicacion_averias(almacen_id: int, capacidad_maxima: int = None):
 # 4. Mecanismo B — asignar(ubicacion_id, producto_id, cantidad)
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _traspasar_desde_general(ubicacion: Ubicacion, producto_id: int, cantidad: int) -> int:
+    """
+    Fusión Layout↔Picking (solo NB1/CO003): al asignar un SKU a un hueco real,
+    resta esa misma cantidad de SIESA-GENERAL (el bucket sin ubicación física
+    donde aterriza el stock del sync de Siesa) para que picking, conteo cíclico
+    y traslados —que ya leen UbicacionProducto sin filtrar por tipo_zona—
+    empiecen a apuntar al hueco real en vez del bucket genérico.
+
+    Las cantidades por ubicación son informativas (alertan reposición), no la
+    fuente oficial de inventario — esa vive en Siesa. Por eso este traspaso
+    nunca bloquea: resta como máximo lo que haya disponible en SIESA-GENERAL
+    (piso en 0), y sigue de largo si no hay nada que mover.
+
+    Retorna las unidades efectivamente movidas (0 si no aplicó).
+    """
+    if ubicacion.codigo == Ubicacion.CODIGO_GENERAL:
+        return 0  # evita auto-traspaso si el hueco destino es el propio bucket
+
+    almacen = Almacen.query.get(ubicacion.almacen_id)
+    if not almacen or not almacen.tiene_fusion_layout_activa:
+        return 0
+
+    general = Ubicacion.query.filter_by(
+        codigo=Ubicacion.CODIGO_GENERAL, almacen_id=ubicacion.almacen_id
+    ).first()
+    if not general:
+        return 0
+
+    reg_general = UbicacionProducto.query.filter_by(
+        ubicacion_id=general.id, producto_id=producto_id, lote=None,
+    ).with_for_update().first()
+    if not reg_general or reg_general.cantidad <= 0:
+        return 0
+
+    movido = min(cantidad, reg_general.cantidad)
+    reg_general.cantidad -= movido
+    reg_general.row_version += 1
+    return movido
+
+
 def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario_id: int = None,
                      capacidad_maxima: int = None):
     """
@@ -397,6 +438,14 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
     reg.cantidad += cantidad
     reg.row_version += 1
 
+    # Lock de destino ya tomado arriba (reg) — ahora sí el de origen (SIESA-GENERAL),
+    # mismo orden que confirmar_reposicion() para evitar deadlocks cruzados.
+    movido_de_general = _traspasar_desde_general(ubicacion, producto_id, cantidad)
+
+    motivo = f'Layout: {producto.codigo} asignado a {ubicacion.codigo}'
+    if movido_de_general:
+        motivo += f' (traspaso {movido_de_general} desde SIESA-GENERAL)'
+
     db.session.add(MovimientoInventario(
         producto_id=producto_id,
         ubicacion_id=ubicacion_id,
@@ -405,7 +454,7 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
         cantidad=cantidad,
         saldo_antes=saldo_antes,
         saldo_despues=reg.cantidad,
-        motivo=f'Layout: {producto.codigo} asignado a {ubicacion.codigo}',
+        motivo=motivo,
         usuario_id=usuario_id,
         siesa_sync='OMITIDO',  # movimiento 100% interno del WMS, Siesa no se entera
     ))

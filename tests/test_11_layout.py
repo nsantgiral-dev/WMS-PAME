@@ -14,6 +14,7 @@ así que sus tests construyen las ubicaciones directo en la BD.
 import pytest
 from app.services import layout_service as svc
 from app.models.ubicacion import Ubicacion
+from app.models.inventario import UbicacionProducto
 
 
 def test_letras_disponibles_empieza_en_A(db, almacen):
@@ -177,6 +178,75 @@ def test_asignar_producto_reserva_sin_restriccion_1a1(db, almacen, producto):
     svc.asignar_producto(ub2.id, producto.id, 200)
     assert Ubicacion.query.get(ub1.id).producto_asignado_id is None
     assert Ubicacion.query.get(ub2.id).producto_asignado_id is None
+
+
+# ── Fusión Layout↔Picking (solo NB1/CO003) ──────────────────────────────────
+# Al asignar un SKU a un hueco real en el almacén NB1/CO003, se resta esa
+# cantidad de SIESA-GENERAL (el bucket sin ubicación física del sync de Siesa)
+# para que picking/conteo/traslados —que ya leen UbicacionProducto sin filtrar
+# por tipo_zona— empiecen a apuntar al hueco real. Nunca bloquea: las
+# cantidades por ubicación son informativas, no la fuente oficial de stock.
+
+def _crear_general_con_stock(almacen_id, producto_id, cantidad):
+    from app.extensions import db as _db
+    from app.models.inventario import UbicacionProducto
+    general = Ubicacion(
+        codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen_id,
+        zona='GENERAL', tipo='estanteria', activo=True,
+    )
+    _db.session.add(general)
+    _db.session.flush()
+    _db.session.add(UbicacionProducto(
+        ubicacion_id=general.id, producto_id=producto_id, cantidad=cantidad,
+    ))
+    _db.session.commit()
+    return general
+
+
+def test_asignar_producto_traspasa_desde_siesa_general_en_nb1_co003(db, almacen, producto):
+    almacen.centro_op_siesa = '003'  # bodega_siesa_id ya es 'NB1' en el fixture
+    db.session.commit()
+    general = _crear_general_con_stock(almacen.id, producto.id, 200)
+
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    svc.asignar_producto(ub.id, producto.id, 50)
+
+    assert UbicacionProducto.query.filter_by(
+        ubicacion_id=general.id, producto_id=producto.id
+    ).first().cantidad == 150
+    assert UbicacionProducto.query.filter_by(
+        ubicacion_id=ub.id, producto_id=producto.id
+    ).first().cantidad == 50
+
+
+def test_asignar_producto_traspaso_no_bloquea_si_general_insuficiente(db, almacen, producto):
+    almacen.centro_op_siesa = '003'
+    db.session.commit()
+    general = _crear_general_con_stock(almacen.id, producto.id, 10)
+
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    resultado = svc.asignar_producto(ub.id, producto.id, 50)
+
+    # No bloquea aunque pida más de lo que hay en SIESA-GENERAL: la cantidad
+    # asignada al hueco es la informada por el jefe de bodega (50), no la
+    # limitada por el traspaso; SIESA-GENERAL solo llega a 0, nunca negativo.
+    assert resultado['cantidad_total'] == 50
+    assert UbicacionProducto.query.filter_by(
+        ubicacion_id=general.id, producto_id=producto.id
+    ).first().cantidad == 0
+
+
+def test_asignar_producto_no_traspasa_fuera_de_nb1_co003(db, almacen, producto):
+    almacen.centro_op_siesa = '002'  # NB1 pero CO distinto — fuera de alcance
+    db.session.commit()
+    general = _crear_general_con_stock(almacen.id, producto.id, 200)
+
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    svc.asignar_producto(ub.id, producto.id, 50)
+
+    assert UbicacionProducto.query.filter_by(
+        ubicacion_id=general.id, producto_id=producto.id
+    ).first().cantidad == 200  # sin tocar
 
 
 def test_reclasificar_bloquea_con_stock_activo(db, almacen, producto):

@@ -35,7 +35,9 @@ from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
 
-_CODIGO_UBICACION_GENERAL = 'SIESA-GENERAL'
+# Alias local — la fuente de verdad del literal vive en Ubicacion.CODIGO_GENERAL
+# (compartida con layout_service.py, que también necesita reconocer este bucket).
+_CODIGO_UBICACION_GENERAL = Ubicacion.CODIGO_GENERAL
 
 # Estado compartido del proceso en background
 _estado_carga = {

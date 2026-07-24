@@ -15,6 +15,19 @@ class Almacen(db.Model):
     bodega_siesa_id = db.Column(db.String(20))   # ej. 'NB1', 'NB2'
     centro_op_siesa = db.Column(db.String(20))   # ej. '003', '004'
 
+    # Bodega/CO donde la fusión Layout↔Picking está activa (ver layout_service.py
+    # asignar_producto): al asignar un SKU a un hueco real ahí, se traspasa stock
+    # desde SIESA-GENERAL. Las demás bodegas aún no tienen su layout físico
+    # organizado — hardcodeado a propósito (YAGNI), único lugar a tocar si se
+    # habilita otra bodega más adelante.
+    _BODEGA_FUSION_LAYOUT = 'NB1'
+    _CO_FUSION_LAYOUT = '003'
+
+    @property
+    def tiene_fusion_layout_activa(self) -> bool:
+        return (self.bodega_siesa_id == self._BODEGA_FUSION_LAYOUT
+                and self.centro_op_siesa == self._CO_FUSION_LAYOUT)
+
     # Relaciones
     ubicaciones = db.relationship('Ubicacion', backref='almacen', lazy=True)
     usuarios = db.relationship('Usuario', backref='almacen', lazy=True)

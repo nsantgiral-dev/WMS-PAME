@@ -5,6 +5,7 @@ Servicio de Picking con lógica FEFO
 import logging
 from datetime import datetime
 import uuid
+from sqlalchemy import case
 from app.extensions import db
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,17 @@ class PickingService:
         Calcula qué ubicaciones usar según FEFO.
         Prioriza lotes que vencen primero.
         Retorna lista de {ubicacion, cantidad, lote, fecha_vencimiento}
+
+        Ubicaciones reales de Layout (PICKING/RESERVA/AVERIAS) van antes que
+        GENERAL (SIESA-GENERAL, el bucket sin ubicación física del sync de
+        Siesa) — sin este criterio, un hueco recién organizado con fecha de
+        ingreso reciente siempre pierde contra GENERAL mientras a este le
+        quede stock, aunque sea de meses atrás: "antigüedad" no es lo mismo
+        que "ubicación real". GENERAL sigue sirviendo de respaldo automático
+        si el hueco real no alcanza a cubrir toda la cantidad pedida.
         """
+        _prioridad_zona = case((Ubicacion.tipo_zona == 'GENERAL', 1), else_=0)
+
         registros = (
             UbicacionProducto.query
             .join(Ubicacion)
@@ -64,6 +75,8 @@ class PickingService:
                 UbicacionProducto.cantidad > 0
             )
             .order_by(
+                # Ubicaciones reales antes que el bucket GENERAL sin organizar
+                _prioridad_zona.asc(),
                 # Primero los que tienen fecha de vencimiento (FEFO)
                 UbicacionProducto.fecha_vencimiento.asc().nullslast(),
                 # Luego por fecha de ingreso (FIFO como fallback)
