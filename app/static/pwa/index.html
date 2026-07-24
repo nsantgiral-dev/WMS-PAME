@@ -1433,6 +1433,10 @@
         style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         ABC
       </div>
+      <div id="inv-tab-inteligencia" onclick="invSubtab('inteligencia')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🧠 Inteligencia
+      </div>
     </div>
 
     <!-- Panel Conteos -->
@@ -1626,6 +1630,29 @@
         </div>
         <div id="inv-abc-resultado" style="min-height:20px;font-size:12px;color:#4ade80;margin-top:8px;text-align:center;"></div>
       </div>
+    </div>
+
+    <!-- Panel Inteligencia (S-B, TSB, ROP, Newsvendor) -->
+    <div id="inv-panel-inteligencia" style="display:none;">
+      <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;overflow:hidden;margin-bottom:12px;flex-wrap:wrap;">
+        <div id="inv-ia-sub-sb" onclick="invIaSubtab('sb')"
+          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;background:var(--pm);color:#fff;font-weight:700;">
+          Clasificacion S-B
+        </div>
+        <div id="inv-ia-sub-tsb" onclick="invIaSubtab('tsb')"
+          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;color:var(--tx3);">
+          Pronostico TSB
+        </div>
+        <div id="inv-ia-sub-rop" onclick="invIaSubtab('rop')"
+          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;color:var(--tx3);">
+          ROP Dual
+        </div>
+        <div id="inv-ia-sub-newsvendor" onclick="invIaSubtab('newsvendor')"
+          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;color:var(--tx3);">
+          Newsvendor
+        </div>
+      </div>
+      <div id="inv-ia-container"><div style="text-align:center;padding:30px;color:#555;">Selecciona un modelo</div></div>
     </div>
   </div>
 
@@ -1998,6 +2025,18 @@
         style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         🚫 Bloqueos
       </div>
+      <div id="comp-sub-acuerdos" onclick="compSubtab('acuerdos')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        📝 Acuerdos
+      </div>
+      <div id="comp-sub-armador" onclick="compSubtab('armador')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🚢 Armador
+      </div>
+      <div id="comp-sub-deriva" onclick="compSubtab('deriva')"
+        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        📊 Deriva
+      </div>
     </div>
 
     <!-- ── SECCIÓN: VELOCITY + ABC ──────────────────────────────── -->
@@ -2114,6 +2153,21 @@
         <div style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:8px;">Fugas detectadas</div>
         <div id="comp-fugas-lista"><div style="text-align:center;padding:20px;color:#555;">Sin fugas registradas</div></div>
       </div>
+    </div>
+
+    <!-- ── SECCIÓN: ACUERDOS MARCO ────────────────────────────────── -->
+    <div id="comp-sec-acuerdos" style="display:none;">
+      <div style="text-align:center;padding:30px;color:#555;">Cargando acuerdos...</div>
+    </div>
+
+    <!-- ── SECCIÓN: ARMADOR DE CONTENEDOR ─────────────────────────── -->
+    <div id="comp-sec-armador" style="display:none;">
+      <div style="text-align:center;padding:30px;color:#555;">Cargando armador...</div>
+    </div>
+
+    <!-- ── SECCIÓN: DERIVA DE PRECIOS ─────────────────────────────── -->
+    <div id="comp-sec-deriva" style="display:none;">
+      <div style="text-align:center;padding:30px;color:#555;">Cargando deriva...</div>
     </div>
   </div><!-- /tab-compras -->
 
@@ -3038,6 +3092,7 @@
   <script src="/static/pwa/tienda.js?v=20260721a"></script>
   <script src="/static/pwa/etiquetas.js?v=20260710a"></script>
   <script src="/static/pwa/vigia.js?v=20260724a"></script>
+  <script src="/static/pwa/compras_ia.js?v=20260724a"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');

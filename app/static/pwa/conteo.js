@@ -93,8 +93,8 @@ async function guardarConfigBodega() {
  */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
-  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc' };
-  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc' };
+  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', inteligencia: 'inv-tab-inteligencia' };
+  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', inteligencia: 'inv-panel-inteligencia' };
   Object.entries(tabs).forEach(([k, id]) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -108,7 +108,8 @@ function invSubtab(nombre) {
     if (el) el.style.display = k === nombre ? 'block' : 'none';
   });
   if (nombre === 'conteos') cargarConteos();
-  else cargarResumenAbc();
+  else if (nombre === 'abc') cargarResumenAbc();
+  else if (nombre === 'inteligencia') compCargarInteligencia();
 }
 
 let _CONTEO_PAGE = 1;
