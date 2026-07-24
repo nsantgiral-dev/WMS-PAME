@@ -162,3 +162,38 @@ def stock_diario():
             'tuvo_stock': r.tuvo_stock,
         } for r in registros],
     }), 200
+
+
+@kardex_bp.route('/pronostico-tsb', methods=['GET'])
+@jwt_required()
+def pronostico_tsb():
+    """TSB (Teunter-Syntetos-Babai) para demanda intermitente/grumosa.
+    Spec §2.M0.3: TSB debe ganar a media móvil 8 sem en MASE."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede ver pronósticos'}), 403
+    meses = request.args.get('meses', 12, type=int)
+    alpha = request.args.get('alpha', 0.15, type=float)
+    from app.services.kardex_service import KardexService
+    try:
+        resultado = KardexService.pronostico_tsb(meses, alpha)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(resultado), 200
+
+
+@kardex_bp.route('/newsvendor', methods=['POST'])
+@jwt_required()
+def newsvendor():
+    """Newsvendor: cantidad óptima de compra para temporada escolar.
+    DEADLINE: 7 de agosto 2026."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede calcular newsvendor'}), 403
+    data = request.get_json() or {}
+    items = data.get('items', [])
+    margen = data.get('margen_pct', 0.40)
+    costo_exceso = data.get('costo_exceso_pct', 0.60)
+    from app.services.kardex_service import KardexService
+    resultado = KardexService.newsvendor(items, margen, costo_exceso)
+    if 'error' in resultado:
+        return jsonify(resultado), 400
+    return jsonify(resultado), 200

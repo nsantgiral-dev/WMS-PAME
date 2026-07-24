@@ -25,6 +25,8 @@ def register_routes(app):
     from app.routes.bloqueo_recompra import bloqueo_bp
     from app.routes.kardex import kardex_bp
     from app.routes.tienda_oc import tienda_oc_bp
+    from app.routes.vigia import vigia_bp
+    from app.routes.armador import armador_bp
 
     app.register_blueprint(health_bp, url_prefix='/api/health')
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
@@ -52,3 +54,5 @@ def register_routes(app):
     app.register_blueprint(bloqueo_bp, url_prefix='/api/compras')
     app.register_blueprint(kardex_bp, url_prefix='/api/kardex')
     app.register_blueprint(tienda_oc_bp, url_prefix='/api/tienda-oc')
+    app.register_blueprint(vigia_bp, url_prefix='/api/vigia')
+    app.register_blueprint(armador_bp, url_prefix='/api/compras')

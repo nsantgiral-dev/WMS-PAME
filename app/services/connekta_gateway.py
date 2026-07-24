@@ -2626,7 +2626,7 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
                     'f450_id_concepto': 605,
-                    'f450_id_bodega_salida': bodega_origen or self.bodega,
+                    'f450_id_bodega_salida': bodega_transito,
                     # NC1: destino final. CO(NC1)==CO(doc)==_co_ent. Sin stock check.
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
@@ -2655,7 +2655,7 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_origen or self.bodega,
+                    'f470_id_bodega': bodega_transito,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
                     'f470_ind_naturaleza': 1,
