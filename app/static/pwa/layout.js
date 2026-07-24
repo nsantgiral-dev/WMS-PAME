@@ -797,6 +797,8 @@ async function layoutImportarExcel(btn) {
 
 let _layoutAsignarEntHuecos = [];
 let _layoutAsignarEntProductos = {};
+let _layoutAsignarEntZona = 'PICKING';
+let _layoutAsignarEntEditando = new Set(); // ids de hueco con SKU ya asignado que el usuario abrió para cambiar
 
 function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
   const zona = huecos[0].tipo_zona;
@@ -842,22 +844,81 @@ function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
   if (!huecos.length) return;
   _layoutAsignarEntHuecos = huecos;
   _layoutAsignarEntProductos = {};
+  _layoutAsignarEntZona = zona;
+  _layoutAsignarEntEditando = new Set();
   const m = document.getElementById('modal-layout-asignar-entrepano');
   if (!m) return;
   const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
   document.getElementById('layout-asignar-ent-titulo').textContent = `${codigoCuerpo} · ${huecos.length} hueco(s) — deja en blanco los que no vayas a asignar hoy`;
-  const cont = document.getElementById('layout-asignar-ent-filas');
-  cont.innerHTML = huecos.map(u => {
-    const huecoLabel = u.codigo.split('-').pop();
-    const yaAsignado = u.producto_asignado_codigo
-      ? `Ya tiene: ${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`
-      : '';
-    return `<div class="tabla-card" style="margin-bottom:8px;padding:10px;"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;"><div style="font-size:12px;font-weight:700;font-family:monospace;color:var(--tx);">${huecoLabel}</div><div id="layout-asignar-ent-estado-${u.id}" style="font-size:11px;color:#60a5fa;">${yaAsignado}</div></div><div style="display:flex;gap:6px;"><input id="layout-asignar-ent-codigo-${u.id}" type="text" placeholder="Código o código de barras" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProductoEntrepano(${u.id});}" style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;"><input id="layout-asignar-ent-cantidad-${u.id}" type="number" min="1" placeholder="Cant." onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}" style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;"></div>${zona === 'PICKING' ? `<input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}</div>`;
-  }).join('');
+  _layoutRenderFilasAsignarEntrepano();
   const resEl = document.getElementById('layout-asignar-ent-resultado');
   if (resEl) resEl.innerHTML = '';
   m.style.display = 'flex';
-  setTimeout(() => document.getElementById(`layout-asignar-ent-codigo-${huecos[0].id}`)?.focus(), 50);
+  // Autofocus solo si el primer hueco tiene input visible (sin SKU, o recién puesto en edición)
+  const primero = huecos[0];
+  if (!primero.producto_asignado_codigo || _layoutAsignarEntEditando.has(primero.id)) {
+    setTimeout(() => document.getElementById(`layout-asignar-ent-codigo-${primero.id}`)?.focus(), 50);
+  }
+}
+
+/** Modo vista (SKU ya asignado) — referencia grande y legible + botón Editar. */
+function _layoutAsignarEntFilaVista(u, huecoLabel) {
+  const referencia = `${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`;
+  return `
+    <div class="tabla-card" style="margin-bottom:8px;padding:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="min-width:0;">
+          <div style="font-size:11px;font-weight:700;font-family:monospace;color:var(--tx3);">${huecoLabel}</div>
+          <div style="font-size:16px;font-weight:800;color:var(--tx);margin-top:2px;line-height:1.3;">${referencia}</div>
+        </div>
+        <button onclick="layoutEditarSkuEntrepano(${u.id})"
+          style="flex-shrink:0;padding:9px 16px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          Editar
+        </button>
+      </div>
+    </div>`;
+}
+
+/** Modo edición — inputs de código/cantidad/capacidad (hueco nuevo o SKU existente a cambiar). */
+function _layoutAsignarEntFilaEdicion(u, huecoLabel, zona) {
+  const cambiando = u.producto_asignado_codigo
+    ? `Cambiando: ${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`
+    : '';
+  return `
+    <div class="tabla-card" style="margin-bottom:8px;padding:10px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+        <div style="font-size:12px;font-weight:700;font-family:monospace;color:var(--tx);">${huecoLabel}</div>
+        <div id="layout-asignar-ent-estado-${u.id}" style="font-size:11px;color:#60a5fa;">${cambiando}</div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <input id="layout-asignar-ent-codigo-${u.id}" type="text" placeholder="Código o código de barras" autocomplete="off"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProductoEntrepano(${u.id});}"
+          style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;">
+        <input id="layout-asignar-ent-cantidad-${u.id}" type="number" min="1" placeholder="Cant."
+          onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}"
+          style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;">
+      </div>
+      ${zona === 'PICKING' ? `<input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" value="${u.capacidad_maxima ?? ''}" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}
+    </div>`;
+}
+
+function _layoutRenderFilasAsignarEntrepano() {
+  const cont = document.getElementById('layout-asignar-ent-filas');
+  if (!cont) return;
+  cont.innerHTML = _layoutAsignarEntHuecos.map(u => {
+    const huecoLabel = u.codigo.split('-').pop();
+    const enVista = u.producto_asignado_codigo && !_layoutAsignarEntEditando.has(u.id);
+    return enVista
+      ? _layoutAsignarEntFilaVista(u, huecoLabel)
+      : _layoutAsignarEntFilaEdicion(u, huecoLabel, _layoutAsignarEntZona);
+  }).join('');
+}
+
+/** El usuario quiere cambiar el SKU de un hueco ya asignado — pasa esa fila a modo edición. */
+function layoutEditarSkuEntrepano(huecoId) {
+  _layoutAsignarEntEditando.add(huecoId);
+  _layoutRenderFilasAsignarEntrepano();
+  setTimeout(() => document.getElementById(`layout-asignar-ent-codigo-${huecoId}`)?.focus(), 50);
 }
 
 function layoutCerrarModalAsignarEntrepano() {
@@ -865,6 +926,7 @@ function layoutCerrarModalAsignarEntrepano() {
   if (m) m.style.display = 'none';
   _layoutAsignarEntHuecos = [];
   _layoutAsignarEntProductos = {};
+  _layoutAsignarEntEditando = new Set();
 }
 
 async function layoutBuscarProductoEntrepano(huecoId) {
