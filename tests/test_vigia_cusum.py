@@ -460,3 +460,73 @@ class TestSchedulerVigia:
         assert esenciales, 'no se encontró la lista _scheduler_esenciales'
         assert 'vigia_service' in esenciales.group(1), \
             'vigia_service debe estar en _scheduler_esenciales, no en _scheduler_pesados'
+
+
+class TestArnesVerificacion:
+    """Las tres pruebas de certificación de la carga histórica.
+
+    Se corren una vez, tras subir los TXT y antes de devolver VIGIA_CARGAR_TXT
+    a false. Certifican que la línea base entró bien y que la ingesta Connekta
+    puede heredar sus convenciones.
+    """
+
+    def test_sin_datos_no_certifica(self, app, db):
+        """Base vacía NUNCA certifica — es el estado actual de producción."""
+        from app.services.vigia_service import verificar_carga_historica
+        r = verificar_carga_historica()
+        assert r['certificado'] is False
+        conteo = next(p for p in r['pruebas'] if p['prueba'].startswith('1.'))
+        assert any('no se cargó' in f for f in conteo['fallos'])
+
+    def test_sin_valor_de_referencia_queda_pendiente_no_inventa(self, app, db):
+        """Sin canon explícito la prueba 2 se marca pendiente, no se inventa un número."""
+        from app.services.vigia_service import verificar_carga_historica
+        _crear_serie_semanal(db, 'facturas_006', [100] * 20)
+        r = verificar_carga_historica()
+        backtest = next(p for p in r['pruebas'] if p['prueba'].startswith('2.'))
+        assert backtest.get('pendiente_valor_referencia') is True
+
+    def test_semana_de_alarma_distinta_falla(self, app, db):
+        """Si la tubería cambió, la semana de alarma no coincide y la prueba revienta."""
+        from app.services.vigia_service import SerieVigia, verificar_carga_historica
+        # Serie estable que colapsa: garantiza una alarma BAJA
+        valores = [100] * 26 + [20] * 6
+        _crear_serie_semanal(db, 'facturas_006', valores)
+        for s in SerieVigia.query.filter_by(serie='facturas_006').all():
+            s.fuente = 'HISTORICO'
+        db.session.commit()
+
+        r = verificar_carga_historica(semana_alarma='1999-01-04')
+        backtest = next(p for p in r['pruebas'] if p['prueba'].startswith('2.'))
+        assert backtest['ok'] is False
+        assert any('semana de alarma' in f for f in backtest['fallos'])
+
+    def test_conteo_detecta_semanas_faltantes(self, app, db):
+        """Cargar menos semanas de las esperadas no puede pasar silenciosamente."""
+        from app.services.vigia_service import SerieVigia, verificar_carga_historica
+        _crear_serie_semanal(db, 'facturas_006', [100] * 10)
+        for s in SerieVigia.query.filter_by(serie='facturas_006').all():
+            s.fuente = 'HISTORICO'
+        db.session.commit()
+
+        r = verificar_carga_historica(semanas=53)
+        conteo = next(p for p in r['pruebas'] if p['prueba'].startswith('1.'))
+        assert conteo['ok'] is False
+        assert any('semanas' in f for f in conteo['fallos'])
+
+    def test_series_de_produccion_no_cuentan_como_historico(self, app, db):
+        """La prueba 1 solo mira HISTORICO: lo que genere el scheduler no infla el conteo."""
+        from app.services.vigia_service import SerieVigia, verificar_carga_historica
+        _crear_serie_semanal(db, 'adopcion_picking', [5] * 10)  # nace PRODUCCION
+        r = verificar_carga_historica()
+        conteo = next(p for p in r['pruebas'] if p['prueba'].startswith('1.'))
+        assert conteo['observado']['semanas_distintas'] == 0, \
+            'series PRODUCCION no deben contarse como línea base histórica'
+
+    def test_endpoint_verificar_carga(self, app, db, client, jwt_token_admin):
+        """GET /api/vigia/verificar-carga responde con las tres pruebas."""
+        resp = client.get('/api/vigia/verificar-carga?semanas=53&cos=6',
+                          headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        assert resp.status_code == 200
+        d = resp.get_json()
+        assert 'certificado' in d and len(d['pruebas']) == 3

@@ -8,11 +8,14 @@ POST /api/vigia/alarmas/<id>/cerrar — cierra alarma con causa + responsable
 GET  /api/vigia/series             — lista series disponibles con stats
 GET  /api/vigia/backtest/florencia — test canónico C.O. 006
 """
+import logging
 import os
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 from app.routes._auth_helpers import _es_admin_o_jefe, _get_uid
 from app.extensions import db
+
+logger = logging.getLogger(__name__)
 
 vigia_bp = Blueprint('vigia', __name__)
 
@@ -20,17 +23,25 @@ vigia_bp = Blueprint('vigia', __name__)
 @vigia_bp.route('/cargar-txt', methods=['POST'])
 @jwt_required()
 def cargar_txt():
-    """Carga un export TXT de facturación de Siesa.
-    RESTRINGIDO en producción: solo disponible cuando VIGIA_CARGAR_TXT=true.
-    En producción, las series se alimentan por conectores vivos, no exports manuales."""
+    """Carga un export TXT de facturación de Siesa — herramienta de backfill admin.
+
+    Bloqueada por defecto: requiere VIGIA_CARGAR_TXT=true. NO es un camino
+    operativo recurrente, es el único cargador de la línea base histórica
+    (26 semanas de mu_ref/sigma_ref) que Connekta no puede alimentar porque
+    solo produce datos hacia adelante.
+
+    Ciclo de vida previsto: se habilita para la carga inicial, se verifica con
+    verificar_carga_historica(), y se devuelve a false. Se conserva habilitable
+    para backfills puntuales, siempre con registro de auditoría.
+    """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin/gerente puede cargar datos'}), 403
 
-    # Guard: bloqueado en producción salvo override explícito
+    # Guard: bloqueado salvo override explícito
     if not os.environ.get('VIGIA_CARGAR_TXT', '').lower() == 'true':
         return jsonify({
             'error': 'Carga manual de TXT deshabilitada en este entorno. '
-                     'Las series deben alimentarse por conectores vivos. '
+                     'Es una herramienta de backfill, no un camino operativo. '
                      'Para habilitar temporalmente: VIGIA_CARGAR_TXT=true'
         }), 403
 
@@ -41,6 +52,12 @@ def cargar_txt():
     if not file.filename:
         return jsonify({'error': 'Nombre de archivo vacío'}), 400
 
+    # Auditoría: quién cargó qué y cuándo. Mientras la variable esté en true
+    # este es el único rastro de por dónde entró la línea base.
+    uid = _get_uid()
+    logger.warning('[VIGIA_BACKFILL] usuario_id=%s archivo=%s — carga manual habilitada',
+                   uid, file.filename)
+
     # Guardar temporalmente
     tmp_path = f'/tmp/vigia_{file.filename}'
     file.save(tmp_path)
@@ -49,10 +66,16 @@ def cargar_txt():
     try:
         resultado = VigiaService.cargar_ventas_desde_txt(tmp_path)
     except Exception as e:
+        logger.exception('[VIGIA_BACKFILL] usuario_id=%s archivo=%s FALLO: %s',
+                         uid, file.filename, e)
         return jsonify({'error': str(e)}), 500
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+    logger.warning('[VIGIA_BACKFILL] usuario_id=%s archivo=%s OK — %s series nuevas, %s registros',
+                   uid, file.filename, resultado.get('series_creadas'),
+                   resultado.get('registros_procesados'))
 
     return jsonify({'ok': True, **resultado}), 200
 
@@ -232,6 +255,38 @@ def alimentar_picking():
     from app.services.vigia_service import VigiaService
     resultado = VigiaService.alimentar_adopcion_picking()
     return jsonify({'ok': True, **resultado}), 200
+
+
+@vigia_bp.route('/verificar-carga', methods=['GET'])
+@jwt_required()
+def verificar_carga():
+    """Arnés de verificación de la carga histórica — las tres pruebas.
+
+    Valores de referencia como query params (opcionales):
+      ?semanas=53&cos=6&semana_alarma=2025-12-29&s_minus=6.30
+
+    Sin ellos, la prueba 2 reporta lo observado y queda pendiente en vez de
+    inventar un canon.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin/gerente puede verificar la carga'}), 403
+
+    def _int(n):
+        v = request.args.get(n)
+        return int(v) if v else None
+
+    def _float(n):
+        v = request.args.get(n)
+        return float(v) if v else None
+
+    from app.services.vigia_service import verificar_carga_historica
+    resultado = verificar_carga_historica(
+        semanas=_int('semanas'),
+        cos=_int('cos'),
+        semana_alarma=request.args.get('semana_alarma'),
+        s_minus=_float('s_minus'),
+    )
+    return jsonify(resultado), 200
 
 
 @vigia_bp.route('/backtest/florencia', methods=['POST'])

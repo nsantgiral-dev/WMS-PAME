@@ -540,6 +540,163 @@ class VigiaService:
         return resultado
 
 
+def _verificar_conteo(esperado):
+    """Prueba 1 — Conteo. Semanas, C.O.s y totales de la carga histórica."""
+    from sqlalchemy import func
+
+    filas = db.session.query(
+        SerieVigia.serie,
+        func.count(SerieVigia.id).label('semanas'),
+        func.min(SerieVigia.semana).label('desde'),
+        func.max(SerieVigia.semana).label('hasta'),
+        func.sum(SerieVigia.valor).label('total'),
+    ).filter(SerieVigia.fuente == 'HISTORICO').group_by(SerieVigia.serie).all()
+
+    # Los C.O. van como sufijo de la serie: facturas_006, despachos_006...
+    cos, semanas = set(), set()
+    for f in filas:
+        if '_' in f.serie:
+            cos.add(f.serie.rsplit('_', 1)[1])
+    for (s,) in db.session.query(SerieVigia.semana).filter(
+            SerieVigia.fuente == 'HISTORICO').distinct().all():
+        semanas.add(s)
+
+    detalle = [{
+        'serie': f.serie,
+        'semanas': f.semanas,
+        'desde': f.desde.isoformat() if f.desde else None,
+        'hasta': f.hasta.isoformat() if f.hasta else None,
+        'total': float(f.total or 0),
+    } for f in filas]
+
+    obs = {'semanas_distintas': len(semanas), 'cos_distintos': len(cos),
+           'series': len(filas), 'cos': sorted(cos)}
+
+    fallos = []
+    if esperado.get('semanas') and len(semanas) != esperado['semanas']:
+        fallos.append(f"semanas: esperadas {esperado['semanas']}, halladas {len(semanas)}")
+    if esperado.get('cos') and len(cos) != esperado['cos']:
+        fallos.append(f"C.O.s: esperados {esperado['cos']}, hallados {len(cos)}")
+    if not filas:
+        fallos.append('no hay ninguna serie marcada HISTORICO — el TXT no se cargó')
+
+    return {
+        'prueba': '1. Conteo',
+        'ok': not fallos,
+        'observado': obs,
+        'esperado': {k: v for k, v in esperado.items() if k in ('semanas', 'cos')} or None,
+        'fallos': fallos,
+        'detalle': detalle,
+    }
+
+
+def _verificar_backtest(esperado):
+    """Prueba 2 — Reproducción del canon. backtest_florencia debe dar el mismo número.
+
+    Los valores canónicos (semana y S-) NO viven en el código: se pasan como
+    esperado. Si no se pasan, la prueba reporta lo observado y queda en
+    'pendiente' — nunca inventa un valor de referencia.
+    """
+    resultado = VigiaService.backtest_florencia()
+    if 'error' in resultado:
+        return {'prueba': '2. Reproducción del canon', 'ok': False,
+                'fallos': [resultado['error']], 'observado': None, 'esperado': None}
+
+    primera = resultado.get('primera_alarma_baja')
+    obs = {
+        'aprobado': resultado.get('aprobado'),
+        'semana': (primera or {}).get('semana'),
+        's_minus': (primera or {}).get('s_minus'),
+        'severidad': (primera or {}).get('severidad'),
+        'mu_ref': resultado.get('mu_ref'),
+        'sigma_ref': resultado.get('sigma_ref'),
+        'total_semanas': resultado.get('total_semanas'),
+    }
+
+    fallos, pendiente = [], False
+    if not resultado.get('aprobado'):
+        fallos.append('el CUSUM no detectó ninguna alarma BAJA en facturas_006')
+
+    sem_esp, s_esp = esperado.get('semana_alarma'), esperado.get('s_minus')
+    if sem_esp and obs['semana'] != sem_esp:
+        fallos.append(f"semana de alarma: esperada {sem_esp}, obtenida {obs['semana']}")
+    if s_esp is not None and obs['s_minus'] is not None:
+        # Tolerancia por redondeo de la tubería, no por permisividad estadística
+        if abs(float(obs['s_minus']) - float(s_esp)) > 0.01:
+            fallos.append(f"S-: esperado {s_esp}, obtenido {obs['s_minus']}")
+    if not sem_esp and s_esp is None:
+        pendiente = True
+
+    return {
+        'prueba': '2. Reproducción del canon',
+        'ok': not fallos,
+        'pendiente_valor_referencia': pendiente,
+        'observado': obs,
+        'esperado': {'semana_alarma': sem_esp, 's_minus': s_esp},
+        'fallos': fallos,
+    }
+
+
+def _verificar_alarma_persiste():
+    """Prueba 3 — La alarma de Florencia queda abierta en producción.
+
+    No es residuo del backtest: es el activo que espera su ritual de cierre.
+    """
+    abiertas = AlarmaVigia.query.filter_by(
+        serie='facturas_006', tipo='BAJA', cerrada=False).all()
+
+    historicas = SerieVigia.query.filter_by(
+        serie='facturas_006', fuente='HISTORICO').count()
+
+    fallos = []
+    if not abiertas:
+        fallos.append('no hay alarma BAJA abierta en facturas_006')
+    if historicas == 0:
+        fallos.append('facturas_006 no tiene semanas marcadas HISTORICO')
+
+    return {
+        'prueba': '3. La alarma persiste',
+        'ok': not fallos,
+        'observado': {
+            'alarmas_baja_abiertas': len(abiertas),
+            'semanas_historicas_facturas_006': historicas,
+            'alarmas': [{'id': a.id, 'semana': a.semana.isoformat(),
+                         's_valor': float(a.s_valor), 'severidad': a.severidad}
+                        for a in abiertas],
+        },
+        'fallos': fallos,
+    }
+
+
+def verificar_carga_historica(semanas=None, cos=None, semana_alarma=None, s_minus=None):
+    """
+    Arnés de verificación de la carga histórica — las tres pruebas, de una.
+
+    Se corre UNA VEZ, después de subir los TXT y antes de devolver
+    VIGIA_CARGAR_TXT a false. Si las tres pasan, la línea base está certificada
+    y la opción 3 (ingesta Connekta) puede construirse encima sabiendo qué
+    convenciones heredar.
+
+    Los valores de referencia son parámetros, no constantes: el canon vive en
+    el entorno donde se corrió el backtest original, no en este repo.
+    """
+    esperado = {'semanas': semanas, 'cos': cos,
+                'semana_alarma': semana_alarma, 's_minus': s_minus}
+
+    pruebas = [
+        _verificar_conteo(esperado),
+        _verificar_backtest(esperado),
+        _verificar_alarma_persiste(),
+    ]
+
+    return {
+        'certificado': all(p['ok'] for p in pruebas),
+        'pruebas': pruebas,
+        'nota': ('Certificado = las tres pruebas en verde. Solo entonces: '
+                 'VIGIA_CARGAR_TXT=false y arranque de la ingesta Connekta.'),
+    }
+
+
 def alimentar_series_vivas(app=None):
     """
     Punto de entrada del cron semanal — corre los lunes 05:30 Bogotá.
