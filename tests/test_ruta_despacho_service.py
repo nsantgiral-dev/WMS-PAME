@@ -102,6 +102,73 @@ class TestCerrarRuta:
         assert ruta.estado == 'EN_CARGUE'
 
 
+class TestTransicionesEstado:
+    """
+    Máquina de estado de ruta: PROGRAMADO → EN_CARGUE → EN_TRANSITO → ENTREGADA.
+    Cada transición tiene un guard. Si alguien salta un paso, el sistema rechaza.
+    Cisne negro: liquidar ruta que nunca salió del CDI.
+    """
+
+    def test_iniciar_desde_entregada_falla(self, app, db, conductor, vehiculo, ruta_maestra):
+        """No se puede iniciar cargue de una ruta ya entregada."""
+        from app.services.ruta_service import RutaService
+        ruta = RutaService.programar_viaje({
+            'conductor_id': conductor.id,
+            'vehiculo_id': vehiculo.id,
+            'ruta_maestra_id': ruta_maestra.id,
+            'tipo_ruta': 'Urbana',
+            'fecha_programada': date.today().isoformat(),
+        })
+        ruta.estado = 'ENTREGADA'
+        db.session.commit()
+        with pytest.raises(ValueError, match='PROGRAMADO'):
+            RutaService.iniciar_ruta(ruta.id)
+
+    def test_cerrar_desde_programado_falla(self, app, db, conductor, vehiculo, ruta_maestra):
+        """No se puede cerrar ruta que no está EN_CARGUE."""
+        from app.services.ruta_service import RutaService
+        ruta = RutaService.programar_viaje({
+            'conductor_id': conductor.id,
+            'vehiculo_id': vehiculo.id,
+            'ruta_maestra_id': ruta_maestra.id,
+            'tipo_ruta': 'Urbana',
+            'fecha_programada': date.today().isoformat(),
+        })
+        # Intentar cerrar desde PROGRAMADO (sin pasar por EN_CARGUE)
+        with pytest.raises(ValueError):
+            RutaService.cerrar_ruta(ruta.id)
+
+    def test_entregar_desde_en_cargue_falla(self, app, db, conductor, vehiculo, ruta_maestra):
+        """No se puede entregar ruta que no está EN_TRANSITO."""
+        from app.services.ruta_service import RutaService
+        ruta = RutaService.programar_viaje({
+            'conductor_id': conductor.id,
+            'vehiculo_id': vehiculo.id,
+            'ruta_maestra_id': ruta_maestra.id,
+            'tipo_ruta': 'Urbana',
+            'fecha_programada': date.today().isoformat(),
+        })
+        RutaService.iniciar_ruta(ruta.id)
+        # Está EN_CARGUE — intentar entregar sin pasar por EN_TRANSITO
+        with pytest.raises(ValueError, match='EN_TRANSITO'):
+            RutaService.entregar_ruta(ruta.id, data={'paradas': []}, usuario_id=1)
+
+    def test_flujo_completo_programado_a_en_cargue(self, app, db, conductor, vehiculo, ruta_maestra):
+        """PROGRAMADO → EN_CARGUE funciona correctamente."""
+        from app.services.ruta_service import RutaService
+        ruta = RutaService.programar_viaje({
+            'conductor_id': conductor.id,
+            'vehiculo_id': vehiculo.id,
+            'ruta_maestra_id': ruta_maestra.id,
+            'tipo_ruta': 'Urbana',
+            'fecha_programada': date.today().isoformat(),
+        })
+        assert ruta.estado == 'PROGRAMADO'
+        RutaService.iniciar_ruta(ruta.id)
+        db.session.refresh(ruta)
+        assert ruta.estado == 'EN_CARGUE'
+
+
 class TestLiquidarRuta:
 
     def test_liquidar_ruta(self, app, db, conductor, vehiculo, ruta_maestra):
@@ -119,3 +186,17 @@ class TestLiquidarRuta:
         resultado = RutaService.liquidar_ruta(ruta.id)
         db.session.refresh(ruta)
         assert ruta.estado_financiero == 'LIQUIDADA'
+
+    def test_liquidar_ruta_no_entregada_falla(self, app, db, conductor, vehiculo, ruta_maestra):
+        """No se puede liquidar una ruta que no está ENTREGADA."""
+        from app.services.ruta_service import RutaService
+        ruta = RutaService.programar_viaje({
+            'conductor_id': conductor.id,
+            'vehiculo_id': vehiculo.id,
+            'ruta_maestra_id': ruta_maestra.id,
+            'tipo_ruta': 'Urbana',
+            'fecha_programada': date.today().isoformat(),
+        })
+        # Está PROGRAMADO — intentar liquidar
+        with pytest.raises((ValueError, LookupError)):
+            RutaService.liquidar_ruta(ruta.id)

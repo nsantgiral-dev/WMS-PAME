@@ -13,23 +13,61 @@ from app.routes._auth_helpers import _es_admin_o_jefe
 kardex_bp = Blueprint('kardex', __name__)
 
 
-@kardex_bp.route('/descargar', methods=['POST'])
+_kardex_descarga_estado = {'en_curso': False, 'resultado': None}
+
+@kardex_bp.route('/descargar', methods=['POST', 'GET'])
 @jwt_required()
 def descargar_kardex():
-    """Descarga movimientos del kardex de Siesa (consulta dinámica T470+T350+T120)."""
+    """Lanza descarga de kardex en background thread (no bloquea HTTP)."""
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede descargar kardex'}), 403
-    data = request.get_json() or {}
-    fecha_desde = data.get('fecha_desde')
-    fecha_hasta = data.get('fecha_hasta')
-    if not fecha_desde:
-        return jsonify({'error': 'fecha_desde es requerido (YYYYMMDD)'}), 400
-    from app.services.kardex_service import KardexService
-    try:
-        resultado = KardexService.descargar_kardex(fecha_desde, fecha_hasta)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-    return jsonify({'ok': True, **resultado}), 200
+
+    if _kardex_descarga_estado['en_curso']:
+        return jsonify({'ok': True, 'mensaje': 'Descarga ya en curso — revisar logs'}), 200
+
+    if request.method == 'GET':
+        fecha_desde = request.args.get('fecha_desde', '20240101')
+        fecha_hasta = request.args.get('fecha_hasta')
+    else:
+        data = request.get_json() or {}
+        fecha_desde = data.get('fecha_desde', '20240101')
+        fecha_hasta = data.get('fecha_hasta')
+
+    from flask import current_app
+    app = current_app._get_current_object()
+
+    import threading
+    def _run():
+        _kardex_descarga_estado['en_curso'] = True
+        _kardex_descarga_estado['resultado'] = None
+        try:
+            with app.app_context():
+                from app.services.kardex_service import KardexService
+                resultado = KardexService.descargar_kardex(fecha_desde, fecha_hasta)
+                _kardex_descarga_estado['resultado'] = resultado
+        except Exception as e:
+            _kardex_descarga_estado['resultado'] = {'error': str(e)}
+        finally:
+            _kardex_descarga_estado['en_curso'] = False
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+    return jsonify({
+        'ok': True,
+        'mensaje': 'Descarga iniciada en background — revisar logs de Railway',
+        'fecha_desde': fecha_desde,
+    }), 200
+
+
+@kardex_bp.route('/descargar/estado', methods=['GET'])
+@jwt_required()
+def estado_descarga():
+    """Verifica si la descarga está en curso o terminó."""
+    return jsonify({
+        'en_curso': _kardex_descarga_estado['en_curso'],
+        'resultado': _kardex_descarga_estado['resultado'],
+    }), 200
 
 
 @kardex_bp.route('/reconstruir', methods=['POST'])
@@ -48,16 +86,52 @@ def reconstruir_stock():
     return jsonify({'ok': True, **resultado}), 200
 
 
-@kardex_bp.route('/tasa-censurada', methods=['GET'])
+@kardex_bp.route('/reconciliar', methods=['GET'])
 @jwt_required()
-def tasa_censurada():
-    """Velocity censurada: picks reales / días con stock (12 meses móviles)."""
+def reconciliar():
+    """COMPUERTA: cruza kardex vs facturación para verificar completitud."""
     if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin puede ver tasa censurada'}), 403
+        return jsonify({'error': 'Solo admin puede reconciliar'}), 403
     meses = request.args.get('meses', 12, type=int)
     from app.services.kardex_service import KardexService
     try:
-        resultado = KardexService.calcular_tasa_censurada(meses)
+        resultado = KardexService.reconciliar_kardex(meses)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(resultado), 200
+
+
+@kardex_bp.route('/tasa-servida-corregida', methods=['GET'])
+@jwt_required()
+def tasa_servida_corregida():
+    """Tasa servida corregida: demanda neta / días con stock.
+    nivel=bodega para reposición, nivel=red para clasificación S-B."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede ver tasa servida'}), 403
+    meses = request.args.get('meses', 12, type=int)
+    nivel = request.args.get('nivel', 'bodega')  # 'bodega' o 'red'
+    from app.services.kardex_service import KardexService
+    try:
+        resultado = KardexService.calcular_tasa_servida_corregida(meses, nivel)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(resultado), 200
+
+
+@kardex_bp.route('/clasificacion-sb', methods=['GET'])
+@jwt_required()
+def clasificacion_sb():
+    """Clasificación Syntetos-Boylan a nivel de RED.
+    Lee estacionales de tabla ABC (rol=ESTACIONAL). Override adicional
+    con ?estacionales_extra=REF1,REF2 para etiquetado provisional."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede clasificar'}), 403
+    meses = request.args.get('meses', 12, type=int)
+    est_raw = request.args.get('estacionales_extra', '')
+    extras = [x.strip() for x in est_raw.split(',') if x.strip()] if est_raw else []
+    from app.services.kardex_service import KardexService
+    try:
+        resultado = KardexService.clasificar_syntetos_boylan(meses, extras)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify(resultado), 200
