@@ -378,3 +378,85 @@ class TestEndpoints:
         finally:
             if old is not None:
                 os.environ['VIGIA_CARGAR_TXT'] = old
+
+
+class TestFuenteSeries:
+    """El campo `fuente` separa la línea base histórica de la operación viva.
+
+    Existe porque la limpieza transaccional del acta de corte debe poder borrar
+    picks y pedidos de prueba SIN tocar serie_vigia: sin las 26 semanas de
+    referencia el CUSUM no puede calcular mu_ref/sigma_ref y queda ciego.
+    """
+
+    def test_default_es_produccion(self, app, db):
+        """Una serie creada sin especificar fuente nace como PRODUCCION."""
+        from app.services.vigia_service import SerieVigia, _lunes_semana_actual
+        s = SerieVigia(serie='test_fuente', semana=_lunes_semana_actual() - timedelta(weeks=2),
+                       valor=100, registros=5)
+        db.session.add(s)
+        db.session.commit()
+        assert s.fuente == 'PRODUCCION'
+
+    def test_historico_y_produccion_conviven_en_la_misma_serie(self, app, db):
+        """El panel debe poder mostrar línea continua: ambas fuentes en una serie."""
+        from app.services.vigia_service import SerieVigia, _lunes_semana_actual
+        lunes = _lunes_semana_actual()
+        db.session.add(SerieVigia(serie='mixta_006', semana=lunes - timedelta(weeks=3),
+                                  valor=100, registros=5, fuente='HISTORICO'))
+        db.session.add(SerieVigia(serie='mixta_006', semana=lunes - timedelta(weeks=2),
+                                  valor=110, registros=5, fuente='PRODUCCION'))
+        db.session.commit()
+
+        todas = SerieVigia.query.filter_by(serie='mixta_006').all()
+        assert len(todas) == 2, 'ambas fuentes deben coexistir en la misma serie'
+        historicas = [s for s in todas if s.fuente == 'HISTORICO']
+        assert len(historicas) == 1, 'se debe poder filtrar por fuente sin borrar nada'
+
+    def test_alimentar_picking_marca_produccion(self, app, db):
+        """Las series que genera el scheduler son PRODUCCION, no HISTORICO."""
+        from app.services.vigia_service import VigiaService, SerieVigia
+        VigiaService.alimentar_adopcion_picking()
+        vivas = SerieVigia.query.filter(
+            SerieVigia.serie.in_(['adopcion_picking', 'brecha_picking'])).all()
+        assert all(s.fuente == 'PRODUCCION' for s in vivas), \
+            'series del scheduler deben marcarse PRODUCCION'
+
+
+class TestSchedulerVigia:
+    """El scheduler es la diferencia entre tener el termómetro puesto y tenerlo en el cajón.
+
+    adopcion_picking mide si los operarios adoptaron el WMS. Si nadie llama a la
+    función, la serie nunca se puebla y la métrica del go-live no existe.
+    """
+
+    def test_init_scheduler_existe(self):
+        """vigia_service debe exponer init_scheduler para que app/__init__ lo arranque."""
+        from app.services import vigia_service
+        assert hasattr(vigia_service, 'init_scheduler'), 'falta init_scheduler'
+        assert callable(vigia_service.init_scheduler)
+
+    def test_alimentar_series_vivas_es_el_entrypoint_del_cron(self):
+        """El job del cron debe existir y aceptar app= para el contexto."""
+        import inspect
+        from app.services import vigia_service
+        assert callable(vigia_service.alimentar_series_vivas)
+        params = inspect.signature(vigia_service.alimentar_series_vivas).parameters
+        assert 'app' in params, 'el job necesita app= para abrir app_context'
+
+    def test_esta_registrado_en_schedulers_esenciales(self):
+        """Guard anti-regresión: si alguien saca vigia de la lista, esto falla.
+
+        Va en esenciales y no en pesados a propósito — los pesados dependen de
+        HEAVY_SCHEDULERS=true y si esa variable falta el cron nunca corre.
+        """
+        import re
+        from pathlib import Path
+        src = Path(__file__).resolve().parents[1] / 'app' / '__init__.py'
+        contenido = src.read_text(encoding='utf-8')
+
+        # El corchete de cierre va en su propia línea: los tags internos
+        # ('[DLQ_SCHEDULER]') tambien traen ']' y cortarian un match no-greedy.
+        esenciales = re.search(r'_scheduler_esenciales\s*=\s*\[(.*?)\n\s*\]', contenido, re.S)
+        assert esenciales, 'no se encontró la lista _scheduler_esenciales'
+        assert 'vigia_service' in esenciales.group(1), \
+            'vigia_service debe estar en _scheduler_esenciales, no en _scheduler_pesados'

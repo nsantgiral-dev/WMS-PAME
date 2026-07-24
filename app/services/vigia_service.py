@@ -48,6 +48,11 @@ class SerieVigia(db.Model):
     semana = db.Column(db.Date, nullable=False)  # lunes de la semana
     valor = db.Column(db.Numeric(14, 2), nullable=False)
     registros = db.Column(db.Integer, default=0)
+    # Procedencia del dato. HISTORICO = cargado desde export TXT (línea base μ_ref/σ_ref
+    # previa al go-live). PRODUCCION = generado por la operación viva.
+    # La limpieza transaccional del acta de corte NUNCA borra esta tabla: sin las 26
+    # semanas de referencia el CUSUM no puede distinguir una semana normal de un colapso.
+    fuente = db.Column(db.String(12), nullable=False, default='PRODUCCION')
 
     __table_args__ = (
         db.Index('ix_serie_vigia_serie_semana', 'serie', 'semana', unique=True),
@@ -167,6 +172,7 @@ class VigiaService:
                 db.session.add(SerieVigia(
                     serie=serie, semana=semana,
                     valor=datos['valor'], registros=datos['registros'],
+                    fuente='HISTORICO',
                 ))
                 creadas += 1
 
@@ -442,6 +448,7 @@ class VigiaService:
                 db.session.add(SerieVigia(
                     serie='adopcion_picking', semana=lunes,
                     valor=datos['picks'], registros=datos['picks'],
+                    fuente='PRODUCCION',
                 ))
                 creadas += 1
 
@@ -458,6 +465,7 @@ class VigiaService:
                 db.session.add(SerieVigia(
                     serie='brecha_picking', semana=lunes,
                     valor=tasa, registros=datos['picks'],
+                    fuente='PRODUCCION',
                 ))
                 creadas += 1
 
@@ -530,3 +538,60 @@ class VigiaService:
                 resultado['g0_ok'] = False
 
         return resultado
+
+
+def alimentar_series_vivas(app=None):
+    """
+    Punto de entrada del cron semanal — corre los lunes 05:30 Bogotá.
+
+    Recalcula adopcion_picking y brecha_picking desde las tareas de picking de la
+    semana que acaba de cerrar. Es el termómetro de adopción del go-live: mide si
+    los operarios están usando el WMS o si la vía manual sigue ganando.
+
+    Lunes porque el guard de _lunes_semana_actual() descarta la semana en curso —
+    corriendo lunes temprano, la semana anterior ya está cerrada y es evaluable.
+    """
+    from flask import current_app as _app
+    ctx_app = app or _app._get_current_object()
+
+    with ctx_app.app_context():
+        try:
+            resultado = VigiaService.alimentar_adopcion_picking()
+            logger.info('[VIGIA_SCHEDULER] Series vivas alimentadas — %d semanas, %d series nuevas',
+                        resultado.get('semanas_procesadas', 0), resultado.get('series_creadas', 0))
+            return resultado
+        except Exception as e:
+            logger.exception('[VIGIA_SCHEDULER] Fallo alimentando series vivas: %s', e)
+            return None
+
+
+def init_scheduler(app):
+    """
+    Cron semanal:
+      Lunes 05:30 Bogotá → alimenta adopcion_picking + brecha_picking
+
+    Adelantado a las otras alertas (05:45) para que el resumen operativo lea
+    series ya actualizadas.
+    """
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        logger.error('[VIGIA_SCHEDULER] APScheduler no instalado')
+        return None
+
+    scheduler = BackgroundScheduler(timezone='America/Bogota')
+    scheduler.add_job(
+        func=alimentar_series_vivas,
+        trigger=CronTrigger(day_of_week='mon', hour=5, minute=30, timezone='America/Bogota'),
+        kwargs={'app': app},
+        id='vigia_alimentar_series',
+        name='Vigía — alimenta series vivas (lunes 05:30 Bogotá)',
+        replace_existing=True, max_instances=1, misfire_grace_time=3600,
+    )
+
+    scheduler.start()
+    import atexit
+    atexit.register(lambda: scheduler.shutdown(wait=False))
+    logger.info('[VIGIA_SCHEDULER] Scheduler iniciado — lunes 05:30 alimentación de series vivas')
+    return scheduler

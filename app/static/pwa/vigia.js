@@ -209,6 +209,15 @@ function _vigiaRenderPanel(el, data, salud) {
         Cargar TXT
       </button>
     </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;">
+      <button onclick="vigiaAlimentarPicking()"
+        style="padding:8px 16px;background:transparent;border:1px solid var(--pm);border-radius:8px;color:var(--pm);font-size:12px;font-weight:700;cursor:pointer;">
+        Recalcular series de picking
+      </button>
+      <span style="font-size:11px;color:var(--tx3);">
+        Adopcion y brecha, desde tareas vivas. Automatico cada lunes 05:30.
+      </span>
+    </div>
   </div>`;
 
   el.innerHTML = html;
@@ -479,6 +488,24 @@ async function vigiaCargarTxt() {
     }
     alerta(`Cargados: ${d.registros_procesados} registros, ${d.series_creadas} series nuevas`, 'exito');
     fileInput.value = '';
+    cargarVigia();
+  } catch (e) {
+    alerta('Error: ' + (e.message || e), 'error');
+  }
+}
+
+/** Recalcula adopcion_picking y brecha_picking desde las tareas de picking vivas.
+ *  Mismo trabajo que hace el scheduler cada lunes 05:30 — el boton existe para
+ *  poder verificar la serie sin esperar al cron. Idempotente. */
+async function vigiaAlimentarPicking() {
+  try {
+    alerta('Recalculando series de picking...', 'advertencia');
+    const r = await post('/api/vigia/alimentar-picking', {});
+    if (r && r.error) {
+      alerta(r.error, 'error');
+      return;
+    }
+    alerta(`Listo: ${r.semanas_procesadas} semanas, ${r.series_creadas} series nuevas`, 'exito');
     cargarVigia();
   } catch (e) {
     alerta('Error: ' + (e.message || e), 'error');

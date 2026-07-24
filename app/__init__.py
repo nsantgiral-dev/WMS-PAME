@@ -198,6 +198,11 @@ def create_app():
             _scheduler_esenciales = [
                 ('app.services.siesa_job_service',          'init_scheduler',          '[DLQ_SCHEDULER]'),
                 ('app.services.pedidos_sync_service',       'init_scheduler',          '[PEDIDOS_SCHEDULER]'),
+                # Esencial y no pesado: adopcion_picking es la métrica de adopción del
+                # go-live. Corre 1 vez por semana y hace upsert idempotente por
+                # (serie, semana), así que repetirlo no ensucia nada. Va aquí y no en
+                # _scheduler_pesados para que no dependa de HEAVY_SCHEDULERS=true.
+                ('app.services.vigia_service',              'init_scheduler',          '[VIGIA_SCHEDULER]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_esenciales:
                 try:
