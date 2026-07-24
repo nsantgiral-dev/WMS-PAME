@@ -513,3 +513,108 @@ def resumen():
         'averias_pendientes': averias_pendientes,
         'auditorias_criticas_30d': auditorias_criticas,
     })
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# ACUERDOS MARCO + MEMORIA DE PRECIOS
+# ──────────────────────────────────────────────────────────────────────────────
+
+@compras_bp.route('/acuerdos', methods=['GET'])
+@jwt_required()
+def listar_acuerdos():
+    """Lista acuerdos marco (vigentes por default)."""
+    from app.models.acuerdo_marco import AcuerdoMarco
+    solo_vigentes = request.args.get('solo_vigentes', 'true').lower() != 'false'
+    q = AcuerdoMarco.query
+    if solo_vigentes:
+        from datetime import date as _d
+        hoy = _d.today()
+        q = q.filter(AcuerdoMarco.activo == True,
+                      AcuerdoMarco.vigencia_hasta >= hoy)
+    acuerdos = q.order_by(AcuerdoMarco.vigencia_hasta).all()
+    return jsonify({'acuerdos': [a.to_dict() for a in acuerdos], 'total': len(acuerdos)})
+
+
+@compras_bp.route('/acuerdos', methods=['POST'])
+@jwt_required()
+def crear_acuerdo():
+    """Registra un acuerdo marco negociado."""
+    from app.models.acuerdo_marco import AcuerdoMarco
+    data = request.get_json() or {}
+    required = ['producto_id', 'proveedor_id', 'precio_unitario', 'vigencia_desde', 'vigencia_hasta']
+    for f in required:
+        if f not in data:
+            return jsonify({'error': f'{f} es requerido'}), 400
+
+    from datetime import datetime as _dt
+    a = AcuerdoMarco(
+        producto_id=data['producto_id'],
+        proveedor_id=data['proveedor_id'],
+        precio_unitario=data['precio_unitario'],
+        moneda=data.get('moneda', 'COP'),
+        condicion_pago=data.get('condicion_pago'),
+        volumen_comprometido=data.get('volumen_comprometido'),
+        vigencia_desde=_dt.strptime(data['vigencia_desde'], '%Y-%m-%d').date(),
+        vigencia_hasta=_dt.strptime(data['vigencia_hasta'], '%Y-%m-%d').date(),
+        negociado_por=data.get('negociado_por'),
+        notas=data.get('notas'),
+    )
+    db.session.add(a)
+    db.session.commit()
+    return jsonify({'ok': True, 'acuerdo': a.to_dict()}), 201
+
+
+@compras_bp.route('/precios/registrar', methods=['POST'])
+@jwt_required()
+def registrar_precio():
+    """Registra una cotización o precio de lista."""
+    from app.models.acuerdo_marco import PrecioProveedor
+    data = request.get_json() or {}
+    from datetime import date as _d
+    p = PrecioProveedor(
+        producto_id=data['producto_id'],
+        proveedor_id=data['proveedor_id'],
+        precio_unitario=data['precio_unitario'],
+        moneda=data.get('moneda', 'COP'),
+        cantidad_cotizada=data.get('cantidad_cotizada'),
+        condicion_pago=data.get('condicion_pago'),
+        fuente=data.get('fuente', 'COTIZACION'),
+        cotizado_por=data.get('cotizado_por'),
+        fecha=_d.today(),
+    )
+    db.session.add(p)
+    db.session.commit()
+    return jsonify({'ok': True, 'precio': p.to_dict()}), 201
+
+
+@compras_bp.route('/precios/comparador/<int:producto_id>', methods=['GET'])
+@jwt_required()
+def comparador(producto_id):
+    """Los 3-5 mejores precios vigentes lado a lado."""
+    from app.services.compras_inteligencia_service import ComprasInteligenciaService
+    return jsonify(ComprasInteligenciaService.comparador_precios(producto_id))
+
+
+@compras_bp.route('/clasificar-rama/<int:producto_id>', methods=['GET'])
+@jwt_required()
+def clasificar_rama(producto_id):
+    """Determina rama de compra: acuerdo vigente / cotización / lista."""
+    from app.services.compras_inteligencia_service import ComprasInteligenciaService
+    return jsonify(ComprasInteligenciaService.clasificar_sku_compra(producto_id))
+
+
+@compras_bp.route('/deriva', methods=['GET'])
+@jwt_required()
+def detectar_deriva():
+    """Dock Lock de compras: precio facturado vs pactado."""
+    meses = request.args.get('meses', 3, type=int)
+    from app.services.compras_inteligencia_service import ComprasInteligenciaService
+    return jsonify(ComprasInteligenciaService.detectar_deriva(meses))
+
+
+@compras_bp.route('/calendario-vencimientos', methods=['GET'])
+@jwt_required()
+def calendario_vencimientos():
+    """Agenda de renegociación: acuerdos por vencer + candidatos."""
+    from app.services.compras_inteligencia_service import ComprasInteligenciaService
+    return jsonify(ComprasInteligenciaService.calendario_vencimientos())
