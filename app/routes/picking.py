@@ -329,15 +329,11 @@ def siguiente_tarea():
             'mensaje': 'Tienes una tarea en proceso'
         }), 200
 
-    # with_for_update() — lock pesimista a nivel de fila.
-    # Evita que dos operarios reciban la misma tarea si llaman simultáneamente.
-    tarea = TareaPicking.query.filter_by(
-        estado=EstadoPicking.PENDIENTE,
-        operario_id=None
-    ).order_by(
-        TareaPicking.prioridad.desc(),
-        TareaPicking.fecha_creacion.asc()
-    ).with_for_update(skip_locked=True).first()
+    # PickingService.siguiente_tarea_para(): prioridad -> mismo documento en
+    # curso -> orden físico de caminata (pasillo/fila/cuerpo/nivel/hueco) ->
+    # fecha_creacion. Row-lock (with_for_update skip_locked) incluido — evita
+    # que dos operarios reciban la misma tarea si llaman simultáneamente.
+    tarea = PickingService.siguiente_tarea_para(operario_id)
 
     if not tarea:
         return jsonify({
@@ -370,12 +366,18 @@ def mis_tareas_activas():
     except (TypeError, ValueError):
         return jsonify({'error': 'Token inválido'}), 401
     from sqlalchemy.orm import selectinload as _sl
+    from app.models.ubicacion import Ubicacion
     tareas = (TareaPicking.query
+              .join(Ubicacion, TareaPicking.ubicacion_id == Ubicacion.id)
               .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
               .filter(
                   TareaPicking.operario_id == operario_id,
                   TareaPicking.estado.in_([EstadoPicking.PENDIENTE, EstadoPicking.EN_PROCESO])
-              ).order_by(TareaPicking.prioridad.desc()).all())
+              )
+              # Mismo orden de ruta física que el dispensador (siguiente_tarea)
+              # — la lista de "mis tareas" se ve en la secuencia real de recorrido.
+              .order_by(TareaPicking.prioridad.desc(), *PickingService.orden_ruta_fisica())
+              .all())
     return jsonify({
         'tareas': [t.to_dict() for t in tareas],
         'total': len(tareas)

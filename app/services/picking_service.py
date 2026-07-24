@@ -115,6 +115,114 @@ class PickingService:
         }
 
     @staticmethod
+    def orden_ruta_fisica():
+        """
+        Orden de caminata física: Pasillo -> Fila -> Cuerpo -> Nivel -> Hueco.
+
+        El pasillo se ordena por (longitud, alfabético) en vez de solo
+        alfabético — un ORDER BY ingenuo pondría 'AA' antes que 'Z'
+        (comparación de string), cuando físicamente 'AA' es el pasillo 27,
+        después de 'Z' (el 26). Longitud primero corrige eso: todos los
+        pasillos de una letra ('A'..'Z') ordenan antes que cualquiera de dos
+        letras ('AA'..'ZZ'), y dentro del mismo largo el alfabético ya es
+        correcto.
+
+        nullslast() en cada eje: ubicaciones sin dirección física (SIESA-
+        GENERAL, AVERIAS, o el esquema legado de 'estante') van al final de
+        la ruta — no son huecos reales que se puedan visitar en secuencia.
+
+        Reutilizable donde haga falta un orden de recorrido — hoy en
+        siguiente_tarea_para() para el dispensador, también aplicable a
+        listados de solo lectura si conviene mostrarlos en orden de ruta.
+        """
+        return (
+            db.func.length(Ubicacion.pasillo).asc().nullslast(),
+            Ubicacion.pasillo.asc().nullslast(),
+            Ubicacion.fila.asc().nullslast(),
+            Ubicacion.cuerpo.asc().nullslast(),
+            Ubicacion.nivel.asc().nullslast(),
+            Ubicacion.hueco.asc().nullslast(),
+        )
+
+    @staticmethod
+    def _documento_en_curso(operario_id: int) -> str | None:
+        """
+        referencia_documento (pedido o traslado — comparten esta misma cola)
+        que el operario tocó más recientemente, EN_PROCESO o recién
+        COMPLETADO. Si todavía le quedan tareas pendientes de ese mismo
+        documento, siguiente_tarea_para() se las asigna antes de saltar a
+        otro — evita que rebote entre pedidos/traslados distintos.
+        """
+        ultima = (
+            TareaPicking.query
+            .filter(
+                TareaPicking.operario_id == operario_id,
+                TareaPicking.estado.in_([EstadoPicking.EN_PROCESO, EstadoPicking.COMPLETADO]),
+                TareaPicking.referencia_documento.isnot(None),
+            )
+            .order_by(
+                db.func.coalesce(TareaPicking.fecha_completado, TareaPicking.fecha_inicio).desc()
+            )
+            .first()
+        )
+        return ultima.referencia_documento if ultima else None
+
+    @staticmethod
+    def siguiente_tarea_para(operario_id: int):
+        """
+        Selecciona (con row-lock) la próxima TareaPicking a asignar a un
+        operario. Aplica igual a pedidos y traslados — ambos comparten esta
+        cola vía referencia_documento.
+
+        Orden de decisión:
+          1. Prioridad — estricta, sin cambios de comportamiento: nunca se
+             trabaja una prioridad más baja mientras haya una más alta
+             pendiente en la cola.
+          2. Dentro de esa prioridad máxima: si el operario ya está
+             trabajando un documento (_documento_en_curso) y le quedan
+             tareas de ese mismo documento en esa prioridad, se las asigna
+             antes de saltar a otro.
+          3. Orden físico de caminata (orden_ruta_fisica) — las líneas de
+             un mismo documento en ubicaciones distintas llegan en secuencia
+             de recorrido, no salteadas.
+          4. fecha_creacion como último desempate (comportamiento previo).
+
+        Retorna None si no hay tareas pendientes sin operario asignado.
+        """
+        base = (
+            TareaPicking.query
+            .join(Ubicacion, TareaPicking.ubicacion_id == Ubicacion.id)
+            .filter(
+                TareaPicking.estado == EstadoPicking.PENDIENTE,
+                TareaPicking.operario_id.is_(None),
+            )
+        )
+
+        prioridad_maxima = base.with_entities(db.func.max(TareaPicking.prioridad)).scalar()
+        if prioridad_maxima is None:
+            return None
+        base = base.filter(TareaPicking.prioridad == prioridad_maxima)
+
+        orden = PickingService.orden_ruta_fisica() + (TareaPicking.fecha_creacion.asc(),)
+
+        documento_actual = PickingService._documento_en_curso(operario_id)
+        if documento_actual:
+            candidata = (
+                base.filter(TareaPicking.referencia_documento == documento_actual)
+                .order_by(*orden)
+                .with_for_update(of=TareaPicking, skip_locked=True)
+                .first()
+            )
+            if candidata:
+                return candidata
+
+        return (
+            base.order_by(*orden)
+            .with_for_update(of=TareaPicking, skip_locked=True)
+            .first()
+        )
+
+    @staticmethod
     def crear_tareas(
         producto_id: int,
         cantidad: int,

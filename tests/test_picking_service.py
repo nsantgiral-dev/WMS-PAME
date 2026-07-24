@@ -3,6 +3,7 @@ Tests de PickingService — el flujo más crítico del CDI.
 Si picking falla, nada sale del almacén.
 """
 import pytest
+from app.services.picking_service import PickingService
 
 
 @pytest.fixture
@@ -251,3 +252,110 @@ class TestIniciarCancelarReabrir:
         db.session.refresh(tarea)
         assert tarea.estado == 'CANCELADO'
         assert reservado_despues == reservado_antes - 5
+
+
+class TestSiguienteTareaPara:
+    """
+    Dispensador de tareas al operario — aplica igual a pedidos y traslados
+    (comparten esta cola vía referencia_documento). Orden: prioridad estricta
+    -> mismo documento en curso -> ruta física (pasillo/fila/cuerpo/nivel/
+    hueco) -> fecha_creacion.
+    """
+
+    @staticmethod
+    def _ub(almacen_id, codigo, pasillo=None, fila=None, cuerpo=None, nivel=None, hueco=None):
+        from app.models.ubicacion import Ubicacion
+        from app.extensions import db as _db
+        u = Ubicacion(
+            codigo=codigo, almacen_id=almacen_id, tipo_zona='PICKING', tipo='estanteria',
+            pasillo=pasillo, fila=fila, cuerpo=cuerpo, nivel=nivel, hueco=hueco,
+            origen='MANUAL', activo=True,
+        )
+        _db.session.add(u)
+        _db.session.flush()
+        return u
+
+    @staticmethod
+    def _tarea(almacen_id, producto_id, ubicacion_id, codigo, prioridad=1,
+              referencia_documento=None, estado='PENDIENTE', operario_id=None):
+        from app.models.picking import TareaPicking
+        from app.extensions import db as _db
+        t = TareaPicking(
+            codigo=codigo, producto_id=producto_id, cantidad_solicitada=1,
+            ubicacion_id=ubicacion_id, almacen_id=almacen_id, estado=estado,
+            prioridad=prioridad, referencia_documento=referencia_documento,
+            operario_id=operario_id,
+        )
+        _db.session.add(t)
+        _db.session.flush()
+        return t
+
+    def test_prefiere_ubicacion_fisicamente_mas_cercana(self, app, db, almacen, producto, usuario):
+        ub_lejos = self._ub(almacen.id, 'PIK-B1-C01-E01-H01', pasillo='B', fila=1, cuerpo=1, nivel=1, hueco=1)
+        ub_cerca = self._ub(almacen.id, 'PIK-A1-C01-E01-H01', pasillo='A', fila=1, cuerpo=1, nivel=1, hueco=1)
+        self._tarea(almacen.id, producto.id, ub_lejos.id, 'T-LEJOS')
+        self._tarea(almacen.id, producto.id, ub_cerca.id, 'T-CERCA')
+        db.session.commit()
+
+        siguiente = PickingService.siguiente_tarea_para(usuario.id)
+        assert siguiente.codigo == 'T-CERCA'
+
+    def test_pasillo_z_antes_que_aa_pese_al_orden_alfabetico(self, app, db, almacen, producto, usuario):
+        ub_aa = self._ub(almacen.id, 'PIK-AA1-C01-E01-H01', pasillo='AA', fila=1, cuerpo=1, nivel=1, hueco=1)
+        ub_z = self._ub(almacen.id, 'PIK-Z1-C01-E01-H01', pasillo='Z', fila=1, cuerpo=1, nivel=1, hueco=1)
+        self._tarea(almacen.id, producto.id, ub_aa.id, 'T-AA')
+        self._tarea(almacen.id, producto.id, ub_z.id, 'T-Z')
+        db.session.commit()
+
+        siguiente = PickingService.siguiente_tarea_para(usuario.id)
+        assert siguiente.codigo == 'T-Z'  # pasillo 26, físicamente antes que AA (27)
+
+    def test_prefiere_terminar_documento_en_curso_sobre_ubicacion_mas_cercana(self, app, db, almacen, producto, usuario):
+        ub_actual = self._ub(almacen.id, 'PIK-A1-C01-E01-H01', pasillo='A', fila=1, cuerpo=1, nivel=1, hueco=1)
+        ub_lejos_mismo_doc = self._ub(almacen.id, 'PIK-Z1-C01-E01-H01', pasillo='Z', fila=1, cuerpo=1, nivel=1, hueco=1)
+        ub_cerca_otro_doc = self._ub(almacen.id, 'PIK-A1-C01-E01-H02', pasillo='A', fila=1, cuerpo=1, nivel=1, hueco=2)
+
+        # El operario ya completó una tarea de PD-100 — sigue trabajando ese documento.
+        self._tarea(almacen.id, producto.id, ub_actual.id, 'T-YA-HECHA',
+                    referencia_documento='PD-100', estado='COMPLETADO', operario_id=usuario.id)
+        db.session.commit()
+
+        self._tarea(almacen.id, producto.id, ub_lejos_mismo_doc.id, 'T-MISMO-DOC', referencia_documento='PD-100')
+        self._tarea(almacen.id, producto.id, ub_cerca_otro_doc.id, 'T-OTRO-DOC', referencia_documento='PD-200')
+        db.session.commit()
+
+        siguiente = PickingService.siguiente_tarea_para(usuario.id)
+        # Aunque T-OTRO-DOC está más cerca, se prioriza terminar PD-100 primero.
+        assert siguiente.codigo == 'T-MISMO-DOC'
+
+    def test_prioridad_mas_alta_gana_aunque_este_trabajando_otro_documento(self, app, db, almacen, producto, usuario):
+        ub_actual = self._ub(almacen.id, 'PIK-A1-C01-E01-H01', pasillo='A', fila=1, cuerpo=1, nivel=1, hueco=1)
+        ub_mismo_doc = self._ub(almacen.id, 'PIK-A1-C01-E01-H02', pasillo='A', fila=1, cuerpo=1, nivel=1, hueco=2)
+        ub_urgente = self._ub(almacen.id, 'PIK-Z1-C01-E01-H01', pasillo='Z', fila=1, cuerpo=1, nivel=1, hueco=1)
+
+        self._tarea(almacen.id, producto.id, ub_actual.id, 'T-YA-HECHA',
+                    referencia_documento='PD-100', estado='COMPLETADO', operario_id=usuario.id)
+        db.session.commit()
+
+        self._tarea(almacen.id, producto.id, ub_mismo_doc.id, 'T-MISMO-DOC-P1',
+                    referencia_documento='PD-100', prioridad=1)
+        self._tarea(almacen.id, producto.id, ub_urgente.id, 'T-URGENTE-P2',
+                    referencia_documento='PD-999', prioridad=2)
+        db.session.commit()
+
+        siguiente = PickingService.siguiente_tarea_para(usuario.id)
+        # Prioridad 2 gana pese a que PD-100 (prioridad 1) es el documento en curso.
+        assert siguiente.codigo == 'T-URGENTE-P2'
+
+    def test_sin_tareas_pendientes_retorna_none(self, app, db, almacen, usuario):
+        assert PickingService.siguiente_tarea_para(usuario.id) is None
+
+    def test_ubicaciones_sin_direccion_fisica_van_al_final(self, app, db, almacen, producto, usuario):
+        ub_general = self._ub(almacen.id, 'SIESA-GENERAL')  # sin pasillo/fila/cuerpo/nivel/hueco
+        ub_real = self._ub(almacen.id, 'PIK-Z1-C01-E01-H01', pasillo='Z', fila=1, cuerpo=1, nivel=1, hueco=1)
+        self._tarea(almacen.id, producto.id, ub_general.id, 'T-GENERAL')
+        self._tarea(almacen.id, producto.id, ub_real.id, 'T-REAL')
+        db.session.commit()
+
+        siguiente = PickingService.siguiente_tarea_para(usuario.id)
+        assert siguiente.codigo == 'T-REAL'
