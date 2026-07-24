@@ -460,3 +460,208 @@ class TestSchedulerVigia:
         assert esenciales, 'no se encontró la lista _scheduler_esenciales'
         assert 'vigia_service' in esenciales.group(1), \
             'vigia_service debe estar en _scheduler_esenciales, no en _scheduler_pesados'
+
+
+class TestArnesVerificacion:
+    """Las tres pruebas de certificación de la carga histórica.
+
+    Se corren una vez, tras subir los TXT y antes de devolver VIGIA_CARGAR_TXT
+    a false. Certifican que la línea base entró bien y que la ingesta Connekta
+    puede heredar sus convenciones.
+    """
+
+    def test_sin_datos_no_certifica(self, app, db):
+        """Base vacía NUNCA certifica — es el estado actual de producción."""
+        from app.services.vigia_service import verificar_carga_historica
+        r = verificar_carga_historica()
+        assert r['certificado'] is False
+        conteo = next(p for p in r['pruebas'] if p['prueba'].startswith('1.'))
+        assert any('no se cargó' in f for f in conteo['fallos'])
+
+    def test_sin_canon_queda_pendiente_no_inventa(self, app, db, tmp_path):
+        """Sin canon NI flags, la prueba 2 se marca pendiente en vez de fabricar un número.
+
+        Con el canon del repo presente esto no ocurre — pero el arnés nunca debe
+        inventar una referencia si se queda sin ella.
+        """
+        import json
+        from app.services.vigia_service import verificar_carga_historica
+        vacio = tmp_path / 'canon_vacio.json'
+        vacio.write_text(json.dumps({'esperado': {}}), encoding='utf-8')
+
+        _crear_serie_semanal(db, 'facturas_006', [100] * 20)
+        r = verificar_carga_historica(canon_path=str(vacio))
+        backtest = next(p for p in r['pruebas'] if p['prueba'].startswith('2.'))
+        assert backtest.get('pendiente_valor_referencia') is True
+
+    def test_semana_de_alarma_distinta_falla(self, app, db):
+        """Si la tubería cambió, la semana de alarma no coincide y la prueba revienta."""
+        from app.services.vigia_service import SerieVigia, verificar_carga_historica
+        # Serie estable que colapsa: garantiza una alarma BAJA
+        valores = [100] * 26 + [20] * 6
+        _crear_serie_semanal(db, 'facturas_006', valores)
+        for s in SerieVigia.query.filter_by(serie='facturas_006').all():
+            s.fuente = 'HISTORICO'
+        db.session.commit()
+
+        r = verificar_carga_historica(semana_alarma='1999-01-04')
+        backtest = next(p for p in r['pruebas'] if p['prueba'].startswith('2.'))
+        assert backtest['ok'] is False
+        assert any('semana de alarma' in f for f in backtest['fallos'])
+
+    def test_conteo_detecta_semanas_faltantes(self, app, db):
+        """Cargar menos semanas de las esperadas no puede pasar silenciosamente."""
+        from app.services.vigia_service import SerieVigia, verificar_carga_historica
+        _crear_serie_semanal(db, 'facturas_006', [100] * 10)
+        for s in SerieVigia.query.filter_by(serie='facturas_006').all():
+            s.fuente = 'HISTORICO'
+        db.session.commit()
+
+        r = verificar_carga_historica(semanas=53)
+        conteo = next(p for p in r['pruebas'] if p['prueba'].startswith('1.'))
+        assert conteo['ok'] is False
+        assert any('semanas' in f for f in conteo['fallos'])
+
+    def test_series_de_produccion_no_cuentan_como_historico(self, app, db):
+        """La prueba 1 solo mira HISTORICO: lo que genere el scheduler no infla el conteo."""
+        from app.services.vigia_service import SerieVigia, verificar_carga_historica
+        _crear_serie_semanal(db, 'adopcion_picking', [5] * 10)  # nace PRODUCCION
+        r = verificar_carga_historica()
+        conteo = next(p for p in r['pruebas'] if p['prueba'].startswith('1.'))
+        assert conteo['observado']['semanas_distintas'] == 0, \
+            'series PRODUCCION no deben contarse como línea base histórica'
+
+    def test_endpoint_verificar_carga(self, app, db, client, jwt_token_admin):
+        """GET /api/vigia/verificar-carga responde con las tres pruebas."""
+        resp = client.get('/api/vigia/verificar-carga?semanas=53&cos=6',
+                          headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        assert resp.status_code == 200
+        d = resp.get_json()
+        assert 'certificado' in d and 'contexto_comparable' in d
+        # 0. parámetros, 0b. insumos, 1. conteo, 2. canon, 3. alarma
+        assert len(d['pruebas']) == 5
+        assert d['canon']['cargado'] is True
+
+
+class TestCanonFlorencia:
+    """El canon vive en el repo con procedencia, no en la memoria de nadie.
+
+    Distingue dos preguntas que se confunden en una:
+      - Prueba de diseño ('¿detecta dentro del plazo de la spec?') — cerrada.
+      - Prueba de reproducción ('¿produccion reproduce lo certificado, con los
+        mismos insumos y parámetros?') — vigente, exacta, no se afloja.
+    """
+
+    def test_canon_existe_y_tiene_procedencia(self):
+        """Un canon sin procedencia es tradición oral con formato JSON."""
+        from app.services.vigia_service import cargar_canon
+        canon = cargar_canon()
+        assert canon is not None, 'falta docs/canon_florencia.json'
+        assert canon['esperado']['semana_alarma'] == '2025-12-29'
+        assert abs(canon['esperado']['s_minus'] - 6.30) < 1e-9
+        assert canon['procedencia']['origen'], 'el canon debe declarar de dónde salió'
+        assert canon['serie']['nombre_en_bd'] == 'facturas_006'
+
+    def test_tolerancia_es_de_flotantes_no_de_criterio(self):
+        """±0.05 cubre punto flotante. Más que eso sería aflojar el criterio."""
+        from app.services.vigia_service import cargar_canon
+        assert cargar_canon()['esperado']['tolerancia_s_minus'] <= 0.05
+
+    def test_usa_el_canon_sin_pasar_argumentos(self, app, db):
+        """El arnés lee el canon solo: nadie tiene que recordar el número."""
+        from app.services.vigia_service import SerieVigia, verificar_carga_historica
+        valores = [100] * 26 + [20] * 6
+        _crear_serie_semanal(db, 'facturas_006', valores)
+        for s in SerieVigia.query.filter_by(serie='facturas_006').all():
+            s.fuente = 'HISTORICO'
+        db.session.commit()
+
+        r = verificar_carga_historica()
+        backtest = next(p for p in r['pruebas'] if p['prueba'].startswith('2.'))
+        # Serie sintética: no reproduce el canon, pero DEBE haberlo aplicado
+        assert backtest.get('pendiente_valor_referencia') is not True
+        assert backtest['esperado']['semana_alarma'] == '2025-12-29'
+
+    def test_parametros_distintos_marcan_contexto_no_comparable(self, app, db, monkeypatch):
+        """Con k distinto, una divergencia en S- no acusa a la tubería."""
+        import app.services.vigia_service as vs
+        monkeypatch.setattr(vs, 'CUSUM_K', 0.9)
+        r = vs.verificar_carga_historica()
+        params = next(p for p in r['pruebas'] if p['prueba'].startswith('0.'))
+        assert params['ok'] is False
+        assert any('k' in f for f in params['fallos'])
+        assert r['contexto_comparable'] is False
+
+    def test_parametros_de_produccion_coinciden_con_el_canon(self, app, db):
+        """Guard: si alguien cambia CUSUM_K por env, la certificación lo detecta."""
+        from app.services.vigia_service import verificar_carga_historica
+        r = verificar_carga_historica()
+        params = next(p for p in r['pruebas'] if p['prueba'].startswith('0.'))
+        assert params['ok'], f"parámetros divergen del canon: {params['fallos']}"
+
+    def test_insumos_distintos_no_es_fallo_de_tuberia(self, app, db, tmp_path):
+        """Hash que no coincide → 'insumos distintos', no acusación al código."""
+        import json
+        from app.services.vigia_service import verificar_carga_historica, CANON_PATH
+
+        with open(CANON_PATH, encoding='utf-8') as f:
+            canon = json.load(f)
+        canon['insumos'] = {'registrado': True, 'archivos': [
+            {'archivo': 'original.txt', 'sha256': 'a' * 64, 'bytes': 10}]}
+        canon_falso = tmp_path / 'canon.json'
+        canon_falso.write_text(json.dumps(canon), encoding='utf-8')
+
+        otro = tmp_path / 'otro.txt'
+        otro.write_text('contenido distinto', encoding='utf-8')
+
+        r = verificar_carga_historica(insumos=[str(otro)], canon_path=str(canon_falso))
+        ins = next(p for p in r['pruebas'] if p['prueba'].startswith('0b'))
+        assert ins['insumos_distintos'] is True
+        assert r['contexto_comparable'] is False, \
+            'insumos distintos deben invalidar el contexto, no reprobar la tubería'
+
+    def test_insumos_iguales_dan_contexto_comparable(self, app, db, tmp_path):
+        """Mismo hash → el contexto es válido y la prueba 2 sí juzga la tubería."""
+        import json
+        from app.services.vigia_service import (verificar_carga_historica,
+                                                sha256_archivo, CANON_PATH)
+        txt = tmp_path / 'ventas.txt'
+        txt.write_text('linea de ventas', encoding='utf-8')
+
+        with open(CANON_PATH, encoding='utf-8') as f:
+            canon = json.load(f)
+        canon['insumos'] = {'registrado': True, 'archivos': [
+            {'archivo': 'ventas.txt', 'sha256': sha256_archivo(str(txt)), 'bytes': 15}]}
+        canon_falso = tmp_path / 'canon.json'
+        canon_falso.write_text(json.dumps(canon), encoding='utf-8')
+
+        r = verificar_carga_historica(insumos=[str(txt)], canon_path=str(canon_falso))
+        ins = next(p for p in r['pruebas'] if p['prueba'].startswith('0b'))
+        assert ins['ok'] is True
+        assert not ins.get('insumos_distintos')
+        assert r['contexto_comparable'] is True
+
+    def test_sin_hashes_registrados_avisa_pero_no_reprueba(self, app, db):
+        """Canon sin insumos registrados: no bloquea, pero deja el aviso."""
+        from app.services.vigia_service import verificar_carga_historica
+        r = verificar_carga_historica()
+        ins = next(p for p in r['pruebas'] if p['prueba'].startswith('0b'))
+        assert ins['ok'] is True
+        assert ins.get('no_verificable') is True
+        assert 'SHA-256' in ins['aviso']
+
+
+class TestPlantillaCanon:
+    """La plantilla es la convención: todo modelo certificado lleva su canon."""
+
+    def test_plantilla_existe_y_es_json_valido(self):
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / 'docs' / 'canon_PLANTILLA.json'
+        assert p.exists(), 'falta docs/canon_PLANTILLA.json'
+        plantilla = json.loads(p.read_text(encoding='utf-8'))
+        # Las secciones que hacen que un canon valga algo
+        for seccion in ('procedencia', 'esperado', 'parametros', 'insumos', 'modelo'):
+            assert seccion in plantilla, f'la plantilla debe traer la sección {seccion}'
+        assert plantilla['insumos']['registrado'] is False, \
+            'la plantilla nace sin insumos: se registran una vez, por modelo'

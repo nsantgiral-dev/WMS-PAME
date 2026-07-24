@@ -1,0 +1,75 @@
+{
+  "_doc": [
+    "PLANTILLA de canon de certificación. Copiar a docs/canon_<modelo>.json y llenar.",
+    "",
+    "Todo modelo que se certifique lleva el suyo. El canon responde una sola",
+    "pregunta: '¿la producción reproduce lo que el entorno original certificó,",
+    "con los mismos insumos y los mismos parámetros?'",
+    "",
+    "NO confundir con la prueba de diseño del modelo ('¿cumple el objetivo de la",
+    "spec?'). Esa se cierra una vez, contra la spec, y no vuelve a correr. Esta",
+    "otra corre cada vez que la tubería cambia de entorno, y es exacta.",
+    "",
+    "Reglas que hacen que esto valga algo:",
+    "  1. Los valores son la SALIDA REGISTRADA de una corrida certificada, nunca",
+    "     constantes de diseño ni números recordados de una conversación.",
+    "  2. La procedencia es obligatoria: sin ella el canon es tradición oral con",
+    "     formato JSON.",
+    "  3. La tolerancia cubre punto flotante, no permisividad estadística. Si la",
+    "     prueba falla con contexto comparable, se investiga la diferencia —",
+    "     jamás se afloja el criterio para que pase.",
+    "  4. Los insumos se fijan por hash. Sin ellos no se puede distinguir un",
+    "     fallo de tubería de un cambio de archivos, que es la diferencia entre",
+    "     un bug real y un día perseguido a un fantasma.",
+    "",
+    "Referencia viva: docs/canon_florencia.json (Vigía CUSUM).",
+    "Arnés: app/services/vigia_service.py::verificar_carga_historica",
+    "Registro de insumos: scripts/registrar_canon_insumos.py"
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "<TSB | ROP dual | Newsvendor | Armador | ...>",
+    "que_decide": "<la decisión operativa que este modelo produce>",
+    "spec": "<archivo y sección de la spec que lo define>"
+  },
+
+  "procedencia": {
+    "origen": "<reporte/corrida de la que salieron estos números>",
+    "fecha_corrida_original": "<AAAA-MM>",
+    "hallazgo": "<el resultado, con las magnitudes que lo hacen verificable>",
+    "nota": "Los valores son la salida registrada de la corrida certificada, no constantes de diseño."
+  },
+
+  "serie": {
+    "concepto": "<qué mide, en palabras del negocio>",
+    "centro_operacion": "<C.O. si aplica>",
+    "nombre_en_bd": "<identificador exacto en la tabla>"
+  },
+
+  "esperado": {
+    "_nota": "Los campos dependen del modelo. Cada uno con su tolerancia explícita.",
+    "semana_alarma": "<AAAA-MM-DD, si el modelo produce una fecha>",
+    "s_minus": null,
+    "tolerancia_s_minus": 0.05
+  },
+
+  "parametros": {
+    "_nota": "Todo parámetro que cambie el resultado. Si producción corre con otros, la divergencia es legítima y el arnés lo reporta como contexto no comparable.",
+    "k": null,
+    "ventana_referencia_semanas": null,
+    "estimadores": "<robustos | clásicos — y por qué>"
+  },
+
+  "insumos": {
+    "_nota": [
+      "SHA-256 de los archivos que alimentaron la corrida original.",
+      "Registrar UNA VEZ con:",
+      "  venv/bin/python scripts/registrar_canon_insumos.py --canon <este.json> <archivos>",
+      "Sin --forzar no se sobreescribe: el canon se fija una vez."
+    ],
+    "registrado": false,
+    "archivos": []
+  }
+}
