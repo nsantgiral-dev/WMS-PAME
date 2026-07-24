@@ -649,3 +649,19 @@ class TestCanonFlorencia:
         assert ins['ok'] is True
         assert ins.get('no_verificable') is True
         assert 'SHA-256' in ins['aviso']
+
+
+class TestPlantillaCanon:
+    """La plantilla es la convención: todo modelo certificado lleva su canon."""
+
+    def test_plantilla_existe_y_es_json_valido(self):
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / 'docs' / 'canon_PLANTILLA.json'
+        assert p.exists(), 'falta docs/canon_PLANTILLA.json'
+        plantilla = json.loads(p.read_text(encoding='utf-8'))
+        # Las secciones que hacen que un canon valga algo
+        for seccion in ('procedencia', 'esperado', 'parametros', 'insumos', 'modelo'):
+            assert seccion in plantilla, f'la plantilla debe traer la sección {seccion}'
+        assert plantilla['insumos']['registrado'] is False, \
+            'la plantilla nace sin insumos: se registran una vez, por modelo'
