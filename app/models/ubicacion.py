@@ -5,6 +5,13 @@ from app.extensions import db
 class Ubicacion(db.Model):
     __tablename__ = 'ubicaciones'
 
+    # Código del bucket sin ubicación física real donde aterriza el stock
+    # recién sincronizado de Siesa (ver inventario_siesa_service.py). Única
+    # fuente de verdad del literal — cualquier servicio que necesite
+    # reconocer o crear este bucket debe referenciar esta constante, nunca
+    # repetir el string.
+    CODIGO_GENERAL = 'SIESA-GENERAL'
+
     id = db.Column(db.Integer, primary_key=True)
     codigo = db.Column(db.String(50), unique=True, nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
