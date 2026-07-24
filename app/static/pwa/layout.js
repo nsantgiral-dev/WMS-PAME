@@ -833,7 +833,12 @@ function layoutImprimirEtiquetasCuerpo(idsCsv) {
   if (!huecos.length) return;
   const area = document.getElementById('print-area');
   if (!area) return;
-  area.innerHTML = huecos.map(u => `<div class="etiqueta-ubicacion"><div class="eu-titulo">UBICACIÓN — BODEGA</div><svg id="ub-bc-${u.id}"></svg><div class="eu-codigo">${u.codigo}</div><div class="eu-zona">${u.tipo_zona}</div></div>`).join('');
+  area.innerHTML = huecos.map(u => {
+    const titulo = u.producto_asignado_codigo
+      ? (u.producto_asignado_nombre || u.producto_asignado_codigo)
+      : 'Sin SKU asignado';
+    return `<div class="etiqueta-ubicacion"><div class="eu-titulo">${titulo}</div><svg id="ub-bc-${u.id}"></svg><div class="eu-codigo">${u.codigo}</div><div class="eu-zona">${u.tipo_zona}</div></div>`;
+  }).join('');
   huecos.forEach(u => { try { JsBarcode(`#ub-bc-${u.id}`, u.codigo, { format: 'CODE128', displayValue: false, height: 55, margin: 0 }); } catch (e) {} });
   setTimeout(() => { window.print(); setTimeout(() => { area.innerHTML = ''; }, 1000); }, 300);
 }
