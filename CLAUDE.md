@@ -3,28 +3,41 @@
 ## Stack
 
 - **Backend**: Flask + SQLAlchemy + PostgreSQL + Gunicorn (Railway)
-- **Frontend**: PWA vanilla JS modularizada (app.js + 9 módulos)
+- **Frontend**: PWA vanilla JS modularizada (app.js + 13 módulos)
 - **Integración ERP**: Connekta V2/V3 → Siesa Enterprise
 - **DLQ**: SiesaJob con reintentos + backoff exponencial (5→15→45 min, max 3)
-- **Tests**: pytest (314 passing), CI en Railway buildCommand
+- **Tests**: pytest (612 passing), CI en Railway buildCommand
 
 ## Arquitectura JS (Frontend)
 
 ```
-app.js          (4,208 líneas)  Core: auth, helpers, dashboard, camera, admin
-picking.js        (815)         Escaneo operario, confirmación
-packing.js        (821)         Empacador HUD, bultos, etiquetas
-recepcion.js    (1,321)         OCs, escaneo ciego, traslados entrantes, devoluciones
-rutas.js        (2,337)         Muelle, conductor, planilla, maestras, vehículos
-traslados.js      (660)         Panel admin traslados
-conteo.js         (945)         Inventario cíclico, ABC
-reposicion.js     (476)         Reposición RESERVA→PICKING
-liquidacion.js    (524)         Liquidación financiera NCE→RC→DC
-layout.js         (715)         Ubicaciones físicas 5 ejes
-etiquetas.js      (111)         Impresión de etiquetas
+app.js          (2,294 líneas)  Core: auth, helpers, dashboard, camera, admin
+picking.js        (747)         Escaneo operario, confirmación
+packing.js        (865)         Empacador HUD, bultos, etiquetas
+recepcion.js    (1,921)         OCs, escaneo ciego, traslados entrantes, devoluciones
+rutas.js        (2,627)         Muelle, conductor, planilla, maestras, vehículos
+traslados.js    (1,366)         Panel admin traslados
+conteo.js       (1,028)         Inventario cíclico, ABC
+reposicion.js     (678)         Reposición RESERVA→PICKING
+liquidacion.js    (722)         Liquidación financiera NCE→RC→DC
+layout.js       (1,186)         Ubicaciones físicas 5 ejes
+tienda.js       (1,160)         Módulo tienda
+etiquetas.js      (110)         Impresión de etiquetas
+vigia.js          (513)         Panel CUSUM, alarmas, carga de series
+compras_ia.js     (394)         Acuerdos marco, Armador, deriva, inteligencia inventario
 ```
 
-Orden de carga: app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → etiquetas. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
+Orden de carga: app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
+
+### Dispatchers fuera de su módulo
+
+Dos sub-navegaciones viven en un archivo distinto al de la lógica que invocan.
+Buscar aquí antes de darlos por inexistentes:
+
+| Dispatcher | Definido en | Invoca lógica de |
+|-----------|-------------|------------------|
+| `compSubtab()` | `recepcion.js:1352` | `compras_ia.js` (acuerdos, armador, deriva) |
+| `invSubtab()` | `conteo.js:94` | `compras_ia.js` (inteligencia inventario) |
 
 ---
 
@@ -247,6 +260,62 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 
 ## DLQ — Dead Letter Queue
 
+### Schedulers registrados (`app/__init__.py`)
+
+Dos listas con semántica distinta — elegir mal tiene consecuencias silenciosas:
+
+- **`_scheduler_esenciales`** — corren siempre (salvo `WORKER_SKIP_ESSENTIAL=true`).
+  DLQ, sync de pedidos, Vigía.
+- **`_scheduler_pesados`** — solo si `HEAVY_SCHEDULERS=true`. Si esa variable
+  falta en Railway, **no corren y nadie se entera**. No poner aquí nada cuyo
+  silencio sea costoso.
+
+---
+
+## Vigía — CUSUM de corrimientos operativos
+
+Detecta desplomes en series semanales (facturación, líneas, frecuencia de
+servicio por C.O.). `vigia_service.py`, panel en `vigia.js`.
+
+### Cómo se alimentan las series
+
+| Vía | Qué alimenta | Estado |
+|-----|--------------|--------|
+| `cargar_ventas_desde_txt()` | Línea base histórica (26 semanas de μ_ref/σ_ref) | Backfill admin, bloqueado salvo `VIGIA_CARGAR_TXT=true` |
+| `alimentar_adopcion_picking()` | `adopcion_picking`, `brecha_picking` | Cron lunes 05:30 Bogotá + botón en el panel |
+| Ingesta Connekta | Facturación, líneas, frecuencia | **No implementada** |
+| Generic Transfer | Planillas de ruta | **No implementada** — requiere configuración en Siesa |
+
+**Connekta alimenta hacia adelante; la línea base solo entra por el TXT.** Por eso
+el cargador se conserva como herramienta de backfill en vez de eliminarse, y por
+eso `VIGIA_CARGAR_TXT` no debe volver a `false` antes de verificar la carga.
+
+### Campo `fuente` en `serie_vigia`
+
+`HISTORICO` (export TXT, pre go-live) | `PRODUCCION` (operación viva).
+
+La limpieza transaccional del acta de corte **no debe tocar `serie_vigia` ni el
+kardex**: sin las 26 semanas de referencia el CUSUM queda ciego ~6 meses, y
+TSB / ROP dual / newsvendor consumen esa misma historia.
+
+### Certificación
+
+El canon vive en `docs/canon_florencia.json` con procedencia y hashes de insumos.
+Plantilla para otros modelos: `docs/canon_PLANTILLA.json`.
+
+```bash
+venv/bin/python scripts/registrar_canon_insumos.py <txt originales>   # una vez
+venv/bin/python scripts/verificar_carga_vigia.py --semanas 53 --cos 6 --insumos <txt>
+```
+
+El arnés descarta primero lo que **no** es la tubería (parámetros, hashes de
+insumos) antes de juzgarla. `contexto_comparable: false` ≠ `NO CERTIFICADO`: lo
+primero significa insumos o parámetros distintos, lo segundo una divergencia
+real. Si la prueba falla con contexto comparable se investiga la diferencia —
+no se afloja el criterio.
+
+---
+
 ### Dispatch (`siesa_job_service._ejecutar_job`)
 
 | Job tipo | Conector | Idempotencia | Secuencia |
@@ -305,15 +374,26 @@ venv/bin/python -m pytest tests/test_siesa_contracts.py -v
 venv/bin/python -m pytest tests/test_siesa_dlq.py tests/test_liquidacion.py tests/test_siesa_guards.py -v
 ```
 
-### Tiers
+### Tiers Siesa (los que protegen la integración)
 
 | Tier | Archivo | Tests | Qué valida |
 |------|---------|-------|------------|
 | 1 | test_siesa_formatos.py | 27 | `_fmt_valor` 21 chars, timezone, CO→Caja, forma_pago→medio |
 | 2 | test_siesa_contracts.py | 25 | Payloads vs spec DOCX (142888, 142882, 142946) |
 | 3 | test_siesa_dlq.py | 6 | Pre-flag, revert en fallo, secuencialidad NC→RC→DC |
-| 4 | test_liquidacion.py | 11 | 6 flujos recaudo, retenciones PUC |
+| 4 | test_liquidacion.py | 20 | Flujos de recaudo, retenciones PUC |
 | 5 | test_siesa_guards.py | 7 | Guards fail-fast (bodega, codigo_siesa, motivo, consec) |
+
+### Otros archivos grandes
+
+| Archivo | Tests | Qué valida |
+|---------|-------|------------|
+| test_10_traslados.py | 76 | Traslados inter-bodega, tránsito, RIT |
+| test_11_layout.py + test_12_layout_endpoints.py | 81 | Ubicaciones físicas, asignación SKU |
+| test_vigia_cusum.py | 43 | CUSUM, canon de Florencia, arnés de certificación |
+| test_kardex_service.py | 29 | Motor kardex |
+| test_endpoints_criticos.py | 28 | Contratos de endpoints operativos |
+| test_servicios_coverage.py | 21 | Guard: bloquea deploy si un servicio/ruta tiene 0 tests |
 
 ### CI en Railway
 
@@ -325,10 +405,20 @@ venv/bin/python -m pytest tests/test_siesa_dlq.py tests/test_liquidacion.py test
 
 Railway detecta push a main automáticamente. Pipeline: install deps → pytest → `flask db upgrade` → gunicorn.
 
-### Migraciones pendientes
+### Migraciones
 
-- `01cd3ed5ad51` — `inventario_descontado` flag en solicitudes_traslado
-- `f4b84ad06843` — unique partial index en sesiones_conteo
+72 migraciones en cadena, un solo head. `releaseCommand` corre `flask db upgrade`
+en cada deploy, así que un head único no es opcional: con dos, el release falla.
+
+Antes de crear una, confirmar el head real (no confiar en la fecha del archivo):
+
+```bash
+venv/bin/python -c "
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+cfg = Config('migrations/alembic.ini'); cfg.set_main_option('script_location','migrations')
+print(ScriptDirectory.from_config(cfg).get_heads())"
+```
 
 ### Health Check
 
