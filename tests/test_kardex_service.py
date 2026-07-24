@@ -371,3 +371,126 @@ class TestNomenclatura:
         assert hasattr(k, 'tasa_servida_corregida')
         # No debe existir el nombre viejo
         assert not hasattr(k, 'tasa_censurada')
+
+
+# ═══════════════════════════════════════════════════════════════════
+# TSB — Teunter-Syntetos-Babai
+# Cisne negro: pronóstico de item intermitente con Croston sin corregir
+# sobreestima demanda → exceso de inventario en items que casi no se venden
+# ═══════════════════════════════════════════════════════════════════
+
+class TestTSB:
+
+    def test_tsb_sin_datos_retorna_vacio(self, app, db):
+        """Sin datos de kardex, TSB retorna lista vacía sin crash."""
+        from app.services.kardex_service import KardexService
+        result = KardexService.pronostico_tsb(12, 0.15)
+        assert isinstance(result, dict)
+        assert result['total'] == 0
+        assert isinstance(result['pronosticos'], list)
+
+    def test_tsb_correccion_menor_que_croston(self, app, db):
+        """TSB = Croston * (1 - alpha/2) — siempre menor que Croston puro.
+        Esto corrige el sesgo positivo conocido de Croston."""
+        from app.services.kardex_service import KardexService
+        # Crear datos sintéticos de demanda intermitente
+        from app.services.kardex_service import KardexMovimiento
+        base_date = date.today() - timedelta(days=200)
+        # Item con demanda cada ~15 días, cantidad variable
+        for i in range(10):
+            db.session.add(KardexMovimiento(
+                referencia='TSB-TEST-001', bodega='NB1',
+                fecha=base_date + timedelta(days=i * 15),
+                concepto=501, naturaleza=2,
+                cantidad=10 + i * 2,
+                tipo_docto='FE1',
+            ))
+        db.session.commit()
+
+        result = KardexService.pronostico_tsb(12, alpha=0.15,
+                                               solo_cuadrantes=['SUAVE', 'ERRATICA', 'INTERMITENTE', 'GRUMOSA'])
+
+        for p in result['pronosticos']:
+            if p['referencia'] == 'TSB-TEST-001':
+                # TSB siempre < Croston (corrección de sesgo)
+                assert p['tsb_diario'] < p['croston_diario'], (
+                    f'TSB ({p["tsb_diario"]}) debería ser menor que Croston ({p["croston_diario"]})')
+                assert p['tsb_diario'] > 0
+                break
+
+    def test_tsb_incluye_backtest(self, app, db):
+        """El resultado incluye métricas de backtest TSB vs MM8."""
+        from app.services.kardex_service import KardexService
+        result = KardexService.pronostico_tsb(12)
+        assert 'backtest' in result
+        assert 'evaluados' in result['backtest']
+        assert 'tsb_gana' in result['backtest']
+
+    def test_endpoints_tsb_registrado(self, app):
+        """Endpoint /api/kardex/pronostico-tsb está registrado."""
+        rules = [r.rule for r in app.url_map.iter_rules()]
+        assert any('pronostico-tsb' in r for r in rules)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# NEWSVENDOR — Compra óptima de temporada
+# Cisne negro: compra escolar decidida por heurística de la fundadora
+# en vez de ratio crítico → $X millones de exceso o quiebre
+# ═══════════════════════════════════════════════════════════════════
+
+class TestNewsvendor:
+
+    def test_newsvendor_sin_items_retorna_error(self, app, db):
+        """Sin items, retorna error claro."""
+        from app.services.kardex_service import KardexService
+        result = KardexService.newsvendor([])
+        assert 'error' in result
+
+    def test_newsvendor_ratio_critico_correcto(self, app, db):
+        """ratio_critico = margen / (margen + costo_exceso)."""
+        from app.services.kardex_service import KardexService
+        result = KardexService.newsvendor(
+            [{'referencia': 'CUAD-001', 'ventas_pasadas': [100, 120, 90], 'costo_unitario': 5000}],
+            margen_pct=0.40, costo_exceso_pct=0.60
+        )
+        expected = 0.40 / (0.40 + 0.60)
+        assert abs(result['ratio_critico'] - expected) < 0.01
+
+    def test_newsvendor_q_optimo_positivo(self, app, db):
+        """Q* siempre es >= 0."""
+        from app.services.kardex_service import KardexService
+        result = KardexService.newsvendor(
+            [{'referencia': 'CUAD-002', 'ventas_pasadas': [500, 600, 450, 550], 'costo_unitario': 3000}],
+        )
+        for item in result['items']:
+            assert item['q_optimo'] >= 0
+
+    def test_newsvendor_1_temporada_infla_sigma(self, app, db):
+        """Con 1 sola temporada, sigma se infla ×1.5 por factor de ignorancia."""
+        from app.services.kardex_service import KardexService
+        result = KardexService.newsvendor(
+            [{'referencia': 'CUAD-003', 'ventas_pasadas': [1000], 'costo_unitario': 2000}],
+        )
+        item = result['items'][0]
+        assert item['advertencia_1_temporada'] is True
+        assert item['sigma'] > 0  # No puede ser 0 con factor de ignorancia
+
+    def test_newsvendor_mas_temporadas_mas_preciso(self, app, db):
+        """Con más temporadas, el rango 80% se estrecha (menos incertidumbre)."""
+        from app.services.kardex_service import KardexService
+        r1 = KardexService.newsvendor(
+            [{'referencia': 'X', 'ventas_pasadas': [1000], 'costo_unitario': 100}],
+        )
+        r3 = KardexService.newsvendor(
+            [{'referencia': 'X', 'ventas_pasadas': [1000, 1050, 980], 'costo_unitario': 100}],
+        )
+        rango1 = r1['items'][0]['rango_80']
+        rango3 = r3['items'][0]['rango_80']
+        ancho1 = rango1[1] - rango1[0]
+        ancho3 = rango3[1] - rango3[0]
+        assert ancho3 < ancho1, 'Más temporadas debería dar rango más estrecho'
+
+    def test_endpoint_newsvendor_registrado(self, app):
+        """Endpoint /api/kardex/newsvendor está registrado."""
+        rules = [r.rule for r in app.url_map.iter_rules()]
+        assert any('newsvendor' in r for r in rules)

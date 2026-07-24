@@ -24,6 +24,8 @@ class Producto(db.Model):
     unidad_empaque = db.Column(db.String(20))     # ej. 'CJA', 'PAC', 'PQT'
     factor_conversion = db.Column(db.Integer, default=1)  # unidades por empaque
     unidad_negocio_id = db.Column(db.String(10))  # Unidad de negocio Siesa p.ej. '001'=PAPELERIA
+    origen = db.Column(db.String(10))  # NACIONAL, CHINA — determina régimen de reposición
+    marca_siesa = db.Column(db.String(50))  # Código marca Siesa (M003, M009, M175, etc.)
     activo = db.Column(db.Boolean, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_actualizacion = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -62,6 +64,8 @@ class Producto(db.Model):
             'unidad_empaque': self.unidad_empaque,
             'factor_conversion': self.factor_conversion or 1,
             'unidad_negocio_id': self.unidad_negocio_id,
+            'origen': self.origen,
+            'marca_siesa': self.marca_siesa,
             'stock_total': self.stock_total,
             'stock_disponible': self.stock_disponible,
             'activo': self.activo

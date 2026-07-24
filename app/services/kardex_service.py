@@ -728,3 +728,281 @@ class KardexService:
         if reg:
             return float(reg.existencia or 0)
         return 0
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # M0.3 — TSB (Teunter-Syntetos-Babai) para demanda intermitente
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def pronostico_tsb(ventana_meses: int = 12, alpha: float = 0.15,
+                       solo_cuadrantes: list = None) -> dict:
+        """
+        Pronóstico TSB para items con demanda intermitente/grumosa.
+
+        TSB es Croston mejorado — corrige el sesgo positivo de Croston
+        usando suavizamiento exponencial separado para:
+          p = intervalo entre demandas (períodos)
+          z = tamaño de la demanda cuando ocurre
+
+        Pronóstico TSB = (z / p) * (1 - alpha/2)
+        La corrección (1 - alpha/2) es lo que distingue TSB de Croston.
+
+        Spec §2.M0.3: TSB debe ganar a media móvil 8 sem en MASE.
+
+        Args:
+            ventana_meses: ventana de datos (default 12)
+            alpha: parámetro de suavizamiento (0.05-0.30, default 0.15)
+            solo_cuadrantes: filtrar por cuadrantes S-B (default: INTERMITENTE+GRUMOSA)
+
+        Returns: {total, pronosticos: [{referencia, tsb, croston, media_movil_8, mase_tsb, mase_mm8}]}
+        """
+        from collections import defaultdict
+        from sqlalchemy import func
+
+        if solo_cuadrantes is None:
+            solo_cuadrantes = ['INTERMITENTE', 'GRUMOSA']
+
+        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+
+        # Obtener demanda diaria agregada a RED (todas las bodegas)
+        demanda_diaria = (
+            db.session.query(
+                KardexMovimiento.referencia,
+                KardexMovimiento.fecha,
+                func.sum(KardexMovimiento.cantidad).label('cantidad')
+            )
+            .filter(KardexMovimiento.fecha >= fecha_limite)
+            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
+            .filter(KardexMovimiento.naturaleza == 2)
+            .group_by(KardexMovimiento.referencia, KardexMovimiento.fecha)
+            .all()
+        )
+
+        # Agrupar por referencia
+        ref_series = defaultdict(list)
+        for row in demanda_diaria:
+            ref = row.referencia.strip() if row.referencia else ''
+            if not ref:
+                continue
+            ref_series[ref].append((row.fecha, float(row.cantidad)))
+
+        # Obtener clasificación S-B para filtrar solo los cuadrantes solicitados
+        clasificacion = KardexService.clasificar_syntetos_boylan(ventana_meses)
+        refs_objetivo = {
+            c['referencia'] for c in clasificacion['clasificacion']
+            if c['cuadrante'] in solo_cuadrantes
+        }
+
+        pronosticos = []
+        tsb_gana = 0
+        total_evaluados = 0
+
+        for ref in refs_objetivo:
+            eventos = sorted(ref_series.get(ref, []), key=lambda x: x[0])
+            if len(eventos) < 3:
+                continue
+
+            cantidades = [e[1] for e in eventos]
+            fechas = [e[0] for e in eventos]
+
+            # Calcular intervalos entre demandas (en días)
+            intervalos = []
+            for i in range(1, len(fechas)):
+                delta = (fechas[i] - fechas[i - 1]).days
+                intervalos.append(delta)
+
+            if not intervalos:
+                continue
+
+            # TSB: suavizamiento exponencial doble con corrección de sesgo
+            z = cantidades[0]  # tamaño de demanda suavizado
+            p = intervalos[0] if intervalos else 1  # intervalo suavizado
+
+            for i in range(1, len(cantidades)):
+                z = alpha * cantidades[i] + (1 - alpha) * z
+                if i < len(intervalos):
+                    p = alpha * intervalos[i] + (1 - alpha) * p
+
+            p = max(p, 1)  # Guard: intervalo mínimo 1 día
+            tsb_forecast = (z / p) * (1 - alpha / 2)  # Corrección TSB
+            croston_forecast = z / p  # Sin corrección (Croston original)
+
+            # Media móvil 8 semanas (56 días) como benchmark ingenuo
+            dias_56 = date.today() - timedelta(days=56)
+            demanda_8sem = sum(c for f, c in eventos if f >= dias_56)
+            mm8_forecast = demanda_8sem / 56 if demanda_8sem > 0 else 0
+
+            # MASE (Mean Absolute Scaled Error) — holdout last 20% de eventos
+            n_holdout = max(1, len(cantidades) // 5)
+            if len(cantidades) > n_holdout + 3:
+                train = cantidades[:-n_holdout]
+                test = cantidades[-n_holdout:]
+
+                # Naive forecast = media del train
+                naive = sum(train) / len(train) if train else 1
+                mae_naive = sum(abs(t - naive) for t in test) / len(test) if naive > 0 else 1
+
+                # MAE del TSB (forecast diario * intervalo promedio entre test)
+                mae_tsb = sum(abs(t - tsb_forecast * p) for t in test) / len(test)
+                mae_mm8 = sum(abs(t - mm8_forecast * 56 / len(test)) for t in test) / len(test)
+
+                mase_tsb = round(mae_tsb / mae_naive, 3) if mae_naive > 0 else None
+                mase_mm8 = round(mae_mm8 / mae_naive, 3) if mae_naive > 0 else None
+            else:
+                mase_tsb = None
+                mase_mm8 = None
+
+            if mase_tsb is not None and mase_mm8 is not None:
+                total_evaluados += 1
+                if mase_tsb < mase_mm8:
+                    tsb_gana += 1
+
+            pronosticos.append({
+                'referencia': ref,
+                'tsb_diario': round(tsb_forecast, 4),
+                'tsb_semanal': round(tsb_forecast * 7, 2),
+                'tsb_mensual': round(tsb_forecast * 30, 1),
+                'croston_diario': round(croston_forecast, 4),
+                'media_movil_8sem_diario': round(mm8_forecast, 4),
+                'z_suavizado': round(z, 2),
+                'p_suavizado': round(p, 1),
+                'eventos': len(cantidades),
+                'mase_tsb': mase_tsb,
+                'mase_mm8': mase_mm8,
+                'tsb_mejor': mase_tsb < mase_mm8 if mase_tsb and mase_mm8 else None,
+            })
+
+        pronosticos.sort(key=lambda x: x['tsb_mensual'], reverse=True)
+
+        return {
+            'total': len(pronosticos),
+            'alpha': alpha,
+            'cuadrantes': solo_cuadrantes,
+            'ventana_meses': ventana_meses,
+            'backtest': {
+                'evaluados': total_evaluados,
+                'tsb_gana': tsb_gana,
+                'porcentaje_tsb_gana': round(tsb_gana / total_evaluados * 100, 1) if total_evaluados > 0 else 0,
+                'nota': 'TSB debe ganar a media móvil 8 sem en MASE — spec §2.M0.3',
+            },
+            'pronosticos': pronosticos,
+        }
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # M0.5 — Newsvendor para compra de temporada escolar
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def newsvendor(items_temporada: list, margen_pct: float = 0.40,
+                   costo_exceso_pct: float = 0.60) -> dict:
+        """
+        Newsvendor: cantidad óptima de compra para temporada con demanda incierta.
+
+        Q* = F⁻¹(ratio_critico) donde ratio_critico = margen / (margen + costo_exceso)
+
+        Usa distribución empírica de temporadas pasadas. Si solo hay 1 temporada,
+        infla la incertidumbre multiplicando σ × 1.5 (factor de ignorancia).
+
+        DEADLINE: 7 de agosto 2026 — decisión del pedido escolar.
+
+        Args:
+            items_temporada: [{referencia, ventas_pasadas: [v1, v2, ...], costo_unitario}]
+                ventas_pasadas = unidades vendidas en cada temporada (mín 1)
+            margen_pct: margen bruto como fracción del precio (default 40%)
+            costo_exceso_pct: % del costo que se pierde si sobra (default 60% — liquidación)
+
+        Returns: {ratio_critico, items: [{referencia, q_optimo, demanda_esperada, ...}]}
+        """
+        import math
+
+        if not items_temporada:
+            return {'error': 'Se requiere al menos un item con ventas_pasadas'}
+
+        ratio_critico = margen_pct / (margen_pct + costo_exceso_pct)
+
+        resultados = []
+
+        for item in items_temporada:
+            ref = item.get('referencia', '???')
+            ventas = item.get('ventas_pasadas', [])
+            costo = item.get('costo_unitario', 0)
+
+            if not ventas:
+                resultados.append({
+                    'referencia': ref,
+                    'error': 'Sin datos de temporadas pasadas',
+                })
+                continue
+
+            n_temporadas = len(ventas)
+            mu = sum(ventas) / n_temporadas
+            if n_temporadas > 1:
+                sigma = math.sqrt(sum((v - mu) ** 2 for v in ventas) / (n_temporadas - 1))
+            else:
+                # Solo 1 temporada: inflar incertidumbre × 1.5
+                sigma = mu * 0.30 * 1.5  # CV asumido 30%, inflado 50%
+
+            # Q* via aproximación normal: Q* = mu + z_cr * sigma
+            # z_cr = inversa de la normal estándar del ratio crítico
+            z_cr = _norm_ppf(ratio_critico)
+            q_optimo = max(0, round(mu + z_cr * sigma))
+
+            # Rango de confianza 80%
+            q_bajo = max(0, round(mu + _norm_ppf(0.10) * sigma))
+            q_alto = max(0, round(mu + _norm_ppf(0.90) * sigma))
+
+            resultados.append({
+                'referencia': ref,
+                'q_optimo': q_optimo,
+                'demanda_esperada': round(mu, 1),
+                'sigma': round(sigma, 1),
+                'n_temporadas': n_temporadas,
+                'ratio_critico': round(ratio_critico, 3),
+                'z_critico': round(z_cr, 3),
+                'rango_80': [q_bajo, q_alto],
+                'costo_unitario': costo,
+                'inversion_optima': round(q_optimo * costo) if costo else None,
+                'advertencia_1_temporada': n_temporadas == 1,
+            })
+
+        resultados.sort(key=lambda x: x.get('inversion_optima') or 0, reverse=True)
+
+        return {
+            'ratio_critico': round(ratio_critico, 3),
+            'margen_pct': margen_pct,
+            'costo_exceso_pct': costo_exceso_pct,
+            'total_items': len(resultados),
+            'total_inversion': sum(r.get('inversion_optima') or 0 for r in resultados),
+            'items_1_temporada': sum(1 for r in resultados if r.get('advertencia_1_temporada')),
+            'nota': (
+                'Q* = cantidad óptima que maximiza utilidad esperada bajo incertidumbre. '
+                'ratio_critico = margen/(margen+costo_exceso). '
+                'Items con 1 sola temporada tienen sigma inflado ×1.5 por factor de ignorancia.'
+            ),
+            'items': resultados,
+        }
+
+
+def _norm_ppf(p):
+    """Aproximación de la inversa de la normal estándar (Abramowitz & Stegun).
+    Suficiente para ratio_critico — no necesitamos scipy."""
+    import math
+    if p <= 0:
+        return -4.0
+    if p >= 1:
+        return 4.0
+    if p == 0.5:
+        return 0.0
+
+    if p < 0.5:
+        t = math.sqrt(-2 * math.log(p))
+    else:
+        t = math.sqrt(-2 * math.log(1 - p))
+
+    # Coeficientes Abramowitz & Stegun 26.2.23
+    c0, c1, c2 = 2.515517, 0.802853, 0.010328
+    d1, d2, d3 = 1.432788, 0.189269, 0.001308
+
+    z = t - (c0 + c1 * t + c2 * t * t) / (1 + d1 * t + d2 * t * t + d3 * t * t * t)
+
+    return z if p >= 0.5 else -z

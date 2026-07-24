@@ -894,6 +894,7 @@
       <div class="nav-tab" onclick="tab('tab-layout')">🧭 Layout</div>
       <div class="nav-tab" onclick="tab('tab-compras')">🛒 Compras</div>
       <div class="nav-tab" onclick="tab('tab-etiquetas')">🏷️ Etiquetas</div>
+      <div class="nav-tab" onclick="tab('tab-vigia')">👁️ Vigia</div>
     </div>
 
     <!-- Contenido principal scrollable -->
@@ -2138,6 +2139,16 @@
       <div id="etq-resultado"></div>
     </div>
 
+    <!-- Vigia CUSUM -->
+    <div id="tab-vigia" class="admin-content" style="display:none;">
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px;">👁️ Vigia — Monitoreo de corrimientos</div>
+      <div style="font-size:12px;color:var(--tx3);margin-bottom:14px;">
+        CUSUM tabular bilateral sobre series semanales por C.O.
+        Detecta cambios sostenidos en frecuencia de servicio, volumen y facturacion.
+      </div>
+      <div id="vigia-container"></div>
+    </div>
+
     </div><!-- /admin-main -->
     </div><!-- /admin-body -->
   </div><!-- /pantalla-admin -->
@@ -3026,6 +3037,7 @@
   <script src="/static/pwa/layout.js?v=20260721d"></script>
   <script src="/static/pwa/tienda.js?v=20260721a"></script>
   <script src="/static/pwa/etiquetas.js?v=20260710a"></script>
+  <script src="/static/pwa/vigia.js?v=20260724a"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
