@@ -185,6 +185,107 @@ def crear_cuerpo(id):
         return jsonify({'error': str(e)}), 400
 
 
+@almacenes_bp.route('/<int:id>/ubicaciones/cuerpo', methods=['PUT'])
+@jwt_required()
+def editar_cuerpo(id):
+    """
+    Remodula un Cuerpo existente: cambia su cantidad de entrepaños/huecos.
+    Borra los huecos actuales (y sus SKUs) y reconstruye limpio con la nueva
+    numeración — misma zona de siempre, no se puede cambiar aquí (para eso
+    está el PATCH de reclasificar). El stock físico real se devuelve
+    automáticamente a SIESA-GENERAL antes de borrar — no se pierde nada.
+    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_nivel? }
+    Bloquea (400) si algún hueco del cuerpo tiene historial operativo real.
+    """
+    usuario = _es_admin_o_jefe()
+    if not usuario:
+        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    Almacen.query.get_or_404(id)
+    data = request.get_json() or {}
+    campos = ('pasillo', 'fila', 'cuerpo', 'cantidad_entrepanos')
+    if not all(data.get(c) for c in campos):
+        return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
+    try:
+        huecos_por_nivel = data.get('huecos_por_nivel')
+        if huecos_por_nivel is not None:
+            huecos_por_nivel = [int(h) for h in huecos_por_nivel]
+        creadas = layout_service.editar_cuerpo(
+            almacen_id=id,
+            pasillo=data['pasillo'],
+            fila=int(data['fila']),
+            cuerpo=int(data['cuerpo']),
+            cantidad_entrepanos=int(data['cantidad_entrepanos']),
+            huecos_por_nivel=huecos_por_nivel,
+            usuario_id=usuario.id,
+        )
+        return jsonify({'ubicaciones': [u.to_dict() for u in creadas]}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@almacenes_bp.route('/<int:id>/ubicaciones/cuerpo', methods=['PATCH'])
+@jwt_required()
+def reclasificar_cuerpo(id):
+    """
+    Reclasifica todo un Cuerpo de una vez: cambia su zona (RESERVA<->PICKING<->
+    AVERIAS) o lo desactiva completo (activo=false — camino recomendado para
+    retirar un cuerpo con historial real sin perder su trazabilidad, cuando
+    el DELETE de este mismo path lo bloquea).
+    Payload: { pasillo, fila, cuerpo, tipo_zona?, activo? }
+    Al menos uno de tipo_zona/activo debe venir presente.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    Almacen.query.get_or_404(id)
+    data = request.get_json() or {}
+    campos = ('pasillo', 'fila', 'cuerpo')
+    if not all(data.get(c) for c in campos):
+        return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
+    if data.get('tipo_zona') is None and data.get('activo') is None:
+        return jsonify({'error': 'Indica al menos un campo a cambiar: tipo_zona o activo'}), 400
+    try:
+        resultado = layout_service.reclasificar_cuerpo(
+            almacen_id=id,
+            pasillo=data['pasillo'],
+            fila=int(data['fila']),
+            cuerpo=int(data['cuerpo']),
+            tipo_zona=data.get('tipo_zona'),
+            activo=data.get('activo'),
+        )
+        return jsonify(resultado), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@almacenes_bp.route('/<int:id>/ubicaciones/cuerpo', methods=['DELETE'])
+@jwt_required()
+def eliminar_cuerpo(id):
+    """
+    Elimina un Cuerpo completo — todos sus entrepaños y huecos, sin excepción.
+    Todo o nada: bloquea (400) si CUALQUIER hueco tiene stock activo o
+    historial operativo real. Usa el PATCH de este mismo path con
+    activo=false para retirar un cuerpo con historial sin perder su rastro.
+    Payload: { pasillo, fila, cuerpo }
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    Almacen.query.get_or_404(id)
+    data = request.get_json() or {}
+    campos = ('pasillo', 'fila', 'cuerpo')
+    if not all(data.get(c) for c in campos):
+        return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
+    try:
+        resultado = layout_service.eliminar_cuerpo(
+            almacen_id=id,
+            pasillo=data['pasillo'],
+            fila=int(data['fila']),
+            cuerpo=int(data['cuerpo']),
+        )
+        return jsonify(resultado), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
 @almacenes_bp.route('/<int:id>/ubicaciones/fila', methods=['PATCH'])
 @jwt_required()
 def editar_fila(id):

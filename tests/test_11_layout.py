@@ -406,3 +406,143 @@ def test_eliminar_fila_bloquea_con_tarea_picking(db, almacen, producto):
 def test_eliminar_fila_rechaza_fila_inexistente(db, almacen):
     with pytest.raises(ValueError, match='No hay posiciones'):
         svc.eliminar_fila(almacen.id, 'Z', 9)
+
+
+# ── Operaciones a nivel de Cuerpo completo (esquema de 5 ejes) ─────────────
+# editar_cuerpo() / eliminar_cuerpo() / reclasificar_cuerpo() — todas actúan
+# sobre TODOS los entrepaños/huecos de un Pasillo+Fila+Cuerpo a la vez.
+
+def test_editar_cuerpo_remodula_cantidad_de_entrepanos_y_huecos(db, almacen, producto):
+    viejas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')  # 2 entrepaños, 1 hueco c/u
+    svc.asignar_producto(viejas[0].id, producto.id, 20)  # E01-H01 con SKU asignado
+
+    creadas = svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=3,
+                                 huecos_por_nivel=[1, 2, 1])
+
+    codigos_nuevos = sorted(u.codigo for u in creadas)
+    assert codigos_nuevos == [
+        'PIK-A1-C01-E01-H01', 'PIK-A1-C01-E02-H01', 'PIK-A1-C01-E02-H02', 'PIK-A1-C01-E03-H01',
+    ]
+    assert all(u.tipo_zona == 'PICKING' for u in creadas)  # conserva la zona original
+    # E01-H01 reaparece (mismo código, sigue en la nueva estructura) pero es
+    # un registro nuevo — el SKU que tenía asignado antes de remodular ya no está.
+    nuevo_e01h01 = next(u for u in creadas if u.codigo == 'PIK-A1-C01-E01-H01')
+    assert nuevo_e01h01.producto_asignado_id is None
+    assert UbicacionProducto.query.filter_by(ubicacion_id=nuevo_e01h01.id).count() == 0
+
+
+def test_editar_cuerpo_devuelve_stock_a_siesa_general_antes_de_borrar(db, almacen, producto):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    svc.asignar_producto(ub.id, producto.id, 40)
+
+    svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=2)
+
+    general = Ubicacion.query.filter_by(
+        codigo=Ubicacion.CODIGO_GENERAL, almacen_id=almacen.id
+    ).first()
+    assert general is not None  # se crea si no existía
+    reg = UbicacionProducto.query.filter_by(
+        ubicacion_id=general.id, producto_id=producto.id
+    ).first()
+    assert reg.cantidad == 40  # ninguna unidad se perdió
+
+    from app.models.inventario import MovimientoInventario
+    mov = MovimientoInventario.query.filter_by(
+        tipo='REMODULACION_CUERPO', producto_id=producto.id
+    ).first()
+    assert mov is not None and mov.cantidad == -40
+
+
+def test_editar_cuerpo_bloquea_si_hay_historial_real(db, almacen, producto):
+    from app.models.picking import TareaPicking
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    db.session.add(TareaPicking(
+        codigo='PICK-TEST-2', producto_id=producto.id, cantidad_solicitada=5,
+        ubicacion_id=ub.id, almacen_id=almacen.id, estado='COMPLETADO',
+    ))
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='historial'):
+        svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=3)
+
+    # No se tocó nada — el hueco original sigue intacto
+    assert Ubicacion.query.filter_by(codigo='PIK-A1-C01-E01-H01').first() is not None
+
+
+def test_editar_cuerpo_rechaza_cuerpo_inexistente(db, almacen):
+    with pytest.raises(ValueError, match='No existe el cuerpo'):
+        svc.editar_cuerpo(almacen.id, 'Z', 1, 9, cantidad_entrepanos=2)
+
+
+def test_eliminar_cuerpo_borra_todo_si_nunca_se_uso(db, almacen):
+    svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING', huecos_por_nivel=[2, 1])
+
+    resultado = svc.eliminar_cuerpo(almacen.id, 'A', 1, 1)
+
+    assert resultado['total'] == 3
+    assert Ubicacion.query.filter_by(
+        almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1
+    ).count() == 0
+
+
+def test_eliminar_cuerpo_todo_o_nada_bloquea_completo_si_un_hueco_tiene_stock(db, almacen, producto):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')
+    svc.asignar_producto(creadas[0].id, producto.id, 10)  # solo el primer hueco tiene stock
+
+    with pytest.raises(ValueError, match='No se puede eliminar el cuerpo'):
+        svc.eliminar_cuerpo(almacen.id, 'A', 1, 1)
+
+    # Ninguno de los dos huecos se borró — ni siquiera el que estaba limpio
+    assert Ubicacion.query.filter_by(
+        almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1
+    ).count() == 2
+
+
+def test_eliminar_cuerpo_rechaza_cuerpo_inexistente(db, almacen):
+    with pytest.raises(ValueError, match='No existe el cuerpo'):
+        svc.eliminar_cuerpo(almacen.id, 'Z', 1, 9)
+
+
+def test_reclasificar_cuerpo_cambia_zona_de_todos_los_huecos(db, almacen):
+    svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'RESERVA')
+
+    resultado = svc.reclasificar_cuerpo(almacen.id, 'A', 1, 1, tipo_zona='PICKING')
+
+    assert len(resultado['actualizadas']) == 2
+    assert resultado['bloqueadas'] == {}
+    ubs = Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1).all()
+    assert all(u.tipo_zona == 'PICKING' for u in ubs)
+
+
+def test_reclasificar_cuerpo_desactiva_completo_preserva_historial(db, almacen, producto):
+    from app.models.picking import TareaPicking
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    db.session.add(TareaPicking(
+        codigo='PICK-TEST-3', producto_id=producto.id, cantidad_solicitada=5,
+        ubicacion_id=ub.id, almacen_id=almacen.id, estado='COMPLETADO',
+    ))
+    db.session.commit()
+
+    resultado = svc.reclasificar_cuerpo(almacen.id, 'A', 1, 1, activo=False)
+
+    assert resultado['actualizadas'] == ['PIK-A1-C01-E01-H01']
+    assert Ubicacion.query.get(ub.id).activo is False
+    # El historial sigue existiendo — desactivar no borra nada
+    assert TareaPicking.query.filter_by(codigo='PICK-TEST-3').first() is not None
+
+
+def test_reclasificar_cuerpo_bloquea_por_hueco_sin_abortar_el_resto(db, almacen, producto):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'RESERVA')
+    svc.asignar_producto(creadas[0].id, producto.id, 15)  # solo el primer hueco tiene stock
+
+    resultado = svc.reclasificar_cuerpo(almacen.id, 'A', 1, 1, tipo_zona='PICKING')
+
+    assert creadas[1].codigo in resultado['actualizadas']  # el limpio sí se reclasifica
+    assert creadas[0].codigo in resultado['bloqueadas']    # el que tiene stock, no
+    assert Ubicacion.query.get(creadas[0].id).tipo_zona == 'RESERVA'  # no cambió
+    assert Ubicacion.query.get(creadas[1].id).tipo_zona == 'PICKING'  # sí cambió
+
+
+def test_reclasificar_cuerpo_rechaza_cuerpo_inexistente(db, almacen):
+    with pytest.raises(ValueError, match='No existe el cuerpo'):
+        svc.reclasificar_cuerpo(almacen.id, 'Z', 1, 9, tipo_zona='PICKING')

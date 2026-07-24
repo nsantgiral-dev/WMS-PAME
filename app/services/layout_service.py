@@ -19,8 +19,18 @@ Piezas:
 
 editar_fila()/eliminar_fila() operan sobre el campo legado 'estante' (fila
 plana previa a este rediseño) — siguen intactas para gestionar en bloque las
-ubicaciones creadas antes del esquema de 5 ejes. Las ubicaciones nuevas no
-usan 'estante' y se gestionan individualmente (editar/eliminar por id).
+ubicaciones creadas antes del esquema de 5 ejes.
+
+Operaciones a nivel de Cuerpo completo (todos sus Entrepaños/Huecos a la vez,
+esquema de 5 ejes — no confundir con editar_fila()/eliminar_fila() del legado):
+  - editar_cuerpo()        — remodula cantidad de entrepaños/huecos: borra y
+                              reconstruye limpio, devolviendo stock a SIESA-GENERAL
+                              antes de borrar. Bloquea si hay historial real.
+  - eliminar_cuerpo()       — borra el cuerpo entero, todo o nada. Bloquea si
+                              CUALQUIER hueco tiene stock activo o historial real.
+  - reclasificar_cuerpo()   — cambia zona de todo el cuerpo, o lo desactiva
+                              completo (camino recomendado para retirar un
+                              cuerpo con historial sin perder la auditoría).
 
 Todas las ubicaciones que crea este módulo nacen con origen='MANUAL' — el sync
 de Siesa (ubicaciones_sync_service.py) nunca las toca.
@@ -205,6 +215,80 @@ def editar_fila(almacen_id: int, pasillo: str, fila: int, tipo_zona: str = None,
     }
 
 
+def _ubicaciones_de_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int) -> list:
+    """Todas las Ubicacion (Entrepaños/Huecos) de un Cuerpo — base de las 3 operaciones a nivel de Cuerpo."""
+    pasillo = pasillo.strip().upper()
+    ubicaciones = Ubicacion.query.filter_by(
+        almacen_id=almacen_id, pasillo=pasillo, fila=fila, cuerpo=cuerpo,
+    ).order_by(Ubicacion.nivel, Ubicacion.hueco).all()
+    if not ubicaciones:
+        raise ValueError(f'No existe el cuerpo {pasillo}{fila}-C{cuerpo:02d} en este almacén')
+    return ubicaciones
+
+
+# Tipos de MovimientoInventario que son puro bookkeeping interno del módulo
+# Layout (asignar SKU, remodular cuerpo) — nunca representan que un operario
+# haya pickeado o movido algo físicamente. editar_cuerpo() los ignora al
+# decidir si puede remodular; eliminar_ubicacion()/eliminar_cuerpo() NO los
+# ignoran (criterio más estricto y ya probado — ver _motivo_historial_bloqueante).
+_TIPOS_MOVIMIENTO_BOOKKEEPING_LAYOUT = ('ASIGNACION_LAYOUT', 'REMODULACION_CUERPO')
+
+
+def _motivo_historial_bloqueante(ubicacion_id: int) -> str | None:
+    """
+    Historial operativo que impide reconstruir o eliminar una ubicación sin
+    perderlo — TareaPicking/TareaReposicion/MovimientoInventario tienen FK
+    NOT NULL hacia ubicaciones. Usado por _motivo_no_eliminable() (que además
+    bloquea por stock activo) para eliminar_ubicacion()/eliminar_cuerpo() —
+    aquí CUALQUIER MovimientoInventario bloquea, incluida la sola asignación
+    de un SKU, a propósito: eliminar borra la fila para siempre, así que el
+    criterio es el más conservador posible (ver test_eliminar_fila_bloquea_
+    por_historial_aunque_stock_sea_cero, que valida exactamente este caso).
+
+    editar_cuerpo() NO usa esta función — usa _motivo_historial_operativo_real(),
+    más permisiva, porque remodular no es tan destructivo como eliminar.
+    """
+    if TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene historial de tareas de Picking'
+    if TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        )
+    ).first():
+        return 'tiene historial de tareas de Reposición'
+    if MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene movimientos de inventario registrados'
+    return None
+
+
+def _motivo_historial_operativo_real(ubicacion_id: int) -> str | None:
+    """
+    Igual que _motivo_historial_bloqueante(), pero ignora los movimientos que
+    son puro bookkeeping del propio módulo Layout (ver
+    _TIPOS_MOVIMIENTO_BOOKKEEPING_LAYOUT). Usada por editar_cuerpo(): un hueco
+    al que solo se le asignó un SKU (sin que ningún operario lo haya pickeado
+    de verdad) sí se puede remodular — es exactamente el caso de uso real de
+    "Editar": corregir la modulación de un cuerpo después de haber empezado a
+    asignar SKUs, no solo antes de tocarlo.
+    """
+    if TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene historial de tareas de Picking'
+    if TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        )
+    ).first():
+        return 'tiene historial de tareas de Reposición'
+    if MovimientoInventario.query.filter(
+        MovimientoInventario.ubicacion_id == ubicacion_id,
+        MovimientoInventario.tipo.notin_(_TIPOS_MOVIMIENTO_BOOKKEEPING_LAYOUT),
+    ).first():
+        return 'tiene movimientos de inventario registrados'
+    return None
+
+
 def _motivo_no_eliminable(ubicacion_id: int) -> str | None:
     """
     Ninguna posición con historial operativo se puede borrar — solo filas creadas
@@ -214,17 +298,9 @@ def _motivo_no_eliminable(ubicacion_id: int) -> str | None:
     """
     if _stock_activo(ubicacion_id) > 0:
         return 'tiene stock activo — muévelo antes de eliminar'
-    if TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).first():
-        return 'tiene historial de tareas de Picking — no se puede eliminar'
-    if TareaReposicion.query.filter(
-        db.or_(
-            TareaReposicion.ubicacion_picking_id == ubicacion_id,
-            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
-        )
-    ).first():
-        return 'tiene historial de tareas de Reposición — no se puede eliminar'
-    if MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).first():
-        return 'tiene movimientos de inventario registrados — no se puede eliminar'
+    motivo_historial = _motivo_historial_bloqueante(ubicacion_id)
+    if motivo_historial:
+        return f'{motivo_historial} — no se puede eliminar'
     return None
 
 
@@ -247,6 +323,86 @@ def eliminar_ubicacion(ubicacion_id: int):
     db.session.delete(ubicacion)
     db.session.commit()
     return {'codigo': codigo}
+
+
+def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int) -> dict:
+    """
+    Elimina un Cuerpo completo — todos sus Entrepaños y Huecos, sin excepción.
+
+    Todo o nada: si CUALQUIER hueco del cuerpo tiene stock activo o historial
+    operativo (TareaPicking/TareaReposicion/MovimientoInventario), se bloquea
+    la eliminación completa — no se borra parcialmente el cuerpo. Reutiliza
+    _motivo_no_eliminable() por hueco (mismo guardarraíl duro que
+    eliminar_ubicacion(), aplicado a los N huecos del cuerpo a la vez).
+
+    Para retirar de operación un cuerpo con historial real sin perder su
+    trazabilidad de auditoría, usar reclasificar_cuerpo(activo=False) en vez
+    de esta función — desactivar archiva, eliminar borra para siempre.
+    """
+    ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
+
+    bloqueados = {}
+    for ub in ubicaciones:
+        motivo = _motivo_no_eliminable(ub.id)
+        if motivo:
+            bloqueados[ub.codigo] = motivo
+    if bloqueados:
+        detalle = '; '.join(f'{codigo} {motivo}' for codigo, motivo in bloqueados.items())
+        raise ValueError(
+            f'No se puede eliminar el cuerpo — {len(bloqueados)} de {len(ubicaciones)} '
+            f'hueco(s) lo bloquean: {detalle}. Usa "Reclasificar > Desactivar cuerpo" '
+            f'si necesitas retirarlo sin perder el historial.'
+        )
+
+    codigos = [ub.codigo for ub in ubicaciones]
+    for ub in ubicaciones:
+        UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
+        db.session.delete(ub)
+    db.session.commit()
+    return {
+        'pasillo': pasillo.strip().upper(), 'fila': fila, 'cuerpo': cuerpo,
+        'eliminadas': codigos, 'total': len(codigos),
+    }
+
+
+def reclasificar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
+                        tipo_zona: str = None, activo: bool = None) -> dict:
+    """
+    Reclasifica todo un Cuerpo de una vez: cambia su zona (RESERVA<->PICKING<->
+    AVERIAS) o lo desactiva completo. Reutiliza reclasificar_ubicacion() hueco
+    por hueco heredando su guardarraíl (bloquea por hueco si tiene stock
+    activo), sin abortar el resto del cuerpo si una posición puntual falla —
+    mismo patrón de "no aborta el lote" que editar_fila() ya usa para el
+    esquema legado.
+
+    activo=False es el camino recomendado para retirar de operación un cuerpo
+    que eliminar_cuerpo() bloquea por tener historial real: no borra nada,
+    solo lo saca de circulación — picking/conteo/traslados dejan de verlo
+    porque ya no aparece activo — preservando la trazabilidad de auditoría
+    para siempre.
+    """
+    ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
+
+    actualizadas = []
+    bloqueadas = {}
+    advertencias = []
+    for ub in ubicaciones:
+        try:
+            resultado = reclasificar_ubicacion(
+                ubicacion_id=ub.id, tipo_zona=tipo_zona, activo=activo,
+            )
+            actualizadas.append(ub.codigo)
+            advertencias.extend(resultado['advertencias'])
+        except ValueError as e:
+            bloqueadas[ub.codigo] = str(e)
+
+    return {
+        'pasillo': pasillo.strip().upper(), 'fila': fila, 'cuerpo': cuerpo,
+        'total_posiciones': len(ubicaciones),
+        'actualizadas': actualizadas,
+        'bloqueadas': bloqueadas,
+        'advertencias': advertencias,
+    }
 
 
 def eliminar_fila(almacen_id: int, pasillo: str, fila: int):
@@ -361,6 +517,133 @@ def _traspasar_desde_general(ubicacion: Ubicacion, producto_id: int, cantidad: i
     reg_general.cantidad -= movido
     reg_general.row_version += 1
     return movido
+
+
+def _traspasar_hacia_general(ubicacion: Ubicacion, producto_id: int, cantidad: int) -> int:
+    """
+    Inverso de _traspasar_desde_general() — usado por editar_cuerpo() antes de
+    borrar un hueco al remodular: su stock físico real se devuelve a
+    SIESA-GENERAL para que ninguna unidad se pierda en el proceso.
+
+    A diferencia del traspaso de ida, esta salvaguarda es universal (no está
+    restringida a NB1/CO003) y crea SIESA-GENERAL en el almacén si todavía no
+    existe ahí — nunca puede fallar por falta de destino.
+
+    Retorna las unidades movidas (siempre == cantidad, salvo cantidad <= 0).
+    """
+    if cantidad <= 0:
+        return 0
+
+    general = Ubicacion.query.filter_by(
+        codigo=Ubicacion.CODIGO_GENERAL, almacen_id=ubicacion.almacen_id
+    ).first()
+    if not general:
+        general = Ubicacion(
+            codigo=Ubicacion.CODIGO_GENERAL, almacen_id=ubicacion.almacen_id,
+            zona='GENERAL', tipo_zona='GENERAL', tipo='estanteria', activo=True,
+        )
+        db.session.add(general)
+        db.session.flush()
+
+    reg_general = UbicacionProducto.query.filter_by(
+        ubicacion_id=general.id, producto_id=producto_id, lote=None,
+    ).with_for_update().first()
+    if reg_general:
+        reg_general.cantidad += cantidad
+        reg_general.row_version += 1
+    else:
+        db.session.add(UbicacionProducto(
+            ubicacion_id=general.id, producto_id=producto_id, cantidad=cantidad,
+            fecha_ingreso=datetime.utcnow(),
+        ))
+    return cantidad
+
+
+def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
+                  cantidad_entrepanos: int, huecos_por_nivel: list = None,
+                  usuario_id: int = None) -> list:
+    """
+    Remodula un Cuerpo existente: cambia su cantidad de Entrepaños/Huecos.
+    Borra todos los huecos actuales del cuerpo (y sus SKUs asignados) y los
+    reconstruye desde cero con la nueva numeración — queda limpio y libre
+    para volver a asignar SKUs, igual que un cuerpo recién creado. Conserva
+    la zona original del cuerpo (editar remodula estructura, no cambia zona
+    — para eso está reclasificar_cuerpo()).
+
+    Antes de borrar cada hueco, su stock físico real se devuelve
+    automáticamente a SIESA-GENERAL (_traspasar_hacia_general) — ninguna
+    unidad se pierde en el proceso. Cada traspaso queda registrado en
+    MovimientoInventario para trazabilidad.
+
+    Guardarraíl duro: si CUALQUIER hueco del cuerpo tiene historial operativo
+    REAL (TareaPicking, TareaReposicion, o un MovimientoInventario que no sea
+    simple bookkeeping de Layout — ver _motivo_historial_operativo_real), se
+    bloquea toda la remodulación. Haber asignado un SKU (ASIGNACION_LAYOUT)
+    NO cuenta como historial bloqueante — es justamente el caso de uso normal
+    de "Editar": corregir la modulación después de empezar a asignar SKUs, no
+    solo antes. El stock tampoco bloquea (se traspasa); solo el historial de
+    operación física real bloquea.
+    """
+    ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
+    tipo_zona = ubicaciones[0].tipo_zona  # un cuerpo es 100% de una sola zona
+
+    if cantidad_entrepanos < 1:
+        raise ValueError('cantidad_entrepanos debe ser mayor a 0')
+    if huecos_por_nivel is None:
+        huecos_por_nivel = [1] * cantidad_entrepanos
+    if len(huecos_por_nivel) != cantidad_entrepanos:
+        raise ValueError('huecos_por_nivel debe traer un valor por cada entrepaño')
+    if any(h < 1 for h in huecos_por_nivel):
+        raise ValueError('huecos_por_nivel: cada entrepaño necesita al menos 1 hueco')
+
+    # Guardarraíl: bloquear TODO si algún hueco tiene historial operativo real.
+    # Se valida antes de mutar nada — ningún traspaso ni borrado ocurre si falla.
+    bloqueados = []
+    for ub in ubicaciones:
+        motivo = _motivo_historial_operativo_real(ub.id)
+        if motivo:
+            bloqueados.append(f'{ub.codigo}: {motivo}')
+    if bloqueados:
+        detalle = '; '.join(bloqueados)
+        raise ValueError(
+            f'No se puede remodular — {len(bloqueados)} de {len(ubicaciones)} hueco(s) '
+            f'con historial real: {detalle}. Usa "Reclasificar > Desactivar cuerpo" '
+            f'si necesitas retirarlo sin perder el historial.'
+        )
+
+    # Devolver stock físico de cada hueco a SIESA-GENERAL antes de borrar
+    for ub in ubicaciones:
+        regs = UbicacionProducto.query.filter_by(ubicacion_id=ub.id).with_for_update().all()
+        for reg in regs:
+            if reg.cantidad > 0:
+                movido = _traspasar_hacia_general(ub, reg.producto_id, reg.cantidad)
+                db.session.add(MovimientoInventario(
+                    producto_id=reg.producto_id,
+                    ubicacion_id=ub.id,
+                    almacen_id=almacen_id,
+                    tipo='REMODULACION_CUERPO',
+                    cantidad=-movido,
+                    saldo_antes=reg.cantidad,
+                    saldo_despues=0,
+                    motivo=f'Layout: {ub.codigo} remodulado — {movido} uds devueltas a SIESA-GENERAL',
+                    usuario_id=usuario_id,
+                    siesa_sync='OMITIDO',
+                ))
+                reg.cantidad = 0
+                reg.row_version += 1
+
+    # Borrar huecos actuales (ya sin stock ni historial — limpio)
+    for ub in ubicaciones:
+        UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
+        db.session.delete(ub)
+    db.session.flush()
+
+    # Reconstruir desde cero con la nueva numeración (misma zona) — commitea al final
+    return crear_cuerpo(
+        almacen_id=almacen_id, pasillo=pasillo, fila=fila, cuerpo=cuerpo,
+        cantidad_entrepanos=cantidad_entrepanos, tipo_zona=tipo_zona,
+        huecos_por_nivel=huecos_por_nivel,
+    )
 
 
 def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario_id: int = None,

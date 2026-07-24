@@ -220,13 +220,28 @@ function layoutRenderUbicaciones() {
       const codigoCuerpo = g.items[0].codigo.split('-').slice(0, 3).join('-');
       const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
       const idsCuerpoCsv = g.items.map(u => u.id).join(',');
+      const zonaCuerpo = g.items[0].tipo_zona; // un cuerpo es 100% de una sola zona
       let cuerpoHtml = `
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
           <div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
-          <button onclick="layoutImprimirEtiquetasCuerpo('${idsCuerpoCsv}')"
-            style="padding:7px 12px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-            🖨 Imprimir etiquetas
-          </button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button onclick="layoutImprimirEtiquetasCuerpo('${idsCuerpoCsv}')"
+              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+              🖨 Etiquetas
+            </button>
+            <button onclick="layoutAbrirModalEditarCuerpo('${g.pasillo}', ${g.fila}, ${g.cuerpo}, ${nivelesEnZona.length})"
+              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+              ✏ Editar
+            </button>
+            <button onclick="layoutAbrirModalReclasificarCuerpo('${g.pasillo}', ${g.fila}, ${g.cuerpo}, '${zonaCuerpo}')"
+              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+              ⇄ Reclasificar
+            </button>
+            <button onclick="layoutEliminarCuerpo('${g.pasillo}', ${g.fila}, ${g.cuerpo})"
+              style="padding:7px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;font-weight:700;cursor:pointer;">
+              🗑 Eliminar
+            </button>
+          </div>
         </div>`;
       nivelesEnZona.forEach((nivel, idx) => {
         const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
@@ -375,6 +390,177 @@ async function layoutGuardarCuerpo() {
     layoutCargarUbicaciones();
   } catch (e) {
     alerta(e.message || 'Error creando el cuerpo', 'error');
+  }
+}
+
+// ── Cuerpo completo: Editar (remodular) / Eliminar / Reclasificar ───────────
+// A diferencia de los 3 iconos dentro de "Ver" (que actúan sobre UN hueco),
+// estos botones del encabezado del Cuerpo actúan sobre TODOS sus
+// entrepaños/huecos a la vez — ver layout_service.py editar_cuerpo() /
+// eliminar_cuerpo() / reclasificar_cuerpo().
+
+let _layoutCuerpoEditando = null; // { pasillo, fila, cuerpo }
+
+/** Open the remodulate-cuerpo wizard (2 steps, same shape as crear), pre-filled with the current entrepaño count. */
+function layoutAbrirModalEditarCuerpo(pasillo, fila, cuerpo, cantidadActual) {
+  const m = document.getElementById('modal-layout-editar-cuerpo');
+  if (!m) return;
+  _layoutCuerpoEditando = { pasillo, fila, cuerpo };
+  const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
+  document.getElementById('layout-editar-cuerpo-titulo').textContent = `Editar ${codigoCuerpo}`;
+  document.getElementById('layout-editar-cuerpo-entrepanos').value = cantidadActual;
+  document.getElementById('layout-editar-cuerpo-huecos-container').innerHTML = '';
+  document.getElementById('layout-editar-cuerpo-paso1').style.display = 'block';
+  document.getElementById('layout-editar-cuerpo-paso2').style.display = 'none';
+  m.style.display = 'flex';
+}
+
+/** Close the remodulate-cuerpo wizard modal. */
+function layoutCerrarModalEditarCuerpo() {
+  const m = document.getElementById('modal-layout-editar-cuerpo');
+  if (m) m.style.display = 'none';
+  _layoutCuerpoEditando = null;
+}
+
+/** Validate step 1 (new entrepaño count) and advance to step 2 (huecos per entrepaño). */
+function layoutEditarCuerpoIrAPaso2() {
+  const cantidad_entrepanos = parseInt(document.getElementById('layout-editar-cuerpo-entrepanos').value);
+  if (isNaN(cantidad_entrepanos) || cantidad_entrepanos < 1) {
+    alerta('Indica la nueva cantidad de entrepaños', 'error');
+    return;
+  }
+  const cont = document.getElementById('layout-editar-cuerpo-huecos-container');
+  let html = '';
+  for (let nivel = 1; nivel <= cantidad_entrepanos; nivel++) {
+    html += `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;font-size:12px;color:var(--tx2);">Entrepaño ${nivel}</div>
+        <input id="layout-editar-cuerpo-hueco-nivel-${nivel}" type="number" min="1" value="1"
+          style="width:72px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:14px;box-sizing:border-box;text-align:center;">
+      </div>`;
+  }
+  cont.innerHTML = html;
+  document.getElementById('layout-editar-cuerpo-paso1').style.display = 'none';
+  document.getElementById('layout-editar-cuerpo-paso2').style.display = 'block';
+}
+
+/** Go back from step 2 to step 1 in the remodulate-cuerpo wizard. */
+function layoutEditarCuerpoVolverAPaso1() {
+  document.getElementById('layout-editar-cuerpo-paso2').style.display = 'none';
+  document.getElementById('layout-editar-cuerpo-paso1').style.display = 'block';
+}
+
+/** Submit the cuerpo remodulation (PUT) — wipes and rebuilds with the new entrepaño/hueco count. */
+async function layoutGuardarEditarCuerpo() {
+  if (!_layoutCuerpoEditando) return;
+  const { pasillo, fila, cuerpo } = _layoutCuerpoEditando;
+  const cantidad_entrepanos = parseInt(document.getElementById('layout-editar-cuerpo-entrepanos').value);
+  const huecos_por_nivel = [];
+  for (let nivel = 1; nivel <= cantidad_entrepanos; nivel++) {
+    const valor = parseInt(document.getElementById(`layout-editar-cuerpo-hueco-nivel-${nivel}`)?.value);
+    huecos_por_nivel.push(isNaN(valor) || valor < 1 ? 1 : valor);
+  }
+  try {
+    const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pasillo, fila, cuerpo, cantidad_entrepanos, huecos_por_nivel }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error remodulando el cuerpo', 'error'); return; }
+    const totalHuecos = huecos_por_nivel.reduce((a, b) => a + b, 0);
+    alerta(`Cuerpo remodulado — ${cantidad_entrepanos} entrepaño(s), ${totalHuecos} hueco(s). Vuelve a asignar los SKU.`, 'ok');
+    layoutCerrarModalEditarCuerpo();
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+/**
+ * Delete an entire cuerpo (all its entrepanos/huecos) — blocks (all-or-nothing)
+ * if any hueco has stock or real operational history.
+ */
+async function layoutEliminarCuerpo(pasillo, fila, cuerpo) {
+  const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
+  if (!confirm(`¿Eliminar TODO el cuerpo ${codigoCuerpo} (todos sus entrepaños y huecos)? Esta acción no se puede deshacer. Se bloquea completo si algún hueco tiene stock o historial real — usa "Reclasificar > Desactivar cuerpo" en ese caso.`)) return;
+  try {
+    const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pasillo, fila, cuerpo }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error eliminando el cuerpo', 'error'); return; }
+    alerta(`Cuerpo ${codigoCuerpo} eliminado — ${d.total} hueco(s)`, 'ok');
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
+}
+
+let _layoutCuerpoReclasificando = null; // { pasillo, fila, cuerpo }
+
+/** Open the bulk zone-change / deactivate modal for an entire cuerpo. */
+function layoutAbrirModalReclasificarCuerpo(pasillo, fila, cuerpo, zonaActual) {
+  const m = document.getElementById('modal-layout-reclasificar-cuerpo');
+  if (!m) return;
+  _layoutCuerpoReclasificando = { pasillo, fila, cuerpo };
+  const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
+  document.getElementById('layout-reclasificar-cuerpo-codigo').textContent = codigoCuerpo;
+  document.getElementById('layout-reclasificar-cuerpo-zona').value = zonaActual;
+  document.getElementById('layout-reclasificar-cuerpo-desactivar').checked = false;
+  document.getElementById('layout-reclasificar-cuerpo-resultado').innerHTML = '';
+  m.style.display = 'flex';
+}
+
+/** Close the bulk reclassify-cuerpo modal. */
+function layoutCerrarModalReclasificarCuerpo() {
+  const m = document.getElementById('modal-layout-reclasificar-cuerpo');
+  if (m) m.style.display = 'none';
+  _layoutCuerpoReclasificando = null;
+}
+
+/**
+ * Save the bulk reclassification — either a zone change for the whole cuerpo,
+ * or deactivating it completely (the safe path to retire a cuerpo blocked
+ * from deletion by real history, without losing the audit trail).
+ */
+async function layoutGuardarReclasificarCuerpo() {
+  if (!_layoutCuerpoReclasificando) return;
+  const { pasillo, fila, cuerpo } = _layoutCuerpoReclasificando;
+  const desactivar = document.getElementById('layout-reclasificar-cuerpo-desactivar').checked;
+  const tipo_zona = document.getElementById('layout-reclasificar-cuerpo-zona').value;
+
+  const payload = { pasillo, fila, cuerpo };
+  if (desactivar) {
+    payload.activo = false;
+  } else {
+    payload.tipo_zona = tipo_zona;
+  }
+
+  try {
+    const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'Error reclasificando el cuerpo', 'error'); return; }
+
+    const bloqueadas = Object.keys(d.bloqueadas || {});
+    const resEl = document.getElementById('layout-reclasificar-cuerpo-resultado');
+    resEl.innerHTML = bloqueadas.length
+      ? `⚠ ${bloqueadas.length} hueco(s) con stock, no se pudieron cambiar: ${bloqueadas.join(', ')}`
+      : '';
+    alerta(
+      `${d.actualizadas.length} hueco(s) actualizado(s)${bloqueadas.length ? ` — ${bloqueadas.length} bloqueado(s)` : ''}`,
+      bloqueadas.length ? 'advertencia' : 'ok',
+    );
+    layoutCargarUbicaciones();
+    if (!bloqueadas.length) setTimeout(layoutCerrarModalReclasificarCuerpo, 200);
+  } catch (e) {
+    alerta('Error de conexión', 'error');
   }
 }
 
