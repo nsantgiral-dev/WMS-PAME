@@ -1052,7 +1052,7 @@ function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
   }
 }
 
-/** Modo vista (SKU ya asignado) — referencia grande y legible + botón Editar. */
+/** Modo vista (SKU ya asignado) — referencia grande y legible + botón Cambiar SKU. */
 function _layoutAsignarEntFilaVista(u, huecoLabel) {
   const referencia = `${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`;
   return `
@@ -1064,7 +1064,7 @@ function _layoutAsignarEntFilaVista(u, huecoLabel) {
         </div>
         <button onclick="layoutEditarSkuEntrepano(${u.id})"
           style="flex-shrink:0;padding:9px 16px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
-          Editar
+          Cambiar SKU
         </button>
       </div>
     </div>`;
