@@ -359,3 +359,145 @@ def test_importar_excel_endpoint(client, jwt_token_admin, almacen, producto):
     assert body['ok'] == 1
     assert len(body['errores']) == 1
     assert body['errores'][0]['fila'] == 3
+
+
+# ── Endpoints a nivel de Cuerpo completo (PUT/PATCH/DELETE sobre el mismo path) ──
+
+def test_editar_cuerpo_endpoint(client, jwt_token_admin, almacen):
+    client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+
+    resp = client.put(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 3},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    ubs = resp.get_json()['ubicaciones']
+    assert len(ubs) == 3
+    assert all(u['tipo_zona'] == 'PICKING' for u in ubs)  # conserva la zona, no viene en el payload
+
+
+def test_editar_cuerpo_endpoint_rechaza_sin_admin(client, jwt_token, almacen):
+    resp = client.put(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2},
+        headers={'Authorization': f'Bearer {jwt_token}'},
+    )
+    assert resp.status_code == 403
+
+
+def test_editar_cuerpo_endpoint_cuerpo_inexistente(client, jwt_token_admin, almacen):
+    resp = client.put(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'Z', 'fila': 1, 'cuerpo': 9, 'cantidad_entrepanos': 2},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert 'No existe el cuerpo' in resp.get_json()['error']
+
+
+def test_eliminar_cuerpo_endpoint(client, jwt_token_admin, almacen):
+    client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+
+    resp = client.delete(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()['total'] == 2
+    assert Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1).count() == 0
+
+
+def test_eliminar_cuerpo_endpoint_bloquea_con_stock(client, jwt_token_admin, almacen, producto):
+    r1 = client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    ub_id = r1.get_json()['ubicaciones'][0]['id']
+    client.post(
+        f'/api/almacenes/ubicaciones/{ub_id}/asignar',
+        json={'producto_id': producto.id, 'cantidad': 10},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+
+    resp = client.delete(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1).count() == 1
+
+
+def test_eliminar_cuerpo_endpoint_rechaza_sin_admin(client, jwt_token, almacen):
+    resp = client.delete(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1},
+        headers={'Authorization': f'Bearer {jwt_token}'},
+    )
+    assert resp.status_code == 403
+
+
+def test_reclasificar_cuerpo_endpoint(client, jwt_token_admin, almacen):
+    client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 2, 'tipo_zona': 'RESERVA'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert len(body['actualizadas']) == 2
+    ubs = Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1).all()
+    assert all(u.tipo_zona == 'PICKING' for u in ubs)
+
+
+def test_reclasificar_cuerpo_endpoint_desactivar(client, jwt_token_admin, almacen):
+    client.post(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'cantidad_entrepanos': 1, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'activo': False},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 200
+    ub = Ubicacion.query.filter_by(almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1).first()
+    assert ub.activo is False
+
+
+def test_reclasificar_cuerpo_endpoint_rechaza_sin_campos(client, jwt_token_admin, almacen):
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1},
+        headers={'Authorization': f'Bearer {jwt_token_admin}'},
+    )
+    assert resp.status_code == 400
+    assert 'al menos un campo' in resp.get_json()['error']
+
+
+def test_reclasificar_cuerpo_endpoint_rechaza_sin_admin(client, jwt_token, almacen):
+    resp = client.patch(
+        f'/api/almacenes/{almacen.id}/ubicaciones/cuerpo',
+        json={'pasillo': 'A', 'fila': 1, 'cuerpo': 1, 'tipo_zona': 'PICKING'},
+        headers={'Authorization': f'Bearer {jwt_token}'},
+    )
+    assert resp.status_code == 403

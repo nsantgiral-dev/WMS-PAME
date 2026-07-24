@@ -2779,6 +2779,88 @@
     </div>
   </div>
 
+  <!-- Modal Layout: Editar Cuerpo completo (remodular entrepaños/huecos) -->
+  <div id="modal-layout-editar-cuerpo" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;max-height:90vh;overflow-y:auto;">
+      <div id="layout-editar-cuerpo-titulo" style="font-size:15px;font-weight:700;margin-bottom:4px;">Editar cuerpo</div>
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:16px;">Cambia la cantidad de entrepaños/huecos — se reconstruye limpio: los SKU asignados se pierden (el stock físico vuelve a SIESA-GENERAL, no se pierde ninguna unidad). Se bloquea si algún hueco ya se pickeó de verdad.</div>
+
+      <!-- Paso 1: nueva cantidad de entrepaños -->
+      <div id="layout-editar-cuerpo-paso1">
+        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad de entrepaños</label>
+        <input id="layout-editar-cuerpo-entrepanos" type="number" min="1"
+          style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:16px;">
+
+        <div style="display:flex;gap:8px;">
+          <button onclick="layoutEditarCuerpoIrAPaso2()"
+            style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+            Siguiente
+          </button>
+          <button onclick="layoutCerrarModalEditarCuerpo()"
+            style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+            Cancelar
+          </button>
+        </div>
+      </div>
+
+      <!-- Paso 2: huecos por cada entrepaño de la nueva estructura -->
+      <div id="layout-editar-cuerpo-paso2" style="display:none;">
+        <div style="font-size:11px;color:var(--tx3);margin-bottom:12px;">Cuántos huecos tiene cada entrepaño de la nueva estructura.</div>
+        <div id="layout-editar-cuerpo-huecos-container"></div>
+
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button onclick="layoutEditarCuerpoVolverAPaso1()"
+            style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+            Atrás
+          </button>
+          <button onclick="layoutGuardarEditarCuerpo()"
+            style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+            Remodular
+          </button>
+          <button onclick="layoutCerrarModalEditarCuerpo()"
+            style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+            Cancelar
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal Layout: Reclasificar Cuerpo completo (zona o desactivar todo) -->
+  <div id="modal-layout-reclasificar-cuerpo" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
+      <div style="font-size:15px;font-weight:700;margin-bottom:4px;">Reclasificar cuerpo</div>
+      <div id="layout-reclasificar-cuerpo-codigo" style="font-size:13px;font-weight:700;color:var(--tx);font-family:monospace;margin-bottom:16px;"></div>
+
+      <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Nueva zona (para todo el cuerpo)</label>
+      <select id="layout-reclasificar-cuerpo-zona"
+        style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+        <option value="PICKING">PICKING</option>
+        <option value="RESERVA">RESERVA</option>
+        <option value="AVERIAS">AVERIAS</option>
+      </select>
+
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--tx2);margin-bottom:6px;cursor:pointer;">
+        <input id="layout-reclasificar-cuerpo-desactivar" type="checkbox">
+        Desactivar cuerpo completo (en vez de cambiar zona)
+      </label>
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:12px;">Retira el cuerpo de circulación sin borrar nada — úsalo cuando "Eliminar" lo bloquee por tener historial real. Ambas opciones se bloquean por hueco si tiene stock activo.</div>
+
+      <div id="layout-reclasificar-cuerpo-resultado" style="font-size:12px;color:#fbbf24;margin-bottom:12px;"></div>
+
+      <div style="display:flex;gap:8px;">
+        <button onclick="layoutGuardarReclasificarCuerpo()"
+          style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
+          Guardar
+        </button>
+        <button onclick="layoutCerrarModalReclasificarCuerpo()"
+          style="padding:13px 18px;background:var(--bg);border:1px solid var(--brd);border-radius:10px;color:var(--tx2);font-size:14px;cursor:pointer;">
+          Cancelar
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Modal Layout: Editar fila (bloque ya creado) -->
   <div id="modal-layout-editar-fila" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:380px;">
