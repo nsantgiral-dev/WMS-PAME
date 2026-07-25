@@ -1,0 +1,74 @@
+{
+  "_doc": [
+    "El termómetro. Qué porcentaje de las rutas se está liquidando por el WMS.",
+    "",
+    "No es una serie de negocio: es la serie que dice si las OTRAS series se",
+    "pueden creer. facturas_{co} alimentada por el WMS solo es completa si todas",
+    "las rutas pasan por el WMS. Si Pitalito sigue liquidando en papel, la serie",
+    "reina tiene un hueco — y un hueco en la serie de frecuencia es exactamente",
+    "el silencio donde murió Florencia.",
+    "",
+    "REGLA OPERATIVA: mientras esta serie no esté en ~100% para un C.O., la serie",
+    "facturas_{co} de ese C.O. NO puede considerarse alimentada por el WMS, y el",
+    "export de SIESA sigue siendo el respaldo de esa plaza.",
+    "",
+    "PLAN B con fecha: si a las 8 semanas del go-live la adopción no cubre la red,",
+    "se reactiva la configuración del Generic Transfer de planillas en Siesa. No",
+    "se declara muerto — se declara condicionado a esta serie."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "Adopción de liquidación por WMS",
+    "que_decide": "Si las series nativas del WMS son confiables por C.O., y si el plan B de planillas debe reactivarse.",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md"
+  },
+
+  "procedencia": {
+    "origen": "Serie nueva — sin corrida certificada todavía",
+    "fecha_corrida_original": null,
+    "hallazgo": null,
+    "nota": "Llenar tras la primera corrida con 26+ semanas de datos WMS."
+  },
+
+  "serie": {
+    "concepto": "porcentaje de rutas liquidadas por el WMS sobre rutas totales, por semana y C.O.",
+    "nombre_en_bd": "adopcion_rutas_{co}",
+    "definicion_wms": "COUNT(RutaDespacho WHERE estado_financiero = 'LIQUIDADA') / COUNT(RutaDespacho) * 100, agrupado por (C.O., lunes de la semana)",
+    "campo_clave": "RutaDespacho.estado_financiero — PENDIENTE | EN_LIQUIDACION | LIQUIDADA",
+    "unidad": "porcentaje 0-100",
+    "_denominador": [
+      "El denominador son las rutas REGISTRADAS en el WMS, no las rutas que",
+      "existen en la realidad. Una ruta despachada sin pasar por el WMS no",
+      "aparece en ninguno de los dos lados y la adopción se ve 100% siendo falsa.",
+      "",
+      "Por eso esta serie se lee contra el conteo de rutas de SIESA durante la",
+      "transición, no sola. Cuando el export de SIESA deje de existir, la única",
+      "defensa contra ese punto ciego es el control de que toda ruta física nazca",
+      "en el WMS."
+    ]
+  },
+
+  "esperado": {
+    "_nota": "No se certifica contra un canon histórico: es una serie de proceso. El criterio es operativo, no estadístico.",
+    "umbral_confiabilidad_serie": 95,
+    "umbral_revision_plan_b": 80,
+    "semanas_hasta_revision_plan_b": 8
+  },
+
+  "parametros": {
+    "k": 0.5,
+    "h_alarma": 4.5,
+    "h_aviso": 3.0,
+    "ventana_referencia_semanas": 26,
+    "estimadores": "robustos — mediana y MAD*1.4826",
+    "direccion_vigilada": "S- (bajas). Una caída de adopción es la operación volviendo al papel."
+  },
+
+  "insumos": {
+    "_nota": "Serie nativa del WMS: no tiene archivos de entrada.",
+    "registrado": false,
+    "archivos": []
+  }
+}

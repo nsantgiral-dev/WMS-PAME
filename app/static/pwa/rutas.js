@@ -1772,14 +1772,19 @@ async function condAbrirParadas(rutaId) {
 }
 
 /**
- * Renderiza la lista de paradas del conductor con estado y boton de cierre.
- * @param {Object} d - Datos de paradas con paradas_gestionadas
+ * Renderiza la lista de entregas del conductor con estado y boton de cierre.
+ * Cada entrada es una FACTURA, no una parada fisica: un cliente con dos
+ * facturas en una visita aparece dos veces.
+ * @param {Object} d - Datos con facturas_gestionadas
  */
 function _condRenderParadas(d) {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
   const paradas = _COND_PARADAS;
-  const gestionadas = d.paradas_gestionadas || paradas.filter(p => p.recaudo).length;
+  // paradas_gestionadas es el nombre viejo: puede venir de IndexedDB cacheado
+  // antes del rename. Retirar el fallback post go-live.
+  const gestionadas = d.facturas_gestionadas ?? d.paradas_gestionadas
+                      ?? paradas.filter(p => p.recaudo).length;
   const total = paradas.length;
   const todasGestionadas = gestionadas === total && total > 0;
 
@@ -2186,7 +2191,7 @@ async function condGuardarParada() {
         items_entregados:      itemsEntregados.length ? itemsEntregados : null,
       };
       const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
-      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, paradas_gestionadas: gestionadas });
+      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, facturas_gestionadas: gestionadas, paradas_gestionadas: gestionadas });
     }
     await _condActualizarBarras();
     alerta('Guardado sin conexión — se enviará al reconectar', 'advertencia');
@@ -2251,7 +2256,7 @@ async function condNoSePudoEntregar() {
     if (idx >= 0) {
       _COND_PARADAS[idx].recaudo = { ...payload, bultos_rechazados_ids: [], items_entregados: null };
       const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
-      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, paradas_gestionadas: gestionadas });
+      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, facturas_gestionadas: gestionadas, paradas_gestionadas: gestionadas });
     }
     await _condActualizarBarras();
     alerta('Registrado sin conexión — se enviará al reconectar', 'advertencia');

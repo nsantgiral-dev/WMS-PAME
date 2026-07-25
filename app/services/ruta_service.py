@@ -570,10 +570,15 @@ class RutaService:
                 tareas_map[r.tarea_id]['recaudo'] = r.to_dict()
 
         paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
+        # Ojo: `paradas` está indexado por tarea_id, así que cada entrada es una
+        # factura, no una parada física. La parada real es DISTINCT cliente.
+        gestionadas = sum(1 for p in paradas if p['recaudo'])
         return {
-            'paradas':             paradas,
-            'total_paradas':       len(paradas),
-            'paradas_gestionadas': sum(1 for p in paradas if p['recaudo']),
+            'paradas':              paradas,
+            'total_paradas':        len(paradas),
+            'facturas_gestionadas': gestionadas,
+            # Alias de transición para PWA en caché — retirar post go-live
+            'paradas_gestionadas':  gestionadas,
         }
 
     @staticmethod

@@ -64,8 +64,14 @@ class RutaDespacho(db.Model):
                 result.append(b.tarea)
         return result
 
-    def paradas_gestionadas(self):
-        """Cantidad de tareas que ya tienen RecaudoEntrega."""
+    def facturas_gestionadas(self):
+        """Cantidad de facturas (TareaPacking) que ya tienen RecaudoEntrega.
+
+        NO son paradas físicas: un cliente que recibe dos facturas en una sola
+        visita cuenta dos veces. La parada real es DISTINCT cliente.
+        Se llamaba paradas_gestionadas — el nombre mentía sobre la unidad, y
+        esta es la unidad que el Vigía vigila (serie facturas_{co}).
+        """
         return sum(1 for t in self.tareas_unicas() if t.recaudo_entrega)
 
     def total_recaudado(self):

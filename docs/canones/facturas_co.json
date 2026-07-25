@@ -1,0 +1,75 @@
+{
+  "_doc": [
+    "LA SERIE REINA. Frecuencia de servicio por C.O. — la que detectó Florencia.",
+    "",
+    "Es la única de las cuatro que HEREDA las 53 semanas de línea base. Por eso su",
+    "unidad no se negocia: si algún día pasa a contar paradas físicas en vez de",
+    "facturas, mu_ref y sigma_ref del histórico dejan de aplicar y el CUSUM queda",
+    "ciego ~6 meses. La unidad es facturas únicas, y se queda así.",
+    "",
+    "Dos fuentes, una serie. La prueba de empalme (semana cerrada calculable por",
+    "ambas) debe cuadrar antes de que la fuente WMS escriba PRODUCCION sola.",
+    "  HISTORICO  — export TXT de Siesa: set(nro_doc) por (C.O., semana)",
+    "  PRODUCCION — WMS: COUNT(RecaudoEntrega) por (C.O., semana)",
+    "",
+    "El empalme es apples-to-apples por construcción: RecaudoEntrega tiene una",
+    "fila por TareaPacking, y TareaPacking es una por factura ('Unidad de pago =",
+    "pedido/factura, NO bulto físico'). Misma unidad que el TXT."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "Vigía CUSUM — frecuencia de servicio",
+    "que_decide": "Si un C.O. dejó de ser visitado con su cadencia normal — el borde delantero de una pérdida de plaza.",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md"
+  },
+
+  "procedencia": {
+    "origen": "Hereda de docs/canon_florencia.json — misma serie, C.O. 006",
+    "fecha_corrida_original": "2026-07",
+    "hallazgo": "S- = 6.30 en semana 2025-12-29 (411 facturas, -63% vs mu=1107)",
+    "nota": "El canon de reproducción vive en canon_florencia.json. Este archivo define la serie hacia adelante."
+  },
+
+  "serie": {
+    "concepto": "facturas únicas por semana y centro de operación",
+    "nombre_en_bd": "facturas_{co}",
+    "definicion_wms": "COUNT(RecaudoEntrega) agrupado por (Almacen.centro_op_siesa, lunes de la semana)",
+    "ruta_al_co": "RecaudoEntrega.tarea -> TareaPacking.almacen_id -> Almacen.centro_op_siesa",
+    "estados_incluidos": ["ENTREGADO", "PARCIAL", "RECHAZADO"],
+    "_por_que_incluye_rechazado": [
+      "Un RECHAZADO fue visitado: el conductor llegó y el cliente rechazó.",
+      "Excluirlo haría que una semana de muchos rechazos se viera idéntica a una",
+      "semana sin visitas — y son patologías opuestas: problema comercial vs",
+      "colapso de ruta. Esa distinción es la que hizo que Florencia se detectara",
+      "en frecuencia y no en volumen. El rechazo se vigila aparte, en rechazos_{co}."
+    ]
+  },
+
+  "esperado": {
+    "_nota": "Reproducción certificada en canon_florencia.json. Aquí se registra la prueba de empalme entre fuentes.",
+    "empalme": {
+      "semana": null,
+      "valor_historico_txt": null,
+      "valor_produccion_wms": null,
+      "tolerancia_absoluta": 0,
+      "_tolerancia_nota": "Cero: ambas fuentes cuentan la misma unidad sobre la misma semana. Una diferencia de 1 factura es una diferencia real que hay que explicar."
+    }
+  },
+
+  "parametros": {
+    "k": 0.5,
+    "h_alarma": 4.5,
+    "h_aviso": 3.0,
+    "ventana_referencia_semanas": 26,
+    "estimadores": "robustos — mediana y MAD*1.4826",
+    "direccion_vigilada": "S- (bajas). Una caída de frecuencia es pérdida de plaza."
+  },
+
+  "insumos": {
+    "_nota": "Los del backtest original, registrados en canon_florencia.json.",
+    "registrado": false,
+    "archivos": []
+  }
+}

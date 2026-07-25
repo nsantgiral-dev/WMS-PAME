@@ -665,3 +665,94 @@ class TestPlantillaCanon:
             assert seccion in plantilla, f'la plantilla debe traer la sección {seccion}'
         assert plantilla['insumos']['registrado'] is False, \
             'la plantilla nace sin insumos: se registran una vez, por modelo'
+
+
+class TestCanonesSeriesRutas:
+    """Los cuatro canones de las series de ruta, escritos antes de construirlas.
+
+    Ninguna definición vuelve a vivir solo en una conversación.
+    """
+
+    CANONES = ['facturas_co', 'paradas_co', 'rechazos_co', 'adopcion_rutas_co']
+
+    def _canon(self, nombre):
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / 'docs' / 'canones' / f'{nombre}.json'
+        assert p.exists(), f'falta docs/canones/{nombre}.json'
+        return json.loads(p.read_text(encoding='utf-8'))
+
+    def test_los_cuatro_existen_con_definicion_wms(self):
+        """Cada serie declara la consulta exacta que la produce."""
+        for nombre in self.CANONES:
+            c = self._canon(nombre)
+            assert c['serie']['definicion_wms'], f'{nombre} sin definicion_wms'
+            assert c['serie']['nombre_en_bd'], f'{nombre} sin nombre_en_bd'
+
+    def test_serie_reina_cuenta_facturas_y_los_tres_estados(self):
+        """La unidad de facturas_{co} no se negocia: hereda 53 semanas de historia.
+
+        Si cambia a paradas, mu_ref y sigma_ref del histórico dejan de aplicar.
+        """
+        c = self._canon('facturas_co')
+        assert c['serie']['nombre_en_bd'] == 'facturas_{co}'
+        assert 'RecaudoEntrega' in c['serie']['definicion_wms']
+        assert set(c['serie']['estados_incluidos']) == {'ENTREGADO', 'PARCIAL', 'RECHAZADO'}, \
+            'RECHAZADO cuenta: fue visitado. Excluirlo confunde colapso de ruta con problema comercial'
+
+    def test_rechazos_es_la_unica_vigilada_hacia_arriba(self):
+        """Subida de rechazos = borde delantero de pérdida competitiva."""
+        direcciones = {n: self._canon(n)['parametros']['direccion_vigilada']
+                       for n in self.CANONES}
+        assert direcciones['rechazos_co'].startswith('S+')
+        for n in ('facturas_co', 'paradas_co', 'adopcion_rutas_co'):
+            assert direcciones[n].startswith('S-'), f'{n} debe vigilarse hacia abajo'
+
+    def test_paradas_documenta_su_fragilidad(self):
+        """DISTINCT sobre texto libre es frágil — la limitación queda escrita."""
+        c = self._canon('paradas_co')
+        lim = c.get('limitaciones_conocidas', {})
+        assert lim.get('_severidad', '').startswith('ALTA')
+        texto = ' '.join(lim['identidad_del_cliente_es_texto_libre'])
+        assert 'NIT' in texto, 'debe registrar que el NIT es el arreglo real'
+
+    def test_solo_la_reina_hereda_linea_base(self):
+        """Las tres series nuevas nacen sin procedencia: no tienen 26 semanas aún."""
+        assert self._canon('facturas_co')['procedencia']['hallazgo'] is not None
+        for n in ('paradas_co', 'rechazos_co', 'adopcion_rutas_co'):
+            assert self._canon(n)['procedencia']['hallazgo'] is None, \
+                f'{n} no puede declarar hallazgo sin corrida certificada'
+
+
+class TestRenameParadasGestionadas:
+    """La mina se desactiva, no se documenta.
+
+    paradas_gestionadas contaba facturas: un cliente con dos facturas en una
+    visita contaba dos veces. El nombre mentía sobre la unidad que el Vigía vigila.
+    """
+
+    def test_el_metodo_se_llama_facturas_gestionadas(self):
+        from app.models.ruta_despacho import RutaDespacho
+        assert hasattr(RutaDespacho, 'facturas_gestionadas')
+        assert not hasattr(RutaDespacho, 'paradas_gestionadas'), \
+            'el nombre viejo debe desaparecer del modelo'
+
+    def test_el_alias_de_transicion_sigue_en_las_respuestas(self):
+        """Un conductor con la PWA vieja en caché sigue leyendo la clave anterior.
+
+        Este test debe BORRARSE junto con el alias, post go-live.
+        """
+        import re
+        from pathlib import Path
+        raiz = Path(__file__).resolve().parents[1]
+        for archivo in ('app/routes/rutas.py', 'app/services/ruta_service.py'):
+            src = (raiz / archivo).read_text(encoding='utf-8')
+            assert 'facturas_gestionadas' in src, f'{archivo} sin la clave nueva'
+            assert 'paradas_gestionadas' in src, f'{archivo} sin el alias de transición'
+
+    def test_frontend_lee_la_clave_nueva_primero(self):
+        from pathlib import Path
+        js = (Path(__file__).resolve().parents[1]
+              / 'app/static/pwa/rutas.js').read_text(encoding='utf-8')
+        assert 'd.facturas_gestionadas ?? d.paradas_gestionadas' in js, \
+            'el frontend debe preferir la clave nueva y caer a la vieja solo por caché'

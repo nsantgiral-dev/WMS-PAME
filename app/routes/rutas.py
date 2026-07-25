@@ -642,9 +642,10 @@ def liquidacion_dashboard():
         recaudos = ruta.recaudos  # preloaded via selectinload
         tareas = ruta.tareas_unicas()
 
-        # Contadores de paradas
+        # Contadores por factura (TareaPacking), NO por parada física:
+        # un cliente con dos facturas en una visita cuenta dos veces.
         total_paradas = len(tareas)
-        paradas_gestionadas = len(recaudos)
+        facturas_gestionadas = len(recaudos)
         paradas_entregadas = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.ENTREGADO)
         paradas_parciales = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.PARCIAL)
         paradas_rechazadas = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.RECHAZADO)
@@ -694,7 +695,11 @@ def liquidacion_dashboard():
         rd = ruta.to_dict()
         rd['total_recaudado'] = ruta_recaudado
         rd['total_paradas'] = total_paradas
-        rd['paradas_gestionadas'] = paradas_gestionadas
+        rd['facturas_gestionadas'] = facturas_gestionadas
+        # Alias de transición: un conductor con la PWA vieja en caché sigue
+        # leyendo la clave anterior. Retirar cuando todos los equipos hayan
+        # recargado (post go-live).
+        rd['paradas_gestionadas'] = facturas_gestionadas
         rd['paradas_entregadas'] = paradas_entregadas
         rd['paradas_parciales'] = paradas_parciales
         rd['paradas_rechazadas'] = paradas_rechazadas

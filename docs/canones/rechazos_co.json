@@ -1,0 +1,65 @@
+{
+  "_doc": [
+    "Rechazos por semana y C.O.",
+    "",
+    "ÚNICA DE LAS CUATRO QUE SE VIGILA HACIA ARRIBA (S+). Las otras tres alarman",
+    "cuando caen; esta alarma cuando sube.",
+    "",
+    "Razón: una subida sostenida de rechazos es el borde delantero de una pérdida",
+    "competitiva — llega un paso ANTES de que la frecuencia caiga. Cuando",
+    "facturas_{co} se desploma, el cliente ya se fue. Cuando rechazos_{co} sube,",
+    "todavía está y algo se puede hacer.",
+    "",
+    "SERIE NUEVA: no hereda línea base."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "Vigía CUSUM — deterioro de aceptación",
+    "que_decide": "Si la tasa de rechazo está subiendo de forma sostenida, antes de que se traduzca en pérdida de frecuencia.",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md"
+  },
+
+  "procedencia": {
+    "origen": "Serie nueva — sin corrida certificada todavía",
+    "fecha_corrida_original": null,
+    "hallazgo": null,
+    "nota": "Llenar tras la primera corrida con 26+ semanas de datos WMS."
+  },
+
+  "serie": {
+    "concepto": "facturas rechazadas por semana y centro de operación",
+    "nombre_en_bd": "rechazos_{co}",
+    "definicion_wms": "COUNT(RecaudoEntrega WHERE estado_entrega = 'RECHAZADO') agrupado por (Almacen.centro_op_siesa, lunes de la semana)",
+    "estados_incluidos": ["RECHAZADO"],
+    "_nota_unidad": [
+      "Conteo absoluto, no tasa. La tasa (rechazos/facturas) mezcla dos señales:",
+      "un mismo cociente sale de 'más rechazos' o de 'menos facturas', y esta",
+      "serie existe para distinguirlas. La tasa se puede derivar en el panel",
+      "dividiendo por facturas_{co}, que ya está al lado."
+    ]
+  },
+
+  "esperado": {
+    "_nota": "Sin valores hasta la primera corrida certificada con 26+ semanas.",
+    "semana_alarma": null,
+    "s_plus": null,
+    "tolerancia_s_plus": 0.05
+  },
+
+  "parametros": {
+    "k": 0.5,
+    "h_alarma": 4.5,
+    "h_aviso": 3.0,
+    "ventana_referencia_semanas": 26,
+    "estimadores": "robustos — mediana y MAD*1.4826",
+    "direccion_vigilada": "S+ (subidas). Es la excepción entre las cuatro series."
+  },
+
+  "insumos": {
+    "_nota": "Serie nativa del WMS: no tiene archivos de entrada.",
+    "registrado": false,
+    "archivos": []
+  }
+}

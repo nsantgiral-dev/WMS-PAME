@@ -1,0 +1,83 @@
+{
+  "_doc": [
+    "Paradas físicas visitadas por semana y C.O. — cuántos CLIENTES se visitaron,",
+    "no cuántas facturas se entregaron.",
+    "",
+    "SERIE NUEVA: no hereda línea base. Empieza a acumular sus 26 semanas de",
+    "referencia desde la primera semana con datos WMS. Hasta entonces el CUSUM",
+    "no puede evaluarla — es el precio de una unidad que el histórico no midió.",
+    "",
+    "Complementa a facturas_{co} sin sustituirla. Juntas separan dos cosas que la",
+    "serie reina mezcla: si caen las facturas pero no las paradas, se está",
+    "vendiendo menos por visita; si caen ambas, se está perdiendo la plaza."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "Vigía CUSUM — cobertura de visita",
+    "que_decide": "Si la red de clientes atendidos se está encogiendo, independiente del monto facturado.",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md"
+  },
+
+  "procedencia": {
+    "origen": "Serie nueva — sin corrida certificada todavía",
+    "fecha_corrida_original": null,
+    "hallazgo": null,
+    "nota": "Llenar tras la primera corrida con 26+ semanas de datos WMS."
+  },
+
+  "serie": {
+    "concepto": "clientes distintos visitados por semana y centro de operación",
+    "nombre_en_bd": "paradas_{co}",
+    "definicion_wms": "COUNT(DISTINCT TareaPacking.cliente) sobre tareas con RecaudoEntrega, agrupado por (Almacen.centro_op_siesa, lunes de la semana)",
+    "estados_incluidos": ["ENTREGADO", "PARCIAL", "RECHAZADO"]
+  },
+
+  "limitaciones_conocidas": {
+    "_severidad": "ALTA — leer antes de confiar en esta serie",
+    "identidad_del_cliente_es_texto_libre": [
+      "TareaPacking.cliente es String(200) copiado de PedidoSiesa.cliente, que",
+      "también es String(200). NO existe cliente_id ni NIT persistido en ninguna",
+      "parte de la cadena pedido -> packing -> recaudo.",
+      "",
+      "Consecuencia: 'Papelería El Sol', 'PAPELERIA EL SOL' y 'Papeleria el Sol'",
+      "cuentan como tres clientes distintos. La serie sobreestima las paradas y,",
+      "peor, su ruido depende de cómo escriban los datos en Siesa — un cambio de",
+      "criterio de digitación produce un escalón que el CUSUM leería como señal.",
+      "",
+      "Mitigación mínima antes de usarla: normalizar (upper + colapsar espacios +",
+      "quitar tildes y puntuación) al construir la serie, y registrar aquí la",
+      "función de normalización exacta usada.",
+      "",
+      "Arreglo real: persistir el NIT. El gateway ya lo trae —",
+      "get_pedido_cabecera() devuelve NIT y cond_pago (ver CLAUDE.md, API",
+      "API_v2_Ventas_Pedidos). Falta una columna nit en PedidoSiesa, propagarla a",
+      "TareaPacking, y reconstruir la serie sobre DISTINCT nit. Hasta que eso",
+      "exista, esta serie es indicativa, no certificable."
+    ],
+    "normalizacion_aplicada": null
+  },
+
+  "esperado": {
+    "_nota": "Sin valores hasta la primera corrida certificada con 26+ semanas.",
+    "semana_alarma": null,
+    "s_minus": null,
+    "tolerancia_s_minus": 0.05
+  },
+
+  "parametros": {
+    "k": 0.5,
+    "h_alarma": 4.5,
+    "h_aviso": 3.0,
+    "ventana_referencia_semanas": 26,
+    "estimadores": "robustos — mediana y MAD*1.4826",
+    "direccion_vigilada": "S- (bajas). Menos clientes visitados es red encogiéndose."
+  },
+
+  "insumos": {
+    "_nota": "Serie nativa del WMS: no tiene archivos de entrada. El insumo es la base de datos.",
+    "registrado": false,
+    "archivos": []
+  }
+}
