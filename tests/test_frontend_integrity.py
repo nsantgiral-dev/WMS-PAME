@@ -475,6 +475,11 @@ DEUDA_SIN_UI = {
         'Descensura M0.2. Doblemente huérfana: sin UI Y sin consumidor aguas abajo. '
         'No necesita pantalla — necesita que TSB, ROP y newsvendor la consuman, y '
         'aparecer como procedencia junto al SKU: "1.240 u/mes, +18% por 62 días sin stock".',
+    '/api/kardex/newsvendor':
+        'Calculadora pura. Su llamador (TemporadaService) la consume en el servidor, '
+        'no por HTTP. Decisión que debería informar: el "¿y si...?" del comité — '
+        'recalcular Q* con otra demanda supuesta sin tocar la historia. La pantalla '
+        'de Temporada aún no lo ofrece; cuando lo haga, se conecta aquí.',
     '/api/vigia/series':
         'Redundante: el panel obtiene lo mismo vía /resumen. Candidato a borrarse, '
         'no a conectarse — un endpoint duplicado es deuda, no funcionalidad.',

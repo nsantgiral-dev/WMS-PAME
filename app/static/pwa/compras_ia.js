@@ -420,19 +420,8 @@ async function _cargarROP(el) {
 }
 
 async function _cargarNewsvendor(el) {
-  el.innerHTML = `<div style="color:var(--tx3);padding:20px;">
-    <div style="font-size:13px;font-weight:700;color:var(--yellow);margin-bottom:8px;">Newsvendor — Compra de temporada escolar</div>
-    <div style="font-size:12px;margin-bottom:12px;">DEADLINE: 7 de agosto 2026</div>
-    <div style="font-size:11px;line-height:1.6;">
-      Q* = cantidad optima que maximiza utilidad esperada bajo incertidumbre.<br>
-      Necesita: ventas por temporada pasada por SKU escolar.<br><br>
-      <strong>Uso:</strong> POST /api/kardex/newsvendor con:<br>
-      <code style="background:var(--bg);padding:2px 6px;border-radius:4px;">
-      {"items": [{"referencia": "CUAD-001", "ventas_pasadas": [1200, 1350], "costo_unitario": 5000}], "margen_pct": 0.40}
-      </code><br><br>
-      <span style="color:var(--yellow);">Pendiente: Santiago exporta ventas temporada 2024 y 2025 de Siesa.</span>
-    </div>
-  </div>`;
+  // Delegado a temporada.js — es instrumento de comité, no listado.
+  await temporadaCargar();
 }
 
 // ═══════════════════════════════════════════════════════════════════

@@ -197,3 +197,33 @@ def newsvendor():
     if 'error' in resultado:
         return jsonify(resultado), 400
     return jsonify(resultado), 200
+
+
+@kardex_bp.route('/temporada/pedido', methods=['GET'])
+@jwt_required()
+def pedido_temporada():
+    """Q* del pedido escolar — el llamador del newsvendor.
+
+    A diferencia de POST /newsvendor (calculadora pura que recibe items), este
+    identifica los SKUs de temporada solo, trae su demanda descensurada,
+    excluye lista negra y costo fantasma, y reporta qué fracción de la decisión
+    alcanza a cubrir el modelo.
+
+    DEADLINE: comité del 7 de agosto 2026.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede ver el pedido de temporada'}), 403
+
+    margen = request.args.get('margen_pct', 0.40, type=float)
+    capital = request.args.get('tasa_capital', 0.30, type=float)
+    liquidacion = request.args.get('tasa_liquidacion', 0.60, type=float)
+    umbral = request.args.get('umbral', 0.40, type=float)
+
+    from app.services.temporada_service import TemporadaService
+    try:
+        resultado = TemporadaService.preparar_pedido_temporada(
+            margen_pct=margen, tasa_capital=capital,
+            tasa_liquidacion=liquidacion, umbral=umbral)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(resultado), 200

@@ -1039,6 +1039,16 @@ class KardexService:
                 })
                 continue
 
+            # Cu/Co por SKU si vienen: el ratio crítico real depende del margen
+            # y del costo de exceso DE ESE producto, no de un promedio global.
+            # Cu = margen que se pierde si falta. Co = lo que cuesta que sobre.
+            cu = item.get('cu')
+            co = item.get('co')
+            if cu is not None and co is not None and (float(cu) + float(co)) > 0:
+                ratio_item = float(cu) / (float(cu) + float(co))
+            else:
+                ratio_item = ratio_critico
+
             n_temporadas = len(ventas)
             mu = sum(ventas) / n_temporadas
             if n_temporadas > 1:
@@ -1049,7 +1059,7 @@ class KardexService:
 
             # Q* via aproximación normal: Q* = mu + z_cr * sigma
             # z_cr = inversa de la normal estándar del ratio crítico
-            z_cr = _norm_ppf(ratio_critico)
+            z_cr = _norm_ppf(ratio_item)
             q_optimo = max(0, round(mu + z_cr * sigma))
 
             # Rango de confianza 80%
@@ -1062,7 +1072,9 @@ class KardexService:
                 'demanda_esperada': round(mu, 1),
                 'sigma': round(sigma, 1),
                 'n_temporadas': n_temporadas,
-                'ratio_critico': round(ratio_critico, 3),
+                'ratio_critico': round(ratio_item, 3),
+                'cu': cu,
+                'co': co,
                 'z_critico': round(z_cr, 3),
                 'rango_80': [q_bajo, q_alto],
                 'costo_unitario': costo,
