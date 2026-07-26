@@ -636,10 +636,18 @@ class KardexService:
 
         salida = {}
         for key, a in acum.items():
-            # Días con stock = denominador descensurado. No puede ser menor que
-            # los días en que hubo movimiento (no se vende sin existencias):
-            # si lo es, el StockDiario está incompleto y mandan los movimientos.
-            n = max(int(dias_stock.get(key, 0)), a['dias_mov'])
+            # Denominador descensurado = días CON stock.
+            #
+            # Si StockDiario no tiene datos para este SKU, NO se puede usar
+            # dias_mov como sustituto: eso da demanda por día-con-venta, no por
+            # día. Un SKU que vende 40 unidades cada 25 días saldría a 40/día
+            # en vez de 1.6 — 25x arriba, y multiplicado después por el z del
+            # colchón. Se cae a días calendario, que subestima (censurado) pero
+            # es conservador, y se marca la fila para que el número no se lea
+            # como descensurado cuando no lo es.
+            n_stock = int(dias_stock.get(key, 0))
+            censurado = n_stock <= 0
+            n = dias_ventana if censurado else max(n_stock, a['dias_mov'])
             if n <= 0:
                 continue
 
@@ -661,7 +669,16 @@ class KardexService:
                 'dias_ventana': dias_ventana,
                 'demanda_neta': round(a['suma'], 2),
                 'factor_censura': round(factor, 4),
+                # False = descensurado de verdad. True = no había StockDiario y
+                # el número quedó censurado (subestima). Reconstruir stock diario.
+                'censurado': censurado,
             }
+
+        n_cens = sum(1 for v in salida.values() if v['censurado'])
+        if n_cens:
+            logger.warning(
+                '[DESCENSURA] %d de %d SKUs SIN StockDiario — demanda censurada. '
+                'Correr POST /api/kardex/reconstruir.', n_cens, len(salida))
 
         return salida
 
@@ -1053,9 +1070,17 @@ class KardexService:
             mu = sum(ventas) / n_temporadas
             if n_temporadas > 1:
                 sigma = math.sqrt(sum((v - mu) ** 2 for v in ventas) / (n_temporadas - 1))
+                distribucion = f'Empirica ({n_temporadas} temporadas)'
+                incertidumbre = 'MEDIA' if n_temporadas < 4 else 'BAJA'
             else:
-                # Solo 1 temporada: inflar incertidumbre × 1.5
-                sigma = mu * 0.30 * 1.5  # CV asumido 30%, inflado 50%
+                # Una observacion NO es una distribucion. Con n=1 la empirica
+                # colapsaria a la observacion misma y el ratio critico dejaria de
+                # tener efecto: el modelo diria "pide lo que vendiste", que es la
+                # heuristica que vino a reemplazar. Se usa Normal con sigma
+                # supuesto e inflado a proposito.
+                sigma = mu * 0.30 * 1.5  # CV asumido 30%, inflado x1.5
+                distribucion = 'Normal inflada (1 temporada, CV 30% x1.5)'
+                incertidumbre = 'ALTA'
 
             # Q* via aproximación normal: Q* = mu + z_cr * sigma
             # z_cr = inversa de la normal estándar del ratio crítico
@@ -1072,6 +1097,8 @@ class KardexService:
                 'demanda_esperada': round(mu, 1),
                 'sigma': round(sigma, 1),
                 'n_temporadas': n_temporadas,
+                'distribucion': distribucion,
+                'incertidumbre': incertidumbre,
                 'ratio_critico': round(ratio_item, 3),
                 'cu': cu,
                 'co': co,

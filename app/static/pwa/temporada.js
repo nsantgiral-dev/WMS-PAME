@@ -10,37 +10,68 @@
 // ══════════════════════════════════════════════════════════════════════════
 
 let _TEMP_DATA = null;
-const _TEMP_LS = 'temporada_lista_paralela';
-
-/** La lista paralela vive en el navegador: se escribe antes del comité y no
- *  se pierde al recargar. No va al servidor — es el juicio de ella, no un dato
- *  del sistema. */
-function _tempLeerParalela() {
-  try { return JSON.parse(localStorage.getItem(_TEMP_LS) || '{}'); }
-  catch (_) { return {}; }
-}
-function _tempGuardarParalela(m) {
-  try { localStorage.setItem(_TEMP_LS, JSON.stringify(m)); } catch (_) {}
-}
+let _TEMP_JUICIOS = {};
+let _TEMP_ESCENARIO = 0;      // % de ajuste a la demanda para el "¿y si...?"
+const TEMPORADA_ACTUAL = '2026-27';
 
 async function temporadaCargar() {
   const el = document.getElementById('inv-ia-container');
   if (!el) return;
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando Q* de temporada…</div>';
   try {
-    _TEMP_DATA = await get('/api/kardex/temporada/pedido');
+    const [pedido, juicios] = await Promise.all([
+      get('/api/kardex/temporada/pedido'),
+      get('/api/kardex/temporada/juicios?temporada=' + TEMPORADA_ACTUAL),
+    ]);
+    _TEMP_DATA = pedido;
+    _TEMP_JUICIOS = juicios.juicios || {};
     _tempRender(el, _TEMP_DATA);
   } catch (e) {
     el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
   }
 }
 
-function temporadaSetParalela(ref, valor) {
-  const m = _tempLeerParalela();
+/** Registra el juicio en el SERVIDOR, con autor y fecha, junto a la foto del
+ *  modelo en ese momento. En enero de 2027 este es el dataset que compara lo
+ *  que ella pidió, lo que el modelo pidió y lo que se vendió. */
+async function temporadaSetParalela(ref, valor) {
+  const fila = (_TEMP_DATA.items || []).find(i => i.referencia === ref) || {};
   const n = parseInt(valor, 10);
-  if (isNaN(n)) delete m[ref]; else m[ref] = n;
-  _tempGuardarParalela(m);
-  if (_TEMP_DATA) _tempRender(document.getElementById('inv-ia-container'), _TEMP_DATA);
+  try {
+    await post('/api/kardex/temporada/juicios', {
+      temporada: TEMPORADA_ACTUAL,
+      referencia: ref,
+      cantidad_juicio: isNaN(n) ? null : n,
+      q_modelo: fila.q_optimo,
+      costo_unitario: fila.costo_unitario,
+      distribucion: fila.distribucion,
+    });
+    if (isNaN(n)) delete _TEMP_JUICIOS[ref];
+    else _TEMP_JUICIOS[ref] = { cantidad_juicio: n };
+    _tempRender(document.getElementById('inv-ia-container'), _TEMP_DATA);
+  } catch (e) {
+    alerta('No se pudo registrar el juicio: ' + (e.message || e), 'error');
+  }
+}
+
+function _tempLeerParalela() {
+  const m = {};
+  for (const [ref, j] of Object.entries(_TEMP_JUICIOS)) m[ref] = j.cantidad_juicio;
+  return m;
+}
+
+/** "¿Y si la demanda cae 20%?" — el comité explora con la herramienta en vez
+ *  de juzgarla. Reescala mu y sigma; el ratio crítico no cambia. */
+function temporadaEscenario(pct) {
+  _TEMP_ESCENARIO = pct;
+  _tempRender(document.getElementById('inv-ia-container'), _TEMP_DATA);
+}
+
+/** Q* bajo el escenario activo. Q* es lineal en mu y sigma, así que reescalar
+ *  la demanda reescala el Q* — no hay que volver al servidor. */
+function _tempQ(fila) {
+  const f = 1 + _TEMP_ESCENARIO / 100;
+  return Math.max(0, Math.round(fila.q_optimo * f));
 }
 
 function _tempRender(el, d) {
@@ -73,12 +104,13 @@ function _tempRender(el, d) {
   const filas = (d.items || []).filter(i => !i.error);
   let invModelo = 0, invParalela = 0, conParalela = 0;
   for (const f of filas) {
-    invModelo += f.inversion_optima || 0;
+    const q = _tempQ(f);
+    invModelo += q * (f.costo_unitario || 0);
     if (par[f.referencia] != null) {
       conParalela++;
       invParalela += par[f.referencia] * (f.costo_unitario || 0);
     } else {
-      invParalela += f.inversion_optima || 0;
+      invParalela += q * (f.costo_unitario || 0);
     }
   }
   const dif = invParalela - invModelo;
@@ -87,6 +119,24 @@ function _tempRender(el, d) {
     ${_compKpi('$' + Math.round(invModelo).toLocaleString('es-CO'), 'Inversión modelo', 'var(--tx)')}
     ${_compKpi('$' + Math.round(invParalela).toLocaleString('es-CO'), 'Con lista paralela', 'var(--blue)')}
     ${_compKpi((dif >= 0 ? '+$' : '−$') + Math.abs(Math.round(dif)).toLocaleString('es-CO'), 'Diferencia', dif >= 0 ? 'var(--yellow)' : 'var(--green)')}
+  </div>`;
+
+  // ── "¿Y si...?" — el comité explora con la herramienta, no la juzga ─────
+  const escenarios = [-30, -20, -10, 0, 10, 20];
+  html += `<div style="border:1px solid var(--brd);border-radius:8px;padding:10px;margin-bottom:12px;">
+    <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">¿Y si la demanda...?</div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;">
+      ${escenarios.map(e => `<button onclick="temporadaEscenario(${e})"
+        style="padding:5px 11px;border-radius:6px;cursor:pointer;font-size:11px;
+               border:1px solid ${e === _TEMP_ESCENARIO ? 'var(--pm)' : 'var(--brd)'};
+               background:${e === _TEMP_ESCENARIO ? 'var(--pm)' : 'transparent'};
+               color:${e === _TEMP_ESCENARIO ? '#fff' : 'var(--tx3)'};
+               font-weight:${e === _TEMP_ESCENARIO ? '700' : '400'};">
+        ${e === 0 ? 'Base' : (e > 0 ? '+' : '') + e + '%'}</button>`).join('')}
+    </div>
+    ${_TEMP_ESCENARIO !== 0 ? `<div style="font-size:10px;color:var(--yellow);margin-top:6px;">
+      Escenario activo: demanda ${_TEMP_ESCENARIO > 0 ? '+' : ''}${_TEMP_ESCENARIO}%. El acta se exporta con el escenario BASE.
+    </div>` : ''}
   </div>`;
 
   html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
@@ -102,7 +152,7 @@ function _tempRender(el, d) {
   // ── Tabla: Q* contra lista paralela, ordenada por desacuerdo ────────────
   const conDif = filas.map(f => {
     const p = par[f.referencia];
-    const difU = p != null ? p - f.q_optimo : null;
+    const difU = p != null ? p - _tempQ(f) : null;
     const difP = difU != null ? difU * (f.costo_unitario || 0) : null;
     return { ...f, _p: p, _difU: difU, _difP: difP };
   }).sort((a, b) => Math.abs(b._difP || 0) - Math.abs(a._difP || 0));
@@ -127,11 +177,11 @@ function _tempRender(el, d) {
         <div style="color:var(--tx);font-weight:600;">${f.referencia}</div>
         <div style="color:var(--tx3);font-size:10px;">${(f.nombre || '').slice(0, 42)}</div>
       </td>
-      <td style="padding:6px;color:${alerta ? 'var(--yellow)' : 'var(--tx3)'};">
+      <td style="padding:6px;color:${alerta ? 'var(--yellow)' : 'var(--tx3)'};" title="${f.distribucion || ''}">
         ${f.n_temporadas}${alerta ? ' ⚠' : ''}
       </td>
       <td style="padding:6px;color:var(--tx3);">${f.demanda_esperada}</td>
-      <td style="padding:6px;color:var(--tx);font-weight:700;">${f.q_optimo}</td>
+      <td style="padding:6px;color:var(--tx);font-weight:700;">${_tempQ(f)}</td>
       <td style="padding:6px;">
         <input type="number" value="${f._p != null ? f._p : ''}" placeholder="—"
           onchange="temporadaSetParalela('${f.referencia}', this.value)"
@@ -148,7 +198,9 @@ function _tempRender(el, d) {
   html += '</tbody></table></div>';
 
   html += `<div style="font-size:10px;color:var(--tx3);margin-top:10px;line-height:1.6;">
-    ⚠ = una sola temporada de historia: σ inflado ×1.5 por factor de ignorancia.<br>
+    ⚠ = una sola temporada: distribución <strong>Normal inflada</strong> (CV 30% ×1.5), incertidumbre ALTA.
+    Una observación no es una distribución — con la empírica el Q* colapsaría a "pide lo que vendiste".
+    El export del 1 de agosto lleva n de 1 a 3 y cambia la distribución a empírica.<br>
     Demanda DESCENSURADA por días con stock — lo que se agotó en enero no se lee como "no se vendía".<br>
     Ratio crítico por SKU: Cu = precio − costo · Co = costo × (capital ${((d.parametros || {}).tasa_capital * 100) || 30}% + liquidación ${((d.parametros || {}).tasa_liquidacion * 100) || 60}%).
   </div>`;

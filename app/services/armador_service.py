@@ -207,7 +207,7 @@ class ArmadorService:
         # Delta agregado — el "backtest" posible del ROP: no se puede certificar
         # una fórmula contra la historia, pero sí cuantificar el salto.
         delta = {'skus': 0, 'ss_antes': 0.0, 'ss_despues': 0.0,
-                 'topados_por_cobertura': 0}
+                 'topados_por_cobertura': 0, 'censurados': 0}
 
         for ref, dem in demanda_por_sku.items():
             ref = (ref or '').strip()
@@ -241,6 +241,8 @@ class ArmadorService:
             delta['skus'] += 1
             delta['ss_antes'] += ss_anterior
             delta['ss_despues'] += safety_stock
+            if dem.get('censurado'):
+                delta['censurados'] += 1
 
             cobertura = posicion / d_avg if d_avg > 0 else 999
 
@@ -258,6 +260,7 @@ class ArmadorService:
                 # Procedencia: el comprador tiene que poder auditar el número
                 'dias_con_stock': dem['dias_con_stock'],
                 'factor_censura': dem['factor_censura'],
+                'censurado': dem.get('censurado', False),
                 'ss_formula_anterior': round(ss_anterior),
             }
 
@@ -308,6 +311,11 @@ class ArmadorService:
                 'safety_stock_despues': round(delta['ss_despues']),
                 'multiplicador': round(mult, 2),
                 'topados_por_cobertura': delta['topados_por_cobertura'],
+                'skus_censurados': delta['censurados'],
+                'aviso_censura': (
+                    f"{delta['censurados']} SKU(s) sin StockDiario: su demanda esta "
+                    f"CENSURADA (subestima). Correr POST /api/kardex/reconstruir."
+                ) if delta['censurados'] else None,
                 'nota': ('La fórmula anterior usaba z*d*sqrt(sigma_LT): sin sigma_d '
                          'y con la raíz sobre la desviación del lead time en vez de '
                          'sobre la exposición. Subestimaba el colchón.'),

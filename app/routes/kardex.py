@@ -8,7 +8,7 @@ GET  /api/kardex/stock-diario       — stock reconstruido por referencia+bodega
 """
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
-from app.routes._auth_helpers import _es_admin_o_jefe
+from app.routes._auth_helpers import _es_admin_o_jefe, _get_uid
 
 kardex_bp = Blueprint('kardex', __name__)
 
@@ -227,3 +227,75 @@ def pedido_temporada():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify(resultado), 200
+
+
+@kardex_bp.route('/temporada/juicios', methods=['GET'])
+@jwt_required()
+def listar_juicios():
+    """Lista paralela registrada para una temporada."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede ver juicios'}), 403
+    from app.models.juicio_temporada import JuicioTemporada
+    temporada = request.args.get('temporada', '2026-27')
+    js = JuicioTemporada.query.filter_by(temporada=temporada).all()
+    return jsonify({
+        'temporada': temporada,
+        'juicios': {j.referencia: j.to_dict() for j in js},
+        'total': len(js),
+    }), 200
+
+
+@kardex_bp.route('/temporada/juicios', methods=['POST'])
+@jwt_required()
+def guardar_juicio():
+    """Registra un juicio humano — NO es un cálculo del sistema.
+
+    Guarda el Q* del modelo del momento junto al juicio: sin esa foto,
+    comparar en enero de 2027 sería contra un modelo que ya cambió.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede registrar juicios'}), 403
+
+    from app.models.juicio_temporada import JuicioTemporada
+    from app.extensions import db
+
+    d = request.get_json() or {}
+    ref = (d.get('referencia') or '').strip()
+    if not ref:
+        return jsonify({'error': 'referencia es requerida'}), 400
+
+    temporada = d.get('temporada', '2026-27')
+    cantidad = d.get('cantidad_juicio')
+
+    j = JuicioTemporada.query.filter_by(temporada=temporada, referencia=ref).first()
+
+    # Cantidad nula = borrar el juicio (el comité se retractó)
+    if cantidad is None or cantidad == '':
+        if j:
+            db.session.delete(j)
+            db.session.commit()
+        return jsonify({'ok': True, 'borrado': True}), 200
+
+    try:
+        cantidad = int(cantidad)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'cantidad_juicio debe ser entero'}), 400
+
+    if j is None:
+        j = JuicioTemporada(temporada=temporada, referencia=ref)
+        db.session.add(j)
+
+    j.cantidad_juicio = cantidad
+    j.autor_id = _get_uid()
+    j.autor_nombre = d.get('autor_nombre') or j.autor_nombre
+    j.nota = d.get('nota') or j.nota
+    # Foto del modelo en el momento del juicio
+    if d.get('q_modelo') is not None:
+        j.q_modelo = d.get('q_modelo')
+    if d.get('costo_unitario') is not None:
+        j.costo_unitario = d.get('costo_unitario')
+    if d.get('distribucion'):
+        j.distribucion = d.get('distribucion')
+
+    db.session.commit()
+    return jsonify({'ok': True, 'juicio': j.to_dict()}), 200

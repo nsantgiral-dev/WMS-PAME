@@ -100,3 +100,67 @@ class TestCoberturaDelModelo:
     def test_endpoints_registrados(self, app):
         rutas = [str(x) for x in app.url_map.iter_rules()]
         assert any('/temporada/pedido' in r for r in rutas)
+
+
+class TestDistribucionConHistoriaCorta:
+    """Una observación NO es una distribución.
+
+    Con n=1 la empírica colapsaría a la observación y el ratio crítico dejaría
+    de tener efecto: el modelo diría "pide lo que vendiste", que es la
+    heurística que vino a reemplazar.
+    """
+
+    def test_una_temporada_usa_normal_inflada_no_empirica(self, app, db):
+        from app.services.kardex_service import KardexService
+        r = KardexService.newsvendor(
+            [{'referencia': 'A', 'ventas_pasadas': [1000], 'costo_unitario': 10}])
+        it = r['items'][0]
+        assert 'Normal inflada' in it['distribucion']
+        assert it['incertidumbre'] == 'ALTA'
+        assert abs(it['sigma'] - 1000 * 0.30 * 1.5) < 1
+
+    def test_el_ratio_critico_sigue_moviendo_el_q_con_una_temporada(self, app, db):
+        """Si sigma colapsara a 0, Cu/Co dejaría de importar. Debe importar."""
+        from app.services.kardex_service import KardexService
+        alto = KardexService.newsvendor([{'referencia': 'A', 'ventas_pasadas': [1000],
+                                          'costo_unitario': 10, 'cu': 90, 'co': 10}])
+        bajo = KardexService.newsvendor([{'referencia': 'A', 'ventas_pasadas': [1000],
+                                          'costo_unitario': 10, 'cu': 10, 'co': 90}])
+        assert alto['items'][0]['q_optimo'] > bajo['items'][0]['q_optimo']
+
+    def test_tres_temporadas_pasan_a_empirica(self, app, db):
+        from app.services.kardex_service import KardexService
+        r = KardexService.newsvendor(
+            [{'referencia': 'A', 'ventas_pasadas': [900, 1000, 1100], 'costo_unitario': 10}])
+        it = r['items'][0]
+        assert it['distribucion'].startswith('Empirica')
+        assert it['incertidumbre'] != 'ALTA'
+
+
+class TestDescensuraNoSobreestima:
+    """El fallback sin StockDiario no puede inventar demanda.
+
+    Usar días-con-venta como denominador daría demanda POR DÍA CON VENTA: un
+    SKU que vende 40 cada 25 días saldría a 40/día en vez de 1.6 — 25x arriba,
+    y multiplicado después por el z del colchón.
+    """
+
+    def test_sin_stock_diario_cae_a_calendario_y_se_marca(self, app, db):
+        from app.services.kardex_service import (
+            KardexService, KardexMovimiento)
+        from datetime import date, timedelta
+        hoy = date.today()
+        # 3 ventas de 40 unidades, sin StockDiario alguno
+        for i in range(3):
+            db.session.add(KardexMovimiento(
+                referencia='LUMPY', bodega='NB1', fecha=hoy - timedelta(days=30 * (i + 1)),
+                concepto=501, naturaleza=2, cantidad=40))
+        db.session.commit()
+
+        r = KardexService.demanda_descensurada(ventana_meses=12, nivel='red')
+        fila = r.get('LUMPY')
+        assert fila is not None
+        assert fila['censurado'] is True, 'sin StockDiario debe marcarse censurado'
+        # 120 unidades sobre ~360 días de calendario, NO sobre 3 días con venta
+        assert fila['d_avg'] < 1.0, f"d_avg={fila['d_avg']} — usó días con venta como denominador"
+        assert fila['dias_con_stock'] == fila['dias_ventana']
