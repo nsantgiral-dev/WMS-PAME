@@ -1,0 +1,72 @@
+{
+  "_doc": [
+    "Canon de la clasificación Syntetos-Boylan.",
+    "",
+    "Importa más que los otros modelos por una razón: no produce un número, elige",
+    "QUÉ MODELO DE PRONÓSTICO se le aplica a cada SKU. Un error aquí no es un",
+    "número mal calculado — es el modelo equivocado escogido por buenas razones,",
+    "y todo lo que venga después será coherente y falso.",
+    "",
+    "VERIFICADO (jul-2026): NO está contaminado por censura.",
+    "  · ADI = dias_con_stock / dias_con_demanda, usando StockDiario.tuvo_stock.",
+    "    Ya descensurado: los días agotados no cuentan como 'no hubo demanda'.",
+    "  · CV² = varianza relativa del TAMAÑO de cada demanda. Por definición se",
+    "    mide solo sobre periodos CON demanda, así que los días agotados no le",
+    "    entran. Estructuralmente inmune."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "Clasificación Syntetos-Boylan",
+    "que_decide": "Qué método de pronóstico se aplica a cada SKU (suave, errático, intermitente, grumoso).",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md"
+  },
+
+  "procedencia": {
+    "origen": "Verificación de código contra la definición de S-B (jul-2026)",
+    "fecha_corrida_original": "2026-07",
+    "hallazgo": "ADI descensurado y CV² inmune por construcción. No requiere corrección.",
+    "nota": "Verificación de implementación, no corrida certificada. Cuando haya kardex cargado, registrar aquí la distribución real de cuadrantes."
+  },
+
+  "serie": {
+    "concepto": "ADI (intervalo medio entre demandas) y CV² (variabilidad del tamaño)",
+    "nombre_en_bd": "derivada de kardex_movimientos + stock_diario",
+    "definicion_wms": "adi = dias_expuestos(dias_con_stock, ventana) / dias_con_demanda ; cv2 = var(cantidades) / media(cantidades)^2"
+  },
+
+  "limitaciones_conocidas": {
+    "_severidad": "BAJA — anotada, no se corrige",
+    "truncamiento_del_dia_de_agotamiento": [
+      "El CV² es inmune a los DÍAS agotados, pero el TAMAÑO de la demanda del",
+      "día en que el stock se acabó a media jornada sí queda truncado: ese día",
+      "se registra la venta servida, no la demanda que hubo.",
+      "",
+      "Efecto: subestima levemente el tamaño medio y la varianza de ese evento.",
+      "Es ruido menor frente a los umbrales de clasificación (ADI_CORTE,",
+      "CV2_CORTE), que están lejos de la frontera para la mayoría del catálogo.",
+      "",
+      "Queda anotado para que nadie lo redescubra como hallazgo. No se corrige:",
+      "reconstruir la demanda intradía exigiría granularidad horaria de stock",
+      "que el kardex no tiene."
+    ]
+  },
+
+  "parametros": {
+    "adi_corte": 1.32,
+    "cv2_corte": 0.49,
+    "ventana_meses": 12,
+    "_nota": "Cortes canónicos de Syntetos-Boylan. Cambiarlos reclasifica el catálogo entero y cambia qué modelo pronostica cada SKU: no se tocan sin recorrer el impacto."
+  },
+
+  "esperado": {
+    "_nota": "Sin distribución certificada hasta que el kardex esté cargado. Registrar entonces el reparto por cuadrante como línea base."
+  },
+
+  "insumos": {
+    "_nota": "Serie nativa: depende de kardex_movimientos y stock_diario, no de archivos.",
+    "registrado": false,
+    "archivos": []
+  }
+}

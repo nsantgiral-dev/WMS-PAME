@@ -235,6 +235,24 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 
 ## Reglas Inquebrantables
 
+0. **ANTE DATO AUSENTE, FALLAR HACIA EL LADO CONSERVADOR Y DECLARARLO.**
+
+   El motivo NO es que el faltante cueste menos que el sobrante — para la
+   canasta constitucional el agotado es carísimo, Florencia lo probó. El motivo
+   es la **reversibilidad**: un sub-pedido declarado es una decisión que un
+   humano corrige mañana; un contenedor embarcado es irreversible 120 días y ya
+   se llevó la caja.
+
+   Queda escrito así para que nadie "corrija" este sesgo en el futuro por
+   parecerle timorato. Implementación: `kardex_service.dias_expuestos()`.
+
+   **Corolario — una política, una función.** El mismo concepto implementado
+   dos veces divergió en tres horas: la clasificación S-B caía a días
+   calendario (conservador) y la descensura a días-con-venta (25× de
+   sobreestimación en SKUs grumosos, multiplicada después por el colchón). Si
+   un fallback se parchea en dos sitios, la tercera implementación divergirá y
+   esa vez nadie estará comparando.
+
 1. **LEER EL DOCX DEL CONECTOR ANTES DE CODIFICAR** — Costo de no hacerlo: 5+ rondas de prueba-error
 2. **F_CIA = 1, NUNCA 8215** — 8215 es el tenant Connekta, no la compañía Siesa
 3. **POST NUNCA reintenta en 5xx/timeout** — solo en 429. Un timeout no significa que falló (incidente RC-00002744)

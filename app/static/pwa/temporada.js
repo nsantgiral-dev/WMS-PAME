@@ -139,6 +139,28 @@ function _tempRender(el, d) {
     </div>` : ''}
   </div>`;
 
+  // ── Banda de sensibilidad: cuánta plata depende de la POLÍTICA ─────────
+  const bs = d.banda_sensibilidad || {};
+  if (bs.exposicion_pesos != null) {
+    const par2 = d.parametros || {};
+    html += `<div style="border:1px solid var(--brd);border-radius:8px;padding:10px;margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">
+        Sensibilidad al ratio crítico (±10 puntos)
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--tx);">
+        <span>CR−10: <strong>$${(bs.inversion_cr_menos_10 || 0).toLocaleString('es-CO')}</strong></span>
+        <span>Base: <strong>$${(bs.inversion_base || 0).toLocaleString('es-CO')}</strong></span>
+        <span>CR+10: <strong>$${(bs.inversion_cr_mas_10 || 0).toLocaleString('es-CO')}</strong></span>
+        <span style="color:var(--yellow);">Exposición: <strong>$${(bs.exposicion_pesos || 0).toLocaleString('es-CO')}</strong></span>
+      </div>
+      <div style="font-size:10px;color:var(--tx3);margin-top:6px;line-height:1.6;">
+        Ese rango es lo que está en juego por la <strong>política de tasas</strong>, no por la demanda.
+        Capital ${Math.round((par2.tasa_capital || 0.30) * 100)}% · liquidación ${Math.round((par2.tasa_liquidacion || 0.60) * 100)}%
+        — ratificar por escrito ANTES de correr el modelo.
+      </div>
+    </div>`;
+  }
+
   html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
     <button onclick="temporadaExportar()"
       style="padding:7px 14px;border:none;border-radius:7px;background:var(--pm);color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
@@ -212,13 +234,15 @@ function _tempRender(el, d) {
  *  guarda a PDF, y eso es lo que va al acta del comité. */
 function temporadaExportar() {
   if (!_TEMP_DATA) return;
-  const par = _tempLeerParalela();
+  const parJuicio = _tempLeerParalela();
   const cob = _TEMP_DATA.cobertura || {};
+  const par = _TEMP_DATA.parametros || {};
+  const bs = _TEMP_DATA.banda_sensibilidad || {};
   const filas = (_TEMP_DATA.items || []).filter(i => !i.error);
 
   let invM = 0, invP = 0;
   const cuerpo = filas.map(f => {
-    const p = par[f.referencia];
+    const p = parJuicio[f.referencia];
     const q = p != null ? p : f.q_optimo;
     invM += f.inversion_optima || 0;
     invP += q * (f.costo_unitario || 0);
@@ -255,7 +279,15 @@ function temporadaExportar() {
       ${cob.excluidos_lista_negra || 0} por lista negra.
       El resto de la decisión se toma sin modelo.<br>
       <b>Método:</b> newsvendor sobre demanda descensurada por días con stock.
-      Ratio crítico por SKU (Cu = precio − costo; Co = costo × capital+liquidación).
+      Ratio crítico por SKU (Cu = precio − costo; Co = costo × capital+liquidación).<br>
+      <b>Política de tasas ratificada:</b> capital ${Math.round((par.tasa_capital || 0.30) * 100)}% ·
+      liquidación ${Math.round((par.tasa_liquidacion || 0.60) * 100)}%.
+      Fijada antes de la corrida, no después de ver los números.<br>
+      <b>Sensibilidad (CR ±10 pts):</b>
+      $${(bs.inversion_cr_menos_10 || 0).toLocaleString('es-CO')} /
+      $${(bs.inversion_base || 0).toLocaleString('es-CO')} /
+      $${(bs.inversion_cr_mas_10 || 0).toLocaleString('es-CO')}
+      — exposición $${(bs.exposicion_pesos || 0).toLocaleString('es-CO')} por la política de tasas.
     </div>
     <h2>Detalle</h2>
     <table><thead><tr>

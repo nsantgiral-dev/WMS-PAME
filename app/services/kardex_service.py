@@ -91,6 +91,36 @@ class StockDiario(db.Model):
     )
 
 
+def dias_expuestos(dias_con_stock, dias_calendario):
+    """
+    POLÍTICA ÚNICA de denominador cuando falta StockDiario.
+
+    Existe en un solo lugar a propósito. El mismo concepto implementado dos
+    veces divergió en tres horas: S-B caía a días calendario (conservador) y la
+    descensura caía a días-con-venta (25x de sobreestimación en SKUs grumosos).
+    Si esto vuelve a parchearse en dos sitios, la tercera implementación
+    divergirá otra vez y esa vez nadie estará comparando.
+
+    LA REGLA — ante dato ausente, fallar hacia el lado conservador y declararlo.
+
+    El motivo NO es que el faltante cueste menos que el sobrante: para la
+    canasta constitucional el agotado es carísimo, Florencia lo probó. El motivo
+    es la REVERSIBILIDAD. Un sub-pedido declarado es una decisión que un humano
+    corrige mañana. Un contenedor embarcado es irreversible 120 días y ya se
+    llevó la caja. No "corregir" este sesgo por parecer timorato.
+
+    NUNCA usar días-con-venta como denominador: eso da demanda por día-con-venta,
+    no por día. Un SKU que vende 40 unidades cada 25 días saldría a 40/día en
+    vez de 1.6.
+
+    Returns: (n_dias, censurado)
+    """
+    n = int(dias_con_stock or 0)
+    if n <= 0:
+        return int(dias_calendario), True
+    return min(n, int(dias_calendario)), False
+
+
 class KardexService:
 
     @staticmethod
@@ -636,18 +666,8 @@ class KardexService:
 
         salida = {}
         for key, a in acum.items():
-            # Denominador descensurado = días CON stock.
-            #
-            # Si StockDiario no tiene datos para este SKU, NO se puede usar
-            # dias_mov como sustituto: eso da demanda por día-con-venta, no por
-            # día. Un SKU que vende 40 unidades cada 25 días saldría a 40/día
-            # en vez de 1.6 — 25x arriba, y multiplicado después por el z del
-            # colchón. Se cae a días calendario, que subestima (censurado) pero
-            # es conservador, y se marca la fila para que el número no se lea
-            # como descensurado cuando no lo es.
-            n_stock = int(dias_stock.get(key, 0))
-            censurado = n_stock <= 0
-            n = dias_ventana if censurado else max(n_stock, a['dias_mov'])
+            # Política única — ver dias_expuestos()
+            n, censurado = dias_expuestos(dias_stock.get(key, 0), dias_ventana)
             if n <= 0:
                 continue
 
@@ -772,7 +792,9 @@ class KardexService:
         for ref, eventos in ref_demandas.items():
             dias_con_demanda = len(eventos)
             cantidades = [e[1] for e in eventos]
-            dias_stock = dias_stock_red.get(ref, dias_ventana)
+            # Política única — la misma que usa la descensura (ver dias_expuestos)
+            dias_stock, sb_censurado = dias_expuestos(
+                dias_stock_red.get(ref, 0), dias_ventana)
 
             if dias_con_demanda == 0:
                 continue
@@ -1087,6 +1109,14 @@ class KardexService:
             z_cr = _norm_ppf(ratio_item)
             q_optimo = max(0, round(mu + z_cr * sigma))
 
+            # Banda de sensibilidad al ratio crítico (±10 puntos).
+            # Protege al comité de una pelea de parámetros: muestra el rango sin
+            # que nadie tenga que discutir si la tasa de capital es 30% o 15%.
+            cr_bajo = max(0.01, ratio_item - 0.10)
+            cr_alto = min(0.99, ratio_item + 0.10)
+            q_cr_bajo = max(0, round(mu + _norm_ppf(cr_bajo) * sigma))
+            q_cr_alto = max(0, round(mu + _norm_ppf(cr_alto) * sigma))
+
             # Rango de confianza 80%
             q_bajo = max(0, round(mu + _norm_ppf(0.10) * sigma))
             q_alto = max(0, round(mu + _norm_ppf(0.90) * sigma))
@@ -1104,6 +1134,17 @@ class KardexService:
                 'co': co,
                 'z_critico': round(z_cr, 3),
                 'rango_80': [q_bajo, q_alto],
+                # Sensibilidad al ratio crítico: qué cambia si la política de
+                # tasas fuera 10 puntos distinta, en unidades y en pesos
+                'sensibilidad_cr': {
+                    'cr_menos_10': {'cr': round(cr_bajo, 3), 'q': q_cr_bajo,
+                                    'inversion': round(q_cr_bajo * costo) if costo else None},
+                    'cr_base': {'cr': round(ratio_item, 3), 'q': q_optimo,
+                                'inversion': round(q_optimo * costo) if costo else None},
+                    'cr_mas_10': {'cr': round(cr_alto, 3), 'q': q_cr_alto,
+                                  'inversion': round(q_cr_alto * costo) if costo else None},
+                    'exposicion_pesos': round((q_cr_alto - q_cr_bajo) * costo) if costo else None,
+                },
                 'costo_unitario': costo,
                 'inversion_optima': round(q_optimo * costo) if costo else None,
                 'advertencia_1_temporada': n_temporadas == 1,
@@ -1111,12 +1152,28 @@ class KardexService:
 
         resultados.sort(key=lambda x: x.get('inversion_optima') or 0, reverse=True)
 
+        def _inv(clave):
+            return sum((r.get('sensibilidad_cr') or {}).get(clave, {}).get('inversion') or 0
+                       for r in resultados)
+
         return {
             'ratio_critico': round(ratio_critico, 3),
             'margen_pct': margen_pct,
             'costo_exceso_pct': costo_exceso_pct,
             'total_items': len(resultados),
             'total_inversion': sum(r.get('inversion_optima') or 0 for r in resultados),
+            # Banda agregada: cuánta plata está en juego por la POLÍTICA de
+            # tasas, no por la demanda. Se ratifica antes de correr el modelo.
+            'banda_sensibilidad': {
+                'inversion_cr_menos_10': _inv('cr_menos_10'),
+                'inversion_base': _inv('cr_base'),
+                'inversion_cr_mas_10': _inv('cr_mas_10'),
+                'exposicion_pesos': _inv('cr_mas_10') - _inv('cr_menos_10'),
+                'nota': ('Cu y Co NO son hechos: son políticas (tasa de capital y de '
+                         'liquidación). Ratificarlas por escrito ANTES de correr el '
+                         'modelo — si se fijan después de ver los números, el modelo '
+                         'deja de ser juez y se vuelve espejo.'),
+            },
             'items_1_temporada': sum(1 for r in resultados if r.get('advertencia_1_temporada')),
             'nota': (
                 'Q* = cantidad óptima que maximiza utilidad esperada bajo incertidumbre. '

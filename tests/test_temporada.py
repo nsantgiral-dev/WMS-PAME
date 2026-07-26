@@ -164,3 +164,91 @@ class TestDescensuraNoSobreestima:
         # 120 unidades sobre ~360 días de calendario, NO sobre 3 días con venta
         assert fila['d_avg'] < 1.0, f"d_avg={fila['d_avg']} — usó días con venta como denominador"
         assert fila['dias_con_stock'] == fila['dias_ventana']
+
+
+class TestPoliticaDatoAusente:
+    """Una sola política, en una sola función.
+
+    El mismo concepto implementado dos veces divergió en tres horas: S-B caía
+    a calendario (conservador) y la descensura a días-con-venta (25x arriba).
+    """
+
+    def test_sin_stock_diario_cae_a_calendario_y_marca(self):
+        from app.services.kardex_service import dias_expuestos
+        n, censurado = dias_expuestos(0, 360)
+        assert (n, censurado) == (360, True)
+
+    def test_con_stock_diario_usa_ese_denominador(self):
+        from app.services.kardex_service import dias_expuestos
+        n, censurado = dias_expuestos(120, 360)
+        assert (n, censurado) == (120, False)
+
+    def test_nunca_excede_el_calendario(self):
+        """Más días con stock que días de ventana es dato sucio."""
+        from app.services.kardex_service import dias_expuestos
+        n, _ = dias_expuestos(500, 360)
+        assert n == 360
+
+    def test_sb_y_descensura_usan_la_misma_funcion(self):
+        """Guard anti-divergencia: si alguien reimplementa el fallback, falla."""
+        import inspect
+        from app.services import kardex_service as ks
+        src = inspect.getsource(ks)
+        # Ambos consumidores deben llamar a la política, no inventar la suya
+        assert src.count('dias_expuestos(') >= 3, \
+            'S-B y la descensura deben consumir dias_expuestos(), no reimplementarlo'
+
+
+class TestBandaSensibilidad:
+    """Protege al comité de una pelea de parámetros.
+
+    Cu y Co no son hechos: son políticas. La banda muestra cuánta plata depende
+    de esa política, sin que nadie tenga que discutir si el capital es 30% o 15%.
+    """
+
+    def test_cada_item_trae_su_banda(self, app, db):
+        from app.services.kardex_service import KardexService
+        r = KardexService.newsvendor(
+            [{'referencia': 'A', 'ventas_pasadas': [1000, 1100], 'costo_unitario': 50}])
+        s = r['items'][0]['sensibilidad_cr']
+        assert s['cr_menos_10']['q'] < s['cr_base']['q'] < s['cr_mas_10']['q'], \
+            'un ratio crítico mayor debe pedir más'
+        assert s['exposicion_pesos'] > 0
+
+    def test_agregado_declara_la_exposicion_total(self, app, db):
+        from app.services.kardex_service import KardexService
+        r = KardexService.newsvendor(
+            [{'referencia': 'A', 'ventas_pasadas': [1000, 1100], 'costo_unitario': 50},
+             {'referencia': 'B', 'ventas_pasadas': [200, 260], 'costo_unitario': 900}])
+        b = r['banda_sensibilidad']
+        assert b['inversion_cr_menos_10'] < b['inversion_base'] < b['inversion_cr_mas_10']
+        assert b['exposicion_pesos'] == b['inversion_cr_mas_10'] - b['inversion_cr_menos_10']
+        assert 'políticas' in b['nota']
+
+
+class TestCanonClasificacionSB:
+    """S-B elige QUÉ MODELO se aplica: un error aquí es coherente y falso."""
+
+    def _canon(self):
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / 'docs' / 'canones' / 'clasificacion_sb.json'
+        assert p.exists(), 'falta docs/canones/clasificacion_sb.json'
+        return json.loads(p.read_text(encoding='utf-8'))
+
+    def test_los_cortes_del_canon_son_los_del_codigo(self):
+        """Cambiar un corte reclasifica el catálogo entero. El canon lo vigila."""
+        import re
+        from pathlib import Path
+        c = self._canon()['parametros']
+        src = (Path(__file__).resolve().parents[1]
+               / 'app/services/kardex_service.py').read_text(encoding='utf-8')
+        assert f"ADI_CORTE = {c['adi_corte']}" in src
+        assert f"CV2_CORTE = {c['cv2_corte']}" in src
+
+    def test_documenta_el_truncamiento_del_dia_de_agotamiento(self):
+        """La limitación de segundo orden queda anotada, no redescubierta."""
+        lim = self._canon()['limitaciones_conocidas']
+        assert lim['_severidad'].startswith('BAJA')
+        texto = ' '.join(lim['truncamiento_del_dia_de_agotamiento'])
+        assert 'truncado' in texto
