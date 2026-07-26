@@ -101,12 +101,13 @@ async function compCargarArmador(tipo) {
     const pend = [
       get('/api/compras/armador/propuesta?tipo=' + encodeURIComponent(ARMADOR_TIPO)),
       get('/api/compras/armador/g5'),
+      get('/api/compras/armador/sigma-lt'),
     ];
     if (!ARMADOR_TIPOS) pend.push(get('/api/compras/armador/tipos'));
 
-    const [propuesta, g5, cat] = await Promise.all(pend);
+    const [propuesta, g5, sigma, cat] = await Promise.all(pend);
     if (cat) ARMADOR_TIPOS = cat.tipos;
-    _renderArmador(el, propuesta, g5);
+    _renderArmador(el, propuesta, g5, sigma);
   } catch (e) {
     el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
   }
@@ -139,7 +140,19 @@ function _selectorContenedor(propuesta) {
   </div>`;
 }
 
-function _renderArmador(el, propuesta, g5) {
+/** Procedencia del σ_LT — va PEGADO a la ventana ETA, no en una caja aparte.
+ *  Un comprador que no puede auditar de dónde sale la fecha no la obedece. */
+function _procedenciaSigmaLt(s) {
+  if (!s) return '';
+  if (s.fuente === 'MEDIDO') {
+    return `<span style="color:var(--green);"> · σ medido sobre ${s.n} contenedores</span>`;
+  }
+  const faltan = Math.max(0, 6 - (s.n || 0));
+  return `<span style="color:var(--yellow);"> · σ=${s.sigma_lt}d supuesto, no medido`
+       + ` — faltan ${faltan} contenedor(es) con fechas completas</span>`;
+}
+
+function _renderArmador(el, propuesta, g5, sigma) {
   let html = '';
 
   // Modo
@@ -185,7 +198,7 @@ function _renderArmador(el, propuesta, g5) {
   if (propuesta.ventana_llegada) {
     html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:12px;">
       Ventana estimada: ${propuesta.ventana_llegada.desde} a ${propuesta.ventana_llegada.hasta}
-      <br>${propuesta.ventana_llegada.nota}
+      <br>${propuesta.ventana_llegada.nota}${_procedenciaSigmaLt(sigma)}
     </div>`;
   }
 

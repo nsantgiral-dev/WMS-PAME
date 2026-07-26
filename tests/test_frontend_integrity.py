@@ -436,3 +436,199 @@ class TestEndpointIntegrity:
                 for route in flask_route_list
             )
             assert found, f'Endpoint crítico {endpoint} no existe en Flask'
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Nivel 4: endpoints sin consumidor (Flask → JS)
+#
+# El Nivel 3 pregunta "¿existe en Flask lo que el JS llama?". Este pregunta lo
+# contrario: "¿llama el JS todo lo que Flask expone?". Sin este guard un
+# endpoint puede escribirse, testearse y desplegarse sin que exista ninguna
+# forma de usarlo — que fue exactamente lo que pasó con la descarga de kardex
+# (bloqueaba 4 modelos), con alimentar-picking y con el cargador del Vigía.
+#
+# NO exige cero huérfanos: exige que el número NUNCA crezca. Es un trinquete.
+# ══════════════════════════════════════════════════════════════════════════
+
+# Exentos por naturaleza — no necesitan pantalla
+_EXENTOS_POR_REGLA = (
+    'debug',          # diagnóstico manual contra Siesa, se llaman a mano
+    '/api/health/',   # monitores externos y healthcheck de Railway
+)
+
+# Deuda diagnosticada. Solo puede ENCOGER (hay un test que lo obliga).
+#
+# La razón NO es "qué pantalla le falta" — un endpoint sin consumidor casi nunca
+# necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
+# Un número que el usuario no puede auditar no se obedece: se ignora.
+DEUDA_SIN_UI = {
+    '/api/kardex/reconstruir':
+        'Decisión: ¿le creo al stock diario? Reconstruye la serie hacia atrás. '
+        'Su lugar es como precondición de la descensura, no como botón suelto.',
+    '/api/kardex/stock-diario':
+        'Decisión: ¿por qué este SKU tiene esa demanda corregida? Es la evidencia '
+        'de los días sin stock. Va como detalle expandible junto al SKU en Reposición.',
+    '/api/kardex/reconciliar':
+        'Decisión: ¿le creo al kardex? Compuerta de completitud y conceptos sin '
+        'clasificar. Va como semáforo de confianza en la pantalla Modelos.',
+    '/api/kardex/tasa-servida-corregida':
+        'Descensura M0.2. Doblemente huérfana: sin UI Y sin consumidor aguas abajo. '
+        'No necesita pantalla — necesita que TSB, ROP y newsvendor la consuman, y '
+        'aparecer como procedencia junto al SKU: "1.240 u/mes, +18% por 62 días sin stock".',
+    '/api/vigia/series':
+        'Redundante: el panel obtiene lo mismo vía /resumen. Candidato a borrarse, '
+        'no a conectarse — un endpoint duplicado es deuda, no funcionalidad.',
+    '/api/vigia/verificar-carga':
+        'Arnés de certificación. Consumidor legítimo NO-JS: scripts/verificar_carga_vigia.py. '
+        'Se corre una vez por CLI; darle UI sería invitar a correrlo sin contexto.',
+    '/api/vigia/backtest/florencia':
+        'Test canónico de reproducción. Mismo caso: se dispara desde el arnés de '
+        'certificación, no desde el panel.',
+}
+
+# Inventario heredado, sin clasificar. No fabricamos razones que no conocemos:
+# al tocar cualquiera de estos, o se conecta o se mueve a DEUDA_SIN_UI con su
+# motivo. Esta lista también solo puede encoger.
+BASELINE_HEREDADO = {
+    '/api/admin/remision/<int:packing_id>',
+    '/api/auth/me',
+    '/api/compras/armador/contenedores',
+    '/api/compras/bloqueados/verificar',
+    '/api/compras/clasificar-rama/<int:producto_id>',
+    '/api/compras/precios/comparador/<int:producto_id>',
+    '/api/compras/precios/registrar',
+    '/api/config/mapeo-unidades',
+    '/api/config/mapeo-unidades/<int:id>',
+    '/api/config/mapeo-unidades/tipos-sin-mapeo',
+    '/api/conteo/abc/sincronizar',
+    '/api/conteo/mis-tareas',
+    '/api/dashboard/kpis',
+    '/api/dashboard/movimientos',
+    '/api/despacho_parcial/<int:packing_id>/compromisos',
+    '/api/despacho_parcial/<int:packing_id>/facturar-rm-manual',
+    '/api/empaques/lpn/<string:codigo>/consumir',
+    '/api/empaques/sync',
+    '/api/empaques/sync/estado',
+    '/api/inventario/ajuste',
+    '/api/inventario/movimientos',
+    '/api/inventario/stock/<int:producto_id>',
+    '/api/mobile/mis-tareas',
+    '/api/muelle/historial',
+    '/api/muelle/manifiesto',
+    '/api/packing/<int:id>/forzar-siesa',
+    '/api/packing/<int:id>/reconciliar',
+    '/api/packing/<int:id>/remision',
+    '/api/packing/crear-desde-picking',
+    '/api/packing/crear-manual',
+    '/api/picking/crear',
+    '/api/picking/fefo',
+    '/api/picking/mis-tareas-activas',
+    '/api/picking/purgar-ceros',
+    '/api/picking/siguiente-tarea',
+    '/api/recepcion/crear',
+    '/api/reposicion/alertas/smtp-check',
+    '/api/reposicion/mis-tareas',
+    '/api/reposicion/pre-verificar-ola',
+    '/api/reposicion/sync-ubicaciones/estado',
+    '/api/rutas/<int:id>/liquidar-completo',
+    '/api/rutas/<int:id>/sugeridos',
+    '/api/siesa/carga-inventario-estado',
+    '/api/siesa/cargar-inventario',
+    '/api/siesa/jobs-fallidos',
+    '/api/siesa/monitor',
+    '/api/siesa/sync-estado',
+    '/api/siesa/sync-pedidos-estado',
+    '/api/siesa/sync-productos',
+    '/api/siesa/terceros-contacto',
+    '/api/siesa/trigger-dlq',
+    '/api/traslados/<int:id>/reintentar-siesa',
+    '/api/traslados/bodegas-siesa',
+    '/api/traslados/recuperar-packing',
+}
+
+TOLERADOS = set(DEUDA_SIN_UI) | BASELINE_HEREDADO
+
+
+class TestEndpointsSinConsumidor:
+    """Nivel 4 — ningún endpoint nuevo puede nacer sin forma de usarse."""
+
+    @staticmethod
+    def _segmentos_literales(ruta):
+        """Trozos fijos de la ruta, ignorando <int:id> y demás.
+
+        El JS arma las URLs por concatenación ('/api/x/' + id + '/cerrar'), así
+        que buscar la ruta completa daría falsos positivos. Exigimos que TODOS
+        los trozos literales aparezcan: el prefijo y también lo que va después
+        del parámetro.
+        """
+        return [s for s in re.split(r'<[^>]+>', ruta) if s.strip('/')]
+
+    def _huerfanos(self, app):
+        blob = _all_code() + _read('index.html') if os.path.exists(
+            os.path.join(_PWA, 'index.html')) else _all_code()
+        huerfanos = set()
+        for regla in app.url_map.iter_rules():
+            ruta = str(regla)
+            if not ruta.startswith('/api/'):
+                continue
+            if any(x in ruta for x in _EXENTOS_POR_REGLA):
+                continue
+            if all(s.rstrip('/') in blob for s in self._segmentos_literales(ruta)):
+                continue
+            huerfanos.add(ruta)
+        return huerfanos
+
+    def test_ningun_endpoint_nuevo_sin_consumidor(self, app):
+        """EL GUARD. Un endpoint nuevo sin forma de llamarse rompe el build.
+
+        Si esto falla: conecta el endpoint desde el JS, o —si de verdad no debe
+        tener UI— añádelo a DEUDA_SIN_UI con la razón y el costo de no tenerla.
+        Lo que no se vale es que se cuele en silencio.
+        """
+        nuevos = self._huerfanos(app) - TOLERADOS
+        assert not nuevos, (
+            f'\n{len(nuevos)} endpoint(s) sin ningún consumidor en el frontend:\n'
+            + '\n'.join(f'  · {r}' for r in sorted(nuevos))
+            + '\n\nConéctalo desde el JS, o justifícalo en DEUDA_SIN_UI '
+              '(tests/test_frontend_integrity.py) explicando qué se pierde.'
+        )
+
+    def test_la_lista_solo_encoge(self, app):
+        """Anti-podredumbre: lo que ya tiene consumidor sale de la lista.
+
+        Sin esto la lista se vuelve un cementerio que nadie limpia y deja de
+        proteger — un endpoint podría desconectarse sin que nadie se entere.
+        """
+        huerfanos = self._huerfanos(app)
+        rutas_vivas = {str(r) for r in app.url_map.iter_rules()}
+        ya_conectados = sorted(
+            r for r in TOLERADOS if r in rutas_vivas and r not in huerfanos)
+        assert not ya_conectados, (
+            f'\n{len(ya_conectados)} endpoint(s) ya tienen consumidor — '
+            f'bórralos de la lista:\n'
+            + '\n'.join(f'  · {r}' for r in ya_conectados)
+        )
+
+    def test_la_lista_no_acumula_rutas_muertas(self, app):
+        """Una ruta borrada del backend no puede seguir en la lista."""
+        rutas_vivas = {str(r) for r in app.url_map.iter_rules()}
+        fantasmas = sorted(r for r in TOLERADOS if r not in rutas_vivas)
+        assert not fantasmas, (
+            f'\n{len(fantasmas)} ruta(s) en la lista ya no existen en Flask — '
+            f'bórralas:\n' + '\n'.join(f'  · {r}' for r in fantasmas)
+        )
+
+    def test_la_deuda_declara_su_razon(self):
+        """Cada deuda dice qué se pierde. Sin razón es un olvido con formato."""
+        for ruta, razon in DEUDA_SIN_UI.items():
+            assert razon and len(razon) > 25, (
+                f'{ruta} está en DEUDA_SIN_UI sin explicar el costo de no tener UI')
+
+    def test_el_baseline_heredado_no_crece(self, app):
+        """BASELINE_HEREDADO es un inventario congelado: solo se le quitan.
+
+        Deuda nueva va a DEUDA_SIN_UI con su razón, nunca aquí.
+        """
+        assert len(BASELINE_HEREDADO) <= 54, (
+            f'BASELINE_HEREDADO creció a {len(BASELINE_HEREDADO)}. '
+            f'La deuda nueva va a DEUDA_SIN_UI con su razón.')

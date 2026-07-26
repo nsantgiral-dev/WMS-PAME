@@ -93,8 +93,10 @@ async function guardarConfigBodega() {
  */
 function invSubtab(nombre) {
   _INV_SUBTAB = nombre;
-  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc', inteligencia: 'inv-tab-inteligencia' };
-  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc', inteligencia: 'inv-panel-inteligencia' };
+  const tabs = { conteos: 'inv-tab-conteos', abc: 'inv-tab-abc',
+                 inteligencia: 'inv-tab-inteligencia', datos: 'inv-tab-datos' };
+  const panels = { conteos: 'inv-panel-conteos', abc: 'inv-panel-abc',
+                   inteligencia: 'inv-panel-inteligencia', datos: 'inv-panel-datos' };
   Object.entries(tabs).forEach(([k, id]) => {
     const el = document.getElementById(id);
     if (!el) return;
@@ -110,6 +112,7 @@ function invSubtab(nombre) {
   if (nombre === 'conteos') cargarConteos();
   else if (nombre === 'abc') cargarResumenAbc();
   else if (nombre === 'inteligencia') compCargarInteligencia();
+  else if (nombre === 'datos') kardexCargarPanel();
 }
 
 let _CONTEO_PAGE = 1;

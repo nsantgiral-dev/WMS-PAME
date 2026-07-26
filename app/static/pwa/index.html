@@ -1437,6 +1437,10 @@
         style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         🧠 Inteligencia
       </div>
+      <div id="inv-tab-datos" onclick="invSubtab('datos')"
+        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🗄️ Datos
+      </div>
     </div>
 
     <!-- Panel Conteos -->
@@ -1653,6 +1657,11 @@
         </div>
       </div>
       <div id="inv-ia-container"><div style="text-align:center;padding:30px;color:#555;">Selecciona un modelo</div></div>
+    </div>
+
+    <!-- Panel Datos — la tubería que alimenta los modelos de Inteligencia -->
+    <div id="inv-panel-datos" style="display:none;">
+      <div id="inv-datos-container"><div style="text-align:center;padding:30px;color:#555;">Cargando…</div></div>
     </div>
   </div>
 
@@ -3175,6 +3184,7 @@
   <script src="/static/pwa/etiquetas.js?v=20260710a"></script>
   <script src="/static/pwa/vigia.js?v=20260724b"></script>
   <script src="/static/pwa/compras_ia.js?v=20260725a"></script>
+  <script src="/static/pwa/kardex.js?v=20260725a"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
