@@ -14,9 +14,34 @@ Armador de contenedor:
 """
 import logging
 import math
+import os
 from datetime import date, timedelta
 from collections import defaultdict
 from app.extensions import db
+
+
+def sigma_ltd(lt_dias, sigma_d, d_avg, sigma_lt, r_dias=0):
+    """
+    §M0.4 — desviación de la demanda durante la exposición al riesgo.
+
+        sigma_LTD = sqrt( (LT + R) * sigma_d^2  +  d_avg^2 * sigma_LT^2 )
+
+    Se suman las VARIANZAS, no las desviaciones: por eso va en cuadratura.
+
+    sigma_LT multiplica solo a LT, nunca a R: el periodo de revisión es el
+    propio ciclo de compra y es determinístico — no tiene incertidumbre.
+
+    El `sqrt(LT)` del docstring viejo es la versión simplificada, válida solo
+    con lead time constante. Buenaventura no lo es: con LT=105 y sigma_LT=15,
+    el término portuario aporta más varianza que el comercial.
+
+    UNIDADES: todo en días. d_avg y sigma_d en unidades/día, LT/R/sigma_LT en
+    días. Convertir en la frontera, nunca aquí dentro.
+    """
+    exposicion = max(float(lt_dias) + float(r_dias), 0.0)
+    var_demanda = exposicion * float(sigma_d) ** 2
+    var_leadtime = float(d_avg) ** 2 * float(sigma_lt) ** 2
+    return math.sqrt(max(var_demanda + var_leadtime, 0.0))
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +75,17 @@ LT_NACIONAL_DIAS = 5
 SIGMA_LT_NACIONAL = 2
 LT_CHINA_DIAS = 105
 SIGMA_LT_CHINA = 15  # conservador — se actualiza con ≥6 contenedores
+
+# Periodo de revisión. China se revisa por trimestre (un contenedor cada ~90d),
+# así que la exposición al riesgo es LT + R, no solo LT. Nacional se revisa de
+# continuo: R = 0.
+R_CHINA_DIAS = int(os.environ.get('ROP_R_CHINA_DIAS', '90'))
+R_NACIONAL_DIAS = 0
+
+# Estimador de sigma_d activo. INTERINO: sigma empírica de la serie
+# descensurada. DEFINITIVO (pendiente): RMSE de un paso adelante del TSB —
+# el colchón debe absorber lo que el modelo NO vio venir, no la varianza cruda.
+ESTIMADOR_SIGMA_D = 'SIGMA_EMPIRICA_DESCENSURADA'
 
 # Restricción anti-500-días
 MAX_COBERTURA_RELLENO_DIAS = 180
@@ -127,22 +163,13 @@ class ArmadorService:
         lt_china = sigma_lt_info['lt_medio']
         sigma_lt_china = sigma_lt_info['sigma_lt']
 
-        # Demanda diaria promedio y σ por SKU (últimos 12 meses, nivel RED)
-        fecha_limite = date.today() - timedelta(days=365)
-        dias_ventana = (date.today() - fecha_limite).days
-
-        demanda_por_sku = (
-            db.session.query(
-                KardexMovimiento.referencia,
-                func.sum(KardexMovimiento.cantidad).label('total'),
-                func.count(func.distinct(KardexMovimiento.fecha)).label('dias_con_demanda'),
-            )
-            .filter(KardexMovimiento.fecha >= fecha_limite)
-            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
-            .filter(KardexMovimiento.naturaleza == 2)
-            .group_by(KardexMovimiento.referencia)
-            .all()
-        )
+        # CABLE M0.2 → M0.4. La demanda entra DESCENSURADA: d_avg sobre días con
+        # stock, no sobre días calendario. Antes se dividía por 365 con los días
+        # agotados aportando cero — el sistema aprendía a comprar poco justo de
+        # lo que siempre faltaba.
+        demanda_por_sku = KardexService.demanda_descensurada(
+            ventana_meses=12, nivel='red')
+        dias_ventana = 360
 
         # En tránsito por producto
         transito = dict(
@@ -177,17 +204,20 @@ class ArmadorService:
         resultados_nac = []
         resultados_chi = []
 
-        for row in demanda_por_sku:
-            ref = row.referencia.strip() if row.referencia else ''
+        # Delta agregado — el "backtest" posible del ROP: no se puede certificar
+        # una fórmula contra la historia, pero sí cuantificar el salto.
+        delta = {'skus': 0, 'ss_antes': 0.0, 'ss_despues': 0.0,
+                 'topados_por_cobertura': 0}
+
+        for ref, dem in demanda_por_sku.items():
+            ref = (ref or '').strip()
             if not ref:
                 continue
 
-            d_total = float(row.total or 0)
-            d_avg = d_total / dias_ventana  # demanda diaria promedio
-
-            # σ_d estimada (asumiendo distribución uniforme como proxy)
-            dias_demanda = int(row.dias_con_demanda or 1)
-            d_por_evento = d_total / dias_demanda if dias_demanda > 0 else 0
+            d_avg = dem['d_avg']        # u/día sobre días CON stock
+            sigma_d = dem['sigma_d']    # u/día
+            if d_avg <= 0:
+                continue
 
             origen = (productos_origen.get(ref) or '').upper()
             es_china = origen == 'CHINA' or any(
@@ -198,51 +228,90 @@ class ArmadorService:
             qty_transito = float(transito.get(ref, 0) or 0)
             posicion = stock_actual + qty_transito
 
-            if es_china:
-                lt = lt_china
-                sigma_lt = sigma_lt_china
-                rop = d_avg * lt + z * d_avg * math.sqrt(sigma_lt)
-                safety_stock = z * d_avg * math.sqrt(sigma_lt)
-                s_objetivo = rop + d_avg * lt  # Base-stock (review period = LT)
-                cobertura = posicion / d_avg if d_avg > 0 else 999
-                deficit = max(0, s_objetivo - posicion)
+            lt = lt_china if es_china else LT_NACIONAL_DIAS
+            sigma_lt = sigma_lt_china if es_china else SIGMA_LT_NACIONAL
+            r = R_CHINA_DIAS if es_china else R_NACIONAL_DIAS
 
-                resultados_chi.append({
-                    'referencia': ref,
-                    'd_avg_diaria': round(d_avg, 4),
-                    'rop': round(rop),
-                    'safety_stock': round(safety_stock),
+            s_ltd = sigma_ltd(lt, sigma_d, d_avg, sigma_lt, r_dias=0)
+            safety_stock = z * s_ltd
+            rop = d_avg * lt + safety_stock
+
+            # Fórmula anterior, solo para el reporte de delta
+            ss_anterior = z * d_avg * math.sqrt(sigma_lt)
+            delta['skus'] += 1
+            delta['ss_antes'] += ss_anterior
+            delta['ss_despues'] += safety_stock
+
+            cobertura = posicion / d_avg if d_avg > 0 else 999
+
+            fila = {
+                'referencia': ref,
+                'd_avg_diaria': round(d_avg, 4),
+                'sigma_d_diaria': round(sigma_d, 4),
+                'rop': round(rop),
+                'safety_stock': round(safety_stock),
+                'sigma_ltd': round(s_ltd, 2),
+                'stock_actual': round(stock_actual),
+                'cobertura_dias': round(cobertura, 1),
+                'lt_dias': lt,
+                'sigma_lt': sigma_lt,
+                # Procedencia: el comprador tiene que poder auditar el número
+                'dias_con_stock': dem['dias_con_stock'],
+                'factor_censura': dem['factor_censura'],
+                'ss_formula_anterior': round(ss_anterior),
+            }
+
+            if es_china:
+                # Revisión periódica: la exposición es LT + R. sigma_LT sigue
+                # aplicando SOLO a LT — R es el propio ciclo, es determinístico.
+                s_ltr = sigma_ltd(lt, sigma_d, d_avg, sigma_lt, r_dias=r)
+                s_objetivo = d_avg * (lt + r) + z * s_ltr
+
+                # Baranda dura: nada por encima de MAX_COBERTURA_RELLENO_DIAS.
+                tope = d_avg * MAX_COBERTURA_RELLENO_DIAS
+                topado = s_objetivo > tope
+                if topado:
+                    s_objetivo = tope
+                    delta['topados_por_cobertura'] += 1
+
+                fila.update({
+                    'r_dias': r,
+                    'sigma_ltr': round(s_ltr, 2),
                     's_objetivo': round(s_objetivo),
-                    'stock_actual': round(stock_actual),
                     'en_transito': round(qty_transito),
                     'posicion': round(posicion),
-                    'deficit': round(deficit),
-                    'cobertura_dias': round(cobertura, 1),
-                    'lt_dias': lt,
-                    'sigma_lt': sigma_lt,
+                    'deficit': round(max(0, s_objetivo - posicion)),
+                    'topado_por_cobertura': topado,
                 })
+                resultados_chi.append(fila)
             else:
-                lt = LT_NACIONAL_DIAS
-                rop = d_avg * lt + z * d_avg * math.sqrt(SIGMA_LT_NACIONAL)
-                safety_stock = z * d_avg * math.sqrt(SIGMA_LT_NACIONAL)
-                cobertura = posicion / d_avg if d_avg > 0 else 999
-
-                resultados_nac.append({
-                    'referencia': ref,
-                    'd_avg_diaria': round(d_avg, 4),
-                    'rop': round(rop),
-                    'safety_stock': round(safety_stock),
-                    'stock_actual': round(stock_actual),
-                    'cobertura_dias': round(cobertura, 1),
-                    'bajo_rop': posicion < rop,
-                })
+                fila['bajo_rop'] = posicion < rop
+                resultados_nac.append(fila)
 
         resultados_nac.sort(key=lambda x: x['cobertura_dias'])
         resultados_chi.sort(key=lambda x: x['cobertura_dias'])
 
+        mult = (delta['ss_despues'] / delta['ss_antes']) if delta['ss_antes'] > 0 else 0
+
         return {
             'nivel_servicio': nivel_servicio,
             'z_score': round(z, 3),
+            # Procedencia del cálculo — sin esto el número no es auditable
+            'estimador_sigma_d': ESTIMADOR_SIGMA_D,
+            'formula': 'sigma_LTD = sqrt((LT+R)*sigma_d^2 + d^2*sigma_LT^2)  §M0.4',
+            'unidad_canonica': 'dias',
+            'cobertura_max_dias': MAX_COBERTURA_RELLENO_DIAS,
+            # Reporte de delta: cuánto salta el colchón al corregir la fórmula
+            'delta_vs_formula_anterior': {
+                'skus': delta['skus'],
+                'safety_stock_antes': round(delta['ss_antes']),
+                'safety_stock_despues': round(delta['ss_despues']),
+                'multiplicador': round(mult, 2),
+                'topados_por_cobertura': delta['topados_por_cobertura'],
+                'nota': ('La fórmula anterior usaba z*d*sqrt(sigma_LT): sin sigma_d '
+                         'y con la raíz sobre la desviación del lead time en vez de '
+                         'sobre la exposición. Subestimaba el colchón.'),
+            },
             'nacional': {
                 'lt_dias': LT_NACIONAL_DIAS,
                 'sigma_lt': SIGMA_LT_NACIONAL,
@@ -254,6 +323,7 @@ class ArmadorService:
                 'lt_dias': lt_china,
                 'sigma_lt': sigma_lt_china,
                 'sigma_lt_fuente': sigma_lt_info['fuente'],
+                'r_dias': R_CHINA_DIAS,
                 'total': len(resultados_chi),
                 'con_deficit': sum(1 for r in resultados_chi if r['deficit'] > 0),
                 'items': resultados_chi,

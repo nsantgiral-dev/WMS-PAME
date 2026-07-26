@@ -160,3 +160,90 @@ class TestTiposContenedor:
     def test_endpoint_tipos_registrado(self, app):
         rutas = [str(r) for r in app.url_map.iter_rules()]
         assert any('/armador/tipos' in r for r in rutas)
+
+
+class TestCanonRopDual:
+    """El juez que faltaba. Contra aritmética, no contra historia.
+
+    Una fórmula dimensionalmente imposible —sqrt(sigma_LT), raíz de días que no
+    da días— pasó 631 tests porque ninguno comparaba contra un número calculado
+    aparte. Estos casos están calculados a mano en docs/canones/rop_dual.json.
+    """
+
+    TOL = 0.01
+
+    def _canon(self):
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / 'docs' / 'canones' / 'rop_dual.json'
+        assert p.exists(), 'falta docs/canones/rop_dual.json'
+        return json.loads(p.read_text(encoding='utf-8'))
+
+    def test_caso_china_reproduce_el_canon(self):
+        from app.services.armador_service import sigma_ltd
+        c = next(x for x in self._canon()['casos'] if x['nombre'].startswith('China'))
+        e, esp = c['entrada'], c['esperado']
+
+        s = sigma_ltd(e['lt'], e['sigma_d'], e['d_avg'], e['sigma_lt'], r_dias=e['r'])
+        assert abs(s - esp['sigma_ltr']) < self.TOL, f'sigma_LTR: {s} != {esp["sigma_ltr"]}'
+        assert abs(e['z'] * s - esp['safety_stock']) < self.TOL
+        assert abs(e['d_avg'] * (e['lt'] + e['r']) + e['z'] * s - esp['base_stock_s']) < self.TOL
+
+    def test_el_riesgo_portuario_domina(self):
+        """64% de la varianza viene del lead time, no de la demanda.
+
+        Si esto se invierte, registrar fechas de contenedores deja de ser la
+        prioridad que es.
+        """
+        c = next(x for x in self._canon()['casos'] if x['nombre'].startswith('China'))
+        e, esp = c['entrada'], c['esperado']
+        var_dem = (e['lt'] + e['r']) * e['sigma_d'] ** 2
+        var_lt = e['d_avg'] ** 2 * e['sigma_lt'] ** 2
+        assert abs(var_dem - esp['var_demanda']) < self.TOL
+        assert abs(var_lt - esp['var_leadtime']) < self.TOL
+        assert var_lt > var_dem, 'el término de lead time debe dominar en China'
+
+    def test_caso_nacional_reproduce_el_canon(self):
+        from app.services.armador_service import sigma_ltd
+        c = next(x for x in self._canon()['casos'] if x['nombre'].startswith('Nacional'))
+        e, esp = c['entrada'], c['esperado']
+        s = sigma_ltd(e['lt'], e['sigma_d'], e['d_avg'], e['sigma_lt'], r_dias=e['r'])
+        assert abs(s - esp['sigma_ltd']) < self.TOL
+        assert abs(e['d_avg'] * e['lt'] + e['z'] * s - esp['rop']) < self.TOL
+
+    def test_borde_variabilidad_cero_no_deja_termino_espurio(self):
+        """Sin incertidumbre el ROP es exactamente d*LT. Ni una unidad más."""
+        from app.services.armador_service import sigma_ltd
+        c = next(x for x in self._canon()['casos'] if x['nombre'].startswith('Borde'))
+        e, esp = c['entrada'], c['esperado']
+        s = sigma_ltd(e['lt'], e['sigma_d'], e['d_avg'], e['sigma_lt'], r_dias=e['r'])
+        assert s == esp['sigma_ltd']
+        assert e['d_avg'] * e['lt'] + e['z'] * s == esp['rop']
+
+    def test_sigma_lt_no_aplica_al_periodo_de_revision(self):
+        """R es el propio ciclo de compra: determinístico, sin incertidumbre.
+
+        Si sigma_LT tocara R, subir R inflaría el término portuario — y no debe.
+        """
+        from app.services.armador_service import sigma_ltd
+        sin_r = sigma_ltd(105, 8, 10, 15, r_dias=0)
+        con_r = sigma_ltd(105, 8, 10, 15, r_dias=90)
+        # Solo crece por el término de demanda
+        esperado = (con_r ** 2) - (sin_r ** 2)
+        assert abs(esperado - 90 * 8 ** 2) < self.TOL, \
+            'R solo puede entrar por el término de demanda'
+
+    def test_la_formula_es_dimensionalmente_coherente(self):
+        """Duplicar sigma_d con sigma_LT=0 debe duplicar sigma_LTD.
+
+        El bug viejo (sqrt de una desviación) rompía justo esta propiedad.
+        """
+        from app.services.armador_service import sigma_ltd
+        a = sigma_ltd(105, 8, 10, 0, r_dias=0)
+        b = sigma_ltd(105, 16, 10, 0, r_dias=0)
+        assert abs(b - 2 * a) < self.TOL
+
+    def test_el_estimador_activo_esta_declarado(self):
+        """La pantalla debe poder mostrar de dónde sale sigma_d."""
+        from app.services.armador_service import ESTIMADOR_SIGMA_D
+        assert ESTIMADOR_SIGMA_D == self._canon()['estimador_sigma_d']['activo']

@@ -18,7 +18,9 @@ Reglas de Connekta:
   - f470_cant_base siempre positivo, naturaleza define signo
 """
 import logging
+import math
 import os
+from collections import defaultdict
 from datetime import datetime, timedelta, date
 from app.extensions import db
 
@@ -559,6 +561,109 @@ class KardexService:
             ),
             'tasas': tasas,
         }
+
+    @staticmethod
+    def demanda_descensurada(ventana_meses: int = 12, nivel: str = 'red') -> dict:
+        """
+        M0.2 → M0.4. Demanda diaria descensurada POR SKU, con su sigma.
+
+        Este es el cable que faltaba: el ROP calculaba d_avg = total / 365 días
+        calendario, metiendo los días sin stock en el denominador con demanda
+        cero. Un SKU agotado 62 de 365 días quedaba subestimado ~20%, el ROP
+        bajaba, se agotaba más, y la estimación bajaba otra vez. Bucle endógeno:
+        el sistema aprendía a comprar poco de lo que siempre faltó.
+
+        UNIDAD CANÓNICA: día. Todo lo que salga de aquí es unidades/día.
+
+        sigma_d se calcula sobre los días CON stock, contando como demanda cero
+        los días con stock y sin venta — que es lo que hace grumosa a la demanda
+        rural. Con suma y suma de cuadrados sobre los días con movimiento basta:
+        los días en cero no aportan ni a una ni a otra.
+
+            media = suma / N
+            var   = (suma_cuadrados - N * media^2) / (N - 1)
+
+        Returns: {referencia: {d_avg, sigma_d, dias_con_stock, dias_ventana,
+                               demanda_neta, factor_censura}}
+        """
+        from sqlalchemy import func
+
+        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+        dias_ventana = (date.today() - fecha_limite).days
+
+        if nivel == 'red':
+            k_kardex = KardexMovimiento.referencia
+            k_stock = StockDiario.referencia
+        else:
+            k_kardex = KardexMovimiento.referencia + '|' + KardexMovimiento.bodega
+            k_stock = StockDiario.referencia + '|' + StockDiario.bodega
+
+        dias_stock = dict(
+            db.session.query(k_stock, func.count())
+            .filter(StockDiario.fecha >= fecha_limite)
+            .filter(StockDiario.tuvo_stock == True)  # noqa: E712
+            .group_by(k_stock)
+            .all()
+        )
+
+        def _por_dia(conceptos, naturaleza):
+            return (
+                db.session.query(k_kardex, KardexMovimiento.fecha,
+                                 func.sum(KardexMovimiento.cantidad))
+                .filter(KardexMovimiento.fecha >= fecha_limite)
+                .filter(KardexMovimiento.concepto.in_(conceptos))
+                .filter(KardexMovimiento.naturaleza == naturaleza)
+                .group_by(k_kardex, KardexMovimiento.fecha)
+                .all()
+            )
+
+        # Demanda neta por (sku, día): ventas menos devoluciones del mismo día
+        neto = defaultdict(float)
+        for key, fecha, cant in _por_dia(CONCEPTOS_VENTA, 2):
+            neto[(key, fecha)] += float(cant or 0)
+        for key, fecha, cant in _por_dia(CONCEPTOS_DEVOLUCION, 1):
+            neto[(key, fecha)] -= float(cant or 0)
+
+        acum = defaultdict(lambda: {'suma': 0.0, 'suma_cuad': 0.0, 'dias_mov': 0})
+        for (key, _fecha), valor in neto.items():
+            v = max(valor, 0.0)
+            if v <= 0:
+                continue
+            a = acum[key]
+            a['suma'] += v
+            a['suma_cuad'] += v * v
+            a['dias_mov'] += 1
+
+        salida = {}
+        for key, a in acum.items():
+            # Días con stock = denominador descensurado. No puede ser menor que
+            # los días en que hubo movimiento (no se vende sin existencias):
+            # si lo es, el StockDiario está incompleto y mandan los movimientos.
+            n = max(int(dias_stock.get(key, 0)), a['dias_mov'])
+            if n <= 0:
+                continue
+
+            media = a['suma'] / n
+            if n > 1:
+                var = (a['suma_cuad'] - n * media * media) / (n - 1)
+            else:
+                var = 0.0
+            sigma = math.sqrt(var) if var > 0 else 0.0
+
+            # Cuánto sube la estimación por corregir la censura. 1.0 = nunca
+            # se agotó; 1.25 = se estimaba 25% por debajo.
+            factor = (dias_ventana / n) if n > 0 else 1.0
+
+            salida[key] = {
+                'd_avg': round(media, 6),
+                'sigma_d': round(sigma, 6),
+                'dias_con_stock': n,
+                'dias_ventana': dias_ventana,
+                'demanda_neta': round(a['suma'], 2),
+                'factor_censura': round(factor, 4),
+            }
+
+        return salida
 
     @staticmethod
     def clasificar_syntetos_boylan(ventana_meses: int = 12,

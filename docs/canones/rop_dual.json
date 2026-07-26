@@ -1,0 +1,99 @@
+{
+  "_doc": [
+    "Canon del ROP dual (§M0.4). Casos calculados A MANO.",
+    "",
+    "Existe porque una fórmula dimensionalmente imposible pasó 631 tests. El",
+    "Vigía tenía su canon y su backtest de Florencia; los otros cuatro modelos",
+    "nunca tuvieron juez. Ningún test comparaba contra un número calculado",
+    "aparte, así que sqrt(sigma_LT) —raíz de una desviación en días, que no da",
+    "días— sobrevivió meses.",
+    "",
+    "A diferencia del canon de Florencia, este no se certifica contra historia:",
+    "se certifica contra aritmética. Los valores de abajo se calcularon con",
+    "calculadora y se verifican con tolerancia de flotante.",
+    "",
+    "UNIDAD CANÓNICA: días. d_avg y sigma_d en unidades/día; LT, R y sigma_LT en",
+    "días. El pronóstico corre semanal: convertir en la frontera",
+    "(d_dia = f_semanal/7, sigma_d_dia = sigma_semanal/sqrt(7)), nunca adentro."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "ROP dual — punto de reorden por origen",
+    "que_decide": "Cuándo disparar reposición nacional y cuánto pedir en el contenedor China.",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md §M0.4"
+  },
+
+  "formula": {
+    "sigma_ltd": "sqrt( (LT + R) * sigma_d^2  +  d^2 * sigma_LT^2 )",
+    "rop": "d * LT + z * sigma_LTD",
+    "base_stock_china": "S = d * (LT + R) + z * sigma_(LT+R)",
+    "_notas": [
+      "Se suman VARIANZAS, no desviaciones: por eso la cuadratura.",
+      "sigma_LT multiplica solo a d, y R nunca entra en el término de lead time:",
+      "el periodo de revisión es el propio ciclo de compra, es determinístico.",
+      "El sqrt(LT) simplificado solo vale con lead time constante. Buenaventura",
+      "no lo es."
+    ]
+  },
+
+  "estimador_sigma_d": {
+    "activo": "SIGMA_EMPIRICA_DESCENSURADA",
+    "definicion": "sigma empírica de la demanda diaria sobre los días CON stock, contando como cero los días con stock y sin venta",
+    "pendiente": "RMSE de un paso adelante del TSB — el colchón debe absorber lo que el modelo no vio venir, no la varianza cruda. Cambiar cuando el TSB pase su backtest MASE.",
+    "_por_que_importa": [
+      "Usar d_avg en lugar de sigma_d NO es un sesgo uniforme: subestima cuando",
+      "sigma_d > d (demanda grumosa — 40 unidades cada 25 días da d=1.6 y",
+      "sigma_d~7.8, CV~4.9) y SOBREestima en los A suaves de alta rotación.",
+      "Es ruido, no sesgo. Por eso hoy ningún margen de seguridad es auditable."
+    ]
+  },
+
+  "casos": [
+    {
+      "nombre": "China — SKU de rotación media",
+      "entrada": {"d_avg": 10.0, "sigma_d": 8.0, "lt": 105, "sigma_lt": 15, "r": 90, "z": 1.6449},
+      "esperado": {
+        "var_demanda": 12480.0,
+        "var_leadtime": 22500.0,
+        "pct_riesgo_portuario": 64.3,
+        "sigma_ltr": 187.0294,
+        "safety_stock": 307.64,
+        "base_stock_s": 2257.64,
+        "sigma_ltd_solo_lt": 170.9386,
+        "rop": 1331.18
+      },
+      "_hallazgo": [
+        "El 64% de la varianza es portuaria, no comercial. Registrar fechas de",
+        "contenedores deja de ser higiene: es el insumo de dos tercios del cálculo.",
+        "",
+        "La fórmula vieja daba SS = z*d*sqrt(sigma_LT) = 63.71 contra 307.64.",
+        "4.83x corto, en el origen de 105 días donde el colchón es lo único que hay.",
+        "El multiplicador no depende de z: se cancela."
+      ]
+    },
+    {
+      "nombre": "Nacional — revisión continua, R=0",
+      "entrada": {"d_avg": 4.0, "sigma_d": 3.0, "lt": 5, "sigma_lt": 2, "r": 0, "z": 1.6449},
+      "esperado": {"sigma_ltd": 10.4403, "safety_stock": 17.17, "rop": 37.17}
+    },
+    {
+      "nombre": "Borde — variabilidad cero",
+      "entrada": {"d_avg": 4.0, "sigma_d": 0.0, "lt": 5, "sigma_lt": 0, "r": 0, "z": 1.6449},
+      "esperado": {"sigma_ltd": 0.0, "safety_stock": 0.0, "rop": 20.0},
+      "_nota": "Sin incertidumbre el colchón desaparece y el ROP es exactamente d*LT. Si esto no da 20 exacto, la fórmula tiene un término espurio."
+    }
+  ],
+
+  "barandas": {
+    "cobertura_max_dias": 180,
+    "_nota": "Tope duro sobre el base-stock China. Los tres arreglos empujan hacia arriba a la vez; sin baranda se cambia un error por el opuesto en una empresa con caja comprometida."
+  },
+
+  "insumos": {
+    "_nota": "Canon aritmético: no depende de archivos, solo de la fórmula. No aplica registro de hashes.",
+    "registrado": false,
+    "archivos": []
+  }
+}
