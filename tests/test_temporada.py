@@ -252,3 +252,61 @@ class TestCanonClasificacionSB:
         assert lim['_severidad'].startswith('BAJA')
         texto = ' '.join(lim['truncamiento_del_dia_de_agotamiento'])
         assert 'truncado' in texto
+
+
+class TestGuardDelReset:
+    """Lo único pendiente que puede destruir algo irrecuperable.
+
+    Si una limpieza se lleva serie_vigia HISTORICO, alarma_vigia o los canones,
+    se vuelve a quedar ciego seis meses y se pierde la alarma de Florencia.
+    """
+
+    def _mod(self):
+        import importlib.util
+        from pathlib import Path
+        ruta = Path(__file__).resolve().parents[1] / 'scripts' / 'reset_transaccional.py'
+        assert ruta.exists(), 'falta scripts/reset_transaccional.py'
+        spec = importlib.util.spec_from_file_location('reset_transaccional', ruta)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def test_las_analiticas_nunca_estan_en_la_lista_de_borrado(self):
+        m = self._mod()
+        for t in m.PROTEGIDAS_ANALITICAS:
+            assert t not in m.OPERATIVAS, f'{t} NO puede borrarse: memoria analítica'
+
+    def test_las_maestras_nunca_estan_en_la_lista_de_borrado(self):
+        m = self._mod()
+        for t in m.PROTEGIDAS_MAESTRAS:
+            assert t not in m.OPERATIVAS, f'{t} NO puede borrarse: tabla maestra'
+
+    def test_protege_las_cinco_criticas_por_nombre(self):
+        """Guard explícito: si alguien renombra o quita una, esto falla."""
+        m = self._mod()
+        for t in ('serie_vigia', 'alarma_vigia', 'kardex_movimientos',
+                  'stock_diario', 'juicios_temporada'):
+            assert t in m.PROTEGIDAS_ANALITICAS, f'{t} debe estar protegida'
+
+    def test_el_guard_aborta_si_contaminan_la_lista(self):
+        m = self._mod()
+        original = list(m.OPERATIVAS)
+        try:
+            m.OPERATIVAS.append('serie_vigia')
+            assert m._guard() is False, 'el guard debe abortar con una protegida en la lista'
+        finally:
+            m.OPERATIVAS[:] = original
+        assert m._guard() is True
+
+    def test_cada_protegida_declara_por_que(self):
+        m = self._mod()
+        for t, razon in m.PROTEGIDAS_ANALITICAS.items():
+            assert razon and len(razon) > 15, f'{t} sin explicar qué se pierde'
+
+    def test_las_tablas_operativas_existen_de_verdad(self, app, db):
+        """Una tabla mal escrita haría que el reset la salte en silencio."""
+        m = self._mod()
+        from app.extensions import db as _db
+        reales = set(_db.metadata.tables)
+        fantasmas = [t for t in m.OPERATIVAS if t not in reales]
+        assert not fantasmas, f'tablas inexistentes en la lista: {fantasmas}'

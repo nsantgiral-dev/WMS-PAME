@@ -2020,6 +2020,10 @@
       <!-- DECISIÓN — lo que compromete plata: trimestral y anual -->
       <div style="width:100%;padding:8px 10px 2px;font-size:10px;font-weight:700;color:var(--tx3);letter-spacing:.4px;border-top:1px solid var(--brd);">DECISIÓN</div>
       <div style="display:flex;width:100%;flex-wrap:wrap;">
+      <div id="comp-sub-nacional" onclick="compSubtab('nacional')"
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🔁 Reposición
+      </div>
       <div id="comp-sub-armador" onclick="compSubtab('armador')"
         style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         🚢 Contenedor
@@ -2172,6 +2176,11 @@
     <!-- ── SECCIÓN: DERIVA DE PRECIOS ─────────────────────────────── -->
     <div id="comp-sec-deriva" style="display:none;">
       <div style="text-align:center;padding:30px;color:#555;">Cargando deriva...</div>
+
+    <!-- ── DECISIÓN: REPOSICIÓN NACIONAL (semanal) ───────────────── -->
+    <div id="comp-sec-nacional" style="display:none;">
+      <div id="nacional-container"><div style="color:var(--tx3);padding:20px;">Cargando…</div></div>
+    </div>
 
     <!-- ── DECISIÓN: TEMPORADA (instrumento de comité) ──────────── -->
     <div id="comp-sec-temporada" style="display:none;">

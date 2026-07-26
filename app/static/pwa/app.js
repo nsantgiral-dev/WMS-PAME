@@ -2301,25 +2301,39 @@ async function _guardarUsuario(uid) {
 // falsos) o se descubre que estaba mal (y se aprende que el sistema miente).
 // La etiqueta cuesta nada y evita las dos.
 // ══════════════════════════════════════════════════════════════════════════
+function _pintarBannerModo(modo) {
+  const el = document.getElementById('banner-modo');
+  if (!el) return;
+
+  // REGLA 0 aplicada al propio banner: solo un 'produccion' EXPLÍCITO lo apaga.
+  // Si la respuesta no llegó, vino rara, o el campo falta por configuración,
+  // se asume que NO es producción y se avisa. Un banner de más es una molestia;
+  // un banner de menos es alguien tomando por real un número de ensayo — y esa
+  // es la misma omisión de configuración que produjo el 403 del Vigía.
+  if (modo === 'produccion') { el.style.display = 'none'; return; }
+
+  const cfg = modo === 'simulacion'
+    ? { txt: 'MODO SIMULACIÓN — datos ficticios, nada llega a Siesa', bg: '#7C2D12', fg: '#FDBA74' }
+    : modo === 'ensayo'
+    ? { txt: 'MODO ENSAYO — los números de pantalla NO son la realidad', bg: '#78350F', fg: '#FCD34D' }
+    : { txt: 'MODO NO VERIFICADO — no asumas que estos números son reales', bg: '#7F1D1D', fg: '#FCA5A5' };
+
+  el.textContent = cfg.txt;
+  el.style.background = cfg.bg;
+  el.style.color = cfg.fg;
+  el.style.display = 'block';
+}
+
 async function verificarModoSistema() {
   try {
     const r = await fetch(API + '/api/health/ping');
-    if (!r.ok) return;
+    if (!r.ok) { _pintarBannerModo(null); return; }
     const d = await r.json();
-    const el = document.getElementById('banner-modo');
-    if (!el) return;
-
-    if (d.modo === 'produccion') { el.style.display = 'none'; return; }
-
-    const cfg = d.modo === 'simulacion'
-      ? { txt: 'MODO SIMULACIÓN — datos ficticios, nada llega a Siesa', bg: '#7C2D12', fg: '#FDBA74' }
-      : { txt: 'MODO ENSAYO — los números de pantalla NO son la realidad', bg: '#78350F', fg: '#FCD34D' };
-
-    el.textContent = cfg.txt;
-    el.style.background = cfg.bg;
-    el.style.color = cfg.fg;
-    el.style.display = 'block';
-  } catch (_) { /* silencioso: el banner nunca debe romper la app */ }
+    _pintarBannerModo(d.modo);
+  } catch (_) {
+    // Sin respuesta no se puede afirmar que sea producción
+    _pintarBannerModo(null);
+  }
 }
 
 document.addEventListener('DOMContentLoaded', verificarModoSistema);

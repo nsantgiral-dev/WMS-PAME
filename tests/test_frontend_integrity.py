@@ -716,4 +716,68 @@ class TestBannerModo:
 
     def test_en_produccion_el_banner_se_oculta(self):
         src = _read('app.js')
-        assert "d.modo === 'produccion'" in src
+        assert "modo === 'produccion'" in src
+
+
+class TestReposicionNacional:
+    """La reorganización no puede dejar huérfana la decisión SEMANAL.
+
+    Sería una ironía costosa: superficie excelente para lo trimestral y nada
+    para lo que es pan de cada semana y la mayoría del catálogo.
+    """
+
+    def test_existe_la_pantalla(self):
+        html = _read('index.html')
+        assert 'id="comp-sub-nacional"' in html
+        assert 'id="comp-sec-nacional"' in html
+
+    def test_el_dispatcher_la_carga(self):
+        assert 'compCargarNacional()' in _read('recepcion.js')
+
+    def test_muestra_procedencia_por_fila(self):
+        """Misma exigencia que el déficit China: la señal donde está el número."""
+        src = _read('compras_ia.js')
+        i = src.index('function _renderNacional')
+        bloque = src[i:i + 4000]
+        for campo in ('censurado', 'dias_con_stock', 'factor_censura',
+                      'ss_formula_anterior', 'sigma_d_diaria'):
+            assert campo in bloque, f'Reposición nacional sin procedencia: {campo}'
+
+    def test_ordena_por_urgencia_no_por_alfabeto(self):
+        src = _read('compras_ia.js')
+        assert 'bajo_rop' in src and 'cobertura_dias' in src
+
+
+class TestBannerReglaCero:
+    """Regla 0 aplicada al propio banner.
+
+    Si el default fuera 'producción', el banner desaparecería justo cuando más
+    se necesita, por omisión de configuración — el mismo modo de falla del 403.
+    """
+
+    def test_solo_un_produccion_explicito_apaga_el_banner(self):
+        src = _read('app.js')
+        assert "modo === 'produccion'" in src
+        assert 'MODO NO VERIFICADO' in src, \
+            'estado desconocido debe mostrar aviso, no ocultarlo'
+
+    def test_fallo_de_red_no_apaga_el_banner(self):
+        """Sin respuesta no se puede afirmar que sea producción."""
+        src = _read('app.js')
+        i = src.index('async function verificarModoSistema')
+        bloque = src[i:i + 900]
+        assert bloque.count('_pintarBannerModo(null)') >= 2, \
+            'tanto el catch como el !r.ok deben pintar el banner'
+
+    def test_el_backend_separa_ensayo_de_conectividad(self):
+        """WMS_ENSAYO es independiente de Connekta a propósito.
+
+        Los flags de connekta dicen si los POST llegan a Siesa; NO dicen si los
+        datos en pantalla son de prueba. En un ensayo con vestuario hay
+        credenciales reales y datos ficticios a la vez.
+        """
+        import os
+        ruta = os.path.join(os.path.dirname(__file__), '..', 'app', 'routes', 'health.py')
+        src = open(ruta).read()
+        assert "WMS_ENSAYO" in src
+        assert "'ensayo'" in src

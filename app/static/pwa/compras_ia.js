@@ -478,3 +478,101 @@ function _compKpi(valor, label, color) {
     <div style="font-size:10px;color:var(--tx3);">${label}</div>
   </div>`;
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// REPOSICIÓN NACIONAL — la decisión semanal.
+//
+// Lista provisional, deliberadamente simple. La pantalla buena ("Reposición":
+// ROP nacional + bloqueos + precio de acuerdo vigente en una sola superficie)
+// se diseña con el Dueño de Compras cuando exista, porque su flujo de trabajo
+// nadie lo ha ejecutado nunca.
+//
+// Mientras tanto esto EXISTE, que es lo que importa: la reorganización le dio
+// una superficie excelente a la decisión trimestral y no puede dejar huérfana
+// a la semanal, que es la mayoría del catálogo.
+// ═══════════════════════════════════════════════════════════════════
+
+async function compCargarNacional() {
+  const el = document.getElementById('nacional-container');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando puntos de reorden…</div>';
+  try {
+    const rop = await get('/api/compras/rop-dual');
+    _renderNacional(el, rop);
+  } catch (e) {
+    el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
+  }
+}
+
+function _renderNacional(el, rop) {
+  const nac = (rop && rop.nacional) || {};
+  const items = (nac.items || []).slice();
+  const d = rop.delta_vs_formula_anterior || {};
+
+  // Lo que está bajo ROP primero, y dentro de eso lo de menor cobertura:
+  // el orden es la urgencia, no el alfabeto.
+  items.sort((a, b) => (b.bajo_rop ? 1 : 0) - (a.bajo_rop ? 1 : 0)
+                    || a.cobertura_dias - b.cobertura_dias);
+
+  let html = `<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:10px;">
+    <span style="font-size:13px;font-weight:700;color:var(--tx);">Reposición nacional</span>
+    <span style="font-size:10px;color:var(--tx3);">LT ${nac.lt_dias}d · σ_LT ${nac.sigma_lt}d · revisión continua (R=0)</span>
+  </div>`;
+
+  html += `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px;">
+    ${_compKpi(nac.bajo_rop || 0, 'Bajo punto de reorden', (nac.bajo_rop || 0) > 0 ? 'var(--red)' : 'var(--green)')}
+    ${_compKpi(nac.total || 0, 'SKUs nacionales', 'var(--tx)')}
+  </div>`;
+
+  if (d.skus_censurados) {
+    html += `<div style="background:#F8717122;border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--red);">
+      <strong>${d.skus_censurados} SKU(s) con demanda CENSURADA</strong> — sin StockDiario el cálculo
+      subestima. Correr <em>Reconstruir stock diario</em> en Inventario › Datos.
+    </div>`;
+  }
+
+  if (!items.length) {
+    html += '<div style="font-size:11px;color:var(--tx3);padding:14px 0;">Sin SKUs nacionales con demanda. ¿Está descargado el kardex?</div>';
+    el.innerHTML = html;
+    return;
+  }
+
+  html += `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead><tr style="border-bottom:2px solid var(--brd);color:var(--tx3);text-align:right;">
+      <th style="text-align:left;padding:5px;">Referencia</th>
+      <th style="padding:5px;">Demanda usada</th>
+      <th style="padding:5px;">Procedencia</th>
+      <th style="padding:5px;">Stock</th>
+      <th style="padding:5px;">ROP</th>
+      <th style="padding:5px;">Cobertura</th>
+      <th style="padding:5px;">Colchón</th>
+    </tr></thead><tbody>`;
+
+  for (const it of items.slice(0, 60)) {
+    const cens = it.censurado;
+    const fc = it.factor_censura || 1;
+    const procColor = cens ? 'var(--red)' : (fc > 1.15 ? 'var(--yellow)' : 'var(--green)');
+    const proc = cens ? 'CENSURADA · sin StockDiario'
+                      : `${it.dias_con_stock}d con stock · +${Math.round((fc - 1) * 100)}%`;
+    html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;
+      background:${it.bajo_rop ? '#F8717111' : 'transparent'};">
+      <td style="text-align:left;padding:5px;color:var(--tx);font-weight:600;">
+        ${it.bajo_rop ? '<span style="color:var(--red);">● </span>' : ''}${it.referencia}
+      </td>
+      <td style="padding:5px;color:var(--tx);">${it.d_avg_diaria}/d
+        <span style="color:var(--tx3);font-size:10px;"> σ ${it.sigma_d_diaria}</span></td>
+      <td style="padding:5px;color:${procColor};font-size:10px;">${proc}</td>
+      <td style="padding:5px;color:var(--tx3);">${it.stock_actual}</td>
+      <td style="padding:5px;color:var(--tx);font-weight:700;">${it.rop}</td>
+      <td style="padding:5px;color:${it.cobertura_dias < 7 ? 'var(--red)' : 'var(--tx3)'};">${it.cobertura_dias}d</td>
+      <td style="padding:5px;color:var(--tx3);font-size:10px;">${it.ss_formula_anterior} → ${it.safety_stock}</td>
+    </tr>`;
+  }
+  html += `</tbody></table></div>
+    <div style="font-size:10px;color:var(--tx3);margin-top:8px;line-height:1.6;">
+      ● = bajo punto de reorden. σ_d: ${rop.estimador_sigma_d}.<br>
+      Provisional: la pantalla definitiva fusiona esto con bloqueos y precio de acuerdo vigente —
+      se diseña con el Dueño de Compras, porque nadie ha ejecutado ese flujo todavía.
+    </div>`;
+  el.innerHTML = html;
+}

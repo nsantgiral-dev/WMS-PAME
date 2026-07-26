@@ -36,12 +36,22 @@ def health_ping():
     """Endpoint público mínimo — solo indica si el servicio está activo."""
     from app.services.connekta_gateway import connekta
     try:
-        # El modo alimenta el banner global: en ensayo o simulación los datos
-        # de pantalla NO son la realidad, y quien los mira debe saberlo. Ver un
-        # número de ensayo sin etiqueta entrena a obedecer números falsos.
-        modo = ('simulacion' if connekta.modo_simulacion
-                else 'ensayo' if getattr(connekta, 'modo_ensayo', False)
-                else 'produccion')
+        # El modo alimenta el banner global: si los datos de pantalla NO son la
+        # realidad, quien los mira debe saberlo. Ver un número de ensayo sin
+        # etiqueta entrena a obedecer números falsos.
+        #
+        # WMS_ENSAYO es INDEPENDIENTE de Connekta a propósito. Los flags de
+        # connekta describen si los POST llegan a Siesa; NO describen si los
+        # datos en pantalla son de prueba. En un ensayo con vestuario hay
+        # credenciales reales y datos ficticios a la vez — sin esta variable el
+        # banner se apagaría justo cuando más se necesita.
+        import os as _os
+        if _os.environ.get('WMS_ENSAYO', '').lower() == 'true':
+            modo = 'ensayo'
+        else:
+            modo = ('simulacion' if connekta.modo_simulacion
+                    else 'ensayo' if getattr(connekta, 'modo_ensayo', False)
+                    else 'produccion')
         return jsonify({
             'ok': True,
             'modo': modo,
