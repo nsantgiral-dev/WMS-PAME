@@ -86,20 +86,57 @@ function _renderAcuerdos(el, data, calendario) {
 // SUB-TAB: ARMADOR DE CONTENEDOR
 // ═══════════════════════════════════════════════════════════════════
 
-async function compCargarArmador() {
+/** Tipo de contenedor seleccionado. Cambia el CBM objetivo contra el que se arma. */
+let ARMADOR_TIPO = '40STD';
+/** Catálogo cacheado — viene del backend, no se duplica aquí. */
+let ARMADOR_TIPOS = null;
+
+async function compCargarArmador(tipo) {
   const el = document.getElementById('comp-sec-armador');
   if (!el) return;
+  if (tipo) ARMADOR_TIPO = tipo;
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando propuesta de contenedor...</div>';
 
   try {
-    const [propuesta, g5] = await Promise.all([
-      get('/api/compras/armador/propuesta'),
+    const pend = [
+      get('/api/compras/armador/propuesta?tipo=' + encodeURIComponent(ARMADOR_TIPO)),
       get('/api/compras/armador/g5'),
-    ]);
+    ];
+    if (!ARMADOR_TIPOS) pend.push(get('/api/compras/armador/tipos'));
+
+    const [propuesta, g5, cat] = await Promise.all(pend);
+    if (cat) ARMADOR_TIPOS = cat.tipos;
     _renderArmador(el, propuesta, g5);
   } catch (e) {
     el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
   }
+}
+
+/** Selector de contenedor: cada tipo muestra su CBM útil. */
+function _selectorContenedor(propuesta) {
+  if (!ARMADOR_TIPOS || !ARMADOR_TIPOS.length) return '';
+
+  const botones = ARMADOR_TIPOS.map(t => {
+    const activo = t.tipo === ARMADOR_TIPO;
+    return `<button onclick="compCargarArmador('${t.tipo}')"
+      style="padding:6px 12px;border-radius:6px;cursor:pointer;font-size:12px;
+             border:1px solid ${activo ? 'var(--pm)' : 'var(--brd)'};
+             background:${activo ? 'var(--pm)' : 'transparent'};
+             color:${activo ? '#fff' : 'var(--tx3)'};
+             font-weight:${activo ? '700' : '400'};">
+      ${t.etiqueta}
+      <span style="opacity:.75;font-size:10px;"> ${t.cbm_util} CBM</span>
+    </button>`;
+  }).join('');
+
+  const sel = ARMADOR_TIPOS.find(t => t.tipo === ARMADOR_TIPO);
+  return `<div style="margin-bottom:12px;">
+    <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">Contenedor a traer</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${botones}</div>
+    ${sel ? `<div style="font-size:10px;color:var(--tx3);margin-top:6px;">
+      CBM útil ${sel.cbm_util} · objetivo de armado ${sel.cbm_objetivo} (90%) · payload ${sel.payload_kg.toLocaleString('es-CO')} kg
+    </div>` : ''}
+  </div>`;
 }
 
 function _renderArmador(el, propuesta, g5) {
@@ -126,6 +163,9 @@ function _renderArmador(el, propuesta, g5) {
     </span>`;
   }
   html += '</div>';
+
+  // Selector de contenedor — define el CBM objetivo de todo lo que sigue
+  html += _selectorContenedor(propuesta);
 
   // Barras de progreso CBM + Peso
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">';

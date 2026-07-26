@@ -114,3 +114,49 @@ class TestEndpoints:
     def test_contenedores_endpoint(self, app):
         rules = [r.rule for r in app.url_map.iter_rules()]
         assert any('armador/contenedores' in r for r in rules)
+
+
+class TestTiposContenedor:
+    """20', 40' y 40' HQ — cada uno con su CBM útil.
+
+    Armar contra el contenedor equivocado produce una propuesta plausible y
+    falsa: los items caben en el papel y no en el barco.
+    """
+
+    def test_los_tres_tipos_existen(self):
+        from app.services.armador_service import CONTENEDOR_PARAMS
+        assert set(CONTENEDOR_PARAMS) == {'20STD', '40STD', '40HC'}
+
+    def test_cbm_util_crece_con_el_tamano(self):
+        """20' < 40' < 40'HQ. Un orden invertido sería un error de digitación."""
+        from app.services.armador_service import CONTENEDOR_PARAMS as C
+        assert C['20STD']['cbm_util'] < C['40STD']['cbm_util'] < C['40HC']['cbm_util']
+
+    def test_catalogo_expone_cbm_util_y_objetivo(self):
+        """El selector necesita CBM útil y el objetivo al 90%."""
+        from app.services.armador_service import tipos_contenedor, FACTOR_UTILIZACION
+        for t in tipos_contenedor():
+            assert t['etiqueta'] and t['cbm_util'] > 0 and t['payload_kg'] > 0
+            esperado = round(t['cbm_util'] * FACTOR_UTILIZACION, 1)
+            assert t['cbm_objetivo'] == esperado
+
+    def test_tipo_desconocido_revienta_sin_fallback(self, app, db):
+        """Antes caía silenciosamente a 40STD: propuesta de otro contenedor."""
+        import pytest
+        from app.services.armador_service import ArmadorService
+        with pytest.raises(ValueError, match='desconocido'):
+            ArmadorService.armar_contenedor('53FT')
+
+    def test_cada_tipo_arma_contra_su_propio_objetivo(self, app, db):
+        """El objetivo de CBM debe cambiar con el contenedor elegido."""
+        from app.services.armador_service import ArmadorService, CONTENEDOR_PARAMS, FACTOR_UTILIZACION
+        for tipo in ('20STD', '40STD', '40HC'):
+            r = ArmadorService.armar_contenedor(tipo)
+            esperado = round(CONTENEDOR_PARAMS[tipo]['cbm_util'] * FACTOR_UTILIZACION, 2)
+            assert r['barras']['cbm_objetivo'] == esperado, f'{tipo} armó contra otro objetivo'
+            assert r['tipo_contenedor'] == tipo
+            assert r['contenedor_cbm_util'] == CONTENEDOR_PARAMS[tipo]['cbm_util']
+
+    def test_endpoint_tipos_registrado(self, app):
+        rutas = [str(r) for r in app.url_map.iter_rules()]
+        assert any('/armador/tipos' in r for r in rutas)

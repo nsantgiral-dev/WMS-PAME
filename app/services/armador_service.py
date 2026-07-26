@@ -21,10 +21,28 @@ from app.extensions import db
 logger = logging.getLogger(__name__)
 
 # Parámetros de contenedor (configurables)
+# cbm_util = volumen interno aprovechable, ya descontado el desperdicio de
+# estiba. Es el número contra el que se arma; el objetivo real es
+# cbm_util * FACTOR_UTILIZACION.
 CONTENEDOR_PARAMS = {
-    '40STD': {'cbm_util': 67.0, 'payload_kg': 26500},
-    '40HC': {'cbm_util': 76.0, 'payload_kg': 26500},
+    '20STD': {'etiqueta': "20' STD",  'cbm_util': 33.0, 'payload_kg': 28000},
+    '40STD': {'etiqueta': "40' STD",  'cbm_util': 67.0, 'payload_kg': 26500},
+    '40HC':  {'etiqueta': "40' HQ",   'cbm_util': 76.0, 'payload_kg': 26500},
 }
+
+
+def tipos_contenedor():
+    """Catálogo para el selector del panel — una sola fuente de verdad."""
+    return [
+        {
+            'tipo': tipo,
+            'etiqueta': p['etiqueta'],
+            'cbm_util': p['cbm_util'],
+            'payload_kg': p['payload_kg'],
+            'cbm_objetivo': round(p['cbm_util'] * FACTOR_UTILIZACION, 1),
+        }
+        for tipo, p in CONTENEDOR_PARAMS.items()
+    ]
 FACTOR_UTILIZACION = 0.90  # objetivo de armado: 90% del CBM útil
 
 # Lead times conservadores (se actualizan con datos reales)
@@ -265,7 +283,13 @@ class ArmadorService:
         from app.models.producto import Producto
         from sqlalchemy import func
 
-        params = CONTENEDOR_PARAMS.get(tipo_contenedor, CONTENEDOR_PARAMS['40STD'])
+        # Sin fallback silencioso: armar contra el contenedor equivocado produce
+        # una propuesta plausible y falsa. Mejor reventar.
+        params = CONTENEDOR_PARAMS.get(tipo_contenedor)
+        if params is None:
+            raise ValueError(
+                f'Tipo de contenedor desconocido: {tipo_contenedor}. '
+                f'Válidos: {", ".join(CONTENEDOR_PARAMS)}')
         cbm_objetivo = params['cbm_util'] * FACTOR_UTILIZACION
         payload_kg = params['payload_kg']
 
@@ -442,6 +466,8 @@ class ArmadorService:
             'cobertura_fichas_pct': round(cobertura_fichas, 1),
             'gatillo': gatillo,
             'tipo_contenedor': tipo_contenedor,
+            'contenedor_etiqueta': params['etiqueta'],
+            'contenedor_cbm_util': params['cbm_util'],
             'barras': {
                 'cbm_acumulado': round(cbm_acum, 2),
                 'cbm_objetivo': round(cbm_objetivo, 2),

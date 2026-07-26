@@ -40,9 +40,20 @@ def propuesta_contenedor():
     from app.services.armador_service import ArmadorService
     try:
         resultado = ArmadorService.armar_contenedor(tipo, presupuesto)
+    except ValueError as e:
+        # Tipo de contenedor invalido — error del cliente, no del servidor
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     return jsonify(resultado), 200
+
+
+@armador_bp.route('/armador/tipos', methods=['GET'])
+@jwt_required()
+def tipos_de_contenedor():
+    """Catálogo de contenedores con su CBM útil — alimenta el selector del panel."""
+    from app.services.armador_service import tipos_contenedor
+    return jsonify({'tipos': tipos_contenedor()}), 200
 
 
 @armador_bp.route('/armador/g5', methods=['GET'])
