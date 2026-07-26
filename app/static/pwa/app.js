@@ -2292,3 +2292,34 @@ async function _guardarUsuario(uid) {
 
 // ── Admin Pedir — solicitar traslado hacia NB1 ──────────────────
 
+
+// ══════════════════════════════════════════════════════════════════════════
+// Banner de modo — protege lo único que no se recarga: los hábitos.
+//
+// En un ensayo con datos parciales, ver "faltan 400 tableros" produce una de
+// dos cosas y ambas son malas: o se le cree (y se aprende a obedecer números
+// falsos) o se descubre que estaba mal (y se aprende que el sistema miente).
+// La etiqueta cuesta nada y evita las dos.
+// ══════════════════════════════════════════════════════════════════════════
+async function verificarModoSistema() {
+  try {
+    const r = await fetch(API + '/api/health/ping');
+    if (!r.ok) return;
+    const d = await r.json();
+    const el = document.getElementById('banner-modo');
+    if (!el) return;
+
+    if (d.modo === 'produccion') { el.style.display = 'none'; return; }
+
+    const cfg = d.modo === 'simulacion'
+      ? { txt: 'MODO SIMULACIÓN — datos ficticios, nada llega a Siesa', bg: '#7C2D12', fg: '#FDBA74' }
+      : { txt: 'MODO ENSAYO — los números de pantalla NO son la realidad', bg: '#78350F', fg: '#FCD34D' };
+
+    el.textContent = cfg.txt;
+    el.style.background = cfg.bg;
+    el.style.color = cfg.fg;
+    el.style.display = 'block';
+  } catch (_) { /* silencioso: el banner nunca debe romper la app */ }
+}
+
+document.addEventListener('DOMContentLoaded', verificarModoSistema);

@@ -637,3 +637,83 @@ class TestEndpointsSinConsumidor:
         assert len(BASELINE_HEREDADO) <= 54, (
             f'BASELINE_HEREDADO creció a {len(BASELINE_HEREDADO)}. '
             f'La deuda nueva va a DEUDA_SIN_UI con su razón.')
+
+
+class TestOrganizacionPorDecision:
+    """La unidad de organización es la decisión, no el módulo ni el rol.
+
+    Los cuatro modelos vivían bajo Inventario con código y endpoints de compras.
+    Nadie los encontraba ahí.
+    """
+
+    def _html(self):
+        return _read('index.html')
+
+    def test_los_modelos_ya_no_viven_en_inventario(self):
+        html = self._html()
+        assert 'inv-panel-inteligencia' not in html, \
+            'el panel de Inteligencia debe haber salido de Inventario'
+        assert 'inv-tab-inteligencia' not in html
+
+    def test_compras_agrupa_operacion_y_decision(self):
+        """Lo continuo arriba, lo que compromete plata abajo."""
+        html = self._html()
+        assert 'OPERACIÓN' in html and 'DECISIÓN' in html
+        for sub in ('comp-sub-temporada', 'comp-sub-modelos', 'comp-sub-armador'):
+            assert f'id="{sub}"' in html, f'falta la sub-pestaña {sub}'
+
+    def test_el_dispatcher_de_compras_cubre_las_secciones_nuevas(self):
+        src = _read('recepcion.js')
+        assert "'temporada'" in src and "'modelos'" in src
+        assert 'temporadaCargar()' in src and 'modelosCargar()' in src
+
+    def test_inventario_no_dispara_modelos(self):
+        """invSubtab quedó con conteos, abc y datos. Nada de modelos."""
+        src = _read('conteo.js')
+        assert 'compCargarInteligencia' not in src
+
+
+class TestFusionRopArmador:
+    """Es la única cadena que cruza módulos y la de la decisión más cara.
+
+    El déficit China no es información PREVIA al armado: es su insumo.
+    """
+
+    def test_el_armador_consume_el_rop(self):
+        src = _read('compras_ia.js')
+        assert '/api/compras/rop-dual' in src, 'el Armador debe traer el déficit'
+        assert '_tablaDeficitChina' in src
+
+    def test_la_tabla_muestra_procedencia_por_fila(self):
+        """Dispositivo de seguridad, no adorno.
+
+        El bug de 25x habría producido números absurdos; lo único que separa a
+        un humano de aprobarlos es ver en la MISMA fila de dónde salió la
+        demanda. Un aviso agregado no basta.
+        """
+        src = _read('compras_ia.js')
+        for campo in ('censurado', 'dias_con_stock', 'factor_censura',
+                      'ss_formula_anterior', 'sigma_d_diaria'):
+            assert campo in src, f'falta procedencia por fila: {campo}'
+
+    def test_avisa_de_censura_en_la_pantalla_de_decision(self):
+        src = _read('compras_ia.js')
+        assert 'skus_censurados' in src
+        assert 'CENSURADA' in src
+
+
+class TestBannerModo:
+    """Los datos de ensayo entrenan juicios reales. Hay que etiquetarlos."""
+
+    def test_existe_el_contenedor_del_banner(self):
+        assert 'id="banner-modo"' in _read('index.html')
+
+    def test_app_consulta_el_modo_y_lo_muestra(self):
+        src = _read('app.js')
+        assert 'verificarModoSistema' in src
+        assert '/api/health/ping' in src
+        assert 'MODO ENSAYO' in src and 'MODO SIMULACIÓN' in src
+
+    def test_en_produccion_el_banner_se_oculta(self):
+        src = _read('app.js')
+        assert "d.modo === 'produccion'" in src

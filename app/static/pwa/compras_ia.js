@@ -102,12 +102,13 @@ async function compCargarArmador(tipo) {
       get('/api/compras/armador/propuesta?tipo=' + encodeURIComponent(ARMADOR_TIPO)),
       get('/api/compras/armador/g5'),
       get('/api/compras/armador/sigma-lt'),
+      get('/api/compras/rop-dual'),
     ];
     if (!ARMADOR_TIPOS) pend.push(get('/api/compras/armador/tipos'));
 
-    const [propuesta, g5, sigma, cat] = await Promise.all(pend);
+    const [propuesta, g5, sigma, rop, cat] = await Promise.all(pend);
     if (cat) ARMADOR_TIPOS = cat.tipos;
-    _renderArmador(el, propuesta, g5, sigma);
+    _renderArmador(el, propuesta, g5, sigma, rop);
   } catch (e) {
     el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
   }
@@ -152,7 +153,83 @@ function _procedenciaSigmaLt(s) {
        + ` — faltan ${faltan} contenedor(es) con fechas completas</span>`;
 }
 
-function _renderArmador(el, propuesta, g5, sigma) {
+/** Déficit China con procedencia por fila.
+ *
+ *  La procedencia NO es adorno de confianza: es dispositivo de seguridad. El
+ *  bug de 25x habría producido números absurdos en pantalla, y lo único que
+ *  separa a un humano de aprobarlos es ver, en la MISMA fila, de dónde salió
+ *  la demanda. Un aviso agregado no basta: la señal va donde está el número.
+ */
+function _tablaDeficitChina(rop) {
+  if (!rop || !rop.china) return '';
+  const ch = rop.china;
+  const items = (ch.items || []).filter(i => (i.deficit || 0) > 0).slice(0, 40);
+  const d = rop.delta_vs_formula_anterior || {};
+
+  let html = `<div style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;margin-bottom:6px;">
+      <span style="font-size:12px;font-weight:700;color:var(--tx);">Déficit China — qué pide entrar al contenedor</span>
+      <span style="font-size:10px;color:var(--tx3);">
+        LT ${ch.lt_dias}d · σ ${ch.sigma_lt}d (${ch.sigma_lt_fuente}) · R ${ch.r_dias}d
+      </span>
+    </div>`;
+
+  if (d.skus_censurados) {
+    html += `<div style="background:#F8717122;border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin-bottom:8px;font-size:11px;color:var(--red);">
+      <strong>${d.skus_censurados} SKU(s) con demanda CENSURADA</strong> — sin StockDiario, el cálculo
+      subestima. Correr <em>Reconstruir stock diario</em> en Inventario › Datos antes de decidir.
+    </div>`;
+  }
+  if (d.multiplicador && d.multiplicador !== 1) {
+    html += `<div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">
+      Colchón: $${''}${(d.safety_stock_antes || 0).toLocaleString('es-CO')} u → ${(d.safety_stock_despues || 0).toLocaleString('es-CO')} u
+      (<strong>${d.multiplicador}×</strong> por la fórmula §M0.4)${d.topados_por_cobertura ? ` · ${d.topados_por_cobertura} topado(s) por cobertura máx.` : ''}
+    </div>`;
+  }
+
+  if (!items.length) {
+    html += '<div style="font-size:11px;color:var(--tx3);padding:10px 0;">Sin déficit China.</div></div>';
+    return html;
+  }
+
+  html += `<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">
+    <thead><tr style="border-bottom:2px solid var(--brd);color:var(--tx3);text-align:right;">
+      <th style="text-align:left;padding:5px;">Referencia</th>
+      <th style="padding:5px;">Demanda usada</th>
+      <th style="padding:5px;">Procedencia</th>
+      <th style="padding:5px;">Posición</th>
+      <th style="padding:5px;">S objetivo</th>
+      <th style="padding:5px;">Déficit</th>
+      <th style="padding:5px;">Colchón</th>
+    </tr></thead><tbody>`;
+
+  for (const it of items) {
+    const cens = it.censurado;
+    const fc = it.factor_censura || 1;
+    const procColor = cens ? 'var(--red)' : (fc > 1.15 ? 'var(--yellow)' : 'var(--green)');
+    const proc = cens
+      ? 'CENSURADA · sin StockDiario'
+      : `${it.dias_con_stock}d con stock · +${Math.round((fc - 1) * 100)}%`;
+    html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;">
+      <td style="text-align:left;padding:5px;color:var(--tx);font-weight:600;">${it.referencia}</td>
+      <td style="padding:5px;color:var(--tx);">${it.d_avg_diaria}/d
+        <span style="color:var(--tx3);font-size:10px;"> σ ${it.sigma_d_diaria}</span></td>
+      <td style="padding:5px;color:${procColor};font-size:10px;">${proc}</td>
+      <td style="padding:5px;color:var(--tx3);">${it.posicion}</td>
+      <td style="padding:5px;color:var(--tx);">${it.s_objetivo}${it.topado_por_cobertura ? ' <span style="color:var(--yellow);" title="topado por cobertura máxima">▲</span>' : ''}</td>
+      <td style="padding:5px;color:var(--pm);font-weight:700;">${it.deficit}</td>
+      <td style="padding:5px;color:var(--tx3);font-size:10px;">${it.ss_formula_anterior} → ${it.safety_stock}</td>
+    </tr>`;
+  }
+  html += `</tbody></table></div>
+    <div style="font-size:10px;color:var(--tx3);margin-top:6px;">
+      ▲ = topado por cobertura máxima (${rop.cobertura_max_dias}d). σ_d: ${rop.estimador_sigma_d}.
+      Fórmula: ${rop.formula}
+    </div></div>`;
+  return html;
+}
+
+function _renderArmador(el, propuesta, g5, sigma, rop) {
   let html = '';
 
   // Modo
@@ -179,6 +256,10 @@ function _renderArmador(el, propuesta, g5, sigma) {
 
   // Selector de contenedor — define el CBM objetivo de todo lo que sigue
   html += _selectorContenedor(propuesta);
+
+  // Déficit China — insumo del armado, no información previa. Antes vivía en
+  // otra pestaña: había que mirar qué falta en una pantalla y armarlo en otra.
+  html += _tablaDeficitChina(rop);
 
   // Barras de progreso CBM + Peso
   html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">';
@@ -303,30 +384,13 @@ function _renderDeriva(el, data) {
 // SUB-TAB: INTELIGENCIA DE INVENTARIO (Kardex + TSB + ROP)
 // ═══════════════════════════════════════════════════════════════════
 
-let _INV_IA_SUBTAB = 'sb';
+let _MODELOS_SUBTAB = 'sb';
 
-async function compCargarInteligencia() {
-  const el = document.getElementById('inv-ia-container');
-  if (!el) return;
-  if (_INV_IA_SUBTAB === 'sb') await _cargarClasificacionSB(el);
-  else if (_INV_IA_SUBTAB === 'tsb') await _cargarTSB(el);
-  else if (_INV_IA_SUBTAB === 'rop') await _cargarROP(el);
-  else if (_INV_IA_SUBTAB === 'newsvendor') await _cargarNewsvendor(el);
-}
-
-function invIaSubtab(nombre) {
-  _INV_IA_SUBTAB = nombre;
-  const tabs = ['sb', 'tsb', 'rop', 'newsvendor'];
-  tabs.forEach(t => {
-    const tab = document.getElementById('inv-ia-sub-' + t);
-    if (tab) {
-      tab.style.background = t === nombre ? 'var(--pm)' : 'transparent';
-      tab.style.color = t === nombre ? '#fff' : 'var(--tx3)';
-      tab.style.fontWeight = t === nombre ? '700' : '400';
-    }
-  });
-  compCargarInteligencia();
-}
+// ═══════════════════════════════════════════════════════════════════
+// MODELOS — pantalla de CONFIANZA, no de decisión.
+// Nadie abre un listado de pronósticos para decidir algo: se abre para
+// auditar si el modelo merece crédito. Tráfico bajo, profundidad permitida.
+// ═══════════════════════════════════════════════════════════════════
 
 async function _cargarClasificacionSB(el) {
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Clasificando demanda (Syntetos-Boylan)...</div>';
@@ -383,46 +447,26 @@ async function _cargarTSB(el) {
   }
 }
 
-async function _cargarROP(el) {
-  el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando ROP dual...</div>';
-  try {
-    const r = await get('/api/compras/rop-dual');
-    let html = '';
-    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">';
-    // Nacional
-    html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;padding:12px;">
-      <div style="font-size:13px;font-weight:700;color:var(--pm);margin-bottom:6px;">Nacional (LT=${r.nacional.lt_dias}d)</div>
-      <div style="font-size:11px;color:var(--tx3);">${r.nacional.total} SKUs | ${r.nacional.bajo_rop} bajo ROP</div>
-    </div>`;
-    // China
-    html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;padding:12px;">
-      <div style="font-size:13px;font-weight:700;color:var(--red);margin-bottom:6px;">China (LT=${r.china.lt_dias}d)</div>
-      <div style="font-size:11px;color:var(--tx3);">${r.china.total} SKUs | ${r.china.con_deficit} con deficit | sigma=${r.china.sigma_lt} (${r.china.sigma_lt_fuente})</div>
-    </div>`;
-    html += '</div>';
-    // Items China con deficit (los urgentes)
-    const urgentes = (r.china.items || []).filter(i => i.deficit > 0).slice(0, 20);
-    if (urgentes.length > 0) {
-      html += '<div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:6px;">SKUs China con deficit</div>';
-      html += '<div style="max-height:300px;overflow-y:auto;">';
-      for (const item of urgentes) {
-        html += `<div style="background:var(--bg-s);border-left:3px solid var(--red);padding:6px 10px;margin-bottom:2px;font-size:11px;display:flex;justify-content:space-between;">
-          <span style="color:var(--tx);">${item.referencia}</span>
-          <span style="color:var(--tx3);">cobertura ${item.cobertura_dias}d | deficit ${item.deficit} | stock ${item.stock_actual} + transito ${item.en_transito}</span>
-        </div>`;
-      }
-      html += '</div>';
-    }
-    el.innerHTML = html;
-  } catch (e) {
-    el.innerHTML = `<div style="color:var(--red);padding:20px;">Error: ${e.message || e}</div>`;
-  }
+async function modelosCargar() {
+  const el = document.getElementById('modelos-container');
+  if (!el) return;
+  if (_MODELOS_SUBTAB === 'sb') await _cargarClasificacionSB(el);
+  else if (_MODELOS_SUBTAB === 'tsb') await _cargarTSB(el);
 }
 
-async function _cargarNewsvendor(el) {
-  // Delegado a temporada.js — es instrumento de comité, no listado.
-  await temporadaCargar();
+function modelosSubtab(nombre) {
+  _MODELOS_SUBTAB = nombre;
+  ['sb', 'tsb'].forEach(t => {
+    const tab = document.getElementById('mod-sub-' + t);
+    if (tab) {
+      tab.style.background = t === nombre ? 'var(--pm)' : 'transparent';
+      tab.style.color = t === nombre ? '#fff' : 'var(--tx3)';
+      tab.style.fontWeight = t === nombre ? '700' : '400';
+    }
+  });
+  modelosCargar();
 }
+
 
 // ═══════════════════════════════════════════════════════════════════
 // HELPER

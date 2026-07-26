@@ -15,7 +15,7 @@ let _TEMP_ESCENARIO = 0;      // % de ajuste a la demanda para el "¿y si...?"
 const TEMPORADA_ACTUAL = '2026-27';
 
 async function temporadaCargar() {
-  const el = document.getElementById('inv-ia-container');
+  const el = document.getElementById('temporada-container');
   if (!el) return;
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando Q* de temporada…</div>';
   try {
@@ -48,7 +48,7 @@ async function temporadaSetParalela(ref, valor) {
     });
     if (isNaN(n)) delete _TEMP_JUICIOS[ref];
     else _TEMP_JUICIOS[ref] = { cantidad_juicio: n };
-    _tempRender(document.getElementById('inv-ia-container'), _TEMP_DATA);
+    _tempRender(document.getElementById('temporada-container'), _TEMP_DATA);
   } catch (e) {
     alerta('No se pudo registrar el juicio: ' + (e.message || e), 'error');
   }
@@ -64,7 +64,7 @@ function _tempLeerParalela() {
  *  de juzgarla. Reescala mu y sigma; el ratio crítico no cambia. */
 function temporadaEscenario(pct) {
   _TEMP_ESCENARIO = pct;
-  _tempRender(document.getElementById('inv-ia-container'), _TEMP_DATA);
+  _tempRender(document.getElementById('temporada-container'), _TEMP_DATA);
 }
 
 /** Q* bajo el escenario activo. Q* es lineal en mu y sigma, así que reescalar

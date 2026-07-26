@@ -1351,7 +1351,7 @@ async function cargarCompras() {
 /** @param {string} id - Purchasing primary sub-tab to activate. */
 function compSubtab(id) {
   COMP_SUBTAB = id;
-  const secs = ['velocity','dock','cuarentena','audit','bloqueos','acuerdos','armador','deriva'];
+  const secs = ['velocity','dock','cuarentena','audit','bloqueos','acuerdos','armador','deriva','temporada','modelos'];
   secs.forEach(s => {
     const el = document.getElementById('comp-sec-' + s);
     const tab = document.getElementById('comp-sub-' + s);
@@ -1369,6 +1369,8 @@ function compSubtab(id) {
   else if (id === 'acuerdos') compCargarAcuerdos();
   else if (id === 'armador') compCargarArmador();
   else if (id === 'deriva') compCargarDeriva();
+  else if (id === 'temporada') temporadaCargar();
+  else if (id === 'modelos') modelosCargar();
   // audit: manual search — no auto-load
 }
 

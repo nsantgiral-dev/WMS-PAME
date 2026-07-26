@@ -812,6 +812,11 @@
   </style>
 </head>
 <body>
+<!-- Banner de modo. Oculto en producción; visible mientras los datos de
+     pantalla no sean la realidad. Se llena desde /api/health/ping. -->
+<div id="banner-modo" style="display:none;position:sticky;top:0;z-index:9999;
+     padding:6px 12px;text-align:center;font-size:12px;font-weight:700;
+     letter-spacing:.5px;"></div>
 
   <input id="scanner-input" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
 
@@ -1433,10 +1438,6 @@
         style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         ABC
       </div>
-      <div id="inv-tab-inteligencia" onclick="invSubtab('inteligencia')"
-        style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
-        🧠 Inteligencia
-      </div>
       <div id="inv-tab-datos" onclick="invSubtab('datos')"
         style="flex:1;padding:10px;font-size:13px;text-align:center;cursor:pointer;color:var(--tx3);">
         🗄️ Datos
@@ -1637,28 +1638,6 @@
     </div>
 
     <!-- Panel Inteligencia (S-B, TSB, ROP, Newsvendor) -->
-    <div id="inv-panel-inteligencia" style="display:none;">
-      <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;overflow:hidden;margin-bottom:12px;flex-wrap:wrap;">
-        <div id="inv-ia-sub-sb" onclick="invIaSubtab('sb')"
-          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;background:var(--pm);color:#fff;font-weight:700;">
-          Clasificacion S-B
-        </div>
-        <div id="inv-ia-sub-tsb" onclick="invIaSubtab('tsb')"
-          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;color:var(--tx3);">
-          Pronostico TSB
-        </div>
-        <div id="inv-ia-sub-rop" onclick="invIaSubtab('rop')"
-          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;color:var(--tx3);">
-          ROP Dual
-        </div>
-        <div id="inv-ia-sub-newsvendor" onclick="invIaSubtab('newsvendor')"
-          style="flex:1;min-width:70px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;color:var(--tx3);">
-          Newsvendor
-        </div>
-      </div>
-      <div id="inv-ia-container"><div style="text-align:center;padding:30px;color:#555;">Selecciona un modelo</div></div>
-    </div>
-
     <!-- Panel Datos — la tubería que alimenta los modelos de Inteligencia -->
     <div id="inv-panel-datos" style="display:none;">
       <div id="inv-datos-container"><div style="text-align:center;padding:30px;color:#555;">Cargando…</div></div>
@@ -2014,37 +1993,53 @@
 
     <!-- Sub-tabs -->
     <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;flex-wrap:wrap;">
+      <!-- OPERACIÓN — lo continuo, lo que se abre a diario -->
+      <div style="width:100%;padding:5px 10px 2px;font-size:10px;font-weight:700;color:var(--tx3);letter-spacing:.4px;">OPERACIÓN</div>
+      <div style="display:flex;width:100%;flex-wrap:wrap;">
       <div id="comp-sub-velocity" onclick="compSubtab('velocity')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;background:var(--pm);color:#fff;">
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;font-weight:700;background:var(--pm);color:#fff;">
         Velocity + ABC
       </div>
       <div id="comp-sub-dock" onclick="compSubtab('dock')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         Dock Lock
       </div>
       <div id="comp-sub-cuarentena" onclick="compSubtab('cuarentena')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         Cuarentena
       </div>
       <div id="comp-sub-audit" onclick="compSubtab('audit')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         Audit Trail
       </div>
       <div id="comp-sub-bloqueos" onclick="compSubtab('bloqueos')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         🚫 Bloqueos
       </div>
+      </div>
+      <!-- DECISIÓN — lo que compromete plata: trimestral y anual -->
+      <div style="width:100%;padding:8px 10px 2px;font-size:10px;font-weight:700;color:var(--tx3);letter-spacing:.4px;border-top:1px solid var(--brd);">DECISIÓN</div>
+      <div style="display:flex;width:100%;flex-wrap:wrap;">
+      <div id="comp-sub-armador" onclick="compSubtab('armador')"
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🚢 Contenedor
+      </div>
       <div id="comp-sub-acuerdos" onclick="compSubtab('acuerdos')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         📝 Acuerdos
       </div>
-      <div id="comp-sub-armador" onclick="compSubtab('armador')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
-        🚢 Armador
-      </div>
       <div id="comp-sub-deriva" onclick="compSubtab('deriva')"
-        style="flex:1;min-width:80px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
         📊 Deriva
+      </div>
+      <div id="comp-sub-temporada" onclick="compSubtab('temporada')"
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🎒 Temporada
+      </div>
+      <div id="comp-sub-modelos" onclick="compSubtab('modelos')"
+        style="flex:1;min-width:74px;padding:9px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        🧠 Modelos
+      </div>
       </div>
     </div>
 
@@ -2177,6 +2172,26 @@
     <!-- ── SECCIÓN: DERIVA DE PRECIOS ─────────────────────────────── -->
     <div id="comp-sec-deriva" style="display:none;">
       <div style="text-align:center;padding:30px;color:#555;">Cargando deriva...</div>
+
+    <!-- ── DECISIÓN: TEMPORADA (instrumento de comité) ──────────── -->
+    <div id="comp-sec-temporada" style="display:none;">
+      <div id="temporada-container"><div style="color:var(--tx3);padding:20px;">Cargando…</div></div>
+    </div>
+
+    <!-- ── DECISIÓN: MODELOS (pantalla de confianza, no de decisión) ─ -->
+    <div id="comp-sec-modelos" style="display:none;">
+      <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;overflow:hidden;margin-bottom:12px;flex-wrap:wrap;">
+        <div id="mod-sub-sb" onclick="modelosSubtab('sb')"
+          style="flex:1;min-width:110px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;background:var(--pm);color:#fff;font-weight:700;">
+          Clasificación S-B
+        </div>
+        <div id="mod-sub-tsb" onclick="modelosSubtab('tsb')"
+          style="flex:1;min-width:110px;padding:8px 4px;font-size:11px;text-align:center;cursor:pointer;color:var(--tx3);">
+          Pronóstico TSB
+        </div>
+      </div>
+      <div id="modelos-container"><div style="color:var(--tx3);padding:20px;">Selecciona un modelo</div></div>
+    </div>
     </div>
   </div><!-- /tab-compras -->
 
@@ -3170,22 +3185,22 @@
   <!-- Área de impresión de etiquetas — visible solo al imprimir -->
   <div id="print-area"></div>
 
-  <script src="/static/pwa/app.js?v=20260721d"></script>
+  <script src="/static/pwa/app.js?v=20260726a"></script>
   <script src="/static/pwa/picking.js?v=20260720a"></script>
   <script src="/static/pwa/packing.js?v=20260720a"></script>
-  <script src="/static/pwa/recepcion.js?v=20260722a"></script>
+  <script src="/static/pwa/recepcion.js?v=20260726a"></script>
   <script src="/static/pwa/rutas.js?v=20260724a"></script>
   <script src="/static/pwa/traslados.js?v=20260720a"></script>
-  <script src="/static/pwa/conteo.js?v=20260721b"></script>
+  <script src="/static/pwa/conteo.js?v=20260726a"></script>
   <script src="/static/pwa/reposicion.js?v=20260720a"></script>
   <script src="/static/pwa/liquidacion.js?v=20260721e"></script>
   <script src="/static/pwa/layout.js?v=20260721d"></script>
   <script src="/static/pwa/tienda.js?v=20260721a"></script>
   <script src="/static/pwa/etiquetas.js?v=20260710a"></script>
   <script src="/static/pwa/vigia.js?v=20260724b"></script>
-  <script src="/static/pwa/compras_ia.js?v=20260725b"></script>
+  <script src="/static/pwa/compras_ia.js?v=20260726a"></script>
   <script src="/static/pwa/kardex.js?v=20260725a"></script>
-  <script src="/static/pwa/temporada.js?v=20260725a"></script>
+  <script src="/static/pwa/temporada.js?v=20260726a"></script>
   <script>
     setInterval(() => {
       const cola = JSON.parse(localStorage.getItem('wms_cola_offline') || '[]');
