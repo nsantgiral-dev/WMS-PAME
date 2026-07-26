@@ -703,6 +703,90 @@ class KardexService:
         return salida
 
     @staticmethod
+    def serie_semanal_descensurada(ventana_meses: int = 12) -> dict:
+        """
+        Serie semanal de demanda DESCENSURADA por SKU, a nivel red.
+
+        Rejilla regular (semanas ISO) en vez de eventos irregulares. Es lo que
+        hace posible un MASE de verdad: el naive de un paso necesita periodos
+        consecutivos comparables, y "el evento anterior" no lo es cuando los
+        intervalos varían.
+
+        Cada semana se descensura con sus PROPIOS días con stock: una semana en
+        que el SKU estuvo agotado 4 de 7 días vendió lo que pudo en 3, y esa
+        tasa proyectada a 7 es la demanda que hubo.
+
+        Returns: {referencia: [(lunes, valor_descensurado), ...]} ordenado.
+        """
+        from sqlalchemy import func
+
+        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+
+        def _lunes(f):
+            return f - timedelta(days=f.weekday())
+
+        def _por_dia(conceptos, naturaleza):
+            return (
+                db.session.query(KardexMovimiento.referencia,
+                                 KardexMovimiento.fecha,
+                                 func.sum(KardexMovimiento.cantidad))
+                .filter(KardexMovimiento.fecha >= fecha_limite)
+                .filter(KardexMovimiento.concepto.in_(conceptos))
+                .filter(KardexMovimiento.naturaleza == naturaleza)
+                .group_by(KardexMovimiento.referencia, KardexMovimiento.fecha)
+                .all()
+            )
+
+        neto = defaultdict(float)
+        for ref, f, c in _por_dia(CONCEPTOS_VENTA, 2):
+            neto[(ref, f)] += float(c or 0)
+        for ref, f, c in _por_dia(CONCEPTOS_DEVOLUCION, 1):
+            neto[(ref, f)] -= float(c or 0)
+
+        # Días con stock por (ref, semana) — el denominador de cada semana
+        dias_stock = defaultdict(int)
+        for ref, f in (db.session.query(StockDiario.referencia, StockDiario.fecha)
+                       .filter(StockDiario.fecha >= fecha_limite)
+                       .filter(StockDiario.tuvo_stock == True).all()):  # noqa: E712
+            dias_stock[(ref, _lunes(f))] += 1
+
+        crudo = defaultdict(float)
+        for (ref, f), v in neto.items():
+            if not ref:
+                continue
+            crudo[(ref.strip(), _lunes(f))] += max(v, 0.0)
+
+        series = defaultdict(list)
+        for (ref, semana), valor in crudo.items():
+            n, _cens = dias_expuestos(dias_stock.get((ref, semana), 0), 7)
+            series[ref].append((semana, round(valor * (7.0 / n), 4)))
+
+        return {ref: sorted(puntos) for ref, puntos in series.items()}
+
+    @staticmethod
+    def mase(reales: list, pronostico: float) -> float:
+        """
+        MASE canónico: MAE del pronóstico / MAE del naive de UN PASO in-sample.
+
+            denominador = media(|y_t - y_{t-1}|)  sobre la serie de entrenamiento
+
+        NO es la media de la serie. Un MASE < 1 significa "mejor que repetir el
+        último valor observado", que es la afirmación que la spec exige. Con el
+        denominador equivocado el número queda plausible y responde otra
+        pregunta — una compuerta mal calculada es peor que no tener compuerta.
+
+        Devuelve None si la serie no tiene variación (denominador cero).
+        """
+        if len(reales) < 2:
+            return None
+        difs = [abs(reales[i] - reales[i - 1]) for i in range(1, len(reales))]
+        denom = sum(difs) / len(difs)
+        if denom <= 0:
+            return None
+        mae = sum(abs(v - pronostico) for v in reales) / len(reales)
+        return round(mae / denom, 4)
+
+    @staticmethod
     def clasificar_syntetos_boylan(ventana_meses: int = 12,
                                     estacionales_extra: list = None) -> dict:
         """
@@ -881,56 +965,31 @@ class KardexService:
     def pronostico_tsb(ventana_meses: int = 12, alpha: float = 0.15,
                        solo_cuadrantes: list = None) -> dict:
         """
-        Pronóstico TSB para items con demanda intermitente/grumosa.
+        Pronóstico TSB (Teunter-Syntetos-Babai) sobre demanda DESCENSURADA.
 
-        TSB es Croston mejorado — corrige el sesgo positivo de Croston
-        usando suavizamiento exponencial separado para:
-          p = intervalo entre demandas (períodos)
-          z = tamaño de la demanda cuando ocurre
+        TSB corrige el sesgo positivo de Croston actualizando la probabilidad de
+        demanda en CADA periodo — también en los de demanda cero — en vez de
+        solo cuando ocurre. Eso es lo que lo hace apto para SKUs que dejan de
+        moverse: Croston se queda congelado en su última tasa, TSB decae.
 
-        Pronóstico TSB = (z / p) * (1 - alpha/2)
-        La corrección (1 - alpha/2) es lo que distingue TSB de Croston.
+            p_t = alpha_p * d_t + (1 - alpha_p) * p_{t-1}      (d_t = 1 si hubo demanda)
+            z_t = alpha_z * y_t + (1 - alpha_z) * z_{t-1}      (solo si hubo demanda)
+            pronostico = p_t * z_t
 
-        Spec §2.M0.3: TSB debe ganar a media móvil 8 sem en MASE.
+        CABLE M0.2 -> M0.3: la serie entra descensurada y en rejilla semanal
+        regular. Con ventas crudas el modelo aprende que un SKU agotado "no se
+        vendía", que es la misma censura que rompía el ROP.
 
-        Args:
-            ventana_meses: ventana de datos (default 12)
-            alpha: parámetro de suavizamiento (0.05-0.30, default 0.15)
-            solo_cuadrantes: filtrar por cuadrantes S-B (default: INTERMITENTE+GRUMOSA)
+        COMPUERTA (spec §2.M0.3): TSB debe ganarle a la media móvil de 8 semanas
+        en MASE. Mientras no la pase, su salida NO alimenta sigma_d del ROP.
 
-        Returns: {total, pronosticos: [{referencia, tsb, croston, media_movil_8, mase_tsb, mase_mm8}]}
+        Returns: {total, backtest: {...}, pronosticos: [...]}
         """
-        from collections import defaultdict
-        from sqlalchemy import func
-
         if solo_cuadrantes is None:
             solo_cuadrantes = ['INTERMITENTE', 'GRUMOSA']
 
-        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+        series = KardexService.serie_semanal_descensurada(ventana_meses)
 
-        # Obtener demanda diaria agregada a RED (todas las bodegas)
-        demanda_diaria = (
-            db.session.query(
-                KardexMovimiento.referencia,
-                KardexMovimiento.fecha,
-                func.sum(KardexMovimiento.cantidad).label('cantidad')
-            )
-            .filter(KardexMovimiento.fecha >= fecha_limite)
-            .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
-            .filter(KardexMovimiento.naturaleza == 2)
-            .group_by(KardexMovimiento.referencia, KardexMovimiento.fecha)
-            .all()
-        )
-
-        # Agrupar por referencia
-        ref_series = defaultdict(list)
-        for row in demanda_diaria:
-            ref = row.referencia.strip() if row.referencia else ''
-            if not ref:
-                continue
-            ref_series[ref].append((row.fecha, float(row.cantidad)))
-
-        # Obtener clasificación S-B para filtrar solo los cuadrantes solicitados
         clasificacion = KardexService.clasificar_syntetos_boylan(ventana_meses)
         refs_objetivo = {
             c['referencia'] for c in clasificacion['clasificacion']
@@ -942,59 +1001,54 @@ class KardexService:
         total_evaluados = 0
 
         for ref in refs_objetivo:
-            eventos = sorted(ref_series.get(ref, []), key=lambda x: x[0])
-            if len(eventos) < 3:
+            puntos = series.get(ref, [])
+            if len(puntos) < 12:
+                continue  # sin semanas suficientes no hay backtest honesto
+
+            # Rejilla completa: las semanas SIN demanda valen cero y cuentan.
+            # Omitirlas es exactamente el sesgo que TSB existe para evitar.
+            inicio, fin = puntos[0][0], puntos[-1][0]
+            mapa = dict(puntos)
+            semanas, cur = [], inicio
+            while cur <= fin:
+                semanas.append(mapa.get(cur, 0.0))
+                cur += timedelta(days=7)
+
+            if len(semanas) < 12:
                 continue
 
-            cantidades = [e[1] for e in eventos]
-            fechas = [e[0] for e in eventos]
-
-            # Calcular intervalos entre demandas (en días)
-            intervalos = []
-            for i in range(1, len(fechas)):
-                delta = (fechas[i] - fechas[i - 1]).days
-                intervalos.append(delta)
-
-            if not intervalos:
+            n_test = max(4, len(semanas) // 5)
+            train, test = semanas[:-n_test], semanas[-n_test:]
+            if len(train) < 8:
                 continue
 
-            # TSB: suavizamiento exponencial doble con corrección de sesgo
-            z = cantidades[0]  # tamaño de demanda suavizado
-            p = intervalos[0] if intervalos else 1  # intervalo suavizado
+            # TSB sobre el train
+            z = next((v for v in train if v > 0), 0.0)
+            p = 1.0 if train and train[0] > 0 else 0.5
+            for y in train:
+                hubo = 1.0 if y > 0 else 0.0
+                p = alpha * hubo + (1 - alpha) * p
+                if hubo:
+                    z = alpha * y + (1 - alpha) * z
+            tsb_semanal = p * z
 
-            for i in range(1, len(cantidades)):
-                z = alpha * cantidades[i] + (1 - alpha) * z
-                if i < len(intervalos):
-                    p = alpha * intervalos[i] + (1 - alpha) * p
+            # Croston: solo actualiza en periodos con demanda (sin decaimiento)
+            zc = next((v for v in train if v > 0), 0.0)
+            intervalo, cuenta = 1.0, 0
+            for y in train:
+                cuenta += 1
+                if y > 0:
+                    zc = alpha * y + (1 - alpha) * zc
+                    intervalo = alpha * cuenta + (1 - alpha) * intervalo
+                    cuenta = 0
+            croston_semanal = zc / max(intervalo, 1.0)
 
-            p = max(p, 1)  # Guard: intervalo mínimo 1 día
-            tsb_forecast = (z / p) * (1 - alpha / 2)  # Corrección TSB
-            croston_forecast = z / p  # Sin corrección (Croston original)
+            # Benchmark ingenuo: media móvil de las últimas 8 semanas del train
+            mm8_semanal = sum(train[-8:]) / min(8, len(train))
 
-            # Media móvil 8 semanas (56 días) como benchmark ingenuo
-            dias_56 = date.today() - timedelta(days=56)
-            demanda_8sem = sum(c for f, c in eventos if f >= dias_56)
-            mm8_forecast = demanda_8sem / 56 if demanda_8sem > 0 else 0
-
-            # MASE (Mean Absolute Scaled Error) — holdout last 20% de eventos
-            n_holdout = max(1, len(cantidades) // 5)
-            if len(cantidades) > n_holdout + 3:
-                train = cantidades[:-n_holdout]
-                test = cantidades[-n_holdout:]
-
-                # Naive forecast = media del train
-                naive = sum(train) / len(train) if train else 1
-                mae_naive = sum(abs(t - naive) for t in test) / len(test) if naive > 0 else 1
-
-                # MAE del TSB (forecast diario * intervalo promedio entre test)
-                mae_tsb = sum(abs(t - tsb_forecast * p) for t in test) / len(test)
-                mae_mm8 = sum(abs(t - mm8_forecast * 56 / len(test)) for t in test) / len(test)
-
-                mase_tsb = round(mae_tsb / mae_naive, 3) if mae_naive > 0 else None
-                mase_mm8 = round(mae_mm8 / mae_naive, 3) if mae_naive > 0 else None
-            else:
-                mase_tsb = None
-                mase_mm8 = None
+            # MASE real — mismo denominador para ambos, así son comparables
+            mase_tsb = KardexService.mase(test, tsb_semanal)
+            mase_mm8 = KardexService.mase(test, mm8_semanal)
 
             if mase_tsb is not None and mase_mm8 is not None:
                 total_evaluados += 1
@@ -1003,40 +1057,52 @@ class KardexService:
 
             pronosticos.append({
                 'referencia': ref,
-                'tsb_diario': round(tsb_forecast, 4),
-                'tsb_semanal': round(tsb_forecast * 7, 2),
-                'tsb_mensual': round(tsb_forecast * 30, 1),
-                'croston_diario': round(croston_forecast, 4),
-                'media_movil_8sem_diario': round(mm8_forecast, 4),
-                'z_suavizado': round(z, 2),
-                'p_suavizado': round(p, 1),
-                'eventos': len(cantidades),
+                'tsb_semanal': round(tsb_semanal, 3),
+                'tsb_diario': round(tsb_semanal / 7, 4),
+                'tsb_mensual': round(tsb_semanal * 30 / 7, 1),
+                'croston_semanal': round(croston_semanal, 3),
+                'media_movil_8sem': round(mm8_semanal, 3),
+                'p_probabilidad': round(p, 4),
+                'z_tamano': round(z, 2),
+                'semanas': len(semanas),
+                'semanas_test': n_test,
                 'mase_tsb': mase_tsb,
                 'mase_mm8': mase_mm8,
-                'tsb_mejor': mase_tsb < mase_mm8 if mase_tsb and mase_mm8 else None,
+                'tsb_mejor': (mase_tsb < mase_mm8)
+                             if (mase_tsb is not None and mase_mm8 is not None) else None,
             })
 
         pronosticos.sort(key=lambda x: x['tsb_mensual'], reverse=True)
+
+        pct = round(tsb_gana / total_evaluados * 100, 1) if total_evaluados else 0
+        # La compuerta es binaria y estricta: mayoría simple no basta para que
+        # el TSB pase a alimentar sigma_d del ROP.
+        aprobado = total_evaluados >= 10 and pct >= 60
 
         return {
             'total': len(pronosticos),
             'alpha': alpha,
             'cuadrantes': solo_cuadrantes,
             'ventana_meses': ventana_meses,
+            'demanda': 'DESCENSURADA, rejilla semanal (semanas sin venta = 0)',
             'backtest': {
+                'metrica': 'MASE = MAE(pronostico) / MAE(naive un paso in-sample)',
                 'evaluados': total_evaluados,
                 'tsb_gana': tsb_gana,
-                'porcentaje_tsb_gana': round(tsb_gana / total_evaluados * 100, 1) if total_evaluados > 0 else 0,
-                'nota': 'TSB debe ganar a media móvil 8 sem en MASE — spec §2.M0.3',
+                'porcentaje_tsb_gana': pct,
+                'aprobado': aprobado,
+                'criterio': 'minimo 10 SKUs evaluados y TSB gana en >=60%',
+                'consecuencia': (
+                    'APROBADO: el TSB puede alimentar sigma_d del ROP (RMSE de un paso).'
+                    if aprobado else
+                    'NO APROBADO: sigma_d sigue con el estimador interino '
+                    '(sigma empirica descensurada). El TSB es informativo, no decide.'
+                ),
+                'nota': 'Spec §2.M0.3 — TSB debe ganarle a la media movil de 8 semanas.',
             },
             'pronosticos': pronosticos,
         }
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # M0.5 — Newsvendor para compra de temporada escolar
-    # ══════════════════════════════════════════════════════════════════════════
-
-    @staticmethod
     def newsvendor(items_temporada: list, margen_pct: float = 0.40,
                    costo_exceso_pct: float = 0.60) -> dict:
         """

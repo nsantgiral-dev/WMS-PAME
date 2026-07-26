@@ -422,24 +422,67 @@ async function _cargarClasificacionSB(el) {
 }
 
 async function _cargarTSB(el) {
-  el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando pronosticos TSB...</div>';
+  el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando pronósticos TSB…</div>';
   try {
     const r = await get('/api/kardex/pronostico-tsb?meses=12');
+    const b = r.backtest || {};
     let html = '';
+
+    // ── LA COMPUERTA primero. Es lo único que decide si el modelo manda ────
+    const ok = b.aprobado;
+    const color = ok ? 'var(--green)' : 'var(--yellow)';
+    html += `<div style="border:1px solid ${color};border-radius:10px;padding:12px;margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;color:${color};margin-bottom:6px;">
+        Compuerta de credibilidad: ${ok ? 'APROBADA' : 'NO APROBADA'}
+      </div>
+      <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
+        ${b.evaluados || 0} SKUs evaluados · TSB gana en <strong>${b.porcentaje_tsb_gana || 0}%</strong>
+        · criterio: ${b.criterio || '—'}
+      </div>
+      <div style="font-size:11px;color:${color};margin-top:6px;">${b.consecuencia || ''}</div>
+      <div style="font-size:10px;color:var(--tx3);margin-top:6px;">
+        ${b.metrica || ''}<br>${r.demanda || ''}
+      </div>
+    </div>`;
+
     html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">';
-    html += _compKpi(r.total, 'SKUs pronosticados', 'var(--pm)');
-    html += _compKpi(r.backtest.tsb_gana, 'TSB gana a MM8', 'var(--green)');
-    html += _compKpi(r.backtest.porcentaje_tsb_gana + '%', 'Win rate TSB', r.backtest.porcentaje_tsb_gana > 50 ? 'var(--green)' : 'var(--red)');
+    html += _compKpi(r.total || 0, 'SKUs pronosticados', 'var(--pm)');
+    html += _compKpi(b.tsb_gana || 0, 'TSB gana a MM8', 'var(--green)');
+    html += _compKpi((b.porcentaje_tsb_gana || 0) + '%', 'Win rate', ok ? 'var(--green)' : 'var(--yellow)');
     html += '</div>';
-    if (r.pronosticos) {
-      html += '<div style="max-height:400px;overflow-y:auto;">';
-      for (const p of r.pronosticos.slice(0, 30)) {
-        html += `<div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:6px;padding:6px 10px;margin-bottom:3px;font-size:11px;display:flex;justify-content:space-between;">
-          <span style="color:var(--tx);">${p.referencia}</span>
-          <span style="color:var(--tx3);">TSB=${p.tsb_semanal}/sem | p=${p.p_suavizado}d | ${p.eventos} eventos ${p.tsb_mejor === true ? '<span style="color:var(--green);">TSB gana</span>' : ''}</span>
-        </div>`;
+
+    const lista = r.pronosticos || [];
+    if (!lista.length) {
+      html += '<div style="font-size:11px;color:var(--tx3);padding:14px 0;">Sin SKUs con 12+ semanas de historia. ¿Está descargado el kardex?</div>';
+    } else {
+      html += `<div style="overflow-x:auto;max-height:420px;overflow-y:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+        <thead><tr style="border-bottom:2px solid var(--brd);color:var(--tx3);text-align:right;position:sticky;top:0;background:var(--bg);">
+          <th style="text-align:left;padding:5px;">Referencia</th>
+          <th style="padding:5px;">TSB /sem</th>
+          <th style="padding:5px;">MM8 /sem</th>
+          <th style="padding:5px;">MASE TSB</th>
+          <th style="padding:5px;">MASE MM8</th>
+          <th style="padding:5px;">Semanas</th>
+        </tr></thead><tbody>`;
+      for (const p of lista.slice(0, 60)) {
+        const gana = p.tsb_mejor === true;
+        html += `<tr style="border-bottom:1px solid var(--brd);text-align:right;">
+          <td style="text-align:left;padding:5px;color:var(--tx);font-weight:600;">
+            ${gana ? '<span style="color:var(--green);">● </span>' : ''}${p.referencia}
+          </td>
+          <td style="padding:5px;color:var(--tx);">${p.tsb_semanal}</td>
+          <td style="padding:5px;color:var(--tx3);">${p.media_movil_8sem}</td>
+          <td style="padding:5px;color:${gana ? 'var(--green)' : 'var(--tx3)'};font-weight:${gana ? '700' : '400'};">${p.mase_tsb ?? '—'}</td>
+          <td style="padding:5px;color:var(--tx3);">${p.mase_mm8 ?? '—'}</td>
+          <td style="padding:5px;color:var(--tx3);">${p.semanas} (${p.semanas_test} test)</td>
+        </tr>`;
       }
-      html += '</div>';
+      html += `</tbody></table></div>
+        <div style="font-size:10px;color:var(--tx3);margin-top:8px;">
+          ● = el TSB le gana a la media móvil de 8 semanas. MASE &lt; 1 significa mejor
+          que repetir el último valor observado.
+        </div>`;
     }
     el.innerHTML = html;
   } catch (e) {

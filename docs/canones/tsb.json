@@ -1,0 +1,105 @@
+{
+  "_doc": [
+    "Canon del pronóstico TSB (Teunter-Syntetos-Babai) — §2.M0.3.",
+    "",
+    "Este canon vigila dos cosas distintas, y la segunda importa más:",
+    "  1. Que el TSB esté bien calculado.",
+    "  2. Que su COMPUERTA esté bien calculada.",
+    "",
+    "Porque el backtest que decide si el modelo merece crédito no medía lo que",
+    "decía medir: usaba la media del train como 'naive' y evaluaba el",
+    "denominador sobre el test. Un MASE<1 significaba 'mejor que predecir la",
+    "media', no 'mejor que repetir el último valor'. Y el término de comparación",
+    "contra la media móvil mezclaba unidades (total de 8 semanas dividido por el",
+    "número de puntos de test), así que TSB y benchmark no eran comparables.",
+    "",
+    "Una compuerta mal calculada es peor que no tener compuerta: da permiso con",
+    "autoridad. Igual que la bandera de modo que afirmaba una cosa y se leía",
+    "como otra — no falla ruidosamente, miente con confianza."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "TSB — pronóstico de demanda intermitente",
+    "que_decide": "Nada todavía. Hasta pasar la compuerta es informativo; el ROP usa el estimador interino de sigma_d.",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md §2.M0.3"
+  },
+
+  "procedencia": {
+    "origen": "Reimplementación con serie descensurada y MASE canónico (jul-2026)",
+    "fecha_corrida_original": "2026-07",
+    "hallazgo": "El backtest previo no calculaba MASE. Corregido junto con el cable de descensura.",
+    "nota": "Sin kardex cargado no hay corrida certificada. Registrar aquí el % de victorias cuando exista."
+  },
+
+  "formula": {
+    "tsb": "p_t = a*d_t + (1-a)*p_{t-1} ; z_t = a*y_t + (1-a)*z_{t-1} (solo si hubo demanda) ; pronostico = p_t * z_t",
+    "mase": "MAE(pronostico) / MAE(naive un paso IN-SAMPLE) ; denominador = media(|y_t - y_{t-1}|)",
+    "_notas": [
+      "TSB actualiza p en TODOS los periodos, tambien los de demanda cero. Eso",
+      "es lo que lo distingue de Croston: Croston se queda congelado en su",
+      "ultima tasa cuando un SKU deja de moverse; TSB decae.",
+      "",
+      "La rejilla es semanal y COMPLETA: las semanas sin venta valen cero y",
+      "cuentan. Omitirlas reintroduce el sesgo que TSB existe para evitar.",
+      "",
+      "La serie entra DESCENSURADA: cada semana se corrige por sus propios dias",
+      "con stock. Con ventas crudas el modelo aprende que un SKU agotado 'no se",
+      "vendia'."
+    ]
+  },
+
+  "casos": [
+    {
+      "nombre": "MASE — serie intermitente",
+      "entrada": {"serie": [0, 10, 0, 0, 8, 0, 12, 0], "pronostico": 3.75},
+      "esperado": {
+        "difs_naive": [10, 10, 0, 8, 8, 12, 12],
+        "mae_naive": 8.571429,
+        "mae_pronostico": 4.6875,
+        "mase": 0.5469
+      },
+      "_nota": "Calculado a mano. Si el denominador volviera a ser la media de la serie, este numero cambia y el test falla."
+    },
+    {
+      "nombre": "MASE — el peor pronostico da peor MASE",
+      "entrada": {"serie": [0, 10, 0, 0, 8, 0, 12, 0], "pronostico": 5.0},
+      "esperado": {"mae_pronostico": 5.0, "mase": 0.5833},
+      "_nota": "Monotonia: alejarse del optimo debe empeorar el MASE."
+    },
+    {
+      "nombre": "Borde — serie sin variacion",
+      "entrada": {"serie": [5, 5, 5], "pronostico": 5.0},
+      "esperado": {"mase": null},
+      "_nota": "Denominador cero. Devolver None, nunca dividir ni inventar un 1.0 que aprobaria la compuerta gratis."
+    }
+  ],
+
+  "compuerta": {
+    "criterio": "minimo 10 SKUs evaluados y TSB gana a la media movil de 8 semanas en >=60%",
+    "consecuencia_si_pasa": "El TSB puede alimentar sigma_d del ROP (RMSE de un paso adelante).",
+    "consecuencia_si_no_pasa": "sigma_d sigue con el estimador interino (sigma empirica descensurada). El TSB es informativo, no decide.",
+    "estado": "NO EVALUADA — requiere kardex cargado",
+    "_por_que_binaria": [
+      "Mayoria simple no basta. Un 51% de victorias sobre un benchmark ingenuo",
+      "no justifica que un modelo pase a gobernar el colchon de seguridad de",
+      "todas las compras. El minimo de 10 SKUs evita que dos casos afortunados",
+      "abran la compuerta."
+    ]
+  },
+
+  "parametros": {
+    "alpha": 0.15,
+    "cuadrantes": ["INTERMITENTE", "GRUMOSA"],
+    "ventana_meses": 12,
+    "semanas_minimas": 12,
+    "_nota": "TSB solo se aplica a los cuadrantes intermitente y grumoso: en los suaves un suavizado simple gana y el TSB solo agrega varianza."
+  },
+
+  "insumos": {
+    "_nota": "Serie nativa: depende de kardex_movimientos y stock_diario.",
+    "registrado": false,
+    "archivos": []
+  }
+}
