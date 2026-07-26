@@ -17,22 +17,18 @@
     "autoridad. Igual que la bandera de modo que afirmaba una cosa y se leía",
     "como otra — no falla ruidosamente, miente con confianza."
   ],
-
   "version": 1,
-
   "modelo": {
     "nombre": "TSB — pronóstico de demanda intermitente",
-    "que_decide": "Nada todavía. Hasta pasar la compuerta es informativo; el ROP usa el estimador interino de sigma_d.",
+    "que_decide": "Nada todavia. El tamiz MASE no da permiso; solo la simulacion de inventario habilita que el TSB gobierne sigma_d del ROP.",
     "spec": "docs/SPEC_ESTADISTICA_v1.md §2.M0.3"
   },
-
   "procedencia": {
     "origen": "Reimplementación con serie descensurada y MASE canónico (jul-2026)",
     "fecha_corrida_original": "2026-07",
     "hallazgo": "El backtest previo no calculaba MASE. Corregido junto con el cable de descensura.",
     "nota": "Sin kardex cargado no hay corrida certificada. Registrar aquí el % de victorias cuando exista."
   },
-
   "formula": {
     "tsb": "p_t = a*d_t + (1-a)*p_{t-1} ; z_t = a*y_t + (1-a)*z_{t-1} (solo si hubo demanda) ; pronostico = p_t * z_t",
     "mase": "MAE(pronostico) / MAE(naive un paso IN-SAMPLE) ; denominador = media(|y_t - y_{t-1}|)",
@@ -49,13 +45,32 @@
       "vendia'."
     ]
   },
-
   "casos": [
     {
       "nombre": "MASE — serie intermitente",
-      "entrada": {"serie": [0, 10, 0, 0, 8, 0, 12, 0], "pronostico": 3.75},
+      "entrada": {
+        "serie": [
+          0,
+          10,
+          0,
+          0,
+          8,
+          0,
+          12,
+          0
+        ],
+        "pronostico": 3.75
+      },
       "esperado": {
-        "difs_naive": [10, 10, 0, 8, 8, 12, 12],
+        "difs_naive": [
+          10,
+          10,
+          0,
+          8,
+          8,
+          12,
+          12
+        ],
         "mae_naive": 8.571429,
         "mae_pronostico": 4.6875,
         "mase": 0.5469
@@ -64,39 +79,89 @@
     },
     {
       "nombre": "MASE — el peor pronostico da peor MASE",
-      "entrada": {"serie": [0, 10, 0, 0, 8, 0, 12, 0], "pronostico": 5.0},
-      "esperado": {"mae_pronostico": 5.0, "mase": 0.5833},
+      "entrada": {
+        "serie": [
+          0,
+          10,
+          0,
+          0,
+          8,
+          0,
+          12,
+          0
+        ],
+        "pronostico": 5.0
+      },
+      "esperado": {
+        "mae_pronostico": 5.0,
+        "mase": 0.5833
+      },
       "_nota": "Monotonia: alejarse del optimo debe empeorar el MASE."
     },
     {
       "nombre": "Borde — serie sin variacion",
-      "entrada": {"serie": [5, 5, 5], "pronostico": 5.0},
-      "esperado": {"mase": null},
+      "entrada": {
+        "serie": [
+          5,
+          5,
+          5
+        ],
+        "pronostico": 5.0
+      },
+      "esperado": {
+        "mase": null
+      },
       "_nota": "Denominador cero. Devolver None, nunca dividir ni inventar un 1.0 que aprobaria la compuerta gratis."
     }
   ],
-
   "compuerta": {
-    "criterio": "minimo 10 SKUs evaluados y TSB gana a la media movil de 8 semanas en >=60%",
-    "consecuencia_si_pasa": "El TSB puede alimentar sigma_d del ROP (RMSE de un paso adelante).",
-    "consecuencia_si_no_pasa": "sigma_d sigue con el estimador interino (sigma empirica descensurada). El TSB es informativo, no decide.",
-    "estado": "NO EVALUADA — requiere kardex cargado",
-    "_por_que_binaria": [
-      "Mayoria simple no basta. Un 51% de victorias sobre un benchmark ingenuo",
-      "no justifica que un modelo pase a gobernar el colchon de seguridad de",
-      "todas las compras. El minimo de 10 SKUs evita que dos casos afortunados",
-      "abran la compuerta."
-    ]
+    "_ADVERTENCIA": "El tamiz MASE NO es la compuerta. Ver 'tamiz_mase' y 'compuerta_real'.",
+    "tamiz_mase": {
+      "que_es": "Filtro barato para descartar lo obviamente malo. NO da permiso.",
+      "por_que_no_es_compuerta": [
+        "MASE mide error punto a punto. Croston y TSB no pronostican CUANDO llega",
+        "el grumo — estiman una TASA. Un pronostico de 1.6/semana contra la serie",
+        "real 0,0,0,40,0,0 se ve pesimo en MAE y es exactamente correcto para",
+        "efectos de inventario. Medirlo asi lo castiga por algo que nunca prometio."
+      ],
+      "criterio": "n>=100 SKUs, win-rate>=60%, limite inferior del IC95 (Wilson) >50%, y win-rate ponderado por valor >=60%",
+      "n_minimo": 100,
+      "_por_que_no_diez": [
+        "Con n=10 una moneda al aire (p=0.5) supera el umbral de 60% en el 37.7%",
+        "de los intentos por azar binomial puro. El filtro no filtra: decora.",
+        "n=30 -> 18.1% · n=50 -> 10.1% · n=100 -> 2.8% · n=200 -> 0.3%"
+      ],
+      "_por_que_ponderado": [
+        "Un win-rate no ponderado premia ganar donde no importa. Un modelo que",
+        "gana en el 60% de la cola y pierde en los veinte SKUs que sostienen el",
+        "negocio no debe pasar. La democracia entre SKUs es un promedio que",
+        "esconde exactamente lo que hay que mirar."
+      ]
+    },
+    "compuerta_real": {
+      "que_es": "Simulacion de inventario sobre el kardex historico.",
+      "pregunta": "El ROP alimentado por TSB, ¿logra el mismo nivel de servicio con menos inventario que el ROP con el estimador interino?",
+      "metodo": [
+        "Aplicar ambas politicas de ROP sobre las 53 semanas de kardex.",
+        "Contar agotados (nivel de servicio) e inventario promedio (capital).",
+        "Gana quien alcance el servicio objetivo con menos capital inmovilizado."
+      ],
+      "_por_que": "El juez de un modelo de pronostico para inventario no es el error de pronostico: es el desempeno de inventario.",
+      "estado": "PENDIENTE — no es ruta critica del comite del 7 de agosto",
+      "consecuencia_si_pasa": "sigma_d del ROP cambia al RMSE de un paso del TSB.",
+      "consecuencia_mientras_no": "sigma_d sigue con el estimador interino (sigma empirica descensurada)."
+    }
   },
-
   "parametros": {
     "alpha": 0.15,
-    "cuadrantes": ["INTERMITENTE", "GRUMOSA"],
+    "cuadrantes": [
+      "INTERMITENTE",
+      "GRUMOSA"
+    ],
     "ventana_meses": 12,
     "semanas_minimas": 12,
     "_nota": "TSB solo se aplica a los cuadrantes intermitente y grumoso: en los suaves un suavizado simple gana y el TSB solo agrega varianza."
   },
-
   "insumos": {
     "_nota": "Serie nativa: depende de kardex_movimientos y stock_diario.",
     "registrado": false,

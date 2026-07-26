@@ -418,13 +418,19 @@ class TestTSB:
                 assert p['tsb_diario'] > 0
                 break
 
-    def test_tsb_incluye_backtest(self, app, db):
-        """El resultado incluye métricas de backtest TSB vs MM8."""
+    def test_tsb_incluye_tamiz(self, app, db):
+        """El resultado incluye el tamiz MASE — que NO es una compuerta.
+
+        La clave se llama `tamiz_mase` y no `backtest` a propósito: un nombre
+        que promete más de lo que la métrica puede afirmar es exactamente el
+        defecto que este renombre corrige.
+        """
         from app.services.kardex_service import KardexService
         result = KardexService.pronostico_tsb(12)
-        assert 'backtest' in result
-        assert 'evaluados' in result['backtest']
-        assert 'tsb_gana' in result['backtest']
+        assert 'tamiz_mase' in result
+        assert result['tamiz_mase']['es_compuerta'] is False
+        assert 'evaluados' in result['tamiz_mase']
+        assert 'tsb_gana' in result['tamiz_mase']
 
     def test_endpoints_tsb_registrado(self, app):
         """Endpoint /api/kardex/pronostico-tsb está registrado."""

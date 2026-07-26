@@ -91,6 +91,30 @@ class StockDiario(db.Model):
     )
 
 
+# Muestra mínima del tamiz MASE. NO es 10: con n=10 una moneda al aire supera
+# el umbral de 60% en el 37.7% de los intentos por azar binomial puro — el
+# filtro no filtra, decora. Con n=100 baja a 2.8%. Se evalúan TODOS los SKUs
+# con historia suficiente, que serán cientos.
+TSB_N_MINIMO = int(os.getenv('TSB_N_MINIMO', '100'))
+
+
+def _wilson(exitos, n, z=1.96):
+    """Intervalo de Wilson al 95% para una proporción.
+
+    Se usa en vez del intervalo normal porque no se rompe con n pequeño ni con
+    proporciones cerca de 0 o 1. Un porcentaje sin intervalo es indistinguible
+    del azar, y esa indistinguibilidad es justo lo que convierte una compuerta
+    en decoración.
+    """
+    if n <= 0:
+        return (0.0, 0.0)
+    p = exitos / n
+    d = 1 + z * z / n
+    centro = (p + z * z / (2 * n)) / d
+    margen = (z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / d
+    return (max(0.0, centro - margen), min(1.0, centro + margen))
+
+
 def dias_expuestos(dias_con_stock, dias_calendario):
     """
     POLÍTICA ÚNICA de denominador cuando falta StockDiario.
@@ -996,9 +1020,18 @@ class KardexService:
             if c['cuadrante'] in solo_cuadrantes
         }
 
+        # Costo unitario para ponderar por importancia economica
+        from app.models.producto import Producto
+        costos = dict(
+            db.session.query(Producto.codigo_siesa, Producto.precio_compra)
+            .filter(Producto.codigo_siesa.isnot(None)).all()
+        )
+
         pronosticos = []
         tsb_gana = 0
         total_evaluados = 0
+        peso_gana = 0.0
+        peso_total = 0.0
 
         for ref in refs_objetivo:
             puntos = series.get(ref, [])
@@ -1050,10 +1083,17 @@ class KardexService:
             mase_tsb = KardexService.mase(test, tsb_semanal)
             mase_mm8 = KardexService.mase(test, mm8_semanal)
 
+            # Peso economico: valor anual movido por ese SKU. Ganar en la cola
+            # y perder en los pocos que sostienen el negocio no debe pasar —
+            # la democracia entre SKUs es un promedio que esconde lo que importa.
+            peso = sum(semanas) * float(costos.get(ref, 0) or 0)
+
             if mase_tsb is not None and mase_mm8 is not None:
                 total_evaluados += 1
+                peso_total += peso
                 if mase_tsb < mase_mm8:
                     tsb_gana += 1
+                    peso_gana += peso
 
             pronosticos.append({
                 'referencia': ref,
@@ -1075,9 +1115,23 @@ class KardexService:
         pronosticos.sort(key=lambda x: x['tsb_mensual'], reverse=True)
 
         pct = round(tsb_gana / total_evaluados * 100, 1) if total_evaluados else 0
-        # La compuerta es binaria y estricta: mayoría simple no basta para que
-        # el TSB pase a alimentar sigma_d del ROP.
-        aprobado = total_evaluados >= 10 and pct >= 60
+
+        # Intervalo de Wilson al 95% sobre la proporción de victorias. Sin él,
+        # un porcentaje es indistinguible del azar: con n=10 una moneda al aire
+        # supera el 60% en el 37.7% de los intentos.
+        lo, hi = _wilson(tsb_gana, total_evaluados)
+
+        # TAMIZ, no compuerta. El MASE castiga a Croston/TSB por no adivinar
+        # CUÁNDO llega el grumo — algo que nunca prometieron: estiman una TASA.
+        # Un modelo que dice 1.6/sem frente a 0,0,0,40,0,0 se ve pésimo en MAE y
+        # es correcto para efectos de inventario. Sirve para descartar lo
+        # obviamente malo, no para dar permiso.
+        pct_peso = round(peso_gana / peso_total * 100, 1) if peso_total > 0 else 0
+
+        supera_tamiz = (total_evaluados >= TSB_N_MINIMO
+                        and pct >= 60
+                        and lo > 0.5           # el azar queda fuera del intervalo
+                        and pct_peso >= 60)    # y gana donde hay plata, no solo en la cola
 
         return {
             'total': len(pronosticos),
@@ -1085,21 +1139,48 @@ class KardexService:
             'cuadrantes': solo_cuadrantes,
             'ventana_meses': ventana_meses,
             'demanda': 'DESCENSURADA, rejilla semanal (semanas sin venta = 0)',
-            'backtest': {
+            'tamiz_mase': {
+                'es_compuerta': False,
+                '_por_que_no': (
+                    'MASE es un juez DEBIL para demanda intermitente: mide error punto '
+                    'a punto y Croston/TSB no pronostican CUANDO llega el grumo — estiman '
+                    'una tasa. Un pronostico de 1.6/sem contra la serie 0,0,0,40,0,0 se ve '
+                    'pesimo en MAE y es correcto para inventario. Sirve para descartar lo '
+                    'obviamente malo, no para dar permiso.'
+                ),
                 'metrica': 'MASE = MAE(pronostico) / MAE(naive un paso in-sample)',
                 'evaluados': total_evaluados,
+                'n_minimo': TSB_N_MINIMO,
                 'tsb_gana': tsb_gana,
                 'porcentaje_tsb_gana': pct,
-                'aprobado': aprobado,
-                'criterio': 'minimo 10 SKUs evaluados y TSB gana en >=60%',
-                'consecuencia': (
-                    'APROBADO: el TSB puede alimentar sigma_d del ROP (RMSE de un paso).'
-                    if aprobado else
-                    'NO APROBADO: sigma_d sigue con el estimador interino '
-                    '(sigma empirica descensurada). El TSB es informativo, no decide.'
+                'ic95_victorias': [round(lo * 100, 1), round(hi * 100, 1)],
+                'porcentaje_ponderado_por_valor': pct_peso,
+                'valor_evaluado': round(peso_total),
+                'azar_descartado': lo > 0.5,
+                'supera_tamiz': supera_tamiz,
+                'criterio': (
+                    f'minimo {TSB_N_MINIMO} SKUs, TSB gana en >=60%, y el limite '
+                    f'inferior del IC95 por encima del 50% (azar descartado)'
+                ),
+                'nota_ponderacion': (
+                    'porcentaje_tsb_gana trata todos los SKUs por igual; '
+                    'porcentaje_ponderado_por_valor pesa cada SKU por el valor anual que '
+                    'mueve. El tamiz exige AMBOS >=60%: ganar en la cola y perder en los '
+                    'pocos que sostienen el negocio no pasa.'
+                ),
+                'compuerta_real': (
+                    'SIMULACION DE INVENTARIO sobre el kardex historico: aplicar ambas '
+                    'politicas de ROP y comparar nivel de servicio contra capital '
+                    'inmovilizado. Gana quien alcance el servicio objetivo con menos '
+                    'inventario. Pendiente — no es ruta critica del comite.'
                 ),
                 'nota': 'Spec §2.M0.3 — TSB debe ganarle a la media movil de 8 semanas.',
             },
+            'sigma_d_del_rop': (
+                'Sigue con el estimador interino (sigma empirica descensurada). '
+                'Solo cambia al RMSE del TSB cuando pase la SIMULACION DE INVENTARIO, '
+                'no con el tamiz MASE.'
+            ),
             'pronosticos': pronosticos,
         }
 

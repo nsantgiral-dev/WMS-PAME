@@ -425,21 +425,29 @@ async function _cargarTSB(el) {
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Calculando pronósticos TSB…</div>';
   try {
     const r = await get('/api/kardex/pronostico-tsb?meses=12');
-    const b = r.backtest || {};
+    const b = r.tamiz_mase || {};
     let html = '';
 
     // ── LA COMPUERTA primero. Es lo único que decide si el modelo manda ────
-    const ok = b.aprobado;
+    const ok = b.supera_tamiz;
     const color = ok ? 'var(--green)' : 'var(--yellow)';
     html += `<div style="border:1px solid ${color};border-radius:10px;padding:12px;margin-bottom:14px;">
       <div style="font-size:13px;font-weight:700;color:${color};margin-bottom:6px;">
-        Compuerta de credibilidad: ${ok ? 'APROBADA' : 'NO APROBADA'}
+        Tamiz MASE: ${ok ? 'SUPERADO' : 'NO SUPERADO'}
+        <span style="font-weight:400;font-size:10px;color:var(--tx3);"> — no es la compuerta</span>
       </div>
       <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
-        ${b.evaluados || 0} SKUs evaluados · TSB gana en <strong>${b.porcentaje_tsb_gana || 0}%</strong>
-        · criterio: ${b.criterio || '—'}
+        ${b.evaluados || 0} de ${b.n_minimo || 100} SKUs mínimos ·
+        gana en <strong>${b.porcentaje_tsb_gana || 0}%</strong>
+        (IC95 ${(b.ic95_victorias || [0, 0])[0]}–${(b.ic95_victorias || [0, 0])[1]}%)
+        · ponderado por valor: <strong>${b.porcentaje_ponderado_por_valor || 0}%</strong>
+        ${b.azar_descartado ? '' : '<span style="color:var(--yellow);"> · azar NO descartado</span>'}
       </div>
-      <div style="font-size:11px;color:${color};margin-top:6px;">${b.consecuencia || ''}</div>
+      <div style="font-size:11px;color:var(--tx3);margin-top:6px;">${b._por_que_no || ''}</div>
+      <div style="font-size:11px;color:var(--yellow);margin-top:6px;">
+        <strong>Compuerta real:</strong> ${b.compuerta_real || ''}
+      </div>
+      <div style="font-size:10px;color:var(--tx3);margin-top:4px;">${r.sigma_d_del_rop || ''}</div>
       <div style="font-size:10px;color:var(--tx3);margin-top:6px;">
         ${b.metrica || ''}<br>${r.demanda || ''}
       </div>
