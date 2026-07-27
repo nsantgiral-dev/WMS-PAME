@@ -13,7 +13,20 @@ os.environ['SYNC_SCHEDULER'] = 'false'
 # 32+ bytes: RFC 7518 §3.2 para HMAC-SHA256. No es cosmética — con una clave
 # corta PyJWT emite un aviso por cada token y ahoga el canal de advertencias.
 os.environ['SECRET_KEY'] = 'test-secret-key-de-32-bytes-o-mas-para-hmac-sha256'
-os.environ['CONNEKTA_MODO_SIMULACION'] = 'true'
+# HERMETISMO. El gateway decide el modo asi:
+#     self.modo_simulacion = not all([self.ikey, self.itoken])
+# Solo mira las credenciales. CONNEKTA_MODO_SIMULACION no la lee NADIE — es
+# una variable que prometia forzar simulacion y no hacia nada.
+#
+# Consecuencia real: el contenedor de build de Railway SI tiene credenciales
+# (llegan como ENV en el Dockerfile), asi que los tests estaban golpeando el
+# ERP DE PRODUCCION en cada build. Un test de descarga de kardex llego a pedir
+# 18 paginas reales contra el Siesa que factura en siete puntos de venta.
+#
+# Se borran las credenciales para que la simulacion sea inevitable, no opcional.
+os.environ.pop('CONNEKTA_IKEY', None)
+os.environ.pop('CONNEKTA_ITOKEN', None)
+os.environ['CONNEKTA_MODO_SIMULACION'] = 'true'  # informativo; el guard real es el de arriba
 
 
 from app import create_app

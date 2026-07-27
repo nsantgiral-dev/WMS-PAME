@@ -213,3 +213,32 @@ class TestCanonZonaHoraria:
         with open(ruta, encoding='utf-8') as f:
             c = json.load(f)
         assert 'zona_de_corte' in c['serie']
+
+
+class TestHermetismoDeLosTests:
+    """Ningún test puede llamar al ERP de producción.
+
+    Pasó: el contenedor de build de Railway tiene credenciales Connekta, el
+    gateway decide el modo SOLO por `not all([ikey, itoken])`, y
+    CONNEKTA_MODO_SIMULACION —que conftest fijaba— no la lee nadie. Resultado:
+    un test de descarga pidió 18 páginas reales contra el Siesa que factura en
+    siete puntos de venta, durante un build.
+    """
+
+    def test_el_gateway_esta_en_simulacion(self, app):
+        from app.services.connekta_gateway import connekta
+        assert connekta.modo_simulacion is True, (
+            'El gateway NO está en simulación: los tests golpearían el ERP real. '
+            'Revisa que conftest borre CONNEKTA_IKEY y CONNEKTA_ITOKEN.'
+        )
+
+    def test_conftest_borra_las_credenciales_no_solo_pone_una_bandera(self):
+        """Poner una bandera que nadie lee es peor que no poner nada."""
+        conftest = open(os.path.join(_RAIZ, 'tests', 'conftest.py'),
+                        encoding='utf-8').read()
+        assert "pop('CONNEKTA_IKEY'" in conftest
+        assert "pop('CONNEKTA_ITOKEN'" in conftest
+
+    def test_no_hay_credenciales_en_el_entorno_de_test(self):
+        assert not os.environ.get('CONNEKTA_IKEY')
+        assert not os.environ.get('CONNEKTA_ITOKEN')

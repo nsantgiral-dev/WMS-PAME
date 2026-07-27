@@ -284,6 +284,18 @@ class KardexService:
         acotar el rango no reduce ni una petición. Lo que sí funciona es
         reanudar: cada corrida avanza lo que puede y devuelve dónde quedó.
 
+        RITMO REAL, MEDIDO EN PRODUCCIÓN (log de Railway, 27-jul-2026):
+        18 páginas en 58 segundos = 3.41 s/página (2.41s de latencia + 1s de
+        throttle). NO los 0.1-0.2 s/página que se supusieron: es 23x más lento.
+
+            17.000 páginas x 3.41 s = 16 HORAS   (11 sin throttle)
+
+        La descarga completa NO cabe en una sesión. Reanudar deja de ser red de
+        seguridad y pasa a ser el único camino: ~40 corridas de 25 minutos. Y
+        con ese calendario, la estabilidad del orden de paginación deja de ser
+        una curiosidad: es la diferencia entre un kardex íntegro y uno con
+        huecos repartidos a lo largo de dos días.
+
         Args:
             fecha_desde: YYYYMMDD — inicio del período a conservar
             fecha_hasta: YYYYMMDD — fin (default: hoy)

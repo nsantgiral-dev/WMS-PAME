@@ -291,3 +291,29 @@ class TestPruebaDeEstabilidad:
     def test_el_veredicto_dice_que_hacer_si_es_inestable(self):
         src = _src('app/services/kardex_service.py')
         assert 'UNA sola sesión' in src or 'UNA sola sesion' in src
+
+
+class TestRitmoRealMedido:
+    """El ritmo se midió en producción, no se supuso.
+
+    Log de Railway (27-jul-2026): 18 páginas en 58 segundos = 3.41 s/página.
+    La estimación previa era 0.1-0.2 s/página — 23 veces optimista. A ese
+    ritmo, 17.000 páginas son 16 horas, no 28-57 minutos.
+    """
+
+    def test_el_codigo_documenta_el_ritmo_medido(self):
+        src = _src('app/services/kardex_service.py')
+        assert '3.41' in src, 'el ritmo medido debe quedar escrito, no supuesto'
+        assert 'HORAS' in src, 'la consecuencia (horas, no minutos) debe estar declarada'
+
+    def test_el_tope_por_corrida_hace_inevitable_reanudar(self):
+        """Con 25 min por corrida y 16 horas de trabajo, son ~40 corridas.
+        Reanudar deja de ser red de seguridad: es el único camino."""
+        import os as _os
+        tope = int(_os.environ.get('KARDEX_MAX_MINUTOS', '25'))
+        paginas_por_corrida = tope * 60 / 3.41
+        corridas = 17000 / paginas_por_corrida
+        assert corridas > 10, (
+            f'Con {tope} min por corrida hacen falta ~{corridas:.0f} corridas. '
+            f'Si este número bajara de 10, revisar el supuesto de ritmo.'
+        )
