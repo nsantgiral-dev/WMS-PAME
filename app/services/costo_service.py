@@ -48,9 +48,45 @@ logger = logging.getLogger(__name__)
 # y medio y cuál en una cotización de este trimestre.
 DIAS_COSTO_ANEJO = 180
 
-# Margen bruto supuesto cuando no hay precio de venta. Es un SUPUESTO, no un
-# dato — va declarado en cada fila que lo use.
-MARGEN_SUPUESTO_DEFAULT = 0.40
+# ══════════════════════════════════════════════════════════════════════════
+# CONVENCIÓN DE MARGEN — nombrada a propósito.
+#
+# "Margen" prometía una afirmación y significaba la vecina. La versión anterior
+# hacía precio = costo * (1 + m), que es MARKUP SOBRE COSTO. Un margen de 43.5%
+# sobre PRECIO equivale a 77% de markup sobre costo — no a 43.5%.
+#
+# El error no era cosmético: con m=0.435 y Co=0.55*costo, el ratio crítico caía
+# de 0.583 a 0.442, z pasaba de +0.21 a -0.146, y el modelo recomendaba pedir
+# POR DEBAJO de la media. La palabra decidiendo la compra.
+#
+#   MARGEN SOBRE PRECIO:  m = (precio - costo) / precio   →  precio = costo/(1-m)
+#   MARKUP SOBRE COSTO:   k = (precio - costo) / costo    →  precio = costo*(1+k)
+#
+# Se usa MARGEN SOBRE PRECIO porque es como el negocio cotiza sus márgenes.
+# El nombre de la variable lo dice para que no vuelva a confundirse.
+# ══════════════════════════════════════════════════════════════════════════
+MARGEN_SOBRE_PRECIO_DEFAULT = 0.40
+
+# Un solo margen global miente sobre catálogos distintos: el importado y el
+# nacional no tienen la misma estructura. `origen` ya existe en el maestro.
+MARGEN_SOBRE_PRECIO_POR_ORIGEN = {
+    'CHINA': 0.435,      # importado — referencia QUIROND
+    'IMPORTADO': 0.435,
+    'NACIONAL': 0.30,
+}
+
+
+def precio_desde_margen(costo, margen_sobre_precio):
+    """precio = costo / (1 - m). NUNCA costo * (1 + m), que es markup."""
+    m = float(margen_sobre_precio)
+    if costo <= 0:
+        return 0.0
+    if not 0 < m < 1:
+        raise ValueError(
+            f'margen_sobre_precio debe estar en (0,1), llegó {m}. '
+            f'Un valor >=1 delata que se está pasando un markup.'
+        )
+    return costo / (1 - m)
 
 FUENTES = ('ACUERDO_VIGENTE', 'COTIZACION', 'KARDEX_PROMEDIO', 'MAESTRO', 'SIN_COSTO')
 
@@ -151,7 +187,7 @@ def _costos_kardex(refs):
     return salida
 
 
-def resolver_costos(refs, margen_supuesto=MARGEN_SUPUESTO_DEFAULT):
+def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
     """
     Costo y precio por SKU, con la fuente declarada en cada fila.
 
@@ -195,8 +231,13 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SUPUESTO_DEFAULT):
         # Cu = margen que se pierde si falta. Sin precio de venta se deriva de
         # un margen SUPUESTO — declarado, no disfrazado de dato.
         precio_supuesto = venta <= 0
+        margen_usado = None
         if precio_supuesto:
-            venta = costo * (1 + margen_supuesto) if costo > 0 else 0.0
+            # Por ORIGEN cuando se conoce: importado y nacional no comparten
+            # estructura de margen, y `origen` ya está en el maestro.
+            origen = (getattr(prod, 'origen', '') or '').strip().upper() if prod else ''
+            margen_usado = MARGEN_SOBRE_PRECIO_POR_ORIGEN.get(origen, margen_supuesto)
+            venta = precio_desde_margen(costo, margen_usado)
         cu = max(venta - costo, 0.0)
 
         elegido.update({
@@ -204,8 +245,16 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SUPUESTO_DEFAULT):
             'costo': costo,
             'precio_venta': venta,
             'precio_es_supuesto': precio_supuesto,
-            'margen_supuesto': margen_supuesto if precio_supuesto else None,
+            'margen_supuesto': margen_usado,
+            'convencion_margen': 'SOBRE_PRECIO' if precio_supuesto else None,
+            'origen': (getattr(prod, 'origen', '') or '') if prod else '',
             'cu': round(cu, 2),
+            # El supuesto mueve la decisión: ±10 puntos de margen mueven Q* ~24%.
+            # Para estas filas el comité no debería ver un punto sino un rango.
+            'cu_rango': ([
+                round(max(precio_desde_margen(costo, max(0.05, (margen_usado or 0) - 0.10)) - costo, 0), 2),
+                round(max(precio_desde_margen(costo, min(0.95, (margen_usado or 0) + 0.10)) - costo, 0), 2),
+            ] if precio_supuesto and costo > 0 else None),
             'confiable': elegido['fuente'] in ('ACUERDO_VIGENTE', 'COTIZACION'),
             'nombre': getattr(prod, 'nombre', '') if prod else '',
         })

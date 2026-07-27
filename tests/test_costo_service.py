@@ -127,7 +127,11 @@ class TestPrecioSupuesto:
         r = resolver_costos(['S1'], margen_supuesto=0.40)['S1']
         assert r['precio_es_supuesto'] is True
         assert r['margen_supuesto'] == 0.40
-        assert abs(r['cu'] - 400) < 0.01  # 1000*1.40 - 1000
+        # MARGEN SOBRE PRECIO: precio = 1000/(1-0.40) = 1666.67 → Cu = 666.67.
+        # Este assert decía 400 (= 1000*1.40 - 1000), que es MARKUP sobre costo:
+        # el test codificaba el bug en vez de detectarlo. Un test escrito contra
+        # la implementación acompaña al error hasta producción.
+        assert abs(r['cu'] - 666.67) < 0.01
 
     def test_con_precio_real_no_se_marca_como_supuesto(self, app, db):
         from app.models.producto import Producto
@@ -167,3 +171,108 @@ class TestCoberturaPorFuente:
         res = resumen_por_fuente(resolver_costos(['E1']))
         assert res['precio_supuesto'] == 1
         assert 'hipótesis' in res['advertencia_precio']
+
+
+class TestConvencionDeMargen:
+    """'Margen' prometía una afirmación y significaba la vecina.
+
+    precio = costo*(1+m) es MARKUP SOBRE COSTO. Con m=0.435 y Co=0.55*costo el
+    ratio caía de 0.5833 a 0.4416, z de +0.2104 a -0.1469, y el modelo
+    recomendaba pedir POR DEBAJO de la media. La palabra decidiendo la compra.
+    """
+
+    TOL = 0.001
+
+    def _canon(self):
+        import json
+        from pathlib import Path
+        p = Path(__file__).resolve().parents[1] / 'docs' / 'canones' / 'margen.json'
+        assert p.exists(), 'falta docs/canones/margen.json'
+        return json.loads(p.read_text(encoding='utf-8'))
+
+    def _caso(self, prefijo):
+        return next(c for c in self._canon()['casos'] if c['nombre'].startswith(prefijo))
+
+    def test_reproduce_el_canon_al_43_5(self):
+        from app.services.costo_service import precio_desde_margen
+        c = self._caso('Margen 43.5%')
+        p = precio_desde_margen(c['entrada']['costo'], c['entrada']['margen_sobre_precio'])
+        assert abs(p - c['esperado']['precio']) < self.TOL
+        assert abs((p - c['entrada']['costo']) - c['esperado']['cu']) < self.TOL
+
+    def test_el_ratio_y_la_z_salen_del_canon(self):
+        from statistics import NormalDist
+        from app.services.costo_service import precio_desde_margen
+        for prefijo in ('Margen 43.5%', 'Margen 33.5%', 'Margen 53.5%'):
+            c = self._caso(prefijo)
+            e, esp = c['entrada'], c['esperado']
+            cu = precio_desde_margen(e['costo'], e['margen_sobre_precio']) - e['costo']
+            co = e['co_fraccion_costo'] * e['costo']
+            ratio = cu / (cu + co)
+            assert abs(ratio - esp['ratio_critico']) < self.TOL, prefijo
+            assert abs(NormalDist().inv_cdf(ratio) - esp['z']) < self.TOL, prefijo
+
+    def test_no_reproduce_los_numeros_del_bug(self):
+        """Caso NEGATIVO: si vuelven estos números, la convención se rompió."""
+        from app.services.costo_service import precio_desde_margen
+        malo = self._caso('EL BUG')['esperado_incorrecto']
+        p = precio_desde_margen(100.0, 0.435)
+        assert abs(p - malo['precio']) > 1.0, \
+            'el precio coincide con el markup: la convención volvió a invertirse'
+
+    def test_margen_sobre_precio_no_es_markup(self):
+        """43.5% de margen == 77% de markup. No son el mismo número."""
+        from app.services.costo_service import precio_desde_margen
+        costo = 100.0
+        precio = precio_desde_margen(costo, 0.435)
+        markup = (precio - costo) / costo
+        assert abs(markup - 0.770) < 0.005
+
+    def test_un_markup_disfrazado_de_margen_revienta(self):
+        """Un valor >=1 solo puede ser un markup mal pasado."""
+        import pytest
+        from app.services.costo_service import precio_desde_margen
+        with pytest.raises(ValueError, match='markup'):
+            precio_desde_margen(100.0, 1.435)
+
+    def test_margen_por_origen(self, app, db):
+        """Un solo margen global miente sobre catálogos distintos."""
+        from app.models.producto import Producto
+        from app.services.kardex_service import KardexMovimiento
+        from app.services.costo_service import resolver_costos
+        from datetime import date
+        db.session.add(Producto(codigo='CH1', nombre='CH1', codigo_siesa='CH1', origen='CHINA'))
+        db.session.add(Producto(codigo='NA1', nombre='NA1', codigo_siesa='NA1', origen='NACIONAL'))
+        for ref in ('CH1', 'NA1'):
+            db.session.add(KardexMovimiento(referencia=ref, bodega='NB1', fecha=date.today(),
+                                            concepto=601, naturaleza=1, cantidad=10,
+                                            costo_promedio=1000))
+        db.session.commit()
+        r = resolver_costos(['CH1', 'NA1'])
+        assert r['CH1']['margen_supuesto'] == 0.435
+        assert r['NA1']['margen_supuesto'] == 0.30
+        assert r['CH1']['cu'] > r['NA1']['cu'], 'mayor margen debe dar mayor Cu'
+
+    def test_las_filas_supuestas_traen_rango_no_punto(self, app, db):
+        """±10 puntos de margen mueven Q* ~24%. El comité ve el rango."""
+        from app.services.kardex_service import KardexMovimiento
+        from app.services.costo_service import resolver_costos
+        from datetime import date
+        db.session.add(KardexMovimiento(referencia='RG1', bodega='NB1', fecha=date.today(),
+                                        concepto=601, naturaleza=1, cantidad=10,
+                                        costo_promedio=1000))
+        db.session.commit()
+        r = resolver_costos(['RG1'])['RG1']
+        assert r['cu_rango'] is not None
+        bajo, alto = r['cu_rango']
+        assert bajo < r['cu'] < alto, 'el rango debe contener el punto'
+
+    def test_la_convencion_esta_declarada_en_la_fila(self, app, db):
+        from app.services.kardex_service import KardexMovimiento
+        from app.services.costo_service import resolver_costos
+        from datetime import date
+        db.session.add(KardexMovimiento(referencia='CV1', bodega='NB1', fecha=date.today(),
+                                        concepto=601, naturaleza=1, cantidad=10,
+                                        costo_promedio=500))
+        db.session.commit()
+        assert resolver_costos(['CV1'])['CV1']['convencion_margen'] == 'SOBRE_PRECIO'

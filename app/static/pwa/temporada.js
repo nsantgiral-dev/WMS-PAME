@@ -107,7 +107,9 @@ function _tempFuenteCosto(f) {
   };
   const [txt, col] = etiquetas[f.fuente_costo] || ['—', 'var(--tx3)'];
   const anejo = f.costo_anejo ? ` <span title="costo de hace ${f.dias_antiguedad_costo} días" style="color:var(--yellow);">▲</span>` : '';
-  const sup = f.precio_es_supuesto ? ' <span title="Cu con margen supuesto: no hay precio de venta" style="color:var(--yellow);">≈</span>' : '';
+  const sup = f.precio_es_supuesto
+    ? ` <span title="Cu con margen ${Math.round((f.margen_supuesto || 0) * 100)}% SUPUESTO sobre precio — ±10 puntos mueven Q* ~24%" style="color:var(--yellow);">≈${Math.round((f.margen_supuesto || 0) * 100)}%</span>`
+    : '';
   return `<span style="color:${col};">${txt}</span>${anejo}${sup}`;
 }
 

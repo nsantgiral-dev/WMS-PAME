@@ -1,0 +1,93 @@
+{
+  "_doc": [
+    "Canon de la convención de margen. Casos calculados A MANO.",
+    "",
+    "Existe porque 'margen' es un número con nombre, y el nombre prometía una",
+    "afirmación y significaba la vecina — undécima instancia del patrón de la",
+    "semana, junto a paradas_gestionadas, modo, mase y backtest.",
+    "",
+    "El error no era cosmético. El código hacía precio = costo * (1 + m), que es",
+    "MARKUP SOBRE COSTO. Con m=0.435 y Co=0.55*costo:",
+    "    convención correcta →  ratio 0.5833,  z = +0.2104  (pedir sobre la media)",
+    "    lo que hacía        →  ratio 0.4416,  z = -0.1469  (pedir BAJO la media)",
+    "La palabra decidiendo la compra.",
+    "",
+    "Y el supuesto mueve la decisión aunque la convención sea correcta: ±10",
+    "puntos de margen mueven z entre -0.055 y +0.458. Con CV 45% eso es ~24% de",
+    "diferencia en la cantidad a pedir. Sobre cientos de millones, son decenas de",
+    "millones decididos por un supuesto. Por eso las filas con margen supuesto",
+    "muestran RANGO, no punto."
+  ],
+
+  "version": 1,
+
+  "modelo": {
+    "nombre": "Convención de margen — insumo de Cu en el newsvendor",
+    "que_decide": "Cu, y a través de Cu el ratio crítico y la cantidad a pedir.",
+    "spec": "docs/SPEC_ESTADISTICA_v1.md"
+  },
+
+  "procedencia": {
+    "origen": "Corrección de la convención (jul-2026), verificada contra aritmética independiente",
+    "fecha_corrida_original": "2026-07",
+    "hallazgo": "El código usaba markup sobre costo donde el negocio cotiza margen sobre precio. Con m=0.435 el modelo recomendaba pedir por debajo de la media.",
+    "nota": "Los valores se calcularon con calculadora, no derivados del código."
+  },
+
+  "convencion": {
+    "activa": "MARGEN_SOBRE_PRECIO",
+    "formula": "m = (precio - costo) / precio  →  precio = costo / (1 - m)",
+    "prohibida": "MARKUP_SOBRE_COSTO: k = (precio - costo) / costo → precio = costo * (1 + k)",
+    "equivalencia": "43.5% de margen sobre precio == 77.0% de markup sobre costo. NO son el mismo número.",
+    "_por_que_esta": "Es como el negocio cotiza sus márgenes. La variable se llama margen_sobre_precio para que no vuelva a confundirse."
+  },
+
+  "casos": [
+    {
+      "nombre": "Margen 43.5% sobre precio — referencia importado",
+      "entrada": {"costo": 100.0, "margen_sobre_precio": 0.435, "co_fraccion_costo": 0.55},
+      "esperado": {"precio": 176.9912, "cu": 76.9912, "co": 55.0, "ratio_critico": 0.5833, "z": 0.2104}
+    },
+    {
+      "nombre": "Margen 33.5% — borde inferior de la banda",
+      "entrada": {"costo": 100.0, "margen_sobre_precio": 0.335, "co_fraccion_costo": 0.55},
+      "esperado": {"precio": 150.3759, "cu": 50.3759, "ratio_critico": 0.4781, "z": -0.0550},
+      "_nota": "z negativo: con este margen el modelo pide por DEBAJO de la media. Es correcto dado el supuesto, y por eso el supuesto debe verse."
+    },
+    {
+      "nombre": "Margen 53.5% — borde superior de la banda",
+      "entrada": {"costo": 100.0, "margen_sobre_precio": 0.535, "co_fraccion_costo": 0.55},
+      "esperado": {"precio": 215.0538, "cu": 115.0538, "ratio_critico": 0.6766, "z": 0.4581}
+    },
+    {
+      "nombre": "EL BUG — markup donde debía ir margen",
+      "entrada": {"costo": 100.0, "markup_sobre_costo": 0.435, "co_fraccion_costo": 0.55},
+      "esperado_incorrecto": {"precio": 143.5, "cu": 43.5, "ratio_critico": 0.4416, "z": -0.1469},
+      "_nota": "Se conserva como caso NEGATIVO: si algún día el código vuelve a producir estos números, la convención se rompió otra vez."
+    }
+  ],
+
+  "sensibilidad": {
+    "banda_puntos_de_margen": 10,
+    "z_en_33.5": -0.0550,
+    "z_en_43.5": 0.2104,
+    "z_en_53.5": 0.4581,
+    "efecto_en_cantidad_cv45": "~24%",
+    "_regla": "Toda fila con margen SUPUESTO muestra rango de Cu, no un punto. El comité debe ver la incertidumbre que el supuesto introduce, no un número con decimales."
+  },
+
+  "margen_por_origen": {
+    "_por_que": "Un solo margen global miente sobre catálogos distintos. `origen` ya está en el maestro.",
+    "CHINA": 0.435,
+    "IMPORTADO": 0.435,
+    "NACIONAL": 0.30,
+    "_default": 0.40,
+    "estado": "SUPUESTOS — reemplazar por margen realizado (valor/cantidad del export) en cuanto la columna de ítem esté identificada."
+  },
+
+  "insumos": {
+    "_nota": "Canon aritmético: no depende de archivos.",
+    "registrado": false,
+    "archivos": []
+  }
+}

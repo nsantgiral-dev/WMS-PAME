@@ -230,6 +230,9 @@ class TemporadaService:
                 'costo_anejo': info_costo.get('anejo', False),
                 'dias_antiguedad_costo': info_costo.get('dias_antiguedad'),
                 'precio_es_supuesto': info_costo.get('precio_es_supuesto', False),
+                'margen_supuesto': info_costo.get('margen_supuesto'),
+                'cu_rango': info_costo.get('cu_rango'),
+                'convencion_margen': info_costo.get('convencion_margen'),
             })
 
         resultado = KardexService.newsvendor(items, margen_pct=margen_pct,
@@ -244,7 +247,8 @@ class TemporadaService:
             fila['concentracion'] = m.get('concentracion')
             fila['precio_venta'] = m.get('precio_venta')
             for k in ('fuente_costo', 'costo_confiable', 'costo_anejo',
-                      'dias_antiguedad_costo', 'precio_es_supuesto'):
+                      'dias_antiguedad_costo', 'precio_es_supuesto',
+                      'margen_supuesto', 'cu_rango', 'convencion_margen'):
                 fila[k] = m.get(k)
 
         total = len(estacionales)
