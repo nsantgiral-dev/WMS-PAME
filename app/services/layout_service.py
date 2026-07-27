@@ -44,6 +44,7 @@ from app.models.producto import Producto
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.picking import TareaPicking
 from app.models.tarea_reposicion import TareaReposicion
+from app.models.conteo import SesionConteo
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -263,6 +264,8 @@ def _motivo_historial_bloqueante(ubicacion_id: int) -> str | None:
         )
     ).first():
         return 'tiene historial de tareas de Reposición'
+    if SesionConteo.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene sesión de conteo cíclico asociada'
     if MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).first():
         return 'tiene movimientos de inventario registrados'
     return None
@@ -287,6 +290,8 @@ def _motivo_historial_operativo_real(ubicacion_id: int) -> str | None:
         )
     ).first():
         return 'tiene historial de tareas de Reposición'
+    if SesionConteo.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene sesión de conteo cíclico asociada'
     if MovimientoInventario.query.filter(
         MovimientoInventario.ubicacion_id == ubicacion_id,
         MovimientoInventario.tipo.notin_(_TIPOS_MOVIMIENTO_BOOKKEEPING_LAYOUT),
@@ -315,10 +320,13 @@ def _borrar_historial_de(ubicacion_id: int):
     SOLO para el path forzar=True de eliminar_ubicacion()/eliminar_fila()/
     eliminar_cuerpo() — cuando el usuario pidió explícitamente saltarse el
     guardarraíl de historial (uso: pruebas, nunca el camino normal). Borra en
-    cascada TareaPicking/TareaReposicion/MovimientoInventario que apuntan a
-    esta ubicación, porque su FK es NOT NULL: si no se borran también, el
-    DELETE de la ubicación falla igual por violación de integridad referencial
-    en Postgres, forzar=True o no. Esto SÍ pierde el historial para siempre.
+    cascada TareaPicking/TareaReposicion/SesionConteo/MovimientoInventario que
+    apuntan a esta ubicación, porque su FK es NOT NULL: si no se borran
+    también, el DELETE de la ubicación falla igual por violación de
+    integridad referencial en Postgres, forzar=True o no (caso real: el
+    conteo cíclico ABC diario genera SesionConteo automáticamente sobre
+    huecos con stock — se descubrió al forzar un cuerpo que ya tenía una
+    sesión DIARIO_ABC pendiente). Esto SÍ pierde el historial para siempre.
     """
     TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
     TareaReposicion.query.filter(
@@ -327,6 +335,7 @@ def _borrar_historial_de(ubicacion_id: int):
             TareaReposicion.ubicacion_reserva_id == ubicacion_id,
         )
     ).delete(synchronize_session=False)
+    SesionConteo.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
     MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
 
 

@@ -336,6 +336,44 @@ def test_eliminar_ubicacion_individual_bloquea_con_stock(db, almacen, producto):
     assert Ubicacion.query.get(ub.id) is not None
 
 
+def test_eliminar_ubicacion_individual_bloquea_por_sesion_conteo(db, almacen, producto):
+    """
+    Regresión real: el conteo cíclico ABC diario genera SesionConteo
+    automáticamente sobre huecos con stock. Su FK a ubicaciones es NOT NULL
+    y el guardarraíl no la contemplaba — el DELETE pasaba el chequeo y
+    crasheaba con IntegrityError (500) en vez de un ValueError limpio.
+    """
+    from app.models.conteo import SesionConteo
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    db.session.add(SesionConteo(
+        codigo='CC-TEST-1', tipo='DIARIO_ABC', ubicacion_id=ub.id,
+        almacen_id=almacen.id, producto_id=producto.id, estado='PENDIENTE',
+    ))
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='sesión de conteo'):
+        svc.eliminar_ubicacion(ub.id)
+    assert Ubicacion.query.get(ub.id) is not None
+
+
+def test_eliminar_ubicacion_individual_forzar_borra_sesion_conteo(db, almacen, producto):
+    from app.models.conteo import SesionConteo
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    sesion = SesionConteo(
+        codigo='CC-TEST-2', tipo='DIARIO_ABC', ubicacion_id=ub.id,
+        almacen_id=almacen.id, producto_id=producto.id, estado='PENDIENTE',
+    )
+    db.session.add(sesion)
+    db.session.commit()
+    sesion_id = sesion.id
+
+    resultado = svc.eliminar_ubicacion(ub.id, forzar=True)
+
+    assert resultado['codigo'] == ub.codigo
+    assert Ubicacion.query.get(ub.id) is None
+    assert SesionConteo.query.get(sesion_id) is None
+
+
 def test_eliminar_ubicacion_individual_forzar_ignora_stock_y_borra_historial(db, almacen, producto):
     from app.models.picking import TareaPicking
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
