@@ -1,0 +1,109 @@
+{
+  "_doc": [
+    "Canon de zona horaria. Política transversal, no métrica de un modelo.",
+    "",
+    "Existe porque 'semana' es un número con nombre, y un número con nombre",
+    "tiene canon. Una serie semanal sin zona de corte declarada no es una serie:",
+    "es dos series distintas según dónde corra el servidor.",
+    "",
+    "Responde dos preguntas que estaban sin responder y que muerden en sitios",
+    "distintos:",
+    "  1. ¿En qué zona se cortan las semanas del Vigía? → decide si el empalme",
+    "     HISTORICO→PRODUCCION diverge por RELOJ en vez de por código.",
+    "  2. ¿En qué zona se sellan los timestamps de auditoría? → decide si el",
+    "     acta del comité queda firmada con una hora corrida cinco horas."
+  ],
+
+  "version": 1,
+
+  "politica": {
+    "zona_de_negocio": "America/Bogota",
+    "_es_utc_menos_5": true,
+    "corte_de_periodos": [
+      "TODA derivación de fecha de negocio (día, semana, mes) se hace en",
+      "America/Bogota. Nunca desde un timestamp UTC naive.",
+      "",
+      "La regla operativa: convertir a Bogotá PRIMERO, derivar la fecha DESPUÉS.",
+      "  MAL:  date.today()                      → fecha del servidor (UTC en Railway)",
+      "  MAL:  func.date(timestamp_utc)          → fecha UTC",
+      "  BIEN: datetime.now(TZ_BOGOTA).date()",
+      "  BIEN: timestamp.astimezone(TZ_BOGOTA).date()"
+    ],
+    "almacenamiento_de_timestamps": [
+      "Timestamps almacenados: UTC con zona explícita (aware). Es inequívoco y",
+      "sobrevive cambios de servidor.",
+      "",
+      "Timestamps MOSTRADOS a humanos o impresos en actas: convertidos a",
+      "America/Bogota, con la zona visible junto a la hora. Un acta firmada a",
+      "las 3 p.m. en Neiva no puede registrar 20:00 sin decir que es UTC.",
+      "",
+      "Prohibido: datetime.utcnow(). Produce un naive que MIENTE sobre su zona —",
+      "parece local y es UTC. Deprecado además en Python 3.12."
+    ],
+    "_precedente": [
+      "La política ya existía y no se aplicaba de forma uniforme:",
+      "connekta_gateway._fecha_hoy_bogota() la implementa correctamente, con el",
+      "docstring 'datetime.utcnow() causa fecha incorrecta después de 7PM",
+      "Colombia', y CLAUDE.md la declara en la Regla 5. El Vigía no la usa.",
+      "Es 'una política, dos implementaciones' en su forma más barata: la",
+      "segunda implementación es simplemente no llamar a la primera."
+    ]
+  },
+
+  "estado_actual": {
+    "_ADVERTENCIA": "El código NO cumple esta política todavía. Declarado aquí para que la divergencia sea visible, no para simular que está resuelta.",
+    "fecha_diagnostico": "2026-07-27",
+    "hallazgos": [
+      {
+        "donde": "vigia_service._lunes_semana_actual()",
+        "hace": "date.today() — fecha local del servidor, que en Railway es UTC",
+        "deberia": "fecha de Bogotá",
+        "efecto": [
+          "El guard de 'semana en curso' se abre CINCO HORAS ANTES. Entre las",
+          "7 p.m. del domingo y medianoche en Bogotá, date.today() en Railway ya",
+          "es lunes, así que la semana que aún no cierra se vuelve evaluable con",
+          "el domingo incompleto. Falso positivo por diseño."
+        ]
+      },
+      {
+        "donde": "serie HISTORICO — cargar_ventas_desde_txt",
+        "hace": "strptime(fecha_str, '%d/%m/%Y') sobre el TXT de Siesa",
+        "zona_efectiva": "America/Bogota (fecha contable de Siesa, sin hora)",
+        "correcto": true
+      },
+      {
+        "donde": "serie PRODUCCION — alimentar_adopcion_picking",
+        "hace": "func.date(TareaPicking.fecha_creacion) sobre datetime.utcnow()",
+        "zona_efectiva": "UTC",
+        "correcto": false
+      }
+    ],
+    "divergencia_del_empalme": [
+      "HISTORICO corta por fecha de negocio Bogotá; PRODUCCION corta por fecha",
+      "UTC. Un movimiento de las 8 p.m. del domingo en Bogotá: el TXT lo pone en",
+      "domingo, el WMS lo sella como lunes 01:00 UTC y cae en la semana",
+      "siguiente.",
+      "",
+      "Cinco horas diarias desplazadas, SISTEMÁTICAMENTE. Para el corte semanal",
+      "solo muerde la ventana domingo 7 p.m.–medianoche, pero sistemático es",
+      "justo lo que un CUSUM lee como señal.",
+      "",
+      "Y lo peor no es el sesgo: es que cuando el empalme no cuadre, nadie sabrá",
+      "si fue el código o el reloj."
+    ],
+    "efecto_en_el_acta": "JuicioTemporada.fecha_creacion usa utcnow(). El acta del comité del 7-ago quedaría con hora UTC: una firma a las 3 p.m. en Neiva se registraría como 20:00."
+  },
+
+  "correccion_pendiente": {
+    "que": "Una función, una política — igual que dias_expuestos(): hoy_bogota() y fecha_negocio(timestamp) en un solo sitio, consumidas por el Vigía y por todo lo que corte periodos. Timestamps con zona explícita.",
+    "cuando": "DESPUÉS de aterrizar los seis commits atascados. No se cambian dos variables a la vez.",
+    "riesgo_de_la_migracion": "Mezclar datetime naive y aware lanza TypeError en ejecución. Hay comparaciones de ese tipo por todo el repo, así que la migración va junto con el pin de Python 3.12, no antes, y no en la semana del comité si el deploy sigue frágil.",
+    "beneficio_colateral": "Elimina los ~2.234 avisos de datetime.utcnow() deprecado en Python 3.12, en vez de silenciarlos."
+  },
+
+  "insumos": {
+    "_nota": "Política, no corrida. No depende de archivos.",
+    "registrado": false,
+    "archivos": []
+  }
+}

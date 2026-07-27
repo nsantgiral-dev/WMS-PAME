@@ -45,3 +45,6 @@ migrations/versions/__pycache__/
 /check_*.py
 /facturar_rm_*.py
 # CI cache bust 1784656642
+
+# venv paralelo para validar contra el Python de produccion (3.12)
+venv312/

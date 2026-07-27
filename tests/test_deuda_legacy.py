@@ -162,3 +162,54 @@ class TestNadaCriticoQuedaFueraDelRepo:
                 f'"{patron}" sin anclar: se tragará cualquier archivo con ese '
                 f'nombre en subdirectorios. Usa "/{patron}".'
             )
+
+
+class TestCanonZonaHoraria:
+    """'Semana' es un número con nombre, así que tiene canon.
+
+    Una serie semanal sin zona de corte declarada no es una serie: son dos
+    series distintas según dónde corra el servidor.
+    """
+
+    def _canon(self):
+        import json
+        ruta = os.path.join(_RAIZ, 'docs', 'canones', 'zona_horaria.json')
+        assert os.path.exists(ruta), 'falta docs/canones/zona_horaria.json'
+        with open(ruta, encoding='utf-8') as f:
+            return json.load(f)
+
+    def test_declara_la_zona_de_negocio(self):
+        c = self._canon()
+        assert c['politica']['zona_de_negocio'] == 'America/Bogota'
+
+    def test_responde_las_dos_preguntas(self):
+        """Corte de periodos y sellado de timestamps: ambas, explícitas."""
+        p = self._canon()['politica']
+        assert 'corte_de_periodos' in p and 'almacenamiento_de_timestamps' in p
+        assert 'utcnow' in ' '.join(p['almacenamiento_de_timestamps']), \
+            'debe prohibir explícitamente datetime.utcnow()'
+
+    def test_declara_que_el_codigo_todavia_no_cumple(self):
+        """Declarar la política sin declarar la brecha sería simular que está resuelta."""
+        e = self._canon()['estado_actual']
+        assert 'NO cumple' in e['_ADVERTENCIA']
+        assert len(e['hallazgos']) >= 3
+        assert any(not h.get('correcto', True) for h in e['hallazgos'])
+
+    def test_la_serie_reina_referencia_la_politica(self):
+        """El empalme solo es comparable si ambas fuentes cortan igual."""
+        import json
+        ruta = os.path.join(_RAIZ, 'docs', 'canones', 'facturas_co.json')
+        with open(ruta, encoding='utf-8') as f:
+            c = json.load(f)
+        z = c['serie']['zona_de_corte']
+        assert z['zona'] == 'America/Bogota'
+        assert 'zona_horaria.json' in z['declarada_en']
+
+    def test_la_plantilla_obliga_a_declarar_zona(self):
+        """Toda serie periódica futura nace declarando su zona."""
+        import json
+        ruta = os.path.join(_RAIZ, 'docs', 'canon_PLANTILLA.json')
+        with open(ruta, encoding='utf-8') as f:
+            c = json.load(f)
+        assert 'zona_de_corte' in c['serie']
