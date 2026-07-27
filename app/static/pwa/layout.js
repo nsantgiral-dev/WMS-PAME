@@ -16,8 +16,12 @@ let _layoutUltimoCuerpo = null;   // { pasillo, fila, cuerpo, zona, entrepanos, 
 let _layoutUbAsignarId = null;
 let _layoutProductoId = null;
 
-const _ZONA_COLOR = { PICKING: '#60a5fa', RESERVA: '#22c55e', AVERIAS: '#ef4444', GENERAL: '#555' };
-const _ZONAS_TABS = ['PICKING', 'RESERVA', 'AVERIAS', 'GENERAL'];
+const _ZONA_COLOR = { PICKING: '#60a5fa', RESERVA: '#22c55e', AVERIAS: '#ef4444', IMPORTADOS: '#f59e0b', GENERAL: '#555' };
+const _ZONAS_TABS = ['PICKING', 'RESERVA', 'AVERIAS', 'IMPORTADOS', 'GENERAL'];
+// Zonas donde el Hueco nunca se comparte (1 SKU <-> 1 ubicación) — replica
+// _ZONAS_SLOT_UNICO de layout_service.py: ahí sí tiene sentido pedir
+// "capacidad máxima del hueco" porque hueco y SKU son la misma cosa.
+const _ZONAS_SLOT_UNICO = ['PICKING', 'IMPORTADOS'];
 
 /**
  * Switch the active zone tab and re-render ubicaciones for that zone.
@@ -258,8 +262,9 @@ function layoutRenderUbicaciones() {
 
 // ── Modal: Crear Cuerpo completo (Mecanismo A), wizard de 2 pasos ────────────
 // Dirección de 5 ejes: Pasillo -> Fila (1/2) -> Cuerpo -> Entrepaños -> Huecos.
-// Un Cuerpo es 100% de una sola zona — PICKING y RESERVA se arman como Cuerpos
-// separados (botones "+ Crear picking" / "+ Crear reserva"), no mezclados por
+// Un Cuerpo es 100% de una sola zona — PICKING, RESERVA e IMPORTADOS se arman
+// como Cuerpos separados (botones "+ Crear picking" / "+ Crear reserva" /
+// "+ Crear importados"), no mezclados por
 // Nivel dentro del mismo Cuerpo: así cada Cuerpo se revisa completo en una sola
 // pestaña de zona. Paso 1 define el cuerpo (pasillo/fila/número/cantidad de
 // entrepaños); paso 2 pide, entrepaño por entrepaño, cuántos huecos tiene —
@@ -481,18 +486,31 @@ async function layoutGuardarEditarCuerpo() {
  * Delete an entire cuerpo (all its entrepanos/huecos) — blocks (all-or-nothing)
  * if any hueco has stock or real operational history.
  */
-async function layoutEliminarCuerpo(pasillo, fila, cuerpo) {
+async function layoutEliminarCuerpo(pasillo, fila, cuerpo, forzar) {
   const codigoCuerpo = `${pasillo}${fila}-C${String(cuerpo).padStart(2, '0')}`;
-  if (!confirm(`¿Eliminar TODO el cuerpo ${codigoCuerpo} (todos sus entrepaños y huecos)? Esta acción no se puede deshacer. Se bloquea completo si algún hueco tiene stock o historial real — usa "Reclasificar > Desactivar cuerpo" en ese caso.`)) return;
+  const msg = forzar
+    ? `⚠ FORZAR eliminación de TODO el cuerpo ${codigoCuerpo} — esto borra también el historial real de picking/reposición de cada hueco, PARA SIEMPRE. ¿Continuar?`
+    : `¿Eliminar TODO el cuerpo ${codigoCuerpo} (todos sus entrepaños y huecos)? Esta acción no se puede deshacer. Se bloquea completo si algún hueco tiene stock o historial real — usa "Reclasificar > Desactivar cuerpo" en ese caso.`;
+  if (!confirm(msg)) return;
   try {
     const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pasillo, fila, cuerpo }),
+      body: JSON.stringify({ pasillo, fila, cuerpo, forzar: !!forzar }),
     });
     const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'Error eliminando el cuerpo', 'error'); return; }
-    alerta(`Cuerpo ${codigoCuerpo} eliminado — ${d.total} hueco(s)`, 'ok');
+    if (!r.ok) {
+      if (!forzar && r.status === 400) {
+        alerta(d.error || 'Error eliminando el cuerpo', 'error');
+        if (confirm(`Bloqueado: ${d.error}\n\n¿Forzar de todos modos? Requiere rol admin y borra el historial para siempre.`)) {
+          return layoutEliminarCuerpo(pasillo, fila, cuerpo, true);
+        }
+        return;
+      }
+      alerta(d.error || 'Error eliminando el cuerpo', 'error');
+      return;
+    }
+    alerta(`Cuerpo ${codigoCuerpo} eliminado${forzar ? ' (forzado)' : ''} — ${d.total} hueco(s)`, 'ok');
     layoutCargarUbicaciones();
   } catch (e) {
     alerta('Error de conexión', 'error');
@@ -665,17 +683,20 @@ function layoutCerrarModalEliminarFila() {
 }
 
 /** Delete all eligible positions in the fila after confirmation. */
-async function layoutGuardarEliminarFila() {
+async function layoutGuardarEliminarFila(forzar) {
   if (!_layoutFilaEnBorrado) return;
   const { pasillo, fila } = _layoutFilaEnBorrado;
   const codigoFila = `${pasillo}${String(fila).padStart(2, '0')}`;
-  if (!confirm(`¿Eliminar la fila ${codigoFila}? Esta acción no se puede deshacer. Solo se borrarán las posiciones sin stock ni historial.`)) return;
+  const msg = forzar
+    ? `⚠ FORZAR eliminación de la fila ${codigoFila} — esto borra también el historial real de picking/reposición de cada posición, PARA SIEMPRE. ¿Continuar?`
+    : `¿Eliminar la fila ${codigoFila}? Esta acción no se puede deshacer. Solo se borrarán las posiciones sin stock ni historial.`;
+  if (!confirm(msg)) return;
 
   try {
     const r = await fetch(API + `/api/almacenes/${ALMACEN_ID}/ubicaciones/fila`, {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pasillo, fila: parseInt(fila) }),
+      body: JSON.stringify({ pasillo, fila: parseInt(fila), forzar: !!forzar }),
     });
     const d = await r.json();
     if (!r.ok) { alerta(d.error || 'Error eliminando la fila', 'error'); return; }
@@ -689,6 +710,13 @@ async function layoutGuardarEliminarFila() {
     resEl.innerHTML = html;
     alerta(`${d.eliminadas.length}/${d.total_posiciones} posición(es) eliminada(s)`, bloqueadasCodigos.length ? 'advertencia' : 'ok');
     layoutCargarUbicaciones();
+
+    // Bloqueadas por stock/historial: ofrecer forzar como reintento explícito, solo sobre lo que falló.
+    if (!forzar && bloqueadasCodigos.length) {
+      if (confirm(`${bloqueadasCodigos.length} posición(es) bloqueada(s) por stock/historial.\n\n¿Forzar de todos modos sobre TODA la fila? Requiere rol admin y borra el historial para siempre.`)) {
+        return layoutGuardarEliminarFila(true);
+      }
+    }
   } catch (e) {
     alerta(e.message || 'Error eliminando la fila', 'error');
   }
@@ -726,7 +754,7 @@ function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   document.getElementById('layout-asignar-confirmacion').style.display = 'none';
   const capWrap = document.getElementById('layout-asignar-capacidad-wrap');
   if (capWrap) {
-    capWrap.style.display = tipoZona === 'PICKING' ? 'block' : 'none';
+    capWrap.style.display = _ZONAS_SLOT_UNICO.includes(tipoZona) ? 'block' : 'none';
     document.getElementById('layout-asignar-capacidad').value = '';
   }
   m.style.display = 'flex';
@@ -858,16 +886,31 @@ async function layoutGuardarEditarUbicacion() {
  * @param {number} ubId - Ubicacion ID.
  * @param {string} codigo - Ubicacion code for the confirmation prompt.
  */
-async function layoutEliminarUbicacion(ubId, codigo) {
-  if (!confirm(`¿Eliminar la ubicación ${codigo}? Esta acción no se puede deshacer. Solo se puede eliminar si no tiene stock ni historial.`)) return;
+async function layoutEliminarUbicacion(ubId, codigo, forzar) {
+  const msg = forzar
+    ? `⚠ FORZAR eliminación de ${codigo} — esto borra también el historial real de picking/reposición asociado, PARA SIEMPRE. Esto no es una prueba reversible. ¿Continuar?`
+    : `¿Eliminar la ubicación ${codigo}? Esta acción no se puede deshacer. Solo se puede eliminar si no tiene stock ni historial.`;
+  if (!confirm(msg)) return;
   try {
-    const r = await fetch(API + `/api/almacenes/ubicaciones/${ubId}`, {
+    const url = API + `/api/almacenes/ubicaciones/${ubId}` + (forzar ? '?forzar=true' : '');
+    const r = await fetch(url, {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + TOKEN },
     });
     const d = await r.json();
-    if (!r.ok) { alerta(d.error || 'Error eliminando la ubicación', 'error'); return; }
-    alerta(`${d.codigo || codigo} eliminada`, 'ok');
+    if (!r.ok) {
+      // Bloqueada por stock/historial: ofrecer forzar como reintento explícito, nunca por defecto.
+      if (!forzar && r.status === 400) {
+        alerta(d.error || 'Error eliminando la ubicación', 'error');
+        if (confirm(`Bloqueada: ${d.error}\n\n¿Forzar de todos modos? Requiere rol admin y borra el historial para siempre.`)) {
+          return layoutEliminarUbicacion(ubId, codigo, true);
+        }
+        return;
+      }
+      alerta(d.error || 'Error eliminando la ubicación', 'error');
+      return;
+    }
+    alerta(`${d.codigo || codigo} eliminada${forzar ? ' (forzado)' : ''}`, 'ok');
     layoutCargarUbicaciones();
   } catch (e) {
     alerta('Error de conexión', 'error');
@@ -1089,7 +1132,7 @@ function _layoutAsignarEntFilaEdicion(u, huecoLabel, zona) {
           onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}"
           style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;">
       </div>
-      ${zona === 'PICKING' ? `<input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" value="${u.capacidad_maxima ?? ''}" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}
+      ${_ZONAS_SLOT_UNICO.includes(zona) ? `<input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" value="${u.capacidad_maxima ?? ''}" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}
     </div>`;
 }
 

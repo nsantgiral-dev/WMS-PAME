@@ -13,7 +13,7 @@ Piezas:
   2. crear_cuerpo()         — Mecanismo A: entrepaños+huecos de un Cuerpo, en bloque,
                               con Zona sugerida por Nivel (piso->PICKING, alto->RESERVA)
   3. crear_ubicacion_averias() — AVE1, AVE2... numeradas, fuera de la grilla pasillo/fila
-  4. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING
+  4. asignar_producto()     — Mecanismo B: bind ubicación↔SKU, con la regla 1:1 en PICKING/IMPORTADOS
   5. reclasificar_ubicacion() — cambiar zona/capacidad/activo/slot, con guardarraíles
   6. importar_excel()       — Mecanismo A, opción masiva (reusa asignar_producto)
 
@@ -95,9 +95,14 @@ def letras_disponibles(almacen_id: int, minimo_a_mostrar: int = 5):
 # 2. Nivel 1 del Mecanismo A — crear las posiciones de una fila, en bloque
 # ──────────────────────────────────────────────────────────────────────────────
 
-ZONAS_VALIDAS = ('PICKING', 'RESERVA', 'AVERIAS')
-_PREFIJO_ZONA = {'PICKING': 'PIK', 'RESERVA': 'RES', 'AVERIAS': 'AVE'}
-_ZONAS_CUERPO = ('PICKING', 'RESERVA')  # zonas que se arman con Mecanismo A (Cuerpo completo)
+ZONAS_VALIDAS = ('PICKING', 'RESERVA', 'AVERIAS', 'IMPORTADOS')
+_PREFIJO_ZONA = {'PICKING': 'PIK', 'RESERVA': 'RES', 'AVERIAS': 'AVE', 'IMPORTADOS': 'IMP'}
+_ZONAS_CUERPO = ('PICKING', 'RESERVA', 'IMPORTADOS')  # zonas que se arman con Mecanismo A (Cuerpo completo)
+# Zonas donde el Hueco nunca se comparte: 1 SKU <-> 1 ubicación, pool de
+# exclusividad independiente por zona (un SKU puede tener a la vez un slot en
+# PICKING y otro en IMPORTADOS — no compiten entre sí, cada zona es su propia
+# regla 1:1). RESERVA/AVERIAS quedan fuera: ahí N:N es libre.
+_ZONAS_SLOT_UNICO = ('PICKING', 'IMPORTADOS')
 
 
 def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
@@ -114,9 +119,10 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     cada Hueco se amarran después, uno por uno, con asignar_producto().
 
     Un Cuerpo es 100% de una sola Zona (tipo_zona) — todos sus Entrepaños la
-    heredan. PICKING y RESERVA se arman como Cuerpos separados (Crear picking /
-    Crear reserva en el front), no mezclados por Nivel dentro del mismo Cuerpo:
-    así cada Cuerpo se revisa completo en una sola pestaña de zona.
+    heredan. PICKING, RESERVA e IMPORTADOS se arman como Cuerpos separados
+    (Crear picking / Crear reserva / Crear importados en el front), no
+    mezclados por Nivel dentro del mismo Cuerpo: así cada Cuerpo se revisa
+    completo en una sola pestaña de zona.
 
     Dirección física: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahía)
     -> Nivel (entrepaño) -> Hueco.
@@ -304,28 +310,56 @@ def _motivo_no_eliminable(ubicacion_id: int) -> str | None:
     return None
 
 
-def eliminar_ubicacion(ubicacion_id: int):
+def _borrar_historial_de(ubicacion_id: int):
+    """
+    SOLO para el path forzar=True de eliminar_ubicacion()/eliminar_fila()/
+    eliminar_cuerpo() — cuando el usuario pidió explícitamente saltarse el
+    guardarraíl de historial (uso: pruebas, nunca el camino normal). Borra en
+    cascada TareaPicking/TareaReposicion/MovimientoInventario que apuntan a
+    esta ubicación, porque su FK es NOT NULL: si no se borran también, el
+    DELETE de la ubicación falla igual por violación de integridad referencial
+    en Postgres, forzar=True o no. Esto SÍ pierde el historial para siempre.
+    """
+    TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
+    TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        )
+    ).delete(synchronize_session=False)
+    MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
+
+
+def eliminar_ubicacion(ubicacion_id: int, forzar: bool = False):
     """
     Elimina una sola ubicación que nunca se usó — versión de eliminar_fila()
     para una posición individual, con el mismo guardarraíl duro (bloquea si
     tiene stock o historial, no solo advierte).
+
+    forzar=True se salta el guardarraíl completo (stock + historial) y borra
+    en cascada TareaPicking/TareaReposicion/MovimientoInventario asociados —
+    pérdida de datos permanente, pensado solo para limpiar pruebas, nunca para
+    el flujo normal de operación.
     """
     ubicacion = Ubicacion.query.get(ubicacion_id)
     if not ubicacion:
         raise ValueError(f'Ubicación {ubicacion_id} no encontrada')
 
-    motivo = _motivo_no_eliminable(ubicacion_id)
-    if motivo:
-        raise ValueError(f'{ubicacion.codigo} {motivo}')
+    if not forzar:
+        motivo = _motivo_no_eliminable(ubicacion_id)
+        if motivo:
+            raise ValueError(f'{ubicacion.codigo} {motivo}')
 
     codigo = ubicacion.codigo
+    if forzar:
+        _borrar_historial_de(ubicacion_id)
     UbicacionProducto.query.filter_by(ubicacion_id=ubicacion.id).delete()
     db.session.delete(ubicacion)
     db.session.commit()
     return {'codigo': codigo}
 
 
-def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int) -> dict:
+def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int, forzar: bool = False) -> dict:
     """
     Elimina un Cuerpo completo — todos sus Entrepaños y Huecos, sin excepción.
 
@@ -338,24 +372,31 @@ def eliminar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int) -> di
     Para retirar de operación un cuerpo con historial real sin perder su
     trazabilidad de auditoría, usar reclasificar_cuerpo(activo=False) en vez
     de esta función — desactivar archiva, eliminar borra para siempre.
+
+    forzar=True se salta el guardarraíl completo en TODOS los huecos del
+    cuerpo y borra en cascada su historial (ver _borrar_historial_de) —
+    pérdida de datos permanente, pensado solo para limpiar pruebas.
     """
     ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
 
-    bloqueados = {}
-    for ub in ubicaciones:
-        motivo = _motivo_no_eliminable(ub.id)
-        if motivo:
-            bloqueados[ub.codigo] = motivo
-    if bloqueados:
-        detalle = '; '.join(f'{codigo} {motivo}' for codigo, motivo in bloqueados.items())
-        raise ValueError(
-            f'No se puede eliminar el cuerpo — {len(bloqueados)} de {len(ubicaciones)} '
-            f'hueco(s) lo bloquean: {detalle}. Usa "Reclasificar > Desactivar cuerpo" '
-            f'si necesitas retirarlo sin perder el historial.'
-        )
+    if not forzar:
+        bloqueados = {}
+        for ub in ubicaciones:
+            motivo = _motivo_no_eliminable(ub.id)
+            if motivo:
+                bloqueados[ub.codigo] = motivo
+        if bloqueados:
+            detalle = '; '.join(f'{codigo} {motivo}' for codigo, motivo in bloqueados.items())
+            raise ValueError(
+                f'No se puede eliminar el cuerpo — {len(bloqueados)} de {len(ubicaciones)} '
+                f'hueco(s) lo bloquean: {detalle}. Usa "Reclasificar > Desactivar cuerpo" '
+                f'si necesitas retirarlo sin perder el historial.'
+            )
 
     codigos = [ub.codigo for ub in ubicaciones]
     for ub in ubicaciones:
+        if forzar:
+            _borrar_historial_de(ub.id)
         UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
         db.session.delete(ub)
     db.session.commit()
@@ -369,7 +410,7 @@ def reclasificar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
                         tipo_zona: str = None, activo: bool = None) -> dict:
     """
     Reclasifica todo un Cuerpo de una vez: cambia su zona (RESERVA<->PICKING<->
-    AVERIAS) o lo desactiva completo. Reutiliza reclasificar_ubicacion() hueco
+    AVERIAS<->IMPORTADOS) o lo desactiva completo. Reutiliza reclasificar_ubicacion() hueco
     por hueco heredando su guardarraíl (bloquea por hueco si tiene stock
     activo), sin abortar el resto del cuerpo si una posición puntual falla —
     mismo patrón de "no aborta el lote" que editar_fila() ya usa para el
@@ -405,12 +446,16 @@ def reclasificar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     }
 
 
-def eliminar_fila(almacen_id: int, pasillo: str, fila: int):
+def eliminar_fila(almacen_id: int, pasillo: str, fila: int, forzar: bool = False):
     """
     Elimina en bloque las posiciones de una fila que nunca se usaron. Pensado
     para deshacer una fila creada por error, no para dar de baja infraestructura
     en operación — por eso el guardarraíl es duro (bloquea, no solo advierte) y
     no aborta el lote si una posición sí tiene historial.
+
+    forzar=True se salta el guardarraíl por posición y borra en cascada su
+    historial (ver _borrar_historial_de) — pérdida de datos permanente,
+    pensado solo para limpiar pruebas.
     """
     pasillo = pasillo.strip().upper()
     ubicaciones = Ubicacion.query.filter_by(
@@ -423,10 +468,13 @@ def eliminar_fila(almacen_id: int, pasillo: str, fila: int):
     eliminadas = []
     bloqueadas = {}
     for ub in ubicaciones:
-        motivo = _motivo_no_eliminable(ub.id)
-        if motivo:
-            bloqueadas[ub.codigo] = motivo
-            continue
+        if not forzar:
+            motivo = _motivo_no_eliminable(ub.id)
+            if motivo:
+                bloqueadas[ub.codigo] = motivo
+                continue
+        if forzar:
+            _borrar_historial_de(ub.id)
         # Filas nunca usadas pueden tener registros de UbicacionProducto en 0
         # (ej. se asignó y luego se vació) — se limpian junto con la ubicación.
         UbicacionProducto.query.filter_by(ubicacion_id=ub.id).delete()
@@ -651,15 +699,17 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
     """
     Amarra un SKU a una ubicación y suma la cantidad contada.
 
-    En PICKING aplica la regla 1 SKU ↔ 1 ubicación por almacén: rechaza si la
-    ubicación ya tiene otro SKU asignado, o si el SKU ya tiene otra ubicación
-    PICKING asignada en el mismo almacén — hay que liberar el slot primero
-    (ver reclasificar_ubicacion).
+    En PICKING e IMPORTADOS aplica la regla 1 SKU ↔ 1 ubicación por almacén,
+    cada zona con su propio pool de exclusividad (un SKU puede tener a la vez
+    un slot en PICKING y otro distinto en IMPORTADOS, no compiten entre sí):
+    rechaza si la ubicación ya tiene otro SKU asignado, o si el SKU ya tiene
+    otra ubicación de esa misma zona asignada en el mismo almacén — hay que
+    liberar el slot primero (ver reclasificar_ubicacion).
     En RESERVA/AVERIAS no hay restricción — N:N libre.
 
-    capacidad_maxima (opcional) solo aplica en PICKING: como ahí el Hueco
-    nunca se comparte con otro SKU, "capacidad del Hueco" y "capacidad para
-    este SKU" son la misma cosa. En RESERVA/AVERIAS un Hueco puede tener
+    capacidad_maxima (opcional) solo aplica en PICKING/IMPORTADOS: como ahí el
+    Hueco nunca se comparte con otro SKU, "capacidad del Hueco" y "capacidad
+    para este SKU" son la misma cosa. En RESERVA/AVERIAS un Hueco puede tener
     varios SKUs a la vez, así que un solo valor de capacidad por Hueco no
     representa nada — se rechaza para no pisar silenciosamente el dato.
     """
@@ -676,13 +726,13 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
     if not producto:
         raise ValueError(f'Producto {producto_id} no encontrado')
 
-    if capacidad_maxima is not None and ubicacion.tipo_zona != 'PICKING':
+    if capacidad_maxima is not None and ubicacion.tipo_zona not in _ZONAS_SLOT_UNICO:
         raise ValueError(
-            'capacidad_maxima solo aplica a Huecos PICKING — en RESERVA/AVERIAS '
-            'el Hueco puede compartirse entre varios SKUs'
+            f'capacidad_maxima solo aplica a Huecos {"/".join(_ZONAS_SLOT_UNICO)} — en '
+            f'RESERVA/AVERIAS el Hueco puede compartirse entre varios SKUs'
         )
 
-    if ubicacion.tipo_zona == 'PICKING':
+    if ubicacion.tipo_zona in _ZONAS_SLOT_UNICO:
         if ubicacion.producto_asignado_id and ubicacion.producto_asignado_id != producto_id:
             otro = Producto.query.get(ubicacion.producto_asignado_id)
             raise ValueError(
@@ -691,13 +741,13 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
             )
         otra_ub = Ubicacion.query.filter(
             Ubicacion.almacen_id == ubicacion.almacen_id,
-            Ubicacion.tipo_zona == 'PICKING',
+            Ubicacion.tipo_zona == ubicacion.tipo_zona,
             Ubicacion.producto_asignado_id == producto_id,
             Ubicacion.id != ubicacion.id,
         ).first()
         if otra_ub:
             raise ValueError(
-                f'{producto.codigo} ya tiene un slot de PICKING asignado en {otra_ub.codigo} '
+                f'{producto.codigo} ya tiene un slot de {ubicacion.tipo_zona} asignado en {otra_ub.codigo} '
                 f'— libéralo antes de asignar uno nuevo'
             )
         ubicacion.producto_asignado_id = producto_id
