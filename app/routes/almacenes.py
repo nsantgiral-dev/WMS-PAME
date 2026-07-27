@@ -153,10 +153,10 @@ def pasillos_disponibles(id):
 def crear_cuerpo(id):
     """
     Mecanismo A: crea un Cuerpo completo — sus Entrepaños (Nivel) y Huecos, en
-    bloque. Un Cuerpo es 100% de una sola Zona (tipo_zona) — PICKING y RESERVA
-    se arman como Cuerpos separados, no mezclados por Nivel dentro del mismo Cuerpo.
+    bloque. Un Cuerpo es 100% de una sola Zona (tipo_zona) — PICKING, RESERVA e
+    IMPORTADOS se arman como Cuerpos separados, no mezclados por Nivel dentro del mismo Cuerpo.
     Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel? }
-    tipo_zona debe ser PICKING o RESERVA. huecos_por_nivel es una lista de N
+    tipo_zona debe ser PICKING, RESERVA o IMPORTADOS. huecos_por_nivel es una lista de N
     enteros (uno por entrepaño, N=cantidad_entrepanos, en orden de Nivel 1..N);
     si no viene, cada entrepaño nace con 1 hueco.
     """
@@ -228,7 +228,7 @@ def editar_cuerpo(id):
 def reclasificar_cuerpo(id):
     """
     Reclasifica todo un Cuerpo de una vez: cambia su zona (RESERVA<->PICKING<->
-    AVERIAS) o lo desactiva completo (activo=false — camino recomendado para
+    AVERIAS<->IMPORTADOS) o lo desactiva completo (activo=false — camino recomendado para
     retirar un cuerpo con historial real sin perder su trazabilidad, cuando
     el DELETE de este mismo path lo bloquea).
     Payload: { pasillo, fila, cuerpo, tipo_zona?, activo? }
@@ -265,7 +265,10 @@ def eliminar_cuerpo(id):
     Todo o nada: bloquea (400) si CUALQUIER hueco tiene stock activo o
     historial operativo real. Usa el PATCH de este mismo path con
     activo=false para retirar un cuerpo con historial sin perder su rastro.
-    Payload: { pasillo, fila, cuerpo }
+    Payload: { pasillo, fila, cuerpo, forzar? }
+    forzar=true se salta el guardarraíl y borra en cascada el historial real
+    (TareaPicking/TareaReposicion/MovimientoInventario) — pérdida de datos
+    permanente, requiere admin (no basta jefe_almacen).
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
@@ -274,12 +277,16 @@ def eliminar_cuerpo(id):
     campos = ('pasillo', 'fila', 'cuerpo')
     if not all(data.get(c) for c in campos):
         return jsonify({'error': f'Requeridos: {", ".join(campos)}'}), 400
+    forzar = bool(data.get('forzar', False))
+    if forzar and not _solo_admin():
+        return jsonify({'error': 'forzar=true requiere rol admin'}), 403
     try:
         resultado = layout_service.eliminar_cuerpo(
             almacen_id=id,
             pasillo=data['pasillo'],
             fila=int(data['fila']),
             cuerpo=int(data['cuerpo']),
+            forzar=forzar,
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -323,7 +330,9 @@ def eliminar_fila(id):
     Elimina en bloque las posiciones de una fila que nunca se usaron (sin stock,
     sin historial de picking/reposición/movimientos). Pensado para deshacer una
     fila creada por error, no para dar de baja infraestructura en operación.
-    Payload: { pasillo, fila }
+    Payload: { pasillo, fila, forzar? }
+    forzar=true se salta el guardarraíl y borra en cascada el historial real
+    por posición — pérdida de datos permanente, requiere admin.
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
@@ -331,11 +340,15 @@ def eliminar_fila(id):
     data = request.get_json() or {}
     if not data.get('pasillo') or not data.get('fila'):
         return jsonify({'error': 'Requeridos: pasillo, fila'}), 400
+    forzar = bool(data.get('forzar', False))
+    if forzar and not _solo_admin():
+        return jsonify({'error': 'forzar=true requiere rol admin'}), 403
     try:
         resultado = layout_service.eliminar_fila(
             almacen_id=id,
             pasillo=data['pasillo'],
             fila=int(data['fila']),
+            forzar=forzar,
         )
         return jsonify(resultado), 200
     except ValueError as e:
@@ -348,11 +361,17 @@ def eliminar_ubicacion(ubicacion_id):
     """
     Elimina una sola ubicación que nunca se usó (sin stock ni historial).
     Mismo guardarraíl que eliminar_fila, a nivel de una sola posición.
+    Query string: ?forzar=true se salta el guardarraíl y borra en cascada el
+    historial real (TareaPicking/TareaReposicion/MovimientoInventario) —
+    pérdida de datos permanente, requiere admin (no basta jefe_almacen).
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    forzar = request.args.get('forzar', '').lower() == 'true'
+    if forzar and not _solo_admin():
+        return jsonify({'error': 'forzar=true requiere rol admin'}), 403
     try:
-        resultado = layout_service.eliminar_ubicacion(ubicacion_id)
+        resultado = layout_service.eliminar_ubicacion(ubicacion_id, forzar=forzar)
         return jsonify(resultado), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

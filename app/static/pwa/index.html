@@ -1909,6 +1909,10 @@
           style="padding:10px 16px;background:#22c55e;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
           + Crear reserva
         </button>
+        <button onclick="layoutAbrirModalCuerpo('IMPORTADOS')"
+          style="padding:10px 16px;background:#f59e0b;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
+          + Crear importados
+        </button>
         <button onclick="layoutCrearAverias()"
           style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
           + Ubicación AVERIAS
@@ -1932,6 +1936,10 @@
         <div id="layout-zona-tab-AVERIAS" onclick="layoutZonaTab('AVERIAS')"
           style="padding:7px 14px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid #ef4444;">
           ● AVERIAS <span id="layout-zona-count-AVERIAS"></span>
+        </div>
+        <div id="layout-zona-tab-IMPORTADOS" onclick="layoutZonaTab('IMPORTADOS')"
+          style="padding:7px 14px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid #f59e0b;">
+          ● IMPORTADOS <span id="layout-zona-count-IMPORTADOS"></span>
         </div>
         <div id="layout-zona-tab-GENERAL" onclick="layoutZonaTab('GENERAL')"
           style="padding:7px 14px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid #555;">
@@ -2936,6 +2944,7 @@
         <option value="PICKING">PICKING</option>
         <option value="RESERVA">RESERVA</option>
         <option value="AVERIAS">AVERIAS</option>
+        <option value="IMPORTADOS">IMPORTADOS</option>
       </select>
 
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--tx2);margin-bottom:6px;cursor:pointer;">
@@ -2972,6 +2981,7 @@
         <option value="PICKING">PICKING</option>
         <option value="RESERVA">RESERVA</option>
         <option value="AVERIAS">AVERIAS</option>
+        <option value="IMPORTADOS">IMPORTADOS</option>
       </select>
 
       <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima</label>
@@ -3047,7 +3057,7 @@
       <input id="layout-asignar-cantidad" type="number" min="1" placeholder="ej. 50"
         style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
 
-      <!-- Solo aplica en huecos PICKING: ahí el hueco nunca se comparte con otro SKU,
+      <!-- Solo aplica en huecos PICKING/IMPORTADOS: ahí el hueco nunca se comparte con otro SKU,
            así que "capacidad del hueco" y "capacidad para este SKU" son lo mismo. -->
       <div id="layout-asignar-capacidad-wrap" style="display:none;">
         <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima del hueco (opcional)</label>
@@ -3119,6 +3129,7 @@
         <option value="PICKING">PICKING</option>
         <option value="RESERVA">RESERVA</option>
         <option value="AVERIAS">AVERIAS</option>
+        <option value="IMPORTADOS">IMPORTADOS</option>
         <option value="GENERAL">GENERAL</option>
       </select>
 
@@ -3128,7 +3139,7 @@
 
       <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--tx2);margin-bottom:12px;cursor:pointer;">
         <input id="layout-reclasificar-liberar" type="checkbox">
-        Liberar slot de PICKING asignado
+        Liberar slot asignado (PICKING/IMPORTADOS)
       </label>
 
       <div id="layout-reclasificar-advertencias" style="font-size:12px;color:#fbbf24;margin-bottom:12px;"></div>
@@ -3159,6 +3170,7 @@
         <option value="PICKING">PICKING</option>
         <option value="RESERVA">RESERVA</option>
         <option value="AVERIAS">AVERIAS</option>
+        <option value="IMPORTADOS">IMPORTADOS</option>
         <option value="GENERAL">GENERAL</option>
       </select>
 

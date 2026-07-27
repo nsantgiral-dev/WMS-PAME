@@ -65,6 +65,13 @@ def test_crear_cuerpo_reserva_aplica_zona_a_todo_el_cuerpo(db, almacen):
     assert all(u.tipo_zona == 'RESERVA' for u in creadas)
 
 
+def test_crear_cuerpo_importados_aplica_zona_a_todo_el_cuerpo(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'IMPORTADOS')
+    codigos = sorted(u.codigo for u in creadas)
+    assert codigos == ['IMP-A1-C01-E01-H01', 'IMP-A1-C01-E02-H01']
+    assert all(u.tipo_zona == 'IMPORTADOS' for u in creadas)
+
+
 def test_crear_cuerpo_rechaza_zona_invalida(db, almacen):
     with pytest.raises(ValueError, match='tipo_zona debe ser una de'):
         svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'AVERIAS')
@@ -180,6 +187,48 @@ def test_asignar_producto_reserva_sin_restriccion_1a1(db, almacen, producto):
     assert Ubicacion.query.get(ub2.id).producto_asignado_id is None
 
 
+# ── IMPORTADOS — misma regla 1:1 que PICKING, pool de exclusividad propio ──
+
+def test_asignar_producto_importados_ok(db, almacen, producto):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'IMPORTADOS')[0]
+    resultado = svc.asignar_producto(ub.id, producto.id, 30)
+    assert resultado['cantidad_total'] == 30
+    assert Ubicacion.query.get(ub.id).producto_asignado_id == producto.id
+
+
+def test_asignar_producto_importados_rechaza_ubicacion_ocupada(db, almacen, producto, producto2):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'IMPORTADOS')[0]
+    svc.asignar_producto(ub.id, producto.id, 30)
+    with pytest.raises(ValueError, match='ya está asignada'):
+        svc.asignar_producto(ub.id, producto2.id, 10)
+
+
+def test_asignar_producto_importados_rechaza_producto_con_otro_slot(db, almacen, producto):
+    ub1 = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'IMPORTADOS')[0]
+    ub2 = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'IMPORTADOS')[0]
+    svc.asignar_producto(ub1.id, producto.id, 30)
+    with pytest.raises(ValueError, match='ya tiene un slot de IMPORTADOS'):
+        svc.asignar_producto(ub2.id, producto.id, 10)
+
+
+def test_asignar_producto_importados_permite_capacidad_maxima(db, almacen, producto):
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'IMPORTADOS')[0]
+    svc.asignar_producto(ub.id, producto.id, 30, capacidad_maxima=60)
+    assert Ubicacion.query.get(ub.id).capacidad_maxima == 60
+
+
+def test_asignar_producto_picking_e_importados_son_pools_independientes(db, almacen, producto):
+    """El mismo SKU puede tener a la vez un slot en PICKING y otro en
+    IMPORTADOS — cada zona valida exclusividad solo contra sí misma, no
+    contra las demás zonas de slot único."""
+    ub_pik = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    ub_imp = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'IMPORTADOS')[0]
+    svc.asignar_producto(ub_pik.id, producto.id, 50)
+    svc.asignar_producto(ub_imp.id, producto.id, 20)  # no debe fallar
+    assert Ubicacion.query.get(ub_pik.id).producto_asignado_id == producto.id
+    assert Ubicacion.query.get(ub_imp.id).producto_asignado_id == producto.id
+
+
 # ── Fusión Layout↔Picking (solo NB1/CO003) ──────────────────────────────────
 # Al asignar un SKU a un hueco real en el almacén NB1/CO003, se resta esa
 # cantidad de SIESA-GENERAL (el bucket sin ubicación física del sync de Siesa)
@@ -285,6 +334,25 @@ def test_eliminar_ubicacion_individual_bloquea_con_stock(db, almacen, producto):
     with pytest.raises(ValueError, match='stock activo'):
         svc.eliminar_ubicacion(ub.id)
     assert Ubicacion.query.get(ub.id) is not None
+
+
+def test_eliminar_ubicacion_individual_forzar_ignora_stock_y_borra_historial(db, almacen, producto):
+    from app.models.picking import TareaPicking
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    svc.asignar_producto(ub.id, producto.id, 50)
+    tarea = TareaPicking(
+        codigo='PICK-TEST-FORZAR-1', producto_id=producto.id, cantidad_solicitada=5,
+        ubicacion_id=ub.id, almacen_id=almacen.id, estado='COMPLETADO',
+    )
+    db.session.add(tarea)
+    db.session.commit()
+    tarea_id = tarea.id
+
+    resultado = svc.eliminar_ubicacion(ub.id, forzar=True)
+
+    assert resultado['codigo'] == ub.codigo
+    assert Ubicacion.query.get(ub.id) is None
+    assert TareaPicking.query.get(tarea_id) is None
 
 
 # ── editar_fila / eliminar_fila — mecanismo legado sobre 'estante' ───────────
@@ -403,6 +471,25 @@ def test_eliminar_fila_bloquea_con_tarea_picking(db, almacen, producto):
     assert 'Picking' in resultado['bloqueadas']['PIK-A01-01']
 
 
+def test_eliminar_fila_forzar_borra_pese_a_tarea_picking(db, almacen, producto):
+    from app.models.picking import TareaPicking
+    ub = _crear_legacy(almacen.id, 'A', 1, 1, 'PICKING')[0]
+    tarea = TareaPicking(
+        codigo='PICK-TEST-FORZAR-2', producto_id=producto.id, cantidad_solicitada=5,
+        ubicacion_id=ub.id, almacen_id=almacen.id, estado='COMPLETADO',
+    )
+    db.session.add(tarea)
+    db.session.commit()
+    tarea_id = tarea.id
+
+    resultado = svc.eliminar_fila(almacen.id, 'A', 1, forzar=True)
+
+    assert resultado['eliminadas'] == ['PIK-A01-01']
+    assert resultado['bloqueadas'] == {}
+    assert Ubicacion.query.get(ub.id) is None
+    assert TareaPicking.query.get(tarea_id) is None
+
+
 def test_eliminar_fila_rechaza_fila_inexistente(db, almacen):
     with pytest.raises(ValueError, match='No hay posiciones'):
         svc.eliminar_fila(almacen.id, 'Z', 9)
@@ -496,6 +583,27 @@ def test_eliminar_cuerpo_todo_o_nada_bloquea_completo_si_un_hueco_tiene_stock(db
     assert Ubicacion.query.filter_by(
         almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1
     ).count() == 2
+
+
+def test_eliminar_cuerpo_forzar_borra_pese_a_stock_y_tarea_picking(db, almacen, producto):
+    from app.models.picking import TareaPicking
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')
+    svc.asignar_producto(creadas[0].id, producto.id, 10)
+    tarea = TareaPicking(
+        codigo='PICK-TEST-FORZAR-3', producto_id=producto.id, cantidad_solicitada=5,
+        ubicacion_id=creadas[1].id, almacen_id=almacen.id, estado='COMPLETADO',
+    )
+    db.session.add(tarea)
+    db.session.commit()
+    tarea_id = tarea.id
+
+    resultado = svc.eliminar_cuerpo(almacen.id, 'A', 1, 1, forzar=True)
+
+    assert resultado['total'] == 2
+    assert Ubicacion.query.filter_by(
+        almacen_id=almacen.id, pasillo='A', fila=1, cuerpo=1
+    ).count() == 0
+    assert TareaPicking.query.get(tarea_id) is None
 
 
 def test_eliminar_cuerpo_rechaza_cuerpo_inexistente(db, almacen):
