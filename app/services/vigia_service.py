@@ -26,7 +26,8 @@ corrimientos de 4σ+.
 """
 import logging
 import os
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
+from zoneinfo import ZoneInfo
 from collections import defaultdict
 from app.extensions import db
 
@@ -83,9 +84,54 @@ def _lunes_de_semana(fecha):
     return fecha - timedelta(days=fecha.weekday())
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# POLÍTICA ÚNICA DE ZONA — docs/canones/zona_horaria.json
+#
+# Toda derivación de fecha de negocio se hace en America/Bogota. Nunca desde
+# un timestamp UTC. Una serie semanal sin zona de corte declarada no es una
+# serie: son dos series distintas según dónde corra el servidor.
+#
+# Se corrige AHORA porque serie_vigia está vacía: cero backfill, cero
+# reconciliación. Cada semana que el ensayo escriba filas bajo definición UTC
+# convierte un cambio de dos líneas en una migración de datos.
+#
+# Colombia no tiene horario de verano — el desfase es fijo, UTC-5 siempre.
+# ══════════════════════════════════════════════════════════════════════════
+TZ_BOGOTA = ZoneInfo('America/Bogota')
+
+
+def hoy_bogota():
+    """Fecha de negocio de hoy. NUNCA date.today(), que da la del servidor."""
+    return datetime.now(TZ_BOGOTA).date()
+
+
+def fecha_negocio(ts):
+    """Fecha de negocio de un timestamp.
+
+    Los timestamps del WMS se guardan con datetime.utcnow(), que produce un
+    naive en UTC — parece local y no lo es. Aquí se asume UTC cuando viene sin
+    zona, que es lo que de hecho son, y se convierte a Bogotá antes de derivar
+    la fecha.
+    """
+    if ts is None:
+        return None
+    if isinstance(ts, date) and not isinstance(ts, datetime):
+        return ts  # ya es fecha de negocio (ej. f350_fecha de Siesa)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(TZ_BOGOTA).date()
+
+
 def _lunes_semana_actual():
-    """Lunes de la semana en curso — esta semana NUNCA se evalúa."""
-    return _lunes_de_semana(date.today())
+    """Lunes de la semana en curso EN BOGOTÁ — esta semana NUNCA se evalúa.
+
+    Con date.today() el guard se abría cinco horas antes: entre las 7 p.m. del
+    domingo y medianoche en Bogotá, el servidor UTC ya está en lunes y la
+    semana que aún no cierra se vuelve evaluable con el domingo incompleto.
+    Un conteo bajo es exactamente lo que el CUSUM lee como colapso — falsa
+    alarma S⁻ en el instrumento cuya credibilidad depende de no darlas.
+    """
+    return _lunes_de_semana(hoy_bogota())
 
 
 class VigiaService:
@@ -408,31 +454,30 @@ class VigiaService:
         lunes_actual = _lunes_semana_actual()
 
         # Agregar picks completados por semana (solo semanas cerradas)
+        # Se traen los timestamps crudos y se agrupa en Python: agrupar en SQL
+        # por func.date() daría la fecha UTC, y el desfase a Bogotá no es
+        # portable entre SQLite y Postgres. El volumen es picks de 12 meses,
+        # perfectamente manejable.
         picks = (
             db.session.query(
-                func.date(TareaPicking.fecha_creacion).label('fecha'),
-                func.count(TareaPicking.id).label('total'),
-                func.sum(TareaPicking.cantidad_solicitada).label('solicitado'),
-                func.sum(TareaPicking.cantidad_recogida).label('recogido'),
+                TareaPicking.fecha_creacion.label('ts'),
+                TareaPicking.cantidad_solicitada.label('solicitado'),
+                TareaPicking.cantidad_recogida.label('recogido'),
             )
             .filter(TareaPicking.estado.in_(['COMPLETADO', 'BLOQUEADO', 'AUDITADO']))
-            .group_by(func.date(TareaPicking.fecha_creacion))
             .all()
         )
 
-        # Agregar por semana
+        # Agregar por semana DE NEGOCIO
         semanas = defaultdict(lambda: {'picks': 0, 'solicitado': 0, 'recogido': 0})
         for p in picks:
-            if not p.fecha:
+            d = fecha_negocio(p.ts)
+            if not d:
                 continue
-            if isinstance(p.fecha, str):
-                d = datetime.strptime(p.fecha, '%Y-%m-%d').date()
-            else:
-                d = p.fecha
             lunes = _lunes_de_semana(d)
             if lunes >= lunes_actual:
                 continue  # Guard: no evaluar semana en curso
-            semanas[lunes]['picks'] += p.total or 0
+            semanas[lunes]['picks'] += 1
             semanas[lunes]['solicitado'] += int(p.solicitado or 0)
             semanas[lunes]['recogido'] += int(p.recogido or 0)
 
@@ -511,7 +556,7 @@ class VigiaService:
             func.max(SerieVigia.semana)
         ).scalar()
         if ultima_serie:
-            delta_dias = (date.today() - ultima_serie).days
+            delta_dias = (hoy_bogota() - ultima_serie).days
             resultado['conectores'].append({
                 'nombre': 'Series Vigia (ventas)',
                 'ultima_semana': ultima_serie.isoformat(),

@@ -257,7 +257,17 @@ function temporadaExportar() {
     </tr>`;
   }).join('');
 
-  const hoy = new Date().toISOString().slice(0, 10);
+  // Sello del acta en hora de Bogotá, con la zona VISIBLE.
+  // toISOString() da UTC: una firma a las 3 p.m. en Neiva se registraría como
+  // 20:00. Es arreglo de presentación, no de almacenamiento — la migración
+  // naive→aware del backend va después del comité.
+  const _bog = new Intl.DateTimeFormat('es-CO', {
+    timeZone: 'America/Bogota', dateStyle: 'short', timeStyle: 'short',
+  }).format(new Date());
+  const hoy = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
+  const sello = `${_bog} (hora de Colombia, UTC−5)`;
   const w = window.open('', '_blank');
   if (!w) { alerta('Permite ventanas emergentes para exportar', 'error'); return; }
   w.document.write(`<html><head><title>Acta pedido temporada ${hoy}</title>
@@ -272,7 +282,7 @@ function temporadaExportar() {
       .tot{margin-top:12px;font-size:12px;} .firma{margin-top:40px;font-size:10px;}
     </style></head><body>
     <h1>Pedido de temporada escolar — acta de comité</h1>
-    <div class="sub">Generado ${hoy} · Papelería Medellín</div>
+    <div class="sub">Generado ${sello} · Papelería Medellín</div>
     <div class="box">
       <b>Cobertura del modelo:</b> ${cob.cubiertos_por_modelo || 0} de ${cob.skus_temporada || 0} SKUs (${cob.pct_cubierto || 0}%).
       Excluidos: ${cob.excluidos_costo_fantasma || 0} por costo no confiable,

@@ -756,3 +756,82 @@ class TestRenameParadasGestionadas:
               / 'app/static/pwa/rutas.js').read_text(encoding='utf-8')
         assert 'd.facturas_gestionadas ?? d.paradas_gestionadas' in js, \
             'el frontend debe preferir la clave nueva y caer a la vieja solo por caché'
+
+
+class TestZonaDeCorte:
+    """La semana se corta en Bogotá, no donde corra el servidor.
+
+    Se arregló cuando serie_vigia estaba vacía: cero backfill. Cada semana que
+    el ensayo escribiera filas bajo definición UTC habría convertido un cambio
+    de dos líneas en una migración de datos.
+    """
+
+    def test_domingo_7pm_bogota_es_domingo_no_lunes(self):
+        """LA VENTANA CRÍTICA. Un timestamp UTC de lunes 01:00 es domingo allá.
+
+        Sin esto, la actividad del domingo por la noche caía en la semana
+        siguiente: un conteo bajo en la serie reina, que es exactamente lo que
+        el CUSUM lee como colapso.
+        """
+        from datetime import datetime, timezone
+        from app.services.vigia_service import fecha_negocio
+        # Domingo 2026-01-04 20:00 Bogotá == lunes 2026-01-05 01:00 UTC
+        utc = datetime(2026, 1, 5, 1, 0, tzinfo=timezone.utc)
+        assert fecha_negocio(utc).isoformat() == '2026-01-04', \
+            'las 8pm del domingo en Bogotá deben seguir siendo domingo'
+
+    def test_naive_se_interpreta_como_utc(self):
+        """datetime.utcnow() produce un naive que MIENTE: parece local, es UTC."""
+        from datetime import datetime
+        from app.services.vigia_service import fecha_negocio
+        assert fecha_negocio(datetime(2026, 1, 5, 1, 0)).isoformat() == '2026-01-04'
+
+    def test_una_fecha_pura_no_se_desplaza(self):
+        """f350_fecha de Siesa YA es fecha de negocio: tocarla la corrompería."""
+        from datetime import date
+        from app.services.vigia_service import fecha_negocio
+        assert fecha_negocio(date(2026, 1, 5)) == date(2026, 1, 5)
+
+    def test_mediodia_no_cambia_de_dia(self):
+        """El desfase solo muerde en los bordes, no en el resto del día."""
+        from datetime import datetime, timezone
+        from app.services.vigia_service import fecha_negocio
+        utc = datetime(2026, 1, 5, 17, 0, tzinfo=timezone.utc)  # 12:00 Bogotá
+        assert fecha_negocio(utc).isoformat() == '2026-01-05'
+
+    def test_el_lunes_de_la_semana_actual_usa_bogota(self):
+        from datetime import datetime
+        from app.services.vigia_service import (
+            _lunes_semana_actual, _lunes_de_semana, TZ_BOGOTA)
+        esperado = _lunes_de_semana(datetime.now(TZ_BOGOTA).date())
+        assert _lunes_semana_actual() == esperado
+
+    def test_el_desfase_es_de_cinco_horas_sin_horario_de_verano(self):
+        """Colombia no tiene DST: el desfase es fijo todo el año.
+
+        Si algún día dejara de serlo, este test lo dice antes que una serie rota.
+        """
+        from datetime import datetime
+        from app.services.vigia_service import TZ_BOGOTA
+        for mes in (1, 4, 7, 10):
+            off = datetime(2026, mes, 15, 12, 0, tzinfo=TZ_BOGOTA).utcoffset()
+            assert off.total_seconds() == -5 * 3600, f'mes {mes}: desfase {off}'
+
+    def test_no_queda_ningun_date_today_en_el_vigia(self):
+        """Guard anti-regresión: date.today() da la fecha del SERVIDOR.
+
+        Se inspecciona el AST, no el texto: buscar la cadena atraparía también
+        los comentarios que la citan como antipatrón — un guard que se dispara
+        con su propia documentación es ruido, no señal.
+        """
+        import ast
+        from pathlib import Path
+        arbol = ast.parse((Path(__file__).resolve().parents[1]
+                           / 'app/services/vigia_service.py').read_text(encoding='utf-8'))
+        malas = [
+            n.lineno for n in ast.walk(arbol)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+            and n.func.attr == 'today'
+            and isinstance(n.func.value, ast.Name) and n.func.value.id == 'date'
+        ]
+        assert not malas, f'date.today() en codigo activo, lineas: {malas}'
