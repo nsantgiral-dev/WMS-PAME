@@ -26,3 +26,4 @@ from app.services.vigia_service import SerieVigia, AlarmaVigia
 from app.models.importacion import FichaImportacion, Contenedor, ItemEnTransito
 from app.models.acuerdo_marco import Proveedor, AcuerdoMarco, PrecioProveedor
 from app.models.juicio_temporada import JuicioTemporada
+from app.models.precio_realizado import PrecioRealizado

@@ -79,6 +79,32 @@ class AlarmaVigia(db.Model):
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+# Nombres plausibles de la columna de ítem en el export de ventas. Se busca
+# por CABECERA y no por índice: escribir row[7] porque parece razonable sería
+# exactamente el error que este proyecto lleva una semana persiguiendo.
+CABECERAS_ITEM = ('item', 'ítem', 'referencia', 'producto', 'codigo', 'código',
+                  'cod. item', 'cod item', 'sku', 'articulo', 'artículo')
+
+
+def detectar_columna_item(header):
+    """Índice de la columna de ítem, buscando por nombre de cabecera.
+
+    Devuelve (indice, nombre) o (None, None). NO adivina: si no reconoce
+    ninguna cabecera, quien llama debe declararlo — nunca caer en silencio al
+    margen supuesto (Regla 0).
+    """
+    if not header:
+        return None, None
+    for i, celda in enumerate(header):
+        limpio = (celda or '').strip().lower()
+        if not limpio:
+            continue
+        for cand in CABECERAS_ITEM:
+            if limpio == cand or limpio.startswith(cand):
+                return i, (celda or '').strip()
+    return None, None
+
+
 def _lunes_de_semana(fecha):
     """Retorna el lunes de la semana a la que pertenece la fecha."""
     return fecha - timedelta(days=fecha.weekday())
@@ -155,6 +181,9 @@ class VigiaService:
 
         series_por_semana = defaultdict(lambda: {'valor': 0, 'registros': 0})
         facturas_por_semana = defaultdict(set)  # Para contar facturas únicas
+        # Precio realizado: valor/cantidad por SKU y por C.O. Mismo archivo,
+        # misma pasada — solo falta saber en qué columna viene el ítem.
+        realizado = defaultdict(lambda: {'valor': 0.0, 'cantidad': 0.0, 'lineas': 0})
         procesados = 0
         errores = 0
 
@@ -163,6 +192,14 @@ class VigiaService:
             header = next(reader, None)
             if not header:
                 return {'error': 'Archivo vacío'}
+
+            col_item, nombre_col_item = detectar_columna_item(header)
+            if col_item is None:
+                # Regla 0: no caer en silencio al margen supuesto. Se declara.
+                logger.error(
+                    '[VIGIA] NO se reconoció la columna de ítem. Cabeceras: %s. '
+                    'El precio realizado NO se calculará y Cu seguirá con margen '
+                    'SUPUESTO. Añadir el nombre real a CABECERAS_ITEM.', header)
 
             for row in reader:
                 try:
@@ -173,6 +210,8 @@ class VigiaService:
                     co = row[3].strip()
                     cantidad_str = row[14].strip().replace('.', '').replace(',', '.')
                     valor_str = row[17].strip().replace('$', '').replace('.', '').replace(',', '.')
+                    ref_item = (row[col_item].strip()
+                                if col_item is not None and col_item < len(row) else '')
 
                     try:
                         fecha = datetime.strptime(fecha_str, '%d/%m/%Y').date()
@@ -183,6 +222,17 @@ class VigiaService:
                     lunes = _lunes_de_semana(fecha)
                     cantidad = float(cantidad_str) if cantidad_str else 0
                     valor = float(valor_str) if valor_str else 0
+
+                    # Precio realizado: por SKU y por C.O. Se acumula valor y
+                    # cantidad; el cociente se calcula al final, que es lo
+                    # correcto — el promedio de cocientes no es el cociente de
+                    # los totales.
+                    if ref_item and cantidad > 0:
+                        for clave in ((ref_item, co), (ref_item, None)):
+                            acc = realizado[clave]
+                            acc['valor'] += valor
+                            acc['cantidad'] += cantidad
+                            acc['lineas'] += 1
 
                     # Serie 1: líneas despachadas (volumen)
                     key_despachos = f'despachos_{co}'
@@ -207,6 +257,26 @@ class VigiaService:
             series_por_semana[(key_facturas, lunes)]['valor'] = len(docs)
             series_por_semana[(key_facturas, lunes)]['registros'] = len(docs)
 
+        # Precio realizado por SKU y por C.O. — valor/cantidad sobre ventas reales
+        precios_creados = 0
+        if col_item is not None:
+            from app.models.precio_realizado import PrecioRealizado
+            for (ref_i, co_i), acc in realizado.items():
+                if acc['cantidad'] <= 0:
+                    continue
+                precio = acc['valor'] / acc['cantidad']
+                fila = PrecioRealizado.query.filter_by(
+                    referencia=ref_i, centro_operacion=co_i, periodo='TOTAL').first()
+                if fila is None:
+                    fila = PrecioRealizado(referencia=ref_i, centro_operacion=co_i,
+                                           periodo='TOTAL')
+                    db.session.add(fila)
+                    precios_creados += 1
+                fila.valor_total = acc['valor']
+                fila.cantidad_total = acc['cantidad']
+                fila.precio_realizado = precio
+                fila.lineas = acc['lineas']
+
         # Persistir
         creadas = 0
         for (serie, semana), datos in series_por_semana.items():
@@ -227,6 +297,14 @@ class VigiaService:
                      creadas, filepath, procesados, errores)
 
         return {
+            'columna_item': nombre_col_item,
+            'precio_realizado_calculado': col_item is not None,
+            'precios_realizados_creados': precios_creados,
+            'advertencia_item': None if col_item is not None else (
+                f'NO se reconoció la columna de ítem entre las cabeceras {header}. '
+                f'El precio realizado no se calculó: Cu sigue con margen SUPUESTO. '
+                f'Añadir el nombre real a CABECERAS_ITEM en vigia_service.'
+            ),
             'series_creadas': creadas,
             'registros_procesados': procesados,
             'errores': errores,

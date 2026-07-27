@@ -187,6 +187,49 @@ def _costos_kardex(refs):
     return salida
 
 
+def _precios_realizados(refs):
+    """Precio al que de verdad se vende: valor/cantidad de las ventas reales.
+
+    Reemplaza el margen supuesto por margen MEDIDO. Neto de descuentos y de la
+    escalera clandestina — el margen que sale de aquí es el que se obtiene.
+    """
+    from app.models.precio_realizado import PrecioRealizado
+    filas = (PrecioRealizado.query
+             .filter(PrecioRealizado.referencia.in_(refs))
+             .filter(PrecioRealizado.centro_operacion.is_(None))
+             .all())
+    return {f.referencia: float(f.precio_realizado or 0)
+            for f in filas if float(f.precio_realizado or 0) > 0}
+
+
+def dispersion_precio_por_co(ref):
+    """La escalera de precios, medida.
+
+    La dispersión del precio realizado de un MISMO SKU entre C.O. es la
+    escalera que existe y nunca se decidió formalmente. No sirve al newsvendor:
+    sirve a la política de precios, que hoy se toma a ciegas.
+    """
+    from app.models.precio_realizado import PrecioRealizado
+    filas = (PrecioRealizado.query
+             .filter_by(referencia=ref)
+             .filter(PrecioRealizado.centro_operacion.isnot(None))
+             .all())
+    precios = {f.centro_operacion: float(f.precio_realizado or 0)
+               for f in filas if float(f.precio_realizado or 0) > 0}
+    if len(precios) < 2:
+        return {'referencia': ref, 'por_co': precios, 'dispersion_pct': None,
+                'nota': 'Se necesitan al menos dos C.O. con ventas para medir la escalera.'}
+    lo, hi = min(precios.values()), max(precios.values())
+    return {
+        'referencia': ref,
+        'por_co': precios,
+        'minimo': lo, 'maximo': hi,
+        'dispersion_pct': round((hi - lo) / lo * 100, 1) if lo > 0 else None,
+        'nota': ('Diferencia entre el C.O. que más cobra y el que menos, para el '
+                 'mismo producto. Eso es la escalera — no una hipótesis.'),
+    }
+
+
 def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
     """
     Costo y precio por SKU, con la fuente declarada en cada fila.
@@ -204,6 +247,8 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
     # Se consultan todas y se elige por jerarquía: una fuente mejor siempre gana
     capas = [_costos_acuerdo_vigente(refs), _costos_cotizacion(refs),
              _costos_kardex(refs)]
+
+    realizados = _precios_realizados(refs)
 
     maestro = {
         p.codigo_siesa: p for p in
@@ -226,7 +271,13 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
                        else {'costo': 0.0, 'fuente': 'SIN_COSTO'})
 
         costo = float(elegido['costo'])
-        venta = float(getattr(prod, 'precio_venta', 0) or 0) if prod else 0.0
+        # PRECIO REALIZADO primero: es el que de verdad se cobra. El maestro
+        # después. El margen supuesto solo si no hay ninguno de los dos.
+        venta = realizados.get(ref, 0.0)
+        fuente_precio = 'REALIZADO' if venta > 0 else None
+        if venta <= 0:
+            venta = float(getattr(prod, 'precio_venta', 0) or 0) if prod else 0.0
+            fuente_precio = 'MAESTRO' if venta > 0 else None
 
         # Cu = margen que se pierde si falta. Sin precio de venta se deriva de
         # un margen SUPUESTO — declarado, no disfrazado de dato.
@@ -245,6 +296,7 @@ def resolver_costos(refs, margen_supuesto=MARGEN_SOBRE_PRECIO_DEFAULT):
             'costo': costo,
             'precio_venta': venta,
             'precio_es_supuesto': precio_supuesto,
+            'fuente_precio': fuente_precio or 'MARGEN_SUPUESTO',
             'margen_supuesto': margen_usado,
             'convencion_margen': 'SOBRE_PRECIO' if precio_supuesto else None,
             'origen': (getattr(prod, 'origen', '') or '') if prod else '',
