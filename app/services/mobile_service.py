@@ -130,7 +130,11 @@ class MobileService:
         """
         Dispensador automático — el operario pide trabajo y el sistema lo asigna.
         Si ya tiene una tarea en proceso la devuelve.
-        Si no, toma la siguiente de la cola global.
+        Si no: primero intenta seguir en el mismo pedido/traslado que ya tenía
+        en curso (evita saltar entre documentos a medio terminar), y si no hay
+        más pendientes ahí, toma la siguiente de la cola global en orden
+        físico de recorrido (pasillo->fila->cuerpo->nivel->hueco — ver
+        PickingService.orden_ruta_fisica()), no por fecha de creación.
         """
         # Verificar si ya tiene tarea activa — eager-load relaciones para evitar lazy queries
         from sqlalchemy.orm import joinedload as _jl
@@ -198,8 +202,6 @@ class MobileService:
         _ids_validos = db.session.query(Ubicacion.id).filter(
             Ubicacion.tipo_zona.in_(['PICKING', 'GENERAL'])
         ).scalar_subquery()
-        # Sin JOIN — with_for_update solo lockea tareas_picking (evita error PostgreSQL
-        # "FOR UPDATE cannot be applied to the nullable side of an outer join")
         _filtros_base = [
             TareaPicking.estado == 'PENDIENTE',
             TareaPicking.operario_id.is_(None),
@@ -218,19 +220,49 @@ class MobileService:
                 )
             )
 
-        tarea = (
-            TareaPicking.query
-            .filter(*_filtros_base)
-            .order_by(
-                # PD (PEDIDO) antes que ST (TRASLADO): CASE tipo_documento PEDIDO=0, TRASLADO=1
-                db.case({'PEDIDO': 0, 'TRASLADO': 1},
-                        value=TareaPicking.tipo_documento, else_=0).asc(),
-                TareaPicking.prioridad.desc(),
-                TareaPicking.fecha_creacion.asc(),
-            )
-            .with_for_update(skip_locked=True)
-            .first()
+        # Orden real de despacho — reutiliza PickingService.orden_ruta_fisica()
+        # en vez de duplicarlo: una sola fuente de verdad de qué es "cerca".
+        # PD (PEDIDO) antes que ST (TRASLADO), luego prioridad, luego el
+        # recorrido físico pasillo->fila->cuerpo->nivel->hueco, y fecha_creacion
+        # como último desempate.
+        _orden_dispatch = (
+            db.case({'PEDIDO': 0, 'TRASLADO': 1},
+                    value=TareaPicking.tipo_documento, else_=0).asc(),
+            TareaPicking.prioridad.desc(),
+            *PickingService.orden_ruta_fisica(),
+            TareaPicking.fecha_creacion.asc(),
         )
+        # JOIN necesario para ordenar por ubicacion — with_for_update(of=TareaPicking)
+        # lockea solo tareas_picking, evitando el error de Postgres "FOR UPDATE cannot
+        # be applied to the nullable side of an outer join" (el join es INNER: ubicacion_id
+        # es NOT NULL en TareaPicking, así que nunca se pierde una fila por el join).
+        _base_tarea_query = (
+            TareaPicking.query
+            .join(Ubicacion, TareaPicking.ubicacion_id == Ubicacion.id)
+            .filter(*_filtros_base)
+        )
+
+        # Terminar lo que ya empezó antes de saltar a otro pedido/traslado — mismo
+        # criterio que PickingService.siguiente_tarea_para(), reutilizado aquí en
+        # vez de reimplementado, para no volver a divergir del original.
+        tarea = None
+        _documento_actual = PickingService._documento_en_curso(operario_id)
+        if _documento_actual:
+            tarea = (
+                _base_tarea_query
+                .filter(TareaPicking.referencia_documento == _documento_actual)
+                .order_by(*_orden_dispatch)
+                .with_for_update(of=TareaPicking, skip_locked=True)
+                .first()
+            )
+
+        if not tarea:
+            tarea = (
+                _base_tarea_query
+                .order_by(*_orden_dispatch)
+                .with_for_update(of=TareaPicking, skip_locked=True)
+                .first()
+            )
 
         if not tarea:
             # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1

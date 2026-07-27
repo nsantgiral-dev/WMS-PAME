@@ -77,6 +77,67 @@ class TestDispensador:
         assert tarea.estado == EstadoPicking.EN_PROCESO
         assert tarea.fecha_inicio is not None
 
+    def test_dispensador_respeta_orden_fisico_no_fecha_creacion(self, app, db, mobile_setup):
+        """
+        Regresión real (2026-07-27, PD1347): get_tarea_actual() ordenaba por
+        fecha_creacion sin mirar ubicación — un pedido con líneas en pasillos
+        A, B, G despachaba G primero (la línea más vieja del pedido en Siesa),
+        no A (el más cercano). Se crean las tareas a propósito en orden
+        cronológico INVERSO a la ruta física (G, luego B, luego A) para
+        probar que el orden ganador es el físico, no el de creación.
+        """
+        from app.services import layout_service as svc
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        ub_g = svc.crear_cuerpo(s['almacen'].id, 'G', 1, 1, 1, 'PICKING')[0]
+        ub_b = svc.crear_cuerpo(s['almacen'].id, 'B', 1, 1, 1, 'PICKING')[0]
+        ub_a = svc.crear_cuerpo(s['almacen'].id, 'A', 1, 1, 1, 'PICKING')[0]
+
+        tarea_g = _crear_tarea(db, s['producto'], ub_g, s['almacen'], referencia_documento='PD-ORDEN')
+        _crear_tarea(db, s['producto'], ub_b, s['almacen'], referencia_documento='PD-ORDEN')
+        _crear_tarea(db, s['producto'], ub_a, s['almacen'], referencia_documento='PD-ORDEN')
+
+        resultado = MobileService.get_tarea_actual(s['usuario'].id)
+
+        assert resultado['ubicacion'] == ub_a.codigo
+        assert resultado['id'] != tarea_g.id
+
+    def test_dispensador_continua_mismo_documento_pese_a_orden_fisico(self, app, db, mobile_setup):
+        """
+        El operario ya tiene una tarea EN_PROCESO/COMPLETADO de PD-X. Aunque
+        haya una tarea de otro documento (PD-Y) físicamente más cerca, el
+        dispensador debe seguir en PD-X hasta agotarlo — evita que el
+        operario rebote entre pedidos a medio terminar.
+        """
+        from app.services import layout_service as svc
+        from app.services.mobile_service import MobileService
+
+        s = mobile_setup
+        ub_lejos = svc.crear_cuerpo(s['almacen'].id, 'Z', 1, 1, 1, 'PICKING')[0]
+        ub_cerca = svc.crear_cuerpo(s['almacen'].id, 'A', 1, 1, 1, 'PICKING')[0]
+
+        # Tarea ya completada de PD-X — marca a PD-X como "documento en curso".
+        _crear_tarea(
+            db, s['producto'], ub_cerca, s['almacen'],
+            referencia_documento='PD-X', estado=EstadoPicking.COMPLETADO,
+            operario_id=s['usuario'].id, cantidad_recogida=10,
+            fecha_completado=datetime.utcnow(),
+        )
+        # Pendiente de PD-X, lejos físicamente.
+        tarea_x_pendiente = _crear_tarea(
+            db, s['producto'], ub_lejos, s['almacen'], referencia_documento='PD-X',
+        )
+        # Pendiente de OTRO documento, más cerca físicamente — no debe ganarle a PD-X.
+        _crear_tarea(
+            db, s['producto'], ub_cerca, s['almacen'], referencia_documento='PD-Y',
+        )
+
+        resultado = MobileService.get_tarea_actual(s['usuario'].id)
+
+        assert resultado['id'] == tarea_x_pendiente.id
+        assert resultado['referencia'] == 'PD-X'
+
     def test_dispensador_devuelve_activa(self, app, db, mobile_setup):
         """Si el operario ya tiene una tarea EN_PROCESO, la devuelve sin asignar otra."""
         s = mobile_setup
