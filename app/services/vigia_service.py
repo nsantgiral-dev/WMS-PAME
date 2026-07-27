@@ -82,12 +82,25 @@ class AlarmaVigia(db.Model):
 # Nombres plausibles de la columna de ítem en el export de ventas. Se busca
 # por CABECERA y no por índice: escribir row[7] porque parece razonable sería
 # exactamente el error que este proyecto lleva una semana persiguiendo.
-CABECERAS_ITEM = ('item', 'ítem', 'referencia', 'producto', 'codigo', 'código',
-                  'cod. item', 'cod item', 'sku', 'articulo', 'artículo')
+# EN ORDEN DE PRIORIDAD, no de posición en el archivo.
+#
+# El export real trae DOS columnas candidatas: "Item" (0000008, código interno
+# de Siesa) y "Referencia" (P100176). La clave de cruce con el resto del
+# sistema es REFERENCIA: KardexMovimiento.referencia y Producto.codigo_siesa
+# vienen ambas de f120_referencia.
+#
+# Buscar columna por columna habría devuelto "Item" —aparece antes— y el cruce
+# habría fallado en silencio: precios calculados que no empatan con ningún SKU.
+CABECERAS_ITEM = ('referencia', 'sku', 'codigo', 'código', 'cod. item',
+                  'cod item', 'item', 'ítem', 'producto', 'articulo', 'artículo')
 
 
 def detectar_columna_item(header):
-    """Índice de la columna de ítem, buscando por nombre de cabecera.
+    """Índice de la columna de ítem, por nombre de cabecera y POR PRIORIDAD.
+
+    Se recorre la lista de candidatos en orden de preferencia y, para cada uno,
+    se busca en todas las columnas. Así "Referencia" gana a "Item" aunque
+    aparezca después en el archivo.
 
     Devuelve (indice, nombre) o (None, None). NO adivina: si no reconoce
     ninguna cabecera, quien llama debe declararlo — nunca caer en silencio al
@@ -95,14 +108,18 @@ def detectar_columna_item(header):
     """
     if not header:
         return None, None
-    for i, celda in enumerate(header):
-        limpio = (celda or '').strip().lower()
-        if not limpio:
-            continue
-        for cand in CABECERAS_ITEM:
-            if limpio == cand or limpio.startswith(cand):
-                return i, (celda or '').strip()
+    limpias = [(i, (c or '').strip().lower()) for i, c in enumerate(header)]
+    for cand in CABECERAS_ITEM:
+        for i, limpio in limpias:
+            if limpio and (limpio == cand or limpio.startswith(cand)):
+                return i, (header[i] or '').strip()
     return None, None
+
+
+# Un costo mayor que este múltiplo del valor de venta es un COSTO FANTASMA:
+# error de unidad de empaque, no un negocio a pérdida. Medido sobre el export
+# real, 0.5% de las filas arrastraban el margen agregado de +35.5% a -190%.
+FACTOR_COSTO_FANTASMA = 3.0
 
 
 def _lunes_de_semana(fecha):

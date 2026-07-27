@@ -129,3 +129,47 @@ class TestFalloRuidosoRegla0:
         assert 'advertencia_item' in src
         assert 'precio_realizado_calculado' in src
         assert 'margen SUPUESTO' in src, 'debe decir la consecuencia de no encontrarla'
+
+
+class TestPrioridadReferenciaSobreItem:
+    """El export real trae DOS candidatas y solo una sirve para cruzar.
+
+    "Item" = 0000008 (código interno Siesa). "Referencia" = P100176, que es lo
+    que usan KardexMovimiento.referencia y Producto.codigo_siesa (ambas de
+    f120_referencia). Buscar columna por columna devolvía "Item" —aparece
+    antes— y el cruce habría fallado EN SILENCIO: precios calculados que no
+    empatan con ningún SKU.
+    """
+
+    def test_referencia_gana_a_item_aunque_venga_despues(self):
+        from app.services.vigia_service import detectar_columna_item
+        # Cabecera REAL del export de Papelería Medellín
+        cab = ['Fecha', 'Nro documento', 'Tipo docto.', 'C.O.', 'Cliente factura',
+               'Razón social cliente factura', 'Item', 'Referencia', 'Desc. ítem',
+               'LINEA DE NEGOCIO', 'MARCA', 'SUB LINEA', 'U.M. emp.', 'U.M.',
+               'Cantidad inv.', 'Costo promedio total', 'Costo promedio uni. movto',
+               'Valor neto local']
+        i, nombre = detectar_columna_item(cab)
+        assert i == 7 and nombre == 'Referencia', \
+            f'eligió {nombre} (col {i}) — "Item" no cruza con el kardex'
+
+    def test_si_solo_hay_item_lo_usa(self):
+        """Sin Referencia, Item es mejor que nada — pero es la segunda opción."""
+        from app.services.vigia_service import detectar_columna_item
+        i, nombre = detectar_columna_item(['Fecha', 'C.O.', 'Item'])
+        assert i == 2 and nombre == 'Item'
+
+
+class TestUmbralCostoFantasma:
+    """0.5% de las filas arrastraban el margen de +35.5% a -190%.
+
+    Un costo 109.616 veces el valor de venta no es un negocio a pérdida: es un
+    error de unidad de empaque. Medido sobre el export real de temporada.
+    """
+
+    def test_el_umbral_existe_y_es_conservador(self):
+        from app.services.vigia_service import FACTOR_COSTO_FANTASMA
+        assert FACTOR_COSTO_FANTASMA >= 2.0, \
+            'un umbral bajo descartaría ventas legítimas a pérdida'
+        assert FACTOR_COSTO_FANTASMA <= 5.0, \
+            'un umbral alto dejaría pasar los costos fantasma'
