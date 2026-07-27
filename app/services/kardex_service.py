@@ -148,15 +148,35 @@ def dias_expuestos(dias_con_stock, dias_calendario):
 class KardexService:
 
     @staticmethod
-    def descargar_kardex(fecha_desde: str, fecha_hasta: str = None) -> dict:
+    def descargar_kardex(fecha_desde: str, fecha_hasta: str = None,
+                         pagina_inicial: int = 1, max_minutos: int = None) -> dict:
         """
         Descarga movimientos del kardex de Siesa via consulta dinámica.
 
-        Args:
-            fecha_desde: YYYYMMDD — inicio del período
-            fecha_hasta: YYYYMMDD — fin (default: hoy)
+        UNA DESCARGA PARCIAL ES UN FALLO, NO UNA ADVERTENCIA.
 
-        Returns: {total_descargados, paginas, errores}
+        Antes había tres formas de terminar —fin natural, timeout a los 30
+        minutos, y excepción— y las tres caían en el MISMO retorno de éxito.
+        Un kardex truncado no produce un error: produce descensura equivocada,
+        ROP equivocado y temporada equivocada, todo plausible y sin una sola
+        alarma. La aritmética lo hacía probable, no hipotético: ~17.000
+        peticiones a ~0.1-0.2 s cada una son 28-57 minutos, y el corte estaba
+        DENTRO de ese rango, no cerca.
+
+        POR QUÉ SE TROCEA POR PÁGINA Y NO POR FECHA: la consulta dinámica NO
+        acepta filtros de fecha —se filtra en Python después de recibir— así que
+        acotar el rango no reduce ni una petición. Lo que sí funciona es
+        reanudar: cada corrida avanza lo que puede y devuelve dónde quedó.
+
+        Args:
+            fecha_desde: YYYYMMDD — inicio del período a conservar
+            fecha_hasta: YYYYMMDD — fin (default: hoy)
+            pagina_inicial: desde qué página seguir (reanudación)
+            max_minutos: tope de esta corrida (default KARDEX_MAX_MINUTOS o 25)
+
+        Returns:
+            {ok, estado, rango_pedido, rango_traido, reanudar_desde, ...}
+            ok=True SOLO si estado == 'COMPLETA'.
         """
         from app.services.connekta_gateway import connekta
 
@@ -174,16 +194,29 @@ class KardexService:
             fecha_hasta_dt = _date_k.today()
 
         total = 0
-        pagina = 1
+        pagina = max(1, int(pagina_inicial or 1))
         errores = 0
         filtrados = 0
         inicio = datetime.utcnow()
-        MAX_MINUTOS = 30
+        # Por debajo del corte anterior: mejor varias corridas honestas que una
+        # que se rinde justo donde nadie mira.
+        MAX_MINUTOS = int(max_minutos or os.environ.get('KARDEX_MAX_MINUTOS', '25'))
+
+        # Cómo terminó. Es el dato que faltaba: sin él, truncado y completo son
+        # el mismo retorno.
+        estado = 'COMPLETA'
+        detalle_estado = None
+        fecha_min = fecha_max = None
 
         while True:
             elapsed = (datetime.utcnow() - inicio).total_seconds()
             if elapsed > MAX_MINUTOS * 60:
-                logger.warning('[KARDEX] Descarga abortada tras %.0fs', elapsed)
+                estado = 'TIMEOUT_PARCIAL'
+                detalle_estado = (
+                    f'Corte por tiempo tras {elapsed:.0f}s en la página {pagina}. '
+                    f'NO es una descarga completa. Reanudar desde esa página.'
+                )
+                logger.error('[KARDEX] PARCIAL por tiempo — página %d, %.0fs', pagina, elapsed)
                 break
 
             try:
@@ -208,6 +241,9 @@ class KardexService:
                     logger.info('[KARDEX] Keys del primer registro: %s', list(first.keys()))
                     logger.info('[KARDEX] Primer registro completo: %s', first)
                 if not rows:
+                    if pagina == max(1, int(pagina_inicial or 1)):
+                        estado = 'SIN_DATOS'
+                        detalle_estado = 'La primera página vino vacía — ¿credenciales o consulta?'
                     break
 
                 for row in rows:
@@ -254,6 +290,10 @@ class KardexService:
                     )
                     db.session.add(mov)
                     total += 1
+                    if fecha_min is None or fecha < fecha_min:
+                        fecha_min = fecha
+                    if fecha_max is None or fecha > fecha_max:
+                        fecha_max = fecha
 
                 db.session.commit()
                 logger.info('[KARDEX] Página %d: %d movimientos', pagina, len(rows))
@@ -268,16 +308,44 @@ class KardexService:
                 time.sleep(float(os.environ.get('KARDEX_PAGE_DELAY_S', '1')))
 
             except Exception as e:
-                logger.error('[KARDEX] Error página %d: %s', pagina, e)
+                estado = 'ERROR_PARCIAL'
+                detalle_estado = f'Excepción en la página {pagina}: {e}'
+                logger.error('[KARDEX] PARCIAL por error — página %d: %s', pagina, e)
                 errores += 1
                 db.session.rollback()
                 break
 
-        logger.info(
-            '[KARDEX] Descarga completa: %d movimientos, %d páginas, %d errores',
-            total, pagina, errores
+        completa = estado == 'COMPLETA'
+        resultado = {
+            'ok': completa,
+            'estado': estado,
+            'detalle_estado': detalle_estado,
+            # RANGO PEDIDO vs RANGO TRAÍDO — la comparación que delata el truncamiento
+            'rango_pedido': {'desde': fecha_desde_dt.isoformat(),
+                             'hasta': fecha_hasta_dt.isoformat()},
+            'rango_traido': {'desde': fecha_min.isoformat() if fecha_min else None,
+                             'hasta': fecha_max.isoformat() if fecha_max else None},
+            'total_descargados': total,
+            'pagina_inicial': int(pagina_inicial or 1),
+            'pagina_final': pagina,
+            'reanudar_desde': None if completa else pagina,
+            'filtrados_fuera_de_rango': filtrados,
+            'errores': errores,
+            'segundos': round((datetime.utcnow() - inicio).total_seconds()),
+        }
+        if not completa:
+            resultado['advertencia'] = (
+                'DESCARGA INCOMPLETA. No correr /reconstruir ni los modelos con '
+                'estos datos: la descensura, el ROP y la temporada heredarían el '
+                f'hueco sin avisar. Reanudar desde la página {pagina}.'
+            )
+        logger.log(
+            logging.INFO if completa else logging.ERROR,
+            '[KARDEX] %s — %d movimientos, páginas %d-%d, rango traído %s..%s',
+            estado, total, resultado['pagina_inicial'], pagina,
+            resultado['rango_traido']['desde'], resultado['rango_traido']['hasta'],
         )
-        return {'total_descargados': total, 'paginas': pagina, 'errores': errores}
+        return resultado
 
     @staticmethod
     def reconstruir_stock_diario(bodega: str = None) -> dict:

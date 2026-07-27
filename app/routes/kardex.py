@@ -28,10 +28,14 @@ def descargar_kardex():
     if request.method == 'GET':
         fecha_desde = request.args.get('fecha_desde', '20240101')
         fecha_hasta = request.args.get('fecha_hasta')
+        pagina_inicial = request.args.get('pagina_inicial', 1, type=int)
+        max_minutos = request.args.get('max_minutos', None, type=int)
     else:
         data = request.get_json() or {}
         fecha_desde = data.get('fecha_desde', '20240101')
         fecha_hasta = data.get('fecha_hasta')
+        pagina_inicial = data.get('pagina_inicial', 1)
+        max_minutos = data.get('max_minutos')
 
     from flask import current_app
     app = current_app._get_current_object()
@@ -43,7 +47,9 @@ def descargar_kardex():
         try:
             with app.app_context():
                 from app.services.kardex_service import KardexService
-                resultado = KardexService.descargar_kardex(fecha_desde, fecha_hasta)
+                resultado = KardexService.descargar_kardex(
+                    fecha_desde, fecha_hasta,
+                    pagina_inicial=pagina_inicial, max_minutos=max_minutos)
                 _kardex_descarga_estado['resultado'] = resultado
         except Exception as e:
             _kardex_descarga_estado['resultado'] = {'error': str(e)}
@@ -55,8 +61,15 @@ def descargar_kardex():
 
     return jsonify({
         'ok': True,
-        'mensaje': 'Descarga iniciada en background — revisar logs de Railway',
+        'mensaje': ('Descarga iniciada en segundo plano. El resultado dice si quedó '
+                    'COMPLETA o PARCIAL — una parcial es un fallo, no un aviso.'),
         'fecha_desde': fecha_desde,
+        'pagina_inicial': pagina_inicial,
+        'aviso_operativo': (
+            'Son ~17.000 peticiones contra el ERP que factura en los puntos de venta. '
+            'Correr FUERA DE HORARIO y avisando antes, no después de que alguien no '
+            'pueda facturar a media manana.'
+        ),
     }), 200
 
 
