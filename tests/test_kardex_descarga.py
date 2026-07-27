@@ -113,3 +113,106 @@ class TestAvisoOperativo:
         """El aviso sirve antes del clic, no en un log después."""
         js = _src('app/static/pwa/kardex.js')
         assert '17.000' in js and 'fuera de horario' in js.lower()
+
+
+class TestPerfilMensual:
+    """El rango no ve los agujeros del medio; el perfil sí.
+
+    Un fallo de reanudación produce un kardex que abarca todo el rango con un
+    hueco en marzo, y rango-pedido-vs-traído diría COMPLETA. Es el mismo error
+    de siempre: el rango es la REPRESENTACIÓN de la completitud; la COSA es que
+    estén todas las filas.
+    """
+
+    def test_kardex_vacio_no_crashea(self, app, db):
+        from app.services.kardex_service import perfil_mensual_kardex
+        assert perfil_mensual_kardex()['meses'] == []
+
+    def test_detecta_un_mes_ausente_en_medio(self, app, db):
+        """EL CASO QUE MOTIVA TODO: rango completo, agujero adentro."""
+        from datetime import date
+        from app.services.kardex_service import KardexMovimiento, perfil_mensual_kardex
+        # Enero y marzo con datos; febrero VACÍO. El rango ene→mar se ve intacto.
+        for mes, dia in ((1, 15), (3, 15)):
+            for i in range(40):
+                db.session.add(KardexMovimiento(
+                    referencia=f'R{i}', bodega='NB1', fecha=date(2026, mes, dia),
+                    concepto=501, naturaleza=2, cantidad=1))
+        db.session.commit()
+
+        p = perfil_mensual_kardex()
+        assert '2026-02' in p['meses_ausentes'], 'no detectó el mes ausente'
+        assert p['sin_huecos'] is False
+
+    def test_detecta_un_mes_anomalamente_bajo(self, app, db):
+        from datetime import date
+        from app.services.kardex_service import KardexMovimiento, perfil_mensual_kardex
+        for mes, n in ((1, 100), (2, 3), (3, 100)):  # febrero casi vacío
+            for i in range(n):
+                db.session.add(KardexMovimiento(
+                    referencia=f'R{i}', bodega='NB1', fecha=date(2026, mes, 10),
+                    concepto=501, naturaleza=2, cantidad=1))
+        db.session.commit()
+
+        p = perfil_mensual_kardex()
+        assert '2026-02' in p['huecos']
+        assert p['sin_huecos'] is False
+
+    def test_meses_parejos_no_dan_falsa_alarma(self, app, db):
+        """Un detector que grita siempre es tan inútil como uno que calla."""
+        from datetime import date
+        from app.services.kardex_service import KardexMovimiento, perfil_mensual_kardex
+        for mes in (1, 2, 3, 4):
+            for i in range(50):
+                db.session.add(KardexMovimiento(
+                    referencia=f'R{i}', bodega='NB1', fecha=date(2026, mes, 10),
+                    concepto=501, naturaleza=2, cantidad=1))
+        db.session.commit()
+        assert perfil_mensual_kardex()['sin_huecos'] is True
+
+
+class TestReconstruirDenyByDefault:
+    """Una advertencia se ignora bajo presión de agenda; un rechazo no.
+
+    Reconstruir sobre un kardex truncado fabrica días sin movimiento que sí lo
+    tuvieron — demanda censurada inventada por el descargador, contaminando
+    justo el modelo que existe para corregir la censura.
+    """
+
+    def test_rechaza_sin_descarga_completa(self, app, db, client, jwt_token_admin):
+        resp = client.post('/api/kardex/reconstruir', json={},
+                           headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        assert resp.status_code == 409, 'debe RECHAZAR, no advertir'
+        d = resp.get_json()
+        assert 'RECHAZADO' in d['error']
+        assert 'que_hacer' in d and 'override' in d
+
+    def test_el_override_existe_y_queda_auditado(self):
+        src = _src('app/routes/kardex.py')
+        assert 'forzar' in src
+        assert 'OVERRIDE' in src, 'el override debe dejar rastro en el log'
+
+    def test_rechaza_si_hay_descarga_en_curso(self, app, db, client, jwt_token_admin):
+        from app.routes.kardex import _kardex_descarga_estado
+        _kardex_descarga_estado['en_curso'] = True
+        try:
+            resp = client.post('/api/kardex/reconstruir', json={},
+                               headers={'Authorization': f'Bearer {jwt_token_admin}'})
+            assert resp.status_code == 409
+        finally:
+            _kardex_descarga_estado['en_curso'] = False
+
+
+class TestSupuestoDeReanudacion:
+    """El orden de la consulta no está declarado — y de eso depende reanudar."""
+
+    def test_una_parcial_declara_el_supuesto(self, app, db):
+        """Si el orden no es estable, la página N no contiene lo mismo dos veces."""
+        from app.services.kardex_service import KardexService
+        r = KardexService.descargar_kardex('20240101', max_minutos=1)
+        if not r['ok'] and r['estado'] != 'SIN_DATOS':
+            assert 'ESTABLE' in r['_supuesto_de_reanudacion'].upper()
+
+    def test_el_codigo_documenta_que_el_orden_lo_define_siesa(self):
+        src = _src('app/services/kardex_service.py')
+        assert 'orden' in src.lower() and 'HUECOS' in src

@@ -145,6 +145,80 @@ def dias_expuestos(dias_con_stock, dias_calendario):
     return min(n, int(dias_calendario)), False
 
 
+def perfil_mensual_kardex():
+    """Filas por mes en el kardex almacenado.
+
+    RANGO PEDIDO vs TRAÍDO ES NECESARIO Y NO SUFICIENTE: compara la primera y
+    la última fecha, y no dice nada del medio. Un fallo de reanudación produce
+    un kardex que abarca todo el rango con un agujero en marzo, y esa
+    comparación diría COMPLETA.
+
+    Es el mismo error de siempre: el rango es la REPRESENTACIÓN de la
+    completitud; la COSA es que estén todas las filas.
+
+    Doce a dieciocho números que un humano reconoce de un vistazo — los picos
+    de temporada donde deben estar, ningún mes en cero, ninguno anómalamente
+    bajo. Un histograma que se lee en cinco segundos y delata el hueco que el
+    rango esconde.
+
+    Returns: [{mes, filas, sospechoso}] ordenado, con la mediana como
+    referencia para marcar los meses anómalos.
+    """
+    from sqlalchemy import func
+
+    # El truncado a mes se hace distinto en SQLite y Postgres
+    if db.engine.dialect.name == 'sqlite':
+        mes_expr = func.strftime('%Y-%m', KardexMovimiento.fecha)
+    else:
+        mes_expr = func.to_char(KardexMovimiento.fecha, 'YYYY-MM')
+
+    filas = (
+        db.session.query(mes_expr.label('mes'), func.count(KardexMovimiento.id))
+        .group_by(mes_expr).order_by(mes_expr).all()
+    )
+    if not filas:
+        return {'meses': [], 'huecos': [], 'nota': 'Kardex vacío.'}
+
+    conteos = sorted(n for _m, n in filas)
+    mediana = conteos[len(conteos) // 2]
+    # Un mes por debajo del 25% de la mediana es anómalo. No prueba un hueco,
+    # pero es donde hay que mirar — y mirar es justo lo que el rango impedía.
+    umbral = mediana * 0.25
+
+    meses, huecos = [], []
+    for mes, n in filas:
+        sospechoso = n < umbral
+        meses.append({'mes': mes, 'filas': n, 'sospechoso': sospechoso})
+        if sospechoso:
+            huecos.append(mes)
+
+    # Meses ausentes por completo dentro del rango cubierto
+    from datetime import date as _d
+    presentes = {m for m, _ in filas}
+    y0, m0 = map(int, filas[0][0].split('-'))
+    y1, m1 = map(int, filas[-1][0].split('-'))
+    ausentes = []
+    y, m = y0, m0
+    while (y, m) <= (y1, m1):
+        etiqueta = f'{y:04d}-{m:02d}'
+        if etiqueta not in presentes:
+            ausentes.append(etiqueta)
+        m += 1
+        if m > 12:
+            y, m = y + 1, 1
+
+    return {
+        'meses': meses,
+        'mediana_filas': mediana,
+        'huecos': huecos,
+        'meses_ausentes': ausentes,
+        'sin_huecos': not huecos and not ausentes,
+        'nota': ('Un mes en cero o muy por debajo de la mediana es el hueco que el '
+                 'rango pedido-vs-traído no ve. Los picos de temporada deben estar '
+                 'donde se esperan.'),
+    }
+
+
 class KardexService:
 
     @staticmethod
@@ -332,6 +406,16 @@ class KardexService:
             'filtrados_fuera_de_rango': filtrados,
             'errores': errores,
             'segundos': round((datetime.utcnow() - inicio).total_seconds()),
+            # El rango no ve los agujeros del medio. Esto sí.
+            'perfil_mensual': perfil_mensual_kardex(),
+            '_supuesto_de_reanudacion': (
+                'Reanudar desde una página asume que el orden del conjunto de '
+                'resultados es ESTABLE entre corridas. La consulta dinámica no '
+                'recibe parámetro de orden desde aquí — lo define Siesa. Si el '
+                'orden no es monótono y estable, la página N de la segunda corrida '
+                'no contiene lo mismo y quedan HUECOS. Verificar el perfil mensual '
+                'siempre; preferir una sola sesión a varias corridas.'
+            ) if not completa else None,
         }
         if not completa:
             resultado['advertencia'] = (

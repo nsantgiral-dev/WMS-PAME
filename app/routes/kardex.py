@@ -8,7 +8,11 @@ GET  /api/kardex/stock-diario       — stock reconstruido por referencia+bodega
 """
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
+import logging
+
 from app.routes._auth_helpers import _es_admin_o_jefe, _get_uid
+
+logger = logging.getLogger(__name__)
 
 kardex_bp = Blueprint('kardex', __name__)
 
@@ -86,17 +90,76 @@ def estado_descarga():
 @kardex_bp.route('/reconstruir', methods=['POST'])
 @jwt_required()
 def reconstruir_stock():
-    """Reconstruye stock diario hacia atrás desde saldo actual - movimientos."""
+    """Reconstruye stock diario hacia atrás desde saldo actual - movimientos.
+
+    DENY-BY-DEFAULT: se NIEGA si la última descarga no quedó COMPLETA.
+
+    Una advertencia se ignora bajo presión de agenda; un rechazo con override
+    auditado no. Es el mismo patrón del script de reset, aplicado al eslabón
+    donde equivocarse es más barato: reconstruir sobre un kardex truncado
+    fabrica días sin movimiento que sí lo tuvieron — demanda censurada
+    inventada por el descargador, que contamina justo el modelo que existe
+    para corregir la censura.
+    """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin puede reconstruir stock'}), 403
+
     data = request.get_json() or {}
     bodega = data.get('bodega')
-    from app.services.kardex_service import KardexService
+    forzar = bool(data.get('forzar'))
+
+    ultima = _kardex_descarga_estado.get('resultado')
+    if _kardex_descarga_estado.get('en_curso'):
+        return jsonify({
+            'error': 'Hay una descarga en curso. Reconstruir ahora usaría datos a medias.',
+        }), 409
+
+    # Sin descarga en esta sesión no se puede afirmar que el kardex esté completo.
+    # Regla 0: ante estado desconocido, no seguir.
+    if not forzar and (not ultima or ultima.get('ok') is not True):
+        estado = (ultima or {}).get('estado', 'DESCONOCIDO')
+        return jsonify({
+            'error': 'RECHAZADO — la última descarga no quedó COMPLETA.',
+            'estado_descarga': estado,
+            'por_que': (
+                'Reconstruir sobre un kardex truncado inventa días sin movimiento. '
+                'Eso es demanda censurada fabricada por el descargador, y contamina '
+                'la descensura, el ROP y la temporada sin una sola alarma.'
+            ),
+            'que_hacer': (
+                'Completar la descarga (reanudar desde la página indicada) y revisar '
+                'el perfil mensual: ningún mes en cero ni anómalamente bajo.'
+            ),
+            'override': 'Reenviar con {"forzar": true} si se asume el riesgo. Queda auditado.',
+        }), 409
+
+    if forzar:
+        logger.warning(
+            '[KARDEX_RECONSTRUIR] OVERRIDE usuario_id=%s — estado de descarga: %s. '
+            'Se reconstruye sobre un kardex posiblemente incompleto.',
+            _get_uid(), (ultima or {}).get('estado', 'DESCONOCIDO'),
+        )
+
+    from app.services.kardex_service import KardexService, perfil_mensual_kardex
     try:
         resultado = KardexService.reconstruir_stock_diario(bodega)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    return jsonify({'ok': True, **resultado}), 200
+    return jsonify({
+        'ok': True, 'forzado': forzar,
+        'perfil_mensual': perfil_mensual_kardex(),
+        **resultado,
+    }), 200
+
+
+@kardex_bp.route('/perfil-mensual', methods=['GET'])
+@jwt_required()
+def perfil_mensual():
+    """Filas por mes — el histograma que delata el hueco que el rango esconde."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede ver el perfil'}), 403
+    from app.services.kardex_service import perfil_mensual_kardex
+    return jsonify(perfil_mensual_kardex()), 200
 
 
 @kardex_bp.route('/reconciliar', methods=['GET'])

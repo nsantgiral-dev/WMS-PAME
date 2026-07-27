@@ -46,8 +46,13 @@ function _kardexRender(el, estado) {
                background:${enCurso ? 'var(--brd)' : 'var(--pm)'};color:#fff;">
         ${enCurso ? 'Descargando…' : 'Descargar'}
       </button>
+      <button onclick="kardexVerPerfil()"
+        style="padding:7px 12px;border:1px solid var(--pm);border-radius:7px;background:transparent;color:var(--pm);font-size:12px;font-weight:700;cursor:pointer;">
+        Verificar perfil
+      </button>
       <span style="font-size:11px;color:var(--tx3);">Corre en segundo plano y por tramos: si se corta, se reanuda.</span>
     </div>
+    <div id="kardex-perfil-out"></div>
     <div style="margin-top:8px;font-size:11px;color:var(--yellow);border-left:2px solid var(--yellow);padding-left:8px;">
       Son ~17.000 peticiones contra el ERP que factura en los puntos de venta.
       Correr <strong>fuera de horario</strong> y avisando antes — no después de que
@@ -77,6 +82,8 @@ function _kardexRender(el, estado) {
       </div>
       ${r.detalle_estado ? `<div style="font-size:11px;color:${col};margin-top:6px;">${r.detalle_estado}</div>` : ''}
       ${r.advertencia ? `<div style="font-size:11px;color:var(--red);margin-top:6px;font-weight:700;">${r.advertencia}</div>` : ''}
+      ${_kardexPerfil(r.perfil_mensual)}
+      ${r._supuesto_de_reanudacion ? `<div style="font-size:10px;color:var(--yellow);margin-top:6px;">${r._supuesto_de_reanudacion}</div>` : ''}
       ${r.reanudar_desde ? `<button onclick="kardexDescargar(${r.reanudar_desde})"
         style="margin-top:8px;padding:6px 12px;border:none;border-radius:6px;background:var(--red);color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
         Reanudar desde la página ${r.reanudar_desde}
@@ -88,6 +95,41 @@ function _kardexRender(el, estado) {
 
   html += '</div>';
   el.innerHTML = html;
+}
+
+/** Histograma de filas por mes.
+ *
+ *  El rango pedido-vs-traído compara la primera y la última fecha: no ve un
+ *  agujero en marzo. Esto sí. Doce a dieciocho barras que un humano lee en
+ *  cinco segundos — los picos de temporada donde deben estar, ningún mes en
+ *  cero, ninguno anómalamente bajo.
+ */
+function _kardexPerfil(p) {
+  if (!p || !p.meses || !p.meses.length) return '';
+  const max = Math.max(...p.meses.map(m => m.filas), 1);
+  const barras = p.meses.map(m => {
+    const h = Math.max(3, Math.round(m.filas / max * 46));
+    const col = m.sospechoso ? 'var(--red)' : 'var(--pm)';
+    return `<div title="${m.mes}: ${m.filas.toLocaleString('es-CO')} filas"
+      style="flex:1;min-width:6px;height:${h}px;background:${col};border-radius:2px 2px 0 0;"></div>`;
+  }).join('');
+
+  const limpio = p.sin_huecos;
+  const col = limpio ? 'var(--green)' : 'var(--red)';
+  return `<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--brd);">
+    <div style="font-size:11px;font-weight:700;color:var(--tx3);margin-bottom:6px;">
+      Filas por mes — el hueco que el rango no ve
+    </div>
+    <div style="display:flex;gap:2px;align-items:flex-end;height:50px;">${barras}</div>
+    <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--tx3);margin-top:3px;">
+      <span>${p.meses[0].mes}</span><span>${p.meses[p.meses.length - 1].mes}</span>
+    </div>
+    <div style="font-size:11px;color:${col};margin-top:6px;">
+      ${limpio
+        ? '✓ Sin meses vacíos ni anómalamente bajos (mediana ' + (p.mediana_filas || 0).toLocaleString('es-CO') + ' filas/mes)'
+        : '✗ Revisar: ' + [...(p.huecos || []), ...(p.meses_ausentes || [])].join(', ')}
+    </div>
+  </div>`;
 }
 
 function _kardexIniciarPoll() {
@@ -105,6 +147,24 @@ function _kardexIniciarPoll() {
       _KARDEX_POLL = null;
     }
   }, 10000);
+}
+
+/** Perfil del kardex ALMACENADO, sin depender de una descarga reciente.
+ *
+ *  Es el paso de verificación humana antes de /reconstruir: el servidor puede
+ *  haberse reiniciado y perdido el resultado de la última descarga, pero el
+ *  kardex sigue ahí y su forma se puede mirar en cualquier momento.
+ */
+async function kardexVerPerfil() {
+  const out = document.getElementById('kardex-perfil-out');
+  if (out) out.innerHTML = '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Calculando perfil…</div>';
+  try {
+    const p = await get('/api/kardex/perfil-mensual');
+    if (out) out.innerHTML = _kardexPerfil(p) ||
+      '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Kardex vacío.</div>';
+  } catch (e) {
+    if (out) out.innerHTML = `<div style="font-size:11px;color:var(--red);">${e.message || e}</div>`;
+  }
 }
 
 async function kardexDescargar(paginaInicial) {
