@@ -13,6 +13,8 @@ Este archivo evita que la deuda siga creciendo mientras tanto.
 import os
 import re
 
+import pytest
+
 _RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Conteo congelado al 2026-07-27. Solo puede BAJAR.
@@ -104,10 +106,30 @@ class TestNadaCriticoQuedaFueraDelRepo:
     """
 
     def _tracked(self):
+        """Ficheros que git conoce de verdad.
+
+        Es un guard de TIEMPO DE DESARROLLO: atrapa lo que existe en la máquina
+        pero no en el repo. En el contenedor de build no aplica y no puede
+        correr — Railway copia el árbol de archivos, no el repositorio, así que
+        no hay .git y `git ls-files` sale con 128.
+
+        Y ahí está la ironía: este test nació para arreglar un test que
+        verificaba la máquina en vez del entregable, y cometió la misma falta en
+        otra forma. La pregunta "¿está en el repo?" solo tiene sentido donde hay
+        repo; donde no lo hay, los archivos presentes SON los del repo por
+        construcción.
+
+        El patrón de skip ya existía en test_frontend_integrity (node); faltaba
+        aplicarlo aquí.
+        """
+        import shutil
         import subprocess
+        if not shutil.which('git') or not os.path.isdir(os.path.join(_RAIZ, '.git')):
+            pytest.skip('sin repositorio git — guard de desarrollo, no aplica al build')
         out = subprocess.run(['git', 'ls-files'], cwd=_RAIZ,
                              capture_output=True, text=True, timeout=30)
-        assert out.returncode == 0, 'git ls-files falló'
+        if out.returncode != 0:
+            pytest.skip(f'git ls-files no disponible: {out.stderr.strip()[:80]}')
         return set(out.stdout.split())
 
     def test_todo_scripts_esta_en_el_repo(self):
