@@ -368,3 +368,39 @@ class TestDiagnosticoDeOrden:
             assert r['ok'] is False
         finally:
             _os.environ.pop('KARDEX_PAGINACION_NO_ENUMERA', None)
+
+
+class TestDestinoDeSiesa:
+    """¿Los datos vienen de producción o del ambiente de pruebas?
+
+    El default del gateway es serviciosqa.siesacloud.com — QA. Si CONNEKTA_URL
+    no está fija, todo lo descargado viene de pruebas. Y eso no es un detalle
+    de infraestructura: el kardex alimentaría la decisión de compra del comité.
+    Datos de pruebas decidiendo cientos de millones, sin que nada lo diga.
+    """
+
+    def test_el_default_del_gateway_es_qa(self):
+        """Si esto cambiara a producción, el riesgo se invierte y hay que saberlo."""
+        src = _src('app/services/connekta_gateway.py')
+        assert 'serviciosqa' in src, 'el default documentado era QA'
+
+    def test_health_reporta_a_donde_apunta(self):
+        src = _src('app/routes/health.py')
+        assert 'siesa_destino' in src
+        assert 'parece_qa' in src
+
+    def test_health_avisa_si_la_url_no_esta_fijada(self):
+        """Ante estado no declarado, avisar. Regla 0."""
+        src = _src('app/routes/health.py')
+        assert 'url_explicita' in src
+        assert 'PRUEBAS' in src, 'debe decir la consecuencia, no solo el host'
+
+    def test_endpoint_responde_con_el_destino(self, app, db, client, jwt_token_admin):
+        resp = client.get('/api/health/siesa',
+                          headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        # 503 cuando faltan variables — preexistente. Lo que importa es que el
+        # destino viaje en la respuesta, no el código.
+        assert resp.status_code in (200, 503)
+        d = resp.get_json()
+        assert 'siesa_destino' in d
+        assert 'host' in d['siesa_destino']

@@ -75,7 +75,11 @@ def health_siesa():
     # Longitud de la SECRET_KEY, nunca la clave. Es la forma de MEDIR producción
     # antes de imponer una validación que podría impedir el arranque.
     import os as _os
+    from urllib.parse import urlparse
     _sk = len((_os.getenv('SECRET_KEY') or '').encode())
+    # url_get_dinamico es la que de verdad se usa para el kardex
+    _host_connekta = urlparse(getattr(connekta, 'url_get_dinamico', '') or '').netloc
+    _parece_qa = any(x in _host_connekta.lower() for x in ('qa', 'test', 'dev', 'pruebas'))
 
     resultado = {
         'timestamp': datetime.utcnow().isoformat(),
@@ -84,6 +88,26 @@ def health_siesa():
             else 'ensayo' if connekta.modo_ensayo
             else 'produccion'
         ),
+        # A QUÉ SIESA APUNTA. El default del gateway es
+        # serviciosqa.siesacloud.com — QA. Si CONNEKTA_URL no está fija en
+        # Railway, todo lo que se descargue viene del ambiente de pruebas.
+        #
+        # No es un detalle de infraestructura: el kardex que va a alimentar la
+        # decisión de compra del comité saldría de ahí. Datos de pruebas
+        # decidiendo cientos de millones, sin que nada en pantalla lo diga.
+        'siesa_destino': {
+            'host': _host_connekta,
+            'parece_qa': _parece_qa,
+            'url_explicita': bool(_os.environ.get('CONNEKTA_URL')),
+            'advertencia': (
+                'CONNEKTA_URL NO está configurada: se está usando el default, que '
+                'es el ambiente de PRUEBAS (serviciosqa). Todo dato descargado '
+                'vendría de QA.'
+            ) if not _os.environ.get('CONNEKTA_URL') else (
+                'El host apunta a un ambiente que parece de PRUEBAS. Verificar '
+                'antes de usar estos datos para decidir compras.'
+            ) if _parece_qa else None,
+        },
         'secret_key': {
             'bytes': _sk,
             'minimo_rfc7518': 32,
