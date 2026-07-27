@@ -404,3 +404,35 @@ class TestDestinoDeSiesa:
         d = resp.get_json()
         assert 'siesa_destino' in d
         assert 'host' in d['siesa_destino']
+
+
+class TestElBannerNoSeApagaConDatosDePrueba:
+    """El fallo más caro posible en el mecanismo de aviso.
+
+    `modo` decía 'produccion' con solo NO ser simulación ni ensayo. Con
+    CONNEKTA_URL fijada a serviciosqa, el banner quedaba APAGADO justo en el
+    escenario para el que se construyó: datos de pruebas leyéndose como reales.
+
+    Un banner que se apaga cuando debe encenderse es peor que no tener banner:
+    su silencio se lee como confirmación.
+    """
+
+    def test_el_modo_considera_el_destino_de_siesa(self):
+        src = _src('app/routes/health.py')
+        assert 'datos_de_prueba' in src
+        assert '_destino_pruebas' in src
+
+    def test_ping_expone_el_host(self):
+        src = _src('app/routes/health.py')
+        assert "'siesa_host'" in src
+
+    def test_el_banner_tiene_texto_para_datos_de_prueba(self):
+        js = _src('app/static/pwa/app.js')
+        assert "modo === 'datos_de_prueba'" in js
+        assert 'QA' in js, 'debe nombrar el ambiente, no decir "no verificado"'
+
+    def test_solo_produccion_apaga_el_banner(self):
+        """Cualquier otro modo — incluido datos_de_prueba — lo enciende."""
+        js = _src('app/static/pwa/app.js')
+        i = js.index('function _pintarBannerModo')
+        assert "modo === 'produccion'" in js[i:i + 900]

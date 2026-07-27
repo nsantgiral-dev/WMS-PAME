@@ -2312,7 +2312,9 @@ function _pintarBannerModo(modo) {
   // es la misma omisión de configuración que produjo el 403 del Vigía.
   if (modo === 'produccion') { el.style.display = 'none'; return; }
 
-  const cfg = modo === 'simulacion'
+  const cfg = modo === 'datos_de_prueba'
+    ? { txt: 'DATOS DE PRUEBA — Siesa apunta al ambiente QA, no a producción', bg: '#7F1D1D', fg: '#FCA5A5' }
+    : modo === 'simulacion'
     ? { txt: 'MODO SIMULACIÓN — datos ficticios, nada llega a Siesa', bg: '#7C2D12', fg: '#FDBA74' }
     : modo === 'ensayo'
     ? { txt: 'MODO ENSAYO — los números de pantalla NO son la realidad', bg: '#78350F', fg: '#FCD34D' }

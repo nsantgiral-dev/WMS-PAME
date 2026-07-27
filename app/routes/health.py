@@ -46,7 +46,17 @@ def health_ping():
         # credenciales reales y datos ficticios a la vez — sin esta variable el
         # banner se apagaría justo cuando más se necesita.
         import os as _os
-        if _os.environ.get('WMS_ENSAYO', '').lower() == 'true':
+        from urllib.parse import urlparse as _up
+        # A QUÉ SIESA APUNTA. `modo` decía 'produccion' con solo NO ser
+        # simulación ni ensayo — y con CONNEKTA_URL fijada a serviciosqa el
+        # banner quedaba APAGADO justo en el escenario para el que se
+        # construyó: datos de pruebas leyéndose como reales.
+        _h = _up(getattr(connekta, 'url_get_dinamico', '') or '').netloc.lower()
+        _destino_pruebas = any(x in _h for x in ('qa', 'test', 'dev', 'pruebas'))
+
+        if _destino_pruebas:
+            modo = 'datos_de_prueba'
+        elif _os.environ.get('WMS_ENSAYO', '').lower() == 'true':
             modo = 'ensayo'
         else:
             modo = ('simulacion' if connekta.modo_simulacion
@@ -55,6 +65,7 @@ def health_ping():
         return jsonify({
             'ok': True,
             'modo': modo,
+            'siesa_host': _h or None,
             'modo_simulacion': connekta.modo_simulacion,
             'circuit_breaker': connekta.circuit_state(),
         }), 200
