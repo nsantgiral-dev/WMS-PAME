@@ -288,9 +288,15 @@ class TestPruebaDeEstabilidad:
         rutas = [str(r) for r in app.url_map.iter_rules()]
         assert any('probar-paginacion' in r for r in rutas)
 
-    def test_el_veredicto_dice_que_hacer_si_es_inestable(self):
+    def test_el_veredicto_dice_que_hacer_segun_la_causa(self):
+        """Este test afirmaba "UNA sola sesión" — la recomendación anterior, que
+        resultó insuficiente. Con orden no determinista, una sola sesión no
+        arregla nada: las páginas también son peticiones separadas."""
         src = _src('app/services/kardex_service.py')
-        assert 'UNA sola sesión' in src or 'UNA sola sesion' in src
+        assert 'una sola sesión' in src, 'debe recomendar sesión única cuando hay deriva'
+        assert 'NO correr la descarga completa' in src, \
+            'debe PROHIBIR la descarga cuando el orden no enumera'
+        assert 'ORDER BY' in src, 'debe nombrar el arreglo real'
 
 
 class TestRitmoRealMedido:
@@ -317,3 +323,48 @@ class TestRitmoRealMedido:
             f'Con {tope} min por corrida hacen falta ~{corridas:.0f} corridas. '
             f'Si este número bajara de 10, revisar el supuesto de ritmo.'
         )
+
+
+class TestDiagnosticoDeOrden:
+    """0/100 filas en la misma posición no es "un poco inestable".
+
+    Con el orden cambiando entre peticiones, la paginación por offset NO PUEDE
+    enumerar el conjunto: cada página se pide sobre un orden distinto, así que
+    hay filas repetidas y filas nunca vistas, sin forma de saber cuándo se
+    terminó. "Una sola sesión" no lo arregla — las páginas también son
+    peticiones separadas.
+    """
+
+    def test_distingue_las_dos_causas(self):
+        """Deriva por inserción y orden no determinista tienen remedios OPUESTOS:
+        ir rápido ayuda en la primera y no sirve de nada en la segunda."""
+        src = _src('app/services/kardex_service.py')
+        assert 'DERIVA_POR_INSERCION' in src
+        assert 'ORDEN_NO_DETERMINISTA' in src
+
+    def test_mide_a_intervalo_corto_ademas_del_largo(self):
+        """Sin la medida corta no se puede saber cuál de las dos causas es."""
+        src = _src('app/services/kardex_service.py')
+        assert 'iguales_tras_5s' in src
+
+    def test_mide_solape_entre_paginas_contiguas(self):
+        """Dos páginas seguidas no deberían compartir ninguna fila.
+        Si comparten, la paginación pierde y repite AQUÍ Y AHORA."""
+        src = _src('app/services/kardex_service.py')
+        assert 'solape_con_pagina_siguiente' in src
+
+    def test_declara_si_se_puede_paginar_del_todo(self):
+        src = _src('app/services/kardex_service.py')
+        assert 'se_puede_paginar' in src
+        assert 'ORDER BY' in src, 'debe decir cuál es el arreglo real'
+
+    def test_una_descarga_no_puede_declararse_completa_si_no_enumera(self, app, db):
+        """Recorrer todas las páginas no es enumerar el conjunto."""
+        import os as _os
+        from app.services.kardex_service import KardexService
+        _os.environ['KARDEX_PAGINACION_NO_ENUMERA'] = 'true'
+        try:
+            r = KardexService.descargar_kardex('20240101', max_minutos=1)
+            assert r['ok'] is False
+        finally:
+            _os.environ.pop('KARDEX_PAGINACION_NO_ENUMERA', None)

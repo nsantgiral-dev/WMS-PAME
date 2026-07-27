@@ -170,20 +170,28 @@ function _kardexIniciarPoll() {
  */
 async function kardexProbarPaginacion() {
   const out = document.getElementById('kardex-perfil-out');
-  if (out) out.innerHTML = '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Probando… se piden dos páginas separadas ~90s.</div>';
+  if (out) out.innerHTML = '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Diagnosticando… 4 peticiones, ~2 minutos. No cierres la pestaña.</div>';
   try {
     const r = await post('/api/kardex/probar-paginacion', { pagina: 50, espera_s: 90 });
     if (!out) return;
     if (r.error) { out.innerHTML = `<div style="font-size:11px;color:var(--red);">${r.error}</div>`; return; }
-    const col = r.estable ? 'var(--green)' : 'var(--red)';
+    const ok = r.se_puede_paginar;
+    const col = ok ? (r.causa_probable === 'DERIVA_POR_INSERCION' ? 'var(--yellow)' : 'var(--green)') : 'var(--red)';
+    const corto = Object.keys(r).find(k => k.startsWith('iguales_tras_') && k !== 'iguales_tras_5s');
     out.innerHTML = `<div style="margin-top:8px;border:1px solid ${col};border-radius:8px;padding:10px;">
-      <div style="font-size:12px;font-weight:700;color:${col};">
-        Orden de paginación: ${r.estable ? 'ESTABLE' : 'INESTABLE'}
+      <div style="font-size:13px;font-weight:700;color:${col};">
+        ${ok ? 'Paginación USABLE' : 'Paginación NO USABLE'} — ${r.causa_probable}
       </div>
-      <div style="font-size:11px;color:var(--tx3);margin-top:4px;">
-        Página ${r.pagina} · ${r.iguales_en_misma_posicion}/${r.filas_primera} filas en la misma posición tras ${r.espera_s}s
+      <div style="font-size:11px;color:var(--tx3);margin-top:6px;line-height:1.7;">
+        Página ${r.pagina}, ${r.filas} filas.<br>
+        Tras <strong>5s</strong>: ${r.iguales_tras_5s}/${r.filas} en la misma posición
+        ${r.estable_corto ? '<span style="color:var(--green);">(estable)</span>' : '<span style="color:var(--red);">(ya cambió)</span>'}<br>
+        Tras <strong>90s</strong>: ${r[corto] ?? '—'}/${r.filas}
+        ${r.estable_largo ? '<span style="color:var(--green);">(estable)</span>' : '<span style="color:var(--red);">(cambió)</span>'}<br>
+        Solape con la página siguiente: <strong>${r.solape_con_pagina_siguiente}</strong> filas
+        ${r.solape_con_pagina_siguiente ? '<span style="color:var(--red);"> — páginas contiguas no deberían compartir ninguna</span>' : ''}
       </div>
-      <div style="font-size:11px;color:${col};margin-top:6px;">${r.veredicto}</div>
+      <div style="font-size:11px;color:${col};margin-top:8px;">${r.veredicto}</div>
     </div>`;
   } catch (e) {
     if (out) out.innerHTML = `<div style="font-size:11px;color:var(--red);">${e.message || e}</div>`;

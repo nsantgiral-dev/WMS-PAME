@@ -334,6 +334,11 @@ class KardexService:
         # el mismo retorno.
         estado = 'COMPLETA'
         detalle_estado = None
+        # Si la paginación no enumera, ninguna descarga puede estar completa —
+        # por rápida que sea. Se declara aquí para que el resultado no prometa
+        # lo que la tubería no puede dar.
+        paginacion_no_enumera = (
+            os.environ.get('KARDEX_PAGINACION_NO_ENUMERA', '').lower() == 'true')
         fecha_min = fecha_max = None
         duplicados = 0
         total_declarado = None
@@ -493,7 +498,13 @@ class KardexService:
                 db.session.rollback()
                 break
 
-        completa = estado == 'COMPLETA'
+        completa = estado == 'COMPLETA' and not paginacion_no_enumera
+        if estado == 'COMPLETA' and paginacion_no_enumera:
+            estado = 'ORDEN_NO_ENUMERA'
+            detalle_estado = (
+                'Se recorrieron todas las páginas, pero el orden de la consulta '
+                'no es determinista: filas repetidas y filas nunca vistas, sin '
+                'forma de saber cuáles. Recorrer no es enumerar.')
         resultado = {
             'ok': completa,
             'estado': estado,
@@ -540,66 +551,105 @@ class KardexService:
 
     @staticmethod
     def probar_estabilidad_paginacion(pagina: int = 50, espera_s: int = 90) -> dict:
-        """Prueba empírica: ¿es estable el orden de la consulta paginada?
+        """Diagnostica SI la paginación por offset puede enumerar el kardex.
 
-        Reanudar desde la página N solo es correcto si el conjunto de resultados
-        es estable entre corridas. Siesa está vivo: mientras la descarga corre se
-        están escribiendo movimientos. Si la consulta no está ordenada por una
-        clave monótona, la página N de la segunda corrida no contiene lo mismo —
-        y el resultado es un kardex con HUECOS.
+        La primera versión solo respondía "estable / inestable". Con el
+        resultado real —0 de 100 filas en la misma posición tras 90s— eso no
+        alcanza, porque hay DOS causas con remedios OPUESTOS:
 
-        El orden no viaja como parámetro desde aquí: lo define la consulta
-        dinámica del lado de Siesa. Esto no lo prueba formalmente, pero da
-        evidencia fuerte por DOS peticiones en vez de diecisiete mil.
+          A) DERIVA POR INSERCIÓN: filas nuevas empujan el offset. Ir rápido
+             reduce el daño; la descarga en una sola sesión ayuda.
+          B) ORDEN NO DETERMINISTA: la consulta no lleva ORDER BY y el motor
+             devuelve filas en cualquier orden. Ir rápido NO ayuda en nada y
+             la paginación por offset simplemente NO PUEDE enumerar el
+             conjunto — ni en una sesión ni en cuarenta.
 
-        Returns: {estable, iguales, total, ...}
+        Se distinguen midiendo a intervalo CORTO además del largo. Y se añade
+        una tercera medida que es la que de verdad importa: si dos páginas
+        CONSECUTIVAS pedidas seguidas comparten filas, la paginación está
+        perdiendo y repitiendo datos aquí y ahora.
+
+        Returns: {veredicto, causa_probable, se_puede_paginar, ...}
         """
         import time
         from app.services.connekta_gateway import connekta
 
-        def _traer():
+        def _traer(pag):
             res = connekta._get(
                 NOMBRE_CONSULTA,
-                params_extra={'paginacion': f'numPag={pagina}|tamPag=100'},
+                params_extra={'paginacion': f'numPag={pag}|tamPag=100'},
                 url=connekta.url_get_dinamico, timeout=60,
             )
             det = (res or {}).get('detalle', {})
             return det.get('Datos', []) or det.get('Table', []) or []
 
-        primera = _traer()
-        if not primera:
-            return {'estable': None, 'error': f'La página {pagina} vino vacía.'}
-
-        def _firma(rows):
+        def _firmas(rows):
             return [hash_movimiento(
-                None, r.get('f350_id_tipo_docto'), r.get('f470_id_bodega'),
+                None, r.get('f350_id_tipo_docto'), r.get('f470_id_bodega') or r.get('f150_id'),
                 r.get('f120_referencia'), r.get('f470_id_concepto'),
                 r.get('f470_ind_naturaleza'), r.get('f470_cant_base'),
+                nro_registro=r.get('LineaRegistro'),
             ) for r in rows if isinstance(r, dict)]
 
-        f1 = _firma(primera)
-        time.sleep(max(1, int(espera_s)))
-        segunda = _traer()
-        f2 = _firma(segunda)
+        base = _firmas(_traer(pagina))
+        if not base:
+            return {'veredicto': None, 'error': f'La página {pagina} vino vacía.'}
 
-        iguales = sum(1 for a, b in zip(f1, f2) if a == b)
-        estable = f1 == f2
+        # 1) Intervalo CORTO — distingue deriva de no-determinismo
+        time.sleep(5)
+        corto = _firmas(_traer(pagina))
+        iguales_corto = sum(1 for a, b in zip(base, corto) if a == b)
+
+        # 2) Página CONSECUTIVA — ¿se solapan páginas contiguas?
+        vecina = _firmas(_traer(pagina + 1))
+        solape = len(set(base) & set(vecina))
+
+        # 3) Intervalo LARGO
+        time.sleep(max(1, int(espera_s)))
+        largo = _firmas(_traer(pagina))
+        iguales_largo = sum(1 for a, b in zip(base, largo) if a == b)
+
+        n = len(base)
+        estable_corto = iguales_corto >= n * 0.95
+        estable_largo = iguales_largo >= n * 0.95
+
+        if estable_corto and estable_largo:
+            causa, puede = 'NINGUNA — el orden se mantuvo', True
+            veredicto = ('El orden es estable bajo carga real. La reanudación '
+                         'multi-sesión es segura.')
+        elif estable_corto and not estable_largo:
+            causa, puede = 'DERIVA_POR_INSERCION', True
+            veredicto = ('El orden aguanta segundos pero no minutos: son filas '
+                         'nuevas empujando el offset. La descarga debe ir en UNA '
+                         'sesión y lo más rápido posible; hash_origen protege del '
+                         'solape. Reanudar entre días NO es seguro.')
+        else:
+            causa, puede = 'ORDEN_NO_DETERMINISTA', False
+            veredicto = (
+                'El orden cambia entre peticiones consecutivas. La paginación por '
+                'offset NO PUEDE enumerar el kardex — ni en una sesión ni en '
+                'cuarenta: cada página se pide sobre un orden distinto, así que '
+                'habría filas repetidas y filas nunca vistas, sin forma de saber '
+                'cuándo se terminó. NO correr la descarga completa. Hace falta que '
+                'la consulta dinámica lleve un ORDER BY por clave monótona '
+                '(LineaRegistro o consecutivo de documento) — eso se pide a Nelly.'
+            )
 
         return {
-            'estable': estable,
             'pagina': pagina,
-            'espera_s': espera_s,
-            'filas_primera': len(f1),
-            'filas_segunda': len(f2),
-            'iguales_en_misma_posicion': iguales,
-            'veredicto': (
-                'El orden se mantuvo bajo carga real. Evidencia fuerte de que la '
-                'reanudación multi-sesión es segura — no prueba formal.'
-                if estable else
-                'EL ORDEN CAMBIÓ. La reanudación multi-sesión produciría huecos. '
-                'Hacer la descarga en UNA sola sesión, y confiar en hash_origen '
-                'para que el solape no duplique.'
-            ),
+            'filas': n,
+            'iguales_tras_5s': iguales_corto,
+            'iguales_tras_%ds' % int(espera_s): iguales_largo,
+            'solape_con_pagina_siguiente': solape,
+            'estable_corto': estable_corto,
+            'estable_largo': estable_largo,
+            'causa_probable': causa,
+            'se_puede_paginar': puede,
+            'veredicto': veredicto,
+            'nota_solape': (
+                f'{solape} filas aparecen en la página {pagina} Y en la {pagina + 1}. '
+                f'Páginas contiguas no deberían compartir ninguna.'
+            ) if solape else None,
         }
 
     @staticmethod
