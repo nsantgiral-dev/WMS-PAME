@@ -310,3 +310,33 @@ class TestGuardDelReset:
         reales = set(_db.metadata.tables)
         fantasmas = [t for t in m.OPERATIVAS if t not in reales]
         assert not fantasmas, f'tablas inexistentes en la lista: {fantasmas}'
+
+
+class TestSelloDeHoraDelActa:
+    """Un acta firmada a las 3 p.m. en Neiva no puede decir 20:00.
+
+    Arreglo de PRESENTACIÓN: entra antes del congelamiento del 4 de agosto.
+    La migración naive→aware del backend toca cientos de sitios y va después.
+    """
+
+    def _js(self):
+        import os
+        ruta = os.path.join(os.path.dirname(__file__), '..',
+                            'app', 'static', 'pwa', 'temporada.js')
+        return open(ruta, encoding='utf-8').read()
+
+    def test_el_acta_no_usa_hora_utc(self):
+        """Se ignoran los comentarios: un guard que se dispara con su propia
+        documentación es ruido, no señal — es la segunda vez que pasa."""
+        codigo = [l.split('//')[0] for l in self._js().splitlines()]
+        malas = [l.strip() for l in codigo if 'toISOString' in l]
+        assert not malas, \
+            f'toISOString() da UTC — el acta quedaría corrida 5 horas: {malas}'
+
+    def test_renderiza_en_bogota(self):
+        assert "America/Bogota" in self._js()
+
+    def test_la_zona_es_visible_en_el_documento(self):
+        """Una hora sin zona declarada es una hora que hay que adivinar."""
+        src = self._js()
+        assert 'hora de Colombia' in src and 'UTC' in src
