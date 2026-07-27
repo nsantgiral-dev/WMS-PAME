@@ -10,7 +10,9 @@ import pytest
 # Forzar antes de importar la app
 os.environ['DATABASE_URL'] = 'sqlite:///:memory:'
 os.environ['SYNC_SCHEDULER'] = 'false'
-os.environ['SECRET_KEY'] = 'test-secret-key'
+# 32+ bytes: RFC 7518 §3.2 para HMAC-SHA256. No es cosmética — con una clave
+# corta PyJWT emite un aviso por cada token y ahoga el canal de advertencias.
+os.environ['SECRET_KEY'] = 'test-secret-key-de-32-bytes-o-mas-para-hmac-sha256'
 os.environ['CONNEKTA_MODO_SIMULACION'] = 'true'
 
 

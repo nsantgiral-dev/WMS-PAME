@@ -25,6 +25,26 @@ def create_app():
             'Agrega SECRET_KEY en Railway (o en tu .env local) antes de arrancar la app.'
         )
 
+    # PASO 1 DE 2 — MEDIR, todavía no imponer.
+    #
+    # RFC 7518 §3.2 pide >=32 bytes para HMAC-SHA256. Una clave corta debería
+    # impedir el arranque (Regla 0: configuración insuficiente no arranca en
+    # silencio), PERO hacerlo hoy puede tumbar producción en el próximo deploy
+    # si la clave que ya vive en Railway es corta.
+    #
+    # Secuencia: (1) esto avisa fuerte y lo reporta en /api/health/siesa;
+    # (2) se mide producción; (3) si es corta se rota EN VENTANA TRANQUILA
+    # —rotar invalida los JWT vivos y deja sin sesión a quien esté en ruta—;
+    # (4) recién entonces esto pasa a `raise`.
+    SECRET_KEY_MIN_BYTES = 32
+    if len(secret_key.encode()) < SECRET_KEY_MIN_BYTES:
+        logging.getLogger(__name__).warning(
+            '[SEGURIDAD] SECRET_KEY mide %d bytes, por debajo de los %d que pide '
+            'RFC 7518 para HMAC-SHA256. Los JWT quedan debilitados. Rotar a una '
+            'clave larga en ventana tranquila (rotar cierra las sesiones activas).',
+            len(secret_key.encode()), SECRET_KEY_MIN_BYTES,
+        )
+
     _db_url = os.getenv('DATABASE_URL', '')
     app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False

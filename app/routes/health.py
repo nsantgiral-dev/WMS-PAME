@@ -72,6 +72,11 @@ def health_siesa():
     import os
     from app.services.connekta_gateway import connekta
 
+    # Longitud de la SECRET_KEY, nunca la clave. Es la forma de MEDIR producción
+    # antes de imponer una validación que podría impedir el arranque.
+    import os as _os
+    _sk = len((_os.getenv('SECRET_KEY') or '').encode())
+
     resultado = {
         'timestamp': datetime.utcnow().isoformat(),
         'modo': (
@@ -79,6 +84,15 @@ def health_siesa():
             else 'ensayo' if connekta.modo_ensayo
             else 'produccion'
         ),
+        'secret_key': {
+            'bytes': _sk,
+            'minimo_rfc7518': 32,
+            'suficiente': _sk >= 32,
+            'accion': None if _sk >= 32 else (
+                'Rotar a una clave de 32+ bytes EN VENTANA TRANQUILA: rotar '
+                'invalida los JWT vivos y deja sin sesión a quien esté en ruta.'
+            ),
+        },
         'variables': {},
         'conectividad': None,
         'dlq': {},
