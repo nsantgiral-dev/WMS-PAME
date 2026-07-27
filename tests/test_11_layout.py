@@ -393,6 +393,127 @@ def test_eliminar_ubicacion_individual_forzar_ignora_stock_y_borra_historial(db,
     assert TareaPicking.query.get(tarea_id) is None
 
 
+# ── Regresión real (2026-07-27): 8 tablas referencian ubicaciones, no 4 ────
+# Se descubrió consultando information_schema.table_constraints en la BD real
+# tras dos crashes seguidos de forzar=True (SesionConteo primero, luego
+# ItemRecepcion). ItemRecepcion/TareaDevolucion/LPN tienen FK nullable pero
+# igual bloquean el DELETE por la regla NO ACTION de Postgres — y su
+# historial real no debe borrarse, solo desvincularse (ubicacion_id=NULL).
+
+def _crear_recepcion(almacen_id):
+    from app.extensions import db as _db
+    from app.models.recepcion import RecepcionMercancia
+    r = RecepcionMercancia(codigo='REC-TEST-1', numero_oc_siesa='OC-1', almacen_id=almacen_id)
+    _db.session.add(r)
+    _db.session.flush()
+    return r
+
+
+def test_eliminar_ubicacion_individual_bloquea_por_item_recepcion(db, almacen, producto):
+    from app.models.recepcion import ItemRecepcion
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    recepcion = _crear_recepcion(almacen.id)
+    db.session.add(ItemRecepcion(
+        recepcion_id=recepcion.id, producto_id=producto.id,
+        cantidad_ordenada=10, ubicacion_id=ub.id,
+    ))
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='ítems de recepción'):
+        svc.eliminar_ubicacion(ub.id)
+    assert Ubicacion.query.get(ub.id) is not None
+
+
+def test_eliminar_ubicacion_individual_forzar_desvincula_item_recepcion(db, almacen, producto):
+    from app.models.recepcion import ItemRecepcion
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    recepcion = _crear_recepcion(almacen.id)
+    item = ItemRecepcion(
+        recepcion_id=recepcion.id, producto_id=producto.id,
+        cantidad_ordenada=10, ubicacion_id=ub.id,
+    )
+    db.session.add(item)
+    db.session.commit()
+    item_id = item.id
+
+    resultado = svc.eliminar_ubicacion(ub.id, forzar=True)
+
+    assert resultado['codigo'] == ub.codigo
+    assert Ubicacion.query.get(ub.id) is None
+    # El ítem de recepción sobrevive — solo se desvincula la ubicación, no se pierde el historial.
+    item_refrescado = ItemRecepcion.query.get(item_id)
+    assert item_refrescado is not None
+    assert item_refrescado.ubicacion_id is None
+
+
+def test_eliminar_ubicacion_individual_bloquea_por_lpn(db, almacen, producto):
+    from app.models.lpn import LPN
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    db.session.add(LPN(
+        codigo='LPN-TEST-1', producto_id=producto.id, factor_conversion=12,
+        cantidad_actual=12, ubicacion_id=ub.id,
+    ))
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='LPN'):
+        svc.eliminar_ubicacion(ub.id)
+    assert Ubicacion.query.get(ub.id) is not None
+
+
+def test_eliminar_ubicacion_individual_forzar_desvincula_lpn(db, almacen, producto):
+    from app.models.lpn import LPN
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    lpn = LPN(
+        codigo='LPN-TEST-2', producto_id=producto.id, factor_conversion=12,
+        cantidad_actual=12, ubicacion_id=ub.id,
+    )
+    db.session.add(lpn)
+    db.session.commit()
+    lpn_id = lpn.id
+
+    resultado = svc.eliminar_ubicacion(ub.id, forzar=True)
+
+    assert resultado['codigo'] == ub.codigo
+    assert Ubicacion.query.get(ub.id) is None
+    lpn_refrescado = LPN.query.get(lpn_id)
+    assert lpn_refrescado is not None
+    assert lpn_refrescado.ubicacion_id is None
+
+
+def test_eliminar_ubicacion_individual_bloquea_por_tarea_devolucion(db, almacen, producto):
+    from app.models.devolucion import TareaDevolucion
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    db.session.add(TareaDevolucion(
+        codigo='DEV-TEST-1', producto_id=producto.id, almacen_id=almacen.id,
+        cantidad_diferencia=5, ubicacion_id=ub.id,
+    ))
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='devolución'):
+        svc.eliminar_ubicacion(ub.id)
+    assert Ubicacion.query.get(ub.id) is not None
+
+
+def test_eliminar_ubicacion_individual_forzar_desvincula_tarea_devolucion(db, almacen, producto):
+    from app.models.devolucion import TareaDevolucion
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    tarea = TareaDevolucion(
+        codigo='DEV-TEST-2', producto_id=producto.id, almacen_id=almacen.id,
+        cantidad_diferencia=5, ubicacion_id=ub.id,
+    )
+    db.session.add(tarea)
+    db.session.commit()
+    tarea_id = tarea.id
+
+    resultado = svc.eliminar_ubicacion(ub.id, forzar=True)
+
+    assert resultado['codigo'] == ub.codigo
+    assert Ubicacion.query.get(ub.id) is None
+    tarea_refrescada = TareaDevolucion.query.get(tarea_id)
+    assert tarea_refrescada is not None
+    assert tarea_refrescada.ubicacion_id is None
+
+
 # ── editar_fila / eliminar_fila — mecanismo legado sobre 'estante' ───────────
 # Ningún mecanismo nuevo escribe 'estante'; se prueba construyendo directo,
 # igual que quedaron las ubicaciones creadas antes del rediseño de 5 ejes.

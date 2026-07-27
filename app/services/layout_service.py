@@ -45,6 +45,9 @@ from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.picking import TareaPicking
 from app.models.tarea_reposicion import TareaReposicion
 from app.models.conteo import SesionConteo
+from app.models.recepcion import ItemRecepcion
+from app.models.lpn import LPN
+from app.models.devolucion import TareaDevolucion
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -241,14 +244,46 @@ def _ubicaciones_de_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int
 _TIPOS_MOVIMIENTO_BOOKKEEPING_LAYOUT = ('ASIGNACION_LAYOUT', 'REMODULACION_CUERPO')
 
 
+def _motivo_referencias_nullable(ubicacion_id: int) -> str | None:
+    """
+    Tablas con FK nullable hacia ubicaciones que NO están en
+    _motivo_historial_bloqueante/_motivo_historial_operativo_real por
+    separado: ItemRecepcion (dos columnas: ubicacion_id y
+    ubicacion_cross_dock_id), TareaDevolucion y LPN. Aunque nullable=True
+    permite que el REGISTRO exista sin ubicación, Postgres igual bloquea el
+    DELETE de la ubicación mientras una fila la referencie (regla NO ACTION)
+    — así que también hay que revisarlas aquí, no solo las NOT NULL. Un LPN
+    que sigue apuntando aquí es además una señal real: representa una
+    estiba/pallet físico que puede seguir presente en el hueco.
+
+    Descubierto en producción (2026-07-27): eliminar_cuerpo(forzar=True) sobre
+    PIK-A1-C01 crasheaba con IntegrityError porque items_recepcion.ubicacion_id
+    apuntaba ahí y nadie lo revisaba ni lo desvinculaba. Se verificó la lista
+    completa de FKs reales contra information_schema.table_constraints en vez
+    de confiar en memoria — salieron 8 tablas, no las 4 que este módulo conocía.
+    """
+    if ItemRecepcion.query.filter(
+        db.or_(
+            ItemRecepcion.ubicacion_id == ubicacion_id,
+            ItemRecepcion.ubicacion_cross_dock_id == ubicacion_id,
+        )
+    ).first():
+        return 'tiene ítems de recepción asociados'
+    if TareaDevolucion.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene tareas de devolución asociadas'
+    if LPN.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene LPN(s) asociados'
+    return None
+
+
 def _motivo_historial_bloqueante(ubicacion_id: int) -> str | None:
     """
     Historial operativo que impide reconstruir o eliminar una ubicación sin
-    perderlo — TareaPicking/TareaReposicion/MovimientoInventario tienen FK
-    NOT NULL hacia ubicaciones. Usado por _motivo_no_eliminable() (que además
-    bloquea por stock activo) para eliminar_ubicacion()/eliminar_cuerpo() —
-    aquí CUALQUIER MovimientoInventario bloquea, incluida la sola asignación
-    de un SKU, a propósito: eliminar borra la fila para siempre, así que el
+    perderlo — TareaPicking/TareaReposicion/SesionConteo tienen FK NOT NULL
+    hacia ubicaciones. Usado por _motivo_no_eliminable() (que además bloquea
+    por stock activo) para eliminar_ubicacion()/eliminar_cuerpo() — aquí
+    CUALQUIER MovimientoInventario bloquea, incluida la sola asignación de un
+    SKU, a propósito: eliminar borra la fila para siempre, así que el
     criterio es el más conservador posible (ver test_eliminar_fila_bloquea_
     por_historial_aunque_stock_sea_cero, que valida exactamente este caso).
 
@@ -268,6 +303,9 @@ def _motivo_historial_bloqueante(ubicacion_id: int) -> str | None:
         return 'tiene sesión de conteo cíclico asociada'
     if MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).first():
         return 'tiene movimientos de inventario registrados'
+    motivo_nullable = _motivo_referencias_nullable(ubicacion_id)
+    if motivo_nullable:
+        return motivo_nullable
     return None
 
 
@@ -297,6 +335,9 @@ def _motivo_historial_operativo_real(ubicacion_id: int) -> str | None:
         MovimientoInventario.tipo.notin_(_TIPOS_MOVIMIENTO_BOOKKEEPING_LAYOUT),
     ).first():
         return 'tiene movimientos de inventario registrados'
+    motivo_nullable = _motivo_referencias_nullable(ubicacion_id)
+    if motivo_nullable:
+        return motivo_nullable
     return None
 
 
@@ -304,8 +345,10 @@ def _motivo_no_eliminable(ubicacion_id: int) -> str | None:
     """
     Ninguna posición con historial operativo se puede borrar — solo filas creadas
     por error y nunca usadas. Distinto (más estricto) que reclasificar_ubicacion:
-    aquí no basta con stock=0, porque TareaPicking/TareaReposicion/MovimientoInventario
-    tienen FK NOT NULL hacia ubicaciones — dejar huérfanos rompería el historial.
+    aquí no basta con stock=0 — hay 8 tablas con FK hacia ubicaciones (ver
+    _motivo_historial_bloqueante y _motivo_referencias_nullable), algunas
+    NOT NULL y otras nullable pero igual bloqueantes por la regla NO ACTION
+    de Postgres — dejar huérfanos rompería el historial real de operación.
     """
     if _stock_activo(ubicacion_id) > 0:
         return 'tiene stock activo — muévelo antes de eliminar'
@@ -319,14 +362,25 @@ def _borrar_historial_de(ubicacion_id: int):
     """
     SOLO para el path forzar=True de eliminar_ubicacion()/eliminar_fila()/
     eliminar_cuerpo() — cuando el usuario pidió explícitamente saltarse el
-    guardarraíl de historial (uso: pruebas, nunca el camino normal). Borra en
-    cascada TareaPicking/TareaReposicion/SesionConteo/MovimientoInventario que
-    apuntan a esta ubicación, porque su FK es NOT NULL: si no se borran
-    también, el DELETE de la ubicación falla igual por violación de
-    integridad referencial en Postgres, forzar=True o no (caso real: el
-    conteo cíclico ABC diario genera SesionConteo automáticamente sobre
-    huecos con stock — se descubrió al forzar un cuerpo que ya tenía una
-    sesión DIARIO_ABC pendiente). Esto SÍ pierde el historial para siempre.
+    guardarraíl de historial (uso: pruebas, nunca el camino normal).
+
+    Lista de las 8 tablas reales con FK hacia ubicaciones, verificada contra
+    information_schema.table_constraints (no contra memoria — la primera
+    versión de esta función solo conocía 4 y crasheó en producción dos veces
+    seguidas con IntegrityError: primero por SesionConteo, después por
+    ItemRecepcion, ambas con FK NOT NULL o NO ACTION que ninguna vía anterior
+    revisaba). Dos estrategias según lo que permite cada esquema:
+
+      - FK NOT NULL (no se puede desvincular, hay que borrar la fila entera):
+        TareaPicking, TareaReposicion, SesionConteo.
+      - FK nullable (el registro tiene sentido sin ubicación — se desvincula
+        con UPDATE ... SET ubicacion_id = NULL, preservando el historial real
+        en vez de borrarlo): MovimientoInventario, ItemRecepcion (dos
+        columnas), LPN, TareaDevolucion.
+
+    UbicacionProducto no aparece aquí — su FK también es NOT NULL, pero ya se
+    borra aparte en cada llamador (eliminar_ubicacion/eliminar_fila/
+    eliminar_cuerpo), antes o después de esta función.
     """
     TareaPicking.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
     TareaReposicion.query.filter(
@@ -336,7 +390,17 @@ def _borrar_historial_de(ubicacion_id: int):
         )
     ).delete(synchronize_session=False)
     SesionConteo.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
-    MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).delete(synchronize_session=False)
+
+    MovimientoInventario.query.filter_by(ubicacion_id=ubicacion_id).update(
+        {'ubicacion_id': None}, synchronize_session=False)
+    ItemRecepcion.query.filter_by(ubicacion_id=ubicacion_id).update(
+        {'ubicacion_id': None}, synchronize_session=False)
+    ItemRecepcion.query.filter_by(ubicacion_cross_dock_id=ubicacion_id).update(
+        {'ubicacion_cross_dock_id': None}, synchronize_session=False)
+    LPN.query.filter_by(ubicacion_id=ubicacion_id).update(
+        {'ubicacion_id': None}, synchronize_session=False)
+    TareaDevolucion.query.filter_by(ubicacion_id=ubicacion_id).update(
+        {'ubicacion_id': None}, synchronize_session=False)
 
 
 def eliminar_ubicacion(ubicacion_id: int, forzar: bool = False):
