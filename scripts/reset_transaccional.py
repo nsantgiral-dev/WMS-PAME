@@ -1,0 +1,192 @@
+#!/usr/bin/env python
+"""
+Reset transaccional del acta de corte — borra el ensayo, conserva la memoria.
+
+Existe porque el riesgo real no es que este script se equivoque: es que alguien
+escriba un DELETE a mano el día del corte y se lleve por delante la memoria
+analítica. Mejor que exista uno correcto a que se improvise uno.
+
+LA FRONTERA
+  Tablas OPERATIVAS  → nacen limpias en el acta de corte.
+    Picks, packing, bultos, rutas, recaudos, recepciones, traslados, conteos,
+    movimientos y jobs generados validando la app.
+
+  Tablas ANALÍTICAS  → NUNCA se tocan.
+    serie_vigia, alarma_vigia, kardex_movimientos, stock_diario,
+    juicios_temporada. Sin las 26 semanas de referencia el CUSUM queda ciego
+    ~6 meses y se pierde la alarma de Florencia — la primera certificada.
+    TSB, ROP y newsvendor consumen esa misma historia.
+
+  Tablas MAESTRAS    → NUNCA se tocan.
+    Productos, ubicaciones, usuarios, proveedores, acuerdos, vehículos.
+
+Deny-by-default: solo se vacía lo que está en OPERATIVAS. Si alguien agrega una
+tabla protegida a esa lista, el script se niega a correr.
+
+Uso:
+    venv/bin/python scripts/reset_transaccional.py              # simulacro
+    venv/bin/python scripts/reset_transaccional.py --ejecutar   # de verdad
+
+Después de rellenar, correr scripts/verificar_carga_vigia.py: con los mismos
+hashes debe dar CERTIFICADO idéntico. Ese es el mejor test del reset — si el
+canon sigue reproduciendo S⁻=6.30, la limpieza fue quirúrgica.
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+VERDE, ROJO, AMAR, GRIS, FIN = '\033[92m', '\033[91m', '\033[93m', '\033[90m', '\033[0m'
+
+# Se vacían. Orden importa: hijos antes que padres por las FKs.
+OPERATIVAS = [
+    'items_packing',
+    'bultos',
+    'recaudos_entrega',
+    'tareas_packing',
+    'tareas_picking',
+    'tareas_devolucion',
+    'tareas_reposicion',
+    'items_recepcion',
+    'recepciones',
+    'items_solicitud_traslado',
+    'solicitudes_traslado',
+    'rutas_despacho',
+    'sesiones_conteo',
+    'movimientos_inventario',
+    'siesa_jobs',
+    'pedidos_siesa',
+    'ubicaciones_huerfanas',
+    'fugas_recompra',
+]
+
+# NUNCA. Si aparecen en OPERATIVAS, el script aborta.
+PROTEGIDAS_ANALITICAS = {
+    'serie_vigia': 'línea base del CUSUM — sin ella, ciego ~6 meses',
+    'alarma_vigia': 'la alarma de Florencia, primera certificada',
+    'kardex_movimientos': 'historia de demanda que alimenta los 4 modelos',
+    'stock_diario': 'denominador de la descensura',
+    'juicios_temporada': 'juicio humano registrado, no recalculable',
+}
+
+PROTEGIDAS_MAESTRAS = {
+    'productos', 'ubicaciones', 'ubicaciones_productos', 'usuarios', 'almacenes',
+    'proveedores', 'acuerdos_marco', 'precios_proveedor', 'vehiculos',
+    'conductores', 'rutas_maestras', 'rutas_maestras_paradas', 'lpn',
+    'producto_empaques', 'siesa_mapeo_unidades', 'productos_bloqueados',
+    'producto_clasificacion_abc', 'contenedores', 'ficha_importacion',
+    'items_en_transito', 'stock_siesa',
+}
+
+CANONES = ['docs/canon_florencia.json', 'docs/canon_PLANTILLA.json',
+           'docs/canones/facturas_co.json', 'docs/canones/rop_dual.json',
+           'docs/canones/clasificacion_sb.json']
+
+
+def _guard():
+    """El script se niega a correr si la lista fue contaminada."""
+    protegidas = set(PROTEGIDAS_ANALITICAS) | PROTEGIDAS_MAESTRAS
+    invasoras = [t for t in OPERATIVAS if t in protegidas]
+    if invasoras:
+        print(f'\n  {ROJO}ABORTADO — hay tablas protegidas en la lista de borrado:{FIN}')
+        for t in invasoras:
+            razon = PROTEGIDAS_ANALITICAS.get(t, 'tabla maestra')
+            print(f'    · {t} — {razon}')
+        print()
+        return False
+    return True
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--ejecutar', action='store_true',
+                   help='Borra de verdad. Sin esto solo simula.')
+    args = p.parse_args()
+
+    if not _guard():
+        return 2
+
+    from app import create_app
+    from app.extensions import db
+    from sqlalchemy import text, func
+
+    app = create_app()
+    with app.app_context():
+        print()
+        print('  RESET TRANSACCIONAL — ACTA DE CORTE')
+        print('  ' + '─' * 54)
+        if not args.ejecutar:
+            print(f'  {AMAR}SIMULACRO — nada se borra. Usa --ejecutar para hacerlo real.{FIN}')
+        print()
+
+        # Lo que se conserva, contado ANTES
+        print(f'  {VERDE}Se conservan (memoria analítica):{FIN}')
+        antes = {}
+        for t, razon in PROTEGIDAS_ANALITICAS.items():
+            try:
+                n = db.session.execute(text(f'SELECT COUNT(*) FROM {t}')).scalar()
+            except Exception:
+                n = None
+            antes[t] = n
+            print(f'    {n if n is not None else "?":>9}  {t}  {GRIS}{razon}{FIN}')
+
+        print(f'\n  {ROJO}Se vacían (transaccional de ensayo):{FIN}')
+        total = 0
+        for t in OPERATIVAS:
+            try:
+                n = db.session.execute(text(f'SELECT COUNT(*) FROM {t}')).scalar()
+            except Exception:
+                print(f'    {GRIS}{"—":>9}  {t} (no existe){FIN}')
+                continue
+            total += n or 0
+            print(f'    {n:>9}  {t}')
+
+        print(f'\n  {GRIS}Total de filas a borrar: {total:,}{FIN}')
+
+        if not args.ejecutar:
+            print(f'\n  {AMAR}Simulacro terminado. Nada se tocó.{FIN}\n')
+            return 0
+
+        for t in OPERATIVAS:
+            try:
+                db.session.execute(text(f'DELETE FROM {t}'))
+            except Exception as e:
+                print(f'  {AMAR}aviso: {t} — {e}{FIN}')
+        db.session.commit()
+
+        # Verificación posterior: la memoria sigue ahí
+        print(f'\n  {VERDE}Verificando que la memoria sobrevivió…{FIN}')
+        ok = True
+        for t, n_antes in antes.items():
+            if n_antes is None:
+                continue
+            n = db.session.execute(text(f'SELECT COUNT(*) FROM {t}')).scalar()
+            marca = f'{VERDE}✓{FIN}' if n == n_antes else f'{ROJO}✗{FIN}'
+            if n != n_antes:
+                ok = False
+            print(f'    {marca} {t}: {n_antes} → {n}')
+
+        faltan = [c for c in CANONES
+                  if not os.path.exists(os.path.join(
+                      os.path.dirname(os.path.dirname(os.path.abspath(__file__))), c))]
+        if faltan:
+            ok = False
+            print(f'\n  {ROJO}Canones faltantes:{FIN}')
+            for c in faltan:
+                print(f'    · {c}')
+
+        print('\n  ' + '─' * 54)
+        if ok:
+            print(f'  {VERDE}RESET COMPLETO{FIN} — memoria analítica intacta.')
+            print(f'  {GRIS}Siguiente: rellenar y correr scripts/verificar_carga_vigia.py.')
+            print(f'  Con los mismos hashes debe dar CERTIFICADO idéntico — si el canon')
+            print(f'  sigue reproduciendo S-=6.30, la limpieza fue quirúrgica.{FIN}\n')
+            return 0
+        print(f'  {ROJO}RESET CON PÉRDIDAS{FIN} — revisar antes de continuar.\n')
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

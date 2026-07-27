@@ -89,3 +89,54 @@ class TestCanalDeAdvertenciasLegible:
         assert m, 'no se encontró SECRET_KEY en conftest'
         assert len(m.group(1).encode()) >= 32, \
             'la clave de tests debe tener 32+ bytes (RFC 7518)'
+
+
+class TestNadaCriticoQuedaFueraDelRepo:
+    """El test corre contra GIT, no contra el disco.
+
+    Un test que verifica `Path.exists()` pasa en local aunque el archivo nunca
+    haya entrado al repo — y revienta el build. Pasó: `.gitignore` tenía
+    `reset_*.py` sin anclar a la raíz y se tragó scripts/reset_transaccional.py.
+    `git add -A` no dijo nada; promete "añade todo" y significa "añade todo lo
+    no ignorado". Éxito parcial reportado como éxito.
+
+    Estos tests usan `git ls-files` para preguntar qué hay DE VERDAD en el repo.
+    """
+
+    def _tracked(self):
+        import subprocess
+        out = subprocess.run(['git', 'ls-files'], cwd=_RAIZ,
+                             capture_output=True, text=True, timeout=30)
+        assert out.returncode == 0, 'git ls-files falló'
+        return set(out.stdout.split())
+
+    def test_todo_scripts_esta_en_el_repo(self):
+        """scripts/ es código versionado, no borrador local."""
+        tracked = self._tracked()
+        en_disco = {f'scripts/{a}' for a in os.listdir(os.path.join(_RAIZ, 'scripts'))
+                    if a.endswith('.py')}
+        fuera = sorted(en_disco - tracked)
+        assert not fuera, (
+            f'\n{len(fuera)} script(s) existen en disco pero NO en el repo:\n'
+            + '\n'.join(f'  · {f}' for f in fuera)
+            + '\n\nProbablemente los tragó .gitignore. Comprueba con:\n'
+              '  git check-ignore -v <archivo>'
+        )
+
+    def test_todos_los_canones_estan_en_el_repo(self):
+        """Un canon fuera del repo es un canon que no certifica nada."""
+        tracked = self._tracked()
+        d = os.path.join(_RAIZ, 'docs', 'canones')
+        en_disco = {f'docs/canones/{a}' for a in os.listdir(d) if a.endswith('.json')}
+        fuera = sorted(en_disco - tracked)
+        assert not fuera, f'canones fuera del repo: {fuera}'
+
+    def test_los_patrones_operacionales_estan_anclados_a_la_raiz(self):
+        """Sin barra inicial, `reset_*.py` aplica a cualquier profundidad."""
+        gi = open(os.path.join(_RAIZ, '.gitignore'), encoding='utf-8').read()
+        for patron in ('fix_*.py', 'debug_*.py', 'diag_*.py', 'reset_*.py',
+                       'check_*.py'):
+            assert f'\n{patron}' not in gi, (
+                f'"{patron}" sin anclar: se tragará cualquier archivo con ese '
+                f'nombre en subdirectorios. Usa "/{patron}".'
+            )

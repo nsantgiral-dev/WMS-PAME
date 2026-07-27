@@ -28,11 +28,20 @@ migrations/versions/__pycache__/
 # Review agent reports (generados localmente)
 .review/reports/
 
-# Scripts de diagnóstico y fix operacional (no deben committearse)
-fix_*.py
-debug_*.py
-diag_*.py
-reset_*.py
-check_*.py
-facturar_rm_*.py
+# Scripts de diagnóstico y fix operacional, sueltos EN LA RAÍZ.
+#
+# La barra inicial los ancla a la raíz a propósito. Sin ella, el patrón aplica
+# a cualquier profundidad y se traga herramientas legítimas: `reset_*.py`
+# silenció a scripts/reset_transaccional.py durante un commit entero — el
+# archivo existía en disco, los tests pasaban en local, `git add -A` no dijo
+# nada, y el build de Railway murió porque el archivo nunca llegó al repo.
+# Éxito parcial reportado como éxito.
+#
+# scripts/ es código versionado, no borrador.
+/fix_*.py
+/debug_*.py
+/diag_*.py
+/reset_*.py
+/check_*.py
+/facturar_rm_*.py
 # CI cache bust 1784656642
