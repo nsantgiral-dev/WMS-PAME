@@ -70,8 +70,23 @@ class KardexMovimiento(db.Model):
     costo_promedio = db.Column(db.Numeric(14, 4), default=0)
     descargado_en = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Clave natural del documento, si Siesa la envía. Es lo que identifica un
+    # movimiento unívocamente: CO + tipo + consecutivo + línea.
+    consec_docto = db.Column(db.String(20))
+    nro_registro = db.Column(db.Integer)
+
+    # Identidad de origen — SHA-256 sobre la tupla que identifica el movimiento.
+    # LA INGESTA ERA UN INSERT PLANO CON ÍNDICE NO ÚNICO: pulsar "Descargar" dos
+    # veces duplicaba el kardex entero, y reanudar con orden inestable duplicaba
+    # el solape. La duplicación es PEOR que la omisión porque el perfil mensual
+    # no la delata — un mes con 8% de filas de más se ve plausible — y
+    # movimientos duplicados inflan la demanda, que infla el ROP, que infla el
+    # contenedor. El bug de 25x por otra puerta.
+    hash_origen = db.Column(db.String(64))
+
     __table_args__ = (
         db.Index('ix_kardex_ref_bod_fecha', 'referencia', 'bodega', 'fecha'),
+        db.Index('ix_kardex_hash_origen', 'hash_origen', unique=True),
     )
 
 
@@ -143,6 +158,33 @@ def dias_expuestos(dias_con_stock, dias_calendario):
     if n <= 0:
         return int(dias_calendario), True
     return min(n, int(dias_calendario)), False
+
+
+def hash_movimiento(fecha, tipo_docto, bodega, referencia, concepto,
+                    naturaleza, cantidad, consec_docto=None, nro_registro=None):
+    """Identidad de un movimiento del kardex.
+
+    Se incluye la clave natural del documento cuando Siesa la envía
+    (consecutivo + línea): sin ella, dos movimientos legítimamente idénticos
+    —mismo ítem, misma cantidad, mismo día, mismo concepto— colapsarían en uno.
+    Con ella, la identidad es exacta.
+
+    Sin clave natural el hash sigue siendo la mejor defensa disponible contra
+    la duplicación, y la limitación queda declarada en vez de supuesta.
+    """
+    import hashlib
+    partes = [
+        fecha.isoformat() if fecha else '',
+        (tipo_docto or '').strip(),
+        (bodega or '').strip(),
+        (referencia or '').strip(),
+        str(concepto or ''),
+        str(naturaleza or ''),
+        f'{float(cantidad or 0):.4f}',
+        (consec_docto or '').strip(),
+        str(nro_registro if nro_registro is not None else ''),
+    ]
+    return hashlib.sha256('|'.join(partes).encode()).hexdigest()
 
 
 def perfil_mensual_kardex():
@@ -281,6 +323,13 @@ class KardexService:
         estado = 'COMPLETA'
         detalle_estado = None
         fecha_min = fecha_max = None
+        duplicados = 0
+        total_declarado = None
+
+        # Hashes ya presentes: hace la descarga idempotente entre corridas.
+        vistos_bd = {h for (h,) in db.session.query(KardexMovimiento.hash_origen)
+                     .filter(KardexMovimiento.hash_origen.isnot(None)).all()}
+        vistos_lote = set()
 
         while True:
             elapsed = (datetime.utcnow() - inicio).total_seconds()
@@ -308,6 +357,22 @@ class KardexService:
                 # Consultas dinámicas usan "Datos", no "Table"
                 detalle = (res or {}).get('detalle', {})
                 rows = detalle.get('Datos', []) or detalle.get('Table', []) or []
+
+                # ¿Siesa declara cuántas filas hay? Si lo hace, es la verdad de
+                # origen: declaradas vs aterrizadas es una prueba de completitud
+                # por CONTEO, superior al perfil mensual, que la infiere por
+                # distribución. Se buscan los nombres plausibles.
+                if total_declarado is None:
+                    for k in ('totalRegistros', 'TotalRegistros', 'total',
+                              'Total', 'totalFilas', 'cantidadRegistros'):
+                        v = (res or {}).get(k) or detalle.get(k)
+                        if v not in (None, ''):
+                            try:
+                                total_declarado = int(v)
+                                logger.info('[KARDEX] Siesa declara %d registros', total_declarado)
+                            except (TypeError, ValueError):
+                                pass
+                            break
 
                 # Log de descubrimiento: mostrar keys del primer registro
                 if pagina == 1 and rows:
@@ -352,15 +417,42 @@ class KardexService:
                     else:
                         naturaleza = int(nat_raw) if nat_raw else 0
 
+                    # Clave natural del documento, si viene. Los nombres varían
+                    # entre consultas, así que se prueban los plausibles.
+                    consec = str(
+                        row.get('f350_consec_docto') or row.get('f470_consec_docto') or
+                        row.get('f350_consec') or ''
+                    ).strip()
+                    try:
+                        nro_reg = int(row.get('f470_nro_registro') or
+                                      row.get('f470_nro_reg') or 0) or None
+                    except (TypeError, ValueError):
+                        nro_reg = None
+
+                    tipo_docto = (row.get('f350_id_tipo_docto') or '').strip()
+                    concepto = int(row.get('f470_id_concepto', 0))
+                    cantidad = abs(float(row.get('f470_cant_base', 0)))
+
+                    h = hash_movimiento(fecha, tipo_docto, bodega, ref, concepto,
+                                        naturaleza, cantidad, consec, nro_reg)
+                    # Idempotencia: reanudar o repetir la descarga NO duplica.
+                    if h in vistos_lote or h in vistos_bd:
+                        duplicados += 1
+                        continue
+                    vistos_lote.add(h)
+
                     mov = KardexMovimiento(
                         fecha=fecha,
-                        tipo_docto=(row.get('f350_id_tipo_docto') or '').strip(),
+                        tipo_docto=tipo_docto,
                         bodega=bodega,
                         referencia=ref,
-                        concepto=int(row.get('f470_id_concepto', 0)),
+                        concepto=concepto,
                         naturaleza=naturaleza,
-                        cantidad=abs(float(row.get('f470_cant_base', 0))),
+                        cantidad=cantidad,
                         costo_promedio=float(row.get('f470_costo_prom_uni', 0)),
+                        consec_docto=consec or None,
+                        nro_registro=nro_reg,
+                        hash_origen=h,
                     )
                     db.session.add(mov)
                     total += 1
@@ -404,6 +496,9 @@ class KardexService:
             'pagina_final': pagina,
             'reanudar_desde': None if completa else pagina,
             'filtrados_fuera_de_rango': filtrados,
+            'duplicados_omitidos': duplicados,
+            # Verdad de origen si Siesa la declara: conteo, no distribución.
+            'total_declarado_por_siesa': total_declarado,
             'errores': errores,
             'segundos': round((datetime.utcnow() - inicio).total_seconds()),
             # El rango no ve los agujeros del medio. Esto sí.
@@ -430,6 +525,70 @@ class KardexService:
             resultado['rango_traido']['desde'], resultado['rango_traido']['hasta'],
         )
         return resultado
+
+    @staticmethod
+    def probar_estabilidad_paginacion(pagina: int = 50, espera_s: int = 90) -> dict:
+        """Prueba empírica: ¿es estable el orden de la consulta paginada?
+
+        Reanudar desde la página N solo es correcto si el conjunto de resultados
+        es estable entre corridas. Siesa está vivo: mientras la descarga corre se
+        están escribiendo movimientos. Si la consulta no está ordenada por una
+        clave monótona, la página N de la segunda corrida no contiene lo mismo —
+        y el resultado es un kardex con HUECOS.
+
+        El orden no viaja como parámetro desde aquí: lo define la consulta
+        dinámica del lado de Siesa. Esto no lo prueba formalmente, pero da
+        evidencia fuerte por DOS peticiones en vez de diecisiete mil.
+
+        Returns: {estable, iguales, total, ...}
+        """
+        import time
+        from app.services.connekta_gateway import connekta
+
+        def _traer():
+            res = connekta._get(
+                NOMBRE_CONSULTA,
+                params_extra={'paginacion': f'numPag={pagina}|tamPag=100'},
+                url=connekta.url_get_dinamico, timeout=60,
+            )
+            det = (res or {}).get('detalle', {})
+            return det.get('Datos', []) or det.get('Table', []) or []
+
+        primera = _traer()
+        if not primera:
+            return {'estable': None, 'error': f'La página {pagina} vino vacía.'}
+
+        def _firma(rows):
+            return [hash_movimiento(
+                None, r.get('f350_id_tipo_docto'), r.get('f470_id_bodega'),
+                r.get('f120_referencia'), r.get('f470_id_concepto'),
+                r.get('f470_ind_naturaleza'), r.get('f470_cant_base'),
+            ) for r in rows if isinstance(r, dict)]
+
+        f1 = _firma(primera)
+        time.sleep(max(1, int(espera_s)))
+        segunda = _traer()
+        f2 = _firma(segunda)
+
+        iguales = sum(1 for a, b in zip(f1, f2) if a == b)
+        estable = f1 == f2
+
+        return {
+            'estable': estable,
+            'pagina': pagina,
+            'espera_s': espera_s,
+            'filas_primera': len(f1),
+            'filas_segunda': len(f2),
+            'iguales_en_misma_posicion': iguales,
+            'veredicto': (
+                'El orden se mantuvo bajo carga real. Evidencia fuerte de que la '
+                'reanudación multi-sesión es segura — no prueba formal.'
+                if estable else
+                'EL ORDEN CAMBIÓ. La reanudación multi-sesión produciría huecos. '
+                'Hacer la descarga en UNA sola sesión, y confiar en hash_origen '
+                'para que el solape no duplique.'
+            ),
+        }
 
     @staticmethod
     def reconstruir_stock_diario(bodega: str = None) -> dict:

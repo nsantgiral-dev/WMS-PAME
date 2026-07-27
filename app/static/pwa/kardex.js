@@ -46,6 +46,10 @@ function _kardexRender(el, estado) {
                background:${enCurso ? 'var(--brd)' : 'var(--pm)'};color:#fff;">
         ${enCurso ? 'Descargando…' : 'Descargar'}
       </button>
+      <button onclick="kardexProbarPaginacion()"
+        style="padding:7px 12px;border:1px solid var(--yellow);border-radius:7px;background:transparent;color:var(--yellow);font-size:12px;font-weight:700;cursor:pointer;">
+        Probar orden
+      </button>
       <button onclick="kardexVerPerfil()"
         style="padding:7px 12px;border:1px solid var(--pm);border-radius:7px;background:transparent;color:var(--pm);font-size:12px;font-weight:700;cursor:pointer;">
         Verificar perfil
@@ -76,7 +80,10 @@ function _kardexRender(el, estado) {
       <div style="font-size:11px;color:var(--tx3);line-height:1.7;">
         ${(r.total_descargados || 0).toLocaleString('es-CO')} movimientos ·
         páginas ${r.pagina_inicial || 1}–${r.pagina_final || 0} ·
-        ${r.errores || 0} errores · ${r.segundos || 0}s<br>
+        ${r.errores || 0} errores · ${r.segundos || 0}s
+        ${r.duplicados_omitidos ? '· <strong>' + r.duplicados_omitidos.toLocaleString('es-CO') + ' duplicados omitidos</strong>' : ''}<br>
+        ${r.total_declarado_por_siesa != null
+          ? '<strong>Siesa declara:</strong> ' + r.total_declarado_por_siesa.toLocaleString('es-CO') + ' registros<br>' : ''}
         <strong>Pedido:</strong> ${rp.desde || '—'} → ${rp.hasta || '—'}<br>
         <strong>Traído:</strong> ${rt.desde || '—'} → ${rt.hasta || '—'}
       </div>
@@ -155,6 +162,34 @@ function _kardexIniciarPoll() {
  *  haberse reiniciado y perdido el resultado de la última descarga, pero el
  *  kardex sigue ahí y su forma se puede mirar en cualquier momento.
  */
+/** ¿Es estable el orden de la consulta paginada?
+ *
+ *  De eso depende que reanudar sea seguro. Dos peticiones separadas en el
+ *  tiempo contra la misma página: si el contenido cambia, la reanudación
+ *  multi-sesión produciría huecos y hay que hacerlo en una sola corrida.
+ */
+async function kardexProbarPaginacion() {
+  const out = document.getElementById('kardex-perfil-out');
+  if (out) out.innerHTML = '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Probando… se piden dos páginas separadas ~90s.</div>';
+  try {
+    const r = await post('/api/kardex/probar-paginacion', { pagina: 50, espera_s: 90 });
+    if (!out) return;
+    if (r.error) { out.innerHTML = `<div style="font-size:11px;color:var(--red);">${r.error}</div>`; return; }
+    const col = r.estable ? 'var(--green)' : 'var(--red)';
+    out.innerHTML = `<div style="margin-top:8px;border:1px solid ${col};border-radius:8px;padding:10px;">
+      <div style="font-size:12px;font-weight:700;color:${col};">
+        Orden de paginación: ${r.estable ? 'ESTABLE' : 'INESTABLE'}
+      </div>
+      <div style="font-size:11px;color:var(--tx3);margin-top:4px;">
+        Página ${r.pagina} · ${r.iguales_en_misma_posicion}/${r.filas_primera} filas en la misma posición tras ${r.espera_s}s
+      </div>
+      <div style="font-size:11px;color:${col};margin-top:6px;">${r.veredicto}</div>
+    </div>`;
+  } catch (e) {
+    if (out) out.innerHTML = `<div style="font-size:11px;color:var(--red);">${e.message || e}</div>`;
+  }
+}
+
 async function kardexVerPerfil() {
   const out = document.getElementById('kardex-perfil-out');
   if (out) out.innerHTML = '<div style="font-size:11px;color:var(--tx3);padding:6px 0;">Calculando perfil…</div>';

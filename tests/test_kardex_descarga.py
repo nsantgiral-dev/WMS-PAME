@@ -216,3 +216,78 @@ class TestSupuestoDeReanudacion:
     def test_el_codigo_documenta_que_el_orden_lo_define_siesa(self):
         src = _src('app/services/kardex_service.py')
         assert 'orden' in src.lower() and 'HUECOS' in src
+
+
+class TestIdempotenciaDeLaIngesta:
+    """La duplicación es PEOR que la omisión: el perfil mensual no la delata.
+
+    Un mes con 8% de filas de más se ve plausible. Y movimientos duplicados
+    inflan la demanda, que infla el ROP, que infla el contenedor — el bug de
+    25× por otra puerta.
+
+    Antes: INSERT plano sobre índice NO único. Pulsar "Descargar" dos veces
+    duplicaba el kardex entero.
+    """
+
+    def test_el_mismo_movimiento_da_el_mismo_hash(self):
+        from datetime import date
+        from app.services.kardex_service import hash_movimiento
+        a = hash_movimiento(date(2026, 3, 1), 'FEW', 'NB1', 'REF1', 501, 2, 10)
+        b = hash_movimiento(date(2026, 3, 1), 'FEW', 'NB1', 'REF1', 501, 2, 10)
+        assert a == b
+
+    def test_cambiar_cualquier_campo_cambia_el_hash(self):
+        from datetime import date
+        from app.services.kardex_service import hash_movimiento
+        base = dict(fecha=date(2026, 3, 1), tipo_docto='FEW', bodega='NB1',
+                    referencia='REF1', concepto=501, naturaleza=2, cantidad=10)
+        h0 = hash_movimiento(**base)
+        for campo, valor in (('bodega', 'NB2'), ('referencia', 'REF2'),
+                             ('concepto', 502), ('naturaleza', 1), ('cantidad', 11)):
+            assert hash_movimiento(**{**base, campo: valor}) != h0, \
+                f'cambiar {campo} debe cambiar la identidad'
+
+    def test_la_clave_natural_distingue_movimientos_identicos(self):
+        """Sin consecutivo+línea, dos movimientos legítimamente iguales
+        colapsarían en uno. Con ella, la identidad es exacta."""
+        from datetime import date
+        from app.services.kardex_service import hash_movimiento
+        base = dict(fecha=date(2026, 3, 1), tipo_docto='FEW', bodega='NB1',
+                    referencia='REF1', concepto=501, naturaleza=2, cantidad=10)
+        assert (hash_movimiento(**base, consec_docto='100', nro_registro=1)
+                != hash_movimiento(**base, consec_docto='100', nro_registro=2))
+
+    def test_el_modelo_tiene_indice_unico_sobre_la_identidad(self):
+        from app.services.kardex_service import KardexMovimiento
+        indices = [i for i in KardexMovimiento.__table__.indexes
+                   if 'hash_origen' in [c.name for c in i.columns]]
+        assert indices, 'falta el índice sobre hash_origen'
+        assert indices[0].unique, 'el índice DEBE ser único o la duplicación vuelve'
+
+    def test_la_descarga_reporta_duplicados_omitidos(self, app, db):
+        from app.services.kardex_service import KardexService
+        r = KardexService.descargar_kardex('20240101', max_minutos=1)
+        assert 'duplicados_omitidos' in r
+
+    def test_la_descarga_reporta_el_total_declarado_por_siesa(self, app, db):
+        """Si Siesa declara cuántas filas hay, es prueba por CONTEO —
+        superior al perfil mensual, que la infiere por distribución."""
+        from app.services.kardex_service import KardexService
+        r = KardexService.descargar_kardex('20240101', max_minutos=1)
+        assert 'total_declarado_por_siesa' in r
+
+
+class TestPruebaDeEstabilidad:
+    """Dos peticiones en vez de diecisiete mil."""
+
+    def test_existe_la_prueba(self):
+        from app.services.kardex_service import KardexService
+        assert hasattr(KardexService, 'probar_estabilidad_paginacion')
+
+    def test_el_endpoint_esta_registrado(self, app):
+        rutas = [str(r) for r in app.url_map.iter_rules()]
+        assert any('probar-paginacion' in r for r in rutas)
+
+    def test_el_veredicto_dice_que_hacer_si_es_inestable(self):
+        src = _src('app/services/kardex_service.py')
+        assert 'UNA sola sesión' in src or 'UNA sola sesion' in src

@@ -375,3 +375,23 @@ def guardar_juicio():
 
     db.session.commit()
     return jsonify({'ok': True, 'juicio': j.to_dict()}), 200
+
+
+@kardex_bp.route('/probar-paginacion', methods=['POST'])
+@jwt_required()
+def probar_paginacion():
+    """Dos peticiones para saber si el orden de la consulta es estable.
+
+    Cuesta dos llamadas en vez de diecisiete mil, y responde la pregunta de la
+    que depende que reanudar sea seguro.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin puede probar paginación'}), 403
+    d = request.get_json() or {}
+    from app.services.kardex_service import KardexService
+    try:
+        r = KardexService.probar_estabilidad_paginacion(
+            pagina=int(d.get('pagina', 50)), espera_s=int(d.get('espera_s', 90)))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    return jsonify(r), 200
