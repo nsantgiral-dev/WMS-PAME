@@ -178,6 +178,12 @@ class TemporadaService:
 
         items, excluidos = [], {'lista_negra': [], 'costo_fantasma': [], 'sin_producto': []}
 
+        # CABLE DE COSTO Y PRECIO. Antes se leía Producto.precio_compra, que la
+        # sincronización de Siesa NUNCA puebla: todos los SKU salían con costo 0
+        # y el newsvendor los excluía a todos. La cobertura no era 40%, era CERO.
+        from app.services.costo_service import resolver_costos, resumen_por_fuente
+        costos = resolver_costos(list(estacionales), margen_supuesto=margen_pct)
+
         for ref, info in estacionales.items():
             if ref in bloqueados:
                 excluidos['lista_negra'].append(ref)
@@ -188,10 +194,11 @@ class TemporadaService:
                 excluidos['sin_producto'].append(ref)
                 continue
 
-            costo = float(prod.precio_compra or 0)
-            venta = float(prod.precio_venta or 0)
-            # Costo fantasma: sin costo confiable no hay Cu/Co, y sin Cu/Co el
-            # Q* sería una opinión con decimales.
+            info_costo = costos.get(ref) or {}
+            costo = float(info_costo.get('costo') or 0)
+            venta = float(info_costo.get('precio_venta') or 0)
+            # Sin costo de NINGUNA fuente no hay Cu/Co, y sin Cu/Co el Q* sería
+            # una opinión con decimales.
             if costo <= 0:
                 excluidos['costo_fantasma'].append(ref)
                 continue
@@ -204,7 +211,7 @@ class TemporadaService:
             if not ventas_pasadas:
                 continue
 
-            cu = max(venta - costo, costo * margen_pct)
+            cu = float(info_costo.get('cu') or max(venta - costo, costo * margen_pct))
             co = costo * (tasa_capital + tasa_liquidacion)
 
             items.append({
@@ -216,6 +223,13 @@ class TemporadaService:
                 'cu': round(cu, 2),
                 'co': round(co, 2),
                 'concentracion': info['concentracion'],
+                # PROCEDENCIA POR FILA: un Q* sobre cotización vigente y uno
+                # sobre promedio de hace 18 meses no valen lo mismo.
+                'fuente_costo': info_costo.get('fuente'),
+                'costo_confiable': info_costo.get('confiable', False),
+                'costo_anejo': info_costo.get('anejo', False),
+                'dias_antiguedad_costo': info_costo.get('dias_antiguedad'),
+                'precio_es_supuesto': info_costo.get('precio_es_supuesto', False),
             })
 
         resultado = KardexService.newsvendor(items, margen_pct=margen_pct,
@@ -229,6 +243,9 @@ class TemporadaService:
             fila['nombre'] = m.get('nombre', '')
             fila['concentracion'] = m.get('concentracion')
             fila['precio_venta'] = m.get('precio_venta')
+            for k in ('fuente_costo', 'costo_confiable', 'costo_anejo',
+                      'dias_antiguedad_costo', 'precio_es_supuesto'):
+                fila[k] = m.get(k)
 
         total = len(estacionales)
         cubiertos = len(items)
@@ -245,6 +262,8 @@ class TemporadaService:
                 f'El resto se decide sin modelo — la lista paralela gobierna ahí.'
             ) if cubiertos < total else None,
         }
+        # Cobertura POR FUENTE, no binaria
+        resultado['cobertura']['costo'] = resumen_por_fuente(costos)
         resultado['parametros'] = {
             'margen_pct': margen_pct,
             'tasa_capital': tasa_capital,

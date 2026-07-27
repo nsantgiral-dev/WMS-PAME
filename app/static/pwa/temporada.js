@@ -74,6 +74,43 @@ function _tempQ(fila) {
   return Math.max(0, Math.round(fila.q_optimo * f));
 }
 
+/** Cobertura POR FUENTE de costo, no binaria.
+ *
+ *  Un Q* sobre cotización vigente y uno sobre promedio de hace 18 meses no
+ *  tienen la misma calidad. El comité tiene derecho a ver cuál es cuál.
+ */
+function _tempCoberturaCosto(c) {
+  if (!c) return '';
+  const f = c.por_fuente || {};
+  return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--brd);font-size:11px;color:var(--tx3);line-height:1.7;">
+    <strong>Origen del costo:</strong>
+    acuerdo vigente ${f.ACUERDO_VIGENTE || 0} ·
+    cotización ${f.COTIZACION || 0} ·
+    promedio kardex ${f.KARDEX_PROMEDIO || 0} ·
+    maestro ${f.MAESTRO || 0} ·
+    sin costo ${f.SIN_COSTO || 0}<br>
+    <span style="color:${c.pct_hacia_adelante >= 50 ? 'var(--green)' : 'var(--yellow)'};">
+      ${c.pct_hacia_adelante}% con costo <strong>hacia adelante</strong> (la plata que se va a gastar)
+    </span>
+    ${c.costo_anejo ? ` · <span style="color:var(--yellow);">${c.costo_anejo} con costo añejo (+180d)</span>` : ''}
+    ${c.advertencia_precio ? `<br><span style="color:var(--yellow);">${c.advertencia_precio}</span>` : ''}
+  </div>`;
+}
+
+/** Procedencia del costo de una fila. La señal va donde está el número. */
+function _tempFuenteCosto(f) {
+  const etiquetas = {
+    ACUERDO_VIGENTE: ['acuerdo', 'var(--green)'],
+    COTIZACION: ['cotización', 'var(--green)'],
+    KARDEX_PROMEDIO: ['kardex', 'var(--yellow)'],
+    MAESTRO: ['maestro', 'var(--tx3)'],
+  };
+  const [txt, col] = etiquetas[f.fuente_costo] || ['—', 'var(--tx3)'];
+  const anejo = f.costo_anejo ? ` <span title="costo de hace ${f.dias_antiguedad_costo} días" style="color:var(--yellow);">▲</span>` : '';
+  const sup = f.precio_es_supuesto ? ' <span title="Cu con margen supuesto: no hay precio de venta" style="color:var(--yellow);">≈</span>' : '';
+  return `<span style="color:${col};">${txt}</span>${anejo}${sup}`;
+}
+
 function _tempRender(el, d) {
   if (!el) return;
   if (d.error) {
@@ -98,6 +135,7 @@ function _tempRender(el, d) {
       sin producto: <strong>${cob.excluidos_sin_producto || 0}</strong>
     </div>
     ${cob.advertencia ? `<div style="font-size:11px;color:${colorCob};margin-top:6px;">${cob.advertencia}</div>` : ''}
+    ${_tempCoberturaCosto(cob.costo)}
   </div>`;
 
   // ── Totales, con el contraste contra la lista paralela ──────────────────
@@ -183,6 +221,7 @@ function _tempRender(el, d) {
     <thead><tr style="border-bottom:2px solid var(--brd);color:var(--tx3);text-align:right;">
       <th style="text-align:left;padding:6px;">Referencia</th>
       <th style="padding:6px;">Temporadas</th>
+      <th style="padding:6px;">Costo</th>
       <th style="padding:6px;">Demanda esp.</th>
       <th style="padding:6px;">Q* modelo</th>
       <th style="padding:6px;">Lista paralela</th>
@@ -202,6 +241,7 @@ function _tempRender(el, d) {
       <td style="padding:6px;color:${alerta ? 'var(--yellow)' : 'var(--tx3)'};" title="${f.distribucion || ''}">
         ${f.n_temporadas}${alerta ? ' ⚠' : ''}
       </td>
+      <td style="padding:6px;font-size:10px;">${_tempFuenteCosto(f)}</td>
       <td style="padding:6px;color:var(--tx3);">${f.demanda_esperada}</td>
       <td style="padding:6px;color:var(--tx);font-weight:700;">${_tempQ(f)}</td>
       <td style="padding:6px;">
@@ -220,6 +260,10 @@ function _tempRender(el, d) {
   html += '</tbody></table></div>';
 
   html += `<div style="font-size:10px;color:var(--tx3);margin-top:10px;line-height:1.6;">
+    Costo: <span style="color:var(--green);">acuerdo/cotización</span> mira hacia adelante ·
+    <span style="color:var(--yellow);">kardex</span> mira hacia atrás y con 500 días de inventario
+    SUBESTIMA el costo de reposición — y subestimar el costo empuja a comprar más.
+    ▲ = costo de más de 180 días · ≈ = Cu con margen supuesto (no hay precio de venta).<br>
     ⚠ = una sola temporada: distribución <strong>Normal inflada</strong> (CV 30% ×1.5), incertidumbre ALTA.
     Una observación no es una distribución — con la empírica el Q* colapsaría a "pide lo que vendiste".
     El export del 1 de agosto lleva n de 1 a 3 y cambia la distribución a empírica.<br>
