@@ -335,12 +335,20 @@ class TestContract142946:
         payload = self._capture_payload(gw)
         assert 'Doctoventascomercial' in payload, 'Debe ser Doctoventascomercial (sin _)'
         assert 'Docto_ventas_comercial' not in payload, '238925 usa underscore, 142946 NO'
-        assert 'Movtoventascomercial' in payload
+        assert 'Movimientos' in payload
+
+    def test_seccion_movimientos_nombre_real_no_movtoventascomercial(self):
+        """Regresión 2026-07-28: Siesa rechazó 'Movtoventascomercial' en vivo
+        (HTTP 400 'Error en la Estructura' — la sección no existe). El DOCX
+        oficial de 142946 nombra la sección 'Movimientos'."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw)
+        assert 'Movtoventascomercial' not in payload
 
     def test_secciones_presentes(self):
         gw = _make_gateway()
         payload = self._capture_payload(gw)
-        for sec in ['Inicial', 'Doctoventascomercial', 'Movtoventascomercial', 'Final']:
+        for sec in ['Inicial', 'Doctoventascomercial', 'Movimientos', 'Final']:
             assert sec in payload, f'Sección "{sec}" falta en payload 142946'
 
     def test_fecha_yyyymmdd(self):

@@ -63,7 +63,16 @@ class ConnektaGateway:
         self.api_clasificacion = os.getenv('CONNEKTA_API_CLASIFICACION', '238920')  # CLASIFICACION DE ITEMS
         # Liquidación de ruta — conectores financieros
         self.conector_recibo_caja     = os.getenv('CONNEKTA_CONECTOR_RECIBO_CAJA',     '142888')
-        self.conector_nota_factura    = os.getenv('CONNEKTA_CONECTOR_NOTA_FACTURA',    '142946')
+        self.conector_nota_factura    = os.getenv('CONNEKTA_CONECTOR_NOTA_FACTURA',    '250696')
+        # Nombre real del documento en Connekta — el estándar 142946
+        # (API_v1_Ventas_Comercial_NotaFactura) rechazaba por tamaño de registro
+        # (le faltaba f470_id_concepto y el formato de decimales de ancho fijo,
+        # ver PapeleriaMedellin_NotaCredito_Desde_Factura_WMS/250696, clonado y
+        # corregido vía el Asistente UnoEE de Generic Transfer, 2026-07-28).
+        self.nombre_conector_nota_factura = os.getenv(
+            'CONNEKTA_NOMBRE_CONECTOR_NOTA_FACTURA',
+            'PapeleriaMedellin_NotaCredito_Desde_Factura_WMS',
+        )
         self.conector_nota_directa    = os.getenv('CONNEKTA_CONECTOR_NOTA_DIRECTA',    '142903')
         self.conector_docto_contable  = os.getenv('CONNEKTA_CONECTOR_DOCTO_CONTABLE',  '142882')
         # Tipo documento nota crédito electrónica en Siesa
@@ -72,8 +81,12 @@ class ConnektaGateway:
         self.tipo_docto_recibo_caja   = os.getenv('SIESA_TIPO_DOCTO_RECIBO_CAJA', 'RC')
         # Tipo documento de causación en Siesa (retenciones)
         self.tipo_docto_docto_contable = os.getenv('SIESA_TIPO_DOCTO_DOCTO_CONTABLE', 'DC')
-        # Causal de devolución por defecto para nota crédito (verificar en Siesa maestros)
-        self.causal_devolucion_default = os.getenv('SIESA_CAUSAL_DEVOLUCION', '01')
+        # Causal de devolución (f470_id_causal_devol, char(2)) — campo opcional
+        # (nullable en el spec, no aparece en la lista de obligatorios que Siesa
+        # exige en 'Movimientos'; el propio flujo manual de Siesa lo deja en
+        # blanco al generar la NC — ver 'Datos por defecto para la devolución').
+        # Se deja vacío salvo que el negocio confirme un código real y activo.
+        self.causal_devolucion_default = os.getenv('SIESA_CAUSAL_DEVOLUCION', '')
         # --- 142888 ReciboCaja: campos requeridos por spec ---
         # Cobrador: código en Siesa (CxC → Maestros → Cobradores). "9876" = APP RECAUDO.
         self.cobrador_rc = os.getenv('SIESA_COBRADOR', '9876')
@@ -265,6 +278,16 @@ class ConnektaGateway:
         Spec: signo(1) + enteros(15) + punto(1) + decimales(4) = 21 chars exactos."""
         signo = '+' if v >= 0 else '-'
         return f'{signo}{abs(v):020.4f}'
+
+    @staticmethod
+    def _fmt_decimal_sin_signo(v, enteros: int, decimales: int = 4) -> str:
+        """Decimal sin signo de ancho fijo (ej. f470_cant_base/f462_cajas):
+        enteros + punto + decimales, cero-rellenado. Encontrado en el Asistente
+        UnoEE de Generic Transfer: estos campos NO se auto-rellenan como los
+        de tipo Entero/FIJO — hay que mandarlos ya formateados al ancho exacto
+        o el registro plano queda corto (Siesa lo rechaza por tamaño)."""
+        ancho = enteros + 1 + decimales
+        return f'{abs(float(v)):0{ancho}.{decimales}f}'
 
     # ── Circuit Breaker Methods ───────────────────────────────────────────────
 
@@ -3020,6 +3043,11 @@ class ConnektaGateway:
         cia = int(self.id_cia_siesa)
         consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
 
+        # Orden de claves alineado a la tabla del DOCX (142946) — no confirmado
+        # que el orden importe (una prueba en vivo con orden distinto dio el
+        # mismo resultado byte a byte), se deja así por legibilidad/trazabilidad
+        # contra el spec, no como el fix real. Ver nota en el docstring de la
+        # clase sobre el tamaño de registro pendiente de resolver.
         movimientos = []
         for i, lin in enumerate(lineas, 1):
             movimientos.append({
@@ -3028,28 +3056,34 @@ class ConnektaGateway:
                 'f470_id_tipo_docto': self.tipo_docto_nota_credito,
                 'f470_consec_docto': 0,
                 'f470_nro_registro': i,
+                'f470_id_item': 0,
+                'f470_referencia_item': lin.get('f120_referencia') or '',
+                'f470_codigo_barras': '',
+                'f470_id_ext1_detalle': '',
+                'f470_id_ext2_detalle': '',
                 'f470_id_bodega': lin.get('f470_id_bodega') or self.bodega,
-                'f470_id_ubicacion_aux': None,
-                'f470_id_lote': None,
+                'f470_id_ubicacion_aux': '',
+                'f470_id_lote': '',
+                # Campo ausente del DOCX original — encontrado en el Asistente UnoEE
+                # de Generic Transfer (estructura real f_tipo_reg=470 v12 sub02):
+                # obligatorio, valor fijo 502 = "Devolución de ventas". Sin esto,
+                # Siesa reportaba "tamaño de registro" corto por los 3 bytes exactos
+                # que ocupa este campo entre f470_id_lote y f470_id_motivo.
+                'f470_id_concepto': 502,
                 'f470_id_motivo': lin.get('f470_id_motivo') or self.motivo_ventas,
                 'f470_ind_obsequio': 0,
                 'f470_id_co_movto': self.centro_op,
-                'f470_id_ccosto_movto': None,
-                'f470_id_proyecto': None,
+                'f470_id_un_movto': self.unidad_negocio,
+                'f470_id_ccosto_movto': '',
+                'f470_id_proyecto': '',
                 'f470_id_unidad_medida': lin.get('f470_id_unidad_medida') or self.uom_default,
-                'f470_cant_base': round(float(lin['f470_cant_base']), 4),
-                'f470_cant_2': None,
+                'f470_cant_base': self._fmt_decimal_sin_signo(lin['f470_cant_base'], 15),
+                'f470_cant_2': self._fmt_decimal_sin_signo(0, 15),
                 'f470_ind_impto_asumido': 0,
-                'f470_notas': lin.get('f470_notas') or '',
                 'f470_desc_variable': '',
+                'f470_notas': lin.get('f470_notas') or '',
                 'f470_id_causal_devol': lin.get('f470_id_causal_devol') or self.causal_devolucion_default,
                 'f470_rowid_movto': int(lin['f470_rowid_movto']),
-                'f470_id_item': None,
-                'f470_referencia_item': None,
-                'f470_codigo_barras': None,
-                'f470_id_ext1_detalle': None,
-                'f470_id_ext2_detalle': None,
-                'f470_id_un_movto': self.unidad_negocio,
             })
 
         payload = {
@@ -3063,22 +3097,49 @@ class ConnektaGateway:
                 'F350_FECHA': fecha_hoy,
                 'F350_IND_ESTADO': 1,
                 'F350_IND_IMPRESION': 0,
-                'F350_NOTAS': notas[:2000] if notas else '',
                 'F430_ID_TIPO_DOCTO': tipo_docto_fe,
                 'F430_CONSEC_DOCTO': consec_int,
+                # f462_* (transportador) — registro plano de ancho fijo exige estos
+                # 12 campos aunque no haya transportador (patrón ya usado por los
+                # demás conectores en este archivo, ej. línea 1632-1643). F350_NOTAS
+                # no existe en el spec de 142946 — se quitó, iba insertado en medio
+                # de la cabecera y corría los campos siguientes de posición.
+                # Alfanumérico en None = Siesa OMITE el campo del registro plano
+                # (desalinea todo lo que sigue) — DEBE ser '' (mismo hallazgo ya
+                # documentado para f470_desc_varible en 173076, línea ~2502).
+                'f462_id_vehiculo': '',
+                'f462_id_tercero_transp': '',
+                'f462_id_sucursal_transp': '',
+                'f462_id_tercero_conductor': '',
+                'f462_nombre_conductor': '',
+                'f462_identif_conductor': '',
+                'f462_numero_guia': '',
+                'f462_cajas': self._fmt_decimal_sin_signo(0, 10),
+                'f462_peso': self._fmt_decimal_sin_signo(0, 15),
+                'f462_volumen': self._fmt_decimal_sin_signo(0, 15),
+                'f462_valor_seguros': self._fmt_decimal_sin_signo(0, 15),
+                'f462_notas': '',
             }],
-            'Movtoventascomercial': movimientos,
+            'Movimientos': movimientos,
             'Final': [{'F_CIA': cia}],
         }
 
         logger.info(
-            '[CONNEKTA] NotaFactura 142946: FE %s-%s, %d líneas, notas=%s',
-            tipo_docto_fe, consec_fe, len(lineas), notas[:80] if notas else ''
+            '[CONNEKTA] NotaFactura (%s): FE %s-%s, %d líneas, notas=%s',
+            self.nombre_conector_nota_factura, tipo_docto_fe, consec_fe,
+            len(lineas), notas[:80] if notas else ''
         )
+        # Conectores clonados vía Asistente UnoEE (como 250696) quedan registrados
+        # en Siesa como dinámicos (v3.1/conectoresimportar + idSistema), no como
+        # el estándar original 142946 (v3/conectoresimportarestandar) — mismo
+        # patrón ya usado en 173076/174646 (ver líneas 2371-2375, 2541-2547).
+        _es_estandar = self.conector_nota_factura in ('142946',)
         return self._post(
             self.conector_nota_factura,
-            'API_v1_Ventas_Comercial_NotaFactura',
+            self.nombre_conector_nota_factura,
             payload,
+            url=self.url_post if _es_estandar else self.url_post_dinamico,
+            extra_params=None if _es_estandar else {'idSistema': self.id_sistema},
         )
 
     def trigger_recibo_caja(self, tercero_nit: str, sucursal: str,
