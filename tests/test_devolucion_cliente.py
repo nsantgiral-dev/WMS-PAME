@@ -1,0 +1,336 @@
+"""
+Tests de DevolucionClienteService — reemplazo de TareaDevolucion.
+
+Cubre: buscar_pedido (ancla en TareaPacking + resolución del tipo/consec REAL
+de la factura electrónica vía get_detalle_factura, nunca los del pedido),
+crear_devolucion (tope contra lo facturado), confirmar_entrada_fisica
+(parcial, exceso rechazado contra el re-GET, línea averiada → AVERIADOS +
+flag en el payload de la NC).
+"""
+import pytest
+from unittest.mock import patch
+
+
+@pytest.fixture
+def tarea_packing_despachada(db, almacen):
+    from app.models.packing import TareaPacking
+    tarea = TareaPacking(
+        codigo='PK-DEVC-001', tipo_documento='PEDIDO', estado='DESPACHADO',
+        almacen_id=almacen.id, numero_pedido_siesa='PD9001',
+        tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='500',
+        rm_tipo='RM', rm_consec=700, cliente='Cliente Test',
+        siesa_triggered=True,
+    )
+    db.session.add(tarea)
+    db.session.commit()
+    return tarea
+
+
+_FILA_FE_CABECERA = {
+    'f350_id_tipo_docto': 'FEW',
+    'f350_consec_docto': '5555',
+}
+
+
+def _fila_rowid(ref='PROD-001', rowid='999', cant=10, uom='UND', bodega='NB1'):
+    return {
+        'f470_rowid': rowid,
+        'f120_referencia': ref,
+        'f470_cant_base': cant,
+        'f470_id_unidad_medida': uom,
+        'f150_id': bodega,
+    }
+
+
+def _linea_input(producto, cantidad_facturada=10, cantidad_devuelta=4, es_averiado=False):
+    return {
+        'producto_id': producto.id, 'codigo_siesa': producto.codigo_siesa,
+        'cantidad_facturada': cantidad_facturada, 'cantidad_devuelta': cantidad_devuelta,
+        'es_averiado': es_averiado, 'f470_id_unidad_medida': 'UND',
+        'f150_id_bodega': 'NB1', 'f470_rowid': '999',
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# buscar_pedido
+# ═══════════════════════════════════════════════════════════════════
+
+class TestBuscarPedido:
+
+    def test_sin_tarea_packing_falla(self, app, db, almacen):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        with pytest.raises(ValueError, match='No se encontró'):
+            DevolucionClienteService.buscar_pedido('PD-INEXISTENTE')
+
+    def test_sin_siesa_triggered_falla(self, app, db, almacen):
+        from app.models.packing import TareaPacking
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        tarea = TareaPacking(
+            codigo='PK-DEVC-002', tipo_documento='PEDIDO', estado='EN_PROCESO',
+            almacen_id=almacen.id, numero_pedido_siesa='PD9002',
+            siesa_triggered=False,
+        )
+        db.session.add(tarea)
+        db.session.commit()
+        with pytest.raises(ValueError, match='no ha sido facturado'):
+            DevolucionClienteService.buscar_pedido('PD9002')
+
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_happy_path_resuelve_fe_real_no_pedido(self, mock_connekta, app, db,
+                                                     tarea_packing_despachada, producto):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        mock_connekta.get_detalle_factura.return_value = [dict(_FILA_FE_CABECERA)]
+        mock_connekta.get_rowids_factura.return_value = [_fila_rowid(ref=producto.codigo_siesa)]
+
+        resultado = DevolucionClienteService.buscar_pedido('PD9001')
+
+        # tipo_docto_fe/consec_fe deben venir de get_detalle_factura (FE real),
+        # NUNCA de tarea.tipo_docto_pedido_siesa ('PD'/'500') — ver hallazgo del
+        # DOCX 142946 documentado en el plan aprobado.
+        assert resultado['tipo_docto_fe'] == 'FEW'
+        assert resultado['consec_fe'] == '5555'
+        assert resultado['tipo_docto_fe'] != tarea_packing_despachada.tipo_docto_pedido_siesa
+        assert resultado['consec_fe'] != tarea_packing_despachada.consec_docto_pedido_siesa
+        mock_connekta.get_rowids_factura.assert_called_once_with('FEW', '5555')
+        assert len(resultado['lineas']) == 1
+        assert resultado['lineas'][0]['producto_id'] == producto.id
+        assert resultado['lineas'][0]['cantidad_facturada'] == 10
+
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_sin_fe_en_siesa_falla(self, mock_connekta, app, db, tarea_packing_despachada):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        mock_connekta.get_detalle_factura.return_value = []
+        with pytest.raises(ValueError, match='factura electrónica'):
+            DevolucionClienteService.buscar_pedido('PD9001')
+
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_referencia_sin_producto_wms_se_omite(self, mock_connekta, app, db,
+                                                    tarea_packing_despachada):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        mock_connekta.get_detalle_factura.return_value = [dict(_FILA_FE_CABECERA)]
+        mock_connekta.get_rowids_factura.return_value = [_fila_rowid(ref='REF-DESCONOCIDA')]
+
+        resultado = DevolucionClienteService.buscar_pedido('PD9001')
+        assert resultado['lineas'] == []
+
+
+# ═══════════════════════════════════════════════════════════════════
+# crear_devolucion
+# ═══════════════════════════════════════════════════════════════════
+
+class TestCrearDevolucion:
+
+    def test_no_puede_devolver_mas_de_lo_facturado(self, app, db, tarea_packing_despachada,
+                                                     producto, almacen):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        with pytest.raises(ValueError, match='no puede superar'):
+            DevolucionClienteService.crear_devolucion(
+                tarea_packing_id=tarea_packing_despachada.id,
+                tipo_docto_fe='FEW', consec_fe='5555',
+                almacen_id=almacen.id, recepcionista_id=None,
+                lineas=[_linea_input(producto, cantidad_facturada=10, cantidad_devuelta=15)],
+            )
+
+    def test_sin_lineas_validas_falla(self, app, db, tarea_packing_despachada, producto, almacen):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        with pytest.raises(ValueError, match='al menos una línea'):
+            DevolucionClienteService.crear_devolucion(
+                tarea_packing_id=tarea_packing_despachada.id,
+                tipo_docto_fe='FEW', consec_fe='5555',
+                almacen_id=almacen.id, recepcionista_id=None,
+                lineas=[_linea_input(producto, cantidad_devuelta=0)],
+            )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# confirmar_entrada_fisica
+# ═══════════════════════════════════════════════════════════════════
+
+class TestConfirmarEntradaFisica:
+
+    @patch('app.services.siesa_job_service.disparar_dlq_inmediato')
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_parcial_sube_solo_cantidad_devuelta_y_encola_nc(self, mock_connekta, mock_dlq,
+                                                              app, db, tarea_packing_despachada,
+                                                              producto, almacen, ub_reserva):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        from app.models.inventario import UbicacionProducto
+        from app.models.siesa_job import SiesaJob
+
+        mock_connekta.get_rowids_factura.return_value = [
+            _fila_rowid(ref=producto.codigo_siesa, cant=10)
+        ]
+
+        devolucion = DevolucionClienteService.crear_devolucion(
+            tarea_packing_id=tarea_packing_despachada.id,
+            tipo_docto_fe='FEW', consec_fe='5555',
+            almacen_id=almacen.id, recepcionista_id=None,
+            lineas=[_linea_input(producto, cantidad_facturada=10, cantidad_devuelta=4)],
+        )
+
+        DevolucionClienteService.confirmar_entrada_fisica(devolucion.id, recepcionista_id=1)
+
+        reg = UbicacionProducto.query.filter_by(producto_id=producto.id).first()
+        assert reg is not None
+        assert reg.cantidad == 4
+
+        db.session.refresh(devolucion)
+        assert devolucion.estado == 'CONFIRMADA'
+
+        job = SiesaJob.query.filter_by(
+            referencia_tipo='DevolucionCliente', referencia_id=devolucion.id
+        ).first()
+        assert job is not None
+        assert job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE'
+        payload = job.get_payload()
+        assert payload['tipo_docto_fe'] == 'FEW'
+        assert payload['consec_fe'] == '5555'
+        assert payload['items_devueltos'][0]['cantidad_devuelta'] == 4
+        assert payload['items_devueltos'][0]['es_averiado'] is False
+
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_exceso_contra_reget_de_siesa_es_rechazado(self, mock_connekta, app, db,
+                                                        tarea_packing_despachada, producto,
+                                                        almacen):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+
+        # crear_devolucion valida contra lo declarado (10 facturadas). Antes de
+        # confirmar, Siesa ahora reporta solo 3 (el dato cambió) — debe fallar
+        # explícito, nunca aceptar con un tope silenciosamente menor.
+        devolucion = DevolucionClienteService.crear_devolucion(
+            tarea_packing_id=tarea_packing_despachada.id,
+            tipo_docto_fe='FEW', consec_fe='5555',
+            almacen_id=almacen.id, recepcionista_id=None,
+            lineas=[_linea_input(producto, cantidad_facturada=10, cantidad_devuelta=8)],
+        )
+
+        mock_connekta.get_rowids_factura.return_value = [
+            _fila_rowid(ref=producto.codigo_siesa, cant=3)
+        ]
+
+        with pytest.raises(ValueError, match='supera la cantidad facturada actual'):
+            DevolucionClienteService.confirmar_entrada_fisica(devolucion.id, recepcionista_id=1)
+
+    @patch('app.services.siesa_job_service.disparar_dlq_inmediato')
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_averiado_va_a_ubicacion_averiados_y_marca_payload(self, mock_connekta, mock_dlq,
+                                                                app, db, tarea_packing_despachada,
+                                                                producto, almacen):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        from app.models.ubicacion import Ubicacion
+        from app.models.siesa_job import SiesaJob
+
+        mock_connekta.get_rowids_factura.return_value = [
+            _fila_rowid(ref=producto.codigo_siesa, cant=10)
+        ]
+
+        devolucion = DevolucionClienteService.crear_devolucion(
+            tarea_packing_id=tarea_packing_despachada.id,
+            tipo_docto_fe='FEW', consec_fe='5555',
+            almacen_id=almacen.id, recepcionista_id=None,
+            lineas=[_linea_input(producto, cantidad_facturada=10, cantidad_devuelta=2, es_averiado=True)],
+        )
+
+        DevolucionClienteService.confirmar_entrada_fisica(devolucion.id, recepcionista_id=1)
+
+        db.session.refresh(devolucion)
+        linea = devolucion.lineas[0]
+        ub = Ubicacion.query.get(linea.ubicacion_id)
+        assert ub.codigo == 'AVERIADOS'
+
+        job = SiesaJob.query.filter_by(
+            referencia_tipo='DevolucionCliente', referencia_id=devolucion.id
+        ).first()
+        assert job.get_payload()['items_devueltos'][0]['es_averiado'] is True
+
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_idempotente_si_ya_confirmada_con_job_activo(self, mock_connekta, app, db,
+                                                          tarea_packing_despachada, producto,
+                                                          almacen):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        from app.models.siesa_job import SiesaJob
+
+        mock_connekta.get_rowids_factura.return_value = [
+            _fila_rowid(ref=producto.codigo_siesa, cant=10)
+        ]
+
+        devolucion = DevolucionClienteService.crear_devolucion(
+            tarea_packing_id=tarea_packing_despachada.id,
+            tipo_docto_fe='FEW', consec_fe='5555',
+            almacen_id=almacen.id, recepcionista_id=None,
+            lineas=[_linea_input(producto, cantidad_facturada=10, cantidad_devuelta=4)],
+        )
+        devolucion.estado = 'CONFIRMADA'
+        db.session.commit()
+        SiesaJob.encolar(
+            tipo='NOTA_CREDITO_DEVOLUCION_CLIENTE', payload={},
+            referencia_tipo='DevolucionCliente', referencia_id=devolucion.id,
+        )
+        db.session.commit()
+
+        # No debe lanzar ni re-encolar un segundo job
+        resultado = DevolucionClienteService.confirmar_entrada_fisica(devolucion.id, recepcionista_id=1)
+        assert resultado.estado == 'CONFIRMADA'
+        jobs = SiesaJob.query.filter_by(
+            referencia_tipo='DevolucionCliente', referencia_id=devolucion.id
+        ).count()
+        assert jobs == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _construir_lineas_nc (extraída en siesa_job_service.py) — función pura
+# ═══════════════════════════════════════════════════════════════════
+
+class TestConstruirLineasNC:
+
+    def test_es_total_usa_fallbacks_del_conector(self):
+        from app.services.siesa_job_service import _construir_lineas_nc
+        rows = [_fila_rowid(ref='PROD-A', rowid='1', cant=5, uom=None, bodega=None)]
+        lineas = _construir_lineas_nc(
+            rows, es_total=True, items_devueltos=[], causal='01',
+            motivo='02', uom_default='UND', bodega_default='NB1',
+        )
+        assert len(lineas) == 1
+        assert lineas[0]['f470_id_bodega'] == 'NB1'
+        assert lineas[0]['f470_id_motivo'] == '02'
+        assert lineas[0]['f470_id_unidad_medida'] == 'UND'
+        assert lineas[0]['f470_cant_base'] == 5
+
+    def test_parcial_solo_incluye_items_declarados(self):
+        from app.services.siesa_job_service import _construir_lineas_nc
+        rows = [
+            _fila_rowid(ref='PROD-A', rowid='1', cant=5),
+            _fila_rowid(ref='PROD-B', rowid='2', cant=8),
+        ]
+        items = [{'codigo': 'PROD-A', 'cantidad_devuelta': 3}]
+        lineas = _construir_lineas_nc(
+            rows, es_total=False, items_devueltos=items, causal='01',
+            motivo='02', uom_default='UND', bodega_default='NB1',
+        )
+        assert len(lineas) == 1
+        assert lineas[0]['f470_rowid_movto'] == '1'
+        assert lineas[0]['f470_cant_base'] == 3
+
+    def test_averiado_usa_bodega_averias_en_vez_de_f150(self):
+        from app.services.siesa_job_service import _construir_lineas_nc
+        rows = [_fila_rowid(ref='PROD-A', rowid='1', cant=5, bodega='NB1')]
+        items = [{'codigo': 'PROD-A', 'cantidad_devuelta': 2, 'es_averiado': True}]
+        lineas = _construir_lineas_nc(
+            rows, es_total=False, items_devueltos=items, causal='01',
+            motivo='02', uom_default='UND', bodega_default='NB1',
+            bodega_averias='AV1',
+        )
+        assert lineas[0]['f470_id_bodega'] == 'AV1'
+
+    def test_sin_averiado_conserva_bodega_original_pese_a_bodega_averias(self):
+        """Regresión: bodega_averias solo debe aplicar a items con es_averiado=True —
+        el caso existente de Liquidación nunca manda ese flag y no debe cambiar."""
+        from app.services.siesa_job_service import _construir_lineas_nc
+        rows = [_fila_rowid(ref='PROD-A', rowid='1', cant=5, bodega='NB1')]
+        items = [{'codigo': 'PROD-A', 'cantidad_devuelta': 2}]
+        lineas = _construir_lineas_nc(
+            rows, es_total=False, items_devueltos=items, causal='01',
+            motivo='02', uom_default='UND', bodega_default='NB1',
+            bodega_averias='AV1',
+        )
+        assert lineas[0]['f470_id_bodega'] == 'NB1'

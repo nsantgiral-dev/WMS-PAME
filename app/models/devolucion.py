@@ -1,4 +1,11 @@
 """
+DEPRECATED (2026-07-28) — reemplazado por DevolucionCliente
+(app/models/devolucion_cliente.py). No crear filas nuevas: el flujo reactivo
+de reconciliación que las generaba (crear_tareas_desde_discrepancias, en
+devolucion_service.py) ya no se invoca — ver inventario_siesa_service.py.
+Se conserva sin borrar por el histórico ya persistido y por los SiesaJob con
+referencia_tipo='TareaDevolucion' de trabajos ya completados.
+
 TareaDevolucion — representa una devolución física pendiente de ubicar en bodega.
 
 El WMS NO crea notas crédito ni toca finanzas. Solo gestiona el movimiento físico:

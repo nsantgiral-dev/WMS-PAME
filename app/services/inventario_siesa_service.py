@@ -962,33 +962,26 @@ def _run_reconciliacion(app):
             productos_siesa = len(inventario_siesa)
             cobertura_pct = (productos_wms_con_stock / productos_siesa * 100) if productos_siesa else 0
 
-            try:
-                from app.services.devolucion_service import crear_tareas_desde_discrepancias
-                almacen = _get_almacen()
-                if almacen and cobertura_pct >= 20:
-                    resumen_dev = crear_tareas_desde_discrepancias(discrepancias, almacen.id, ts)
-                    logger.info(f'[RECONCILIACION] Tareas devolución: {resumen_dev}')
-                elif almacen:
-                    logger.warning(
-                        f'[RECONCILIACION] Cobertura WMS={cobertura_pct:.1f}% (<20%) — '
-                        f'devoluciones automáticas desactivadas para evitar falsos positivos'
-                    )
-            except Exception as e_dev:
-                logger.exception('[RECONCILIACION] Error creando tareas devolución — discrepancias sin procesar en esta ejecución')
-                try:
-                    from app.services.alertas_service import _enviar_email_con_dlq
-                    _enviar_email_con_dlq(
-                        asunto='[WMS ALERTA] Reconciliación — tareas devolución fallaron',
-                        cuerpo_texto=(
-                            f'Error al crear tareas de logística inversa:\n{e_dev}\n\n'
-                            'Las discrepancias de este ciclo no generaron TareaDevolucion. '
-                            'Se reintentará en el próximo ciclo (~5 min).'
-                        ),
-                        cuerpo_html=None,
-                        tipo_alerta='reconciliacion_dev_fallo',
-                    )
-                except Exception as _e_alert:
-                    logger.error('[RECONCILIACION] Email de alerta también falló: %s', _e_alert)
+            # DEPRECATED (2026-07-28): antes se llamaba a
+            # devolucion_service.crear_tareas_desde_discrepancias() para crear
+            # TareaDevolucion ciegas (sin saber de qué pedido venía el excedente,
+            # sin generar Nota Crédito). Reemplazado por el flujo proactivo de
+            # DevolucionCliente (recepcionista busca el pedido/factura real) —
+            # ver app/services/devolucion_cliente_service.py. La reconciliación
+            # ahora es puramente informativa: las discrepancias SIESA_MAYOR
+            # quedan visibles en GET /api/siesa/reconciliacion-estado para que
+            # alguien las procese manualmente si corresponde a una devolución real.
+            siesa_mayor = [d for d in discrepancias if d.get('estado') == 'SIESA_MAYOR']
+            almacen = _get_almacen()
+            if almacen and cobertura_pct >= 20 and siesa_mayor:
+                logger.warning(
+                    f'[RECONCILIACION] {len(siesa_mayor)} discrepancia(s) SIESA_MAYOR — '
+                    'informativo únicamente, no se crean tareas (módulo de devolución ciega desactivado)'
+                )
+            elif almacen:
+                logger.warning(
+                    f'[RECONCILIACION] Cobertura WMS={cobertura_pct:.1f}% (<20%) — informativo únicamente'
+                )
 
             _estado_reconciliacion['ultimo_resultado'] = {
                 'timestamp': ts,

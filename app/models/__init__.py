@@ -8,6 +8,7 @@ from app.models.packing import TareaPacking, ItemPacking
 from app.models.recepcion import RecepcionMercancia, ItemRecepcion
 from app.models.conteo import SesionConteo
 from app.models.devolucion import TareaDevolucion
+from app.models.devolucion_cliente import DevolucionCliente, LineaDevolucionCliente
 from app.models.pedido_siesa import PedidoSiesa
 from app.models.conductor import Conductor
 from app.models.vehiculo import Vehiculo

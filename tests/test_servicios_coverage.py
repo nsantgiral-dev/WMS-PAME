@@ -222,6 +222,23 @@ class TestInventarioSiesaService:
         from app.services.inventario_siesa_service import iniciar_refresh_periodico
         assert callable(iniciar_refresh_periodico)
 
+    def test_reconciliacion_ya_no_crea_tareas_devolucion_ciegas(self):
+        """
+        Regresión (2026-07-28): _run_reconciliacion ya NO debe invocar
+        devolucion_service.crear_tareas_desde_discrepancias — ese flujo reactivo
+        (TareaDevolucion ciega, sin NC) fue reemplazado por el flujo proactivo
+        de DevolucionCliente (ver devolucion_cliente_service.py). Verificación
+        por inspección de fuente: el símbolo no debe volver a aparecer.
+        """
+        import inspect
+        from app.services import inventario_siesa_service
+        fuente = inspect.getsource(inventario_siesa_service._run_reconciliacion)
+        # El símbolo puede seguir mencionado en un comentario explicando la
+        # historia — lo que no debe existir es el import (única forma real de
+        # invocarlo, ya que el módulo lo importa localmente dentro de la función).
+        assert 'import crear_tareas_desde_discrepancias' not in fuente
+        assert 'crear_tareas_desde_discrepancias(discrepancias' not in fuente
+
 
 class TestTiendaOcService:
 

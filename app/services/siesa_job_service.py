@@ -253,6 +253,67 @@ def _run_dlq_jobs():
 _BACKOFF_LABELS = ['5 min', '15 min', '45 min']
 
 
+def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: list,
+                          causal: str, motivo: str, uom_default: str, bodega_default: str,
+                          bodega_averias: str = None) -> list:
+    """
+    Construye las líneas del payload de 142946 (trigger_nota_factura) a partir
+    de las filas reales de la factura (get_rowids_factura) y lo que se declaró
+    devuelto. Función pura, sin I/O — extraída del job NOTA_CREDITO_FACTURA para
+    que NOTA_CREDITO_DEVOLUCION_CLIENTE (devoluciones de cliente en Recepción)
+    la reutilice sin duplicar esta lógica (ver Regla 0 del CLAUDE.md).
+
+    motivo/uom_default/bodega_default: mismos fallbacks que usaba el bloque
+    original (connekta.motivo_ventas/uom_default/bodega) — se pasan explícitos
+    para mantener la función pura (sin depender del singleton connekta).
+
+    es_total=True: todas las líneas de la factura, cantidad completa (usado por
+    Liquidación cuando no hay items_devueltos explícito). No soporta bodega_averias
+    por línea — si se necesita ese flag, usar es_total=False con items_devueltos.
+    es_total=False: solo las líneas presentes en items_devueltos (match por
+    'codigo'), con su 'cantidad_devuelta'. Si un item trae 'es_averiado': True
+    y se pasó bodega_averias, esa línea usa bodega_averias en vez de f150_id.
+    """
+    lineas_nc = []
+    if es_total:
+        for row in rowids_data:
+            lineas_nc.append({
+                'f470_rowid_movto': row['f470_rowid'],
+                'f470_cant_base': row.get('f470_cant_base', 1),
+                'f470_id_bodega': row.get('f150_id') or bodega_default,
+                'f470_id_motivo': motivo,
+                'f470_id_causal_devol': causal,
+                'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or uom_default,
+                'f120_referencia': row.get('f120_referencia', ''),
+            })
+        return lineas_nc
+
+    devueltos_map = {
+        it['codigo']: it
+        for it in items_devueltos
+        if int(it.get('cantidad_devuelta', 0)) > 0
+    }
+    for row in rowids_data:
+        ref = row.get('f120_referencia', '')
+        item = devueltos_map.get(ref)
+        if not item:
+            continue
+        cant_dev = int(item['cantidad_devuelta'])
+        bodega = row.get('f150_id') or bodega_default
+        if item.get('es_averiado') and bodega_averias:
+            bodega = bodega_averias
+        lineas_nc.append({
+            'f470_rowid_movto': row['f470_rowid'],
+            'f470_cant_base': cant_dev,
+            'f470_id_bodega': bodega,
+            'f470_id_motivo': motivo,
+            'f470_id_causal_devol': causal,
+            'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or uom_default,
+            'f120_referencia': ref,
+        })
+    return lineas_nc
+
+
 def _ejecutar_job(job: SiesaJob) -> dict:
     """Despacha el job al handler correcto según su tipo."""
     from app.services.connekta_gateway import connekta
@@ -752,39 +813,11 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         es_total = payload.get('es_total', False)
         causal = payload.get('causal_devolucion') or connekta.causal_devolucion_default
 
-        lineas_nc = []
-        if es_total:
-            # Devolución total — todas las líneas con cantidad completa
-            for row in rowids_data:
-                lineas_nc.append({
-                    'f470_rowid_movto': row['f470_rowid'],
-                    'f470_cant_base': row.get('f470_cant_base', 1),
-                    'f470_id_bodega': row.get('f150_id') or connekta.bodega,
-                    'f470_id_motivo': connekta.motivo_ventas,
-                    'f470_id_causal_devol': causal,
-                    'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or connekta.uom_default,
-                    'f120_referencia': row.get('f120_referencia', ''),
-                })
-        else:
-            # Devolución parcial — match por código de producto
-            devueltos_map = {
-                it['codigo']: int(it['cantidad_devuelta'])
-                for it in items_devueltos
-                if int(it.get('cantidad_devuelta', 0)) > 0
-            }
-            for row in rowids_data:
-                ref = row.get('f120_referencia', '')
-                cant_dev = devueltos_map.get(ref, 0)
-                if cant_dev > 0:
-                    lineas_nc.append({
-                        'f470_rowid_movto': row['f470_rowid'],
-                        'f470_cant_base': cant_dev,
-                        'f470_id_bodega': row.get('f150_id') or connekta.bodega,
-                        'f470_id_motivo': connekta.motivo_ventas,
-                        'f470_id_causal_devol': causal,
-                        'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or connekta.uom_default,
-                        'f120_referencia': ref,
-                    })
+        lineas_nc = _construir_lineas_nc(
+            rowids_data, es_total, items_devueltos, causal,
+            motivo=connekta.motivo_ventas, uom_default=connekta.uom_default,
+            bodega_default=connekta.bodega,
+        )
 
         if not lineas_nc:
             logger.warning(
@@ -817,6 +850,80 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 )
                 try:
                     recaudo.siesa_nc_triggered = True
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+        return resultado
+
+    if job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE':
+        # 142946 — Nota crédito de devolución de cliente atada al pedido/factura
+        # (módulo de Recepción, reemplaza TareaDevolucion). tipo_docto_fe/consec_fe
+        # ya vienen resueltos como el tipo/consec REAL de la factura electrónica
+        # (connekta.get_detalle_factura, ver devolucion_cliente_service.py) —
+        # nunca los del pedido.
+        from app.models.devolucion_cliente import DevolucionCliente as _DC
+        devolucion = db.session.get(_DC, payload.get('devolucion_id'))
+
+        if devolucion and devolucion.siesa_nc_triggered:
+            logger.info(
+                '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: devolución %s ya tiene '
+                'siesa_nc_triggered=True — idempotente', job.id, devolucion.id
+            )
+            return {'idempotente': True, 'devolucion_id': devolucion.id}
+
+        tipo_docto_fe = payload['tipo_docto_fe']
+        consec_fe = payload['consec_fe']
+
+        rowids_data = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
+        if not rowids_data:
+            raise Exception(
+                f'No se obtuvieron rowids para FE {tipo_docto_fe}-{consec_fe} — '
+                'la factura puede no existir en Siesa'
+            )
+
+        items_devueltos = payload.get('items_devueltos', [])
+        causal = connekta.causal_devolucion_default
+        # Siempre por match de items (nunca la rama es_total="todas las líneas
+        # completas"): items_devueltos ya trae la cantidad exacta contada por
+        # línea y el flag es_averiado por línea — la rama es_total del conector
+        # de Liquidación no soporta ese flag por línea.
+        lineas_nc = _construir_lineas_nc(
+            rowids_data, es_total=False, items_devueltos=items_devueltos,
+            causal=causal, motivo=connekta.motivo_ventas, uom_default=connekta.uom_default,
+            bodega_default=connekta.bodega, bodega_averias=connekta.bodega_averias,
+        )
+
+        if not lineas_nc:
+            logger.warning(
+                '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: sin líneas para devolver — '
+                'posible mismatch de códigos entre items_devueltos y factura Siesa',
+                job.id
+            )
+            return {'sin_lineas': True, 'devolucion_id': payload.get('devolucion_id')}
+
+        resultado = connekta.trigger_nota_factura(
+            tipo_docto_fe=tipo_docto_fe,
+            consec_fe=consec_fe,
+            lineas=lineas_nc,
+            notas=payload.get('notas', ''),
+        )
+
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
+        if devolucion and not _es_ensayo:
+            try:
+                devolucion.siesa_nc_triggered = True
+                devolucion.siesa_nc_triggered_at = datetime.utcnow()
+                devolucion.siesa_nc_response = json.dumps(resultado, ensure_ascii=False)
+                db.session.commit()
+            except Exception as _e:
+                db.session.rollback()
+                logger.critical(
+                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: Siesa OK pero fallo '
+                    'siesa_nc_triggered — devolución %s en riesgo de NC duplicada: %s',
+                    job.id, devolucion.id, _e
+                )
+                try:
+                    devolucion.siesa_nc_triggered = True
                     db.session.commit()
                 except Exception:
                     db.session.rollback()

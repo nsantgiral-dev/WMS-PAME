@@ -180,3 +180,89 @@ class TestSecuencialidad:
             from app.services.siesa_job_service import _ejecutar_job
             _ejecutar_job(job)
         mc.trigger_documento_contable.assert_called_once()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# NOTA_CREDITO_DEVOLUCION_CLIENTE — devolución de cliente (Recepción),
+# reutiliza el mismo conector 142946 que NOTA_CREDITO_FACTURA pero con su
+# propio flag de idempotencia (DevolucionCliente.siesa_nc_triggered).
+# ═══════════════════════════════════════════════════════════════════
+
+class TestNotaCreditoDevolucionCliente:
+
+    @staticmethod
+    def _make_devolucion(db, almacen, siesa_nc_triggered=False):
+        from app.models.packing import TareaPacking
+        from app.models.devolucion_cliente import DevolucionCliente
+        tarea = TareaPacking(
+            codigo='PK-DEVC-DLQ', tipo_documento='PEDIDO', estado='DESPACHADO',
+            almacen_id=almacen.id, numero_pedido_siesa='PD-DLQ',
+            tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='500',
+            siesa_triggered=True,
+        )
+        db.session.add(tarea)
+        db.session.flush()
+        devolucion = DevolucionCliente(
+            codigo='DEVC-DLQ-001', tarea_packing_id=tarea.id,
+            numero_pedido_siesa='PD-DLQ', tipo_docto_fe='FEW', consec_fe='5555',
+            almacen_id=almacen.id, estado='CONFIRMADA',
+            siesa_nc_triggered=siesa_nc_triggered,
+        )
+        db.session.add(devolucion)
+        db.session.commit()
+        return devolucion
+
+    def test_idempotente_si_ya_triggered(self, app, db, almacen):
+        devolucion = self._make_devolucion(db, almacen, siesa_nc_triggered=True)
+        from app.models.siesa_job import SiesaJob
+        job = SiesaJob.encolar('NOTA_CREDITO_DEVOLUCION_CLIENTE', {
+            'devolucion_id': devolucion.id,
+            'tipo_docto_fe': 'FEW', 'consec_fe': '5555',
+            'items_devueltos': [{'codigo': 'PROD-001', 'cantidad_devuelta': 4}],
+        })
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            from app.services.siesa_job_service import _ejecutar_job
+            resultado = _ejecutar_job(job)
+
+        assert resultado.get('idempotente') is True
+        mc.get_rowids_factura.assert_not_called()
+        mc.trigger_nota_factura.assert_not_called()
+
+    def test_dispara_142946_y_marca_triggered(self, app, db, almacen, producto):
+        devolucion = self._make_devolucion(db, almacen, siesa_nc_triggered=False)
+        from app.models.siesa_job import SiesaJob
+        job = SiesaJob.encolar('NOTA_CREDITO_DEVOLUCION_CLIENTE', {
+            'devolucion_id': devolucion.id,
+            'tipo_docto_fe': 'FEW', 'consec_fe': '5555',
+            'items_devueltos': [{'codigo': producto.codigo_siesa, 'cantidad_devuelta': 4}],
+            'es_total': False,
+        })
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            mc.causal_devolucion_default = '01'
+            mc.motivo_ventas = '01'
+            mc.uom_default = 'UND'
+            mc.bodega = 'NB1'
+            mc.bodega_averias = 'AV1'
+            mc.get_rowids_factura.return_value = [{
+                'f470_rowid': '999', 'f120_referencia': producto.codigo_siesa,
+                'f470_cant_base': 10, 'f470_id_unidad_medida': 'UND', 'f150_id': 'NB1',
+            }]
+            mc.trigger_nota_factura.return_value = {'codigo': 0}
+            from app.services.siesa_job_service import _ejecutar_job
+            _ejecutar_job(job)
+
+        mc.trigger_nota_factura.assert_called_once()
+        _, kwargs = mc.trigger_nota_factura.call_args
+        assert kwargs['tipo_docto_fe'] == 'FEW'
+        assert kwargs['consec_fe'] == '5555'
+        assert kwargs['lineas'][0]['f470_cant_base'] == 4
+
+        db.session.refresh(devolucion)
+        assert devolucion.siesa_nc_triggered is True
+        assert devolucion.siesa_nc_triggered_at is not None

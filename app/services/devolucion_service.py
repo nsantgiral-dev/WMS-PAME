@@ -1,4 +1,13 @@
 """
+DEPRECATED (2026-07-28) — reemplazado por devolucion_cliente_service.py.
+Su único caller real (inventario_siesa_service.py::_run_reconciliacion) ya no
+invoca crear_tareas_desde_discrepancias(); este servicio queda sin uso en
+producción, conservado solo por sus tests existentes
+(tests/test_servicios_coverage.py) y por el histórico de TareaDevolucion ya
+persistido. No agregar funcionalidad nueva aquí — el reemplazo real es
+buscar_pedido/crear_devolucion/confirmar_entrada_fisica en
+devolucion_cliente_service.py.
+
 Servicio de Logística Inversa (Devoluciones físicas).
 
 REGLA DE ORO: Este servicio NO toca dinero, IVA ni contabilidad.
