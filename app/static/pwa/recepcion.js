@@ -1156,11 +1156,13 @@ async function buscarPedidoDevolucion() {
   if (estado) { estado.textContent = '⏳ Buscando...'; estado.style.color = '#93c5fd'; }
   try {
     const r = await get('/api/devoluciones/pedido/' + encodeURIComponent(numero));
-    if (r.error) { if (estado) { estado.textContent = 'Error: ' + r.error; estado.style.color = '#ef4444'; } return; }
     DEVOLUCION_ACTUAL = r;
     renderLineasDevolucion(r);
   } catch (e) {
-    if (estado) { estado.textContent = 'Error de conexión'; estado.style.color = '#ef4444'; }
+    if (estado) {
+      estado.textContent = 'Error: ' + (e.status ? e.message : 'Error de conexión');
+      estado.style.color = '#ef4444';
+    }
   }
 }
 
@@ -1242,6 +1244,7 @@ async function confirmarDevolucionCliente() {
   });
 
   if (estado) { estado.textContent = '⏳ Creando devolución...'; estado.style.color = '#93c5fd'; }
+  let devolucionId;
   try {
     const rCrear = await post('/api/devoluciones/', {
       tarea_packing_id: datos.tarea_packing_id,
@@ -1251,30 +1254,34 @@ async function confirmarDevolucionCliente() {
       lineas,
       es_total: esTotal
     });
-    if (rCrear.error) { if (estado) { estado.textContent = 'Error: ' + rCrear.error; estado.style.color = '#ef4444'; } return; }
-
-    const devolucionId = rCrear.devolucion.id;
-    if (estado) { estado.textContent = '⏳ Ingresando stock y generando Nota Crédito...'; }
-    const rConfirmar = await post(`/api/devoluciones/${devolucionId}/confirmar`, {});
-    if (rConfirmar.error) {
-      if (estado) {
-        estado.innerHTML = `Error al confirmar: ${rConfirmar.error}<br>
-          <button onclick="reintentarConfirmarDevolucion(${devolucionId})"
-            style="margin-top:8px;padding:8px 14px;background:#f59e0b;color:#000;border:none;border-radius:8px;cursor:pointer;">
-            Reintentar confirmación
-          </button>`;
-        estado.style.color = '#ef4444';
-      }
-      return;
-    }
-
-    vibrar(); flash();
-    alerta('✓ Devolución confirmada — stock ingresado, Nota Crédito en proceso', 'exito');
-    DEVOLUCION_ACTUAL = null;
-    setTimeout(cargarDevoluciones, 800);
+    devolucionId = rCrear.devolucion.id;
   } catch (e) {
-    if (estado) { estado.textContent = 'Error de conexión'; estado.style.color = '#ef4444'; }
+    if (estado) {
+      estado.textContent = 'Error: ' + (e.status ? e.message : 'Error de conexión');
+      estado.style.color = '#ef4444';
+    }
+    return;
   }
+
+  if (estado) { estado.textContent = '⏳ Ingresando stock y generando Nota Crédito...'; }
+  try {
+    await post(`/api/devoluciones/${devolucionId}/confirmar`, {});
+  } catch (e) {
+    if (estado) {
+      estado.innerHTML = `Error al confirmar: ${e.status ? e.message : 'Error de conexión'}<br>
+        <button onclick="reintentarConfirmarDevolucion(${devolucionId})"
+          style="margin-top:8px;padding:8px 14px;background:#f59e0b;color:#000;border:none;border-radius:8px;cursor:pointer;">
+          Reintentar confirmación
+        </button>`;
+      estado.style.color = '#ef4444';
+    }
+    return;
+  }
+
+  vibrar(); flash();
+  alerta('✓ Devolución confirmada — stock ingresado, Nota Crédito en proceso', 'exito');
+  DEVOLUCION_ACTUAL = null;
+  setTimeout(cargarDevoluciones, 800);
 }
 
 /**
@@ -1286,14 +1293,16 @@ async function reintentarConfirmarDevolucion(devolucionId) {
   const estado = document.getElementById('estado-confirmar-dev');
   if (estado) { estado.textContent = '⏳ Reintentando...'; estado.style.color = '#93c5fd'; }
   try {
-    const r = await post(`/api/devoluciones/${devolucionId}/confirmar`, {});
-    if (r.error) { if (estado) { estado.textContent = 'Error: ' + r.error; estado.style.color = '#ef4444'; } return; }
+    await post(`/api/devoluciones/${devolucionId}/confirmar`, {});
     vibrar(); flash();
     alerta('✓ Devolución confirmada — stock ingresado, Nota Crédito en proceso', 'exito');
     DEVOLUCION_ACTUAL = null;
     setTimeout(cargarDevoluciones, 800);
   } catch (e) {
-    if (estado) { estado.textContent = 'Error de conexión'; estado.style.color = '#ef4444'; }
+    if (estado) {
+      estado.textContent = 'Error: ' + (e.status ? e.message : 'Error de conexión');
+      estado.style.color = '#ef4444';
+    }
   }
 }
 

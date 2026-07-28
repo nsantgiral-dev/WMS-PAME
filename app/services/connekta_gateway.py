@@ -2961,15 +2961,25 @@ class ConnektaGateway:
         try:
             consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
             res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
-                'paginacion': 'numPag=1|tamPag=200',
+                # tamPag=100 — regla #10: valores mayores (200 confirmado, no solo
+                # >=500) hacen que Siesa rechace la consulta entera con una fila
+                # {'alerta': '...'} en vez de datos, que antes se descartaba en
+                # silencio (ver bloque de abajo) dejando "0 líneas" sin explicación.
+                'paginacion': 'numPag=1|tamPag=100',
                 'parametros': (
                     f"f350_id_co = ''{self.centro_op}'' "
                     f"AND f350_id_tipo_docto = ''{tipo_docto_fe}'' "
                     f"AND f350_consec_docto = {consec_int}"
                 )
             })
-            rows = res.get('detalle', {}).get('Table', [])
-            rows = [r for r in rows if 'alerta' not in r]
+            rows_crudas = res.get('detalle', {}).get('Table', [])
+            alertas = [r['alerta'] for r in rows_crudas if 'alerta' in r]
+            if alertas:
+                raise Exception(
+                    f'Siesa rechazó la consulta de FE {tipo_docto_fe}-{consec_fe}: '
+                    + '; '.join(alertas)
+                )
+            rows = rows_crudas
             if rows:
                 logger.info(
                     '[CONNEKTA] get_rowids_factura: FE %s-%s → %d líneas, keys=%s',

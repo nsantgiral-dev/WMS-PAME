@@ -355,3 +355,43 @@ class TestContract142946:
         payload = self._capture_payload(gw)
         assert payload['Inicial'][0]['F_CIA'] == 1
         assert payload['Final'][0]['F_CIA'] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
+# get_rowids_factura — regresión 2026-07-28: Siesa rechazaba tamPag=200
+# ("La cantidad de registros solicitados excede el permitido") y el código
+# descartaba esa fila de alerta en silencio, quedando "0 líneas" sin
+# explicación — verificado con una FE real contra Siesa QA (FEW-1462, PD1347).
+# ═══════════════════════════════════════════════════════════════════
+
+class TestGetRowidsFacturaPaginacion:
+
+    def test_tam_pag_no_excede_100(self):
+        """Regla #10: tamPag debe ser <= 100 — 200 confirmado rechazado por Siesa."""
+        gw = _make_gateway()
+        with patch.object(gw, '_get', return_value={'detalle': {'Table': []}}) as mock_get:
+            gw.get_rowids_factura('FEW', '1462')
+        params = mock_get.call_args[0][1]
+        tam_pag = int(params['paginacion'].split('tamPag=')[1])
+        assert tam_pag <= 100, f'tamPag={tam_pag} — Siesa rechaza consultas con tamPag=200'
+
+    def test_fila_alerta_se_propaga_como_error_no_se_descarta_en_silencio(self):
+        """Antes: rows = [r for r in rows if 'alerta' not in r] descartaba la
+        fila sin loguear su contenido — 0 líneas quedaba indistinguible de
+        'la factura no tiene líneas' real. Ahora debe fallar explícito."""
+        gw = _make_gateway()
+        with patch.object(gw, '_get', return_value={
+            'codigo': 0, 'mensaje': 'Transacción Exitosa',
+            'detalle': {'Table': [{'alerta': 'La cantidad de registros solicitados excede el permitido.'}]}
+        }):
+            with pytest.raises(Exception, match='excede el permitido'):
+                gw.get_rowids_factura('FEW', '1462')
+
+    def test_filas_reales_sin_alerta_se_retornan_normal(self):
+        gw = _make_gateway()
+        with patch.object(gw, '_get', return_value={
+            'detalle': {'Table': [{'f470_rowid': 1, 'f120_referencia': 'PROD-001'}]}
+        }):
+            rows = gw.get_rowids_factura('FEW', '1462')
+        assert len(rows) == 1
+        assert rows[0]['f120_referencia'] == 'PROD-001'
