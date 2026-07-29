@@ -273,6 +273,16 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 18. **PK documental = CO + tipo_docto + consecutivo + cuota** — omitir cualquiera mezcla documentos
 19. **ConniKey y ConniToken son estáticos** — no expiran, no hay refresh flow
 20. **Después de POST exitoso, Siesa tarda ~10-12s en procesar** — no consultar inmediatamente
+21. **142946 (NotaFactura) SIEMPRE con `F350_IND_ESTADO=0` (Elaboración), NUNCA 1 (Aprobado)** —
+    verificado en vivo contra Siesa QA (2026-07-29): con estado=1 Siesa rechaza el documento
+    completo con `"El valor de la cartera debe ser igual al valor de las CxC"`. El conector
+    estándar `API_v1_Ventas_Comercial_NotaFactura` (y su clon 250696) no tiene sección
+    `CuotasCxC` para declarar el cruce — ni el Asistente de Personalizar Estructura permite
+    agregarla. Con estado=0 el POST es aceptado sin error; el cruce contra la factura queda
+    pendiente de **aprobación manual en el escritorio de Siesa** — decisión de diseño para
+    Devolución de Cliente, no un workaround temporal. Confirmado también que una NC en
+    Elaboración ya consume "cantidad pendiente por devolver" de la factura (bloquea intentos
+    duplicados contra la misma línea, incluso sin aprobar).
 
 ---
 
@@ -464,7 +474,7 @@ Conectores con spec verificado contra código (julio 2026):
 | 142888 | `142888 API_v1_ReciboCaja.docx` | ✓ 15/15 campos CxC verificados |
 | 142882 | `142882 - API_v1_DocumentoContable 428272.docx` | ✓ 29/29 campos MovimientoCxC verificados |
 | 142945 | `142945_API_v1_Ventas_Comercial_RemisionPedido.docx` | ✓ Limpio |
-| 142946 | `142946 - API_v1_Ventas_Comercial_NotaFactura 428509.docx` | ✓ 3 obligatorios agregados |
+| 142946 | `142946 - API_v1_Ventas_Comercial_NotaFactura 428509.docx` | ✓ 3 obligatorios agregados. Clon 250696 (dinámico) para Devolución de Cliente — requiere `F350_IND_ESTADO=0`, ver Regla #21 |
 | 142948 | `142948 - API_v1_Compras_Comercial_EntradaOC.docx` | ✓ Limpio (2 extras low-risk) |
 | 142951 | `142951-API_v1_Inventarios_Comercial_DocumentoInv.docx` | ✓ Limpio |
 | 173066 | `173066 - API_v1_Inventarios_Comercial_TransferenciaDirecta.docx` | ✓ f470_desc_varible agregado |

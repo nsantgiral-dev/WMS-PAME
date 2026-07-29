@@ -3095,7 +3095,15 @@ class ConnektaGateway:
                 'F350_ID_TIPO_DOCTO': self.tipo_docto_nota_credito,
                 'F350_CONSEC_DOCTO': 0,
                 'F350_FECHA': fecha_hoy,
-                'F350_IND_ESTADO': 1,
+                # 0 = Elaboración, NUNCA 1 (Aprobado) — verificado en vivo contra
+                # Siesa QA (2026-07-29): con estado=1 Siesa rechaza el documento
+                # completo con "El valor de la cartera debe ser igual al valor de
+                # las CxC" (142946 no tiene sección CuotasCxC para declarar el
+                # cruce). Con estado=0 el POST es aceptado sin error. El cruce
+                # contra la factura queda pendiente de aprobación manual en el
+                # escritorio de Siesa — decisión de diseño, no un workaround
+                # temporal (ver CLAUDE.md Regla #21).
+                'F350_IND_ESTADO': 0,
                 'F350_IND_IMPRESION': 0,
                 'F430_ID_TIPO_DOCTO': tipo_docto_fe,
                 'F430_CONSEC_DOCTO': consec_int,

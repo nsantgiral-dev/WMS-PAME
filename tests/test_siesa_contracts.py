@@ -358,6 +358,21 @@ class TestContract142946:
         fecha = doc.get('F350_FECHA', '')
         assert len(fecha) == 8 and fecha.isdigit(), f'Fecha "{fecha}" no es YYYYMMDD'
 
+    def test_ind_estado_elaboracion_no_aprobado(self):
+        """Regresión 2026-07-29: con F350_IND_ESTADO=1 (Aprobado) Siesa rechaza
+        el documento completo con "El valor de la cartera debe ser igual al
+        valor de las CxC" — 142946 no tiene sección CuotasCxC para declarar el
+        cruce. Con estado=0 (Elaboración) el POST es aceptado; el cruce contra
+        la factura queda pendiente de aprobación manual en Siesa (decisión de
+        diseño, ver CLAUDE.md Regla #21)."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw)
+        doc = payload['Doctoventascomercial'][0]
+        assert doc['F350_IND_ESTADO'] == 0, (
+            'F350_IND_ESTADO debe ser 0 (Elaboración) — con 1 Siesa rechaza '
+            'por "cartera != CxC" (verificado en vivo contra Siesa QA)'
+        )
+
     def test_f_cia_es_1(self):
         gw = _make_gateway()
         payload = self._capture_payload(gw)
