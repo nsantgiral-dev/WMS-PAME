@@ -334,3 +334,68 @@ class TestConstruirLineasNC:
             bodega_averias='AV1',
         )
         assert lineas[0]['f470_id_bodega'] == 'NB1'
+
+
+# ═══════════════════════════════════════════════════════════════════
+# listar_pendientes_aprobacion_nc / marcar_nc_aprobada
+#
+# Seguimiento interno de aprobación contable (CLAUDE.md Regla #21): 142946
+# se crea en Elaboración y ni crearla ni aprobarla desde el escritorio cruza
+# sola la cartera — alguien en contabilidad debe marcarlo aquí manualmente.
+# ═══════════════════════════════════════════════════════════════════
+
+class TestPendientesAprobacionNC:
+
+    @staticmethod
+    def _make_devolucion(db, almacen, siesa_nc_triggered=False, nc_aprobada=False, codigo='DEVC-NC-001'):
+        from app.models.packing import TareaPacking
+        from app.models.devolucion_cliente import DevolucionCliente
+        tarea = TareaPacking(
+            codigo=f'PK-{codigo}', tipo_documento='PEDIDO', estado='DESPACHADO',
+            almacen_id=almacen.id, numero_pedido_siesa='PD-NC',
+            tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='500',
+            siesa_triggered=True,
+        )
+        db.session.add(tarea)
+        db.session.flush()
+        devolucion = DevolucionCliente(
+            codigo=codigo, tarea_packing_id=tarea.id,
+            numero_pedido_siesa='PD-NC', tipo_docto_fe='FEW', consec_fe='9999',
+            almacen_id=almacen.id, estado='CONFIRMADA',
+            siesa_nc_triggered=siesa_nc_triggered,
+            nc_aprobada_siesa=nc_aprobada,
+        )
+        db.session.add(devolucion)
+        db.session.commit()
+        return devolucion
+
+    def test_lista_solo_triggered_y_no_aprobadas(self, app, db, almacen):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        self._make_devolucion(db, almacen, siesa_nc_triggered=True, nc_aprobada=False, codigo='DEVC-NC-A')
+        self._make_devolucion(db, almacen, siesa_nc_triggered=True, nc_aprobada=True, codigo='DEVC-NC-B')
+        self._make_devolucion(db, almacen, siesa_nc_triggered=False, nc_aprobada=False, codigo='DEVC-NC-C')
+
+        pendientes = DevolucionClienteService.listar_pendientes_aprobacion_nc()
+        codigos = [p['codigo'] for p in pendientes]
+        assert 'DEVC-NC-A' in codigos
+        assert 'DEVC-NC-B' not in codigos, 'Ya aprobada — no debe listarse'
+        assert 'DEVC-NC-C' not in codigos, 'Sin NC en Siesa todavía — no debe listarse'
+
+    def test_marcar_nc_aprobada_la_saca_de_pendientes(self, app, db, almacen, usuario_admin):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        dev = self._make_devolucion(db, almacen, siesa_nc_triggered=True, nc_aprobada=False, codigo='DEVC-NC-D')
+
+        DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id)
+
+        db.session.refresh(dev)
+        assert dev.nc_aprobada_siesa is True
+        assert dev.nc_aprobada_siesa_at is not None
+        assert dev.nc_aprobada_siesa_por == usuario_admin.id
+        pendientes = DevolucionClienteService.listar_pendientes_aprobacion_nc()
+        assert dev.codigo not in [p['codigo'] for p in pendientes]
+
+    def test_marcar_nc_aprobada_falla_si_no_tiene_nc(self, app, db, almacen, usuario_admin):
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        dev = self._make_devolucion(db, almacen, siesa_nc_triggered=False, codigo='DEVC-NC-E')
+        with pytest.raises(ValueError, match='no tiene una NC'):
+            DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id)

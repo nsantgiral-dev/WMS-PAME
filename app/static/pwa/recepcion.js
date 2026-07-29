@@ -1137,12 +1137,65 @@ async function cargarDevoluciones(silencioso = false) {
           </button>
         </div>
         <div id="estado-busqueda-dev" style="margin-top:8px;font-size:12px;color:#555;"></div>
-      </div>`;
+      </div>
+      <div id="panel-nc-pendientes"></div>`;
 
     el.innerHTML = html;
+
+    // Solo admin/jefe_almacen — coincide con el gate del backend (Roles.SUPERVISION)
+    if (OPERARIO && ['admin', 'jefe_almacen'].includes(OPERARIO.rol)) {
+      cargarPendientesAprobacionNC();
+    }
   } catch (e) {
     if (badge) badge.style.display = 'none';
     el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando devoluciones</div>';
+  }
+}
+
+/**
+ * NC de devolución de cliente ya creadas en Siesa (Elaboración) que todavía
+ * nadie ha marcado como aprobadas+cruzadas manualmente en Siesa. Ver
+ * CLAUDE.md Regla #21 — Siesa no cruza la cartera sola, ni al crear ni al
+ * aprobar el documento.
+ */
+async function cargarPendientesAprobacionNC() {
+  const cont = document.getElementById('panel-nc-pendientes');
+  if (!cont) return;
+  try {
+    const r = await get('/api/devoluciones/pendientes-aprobacion-nc');
+    const pendientes = r.pendientes || [];
+    if (!pendientes.length) { cont.innerHTML = ''; return; }
+
+    cont.innerHTML = `
+      <div style="font-size:12px;font-weight:600;color:#fbbf24;padding:4px 0 8px;border-bottom:1px solid #2a2210;margin:16px 0 10px;">
+        🟡 ${pendientes.length} NC PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE APROBAR EN SIESA
+      </div>` +
+      pendientes.map(d => `
+        <div class="rec-card" style="border-color:#78350f;background:#1a1408;margin-bottom:8px;">
+          <div class="rec-titulo" style="font-size:14px;">${d.codigo} — ${d.numero_pedido_siesa || '—'}</div>
+          <div class="rec-sub">${d.cliente || 'Cliente sin nombre'} · FE ${d.tipo_docto_fe}-${d.consec_fe}</div>
+          <div style="margin-top:4px;font-size:11px;color:#888;">
+            NC creada en Siesa: ${d.siesa_nc_triggered_at ? new Date(d.siesa_nc_triggered_at).toLocaleString('es-CO') : '—'}
+          </div>
+          <button onclick="marcarNCAprobada(${d.id})"
+            style="margin-top:10px;width:100%;padding:10px;background:#78350f;color:#fbbf24;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">
+            Ya la aprobé y crucé en Siesa
+          </button>
+        </div>`).join('');
+  } catch (e) {
+    cont.innerHTML = '';
+  }
+}
+
+/** Contabilidad confirma que ya aprobó+cruzó la NC en Siesa manualmente. */
+async function marcarNCAprobada(devolucionId) {
+  if (!confirm('¿Confirmas que ya aprobaste y cruzaste esta Nota Crédito en Siesa?')) return;
+  try {
+    await post(`/api/devoluciones/${devolucionId}/marcar-nc-aprobada`, {});
+    vibrar(); flash();
+    cargarPendientesAprobacionNC();
+  } catch (e) {
+    alerta('Error: ' + (e.status ? e.message : 'Error de conexión'), 'error');
   }
 }
 

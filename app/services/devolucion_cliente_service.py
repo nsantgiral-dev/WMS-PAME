@@ -330,6 +330,34 @@ class DevolucionClienteService:
         return devolucion
 
     @staticmethod
+    def listar_pendientes_aprobacion_nc() -> list:
+        """
+        NC ya creadas en Siesa (Elaboración, CLAUDE.md Regla #21) que todavía
+        no han sido aprobadas+cruzadas manualmente por contabilidad. Esto es
+        seguimiento interno del WMS (nc_aprobada_siesa) — Siesa no expone un
+        estado consultable para esto vía los conectores que tenemos.
+        """
+        devoluciones = DevolucionCliente.query.filter_by(
+            siesa_nc_triggered=True,
+            nc_aprobada_siesa=False,
+        ).order_by(DevolucionCliente.siesa_nc_triggered_at.asc()).all()
+        return [d.to_dict() for d in devoluciones]
+
+    @staticmethod
+    def marcar_nc_aprobada(devolucion_id: int, usuario_id: int) -> DevolucionCliente:
+        """Contabilidad confirma que ya aprobó y cruzó la NC en Siesa."""
+        devolucion = db.session.get(DevolucionCliente, devolucion_id)
+        if not devolucion:
+            raise ValueError(f'Devolución {devolucion_id} no existe')
+        if not devolucion.siesa_nc_triggered:
+            raise ValueError('Esta devolución todavía no tiene una NC creada en Siesa')
+        devolucion.nc_aprobada_siesa = True
+        devolucion.nc_aprobada_siesa_at = datetime.utcnow()
+        devolucion.nc_aprobada_siesa_por = usuario_id
+        db.session.commit()
+        return devolucion
+
+    @staticmethod
     def _resolver_ubicacion(producto_id: int, almacen_id: int, es_averiado: bool) -> Ubicacion:
         """
         Preferencia de put-away: si es_averiado, bucket AVERIADOS (find-or-create,

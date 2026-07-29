@@ -11,6 +11,8 @@ POST /api/devoluciones/                              → crea la devolución (AB
 POST /api/devoluciones/<id>/confirmar                → entrada física + NC automática
 POST /api/devoluciones/<id>/cancelar                 → descarta una ABIERTA
 GET  /api/devoluciones/<id>                          → detalle (para reanudar una ABIERTA)
+GET  /api/devoluciones/pendientes-aprobacion-nc       → NC creadas en Siesa (Elaboración) sin aprobar
+POST /api/devoluciones/<id>/marcar-nc-aprobada        → contabilidad confirma que ya aprobó+cruzó en Siesa
 """
 import logging
 from flask import Blueprint, request, jsonify
@@ -120,5 +122,42 @@ def cancelar_devolucion(devolucion_id):
     try:
         devolucion = DevolucionClienteService.cancelar(devolucion_id, uid, data.get('motivo'))
         return jsonify({'mensaje': 'Devolución cancelada', 'devolucion': devolucion.to_dict()}), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@devoluciones_bp.route('/pendientes-aprobacion-nc', methods=['GET'])
+@jwt_required()
+def pendientes_aprobacion_nc():
+    """
+    NC ya creadas en Siesa (Elaboración — CLAUDE.md Regla #21) que todavía
+    nadie ha marcado como aprobadas+cruzadas manualmente en Siesa.
+    """
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+    pendientes = DevolucionClienteService.listar_pendientes_aprobacion_nc()
+    return jsonify({'pendientes': pendientes, 'total': len(pendientes)}), 200
+
+
+@devoluciones_bp.route('/<int:devolucion_id>/marcar-nc-aprobada', methods=['POST'])
+@jwt_required()
+def marcar_nc_aprobada(devolucion_id):
+    from app.models.usuario import Usuario
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = db.session.get(Usuario, uid)
+    if not u or u.rol not in Roles.SUPERVISION:
+        return jsonify({'error': 'Sin permiso'}), 403
+    try:
+        devolucion = DevolucionClienteService.marcar_nc_aprobada(devolucion_id, uid)
+        return jsonify({'mensaje': 'NC marcada como aprobada', 'devolucion': devolucion.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

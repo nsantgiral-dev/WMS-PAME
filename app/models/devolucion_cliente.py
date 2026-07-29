@@ -50,13 +50,22 @@ class DevolucionCliente(db.Model):
     siesa_nc_triggered_at = db.Column(db.DateTime, nullable=True)
     siesa_nc_response = db.Column(db.Text, nullable=True)
 
+    # 142946 se crea en Elaboración (CLAUDE.md Regla #21) — Siesa no cruza la
+    # cartera solo ni al crear ni al aprobar el documento (verificado con NCE-
+    # 00000048). Estos campos son seguimiento interno del WMS, NO un estado de
+    # Siesa: contabilidad marca aquí cuándo aprobó+cruzó manualmente en Siesa.
+    nc_aprobada_siesa = db.Column(db.Boolean, default=False, nullable=False, server_default='false')
+    nc_aprobada_siesa_at = db.Column(db.DateTime, nullable=True)
+    nc_aprobada_siesa_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_confirmacion = db.Column(db.DateTime, nullable=True)
 
     # Relaciones
     tarea_packing = db.relationship('TareaPacking', lazy=True)
     almacen = db.relationship('Almacen', lazy=True)
-    recepcionista = db.relationship('Usuario', lazy=True)
+    recepcionista = db.relationship('Usuario', lazy=True, foreign_keys=[recepcionista_id])
+    nc_aprobada_por = db.relationship('Usuario', lazy=True, foreign_keys=[nc_aprobada_siesa_por])
     lineas = db.relationship('LineaDevolucionCliente', backref='devolucion',
                               lazy=True, cascade='all, delete-orphan')
 
@@ -66,6 +75,8 @@ class DevolucionCliente(db.Model):
             'codigo': self.codigo,
             'tarea_packing_id': self.tarea_packing_id,
             'numero_pedido_siesa': self.numero_pedido_siesa,
+            'tipo_docto_fe': self.tipo_docto_fe,
+            'consec_fe': self.consec_fe,
             'cliente': self.cliente,
             'almacen_id': self.almacen_id,
             'recepcionista_id': self.recepcionista_id,
@@ -74,6 +85,9 @@ class DevolucionCliente(db.Model):
             'observaciones': self.observaciones,
             'siesa_nc_triggered': self.siesa_nc_triggered,
             'siesa_nc_triggered_at': self.siesa_nc_triggered_at.isoformat() if self.siesa_nc_triggered_at else None,
+            'nc_aprobada_siesa': self.nc_aprobada_siesa,
+            'nc_aprobada_siesa_at': self.nc_aprobada_siesa_at.isoformat() if self.nc_aprobada_siesa_at else None,
+            'nc_aprobada_siesa_por': self.nc_aprobada_por.nombre if self.nc_aprobada_por else None,
             'fecha_creacion': self.fecha_creacion.isoformat() if self.fecha_creacion else None,
             'fecha_confirmacion': self.fecha_confirmacion.isoformat() if self.fecha_confirmacion else None,
             'lineas': [l.to_dict() for l in self.lineas],
