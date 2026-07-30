@@ -286,6 +286,118 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 
 ---
 
+## Procedimiento Manual — Aprobar NC de Devolución de Cliente en Siesa
+
+Consecuencia operativa de la Regla #21: el WMS crea la Nota Crédito (142946)
+en **Elaboración**, nunca Aprobada. Alguien en contabilidad debe completar el
+cruce y la aprobación a mano en el escritorio de Siesa. Verificado en vivo
+contra Siesa QA (2026-07-29) con NCE-00000050 / factura FEW-1463 (Samboni
+Benavides Aldivar), de punta a punta:
+
+1. **Ubicar el documento**: Financiero → Auditoría de documentos → filtrar
+   por tercero/fecha → doble clic sobre la fila `NCE-0000xxxx` (Estado: En
+   elaboración). El menú "Nota crédito desde factura → Desde factura..." crea
+   un documento **nuevo vacío** — no sirve para esto, abre siempre el ya
+   existente.
+2. **Cruzar la cartera**: tab **CxC → Facturas** → botón **Automático**
+   (abajo a la derecha). Esto llena `Aplicar PCGA`/`Aplicar NIIF` con el saldo
+   completo de la factura y deja `Nuevo saldo` en $0. Guardar (Ctrl+S /
+   ícono disquete).
+3. **Motivo DIAN**: tab **Entidades** → `Grupo Entidad: FE_CONCEPTOS NC 2.1`
+   → sub-tab "Conceptos NC - FE 2.1" → `Concepto notas crédito` = **1 —
+   Devolución parcial de los bienes** (código genérico de devolución, aunque
+   diga "parcial"). Sin este campo el botón Aprobar no se habilita.
+4. **Aprobar**: ícono "Aprobar" en la barra de herramientas superior (después
+   de las flechas ← →, tooltip "Aprobar"). Aparece un popup: *"Esta es una
+   factura desde remisión con base en pedido. ¿Desea reversar el pedido
+   relacionado con esta factura?"* → responder **No**, salvo que exista una
+   razón de negocio explícita para reabrir ese pedido (reabrirlo puede
+   desincronizar el estado `DESPACHADO` que el WMS ya tiene registrado).
+5. **Verificar cierre**: tab CxC muestra `Pendiente PCGA`/`Pendiente NIIF` en
+   $0 y `Estado: Aprobado`. Este mismo paso reingresa el inventario devuelto
+   a la bodega de Siesa (el tab Items trae la bodega por línea) — en paralelo
+   al inventario del WMS, que ya se actualizó al confirmar la devolución
+   física.
+
+Aprobar sin haber cruzado primero (paso 2) deja el botón Aprobar
+deshabilitado — el cruce de cartera es un prerrequisito de la aprobación, no
+un paso posterior opcional.
+
+---
+
+## Por qué la aprobación de NC NO se pudo automatizar (2026-07-30)
+
+Investigación exhaustiva (~4h, Siesa QA en vivo) para eliminar el paso manual
+de la sección anterior. Se construyó un conector especial vía Asistente
+UnoEE (Generic Transfer → 4_Especial → `07_Nota_Credito_Entidades_Aprobacion`),
+registrado como **250878** (`PapeleriaMedellin_NotaCredito_Aprobacion_Completa_WMS`),
+con secciones Docto. ventas comercial + Cuotas CxC + Documentos + Movimientos
++ Entidades dinámicas. **Conclusión: no es posible con las herramientas
+actuales de Siesa — es una limitación estructural del motor de importación,
+no un problema de configuración.**
+
+### Cadena de hallazgos (todos verificados en vivo, no teóricos)
+
+1. `F350_ID_CLASE_DOCTO` para `NCE` debe ser **525** ("Nota crédito directa"),
+   no 521 ni 526 — Siesa valida contra una lista corta (520/521/522/525/542)
+   en la sección "Docto. ventas comercial", distinta de la lista larga que
+   aparece en "Entidades dinámicas" (que sí incluye 526 pero no aplica aquí).
+   Debe coincidir en **ambas** secciones.
+2. `f461_id_tercero_vendedor` es obligatorio en este conector (a diferencia
+   de 142946/250696) — usar `"Generico"` (el valor real que trae
+   `f200_id_vendedor` en la factura), no un código numérico.
+3. **250878 no crea una NC nueva — completa una que ya existe en
+   Elaboración** (creada previamente vía 250696). La sección "Documentos"
+   (T461 subtipo 04) exige referenciar un documento existente en estado
+   Elaboración; si no existe o ya está Aprobado, rechaza con "el documento
+   no existe" / "debe estar en elaboración".
+4. `F353_CONSEC_DOCTO_CRUCE` (Cuotas CxC) sí está disponible como campo
+   variable pese a que la guía DOCX descargada no lo mostraba — la guía
+   puede quedar desactualizada tras ediciones en el Asistente; verificar en
+   vivo, no confiar en el DOCX si hay dudas.
+5. `f753_id_grupo_entidad` real es **`FE_CONCEPTOS NC 2.1`** (guion bajo
+   entre "FE" y "CONCEPTOS") — el valor puesto a mano en el Asistente tenía
+   un espacio en su lugar. Confirmado contra `t744_mm_grupo_entidad` y contra
+   el propio mensaje de error de Siesa, que sí lo citaba con guion bajo.
+   Entidad real: `EUNOECO015` (`t742_mm_entidad`, etiqueta "Conceptos NC -
+   FE 2.1"). Atributo real: `co015_concepto_nc` (`t743_mm_entidad_atributo`).
+6. **Bloqueo final, irresoluble**: `F350_IND_ESTADO=1` (aprobar) exige
+   `F_CONSEC_AUTO_REG=1` ("automático", crea documento nuevo) — Siesa
+   rechaza con "el indicador de consecutivo automático del plano debe ser
+   automático" si se manda `auto_reg=0` para apuntar a un documento ya
+   existente. Pero **Entidades dinámicas es tipo de registro 753, que
+   siempre se procesa después de 461** (el registro que aprueba) dentro del
+   mismo plano — así que un documento recién creado (`auto_reg=1`) nunca ve
+   su propia sección de Entidades a tiempo para satisfacer la validación
+   "el tipo de documento maneja entidades dinámicas obligatorias" que corre
+   sobre 461. Verificado con `f753_dato_numerico` formateado correctamente,
+   códigos reales de entidad/atributo, y grupo entidad corregido — el
+   resultado no cambia.
+
+   Es decir: **crear+cruzar+motivo+aprobar en un solo POST es imposible**
+   (motivo llega tarde), y **completar una NC existente con motivo ya
+   puesto a mano tampoco** (aprobar exige `auto_reg=1`, que fuerza crear
+   una NC nueva vacía en vez de tomar la existente).
+
+### Por qué no seguir intentando
+
+No es una combinación de campos sin probar — se agotaron las combinaciones
+relevantes de `F_CONSEC_AUTO_REG` × `F350_IND_ESTADO` × orden de secciones
+en el JSON, con y sin motivo pre-existente. El bloqueo es el orden interno
+de procesamiento por tipo de registro (`753 > 461`), algo que no se controla
+desde el payload. Cualquier intento futuro de automatizar esto requiere que
+**Siesa** exponga un mecanismo distinto (ver ticket de soporte).
+
+### Vía de escape NO explorada (mayor riesgo/costo, ver conversación 2026-07-29)
+
+RPA de navegador contra el cliente web (SiesaEE Cloud corre en HTML5,
+técnicamente scripteable con Playwright/Selenium) — descartado por ahora:
+requiere guardar credenciales de Siesa en el backend, correr navegador
+headless en el worker, y se rompe con cualquier cambio de UI. Reservar solo
+si soporte Siesa confirma que no habrá solución de API.
+
+---
+
 ## DLQ — Dead Letter Queue
 
 ### Schedulers registrados (`app/__init__.py`)
