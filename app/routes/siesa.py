@@ -831,10 +831,18 @@ def buscar_producto_siesa_vivo(codigo):
     """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede consultar Siesa en vivo'}), 403
-    item = connekta.buscar_item_por_referencia(codigo)
+    try:
+        item = connekta.buscar_item_por_referencia(codigo)
+    except Exception as e:
+        logger.warning('[ETIQUETAS] buscar_item_por_referencia(%s) falló: %s', codigo, e)
+        return jsonify({'error': 'Siesa no respondió a la consulta en vivo — reintenta en unos segundos'}), 502
     if not item:
         return jsonify({'error': f"'{codigo}' no existe en el maestro de ítems de Siesa"}), 404
-    barras = connekta.buscar_barras_por_referencia(item['codigo_siesa'])
+    try:
+        barras = connekta.buscar_barras_por_referencia(item['codigo_siesa'])
+    except Exception as e:
+        logger.warning('[ETIQUETAS] buscar_barras_por_referencia(%s) falló: %s', item['codigo_siesa'], e)
+        barras = []
     item['codigo_barras'] = barras[0] if barras else None
     return jsonify(item), 200
 

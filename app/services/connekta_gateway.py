@@ -1041,10 +1041,28 @@ class ConnektaGateway:
         if not ref:
             return None
         api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
-        resultado = self._get(api_items, {
-            'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f120_referencia = ''{ref}''"
-        })
+        # f120_id_cia incluido para calzar con el ejemplo del spec
+        # (API_v2_Items.docx: "f120_id_cia = 1 AND f120_referencia = ...").
+        try:
+            resultado = self._get(api_items, {
+                'paginacion': 'numPag=1|tamPag=5',
+                'parametros': f"f120_id_cia = {int(self.id_cia_siesa)} AND f120_referencia = ''{ref}''"
+            })
+        except Exception as e:
+            # Confirmado en vivo 2026-07-31: cuando el filtro f120_referencia
+            # no matchea ninguna fila, Siesa responde HTTP 400 en vez de
+            # codigo:0 con Table vacía (contrario a su propio spec, que
+            # documenta Table como lista — puede venir vacía). Con una
+            # referencia real (ej. PAPELSP01) el mismo filtro sí da 200.
+            # Tratamos el 400 como "no encontrado", no como error real —
+            # cualquier otro fallo (timeout, 5xx, red) sigue propagándose.
+            if '400 client error' in str(e).lower():
+                logger.info(
+                    '[CONNEKTA] buscar_item_por_referencia(%s): Siesa 400 '
+                    '(sin match, tratado como no encontrado)', ref
+                )
+                return None
+            raise
         tabla = resultado.get('detalle', {}).get('Table', [])
         if not tabla:
             return None
