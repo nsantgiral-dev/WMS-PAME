@@ -294,6 +294,11 @@ cruce y la aprobación a mano en el escritorio de Siesa. Verificado en vivo
 contra Siesa QA (2026-07-29) con NCE-00000050 / factura FEW-1463 (Samboni
 Benavides Aldivar), de punta a punta:
 
+> **Nota (2026-07-31):** el paso 2 (cruzar cartera) ya tiene solución de API
+> verificada — ver "Cruce de cartera SÍ se pudo automatizar — conector
+> 251126" más abajo. Pendiente de integrar a código; hasta entonces este
+> procedimiento de 3 pasos sigue siendo el vigente en producción.
+
 1. **Ubicar el documento**: Financiero → Auditoría de documentos → filtrar
    por tercero/fecha → doble clic sobre la fila `NCE-0000xxxx` (Estado: En
    elaboración). El menú "Nota crédito desde factura → Desde factura..." crea
@@ -395,6 +400,95 @@ técnicamente scripteable con Playwright/Selenium) — descartado por ahora:
 requiere guardar credenciales de Siesa en el backend, correr navegador
 headless en el worker, y se rompe con cualquier cambio de UI. Reservar solo
 si soporte Siesa confirma que no habrá solución de API.
+
+---
+
+## Cruce de cartera SÍ se pudo automatizar — conector 251126 (2026-07-31)
+
+A diferencia de 250878 (bloqueo estructural irresoluble, ver arriba), **sí
+es posible crear la NC Y cruzar la cartera en un solo POST** usando un
+conector distinto, construido sobre un plano base diferente. Reduce el
+procedimiento manual de 3 pasos a 2 — motivo DIAN y aprobar siguen siendo
+manuales, cruzar cartera ya no.
+
+### Por qué este conector sí funciona y 250878 no
+
+250878 se construyó sobre `07_Nota_Credito_Entidades_Aprobacion`, que usa
+**Docto. ventas comercial v9** — esa versión trae incorporada la validación
+"entidades dinámicas obligatorias" (registro 753) que siempre se procesa
+después del registro que aprueba (461), bloqueo irresoluble.
+
+**251126** (`PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2`) se construyó
+vía Generic Transfer → Personalizar Estructura sobre el plano
+`Tecnocedi_Nota_credito_Desde_Factura_WMS`, que usa **Docto. ventas
+comercial v3** — la misma versión de header que ya usa 250696 en
+producción, y que **no exige entidades dinámicas**. Se le agregó la sección
+`Cuotas CxC (v1)` (ausente en 250696) para poder declarar el cruce en el
+mismo POST. Secciones finales: Inicial + Docto. ventas comercial (v3) +
+Cuotas CxC (v1) + Movimientos (v12 Sub2) + Final — sin Documentos ni
+Entidades dinámicas (no existen en este plano).
+
+### El bug que casi lo descarta por error: `F353_VLR_CRUCE`
+
+Primer intento (2026-07-30, factura FEW-1465): el POST devolvió
+`codigo:0` pero el cruce no aplicó — la NC quedó creada con **Debito/Credito
+PCGA en $0** y T353 sin cambios. Se investigó ~1h (incluyendo revisar campo
+por campo la definición completa de la sección Cuotas CxC contra la spec de
+Siesa, sin encontrar campos faltantes) antes de encontrar la causa real:
+
+`F353_VLR_CRUCE` se estaba llenando con la **suma de `f470_vlr_bruto`**
+(subtotal sin IVA, ej. $61,471) en vez del **saldo real de la factura**
+(con IVA — lo que Siesa muestra como "Saldo PCGA" en el tab CxC→Facturas y
+lo que trae `f353_total_db` en `API_v2_CxC_General`, ej. $73,150). Ambos
+valores pueden coincidir por casualidad en pruebas con los mismos SKUs, lo
+que ocultó el bug la primera vez.
+
+**Regla:** `F353_VLR_CRUCE` = suma de `f470_vlr_neto` de las líneas de la
+factura (`get_rowids_factura`), o el `f353_total_db` real vía
+`API_v2_CxC_General` — nunca `f470_vlr_bruto`.
+
+Nota sobre `$0/$0` en Auditoría de documentos: **no es señal de fallo por sí
+sola** — toda NC recién creada en Elaboración muestra Debito/Credito PCGA en
+$0 hasta que el cruce se aprueba (el valor de items si se refleja de
+inmediato en el tab Items — eso sí hay que verificar ahí, no en la columna
+de Auditoría).
+
+### Verificado en vivo de punta a punta (2026-07-31)
+
+Factura FEW-00001466 (pedido PD1352, cliente GOMEZ CHICO SERGIO, NIT
+1000134388, CO 003). Líneas: PAPELSP9218 x5 (rowid 2857568, neto $72,750),
+PAPELSP9830 x4 (rowid 2857569, neto $400). Total neto = **$73,150**.
+
+1. POST a 251126 con `F_CONSEC_AUTO_REG=1`, `F350_IND_ESTADO=0` (crea, no
+   aprueba), `F353_VLR_CRUCE=73150.0000` → `codigo:0`.
+2. NCE-00000056 creada: tab **Items** con las 2 líneas y valor neto exacto
+   $73,150 (Siesa deriva precio/IVA automáticamente desde `f470_rowid_movto`
+   — no hace falta mandar precio/valor explícito, igual que 142946).
+3. Tab **CxC → Facturas**: FEW-00001466-0 con **Aplicar PCGA = $73,150,
+   Nuevo saldo = $0** — el cruce quedó aplicado/staged sin tocar el botón
+   Automático.
+4. Manual: tab Entidades → `FE_CONCEPTOS NC 2.1` → concepto `1` → Aprobar.
+   Sin error, sin pedir cruzar de nuevo.
+5. Confirmado contra el ledger real (`API_v2_CxC_General`, no solo la vista
+   del documento): `f353_total_cr = 73150.0 = f353_total_db`,
+   `f353_fecha_cancelacion = 2026-07-31`. La factura quedó saldada de verdad,
+   no solo en apariencia.
+
+### Estado: verificado en Siesa QA, NO integrado a `connekta_gateway.py`
+
+Esta prueba se hizo con un script ad-hoc (`railway run python ...`), no con
+código de producción. Para adoptarlo en el flujo de Devolución de Cliente
+(`devolucion_cliente_service.py`) falta:
+
+- Nueva función en `connekta_gateway.py` (o modificar `trigger_nota_factura`)
+  que arme la sección `Cuotas CxC` sumando `f470_vlr_neto` de
+  `get_rowids_factura()` para `F353_VLR_CRUCE`.
+- Nueva variable de entorno para el ID/nombre del conector 251126 (hoy
+  `SIESA_TIPO_DOCTO_NOTA_CREDITO` apunta al conector 250696/142946).
+- Actualizar el paso 2 del "Procedimiento Manual" de abajo — con este
+  conector integrado, ese paso deja de ser manual.
+- Correr contra 2-3 casos más (facturas con descuentos, con más de 2 líneas)
+  antes de reemplazar 250696 en producción — solo se probó un caso simple.
 
 ---
 
