@@ -474,19 +474,48 @@ PAPELSP9830 x4 (rowid 2857569, neto $400). Total neto = **$73,150**.
    `f353_fecha_cancelacion = 2026-07-31`. La factura quedó saldada de verdad,
    no solo en apariencia.
 
-### Estado: verificado en Siesa QA, NO integrado a `connekta_gateway.py`
+### Estado: integrado a `connekta_gateway.py` (2026-07-31)
 
-Esta prueba se hizo con un script ad-hoc (`railway run python ...`), no con
-código de producción. Para adoptarlo en el flujo de Devolución de Cliente
-(`devolucion_cliente_service.py`) falta:
+`trigger_nota_factura_crear_cruzar()` reemplaza a `trigger_nota_factura()`
+en el job `NOTA_CREDITO_DEVOLUCION_CLIENTE` (`siesa_job_service.py`) — el
+submódulo de Devolución de Cliente ahora crea Y cruza la cartera en un solo
+POST. `trigger_nota_factura()` (250696) sigue existiendo intacta y la sigue
+usando `NOTA_CREDITO_FACTURA` (Liquidación de ruta) — no se tocó ese flujo.
 
-- Nueva función en `connekta_gateway.py` (o modificar `trigger_nota_factura`)
-  que arme la sección `Cuotas CxC` sumando `f470_vlr_neto` de
-  `get_rowids_factura()` para `F353_VLR_CRUCE`.
-- Nueva variable de entorno para el ID/nombre del conector 251126 (hoy
-  `SIESA_TIPO_DOCTO_NOTA_CREDITO` apunta al conector 250696/142946).
-- Actualizar el paso 2 del "Procedimiento Manual" de abajo — con este
-  conector integrado, ese paso deja de ser manual.
+**Prorrateo de valor (nuevo, no existía antes):** `get_rowids_factura()` da
+el `f470_vlr_neto` de la línea **completa facturada**, pero Devolución de
+Cliente permite devolver menos de lo facturado. `_construir_lineas_nc()`
+(rama `es_total=False`, la única que usa Devolución) ahora calcula
+`f470_vlr_neto_prorrateado = vlr_neto_linea × cant_devuelta / cant_facturada`
+por línea con `Decimal` (no float, para no arrastrar error de redondeo al
+sumar varias líneas). El job suma esos prorrateos para `valor_cruce`. La
+rama `es_total=True` (Liquidación) no se tocó — no prorratea, sigue igual.
+
+**Helpers compartidos (Regla 0 — una política, una función):**
+`_build_transportador_vacio()` y `_build_header_docto_ventas_nc()` en
+`connekta_gateway.py` — el bloque `f462_*` y el header base de
+`Docto ventas comercial` son idénticos entre 250696 y 251126; extraídos
+para que un fix futuro no se aplique en un solo conector y diverja en el
+otro (exactamente el patrón que ya costó 3h una vez, ver Regla 0 arriba).
+
+**Vencimiento real:** `get_vencimiento_factura()` consulta
+`API_v2_CxC_General` por `f353_fecha_vcto` real de la factura cruzada, con
+fallback a hoy+30 días si no se encuentra (no bloqueante — verificado en
+vivo que Siesa acepta el cruce aunque el vencimiento no sea exacto).
+
+**Variable de entorno nueva:** `CONNEKTA_CONECTOR_NOTA_CREDITO_CRUZAR`
+(default `251126`) / `CONNEKTA_NOMBRE_CONECTOR_NOTA_CREDITO_CRUZAR`.
+`SIESA_TIPO_DOCTO_NOTA_CREDITO` (NCE) se reutiliza sin cambios.
+
+**Pendiente de probar en vivo antes de confiar ciegamente:** el prorrateo
+solo se verificó con test unitario (mock), no contra Siesa QA real con una
+devolución parcial genuina (todas las pruebas en vivo de hoy fueron
+devoluciones de línea completa). Probar un caso de devolución parcial real
+antes de dar esto por cerrado.
+
+Actualiza automáticamente el paso 2 del "Procedimiento Manual" de abajo:
+cruzar cartera ya no es manual para Devolución de Cliente. Motivo DIAN y
+Aprobar (pasos 3-4) siguen manuales — ver siguiente sección.
 - Correr contra 2-3 casos más (facturas con descuentos, con más de 2 líneas)
   antes de reemplazar 250696 en producción — solo se probó un caso simple.
 

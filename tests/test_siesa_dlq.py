@@ -252,16 +252,19 @@ class TestNotaCreditoDevolucionCliente:
             mc.get_rowids_factura.return_value = [{
                 'f470_rowid': '999', 'f120_referencia': producto.codigo_siesa,
                 'f470_cant_base': 10, 'f470_id_unidad_medida': 'UND', 'f150_id': 'NB1',
+                'f470_vlr_neto': 1000,
             }]
-            mc.trigger_nota_factura.return_value = {'codigo': 0}
+            mc.trigger_nota_factura_crear_cruzar.return_value = {'codigo': 0}
             from app.services.siesa_job_service import _ejecutar_job
             _ejecutar_job(job)
 
-        mc.trigger_nota_factura.assert_called_once()
-        _, kwargs = mc.trigger_nota_factura.call_args
+        mc.trigger_nota_factura_crear_cruzar.assert_called_once()
+        _, kwargs = mc.trigger_nota_factura_crear_cruzar.call_args
         assert kwargs['tipo_docto_fe'] == 'FEW'
         assert kwargs['consec_fe'] == '5555'
         assert kwargs['lineas'][0]['f470_cant_base'] == 4
+        # Prorrateo: factura 10 unidades por $1000 neto, se devuelven 4 → $400
+        assert kwargs['valor_cruce'] == 400.0
 
         db.session.refresh(devolucion)
         assert devolucion.siesa_nc_triggered is True

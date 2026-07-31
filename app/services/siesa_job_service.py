@@ -16,6 +16,7 @@ Tipos de job implementados:
 import json
 import logging
 from datetime import datetime
+from decimal import Decimal
 from app.extensions import db
 from app.models.siesa_job import SiesaJob, EstadoSiesaJob
 from app.models.packing import EstadoPacking
@@ -302,6 +303,19 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
         bodega = row.get('f150_id') or bodega_default
         if item.get('es_averiado') and bodega_averias:
             bodega = bodega_averias
+        # Prorrateo del valor neto (CON IVA) de la línea — get_rowids_factura
+        # trae el valor de la línea FACTURADA completa, no por unidad. Usado
+        # por trigger_nota_factura_crear_cruzar (251126) para F353_VLR_CRUCE.
+        # NUNCA usar f470_vlr_bruto aquí — bug confirmado en vivo 2026-07-30
+        # (ver CLAUDE.md): el cruce queda creado pero sin aplicar si el valor
+        # no coincide con el saldo real (que incluye IVA) de la factura.
+        cant_facturada = row.get('f470_cant_base') or 0
+        vlr_neto_linea = row.get('f470_vlr_neto') or 0
+        if cant_facturada:
+            vlr_prorrateado = (Decimal(str(vlr_neto_linea)) * Decimal(cant_dev)
+                                / Decimal(str(cant_facturada)))
+        else:
+            vlr_prorrateado = Decimal(0)
         lineas_nc.append({
             'f470_rowid_movto': row['f470_rowid'],
             'f470_cant_base': cant_dev,
@@ -310,6 +324,7 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
             'f470_id_causal_devol': causal,
             'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or uom_default,
             'f120_referencia': ref,
+            'f470_vlr_neto_prorrateado': vlr_prorrateado,
         })
     return lineas_nc
 
@@ -901,10 +916,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'sin_lineas': True, 'devolucion_id': payload.get('devolucion_id')}
 
-        resultado = connekta.trigger_nota_factura(
+        # 251126 crea la NC Y cruza la cartera en el mismo POST (ver CLAUDE.md
+        # "Cruce de cartera SÍ se pudo automatizar") — reemplaza a
+        # trigger_nota_factura (250696), que solo creaba. valor_cruce es la
+        # suma del valor neto prorrateado por línea, calculado en
+        # _construir_lineas_nc — NUNCA el bruto (bug confirmado 2026-07-30).
+        valor_cruce = sum(
+            (lin['f470_vlr_neto_prorrateado'] for lin in lineas_nc), Decimal(0)
+        )
+        resultado = connekta.trigger_nota_factura_crear_cruzar(
             tipo_docto_fe=tipo_docto_fe,
             consec_fe=consec_fe,
             lineas=lineas_nc,
+            valor_cruce=float(valor_cruce),
             notas=payload.get('notas', ''),
         )
 

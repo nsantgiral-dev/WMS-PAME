@@ -73,6 +73,19 @@ class ConnektaGateway:
             'CONNEKTA_NOMBRE_CONECTOR_NOTA_FACTURA',
             'PapeleriaMedellin_NotaCredito_Desde_Factura_WMS',
         )
+        # Crea la NC Y cruza la cartera contra la factura en un solo POST (a
+        # diferencia de 250696, que no tiene sección Cuotas CxC) — construido
+        # sobre Docto. ventas comercial v3 (no exige entidades dinámicas al
+        # crear, a diferencia de v9/250878). Verificado en vivo 2026-07-31,
+        # ver CLAUDE.md "Cruce de cartera SÍ se pudo automatizar". Motivo DIAN
+        # y aprobación siguen manuales — ver Regla #21.
+        self.conector_nota_credito_cruzar = os.getenv(
+            'CONNEKTA_CONECTOR_NOTA_CREDITO_CRUZAR', '251126'
+        )
+        self.nombre_conector_nota_credito_cruzar = os.getenv(
+            'CONNEKTA_NOMBRE_CONECTOR_NOTA_CREDITO_CRUZAR',
+            'PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2',
+        )
         self.conector_nota_directa    = os.getenv('CONNEKTA_CONECTOR_NOTA_DIRECTA',    '142903')
         self.conector_docto_contable  = os.getenv('CONNEKTA_CONECTOR_DOCTO_CONTABLE',  '142882')
         # Tipo documento nota crédito electrónica en Siesa
@@ -3021,11 +3034,71 @@ class ConnektaGateway:
                 'Sin rowids no se puede crear nota crédito.'
             )
 
+    def _build_transportador_vacio(self) -> dict:
+        """
+        Bloque f462_* (transportador) vacío — registro plano de ancho fijo
+        exige estos 12 campos aunque no haya transportador. Compartido entre
+        todos los conectores de Ventas Comercial que crean NC (142946/250696,
+        251126) — ver Regla 0 del CLAUDE.md (una política, una función):
+        duplicar esto por conector es exactamente el patrón que ya divergió
+        una vez y costó 3h de diagnóstico.
+
+        Alfanumérico en None = Siesa OMITE el campo del registro plano
+        (desalinea todo lo que sigue) — DEBE ser '' (mismo hallazgo ya
+        documentado para f470_desc_varible en 173076).
+        """
+        return {
+            'f462_id_vehiculo': '',
+            'f462_id_tercero_transp': '',
+            'f462_id_sucursal_transp': '',
+            'f462_id_tercero_conductor': '',
+            'f462_nombre_conductor': '',
+            'f462_identif_conductor': '',
+            'f462_numero_guia': '',
+            'f462_cajas': self._fmt_decimal_sin_signo(0, 10),
+            'f462_peso': self._fmt_decimal_sin_signo(0, 15),
+            'f462_volumen': self._fmt_decimal_sin_signo(0, 15),
+            'f462_valor_seguros': self._fmt_decimal_sin_signo(0, 15),
+            'f462_notas': '',
+        }
+
+    def _build_header_docto_ventas_nc(self, tipo_docto_fe: str, consec_fe,
+                                       fecha: str) -> dict:
+        """
+        Campos base de 'Docto ventas comercial' para NC — idénticos entre
+        142946/250696 (solo crea) y 251126 (crea+cruza): el header no cambia,
+        lo único que difiere entre esos dos conectores es el nombre de la
+        sección en el JSON y si además se manda Cuotas CxC. Ver Regla 0.
+
+        F350_IND_ESTADO siempre 0 (Elaboración), NUNCA 1 (Aprobado) —
+        verificado en vivo contra Siesa QA (2026-07-29): con estado=1 Siesa
+        rechaza el documento ("El valor de la cartera debe ser igual al
+        valor de las CxC" en 142946 sin CuotasCxC; "entidades dinámicas
+        obligatorias" en 251126, ver CLAUDE.md). Aprobación sigue manual
+        (Regla #21).
+        """
+        consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+        return {
+            'F_CIA': int(self.id_cia_siesa),
+            'F_CONSEC_AUTO_REG': 1,
+            'F350_ID_CO': self.centro_op,
+            'F350_ID_TIPO_DOCTO': self.tipo_docto_nota_credito,
+            'F350_CONSEC_DOCTO': 0,
+            'F350_FECHA': fecha,
+            'F350_IND_ESTADO': 0,
+            'F350_IND_IMPRESION': 0,
+            'F430_ID_TIPO_DOCTO': tipo_docto_fe,
+            'F430_CONSEC_DOCTO': consec_int,
+        }
+
     def trigger_nota_factura(self, tipo_docto_fe: str, consec_fe,
                               lineas: list, notas: str = '') -> dict:
         """
         142946 → API_v1_Ventas_Comercial_NotaFactura
         Nota crédito amarrada a factura para devoluciones parciales o totales.
+        Solo crea en Elaboración — NO cruza cartera (sin sección CuotasCxC).
+        Para crear+cruzar en un solo POST, ver trigger_nota_factura_crear_cruzar.
+
         lineas: lista de dicts con:
           - f470_rowid_movto: rowid del renglón de la FE (del GET)
           - f470_cant_base: cantidad a devolver
@@ -3041,7 +3114,6 @@ class ConnektaGateway:
 
         fecha_hoy = self._fecha_hoy_bogota()
         cia = int(self.id_cia_siesa)
-        consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
 
         # Orden de claves alineado a la tabla del DOCX (142946) — no confirmado
         # que el orden importe (una prueba en vivo con orden distinto dio el
@@ -3089,44 +3161,8 @@ class ConnektaGateway:
         payload = {
             'Inicial': [{'F_CIA': cia}],
             'Doctoventascomercial': [{
-                'F_CIA': cia,
-                'F_CONSEC_AUTO_REG': 1,
-                'F350_ID_CO': self.centro_op,
-                'F350_ID_TIPO_DOCTO': self.tipo_docto_nota_credito,
-                'F350_CONSEC_DOCTO': 0,
-                'F350_FECHA': fecha_hoy,
-                # 0 = Elaboración, NUNCA 1 (Aprobado) — verificado en vivo contra
-                # Siesa QA (2026-07-29): con estado=1 Siesa rechaza el documento
-                # completo con "El valor de la cartera debe ser igual al valor de
-                # las CxC" (142946 no tiene sección CuotasCxC para declarar el
-                # cruce). Con estado=0 el POST es aceptado sin error. El cruce
-                # contra la factura queda pendiente de aprobación manual en el
-                # escritorio de Siesa — decisión de diseño, no un workaround
-                # temporal (ver CLAUDE.md Regla #21).
-                'F350_IND_ESTADO': 0,
-                'F350_IND_IMPRESION': 0,
-                'F430_ID_TIPO_DOCTO': tipo_docto_fe,
-                'F430_CONSEC_DOCTO': consec_int,
-                # f462_* (transportador) — registro plano de ancho fijo exige estos
-                # 12 campos aunque no haya transportador (patrón ya usado por los
-                # demás conectores en este archivo, ej. línea 1632-1643). F350_NOTAS
-                # no existe en el spec de 142946 — se quitó, iba insertado en medio
-                # de la cabecera y corría los campos siguientes de posición.
-                # Alfanumérico en None = Siesa OMITE el campo del registro plano
-                # (desalinea todo lo que sigue) — DEBE ser '' (mismo hallazgo ya
-                # documentado para f470_desc_varible en 173076, línea ~2502).
-                'f462_id_vehiculo': '',
-                'f462_id_tercero_transp': '',
-                'f462_id_sucursal_transp': '',
-                'f462_id_tercero_conductor': '',
-                'f462_nombre_conductor': '',
-                'f462_identif_conductor': '',
-                'f462_numero_guia': '',
-                'f462_cajas': self._fmt_decimal_sin_signo(0, 10),
-                'f462_peso': self._fmt_decimal_sin_signo(0, 15),
-                'f462_volumen': self._fmt_decimal_sin_signo(0, 15),
-                'f462_valor_seguros': self._fmt_decimal_sin_signo(0, 15),
-                'f462_notas': '',
+                **self._build_header_docto_ventas_nc(tipo_docto_fe, consec_fe, fecha_hoy),
+                **self._build_transportador_vacio(),
             }],
             'Movimientos': movimientos,
             'Final': [{'F_CIA': cia}],
@@ -3148,6 +3184,141 @@ class ConnektaGateway:
             payload,
             url=self.url_post if _es_estandar else self.url_post_dinamico,
             extra_params=None if _es_estandar else {'idSistema': self.id_sistema},
+        )
+
+    def get_vencimiento_factura(self, tipo_docto_fe: str, consec_fe) -> str:
+        """
+        GET API_v2_CxC_General — saldo y fecha de vencimiento reales de la
+        factura (f353_fecha_vcto), para F353_FECHA_VCTO en el cruce de
+        251126. Fallback (fecha de hoy + 30 días) si no se encuentra —
+        no es un campo bloqueante para el cruce (verificado en vivo
+        2026-07-31), así que no vale la pena fallar duro por esto.
+        """
+        from datetime import timedelta
+        fallback = (datetime.now(_TZ_BOGOTA) + timedelta(days=30)).strftime('%Y%m%d')
+        if self.modo_simulacion:
+            return fallback
+        try:
+            consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+            res = self._get('API_v2_CxC_General', {
+                'paginacion': 'numPag=1|tamPag=5',
+                'parametros': (
+                    f"f353_id_co_cruce = ''{self.centro_op}'' "
+                    f"AND f353_id_tipo_docto_cruce = ''{tipo_docto_fe}'' "
+                    f"AND f353_consec_docto_cruce = {consec_int}"
+                ),
+            })
+            rows = res.get('detalle', {}).get('Table', [])
+            fecha = rows[0].get('f353_fecha_vcto') if rows else None
+            if not fecha:
+                return fallback
+            return fecha[:10].replace('-', '')
+        except Exception as e:
+            logger.warning(
+                '[CONNEKTA] get_vencimiento_factura(%s-%s) falló, usando fallback: %s',
+                tipo_docto_fe, consec_fe, e
+            )
+            return fallback
+
+    def trigger_nota_factura_crear_cruzar(self, tipo_docto_fe: str, consec_fe,
+                                           lineas: list, valor_cruce: float,
+                                           notas: str = '') -> dict:
+        """
+        251126 → PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2. Crea la NC
+        Y cruza la cartera contra la factura en el mismo POST — a diferencia
+        de trigger_nota_factura (250696/142946), que solo crea. Ver CLAUDE.md
+        "Cruce de cartera SÍ se pudo automatizar — conector 251126".
+
+        lineas: mismo formato que trigger_nota_factura (f470_rowid_movto,
+          f470_cant_base, f470_id_bodega, f470_id_motivo, f470_id_causal_devol,
+          f120_referencia, f470_id_unidad_medida).
+        valor_cruce: suma de f470_vlr_neto PRORRATEADO por cantidad devuelta
+          (NUNCA f470_vlr_bruto — bug confirmado en vivo 2026-07-30, ver
+          CLAUDE.md). El caller es responsable del prorrateo — esta función
+          no tiene visibilidad de cuánto se facturó originalmente por línea.
+
+        Sigue creando en Elaboración (F350_IND_ESTADO=0) — motivo DIAN y
+        aprobación siguen manuales (Regla #21), esto solo automatiza crear+cruzar.
+        """
+        if not self.tipo_docto_nota_credito:
+            raise ValueError(
+                'SIESA_TIPO_DOCTO_NOTA_CREDITO no configurado — requerido para 251126'
+            )
+
+        fecha_hoy = self._fecha_hoy_bogota()
+        cia = int(self.id_cia_siesa)
+        co = self.centro_op
+        fecha_vcto = self.get_vencimiento_factura(tipo_docto_fe, consec_fe)
+
+        docto_ventas = {
+            **self._build_header_docto_ventas_nc(tipo_docto_fe, consec_fe, fecha_hoy),
+            **self._build_transportador_vacio(),
+        }
+
+        movimientos = []
+        for i, lin in enumerate(lineas, 1):
+            movimientos.append({
+                'F_CIA': cia,
+                'f470_id_co': co,
+                'f470_id_tipo_docto': self.tipo_docto_nota_credito,
+                'f470_consec_docto': 0,
+                'f470_nro_registro': i,
+                'f470_id_bodega': lin.get('f470_id_bodega') or self.bodega,
+                'f470_id_concepto': 502,
+                'f470_id_motivo': lin.get('f470_id_motivo') or self.motivo_ventas,
+                'f470_ind_obsequio': 0,
+                'f470_id_co_movto': co,
+                'f470_id_un_movto': self.unidad_negocio,
+                'f470_id_unidad_medida': lin.get('f470_id_unidad_medida') or self.uom_default,
+                'f470_cant_base': self._fmt_decimal_sin_signo(lin['f470_cant_base'], 15),
+                'f470_cant_2': self._fmt_decimal_sin_signo(0, 15),
+                'f470_ind_impto_asumido': 0,
+                'f470_referencia_item': lin.get('f120_referencia') or '',
+                'f470_rowid_movto': int(lin['f470_rowid_movto']),
+                'f470_id_item': '',
+                'f470_codigo_barras': '',
+                'f470_id_ubicacion_aux': '',
+                'f470_id_lote': '',
+                'f470_id_ccosto_movto': '',
+                'f470_id_causal_devol': lin.get('f470_id_causal_devol') or self.causal_devolucion_default,
+            })
+
+        cuotas_cxc = {
+            'F_CIA': cia,
+            'F350_ID_CO': co,
+            'F350_ID_TIPO_DOCTO': self.tipo_docto_nota_credito,
+            'F350_CONSEC_DOCTO': 0,
+            'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
+            'F353_CONSEC_DOCTO_CRUCE': docto_ventas['F430_CONSEC_DOCTO'],
+            'F353_NRO_CUOTA_CRUCE': 0,
+            'F353_VLR_CRUCE': self._fmt_decimal_sin_signo(valor_cruce, 15, 4),
+            'F_PORCENTAJE_CUOTA': '000.00',
+            'F353_FECHA_VCTO': fecha_vcto,
+            'F353_VLR__DSCTO_PP': self._fmt_decimal_sin_signo(0, 15),
+            'F_PORCENTAJE_PP': '000.00',
+            'F353_FECHA_DSCTO_PP': '',
+        }
+
+        payload = {
+            'Inicial': [{'F_CIA': cia}],
+            'Docto. ventas comercial': [docto_ventas],
+            'Cuotas CxC': [cuotas_cxc],
+            'Movimientos': movimientos,
+            'Final': [{'F_CIA': cia}],
+        }
+
+        logger.info(
+            '[CONNEKTA] NotaFactura crear+cruzar (%s): FE %s-%s, %d líneas, '
+            'valor_cruce=%.2f, notas=%s',
+            self.nombre_conector_nota_credito_cruzar, tipo_docto_fe, consec_fe,
+            len(lineas), valor_cruce, notas[:80] if notas else ''
+        )
+        return self._post(
+            self.conector_nota_credito_cruzar,
+            self.nombre_conector_nota_credito_cruzar,
+            payload,
+            url=self.url_post_dinamico,
+            extra_params={'idSistema': self.id_sistema},
         )
 
     def trigger_recibo_caja(self, tercero_nit: str, sucursal: str,
