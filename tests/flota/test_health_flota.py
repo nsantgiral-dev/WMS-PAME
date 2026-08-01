@@ -9,24 +9,10 @@ defecto las colapsa y convierte el tablero en decoración con autoridad.
 from flota.adaptadores.medicion import MedidorSQL
 from flota.api.health import _CAMPOS
 
-# Campos cuya fuente todavía no existe: la tanda 1 crea esas tablas.
-# Mientras no existan, la única respuesta honesta es `null`.
-_AUN_NO_MEDIBLES = {
-    'fichas_completas',
-    'atributos_sin_dato',
-    'vehiculos_sin_custodia_activa',
-    'custodias_sin_foto_completa',
-    'fotos_pendiente_evidencia',
-    'documentos_vencidos',
-    'documentos_por_vencer_30d',
-}
-
-# Campos que SÍ se pueden medir hoy: sus tablas existen desde antes del módulo.
-_MEDIBLES_HOY = {
-    'vehiculos_activos',
-    'conductores_activos_sin_cuenta',
-    'rutas_historicas_sin_placa',
-}
+# Las cinco tablas de la tanda 1 ya existen: los doce campos se miden.
+# `null` queda reservado para su único significado — la fuente no existe todavía —
+# y eso se prueba aparte, quitándole la tabla al medidor.
+_CAMPOS_MEDIDOS = tuple(c for c in _CAMPOS if c not in ('ambiente', 'datos_reales'))
 
 
 def _get(client, token):
@@ -67,23 +53,32 @@ class TestHealthResponde:
 
 
 class TestNingunCampoCaeACero:
-    """El corazón del paso 1."""
+    """El corazón del paso 1, y sigue siéndolo con las tablas ya creadas."""
 
-    def test_lo_no_medible_vale_null_y_no_cero(self, client, jwt_token_admin):
+    def test_sin_fuente_el_campo_vale_null_y_jamas_cero(self, app, monkeypatch):
+        """La propiedad, independiente del esquema que haya hoy.
+
+        Se le quita la tabla al medidor y se exige `None`. Si en vez de eso
+        devolviera 0, el tablero diría "0 documentos vencidos" cuando lo que
+        pasa es que no hay de dónde saberlo — un 0 es una afirmación sobre la
+        flota, `null` es una afirmación sobre el sistema.
+        """
+        import flota.adaptadores.medicion as med
+
+        monkeypatch.setattr(med, '_tabla_existe', lambda nombre: False)
+        medidor = med.MedidorSQL()
+        with app.app_context():
+            for campo in _CAMPOS_MEDIDOS:
+                valor = getattr(medidor, campo)()
+                assert valor is None, f'{campo} devolvió {valor!r} sin fuente; debía ser None'
+
+    def test_con_las_tablas_creadas_los_doce_campos_miden(self, client, jwt_token_admin):
         cuerpo = _get(client, jwt_token_admin).get_json()
-        en_cero = [c for c in _AUN_NO_MEDIBLES if cuerpo[c] == 0]
-        assert not en_cero, (
-            f'\nCampos en 0 sin fuente que los alimente: {sorted(en_cero)}\n'
-            'Un 0 acá se lee como "no hay problema". La respuesta correcta es null.'
+        sin_medir = [c for c in _CAMPOS_MEDIDOS if cuerpo[c] is None]
+        assert not sin_medir, (
+            f'Campos en null con su tabla ya creada: {sin_medir}. '
+            'Si la tabla existe, la respuesta honesta es un número.'
         )
-        assert all(cuerpo[c] is None for c in _AUN_NO_MEDIBLES)
-
-    def test_lo_medible_devuelve_un_numero_de_verdad(self, client, jwt_token_admin):
-        cuerpo = _get(client, jwt_token_admin).get_json()
-        for campo in _MEDIBLES_HOY:
-            assert isinstance(cuerpo[campo], int), (
-                f'{campo} debería estar medido: su tabla existe desde antes de flota.'
-            )
 
     def test_el_numero_medido_se_mueve_con_los_datos(self, db):
         """Prueba de que está medido y no escrito a mano.

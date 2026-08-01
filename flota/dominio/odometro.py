@@ -1,12 +1,16 @@
 """
 Políticas del odómetro. Invariantes 1 (monotonía) y 7 (borde degenerado).
 
-Sin implementar. Las firmas y las definiciones existen para que los tests de
-propiedad fallen por AUSENCIA DE IMPLEMENTACIÓN y no por error de importación.
+La base impone lo mismo por trigger y por CHECK
+(`flota/adaptadores/modelos.py`). Está dicho dos veces a propósito: acá para dar
+un error legible a quien lo escribe, allá para que no exista camino que lo
+esquive. Lo que no se vale es que digan cosas distintas — por eso las dos mitades
+se prueban contra los mismos casos.
 """
 from typing import Sequence, Union
 
-from flota.dominio.valores import SIN_DATO, Lectura
+from flota.dominio.errores import LecturaRechazada
+from flota.dominio.valores import SIN_DATO, Lectura, OrigenLectura
 
 
 def validar_lectura(previas: Sequence[Lectura], nueva: Lectura) -> None:
@@ -27,9 +31,28 @@ def validar_lectura(previas: Sequence[Lectura], nueva: Lectura) -> None:
     Levanta `LecturaRechazada` si no se puede aceptar. No devuelve un valor
     corregido: en la frontera no se degrada hacia el éxito (regla 5).
     """
-    raise NotImplementedError(
-        'flota.dominio.odometro.validar_lectura — invariante 1 (monotonía) sin implementar'
-    )
+    if nueva.origen == OrigenLectura.CORRECCION:
+        motivo = (nueva.motivo_correccion or '').strip()
+        if not motivo:
+            raise LecturaRechazada(
+                'una corrección exige motivo escrito: sin él es indistinguible '
+                'de un error de digitación'
+            )
+        if not nueva.autor_usuario_id:
+            raise LecturaRechazada('una corrección exige autor: el punto es dejar rastro')
+        return
+
+    if not previas:
+        return
+
+    # El tope es el MÁXIMO histórico, no la última lectura: si ya se registró
+    # 100.450, una lectura de 100.000 decrece aunque la anterior fuera menor.
+    tope = max(l.valor_km for l in previas)
+    if nueva.valor_km < tope:
+        raise LecturaRechazada(
+            f'el odómetro no puede decrecer: {nueva.valor_km} < {tope}. '
+            f'Si el valor es correcto, se registra con origen=correccion y motivo.'
+        )
 
 
 def odometro_actual(lecturas: Sequence[Lectura]) -> Union[int, str]:
@@ -46,9 +69,11 @@ def odometro_actual(lecturas: Sequence[Lectura]) -> Union[int, str]:
     todo CPK y todo preventivo por kilometraje aguas abajo en un número
     inventado con cara de medición.
     """
-    raise NotImplementedError(
-        'flota.dominio.odometro.odometro_actual — invariante 7 (borde degenerado) sin implementar'
-    )
+    if not lecturas:
+        return SIN_DATO
+    # La más reciente por marca de tiempo, no la de mayor kilometraje: una
+    # corrección posterior debe ganarle a la lectura que corrige.
+    return max(lecturas, key=lambda l: l.ts).valor_km
 
 
 __all__ = ['validar_lectura', 'odometro_actual', 'SIN_DATO']

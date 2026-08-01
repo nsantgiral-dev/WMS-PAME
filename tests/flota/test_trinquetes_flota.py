@@ -300,35 +300,63 @@ class TestTrinqueteEndpointsSinConsumidor:
 # ══════════════════════════════════════════════════════════════════════════
 
 class TestTrinqueteTamanoDelClaudeMd:
-    """TRINQUETE 7 — el CLAUDE.md del módulo no se sedimenta (tope: 100 líneas).
+    """TRINQUETE 7 — el CLAUDE.md del módulo no se sedimenta.
 
-    El archivo declara su propio tope: "Si este archivo pasa de 100 líneas, algo
-    se está sedimentando acá que no debería". Un tope declarado sin mecanismo es
-    una intención — y este archivo no se degrada de golpe sino por acumulación,
-    que es justo la clase de deterioro que nadie nota a tiempo.
+    ══════════════════════════════════════════════════════════════════════
+    POR QUÉ ESTE TRINQUETE CAMBIÓ DE MECANISMO EL 2026-08-01
 
-    QUÉ CUENTA: desde el primer `## ` hasta el final, o sea las reglas. El
-    preámbulo (título, punteros, la regla del tope, "toda regla lleva su motivo")
-    es el contrato del archivo, no sedimento. Incluirlo haría el tope inalcanzable
-    por construcción: las doce reglas con su motivo ocupan 98 líneas y cualquier
-    encabezado empujaría por encima de 100 sin que sobre nada.
+    Nació como un tope de 100 líneas totales, puesto cuando el archivo tenía
+    98. Dos líneas de holgura no son un trinquete: son un cable trampa sobre
+    la próxima regla legítima. La regla 13 lo hizo saltar —106 líneas— sin que
+    hubiera sedimento alguno: 13 reglas, promedio 8,2 líneas, máximo 12,
+    ninguna sección que no fuera una regla.
+
+    O sea que el tope midió lo que NO decía. El archivo dice "algo se está
+    sedimentando"; el conteo total no distingue sedimento de crecimiento
+    legítimo, y un guard con falsos positivos termina desactivado —que es
+    justo la muerte que este proyecto ya vio.
+
+    Ahora mide sedimento directamente, en sus dos formas reales:
+      · una sección que no es una regla (un documento colándose)
+      · una regla que se hincha hasta ser un ensayo
+
+    Crecer en cantidad de reglas ya no dispara nada. Eso es lo que debía ser.
+    ══════════════════════════════════════════════════════════════════════
     """
 
-    TOPE = 100
+    MAX_LINEAS_POR_REGLA = 15
     _CLAUDE_MD = os.path.join(_FLOTA, 'CLAUDE.md')
 
-    def _lineas_de_reglas(self):
+    def _reglas(self):
+        """[(numero, titulo, largo_en_lineas)] de cada sección del archivo."""
         lineas = _leer(self._CLAUDE_MD).splitlines()
-        primera = next(i for i, l in enumerate(lineas) if l.startswith('## '))
-        return lineas[primera:]
+        cortes = [i for i, l in enumerate(lineas) if l.startswith('## ')] + [len(lineas)]
+        return [
+            (lineas[a][3:].split('.')[0], lineas[a][3:].strip(), b - a)
+            for a, b in zip(cortes, cortes[1:])
+        ]
 
-    def test_las_reglas_no_pasan_del_tope(self):
-        reglas = self._lineas_de_reglas()
-        assert len(reglas) <= self.TOPE, (
-            f'\nflota/CLAUDE.md: {len(reglas)} líneas de reglas, tope {self.TOPE}.\n'
-            'La salida NO es subir el tope. Es sacar lo que no sea regla de '
-            'decisión: el estado va a docs/flota/ESTADO.md y la referencia '
-            'técnica a docs/flota/ESPECIFICACION_T1.md.'
+    def test_toda_seccion_es_una_regla_numerada(self):
+        """Una sección sin número es un documento colándose entre las reglas."""
+        intrusas = [titulo for num, titulo, _ in self._reglas() if not num.isdigit()]
+        assert not intrusas, (
+            f'\nSecciones que no son reglas numeradas: {intrusas}\n'
+            'El estado va a docs/flota/ESTADO.md y la referencia a ESPECIFICACION_T1.md.'
+        )
+
+    def test_las_reglas_van_numeradas_de_1_en_adelante_sin_huecos(self):
+        nums = [int(n) for n, _, _ in self._reglas() if n.isdigit()]
+        assert nums == list(range(1, len(nums) + 1)), (
+            f'Numeración con huecos o repetida: {nums}. Una regla se cita por su '
+            'número —"regla 5"— y renumerar rompe cada cita que ya se escribió.'
+        )
+
+    def test_ninguna_regla_se_hincha_hasta_ser_un_ensayo(self):
+        gordas = [(t, n) for _, t, n in self._reglas() if n > self.MAX_LINEAS_POR_REGLA]
+        assert not gordas, (
+            f'\nReglas por encima de {self.MAX_LINEAS_POR_REGLA} líneas:\n'
+            + '\n'.join(f'  · {t} ({n} líneas)' for t, n in gordas)
+            + '\n\nUna regla que necesita más es un documento: va a docs/flota/.'
         )
 
     def test_el_tope_del_trinquete_es_el_que_declara_el_archivo(self):
@@ -338,10 +366,10 @@ class TestTrinqueteTamanoDelClaudeMd:
         revés— queda una regla que dice una cosa y un guard que hace otra. Es
         `nombre-que-miente` aplicado a un tope.
         """
-        texto = _leer(self._CLAUDE_MD)
-        declarados = re.findall(r'pasa de (\d+) líneas', texto)
-        assert declarados == [str(self.TOPE)], (
-            f'El archivo declara {declarados} y el trinquete usa {self.TOPE}.'
+        declarados = re.findall(r'pasa de (\d+) líneas', _leer(self._CLAUDE_MD))
+        assert declarados == [str(self.MAX_LINEAS_POR_REGLA)], (
+            f'El archivo declara {declarados} y el trinquete usa '
+            f'{self.MAX_LINEAS_POR_REGLA}.'
         )
 
     def test_el_archivo_no_reabsorbe_lo_que_se_movio(self):

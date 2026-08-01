@@ -12,11 +12,26 @@ que dice "0 documentos vencidos" cuando lo que pasó es que la consulta reventó
 Eso es la regla 5, y es exactamente el `except Exception: pass` de
 `ruta_service.py:633` que este módulo tiene prohibido heredar.
 """
+from datetime import date as _date
+from datetime import timedelta as _timedelta
 from typing import List, Optional
 
 from sqlalchemy import inspect as _inspect
 
 from app.extensions import db
+
+# Las ocho del recibo de turno: frontal, trasera, lateral izq, lateral der,
+# cajón abierto, interior cabina, tablero, llantas.
+FOTOS_POR_CUSTODIA = 8
+
+
+def _hoy() -> _date:
+    """Fecha de corte de los vencimientos.
+
+    Aislada en una función para que el día que haya que pasarla a hora Bogotá
+    —Siesa ya obligó a eso en los payloads— se cambie en un solo lugar.
+    """
+    return _date.today()
 
 
 # Tablas que la tanda 1 va a crear. Mientras no existan, los campos que
@@ -142,42 +157,143 @@ class MedidorSQL:
             return None
         return _contar(RutaDespacho.query.filter(RutaDespacho.vehiculo_id.is_(None)))
 
-    # ── No medible todavía: la tabla llega con la tanda 1 ────────────────────
+    # ── Medible desde la tanda 1: las tablas ya existen ──────────────────────
+    #
+    # Cada uno de estos campos tiene su test que MUEVE UN DATO REAL y verifica
+    # que el número se mueve. Un campo que devuelve una constante plausible es
+    # indistinguible de uno medido hasta el día en que importa.
 
     def fichas_completas(self) -> Optional[int]:
+        """Fichas sin ningún atributo en `sin_dato`.
+
+        No cuenta fichas existentes: cuenta fichas que ya no tienen huecos. Una
+        ficha creada con todo en `sin_dato` es una fila, no un dato.
+        """
+        from flota.adaptadores.modelos import FichaTecnica
+
         if not _tabla_existe('flota_ficha_tecnica'):
             return None
-        raise NotImplementedError('fichas_completas — la tabla existe, falta la medición')
+        return sum(1 for f in FichaTecnica.query.all() if f.completa())
 
     def atributos_sin_dato(self) -> Optional[List[str]]:
+        """`['TGZ653.distribucion', ...]` — placa.atributo, no id.atributo.
+
+        Con la placa, porque quien lee esto va a ir a buscar el camión, no la
+        fila. Un tablero que obliga a traducir un id a una placa no se usa.
+        """
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import FichaTecnica
+
         if not _tabla_existe('flota_ficha_tecnica'):
             return None
-        raise NotImplementedError('atributos_sin_dato — la tabla existe, falta la medición')
+        filas = (
+            db.session.query(FichaTecnica, Vehiculo.placa)
+            .join(Vehiculo, Vehiculo.id == FichaTecnica.vehiculo_id)
+            .all()
+        )
+        return sorted(
+            f'{placa}.{atributo}'
+            for ficha, placa in filas
+            for atributo in ficha.atributos_sin_dato()
+        )
 
     def vehiculos_sin_custodia_activa(self) -> Optional[int]:
+        """Vehículos activos sin nadie que responda por ellos ahora mismo."""
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import Custodia
+
         if not _tabla_existe('flota_custodia'):
             return None
-        raise NotImplementedError('vehiculos_sin_custodia_activa — la tabla existe, falta la medición')
+        con_custodia = (
+            db.session.query(Custodia.vehiculo_id)
+            .filter(Custodia.fin_ts.is_(None))
+            .subquery()
+        )
+        return _contar(
+            Vehiculo.query.filter(
+                Vehiculo.activo.is_(True),
+                ~Vehiculo.id.in_(db.session.query(con_custodia.c.vehiculo_id)),
+            )
+        )
+
+    def custodias_pendiente_sede(self) -> Optional[int]:
+        """Custodias cuya sede no existe como fila en `almacenes`.
+
+        `almacenes` cubre 5 de los 9 centros del mapa de C.O. (medido
+        2026-08-01). Flota no crea maestros ajenos para tapar ese hueco: declara
+        lo que no puede representar y lo cuenta acá.
+
+        Si este número crece y nadie da de alta la sede, el sistema está
+        registrando custodias que no dicen de quién son. Por eso se cuenta,
+        no se tolera.
+        """
+        from flota.adaptadores.modelos import Custodia
+
+        if not _tabla_existe('flota_custodia'):
+            return None
+        return _contar(Custodia.query.filter(
+            Custodia.custodio_estado == 'pendiente_sede'
+        ))
 
     def custodias_sin_foto_completa(self) -> Optional[int]:
-        if not _tabla_existe('flota_custodia'):
+        """Custodias a las que les faltan fotos de las ocho del recibo de turno.
+
+        Cuenta las abiertas sin sus 8 de inicio y las cerradas sin sus 8 de fin.
+        Una custodia con 7 fotos no es "casi completa": el ángulo que falta es
+        justo el que se va a discutir.
+        """
+        from flota.adaptadores.modelos import Custodia, Foto
+
+        if not _tabla_existe('flota_custodia') or not _tabla_existe('flota_foto'):
             return None
-        raise NotImplementedError('custodias_sin_foto_completa — la tabla existe, falta la medición')
+
+        def _cuantas(entidad_tipo, custodia_id):
+            return _contar(Foto.query.filter(
+                Foto.entidad_tipo == entidad_tipo,
+                Foto.entidad_id == custodia_id,
+            ))
+
+        incompletas = 0
+        for c in Custodia.query.all():
+            if _cuantas('custodia_inicio', c.id) < FOTOS_POR_CUSTODIA:
+                incompletas += 1
+            elif c.fin_ts is not None and _cuantas('custodia_fin', c.id) < FOTOS_POR_CUSTODIA:
+                incompletas += 1
+        return incompletas
 
     def fotos_pendiente_evidencia(self) -> Optional[int]:
+        """Fotos cuya compresión falló y quedaron declaradas rotas. Nunca `pass`."""
+        from flota.adaptadores.modelos import Foto
+
         if not _tabla_existe('flota_foto'):
             return None
-        raise NotImplementedError('fotos_pendiente_evidencia — la tabla existe, falta la medición')
+        return _contar(Foto.query.filter(Foto.estado == 'pendiente_evidencia'))
 
     def documentos_vencidos(self) -> Optional[int]:
+        from flota.adaptadores.modelos import DocumentoVehiculo
+
         if not _tabla_existe('flota_documento_vehiculo'):
             return None
-        raise NotImplementedError('documentos_vencidos — la tabla existe, falta la medición')
+        return _contar(DocumentoVehiculo.query.filter(
+            DocumentoVehiculo.fecha_vencimiento < _hoy()
+        ))
 
     def documentos_por_vencer_30d(self) -> Optional[int]:
+        """Vigentes que vencen dentro de 30 días. NO incluye los ya vencidos.
+
+        Son dos números distintos a propósito: "por vencer" es una tarea con
+        plazo, "vencido" es un camión que no debería estar rodando. Sumarlos
+        esconde el segundo dentro del primero.
+        """
+        from flota.adaptadores.modelos import DocumentoVehiculo
+
         if not _tabla_existe('flota_documento_vehiculo'):
             return None
-        raise NotImplementedError('documentos_por_vencer_30d — la tabla existe, falta la medición')
+        hoy = _hoy()
+        return _contar(DocumentoVehiculo.query.filter(
+            DocumentoVehiculo.fecha_vencimiento >= hoy,
+            DocumentoVehiculo.fecha_vencimiento <= hoy + _timedelta(days=30),
+        ))
 
 
-__all__ = ['MedidorSQL', '_TABLAS_TANDA_1']
+__all__ = ['MedidorSQL', '_TABLAS_TANDA_1', 'FOTOS_POR_CUSTODIA']

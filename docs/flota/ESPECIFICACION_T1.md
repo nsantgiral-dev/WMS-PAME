@@ -215,6 +215,7 @@ switch `FLOTA_BLOQUEO_DESPACHO=0`.
   "fichas_completas": 3,
   "atributos_sin_dato": ["TGZ653.distribucion", "TGZ655.distribucion"],
   "vehiculos_sin_custodia_activa": 0,
+  "custodias_pendiente_sede": 0,
   "custodias_sin_foto_completa": 1,
   "fotos_pendiente_evidencia": 0,
   "conductores_activos_sin_cuenta": 2,
@@ -225,6 +226,13 @@ switch `FLOTA_BLOQUEO_DESPACHO=0`.
 ```
 
 `rutas_historicas_sin_placa` en `null` significa aún no medido. **No se pone en 0.**
+Medido el 2026-08-01 contra la base real: **3 de 15**. Ya no vale `null`.
+
+`custodias_pendiente_sede` cuenta las custodias cuya sede el WMS no puede
+representar: `almacenes` cubre 5 de los 9 centros del mapa de C.O. (medido
+2026-08-01). Flota no crea maestros ajenos para tapar el hueco — declara lo que
+no puede representar. Una custodia `pendiente_sede` **sí** cubre al vehículo: no
+saber *qué* sede no es lo mismo que no tener responsable.
 
 ---
 

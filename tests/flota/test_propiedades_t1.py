@@ -12,22 +12,18 @@ cómo esté escrito el código: monotonía, cardinalidad, cobertura, exclusivida
 paternidad, no-degradación y borde degenerado.
 
 ──────────────────────────────────────────────────────────────────────────────
-POR QUÉ ESTÁN MARCADOS `xfail(strict=True)` Y NO SIMPLEMENTE ROJOS
+EL `xfail(strict=True)` YA NO ESTÁ, Y ASÍ TENÍA QUE TERMINAR
 
-Los siete fallan hoy, y deben fallar: la implementación no existe. Pero el
-`buildCommand` de Railway corre `pytest tests/ -x` y bloquea el deploy con el
-primer rojo. Siete tests rojos a propósito dejarían todo el WMS sin poder
-desplegar mientras dure la tanda 1 — el andamiaje de un módulo nuevo no puede
-secuestrar el deploy del sistema que ya está en producción.
+Nacieron marcados: fallaban por `NotImplementedError` y el marcador estricto
+garantizaba que el día que pasaran, pytest los reportara como `XPASS(strict)` =
+FALLO, obligando a quitarlo. No se puede implementar en silencio y no se puede
+olvidar el marcador. Eso ocurrió en la tanda 1 y por eso el marcador se fue.
 
-`xfail(strict=True)` es el trinquete correcto para esto:
-
-  · hoy fallan y el build sigue verde (`xfailed`),
-  · el día que se implemente, el test pasa y pytest lo reporta como
-    `XPASS(strict)` = FALLO, obligando a quitar el marcador.
-
-Es decir: no se puede implementar en silencio y no se puede olvidar el marcador.
-Para ver los fallos reales con su razón: `pytest tests/flota/ --runxfail -q`.
+Lo que estos tests comprueban sigue siendo una propiedad del problema —
+monotonía, cardinalidad, cobertura, exclusividad, paternidad, no-degradación,
+borde degenerado— y no lo que el código hace. Las mismas propiedades se ejercen
+contra la base con `INSERT` crudo en `test_constraints_t1.py`: si la política
+del dominio y la de la base dijeran cosas distintas, uno de los dos falla.
 ──────────────────────────────────────────────────────────────────────────────
 """
 from datetime import datetime, timedelta
@@ -42,18 +38,13 @@ from flota.dominio.valores import (
     SIN_DATO,
     ClaseFoto,
     Custodia,
+    CustodioEstado,
     CustodioTipo,
     Dimensiones,
     EntidadFoto,
     Foto,
     Lectura,
     OrigenLectura,
-)
-
-pytestmark = pytest.mark.xfail(
-    strict=True,
-    reason='Tanda 1 sin implementar. Al implementar: quitar este marcador '
-           '(strict lo obliga — el test pasará y romperá el build hasta que se quite).',
 )
 
 _T0 = datetime(2026, 8, 1, 5, 0)
@@ -71,7 +62,7 @@ def _lectura(km, minutos, origen=OrigenLectura.ENTREGA, motivo=None):
 
 
 def _custodia(inicio_min, fin_min=None, tipo=CustodioTipo.CONDUCTOR,
-              conductor_id=5, sede_id=None):
+              conductor_id=5, sede_id=None, estado=CustodioEstado.RESUELTO):
     return Custodia(
         vehiculo_id=1,
         custodio_tipo=tipo,
@@ -81,6 +72,7 @@ def _custodia(inicio_min, fin_min=None, tipo=CustodioTipo.CONDUCTOR,
         km_inicio=100_000,
         custodio_conductor_id=conductor_id,
         custodio_sede_id=sede_id,
+        custodio_estado=estado,
     )
 
 
@@ -198,6 +190,41 @@ class TestInvarianteArcoExclusivo:
         with pytest.raises(CustodiaInvalida):
             dom_custodia.validar_arco_exclusivo(
                 _custodia(0, tipo=CustodioTipo.SEDE, conductor_id=5, sede_id=None)
+            )
+
+    def test_pendiente_sede_sin_ningun_custodio_es_valido(self):
+        """La sede que el WMS no puede representar todavía.
+
+        `almacenes` cubre 5 de los 9 centros. Flota no crea maestros ajenos:
+        declara lo que no puede representar y el health lo cuenta.
+        """
+        dom_custodia.validar_arco_exclusivo(
+            _custodia(0, tipo=CustodioTipo.SEDE, conductor_id=None, sede_id=None,
+                      estado=CustodioEstado.PENDIENTE_SEDE)
+        )
+
+    def test_pendiente_sede_con_un_custodio_puesto_es_invalido(self):
+        """O la sede se pudo representar, o no. No las dos cosas."""
+        with pytest.raises(CustodiaInvalida):
+            dom_custodia.validar_arco_exclusivo(
+                _custodia(0, tipo=CustodioTipo.SEDE, conductor_id=None, sede_id=3,
+                          estado=CustodioEstado.PENDIENTE_SEDE)
+            )
+
+    def test_pendiente_sede_de_tipo_conductor_es_invalido(self):
+        """Un conductor siempre tiene fila: es la cédula lo que hace válida el acta."""
+        with pytest.raises(CustodiaInvalida):
+            dom_custodia.validar_arco_exclusivo(
+                _custodia(0, tipo=CustodioTipo.CONDUCTOR, conductor_id=None, sede_id=None,
+                          estado=CustodioEstado.PENDIENTE_SEDE)
+            )
+
+    def test_resuelto_sigue_exigiendo_exactamente_uno(self):
+        """El estado nuevo no aflojó el invariante para las filas normales."""
+        with pytest.raises(CustodiaInvalida):
+            dom_custodia.validar_arco_exclusivo(
+                _custodia(0, conductor_id=None, sede_id=None,
+                          estado=CustodioEstado.RESUELTO)
             )
 
     def test_conductor_con_su_id_es_valido(self):

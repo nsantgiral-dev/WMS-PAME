@@ -11,6 +11,12 @@ def registrar_flota(app):
     Se llama desde `app.routes.register_routes`. Es la única línea de
     acoplamiento con el repo existente en la tanda 1.
     """
+    # Importar los modelos ANTES de montar el blueprint: registra las cinco
+    # tablas en `db.metadata`, que es de donde salen tanto el `create_all()` de
+    # los tests como el autogenerate de Alembic. Un modelo que nadie importa no
+    # existe para ninguno de los dos, y esa es la forma más silenciosa de que
+    # una tabla no llegue a producción.
+    from flota.adaptadores import modelos  # noqa: F401
     from flota.api.health import flota_bp
 
     app.register_blueprint(flota_bp, url_prefix='/flota')

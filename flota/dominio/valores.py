@@ -61,6 +61,21 @@ class CustodioTipo(str, Enum):
     SEDE      = 'sede'
 
 
+class CustodioEstado(str, Enum):
+    """Si el custodio declarado se pudo representar contra el maestro.
+
+    `pendiente_sede` no es un error ni un NULL disfrazado: es la sede que el
+    WMS todavía no tiene como fila. `almacenes` cubre 5 de los 9 centros
+    (medido 2026-08-01) y flota no crea maestros ajenos para tapar el hueco.
+
+    Regla 4 aplicada a una relación: lo que no se puede representar se dice
+    con una palabra, y el health lo cuenta para que no se acumule callado.
+    """
+
+    RESUELTO       = 'resuelto'
+    PENDIENTE_SEDE = 'pendiente_sede'
+
+
 class ClaseFoto(str, Enum):
     """Regla 7: hay dos clases de foto y no comparten parámetros.
 
@@ -112,6 +127,7 @@ class Custodia:
     km_fin: Optional[int] = None
     custodio_conductor_id: Optional[int] = None
     custodio_sede_id: Optional[int] = None
+    custodio_estado: CustodioEstado = CustodioEstado.RESUELTO
     linea_base: bool = False
 
 

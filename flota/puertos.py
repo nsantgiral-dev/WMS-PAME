@@ -51,6 +51,10 @@ class MedidorDeFlota(Protocol):
     def vehiculos_sin_custodia_activa(self) -> Optional[int]:
         ...
 
+    def custodias_pendiente_sede(self) -> Optional[int]:
+        """Custodias cuya sede el WMS todavía no tiene como fila en `almacenes`."""
+        ...
+
     def custodias_sin_foto_completa(self) -> Optional[int]:
         ...
 

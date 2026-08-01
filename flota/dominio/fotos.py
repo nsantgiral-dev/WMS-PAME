@@ -1,10 +1,13 @@
 """
 Políticas de fotos. Invariantes 5 (paternidad) y 6 (integridad de clase).
 
-Sin implementar. Ver la nota de `odometro.py` sobre por qué existen las firmas.
+La paternidad es la única de los siete invariantes que la base NO puede
+imponer sola: `entidad_tipo` + `entidad_id` es polimórfico y no admite FK.
+Queda dicho en vez de disimulado.
 """
 from typing import Callable
 
+from flota.dominio.errores import FotoInvalida
 from flota.dominio.valores import ClaseFoto, Dimensiones, EntidadFoto, Foto
 
 # Resuelve (entidad_tipo, entidad_id) → ¿existe esa fila?
@@ -33,9 +36,12 @@ def validar_paternidad(foto: Foto, resolver: ResolvedorDePadre) -> None:
     "suelta para después": una foto huérfana es evidencia que nadie va a
     encontrar el día que la necesite.
     """
-    raise NotImplementedError(
-        'flota.dominio.fotos.validar_paternidad — invariante 5 (paternidad) sin implementar'
-    )
+    if not resolver(foto.entidad_tipo, foto.entidad_id):
+        raise FotoInvalida(
+            f'foto sin padre resoluble: {foto.entidad_tipo.value}#{foto.entidad_id} '
+            f'no existe. Una foto huérfana es evidencia que nadie va a encontrar '
+            f'el día que la necesite.'
+        )
 
 
 def validar_integridad_de_clase(
@@ -58,9 +64,14 @@ def validar_integridad_de_clase(
 
     Levanta `FotoInvalida`.
     """
-    raise NotImplementedError(
-        'flota.dominio.fotos.validar_integridad_de_clase — invariante 6 (integridad de clase) sin implementar'
-    )
+    if clase != ClaseFoto.FOTO_DATO:
+        return
+    if servida.ancho < capturada.ancho or servida.alto < capturada.alto:
+        raise FotoInvalida(
+            f'foto_dato degradada: se capturó {capturada.ancho}x{capturada.alto} '
+            f'y se sirve {servida.ancho}x{servida.alto}. Un odómetro que no se '
+            f'puede verificar contra su foto es una declaración sin respaldo.'
+        )
 
 
 __all__ = [

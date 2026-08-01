@@ -2,13 +2,15 @@
 Políticas de custodia. Invariantes 2 (cardinalidad), 3 (cobertura temporal)
 y 4 (arco exclusivo).
 
-Sin implementar. Ver la nota de `odometro.py` sobre por qué existen las firmas.
+La base impone 2 y 4 por índice único parcial y CHECK; el 3 solo
+parcialmente — ver la nota de `flota/adaptadores/modelos.py`.
 """
 from dataclasses import dataclass
 from datetime import datetime
 from typing import List, Sequence
 
-from flota.dominio.valores import Custodia
+from flota.dominio.errores import CustodiaInvalida
+from flota.dominio.valores import Custodia, CustodioEstado, CustodioTipo
 
 
 @dataclass(frozen=True)
@@ -27,9 +29,7 @@ def custodias_activas(custodias: Sequence[Custodia]) -> List[Custodia]:
     QUÉ NO AFIRMA: que sea legal que haya más de una. Eso lo dice
     `validar_cardinalidad`. Esta función cuenta; la otra juzga.
     """
-    raise NotImplementedError(
-        'flota.dominio.custodia.custodias_activas — invariante 2 (cardinalidad) sin implementar'
-    )
+    return [c for c in custodias if c.fin_ts is None]
 
 
 def validar_cardinalidad(custodias: Sequence[Custodia]) -> None:
@@ -43,9 +43,12 @@ def validar_cardinalidad(custodias: Sequence[Custodia]) -> None:
 
     Levanta `CustodiaInvalida`.
     """
-    raise NotImplementedError(
-        'flota.dominio.custodia.validar_cardinalidad — invariante 2 (cardinalidad) sin implementar'
-    )
+    activas = custodias_activas(custodias)
+    if len(activas) > 1:
+        raise CustodiaInvalida(
+            f'{len(activas)} custodias activas a la vez para el mismo vehículo. '
+            f'Dos responsables del mismo camión es, en la práctica, ninguno.'
+        )
 
 
 def huecos_de_cobertura(custodias: Sequence[Custodia], ahora: datetime) -> List[Hueco]:
@@ -63,9 +66,25 @@ def huecos_de_cobertura(custodias: Sequence[Custodia], ahora: datetime) -> List[
     esta lista no pueda crecer: cierra la anterior y abre la nueva en una sola
     transacción, sin instante intermedio.
     """
-    raise NotImplementedError(
-        'flota.dominio.custodia.huecos_de_cobertura — invariante 3 (cobertura temporal) sin implementar'
-    )
+    if not custodias:
+        return []
+
+    ordenadas = sorted(custodias, key=lambda c: c.inicio_ts)
+    huecos = []
+    # El reloj arranca en la primera custodia, nunca antes: sobre el período
+    # previo al arranque en frío el sistema no sabe y no pretende saber.
+    cursor = ordenadas[0].inicio_ts
+
+    for c in ordenadas:
+        if c.inicio_ts > cursor:
+            huecos.append(Hueco(desde=cursor, hasta=c.inicio_ts))
+        fin = ahora if c.fin_ts is None else c.fin_ts
+        if fin > cursor:
+            cursor = fin
+
+    if cursor < ahora:
+        huecos.append(Hueco(desde=cursor, hasta=ahora))
+    return huecos
 
 
 def validar_arco_exclusivo(custodia: Custodia) -> None:
@@ -77,9 +96,42 @@ def validar_arco_exclusivo(custodia: Custodia) -> None:
 
     Levanta `CustodiaInvalida`.
     """
-    raise NotImplementedError(
-        'flota.dominio.custodia.validar_arco_exclusivo — invariante 4 (arco exclusivo) sin implementar'
-    )
+    if custodia.custodio_estado == CustodioEstado.PENDIENTE_SEDE:
+        # No afloja el invariante: lo hace condicional a un estado que a su vez
+        # está constreñido. Una custodia `pendiente_sede` tiene que ser de tipo
+        # sede y no puede traer NINGÚN custodio puesto — si trajera uno, sería
+        # una sede resuelta que finge no serlo.
+        if custodia.custodio_tipo != CustodioTipo.SEDE:
+            raise CustodiaInvalida(
+                'pendiente_sede solo aplica a custodia de sede: un conductor '
+                'siempre tiene fila, y es la cédula lo que hace válida el acta.'
+            )
+        if (custodia.custodio_conductor_id is not None
+                or custodia.custodio_sede_id is not None):
+            raise CustodiaInvalida(
+                'pendiente_sede con un custodio puesto: o la sede se pudo '
+                'representar, o no. No las dos cosas.'
+            )
+        return
+
+    llenos = [
+        custodia.custodio_conductor_id is not None,
+        custodia.custodio_sede_id is not None,
+    ]
+    if sum(llenos) != 1:
+        raise CustodiaInvalida(
+            'una custodia lleva exactamente un custodio: '
+            f'conductor={custodia.custodio_conductor_id}, sede={custodia.custodio_sede_id}. '
+            'Un registro con los dos, o con ninguno, no dice de quién es la responsabilidad.'
+        )
+
+    esperado = ('custodio_conductor_id' if custodia.custodio_tipo == CustodioTipo.CONDUCTOR
+                else 'custodio_sede_id')
+    if getattr(custodia, esperado) is None:
+        raise CustodiaInvalida(
+            f'custodio_tipo={custodia.custodio_tipo.value} exige {esperado}, '
+            f'y el que viene lleno es el otro.'
+        )
 
 
 __all__ = [

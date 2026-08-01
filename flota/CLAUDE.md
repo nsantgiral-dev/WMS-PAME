@@ -3,7 +3,8 @@
 Módulo de control de flota dentro de WMS-PAME.
 Este archivo contiene **solo reglas de decisión**. La referencia técnica vive en
 `docs/flota/ESPECIFICACION_T1.md`. La historia vive en `docs/flota/ESTADO.md`.
-Si este archivo pasa de 100 líneas, algo se está sedimentando acá que no debería.
+Toda sección es una regla numerada y ninguna pasa de 15 líneas. Si una necesita más,
+es un documento y va a `docs/flota/`: ahí es donde se sedimenta lo que no es decisión.
 
 **Toda regla lleva su motivo.** Una regla sin motivo escrito tiene fecha de vencimiento:
 alguien la "corrige" en seis meses por parecerle timorata.
@@ -108,3 +109,11 @@ producción. Una cosa construida y sin verificar a la vez, no cinco.
 
 *Motivo: es la lección más cara de cartera —superficie construida y nunca ejercitada— y
 acá pesa más, porque el usuario puede negarse a usar el sistema sin que nadie se entere.*
+
+## 13. Ningún número entra a ESTADO.md sin decir contra qué base y en qué fecha
+
+*Motivo: `rutas_historicas_sin_placa` valía 0 en una SQLite vacía y se leyó como "todas
+las rutas tienen placa". Era falso —son 3 de 15— y se leyó mal dos veces, la segunda
+después de la advertencia. La defensa no es leer con más cuidado: es que el dato llegue
+con su procedencia pegada.*
+
