@@ -220,6 +220,67 @@ cartera fantasma total — esa vive en Siesa.
 
 ---
 
+## Tanda 3 — anotado el 2026-08-01, no construido
+
+### Llegan 2 motocarros (Neiva y Pitalito, pedidos express urbanos)
+
+**Necesitan plantilla propia `motocarro_v1`.** No es el checklist de camión con
+la mitad de los ítems en N/A: un formulario lleno de casillas inaplicables
+entrena a marcar todo sin leer, que es exactamente lo que la regla 11 persigue.
+
+Diferencias que cambian la plantilla, no solo los valores:
+
+| | Camión | Motocarro |
+|---|---|---|
+| Posiciones de llanta | 4 o 6 | **3** |
+| Frenos | un sistema | **delantero y trasero por separado** |
+| Transmisión final | cardán | **cadena** — lubricación es tarea de rutina |
+| Furgón | sí | **no** |
+
+Por eso `ficha_tecnica` ganó `transmision_final` (2026-08-01): sin ese campo la
+tarea de lubricación de cadena no se puede derivar de la ficha, y en un camión
+con cardán ni siquiera existe.
+
+### `capacidad_kg` deja de ser opcional
+
+Hoy es nullable en `vehiculos` y el alta solo exige placa y tipo. Cuando
+`decision_ruta` reasigne, **necesita capacidad, no solo disponibilidad**: un
+motocarro no reemplaza un camión, y un reasignador que solo mira "¿está libre?"
+va a mandar tres toneladas en tres llantas.
+
+Se mide antes de imponerlo: cuántos vehículos activos tienen `capacidad_kg` en
+`NULL`. Medir → corregir → imponer, como el resto.
+
+### Política express — definida, sin implementar
+
+- Pedido mínimo **$70.000**
+- Flete **$5.000**
+- Se cobra **aunque el cliente tenga reparto programado** — paga la excepción,
+  no la entrega
+
+Dos cosas que hay que vigilar y que salen del mismo registro:
+
+1. **¿El flete cubre el costo real?** Tres entregas en una salida son $15.000
+   contra combustible, conductor prorrateado y desgaste. Una sola entrega a
+   $5.000 probablemente no. Si a los dos meses el express está en pérdida, el
+   número a mirar es entregas por salida, no el precio del flete.
+2. **¿Quién llama?** Si en tres meses los mismos cinco clientes concentran el
+   60% de los express, eso no es urgencia: es que su frecuencia de reparto está
+   mal calibrada. Se arregla cambiando la ruta, no cobrando flete.
+
+### Métrica pendiente — medición manual
+
+**Urgencias urbanas por mes en Neiva y Pitalito, con cliente y producto.**
+
+Sin ese número no se dimensiona nada: ni cuántos motocarros, ni si el flete
+cubre, ni si el problema es la ruta. Es medición manual porque hoy las urgencias
+no dejan rastro en ningún sistema — se piden por teléfono.
+
+Lleva canon antes de publicarse (`docs/flota/canones/`): qué cuenta como
+urgencia urbana, desde qué momento, y qué pasa con la que se pidió y se canceló.
+
+---
+
 ## Deuda declarada, con condición de disparo
 
 ### Tercera copia de la política "a qué SIESA apunta"

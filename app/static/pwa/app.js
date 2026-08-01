@@ -455,11 +455,12 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-layout') { if (!desdeTimer) await cargarLayout(); }
   else if (TAB === 'tab-compras') await cargarCompras();
   else if (TAB === 'tab-vigia') { if (!desdeTimer) await cargarVigia(); }
+  else if (TAB === 'tab-flota') { if (!desdeTimer) await cargarFlota(); }
 }
 
 /** @param {string} id - Tab element ID to activate (e.g. 'tab-dashboard'). */
 function tab(id) {
-  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-liquidacion','tab-layout','tab-compras','tab-etiquetas','tab-vigia'];
+  const TABS = ['tab-dashboard','tab-pedidos','tab-requisiciones','tab-traslados','tab-bodega','tab-operarios','tab-usuarios','tab-stock','tab-connekta','tab-muelle','tab-rutas','tab-inventario','tab-reposicion','tab-liquidacion','tab-layout','tab-compras','tab-etiquetas','tab-vigia','tab-flota'];
   TABS.forEach(t => {
     const el = document.getElementById(t);
     if (el) el.style.display = t === id ? 'block' : 'none';

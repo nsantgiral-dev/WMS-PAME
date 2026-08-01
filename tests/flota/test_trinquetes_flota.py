@@ -148,7 +148,18 @@ class TestTrinqueteSinDegradacionSilenciosa:
                 if not isinstance(nodo, ast.Call):
                     continue
                 fn = nodo.func
-                con_default = (
+                # `db.session.get(Modelo, pk)` NO es `dict.get(k, default)`:
+                # es el identity-map de SQLAlchemy 2.0, y es exactamente lo que
+                # el trinquete de deuda legacy del repo PREMIA frente a
+                # `Modelo.query.get(id)`. Un guard que castiga la migración que
+                # otro guard exige es un guard que alguien va a desactivar.
+                # Se distingue por el receptor, no por el nombre del método.
+                receptor = getattr(fn, 'value', None)
+                es_sesion = (
+                    (isinstance(receptor, ast.Attribute) and receptor.attr == 'session')
+                    or (isinstance(receptor, ast.Name) and receptor.id == 'session')
+                )
+                con_default = (not es_sesion) and (
                     (isinstance(fn, ast.Attribute)
                      and fn.attr in ('get', 'getenv')
                      and len(nodo.args) >= 2)

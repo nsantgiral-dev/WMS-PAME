@@ -47,6 +47,7 @@ def _ficha(mundo, **kw):
         vehiculo_id=mundo['vehiculo'].id, combustible='diesel',
         sistema_frenos='hidraulico', frenos_fuente='manual_fabricante',
         tiene_freno_escape='no', distribucion='correa',
+        transmision_final='cardan',
         distribucion_fuente='concesionario', aceite_motor_spec='15W40 CI-4',
         posiciones_llanta=4, tiene_furgon=False,
         km_inicial=100_000, km_inicial_ts=_T0,
@@ -139,6 +140,18 @@ class TestAtributosSinDato:
         """Quien lee esto va a buscar el camión, no la fila."""
         _ficha(mundo, distribucion='sin_dato', distribucion_fuente='sin_dato')
         assert 'TGZ655.distribucion' in MedidorSQL().atributos_sin_dato()
+
+    def test_un_atributo_nuevo_deja_incompleta_una_ficha_que_lo_estaba(self, mundo):
+        """`transmision_final` (2026-08-01) entró como `sin_dato` por defecto.
+
+        Una ficha que estaba completa antes del campo nuevo NO sigue completa
+        después: le falta un dato que ahora se pide. Un default que la dejara
+        pasar convertiría el campo en decorativo el día que se agregó.
+        """
+        medidor = MedidorSQL()
+        antes = medidor.fichas_completas()
+        _ficha(mundo, transmision_final='sin_dato')
+        assert medidor.fichas_completas() == antes
 
     def test_una_ficha_completa_no_aporta_nada(self, mundo):
         medidor = MedidorSQL()

@@ -43,6 +43,7 @@ COMBUSTIBLE      = ('gasolina', 'diesel', 'sin_dato')
 SISTEMA_FRENOS   = ('hidraulico', 'aire_sobre_hidraulico', 'aire_full', 'sin_dato')
 SI_NO            = ('si', 'no', 'sin_dato')
 DISTRIBUCION     = ('correa', 'cadena', 'sin_dato')
+TRANSMISION_FINAL = ('cadena', 'correa', 'cardan', 'sin_dato')
 FUENTE           = ('manual_fabricante', 'concesionario', 'placa_motor',
                     'taller', 'estimado', 'sin_dato')
 TIPO_DOCUMENTO   = ('soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad')
@@ -84,6 +85,13 @@ class FichaTecnica(db.Model):
     tiene_freno_escape = db.Column(db.String(10), nullable=False, server_default='sin_dato')
     distribucion   = db.Column(db.String(10), nullable=False, server_default='sin_dato')
 
+    # Cómo llega la fuerza a la rueda. NO es lo mismo que `distribucion`, que es
+    # la sincronización del motor: un motocarro puede tener distribución por
+    # cadena Y transmisión final por cadena, y son dos mantenimientos distintos.
+    # Sin este campo no se puede derivar la lubricación de cadena, que en un
+    # motocarro es tarea de rutina y en un camión con cardán no existe.
+    transmision_final = db.Column(db.String(10), nullable=False, server_default='sin_dato')
+
     distribucion_km_cambio  = db.Column(db.Integer, nullable=True)
     norma_emisiones         = db.Column(db.Text, nullable=True)
     aceite_motor_spec       = db.Column(db.Text, nullable=False, server_default='sin_dato')
@@ -113,6 +121,7 @@ class FichaTecnica(db.Model):
         _en('sistema_frenos', SISTEMA_FRENOS),
         _en('tiene_freno_escape', SI_NO),
         _en('distribucion', DISTRIBUCION),
+        _en('transmision_final', TRANSMISION_FINAL),
         _en('distribucion_fuente', FUENTE),
         _en('frenos_fuente', FUENTE),
         db.CheckConstraint('posiciones_llanta > 0', name='ck_flota_posiciones_llanta'),
@@ -133,7 +142,8 @@ class FichaTecnica(db.Model):
         """Los campos de esta ficha que están declarados como desconocidos."""
         return [
             campo for campo in
-            ('combustible', 'sistema_frenos', 'tiene_freno_escape', 'distribucion')
+            ('combustible', 'sistema_frenos', 'tiene_freno_escape', 'distribucion',
+             'transmision_final')
             if getattr(self, campo) == 'sin_dato'
         ]
 

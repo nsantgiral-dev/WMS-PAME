@@ -40,7 +40,8 @@ vehiculo_id             FK vehiculos.id, PK
 combustible             gasolina | diesel | sin_dato
 sistema_frenos          hidraulico | aire_sobre_hidraulico | aire_full | sin_dato
 tiene_freno_escape      si | no | sin_dato
-distribucion            correa | cadena | sin_dato
+distribucion            correa | cadena | sin_dato      -- sincronización del motor
+transmision_final       cadena | correa | cardan | sin_dato  -- fuerza a la rueda
 distribucion_km_cambio  int nullable
 norma_emisiones         text nullable
 aceite_motor_spec       text          -- API + viscosidad
@@ -60,6 +61,11 @@ distribucion_verificado_ts   timestamptz nullable
 frenos_fuente           (mismos valores)
 frenos_verificado_ts    timestamptz nullable
 ```
+
+`transmision_final` no es `distribucion`. La distribución sincroniza el motor; la
+transmisión final lleva la fuerza a la rueda. Un motocarro puede tener las dos por
+cadena y son dos mantenimientos distintos: sin este campo no se deriva la lubricación
+de cadena, que en un motocarro es rutina y en un camión con cardán no existe.
 
 Los dos atributos que disparan tareas de seguridad —`distribucion` y `sistema_frenos`—
 llevan fuente y fecha propias. Los demás no. Es el canon aplicado a un dato de ficha: un
@@ -199,6 +205,15 @@ GET  /flota/vehiculo/{placa}/ficha
 PUT  /flota/vehiculo/{placa}/ficha
 GET  /flota/health
 ```
+
+**Estos cinco endpoints se construyen JUNTO CON su consumidor (§3), en la misma
+sesión — nunca antes.** Un endpoint sin forma de llamarse es la regla 12 rota y el
+patrón que ya apareció cuatro veces en este repo: la capacidad construida, probada y
+desplegada, y el gesto que la enciende nunca escrito. El trinquete de huérfanos de
+`tests/flota/test_trinquetes_flota.py` lo impide, y la alternativa —cinco excepciones
+declaradas el primer día— convertiría un trinquete en cero en arqueología.
+
+El orden de §3 y §4 en este documento es de lectura, no de ejecución.
 
 `GET /flota/aptitud/{placa}` **no se implementa en tanda 1.** Llega en tanda 2 con el kill
 switch `FLOTA_BLOQUEO_DESPACHO=0`.

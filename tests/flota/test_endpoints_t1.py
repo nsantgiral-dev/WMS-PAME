@@ -1,0 +1,208 @@
+"""
+Los cinco endpoints de §4, construidos con su consumidor (§3).
+
+Lo que se prueba acá no es que devuelvan 200: es que **la frontera HTTP no
+afloje ninguna de las políticas del dominio.** Un endpoint que acepta lo que el
+dominio rechaza es un rodeo alrededor de todo lo demás — y como devuelve 201,
+nadie se entera.
+"""
+from datetime import datetime
+
+import pytest
+
+from flota.adaptadores.modelos import Custodia, LecturaOdometro
+
+_H = 'Authorization'
+
+
+@pytest.fixture
+def flota_mundo(db):
+    from app.models.almacen import Almacen
+    from app.models.conductor import Conductor
+    from app.models.vehiculo import Vehiculo
+
+    veh = Vehiculo(placa='EPX100', tipo='NHR', activo=True)
+    alm = Almacen(codigo='EP-SEDE', nombre='Sede endpoints')
+    db.session.add_all([veh, alm])
+    db.session.flush()
+    con = Conductor(nombre='Conductor EP', cedula='EP-1', activo=True)
+    db.session.add(con)
+    db.session.commit()
+    return {'placa': veh.placa, 'veh': veh.id, 'alm': alm.id, 'con': con.id}
+
+
+def _auth(token):
+    return {_H: f'Bearer {token}'}
+
+
+class TestSesionObligatoria:
+    """`registrado_por_usuario_id` sale del token, nunca del cuerpo.
+
+    Quién dice que entregó el turno no lo elige quien manda el JSON.
+    """
+
+    def test_los_cinco_exigen_sesion(self, client, flota_mundo):
+        p = flota_mundo['placa']
+        assert client.get(f'/flota/custodia/activa/{p}').status_code == 401
+        assert client.post('/flota/custodia/traspaso', json={}).status_code == 401
+        assert client.post('/flota/odometro', json={}).status_code == 401
+        assert client.get(f'/flota/vehiculo/{p}/ficha').status_code == 401
+        assert client.put(f'/flota/vehiculo/{p}/ficha', json={}).status_code == 401
+
+
+class TestCustodiaActiva:
+
+    def test_una_placa_que_no_existe_es_404_y_no_una_respuesta_vacia(
+            self, client, jwt_token_admin, flota_mundo):
+        """Un vehículo que nadie dio de alta se dice, no se rodea."""
+        r = client.get('/flota/custodia/activa/NOEXISTE', headers=_auth(jwt_token_admin))
+        assert r.status_code == 404
+
+    def test_sin_lecturas_el_odometro_viaja_como_palabra_no_como_cero(
+            self, client, jwt_token_admin, flota_mundo):
+        """0 km es 'no ha rodado'. `sin_dato` es 'no sabemos'."""
+        r = client.get(f"/flota/custodia/activa/{flota_mundo['placa']}",
+                       headers=_auth(jwt_token_admin))
+        cuerpo = r.get_json()
+        assert cuerpo['odometro_actual'] == 'sin_dato'
+        assert cuerpo['odometro_actual'] != 0
+        assert cuerpo['custodia'] is None
+
+
+class TestTraspaso:
+
+    def _payload(self, m, km=100_000, **kw):
+        base = {'placa': m['placa'], 'km': km, 'custodio_tipo': 'conductor',
+                'custodio_conductor_id': m['con']}
+        base.update(kw)
+        return base
+
+    def test_el_primer_turno_es_linea_base(self, client, jwt_token_admin, flota_mundo):
+        r = client.post('/flota/custodia/traspaso', json=self._payload(flota_mundo),
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 201
+        assert r.get_json()['linea_base'] is True
+
+    def test_sin_km_no_pasa(self, client, jwt_token_admin, flota_mundo):
+        """Regla 3: sin odómetro no se persiste ningún evento de flota."""
+        p = self._payload(flota_mundo)
+        del p['km']
+        r = client.post('/flota/custodia/traspaso', json=p, headers=_auth(jwt_token_admin))
+        assert r.status_code == 400
+        assert 'km' in r.get_json()['error']
+
+    def test_un_odometro_que_decrece_es_409_y_no_deja_rastro(
+            self, client, jwt_token_admin, flota_mundo):
+        """409, no 400: no es sintaxis del cliente, es que el mundo no lo admite."""
+        client.post('/flota/custodia/traspaso', json=self._payload(flota_mundo, km=100_000),
+                    headers=_auth(jwt_token_admin))
+        r = client.post('/flota/custodia/traspaso', json=self._payload(flota_mundo, km=99_000),
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 409
+        assert Custodia.query.count() == 1
+        assert LecturaOdometro.query.count() == 1
+
+    def test_un_custodio_invalido_no_cierra_el_turno_anterior(
+            self, client, jwt_token_admin, flota_mundo):
+        """La frontera HTTP no puede dejar al vehículo sin responsable."""
+        client.post('/flota/custodia/traspaso', json=self._payload(flota_mundo),
+                    headers=_auth(jwt_token_admin))
+        r = client.post('/flota/custodia/traspaso',
+                        json={'placa': flota_mundo['placa'], 'km': 100_100,
+                              'custodio_tipo': 'conductor'},
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 409
+        assert Custodia.query.filter(Custodia.fin_ts.is_(None)).count() == 1
+
+    def test_sede_sin_fila_entra_declarada(self, client, jwt_token_admin, flota_mundo):
+        r = client.post('/flota/custodia/traspaso',
+                        json={'placa': flota_mundo['placa'], 'km': 100_000,
+                              'custodio_tipo': 'sede', 'custodio_estado': 'pendiente_sede'},
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 201
+        assert r.get_json()['custodio_estado'] == 'pendiente_sede'
+
+
+class TestOdometro:
+
+    def test_una_correccion_sin_motivo_es_409(self, client, jwt_token_admin, flota_mundo):
+        client.post('/flota/odometro',
+                    json={'placa': flota_mundo['placa'], 'valor_km': 100_000,
+                          'origen': 'entrega'}, headers=_auth(jwt_token_admin))
+        r = client.post('/flota/odometro',
+                        json={'placa': flota_mundo['placa'], 'valor_km': 99_000,
+                              'origen': 'correccion'}, headers=_auth(jwt_token_admin))
+        assert r.status_code == 409
+
+    def test_una_correccion_con_motivo_si_entra(self, client, jwt_token_admin, flota_mundo):
+        client.post('/flota/odometro',
+                    json={'placa': flota_mundo['placa'], 'valor_km': 100_000,
+                          'origen': 'entrega'}, headers=_auth(jwt_token_admin))
+        r = client.post('/flota/odometro',
+                        json={'placa': flota_mundo['placa'], 'valor_km': 99_000,
+                              'origen': 'correccion',
+                              'motivo_correccion': 'digitación: sobraba un cero'},
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 201
+
+    def test_un_origen_inventado_es_400(self, client, jwt_token_admin, flota_mundo):
+        r = client.post('/flota/odometro',
+                        json={'placa': flota_mundo['placa'], 'valor_km': 1,
+                              'origen': 'lo_que_sea'}, headers=_auth(jwt_token_admin))
+        assert r.status_code == 400
+
+
+class TestFicha:
+
+    def test_sin_ficha_devuelve_existe_false_y_no_una_ficha_vacia(
+            self, client, jwt_token_admin, flota_mundo):
+        """La pantalla tiene que distinguir 'sin levantar' de 'levantada a medias'."""
+        cuerpo = client.get(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                            headers=_auth(jwt_token_admin)).get_json()
+        assert cuerpo['existe'] is False
+        assert cuerpo['completa'] is None      # no False: no hay ficha que juzgar
+
+    def test_una_ficha_nueva_nace_incompleta(self, client, jwt_token_admin, flota_mundo):
+        """Todo en `sin_dato` hasta que alguien la llene. Sin defaults alegres."""
+        r = client.put(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                       json={'posiciones_llanta': 4, 'km_inicial': 100_000},
+                       headers=_auth(jwt_token_admin))
+        assert r.status_code == 201
+        cuerpo = r.get_json()
+        assert cuerpo['completa'] is False
+        assert 'transmision_final' in cuerpo['atributos_sin_dato']
+
+    def test_un_dato_de_seguridad_sin_procedencia_lo_rechaza_la_base(
+            self, client, jwt_token_admin, flota_mundo):
+        """El endpoint no revalida: la política vive en un solo lugar."""
+        client.put(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                   json={'posiciones_llanta': 4, 'km_inicial': 100_000},
+                   headers=_auth(jwt_token_admin))
+        r = client.put(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                       json={'distribucion': 'correa'},
+                       headers=_auth(jwt_token_admin))
+        assert r.status_code == 409
+        assert 'detalle' in r.get_json()
+
+    def test_con_procedencia_si_guarda(self, client, jwt_token_admin, flota_mundo):
+        client.put(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                   json={'posiciones_llanta': 4, 'km_inicial': 100_000},
+                   headers=_auth(jwt_token_admin))
+        r = client.put(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                       json={'distribucion': 'correa',
+                             'distribucion_fuente': 'concesionario',
+                             'distribucion_verificado_ts': datetime(2026, 8, 1).isoformat()},
+                       headers=_auth(jwt_token_admin))
+        assert r.status_code == 200
+        assert r.get_json()['ficha']['distribucion'] == 'correa'
+
+    def test_una_fecha_mal_escrita_es_400_y_no_un_NULL_silencioso(
+            self, client, jwt_token_admin, flota_mundo):
+        """Una fecha de verificación guardada como NULL diría que nunca se verificó."""
+        client.put(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                   json={'posiciones_llanta': 4, 'km_inicial': 100_000},
+                   headers=_auth(jwt_token_admin))
+        r = client.put(f"/flota/vehiculo/{flota_mundo['placa']}/ficha",
+                       json={'frenos_verificado_ts': '01/08/2026'},
+                       headers=_auth(jwt_token_admin))
+        assert r.status_code == 400
