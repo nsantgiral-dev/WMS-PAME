@@ -130,7 +130,7 @@ no puede cerrar aunque el código esté completo.
 
 | Bloqueo | Medido | Qué falta |
 |---|---|---|
-| **Solo 1 vehículo activo de los 5** | `vehiculos WHERE activo` = 1 | Dar de alta 4 filas (placa, tipo, marca, modelo) **antes** de que el dueño de flota salga a campo |
+| ~~Solo 1 vehículo activo de los 5~~ | **RESUELTO 2026-08-01** | Las cinco placas dadas de alta: TGZ653 y TGZ655 (Van, los N300), THP696, UPQ606 y WHX245 (Camión) |
 | **`almacenes` cubre 5 de 9 centros** | CO 001, 002, 003, 004, 006 | Faltan CO 005 (Pitalito Terminal) y 007–009 (ferias) |
 | **1 conductor activo sin cuenta** | 1 de 3 activos | Ese conductor no puede autenticarse: su entrega de turno la registra otro |
 
@@ -142,6 +142,24 @@ flota vuelve con las fotos y no tiene dónde ponerlas. Son quince minutos de
 El tercero no bloquea: el modelo ya contempla que el jefe de sede registre la
 entrega con la cédula del conductor como custodio y su propio usuario como
 `registrado_por`. Honesto y auditable, en vez de excluir gente en silencio.
+
+#### Basura en el maestro de vehículos — para el dueño del maestro
+
+Al dar de alta las cinco placas apareció esto:
+
+| id | placa | activo |
+|---|---|---|
+| 1 | `FNR*()` | **sí** |
+| 2 | `TST999` | no |
+| 3 | `TST001` | no |
+
+**El `vehiculos_activos = 1` que midió el health el 2026-08-01 estaba contando
+la fila 1**, que tiene una placa imposible. No era un vehículo: era ruido con
+cara de dato.
+
+No se tocó —es maestro ajeno y no sé de dónde salió— pero hay que desactivarla:
+mientras siga activa, el health dice 6 vehículos y la compuerta de 5 fichas va a
+verse eternamente incompleta por una fila que no existe en el patio.
 
 ### `custodio_sede_id` apunta a `almacenes` — sin verificar que alcance
 
@@ -217,6 +235,116 @@ sola en el próximo deploy.
 Contribución del WMS a la cartera fantasma, medida el 2026-08-01: **2 registros**,
 uno de ellos la prueba de FEW-1463 (Samboni) documentada en CLAUDE.md. No es la
 cartera fantasma total — esa vive en Siesa.
+
+---
+
+## Estructura de responsabilidad — definida el 2026-08-01
+
+Lo que faltaba desde el primer día no era código: era dueño. El sistema de papel
+de septiembre a noviembre de 2025 detectaba bien y murió el 18 de noviembre por
+no tenerlo.
+
+| Nivel | Quién | Qué hace | Tiempo |
+|---|---|---|---|
+| Custodio diario | Cada conductor | Preoperacional, odómetro, reporta hallazgos | 2 min/día |
+| Responsable de zona | Admin C.O. 003 (Neiva) · encargado Pitalito · encargado Florencia | Ejecuta lo que ya ejecuta, **pero registrándolo** | Lo que ya hacen |
+| Control de flota | **Yesid** — dueño del registro | Revisa el tablero, persigue lo vencido, escala | 30 min/semana |
+
+El nivel 2 ya existía y funcionaba. Lo único que cambia es que registran.
+
+### Yesid no tiene autoridad jerárquica sobre las zonas, y el diseño depende de eso
+
+**No ordena: señala plazos vencidos y escala.** Llama a la administradora; si no
+se resuelve en el plazo, no insiste — le escribe a Santiago.
+
+**La autoridad de la instrucción es del sistema, no de la persona.** El hallazgo
+nace con severidad y fecha límite calculadas por regla (bloqueante = mismo día,
+mayor = 7, menor = 30), no por opinión de nadie. Yesid no está diciendo qué
+hacer: está señalando que un plazo se venció.
+
+Es el mismo diseño que el bloqueo de cartera — **la decisión incómoda la toma la
+regla, no la persona.** Sin eso, el rol muere en el primer "yo no le recibo
+órdenes a él", y tendría razón quien lo diga.
+
+Lo que **no** funciona es repartirlo entre las tres administradoras: con tres
+responsables y ningún dueño, nadie mira el conjunto. Eso es exactamente lo que
+pasó entre noviembre y hoy.
+
+### El compromiso que sostiene todo, y no es de código
+
+Santiago lee el reporte de tres líneas **todos los lunes**. Cinco minutos.
+
+Si a la tercera semana no se leyó, Yesid deja de mandarlo, y ahí muere el
+sistema — igual que en noviembre, y otra vez sin que la herramienta tenga nada
+que ver.
+
+---
+
+## Tanda 2 — alcance agregado el 2026-08-01
+
+### Reporte semanal automático, de tres líneas
+
+Llega **armado** los lunes por correo a Yesid. Tres números y su detalle:
+
+1. Inspecciones completas de la semana
+2. Hallazgos vencidos, con días de vencimiento
+3. Documentos que vencen en 30 días
+
+**Si Yesid tiene que construirlo, no lo va a construir.** El sistema trabaja
+para él, no al revés — esa es la diferencia entre un rol de 30 minutos y uno que
+nadie sostiene.
+
+Nace apagado por variable de entorno, como todo cron que escribe (regla 10).
+
+### Notificaciones por WhatsApp (Gupshup) — caso de uso interno
+
+**Tres empleados, dos o tres mensajes por semana, sin respuesta esperada.** No
+son clientes. Esa diferencia cambia el diseño respecto del adaptador de cartera:
+
+| Decisión | Flota | Por qué difiere de cartera |
+|---|---|---|
+| Número | **Compartido** con la app de cartera | El riesgo de *quality rating* nace de que la gente bloquee; tres empleados que esperan el mensaje no bloquean. Y como no se espera respuesta, no compiten por el único callback URL |
+| Opt-out | **No aplica** | Es comunicación laboral, no comercial |
+| Teléfonos | **En configuración, a mano** | Cuatro números. No salen de `TercerosContacto`, así que las trampas de la paginación sin `ORDER BY` y del caché que reemplaza no tocan este caso |
+| Delay y tope diario | **No aplican** | No hay ráfagas |
+| Escalonamiento por cohortes | **No aplica** | Los destinatarios YA son los internos |
+
+**Lo que sí se hereda entero del adaptador de cartera, y es lo caro:**
+
+1. **El nombre de plantilla no es su UUID.** `_TEMPLATE_IDS.get(nombre, nombre)`
+   hacía que Gupshup respondiera `submitted` y no llegara nada, durante semanas.
+   Devuelve `None` y aborta. Es la regla 5 literal: un adaptador que degrada
+   hacia algo que se parece al éxito.
+2. **`submitted` no es `delivered`.** Acá importa más que en cartera: **el
+   propósito del sistema es que un hallazgo vencido no se quede quieto.** Si el
+   aviso no llega y nadie se entera, el sistema falló justo donde tenía que
+   funcionar. Se consumen los eventos de entrega desde el día uno, y un aviso de
+   hallazgo bloqueante que no llegue a `delivered` se registra y escala.
+3. **El doble se declara** — `simulado = True` en el registro, no solo en el
+   código (regla 8).
+4. **El guard de teléfono verifica forma.** `str(None)` es `'None'` y es truthy.
+5. **Callback URL verificado el primer día**, o todo lo entrante se pierde en
+   silencio.
+
+**Una notificación por evento, no por consulta.** Si el cron corre cada noche y
+reenvía el mismo hallazgo vencido, en tres días el chat se silencia. Se manda al
+vencer, y se repite solo si escala de nivel.
+
+Tres plantillas, categoría `utility`, parámetros como **lista explícita** (son
+posicionales: reordenarlos manda la dirección donde va la fecha, sin error):
+
+| Plantilla | Destinatario |
+|---|---|
+| `flota_hallazgo_bloqueante` | Admin de zona + Yesid, al instante |
+| `flota_hallazgo_vencido` | Yesid; +2 días sin cerrar → Santiago |
+| `flota_documento_vence` | Yesid, 15 días antes |
+
+SMS queda **fuera de alcance**: cuesta más, se lee menos, y con tres
+destinatarios internos que usan WhatsApp todo el día no aporta.
+
+**Orden:** esto es tanda 2 y no puede adelantarse. Primero tiene que existir el
+hallazgo con plazo — que es lo que se notifica. Notificar antes de que haya qué
+notificar es superficie sin estrenar, que es la lección más cara del proyecto.
 
 ---
 
