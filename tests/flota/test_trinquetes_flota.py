@@ -1,0 +1,388 @@
+"""
+Trinquetes del módulo `flota/`. Alcance limitado a `flota/`; los trinquetes
+globales del repo no se tocan.
+
+TODOS ARRANCAN EN CERO. Es la diferencia que hace que valgan algo: los
+trinquetes de `app/` nacieron con deuda —83 endpoints huérfanos, 224 llamadas
+legacy, 637 advertencias— y un trinquete que arranca en 83 es arqueología. Uno
+que arranca en 0 es una garantía, y solo se puede tener antes de la primera
+línea. Esta es esa línea.
+
+Cada uno trae su regla del `flota/CLAUDE.md`. Si alguno se pone rojo, la
+respuesta es arreglar el código, no subir el tope.
+"""
+import ast
+import os
+import re
+import warnings
+
+import pytest
+
+_RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_FLOTA = os.path.join(_RAIZ, 'flota')
+_DOMINIO = os.path.join(_FLOTA, 'dominio')
+
+
+def _archivos_py(directorio):
+    encontrados = []
+    for raiz, _dirs, archivos in os.walk(directorio):
+        if '__pycache__' in raiz:
+            continue
+        for a in archivos:
+            if a.endswith('.py'):
+                encontrados.append(os.path.join(raiz, a))
+    return sorted(encontrados)
+
+
+def _leer(ruta):
+    with open(ruta, encoding='utf-8') as f:
+        return f.read()
+
+
+def _rel(ruta):
+    return os.path.relpath(ruta, _RAIZ)
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRINQUETE 1 — frontera del dominio (tope: 0)
+#
+# El dominio no importa Flask, ni SQLAlchemy, ni `app.*`. No es preferencia
+# estética: es lo único que hace que las políticas se puedan probar sin base y
+# que un `db.session` no se cuele adentro de una regla de negocio.
+#
+# En `app/` esta frontera no existe y por eso hubo que documentar a mano una
+# tabla de "dispatchers fuera de su módulo" en CLAUDE.md — cada tabla así es
+# memoria humana pagando lo que una herramienta hace gratis.
+# ══════════════════════════════════════════════════════════════════════════
+
+_PROHIBIDOS_EN_DOMINIO = ('flask', 'sqlalchemy', 'app.', 'app')
+
+
+class TestTrinqueteFronteraDominio:
+
+    def _imports_de(self, ruta):
+        arbol = ast.parse(_leer(ruta), filename=ruta)
+        modulos = []
+        for nodo in ast.walk(arbol):
+            if isinstance(nodo, ast.Import):
+                modulos += [a.name for a in nodo.names]
+            elif isinstance(nodo, ast.ImportFrom) and nodo.module:
+                modulos.append(nodo.module)
+        return modulos
+
+    def test_el_dominio_no_importa_framework_ni_base(self):
+        violaciones = []
+        for ruta in _archivos_py(_DOMINIO):
+            for modulo in self._imports_de(ruta):
+                raiz = modulo.split('.')[0]
+                if raiz in _PROHIBIDOS_EN_DOMINIO or modulo.startswith('app.'):
+                    violaciones.append(f'{_rel(ruta)} → import {modulo}')
+        assert not violaciones, (
+            '\nEl dominio de flota dejó de ser puro:\n'
+            + '\n'.join(f'  · {v}' for v in violaciones)
+            + '\n\nEso va en flota/adaptadores/. El dominio solo consume Protocols '
+              'de flota/puertos.py.'
+        )
+
+    def test_el_dominio_no_importa_adaptadores_ni_api(self):
+        """La dirección es una sola: api → adaptadores → puertos → dominio."""
+        violaciones = []
+        for ruta in _archivos_py(_DOMINIO):
+            for modulo in self._imports_de(ruta):
+                if modulo.startswith(('flota.adaptadores', 'flota.api')):
+                    violaciones.append(f'{_rel(ruta)} → import {modulo}')
+        assert not violaciones, (
+            '\nEl dominio miró hacia arriba:\n' + '\n'.join(f'  · {v}' for v in violaciones)
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRINQUETE 2 — ninguna degradación silenciosa (tope: 0)
+#
+# Regla 5 del módulo: ningún adaptador degrada hacia algo que se parezca al
+# éxito. Prohibido heredar el `except Exception: pass` de
+# `ruta_service.py:633`, que hoy guarda la foto sin comprimir y no se lo cuenta
+# a nadie.
+#
+# Los defaults peligrosos de este dominio son "el último conductor conocido",
+# "el último odómetro conocido" y "el custodio del acta original" — este último
+# es exactamente lo que está pasando en papel desde septiembre de 2025.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestTrinqueteSinDegradacionSilenciosa:
+
+    def test_ningun_except_que_traga(self):
+        violaciones = []
+        for ruta in _archivos_py(_FLOTA):
+            arbol = ast.parse(_leer(ruta), filename=ruta)
+            for nodo in ast.walk(arbol):
+                if not isinstance(nodo, ast.ExceptHandler):
+                    continue
+                cuerpo = [n for n in nodo.body if not isinstance(n, ast.Expr)]
+                if not cuerpo or all(isinstance(n, ast.Pass) for n in cuerpo):
+                    violaciones.append(f'{_rel(ruta)}:{nodo.lineno} — except que traga')
+        assert not violaciones, (
+            '\n' + '\n'.join(f'  · {v}' for v in violaciones)
+            + '\n\nO se maneja de verdad, o se propaga. Un fallo silencioso acá '
+              'produce evidencia falsa de que todo está bien.'
+        )
+
+    def test_ningun_get_con_default_ni_getattr_con_default(self):
+        """`.get(x, default)` en una frontera es un bug: o funciona, o falla ruidosamente.
+
+        Sin exenciones. La lectura de variables de entorno se escribe con
+        `os.getenv(X)` de un solo argumento y una comparación explícita — así
+        "no configurado" queda como un estado que se decide, no como un default
+        que se hereda sin mirar.
+
+        Se comprueba por AST y no por texto: lo que hace ilegal a la llamada es
+        el ARGUMENTO DE MÁS, no la palabra. `getattr(obj, nombre)` de dos
+        argumentos es legítimo —levanta si no está— y una regex que cuente comas
+        lo marca igual. Un guard con falsos positivos se termina desactivando, y
+        un guard desactivado es peor que no tenerlo.
+        """
+        violaciones = []
+        for ruta in _archivos_py(_FLOTA):
+            arbol = ast.parse(_leer(ruta), filename=ruta)
+            for nodo in ast.walk(arbol):
+                if not isinstance(nodo, ast.Call):
+                    continue
+                fn = nodo.func
+                con_default = (
+                    (isinstance(fn, ast.Attribute)
+                     and fn.attr in ('get', 'getenv')
+                     and len(nodo.args) >= 2)
+                    or (isinstance(fn, ast.Name)
+                        and fn.id in ('getattr', 'getenv')
+                        and len(nodo.args) >= 3)
+                )
+                if con_default:
+                    nombre = fn.attr if isinstance(fn, ast.Attribute) else fn.id
+                    violaciones.append(f'{_rel(ruta)}:{nodo.lineno} — {nombre}() con default')
+        assert not violaciones, (
+            '\n' + '\n'.join(f'  · {v}' for v in violaciones)
+            + '\n\nSi el dato puede faltar, decláralo con palabras (SIN_DATO) o levanta.'
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRINQUETE 3 — ninguna foto en la base (tope: 0)
+#
+# Regla 7: la base guarda referencia, hash, bytes y dimensiones. Nunca el
+# binario. Las fotos viejas de `recaudo_entrega` (base64 en columna Text) se
+# quedan donde están; este módulo no las hereda ni las migra.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestTrinqueteFotosFueraDeLaBase:
+
+    def test_ninguna_columna_de_texto_guarda_binario(self):
+        sospechosos = re.compile(
+            r'(b64encode|b64decode|base64\.|toDataURL|data:image/)', re.IGNORECASE
+        )
+        violaciones = []
+        for ruta in _archivos_py(_FLOTA):
+            for i, linea in enumerate(_leer(ruta).splitlines(), 1):
+                sin_comentario = linea.split('#')[0]
+                if sospechosos.search(sin_comentario):
+                    violaciones.append(f'{_rel(ruta)}:{i} — {linea.strip()}')
+        assert not violaciones, (
+            '\n' + '\n'.join(f'  · {v}' for v in violaciones)
+            + '\n\nEl binario va a object storage; la base guarda storage_ref, '
+              'hash_sha256, bytes y dimensiones.'
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRINQUETE 4 — cobertura (tope: 0 módulos sin test)
+#
+# Mismo criterio que el guard global: no mide % de líneas, mide si EXISTE al
+# menos un test que referencie el módulo. Un módulo con 1 test es peor que
+# tres; 0 es inaceptable.
+# ══════════════════════════════════════════════════════════════════════════
+
+_TESTS_FLOTA = os.path.dirname(os.path.abspath(__file__))
+
+
+def _todo_el_texto_de_tests():
+    texto = ''
+    for a in sorted(os.listdir(_TESTS_FLOTA)):
+        if a.startswith('test_') and a.endswith('.py'):
+            texto += _leer(os.path.join(_TESTS_FLOTA, a))
+    return texto
+
+
+class TestTrinqueteCobertura:
+
+    def test_todo_modulo_de_flota_esta_referenciado_por_un_test(self):
+        texto = _todo_el_texto_de_tests()
+        sin_test = []
+        for ruta in _archivos_py(_FLOTA):
+            nombre = os.path.basename(ruta)[:-3]
+            if nombre == '__init__':
+                continue
+            if nombre not in texto:
+                sin_test.append(_rel(ruta))
+        assert not sin_test, (
+            '\nMódulos de flota sin ningún test que los nombre:\n'
+            + '\n'.join(f'  · {m}' for m in sin_test)
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRINQUETE 5 — endpoints sin consumidor (tope: 0 no declarados)
+#
+# Es el guard que en `app/` nació con 83 huérfanos heredados. Acá arranca
+# limpio. Su razón de ser: `descargar_kardex` bloqueaba 4 modelos y no tenía
+# botón; `alimentar_adopcion_picking` era la métrica del go-live y no tenía ni
+# cron ni botón. Ninguna de las dos se detecta leyendo código: cada pieza está
+# bien, lo que falta es el gesto que la enciende.
+#
+# El guard global de `app/` solo mira rutas que empiezan por `/api/`, así que
+# `/flota/...` le es invisible. Por eso el módulo necesita el suyo.
+# ══════════════════════════════════════════════════════════════════════════
+
+# Exentos POR NATURALEZA, no por deuda. Mismo criterio que `_EXENTOS_POR_REGLA`
+# en el guard global, donde `/api/health/` ya está exento: un health lo leen
+# monitores y operación desde consola, no una pantalla.
+_EXENTOS_POR_REGLA = ('/flota/health',)
+
+_PWA = os.path.join(_RAIZ, 'app', 'static', 'pwa')
+
+
+class TestTrinqueteEndpointsSinConsumidor:
+
+    def _rutas_de_flota(self, app):
+        return [str(r) for r in app.url_map.iter_rules() if str(r).startswith('/flota')]
+
+    def test_health_esta_montado(self, app):
+        assert '/flota/health' in self._rutas_de_flota(app)
+
+    def test_ningun_endpoint_de_flota_sin_consumidor(self, app):
+        blob = ''
+        for a in os.listdir(_PWA):
+            if a.endswith(('.js', '.html')):
+                blob += _leer(os.path.join(_PWA, a))
+
+        huerfanos = []
+        for ruta in self._rutas_de_flota(app):
+            if ruta in _EXENTOS_POR_REGLA:
+                continue
+            literales = [s for s in re.split(r'<[^>]+>', ruta) if s.strip('/')]
+            if not all(s.rstrip('/') in blob for s in literales):
+                huerfanos.append(ruta)
+
+        assert not huerfanos, (
+            f'\n{len(huerfanos)} endpoint(s) de flota sin consumidor:\n'
+            + '\n'.join(f'  · {r}' for r in huerfanos)
+            + '\n\nConéctalo desde el JS. Si de verdad no debe tener pantalla, '
+              'la pregunta no es "qué pantalla le falta" sino QUÉ DECISIÓN '
+              'DEBERÍA ESTAR INFORMANDO — y eso se escribe acá antes de eximirlo.'
+        )
+
+    def test_la_lista_de_exentos_no_crece(self):
+        """Anti-podredumbre: la exención es una categoría, no un basurero."""
+        assert len(_EXENTOS_POR_REGLA) <= 1, (
+            'Se agregó un exento nuevo. Un endpoint sin consumidor casi nunca '
+            'necesita un tab: suele necesitar ser procedencia dentro de la '
+            'pantalla que ya usa ese dato.'
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# TRINQUETE 6 — canal de advertencias (tope: 0)
+#
+# `app/` llegó a 639 advertencias por corrida, 637 de una sola clase conocida.
+# Entre ese ruido había una real —clave HMAC de 15 bytes contra los 32 de
+# RFC 7518— que nadie veía. Lo que se normaliza, se esconde.
+#
+# Acá el tope es 0 desde el principio: la próxima advertencia que aparezca en
+# `flota/` será real.
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestTrinqueteTamanoDelClaudeMd:
+    """TRINQUETE 7 — el CLAUDE.md del módulo no se sedimenta (tope: 100 líneas).
+
+    El archivo declara su propio tope: "Si este archivo pasa de 100 líneas, algo
+    se está sedimentando acá que no debería". Un tope declarado sin mecanismo es
+    una intención — y este archivo no se degrada de golpe sino por acumulación,
+    que es justo la clase de deterioro que nadie nota a tiempo.
+
+    QUÉ CUENTA: desde el primer `## ` hasta el final, o sea las reglas. El
+    preámbulo (título, punteros, la regla del tope, "toda regla lleva su motivo")
+    es el contrato del archivo, no sedimento. Incluirlo haría el tope inalcanzable
+    por construcción: las doce reglas con su motivo ocupan 98 líneas y cualquier
+    encabezado empujaría por encima de 100 sin que sobre nada.
+    """
+
+    TOPE = 100
+    _CLAUDE_MD = os.path.join(_FLOTA, 'CLAUDE.md')
+
+    def _lineas_de_reglas(self):
+        lineas = _leer(self._CLAUDE_MD).splitlines()
+        primera = next(i for i, l in enumerate(lineas) if l.startswith('## '))
+        return lineas[primera:]
+
+    def test_las_reglas_no_pasan_del_tope(self):
+        reglas = self._lineas_de_reglas()
+        assert len(reglas) <= self.TOPE, (
+            f'\nflota/CLAUDE.md: {len(reglas)} líneas de reglas, tope {self.TOPE}.\n'
+            'La salida NO es subir el tope. Es sacar lo que no sea regla de '
+            'decisión: el estado va a docs/flota/ESTADO.md y la referencia '
+            'técnica a docs/flota/ESPECIFICACION_T1.md.'
+        )
+
+    def test_el_tope_del_trinquete_es_el_que_declara_el_archivo(self):
+        """La regla y su mecanismo no pueden decir números distintos.
+
+        Si alguien relaja el texto del CLAUDE.md sin tocar el trinquete —o al
+        revés— queda una regla que dice una cosa y un guard que hace otra. Es
+        `nombre-que-miente` aplicado a un tope.
+        """
+        texto = _leer(self._CLAUDE_MD)
+        declarados = re.findall(r'pasa de (\d+) líneas', texto)
+        assert declarados == [str(self.TOPE)], (
+            f'El archivo declara {declarados} y el trinquete usa {self.TOPE}.'
+        )
+
+    def test_el_archivo_no_reabsorbe_lo_que_se_movio(self):
+        """Anti-podredumbre: compuertas y secuencia viven en ESTADO.md."""
+        texto = _leer(self._CLAUDE_MD)
+        for reincidente in ('Compuertas de las tandas', 'medir → corregir → imponer'):
+            assert reincidente not in texto, (
+                f'"{reincidente}" volvió al CLAUDE.md. Es estado del proyecto, '
+                'no una regla de decisión: va en docs/flota/ESTADO.md.'
+            )
+
+    def test_los_punteros_del_claude_md_existen(self):
+        """Un puntero a un archivo que no existe es documentación que miente."""
+        rotos = []
+        for ref in re.findall(r'`(docs/flota/[^`]+\.md)`', _leer(self._CLAUDE_MD)):
+            if not os.path.exists(os.path.join(_RAIZ, ref)):
+                rotos.append(ref)
+        assert not rotos, f'El CLAUDE.md apunta a archivos que no existen: {rotos}'
+
+
+class TestTrinqueteAdvertencias:
+
+    def test_importar_flota_no_emite_advertencias(self):
+        import importlib
+
+        modulos = [
+            'flota.dominio.valores',
+            'flota.dominio.odometro',
+            'flota.dominio.custodia',
+            'flota.dominio.fotos',
+            'flota.dominio.errores',
+            'flota.puertos',
+        ]
+        with warnings.catch_warnings(record=True) as capturadas:
+            warnings.simplefilter('always')
+            for m in modulos:
+                importlib.reload(importlib.import_module(m))
+
+        assert not capturadas, (
+            '\nAdvertencias al importar flota:\n'
+            + '\n'.join(f'  · {w.category.__name__}: {w.message}' for w in capturadas)
+            + '\n\nEl tope es 0 y se silencia con razón y fecha en pytest.ini, '
+              'nunca con un ignore desnudo.'
+        )

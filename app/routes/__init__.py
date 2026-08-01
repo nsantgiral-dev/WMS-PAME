@@ -56,3 +56,60 @@ def register_routes(app):
     app.register_blueprint(tienda_oc_bp, url_prefix='/api/tienda-oc')
     app.register_blueprint(vigia_bp, url_prefix='/api/vigia')
     app.register_blueprint(armador_bp, url_prefix='/api/compras')
+
+    # Módulo flota — vive fuera de `app/` para que su dominio no pueda importar
+    # framework ni base. Esta es la única línea de acoplamiento (tanda 1).
+    #
+    # El import va blindado: si `flota/` no llega al contenedor o revienta al
+    # importarse, el WMS ARRANCA IGUAL y `/flota/*` responde 503 con el motivo.
+    # El WMS todavía no sale a producción y un módulo nuevo sin estrenar no
+    # puede tumbar el arranque de la aplicación que sí va al corte.
+    #
+    # No contradice la regla 5 del módulo ("ningún adaptador degrada hacia algo
+    # que se parezca al éxito"): un 503 con motivo declarado y registrado en el
+    # log es lo contrario de un éxito silencioso. Lo prohibido es responder 200
+    # con datos vacíos, no responder "esto está caído y por esto".
+    _registrar_flota(app)
+
+
+def _registrar_flota(app):
+    """Monta el módulo de flota, o su sustituto declarado si no se puede."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        from flota.api import registrar_flota
+    except Exception as exc:
+        log.error(
+            '[FLOTA] módulo NO montado: %s: %s. /flota/* responderá 503. '
+            'El resto del WMS arranca normal.',
+            type(exc).__name__, exc, exc_info=True,
+        )
+        _registrar_flota_caida(app, f'{type(exc).__name__}: {exc}')
+    else:
+        registrar_flota(app)
+
+
+def _registrar_flota_caida(app, motivo):
+    """Sustituto visible: todo `/flota/*` responde 503 diciendo por qué.
+
+    Vive en `app/` y no en `flota/` a propósito — si `flota/` es justamente lo
+    que no se pudo importar, un sustituto que viviera ahí tampoco cargaría.
+    """
+    from flask import Blueprint, jsonify
+
+    bp = Blueprint('flota_caida', __name__)
+
+    @bp.route('/', defaults={'ruta': ''},
+              methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+    @bp.route('/<path:ruta>',
+              methods=['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+    def _flota_no_disponible(ruta):
+        return jsonify({
+            'error': 'modulo_flota_no_disponible',
+            'motivo': motivo,
+            'detalle': 'El módulo de flota no pudo importarse. '
+                       'El resto del WMS funciona normal.',
+        }), 503
+
+    app.register_blueprint(bp, url_prefix='/flota')
