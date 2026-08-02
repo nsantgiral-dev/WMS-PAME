@@ -307,10 +307,43 @@ ningún CHECK de flota puede hacer aritmética sobre predicados.
 **Pero el trinquete ataja la clase concreta, no la causa.** La causa es que los
 tests corren sobre SQLite. La deuda estructural, anotada con nombre:
 
-> **Correr `tests/flota/test_constraints_t1.py` contra PostgreSQL.** Mientras no
-> pase, "la base impone el invariante" significa "SQLite impone el invariante", y
-> la diferencia solo aparece en el deploy. Es la tercera vez que el mismo
-> principio se rompe por medir contra el objeto equivocado.
+### Atacada el 2026-08-02 — con una salvedad que hay que leer
+
+`tests/flota/test_constraints_postgres.py` corre los invariantes contra
+PostgreSQL real. Doce tests, marcados `postgres`:
+
+- **`test_las_cinco_tablas_de_flota_existen`** — crear el esquema contra
+  PostgreSQL. Eso solo habría atrapado el bug del `(bool) + (bool)`.
+- Invariante 4 con `INSERT` crudo, en el motor donde falló.
+- El índice parcial `WHERE fin_ts IS NULL`, que los dos motores escriben distinto.
+- Los triggers, **incluido el `BEFORE DELETE` que hasta ahora no se ejercía en
+  ningún test** porque no existe en SQLite.
+
+**No se saltan: fallan.** Sin `FLOTA_TEST_PG_URL` van a rojo, porque un skip deja
+el reporte en verde y la propiedad sin verificar — el mismo falso negativo del
+que salió todo esto.
+
+Quedan fuera del `buildCommand` (`-m "not postgres"`) porque el contenedor de
+build no tiene base de pruebas. Eso está **declarado** en `pytest.ini` y en
+`railway.toml`, que es distinto de estar callado, y el **trinquete 9** verifica
+que la declaración siga ahí.
+
+El trinquete 9 además cruza el conteo de CHECK de los modelos contra la
+expectativa de la suite de PostgreSQL: agregar un constraint sin correrlo contra
+el motor real pone el build en rojo.
+
+> **SALVEDAD, y es la misma clase de deuda: esta suite todavía NO SE HA
+> EJECUTADO contra ningún PostgreSQL.** Está escrita y cableada, no verificada.
+> Hace falta una base vacía y desechable (`brew install postgresql@17` en local, o
+> un servicio de pruebas). Hasta que corra en verde, lo que hay es la intención
+> de verificar contra el motor real, no la verificación.
+
+Para correrla:
+
+```bash
+FLOTA_TEST_PG_URL=postgresql://user:pass@host:puerto/scratch \
+  venv/bin/python -m pytest -m postgres -v
+```
 
 ---
 

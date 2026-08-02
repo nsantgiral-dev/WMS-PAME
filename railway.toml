@@ -1,6 +1,6 @@
 [build]
 builder = "nixpacks"
-buildCommand = "python -m pytest tests/ -x -q --tb=short --deselect=tests/test_10_traslados.py::TestConnektaGatewayTraslados::test_173079_bodega_salida_es_transito_no_origen"
+buildCommand = "python -m pytest tests/ -x -q --tb=short -m \"not postgres\" --deselect=tests/test_10_traslados.py::TestConnektaGatewayTraslados::test_173079_bodega_salida_es_transito_no_origen"
 
 [deploy]
 releaseCommand = "flask db upgrade"

@@ -435,6 +435,71 @@ class TestTrinqueteTamanoDelClaudeMd:
         assert not rotos, f'El CLAUDE.md apunta a archivos que no existen: {rotos}'
 
 
+class TestTrinqueteMotorDeProduccion:
+    """TRINQUETE 9 — que los CHECK se sigan verificando contra PostgreSQL.
+
+    El 2026-08-01 un CHECK con `(bool) + (bool)` pasó 25 tests contra SQLite y
+    reventó el CREATE TABLE en el release. La cura no es el trinquete 8 —ese
+    ataja una clase concreta— sino que los constraints se ejerzan contra el
+    motor de producción. Esto vigila que ese arreglo no se desarme.
+    """
+
+    _PG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       'test_constraints_postgres.py')
+
+    def test_existe_la_suite_contra_postgres(self):
+        assert os.path.exists(self._PG), (
+            'Se borró tests/flota/test_constraints_postgres.py. Sin ella, '
+            '"la base impone el invariante" vuelve a significar "SQLite lo impone".'
+        )
+
+    def test_el_marcador_esta_registrado_y_el_build_lo_desactiva_declarandolo(self):
+        """El silencio tiene que ser declarado, no accidental.
+
+        Los tests de PostgreSQL quedan fuera del build porque el contenedor no
+        tiene base de pruebas. Eso está bien; lo que no vale es que queden fuera
+        porque nadie se acordó de correrlos.
+        """
+        assert 'postgres:' in _leer(os.path.join(_RAIZ, 'pytest.ini')), \
+            'pytest.ini no registra el marcador `postgres` con su razón'
+        assert 'not postgres' in _leer(os.path.join(_RAIZ, 'railway.toml')), \
+            'railway.toml no deselecciona `postgres` de forma explícita'
+
+    def test_los_tests_de_postgres_fallan_en_vez_de_saltarse(self):
+        """Un skip deja el reporte en verde y la propiedad sin verificar.
+
+        Ese falso negativo silencioso es exactamente el defecto del que salió
+        todo esto — no se puede reintroducir como "solución".
+        """
+        pg = _leer(self._PG)
+        assert 'pytest.fail(' in pg, 'la suite de PostgreSQL debe FALLAR sin base'
+        assert 'pytest.skip(' not in pg, 'un skip acá reintroduce el falso negativo'
+
+    def test_el_conteo_de_CHECK_esperado_coincide_con_los_modelos(self, app):
+        """Si alguien agrega un CHECK, la suite de PostgreSQL tiene que saberlo.
+
+        La cifra vive en dos lados a propósito: en los modelos y en la
+        expectativa del test contra PostgreSQL. Compararlas es lo que obliga a
+        correr el nuevo constraint contra el motor real antes de desplegarlo.
+        """
+        from flota.adaptadores import modelos as m
+
+        reales = sum(
+            1
+            for M in (m.Foto, m.FichaTecnica, m.DocumentoVehiculo,
+                      m.LecturaOdometro, m.Custodia)
+            for c in M.__table__.constraints
+            if c.__class__.__name__ == 'CheckConstraint'
+        )
+        declarado = re.search(r'assert n == (\d+)', _leer(self._PG))
+        assert declarado, 'no se encontró la expectativa de CHECK en la suite de PostgreSQL'
+        assert int(declarado.group(1)) == reales, (
+            f'Los modelos tienen {reales} CHECK y la suite de PostgreSQL espera '
+            f'{declarado.group(1)}. Actualizá el número Y corré la suite contra '
+            f'PostgreSQL — el constraint nuevo no está verificado en el motor real.'
+        )
+
+
 class TestTrinqueteAdvertencias:
 
     def test_importar_flota_no_emite_advertencias(self):
