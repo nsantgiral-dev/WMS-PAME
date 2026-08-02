@@ -39,8 +39,31 @@ Sin modelos y sin pantalla, por diseño.
 Las cinco tablas escritas, los siete invariantes implementados y el `xfail`
 retirado. Los doce campos del health miden: ninguno queda en `null`.
 
-**La migración NO se ha generado ni corrido.** Se genera y se sube después de
-restaurar y verificar un backup.
+**Migración generada el 2026-08-01, pendiente de `upgrade`.**
+`migrations/versions/f10ta1cimientos_flota_tanda1.py`, head único
+`c0a1cecc16dc → f10ta1cimientos`.
+
+Respaldo bajo el que se corre, con fecha y no de palabra:
+
+| Cobertura | Estado |
+|---|---|
+| Snapshot manual Railway | **2026-08-01 23:27** (395 MB) |
+| Point-in-time recovery | **activo** — restaura a cualquier segundo |
+| Schedules | diario (6 días) + semanal (1 mes) |
+| Estado previo verificable | `scratchpad/estado_pre_migracion.json` — 48 tablas, 169.495 filas |
+
+PITR importa más que el snapshot para esto: con un snapshot de volumen, un
+rollback a las 3pm te devuelve a las 8am y perdés el día. Con PITR volvés a las
+2:59pm.
+
+**El cuerpo de la migración NO se escribió a mano**: se emitió desde
+`db.metadata`. Una transcripción manual de 5 tablas, 31 CHECK y 5 índices es
+donde se pierde un constraint sin que nadie lo note, y un invariante que la base
+no impone es una sugerencia. Verificado: cubre las 5 tablas, las 22+9+8+12+16
+columnas, los 31 CHECK y los 5 índices, sin faltantes.
+
+**Es puramente aditiva**: cinco `CREATE TABLE`, ningún `ALTER`, ningún `DROP`,
+ninguna migración de datos. No toca una sola de las 169.495 filas.
 
 ### Lo que la base garantiza, y lo que no
 
