@@ -269,6 +269,24 @@ class MedidorSQL:
             return None
         return _contar(Foto.query.filter(Foto.estado == 'pendiente_evidencia'))
 
+    def documentos_no_encontrados(self) -> Optional[int]:
+        """Documentos que se buscaron y NO aparecieron.
+
+        Contador aparte de `documentos_vencidos` a propósito: son dos
+        afirmaciones distintas. "Vencido" es un papel que existe y caducó;
+        "no encontrado" es que nadie pudo mostrar el papel. Sumarlos esconde el
+        segundo, que es el más grave — un camión rodando sin SOAT localizable.
+
+        Y sin este contador desaparecerían de los dos: sus fechas son NULL, y
+        `fecha_vencimiento < hoy` no matchea NULL. Un cero silencioso.
+        """
+        from flota.adaptadores.modelos import DocumentoVehiculo
+
+        if not _tabla_existe('flota_documento_vehiculo'):
+            return None
+        return _contar(DocumentoVehiculo.query.filter(
+            DocumentoVehiculo.estado == 'no_encontrado'))
+
     def documentos_vencidos(self) -> Optional[int]:
         from flota.adaptadores.modelos import DocumentoVehiculo
 

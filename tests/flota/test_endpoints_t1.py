@@ -206,3 +206,88 @@ class TestFicha:
                        json={'frenos_verificado_ts': '01/08/2026'},
                        headers=_auth(jwt_token_admin))
         assert r.status_code == 400
+
+
+class TestDocumentos:
+    """`no_encontrado` es una afirmación, no un campo vacío.
+
+    Si Yesid verifica los cinco SOAT y uno no aparece, eso tiene que quedar
+    escrito como hallazgo. Registrarlo como ausencia de dato lo vuelve
+    indistinguible de "todavía no lo hemos mirado", y esas dos cosas exigen
+    acciones opuestas: buscar el papel, o sacar el camión de ruta.
+    """
+
+    def _url(self, m):
+        return f"/flota/vehiculo/{m['placa']}/documentos"
+
+    def test_lo_no_verificado_se_declara_aparte(self, client, jwt_token_admin, flota_mundo):
+        cuerpo = client.get(self._url(flota_mundo),
+                            headers=_auth(jwt_token_admin)).get_json()
+        assert set(cuerpo['sin_verificar']) == {
+            'soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad'}
+
+    def test_un_soat_vigente_se_guarda_con_sus_dias(self, client, jwt_token_admin, flota_mundo):
+        from datetime import date, timedelta
+        r = client.post(self._url(flota_mundo), json={
+            'tipo': 'soat', 'numero': 'S-1', 'entidad': 'Aseguradora',
+            'fecha_expedicion': (date.today() - timedelta(days=100)).isoformat(),
+            'fecha_vencimiento': (date.today() + timedelta(days=20)).isoformat(),
+        }, headers=_auth(jwt_token_admin))
+        assert r.status_code == 201
+        assert r.get_json()['dias_para_vencer'] == 20
+        assert r.get_json()['vencido'] is False
+
+    def test_no_encontrado_entra_sin_fechas_y_se_cuenta_aparte(
+            self, client, jwt_token_admin, flota_mundo):
+        from flota.adaptadores.medicion import MedidorSQL
+        medidor = MedidorSQL()
+        antes_no, antes_venc = medidor.documentos_no_encontrados(), medidor.documentos_vencidos()
+
+        r = client.post(self._url(flota_mundo),
+                        json={'tipo': 'soat', 'estado': 'no_encontrado'},
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 201
+        cuerpo = r.get_json()
+        assert cuerpo['estado'] == 'no_encontrado'
+        assert cuerpo['fecha_vencimiento'] is None
+
+        # Cuenta en su propio contador y NO se cuela en vencidos: son dos
+        # afirmaciones distintas y la segunda es la más grave.
+        assert medidor.documentos_no_encontrados() == antes_no + 1
+        assert medidor.documentos_vencidos() == antes_venc
+
+    def test_las_fechas_de_un_no_encontrado_se_descartan(
+            self, client, jwt_token_admin, flota_mundo):
+        """Si el papel no apareció, no hay de dónde salieron esas fechas."""
+        from datetime import date
+        r = client.post(self._url(flota_mundo), json={
+            'tipo': 'rtm', 'estado': 'no_encontrado',
+            'fecha_vencimiento': date.today().isoformat(),
+        }, headers=_auth(jwt_token_admin))
+        assert r.get_json()['fecha_vencimiento'] is None
+
+    def test_un_vigente_sin_fechas_lo_rechaza_la_base(
+            self, client, jwt_token_admin, flota_mundo):
+        r = client.post(self._url(flota_mundo),
+                        json={'tipo': 'soat', 'numero': 'S-2', 'entidad': 'X'},
+                        headers=_auth(jwt_token_admin))
+        assert r.status_code == 409
+
+    def test_guardar_dos_veces_el_mismo_tipo_reemplaza_no_acumula(
+            self, client, jwt_token_admin, flota_mundo):
+        from datetime import date, timedelta
+        from flota.adaptadores.modelos import DocumentoVehiculo
+        for dias in (10, 400):
+            client.post(self._url(flota_mundo), json={
+                'tipo': 'soat', 'numero': f'S-{dias}', 'entidad': 'Aseguradora',
+                'fecha_expedicion': date.today().isoformat(),
+                'fecha_vencimiento': (date.today() + timedelta(days=dias)).isoformat(),
+            }, headers=_auth(jwt_token_admin))
+        assert DocumentoVehiculo.query.filter_by(tipo='soat').count() == 1
+
+    def test_una_fecha_mal_escrita_es_400(self, client, jwt_token_admin, flota_mundo):
+        r = client.post(self._url(flota_mundo), json={
+            'tipo': 'soat', 'numero': 'S-3', 'entidad': 'X',
+            'fecha_vencimiento': '01/08/2026',
+        }, headers=_auth(jwt_token_admin))
+        assert r.status_code == 400

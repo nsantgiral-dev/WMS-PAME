@@ -24,6 +24,7 @@ let FLOTA_PLACA = null;
 let FLOTA_ESTADO = null;      // respuesta de /custodia/activa
 let FLOTA_FOTOS = {};         // angulo → dataURL comprimido
 let FLOTA_FOTO_TABLERO = null;
+let FLOTA_FOTO_DOC = null;
 
 /** Los ocho ángulos, en orden fijo. El orden fijo es lo que hace comparable un turno con otro. */
 const FLOTA_ANGULOS = [
@@ -52,6 +53,7 @@ async function cargarFlota() {
         <button class="btn" onclick="flotaAbrirRecibo('${v.placa}')">Recibo de turno</button>
         <button class="btn" onclick="flotaAbrirFicha('${v.placa}')">Ficha técnica</button>
         <button class="btn" onclick="flotaAbrirOdometro('${v.placa}')">Odómetro</button>
+        <button class="btn" onclick="flotaAbrirDocumentos('${v.placa}')">Documentos</button>
       </div>`;
     });
     html += '</div></div><div id="flota-recibo"></div>';
@@ -477,6 +479,136 @@ async function flotaGuardarFicha() {
     alerta(d.completa ? 'Ficha guardada y completa ✓'
                       : 'Ficha guardada — falta: ' + d.atributos_sin_dato.join(', '), 'exito');
     flotaAbrirFicha(FLOTA_PLACA);
+  } catch (e) {
+    err.textContent = 'Sin conexión: ' + e.message;
+  }
+}
+
+/** Documentos del vehículo: SOAT, tecnomecánica, póliza, tarjeta de propiedad. */
+async function flotaAbrirDocumentos(placa) {
+  FLOTA_PLACA = placa;
+  FLOTA_FOTO_DOC = null;
+  const el = document.getElementById('flota-recibo');
+  el.innerHTML = '<div class="card">Cargando documentos…</div>';
+  let d;
+  try {
+    d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/documentos');
+  } catch (e) {
+    el.innerHTML = `<div class="card" style="color:#f87171">${e.message}</div>`;
+    return;
+  }
+
+  let filas = d.documentos.map(x => {
+    if (x.estado === 'no_encontrado') {
+      return `<li style="color:#f87171"><b>${x.tipo}</b> — NO ENCONTRADO
+        · hallazgo bloqueante</li>`;
+    }
+    const color = x.vencido ? '#f87171' : (x.dias_para_vencer <= 30 ? '#fbbf24' : '#4ade80');
+    const nota = x.vencido ? `VENCIDO hace ${-x.dias_para_vencer} días`
+                           : `vence en ${x.dias_para_vencer} días`;
+    return `<li style="color:${color}"><b>${x.tipo}</b> ${x.numero} · ${x.entidad}
+      · ${x.fecha_vencimiento} — ${nota}</li>`;
+  }).join('');
+  if (!filas) filas = '<li style="color:#94a3b8">Ninguno registrado todavía.</li>';
+
+  el.innerHTML = `<div class="card">
+    <h3>Documentos · ${placa}</h3>
+    <ul style="line-height:1.7">${filas}</ul>
+    ${d.sin_verificar.length ? `<p style="color:#fbbf24">Sin verificar:
+      ${d.sin_verificar.join(', ')} — <b>no es lo mismo que no encontrado</b>:
+      esto significa que nadie lo ha mirado todavía.</p>` : ''}
+
+    <hr style="border-color:#334155;margin:14px 0">
+    <label>Tipo</label>
+    <select id="doc-tipo" style="width:100%;padding:6px">
+      <option value="soat">SOAT</option>
+      <option value="rtm">Tecnomecánica (RTM)</option>
+      <option value="poliza_rc">Póliza RC</option>
+      <option value="tarjeta_propiedad">Tarjeta de propiedad</option>
+    </select>
+
+    <label>Estado</label>
+    <select id="doc-estado" style="width:100%;padding:6px" onchange="flotaDocEstadoCambio()">
+      <option value="vigente">Lo tengo a la vista</option>
+      <option value="no_encontrado">No aparece</option>
+    </select>
+
+    <div id="doc-campos">
+      <label>Número</label>
+      <input id="doc-numero" style="width:100%;padding:6px">
+      <label>Entidad</label>
+      <input id="doc-entidad" style="width:100%;padding:6px">
+      <label>Fecha de expedición</label>
+      <input type="date" id="doc-expedicion" style="width:100%;padding:6px">
+      <label>Fecha de vencimiento</label>
+      <input type="date" id="doc-vencimiento" style="width:100%;padding:6px">
+      <label style="display:block;margin-top:8px">Foto del documento</label>
+      <input type="file" id="doc-foto" accept="image/*" capture="environment"
+             style="display:none" onchange="flotaCapturarDocumento()">
+      <button type="button" class="btn"
+              onclick="document.getElementById('doc-foto').click()">📷 Foto</button>
+      <span id="doc-foto-ok" style="margin-left:8px"></span>
+    </div>
+    <p id="doc-aviso-no" style="display:none;color:#f87171">
+      Queda registrado como <b>no encontrado</b>. Eso es un hallazgo bloqueante,
+      no un campo vacío — y el health lo cuenta aparte de los vencidos.</p>
+
+    <button class="btn btn-primary" style="margin-top:14px;width:100%"
+            onclick="flotaGuardarDocumento()">Guardar documento</button>
+    <div id="doc-error" style="color:#f87171;margin-top:8px"></div>
+  </div>`;
+}
+
+/** Oculta los campos cuando el documento no apareció: no hay de dónde sacarlos. */
+function flotaDocEstadoCambio() {
+  const no = document.getElementById('doc-estado').value === 'no_encontrado';
+  document.getElementById('doc-campos').style.display = no ? 'none' : 'block';
+  document.getElementById('doc-aviso-no').style.display = no ? 'block' : 'none';
+}
+
+/** Captura la foto del documento — clase foto_dato, sin recompresión en servidor. */
+async function flotaCapturarDocumento() {
+  const f = document.getElementById('doc-foto').files[0];
+  if (!f) return;
+  const r = await flotaComprimir(f, 'foto_dato');
+  FLOTA_FOTO_DOC = r;
+  document.getElementById('doc-foto-ok').innerHTML =
+    (Math.max(r.ancho, r.alto) < 1600)
+      ? `<span style="color:#fbbf24">✓ ${r.ancho}×${r.alto} — queda pendiente_evidencia</span>`
+      : `<span style="color:#4ade80">✓ ${r.ancho}×${r.alto}</span>`;
+}
+
+/** Valida y guarda el documento. */
+async function flotaGuardarDocumento() {
+  const err = document.getElementById('doc-error');
+  err.textContent = '';
+  const estado = document.getElementById('doc-estado').value;
+  const cuerpo = { tipo: document.getElementById('doc-tipo').value, estado: estado };
+
+  if (estado === 'vigente') {
+    cuerpo.numero = document.getElementById('doc-numero').value.trim();
+    cuerpo.entidad = document.getElementById('doc-entidad').value.trim();
+    cuerpo.fecha_expedicion = document.getElementById('doc-expedicion').value;
+    cuerpo.fecha_vencimiento = document.getElementById('doc-vencimiento').value;
+    if (!cuerpo.numero || !cuerpo.entidad || !cuerpo.fecha_vencimiento) {
+      err.textContent = 'Con el documento a la vista: número, entidad y vencimiento. ' +
+        'Si no lo tenés, marcá "No aparece" — es una afirmación distinta.';
+      return;
+    }
+    if (FLOTA_FOTO_DOC) cuerpo.foto = flotaFotoPayload(FLOTA_FOTO_DOC, 'foto_dato');
+  }
+
+  try {
+    const r = await fetch(API + '/flota/vehiculo/' + encodeURIComponent(FLOTA_PLACA) + '/documentos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(cuerpo),
+    });
+    const d = await r.json();
+    if (!r.ok) { err.textContent = d.detalle || d.error || 'No se pudo guardar'; return; }
+    alerta(estado === 'no_encontrado' ? 'Registrado como NO ENCONTRADO' : 'Documento guardado ✓',
+           estado === 'no_encontrado' ? 'advertencia' : 'exito');
+    flotaAbrirDocumentos(FLOTA_PLACA);
   } catch (e) {
     err.textContent = 'Sin conexión: ' + e.message;
   }

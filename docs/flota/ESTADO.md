@@ -238,6 +238,34 @@ cartera fantasma total — esa vive en Siesa.
 
 ---
 
+## Lección: un trinquete que mide una proxy da falsos negativos silenciosos
+
+Pasó dos veces el mismo día, y las dos con la misma forma.
+
+**El tope del CLAUDE.md** medía líneas totales. La propiedad que le importaba era
+*sedimentación*. Saltó con la regla 13 —crecimiento legítimo— y no habría saltado
+nunca con un documento colándose entre reglas si el archivo era corto.
+
+**El trinquete de huérfanos** verificaba que el endpoint apareciera *mencionado*
+en el JS. La propiedad que le importaba era que la función fuera *alcanzable
+desde un gesto*. `flotaGuardarFicha` mencionaba su ruta, así que el endpoint
+parecía consumido — y no había un solo botón que la llamara. **Quinta aparición
+del patrón función-sin-caller en este repo, adentro del módulo construido para
+evitarlo.**
+
+Los dos son falsos negativos silenciosos: el guard está verde y la propiedad
+está rota. Peor que no tener guard, porque además tranquiliza.
+
+> **Regla: cuando un trinquete no atrapa algo que debía atrapar, revisar QUÉ MIDE
+> antes de mover el umbral.** Casi nunca es el número: es que mide algo que se
+> parece a la propiedad en vez de la propiedad.
+
+La confirmación de que sirve: al reescribir el guard por alcanzabilidad apareció
+**una segunda huérfana que nadie sospechaba** —`flotaRegistrarOdometro`—, o sea
+que el endpoint de odómetro tampoco tenía gesto.
+
+---
+
 ## Estructura de responsabilidad — definida el 2026-08-01
 
 Lo que faltaba desde el primer día no era código: era dueño. El sistema de papel

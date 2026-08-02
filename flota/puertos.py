@@ -64,6 +64,10 @@ class MedidorDeFlota(Protocol):
     def conductores_activos_sin_cuenta(self) -> Optional[int]:
         ...
 
+    def documentos_no_encontrados(self) -> Optional[int]:
+        """Documentos que se buscaron y no aparecieron. Distinto de vencido."""
+        ...
+
     def documentos_vencidos(self) -> Optional[int]:
         ...
 

@@ -76,12 +76,19 @@ número con autoridad lleva su procedencia.
 ```
 id, vehiculo_id FK
 tipo             soat | rtm | poliza_rc | tarjeta_propiedad
+estado           vigente | no_encontrado
 numero, entidad
-fecha_expedicion, fecha_vencimiento   date
+fecha_expedicion, fecha_vencimiento   date nullable   -- NULL si no_encontrado
 foto_id          FK foto.id nullable   -- clase foto_dato
 ```
 
 Alerta a 30 y 15 días. En tanda 1 solo reporta en el health; no bloquea nada.
+
+`no_encontrado` **no es un campo vacío: es una afirmación.** Un vehículo sin SOAT
+vigente localizable es un hallazgo bloqueante. Registrarlo como ausencia de dato
+lo vuelve indistinguible de "todavía no lo hemos mirado", y esas dos cosas exigen
+acciones opuestas — buscar el papel, o sacar el camión de ruta. Un tipo que no
+aparece en la lista es lo tercero: sin verificar.
 
 ### `lectura_odometro`
 
@@ -203,10 +210,19 @@ GET  /flota/custodia/activa/{placa}
 POST /flota/odometro
 GET  /flota/vehiculo/{placa}/ficha
 PUT  /flota/vehiculo/{placa}/ficha
+GET  /flota/vehiculo/{placa}/documentos
+POST /flota/vehiculo/{placa}/documentos
 GET  /flota/health
 ```
 
-**Estos cinco endpoints se construyen JUNTO CON su consumidor (§3), en la misma
+**Corrección 2026-08-01:** esta sección omitía los dos endpoints de
+`documento_vehiculo`. El health ya contaba documentos vencidos y por vencer, la
+tabla existía desde la tanda 1, y no había por dónde cargar una fecha — la
+primera tarea del control de flota es verificar los cinco SOAT. Una capacidad
+contada y no cargable es medio hueco: el tablero pregunta algo que nadie puede
+responder.
+
+**Estos endpoints se construyen JUNTO CON su consumidor (§3), en la misma
 sesión — nunca antes.** Un endpoint sin forma de llamarse es la regla 12 rota y el
 patrón que ya apareció cuatro veces en este repo: la capacidad construida, probada y
 desplegada, y el gesto que la enciende nunca escrito. El trinquete de huérfanos de
@@ -234,6 +250,7 @@ switch `FLOTA_BLOQUEO_DESPACHO=0`.
   "custodias_sin_foto_completa": 1,
   "fotos_pendiente_evidencia": 0,
   "conductores_activos_sin_cuenta": 2,
+  "documentos_no_encontrados": 1,
   "documentos_vencidos": 5,
   "documentos_por_vencer_30d": 0,
   "rutas_historicas_sin_placa": null
@@ -242,6 +259,12 @@ switch `FLOTA_BLOQUEO_DESPACHO=0`.
 
 `rutas_historicas_sin_placa` en `null` significa aún no medido. **No se pone en 0.**
 Medido el 2026-08-01 contra la base real: **3 de 15**. Ya no vale `null`.
+
+`documentos_no_encontrados` es un contador aparte de `documentos_vencidos`:
+"vencido" es un papel que existe y caducó, "no encontrado" es que nadie pudo
+mostrar el papel. Sumarlos esconde el segundo, que es el más grave. Y sin
+contador propio desaparecerían de los dos, porque sus fechas son `NULL` y
+`fecha_vencimiento < hoy` no matchea `NULL` — un cero silencioso.
 
 `custodias_pendiente_sede` cuenta las custodias cuya sede el WMS no puede
 representar: `almacenes` cubre 5 de los 9 centros del mapa de C.O. (medido

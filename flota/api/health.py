@@ -38,6 +38,7 @@ _CAMPOS = (
     'custodias_sin_foto_completa',
     'fotos_pendiente_evidencia',
     'conductores_activos_sin_cuenta',
+    'documentos_no_encontrados',
     'documentos_vencidos',
     'documentos_por_vencer_30d',
     'rutas_historicas_sin_placa',

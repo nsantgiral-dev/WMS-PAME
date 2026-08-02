@@ -18,12 +18,14 @@ def registrar_flota(app):
     # una tabla no llegue a producción.
     from flota.adaptadores import modelos  # noqa: F401
     from flota.api.custodia import custodia_bp
+    from flota.api.documentos import documentos_bp
     from flota.api.ficha import ficha_bp
     from flota.api.health import flota_bp
 
     app.register_blueprint(flota_bp, url_prefix='/flota')
     app.register_blueprint(custodia_bp, url_prefix='/flota')
     app.register_blueprint(ficha_bp, url_prefix='/flota')
+    app.register_blueprint(documentos_bp, url_prefix='/flota')
 
 
 __all__ = ['registrar_flota']

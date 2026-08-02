@@ -47,6 +47,7 @@ TRANSMISION_FINAL = ('cadena', 'correa', 'cardan', 'sin_dato')
 FUENTE           = ('manual_fabricante', 'concesionario', 'placa_motor',
                     'taller', 'estimado', 'sin_dato')
 TIPO_DOCUMENTO   = ('soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad')
+ESTADO_DOCUMENTO = ('vigente', 'no_encontrado')
 ORIGEN_LECTURA   = ('entrega', 'preoperacional', 'cierre_dia', 'ot', 'tanqueo', 'correccion')
 CUSTODIO_TIPO    = ('conductor', 'sede')
 CUSTODIO_ESTADO  = ('resuelto', 'pendiente_sede')
@@ -167,16 +168,36 @@ class DocumentoVehiculo(db.Model):
     id          = db.Column(db.Integer, primary_key=True)
     vehiculo_id = db.Column(db.Integer, db.ForeignKey('vehiculos.id'), nullable=False, index=True)
     tipo        = db.Column(db.String(20), nullable=False)
-    numero      = db.Column(db.String(50), nullable=False)
-    entidad     = db.Column(db.String(100), nullable=False)
-    fecha_expedicion  = db.Column(db.Date, nullable=False)
-    fecha_vencimiento = db.Column(db.Date, nullable=False)
+    numero      = db.Column(db.String(50), nullable=False, server_default='')
+    entidad     = db.Column(db.String(100), nullable=False, server_default='')
+
+    # Nullable desde el 2026-08-01: un documento `no_encontrado` no tiene fechas.
+    fecha_expedicion  = db.Column(db.Date, nullable=True)
+    fecha_vencimiento = db.Column(db.Date, nullable=True)
     foto_id     = db.Column(db.Integer, db.ForeignKey('flota_foto.id'), nullable=True)
+
+    # `no_encontrado` NO es un campo vacío: es una afirmación. Un vehículo sin
+    # SOAT vigente localizable es un hallazgo bloqueante, y si eso se registra
+    # como "sin dato" queda indistinguible de "todavía no lo hemos mirado".
+    #
+    # Es la misma forma que `custodia.custodio_estado`: el invariante no se
+    # afloja, se hace condicional a un estado que a su vez está constreñido.
+    estado = db.Column(db.String(20), nullable=False, server_default='vigente')
 
     __table_args__ = (
         _en('tipo', TIPO_DOCUMENTO),
-        db.CheckConstraint('fecha_vencimiento >= fecha_expedicion',
-                           name='ck_flota_doc_vigencia'),
+        _en('estado', ESTADO_DOCUMENTO),
+        db.CheckConstraint(
+            "(estado = 'vigente' AND fecha_expedicion IS NOT NULL "
+            " AND fecha_vencimiento IS NOT NULL "
+            " AND length(trim(numero)) > 0 AND length(trim(entidad)) > 0) OR "
+            "(estado = 'no_encontrado' AND fecha_expedicion IS NULL "
+            " AND fecha_vencimiento IS NULL)",
+            name='ck_flota_doc_estado_coherente',
+        ),
+        db.CheckConstraint(
+            'fecha_vencimiento IS NULL OR fecha_vencimiento >= fecha_expedicion',
+            name='ck_flota_doc_vigencia'),
         db.UniqueConstraint('vehiculo_id', 'tipo', 'numero', name='uq_flota_doc'),
     )
 
