@@ -90,13 +90,13 @@ def upgrade():
         sa.Column('simulado', sa.Boolean(), nullable=False, server_default='0'),
         sa.Column('estado', sa.String(length=30), nullable=False, server_default='ok'),
         sa.ForeignKeyConstraint(['autor_usuario_id'], ['usuarios.id']),
+        sa.CheckConstraint("clase IN ('evidencia_estado', 'foto_dato')", name='ck_flota_clase'),
+        sa.CheckConstraint("clase <> 'foto_dato' OR estado = 'pendiente_evidencia' OR ancho >= 1600 OR alto >= 1600", name='ck_flota_foto_dato_resolucion'),
         sa.CheckConstraint("estado IN ('ok', 'pendiente_evidencia')", name='ck_flota_estado'),
         sa.CheckConstraint("storage_ref NOT LIKE 'data:%' AND length(storage_ref) < 500", name='ck_flota_foto_es_referencia_no_binario'),
+        sa.CheckConstraint("entidad_tipo IN ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo')", name='ck_flota_entidad_tipo'),
         sa.PrimaryKeyConstraint('id'),
         sa.CheckConstraint('bytes > 0 AND ancho > 0 AND alto > 0', name='ck_flota_foto_medidas'),
-        sa.CheckConstraint("clase <> 'foto_dato' OR estado = 'pendiente_evidencia' OR ancho >= 1600 OR alto >= 1600", name='ck_flota_foto_dato_resolucion'),
-        sa.CheckConstraint("entidad_tipo IN ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo')", name='ck_flota_entidad_tipo'),
-        sa.CheckConstraint("clase IN ('evidencia_estado', 'foto_dato')", name='ck_flota_clase'),
     )
     op.create_index('ix_flota_foto_padre', 'flota_foto', ['entidad_tipo', 'entidad_id'], unique=False)
 
@@ -125,18 +125,18 @@ def upgrade():
         sa.Column('frenos_fuente', sa.String(length=30), nullable=False, server_default='sin_dato'),
         sa.Column('frenos_verificado_ts', sa.DateTime(), nullable=True),
         sa.ForeignKeyConstraint(['vehiculo_id'], ['vehiculos.id']),
-        sa.CheckConstraint("sistema_frenos IN ('hidraulico', 'aire_sobre_hidraulico', 'aire_full', 'sin_dato')", name='ck_flota_sistema_frenos'),
         sa.CheckConstraint("transmision_final IN ('cadena', 'correa', 'cardan', 'sin_dato')", name='ck_flota_transmision_final'),
         sa.CheckConstraint("frenos_fuente IN ('manual_fabricante', 'concesionario', 'placa_motor', 'taller', 'estimado', 'sin_dato')", name='ck_flota_frenos_fuente'),
         sa.CheckConstraint('km_inicial >= 0', name='ck_flota_km_inicial'),
-        sa.CheckConstraint("sistema_frenos = 'sin_dato' OR frenos_fuente <> 'sin_dato'", name='ck_flota_frenos_con_procedencia'),
-        sa.CheckConstraint("distribucion = 'sin_dato' OR distribucion_fuente <> 'sin_dato'", name='ck_flota_distribucion_con_procedencia'),
         sa.CheckConstraint("tiene_freno_escape IN ('si', 'no', 'sin_dato')", name='ck_flota_tiene_freno_escape'),
+        sa.CheckConstraint("sistema_frenos = 'sin_dato' OR frenos_fuente <> 'sin_dato'", name='ck_flota_frenos_con_procedencia'),
+        sa.PrimaryKeyConstraint('vehiculo_id'),
+        sa.CheckConstraint("distribucion = 'sin_dato' OR distribucion_fuente <> 'sin_dato'", name='ck_flota_distribucion_con_procedencia'),
         sa.CheckConstraint("distribucion IN ('correa', 'cadena', 'sin_dato')", name='ck_flota_distribucion'),
         sa.CheckConstraint("distribucion_fuente IN ('manual_fabricante', 'concesionario', 'placa_motor', 'taller', 'estimado', 'sin_dato')", name='ck_flota_distribucion_fuente'),
         sa.CheckConstraint('posiciones_llanta > 0', name='ck_flota_posiciones_llanta'),
         sa.CheckConstraint("combustible IN ('gasolina', 'diesel', 'sin_dato')", name='ck_flota_combustible'),
-        sa.PrimaryKeyConstraint('vehiculo_id'),
+        sa.CheckConstraint("sistema_frenos IN ('hidraulico', 'aire_sobre_hidraulico', 'aire_full', 'sin_dato')", name='ck_flota_sistema_frenos'),
     )
 
     op.create_table(
@@ -152,12 +152,12 @@ def upgrade():
         sa.Column('estado', sa.String(length=20), nullable=False, server_default='vigente'),
         sa.ForeignKeyConstraint(['vehiculo_id'], ['vehiculos.id']),
         sa.ForeignKeyConstraint(['foto_id'], ['flota_foto.id']),
-        sa.CheckConstraint("estado IN ('vigente', 'no_encontrado')", name='ck_flota_estado'),
-        sa.CheckConstraint("tipo IN ('soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad')", name='ck_flota_tipo'),
         sa.PrimaryKeyConstraint('id'),
+        sa.CheckConstraint("tipo IN ('soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad')", name='ck_flota_tipo'),
         sa.CheckConstraint('fecha_vencimiento IS NULL OR fecha_vencimiento >= fecha_expedicion', name='ck_flota_doc_vigencia'),
         sa.UniqueConstraint('vehiculo_id', 'tipo', 'numero', name='uq_flota_doc'),
         sa.CheckConstraint("(estado = 'vigente' AND fecha_expedicion IS NOT NULL  AND fecha_vencimiento IS NOT NULL  AND length(trim(numero)) > 0 AND length(trim(entidad)) > 0) OR (estado = 'no_encontrado' AND fecha_expedicion IS NULL  AND fecha_vencimiento IS NULL)", name='ck_flota_doc_estado_coherente'),
+        sa.CheckConstraint("estado IN ('vigente', 'no_encontrado')", name='ck_flota_estado'),
     )
     op.create_index('ix_flota_documento_vehiculo_vehiculo_id', 'flota_documento_vehiculo', ['vehiculo_id'], unique=False)
 
@@ -174,10 +174,10 @@ def upgrade():
         sa.ForeignKeyConstraint(['vehiculo_id'], ['vehiculos.id']),
         sa.ForeignKeyConstraint(['foto_id'], ['flota_foto.id']),
         sa.ForeignKeyConstraint(['autor_usuario_id'], ['usuarios.id']),
-        sa.CheckConstraint('valor_km >= 0', name='ck_flota_valor_km'),
         sa.CheckConstraint("origen IN ('entrega', 'preoperacional', 'cierre_dia', 'ot', 'tanqueo', 'correccion')", name='ck_flota_origen'),
         sa.CheckConstraint("origen <> 'correccion' OR (motivo_correccion IS NOT NULL AND length(trim(motivo_correccion)) > 0)", name='ck_flota_correccion_con_motivo'),
         sa.PrimaryKeyConstraint('id'),
+        sa.CheckConstraint('valor_km >= 0', name='ck_flota_valor_km'),
     )
     op.create_index('ix_flota_lectura_odometro_vehiculo_id', 'flota_lectura_odometro', ['vehiculo_id'], unique=False)
 
@@ -199,17 +199,17 @@ def upgrade():
         sa.ForeignKeyConstraint(['custodio_conductor_id'], ['conductores.id']),
         sa.ForeignKeyConstraint(['custodio_sede_id'], ['almacenes.id']),
         sa.ForeignKeyConstraint(['registrado_por_usuario_id'], ['usuarios.id']),
-        sa.PrimaryKeyConstraint('id'),
-        sa.CheckConstraint("custodio_estado = 'pendiente_sede' OR (custodio_tipo = 'conductor' AND custodio_conductor_id IS NOT NULL) OR (custodio_tipo = 'sede' AND custodio_sede_id IS NOT NULL)", name='ck_flota_custodia_tipo_coherente'),
+        sa.CheckConstraint('fin_ts IS NULL OR fin_ts >= inicio_ts', name='ck_flota_custodia_cierre_posterior'),
+        sa.CheckConstraint("(custodio_estado = 'resuelto' AND  (CASE WHEN custodio_conductor_id IS NOT NULL THEN 1 ELSE 0 END +   CASE WHEN custodio_sede_id IS NOT NULL THEN 1 ELSE 0 END) = 1) OR (custodio_estado = 'pendiente_sede' AND  custodio_conductor_id IS NULL AND custodio_sede_id IS NULL)", name='ck_flota_custodia_arco_exclusivo'),
         sa.CheckConstraint('km_fin IS NULL OR km_fin >= km_inicio', name='ck_flota_custodia_km_no_decrece'),
+        sa.PrimaryKeyConstraint('id'),
+        sa.CheckConstraint("custodio_tipo IN ('conductor', 'sede')", name='ck_flota_custodio_tipo'),
+        sa.CheckConstraint("custodio_estado = 'pendiente_sede' OR (custodio_tipo = 'conductor' AND custodio_conductor_id IS NOT NULL) OR (custodio_tipo = 'sede' AND custodio_sede_id IS NOT NULL)", name='ck_flota_custodia_tipo_coherente'),
         sa.CheckConstraint("custodio_estado <> 'pendiente_sede' OR custodio_tipo = 'sede'", name='ck_flota_pendiente_sede_solo_es_sede'),
         sa.CheckConstraint("custodio_estado IN ('resuelto', 'pendiente_sede')", name='ck_flota_custodio_estado'),
-        sa.CheckConstraint('fin_ts IS NULL OR fin_ts >= inicio_ts', name='ck_flota_custodia_cierre_posterior'),
-        sa.CheckConstraint("(custodio_estado = 'resuelto' AND  ((custodio_conductor_id IS NOT NULL) + (custodio_sede_id IS NOT NULL)) = 1) OR (custodio_estado = 'pendiente_sede' AND  custodio_conductor_id IS NULL AND custodio_sede_id IS NULL)", name='ck_flota_custodia_arco_exclusivo'),
-        sa.CheckConstraint("custodio_tipo IN ('conductor', 'sede')", name='ck_flota_custodio_tipo'),
     )
-    op.create_index('uq_flota_custodia_activa', 'flota_custodia', ['vehiculo_id'], unique=True, postgresql_where=sa.text('fin_ts IS NULL'))
     op.create_index('ix_flota_custodia_vehiculo_id', 'flota_custodia', ['vehiculo_id'], unique=False)
+    op.create_index('uq_flota_custodia_activa', 'flota_custodia', ['vehiculo_id'], unique=True, postgresql_where=sa.text('fin_ts IS NULL'))
 
     # Triggers: solo PostgreSQL. En los tests las tablas nacen por create_all y
     # los triggers cuelgan del `after_create` de cada tabla, asi que existen

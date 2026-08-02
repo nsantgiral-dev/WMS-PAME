@@ -261,6 +261,59 @@ cartera fantasma total — esa vive en Siesa.
 
 ---
 
+## El deploy que falló: los tests corren en SQLite, producción es PostgreSQL
+
+**2026-08-01 23:47.** El release del deploy murió en el `CREATE TABLE` de
+`flota_custodia`:
+
+```
+operator does not exist: boolean + boolean
+CHECK ((custodio_conductor_id IS NOT NULL) + (custodio_sede_id IS NOT NULL)) = 1
+```
+
+SQLite acepta esa suma —trata los booleanos como 0/1—. **PostgreSQL no tiene
+operador `boolean + boolean`.** Los 25 tests de constraints con `INSERT` crudo
+pasaron en verde contra un motor que no es el de producción.
+
+Lo que hace esto peor que un bug común: `test_constraints_t1.py` abre diciendo
+*"prueba que no exista camino que las esquive"* y *"si un INSERT crudo puede
+violar el invariante, el modelo está incompleto"*. Todo eso era cierto **en
+SQLite**. El archivo entero medía la propiedad correcta contra el objeto
+equivocado.
+
+Es la misma clase que costó tres builds en 2026-07: **validar contra mi entorno
+en vez de contra el artefacto desplegado.** Ahí fue `.git` y el árbol de
+archivos; acá es el motor de base de datos. Y `simular_build.sh` lo declara en
+cada corrida —"NO cubre el intérprete ni las dependencias"—; habría que agregar
+"ni el motor de base".
+
+### Qué se rompió: nada
+
+| | |
+|---|---|
+| Base | `head=c0a1cecc16dc`, 0 tablas flota, **169.495 filas intactas** |
+| Producción | arriba, sirviendo el código anterior (`/flota/health` → 404) |
+| Por qué | PostgreSQL hace DDL transaccional: la migración entera se revirtió sola |
+
+El `releaseCommand` falla **antes** de arrancar el código nuevo, así que Railway
+siguió sirviendo el deploy anterior. El orden build → tests → migración → start
+hizo exactamente lo que tenía que hacer.
+
+### Arreglo y trinquete
+
+`CASE WHEN <predicado> THEN 1 ELSE 0 END`, que es portable. Más el **trinquete 8**:
+ningún CHECK de flota puede hacer aritmética sobre predicados.
+
+**Pero el trinquete ataja la clase concreta, no la causa.** La causa es que los
+tests corren sobre SQLite. La deuda estructural, anotada con nombre:
+
+> **Correr `tests/flota/test_constraints_t1.py` contra PostgreSQL.** Mientras no
+> pase, "la base impone el invariante" significa "SQLite impone el invariante", y
+> la diferencia solo aparece en el deploy. Es la tercera vez que el mismo
+> principio se rompe por medir contra el objeto equivocado.
+
+---
+
 ## Lección: un trinquete que mide una proxy da falsos negativos silenciosos
 
 Pasó dos veces el mismo día, y las dos con la misma forma.

@@ -90,6 +90,66 @@ def _insertar_custodia(db, s, inicio, fin=None, tipo='conductor',
 # INVARIANTE 1 — monotonía y append-only, por trigger
 # ══════════════════════════════════════════════════════════════════════════
 
+class TestPortabilidadDeLosCHECK:
+    """TRINQUETE 8 — los CHECK tienen que correr en el motor de PRODUCCIÓN.
+
+    ══════════════════════════════════════════════════════════════════════
+    EL AGUJERO QUE ESTE ARCHIVO TENÍA, Y POR EL QUE SE CAYÓ UN DEPLOY
+
+    Todo lo de acá corre contra SQLite. Producción es PostgreSQL. El
+    2026-08-01 el invariante 4 se escribió así:
+
+        (custodio_conductor_id IS NOT NULL) + (custodio_sede_id IS NOT NULL) = 1
+
+    SQLite lo acepta —trata los booleanos como 0/1— y los 25 tests pasaron en
+    verde. PostgreSQL **no tiene operador `boolean + boolean`**, y el
+    `CREATE TABLE` reventó en el release del deploy.
+
+    O sea: este archivo dice "los invariantes los impone la base" y los estaba
+    probando contra una base que no es la de producción. Es la misma clase que
+    ya nos costó tres builds —validar contra mi entorno en vez de contra el
+    artefacto desplegado— aplicada al motor.
+
+    **El arreglo estructural es correr estos tests contra PostgreSQL**, y queda
+    anotado en ESTADO.md. Mientras tanto, esto ataja la clase concreta que ya
+    mordió: aritmética sobre predicados. `CASE WHEN ... THEN 1 ELSE 0 END` es
+    portable; `(x IS NULL) + (y IS NULL)` no.
+    ══════════════════════════════════════════════════════════════════════
+    """
+
+    def _checks(self):
+        from flota.adaptadores import modelos as m
+        for M in (m.Foto, m.FichaTecnica, m.DocumentoVehiculo,
+                  m.LecturaOdometro, m.Custodia):
+            for con in M.__table__.constraints:
+                if con.__class__.__name__ == 'CheckConstraint':
+                    yield M.__table__.name, con.name, str(con.sqltext)
+
+    def test_ningun_check_hace_aritmetica_sobre_predicados(self, app):
+        malos = [
+            f'{tabla}.{nombre}'
+            for tabla, nombre, sql in self._checks()
+            if 'IS NULL) +' in sql or 'IS NOT NULL) +' in sql
+        ]
+        assert not malos, (
+            f'\nCHECK con aritmética booleana: {malos}\n'
+            'PostgreSQL no tiene `boolean + boolean`. SQLite sí, así que el test '
+            'pasa y el CREATE TABLE revienta en el deploy.\n'
+            'Usá CASE WHEN <predicado> THEN 1 ELSE 0 END.'
+        )
+
+    def test_los_check_se_compilan_contra_el_dialecto_de_produccion(self, app):
+        """Compilar no ejecuta, pero atrapa lo que el dialecto no sabe escribir."""
+        from sqlalchemy.dialects import postgresql
+        from sqlalchemy.schema import CreateTable
+
+        from flota.adaptadores import modelos as m
+        for M in (m.Foto, m.FichaTecnica, m.DocumentoVehiculo,
+                  m.LecturaOdometro, m.Custodia):
+            ddl = str(CreateTable(M.__table__).compile(dialect=postgresql.dialect()))
+            assert 'CHECK' in ddl or not list(self._checks())
+
+
 class TestInvariante1EnLaBase:
 
     def test_un_insert_crudo_no_puede_bajar_el_odometro(self, db, semilla):

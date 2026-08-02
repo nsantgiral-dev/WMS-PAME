@@ -298,8 +298,13 @@ class Custodia(db.Model):
         # no se puede estar `pendiente_sede` con un conductor puesto, ni
         # `resuelto` sin nadie.
         db.CheckConstraint(
+            # CASE WHEN y no `(x IS NOT NULL) + (y IS NOT NULL)`: PostgreSQL no
+            # tiene operador `boolean + boolean`. SQLite sí —trata los booleanos
+            # como 0/1— y por eso los 25 tests de constraints pasaron en verde
+            # mientras el CREATE TABLE reventaba en producción.
             "(custodio_estado = 'resuelto' AND "
-            " ((custodio_conductor_id IS NOT NULL) + (custodio_sede_id IS NOT NULL)) = 1) OR "
+            " (CASE WHEN custodio_conductor_id IS NOT NULL THEN 1 ELSE 0 END + "
+            "  CASE WHEN custodio_sede_id IS NOT NULL THEN 1 ELSE 0 END) = 1) OR "
             "(custodio_estado = 'pendiente_sede' AND "
             " custodio_conductor_id IS NULL AND custodio_sede_id IS NULL)",
             name='ck_flota_custodia_arco_exclusivo',
