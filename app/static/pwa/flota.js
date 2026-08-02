@@ -47,8 +47,12 @@ async function cargarFlota() {
     }
     let html = '<div class="card"><h3>Recibo de turno</h3><p>Elegí la placa:</p><div>';
     vehiculos.forEach(v => {
-      html += `<button class="btn" onclick="flotaAbrirRecibo('${v.placa}')"
-        style="margin:4px">${v.placa} · ${v.tipo}</button>`;
+      html += `<div style="margin:6px 0;padding:8px;border:1px solid #334155;border-radius:8px">
+        <b style="font-size:17px">${v.placa}</b> <span style="color:#94a3b8">${v.tipo}</span><br>
+        <button class="btn" onclick="flotaAbrirRecibo('${v.placa}')">Recibo de turno</button>
+        <button class="btn" onclick="flotaAbrirFicha('${v.placa}')">Ficha técnica</button>
+        <button class="btn" onclick="flotaAbrirOdometro('${v.placa}')">Odómetro</button>
+      </div>`;
     });
     html += '</div></div><div id="flota-recibo"></div>';
     cont.innerHTML = html;
@@ -267,7 +271,62 @@ async function flotaGuardarRecibo() {
   }
 }
 
-/** Registra una lectura suelta de odómetro (tanqueo, cierre de día, corrección). */
+/** Formulario de lectura suelta: tanqueo, cierre de día, OT o corrección. */
+function flotaAbrirOdometro(placa) {
+  FLOTA_PLACA = placa;
+  document.getElementById('flota-recibo').innerHTML = `<div class="card">
+    <h3>Odómetro · ${placa}</h3>
+    <p style="color:#94a3b8;font-size:13px">Para una lectura fuera del recibo de turno.
+    Una lectura <b>no se edita</b>: si está mal, se corrige con un registro nuevo, y la
+    corrección exige motivo escrito — sin él es indistinguible de un error de digitación.</p>
+    <label>Kilometraje</label>
+    <input type="number" id="od-km" inputmode="numeric" style="width:100%;font-size:20px;padding:6px">
+    <label>Origen</label>
+    <select id="od-origen" style="width:100%;padding:6px" onchange="flotaOrigenCambio()">
+      <option value="tanqueo">tanqueo</option>
+      <option value="cierre_dia">cierre_dia</option>
+      <option value="ot">ot</option>
+      <option value="preoperacional">preoperacional</option>
+      <option value="correccion">correccion</option>
+    </select>
+    <div id="od-motivo-caja" style="display:none">
+      <label style="color:#fbbf24">Motivo de la corrección (obligatorio)</label>
+      <input id="od-motivo" style="width:100%;padding:6px">
+    </div>
+    <button class="btn btn-primary" style="margin-top:14px;width:100%"
+            onclick="flotaEnviarOdometro()">Registrar lectura</button>
+    <div id="od-error" style="color:#f87171;margin-top:8px"></div>
+  </div>`;
+}
+
+/** Muestra el motivo solo cuando el origen es una corrección. */
+function flotaOrigenCambio() {
+  const es = document.getElementById('od-origen').value === 'correccion';
+  document.getElementById('od-motivo-caja').style.display = es ? 'block' : 'none';
+}
+
+/** Valida y envía la lectura suelta. */
+async function flotaEnviarOdometro() {
+  const err = document.getElementById('od-error');
+  err.textContent = '';
+  const km = parseInt(document.getElementById('od-km').value, 10);
+  if (!Number.isFinite(km) || km < 0) { err.textContent = 'El kilometraje es obligatorio.'; return; }
+  const origen = document.getElementById('od-origen').value;
+  const motivo = origen === 'correccion' ? document.getElementById('od-motivo').value.trim() : null;
+  if (origen === 'correccion' && !motivo) {
+    err.textContent = 'Una corrección sin motivo es indistinguible de un error de digitación.';
+    return;
+  }
+  try {
+    await flotaRegistrarOdometro(FLOTA_PLACA, km, origen, motivo);
+    alerta('Lectura registrada ✓', 'exito');
+    flotaAbrirOdometro(FLOTA_PLACA);
+  } catch (e) {
+    err.textContent = e.message;
+  }
+}
+
+/** Registra una lectura suelta de odómetro contra el endpoint. */
 async function flotaRegistrarOdometro(placa, valorKm, origen, motivo) {
   const cuerpo = { placa: placa, valor_km: valorKm, origen: origen };
   if (motivo) cuerpo.motivo_correccion = motivo;
@@ -281,31 +340,144 @@ async function flotaRegistrarOdometro(placa, valorKm, origen, motivo) {
   return d;
 }
 
-/** Trae la ficha técnica de una placa. */
-async function flotaVerFicha(placa) {
-  const d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/ficha');
-  const el = document.getElementById('flota-recibo');
-  if (!d.existe) {
-    el.innerHTML = `<div class="card"><h3>${placa}</h3>
-      <p style="color:#fbbf24">Sin ficha técnica. El levantamiento de campo aterriza acá.</p>
-      </div>`;
-    return d;
-  }
-  el.innerHTML = `<div class="card"><h3>Ficha ${placa}</h3>
-    <p>${d.completa ? '<span style="color:#4ade80">Completa</span>'
-                    : '<span style="color:#fbbf24">Falta: ' + d.atributos_sin_dato.join(', ') + '</span>'}</p>
-    <pre style="font-size:12px;overflow-x:auto">${JSON.stringify(d.ficha, null, 1)}</pre></div>`;
-  return d;
+/** Opciones de cada campo con vocabulario cerrado. `sin_dato` SIEMPRE primero. */
+const FLOTA_OPCIONES = {
+  combustible:        ['sin_dato', 'gasolina', 'diesel'],
+  sistema_frenos:     ['sin_dato', 'hidraulico', 'aire_sobre_hidraulico', 'aire_full'],
+  tiene_freno_escape: ['sin_dato', 'si', 'no'],
+  distribucion:       ['sin_dato', 'correa', 'cadena'],
+  transmision_final:  ['sin_dato', 'cadena', 'correa', 'cardan'],
+  distribucion_fuente: ['sin_dato', 'manual_fabricante', 'concesionario', 'placa_motor', 'taller', 'estimado'],
+  frenos_fuente:       ['sin_dato', 'manual_fabricante', 'concesionario', 'placa_motor', 'taller', 'estimado'],
+};
+
+/** Un <select> cuya primera opción es siempre `sin_dato` — ningún default optimista. */
+function flotaSelect(campo, valor) {
+  return `<select id="fi-${campo}" style="width:100%;padding:6px">` +
+    FLOTA_OPCIONES[campo].map(o =>
+      `<option value="${o}" ${o === valor ? 'selected' : ''}>${o}</option>`).join('') +
+    '</select>';
 }
 
-/** Guarda cambios de la ficha técnica de una placa. */
-async function flotaGuardarFicha(placa, campos) {
-  const r = await fetch(API + '/flota/vehiculo/' + encodeURIComponent(placa) + '/ficha', {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-    body: JSON.stringify(campos),
+/** Abre el formulario de ficha técnica de una placa. */
+async function flotaAbrirFicha(placa) {
+  FLOTA_PLACA = placa;
+  const el = document.getElementById('flota-recibo');
+  el.innerHTML = '<div class="card">Cargando ficha…</div>';
+  let d;
+  try {
+    d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/ficha');
+  } catch (e) {
+    el.innerHTML = `<div class="card" style="color:#f87171">${e.message}</div>`;
+    return;
+  }
+  const f = d.ficha || {};
+  const v = c => (f[c] === undefined || f[c] === null) ? '' : f[c];
+
+  el.innerHTML = `<div class="card">
+    <h3>Ficha técnica · ${placa}</h3>
+    <p style="color:#94a3b8;font-size:13px">Se llena parado al lado del vehículo: el
+    kilometraje está en el tablero, el aceite en la tapa del motor o en la última factura,
+    la medida de llanta en el flanco. <b>Lo que no sepas, dejalo en <code>sin_dato</code></b> —
+    el sistema lo declara y lo persigue. Inventarlo es peor que no tenerlo.</p>
+
+    ${!d.existe ? '<p style="color:#fbbf24">Este vehículo todavía no tiene ficha.</p>'
+                : `<p>${d.completa ? '<span style="color:#4ade80">Ficha completa</span>'
+                                   : '<span style="color:#fbbf24">Falta: ' + d.atributos_sin_dato.join(', ') + '</span>'}</p>`}
+
+    <label>Kilometraje actual (del tablero) *</label>
+    <input type="number" id="fi-km_inicial" inputmode="numeric" value="${v('km_inicial')}"
+           style="width:100%;font-size:20px;padding:6px">
+
+    <label>Posiciones de llanta *</label>
+    <input type="number" id="fi-posiciones_llanta" inputmode="numeric"
+           value="${v('posiciones_llanta')}" placeholder="4 en van, 6 en camión"
+           style="width:100%;padding:6px">
+
+    <label>Combustible</label>${flotaSelect('combustible', v('combustible') || 'sin_dato')}
+    <label>Sistema de frenos</label>${flotaSelect('sistema_frenos', v('sistema_frenos') || 'sin_dato')}
+    <label style="color:#fbbf24">¿De dónde salió el dato de frenos?</label>
+    ${flotaSelect('frenos_fuente', v('frenos_fuente') || 'sin_dato')}
+
+    <label>¿Tiene freno de escape?</label>${flotaSelect('tiene_freno_escape', v('tiene_freno_escape') || 'sin_dato')}
+
+    <label>Distribución (sincronización del motor)</label>${flotaSelect('distribucion', v('distribucion') || 'sin_dato')}
+    <label style="color:#fbbf24">¿De dónde salió el dato de distribución?</label>
+    ${flotaSelect('distribucion_fuente', v('distribucion_fuente') || 'sin_dato')}
+    <label>Km de cambio de distribución</label>
+    <input type="number" id="fi-distribucion_km_cambio" value="${v('distribucion_km_cambio')}" style="width:100%;padding:6px">
+
+    <label>Transmisión final (fuerza a la rueda)</label>${flotaSelect('transmision_final', v('transmision_final') || 'sin_dato')}
+
+    <label>Aceite de motor (API + viscosidad)</label>
+    <input id="fi-aceite_motor_spec" value="${v('aceite_motor_spec')}" placeholder="15W40 CI-4" style="width:100%;padding:6px">
+    <label>Litros de aceite de motor</label>
+    <input type="number" step="0.1" id="fi-aceite_motor_litros" value="${v('aceite_motor_litros')}" style="width:100%;padding:6px">
+    <label>Aceite de caja</label>
+    <input id="fi-aceite_caja_spec" value="${v('aceite_caja_spec')}" style="width:100%;padding:6px">
+    <label>Aceite de diferencial</label>
+    <input id="fi-aceite_diferencial_spec" value="${v('aceite_diferencial_spec')}" style="width:100%;padding:6px">
+    <label>Refrigerante</label>
+    <input id="fi-refrigerante_spec" value="${v('refrigerante_spec')}" style="width:100%;padding:6px">
+
+    <label>Medida de llanta</label>
+    <input id="fi-medida_llanta" value="${v('medida_llanta')}" placeholder="195R15C" style="width:100%;padding:6px">
+    <label>Norma de emisiones</label>
+    <input id="fi-norma_emisiones" value="${v('norma_emisiones')}" style="width:100%;padding:6px">
+    <label><input type="checkbox" id="fi-tiene_furgon" ${f.tiene_furgon ? 'checked' : ''}> Tiene furgón</label>
+
+    <button class="btn btn-primary" style="margin-top:16px;width:100%;font-size:18px"
+            onclick="flotaGuardarFicha()">Guardar ficha</button>
+    <div id="fi-error" style="color:#f87171;margin-top:8px"></div>
+  </div>`;
+}
+
+/** Recoge el formulario de ficha y lo manda al PUT. */
+async function flotaGuardarFicha() {
+  const err = document.getElementById('fi-error');
+  err.textContent = '';
+  const val = id => document.getElementById('fi-' + id).value;
+
+  const km = parseInt(val('km_inicial'), 10);
+  const pos = parseInt(val('posiciones_llanta'), 10);
+  if (!Number.isFinite(km) || km < 0) { err.textContent = 'El kilometraje es obligatorio.'; return; }
+  if (!Number.isFinite(pos) || pos <= 0) { err.textContent = 'Las posiciones de llanta se cuentan a la vista.'; return; }
+
+  const campos = { km_inicial: km, posiciones_llanta: pos,
+                   tiene_furgon: document.getElementById('fi-tiene_furgon').checked };
+  ['combustible', 'sistema_frenos', 'frenos_fuente', 'tiene_freno_escape',
+   'distribucion', 'distribucion_fuente', 'transmision_final'].forEach(c => { campos[c] = val(c); });
+  ['aceite_motor_spec', 'aceite_caja_spec', 'aceite_diferencial_spec',
+   'refrigerante_spec', 'medida_llanta', 'norma_emisiones'].forEach(c => {
+     if (val(c).trim()) campos[c] = val(c).trim();
+   });
+  ['aceite_motor_litros', 'distribucion_km_cambio'].forEach(c => {
+    if (val(c).trim()) campos[c] = parseFloat(val(c));
   });
-  const d = await r.json();
-  if (!r.ok) throw new Error(d.detalle || d.error || 'No se pudo guardar la ficha');
-  return d;
+
+  // El mismo aviso que el CHECK de la base, dicho antes de perder el formulario.
+  if (campos.distribucion !== 'sin_dato' && campos.distribucion_fuente === 'sin_dato') {
+    err.textContent = 'Si sabés la distribución, decí de dónde salió el dato. ' +
+      'Un dato que dispara un cambio de correa sin procedencia es una suposición.';
+    return;
+  }
+  if (campos.sistema_frenos !== 'sin_dato' && campos.frenos_fuente === 'sin_dato') {
+    err.textContent = 'Si sabés el sistema de frenos, decí de dónde salió el dato.';
+    return;
+  }
+
+  try {
+    const r = await fetch(API + '/flota/vehiculo/' + encodeURIComponent(FLOTA_PLACA) + '/ficha', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(campos),
+    });
+    const d = await r.json();
+    if (!r.ok) { err.textContent = d.detalle || d.error || 'No se pudo guardar'; return; }
+    alerta(d.completa ? 'Ficha guardada y completa ✓'
+                      : 'Ficha guardada — falta: ' + d.atributos_sin_dato.join(', '), 'exito');
+    flotaAbrirFicha(FLOTA_PLACA);
+  } catch (e) {
+    err.textContent = 'Sin conexión: ' + e.message;
+  }
 }

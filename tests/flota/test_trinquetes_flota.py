@@ -290,6 +290,40 @@ class TestTrinqueteEndpointsSinConsumidor:
               'DEBERÍA ESTAR INFORMANDO — y eso se escribe acá antes de eximirlo.'
         )
 
+    def test_ninguna_funcion_de_flota_js_es_inalcanzable(self):
+        """TRINQUETE 5b — el agujero que el 5 no veía, y por el que me caí.
+
+        El trinquete 5 verifica que cada endpoint aparezca MENCIONADO en el JS.
+        Eso no alcanza: `flotaGuardarFicha` mencionaba `/flota/vehiculo/.../ficha`
+        y no tenía un solo caller. El endpoint parecía consumido, la función
+        existía, estaba probada y desplegada — y no había botón que la
+        encendiera. Quinta aparición del patrón en este repo, cometida dentro
+        del módulo construido para evitarlo.
+
+        Una función es alcanzable si un `onclick` del HTML la nombra, o si otra
+        función de flota la llama. Lo que no vale es que exista y nadie la toque.
+        """
+        js = _leer(os.path.join(_PWA, 'flota.js'))
+        definidas = set(re.findall(r'(?:async\s+)?function\s+(flota\w+|cargarFlota)', js))
+
+        # El caller puede vivir en CUALQUIER archivo del PWA: `cargarFlota` la
+        # llama el dispatcher de app.js. Buscar solo en flota.js daría un falso
+        # positivo, y un guard con falsos positivos termina desactivado.
+        blob = ''
+        for a in sorted(os.listdir(_PWA)):
+            if a.endswith(('.js', '.html')):
+                blob += _leer(os.path.join(_PWA, a))
+        # Referencias EXCLUYENDO las líneas de definición.
+        cuerpo = re.sub(r'(?:async\s+)?function\s+\w+', '', blob)
+        alcanzables = {f for f in definidas if re.search(rf'\b{f}\s*\(', cuerpo)}
+
+        huerfanas = sorted(definidas - alcanzables)
+        assert not huerfanas, (
+            f'\nFunciones de flota.js que nadie llama: {huerfanas}\n'
+            'El módulo no está incompleto: está desconectado del gesto que lo '
+            'enciende, y eso no se ve leyendo el código porque cada pieza está bien.'
+        )
+
     def test_la_lista_de_exentos_no_crece(self):
         """Anti-podredumbre: la exención es una categoría, no un basurero."""
         assert len(_EXENTOS_POR_REGLA) <= 1, (
