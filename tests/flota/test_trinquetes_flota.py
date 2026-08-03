@@ -639,3 +639,71 @@ class TestTrinqueteSistemaDeDiseno:
         html = _leer(self._HTML)
         i = html.index('.flota-placa')
         assert 'font-size: 22px' in html[i:i + 300]
+
+
+class TestTrinqueteResetConoceAFlota:
+    """TRINQUETE 11 — el plan de "reseteamos todo al pasar a producción"
+    depende de que el script sepa que flota existe.
+
+    Cuando se escribió, `reset_transaccional.py` no mencionaba una sola tabla
+    de flota. El plan era correcto y el mecanismo no lo cumplía: las fichas y
+    custodias del ensayo habrían sobrevivido al corte sin que nadie lo notara,
+    que es justo lo que un `simulado` habría evitado.
+
+    Este trinquete existe para que una tabla nueva de flota no se quede fuera
+    del corte por olvido.
+    """
+
+    _RESET = os.path.join(_RAIZ, 'scripts', 'reset_transaccional.py')
+
+    def _tablas_de_flota(self, app):
+        from flota.adaptadores import modelos as m
+        return {M.__table__.name for M in (
+            m.Foto, m.FichaTecnica, m.DocumentoVehiculo, m.LecturaOdometro,
+            m.Custodia, m.PlantillaInspeccion, m.ItemInspeccion)}
+
+    def test_toda_tabla_de_flota_esta_clasificada_en_el_reset(self, app):
+        reset = _leer(self._RESET)
+        sin_clasificar = [t for t in self._tablas_de_flota(app) if f"'{t}'" not in reset]
+        assert not sin_clasificar, (
+            f'\nTablas de flota que el reset no conoce: {sorted(sin_clasificar)}\n'
+            'O se vacían en el corte, o se declaran protegidas. Quedar fuera de '
+            'las dos listas significa que sobreviven por accidente.'
+        )
+
+    def test_el_levantamiento_de_campo_NO_se_borra(self, app):
+        """Ficha y documentos son media mañana recorriendo cinco vehículos.
+
+        Borrarlos en el corte obliga a repetir el levantamiento, y la segunda
+        vez nadie la hace.
+        """
+        from scripts.reset_transaccional import OPERATIVAS, PROTEGIDAS_MAESTRAS
+
+        for t in ('flota_ficha_tecnica', 'flota_documento_vehiculo'):
+            assert t in PROTEGIDAS_MAESTRAS, f'{t} debería estar protegida'
+            assert t not in OPERATIVAS
+
+    def test_el_catalogo_de_inspeccion_tampoco(self):
+        """Borrar las plantillas dejaría las inspecciones viejas apuntando a
+        ítems que ya no existen."""
+        from scripts.reset_transaccional import OPERATIVAS, PROTEGIDAS_MAESTRAS
+
+        for t in ('flota_plantilla_inspeccion', 'flota_item_inspeccion'):
+            assert t in PROTEGIDAS_MAESTRAS
+            assert t not in OPERATIVAS
+
+    def test_los_registros_del_ensayo_SI_se_borran(self):
+        from scripts.reset_transaccional import OPERATIVAS
+
+        for t in ('flota_custodia', 'flota_lectura_odometro', 'flota_foto'):
+            assert t in OPERATIVAS, f'{t} sobreviviría al corte'
+
+    def test_las_filas_se_borran_antes_que_los_archivos(self):
+        """Al revés dejaría referencias apuntando a nada — un hueco silencioso
+        contra disco ocupado, y el hueco es peor."""
+        reset = _leer(self._RESET)
+        i_borrado = reset.index("db.session.execute(text(f'DELETE FROM {t}'))")
+        # La LLAMADA, no la definición. Comparar la posición del `def` mide
+        # dónde está escrita la función, no cuándo se ejecuta.
+        i_fotos = reset.index("print(f'  {_limpiar_fotos_huerfanas(db)}')")
+        assert i_borrado < i_fotos

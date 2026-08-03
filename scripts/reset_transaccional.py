@@ -18,7 +18,14 @@ LA FRONTERA
     TSB, ROP y newsvendor consumen esa misma historia.
 
   Tablas MAESTRAS    → NUNCA se tocan.
-    Productos, ubicaciones, usuarios, proveedores, acuerdos, vehículos.
+    Productos, ubicaciones, usuarios, proveedores, acuerdos, vehículos, y el
+    expediente de flota: ficha técnica, documentos y plantillas de inspección.
+
+ARCHIVOS DE FOTOS — lo que este script NO puede limpiar
+  Vaciar `flota_foto` borra las filas, no los archivos del volumen. Quedan
+  huérfanos ocupando disco. Se limpian aparte con `--fotos`, y solo entonces:
+  borrar archivos antes que filas dejaría referencias apuntando a nada, que es
+  peor que un archivo de más.
 
 Deny-by-default: solo se vacía lo que está en OPERATIVAS. Si alguien agrega una
 tabla protegida a esa lista, el script se niega a correr.
@@ -59,6 +66,16 @@ OPERATIVAS = [
     'pedidos_siesa',
     'ubicaciones_huerfanas',
     'fugas_recompra',
+    # ── Flota (agregado 2026-08-03) ────────────────────────────────────────
+    # Registros del ensayo: turnos, lecturas y fotos. Se vacían.
+    #
+    # NO están acá `flota_ficha_tecnica` ni `flota_documento_vehiculo`: son el
+    # levantamiento de campo. Media mañana recorriendo cinco vehículos, con la
+    # foto del tablero y la medida de llanta en la mano. Borrarlas en el corte
+    # obliga a hacerlo dos veces, y la segunda nadie la hace.
+    'flota_foto',
+    'flota_lectura_odometro',
+    'flota_custodia',
 ]
 
 # NUNCA. Si aparecen en OPERATIVAS, el script aborta.
@@ -77,6 +94,13 @@ PROTEGIDAS_MAESTRAS = {
     'producto_empaques', 'siesa_mapeo_unidades', 'productos_bloqueados',
     'producto_clasificacion_abc', 'contenedores', 'ficha_importacion',
     'items_en_transito', 'stock_siesa',
+    # Flota: el expediente del vehículo y el catálogo de inspección.
+    # `flota_ficha_tecnica` es levantamiento de campo, no registro de ensayo.
+    # `flota_documento_vehiculo` es la vigencia real de SOAT y tecnomecánica.
+    # Las plantillas son el catálogo versionado — borrarlas dejaría las
+    # inspecciones viejas apuntando a ítems que ya no existen.
+    'flota_ficha_tecnica', 'flota_documento_vehiculo',
+    'flota_plantilla_inspeccion', 'flota_item_inspeccion',
 }
 
 CANONES = ['docs/canon_florencia.json', 'docs/canon_PLANTILLA.json',
@@ -98,11 +122,51 @@ def _guard():
     return True
 
 
+def _limpiar_fotos_huerfanas(db):
+    """Borra del volumen los archivos que ya no tiene ninguna fila.
+
+    Vaciar `flota_foto` borra las filas, no los archivos: quedan ocupando disco
+    sin que nadie los reclame. El volumen de Railway tiene tamaño fijo, y
+    **llenarse en silencio es el próximo modo de fallo de este diseño** — a
+    partir de ahí toda foto nueva cae en `pendiente_evidencia`.
+
+    El orden importa y es este: **primero las filas, después los archivos.**
+    Al revés dejaría referencias apuntando a nada, que es peor que un archivo
+    de más — un hueco silencioso contra disco ocupado.
+    """
+    import os
+    from pathlib import Path as _P
+
+    from sqlalchemy import text
+
+    raiz = os.getenv('FLOTA_FOTOS_DIR')
+    if raiz is None or not raiz.strip():
+        return 'FLOTA_FOTOS_DIR no está configurada — no hay volumen que limpiar.'
+
+    vivas = {r[0] for r in db.session.execute(
+        text('SELECT storage_ref FROM flota_foto'))}
+    base = _P(raiz.strip())
+    borrados = liberado = 0
+    for archivo in base.rglob('*'):
+        if not archivo.is_file():
+            continue
+        rel = str(archivo.relative_to(base))
+        if rel in vivas:
+            continue
+        liberado += archivo.stat().st_size
+        archivo.unlink()
+        borrados += 1
+    return f'{borrados} archivos huérfanos borrados · {liberado / 1_048_576:.1f} MB liberados'
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--ejecutar', action='store_true',
                    help='Borra de verdad. Sin esto solo simula.')
+    p.add_argument('--fotos', action='store_true',
+                   help='Borra tambien los archivos huerfanos del volumen de '
+                        'flota. Solo DESPUES de vaciar las filas.')
     args = p.parse_args()
 
     if not _guard():
@@ -155,6 +219,10 @@ def main():
             except Exception as e:
                 print(f'  {AMAR}aviso: {t} — {e}{FIN}')
         db.session.commit()
+
+        if args.fotos:
+            print(f'\n  {VERDE}Limpiando archivos huérfanos de flota…{FIN}')
+            print(f'  {_limpiar_fotos_huerfanas(db)}')
 
         # Verificación posterior: la memoria sigue ahí
         print(f'\n  {VERDE}Verificando que la memoria sobrevivió…{FIN}')

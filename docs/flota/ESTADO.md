@@ -603,6 +603,49 @@ notificar es superficie sin estrenar, que es la lección más cara del proyecto.
 
 ---
 
+## Decisión: sin `simulado`, se resetea al pasar a producción (2026-08-03)
+
+Se descartó agregar `simulado` a ficha, custodia y odómetro. **Se prueba contra
+producción con datos reales y en el corte se resetea.** Es decisión de Santiago
+y ahorra trabajo.
+
+### Pero el plan dependía de un script que no conocía flota
+
+`scripts/reset_transaccional.py` **no mencionaba una sola tabla de flota.** El
+plan era correcto y el mecanismo no lo cumplía: las fichas y custodias del
+ensayo habrían sobrevivido al corte sin que nadie lo notara — justo lo que un
+`simulado` habría evitado.
+
+Corregido, y la clasificación no es obvia:
+
+| Se vacía en el corte | Se protege |
+|---|---|
+| `flota_custodia` | `flota_ficha_tecnica` |
+| `flota_lectura_odometro` | `flota_documento_vehiculo` |
+| `flota_foto` | `flota_plantilla_inspeccion` · `flota_item_inspeccion` |
+
+**Ficha y documentos NO se borran**, y ese es el punto que casi se pierde: son
+media mañana recorriendo cinco vehículos con la foto del tablero y la medida de
+llanta en la mano. Borrarlas en el corte obliga a repetir el levantamiento, **y
+la segunda vez nadie la hace.** Las plantillas tampoco: borrarlas dejaría las
+inspecciones viejas apuntando a ítems que ya no existen.
+
+### Los archivos del volumen no los borra un DELETE
+
+Vaciar `flota_foto` borra las filas, no los archivos. Quedan huérfanos ocupando
+disco, y **el volumen de Railway tiene tamaño fijo: llenarse en silencio es el
+próximo modo de fallo de este diseño** — a partir de ahí toda foto nueva cae en
+`pendiente_evidencia`.
+
+`reset_transaccional.py --fotos` los limpia, y **corre después de vaciar las
+filas, nunca antes**: al revés dejaría referencias apuntando a nada, que es peor
+que un archivo de más — un hueco silencioso contra disco ocupado.
+
+**Trinquete 11:** toda tabla de flota tiene que estar clasificada en el reset.
+Quedar fuera de las dos listas significa sobrevivir por accidente.
+
+---
+
 ## Las fotos no se guardaban — 2026-08-03
 
 **Durante tres días el módulo pidió fotos y las tiró.** El frontend mandaba:
