@@ -220,6 +220,19 @@ cuenta, no se puede acumular sin que nadie lo vea.
 Lo de "Neiva Centro (Prueba)" en la base real es basura del maestro. Se saca,
 pero lo saca el dueño del maestro.
 
+### Para la capacitación de Yesid — decirlo con estas palabras
+
+**"No encontrado" es una respuesta válida al registrar un documento**, y hay que
+decírselo **antes** de que salga a buscar papeles.
+
+Si cree que solo puede registrar lo que encuentre, lo que no encuentre se le
+queda en la cabeza — y ese es justo el dato más grave que puede levantar: un
+vehículo sin SOAT localizable es un hallazgo bloqueante, no un campo vacío.
+
+El sistema lo distingue en tres estados —`vigente`, `no_encontrado` y
+`sin_verificar`— y los cuenta por separado en el health. Pero esa distinción solo
+sirve si quien llena el formulario sabe que existe.
+
 ### Ficha técnica — 5 vehículos
 
 Levantamiento en campo (paso 2), a cargo del dueño de flota. Es la semilla de
@@ -427,6 +440,17 @@ todo, en `GET /flota/custodia/cierres-forzados`.
 > Cuando el notificador exista en la tanda 2, deja de depender de que alguien se
 > acuerde — pero hasta entonces depende de eso, y fingir lo contrario sería
 > peor que decirlo.
+
+**FLO-PR-01 §4.1.1 — cerrado el 2026-08-03.** El procedimiento ya contempla el
+caso completo: vehículo con turno abierto por otro conductor, quién puede forzar
+el cierre, la obligación de avisar al custodio el mismo día, y por qué el cierre
+sin las ocho fotografías se contabiliza aparte.
+
+> **El `.docx` vive fuera del repositorio**, así que desde acá no se puede
+> verificar y no hay que volver a reportarlo como hueco. Esta línea es el único
+> rastro de que existe: sin ella, la próxima revisión del código vuelve a
+> concluir que el procedimiento no cubre el caso — porque desde el repo se ve
+> igual que si no existiera.
 
 ---
 
@@ -728,6 +752,22 @@ Dos cosas que hay que vigilar y que salen del mismo registro:
 2. **¿Quién llama?** Si en tres meses los mismos cinco clientes concentran el
    60% de los express, eso no es urgencia: es que su frecuencia de reparto está
    mal calibrada. Se arregla cambiando la ruta, no cobrando flete.
+
+### Restricción de diseño para la pantalla de preoperacional
+
+Anotada antes de construirla, que es cuando sirve.
+
+El conductor la va a usar **en un celular, en patio, a las 5 a.m., con lluvia y
+posiblemente con guantes.** Ahí lo que decide si el dato es bueno no es el color:
+
+- **Los tres botones de respuesta —óptimo, no óptimo, N/A— van grandes y bien
+  separados.** Un error de pulgar entre "óptimo" y "no óptimo" produce un dato
+  falso que **nadie va a detectar nunca**: no hay excepción, no hay log, no hay
+  test que falle. Es la misma familia que un nombre que miente, con la
+  diferencia de que lo genera el hardware humano.
+- Contraste alto y placa legible sin acercar el ojo.
+
+No es branding. Es que la calidad del dato depende del tamaño del botón.
 
 ### Métrica pendiente — medición manual
 
