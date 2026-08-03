@@ -16,6 +16,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
+from app.routes._auth_helpers import _es_gestion
 from app.models.vehiculo import Vehiculo
 from flota.adaptadores import traspaso
 from flota.adaptadores.modelos import LecturaOdometro
@@ -27,6 +28,7 @@ from flota.dominio.valores import (
     CustodioTipo,
     Lectura,
     OrigenLectura,
+    QuienPide,
 )
 
 custodia_bp = Blueprint('flota_custodia', __name__)
@@ -110,7 +112,6 @@ def cierres_forzados():
     depender de que alguien se acuerde.
     """
     from app.models.usuario import Usuario
-    from app.models.vehiculo import Vehiculo
     from flota.adaptadores.modelos import Custodia
 
     filas = (
@@ -164,10 +165,17 @@ def custodia_traspaso():
     except (ValueError, TypeError) as e:
         return jsonify({'error': f'Valor inválido: {e}'}), 400
 
+    # `quien_pide` sale del ROL, jamás del cuerpo. Si viniera en el JSON, un
+    # conductor mandaría `admin_zona` y le cerraría el turno a otro — la regla
+    # entera se saltaría con un campo.
+    quien = QuienPide.ADMIN_ZONA if _es_gestion() else QuienPide.CONDUCTOR
+
     try:
         nueva = traspaso.traspasar(
             vehiculo_id=vehiculo.id,
             km=km,
+            quien_pide=quien,
+            motivo_forzado=datos['motivo_forzado'] if 'motivo_forzado' in datos else None,
             registrado_por_usuario_id=_usuario_id(),
             custodio_tipo=tipo,
             custodio_conductor_id=datos['custodio_conductor_id'] if 'custodio_conductor_id' in datos else None,

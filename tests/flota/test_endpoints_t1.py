@@ -330,3 +330,127 @@ class TestDocumentos:
         cuerpo = client.get('/flota/custodia/cierres-forzados',
                             headers=_auth(jwt_token_admin)).get_json()
         assert cuerpo['cierres'] == []
+
+
+class TestVistaDelConductor:
+    """El conductor ve solo lo suyo, y la identidad sale del token.
+
+    Si el admin registra por el conductor, el conductor no está reportando nada:
+    la app deja de ser su respaldo y pasa a ser un registro sobre él hecho por
+    otro. Eso rompe el argumento central del sistema.
+    """
+
+    @pytest.fixture
+    def conductor_con_cuenta(self, db, flota_mundo):
+        from app.services.ruta_service import RutaService
+        conductor, usuario = RutaService.crear_cuenta_para_conductor(
+            flota_mundo['con'], 'ep@test.com', 'clave123')
+        return conductor, usuario
+
+    def _token(self, app, usuario):
+        from flask_jwt_extended import create_access_token
+        with app.app_context():
+            return create_access_token(identity=str(usuario.id))
+
+    def test_sin_ficha_vinculada_lo_dice_en_vez_de_romperse(
+            self, client, jwt_token_admin, flota_mundo):
+        """Un admin no es conductor: no tiene turno, y eso se explica."""
+        r = client.get('/flota/conductor/mi-turno', headers=_auth(jwt_token_admin))
+        assert r.status_code == 404
+        assert 'vinculado' in r.get_json()['error']
+
+    def test_sin_custodia_ni_ruta_elige_de_la_lista(
+            self, app, client, db, flota_mundo, conductor_con_cuenta):
+        _, usuario = conductor_con_cuenta
+        cuerpo = client.get('/flota/conductor/mi-turno',
+                            headers=_auth(self._token(app, usuario))).get_json()
+        assert cuerpo['origen'] == 'eleccion'
+        assert cuerpo['requiere_confirmacion'] is True
+        assert any(c['placa'] == flota_mundo['placa'] for c in cuerpo['candidatos'])
+
+    def test_con_custodia_activa_es_su_vehiculo_y_no_se_pregunta(
+            self, app, client, db, flota_mundo, conductor_con_cuenta):
+        from flota.adaptadores import traspaso
+        from flota.dominio.valores import CustodioTipo
+
+        conductor, usuario = conductor_con_cuenta
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_000,
+            registrado_por_usuario_id=usuario.id,
+            custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=conductor.id)
+
+        cuerpo = client.get('/flota/conductor/mi-turno',
+                            headers=_auth(self._token(app, usuario))).get_json()
+        assert cuerpo['origen'] == 'custodia'
+        assert cuerpo['requiere_confirmacion'] is False
+        assert cuerpo['placa'] == flota_mundo['placa']
+        assert cuerpo['tiene_turno_abierto'] is True
+
+    def test_un_vehiculo_ocupado_dice_quien_lo_tiene(
+            self, app, client, db, flota_mundo, conductor_con_cuenta):
+        """El dato que convierte un 409 en una conversación."""
+        from app.models.conductor import Conductor
+        from app.services.ruta_service import RutaService
+        from flota.adaptadores import traspaso
+        from flota.dominio.valores import CustodioTipo
+
+        otro = Conductor(nombre='Víctor', cedula='EP-2', activo=True)
+        db.session.add(otro)
+        db.session.commit()
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_000, registrado_por_usuario_id=1,
+            custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=otro.id)
+
+        _, usuario = conductor_con_cuenta
+        cuerpo = client.get('/flota/conductor/mi-turno',
+                            headers=_auth(self._token(app, usuario))).get_json()
+        ocupado = [c for c in cuerpo['candidatos'] if c['ocupado_por']]
+        assert ocupado and ocupado[0]['ocupado_por'] == 'Víctor'
+
+    def test_un_conductor_no_puede_quitarle_el_turno_por_HTTP(
+            self, app, client, db, flota_mundo, conductor_con_cuenta):
+        """El rol decide `quien_pide`, no el cuerpo del request.
+
+        Si viniera en el JSON, un conductor mandaría `admin_zona` y la regla
+        entera se saltaría con un campo.
+        """
+        from app.models.conductor import Conductor
+        from flota.adaptadores import traspaso
+        from flota.dominio.valores import CustodioTipo
+
+        otro = Conductor(nombre='Víctor', cedula='EP-3', activo=True)
+        db.session.add(otro)
+        db.session.commit()
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_000, registrado_por_usuario_id=1,
+            custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=otro.id)
+
+        conductor, usuario = conductor_con_cuenta
+        r = client.post('/flota/custodia/traspaso', json={
+            'placa': flota_mundo['placa'], 'km': 100_100,
+            'custodio_tipo': 'conductor', 'custodio_conductor_id': conductor.id,
+            'motivo_forzado': 'me lo llevo igual',   # ← ignorado: no es admin
+        }, headers=_auth(self._token(app, usuario)))
+        assert r.status_code == 409
+        assert 'Víctor' in r.get_json()['error']
+        assert 'cerrar su turno primero' in r.get_json()['error']
+
+    def test_mis_reportes_muestra_si_le_cerraron_el_turno(
+            self, app, client, db, flota_mundo, conductor_con_cuenta):
+        """Que se entere por su app, no por un tercero tres días después."""
+        from flota.adaptadores import traspaso
+        from flota.dominio.valores import CustodioTipo, QuienPide
+
+        conductor, usuario = conductor_con_cuenta
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_000, registrado_por_usuario_id=usuario.id,
+            custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=conductor.id)
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_100, registrado_por_usuario_id=1,
+            custodio_tipo=CustodioTipo.SEDE, custodio_sede_id=flota_mundo['alm'],
+            quien_pide=QuienPide.ADMIN_ZONA, motivo_forzado='se fue sin cerrar')
+
+        cuerpo = client.get('/flota/conductor/mis-reportes',
+                            headers=_auth(self._token(app, usuario))).get_json()
+        forzado = [t for t in cuerpo['turnos'] if t['cerrado_a_la_fuerza']]
+        assert forzado and 'sin cerrar' in forzado[0]['motivo_del_cierre_forzado']

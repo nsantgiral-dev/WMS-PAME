@@ -139,6 +139,7 @@ function mostrarSegunRol(rol) {
     if (OPERARIO) actualizarUI(OPERARIO);
     document.getElementById('cond-nombre').textContent = OPERARIO.nombre || '—';
     _condIniciarOffline();
+    flotaCondCargar();
     cargarRutasConductor();
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {

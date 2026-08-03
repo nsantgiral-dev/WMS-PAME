@@ -646,3 +646,198 @@ async function flotaBloqueForzados() {
     <ul style="line-height:1.6">${filas}</ul>
   </div>`;
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// VISTA DEL CONDUCTOR — dentro de pantalla-conductor, no del módulo Flota
+//
+// El conductor ve solo lo suyo: su vehículo del día, el recibo de turno, y
+// sus reportes. Si el admin registra por él, el conductor no está reportando
+// nada — la app deja de ser su respaldo y pasa a ser un registro sobre él
+// hecho por otro.
+// ══════════════════════════════════════════════════════════════════════
+
+let FLOTA_COND = null;        // respuesta de /conductor/mi-turno
+let FLOTA_COND_ELEGIDO = null;
+
+/** Carga el turno del conductor y pinta el bloque de flota. */
+async function flotaCondCargar() {
+  const el = document.getElementById('cond-flota');
+  if (!el) return;
+  try {
+    FLOTA_COND = await get('/flota/conductor/mi-turno');
+  } catch (e) {
+    // Un conductor sin ficha vinculada no puede operar flota, pero SÍ sus
+    // rutas: no se le rompe la pantalla por esto.
+    el.innerHTML = '';
+    return;
+  }
+  FLOTA_COND_ELEGIDO = FLOTA_COND.vehiculo_id;
+  const placa = FLOTA_COND.placa;
+  const bar = document.getElementById('cond-vehiculo');
+  if (bar) bar.textContent = placa ? `🚚 ${placa}` : 'Sin vehículo asignado';
+  flotaCondRender();
+}
+
+/** Dibuja el bloque según de dónde salió la placa. */
+function flotaCondRender() {
+  const el = document.getElementById('cond-flota');
+  const d = FLOTA_COND;
+  const km = d.odometro_actual === 'sin_dato'
+    ? '<span style="color:#fbbf24">sin dato — primera lectura</span>'
+    : `${d.odometro_actual} km`;
+
+  // Tres orígenes, tres mensajes distintos. No es lo mismo "este es tu
+  // vehículo" que "creemos que es este": la segunda pide mirar la placa.
+  let cabeza;
+  if (d.origen === 'custodia') {
+    cabeza = `<div style="font-size:26px;font-weight:800">${d.placa}</div>
+      <div style="color:#4ade80;font-size:13px">Tu turno está abierto · ${km}</div>`;
+  } else if (d.origen === 'ruta') {
+    cabeza = `<div style="font-size:26px;font-weight:800">${d.placa}</div>
+      <div style="color:#fbbf24;font-size:13px">Según tu ruta de hoy.
+      <b>Confirmá que la placa es la del camión que tenés enfrente.</b> · ${km}</div>`;
+  } else {
+    cabeza = `<div style="color:#fbbf24;font-size:14px">Elegí el vehículo que vas a recibir:</div>`;
+  }
+
+  let lista = '';
+  if (d.origen !== 'custodia') {
+    lista = '<div style="margin-top:10px">' + (d.candidatos || []).map(c => {
+      if (c.ocupado_por) {
+        // El mensaje nombra a la persona. Un 409 crudo deja al conductor
+        // mirando el celular en el patio sin saber a quién llamar.
+        return `<div style="padding:10px;margin:4px 0;border:1px solid #3f1515;border-radius:8px;opacity:.75">
+          <b>${c.placa}</b> · ${c.tipo}<br>
+          <span style="color:#f87171;font-size:12px">Lo tiene ${c.ocupado_por}.
+          Si lo vas a recibir vos, tiene que cerrar su turno primero.</span>
+        </div>`;
+      }
+      const sel = c.vehiculo_id === FLOTA_COND_ELEGIDO;
+      return `<button onclick="flotaCondElegir(${c.vehiculo_id})"
+        style="display:block;width:100%;text-align:left;padding:12px;margin:4px 0;
+        border-radius:8px;cursor:pointer;font-size:15px;
+        background:${sel ? '#14532d' : '#1a1a1a'};border:1px solid ${sel ? '#4ade80' : '#333'};color:#eee">
+        ${sel ? '✓ ' : ''}<b>${c.placa}</b> · ${c.tipo}</button>`;
+    }).join('') + '</div>';
+  }
+
+  el.innerHTML = `<div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:12px">
+    ${cabeza}${lista}
+    <div style="display:flex;gap:6px;margin-top:12px">
+      <button onclick="flotaCondAbrirRecibo()" style="flex:2;padding:12px;background:#1e3a5f;
+        border:1px solid #2563eb;color:#93c5fd;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer">
+        ${d.tiene_turno_abierto ? 'Entregar turno' : 'Recibir turno'}</button>
+      <button onclick="flotaCondMisReportes()" style="flex:1;padding:12px;background:#1a1a1a;
+        border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer">Mis reportes</button>
+    </div>
+    <div id="cond-flota-form"></div>
+  </div>`;
+}
+
+/** Marca el vehículo elegido de la lista. */
+function flotaCondElegir(id) {
+  FLOTA_COND_ELEGIDO = id;
+  const c = (FLOTA_COND.candidatos || []).find(x => x.vehiculo_id === id);
+  FLOTA_COND.placa = c ? c.placa : '';
+  const bar = document.getElementById('cond-vehiculo');
+  if (bar && c) bar.textContent = `🚚 ${c.placa}`;
+  flotaCondRender();
+}
+
+/** Abre el formulario de recibo de turno del conductor. */
+function flotaCondAbrirRecibo() {
+  if (!FLOTA_COND_ELEGIDO) { alerta('Elegí primero el vehículo', 'error'); return; }
+  const c = (FLOTA_COND.candidatos || []).find(x => x.vehiculo_id === FLOTA_COND_ELEGIDO);
+  FLOTA_PLACA = c ? c.placa : FLOTA_COND.placa;
+  FLOTA_FOTOS = {};
+  FLOTA_FOTO_TABLERO = null;
+
+  let angulos = FLOTA_ANGULOS.map(a => `<div style="display:inline-block;margin:3px">
+    <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
+           style="display:none" onchange="flotaCapturarAngulo('${a}')">
+    <button type="button" class="btn" id="flota-b-${a}"
+            onclick="document.getElementById('flota-f-${a}').click()">${a}</button></div>`).join('');
+
+  document.getElementById('cond-flota-form').innerHTML = `
+    <hr style="border-color:#333;margin:14px 0">
+    <div style="font-size:20px;font-weight:800;margin-bottom:8px">${FLOTA_PLACA}</div>
+    <label>Kilometraje del tablero</label>
+    <input type="number" id="cf-km" inputmode="numeric"
+           style="width:100%;font-size:24px;padding:8px;background:#000;border:1px solid #333;color:#fff;border-radius:8px">
+    <input type="file" id="flota-foto-tablero" accept="image/*" capture="environment"
+           style="display:none" onchange="flotaCapturarTablero()">
+    <button type="button" class="btn" style="margin-top:8px"
+            onclick="document.getElementById('flota-foto-tablero').click()">📷 Foto del tablero</button>
+    <span id="flota-tablero-ok" style="margin-left:8px"></span>
+    <p style="margin-top:12px"><b>Las ocho fotos</b></p><div>${angulos}</div>
+    <button onclick="flotaCondGuardar()" style="width:100%;margin-top:14px;padding:14px;
+      background:#166534;border:none;color:#fff;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer">
+      Confirmar ${FLOTA_PLACA}</button>
+    <div id="cf-error" style="color:#f87171;margin-top:8px"></div>`;
+}
+
+/** Valida y envía el recibo de turno del conductor. */
+async function flotaCondGuardar() {
+  const err = document.getElementById('cf-error');
+  err.textContent = '';
+  const km = parseInt(document.getElementById('cf-km').value, 10);
+  if (!Number.isFinite(km) || km < 0) {
+    err.textContent = 'El kilometraje es obligatorio. Sin odómetro no se registra el turno.';
+    return;
+  }
+  if (!FLOTA_FOTO_TABLERO) {
+    err.textContent = 'Falta la foto del tablero: el número necesita respaldo verificable.';
+    return;
+  }
+  const faltan = FLOTA_ANGULOS.filter(a => !FLOTA_FOTOS[a]).length;
+  if (faltan && !confirm(`Faltan ${faltan} de las 8 fotos. El turno se registra igual y queda contado como incompleto. ¿Confirmás?`)) return;
+
+  const payload = {
+    placa: FLOTA_PLACA, km: km, custodio_tipo: 'conductor',
+    custodio_conductor_id: FLOTA_COND.conductor.id,
+    fotos_inicio: FLOTA_ANGULOS.filter(a => FLOTA_FOTOS[a])
+      .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado'))
+      .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato')]),
+  };
+  try {
+    const r = await fetch(API + '/flota/custodia/traspaso', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok) { err.textContent = d.error || 'No se pudo registrar'; return; }
+    alerta('Turno recibido ✓' + (d.linea_base ? ' (línea base)' : ''), 'exito');
+    flotaCondCargar();
+  } catch (e) {
+    err.textContent = 'Sin conexión: ' + e.message;
+  }
+}
+
+/** "Mis reportes y en qué van" — lo que hace que la app sea su respaldo. */
+async function flotaCondMisReportes() {
+  const el = document.getElementById('cond-flota-form');
+  el.innerHTML = '<div style="padding:12px">Cargando…</div>';
+  let d;
+  try {
+    d = await get('/flota/conductor/mis-reportes');
+  } catch (e) {
+    el.innerHTML = `<div style="color:#f87171;padding:12px">${e.message}</div>`;
+    return;
+  }
+  const turnos = d.turnos || [];
+  if (!turnos.length) {
+    el.innerHTML = '<div style="padding:12px;color:#666">Todavía no registraste ningún turno.</div>';
+    return;
+  }
+  el.innerHTML = '<hr style="border-color:#333;margin:14px 0"><ul style="line-height:1.7;padding-left:18px">' +
+    turnos.map(t => {
+      const cuando = t.inicio.slice(0, 16).replace('T', ' ');
+      if (t.cerrado_a_la_fuerza) {
+        return `<li style="color:#f87171"><b>${t.placa}</b> ${cuando} —
+          <b>te cerraron el turno</b>: ${t.motivo_del_cierre_forzado || 'sin motivo'}</li>`;
+      }
+      if (t.abierto) return `<li style="color:#4ade80"><b>${t.placa}</b> ${cuando} — abierto ahora</li>`;
+      return `<li><b>${t.placa}</b> ${cuando} — cerrado · ${t.km_fin - t.km_inicio} km</li>`;
+    }).join('') + '</ul>';
+}
