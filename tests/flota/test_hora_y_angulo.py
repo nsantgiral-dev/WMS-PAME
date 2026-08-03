@@ -422,6 +422,42 @@ class TestListadoDeFotosDeUnaCustodia:
         assert len(d['fotos']) == 1
         assert d['posiciones_llanta_fuente'] == 'tipo'
 
+    def test_devuelve_la_clase_para_identificar_el_tablero(
+            self, client, jwt_token_admin, mundo, tmp_path, monkeypatch):
+        """Las fotos anteriores a la migración no tienen ángulo — pero sí clase.
+
+        En un recibo hay exactamente una `foto_dato`: el tablero. Eso identifica
+        la foto del odómetro **sin adivinar por el orden**, que es lo único que
+        permite verificar si los seis dígitos se leen en las que ya se tomaron.
+        """
+        monkeypatch.setenv('FLOTA_FOTOS_DIR', str(tmp_path))
+        r = client.post('/flota/custodia/traspaso',
+                        json={'placa': mundo['placa'], 'km': 700,
+                              'custodio_tipo': 'conductor',
+                              'custodio_conductor_id': mundo['con'],
+                              'fotos_inicio': [
+                                  {'clase': 'evidencia_estado', 'data_url': _DATA_URL,
+                                   'ancho': 800, 'alto': 600},
+                                  {'clase': 'foto_dato', 'data_url': _DATA_URL,
+                                   'ancho': 1600, 'alto': 1200},
+                              ]},
+                        headers=_auth(jwt_token_admin))
+        cid = r.get_json()['custodia_id']
+        d = client.get(f'/flota/custodia/{cid}/fotos',
+                       headers=_auth(jwt_token_admin)).get_json()
+        sin_angulo = [f for f in d['fotos'] if not f['angulo']]
+        assert len(sin_angulo) == 2
+        datos = [f for f in sin_angulo if f['clase'] == 'foto_dato']
+        assert len(datos) == 1, 'la clase no identifica el tablero'
+
+    def test_la_pantalla_usa_la_clase_y_no_el_orden(self):
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        i = js.index('async function flotaVerFotosDeCustodia')
+        cuerpo = js[i:i + 2600]
+        assert "clase === 'foto_dato'" in cuerpo, (
+            'la pantalla no distingue el tablero por su clase — quien busque el '
+            'odómetro tiene que abrir las nueve')
+
     def test_una_custodia_que_no_existe_es_404(self, client, jwt_token_admin, mundo):
         r = client.get('/flota/custodia/999999/fotos', headers=_auth(jwt_token_admin))
         assert r.status_code == 404

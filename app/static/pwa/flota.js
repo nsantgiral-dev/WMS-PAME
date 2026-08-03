@@ -426,12 +426,28 @@ async function flotaVerFotosDeCustodia(custodiaId) {
     }).join('');
 
     if (sinAngulo.length) {
+      // La `clase` SÍ se guardó siempre, y en un recibo hay exactamente una
+      // `foto_dato`: el tablero. Eso identifica la foto del odómetro sin
+      // adivinar — es un dato registrado, no una inferencia por posición.
+      const tablero = sinAngulo.filter(f => f.clase === 'foto_dato');
+      const resto = sinAngulo.filter(f => f.clase !== 'foto_dato');
       filas += `<li style="color:var(--tx2);margin-top:6px">
         ${sinAngulo.length} foto(s) <b>sin ángulo</b> — se guardaron antes de que
-        el sistema registrara cuál era cuál. No se puede saber a qué parte
-        corresponden, y adivinarlo por el orden sería inventar:
-        ${sinAngulo.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
-            onclick="flotaVerFoto(${f.id}, 'sin ángulo')">#${f.id}</button>`).join(' ')}</li>`;
+        el sistema registrara cuál era cuál. No se puede saber a qué parte del
+        vehículo corresponden, y adivinarlo por el orden sería inventar.</li>`;
+      if (tablero.length) {
+        filas += `<li style="color:var(--green);margin-top:4px">
+          Salvo el <b>tablero</b>: es la única <code>foto_dato</code> del recibo,
+          y la clase sí quedó guardada.
+          ${tablero.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
+              onclick="flotaVerFoto(${f.id}, 'tablero — el del odómetro')">
+              ver tablero (${f.ancho}×${f.alto})</button>`).join(' ')}</li>`;
+      }
+      if (resto.length) {
+        filas += `<li style="color:var(--tx2);margin-top:4px">Las otras:
+          ${resto.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
+              onclick="flotaVerFoto(${f.id}, 'sin ángulo')">#${f.id}</button>`).join(' ')}</li>`;
+      }
     }
 
     el.innerHTML = `<div class="tabla-card">
