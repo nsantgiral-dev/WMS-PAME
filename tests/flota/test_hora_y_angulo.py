@@ -329,6 +329,76 @@ class TestElVisorExisteYSeEnciende:
             'mostrarla.')
 
 
+class TestLaPlacaSeTieneQueVer:
+    """TRINQUETE — el resguardo existía y era invisible.
+
+    El modal se diseñó con la placa en un encabezado pegajoso para que nadie
+    registrara un odómetro en el camión equivocado. Pero `#banner-modo` está en
+    `z-index: 9999` y el modal en `900`: el banner pintaba encima y tapaba
+    exactamente eso. En las capturas del 2026-08-03 se lee "Recibo de turno" y
+    la placa no aparece — el usuario no podía saber sobre qué vehículo estaba
+    trabajando, que es el escenario entero que el modal existía para impedir.
+    """
+
+    def test_el_modal_se_corre_debajo_del_banner(self):
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        assert 'flotaBajarModalDebajoDelBanner' in js
+        i = js.index('function flotaBajarModalDebajoDelBanner')
+        assert "banner-modo" in js[i:i + 600], (
+            'el ajuste no consulta el banner: si el banner cambia de alto, '
+            'la placa se vuelve a tapar')
+
+    def test_se_llama_al_abrir_y_no_solo_se_define(self):
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        assert js.count('flotaBajarModalDebajoDelBanner') >= 2, (
+            'definida y nunca invocada — el patrón función-sin-caller sobre el '
+            'arreglo de un resguardo invisible')
+
+    def test_el_modal_no_le_gana_el_z_index_al_banner(self):
+        """Subirle el z-index al modal taparía el aviso de DATOS DE PRUEBA.
+
+        Los dos avisos importan y dicen cosas distintas: uno qué camión, el otro
+        si lo que se está cargando cuenta como real.
+        """
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        html = (_PWA / 'index.html').read_text(encoding='utf-8')
+        z_modal = int(re.search(r'flota-modal[\s\S]{0,200}?z-index:(\d+)', js).group(1))
+        z_banner = int(re.search(r'banner-modo[\s\S]{0,200}?z-index:(\d+)', html).group(1))
+        assert z_modal < z_banner, (
+            'El modal tapa el banner de modo: alguien puede cargar datos de '
+            'prueba creyendo que son reales.')
+
+    def test_la_placa_esta_tambien_en_el_boton_de_confirmar(self):
+        """Lo último que se mira antes del gesto irreversible."""
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        i = js.index('id="flota-guardar"')
+        assert 'FLOTA_PLACA' in js[i:i + 300]
+
+
+class TestNingunSelectorCssDefinidoDosVeces:
+    """TRINQUETE — `.flota-modal-cabeza` estaba escrito dos veces, idéntico.
+
+    Dos copias idénticas hoy son dos copias distintas en tres meses: alguien
+    ajusta el padding en la primera, la segunda gana por orden de cascada, y el
+    cambio "no hace nada" sin que se entienda por qué. Es el mismo patrón que ya
+    costó 25× en el kardex, aplicado a estilos.
+    """
+
+    def test_sin_duplicados(self):
+        html = (_PWA / 'index.html').read_text(encoding='utf-8')
+        selectores = re.findall(r'^\s{4}(\.[a-z][a-z0-9_-]*)\s*\{', html, re.M)
+        repetidos = sorted({s for s in selectores if selectores.count(s) > 1})
+        assert not repetidos, (
+            '\nSelectores CSS definidos más de una vez:\n'
+            + '\n'.join(f'  · {s}' for s in repetidos)
+            + '\n\nDos copias idénticas hoy divergen mañana.')
+
+    def test_encontro_selectores(self):
+        """Si el regex deja de encontrarlos, el test de arriba pasa vacío."""
+        html = (_PWA / 'index.html').read_text(encoding='utf-8')
+        assert len(re.findall(r'^\s{4}(\.[a-z][a-z0-9_-]*)\s*\{', html, re.M)) > 20
+
+
 class TestListadoDeFotosDeUnaCustodia:
 
     def test_lista_los_angulos_que_faltan_tambien(self, client, jwt_token_admin,

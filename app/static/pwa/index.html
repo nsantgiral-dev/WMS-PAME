@@ -528,7 +528,14 @@
 
     /* Encabezado del modal: pegajoso a propósito. Si la placa se va con el
        scroll, un formulario largo la esconde justo cuando se llega al botón de
-       guardar — y ahí es cuando más importa saber de qué camión se habla. */
+       guardar — y ahí es cuando más importa saber de qué camión se habla.
+
+       Pegajoso no alcanzaba: #banner-modo está en z-index 9999 y el modal en
+       900, así que el banner pintaba encima y tapaba la placa. El resguardo
+       existía y era invisible (2026-08-03). Se corrige corriendo el modal
+       debajo del banner en flotaBajarModalDebajoDelBanner(), no subiéndole el
+       z-index: el banner dice si los datos son reales y taparlo sería cambiar
+       un aviso por otro. */
     .flota-modal-cabeza {
       position: sticky; top: 0; z-index: 2; background: var(--bg-s);
       border-bottom: 1px solid var(--brd-b); padding: 14px 16px;
@@ -827,54 +834,6 @@
       /* imagen 340px centrada en 320px → margen 10px c/lado, logo 85%=289px cabe */
       .header-logo { width: 320px; height: 56px; }
       .header-logo img { width: 340px; height: 340px; }
-
-      /* ── Flota ──────────────────────────────────────────────────────────
-       Botones dimensionados para el patio: el conductor los toca a las 5 a.m.,
-       con lluvia y a veces con guantes. 48px es el mínimo táctil accesible;
-       los de respuesta del preoperacional van más grandes todavía y separados,
-       porque un error de pulgar produce un dato falso que nadie detecta. */
-    .btn-flota {
-      padding: 13px 16px; font-size: 15px; font-weight: 600; min-height: 48px;
-      background: var(--bg-s2); color: var(--tx); border: 1px solid var(--brd-b);
-      border-radius: 12px; cursor: pointer; margin: 3px 3px 3px 0;
-      transition: border-color .15s, background .15s;
-    }
-    .btn-flota:hover  { border-color: var(--pm-border); }
-    .btn-flota:active { background: var(--pm-dim); transform: scale(.98); }
-    .btn-flota.ok     { background: var(--gbg); color: var(--green); border-color: var(--gbrd); }
-
-    /* Tarjeta de vehículo: la placa es lo que se busca con la vista, así que
-       manda en tamaño y en peso. Todo lo demás es secundario. */
-    .flota-veh {
-      background: var(--bg-s); border: 1px solid var(--brd); border-radius: 14px;
-      padding: 14px; margin-bottom: 10px;
-    }
-    .flota-placa {
-      font-size: 22px; font-weight: 800; letter-spacing: .06em; color: var(--tx);
-      font-variant-numeric: tabular-nums;
-    }
-    .flota-tipo { font-size: 12px; color: var(--tx2); margin-bottom: 10px; }
-
-    /* Encabezado del modal: pegajoso a propósito. Si la placa se va con el
-       scroll, un formulario largo la esconde justo cuando se llega al botón de
-       guardar — y ahí es cuando más importa saber de qué camión se habla. */
-    .flota-modal-cabeza {
-      position: sticky; top: 0; z-index: 2; background: var(--bg-s);
-      border-bottom: 1px solid var(--brd-b); padding: 14px 16px;
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    .flota-modal-placa {
-      font-size: 26px; font-weight: 800; letter-spacing: .06em; color: var(--tx);
-      font-variant-numeric: tabular-nums;
-    }
-
-    /* Vista del conductor en celular: contraste alto y placa legible sin
-       acercar el ojo. No es branding — de esto depende que el dato sea bueno. */
-    @media (max-width: 480px) {
-      .flota-placa       { font-size: 26px; }
-      .flota-modal-placa { font-size: 30px; }
-      .btn-flota         { min-height: 54px; font-size: 16px; width: 100%; margin: 4px 0; }
-    }
 
     /* ── Rec cards ── */
       .rec-card { padding: 24px 26px; }

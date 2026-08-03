@@ -127,6 +127,27 @@ function flotaAsegurarModal() {
   document.body.appendChild(m);
 }
 
+/** Corre el modal debajo del banner de modo, para que la placa se vea.
+ *
+ * El banner (`#banner-modo`) está en `z-index: 9999` y el modal en `900`: el
+ * banner pinta encima y tapa exactamente el encabezado pegajoso con la placa.
+ * Reportado el 2026-08-03 — en las capturas se lee "Recibo de turno" y la placa
+ * no aparece por ningún lado.
+ *
+ * **Por qué se corre el modal y no se le sube el z-index:** el banner dice
+ * "DATOS DE PRUEBA — nada de esto es real". Taparlo justo en la pantalla donde
+ * se cargan los datos sería cambiar un aviso por otro, y el que se pierde es el
+ * que evita que alguien tome un número de ensayo por bueno. Los dos tienen que
+ * verse: uno dice qué camión, el otro dice si esto cuenta.
+ */
+function flotaBajarModalDebajoDelBanner() {
+  const m = document.getElementById('flota-modal');
+  const b = document.getElementById('banner-modo');
+  if (!m) return;
+  const alto = (b && b.style.display !== 'none') ? b.offsetHeight : 0;
+  m.style.top = alto + 'px';
+}
+
 /** Abre el modal con la placa SIEMPRE visible en el encabezado.
  *
  * La placa va en un encabezado pegajoso: aunque el formulario sea largo y el
@@ -135,6 +156,7 @@ function flotaAsegurarModal() {
  */
 function flotaAbrirModal(titulo, placa) {
   flotaAsegurarModal();
+  flotaBajarModalDebajoDelBanner();
   document.getElementById('flota-modal-placa').textContent = placa || '';
   document.getElementById('flota-modal-titulo').textContent = titulo;
   document.getElementById('flota-recibo').innerHTML =
@@ -221,8 +243,12 @@ function flotaRenderRecibo() {
     </select>
     <div id="flota-custodio-detalle" style="margin-top:8px"></div>
 
+    <!-- La placa va TAMBIÉN en el botón: es lo último que se mira antes de
+         confirmar, y el encabezado puede quedar fuera de pantalla. Dos veces la
+         misma placa no es redundancia — es que el gesto irreversible diga sobre
+         qué vehículo se ejerce. -->
     <button class="btn-primary" id="flota-guardar" style="margin-top:16px;width:100%;font-size:18px"
-            onclick="flotaGuardarRecibo()">Confirmar recibo de turno</button>
+            onclick="flotaGuardarRecibo()">Confirmar recibo de turno · ${FLOTA_PLACA}</button>
     <div id="flota-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
   el.innerHTML = html;
