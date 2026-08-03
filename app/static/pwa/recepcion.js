@@ -1148,6 +1148,7 @@ function recTab(tab) {
   const contOcs  = document.getElementById('contenido-recepcion');
   const contTras = document.getElementById('contenido-traslados-rec');
   const contDev  = document.getElementById('contenido-devoluciones');
+  const subtabsOcs = document.getElementById('rec-oc-subtabs');
   if (!tabOcs) return;
 
   const activo  = 'border-bottom:2px solid #1E8395;color:#1E8395;font-weight:600;';
@@ -1164,6 +1165,7 @@ function recTab(tab) {
   if (contOcs)  contOcs.style.display  = tab === 'ocs'       ? 'block' : 'none';
   if (contTras) contTras.style.display  = tab === 'traslados' ? 'block' : 'none';
   if (contDev)  contDev.style.display   = tab === 'dev'       ? 'block' : 'none';
+  if (subtabsOcs) subtabsOcs.style.display = tab === 'ocs' ? 'flex' : 'none';
 
   if (tab === 'traslados' && !_REC_TRASLADO_ACTIVO) recepCargarTraslados();
   if (tab === 'dev') cargarDevoluciones();
