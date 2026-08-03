@@ -52,6 +52,7 @@ ESTADO_DOCUMENTO = ('vigente', 'no_encontrado')
 ORIGEN_LECTURA   = ('entrega', 'preoperacional', 'cierre_dia', 'ot', 'tanqueo', 'correccion')
 CUSTODIO_TIPO    = ('conductor', 'sede')
 CUSTODIO_ESTADO  = ('resuelto', 'pendiente_sede')
+UBICACION        = ('sede', 'taller', 'fuera_de_sede')
 CLASE_FOTO       = ('evidencia_estado', 'foto_dato')
 ENTIDAD_FOTO     = ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo')
 ESTADO_FOTO      = ('ok', 'pendiente_evidencia')
@@ -283,6 +284,15 @@ class Custodia(db.Model):
     km_inicio = db.Column(db.Integer, nullable=False)
     km_fin    = db.Column(db.Integer, nullable=True)
 
+    # DÓNDE queda el vehículo. NO es lo mismo que quién responde — son dos
+    # hechos independientes y mezclarlos descarga de responsabilidad a quien
+    # efectivamente tiene el camión. Ver `valores.Ubicacion`.
+    #
+    # Nullable: las custodias anteriores al 2026-08-03 no lo registraron y no se
+    # puede saber dónde quedaron. Se dice, no se rellena.
+    ubicacion        = db.Column(db.String(20), nullable=True)
+    ubicacion_motivo = db.Column(db.Text, nullable=True)
+
     # Arranque en frío: los daños de la primera custodia nacen preexistentes,
     # sin responsable. Nadie paga por lo que no sabemos cuándo apareció.
     linea_base = db.Column(db.Boolean, nullable=False, server_default='0')
@@ -338,6 +348,35 @@ class Custodia(db.Model):
             "(custodio_tipo = 'sede' AND custodio_sede_id IS NOT NULL)",
             name='ck_flota_custodia_tipo_coherente',
         ),
+        # ── Ubicación: dónde está ≠ quién responde ──────────────────────────
+        _en('ubicacion', UBICACION),
+
+        # LA combinación que no puede existir.
+        #
+        # Un vehículo fuera de sede está en manos del conductor — en su casa, en
+        # un hotel de ruta, donde sea. Dejar que la custodia pase a `sede` ahí
+        # **descarga de responsabilidad a la única persona que lo tiene**: si
+        # amanece rayado, el registro dice que respondía una sede que no lo vio
+        # nunca.
+        #
+        # Va como CHECK y no como validación del adaptador a propósito: es
+        # exactamente la clase de regla que un refactor futuro borra sin notarlo,
+        # y su consecuencia solo aparece meses después, en una discusión sobre
+        # quién paga un golpe.
+        db.CheckConstraint(
+            "ubicacion IS NULL OR ubicacion <> 'fuera_de_sede' "
+            "OR custodio_tipo = 'conductor'",
+            name='ck_flota_fuera_de_sede_responde_el_conductor',
+        ),
+        # Fuera de sede no es un caso normal: es un vehículo pasando la noche
+        # fuera del control de la empresa. El motivo escrito es lo que hace que
+        # sea una decisión y no una costumbre.
+        db.CheckConstraint(
+            "ubicacion IS NULL OR ubicacion <> 'fuera_de_sede' "
+            "OR (ubicacion_motivo IS NOT NULL AND length(trim(ubicacion_motivo)) > 0)",
+            name='ck_flota_fuera_de_sede_con_motivo',
+        ),
+
         # Una custodia sin sede resoluble solo puede ser de tipo sede: un
         # conductor siempre tiene fila, es la cédula lo que hace válida el acta.
         db.CheckConstraint(

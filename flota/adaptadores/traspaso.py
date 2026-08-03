@@ -37,6 +37,7 @@ from flota.dominio.valores import (
     Lectura,
     OrigenLectura,
     QuienPide,
+    Ubicacion,
 )
 
 FOTOS_POR_CUSTODIA = 8
@@ -84,6 +85,8 @@ def traspasar(
     motivo_forzado: Optional[str] = None,
     fotos_fin: Optional[List[dict]] = None,
     fotos_inicio: Optional[List[dict]] = None,
+    ubicacion: Optional[Ubicacion] = None,
+    ubicacion_motivo: Optional[str] = None,
     ts: Optional[datetime] = None,
 ) -> Custodia:
     """Cierra la custodia vigente y abre la nueva, atómicamente.
@@ -101,6 +104,25 @@ def traspasar(
     estado intermedio observable: o pasa todo, o no pasa nada.
     """
     ahora = ts if ts is not None else datetime.utcnow()
+
+    # ── 0. ¿Ya pasó esto mismo hace un momento? ──────────────────────────
+    #
+    # Regla 9 aplicada acá: un timeout no significa que falló. El traspaso tiene
+    # el mismo perfil que un POST a Siesa —crea un hecho, no es reintentable, la
+    # red del patio es mala— y no tenía ninguna protección.
+    #
+    # El 2026-08-03 eso produjo NUEVE custodias de cero kilómetros en el THP696
+    # dentro del mismo minuto. Deshabilitar el botón evita el doble toque desde
+    # esa pantalla; no evita dos pestañas, un reintento del navegador, ni una red
+    # que responde tarde. La defensa tiene que estar del lado del servidor.
+    #
+    # Se devuelve la custodia existente en vez de levantar: para quien llama, el
+    # resultado es el que pidió. Levantar convertiría un reintento inocente en un
+    # error rojo en la cara del conductor, y ahí vuelve a tocar el botón.
+    duplicada = _traspaso_reciente_identico(
+        vehiculo_id, km, custodio_conductor_id, custodio_sede_id, ahora)
+    if duplicada is not None:
+        return duplicada
 
     # ── 1. Juzgar ANTES de escribir ──────────────────────────────────────
     propuesta = CustodiaDom(
@@ -183,6 +205,8 @@ def traspasar(
         nueva = Custodia(
             vehiculo_id=vehiculo_id,
             custodio_tipo=custodio_tipo.value,
+            ubicacion=ubicacion.value if ubicacion is not None else None,
+            ubicacion_motivo=(ubicacion_motivo or '').strip() or None,
             custodio_conductor_id=custodio_conductor_id,
             custodio_sede_id=custodio_sede_id,
             custodio_estado=custodio_estado.value,
@@ -215,6 +239,37 @@ def traspasar(
         # volver a levantar. Un traspaso a medias es peor que uno que falló.
         db.session.rollback()
         raise
+
+
+#: Ventana de idempotencia del traspaso.
+#:
+#: 90 segundos: más que cualquier reintento de red razonable, mucho menos que un
+#: turno real. Dos custodias legítimas del mismo vehículo, mismo conductor y
+#: MISMO kilometraje separadas por menos de minuto y medio no existen en la
+#: operación — para que el odómetro no se moviera, el camión no rodó.
+VENTANA_IDEMPOTENCIA_S = 90
+
+
+def _traspaso_reciente_identico(vehiculo_id, km, conductor_id, sede_id, ahora):
+    """La custodia que ya se abrió con estos mismos datos, o `None`.
+
+    Compara los cuatro campos que definen el hecho: qué vehículo, con cuántos
+    kilómetros, y a nombre de quién. No compara las fotos a propósito — un
+    reintento manda las mismas, y compararlas obligaría a decodificarlas antes
+    de saber si hacen falta.
+    """
+    from datetime import timedelta
+
+    desde = ahora - timedelta(seconds=VENTANA_IDEMPOTENCIA_S)
+    return (Custodia.query
+            .filter(Custodia.vehiculo_id == vehiculo_id,
+                    Custodia.km_inicio == km,
+                    Custodia.custodio_conductor_id == conductor_id,
+                    Custodia.custodio_sede_id == sede_id,
+                    Custodia.inicio_ts >= desde,
+                    Custodia.fin_ts.is_(None))
+            .order_by(Custodia.id.desc())
+            .first())
 
 
 def _colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):

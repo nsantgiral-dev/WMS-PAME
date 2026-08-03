@@ -192,6 +192,65 @@ class CustodioTipo(str, Enum):
     SEDE      = 'sede'
 
 
+class Ubicacion(str, Enum):
+    """DÓNDE queda el vehículo. **No es lo mismo que quién responde.**
+
+    Son dos hechos independientes y mezclarlos es el error que este módulo
+    existe para impedir. El caso que lo rompe:
+
+        El camión duerme en la casa del conductor. Si la ubicación arrastra la
+        custodia a `sede`, se acaba de **descargar de responsabilidad a la única
+        persona que efectivamente tiene el vehículo**. Si amanece rayado, el
+        registro dice que estaba bajo custodia de una sede que no lo vio nunca.
+
+    Por eso son dos campos, y por eso hay un CHECK que impide la combinación
+    imposible (ver `modelos.Custodia`).
+    """
+
+    SEDE          = 'sede'           # patio — custodia de la sede
+    TALLER        = 'taller'         # custodia de la sede que lo envió (tanda 1)
+    FUERA_DE_SEDE = 'fuera_de_sede'  # sigue siendo del conductor, y exige motivo
+
+
+#: Ángulos que se piden al ENTREGAR. Cuatro, no trece — asimetría deliberada.
+#:
+#: Recibir es exhaustivo porque **protege a quien asume** el vehículo: necesita
+#: constancia detallada de cómo lo recibió. Entregar es rápido porque cierra el
+#: reloj y detecta lo grueso.
+#:
+#: **El motivo de no pedir las trece al cerrar:** son las 6 p.m., el conductor
+#: terminó y quiere irse. La primera semana toma las trece. La tercera saca
+#: trece fotos del piso, y eso es evidencia peor que no tener nada — parece
+#: registro y no lo es. Cuatro fotos que se toman bien valen más que trece que
+#: se falsifican.
+#:
+#: Estas cuatro son las que detectan un golpe nuevo, que es lo que la entrega
+#: tiene que detectar. Un daño en el cajón o un espejo roto no se ven acá: es un
+#: costo aceptado a cambio de que el registro se haga de verdad.
+ANGULOS_ENTREGA = ('frontal', 'trasera', 'lateral_izq', 'lateral_der')
+
+
+def custodio_de_ubicacion(ubicacion: 'Ubicacion') -> CustodioTipo:
+    """Quién responde cuando el vehículo queda en cada lugar.
+
+    Es la única función que traduce una cosa en la otra, y existe para que la
+    traducción esté **en un solo lugar con nombre** en vez de repartida en un
+    `if` del adaptador y otro del frontend. La regla 0 aplicada a una relación:
+    el mismo criterio en dos sitios diverge.
+
+        sede          → la sede responde
+        taller        → la sede que lo envió responde (tanda 1, sin talleres)
+        fuera_de_sede → **el conductor sigue respondiendo**
+
+    El tercero es el que importa: no es una excepción que se tolera, es el caso
+    con riesgo real, y por eso además exige motivo escrito y sale marcado en el
+    tablero de control de flota.
+    """
+    if ubicacion is Ubicacion.FUERA_DE_SEDE:
+        return CustodioTipo.CONDUCTOR
+    return CustodioTipo.SEDE
+
+
 class CustodioEstado(str, Enum):
     """Si el custodio declarado se pudo representar contra el maestro.
 

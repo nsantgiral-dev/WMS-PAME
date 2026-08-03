@@ -25,6 +25,10 @@ let FLOTA_ESTADO = null;      // respuesta de /custodia/activa
 let FLOTA_FOTOS = {};         // angulo → dataURL comprimido
 let FLOTA_FOTO_TABLERO = null;
 let FLOTA_FOTO_DOC = null;
+// angulo → id de la foto de APERTURA del turno que se está cerrando. Es la
+// referencia de encuadre: sin ella, "frontal" de apertura y "frontal" de cierre
+// pueden ser dos planos distintos y la comparación no concluye nada.
+let FLOTA_REFERENCIA = {};
 
 /** Ángulos fijos, en orden. El orden fijo es lo que hace comparable un turno con otro. */
 const FLOTA_ANGULOS_FIJOS = [
@@ -76,7 +80,8 @@ async function cargarFlota() {
         ni dónde registrar un turno.</p></div>`;
       return;
     }
-    let html = await flotaBloqueForzados();
+    let html = await flotaBloqueFueraDeSede();
+    html += await flotaBloqueForzados();
     html += '<div class="tabla-card"><div class="tabla-titulo">Expedientes de flota</div>' +
       '<p style="font-size:12px;color:var(--tx2);margin:0 0 12px">El alta y la baja de ' +
       'vehículos se hacen en <b>Rutas → Vehículos</b>. Acá vive el expediente de cada uno.</p><div>';
@@ -903,6 +908,38 @@ async function flotaGuardarDocumento() {
  * la tanda 2; mientras tanto, el procedimiento pide que quien fuerza avise el
  * mismo día — esto es el respaldo de que se hizo, no el aviso.
  */
+/** Vehículos durmiendo fuera de sede, con nombre de quién responde.
+ *
+ * No es un detalle de ubicación: es un camión pasando la noche fuera del
+ * control de la empresa. Que se vea el lunes en el tablero, y no cuando
+ * aparezca un golpe y haya que reconstruir dónde estuvo.
+ *
+ * Si un vehículo aparece acá tres semanas seguidas, dejó de ser una excepción y
+ * es una costumbre que nadie decidió. Verla es el primer paso para decidirla.
+ */
+async function flotaBloqueFueraDeSede() {
+  let d;
+  try {
+    d = await get('/flota/custodia/fuera-de-sede');
+  } catch (e) {
+    return '';
+  }
+  const filas = d.fuera_de_sede || [];
+  if (!filas.length) return '';
+  return `<div class="tabla-card" style="border-left:3px solid var(--yellow)">
+    <h3 style="color:var(--yellow)">Fuera de sede ahora (${filas.length})</h3>
+    <p style="font-size:13px;color:var(--tx2)">Estos vehículos <b>no están en un
+    patio de la empresa</b>. La custodia sigue en la persona que los tiene — no
+    pasó a ninguna sede, porque ninguna sede los vio.</p>
+    <ul style="line-height:1.6">${filas.map(f => `
+      <li style="margin-bottom:8px">
+        <b>${f.placa}</b> — responde <b>${f.responde}</b>, desde ${horaColombia(f.desde)}
+        · ${f.km} km<br>
+        <span style="color:var(--tx2)">${f.motivo || 'sin motivo escrito'}</span>
+      </li>`).join('')}</ul>
+  </div>`;
+}
+
 async function flotaBloqueForzados() {
   let d;
   try {
@@ -1000,12 +1037,36 @@ function flotaCondRender() {
     }).join('') + '</div>';
   }
 
+  // Con el turno abierto, flota se colapsa a una línea.
+  //
+  // El conductor abre la app para ENTREGAR PEDIDOS. Flota es un trámite de dos
+  // minutos que hace una vez al día. Ponerlo entero arriba —con la lista de
+  // vehículos y diez turnos de historial— lo obliga a atravesarlo para llegar a
+  // su trabajo, todos los días. Eso es invertir la prioridad, y lo hice yo.
+  if (d.tiene_turno_abierto) {
+    el.innerHTML = `<div class="flota-veh" style="padding:10px 14px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:17px;font-weight:800;letter-spacing:.05em">🚚 ${d.placa}</span>
+        <span style="color:var(--green);font-size:13px">turno abierto · ${km}</span>
+        <span style="flex:1"></span>
+        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+                onclick="flotaCondAbrirEntrega()">Entregar turno</button>
+        <button class="btn-flota" style="padding:6px 12px;font-size:13px"
+                onclick="flotaCondMisReportes()">Mis turnos</button>
+      </div>
+      <div id="cond-flota-form"></div>
+    </div>`;
+    return;
+  }
+
+  // Sin turno abierto sí ocupa espacio: recibir el vehículo es lo primero que
+  // hay que hacer, antes del manifiesto de ruta.
   el.innerHTML = `<div class="flota-veh">
     ${cabeza}${lista}
     <div style="display:flex;gap:6px;margin-top:12px">
       <button class="btn-primary" style="flex:2;margin-top:0" onclick="flotaCondAbrirRecibo()">
-        ${d.tiene_turno_abierto ? 'Entregar turno' : 'Recibir turno'}</button>
-      <button class="btn-flota" style="flex:1" onclick="flotaCondMisReportes()">Mis reportes</button>
+        Recibir turno</button>
+      <button class="btn-flota" style="flex:1" onclick="flotaCondMisReportes()">Mis turnos</button>
     </div>
     <div id="cond-flota-form"></div>
   </div>`;
@@ -1062,6 +1123,187 @@ async function flotaCondAbrirRecibo() {
     <p style="margin-top:12px"><b>Las ${FLOTA_ANGULOS.length} fotos</b></p><div>${angulos}</div>
     <button class="btn-primary" id="cf-guardar" onclick="flotaCondGuardar()">Confirmar ${FLOTA_PLACA}</button>
     <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
+}
+
+/** Los cuatro ángulos que se piden al ENTREGAR. Asimetría deliberada.
+ *
+ * Recibir es exhaustivo porque protege a quien asume el vehículo. Entregar es
+ * rápido porque cierra el reloj y detecta lo grueso.
+ *
+ * El motivo de no pedir las trece al cerrar: son las 6 p.m., el conductor
+ * terminó y quiere irse. La primera semana toma las trece. La tercera saca
+ * trece fotos del piso, y eso es peor que no tener nada — parece registro y no
+ * lo es. Cuatro que se toman bien valen más que trece que se falsifican.
+ */
+const FLOTA_ANGULOS_ENTREGA = ['frontal', 'trasera', 'lateral_izq', 'lateral_der'];
+
+/** Abre el formulario de ENTREGA. No es el recibo con otro texto.
+ *
+ * Hasta el 2026-08-03 "Entregar turno" llamaba a `flotaCondAbrirRecibo()`: el
+ * mismo formulario, el mismo POST, y el resultado era abrirse una custodia
+ * nueva a sí mismo. Nueve toques produjeron nueve custodias de cero kilómetros
+ * en el THP696. El botón no fallaba — decía una cosa y hacía otra.
+ */
+async function flotaCondAbrirEntrega() {
+  const c = (FLOTA_COND.candidatos || []).find(x => x.vehiculo_id === FLOTA_COND_ELEGIDO)
+            || (FLOTA_COND.candidatos || [])[0];
+  FLOTA_PLACA = c ? c.placa : FLOTA_COND.placa;
+  FLOTA_FOTOS = {};
+  FLOTA_FOTO_TABLERO = null;
+
+  // Las fotos de apertura del turno que se está cerrando: son la referencia
+  // contra la que se van a comparar estas. Sin el mismo encuadre, "frontal" de
+  // apertura y "frontal" de cierre son dos planos distintos y la comparación no
+  // concluye nada — que es lo único que hace que estas cuatro sean evidencia.
+  FLOTA_REFERENCIA = {};
+  try {
+    const est = await get('/flota/custodia/activa/' + encodeURIComponent(FLOTA_PLACA));
+    if (est.custodia) {
+      const f = await get(`/flota/custodia/${est.custodia.id}/fotos`);
+      (f.fotos || []).forEach(x => {
+        if (x.angulo && x.momento === 'custodia_inicio') FLOTA_REFERENCIA[x.angulo] = x.id;
+      });
+    }
+  } catch (e) {
+    // Sin referencia se entrega igual: dejar al conductor sin poder cerrar el
+    // turno por falta de una ayuda visual sería peor que cerrarlo sin ella.
+  }
+
+  const angulos = FLOTA_ANGULOS_ENTREGA.map(a => `
+    <div style="display:inline-block;margin:3px;text-align:center">
+      <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
+             style="display:none" onchange="flotaCapturarAngulo('${a}')">
+      <button type="button" class="btn-flota" id="flota-b-${a}"
+              onclick="document.getElementById('flota-f-${a}').click()">${flotaNombreAngulo(a)}</button>
+      ${FLOTA_REFERENCIA[a] ? `<div><button class="btn-flota"
+           style="padding:1px 6px;font-size:11px;margin-top:2px"
+           onclick="flotaVerFoto(${FLOTA_REFERENCIA[a]}, 'así estaba al recibir — ${flotaNombreAngulo(a)}')"
+           >cómo estaba</button></div>` : ''}
+    </div>`).join('');
+
+  document.getElementById('cond-flota-form').innerHTML = `
+    <hr style="border-color:#333;margin:14px 0">
+    <div style="font-size:20px;font-weight:800;margin-bottom:2px">Entregar ${FLOTA_PLACA}</div>
+    <p style="font-size:12px;color:var(--tx2);margin:0 0 8px">
+      Cierra tu turno. Cuatro fotos, no trece — las que detectan un golpe nuevo.</p>
+
+    <label class="input-label">Kilometraje del tablero</label>
+    <input type="number" id="cf-km" inputmode="numeric" class="input-field"
+           style="font-size:26px;font-weight:700;text-align:center">
+    <input type="file" id="flota-foto-tablero" accept="image/*" capture="environment"
+           style="display:none" onchange="flotaCapturarTablero()">
+    <button type="button" class="btn-flota" style="margin-top:8px"
+            onclick="document.getElementById('flota-foto-tablero').click()">📷 Foto del tablero</button>
+    <span id="flota-tablero-ok" style="margin-left:8px"></span>
+
+    <p style="margin-top:12px"><b>Las 4 fotos</b>
+      ${Object.keys(FLOTA_REFERENCIA).length
+        ? '<span style="font-size:12px;color:var(--tx2)">— "cómo estaba" te muestra la de cuando lo recibiste</span>'
+        : ''}</p>
+    <div>${angulos}</div>
+
+    <label class="input-label" style="margin-top:12px">¿Dónde queda el vehículo?</label>
+    <select id="cf-ubicacion" class="input-field" onchange="flotaEntregaUbicacionCambio()">
+      <option value="sede">En la sede — patio</option>
+      <option value="taller">En el taller</option>
+      <option value="fuera_de_sede">Fuera de sede</option>
+    </select>
+    <div id="cf-fuera-caja" style="display:none">
+      <label class="input-label" style="color:var(--yellow)">¿Por qué queda fuera? (obligatorio)</label>
+      <input id="cf-ubicacion-motivo" class="input-field">
+      <p style="font-size:12px;color:var(--yellow);margin:4px 0">
+        El vehículo <b>sigue bajo tu responsabilidad</b> — no pasa a la sede.
+        Queda marcado en el tablero de control de flota.</p>
+    </div>
+    <div id="cf-sede-caja"><label class="input-label">¿Qué sede?</label>
+      <select id="cf-sede" class="input-field"></select></div>
+
+    <button class="btn-primary" id="cf-guardar"
+            onclick="flotaCondEntregar()">Entregar ${FLOTA_PLACA}</button>
+    <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
+
+  try {
+    const d = await get('/api/almacenes');
+    document.getElementById('cf-sede').innerHTML =
+      '<option value="">— la sede no está en el maestro —</option>' +
+      (d.almacenes || []).map(a =>
+        `<option value="${a.id}">${a.codigo} · ${a.nombre}</option>`).join('');
+  } catch (e) { /* se entrega igual: queda pendiente_sede y el health lo cuenta */ }
+}
+
+/** Muestra el motivo solo cuando queda fuera de sede. */
+function flotaEntregaUbicacionCambio() {
+  const u = document.getElementById('cf-ubicacion').value;
+  const fuera = u === 'fuera_de_sede';
+  document.getElementById('cf-fuera-caja').style.display = fuera ? 'block' : 'none';
+  document.getElementById('cf-sede-caja').style.display = fuera ? 'none' : 'block';
+}
+
+/** Cierra el turno: el vehículo pasa a la sede, o sigue con el conductor. */
+async function flotaCondEntregar() {
+  const err = document.getElementById('cf-error');
+  err.textContent = '';
+  const km = parseInt(document.getElementById('cf-km').value, 10);
+  if (!Number.isFinite(km) || km < 0) {
+    err.textContent = 'El kilometraje es obligatorio. Sin odómetro no se cierra el turno.';
+    return;
+  }
+  if (!FLOTA_FOTO_TABLERO) {
+    err.textContent = 'Falta la foto del tablero: el número necesita respaldo verificable.';
+    return;
+  }
+
+  const ubicacion = document.getElementById('cf-ubicacion').value;
+  const fuera = ubicacion === 'fuera_de_sede';
+  const motivo = fuera ? (document.getElementById('cf-ubicacion-motivo').value || '').trim() : '';
+  if (fuera && !motivo) {
+    err.textContent = 'Un vehículo que pasa la noche fuera de sede exige motivo escrito.';
+    return;
+  }
+
+  // Dónde está y quién responde: dos hechos. Fuera de sede el vehículo NO pasa
+  // a la sede — sigue siendo del conductor, que es quien lo tiene.
+  const payload = {
+    placa: FLOTA_PLACA, km: km,
+    ubicacion: ubicacion,
+    fotos_fin: FLOTA_ANGULOS_ENTREGA.filter(a => FLOTA_FOTOS[a])
+      .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado', a))
+      .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato', 'tablero')]),
+  };
+  if (fuera) {
+    payload.custodio_tipo = 'conductor';
+    payload.custodio_conductor_id = FLOTA_COND.conductor.id;
+    payload.ubicacion_motivo = motivo;
+  } else {
+    payload.custodio_tipo = 'sede';
+    const sede = document.getElementById('cf-sede').value;
+    if (sede) payload.custodio_sede_id = parseInt(sede, 10);
+    else payload.custodio_estado = 'pendiente_sede';
+  }
+
+  const faltan = FLOTA_ANGULOS_ENTREGA.filter(a => !FLOTA_FOTOS[a]).length;
+  if (faltan && !confirm(`Faltan ${faltan} de las 4 fotos. El turno se cierra igual ` +
+      `y queda contado como incompleto — pero sin ellas, un golpe que aparezca ` +
+      `mañana no se le puede atribuir a nadie. ¿Confirmás?`)) return;
+
+  const restaurar = flotaBotonOcupado(
+    'cf-guardar',
+    `Subiendo ${payload.fotos_fin.length} fotos (${flotaPesoAproximado({fotos_inicio: payload.fotos_fin})} KB)…`);
+  try {
+    const r = await fetch(API + '/flota/custodia/traspaso', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify(payload),
+    });
+    const d = await r.json();
+    if (!r.ok) { err.textContent = d.error || 'No se pudo cerrar el turno'; return; }
+    alerta('Turno entregado ✓', 'exito');
+    flotaCondCargar();
+  } catch (e) {
+    err.textContent = 'Sin conexión: ' + e.message;
+  } finally {
+    restaurar();
+  }
 }
 
 /** Valida y envía el recibo de turno del conductor. */
@@ -1124,14 +1366,31 @@ async function flotaCondMisReportes() {
     el.innerHTML = '<div style="padding:12px;color:var(--tx3)">Todavía no registraste ningún turno.</div>';
     return;
   }
-  el.innerHTML = '<hr style="border-color:#333;margin:14px 0"><ul style="line-height:1.7;padding-left:18px">' +
-    turnos.map(t => {
-      const cuando = horaColombia(t.inicio);
-      if (t.cerrado_a_la_fuerza) {
-        return `<li style="color:var(--red)"><b>${t.placa}</b> ${cuando} —
-          <b>te cerraron el turno</b>: ${t.motivo_del_cierre_forzado || 'sin motivo'}</li>`;
-      }
-      if (t.abierto) return `<li style="color:var(--green)"><b>${t.placa}</b> ${cuando} — abierto ahora</li>`;
-      return `<li><b>${t.placa}</b> ${cuando} — cerrado · ${t.km_fin - t.km_inicio} km</li>`;
-    }).join('') + '</ul>';
+  // Los turnos de cero kilómetros se agrupan en una línea.
+  //
+  // Diez filas idénticas no informan: son ruido que esconde las que sí dicen
+  // algo —un cierre forzado, un turno con kilómetros—. Y en este caso además
+  // son el rastro de un bug: nueve custodias de 0 km en el mismo minuto porque
+  // el botón decía "Entregar" y ejecutaba un recibo.
+  const filas = [];
+  let vacios = 0;
+  turnos.forEach(t => {
+    const cuando = horaColombia(t.inicio);
+    if (t.cerrado_a_la_fuerza) {
+      filas.push(`<li style="color:var(--red)"><b>${t.placa}</b> ${cuando} —
+        <b>te cerraron el turno</b>: ${t.motivo_del_cierre_forzado || 'sin motivo'}</li>`);
+    } else if (t.abierto) {
+      filas.push(`<li style="color:var(--green)"><b>${t.placa}</b> ${cuando} — abierto ahora</li>`);
+    } else if ((t.km_fin - t.km_inicio) === 0) {
+      vacios++;   // se cuentan, no se listan
+    } else {
+      filas.push(`<li><b>${t.placa}</b> ${cuando} — cerrado · ${t.km_fin - t.km_inicio} km</li>`);
+    }
+  });
+  if (vacios) {
+    filas.push(`<li style="color:var(--tx3)">${vacios} turno(s) de <b>0 km</b> —
+      abiertos y cerrados sin rodar. No se listan uno por uno.</li>`);
+  }
+  el.innerHTML = '<hr style="border-color:#333;margin:14px 0">' +
+    '<ul style="line-height:1.7;padding-left:18px">' + filas.join('') + '</ul>';
 }

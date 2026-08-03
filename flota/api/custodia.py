@@ -26,6 +26,7 @@ from flota.dominio.errores import ErrorFlota
 from flota.dominio.valores import (
     MOTIVO_ORIGEN_NO_SUELTO,
     angulos_de_custodia,
+    custodio_de_ubicacion,
     posiciones_llanta,
     ORIGENES_LECTURA_SUELTA,
     SIN_DATO,
@@ -34,6 +35,7 @@ from flota.dominio.valores import (
     Lectura,
     OrigenLectura,
     QuienPide,
+    Ubicacion,
 )
 
 custodia_bp = Blueprint('flota_custodia', __name__)
@@ -193,6 +195,44 @@ def fotos_de_custodia(custodia_id):
     }), 200
 
 
+@custodia_bp.route('/custodia/fuera-de-sede', methods=['GET'])
+@jwt_required()
+def fuera_de_sede():
+    """Vehículos que están pasando la noche fuera del control de la empresa.
+
+    No es un caso normal ni un detalle de ubicación: es un camión durmiendo
+    afuera, bajo responsabilidad de una persona, con un motivo que alguien
+    escribió. Tiene que **verse el lunes**, no descubrirse cuando aparezca un
+    golpe y haya que reconstruir dónde estuvo.
+
+    Sale con nombre del responsable. Si un vehículo aparece acá tres semanas
+    seguidas, eso ya no es una excepción — es una costumbre que nadie decidió, y
+    verla es el primer paso para decidirla.
+    """
+    from flota.adaptadores.modelos import Custodia
+
+    filas = (
+        db.session.query(Custodia, Vehiculo.placa)
+        .join(Vehiculo, Vehiculo.id == Custodia.vehiculo_id)
+        .filter(Custodia.ubicacion == Ubicacion.FUERA_DE_SEDE.value,
+                Custodia.fin_ts.is_(None))
+        .order_by(Custodia.inicio_ts.desc())
+        .all()
+    )
+    return jsonify({'fuera_de_sede': [
+        {
+            'custodia_id': c.id,
+            'placa': placa,
+            'responde': (c.custodio_conductor.nombre
+                         if c.custodio_conductor else 'sin nombre'),
+            'desde': iso_utc(c.inicio_ts),
+            'motivo': c.ubicacion_motivo,
+            'km': c.km_inicio,
+        }
+        for c, placa in filas
+    ]}), 200
+
+
 @custodia_bp.route('/custodia/cierres-forzados', methods=['GET'])
 @jwt_required()
 def cierres_forzados():
@@ -259,8 +299,28 @@ def custodia_traspaso():
             datos['custodio_estado'] if 'custodio_estado' in datos else 'resuelto'
         )
         km = int(datos['km'])
+        ubicacion = (Ubicacion(datos['ubicacion'])
+                     if datos.get('ubicacion') else None)
     except (ValueError, TypeError) as e:
         return jsonify({'error': f'Valor inválido: {e}'}), 400
+
+    # Dónde está y quién responde son dos hechos, y la traducción entre ellos
+    # vive en UNA función del dominio. Se impone acá porque el cliente no puede
+    # elegir la combinación: un vehículo fuera de sede con custodia de sede
+    # descarga de responsabilidad a quien efectivamente lo tiene.
+    if ubicacion is not None:
+        exigido = custodio_de_ubicacion(ubicacion)
+        if tipo is not exigido:
+            return jsonify({
+                'error': f'Un vehículo en «{ubicacion.value}» queda bajo custodia '
+                         f'de tipo «{exigido.value}», no «{tipo.value}».',
+                'motivo': ('Fuera de sede el vehículo sigue en manos del '
+                           'conductor: pasarlo a la sede diría que responde '
+                           'alguien que no lo vio.'
+                           if ubicacion is Ubicacion.FUERA_DE_SEDE else
+                           'En sede o taller responde la sede, no el conductor '
+                           'que ya se fue.'),
+            }), 400
 
     # `quien_pide` sale del ROL, jamás del cuerpo. Si viniera en el JSON, un
     # conductor mandaría `admin_zona` y le cerraría el turno a otro — la regla
@@ -280,6 +340,8 @@ def custodia_traspaso():
             custodio_estado=estado,
             fotos_fin=datos['fotos_fin'] if 'fotos_fin' in datos else None,
             fotos_inicio=datos['fotos_inicio'] if 'fotos_inicio' in datos else None,
+            ubicacion=ubicacion,
+            ubicacion_motivo=datos['ubicacion_motivo'] if 'ubicacion_motivo' in datos else None,
         )
     except ErrorFlota as e:
         # 409: el estado del mundo no admite este traspaso. No es un error de
