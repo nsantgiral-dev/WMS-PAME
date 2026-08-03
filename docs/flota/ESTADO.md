@@ -988,3 +988,42 @@ de sobreestimación. Escrito tres veces, más rápido.*
 | 2026-07-31 | `/flota/health` va tras JWT de gestión, no público | Declara `ambiente`, `datos_reales` y el inventario de lo que el sistema no sabe. Eso es reconocimiento de superficie. Si hace falta lectura sin sesión, se resuelve con un token de solo lectura, no abriendo el endpoint. |
 | 2026-07-31 | El import de `flota.api` está blindado: si falla, el WMS arranca igual y `/flota/*` responde 503 con motivo | El WMS todavía no sale a producción; un módulo nuevo sin estrenar no puede tumbar el arranque. Un 503 con motivo declarado es lo contrario del éxito silencioso que prohíbe la regla 5. |
 | 2026-07-31 | `rutas_historicas_sin_placa` se mide, no queda en `null` | Un cero medido y un `null` son afirmaciones distintas. |
+
+---
+
+## 2026-08-03 — la tarde que la app se usó de verdad
+
+Nueve defectos en una tarde de uso real, con 1193 tests en verde. Ninguna
+corrida de tests podía encontrarlos, y eso no es un fallo de los tests: **un
+test encuentra lo que alguien pensó en afirmar; una persona usando la app
+encuentra lo que nadie pensó.** Ocho de los nueve tienen hoy un test que falla
+si reaparecen.
+
+| Qué se rompía | Por qué ningún test lo veía |
+|---|---|
+| "Entregar turno" ejecutaba un recibo | Un solo `onclick` con el texto cambiando. No fallaba — abría una custodia nueva. Nueve toques → **nueve custodias de 0 km** en el THP696 |
+| La placa tapada por `#banner-modo` | `z-index` 9999 vs 900. Nadie pensó en afirmar que la placa fuera *visible*, solo que estuviera |
+| Fotos guardadas **sin ángulo** | El orden tampoco las identifica: el frontend filtra las faltantes antes de enviar |
+| Hora en UTC (20h cuando eran las 15h) | `datetime.utcnow().isoformat()` no dice de qué zona es; JS la lee como local |
+| "Ver foto" = `<a target=_blank>` con JWT en header | 401 siempre. **Nunca funcionó**, y como nadie lo abrió nadie lo supo |
+| Selector de origen ofrecía `ot` y `preoperacional` | Y el endpoint aceptaba además `entrega` — un cambio de turno inventado |
+| `Carlos Pérez · undefined` | El guard de datos personales quita la cédula; la pantalla imprimía el hueco |
+| Una sola foto `llantas` para 4 o 6 ruedas | Un flanco herido está en una rueda concreta |
+| CSS de flota duplicado, con un `@media` anidado imposible | 36 líneas muertas (≥1024 **y** ≤480) |
+
+### Decisiones que quedan
+
+| Decisión | Motivo |
+|---|---|
+| **Ubicación ≠ custodia**, dos columnas y un CHECK | Si el camión duerme en casa del conductor y la ubicación arrastra la custodia a `sede`, se descarga de responsabilidad a la única persona que lo tiene. Va en la base porque es la clase de regla que un refactor borra sin notarlo, y su consecuencia aparece meses después en una discusión sobre quién paga un golpe |
+| **Recibir 13 fotos, entregar 4** | Si la entrega exige 13 a las 6 p.m. en un patio, a la tercera semana se toman 13 del piso. Cuatro que se toman bien valen más que trece que se falsifican. Las cuatro son las mismas del recibo: sin el mismo encuadre no hay con qué comparar |
+| Idempotencia de 90 s en el traspaso, devolviendo **201** | Regla 9: un timeout no significa que falló. Y un rojo en la cara del conductor lo hace tocar de nuevo — que es exactamente cómo se produjeron las nueve filas |
+| `flota_limpiar_vehiculo.py` en vez de `reset_transaccional.py` | El segundo es el acta de corte: vacía picking, packing, recepciones, rutas y movimientos. Y sin `--ejecutar` no hacía nada, con `--ejecutar` hacía demasiado |
+| Umbrales decididos **antes** de medir: recibir ≤ 3 min, entregar ≤ 40 s | Con el corte ya elegido (salen las llantas: una llanta en mal estado es hallazgo de inspección, no de traspaso). Si no, la decisión se toma a las 6 p.m. con la gente esperando |
+
+### Lo que sigue sin ejercerse
+
+Cuatro superficies nuevas —entregar turno, ubicación, "cómo estaba",
+idempotencia— y **ninguna la tocó una persona**. Pendiente la corrida real con
+el camión y los cinco números: recibir, entregar, legibilidad del odómetro,
+utilidad del "cómo estaba", y si la referencia abre instantánea.
