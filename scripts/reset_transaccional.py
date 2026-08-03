@@ -213,12 +213,42 @@ def main():
             print(f'\n  {AMAR}Simulacro terminado. Nada se tocó.{FIN}\n')
             return 0
 
+        # `flota_lectura_odometro` tiene un trigger BEFORE DELETE en PostgreSQL:
+        # una lectura no se borra, se corrige con otra. Es correcto y es a
+        # propósito — pero el acta de corte SÍ tiene que poder vaciarla.
+        #
+        # Sin esto el DELETE fallaba, el `except` de abajo lo imprimía como un
+        # "aviso" entre otros, y el corte terminaba dejando las lecturas vivas
+        # con sus custodias borradas. Un error tragado por un manejador que
+        # existe para otra cosa: exactamente lo que la regla 5 prohíbe.
+        es_pg = db.engine.dialect.name == 'postgresql'
+        if es_pg:
+            db.session.execute(text(
+                'ALTER TABLE flota_lectura_odometro DISABLE TRIGGER USER'))
+        try:
+            for t in OPERATIVAS:
+                try:
+                    db.session.execute(text(f'DELETE FROM {t}'))
+                except Exception as e:
+                    print(f'  {AMAR}aviso: {t} — {e}{FIN}')
+        finally:
+            if es_pg:
+                db.session.execute(text(
+                    'ALTER TABLE flota_lectura_odometro ENABLE TRIGGER USER'))
+        db.session.commit()
+
+        # Verificar que las operativas quedaron en cero. Un `except` que imprime
+        # un aviso no es una verificación: el corte tiene que afirmar que cortó.
+        sobrantes = []
         for t in OPERATIVAS:
             try:
-                db.session.execute(text(f'DELETE FROM {t}'))
-            except Exception as e:
-                print(f'  {AMAR}aviso: {t} — {e}{FIN}')
-        db.session.commit()
+                n = db.session.execute(text(f'SELECT count(*) FROM {t}')).scalar()
+                if n:
+                    sobrantes.append(f'{t}: {n}')
+            except Exception:
+                pass
+        if sobrantes:
+            print(f'\n  {ROJO}NO quedaron vacías:{FIN} ' + ', '.join(sobrantes))
 
         if args.fotos:
             print(f'\n  {VERDE}Limpiando archivos huérfanos de flota…{FIN}')
