@@ -475,3 +475,52 @@ _JPEG_B64 = (
     '5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/APn+iiigD//Z'
 )
 _DATA_URL = f'data:image/jpeg;base64,{_JPEG_B64}'
+
+
+class TestLaReferenciaNoCuestaEsperar:
+    """El "cómo estaba" no puede comerse el presupuesto de la entrega.
+
+    Cada referencia era un viaje a la red del patio: cuatro toques, cuatro
+    esperas. A cinco segundos cada uno son veinte sobre cuarenta — la mitad de
+    la entrega gastada en mirar en vez de registrar.
+
+    Se precargan mientras el conductor teclea el odómetro, que son treinta
+    segundos en los que la red no hace nada.
+    """
+
+    def _js(self):
+        return (_PWA / 'flota.js').read_text(encoding='utf-8')
+
+    def test_la_precarga_existe_y_se_dispara(self):
+        js = self._js()
+        assert js.count('flotaPrecargarReferencias') >= 2, 'definida y sin caller'
+
+    def test_no_bloquea_el_formulario(self):
+        """Con `await`, el conductor esperaría las cuatro fotos antes de poder
+        escribir el kilometraje — justo al revés de lo que se busca."""
+        js = self._js()
+        assert 'await flotaPrecargarReferencias' not in js
+
+    def test_el_visor_usa_la_cache_antes_de_ir_a_la_red(self):
+        js = self._js()
+        i = js.index('async function flotaVerFoto')
+        cuerpo = js[i:i + 700]
+        assert 'FLOTA_REF_CACHE[fotoId]' in cuerpo, (
+            'el visor no consulta la caché: precargar no sirve de nada')
+
+    def test_un_solo_lugar_dibuja_la_foto(self):
+        """El atajo de caché y el camino de red comparten el pintado.
+
+        Dos copias del mismo HTML divergen — el mismo fallback en dos sitios ya
+        costó 25× en este repo.
+        """
+        js = self._js()
+        assert js.count('function flotaPintarFoto') == 1
+        assert js.count('flotaPintarFoto(') >= 3, 'no lo usan los dos caminos'
+
+    def test_si_la_precarga_falla_el_boton_sigue_sirviendo(self):
+        """Sin señal, "cómo estaba" tiene que caer al fetch de siempre, no
+        quedarse mudo: la referencia es una ayuda, no un requisito."""
+        js = self._js()
+        i = js.index('function flotaPrecargarReferencias')
+        assert '.catch(' in js[i:i + 700]

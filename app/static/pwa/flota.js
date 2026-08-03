@@ -368,6 +368,46 @@ function flotaFotoPayload(r, clase, angulo) {
  * comprobar que un odómetro es legible es abrir la foto que quedó — no la que
  * está en el celular.
  */
+/** Dibuja la foto. Una sola función para el camino cacheado y el de red.
+ *
+ * Separada a propósito: si el pintado viviera solo dentro del `try` del fetch,
+ * el atajo de caché tendría su propia copia del HTML y las dos divergirían —
+ * el mismo fallback en dos sitios, que en este repo ya costó 25×.
+ */
+function flotaPintarFoto(cont, url, bytes, titulo) {
+  cont.innerHTML = `
+    <p style="margin:0 0 6px"><b>${titulo || 'Foto'}</b> · ${Math.round(bytes / 1024)} KB —
+      <a href="${url}" target="_blank" style="color:var(--pm-light)">abrir en grande</a></p>
+    <img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid #333">
+    <p style="font-size:11px;color:var(--tx3);margin-top:4px">
+      Si es el tablero: hacé zoom y verificá que se lean los seis dígitos.
+      Si no se leen, los parámetros de <code>foto_dato</code> están cortos.</p>`;
+}
+
+/** fotoId → objectURL ya descargado. Vacío al empezar cada entrega. */
+let FLOTA_REF_CACHE = {};
+
+/** Baja las cuatro fotos de referencia mientras el conductor escribe.
+ *
+ * Sin esto, cada "cómo estaba" es un viaje a la red del patio: cuatro toques,
+ * cuatro esperas. A cinco segundos cada uno son veinte sobre un presupuesto de
+ * cuarenta — la mitad de la entrega gastada en mirar, no en registrar.
+ *
+ * El momento es gratis: corre mientras se teclea el odómetro y se saca la foto
+ * del tablero, que son treinta segundos en los que la red no hace nada. No se
+ * espera —`await` acá bloquearía el formulario— y si alguna falla, el botón
+ * sigue funcionando: cae al fetch de siempre.
+ */
+function flotaPrecargarReferencias() {
+  FLOTA_REF_CACHE = {};
+  Object.values(FLOTA_REFERENCIA).forEach(id => {
+    fetch(`${API}/flota/foto/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } })
+      .then(r => (r.ok ? r.blob() : null))
+      .then(b => { if (b) FLOTA_REF_CACHE[id] = { url: URL.createObjectURL(b), size: b.size }; })
+      .catch(() => { /* se baja al tocar, como antes */ });
+  });
+}
+
 async function flotaVerFoto(fotoId, titulo) {
   const cont = document.getElementById('flota-visor');
   if (!cont) {
@@ -376,6 +416,10 @@ async function flotaVerFoto(fotoId, titulo) {
     alerta('La pantalla no tiene dónde mostrar la foto — falta #flota-visor', 'error');
     return;
   }
+  // Si ya se precargó, es instantáneo: sin viaje a la red, sin espera.
+  const ya = FLOTA_REF_CACHE[fotoId];
+  if (ya) { flotaPintarFoto(cont, ya.url, ya.size, titulo); return; }
+
   cont.innerHTML = '<p style="color:var(--tx3)">Trayendo la foto…</p>';
   try {
     const r = await fetch(`${API}/flota/foto/${fotoId}`,
@@ -391,15 +435,7 @@ async function flotaVerFoto(fotoId, titulo) {
       return;
     }
     const blob = await r.blob();
-    const url = URL.createObjectURL(blob);
-    const kb = Math.round(blob.size / 1024);
-    cont.innerHTML = `
-      <p style="margin:0 0 6px"><b>${titulo || 'Foto'}</b> · ${kb} KB —
-        <a href="${url}" target="_blank" style="color:var(--pm-light)">abrir en grande</a></p>
-      <img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid #333">
-      <p style="font-size:11px;color:var(--tx3);margin-top:4px">
-        Si es el tablero: hacé zoom y verificá que se lean los seis dígitos.
-        Si no se leen, los parámetros de <code>foto_dato</code> están cortos.</p>`;
+    flotaPintarFoto(cont, URL.createObjectURL(blob), blob.size, titulo);
   } catch (e) {
     cont.innerHTML = `<p style="color:var(--red)">Sin conexión: ${e.message}</p>`;
   }
@@ -1221,6 +1257,10 @@ async function flotaCondAbrirEntrega() {
     <button class="btn-primary" id="cf-guardar"
             onclick="flotaCondEntregar()">Entregar ${FLOTA_PLACA}</button>
     <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
+
+  // Sin await: baja las referencias en segundo plano mientras el conductor
+  // teclea el odómetro. Cuando toque "cómo estaba", ya están.
+  flotaPrecargarReferencias();
 
   try {
     const d = await get('/api/almacenes');
