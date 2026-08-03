@@ -136,6 +136,45 @@ class TestRolControlFlota:
                        headers={'Authorization': f'Bearer {jwt_token_admin}'})
         assert r.status_code == 200
 
+    def test_el_backend_acepta_el_rol_al_crear_usuario(self):
+        """La lista de roles válidos vive en OTRO archivo que el enum.
+
+        `Roles` está en `_auth_helpers.py` y `_ROLES_VALIDOS` en `auth.py`.
+        Agregar el rol a uno y no al otro deja la opción visible en el
+        formulario y el backend rechazando con "Rol inválido" — el usuario ve
+        una opción que no funciona, y el error no dice que falte registrarlo.
+        """
+        from app.routes.auth import _ROLES_VALIDOS
+
+        assert Roles.CONTROL_FLOTA in _ROLES_VALIDOS
+
+    def test_toda_opcion_del_selector_es_un_rol_valido(self):
+        """El trinquete general, no el caso puntual.
+
+        Cualquier opción que aparezca en el formulario tiene que ser aceptada
+        por el backend. Si no, alguien la elige y recibe un error que no explica
+        nada.
+        """
+        import os
+        import re
+
+        from app.routes.auth import _ROLES_VALIDOS
+
+        pwa = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))), 'app', 'static', 'pwa')
+        with open(os.path.join(pwa, 'app.js'), encoding='utf-8') as f:
+            app_js = f.read()
+        # El bloque del selector de rol del formulario de usuario.
+        i = app_js.index("<select id=\"u-rol\"")
+        bloque = app_js[i:app_js.index('</select>', i)]
+        opciones = set(re.findall(r'<option value="([a-z_]+)"', bloque))
+        invalidas = sorted(opciones - set(_ROLES_VALIDOS))
+        assert not invalidas, (
+            f'\nOpciones del formulario que el backend rechaza: {invalidas}\n'
+            'Quien las elija recibe "Rol inválido" sin saber que falta '
+            'registrarlas en _ROLES_VALIDOS.'
+        )
+
     def test_el_rol_se_puede_asignar_desde_la_pantalla(self):
         """Un rol que no aparece en el formulario no se le puede dar a nadie.
 
