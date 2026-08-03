@@ -18,12 +18,15 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from app.extensions import db
 from app.routes._auth_helpers import _es_gestion
 from app.models.vehiculo import Vehiculo
+from flota.api._tiempo import iso_utc
 from flota.adaptadores import traspaso
-from flota.adaptadores.modelos import LecturaOdometro
+from flota.adaptadores.modelos import FichaTecnica, LecturaOdometro
 from flota.dominio import odometro as dom_odo
 from flota.dominio.errores import ErrorFlota
 from flota.dominio.valores import (
     MOTIVO_ORIGEN_NO_SUELTO,
+    angulos_de_custodia,
+    posiciones_llanta,
     ORIGENES_LECTURA_SUELTA,
     SIN_DATO,
     CustodioEstado,
@@ -79,9 +82,21 @@ def custodia_activa(placa):
     vigente = traspaso.custodia_activa(vehiculo.id)
     km = dom_odo.odometro_actual(_lecturas_dominio(vehiculo.id))
 
+    # Cuántas fotos de llanta pedir. Una sola foto llamada `llantas` no ubica
+    # nada: una tuerca floja está en una rueda concreta. El número sale de la
+    # ficha, y si no hay ficha se infiere del tipo — pero la pantalla dice
+    # cuál de las dos cosas pasó, porque no valen lo mismo.
+    ficha = db.session.get(FichaTecnica, vehiculo.id)
+    n_llantas, fuente = posiciones_llanta(
+        ficha.posiciones_llanta if ficha else None, vehiculo.tipo)
+
     return jsonify({
         'placa': vehiculo.placa,
         'vehiculo_id': vehiculo.id,
+        'tipo': vehiculo.tipo,
+        'posiciones_llanta': n_llantas,
+        'posiciones_llanta_fuente': fuente,
+        'angulos': list(angulos_de_custodia(n_llantas)),
         # `sin_dato` viaja como la palabra, no como 0. Un vehículo sin lecturas
         # no tiene 0 km: no sabemos cuántos tiene.
         'odometro_actual': km if km is not SIN_DATO else str(SIN_DATO),
@@ -91,7 +106,7 @@ def custodia_activa(placa):
             'custodio_estado': vigente.custodio_estado,
             'custodio_conductor_id': vigente.custodio_conductor_id,
             'custodio_sede_id': vigente.custodio_sede_id,
-            'inicio_ts': vigente.inicio_ts.isoformat(),
+            'inicio_ts': iso_utc(vigente.inicio_ts),
             'km_inicio': vigente.km_inicio,
             'linea_base': vigente.linea_base,
         },
@@ -128,6 +143,56 @@ def ver_foto(foto_id):
     return Response(contenido, mimetype=foto.mime)
 
 
+@custodia_bp.route('/custodia/<int:custodia_id>/fotos', methods=['GET'])
+@jwt_required()
+def fotos_de_custodia(custodia_id):
+    """Qué fotos quedaron de un turno, con su ángulo y su estado.
+
+    Existe porque hasta el 2026-08-03 **no había forma de mirar una foto
+    guardada**: el almacén escribía, el endpoint de archivo funcionaba, y
+    ninguna pantalla los llamaba. Un almacén que solo puede leer un test no es
+    un almacén — es el patrón de función-sin-caller sobre la evidencia misma.
+
+    Devuelve las que faltan también: un ángulo sin foto es un hueco que alguien
+    tiene que poder ver, no una ausencia que se disimula no listándola.
+    """
+    from flota.adaptadores.modelos import Custodia, Foto
+
+    custodia = db.session.get(Custodia, custodia_id)
+    if custodia is None:
+        return jsonify({'error': f'No existe la custodia {custodia_id}'}), 404
+
+    vehiculo = db.session.get(Vehiculo, custodia.vehiculo_id)
+    ficha = db.session.get(FichaTecnica, custodia.vehiculo_id)
+    n_llantas, fuente = posiciones_llanta(
+        ficha.posiciones_llanta if ficha else None,
+        vehiculo.tipo if vehiculo else '')
+
+    filas = Foto.query.filter(
+        Foto.entidad_tipo.in_(('custodia_inicio', 'custodia_fin')),
+        Foto.entidad_id == custodia_id,
+    ).order_by(Foto.id).all()
+
+    return jsonify({
+        'custodia_id': custodia_id,
+        'placa': vehiculo.placa if vehiculo else None,
+        'angulos_esperados': list(angulos_de_custodia(n_llantas)),
+        'posiciones_llanta_fuente': fuente,
+        'fotos': [{
+            'id': f.id,
+            # NULL para las anteriores a la migración del ángulo. Se dice, no se
+            # adivina por el orden: el frontend filtra las faltantes antes de
+            # enviar, así que la posición no identifica nada.
+            'angulo': f.angulo,
+            'clase': f.clase,
+            'momento': f.entidad_tipo,
+            'estado': f.estado,
+            'ancho': f.ancho, 'alto': f.alto, 'bytes': f.bytes,
+            'ts_captura': iso_utc(f.ts_captura),
+        } for f in filas],
+    }), 200
+
+
 @custodia_bp.route('/custodia/cierres-forzados', methods=['GET'])
 @jwt_required()
 def cierres_forzados():
@@ -161,7 +226,7 @@ def cierres_forzados():
             # Quién lo tenía: es a quien hay que avisarle.
             'lo_tenia': c.custodio_conductor.nombre if c.custodio_conductor else 'sede',
             'forzado_por': forzador or 'desconocido',
-            'cuando': c.fin_ts.isoformat() if c.fin_ts else None,
+            'cuando': iso_utc(c.fin_ts),
             'motivo': c.cierre_forzado_motivo,
         }
         for c, placa, forzador in filas
@@ -224,7 +289,7 @@ def custodia_traspaso():
     return jsonify({
         'custodia_id': nueva.id,
         'placa': vehiculo.placa,
-        'inicio_ts': nueva.inicio_ts.isoformat(),
+        'inicio_ts': iso_utc(nueva.inicio_ts),
         'km_inicio': nueva.km_inicio,
         'linea_base': nueva.linea_base,
         'custodio_estado': nueva.custodio_estado,

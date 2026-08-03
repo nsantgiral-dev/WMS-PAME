@@ -175,7 +175,7 @@ class TestElEsquemaSeCreaEnPostgres:
                 "SELECT count(*) FROM information_schema.table_constraints "
                 "WHERE constraint_type='CHECK' AND constraint_name LIKE 'ck_flota%'"
             )).scalar()
-        assert n == 38, f'Se esperaban 38 CHECK de flota en PostgreSQL, hay {n}'
+        assert n == 39, f'Se esperaban 39 CHECK de flota en PostgreSQL, hay {n}'
 
 
 # ══════════════════════════════════════════════════════════════════════════

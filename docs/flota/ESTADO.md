@@ -498,6 +498,41 @@ que ver.
 
 ## Tanda 2 — alcance agregado el 2026-08-01
 
+### Módulo de tanqueo — primera candidata de la tanda (agregado 2026-08-03)
+
+Hoy el odómetro suelto ya acepta origen `tanqueo`: registra el kilometraje y la
+foto del tablero. **Lo que no registra es galones ni valor**, y sin eso no se
+calcula nada.
+
+```
+tanqueo
+  vehiculo_id, lectura_odometro_id
+  fecha, galones, valor_total, valor_galon
+  estacion, tanque_lleno (bool)
+  foto_factura_id      ← foto_dato, no evidencia_estado
+  registrado_por_usuario_id
+```
+
+**Regla dura:** si `tanque_lleno = false`, el rendimiento de ese tramo es
+`SIN_DATO`, **no un número calculado**. El rendimiento solo es válido de tanque
+lleno a tanque lleno; el tanqueo parcial es la forma más común de contaminar
+esta métrica, y un promedio contaminado es peor que no tenerlo — se usa igual.
+
+Por qué vale más de lo que parece: el combustible es el rubro más grande de la
+flota, por encima del mantenimiento, y hoy no se mide por vehículo. Además un
+vehículo que baja de rendimiento sin explicación está avisando de un problema
+mecánico antes de que se manifieste (inyectores, filtro de aire, frenos que
+arrastran, presión de llantas). Y `valor_total` da precio por galón por
+estación: en seis meses se sabe dónde cobran más caro.
+
+**Es la única pieza de tanda 2 que no depende de hallazgos ni inspecciones** —
+solo del odómetro, que ya funciona. Por eso va primera: genera datos desde el
+día uno, mientras las notificaciones todavía no tienen qué notificar.
+
+**Sin código, desde ya:** que los conductores guarden la factura de cada
+tanqueo. Cuando exista la pantalla se carga el histórico y se arranca con dos o
+tres meses de serie en vez de cero. Va en la capacitación del lunes.
+
 ### Reporte semanal automático, de tres líneas
 
 Llega **armado** los lunes por correo a Yesid. Tres números y su detalle:

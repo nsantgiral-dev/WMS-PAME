@@ -128,6 +128,10 @@ def guardar_foto(datos: dict) -> dict:
         'ancho': datos['ancho'], 'alto': datos['alto'],
         'mime': datos['mime'] if 'mime' in datos else 'image/jpeg',
         'simulado': datos['simulado'] if 'simulado' in datos else False,
+        # Qué parte del vehículo muestra. Si no viene, queda NULL y el health lo
+        # cuenta: una foto anónima no se puede referir a una rueda ni a un
+        # costado, que es justamente para lo que se toma.
+        'angulo': datos['angulo'] if 'angulo' in datos else None,
     }
     # Decodificar y escribir son dos fallos distintos y no se mezclan:
     #

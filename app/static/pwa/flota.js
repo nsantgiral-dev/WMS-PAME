@@ -26,11 +26,41 @@ let FLOTA_FOTOS = {};         // angulo → dataURL comprimido
 let FLOTA_FOTO_TABLERO = null;
 let FLOTA_FOTO_DOC = null;
 
-/** Los ocho ángulos, en orden fijo. El orden fijo es lo que hace comparable un turno con otro. */
-const FLOTA_ANGULOS = [
+/** Ángulos fijos, en orden. El orden fijo es lo que hace comparable un turno con otro. */
+const FLOTA_ANGULOS_FIJOS = [
   'frontal', 'trasera', 'lateral_izq', 'lateral_der',
-  'cajon_abierto', 'interior_cabina', 'tablero', 'llantas',
+  'cajon_abierto', 'interior_cabina', 'tablero',
 ];
+
+/** Los ángulos de ESTE vehículo. Los arma el servidor contra su ficha técnica.
+ *
+ * Antes era una constante con un solo `llantas` para todo el parque. Un furgón
+ * tiene 4 ruedas y un camión 6, y una foto llamada "llantas" no ubica nada: un
+ * flanco herido o una tuerca floja está en una rueda concreta. Sin poder decir
+ * cuál, la evidencia no sirve para atribuir el daño — que es para lo que se
+ * toma.
+ */
+let FLOTA_ANGULOS = FLOTA_ANGULOS_FIJOS.slice();
+
+/** Nombre legible de un ángulo. `llanta_3` no le dice nada a nadie a las 5 a.m. */
+function flotaNombreAngulo(a) {
+  const m = /^llanta_(\d+)$/.exec(a);
+  if (m) return `llanta ${m[1]}`;
+  return a.replace(/_/g, ' ');
+}
+
+/** Dice de dónde salió el número de llantas, porque no todas las fuentes valen igual. */
+function flotaNotaLlantas() {
+  const n = FLOTA_ESTADO.posiciones_llanta;
+  const fuente = FLOTA_ESTADO.posiciones_llanta_fuente;
+  if (fuente === 'ficha') return '';
+  const razon = fuente === 'tipo'
+    ? `deducidas del tipo <b>${FLOTA_ESTADO.tipo || 'del vehículo'}</b>`
+    : 'un supuesto — no se pudo deducir del tipo';
+  return `<p style="color:var(--yellow);font-size:12px;margin:4px 0">
+    ${n} posiciones de llanta: ${razon}, no de la ficha técnica.
+    Cargá la ficha para que el número sea un dato.</p>`;
+}
 
 /** Carga la pestaña de flota: lista de vehículos y estado de custodia. */
 async function cargarFlota() {
@@ -133,6 +163,13 @@ async function flotaAbrirRecibo(placa) {
     el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
     return;
   }
+  // Los ángulos los decide el SERVIDOR contra la ficha de este vehículo. Si la
+  // respuesta no los trae —una versión vieja en caché del service worker— se
+  // usan los fijos: se piden menos fotos, pero el conductor no queda sin
+  // formulario a las 5 a.m.
+  FLOTA_ANGULOS = (FLOTA_ESTADO.angulos && FLOTA_ESTADO.angulos.length)
+    ? FLOTA_ESTADO.angulos
+    : FLOTA_ANGULOS_FIJOS.slice();
   flotaRenderRecibo();
 }
 
@@ -148,7 +185,9 @@ function flotaRenderRecibo() {
 
   let html = `<div class="tabla-card">
     <p>Último odómetro registrado: ${kmTexto}</p>
-    <p>${c ? `Viene de: custodia #${c.id} (desde ${c.inicio_ts.slice(0, 16).replace('T', ' ')})`
+    <p>${c ? `Viene de: custodia #${c.id} (desde ${horaColombia(c.inicio_ts)})
+              <button class="btn-flota" style="padding:2px 8px;font-size:12px"
+                      onclick="flotaVerFotosDeCustodia(${c.id})">ver sus fotos</button>`
            : '<b>Arranque en frío</b> — primera custodia. Lo que se registre acá nace como preexistente, sin responsable.'}</p>
 
     <label>Odómetro ahora (km)</label>
@@ -161,7 +200,8 @@ function flotaRenderRecibo() {
       📷 Foto del tablero</button>
     <span id="flota-tablero-ok" style="margin-left:8px"></span>
 
-    <p style="margin-top:14px"><b>Las ocho fotos</b> — orden fijo</p>
+    <p style="margin-top:14px"><b>Las ${FLOTA_ANGULOS.length} fotos</b> — orden fijo</p>
+    ${flotaNotaLlantas()}
     <div id="flota-angulos">`;
 
   FLOTA_ANGULOS.forEach(a => {
@@ -169,7 +209,7 @@ function flotaRenderRecibo() {
       <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
              style="display:none" onchange="flotaCapturarAngulo('${a}')">
       <button type="button" class="btn-flota" id="flota-b-${a}"
-              onclick="document.getElementById('flota-f-${a}').click()">${a}</button>
+              onclick="document.getElementById('flota-f-${a}').click()">${flotaNombreAngulo(a)}</button>
     </div>`;
   });
 
@@ -181,7 +221,7 @@ function flotaRenderRecibo() {
     </select>
     <div id="flota-custodio-detalle" style="margin-top:8px"></div>
 
-    <button class="btn-primary" style="margin-top:16px;width:100%;font-size:18px"
+    <button class="btn-primary" id="flota-guardar" style="margin-top:16px;width:100%;font-size:18px"
             onclick="flotaGuardarRecibo()">Confirmar recibo de turno</button>
     <div id="flota-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
@@ -267,7 +307,7 @@ async function flotaCapturarAngulo(angulo) {
 }
 
 /** Arma el payload de una foto para el backend: referencia, no binario. */
-function flotaFotoPayload(r, clase) {
+function flotaFotoPayload(r, clase, angulo) {
   // Manda la IMAGEN. Hasta el 2026-08-03 mandaba una referencia inventada y un
   // hash de ceros: el navegador comprimía la foto y la tiraba, y la fila decía
   // que existía una evidencia que no existía.
@@ -277,9 +317,137 @@ function flotaFotoPayload(r, clase) {
   // binario en una columna, no en un request.
   return {
     clase: clase,
+    // Qué parte del vehículo muestra. Sin esto las ocho fotos llegan anónimas
+    // y el orden no las identifica: abajo se filtran las faltantes, así que
+    // con `frontal` sin tomar la primera del arreglo es `trasera`.
+    angulo: angulo || null,
     data_url: r.dataUrl,
     ancho: r.ancho, alto: r.alto, mime: 'image/jpeg',
   };
+}
+
+/** Trae una foto guardada y la muestra. El visor que faltaba.
+ *
+ * `GET /flota/foto/<id>` exige JWT en un header, y un `<a href target=_blank>`
+ * **no manda headers**: el único enlace "ver foto" que había en el PWA devolvía
+ * 401 siempre. Nunca funcionó, y como nadie lo abrió, nadie lo supo.
+ *
+ * Eso hacía que el almacén fuera de solo escritura en la práctica: se guardaba
+ * la evidencia y no había gesto humano capaz de mirarla. La única forma de
+ * comprobar que un odómetro es legible es abrir la foto que quedó — no la que
+ * está en el celular.
+ */
+async function flotaVerFoto(fotoId, titulo) {
+  const cont = document.getElementById('flota-visor');
+  if (!cont) {
+    // Ruidoso a propósito: un `return` callado acá es un botón que no hace nada
+    // y nadie reporta. Es la forma exacta en que el enlace roto sobrevivió.
+    alerta('La pantalla no tiene dónde mostrar la foto — falta #flota-visor', 'error');
+    return;
+  }
+  cont.innerHTML = '<p style="color:var(--tx3)">Trayendo la foto…</p>';
+  try {
+    const r = await fetch(`${API}/flota/foto/${fotoId}`,
+                          { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!r.ok) {
+      // 410 = la fila existe y afirma que hay foto, pero el archivo no está.
+      // Se dice con esas palabras: es una inconsistencia, no un "no encontrado".
+      const d = await r.json().catch(() => ({}));
+      cont.innerHTML = `<p style="color:var(--red)">
+        ${r.status === 410 ? 'La fila dice que hay foto, pero el archivo no está en el almacén.'
+                           : 'No se pudo traer la foto.'}
+        ${d.error ? '<br><small>' + d.error + '</small>' : ''}</p>`;
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const kb = Math.round(blob.size / 1024);
+    cont.innerHTML = `
+      <p style="margin:0 0 6px"><b>${titulo || 'Foto'}</b> · ${kb} KB —
+        <a href="${url}" target="_blank" style="color:var(--pm-light)">abrir en grande</a></p>
+      <img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid #333">
+      <p style="font-size:11px;color:var(--tx3);margin-top:4px">
+        Si es el tablero: hacé zoom y verificá que se lean los seis dígitos.
+        Si no se leen, los parámetros de <code>foto_dato</code> están cortos.</p>`;
+  } catch (e) {
+    cont.innerHTML = `<p style="color:var(--red)">Sin conexión: ${e.message}</p>`;
+  }
+}
+
+/** Lista las fotos de una custodia y deja verlas. */
+async function flotaVerFotosDeCustodia(custodiaId) {
+  const el = document.getElementById('flota-recibo');
+  flotaAbrirModal('Fotos del turno', FLOTA_PLACA);
+  try {
+    const d = await get(`/flota/custodia/${custodiaId}/fotos`);
+    const porAngulo = {};
+    d.fotos.forEach(f => { if (f.angulo) porAngulo[f.angulo] = f; });
+    const sinAngulo = d.fotos.filter(f => !f.angulo);
+
+    // Se listan los ángulos ESPERADOS, no solo los que llegaron: un hueco que
+    // no se muestra es un hueco que nadie va a llenar.
+    let filas = d.angulos_esperados.map(a => {
+      const f = porAngulo[a];
+      if (!f) return `<li style="color:var(--yellow)">${flotaNombreAngulo(a)} — <b>falta</b></li>`;
+      if (f.estado === 'pendiente_evidencia') {
+        return `<li style="color:var(--red)">${flotaNombreAngulo(a)} —
+          se registró pero <b>el archivo no se guardó</b></li>`;
+      }
+      return `<li>${flotaNombreAngulo(a)} · ${f.ancho}×${f.alto} ·
+        ${Math.round(f.bytes / 1024)} KB
+        <button class="btn-flota" style="padding:2px 8px;font-size:12px"
+                onclick="flotaVerFoto(${f.id}, '${flotaNombreAngulo(a)}')">ver</button></li>`;
+    }).join('');
+
+    if (sinAngulo.length) {
+      filas += `<li style="color:var(--tx2);margin-top:6px">
+        ${sinAngulo.length} foto(s) <b>sin ángulo</b> — se guardaron antes de que
+        el sistema registrara cuál era cuál. No se puede saber a qué parte
+        corresponden, y adivinarlo por el orden sería inventar:
+        ${sinAngulo.map(f => `<button class="btn-flota" style="padding:2px 8px;font-size:12px"
+            onclick="flotaVerFoto(${f.id}, 'sin ángulo')">#${f.id}</button>`).join(' ')}</li>`;
+    }
+
+    el.innerHTML = `<div class="tabla-card">
+      <ul style="line-height:1.8;list-style:none;padding:0">${filas}</ul>
+      <div id="flota-visor" style="margin-top:12px"></div>
+    </div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
+  }
+}
+
+/** Bloquea un botón mientras sube, y dice cuánto va.
+ *
+ * Nueve fotos a 1600 px por la señal de un patio no son instantáneas. Un botón
+ * que no responde durante diez segundos se toca dos veces — y un segundo POST
+ * de traspaso abre una custodia más, con el mismo conductor y el mismo
+ * kilometraje, indistinguible de un turno real. Deshabilitarlo no es cortesía
+ * de interfaz: es lo que impide el registro duplicado.
+ *
+ * Devuelve la función que lo restaura.
+ */
+function flotaBotonOcupado(id, texto) {
+  const b = document.getElementById(id);
+  if (!b) return () => {};
+  const original = b.textContent;
+  const estabaDeshabilitado = b.disabled;
+  b.disabled = true;
+  b.style.opacity = '0.7';
+  b.textContent = texto;
+  return () => {
+    b.disabled = estabaDeshabilitado;
+    b.style.opacity = '';
+    b.textContent = original;
+  };
+}
+
+/** Cuánto pesa lo que se va a subir, para poder avisar antes de empezar. */
+function flotaPesoAproximado(payload) {
+  const total = (payload.fotos_inicio || [])
+    .reduce((s, f) => s + (f.data_url ? f.data_url.length : 0), 0);
+  // base64 infla ~4/3. Devuelve KB de verdad, no de string.
+  return Math.round(total * 0.75 / 1024);
 }
 
 /** Valida y envía el recibo de turno. Encola si no hay señal. */
@@ -304,8 +472,8 @@ async function flotaGuardarRecibo() {
     km: km,
     custodio_tipo: tipo,
     fotos_inicio: FLOTA_ANGULOS.filter(a => FLOTA_FOTOS[a])
-      .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado'))
-      .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato')]),
+      .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado', a))
+      .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato', 'tablero')]),
   };
   if (tipo === 'conductor') {
     payload.custodio_conductor_id = parseInt(document.getElementById('flota-conductor').value, 10);
@@ -319,6 +487,9 @@ async function flotaGuardarRecibo() {
   if (faltan && !confirm(`Faltan ${faltan} de las 8 fotos. El turno se registra igual y ` +
                          `queda contado como incompleto. ¿Confirmás?`)) return;
 
+  const n = payload.fotos_inicio.length;
+  const restaurar = flotaBotonOcupado(
+    'flota-guardar', `Subiendo ${n} fotos (${flotaPesoAproximado(payload)} KB)…`);
   try {
     const r = await fetch(API + '/flota/custodia/traspaso', {
       method: 'POST',
@@ -331,6 +502,10 @@ async function flotaGuardarRecibo() {
     flotaAbrirRecibo(FLOTA_PLACA);
   } catch (e) {
     err.textContent = 'Sin conexión: ' + e.message;
+  } finally {
+    // En `finally`: si el POST falla, el botón tiene que volver. Un botón que
+    // queda deshabilitado tras un error deja al conductor sin poder reintentar.
+    restaurar();
   }
 }
 
@@ -564,10 +739,12 @@ async function flotaAbrirDocumentos(placa) {
     const color = x.vencido ? 'var(--red)' : (x.dias_para_vencer <= 30 ? 'var(--yellow)' : 'var(--green)');
     const nota = x.vencido ? `VENCIDO hace ${-x.dias_para_vencer} días`
                            : `vence en ${x.dias_para_vencer} días`;
-    // Enlace a la foto: sin poder recuperarla, el almacén es de solo escritura
-    // y la evidencia no existe aunque la fila diga que sí.
+    // Botón y no `<a href>`: el endpoint exige el token en un header y una
+    // pestaña nueva no manda headers. Este enlace devolvía 401 siempre — y como
+    // nadie lo abrió, pasó por bueno desde que se escribió.
     const foto = x.foto_id
-      ? ` · <a href="${API}/flota/foto/${x.foto_id}" target="_blank" style="color:var(--pm-light)">ver foto</a>`
+      ? ` · <button class="btn-flota" style="padding:2px 8px;font-size:12px"
+             onclick="flotaVerFoto(${x.foto_id}, '${x.tipo}')">ver foto</button>`
       : ' · <span style="color:var(--tx3)">sin foto</span>';
     return `<li style="color:${color}"><b>${x.tipo}</b> ${x.numero} · ${x.entidad}
       · ${x.fecha_vencimiento} — ${nota}${foto}</li>`;
@@ -579,6 +756,7 @@ async function flotaAbrirDocumentos(placa) {
     ${d.sin_verificar.length ? `<p style="color:var(--yellow)">Sin verificar:
       ${d.sin_verificar.join(', ')} — <b>no es lo mismo que no encontrado</b>:
       esto significa que nadie lo ha mirado todavía.</p>` : ''}
+    <div id="flota-visor" style="margin-top:12px"></div>
 
     <hr style="border-color:var(--brd-b);margin:14px 0">
     <label>Tipo</label>
@@ -695,7 +873,7 @@ async function flotaBloqueForzados() {
   const filas = cierres.map(c => `
     <li style="margin-bottom:8px">
       <b>${c.placa}</b> — lo tenía <b>${c.lo_tenia}</b>, lo cerró ${c.forzado_por}
-      el ${(c.cuando || '').slice(0, 16).replace('T', ' ')}<br>
+      el ${horaColombia(c.cuando)}<br>
       <span style="color:var(--tx2)">${c.motivo || ''}</span>
     </li>`).join('');
   return `<div class="tabla-card" style="border-left:3px solid var(--red)">
@@ -802,18 +980,31 @@ function flotaCondElegir(id) {
 }
 
 /** Abre el formulario de recibo de turno del conductor. */
-function flotaCondAbrirRecibo() {
+async function flotaCondAbrirRecibo() {
   if (!FLOTA_COND_ELEGIDO) { alerta('Elegí primero el vehículo', 'error'); return; }
   const c = (FLOTA_COND.candidatos || []).find(x => x.vehiculo_id === FLOTA_COND_ELEGIDO);
   FLOTA_PLACA = c ? c.placa : FLOTA_COND.placa;
   FLOTA_FOTOS = {};
   FLOTA_FOTO_TABLERO = null;
 
+  // Los ángulos son de ESTE vehículo, no del que se abrió antes. Sin esta
+  // consulta, un conductor que pasa de un furgón a un camión sigue viendo 4
+  // posiciones de llanta y las dos que faltan no se las pide nadie.
+  try {
+    FLOTA_ESTADO = await get('/flota/custodia/activa/' + encodeURIComponent(FLOTA_PLACA));
+    FLOTA_ANGULOS = (FLOTA_ESTADO.angulos && FLOTA_ESTADO.angulos.length)
+      ? FLOTA_ESTADO.angulos
+      : FLOTA_ANGULOS_FIJOS.slice();
+  } catch (e) {
+    FLOTA_ANGULOS = FLOTA_ANGULOS_FIJOS.slice();
+    alerta('Sin señal: se piden las fotos fijas, sin las de llanta', 'error');
+  }
+
   let angulos = FLOTA_ANGULOS.map(a => `<div style="display:inline-block;margin:3px">
     <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
            style="display:none" onchange="flotaCapturarAngulo('${a}')">
     <button type="button" class="btn-flota" id="flota-b-${a}"
-            onclick="document.getElementById('flota-f-${a}').click()">${a}</button></div>`).join('');
+            onclick="document.getElementById('flota-f-${a}').click()">${flotaNombreAngulo(a)}</button></div>`).join('');
 
   document.getElementById('cond-flota-form').innerHTML = `
     <hr style="border-color:#333;margin:14px 0">
@@ -826,8 +1017,8 @@ function flotaCondAbrirRecibo() {
     <button type="button" class="btn-flota" style="margin-top:8px"
             onclick="document.getElementById('flota-foto-tablero').click()">📷 Foto del tablero</button>
     <span id="flota-tablero-ok" style="margin-left:8px"></span>
-    <p style="margin-top:12px"><b>Las ocho fotos</b></p><div>${angulos}</div>
-    <button class="btn-primary" onclick="flotaCondGuardar()">Confirmar ${FLOTA_PLACA}</button>
+    <p style="margin-top:12px"><b>Las ${FLOTA_ANGULOS.length} fotos</b></p><div>${angulos}</div>
+    <button class="btn-primary" id="cf-guardar" onclick="flotaCondGuardar()">Confirmar ${FLOTA_PLACA}</button>
     <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
 }
 
@@ -845,15 +1036,19 @@ async function flotaCondGuardar() {
     return;
   }
   const faltan = FLOTA_ANGULOS.filter(a => !FLOTA_FOTOS[a]).length;
-  if (faltan && !confirm(`Faltan ${faltan} de las 8 fotos. El turno se registra igual y queda contado como incompleto. ¿Confirmás?`)) return;
+  if (faltan && !confirm(`Faltan ${faltan} de las ${FLOTA_ANGULOS.length} fotos. ` +
+      `El turno se registra igual y queda contado como incompleto. ¿Confirmás?`)) return;
 
   const payload = {
     placa: FLOTA_PLACA, km: km, custodio_tipo: 'conductor',
     custodio_conductor_id: FLOTA_COND.conductor.id,
     fotos_inicio: FLOTA_ANGULOS.filter(a => FLOTA_FOTOS[a])
-      .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado'))
-      .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato')]),
+      .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado', a))
+      .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato', 'tablero')]),
   };
+  const restaurar = flotaBotonOcupado(
+    'cf-guardar',
+    `Subiendo ${payload.fotos_inicio.length} fotos (${flotaPesoAproximado(payload)} KB)…`);
   try {
     const r = await fetch(API + '/flota/custodia/traspaso', {
       method: 'POST',
@@ -866,6 +1061,8 @@ async function flotaCondGuardar() {
     flotaCondCargar();
   } catch (e) {
     err.textContent = 'Sin conexión: ' + e.message;
+  } finally {
+    restaurar();
   }
 }
 
@@ -887,7 +1084,7 @@ async function flotaCondMisReportes() {
   }
   el.innerHTML = '<hr style="border-color:#333;margin:14px 0"><ul style="line-height:1.7;padding-left:18px">' +
     turnos.map(t => {
-      const cuando = t.inicio.slice(0, 16).replace('T', ' ');
+      const cuando = horaColombia(t.inicio);
       if (t.cerrado_a_la_fuerza) {
         return `<li style="color:var(--red)"><b>${t.placa}</b> ${cuando} —
           <b>te cerraron el turno</b>: ${t.motivo_del_cierre_forzado || 'sin motivo'}</li>`;

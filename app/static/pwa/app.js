@@ -1622,6 +1622,32 @@ function pantalla(id) {
 }
 
 /**
+ * Una hora de la API, mostrada en hora de Colombia.
+ *
+ * Lo que reemplaza: `ts.slice(0, 16).replace('T', ' ')`. Cortar el string no
+ * convierte nada — mostraba UTC crudo, y un recibo de turno hecho a las 15:00
+ * decía 20:00 (reportado 2026-08-03 sobre el TGZ653). Cinco horas de corrimiento
+ * en el dato cuyo valor entero es ser confiable frente a un tercero.
+ *
+ * Se apoya en que la API declara la zona (`flota/api/_tiempo.py`). Sin esa `Z`,
+ * `new Date()` interpreta la hora como local del teléfono y este helper
+ * devolvería el mismo número equivocado — por eso el arreglo son las dos
+ * mitades, no ésta sola.
+ *
+ * @param {string} iso - Timestamp ISO 8601 con zona.
+ * @param {boolean} [conFecha=true] - Incluir la fecha además de la hora.
+ * @returns {string} '03/08/2026 15:04', o '—' si no hay dato.
+ */
+function horaColombia(iso, conFecha = true) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  const opts = { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit' };
+  if (conFecha) Object.assign(opts, { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return d.toLocaleString('es-CO', opts).replace(',', '');
+}
+
+/**
  * Cómo se identifica a un conductor en pantalla cuando la cédula puede faltar.
  *
  * `RutaService.listar_conductores` **borra** cédula, teléfono y email para todo

@@ -34,6 +34,7 @@ from datetime import datetime
 from sqlalchemy import DDL, event
 
 from app.extensions import db
+from flota.dominio.valores import ANGULOS_FOTO
 
 # ── Vocabularios permitidos ──────────────────────────────────────────────────
 # Se declaran acá y se convierten en CHECK. Un enum de Python que la base no
@@ -54,6 +55,8 @@ CUSTODIO_ESTADO  = ('resuelto', 'pendiente_sede')
 CLASE_FOTO       = ('evidencia_estado', 'foto_dato')
 ENTIDAD_FOTO     = ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo')
 ESTADO_FOTO      = ('ok', 'pendiente_evidencia')
+# El vocabulario vive en el dominio: la tabla lo sigue, no al reves.
+ANGULO_FOTO      = ANGULOS_FOTO
 CRITICIDAD       = ('bloqueante', 'mayor', 'menor')
 PERIODICIDAD     = ('diaria', 'semanal')
 APLICA_A         = ('furgon_liviano', 'camion', 'motocarro')
@@ -391,6 +394,12 @@ class Foto(db.Model):
     alto        = db.Column(db.Integer, nullable=False)
     mime        = db.Column(db.String(40), nullable=False)
 
+    # Qué parte del vehículo muestra. NULL a proposito y no un default:
+    # las fotos anteriores al 2026-08-03 se guardaron sin angulo y NO se puede
+    # saber cual era cual — inventarselo seria peor que decir que no se sabe.
+    # El health cuenta las que quedaron sin angulo.
+    angulo = db.Column(db.String(24), nullable=True)
+
     ts_captura = db.Column(db.DateTime, nullable=False)
     gps_lat    = db.Column(db.Float, nullable=True)
     gps_lon    = db.Column(db.Float, nullable=True)
@@ -408,6 +417,11 @@ class Foto(db.Model):
     __table_args__ = (
         _en('clase', CLASE_FOTO),
         _en('entidad_tipo', ENTIDAD_FOTO),
+        # Condicional: si hay angulo tiene que ser uno del vocabulario. La
+        # ausencia se permite (filas viejas); un valor inventado no.
+        db.CheckConstraint(
+            'angulo IS NULL OR angulo IN (%s)' % ', '.join(f"'{a}'" for a in ANGULO_FOTO),
+            name='ck_flota_angulo'),
         _en('estado', ESTADO_FOTO),
         db.CheckConstraint('bytes > 0 AND ancho > 0 AND alto > 0', name='ck_flota_foto_medidas'),
         # Regla 7 — el binario nunca vive en la base. Se impide en la base y no

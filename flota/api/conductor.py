@@ -20,6 +20,7 @@ from app.extensions import db
 from app.models.conductor import Conductor
 from app.models.ruta_despacho import RutaDespacho
 from app.models.vehiculo import Vehiculo
+from flota.api._tiempo import iso_utc
 from flota.adaptadores import traspaso
 from flota.adaptadores.modelos import Custodia
 from flota.dominio import odometro as dom_odo
@@ -138,8 +139,8 @@ def mis_reportes():
         {
             'custodia_id': c.id,
             'placa': placa,
-            'inicio': c.inicio_ts.isoformat(),
-            'fin': c.fin_ts.isoformat() if c.fin_ts else None,
+            'inicio': iso_utc(c.inicio_ts),
+            'fin': iso_utc(c.fin_ts),
             'km_inicio': c.km_inicio,
             'km_fin': c.km_fin,
             'abierto': c.fin_ts is None,

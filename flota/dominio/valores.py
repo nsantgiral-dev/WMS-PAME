@@ -94,6 +94,93 @@ MOTIVO_ORIGEN_NO_SUELTO = {
 }
 
 
+#: Máximo de posiciones de llanta que el vocabulario contempla.
+#:
+#: La flota de hoy son furgones (4) y camiones (6). 12 deja aire para un
+#: doble-troque sin abrir la puerta a un valor arbitrario del cliente. Si algún
+#: día entra una tractomula, esto se sube **acá** y el CHECK lo sigue: el
+#: número está en un lugar con nombre y no repartido en tres archivos.
+MAX_POSICIONES_LLANTA = 12
+
+#: Ángulos fijos de la evidencia de estado, en orden. El orden fijo es lo que
+#: hace comparable un turno con otro.
+ANGULOS_FIJOS = (
+    'frontal', 'trasera', 'lateral_izq', 'lateral_der',
+    'cajon_abierto', 'interior_cabina', 'tablero',
+)
+
+#: Vocabulario completo de `flota_foto.angulo`.
+#:
+#: Hasta el 2026-08-03 las fotos se guardaban **sin ángulo**: ocho archivos
+#: anónimos colgados de una custodia. El orden tampoco las identificaba, porque
+#: el frontend filtra las faltantes antes de enviar — con `frontal` sin tomar,
+#: la primera foto del arreglo es `trasera` y todo queda corrido un lugar.
+#:
+#: La consecuencia práctica: era imposible decir *"el flanco herido está en la
+#: llanta trasera derecha"*. Una evidencia que no se puede referir a una parte
+#: del vehículo no sirve para atribuir un daño, que es para lo que se toma.
+ANGULOS_FOTO = ANGULOS_FIJOS + tuple(
+    f'llanta_{i}' for i in range(1, MAX_POSICIONES_LLANTA + 1)
+)
+
+
+def angulos_de_custodia(posiciones_llanta: int) -> tuple:
+    """Los ángulos que se le piden a un vehículo con N posiciones de llanta.
+
+    Una sola foto llamada `llantas` no ubica nada: una tuerca floja está en una
+    rueda concreta. Por eso el formulario se arma contra la ficha técnica y no
+    contra una constante.
+    """
+    if not 1 <= posiciones_llanta <= MAX_POSICIONES_LLANTA:
+        raise ValueError(
+            f'posiciones_llanta fuera de rango: {posiciones_llanta} '
+            f'(1..{MAX_POSICIONES_LLANTA})'
+        )
+    return ANGULOS_FIJOS + tuple(
+        f'llanta_{i}' for i in range(1, posiciones_llanta + 1))
+
+
+#: Posiciones de llanta cuando el vehículo todavía no tiene ficha técnica.
+#:
+#: Las claves son los valores reales de `Vehiculo.tipo`, que es texto libre —
+#: no el vocabulario del dominio. Se normaliza a minúsculas sin tildes.
+#:
+#: **Es un supuesto, no un dato.** Por eso `posiciones_llanta()` devuelve además
+#: de dónde salió el número, y la pantalla lo dice. Un default silencioso haría
+#: que un camión de 6 posiciones pidiera 4 fotos y nadie notara las dos que
+#: faltan — la regla 1 aplicada a la forma del formulario, no al valor de un ítem.
+POSICIONES_LLANTA_POR_TIPO = {
+    'nhr': 6, 'turbo': 6, 'camion': 6, 'sencillo': 6,
+    'van': 4, 'furgon': 4, 'furgon liviano': 4, 'camioneta': 4,
+    'moto': 2, 'motocarro': 3,
+}
+POSICIONES_LLANTA_FALLBACK = 4
+
+
+def _normalizar(texto: str) -> str:
+    tildes = str.maketrans('áéíóúü', 'aeiouu')
+    return (texto or '').strip().lower().translate(tildes)
+
+
+def posiciones_llanta(ficha_posiciones, tipo_vehiculo):
+    """Cuántas fotos de llanta pedir, y **de dónde salió ese número**.
+
+    Devuelve `(n, fuente)` con fuente en {'ficha', 'tipo', 'fallback'}. Los tres
+    valen números distintos de confianza y la pantalla los muestra distinto:
+    con ficha es un dato levantado en campo; por tipo es una inferencia
+    razonable; el fallback es no saber.
+
+    Nunca levanta: dejar al conductor sin formulario a las 5 a.m. porque el
+    vehículo no tiene ficha sería peor que pedirle cuatro fotos y decírselo.
+    """
+    if ficha_posiciones:
+        return int(ficha_posiciones), 'ficha'
+    n = POSICIONES_LLANTA_POR_TIPO.get(_normalizar(tipo_vehiculo))
+    if n:
+        return n, 'tipo'
+    return POSICIONES_LLANTA_FALLBACK, 'fallback'
+
+
 class CustodioTipo(str, Enum):
     """Quién responde por el vehículo.
 
