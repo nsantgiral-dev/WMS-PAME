@@ -107,7 +107,11 @@ document.addEventListener('DOMContentLoaded', () => {
  */
 function mostrarSegunRol(rol) {
   pararTimers();
-  const esAdmin = ['admin','gerente','jefe_almacen','supervisor'].includes(rol);
+  const esAdmin = ['admin','gerente','jefe_almacen','supervisor','control_flota'].includes(rol);
+  // control_flota entra al shell de admin pero SOLO ve Flota. No es cosmética:
+  // el procedimiento dice que ve el tablero y no aprueba, y dejarle a la vista
+  // pestañas que el backend le va a negar con 403 enseña a ignorar errores.
+  const soloFlota = rol === 'control_flota';
   const esRecepcion = rol === 'recepcionista';
   const esConductor = rol === 'conductor';
   const esTienda = rol === 'tienda';
@@ -138,6 +142,15 @@ function mostrarSegunRol(rol) {
     cargarRutasConductor();
     TIMER_OPERARIO = setInterval(cargarRutasConductor, 30000);
   } else if (esAdmin) {
+    if (soloFlota) {
+      pantalla('pantalla-admin');
+      if (OPERARIO) actualizarUI(OPERARIO);
+      document.querySelectorAll('.nav-tab').forEach(el => {
+        if (!(el.getAttribute('onclick') || '').includes('tab-flota')) el.style.display = 'none';
+      });
+      tab('tab-flota');
+      return;
+    }
     pantalla('pantalla-admin');
     if (OPERARIO) actualizarUI(OPERARIO);
     cargarAdmin();
@@ -1977,6 +1990,7 @@ function _formUsuario(u = {}) {
         <option value="operario" ${(u.rol||'operario')==='operario'?'selected':''}>Operario (pedidos)</option>
         <option value="recepcionista" ${u.rol==='recepcionista'?'selected':''}>Recepcionista</option>
         <option value="conductor" ${u.rol==='conductor'?'selected':''}>Conductor</option>
+        <option value="control_flota" ${u.rol==='control_flota'?'selected':''}>Control de flota</option>
         <option value="tienda" ${u.rol==='tienda'?'selected':''}>Tienda (punto de venta)</option>
         <option value="supervisor" ${u.rol==='supervisor'?'selected':''}>Supervisor</option>
         <option value="jefe_almacen" ${u.rol==='jefe_almacen'?'selected':''}>Jefe de almacén</option>

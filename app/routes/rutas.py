@@ -56,6 +56,29 @@ def crear_conductor():
     return jsonify({'conductor': c.to_dict()}), 201
 
 
+@rutas_bp.route('/conductores/<int:id>/cuenta', methods=['POST'])
+@jwt_required()
+def crear_cuenta_conductor(id):
+    """Le da cuenta PWA a un conductor existente, sin duplicar su fila.
+
+    Sin esto, un conductor ya registrado no puede entrar nunca a la app: el
+    alta de usuario crea otro Conductor y la cédula única lo rechaza.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede crear cuentas'}), 403
+    datos = request.get_json(silent=True) or {}
+    try:
+        conductor, usuario = RutaService.crear_cuenta_para_conductor(
+            id, datos.get('email'), datos.get('password'))
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ConflictError as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'conductor': conductor.to_dict(), 'usuario_id': usuario.id}), 201
+
+
 @rutas_bp.route('/conductores/<int:id>', methods=['PUT'])
 @jwt_required()
 def actualizar_conductor(id):

@@ -77,6 +77,47 @@ class RutaService:
         return c
 
     @staticmethod
+    def crear_cuenta_para_conductor(conductor_id: int, email: str, password: str) -> tuple:
+        """Le da cuenta PWA a un conductor que YA EXISTE. No crea otra fila.
+
+        Es lo que faltaba: `POST /api/auth/register` con rol=conductor siempre
+        hace `Conductor(...)` nuevo, y `conductores.cedula` es único. Para un
+        conductor ya registrado eso deja dos salidas y las dos malas — 409 por
+        cédula repetida, o una segunda fila con el mismo nombre donde el
+        histórico de rutas queda en una y la cuenta en la otra.
+
+        Acá solo se escribe `Conductor.usuario_id`. Nada más de la fila del
+        conductor se toca: ni el nombre, ni la cédula, ni sus rutas.
+
+        Si ya tiene cuenta, **falla ruidosamente**. Sobrescribir el vínculo
+        dejaría al conductor anterior sin acceso sin que nadie se entere.
+        """
+        from app.models.usuario import Usuario
+
+        conductor = db.session.get(Conductor, conductor_id)
+        if not conductor:
+            raise LookupError(f'Conductor {conductor_id} no existe')
+        if conductor.usuario_id is not None:
+            raise ConflictError(
+                f'{conductor.nombre} ya tiene cuenta ({conductor.usuario.email}). '
+                f'Vincularlo a otra dejaría la anterior sin dueño y sin aviso.'
+            )
+        email = (email or '').strip().lower()
+        if not email or not password:
+            raise ValueError('Email y contraseña son obligatorios')
+        if Usuario.query.filter_by(email=email).first():
+            raise ConflictError(f'Ya existe un usuario con el email {email}')
+
+        usuario = Usuario(email=email, nombre=conductor.nombre,
+                          rol='conductor', activo=True)
+        usuario.set_password(password)
+        db.session.add(usuario)
+        db.session.flush()
+        conductor.usuario_id = usuario.id
+        db.session.commit()
+        return conductor, usuario
+
+    @staticmethod
     def actualizar_conductor(id: int, data: dict) -> Conductor:
         c = Conductor.query.get(id)
         if not c:

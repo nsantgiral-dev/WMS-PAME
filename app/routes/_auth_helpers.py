@@ -14,10 +14,17 @@ class Roles:
     TIENDA            = 'tienda'
     CONDUCTOR         = 'conductor'
     COMPRAS           = 'compras'
+    CONTROL_FLOTA     = 'control_flota'     # dueño del registro de flota — NO aprueba
     PICKER_TRASLADO   = 'picker_traslado'   # picking de solicitudes de traslado
     PACKER_TRASLADO   = 'packer_traslado'   # packing/verificacion de solicitudes de traslado
 
     # Grupos reutilizables
+    #
+    # CONTROL_FLOTA NO está en GESTION a propósito. El procedimiento FLO-PR-01
+    # dice que ve el tablero y escala, pero no aprueba órdenes de trabajo ni
+    # gastos. Meterlo en GESTION le daría permiso sobre liquidación, traslados
+    # y config de Siesa — y el documento diría una cosa mientras el sistema
+    # permite otra. Ese desfase es lo que vuelve decorativo un procedimiento.
     GESTION        = (ADMIN, SUPERVISOR, JEFE_ALMACEN, GERENTE)
     ALMACEN        = (ADMIN, JEFE_ALMACEN)
     DESPACHO       = (ADMIN, SUPERVISOR, GERENTE, JEFE_ALMACEN)
@@ -62,6 +69,24 @@ def _es_gestion():
         return None
     u = Usuario.query.get(uid)
     return u if u and u.activo and u.rol in Roles.GESTION else None
+
+
+def _es_control_flota():
+    """Devuelve el usuario si puede LEER el tablero de flota.
+
+    Incluye a gestión —quien puede todo, puede ver esto— más el rol dedicado.
+    Es solo lectura: no habilita aprobar nada. Yesid no ordena, señala plazos
+    vencidos y escala; la autoridad de la instrucción es del sistema, que
+    calcula severidad y fecha límite por regla.
+    """
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    if not u or not u.activo:
+        return None
+    return u if u.rol in Roles.GESTION or u.rol == Roles.CONTROL_FLOTA else None
 
 
 def _es_personal_almacen():

@@ -1530,16 +1530,22 @@ async function cargarListaConductores() {
             <div style="font-size:12px;color:#555;margin-top:2px;">CC ${c.cedula}${c.telefono ? ' · ' + c.telefono : ''}</div>
             ${c.usuario_email
               ? `<div style="font-size:11px;color:#facc15;margin-top:3px;">👤 ${c.usuario_email}</div>`
-              : `<div style="font-size:11px;color:#555;margin-top:3px;">Sin cuenta PWA</div>`}
+              : `<div style="font-size:11px;color:#fbbf24;margin-top:3px;">Sin cuenta PWA — no puede entrar a la app</div>`}
           </div>
           ${c.activo
             ? '<span style="background:#14532d;color:#4ade80;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;height:fit-content;">ACTIVO</span>'
             : '<span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;height:fit-content;">INACTIVO</span>'}
         </div>
-        <button onclick="conductorToggle(${c.id}, ${!c.activo})"
-          style="width:100%;padding:8px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
-          ${c.activo ? 'Desactivar' : 'Activar'}
-        </button>
+        <div style="display:flex;gap:6px;">
+          <button onclick="conductorToggle(${c.id}, ${!c.activo})"
+            style="flex:1;padding:8px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+            ${c.activo ? 'Desactivar' : 'Activar'}
+          </button>
+          ${c.usuario_email ? '' : `<button onclick="conductorCrearCuenta(${c.id}, '${c.nombre.replace(/'/g, "\\'")}')"
+            style="flex:1;padding:8px;background:#1e3a5f;border:1px solid #2563eb;color:#93c5fd;border-radius:8px;font-size:12px;cursor:pointer;">
+            Crear cuenta PWA
+          </button>`}
+        </div>
       </div>`).join('');
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando conductores</div>';
@@ -2630,3 +2636,28 @@ function cerrarModalPlanilla() {
   _PLAN_RUTA_ID = null;
 }
 
+/** Le da cuenta PWA a un conductor que ya existe, sin duplicar su ficha.
+ *
+ * El alta normal de usuario crea OTRO conductor y la cédula única lo rechaza.
+ * Este camino solo escribe `usuario_id` en la fila que ya está — el histórico
+ * de rutas del conductor se queda donde estaba.
+ */
+async function conductorCrearCuenta(id, nombre) {
+  const email = prompt(`Correo para la cuenta de ${nombre}:`);
+  if (!email) return;
+  const password = prompt('Contraseña inicial (el conductor la usa para entrar):');
+  if (!password) return;
+  try {
+    const r = await fetch(API + '/api/rutas/conductores/' + id + '/cuenta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
+      body: JSON.stringify({ email: email.trim(), password: password }),
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'No se pudo crear la cuenta', 'error'); return; }
+    alerta(`${nombre} ya puede entrar con ${email.trim()}`, 'exito');
+    cargarListaConductores();
+  } catch (e) {
+    alerta('Sin conexión: ' + e.message, 'error');
+  }
+}
