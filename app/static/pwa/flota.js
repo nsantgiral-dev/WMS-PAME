@@ -40,28 +40,31 @@ async function cargarFlota() {
     const d = await get('/api/rutas/vehiculos?solo_activos=true');
     const vehiculos = d.vehiculos || [];
     if (!vehiculos.length) {
-      cont.innerHTML = `<div class="card"><p>No hay vehículos activos.
+      cont.innerHTML = `<div class="tabla-card"><p>No hay vehículos activos.
         Se dan de alta en <b>Rutas → maestras → vehículo nuevo</b>.</p>
-        <p style="color:#fbbf24">Sin vehículos no hay dónde cargar una ficha técnica
+        <p style="color:var(--yellow)">Sin vehículos no hay dónde cargar una ficha técnica
         ni dónde registrar un turno.</p></div>`;
       return;
     }
     let html = await flotaBloqueForzados();
-    html += '<div class="card"><h3>Recibo de turno</h3><p>Elegí la placa:</p><div>';
+    html += '<div class="tabla-card"><div class="tabla-titulo">Expedientes de flota</div>' +
+      '<p style="font-size:12px;color:var(--tx2);margin:0 0 12px">El alta y la baja de ' +
+      'vehículos se hacen en <b>Rutas → Vehículos</b>. Acá vive el expediente de cada uno.</p><div>';
     vehiculos.forEach(v => {
-      html += `<div style="margin:6px 0;padding:8px;border:1px solid #334155;border-radius:8px">
-        <b style="font-size:17px">${v.placa}</b> <span style="color:#94a3b8">${v.tipo}</span><br>
-        <button class="btn" onclick="flotaAbrirRecibo('${v.placa}')">Recibo de turno</button>
-        <button class="btn" onclick="flotaAbrirFicha('${v.placa}')">Ficha técnica</button>
-        <button class="btn" onclick="flotaAbrirOdometro('${v.placa}')">Odómetro</button>
-        <button class="btn" onclick="flotaAbrirDocumentos('${v.placa}')">Documentos</button>
+      html += `<div class="flota-veh">
+        <div class="flota-placa">${v.placa}</div>
+        <div class="flota-tipo">${v.tipo}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}</div>
+        <button class="btn-flota" onclick="flotaAbrirRecibo('${v.placa}')">Recibo de turno</button>
+        <button class="btn-flota" onclick="flotaAbrirFicha('${v.placa}')">Ficha técnica</button>
+        <button class="btn-flota" onclick="flotaAbrirOdometro('${v.placa}')">Odómetro</button>
+        <button class="btn-flota" onclick="flotaAbrirDocumentos('${v.placa}')">Documentos</button>
       </div>`;
     });
     html += '</div></div>';
     cont.innerHTML = html;
     flotaAsegurarModal();
   } catch (e) {
-    cont.innerHTML = `<div class="card" style="color:#f87171">
+    cont.innerHTML = `<div class="tabla-card" style="color:var(--red)">
       No se pudo cargar la flota: ${e.message}</div>`;
   }
 }
@@ -79,19 +82,15 @@ function flotaAsegurarModal() {
   const m = document.createElement('div');
   m.id = 'flota-modal';
   m.style.cssText = 'display:none;position:fixed;inset:0;z-index:900;' +
-    'background:rgba(0,0,0,.82);overflow-y:auto;padding:0;';
+    'background:rgba(0,0,0,.85);overflow-y:auto;padding:0;';
   m.innerHTML = `
-    <div style="max-width:640px;margin:0 auto;min-height:100%;background:#0b0b0b;">
-      <div id="flota-modal-cabeza" style="position:sticky;top:0;z-index:2;
-        background:#111;border-bottom:1px solid #333;padding:14px 16px;
-        display:flex;justify-content:space-between;align-items:center;">
+    <div style="max-width:640px;margin:0 auto;min-height:100%;background:var(--bg);">
+      <div id="flota-modal-cabeza" class="flota-modal-cabeza">
         <div>
-          <div id="flota-modal-placa" style="font-size:24px;font-weight:800;
-            letter-spacing:.04em;color:#fff;"></div>
-          <div id="flota-modal-titulo" style="font-size:12px;color:#94a3b8;"></div>
+          <div id="flota-modal-placa" class="flota-modal-placa"></div>
+          <div id="flota-modal-titulo" style="font-size:12px;color:var(--tx2);"></div>
         </div>
-        <button onclick="flotaCerrarModal()" style="background:#1a1a1a;border:1px solid #333;
-          color:#aaa;border-radius:8px;padding:8px 14px;font-size:15px;cursor:pointer;">Cerrar</button>
+        <button class="btn-flota" onclick="flotaCerrarModal()">Cerrar</button>
       </div>
       <div id="flota-recibo" style="padding:16px;"></div>
     </div>`;
@@ -109,7 +108,7 @@ function flotaAbrirModal(titulo, placa) {
   document.getElementById('flota-modal-placa').textContent = placa || '';
   document.getElementById('flota-modal-titulo').textContent = titulo;
   document.getElementById('flota-recibo').innerHTML =
-    '<div style="padding:20px;color:#666">Cargando…</div>';
+    '<div style="padding:20px;color:var(--tx3)">Cargando…</div>';
   document.getElementById('flota-modal').style.display = 'block';
   document.body.style.overflow = 'hidden';
 }
@@ -131,7 +130,7 @@ async function flotaAbrirRecibo(placa) {
   try {
     FLOTA_ESTADO = await get('/flota/custodia/activa/' + encodeURIComponent(placa));
   } catch (e) {
-    el.innerHTML = `<div class="card" style="color:#f87171">${e.message}</div>`;
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
     return;
   }
   flotaRenderRecibo();
@@ -144,10 +143,10 @@ function flotaRenderRecibo() {
   const km = FLOTA_ESTADO.odometro_actual;
   // `sin_dato` llega como palabra, no como 0. Se muestra como palabra.
   const kmTexto = (km === 'sin_dato')
-    ? '<span style="color:#fbbf24">sin dato — es la primera lectura</span>'
+    ? '<span style="color:var(--yellow)">sin dato — es la primera lectura</span>'
     : `${km} km`;
 
-  let html = `<div class="card">
+  let html = `<div class="tabla-card">
     <p>Último odómetro registrado: ${kmTexto}</p>
     <p>${c ? `Viene de: custodia #${c.id} (desde ${c.inicio_ts.slice(0, 16).replace('T', ' ')})`
            : '<b>Arranque en frío</b> — primera custodia. Lo que se registre acá nace como preexistente, sin responsable.'}</p>
@@ -158,7 +157,7 @@ function flotaRenderRecibo() {
     <label style="display:block;margin-top:10px">Foto del tablero (obligatoria)</label>
     <input type="file" id="flota-foto-tablero" accept="image/*" capture="environment"
            style="display:none" onchange="flotaCapturarTablero()">
-    <button type="button" class="btn" onclick="document.getElementById('flota-foto-tablero').click()">
+    <button type="button" class="btn-flota" onclick="document.getElementById('flota-foto-tablero').click()">
       📷 Foto del tablero</button>
     <span id="flota-tablero-ok" style="margin-left:8px"></span>
 
@@ -169,7 +168,7 @@ function flotaRenderRecibo() {
     html += `<div style="display:inline-block;margin:3px">
       <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
              style="display:none" onchange="flotaCapturarAngulo('${a}')">
-      <button type="button" class="btn" id="flota-b-${a}"
+      <button type="button" class="btn-flota" id="flota-b-${a}"
               onclick="document.getElementById('flota-f-${a}').click()">${a}</button>
     </div>`;
   });
@@ -182,9 +181,9 @@ function flotaRenderRecibo() {
     </select>
     <div id="flota-custodio-detalle" style="margin-top:8px"></div>
 
-    <button class="btn btn-primary" style="margin-top:16px;width:100%;font-size:18px"
+    <button class="btn-primary" style="margin-top:16px;width:100%;font-size:18px"
             onclick="flotaGuardarRecibo()">Confirmar recibo de turno</button>
-    <div id="flota-error" style="color:#f87171;margin-top:8px"></div>
+    <div id="flota-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
   el.innerHTML = html;
   flotaCambiarTipoCustodio();
@@ -206,7 +205,7 @@ async function flotaCambiarTipoCustodio() {
       '— la sede no está en el maestro —</option>' +
       (d.almacenes || []).map(a =>
         `<option value="${a.id}">${a.codigo} · ${a.nombre}</option>`).join('') +
-      '</select><p style="color:#fbbf24;font-size:12px">Si la sede no aparece, dejá la ' +
+      '</select><p style="color:var(--yellow);font-size:12px">Si la sede no aparece, dejá la ' +
       'primera opción: la custodia queda declarada <b>pendiente_sede</b> y el health la ' +
       'cuenta. No se inventa una sede.</p>';
   }
@@ -247,10 +246,10 @@ async function flotaCapturarTablero() {
   const aviso = document.getElementById('flota-tablero-ok');
   if (Math.max(r.ancho, r.alto) < 1600) {
     // No se rechaza: se declara. Bloquear acá deja el camión en el patio.
-    aviso.innerHTML = `<span style="color:#fbbf24">✓ ${r.ancho}×${r.alto} — por debajo de
+    aviso.innerHTML = `<span style="color:var(--yellow)">✓ ${r.ancho}×${r.alto} — por debajo de
       1600 px: queda como <b>pendiente_evidencia</b></span>`;
   } else {
-    aviso.innerHTML = `<span style="color:#4ade80">✓ ${r.ancho}×${r.alto}</span>`;
+    aviso.innerHTML = `<span style="color:var(--green)">✓ ${r.ancho}×${r.alto}</span>`;
   }
 }
 
@@ -333,8 +332,8 @@ async function flotaGuardarRecibo() {
 function flotaAbrirOdometro(placa) {
   FLOTA_PLACA = placa;
   flotaAbrirModal('Lectura de odómetro', placa);
-  document.getElementById('flota-recibo').innerHTML = `<div class="card">
-    <p style="color:#94a3b8;font-size:13px">Para una lectura fuera del recibo de turno.
+  document.getElementById('flota-recibo').innerHTML = `<div class="tabla-card">
+    <p style="color:var(--tx2);font-size:13px">Para una lectura fuera del recibo de turno.
     Una lectura <b>no se edita</b>: si está mal, se corrige con un registro nuevo, y la
     corrección exige motivo escrito — sin él es indistinguible de un error de digitación.</p>
     <label>Kilometraje</label>
@@ -348,12 +347,12 @@ function flotaAbrirOdometro(placa) {
       <option value="correccion">correccion</option>
     </select>
     <div id="od-motivo-caja" style="display:none">
-      <label style="color:#fbbf24">Motivo de la corrección (obligatorio)</label>
+      <label style="color:var(--yellow)">Motivo de la corrección (obligatorio)</label>
       <input id="od-motivo" style="width:100%;padding:6px">
     </div>
-    <button class="btn btn-primary" style="margin-top:14px;width:100%"
+    <button class="btn-primary" style="margin-top:14px;width:100%"
             onclick="flotaEnviarOdometro()">Registrar lectura</button>
-    <div id="od-error" style="color:#f87171;margin-top:8px"></div>
+    <div id="od-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 }
 
@@ -426,21 +425,21 @@ async function flotaAbrirFicha(placa) {
   try {
     d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/ficha');
   } catch (e) {
-    el.innerHTML = `<div class="card" style="color:#f87171">${e.message}</div>`;
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
     return;
   }
   const f = d.ficha || {};
   const v = c => (f[c] === undefined || f[c] === null) ? '' : f[c];
 
-  el.innerHTML = `<div class="card">
-    <p style="color:#94a3b8;font-size:13px">Se llena parado al lado del vehículo: el
+  el.innerHTML = `<div class="tabla-card">
+    <p style="color:var(--tx2);font-size:13px">Se llena parado al lado del vehículo: el
     kilometraje está en el tablero, el aceite en la tapa del motor o en la última factura,
     la medida de llanta en el flanco. <b>Lo que no sepas, dejalo en <code>sin_dato</code></b> —
     el sistema lo declara y lo persigue. Inventarlo es peor que no tenerlo.</p>
 
-    ${!d.existe ? '<p style="color:#fbbf24">Este vehículo todavía no tiene ficha.</p>'
-                : `<p>${d.completa ? '<span style="color:#4ade80">Ficha completa</span>'
-                                   : '<span style="color:#fbbf24">Falta: ' + d.atributos_sin_dato.join(', ') + '</span>'}</p>`}
+    ${!d.existe ? '<p style="color:var(--yellow)">Este vehículo todavía no tiene ficha.</p>'
+                : `<p>${d.completa ? '<span style="color:var(--green)">Ficha completa</span>'
+                                   : '<span style="color:var(--yellow)">Falta: ' + d.atributos_sin_dato.join(', ') + '</span>'}</p>`}
 
     <label>Kilometraje actual (del tablero) *</label>
     <input type="number" id="fi-km_inicial" inputmode="numeric" value="${v('km_inicial')}"
@@ -453,13 +452,13 @@ async function flotaAbrirFicha(placa) {
 
     <label>Combustible</label>${flotaSelect('combustible', v('combustible') || 'sin_dato')}
     <label>Sistema de frenos</label>${flotaSelect('sistema_frenos', v('sistema_frenos') || 'sin_dato')}
-    <label style="color:#fbbf24">¿De dónde salió el dato de frenos?</label>
+    <label style="color:var(--yellow)">¿De dónde salió el dato de frenos?</label>
     ${flotaSelect('frenos_fuente', v('frenos_fuente') || 'sin_dato')}
 
     <label>¿Tiene freno de escape?</label>${flotaSelect('tiene_freno_escape', v('tiene_freno_escape') || 'sin_dato')}
 
     <label>Distribución (sincronización del motor)</label>${flotaSelect('distribucion', v('distribucion') || 'sin_dato')}
-    <label style="color:#fbbf24">¿De dónde salió el dato de distribución?</label>
+    <label style="color:var(--yellow)">¿De dónde salió el dato de distribución?</label>
     ${flotaSelect('distribucion_fuente', v('distribucion_fuente') || 'sin_dato')}
     <label>Km de cambio de distribución</label>
     <input type="number" id="fi-distribucion_km_cambio" value="${v('distribucion_km_cambio')}" style="width:100%;padding:6px">
@@ -483,9 +482,9 @@ async function flotaAbrirFicha(placa) {
     <input id="fi-norma_emisiones" value="${v('norma_emisiones')}" style="width:100%;padding:6px">
     <label><input type="checkbox" id="fi-tiene_furgon" ${f.tiene_furgon ? 'checked' : ''}> Tiene furgón</label>
 
-    <button class="btn btn-primary" style="margin-top:16px;width:100%;font-size:18px"
+    <button class="btn-primary" style="margin-top:16px;width:100%;font-size:18px"
             onclick="flotaGuardarFicha()">Guardar ficha</button>
-    <div id="fi-error" style="color:#f87171;margin-top:8px"></div>
+    <div id="fi-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 }
 
@@ -549,30 +548,30 @@ async function flotaAbrirDocumentos(placa) {
   try {
     d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/documentos');
   } catch (e) {
-    el.innerHTML = `<div class="card" style="color:#f87171">${e.message}</div>`;
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">${e.message}</div>`;
     return;
   }
 
   let filas = d.documentos.map(x => {
     if (x.estado === 'no_encontrado') {
-      return `<li style="color:#f87171"><b>${x.tipo}</b> — NO ENCONTRADO
+      return `<li style="color:var(--red)"><b>${x.tipo}</b> — NO ENCONTRADO
         · hallazgo bloqueante</li>`;
     }
-    const color = x.vencido ? '#f87171' : (x.dias_para_vencer <= 30 ? '#fbbf24' : '#4ade80');
+    const color = x.vencido ? 'var(--red)' : (x.dias_para_vencer <= 30 ? 'var(--yellow)' : 'var(--green)');
     const nota = x.vencido ? `VENCIDO hace ${-x.dias_para_vencer} días`
                            : `vence en ${x.dias_para_vencer} días`;
     return `<li style="color:${color}"><b>${x.tipo}</b> ${x.numero} · ${x.entidad}
       · ${x.fecha_vencimiento} — ${nota}</li>`;
   }).join('');
-  if (!filas) filas = '<li style="color:#94a3b8">Ninguno registrado todavía.</li>';
+  if (!filas) filas = '<li style="color:var(--tx2)">Ninguno registrado todavía.</li>';
 
-  el.innerHTML = `<div class="card">
+  el.innerHTML = `<div class="tabla-card">
     <ul style="line-height:1.7">${filas}</ul>
-    ${d.sin_verificar.length ? `<p style="color:#fbbf24">Sin verificar:
+    ${d.sin_verificar.length ? `<p style="color:var(--yellow)">Sin verificar:
       ${d.sin_verificar.join(', ')} — <b>no es lo mismo que no encontrado</b>:
       esto significa que nadie lo ha mirado todavía.</p>` : ''}
 
-    <hr style="border-color:#334155;margin:14px 0">
+    <hr style="border-color:var(--brd-b);margin:14px 0">
     <label>Tipo</label>
     <select id="doc-tipo" style="width:100%;padding:6px">
       <option value="soat">SOAT</option>
@@ -599,17 +598,17 @@ async function flotaAbrirDocumentos(placa) {
       <label style="display:block;margin-top:8px">Foto del documento</label>
       <input type="file" id="doc-foto" accept="image/*" capture="environment"
              style="display:none" onchange="flotaCapturarDocumento()">
-      <button type="button" class="btn"
+      <button type="button" class="btn-flota"
               onclick="document.getElementById('doc-foto').click()">📷 Foto</button>
       <span id="doc-foto-ok" style="margin-left:8px"></span>
     </div>
-    <p id="doc-aviso-no" style="display:none;color:#f87171">
+    <p id="doc-aviso-no" style="display:none;color:var(--red)">
       Queda registrado como <b>no encontrado</b>. Eso es un hallazgo bloqueante,
       no un campo vacío — y el health lo cuenta aparte de los vencidos.</p>
 
-    <button class="btn btn-primary" style="margin-top:14px;width:100%"
+    <button class="btn-primary" style="margin-top:14px;width:100%"
             onclick="flotaGuardarDocumento()">Guardar documento</button>
-    <div id="doc-error" style="color:#f87171;margin-top:8px"></div>
+    <div id="doc-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 }
 
@@ -628,8 +627,8 @@ async function flotaCapturarDocumento() {
   FLOTA_FOTO_DOC = r;
   document.getElementById('doc-foto-ok').innerHTML =
     (Math.max(r.ancho, r.alto) < 1600)
-      ? `<span style="color:#fbbf24">✓ ${r.ancho}×${r.alto} — queda pendiente_evidencia</span>`
-      : `<span style="color:#4ade80">✓ ${r.ancho}×${r.alto}</span>`;
+      ? `<span style="color:var(--yellow)">✓ ${r.ancho}×${r.alto} — queda pendiente_evidencia</span>`
+      : `<span style="color:var(--green)">✓ ${r.ancho}×${r.alto}</span>`;
 }
 
 /** Valida y guarda el documento. */
@@ -688,11 +687,11 @@ async function flotaBloqueForzados() {
     <li style="margin-bottom:8px">
       <b>${c.placa}</b> — lo tenía <b>${c.lo_tenia}</b>, lo cerró ${c.forzado_por}
       el ${(c.cuando || '').slice(0, 16).replace('T', ' ')}<br>
-      <span style="color:#94a3b8">${c.motivo || ''}</span>
+      <span style="color:var(--tx2)">${c.motivo || ''}</span>
     </li>`).join('');
-  return `<div class="card" style="border-left:3px solid #f87171">
-    <h3 style="color:#f87171">Turnos cerrados a la fuerza (${cierres.length})</h3>
-    <p style="font-size:13px;color:#94a3b8">Sin firma del custodio anterior y sin
+  return `<div class="tabla-card" style="border-left:3px solid var(--red)">
+    <h3 style="color:var(--red)">Turnos cerrados a la fuerza (${cierres.length})</h3>
+    <p style="font-size:13px;color:var(--tx2)">Sin firma del custodio anterior y sin
     fotos de cierre: el turno siguiente arrancó sin nada con qué comparar.
     <b>Si este bloque crece, el problema no es el sistema — es que no se está
     cerrando turno.</b></p>
@@ -736,21 +735,21 @@ function flotaCondRender() {
   const el = document.getElementById('cond-flota');
   const d = FLOTA_COND;
   const km = d.odometro_actual === 'sin_dato'
-    ? '<span style="color:#fbbf24">sin dato — primera lectura</span>'
+    ? '<span style="color:var(--yellow)">sin dato — primera lectura</span>'
     : `${d.odometro_actual} km`;
 
   // Tres orígenes, tres mensajes distintos. No es lo mismo "este es tu
   // vehículo" que "creemos que es este": la segunda pide mirar la placa.
   let cabeza;
   if (d.origen === 'custodia') {
-    cabeza = `<div style="font-size:26px;font-weight:800">${d.placa}</div>
-      <div style="color:#4ade80;font-size:13px">Tu turno está abierto · ${km}</div>`;
+    cabeza = `<div class="flota-placa">${d.placa}</div>
+      <div style="color:var(--green);font-size:13px">Tu turno está abierto · ${km}</div>`;
   } else if (d.origen === 'ruta') {
-    cabeza = `<div style="font-size:26px;font-weight:800">${d.placa}</div>
-      <div style="color:#fbbf24;font-size:13px">Según tu ruta de hoy.
+    cabeza = `<div class="flota-placa">${d.placa}</div>
+      <div style="color:var(--yellow);font-size:13px">Según tu ruta de hoy.
       <b>Confirmá que la placa es la del camión que tenés enfrente.</b> · ${km}</div>`;
   } else {
-    cabeza = `<div style="color:#fbbf24;font-size:14px">Elegí el vehículo que vas a recibir:</div>`;
+    cabeza = `<div style="color:var(--yellow);font-size:14px">Elegí el vehículo que vas a recibir:</div>`;
   }
 
   let lista = '';
@@ -759,29 +758,25 @@ function flotaCondRender() {
       if (c.ocupado_por) {
         // El mensaje nombra a la persona. Un 409 crudo deja al conductor
         // mirando el celular en el patio sin saber a quién llamar.
-        return `<div style="padding:10px;margin:4px 0;border:1px solid #3f1515;border-radius:8px;opacity:.75">
+        return `<div style="padding:10px;margin:4px 0;border:1px solid var(--rbg);border-radius:8px;opacity:.75">
           <b>${c.placa}</b> · ${c.tipo}<br>
-          <span style="color:#f87171;font-size:12px">Lo tiene ${c.ocupado_por}.
+          <span style="color:var(--red);font-size:12px">Lo tiene ${c.ocupado_por}.
           Si lo vas a recibir vos, tiene que cerrar su turno primero.</span>
         </div>`;
       }
       const sel = c.vehiculo_id === FLOTA_COND_ELEGIDO;
-      return `<button onclick="flotaCondElegir(${c.vehiculo_id})"
-        style="display:block;width:100%;text-align:left;padding:12px;margin:4px 0;
-        border-radius:8px;cursor:pointer;font-size:15px;
-        background:${sel ? '#14532d' : '#1a1a1a'};border:1px solid ${sel ? '#4ade80' : '#333'};color:#eee">
-        ${sel ? '✓ ' : ''}<b>${c.placa}</b> · ${c.tipo}</button>`;
+      return `<button class="btn-flota ${sel ? 'ok' : ''}" onclick="flotaCondElegir(${c.vehiculo_id})"
+        style="display:block;width:100%;text-align:left">
+        ${sel ? '✓ ' : ''}<b style="font-size:19px;letter-spacing:.05em">${c.placa}</b> · ${c.tipo}</button>`;
     }).join('') + '</div>';
   }
 
-  el.innerHTML = `<div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:12px">
+  el.innerHTML = `<div class="flota-veh">
     ${cabeza}${lista}
     <div style="display:flex;gap:6px;margin-top:12px">
-      <button onclick="flotaCondAbrirRecibo()" style="flex:2;padding:12px;background:#1e3a5f;
-        border:1px solid #2563eb;color:#93c5fd;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer">
+      <button class="btn-primary" style="flex:2;margin-top:0" onclick="flotaCondAbrirRecibo()">
         ${d.tiene_turno_abierto ? 'Entregar turno' : 'Recibir turno'}</button>
-      <button onclick="flotaCondMisReportes()" style="flex:1;padding:12px;background:#1a1a1a;
-        border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer">Mis reportes</button>
+      <button class="btn-flota" style="flex:1" onclick="flotaCondMisReportes()">Mis reportes</button>
     </div>
     <div id="cond-flota-form"></div>
   </div>`;
@@ -808,25 +803,23 @@ function flotaCondAbrirRecibo() {
   let angulos = FLOTA_ANGULOS.map(a => `<div style="display:inline-block;margin:3px">
     <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
            style="display:none" onchange="flotaCapturarAngulo('${a}')">
-    <button type="button" class="btn" id="flota-b-${a}"
+    <button type="button" class="btn-flota" id="flota-b-${a}"
             onclick="document.getElementById('flota-f-${a}').click()">${a}</button></div>`).join('');
 
   document.getElementById('cond-flota-form').innerHTML = `
     <hr style="border-color:#333;margin:14px 0">
     <div style="font-size:20px;font-weight:800;margin-bottom:8px">${FLOTA_PLACA}</div>
-    <label>Kilometraje del tablero</label>
-    <input type="number" id="cf-km" inputmode="numeric"
-           style="width:100%;font-size:24px;padding:8px;background:#000;border:1px solid #333;color:#fff;border-radius:8px">
+    <label class="input-label">Kilometraje del tablero</label>
+    <input type="number" id="cf-km" inputmode="numeric" class="input-field"
+           style="font-size:26px;font-weight:700;text-align:center">
     <input type="file" id="flota-foto-tablero" accept="image/*" capture="environment"
            style="display:none" onchange="flotaCapturarTablero()">
-    <button type="button" class="btn" style="margin-top:8px"
+    <button type="button" class="btn-flota" style="margin-top:8px"
             onclick="document.getElementById('flota-foto-tablero').click()">📷 Foto del tablero</button>
     <span id="flota-tablero-ok" style="margin-left:8px"></span>
     <p style="margin-top:12px"><b>Las ocho fotos</b></p><div>${angulos}</div>
-    <button onclick="flotaCondGuardar()" style="width:100%;margin-top:14px;padding:14px;
-      background:#166534;border:none;color:#fff;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer">
-      Confirmar ${FLOTA_PLACA}</button>
-    <div id="cf-error" style="color:#f87171;margin-top:8px"></div>`;
+    <button class="btn-primary" onclick="flotaCondGuardar()">Confirmar ${FLOTA_PLACA}</button>
+    <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
 }
 
 /** Valida y envía el recibo de turno del conductor. */
@@ -875,22 +868,22 @@ async function flotaCondMisReportes() {
   try {
     d = await get('/flota/conductor/mis-reportes');
   } catch (e) {
-    el.innerHTML = `<div style="color:#f87171;padding:12px">${e.message}</div>`;
+    el.innerHTML = `<div style="color:var(--red);padding:12px">${e.message}</div>`;
     return;
   }
   const turnos = d.turnos || [];
   if (!turnos.length) {
-    el.innerHTML = '<div style="padding:12px;color:#666">Todavía no registraste ningún turno.</div>';
+    el.innerHTML = '<div style="padding:12px;color:var(--tx3)">Todavía no registraste ningún turno.</div>';
     return;
   }
   el.innerHTML = '<hr style="border-color:#333;margin:14px 0"><ul style="line-height:1.7;padding-left:18px">' +
     turnos.map(t => {
       const cuando = t.inicio.slice(0, 16).replace('T', ' ');
       if (t.cerrado_a_la_fuerza) {
-        return `<li style="color:#f87171"><b>${t.placa}</b> ${cuando} —
+        return `<li style="color:var(--red)"><b>${t.placa}</b> ${cuando} —
           <b>te cerraron el turno</b>: ${t.motivo_del_cierre_forzado || 'sin motivo'}</li>`;
       }
-      if (t.abierto) return `<li style="color:#4ade80"><b>${t.placa}</b> ${cuando} — abierto ahora</li>`;
+      if (t.abierto) return `<li style="color:var(--green)"><b>${t.placa}</b> ${cuando} — abierto ahora</li>`;
       return `<li><b>${t.placa}</b> ${cuando} — cerrado · ${t.km_fin - t.km_inicio} km</li>`;
     }).join('') + '</ul>';
 }

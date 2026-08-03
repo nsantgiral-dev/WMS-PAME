@@ -1413,20 +1413,19 @@ async function cargarListaVehiculos() {
       return;
     }
     el.innerHTML = vehiculos.map(v => `
-      <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <div style="font-size:15px;font-weight:800;font-family:monospace;">${v.placa}</div>
-          <div style="font-size:12px;color:#888;margin-top:2px;">${v.tipo}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}</div>
+      <div class="flota-veh">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+          <div>
+            <div class="flota-placa">${v.placa}</div>
+            <div class="flota-tipo">${v.tipo}${v.capacidad_kg ? ' · ' + v.capacidad_kg + ' kg' : ''}</div>
+          </div>
+          <span class="badge ${v.activo ? 'badge-green' : 'badge-red'}">
+            ${v.activo ? 'ACTIVO' : 'INACTIVO'}</span>
         </div>
-        <div style="display:flex;gap:6px;align-items:center;">
-          ${v.activo
-            ? '<span style="background:#14532d;color:#4ade80;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">ACTIVO</span>'
-            : '<span style="background:#3f1515;color:#f87171;padding:3px 8px;border-radius:8px;font-size:10px;font-weight:700;">INACTIVO</span>'}
-          <button onclick="vehiculoToggle(${v.id}, ${!v.activo})"
-            style="padding:6px 10px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
-            ${v.activo ? 'Desactivar' : 'Activar'}
-          </button>
-        </div>
+        <button class="btn-flota" onclick="vehiculoToggle(${v.id}, ${!v.activo})">
+          ${v.activo ? 'Desactivar' : 'Activar'}</button>
+        ${v.activo ? `<button class="btn-flota" onclick="verExpedienteVehiculo('${v.placa}')">
+          Ver expediente →</button>` : ''}
       </div>`).join('');
   } catch (e) {
     el.innerHTML = '<div style="color:#ef4444;text-align:center;">Error cargando vehículos</div>';
@@ -2660,4 +2659,20 @@ async function conductorCrearCuenta(id, nombre) {
   } catch (e) {
     alerta('Sin conexión: ' + e.message, 'error');
   }
+}
+
+/** Salta al expediente del vehículo en el módulo Flota.
+ *
+ * Resuelve la duplicación que confunde desde el primer día: este maestro tiene
+ * el alta y la baja; el expediente —ficha, documentos, custodia, odómetro— vive
+ * en el módulo Flota. Sin este enlace, quien entra por Rutas no encuentra la
+ * ficha, y quien entra por Flota no encuentra dónde dar de alta.
+ *
+ * Un maestro, un expediente, y un camino claro entre los dos.
+ */
+function verExpedienteVehiculo(placa) {
+  tab('tab-flota');
+  // `cargarFlota` es asíncrona: se espera a que pinte la lista antes de abrir
+  // la ficha, o el modal escribiría sobre un contenedor que todavía no existe.
+  cargarFlota().then(() => flotaAbrirFicha(placa));
 }

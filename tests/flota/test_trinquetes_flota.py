@@ -550,11 +550,71 @@ class TestPlacaSiempreVisible:
 
     def test_el_encabezado_del_modal_es_pegajoso(self):
         """Si la placa se va con el scroll, el formulario largo la esconde
-        justo cuando el conductor llega al botón de guardar."""
-        js = _leer(self._FLOTA_JS)
-        cabeza = js[js.index("id=\"flota-modal-cabeza\""):][:200]
-        assert 'position:sticky' in cabeza
+        justo cuando el conductor llega al botón de guardar.
+
+        Se busca la PROPIEDAD en todo el PWA y no en un archivo concreto: el
+        estilo puede estar inline o en la hoja, y un test que exige un lugar
+        falla cuando alguien mueve el estilo sin romper nada. Es el mismo error
+        de medir una proxy en vez de la propiedad.
+        """
+        blob = _leer(self._FLOTA_JS) + _leer(os.path.join(_PWA, 'index.html'))
+        assert 'flota-modal-cabeza' in blob
+        i = blob.index('.flota-modal-cabeza') if '.flota-modal-cabeza' in blob else 0
+        assert 'position: sticky' in blob[i:i + 400] or 'position:sticky' in blob, (
+            'El encabezado del modal dejó de ser pegajoso: con un formulario '
+            'largo, la placa desaparece justo al llegar al botón de guardar.'
+        )
 
     def test_la_placa_se_escribe_en_el_encabezado_al_abrir(self):
         js = _leer(self._FLOTA_JS)
         assert "getElementById('flota-modal-placa').textContent = placa" in js
+
+
+class TestTrinqueteSistemaDeDiseno:
+    """TRINQUETE 10 — el módulo usa las clases del WMS, no unas inventadas.
+
+    Nació de un hallazgo concreto: `flota.js` usaba `class="card"` y
+    `class="btn"` durante tres días, y **ninguna de las dos existe en este WMS**.
+    Por eso las pantallas salían sin estilo. El navegador no avisa de una clase
+    inexistente: ignora el atributo y sigue.
+
+    Es la familia del nombre que miente, aplicada al CSS — el código dice que
+    hay un estilo y no lo hay, sin error en ninguna parte.
+    """
+
+    _FLOTA_JS = os.path.join(_PWA, 'flota.js')
+    _HTML = os.path.join(_PWA, 'index.html')
+
+    def _clases_definidas(self):
+        return set(re.findall(r'\.([a-z][a-z0-9-]+)\s*[,{]', _leer(self._HTML)))
+
+    def test_toda_clase_usada_existe_en_la_hoja_de_estilos(self):
+        usadas = set(re.findall(r'class="([a-z0-9 -]+)"', _leer(self._FLOTA_JS)))
+        usadas = {c for grupo in usadas for c in grupo.split() if c}
+        # `ok` es modificador de btn-flota; se declara junto con ella.
+        inexistentes = sorted(usadas - self._clases_definidas() - {'ok'})
+        assert not inexistentes, (
+            f'\nClases que no existen en index.html: {inexistentes}\n'
+            'El navegador ignora una clase inexistente sin avisar: la pantalla '
+            'sale sin estilo y nada falla.'
+        )
+
+    def test_los_botones_del_patio_tienen_tamano_tactil(self):
+        """El conductor los toca a las 5 a.m., con lluvia y a veces con guantes.
+
+        48px es el mínimo táctil accesible. En celular sube, porque ahí es donde
+        se usa de verdad — y un error de pulgar produce un dato falso que nadie
+        detecta.
+        """
+        html = _leer(self._HTML)
+        i = html.index('.btn-flota')
+        assert 'min-height: 48px' in html[i:i + 400]
+        assert '@media (max-width: 480px)' in html
+        movil = html[html.index('@media (max-width: 480px)'):][:500]
+        assert 'min-height: 54px' in movil, 'en celular los botones no crecen'
+
+    def test_la_placa_manda_en_tamano(self):
+        """Es lo que se busca con la vista antes de tocar nada."""
+        html = _leer(self._HTML)
+        i = html.index('.flota-placa')
+        assert 'font-size: 22px' in html[i:i + 300]
