@@ -271,3 +271,65 @@ class TestTriggersEnPostgres:
         with pytest.raises(Exception, match='append-only'):
             with esquema.begin() as c:
                 c.execute(text('UPDATE flota_lectura_odometro SET valor_km = 1'))
+
+
+class TestElScriptDeLimpiezaDejaElTriggerComoEstaba:
+    """Lo único que `flota_limpiar_vehiculo.py` puede romper para siempre.
+
+    El script desactiva el trigger append-only para poder borrar lecturas de un
+    vehículo. Si quedara apagado, `flota_lectura_odometro` perdería su
+    invariante y el próximo DELETE —de un script, de una migración, de alguien
+    en psql— no encontraría resistencia.
+
+    Y no daría error: **un invariante ausente no falla, deja pasar.** Por eso se
+    verifica el catálogo de PostgreSQL y no solo que el borrado haya funcionado.
+    """
+
+    def _script(self):
+        import importlib.util
+        from pathlib import Path as _P
+
+        ruta = _P(__file__).resolve().parents[2] / 'scripts' / 'flota_limpiar_vehiculo.py'
+        spec = importlib.util.spec_from_file_location('flota_limpiar_vehiculo', ruta)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def _estado_trigger(self, esquema):
+        with esquema.connect() as c:
+            return c.execute(text(
+                "SELECT tgenabled FROM pg_trigger "
+                "WHERE tgname = 'flota_odometro_no_delete'")).scalar()
+
+    def test_arranca_habilitado(self, esquema, semilla):
+        """Si esto falla, el resto del archivo mide sobre una tabla sin
+        protección y todos los `pytest.raises` de arriba son casualidad."""
+        assert self._estado_trigger(esquema) == 'O'
+
+    def test_despues_de_limpiar_sigue_habilitado(self, esquema, semilla):
+        from app.extensions import db
+
+        _insertar_lectura(esquema, semilla, 100_000)
+        m = self._script()
+        vid, objetivo = m.contar(db, 'PGX001')
+        assert objetivo['lecturas'], 'el script no encontró nada que borrar'
+        m.borrar(db, vid, objetivo)
+
+        assert m.verificar(db, vid) == {'custodias': 0, 'lecturas': 0}
+        assert self._estado_trigger(esquema) == 'O', (
+            'el trigger quedó desactivado: la tabla perdió su invariante y '
+            'nada lo va a decir')
+
+    def test_y_el_DELETE_vuelve_a_estar_bloqueado_de_verdad(self, esquema, semilla):
+        """El catálogo puede decir 'O' y el bloqueo no ejercerse. Se ejerce."""
+        from app.extensions import db
+
+        _insertar_lectura(esquema, semilla, 100_000)
+        m = self._script()
+        vid, objetivo = m.contar(db, 'PGX001')
+        m.borrar(db, vid, objetivo)
+
+        _insertar_lectura(esquema, semilla, 200_000)
+        with pytest.raises(Exception, match='append-only'):
+            with esquema.begin() as c:
+                c.execute(text('DELETE FROM flota_lectura_odometro'))
