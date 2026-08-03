@@ -471,13 +471,52 @@ reenvía el mismo hallazgo vencido, en tres días el chat se silencia. Se manda 
 vencer, y se repite solo si escala de nivel.
 
 Tres plantillas, categoría `utility`, parámetros como **lista explícita** (son
-posicionales: reordenarlos manda la dirección donde va la fecha, sin error):
+posicionales: reordenarlos manda la dirección donde va la fecha, sin error).
 
-| Plantilla | Destinatario |
-|---|---|
-| `flota_hallazgo_bloqueante` | Admin de zona + Yesid, al instante |
-| `flota_hallazgo_vencido` | Yesid; +2 días sin cerrar → Santiago |
-| `flota_documento_vence` | Yesid, 15 días antes |
+**Enviadas a aprobación el 2026-08-03**, las tres en `Pending`:
+
+| Plantilla | Destinatario | Cuerpo |
+|---|---|---|
+| `flota_hallazgo_bloqueante` | Admin de zona + Yesid, al instante | `Vehículo {{1}}: se reportó un hallazgo bloqueante — {{2}}. Debe atenderse hoy, antes de que el vehículo salga a ruta.` |
+| `flota_hallazgo_vencido` | Yesid; +2 días sin cerrar → Santiago | `Vehículo {{1}}: el hallazgo "{{2}}" venció hace {{3}} y sigue abierto. Si no se cierra hoy, el sistema lo escala automáticamente.` |
+| `flota_documento_vence` | Yesid, 15 días antes | `Vehículo {{1}}: el documento {{2}} vence el {{3}}. Programá la renovación antes de esa fecha.` |
+
+#### Tres trampas resueltas en la redacción, y que el adaptador tiene que respetar
+
+**1. Las variables llevan la unidad y el artículo adentro.** Una plantilla de
+WhatsApp no admite condicionales, así que no puede concordar número ni género:
+
+- `{{3}}` de `hallazgo_vencido` recibe **`"3 días"`**, no `3`. Si recibiera el
+  entero, con valor 1 el mensaje diría *"venció hace 1 días"*.
+- El cuerpo dice `el documento {{2}}` y no `el {{2}}`, porque con
+  `{{2}} = tecnomecánica` saldría *"el tecnomecánica"*.
+
+**2. La fecha va en palabras y en hora Bogotá.** `{{3}}` de `documento_vence`
+recibe `"15 de agosto de 2026"`. El ISO se lee como un error del sistema —es el
+`2026-07-15` que salió a producción en cartera— y el numérico es ambiguo.
+
+> **Toca código que ya existe:** `flota/adaptadores/medicion.py::_hoy()` usa
+> `date.today()`, aislado en una función a propósito. **El día de implementar
+> este aviso es el día de pasarlo a hora Bogotá** — regla 5 del CLAUDE.md del
+> WMS: después de las 7PM Colombia, UTC ya es el día siguiente, y un SOAT que
+> vence hoy aparecería vencido ayer.
+
+**3. Cada plantilla tiene DOS identificadores.** Descubierto al enviarlas:
+
+| Plantilla | Facebook temp ID | Gupshup temp ID |
+|---|---|---|
+| `flota_hallazgo_bloqueante` | `1755955632267884` | `c1af2a31-084d-4681-a3f0-aaf60e531498` |
+| `flota_hallazgo_vencido` | `1422079923106226` | `25da9107-feb5-4c4b-869c-70a7b07759f2` |
+| `flota_documento_vence` | *(aún sin asignar)* | `bd442d44-8308-4d26-bb1c-c2d038811893` |
+
+> **Para enviar por la API de Gupshup va el de Gupshup.** Dos identificadores
+> parecidos para la misma cosa y uno solo funciona: es la forma más pura del bug
+> que costó semanas en cartera.
+>
+> **Y los de arriba dicen `temp`.** Son los de mientras está `Pending`. Los que
+> entran a `GUPSHUP_TEMPLATE_IDS` son los definitivos, leídos cuando el estado
+> pase a `Approved` — anotar el temporal produce un `submitted` que no entrega
+> nada.
 
 SMS queda **fuera de alcance**: cuesta más, se lee menos, y con tres
 destinatarios internos que usan WhatsApp todo el día no aporta.
