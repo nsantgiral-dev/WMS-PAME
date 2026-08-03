@@ -690,6 +690,42 @@ urgencia urbana, desde qué momento, y qué pasa con la que se pidió y se cance
 
 ---
 
+## `dias_hallazgo_abierto` — canon cerrado el 2026-08-03
+
+Definido por Santiago en `docs/flota/canones/dias_hallazgo_abierto.md`,
+implementado en `flota/dominio/hallazgo.py`, con **23 tests derivados del
+documento y escritos antes del cálculo**.
+
+Lo que el canon fija y que no era obvio:
+
+- **Para cuando el vehículo vuelve reparado**, no al aprobar la OT ni al entrar
+  al taller. Mide riesgo real, no gestión: si cerrara al aprobar, un vehículo
+  tres semanas en taller mostraría el indicador limpio. Hay un test con ese
+  escenario exacto.
+- **El aplazamiento no congela el reloj.** Mueve la fecha límite, no borra el
+  tiempo. Si congelara, aplazar sería la forma fácil de limpiar el tablero.
+- **La línea base queda excluida, sin reloj y sin responsable.** El desorden
+  viejo no entra al indicador: la primera inspección de cada vehículo levanta lo
+  que ya había, y la cuenta empieza al día siguiente con todo fechado y con
+  nombre.
+- **Un hallazgo abierto vale `sin_dato`, jamás 0.** Cero diría "se resolvió al
+  instante". Lo que sí existe es cuántos días LLEVA, y ese es otro número
+  (`dias_transcurridos`) — el aviso de WhatsApp usa ese, el indicador usa el otro.
+
+### El caso THP 696 quedó con la magnitud fijada y el valor puntual abierto
+
+Entre **32 y 38 días**, según qué par de fechas se tome del rango de inspección
+(6–11 oct) y de las dos órdenes de cierre (12 y 13 nov). Las cuatro
+combinaciones están probadas.
+
+**No se puede cerrar más, y eso es información:** el canon dice que el reloj
+arranca en el timestamp del reporte porque *"el reporte es digital y fechado"*.
+THP 696 es un caso de papel — no tiene timestamp, tiene un rango de seis días.
+Esa imposibilidad es exactamente el problema que el sistema resuelve. Falta el
+par exacto de fechas para tener un valor reproducible.
+
+---
+
 ## Deuda declarada, con condición de disparo
 
 ### Tercera copia de la política "a qué SIESA apunta"
