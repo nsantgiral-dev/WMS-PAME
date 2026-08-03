@@ -661,7 +661,14 @@ def ordenes_compra():
         return jsonify({'error': 'Sin permiso — se requiere rol admin, jefe_almacen o recepcionista'}), 403
 
     sin_filtros = request.args.get('sin_filtros', '').lower() == 'true'
-    resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
+    try:
+        resultado = connekta.get_ordenes_compra_aprobadas(sin_filtros=sin_filtros)
+    except Exception as e:
+        # Siesa QA/prod puede tardar >30s o no responder — no tumbar la pantalla
+        # de recepción entera por esto. El frontend distingue error_siesa=True
+        # de "de verdad no hay nada pendiente".
+        logger.error(f'[SIESA] ordenes-compra: Siesa no respondió: {e}')
+        return jsonify({'ordenes': [], 'total': 0, 'error_siesa': True}), 200
 
     if resultado.get('simulado'):
         return jsonify(resultado), 200

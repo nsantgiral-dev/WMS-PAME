@@ -69,6 +69,10 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
     html += `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">
       ⚡ Connekta en simulación — conecta credenciales para ver OCs reales de Siesa
     </div>`;
+  } else if (siesa.error_siesa) {
+    html += `<div style="background:#1a0d0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#f59e0b;border:1px solid #332222;">
+      ⚠ Siesa no respondió — no se pudo consultar OCs pendientes. Reintenta en un momento.
+    </div>`;
   } else if (SIESA_OCS.length) {
     html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">OCs PENDIENTES EN SIESA</div>`;
     html += SIESA_OCS.map((oc, i) => {
