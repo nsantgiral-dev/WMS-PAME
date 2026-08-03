@@ -1526,7 +1526,7 @@ async function cargarListaConductores() {
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
           <div>
             <div style="font-size:14px;font-weight:700;">${c.nombre}</div>
-            <div style="font-size:12px;color:#555;margin-top:2px;">CC ${c.cedula}${c.telefono ? ' · ' + c.telefono : ''}</div>
+            <div style="font-size:12px;color:#555;margin-top:2px;">${identidadConductor(c, conductores)}${c.telefono ? ' · ' + c.telefono : ''}</div>
             ${c.usuario_email
               ? `<div style="font-size:11px;color:#facc15;margin-top:3px;">👤 ${c.usuario_email}</div>`
               : `<div style="font-size:11px;color:#fbbf24;margin-top:3px;">Sin cuenta PWA — no puede entrar a la app</div>`}

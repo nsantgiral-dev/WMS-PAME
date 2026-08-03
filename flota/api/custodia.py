@@ -23,6 +23,8 @@ from flota.adaptadores.modelos import LecturaOdometro
 from flota.dominio import odometro as dom_odo
 from flota.dominio.errores import ErrorFlota
 from flota.dominio.valores import (
+    MOTIVO_ORIGEN_NO_SUELTO,
+    ORIGENES_LECTURA_SUELTA,
     SIN_DATO,
     CustodioEstado,
     CustodioTipo,
@@ -254,6 +256,20 @@ def registrar_odometro():
         valor = int(datos['valor_km'])
     except (ValueError, TypeError) as e:
         return jsonify({'error': f'Valor inválido: {e}'}), 400
+
+    # Que el origen exista en el enum no significa que ESTE gesto lo produzca.
+    # `entrega` la escribe el traspaso; `preoperacional` y `ot` todavía no
+    # tienen fuente. Aceptarlos acá deja una lectura apuntando a un padre que
+    # no existe — y en el caso de `entrega`, un cambio de turno inventado.
+    if origen not in ORIGENES_LECTURA_SUELTA:
+        permitidos = ', '.join(o.value for o in ORIGENES_LECTURA_SUELTA)
+        return jsonify({
+            'error': f'Una lectura suelta no puede tener origen "{origen.value}". '
+                     f'Válidos hoy: {permitidos}.',
+            # Indexado directo, no `.get(x, '')`: el mapa es total sobre los
+            # orígenes excluidos y un test del dominio lo mantiene así.
+            'motivo': MOTIVO_ORIGEN_NO_SUELTO[origen],
+        }), 400
 
     from datetime import datetime
     nueva = Lectura(

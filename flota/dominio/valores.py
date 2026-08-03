@@ -50,6 +50,50 @@ class OrigenLectura(str, Enum):
     CORRECCION     = 'correccion'
 
 
+#: Orígenes que el endpoint de **lectura suelta** puede registrar hoy.
+#:
+#: El enum de arriba nombra los seis gestos que existen en el modelo. Este
+#: subconjunto declara cuáles de esos gestos **son este endpoint**. Los otros
+#: tres quedan fuera por razones distintas y ninguna es "todavía no lo hicimos":
+#:
+#:   · `entrega` nace del traspaso atómico, que además cierra la custodia
+#:     anterior y abre la nueva. Una lectura suelta que se declare `entrega`
+#:     dice que hubo un cambio de turno que nunca ocurrió — y queda
+#:     indistinguible de las reales en el histórico que alimenta el CPK.
+#:   · `preoperacional` viene de la inspección diaria (tanda 2).
+#:   · `ot` viene de la orden de trabajo (tanda 3).
+#:
+#: Para los dos últimos el problema no es que la pantalla los ofrezca: es que
+#: **la lectura apuntaría a un padre que no puede existir**. Un `ot` sin OT es
+#: una referencia colgada, y el día que la tanda 3 exista habrá filas viejas que
+#: no se pueden reconciliar con ninguna orden.
+#:
+#: Se habilitan agregándolos acá, no editando la pantalla: el selector se
+#: valida contra esta tupla (`tests/flota/test_origen_lectura.py`).
+ORIGENES_LECTURA_SUELTA = (
+    OrigenLectura.TANQUEO,
+    OrigenLectura.CIERRE_DIA,
+    OrigenLectura.CORRECCION,
+)
+
+#: Por qué cada origen excluido no se puede registrar como lectura suelta.
+#:
+#: Es **total sobre el complemento** de la tupla de arriba, y un test lo obliga.
+#: Total a propósito: la frontera lo indexa directo, sin `.get(x, '')` — un
+#: default vacío ahí sería un mensaje de error que no dice nada justo cuando
+#: alguien más lo necesita, que es la regla 5 aplicada a un texto.
+MOTIVO_ORIGEN_NO_SUELTO = {
+    OrigenLectura.ENTREGA:
+        'Una entrega se registra en el recibo de turno, que además cierra la '
+        'custodia anterior y abre la nueva.',
+    OrigenLectura.PREOPERACIONAL:
+        'La inspección diaria todavía no existe (tanda 2).',
+    OrigenLectura.OT:
+        'Las órdenes de trabajo todavía no existen (tanda 3): la lectura '
+        'quedaría apuntando a una OT imposible.',
+}
+
+
 class CustodioTipo(str, Enum):
     """Quién responde por el vehículo.
 

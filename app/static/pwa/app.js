@@ -1622,6 +1622,34 @@ function pantalla(id) {
 }
 
 /**
+ * Cómo se identifica a un conductor en pantalla cuando la cédula puede faltar.
+ *
+ * `RutaService.listar_conductores` **borra** cédula, teléfono y email para todo
+ * rol que no sea admin o jefe de almacén. Eso no es un campo que se perdió: es
+ * el guard de datos personales haciendo su trabajo. Por eso la corrección no es
+ * pedir la cédula desde el frontend — es rendir lo que hay.
+ *
+ * Lo que sí no puede quedar ambiguo es un desplegable donde se elige **quién
+ * queda responsable de un vehículo**. Si dos conductores activos comparten
+ * nombre y no hay cédula para distinguirlos, se agrega el id, que no es dato
+ * personal. Sin eso, Yesid podría asignarle la custodia al homónimo y el
+ * registro diría el nombre correcto de la persona equivocada.
+ *
+ * Vive acá y no en `flota.js` porque el maestro de conductores de `rutas.js`
+ * tiene el mismo agujero: escribía `CC undefined` para supervisor y gerente.
+ * El mismo fallback en dos sitios diverge — ya pasó una vez y costó 25×.
+ *
+ * @param {object} c - Conductor tal como llega del API.
+ * @param {Array}  [todos] - La lista completa, para detectar homónimos.
+ * @returns {string} Sufijo de identidad, o '' si no hay nada que agregar.
+ */
+function identidadConductor(c, todos) {
+  if (c.cedula) return `CC ${c.cedula}`;
+  const homonimos = (todos || []).filter(o => o.nombre === c.nombre).length > 1;
+  return homonimos ? `#${c.id}` : '';
+}
+
+/**
  * Set textContent of a DOM element by ID.
  * @param {string} id - Element ID.
  * @param {*} val - Value to display (falls back to '—').

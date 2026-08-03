@@ -195,9 +195,12 @@ async function flotaCambiarTipoCustodio() {
   const det = document.getElementById('flota-custodio-detalle');
   if (tipo === 'conductor') {
     const d = await get('/api/rutas/conductores?activos=true');
+    const lista = d.conductores || [];
     det.innerHTML = '<select id="flota-conductor">' +
-      (d.conductores || []).map(c =>
-        `<option value="${c.id}">${c.nombre} · ${c.cedula}</option>`).join('') +
+      lista.map(c => {
+        const id = identidadConductor(c, lista);
+        return `<option value="${c.id}">${c.nombre}${id ? ' · ' + id : ''}</option>`;
+      }).join('') +
       '</select>';
   } else {
     const d = await get('/api/almacenes');
@@ -343,11 +346,9 @@ function flotaAbrirOdometro(placa) {
     <input type="number" id="od-km" inputmode="numeric" style="width:100%;font-size:20px;padding:6px">
     <label>Origen</label>
     <select id="od-origen" style="width:100%;padding:6px" onchange="flotaOrigenCambio()">
-      <option value="tanqueo">tanqueo</option>
-      <option value="cierre_dia">cierre_dia</option>
-      <option value="ot">ot</option>
-      <option value="preoperacional">preoperacional</option>
-      <option value="correccion">correccion</option>
+      <option value="tanqueo">Tanqueo — para calcular km/galón</option>
+      <option value="cierre_dia">Cierre de día — sin entrega de turno</option>
+      <option value="correccion">Corrección de una lectura anterior</option>
     </select>
     <div id="od-motivo-caja" style="display:none">
       <label style="color:var(--yellow)">Motivo de la corrección (obligatorio)</label>
