@@ -57,12 +57,68 @@ async function cargarFlota() {
         <button class="btn" onclick="flotaAbrirDocumentos('${v.placa}')">Documentos</button>
       </div>`;
     });
-    html += '</div></div><div id="flota-recibo"></div>';
+    html += '</div></div>';
     cont.innerHTML = html;
+    flotaAsegurarModal();
   } catch (e) {
     cont.innerHTML = `<div class="card" style="color:#f87171">
       No se pudo cargar la flota: ${e.message}</div>`;
   }
+}
+
+/** Crea el modal una sola vez y lo deja oculto.
+ *
+ * El formulario va en modal y no debajo de la lista por una razón que no es
+ * estética: en un celular, un formulario suelto después de cinco vehículos
+ * obliga a hacer scroll pasando cuatro placas ajenas, y deja de estar claro a
+ * cuál pertenece. Un odómetro registrado en el camión equivocado se convierte
+ * en el `km_inicial` de otro vehículo y contamina todo lo que cuelgue de él.
+ */
+function flotaAsegurarModal() {
+  if (document.getElementById('flota-modal')) return;
+  const m = document.createElement('div');
+  m.id = 'flota-modal';
+  m.style.cssText = 'display:none;position:fixed;inset:0;z-index:900;' +
+    'background:rgba(0,0,0,.82);overflow-y:auto;padding:0;';
+  m.innerHTML = `
+    <div style="max-width:640px;margin:0 auto;min-height:100%;background:#0b0b0b;">
+      <div id="flota-modal-cabeza" style="position:sticky;top:0;z-index:2;
+        background:#111;border-bottom:1px solid #333;padding:14px 16px;
+        display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div id="flota-modal-placa" style="font-size:24px;font-weight:800;
+            letter-spacing:.04em;color:#fff;"></div>
+          <div id="flota-modal-titulo" style="font-size:12px;color:#94a3b8;"></div>
+        </div>
+        <button onclick="flotaCerrarModal()" style="background:#1a1a1a;border:1px solid #333;
+          color:#aaa;border-radius:8px;padding:8px 14px;font-size:15px;cursor:pointer;">Cerrar</button>
+      </div>
+      <div id="flota-recibo" style="padding:16px;"></div>
+    </div>`;
+  document.body.appendChild(m);
+}
+
+/** Abre el modal con la placa SIEMPRE visible en el encabezado.
+ *
+ * La placa va en un encabezado pegajoso: aunque el formulario sea largo y el
+ * conductor baje hasta el botón de guardar, sigue viendo de qué camión está
+ * hablando. Ese es el punto entero.
+ */
+function flotaAbrirModal(titulo, placa) {
+  flotaAsegurarModal();
+  document.getElementById('flota-modal-placa').textContent = placa || '';
+  document.getElementById('flota-modal-titulo').textContent = titulo;
+  document.getElementById('flota-recibo').innerHTML =
+    '<div style="padding:20px;color:#666">Cargando…</div>';
+  document.getElementById('flota-modal').style.display = 'block';
+  document.body.style.overflow = 'hidden';
+}
+
+/** Cierra el modal y devuelve el scroll a la página. */
+function flotaCerrarModal() {
+  const m = document.getElementById('flota-modal');
+  if (m) m.style.display = 'none';
+  document.body.style.overflow = '';
 }
 
 /** Abre el recibo de turno de una placa: trae custodia activa y odómetro. */
@@ -70,8 +126,8 @@ async function flotaAbrirRecibo(placa) {
   FLOTA_PLACA = placa;
   FLOTA_FOTOS = {};
   FLOTA_FOTO_TABLERO = null;
+  flotaAbrirModal('Recibo de turno', placa);
   const el = document.getElementById('flota-recibo');
-  el.innerHTML = '<div class="card">Cargando…</div>';
   try {
     FLOTA_ESTADO = await get('/flota/custodia/activa/' + encodeURIComponent(placa));
   } catch (e) {
@@ -92,7 +148,6 @@ function flotaRenderRecibo() {
     : `${km} km`;
 
   let html = `<div class="card">
-    <h3>${FLOTA_PLACA}</h3>
     <p>Último odómetro registrado: ${kmTexto}</p>
     <p>${c ? `Viene de: custodia #${c.id} (desde ${c.inicio_ts.slice(0, 16).replace('T', ' ')})`
            : '<b>Arranque en frío</b> — primera custodia. Lo que se registre acá nace como preexistente, sin responsable.'}</p>
@@ -277,8 +332,8 @@ async function flotaGuardarRecibo() {
 /** Formulario de lectura suelta: tanqueo, cierre de día, OT o corrección. */
 function flotaAbrirOdometro(placa) {
   FLOTA_PLACA = placa;
+  flotaAbrirModal('Lectura de odómetro', placa);
   document.getElementById('flota-recibo').innerHTML = `<div class="card">
-    <h3>Odómetro · ${placa}</h3>
     <p style="color:#94a3b8;font-size:13px">Para una lectura fuera del recibo de turno.
     Una lectura <b>no se edita</b>: si está mal, se corrige con un registro nuevo, y la
     corrección exige motivo escrito — sin él es indistinguible de un error de digitación.</p>
@@ -365,8 +420,8 @@ function flotaSelect(campo, valor) {
 /** Abre el formulario de ficha técnica de una placa. */
 async function flotaAbrirFicha(placa) {
   FLOTA_PLACA = placa;
+  flotaAbrirModal('Ficha técnica', placa);
   const el = document.getElementById('flota-recibo');
-  el.innerHTML = '<div class="card">Cargando ficha…</div>';
   let d;
   try {
     d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/ficha');
@@ -378,7 +433,6 @@ async function flotaAbrirFicha(placa) {
   const v = c => (f[c] === undefined || f[c] === null) ? '' : f[c];
 
   el.innerHTML = `<div class="card">
-    <h3>Ficha técnica · ${placa}</h3>
     <p style="color:#94a3b8;font-size:13px">Se llena parado al lado del vehículo: el
     kilometraje está en el tablero, el aceite en la tapa del motor o en la última factura,
     la medida de llanta en el flanco. <b>Lo que no sepas, dejalo en <code>sin_dato</code></b> —
@@ -489,8 +543,8 @@ async function flotaGuardarFicha() {
 async function flotaAbrirDocumentos(placa) {
   FLOTA_PLACA = placa;
   FLOTA_FOTO_DOC = null;
+  flotaAbrirModal('Documentos', placa);
   const el = document.getElementById('flota-recibo');
-  el.innerHTML = '<div class="card">Cargando documentos…</div>';
   let d;
   try {
     d = await get('/flota/vehiculo/' + encodeURIComponent(placa) + '/documentos');
@@ -513,7 +567,6 @@ async function flotaAbrirDocumentos(placa) {
   if (!filas) filas = '<li style="color:#94a3b8">Ninguno registrado todavía.</li>';
 
   el.innerHTML = `<div class="card">
-    <h3>Documentos · ${placa}</h3>
     <ul style="line-height:1.7">${filas}</ul>
     ${d.sin_verificar.length ? `<p style="color:#fbbf24">Sin verificar:
       ${d.sin_verificar.join(', ')} — <b>no es lo mismo que no encontrado</b>:

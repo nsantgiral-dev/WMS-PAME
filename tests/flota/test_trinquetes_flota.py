@@ -525,3 +525,36 @@ class TestTrinqueteAdvertencias:
             + '\n\nEl tope es 0 y se silencia con razón y fecha en pytest.ini, '
               'nunca con un ignore desnudo.'
         )
+
+
+class TestPlacaSiempreVisible:
+    """La placa no puede perderse de vista mientras se llena el formulario.
+
+    No es estética: un odómetro registrado en el camión equivocado se convierte
+    en el `km_inicial` de otro vehículo y contamina todo lo que cuelgue de él —
+    el preventivo por kilómetro, el CPK, la comparación entre turnos.
+    """
+
+    _FLOTA_JS = os.path.join(_PWA, 'flota.js')
+
+    def test_los_formularios_van_en_modal_y_no_debajo_de_la_lista(self):
+        js = _leer(self._FLOTA_JS)
+        for abrir in ('flotaAbrirRecibo', 'flotaAbrirFicha',
+                      'flotaAbrirOdometro', 'flotaAbrirDocumentos'):
+            cuerpo = js[js.index(f'function {abrir}('):][:900]
+            assert 'flotaAbrirModal(' in cuerpo, (
+                f'{abrir} no abre el modal: el formulario queda debajo de la '
+                f'lista y en celular hay que pasar cuatro placas ajenas para '
+                f'llegar a él.'
+            )
+
+    def test_el_encabezado_del_modal_es_pegajoso(self):
+        """Si la placa se va con el scroll, el formulario largo la esconde
+        justo cuando el conductor llega al botón de guardar."""
+        js = _leer(self._FLOTA_JS)
+        cabeza = js[js.index("id=\"flota-modal-cabeza\""):][:200]
+        assert 'position:sticky' in cabeza
+
+    def test_la_placa_se_escribe_en_el_encabezado_al_abrir(self):
+        js = _leer(self._FLOTA_JS)
+        assert "getElementById('flota-modal-placa').textContent = placa" in js
