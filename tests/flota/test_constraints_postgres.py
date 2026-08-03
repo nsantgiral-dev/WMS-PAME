@@ -168,14 +168,14 @@ class TestElEsquemaSeCreaEnPostgres:
         codigos = {p.codigo for p in PlantillaInspeccion.query.all()}
         assert {'furgon_liviano_v1', 'camion_v1'} <= codigos
 
-    def test_los_37_check_quedaron_en_la_base(self, esquema):
+    def test_los_38_check_quedaron_en_la_base(self, esquema):
         """Un CHECK que PostgreSQL no entiende no llega a existir."""
         with esquema.connect() as c:
             n = c.execute(text(
                 "SELECT count(*) FROM information_schema.table_constraints "
                 "WHERE constraint_type='CHECK' AND constraint_name LIKE 'ck_flota%'"
             )).scalar()
-        assert n == 37, f'Se esperaban 37 CHECK de flota en PostgreSQL, hay {n}'
+        assert n == 38, f'Se esperaban 38 CHECK de flota en PostgreSQL, hay {n}'
 
 
 # ══════════════════════════════════════════════════════════════════════════

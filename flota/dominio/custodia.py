@@ -10,7 +10,30 @@ from datetime import datetime
 from typing import List, Sequence
 
 from flota.dominio.errores import CustodiaInvalida
-from flota.dominio.valores import Custodia, CustodioEstado, CustodioTipo
+from flota.dominio.valores import (
+    Custodia,
+    CustodioEstado,
+    CustodioTipo,
+    QuienPide,
+)
+
+
+@dataclass(frozen=True)
+class Veredicto:
+    """Si se puede recibir el vehículo, y qué hace falta.
+
+    `mensaje` no es un detalle de presentación: es lo que convierte una
+    restricción de base de datos en una conversación entre dos personas. Un 409
+    crudo deja al conductor mirando el celular en el patio; "el WHX245 lo tiene
+    Víctor desde ayer" le dice a quién llamar.
+
+    Por eso vive en el dominio y no en la pantalla — un mensaje en la vista se
+    pierde en el próximo rediseño.
+    """
+
+    puede: bool
+    requiere_forzado: bool
+    mensaje: str
 
 
 @dataclass(frozen=True)
@@ -19,6 +42,49 @@ class Hueco:
 
     desde: datetime
     hasta: datetime
+
+
+def puede_recibir(custodia_vigente, quien_pide: QuienPide,
+                  nombre_custodio_actual: str = '', placa: str = '',
+                  desde: str = '') -> Veredicto:
+    """Si quien pide puede abrir custodia sobre este vehículo.
+
+    QUÉ AFIRMA: si la operación está permitida y si necesita un forzado
+    declarado.
+
+    QUÉ NO AFIRMA: que sea buena idea. Un admin puede forzar; que lo haga ocho
+    veces en un mes significa que los conductores no están cerrando turno, y eso
+    lo dice el contador del health, no esta función.
+
+    Tres casos:
+
+    · **Sin custodia vigente** — se puede, sin más.
+    · **Vigente del mismo conductor** — se puede: recibir lo que ya se tiene es
+      un no-op, no un conflicto.
+    · **Vigente de OTRO** — depende de quién pide. El conductor **no puede**: la
+      conversación es entre él y quien tiene el vehículo. El admin de zona
+      **sí**, y queda marcado como forzado — es la única salida cuando alguien
+      se fue sin cerrar y el camión tiene que salir.
+    """
+    if custodia_vigente is None:
+        return Veredicto(True, False, '')
+
+    if quien_pide == QuienPide.CONDUCTOR:
+        quien = nombre_custodio_actual or 'otro conductor'
+        cuando = f' desde {desde}' if desde else ''
+        return Veredicto(
+            False, False,
+            f'El {placa or "vehículo"} lo tiene {quien}{cuando}. '
+            f'Si lo vas a recibir vos, {quien} tiene que cerrar su turno primero.'
+        )
+
+    return Veredicto(
+        True, True,
+        f'{nombre_custodio_actual or "El custodio anterior"} no cerró su turno. '
+        f'Al recibirlo se cierra a la fuerza: queda registrado quién lo autorizó '
+        f'y por qué, y sin fotos de cierre no hay con qué comparar el estado del '
+        f'vehículo en el turno siguiente.'
+    )
 
 
 def custodias_activas(custodias: Sequence[Custodia]) -> List[Custodia]:

@@ -378,6 +378,58 @@ que el endpoint de odómetro tampoco tenía gesto.
 
 ---
 
+## Cierre forzado de custodia — 2026-08-03
+
+Un conductor **no puede** abrir custodia sobre un vehículo que tiene otro. El
+mensaje nombra a la persona y dice qué tiene que pasar: *"El WHX245 lo tiene
+Víctor desde 02/08 a las 17:30. Si lo vas a recibir vos, Víctor tiene que cerrar
+su turno primero."* Eso convierte una restricción de base en una conversación
+entre dos personas, que es lo que de verdad resuelve el problema del custodio.
+
+Un **admin de zona sí puede**, porque es la única salida cuando alguien se fue
+sin cerrar y el camión tiene que salir a las 5 a.m.
+
+### Qué cuenta como forzado, y no es lo que parecía
+
+**Forzado = cerrar el turno ajeno SIN fotos de cierre.** No es "cerrar el turno
+ajeno" a secas.
+
+La definición se afinó al implementarla: el daño concreto no es la falta de
+firma, es que **el turno siguiente arranca sin nada con qué comparar** y el
+próximo golpe que aparezca no se le puede atribuir a nadie. Un admin que cierra
+con las ocho fotos hizo un cierre completo — solo le faltó la firma del titular,
+y ese caso no debe contaminar el contador.
+
+La base impone el rastro: un forzado sin autor ni motivo **no entra ni por SQL
+crudo**. Un rastro de que pasó algo raro sin quién lo autorizó es peor que no
+tener rastro.
+
+### La notificación al custodio anterior — PENDIENTE de tanda 2
+
+**No está implementada, y hay que decirlo.** El aviso por WhatsApp llega con el
+adaptador de Gupshup en la tanda 2. Construir ahora una cola de avisos sin
+consumidor sería superficie sin estrenar — el patrón que ya apareció cinco veces
+en este repo.
+
+Lo que sí hay: el dato completo está en la fila —quién lo tenía, quién forzó,
+cuándo y por qué— y **el tablero de flota lo muestra con nombre**, arriba de
+todo, en `GET /flota/custodia/cierres-forzados`.
+
+> **Pero eso lo ve Yesid el lunes, y si el custodio anterior se entera tres días
+> después el daño de confianza ya está hecho.**
+>
+> **La solución de verdad no es técnica y va al procedimiento FLO-PR-01,
+> sección 4:** *quien fuerza un cierre le avisa al custodio anterior el mismo
+> día*, por el mismo WhatsApp por el que se hablan todos los días. El sistema
+> registra y muestra; la cortesía la pone la persona.
+>
+> **La regla existe en el papel antes que en el código, y eso queda declarado.**
+> Cuando el notificador exista en la tanda 2, deja de depender de que alguien se
+> acuerde — pero hasta entonces depende de eso, y fingir lo contrario sería
+> peor que decirlo.
+
+---
+
 ## Estructura de responsabilidad — definida el 2026-08-01
 
 Lo que faltaba desde el primer día no era código: era dueño. El sistema de papel

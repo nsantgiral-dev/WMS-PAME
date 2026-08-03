@@ -35,6 +35,7 @@ _CAMPOS = (
     'atributos_sin_dato',
     'vehiculos_sin_custodia_activa',
     'custodias_pendiente_sede',
+    'custodias_cerradas_forzadas',
     'custodias_sin_foto_completa',
     'fotos_pendiente_evidencia',
     'conductores_activos_sin_cuenta',

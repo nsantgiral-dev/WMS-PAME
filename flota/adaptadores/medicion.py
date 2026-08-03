@@ -235,6 +235,23 @@ class MedidorSQL:
             Custodia.custodio_estado == 'pendiente_sede'
         ))
 
+    def custodias_cerradas_forzadas(self) -> Optional[int]:
+        """Turnos cerrados sin la firma del custodio anterior.
+
+        No mide un fallo del sistema: mide una conducta. **Si este número sube,
+        el problema no es que se pueda forzar — es que los conductores no están
+        cerrando turno**, y la corrección es esa, no seguir forzando.
+
+        Cada uno de estos deja un turno siguiente sin fotos de cierre con qué
+        comparar. Ocho en un mes significa ocho vehículos cuyo próximo daño no
+        se le puede atribuir a nadie.
+        """
+        from flota.adaptadores.modelos import Custodia
+
+        if not _tabla_existe('flota_custodia'):
+            return None
+        return _contar(Custodia.query.filter(Custodia.cierre_forzado.is_(True)))
+
     def custodias_sin_foto_completa(self) -> Optional[int]:
         """Custodias a las que les faltan fotos de las ocho del recibo de turno.
 

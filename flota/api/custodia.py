@@ -94,6 +94,47 @@ def custodia_activa(placa):
     }), 200
 
 
+@custodia_bp.route('/custodia/cierres-forzados', methods=['GET'])
+@jwt_required()
+def cierres_forzados():
+    """Turnos cerrados sin la firma del custodio anterior, con nombre.
+
+    Salida corta hasta que exista el notificador de la tanda 2: si el custodio
+    anterior se entera tres días después, el daño de confianza ya está hecho.
+    Acá al menos lo ve el control de flota el lunes.
+
+    **La solución de verdad no es técnica**: el procedimiento FLO-PR-01 exige
+    que quien fuerza un cierre le avise al custodio el mismo día, por el mismo
+    WhatsApp por el que se hablan todos los días. El sistema registra y muestra;
+    la cortesía la pone la persona. Cuando el notificador exista, deja de
+    depender de que alguien se acuerde.
+    """
+    from app.models.usuario import Usuario
+    from app.models.vehiculo import Vehiculo
+    from flota.adaptadores.modelos import Custodia
+
+    filas = (
+        db.session.query(Custodia, Vehiculo.placa, Usuario.nombre)
+        .join(Vehiculo, Vehiculo.id == Custodia.vehiculo_id)
+        .outerjoin(Usuario, Usuario.id == Custodia.cierre_forzado_por_usuario_id)
+        .filter(Custodia.cierre_forzado.is_(True))
+        .order_by(Custodia.fin_ts.desc())
+        .all()
+    )
+    return jsonify({'cierres': [
+        {
+            'custodia_id': c.id,
+            'placa': placa,
+            # Quién lo tenía: es a quien hay que avisarle.
+            'lo_tenia': c.custodio_conductor.nombre if c.custodio_conductor else 'sede',
+            'forzado_por': forzador or 'desconocido',
+            'cuando': c.fin_ts.isoformat() if c.fin_ts else None,
+            'motivo': c.cierre_forzado_motivo,
+        }
+        for c, placa, forzador in filas
+    ]}), 200
+
+
 @custodia_bp.route('/custodia/traspaso', methods=['POST'])
 @jwt_required()
 def custodia_traspaso():

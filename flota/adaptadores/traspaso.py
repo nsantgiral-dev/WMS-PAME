@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from app.extensions import db
+from app.models.vehiculo import Vehiculo
 from flota.adaptadores.modelos import Custodia, Foto, LecturaOdometro
 from flota.dominio import custodia as dom
 from flota.dominio import odometro as dom_odo
@@ -35,6 +36,7 @@ from flota.dominio.valores import (
     CustodioTipo,
     Lectura,
     OrigenLectura,
+    QuienPide,
 )
 
 FOTOS_POR_CUSTODIA = 8
@@ -78,6 +80,8 @@ def traspasar(
     custodio_conductor_id: Optional[int] = None,
     custodio_sede_id: Optional[int] = None,
     custodio_estado: CustodioEstado = CustodioEstado.RESUELTO,
+    quien_pide: QuienPide = QuienPide.ADMIN_ZONA,
+    motivo_forzado: Optional[str] = None,
     fotos_fin: Optional[List[dict]] = None,
     fotos_inicio: Optional[List[dict]] = None,
     ts: Optional[datetime] = None,
@@ -113,6 +117,38 @@ def traspasar(
 
     vigente = custodia_activa(vehiculo_id)
 
+    # ¿Puede recibirlo? La decisión es del dominio, no de un `if` acá — una
+    # regla escrita en el adaptador se pierde en el próximo refactor.
+    mismo_custodio = (
+        vigente is not None
+        and vigente.custodio_conductor_id is not None
+        and vigente.custodio_conductor_id == custodio_conductor_id
+    )
+    forzado = False
+    if vigente is not None and not mismo_custodio:
+        nombre = (vigente.custodio_conductor.nombre
+                  if vigente.custodio_conductor is not None else '')
+        veredicto = dom.puede_recibir(
+            vigente, quien_pide,
+            nombre_custodio_actual=nombre,
+            placa=Vehiculo.query.get(vehiculo_id).placa if vehiculo_id else '',
+            desde=vigente.inicio_ts.strftime('%d/%m a las %H:%M'),
+        )
+        if not veredicto.puede:
+            raise CustodiaInvalida(veredicto.mensaje)
+        # Forzado no es "cerrar el de otro": es cerrarlo SIN FOTOS DE CIERRE.
+        # Ese es el daño concreto — el turno siguiente arranca sin nada con qué
+        # comparar, y el próximo golpe que aparezca no se le puede atribuir a
+        # nadie. Un admin que cierra con las ocho fotos hace un cierre normal.
+        if veredicto.requiere_forzado and not fotos_fin:
+            if not (motivo_forzado or '').strip():
+                raise CustodiaInvalida(
+                    'Cerrar el turno de otro sin su firma exige motivo escrito: '
+                    'sin fotos de cierre, es lo único que va a explicar después '
+                    'por qué el turno siguiente arrancó sin comparación.'
+                )
+            forzado = True
+
     # Regla 3: el kilometraje entra por la misma puerta o no entra ninguno.
     previas = [
         Lectura(valor_km=l.valor_km, ts=l.ts, origen=OrigenLectura(l.origen),
@@ -136,6 +172,10 @@ def traspasar(
         if vigente is not None:
             vigente.fin_ts = ahora
             vigente.km_fin = km
+            if forzado:
+                vigente.cierre_forzado = True
+                vigente.cierre_forzado_por_usuario_id = registrado_por_usuario_id
+                vigente.cierre_forzado_motivo = motivo_forzado.strip()
             db.session.flush()
             _colgar_fotos(fotos_fin, 'custodia_fin', vigente.id,
                           registrado_por_usuario_id, ahora)

@@ -55,6 +55,10 @@ class MedidorDeFlota(Protocol):
         """Custodias cuya sede el WMS todavía no tiene como fila en `almacenes`."""
         ...
 
+    def custodias_cerradas_forzadas(self) -> Optional[int]:
+        """Turnos cerrados sin firma del custodio anterior. Mide conducta, no fallas."""
+        ...
+
     def custodias_sin_foto_completa(self) -> Optional[int]:
         ...
 

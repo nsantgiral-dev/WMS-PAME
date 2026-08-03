@@ -291,3 +291,42 @@ class TestDocumentos:
             'fecha_vencimiento': '01/08/2026',
         }, headers=_auth(jwt_token_admin))
         assert r.status_code == 400
+
+    def test_los_cierres_forzados_salen_con_nombre(self, client, jwt_token_admin, flota_mundo):
+        """Con nombre porque hay que saber A QUIÉN avisarle.
+
+        Una lista de custodias forzadas sin decir quién tenía el vehículo no
+        sirve para nada: el punto entero es que el custodio anterior se entere.
+        """
+        from flota.adaptadores import traspaso
+        from flota.dominio.valores import CustodioTipo, QuienPide
+
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_000,
+            registrado_por_usuario_id=1, custodio_tipo=CustodioTipo.CONDUCTOR,
+            custodio_conductor_id=flota_mundo['con'])
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_100,
+            registrado_por_usuario_id=1, custodio_tipo=CustodioTipo.SEDE,
+            custodio_sede_id=flota_mundo['alm'], quien_pide=QuienPide.ADMIN_ZONA,
+            motivo_forzado='se fue sin cerrar y el camión salía a las 6')
+
+        cuerpo = client.get('/flota/custodia/cierres-forzados',
+                            headers=_auth(jwt_token_admin)).get_json()
+        assert len(cuerpo['cierres']) == 1
+        c = cuerpo['cierres'][0]
+        assert c['placa'] == flota_mundo['placa']
+        assert c['lo_tenia'] == 'Conductor EP'      # a quién avisarle
+        assert 'sin cerrar' in c['motivo']
+
+    def test_un_cierre_normal_no_aparece_en_la_lista(self, client, jwt_token_admin, flota_mundo):
+        from flota.adaptadores import traspaso
+        from flota.dominio.valores import CustodioTipo
+
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_000,
+            registrado_por_usuario_id=1, custodio_tipo=CustodioTipo.CONDUCTOR,
+            custodio_conductor_id=flota_mundo['con'])
+        cuerpo = client.get('/flota/custodia/cierres-forzados',
+                            headers=_auth(jwt_token_admin)).get_json()
+        assert cuerpo['cierres'] == []

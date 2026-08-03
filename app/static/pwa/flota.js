@@ -46,7 +46,8 @@ async function cargarFlota() {
         ni dónde registrar un turno.</p></div>`;
       return;
     }
-    let html = '<div class="card"><h3>Recibo de turno</h3><p>Elegí la placa:</p><div>';
+    let html = await flotaBloqueForzados();
+    html += '<div class="card"><h3>Recibo de turno</h3><p>Elegí la placa:</p><div>';
     vehiculos.forEach(v => {
       html += `<div style="margin:6px 0;padding:8px;border:1px solid #334155;border-radius:8px">
         <b style="font-size:17px">${v.placa}</b> <span style="color:#94a3b8">${v.tipo}</span><br>
@@ -612,4 +613,36 @@ async function flotaGuardarDocumento() {
   } catch (e) {
     err.textContent = 'Sin conexión: ' + e.message;
   }
+}
+
+/** Bloque de cierres forzados: turnos cerrados sin la firma de su custodio.
+ *
+ * Va arriba de todo y con nombre porque es lo único que hoy hace que el
+ * custodio anterior se entere antes de tres días. El aviso automático llega en
+ * la tanda 2; mientras tanto, el procedimiento pide que quien fuerza avise el
+ * mismo día — esto es el respaldo de que se hizo, no el aviso.
+ */
+async function flotaBloqueForzados() {
+  let d;
+  try {
+    d = await get('/flota/custodia/cierres-forzados');
+  } catch (e) {
+    return '';
+  }
+  const cierres = d.cierres || [];
+  if (!cierres.length) return '';
+  const filas = cierres.map(c => `
+    <li style="margin-bottom:8px">
+      <b>${c.placa}</b> — lo tenía <b>${c.lo_tenia}</b>, lo cerró ${c.forzado_por}
+      el ${(c.cuando || '').slice(0, 16).replace('T', ' ')}<br>
+      <span style="color:#94a3b8">${c.motivo || ''}</span>
+    </li>`).join('');
+  return `<div class="card" style="border-left:3px solid #f87171">
+    <h3 style="color:#f87171">Turnos cerrados a la fuerza (${cierres.length})</h3>
+    <p style="font-size:13px;color:#94a3b8">Sin firma del custodio anterior y sin
+    fotos de cierre: el turno siguiente arrancó sin nada con qué comparar.
+    <b>Si este bloque crece, el problema no es el sistema — es que no se está
+    cerrando turno.</b></p>
+    <ul style="line-height:1.6">${filas}</ul>
+  </div>`;
 }

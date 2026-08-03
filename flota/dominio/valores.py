@@ -76,6 +76,18 @@ class CustodioEstado(str, Enum):
     PENDIENTE_SEDE = 'pendiente_sede'
 
 
+class QuienPide(str, Enum):
+    """Desde dónde se pide recibir un vehículo. Cambia la respuesta, no el dato.
+
+    Un conductor no puede quitarle el turno a otro: la conversación la tienen
+    ellos dos. Un admin de zona sí, porque es la única salida cuando alguien se
+    fue sin cerrar y el camión tiene que salir a las 5 a.m.
+    """
+
+    CONDUCTOR  = 'conductor'
+    ADMIN_ZONA = 'admin_zona'
+
+
 class ClaseFoto(str, Enum):
     """Regla 7: hay dos clases de foto y no comparten parámetros.
 
@@ -129,6 +141,7 @@ class Custodia:
     custodio_sede_id: Optional[int] = None
     custodio_estado: CustodioEstado = CustodioEstado.RESUELTO
     linea_base: bool = False
+    cierre_forzado: bool = False
 
 
 @dataclass(frozen=True)

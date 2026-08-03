@@ -15,7 +15,7 @@ from flota.adaptadores import traspaso
 from flota.adaptadores.modelos import Custodia, Foto, LecturaOdometro
 from flota.dominio.custodia import huecos_de_cobertura
 from flota.dominio.errores import CustodiaInvalida, LecturaRechazada
-from flota.dominio.valores import CustodioEstado, CustodioTipo
+from flota.dominio.valores import CustodioEstado, CustodioTipo, QuienPide
 
 _T0 = datetime(2026, 8, 1, 5, 0)
 
@@ -42,6 +42,13 @@ def mundo(db):
 
 
 def _traspasar(mundo, conductor, km, minutos, **kw):
+    """Traspaso desde escritorio (admin de zona).
+
+    Lleva `motivo_forzado` por defecto porque cerrar el turno de otro sin fotos
+    de cierre ES un forzado desde el 2026-08-03 — y estos tests hacen justo eso.
+    Los que prueban el camino normal pasan `fotos_fin`.
+    """
+    kw.setdefault('motivo_forzado', 'turno anterior sin cerrar')
     return traspaso.traspasar(
         vehiculo_id=mundo['veh'], km=km,
         registrado_por_usuario_id=mundo['usr'],
@@ -173,7 +180,99 @@ class TestSedeSinFila:
             custodio_tipo=CustodioTipo.SEDE,
             custodio_estado=CustodioEstado.PENDIENTE_SEDE,
             ts=_T0 + timedelta(minutes=480),
+            motivo_forzado='el conductor entregó en Pitalito y se fue',
         )
         assert nueva.custodio_estado == 'pendiente_sede'
         assert nueva.custodio_sede_id is None
         assert traspaso.custodia_activa(mundo['veh']).id == nueva.id
+
+
+class TestQuienPuedeRecibir:
+    """La regla que convierte una restricción de base en una conversación.
+
+    Un conductor no puede quitarle el turno a otro: eso lo arreglan ellos dos.
+    Un admin de zona sí, porque es la única salida cuando alguien se fue sin
+    cerrar y el camión tiene que salir a las 5 a.m.
+    """
+
+    def _recibir(self, mundo, conductor, quien, **kw):
+        return traspaso.traspasar(
+            vehiculo_id=mundo['veh'], km=100_500,
+            registrado_por_usuario_id=mundo['usr'],
+            custodio_tipo=CustodioTipo.CONDUCTOR,
+            custodio_conductor_id=mundo[conductor],
+            quien_pide=quien,
+            ts=_T0 + timedelta(minutes=900),
+            **kw,
+        )
+
+    def test_un_conductor_no_puede_quitarle_el_turno_a_otro(self, mundo):
+        _traspasar(mundo, 'c1', 100_000, 0)
+        with pytest.raises(CustodiaInvalida) as e:
+            self._recibir(mundo, 'c2', QuienPide.CONDUCTOR)
+        # El mensaje nombra a la persona y dice qué tiene que pasar.
+        assert 'Turno A' in str(e.value)
+        assert 'cerrar su turno primero' in str(e.value)
+
+    def test_y_el_turno_del_otro_queda_intacto(self, mundo):
+        """Un rechazo no puede dejar a medias lo que rechazó."""
+        _traspasar(mundo, 'c1', 100_000, 0)
+        with pytest.raises(CustodiaInvalida):
+            self._recibir(mundo, 'c2', QuienPide.CONDUCTOR)
+        vigente = traspaso.custodia_activa(mundo['veh'])
+        assert vigente.custodio_conductor_id == mundo['c1']
+        assert vigente.fin_ts is None
+
+    def test_recibir_lo_que_ya_se_tiene_no_es_conflicto(self, mundo):
+        """Un no-op, no una colisión: el vehículo ya es suyo."""
+        _traspasar(mundo, 'c1', 100_000, 0)
+        self._recibir(mundo, 'c1', QuienPide.CONDUCTOR)
+        assert traspaso.custodia_activa(mundo['veh']).custodio_conductor_id == mundo['c1']
+
+    def test_el_admin_si_puede_pero_exige_motivo_escrito(self, mundo):
+        _traspasar(mundo, 'c1', 100_000, 0)
+        with pytest.raises(CustodiaInvalida, match='motivo escrito'):
+            self._recibir(mundo, 'c2', QuienPide.ADMIN_ZONA)
+
+    def test_con_motivo_pasa_y_queda_marcado_el_forzado(self, mundo):
+        _traspasar(mundo, 'c1', 100_000, 0)
+        self._recibir(mundo, 'c2', QuienPide.ADMIN_ZONA,
+                      motivo_forzado='Turno A se fue sin cerrar, el camión sale a las 6')
+        anterior = Custodia.query.filter(Custodia.fin_ts.isnot(None)).order_by(
+            Custodia.id.desc()).first()
+        assert anterior.cierre_forzado is True
+        assert anterior.cierre_forzado_por_usuario_id == mundo['usr']
+        assert 'sin cerrar' in anterior.cierre_forzado_motivo
+
+    def test_cerrar_CON_fotos_no_es_forzado(self, mundo):
+        """Forzado no es "cerrar el de otro": es cerrarlo sin nada con qué
+        comparar el turno siguiente. Con las fotos, es un cierre normal."""
+        _traspasar(mundo, 'c1', 100_000, 0)
+        self._recibir(mundo, 'c2', QuienPide.ADMIN_ZONA,
+                      fotos_fin=[_foto(i) for i in range(8)])
+        anterior = Custodia.query.filter(Custodia.fin_ts.isnot(None)).order_by(
+            Custodia.id.desc()).first()
+        assert anterior.cierre_forzado is False
+
+    def test_el_health_cuenta_los_forzados(self, mundo):
+        """Si el número sube, el problema no es el sistema: es que los
+        conductores no están cerrando turno."""
+        from flota.adaptadores.medicion import MedidorSQL
+
+        medidor = MedidorSQL()
+        antes = medidor.custodias_cerradas_forzadas()
+        _traspasar(mundo, 'c1', 100_000, 0)
+        self._recibir(mundo, 'c2', QuienPide.ADMIN_ZONA, motivo_forzado='sin cerrar')
+        assert medidor.custodias_cerradas_forzadas() == antes + 1
+
+    def test_un_forzado_sin_autor_no_entra_ni_por_SQL_crudo(self, mundo):
+        """La base también lo impone: un cierre anónimo dejaría el rastro de
+        que pasó algo raro y ninguna forma de saber quién ni por qué."""
+        from sqlalchemy import text
+
+        c = _traspasar(mundo, 'c1', 100_000, 0)
+        with pytest.raises(Exception):
+            mundo['db'].session.execute(text(
+                'UPDATE flota_custodia SET cierre_forzado = 1 WHERE id = :i'), {'i': c.id})
+            mundo['db'].session.commit()
+        mundo['db'].session.rollback()

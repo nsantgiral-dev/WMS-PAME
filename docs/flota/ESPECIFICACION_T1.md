@@ -247,6 +247,7 @@ switch `FLOTA_BLOQUEO_DESPACHO=0`.
   "atributos_sin_dato": ["TGZ653.distribucion", "TGZ655.distribucion"],
   "vehiculos_sin_custodia_activa": 0,
   "custodias_pendiente_sede": 0,
+  "custodias_cerradas_forzadas": 0,
   "custodias_sin_foto_completa": 1,
   "fotos_pendiente_evidencia": 0,
   "conductores_activos_sin_cuenta": 2,
@@ -265,6 +266,12 @@ Medido el 2026-08-01 contra la base real: **3 de 15**. Ya no vale `null`.
 mostrar el papel. Sumarlos esconde el segundo, que es el más grave. Y sin
 contador propio desaparecerían de los dos, porque sus fechas son `NULL` y
 `fecha_vencimiento < hoy` no matchea `NULL` — un cero silencioso.
+
+`custodias_cerradas_forzadas` cuenta los turnos cerrados sin la firma del
+custodio anterior. **No mide una falla del sistema: mide una conducta.** Si sube,
+el problema no es que se pueda forzar — es que los conductores no están cerrando
+turno, y la corrección es esa. Cada uno deja un turno siguiente sin fotos de
+cierre con qué comparar.
 
 `custodias_pendiente_sede` cuenta las custodias cuya sede el WMS no puede
 representar: `almacenes` cubre 5 de los 9 centros del mapa de C.O. (medido

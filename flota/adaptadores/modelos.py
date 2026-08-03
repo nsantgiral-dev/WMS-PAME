@@ -294,6 +294,18 @@ class Custodia(db.Model):
     # Siesa no reconoce.
     custodio_estado = db.Column(db.String(20), nullable=False, server_default='resuelto')
 
+    # Cierre sin firma del custodio anterior. NO es una custodia normal cerrada:
+    # no hay `fotos_fin`, así que el turno siguiente arranca sin comparación
+    # posible y el próximo daño que aparezca no se le puede atribuir a nadie.
+    # Si eso no queda distinguible, nadie va a saber por qué.
+    custodio_conductor = db.relationship('Conductor', lazy='joined',
+                                         foreign_keys=[custodio_conductor_id])
+
+    cierre_forzado = db.Column(db.Boolean, nullable=False, server_default='0')
+    cierre_forzado_por_usuario_id = db.Column(
+        db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    cierre_forzado_motivo = db.Column(db.Text, nullable=True)
+
     __table_args__ = (
         _en('custodio_tipo', CUSTODIO_TIPO),
         _en('custodio_estado', CUSTODIO_ESTADO),
@@ -333,6 +345,15 @@ class Custodia(db.Model):
                            name='ck_flota_custodia_cierre_posterior'),
         db.CheckConstraint('km_fin IS NULL OR km_fin >= km_inicio',
                            name='ck_flota_custodia_km_no_decrece'),
+        # Un forzado sin autor ni motivo es un cierre anónimo: quedaría el
+        # rastro de que pasó algo raro y ninguna forma de saber quién ni por qué.
+        db.CheckConstraint(
+            "(cierre_forzado = '0' AND cierre_forzado_por_usuario_id IS NULL "
+            " AND cierre_forzado_motivo IS NULL) OR "
+            "(cierre_forzado = '1' AND cierre_forzado_por_usuario_id IS NOT NULL "
+            " AND length(trim(cierre_forzado_motivo)) > 0)",
+            name='ck_flota_cierre_forzado_declarado',
+        ),
         # INVARIANTE 2 — 0 o 1 activa. Índice único parcial: solo indexa las
         # filas abiertas, así que dos abiertas para el mismo vehículo colisionan
         # y cualquier cantidad de cerradas convive.
