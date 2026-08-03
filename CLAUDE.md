@@ -296,8 +296,13 @@ Benavides Aldivar), de punta a punta:
 
 > **Nota (2026-07-31):** el paso 2 (cruzar cartera) ya tiene solución de API
 > verificada — ver "Cruce de cartera SÍ se pudo automatizar — conector
-> 251126" más abajo. Pendiente de integrar a código; hasta entonces este
-> procedimiento de 3 pasos sigue siendo el vigente en producción.
+> 251126" más abajo.
+> **Nota (2026-08-03):** el paso 3 (motivo DIAN) también tiene solución de
+> API verificada — ver "Motivo DIAN SÍ se pudo automatizar — conector 251546
+> + segundo POST" más abajo. De los 3 pasos manuales originales (cruzar,
+> motivo, aprobar) solo **Aprobar** queda sin solución de API. Todo pendiente
+> de integrar a código; hasta entonces este procedimiento completo sigue
+> siendo el vigente en producción.
 
 1. **Ubicar el documento**: Financiero → Auditoría de documentos → filtrar
    por tercero/fecha → doble clic sobre la fila `NCE-0000xxxx` (Estado: En
@@ -513,11 +518,157 @@ devolución parcial genuina (todas las pruebas en vivo de hoy fueron
 devoluciones de línea completa). Probar un caso de devolución parcial real
 antes de dar esto por cerrado.
 
-Actualiza automáticamente el paso 2 del "Procedimiento Manual" de abajo:
-cruzar cartera ya no es manual para Devolución de Cliente. Motivo DIAN y
-Aprobar (pasos 3-4) siguen manuales — ver siguiente sección.
+Actualiza automáticamente el paso 2 del "Procedimiento Manual" de arriba:
+cruzar cartera ya no es manual para Devolución de Cliente. Motivo DIAN (paso 3)
+también dejó de ser manual — ver siguiente sección. Aprobar (paso 4) sigue sin
+solución de API.
 - Correr contra 2-3 casos más (facturas con descuentos, con más de 2 líneas)
   antes de reemplazar 250696 en producción — solo se probó un caso simple.
+
+---
+
+## Motivo DIAN SÍ se pudo automatizar — conector 251546 + segundo POST (2026-08-03)
+
+A diferencia de 250878/251192 (bloqueo estructural irresoluble en el mismo
+POST de creación, ver arriba), **sí es posible fijar el motivo DIAN sin
+tocar el escritorio de Siesa** — pero no en el mismo POST que crea la NC,
+sino en un **segundo POST separado, contra el documento ya persistido**.
+Reduce el procedimiento manual de 3 pasos a 1 — solo Aprobar sigue siendo
+manual.
+
+### Comparación con los intentos anteriores
+
+| Conector | Enfoque | Resultado |
+|----------|---------|-----------|
+| 250878 | Crear + cruzar + motivo + **aprobar**, todo en un solo POST (`auto_reg=1`, `estado=1`) | Bloqueado: 753 (Entidades) siempre se procesa después de 461 (el registro que aprueba) — el motivo llega tarde para satisfacer la validación de aprobación. Irresoluble desde el payload. |
+| 251192 | Referenciar una NC ya existente (`Documentos`, T461 subtipo 04) + motivo + **aprobar**, sin crear nada | Mismo bloqueo — cualquier registro 461 (crear o referenciar) dispara la validación de "entidades obligatorias" antes de que el 753 se procese, así vaya en un POST separado de la creación. |
+| **251546, un solo POST** | Crear + cruzar + motivo, **sin aprobar** (`auto_reg=1`, `estado=0`) | El bloqueo de aprobación **no aplica** (no se pide `estado=1`) — pero aparece un problema distinto: Entidades dinámicas no acepta `consec_docto=0` como "el documento de esta misma transacción" (Cuotas CxC y Movimientos sí lo aceptan). Falla con "el documento o movimiento no existe". |
+| **251546, segundo POST** | Solo la sección Entidades dinámicas, referenciando el **consecutivo real** de una NC que ya existe en Elaboración (creada antes por 251126) | **`codigo:0` — Transacción Exitosa.** Verificado en vivo. |
+
+La diferencia clave con 250878/251192: aquellos estaban bloqueados por el
+**orden de procesamiento de registros dentro de una transacción de
+aprobación** (753 > 461, un límite del motor, no evitable). Esto es un
+problema distinto y sí evitable: Entidades dinámicas necesita que el
+documento **ya exista de verdad** (con su consecutivo real, no un
+placeholder de auto-creación) — separar la creación del motivo en dos
+POSTs distintos lo resuelve limpio, sin pelear con el motor.
+
+### El gap que había que cerrar primero: el WMS no sabía el consecutivo real
+
+Ya documentado como pendiente desde el 2026-07-31 ("el WMS nunca sabe qué
+consecutivo de NCE asigna Siesa"). Se cerró hoy con **consultas SQL directas
+contra las tablas reales de Siesa**, usando el mecanismo de "Consultas
+dinámicas" de Generic Transfer (una consulta ya existente,
+`papeleriamedellin_pame_descubrir_tablas`, permite correr SQL crudo contra
+el esquema real — mucho más confiable que el texto de ayuda del Asistente,
+que ya se había demostrado desactualizado antes con `f753_id_grupo_entidad`).
+
+**Tabla real del encabezado de documento**: `t350_co_docto_contable` (a
+pesar del nombre, es el encabezado genérico compartido por todo documento
+comercial, no solo contable — confirmado en vivo: la fila de NCE-00000056,
+ya conocida de la sesión anterior, aparece ahí con `f350_total_db =
+f350_total_cr = 73150.0000`, `f350_id_clase_docto = 526`, `f350_ind_estado =
+1`). Después de crear+cruzar con 251126, consultar:
+
+```sql
+SELECT * FROM t350_co_docto_contable
+WHERE f350_id_co = '<CO>' AND f350_id_tipo_docto = 'NCE'
+ORDER BY f350_rowid DESC
+```
+
+y tomar el `f350_consec_docto` de la fila más reciente que coincida con el
+tercero (`f350_rowid_tercero`) y el valor (`f350_total_db`) esperados.
+
+### Valores de maestro reales, antes desconocidos
+
+- **`f753_id_tipo_entidad` correcto = `G504_1`** ("Facturas y notas
+  documentos", tabla relacionada `t350`) — confirmado sin ambigüedad en
+  `t747_mm_grupo_entidad_tipo` filtrando por `f747_rowid_grupo_entidad = 9`
+  (rowid de `FE_CONCEPTOS NC 2.1` en `t744_mm_grupo_entidad`) y
+  `f747_id_tipo_docto = 'NCE'`. **No está en la lista de 8 códigos que
+  muestra el texto de ayuda del campo en el Asistente** (esa lista solo
+  cubre Facturas de servicio, OVS, CVS, RFVS, OC, Pedidos de venta y
+  Entradas de almacén — otra vez el texto de ayuda desactualizado/
+  incompleto, igual que pasó con `f753_id_grupo_entidad` en 250878).
+- **El atributo `co015_concepto_nc` es de tipo "maestro genérico"**, no
+  numérico simple — rechaza `f753_dato_numerico` con el error "el código y
+  el detalle del maestro es necesario, el atributo es de tipo maestro
+  genérico". Requiere:
+  - `f753_id_maestro = 'MUNOECO017'` (código del catálogo en
+    `t740_mm_maestro`, rowid 65, descripción "Conceptos Notas Credito - FE
+    2.1").
+  - `f753_id_maestro_detalle` = código del concepto en
+    `t741_mm_maestro_detalle` (rowid_maestro=65): **1**=Devolución parcial
+    de bienes, **2**=Anulación de factura electrónica, **3**=Rebaja o
+    descuento parcial, **4**=Ajuste de precio, **5**=Otros.
+
+### La receta que funciona — 2 POSTs
+
+1. **POST 1** — `trigger_nota_factura_crear_cruzar()` (251126, sin cambios,
+   ya en producción): crea la NC en Elaboración y cruza la cartera.
+2. **Consulta** — `t350_co_docto_contable` (arriba) para obtener el
+   `f350_consec_docto` real recién asignado.
+3. **POST 2** — mismo conector **251546**
+   (`PapeleriaMedellin_NotaCredito_CrearCruzarDian_WMS`), pero enviando
+   **solo** las secciones `Inicial` + `Entidades dinámicas` + `Final` (no
+   hace falta reenviar Docto ventas comercial/Cuotas CxC/Movimientos), con
+   `f350_consec_docto` = el valor real del paso 2 y los valores de maestro
+   de arriba. Verificado en vivo hoy contra NCE-00000057 (factura FEW-1465,
+   CO 003): `codigo:0 — Transacción Exitosa`.
+4. **Aprobar** sigue siendo manual en el escritorio de Siesa (Regla #21 no
+   cambia) — pero contabilidad ya no tiene que buscar ni seleccionar el
+   motivo DIAN a mano.
+
+### Conector 251546 — notas de configuración (por si se reconstruye)
+
+Construido sobre el plano `01_Notas credito con entidades` (Generic
+Transfer → `03_Comercial` → `4_Especial`, hermano de `07_Nota_Credito_
+Entidades_Aprobacion` pero sin las secciones `Documentos`/`Descuentos` y
+con `Docto. ventas comercial` en v2, no v9 — por eso no hereda el bloqueo
+de 250878). Secciones: Inicial + Docto. ventas comercial (v2) + Cuotas CxC
+(v1) + Movimientos (v11) + Entidades dinámicas (v2) + Final.
+
+Bugs de configuración reales encontrados y corregidos en vivo durante el
+armado (varios son el mismo patrón: **el Asistente mostraba un valor de
+"ejemplo" en el cuadro Fijo que nunca quedó realmente guardado** — hay que
+verificar/reescribir cada uno explícitamente, no confiar en lo que se ve):
+
+- `F_CIA` quedó en `020` (plantilla de otra compañía) en vez de `1`.
+- `F350_ID_TIPO_DOCTO` (header) y `f470_id_tipo_docto` (Movimientos)
+  quedaron fijos en `NDG` (placeholder) en vez de variable.
+- `F_LIQUIDA_IMPUESTO`/`F_LIQUIDA_RETENCION` deben ser `0`, no `1` — con
+  `1` Siesa exige cuotas porcentuales (suma 100) en vez del valor de cruce
+  directo que mandamos en `F353_VLR_CRUCE`.
+- `f470_ind_solo_valor` debe ser `0` para motivo `502-01` — confirmado
+  contra `t146_mc_motivos` (fila real: concepto 502, motivo 01 =
+  "Devolución de venta Nacionales", `ind_naturaleza=1`, `ind_obsequio=0`,
+  `ind_solo_valor=0`).
+- `f470_id_un_movto` (Unidad de Negocio en Movimientos) debe ser **`99`**
+  (ADMON) — el valor global `SIESA_UNIDAD_NEGOCIO` (`040`) **no existe** en
+  el maestro real `t281_co_unidades_negocio` para esta compañía (códigos
+  válidos: `99` y `001`-`014`, categorías de producto). 251126 nunca choca
+  con esto porque su Movimientos usa otra versión/subtipo que no valida
+  este campo tan estricto.
+- `f753_id_tipo_entidad` y `F461_IND_GENERA_KIT` sufrieron el mismo bug de
+  "valor de ejemplo no guardado" — quedaron resueltos poniéndolos Fijo
+  explícitamente (`G504_1` y `0` respectivamente).
+
+### Pendiente de implementar en código
+
+- Registrar formalmente una consulta dinámica en Connekta para el paso 2
+  (hoy se usó la consulta cruda de exploración `papeleriamedellin_pame_
+  descubrir_tablas` — no apta para producción tal cual).
+- Nuevo método en `connekta_gateway.py` (ej. `trigger_motivo_dian_nc()`)
+  para el POST 2, con conector `251546` (env vars nuevas
+  `CONNEKTA_CONECTOR_NC_MOTIVO_DIAN` / `..._NOMBRE`).
+- Enganchar en `siesa_job_service.py` como paso encadenado después de que
+  `NOTA_CREDITO_DEVOLUCION_CLIENTE` confirme éxito — mismo patrón de
+  secuencialidad que ya existe para NC→RC→DC.
+- Decidir cómo mapear la devolución del WMS al concepto DIAN correcto (hoy
+  todo usa el genérico `1`=Devolución parcial — revisar si alguna vez
+  aplica `2`/`3`/`4` según el caso de negocio).
+- Probar con una devolución parcial genuina end-to-end (pendiente también
+  de 251126) antes de confiar en esto para producción.
 
 ---
 
