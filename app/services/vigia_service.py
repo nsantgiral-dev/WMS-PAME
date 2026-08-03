@@ -632,7 +632,7 @@ class VigiaService:
 
         # Stock Siesa: última sincronización
         ultimo_stock = db.session.query(
-            func.max(StockSiesa.fecha_sync)
+            func.max(StockSiesa.updated_at)
         ).scalar()
         if ultimo_stock:
             delta_h = (ahora - ultimo_stock).total_seconds() / 3600
