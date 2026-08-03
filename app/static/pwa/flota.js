@@ -37,7 +37,7 @@ async function cargarFlota() {
   const cont = document.getElementById('flota-contenido');
   if (!cont) return;
   try {
-    const d = await get('/api/rutas/vehiculos?solo_activos=true');
+    const d = await get('/api/rutas/vehiculos?activos=true');
     const vehiculos = d.vehiculos || [];
     if (!vehiculos.length) {
       cont.innerHTML = `<div class="tabla-card"><p>No hay vehículos activos.
@@ -194,7 +194,7 @@ async function flotaCambiarTipoCustodio() {
   const tipo = document.getElementById('flota-custodio-tipo').value;
   const det = document.getElementById('flota-custodio-detalle');
   if (tipo === 'conductor') {
-    const d = await get('/api/rutas/conductores?solo_activos=true');
+    const d = await get('/api/rutas/conductores?activos=true');
     det.innerHTML = '<select id="flota-conductor">' +
       (d.conductores || []).map(c =>
         `<option value="${c.id}">${c.nombre} · ${c.cedula}</option>`).join('') +

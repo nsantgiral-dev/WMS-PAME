@@ -9,12 +9,18 @@ from app.services import layout_service
 almacenes_bp = Blueprint('almacenes', __name__)
 
 
-from app.routes._auth_helpers import _solo_admin, _es_personal_almacen, _es_admin_o_jefe
+from app.routes._auth_helpers import (_solo_admin, _es_personal_almacen,
+                                       _es_admin_o_jefe, _es_control_flota)
 
 @almacenes_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_almacenes():
-    if not _es_personal_almacen():
+    # `_es_control_flota` se suma aparte en vez de ensanchar
+    # `_es_personal_almacen`: ese helper autoriza operaciones de almacén, y
+    # meter ahí a control_flota le daría permisos que el procedimiento le niega.
+    # La pantalla de flota necesita la lista de sedes para registrar una
+    # custodia, y nada más.
+    if not (_es_personal_almacen() or _es_control_flota()):
         return jsonify({'error': 'Sin permiso para listar almacenes'}), 403
     almacenes = Almacen.query.filter_by(activo=True).all()
     return jsonify([a.to_dict() for a in almacenes]), 200

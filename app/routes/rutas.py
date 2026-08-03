@@ -35,7 +35,7 @@ def _usuario():
 @jwt_required()
 def listar_conductores():
     u = _usuario()
-    if not u or u.rol not in Roles.GESTION + (Roles.CONDUCTOR,):
+    if not u or u.rol not in Roles.LECTURA_FLOTA:
         return jsonify({'error': 'Sin permiso para listar conductores'}), 403
     solo_activos = request.args.get('activos', 'true').lower() == 'true'
     puede_ver = u.rol in Roles.ALMACEN
@@ -111,7 +111,7 @@ def desactivar_conductor(id):
 @jwt_required()
 def listar_vehiculos():
     u = _usuario()
-    if not u or u.rol not in Roles.GESTION + (Roles.CONDUCTOR,):
+    if not u or u.rol not in Roles.LECTURA_FLOTA:
         return jsonify({'error': 'Sin permiso para listar vehículos'}), 403
     solo_activos = request.args.get('activos', 'true').lower() == 'true'
     return jsonify({'vehiculos': RutaService.listar_vehiculos(solo_activos)}), 200

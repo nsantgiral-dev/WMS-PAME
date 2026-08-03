@@ -191,3 +191,73 @@ class TestRolControlFlota:
             'El rol no está en el selector de usuarios: existe en el backend y '
             'no hay forma de asignárselo a Yesid.'
         )
+
+
+class TestLaPantallaDeFlotaFuncionaParaControlFlota:
+    """TRINQUETE 12 — cada endpoint que la pantalla llama tiene que responderle.
+
+    Yesid entró, vio su pestaña, y recibió **"Sin permiso para listar
+    vehículos"**. El rol estaba en `Roles`, en `_ROLES_VALIDOS` y en el
+    selector; los tres guards de `/api/rutas/vehiculos`,
+    `/api/rutas/conductores` y `/api/almacenes` seguían con su lista propia.
+
+    Es la tercera vez que aparece la misma forma: la capacidad de un lado y el
+    permiso del otro. Este test la ataja completa — extrae las URLs del propio
+    `flota.js`, así que un endpoint nuevo queda cubierto sin que nadie se
+    acuerde de agregarlo acá.
+    """
+
+    def _token_yesid(self, app, db):
+        from flask_jwt_extended import create_access_token
+
+        from app.models.usuario import Usuario
+
+        u = Usuario(email='yesid@x.com', nombre='YESID',
+                    rol='control_flota', activo=True)
+        u.set_password('x')
+        db.session.add(u)
+        db.session.commit()
+        with app.app_context():
+            return create_access_token(identity=str(u.id))
+
+    def _urls_que_llama_la_pantalla(self):
+        import os
+        import re
+
+        pwa = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__)))), 'app', 'static', 'pwa')
+        with open(os.path.join(pwa, 'flota.js'), encoding='utf-8') as f:
+            js = f.read()
+        # Solo las que no llevan interpolación: las de placa se prueban aparte.
+        return sorted({u for u in re.findall(r"'(/api/[a-z/?=&_-]+)'", js)})
+
+    def test_ninguna_devuelve_403(self, app, db, client):
+        token = self._token_yesid(app, db)
+        negados = []
+        for url in self._urls_que_llama_la_pantalla():
+            r = client.get(url, headers={'Authorization': f'Bearer {token}'})
+            if r.status_code == 403:
+                negados.append(f'{url} → {r.get_json()}')
+        assert not negados, (
+            '\nLa pantalla de flota llama endpoints que le niegan el acceso:\n'
+            + '\n'.join(f'  · {n}' for n in negados)
+            + '\n\nEl rol existe pero la pantalla no funciona: es la capacidad '
+              'de un lado y el permiso del otro.'
+        )
+
+    def test_al_menos_encontro_las_tres_que_sabemos(self):
+        """Si el regex deja de encontrarlas, el test de arriba pasa vacío.
+
+        Un guard que no encuentra nada da verde igual que uno que no encuentra
+        problemas — y son cosas distintas.
+        """
+        urls = self._urls_que_llama_la_pantalla()
+        assert len(urls) >= 3, f'solo se extrajeron {len(urls)} URLs de flota.js'
+
+    def test_y_sigue_sin_poder_escribir(self, app, db, client):
+        """Leer los maestros no es administrarlos: el alta sigue siendo de admin."""
+        token = self._token_yesid(app, db)
+        r = client.post('/api/rutas/vehiculos',
+                        json={'placa': 'XXX000', 'tipo': 'Camión'},
+                        headers={'Authorization': f'Bearer {token}'})
+        assert r.status_code == 403

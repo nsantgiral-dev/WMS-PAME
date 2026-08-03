@@ -34,6 +34,15 @@ class Roles:
     COMPRAS_ROLES  = (ADMIN, JEFE_ALMACEN, GERENTE, COMPRAS)
     LEAD           = (ADMIN, SUPERVISOR)
     TRASLADO_OPS   = (PICKER_TRASLADO, PACKER_TRASLADO)
+    # Quién puede LEER los maestros que la pantalla de flota necesita para
+    # funcionar: vehículos, conductores y sedes. Solo lectura — no habilita
+    # crear, desactivar ni aprobar nada.
+    #
+    # Existe como grupo con nombre y no repetido en cada endpoint porque ese
+    # fue el bug: `control_flota` se agregó a `Roles` y a la pantalla, y los
+    # tres guards siguieron con su lista propia. Yesid entró, vio su pestaña y
+    # recibió "Sin permiso para listar vehículos".
+    LECTURA_FLOTA  = GESTION + (CONDUCTOR, CONTROL_FLOTA)
 
 
 def _puede_empacar(usuario) -> bool:
