@@ -54,6 +54,14 @@ CUSTODIO_ESTADO  = ('resuelto', 'pendiente_sede')
 CLASE_FOTO       = ('evidencia_estado', 'foto_dato')
 ENTIDAD_FOTO     = ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo')
 ESTADO_FOTO      = ('ok', 'pendiente_evidencia')
+CRITICIDAD       = ('bloqueante', 'mayor', 'menor')
+PERIODICIDAD     = ('diaria', 'semanal')
+APLICA_A         = ('furgon_liviano', 'camion', 'motocarro')
+
+# Regla 6: el plazo se calcula al nacer, no se elige a mano. Vive acá, en un
+# solo lugar, y el hallazgo lo hereda — si un día alguien puede escribir "este
+# bloqueante para el viernes", la severidad dejó de significar algo.
+DIAS_DE_PLAZO = {'bloqueante': 0, 'mayor': 7, 'menor': 30}
 
 LADO_LARGO_MINIMO_FOTO_DATO = 1600
 
@@ -505,5 +513,84 @@ _colgar(Custodia.__table__, _SQLITE_DDL_CUSTODIA, _PG_DDL_CUSTODIA)
 
 __all__ = [
     'FichaTecnica', 'DocumentoVehiculo', 'LecturaOdometro', 'Custodia', 'Foto',
-    'LADO_LARGO_MINIMO_FOTO_DATO',
+    'PlantillaInspeccion', 'ItemInspeccion',
+    'LADO_LARGO_MINIMO_FOTO_DATO', 'DIAS_DE_PLAZO',
 ]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Plantillas de inspección — el catálogo, versionado
+# ═══════════════════════════════════════════════════════════════════════════
+
+class PlantillaInspeccion(db.Model):
+    """Un catálogo de ítems, congelado en una versión.
+
+    **Las plantillas no se editan: se versionan.** Una inspección hecha bajo
+    `camion_v1` tiene que seguir siendo legible dentro de dos años, y si los
+    ítems cambiaran bajo sus pies, el registro diría una cosa y significaría
+    otra. Cambiar el catálogo es crear `camion_v2` y desactivar la anterior.
+
+    Por eso el código lleva la versión adentro (`camion_v1`) y no hay UPDATE
+    previsto sobre los ítems.
+    """
+
+    __tablename__ = 'flota_plantilla_inspeccion'
+
+    id       = db.Column(db.Integer, primary_key=True)
+    codigo   = db.Column(db.String(40), nullable=False, unique=True)
+    nombre   = db.Column(db.String(100), nullable=False)
+    version  = db.Column(db.Integer, nullable=False)
+    aplica_a = db.Column(db.String(20), nullable=False)
+    activa   = db.Column(db.Boolean, nullable=False, server_default='1')
+    fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    items = db.relationship('ItemInspeccion', backref='plantilla', lazy=True,
+                            order_by='ItemInspeccion.orden')
+
+    __table_args__ = (
+        _en('aplica_a', APLICA_A),
+        db.CheckConstraint('version > 0', name='ck_flota_plantilla_version'),
+        db.UniqueConstraint('aplica_a', 'version', name='uq_flota_plantilla_version'),
+    )
+
+    def bloqueantes(self):
+        return [i for i in self.items if i.criticidad == 'bloqueante']
+
+
+class ItemInspeccion(db.Model):
+    """Un ítem del catálogo, con su gesto y su criticidad.
+
+    `gesto` es NOT NULL y no puede estar vacío. **Sin el gesto la criticidad es
+    decorativa**: "revisar frenos" no dice qué hacer y termina en un óptimo
+    marcado sin mirar; "pisar a fondo y sostener 5 segundos, ¿el pedal sigue
+    hundiéndose?" sí. Va en pantalla, no en un manual aparte.
+
+    `periodicidad` existe porque no todo lo que se inspecciona se inspecciona a
+    diario: el drenaje del separador de agua es semanal. Sin el campo, o se
+    pregunta todos los días —y se vuelve ruido que entrena a marcar sin leer— o
+    no se pregunta nunca.
+    """
+
+    __tablename__ = 'flota_item_inspeccion'
+
+    id           = db.Column(db.Integer, primary_key=True)
+    plantilla_id = db.Column(db.Integer, db.ForeignKey('flota_plantilla_inspeccion.id'),
+                             nullable=False, index=True)
+    orden        = db.Column(db.Integer, nullable=False)
+    nombre       = db.Column(db.String(120), nullable=False)
+    gesto        = db.Column(db.Text, nullable=False)
+    criticidad   = db.Column(db.String(20), nullable=False)
+    periodicidad = db.Column(db.String(20), nullable=False, server_default='diaria')
+
+    __table_args__ = (
+        _en('criticidad', CRITICIDAD),
+        _en('periodicidad', PERIODICIDAD),
+        db.CheckConstraint('length(trim(gesto)) > 0', name='ck_flota_item_gesto_no_vacio'),
+        db.CheckConstraint('length(trim(nombre)) > 0', name='ck_flota_item_nombre_no_vacio'),
+        db.UniqueConstraint('plantilla_id', 'orden', name='uq_flota_item_orden'),
+    )
+
+    @property
+    def dias_de_plazo(self) -> int:
+        """Regla 6: se calcula, no se elige."""
+        return DIAS_DE_PLAZO[self.criticidad]

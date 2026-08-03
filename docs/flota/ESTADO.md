@@ -332,11 +332,14 @@ El trinquete 9 además cruza el conteo de CHECK de los modelos contra la
 expectativa de la suite de PostgreSQL: agregar un constraint sin correrlo contra
 el motor real pone el build en rojo.
 
-> **SALVEDAD, y es la misma clase de deuda: esta suite todavía NO SE HA
-> EJECUTADO contra ningún PostgreSQL.** Está escrita y cableada, no verificada.
-> Hace falta una base vacía y desechable (`brew install postgresql@17` en local, o
-> un servicio de pruebas). Hasta que corra en verde, lo que hay es la intención
-> de verificar contra el motor real, no la verificación.
+**EJECUTADA EN VERDE el 2026-08-03** contra PostgreSQL 17.10 local:
+**13 passed.** Ya no es la intención de verificar contra el motor real — es la
+verificación.
+
+El trinquete 9 se ejerció solo al día siguiente: al agregar las dos tablas de
+plantillas el conteo pasó de 31 a 37 CHECK y el build se puso rojo, obligando a
+correr la suite contra PostgreSQL antes de dar los constraints nuevos por
+buenos. Funcionó sin que nadie se acordara de hacerlo.
 
 Para correrla:
 
@@ -482,6 +485,108 @@ destinatarios internos que usan WhatsApp todo el día no aporta.
 **Orden:** esto es tanda 2 y no puede adelantarse. Primero tiene que existir el
 hallazgo con plazo — que es lo que se notifica. Notificar antes de que haya qué
 notificar es superficie sin estrenar, que es la lección más cara del proyecto.
+
+---
+
+## Catálogo de ítems de inspección — sembrado el 2026-08-02
+
+Fuente de las plantillas `furgon_liviano_v1` y `camion_v1`. **Vive acá y en la
+base, no en una conversación** — es lo que faltaba cuando se afirmó que estaba
+escrito y no lo estaba.
+
+### Criterio de bloqueante — las cuatro condiciones, todas
+
+1. Puede causar accidente, inmovilización por autoridad o varada **hoy**
+2. El conductor lo verifica **sin herramienta**
+3. En **menos de 20 segundos**
+4. Con respuesta **binaria y objetiva**, no un juicio
+
+Si un ítem falla cualquiera de las cuatro, no es bloqueante. La cuarta es la que
+más se olvida: "¿está bien la suspensión?" no es binaria y no puede bloquear.
+
+### Bloqueantes — orden fijo, mismo día
+
+| # | Ítem | Gesto | Aplica |
+|---|---|---|---|
+| 1 | Freno de servicio | Motor encendido, pisar a fondo y sostener 5 segundos. ¿El pedal sigue hundiéndose o llega al piso? | ambos |
+| 2 | Freno de estacionamiento | En pendiente, aplicar y soltar el pedal 3 segundos. ¿Se mueve el vehículo? | ambos |
+| 3 | Llantas: flanco, labrado y tuercas | Recorrer todas las posiciones. ¿Abultamiento o herida en el costado? ¿Labrado en el testigo? ¿Tuerca floja o faltante? | ambos |
+| 4 | Nivel de refrigerante y aceite de motor | Motor frío. ¿Alguno por debajo del mínimo? | ambos |
+| 5 | Fuga activa de frenos, combustible o refrigerante | Mirar el piso bajo el vehículo. ¿Charco o goteo activo? (Sudado de aceite es mayor, no bloqueante.) | ambos |
+| 6 | Luces traseras: stop, direccionales y cocuyos | Con ayuda o contra una pared. ¿Alguna no enciende? | ambos |
+| 7 | Limpiaparabrisas y lavador | Activarlos. ¿Barren limpio o rayan? ¿Sale agua? | ambos |
+| 8 | Puertas del furgón aseguran | Cerrar y jalar. ¿Quedan trabadas? | **solo camión** |
+| 9 | Documentos y equipo reglamentario | SOAT, tecnomecánica y licencia vigentes. Extintor con carga y sin vencer, dos señales, dos tacos, repuesto con aire, gato y cruceta. | ambos |
+
+**Furgón liviano: 8 bloqueantes** (todos menos el 8). **Camión: 9.**
+
+### Mayores — 7 días
+
+Espejos · batería y bornes · escape y soportes *(bloqueante si entra gas a la
+cabina)* · sudado de aceite · luces de reversa · **alarma de retroceso (solo
+camión)** · cinturón de seguridad · holguras de suspensión · botiquín · chaleco
+reflectivo · linterna · caja de herramienta · **drenaje del separador de agua
+(solo camión diésel, periodicidad SEMANAL)**.
+
+### Menores — 30 días
+
+Golpes y rayones · tapones de ruedas · radio y antena · aire acondicionado ·
+limpieza · accesorios varios.
+
+---
+
+### Lo que NO va al chequeo diario, y por qué
+
+Esta lista importa tanto como la otra, y está acá **para que nadie la agregue en
+tres meses con buena intención**:
+
+> Espesor de pastillas y bandas · estado de amortiguadores · juego de terminales
+> de dirección · rodamientos · compresión del motor · estado del turbo ·
+> alineación · balanceo · correa de repartición.
+
+Nada de eso lo puede evaluar un conductor en patio. **Cada ítem incontestable en
+la pantalla diaria entrena el reflejo de marcar óptimo sin mirar** — es la regla
+11 en su forma más concreta. Todo eso va al plan preventivo por kilómetro,
+ejecutado en taller.
+
+### Dos decisiones de presentación que son de diseño, no de estética
+
+**Los bloqueantes van primero y en orden fijo.** Se citan por número y el orden
+es memoria muscular útil: el freno siempre es el 1.
+
+**Los no bloqueantes se muestran en orden aleatorio cada día.** Con orden fijo,
+a la tercera semana el pulgar responde sin leer. La aleatoriedad va sembrada por
+fecha, así que es reproducible: dos conductores el mismo día ven el mismo orden
+y una inspección se puede auditar.
+
+**Cada ítem lleva su gesto en pantalla**, no en un manual aparte. Sin el gesto,
+la criticidad es decorativa: "revisar frenos" no dice qué hacer, "pisar a fondo
+y sostener 5 segundos" sí. Por eso `gesto` es NOT NULL con CHECK de no-vacío.
+
+---
+
+### Estado del catálogo — 2026-08-03
+
+Sembrado en código (`flota/adaptadores/catalogo.py`) y en dos tablas
+versionadas. **Falta correr el sembrado en producción** tras aplicar la
+migración `f10ta2plantillas`:
+
+```bash
+venv/bin/python scripts/sembrar_plantillas_flota.py
+```
+
+Es idempotente y no pisa lo que exista.
+
+| Plantilla | Bloqueantes | Total ítems |
+|---|---|---|
+| `furgon_liviano_v1` | 8 | 25 |
+| `camion_v1` | 9 | 28 |
+
+Un test comprobó lo que faltaba en la redacción: **el gesto de "Documentos y
+equipo reglamentario" era una enumeración, no una pregunta contestable** — falla
+la cuarta condición del criterio. Se le agregó "¿Falta alguno, o hay alguno
+vencido o descargado?". Enumerar no es preguntar, y una lista sin pregunta se
+responde de memoria a la tercera semana.
 
 ---
 

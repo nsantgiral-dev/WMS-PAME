@@ -487,7 +487,8 @@ class TestTrinqueteMotorDeProduccion:
         reales = sum(
             1
             for M in (m.Foto, m.FichaTecnica, m.DocumentoVehiculo,
-                      m.LecturaOdometro, m.Custodia)
+                      m.LecturaOdometro, m.Custodia,
+                      m.PlantillaInspeccion, m.ItemInspeccion)
             for c in M.__table__.constraints
             if c.__class__.__name__ == 'CheckConstraint'
         )

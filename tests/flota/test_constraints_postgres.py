@@ -89,39 +89,50 @@ def esquema(motor_pg):
     from app import create_app
     from app.extensions import db
 
+    os.environ['DATABASE_URL'] = str(motor_pg.url)
     app = create_app()
-    app.config['SQLALCHEMY_DATABASE_URI'] = str(motor_pg.url)
     with app.app_context():
         db.metadata.create_all(motor_pg)
         yield motor_pg
+        db.session.remove()
         db.metadata.drop_all(motor_pg)
 
 
 @pytest.fixture
 def semilla(esquema):
-    """Un vehículo, un conductor, un usuario y un almacén, en PostgreSQL."""
+    """Un vehículo, un conductor, un usuario y un almacén, en PostgreSQL.
+
+    Con el ORM y no con `INSERT` crudo: varias columnas de `usuarios` son
+    NOT NULL con default del lado de Python, no de la base. Un INSERT a mano
+    los omite y la fila no entra — el crudo se reserva para lo que se está
+    probando, que son los constraints de flota.
+    """
+    from app.extensions import db
+    from app.models.almacen import Almacen
+    from app.models.conductor import Conductor
+    from app.models.usuario import Usuario
+    from app.models.vehiculo import Vehiculo
+
     with esquema.begin() as c:
-        c.execute(text("DELETE FROM flota_custodia"))
-        c.execute(text("ALTER TABLE flota_lectura_odometro DISABLE TRIGGER USER"))
-        c.execute(text("DELETE FROM flota_lectura_odometro"))
-        c.execute(text("ALTER TABLE flota_lectura_odometro ENABLE TRIGGER USER"))
-        veh = c.execute(text("INSERT INTO vehiculos (placa, tipo, activo, fecha_creacion) "
-                             "VALUES ('PGX001','Camión',TRUE,NOW()) "
-                             "ON CONFLICT (placa) DO UPDATE SET tipo=EXCLUDED.tipo "
-                             "RETURNING id")).scalar()
-        alm = c.execute(text("INSERT INTO almacenes (codigo, nombre, activo, fecha_creacion) "
-                             "VALUES ('PG-SEDE','Sede PG',TRUE,NOW()) "
-                             "ON CONFLICT (codigo) DO UPDATE SET nombre=EXCLUDED.nombre "
-                             "RETURNING id")).scalar()
-        usr = c.execute(text("INSERT INTO usuarios (email, nombre, rol, activo, password_hash) "
-                             "VALUES ('pg@test.com','PG','admin',TRUE,'x') "
-                             "ON CONFLICT (email) DO UPDATE SET nombre=EXCLUDED.nombre "
-                             "RETURNING id")).scalar()
-        con = c.execute(text("INSERT INTO conductores (nombre, cedula, activo, fecha_creacion) "
-                             "VALUES ('Cond PG','PG-1',TRUE,NOW()) "
-                             "ON CONFLICT (cedula) DO UPDATE SET nombre=EXCLUDED.nombre "
-                             "RETURNING id")).scalar()
-    return {'veh': veh, 'alm': alm, 'usr': usr, 'con': con}
+        c.execute(text('DELETE FROM flota_custodia'))
+        c.execute(text('ALTER TABLE flota_lectura_odometro DISABLE TRIGGER USER'))
+        c.execute(text('DELETE FROM flota_lectura_odometro'))
+        c.execute(text('ALTER TABLE flota_lectura_odometro ENABLE TRIGGER USER'))
+
+    veh = Vehiculo.query.filter_by(placa='PGX001').first()
+    if veh is None:
+        veh = Vehiculo(placa='PGX001', tipo='Camión', activo=True)
+        alm = Almacen(codigo='PG-SEDE', nombre='Sede PG')
+        usr = Usuario(email='pg@test.com', nombre='PG', rol='admin', activo=True)
+        usr.set_password('x')
+        con = Conductor(nombre='Cond PG', cedula='PG-1', activo=True)
+        db.session.add_all([veh, alm, usr, con])
+        db.session.commit()
+    else:
+        alm = Almacen.query.filter_by(codigo='PG-SEDE').one()
+        usr = Usuario.query.filter_by(email='pg@test.com').one()
+        con = Conductor.query.filter_by(cedula='PG-1').one()
+    return {'veh': veh.id, 'alm': alm.id, 'usr': usr.id, 'con': con.id}
 
 
 def _ts(minutos=0):
@@ -143,17 +154,28 @@ class TestElEsquemaSeCreaEnPostgres:
         """
         tablas = set(inspect(esquema).get_table_names())
         faltan = {'flota_ficha_tecnica', 'flota_documento_vehiculo',
-                  'flota_lectura_odometro', 'flota_custodia', 'flota_foto'} - tablas
+                  'flota_lectura_odometro', 'flota_custodia', 'flota_foto',
+                  'flota_plantilla_inspeccion', 'flota_item_inspeccion'} - tablas
         assert not faltan, f'PostgreSQL no pudo crear: {faltan}'
 
-    def test_los_31_check_quedaron_en_la_base(self, esquema):
+    def test_el_catalogo_se_siembra_contra_postgres(self, esquema, semilla):
+        """Sembrar es escribir: los CHECK de gesto y nombre no vacíos se ejercen acá."""
+        from app.extensions import db
+        from flota.adaptadores.catalogo import sembrar
+        from flota.adaptadores.modelos import PlantillaInspeccion
+
+        sembrar(db)
+        codigos = {p.codigo for p in PlantillaInspeccion.query.all()}
+        assert {'furgon_liviano_v1', 'camion_v1'} <= codigos
+
+    def test_los_37_check_quedaron_en_la_base(self, esquema):
         """Un CHECK que PostgreSQL no entiende no llega a existir."""
         with esquema.connect() as c:
             n = c.execute(text(
                 "SELECT count(*) FROM information_schema.table_constraints "
                 "WHERE constraint_type='CHECK' AND constraint_name LIKE 'ck_flota%'"
             )).scalar()
-        assert n == 31, f'Se esperaban 31 CHECK de flota en PostgreSQL, hay {n}'
+        assert n == 37, f'Se esperaban 37 CHECK de flota en PostgreSQL, hay {n}'
 
 
 # ══════════════════════════════════════════════════════════════════════════
