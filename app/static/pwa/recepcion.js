@@ -10,6 +10,14 @@
 // Página actual de la sección "RECEPCIONADAS" (recepciones ya CONFIRMADA, para seguimiento)
 let _RECEPCION_CONFIRM_PAGE = 1;
 
+// Sub-pestañas por estado en la pantalla de OCs (mismo patrón que PEDIDOS_TAB_*
+// en app.js: se cachea el HTML ya renderizado de cada grupo, cambiar de pestaña
+// no requiere refetch ni re-render, solo pintar el string cacheado).
+const REC_OC_TAB_LABELS = ['PENDIENTES EN SIESA', 'EN PROCESO', 'RECEPCIONADAS'];
+let REC_OC_TAB_ACTIVO = 0;
+let REC_OC_GRUPOS_HTML = ['', '', ''];
+let REC_OC_GRUPOS_COUNT = [0, 0, 0];
+
 /**
  * Carga y renderiza la lista de recepciones activas (OCs de Siesa + DB).
  * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
@@ -48,34 +56,49 @@ function _recepcionConfirmadasPagina(page) {
   cargarRecepciones(true);
 }
 
+/** Pinta la barra de sub-pestañas y el grupo activo — sin refetch, usa el HTML ya cacheado. */
+function renderRecOcTabsYLista() {
+  const tabsEl = document.getElementById('rec-oc-subtabs');
+  const el = document.getElementById('contenido-recepcion');
+  if (!tabsEl || !el) return;
+  tabsEl.innerHTML = REC_OC_TAB_LABELS.map((label, i) => {
+    const count = REC_OC_GRUPOS_COUNT[i] || 0;
+    return `<div class="subtab${i === REC_OC_TAB_ACTIVO ? ' active' : ''}" onclick="recOcCambiarTab(${i})">${label}${count ? `<span class="subtab-badge">${count}</span>` : ''}</div>`;
+  }).join('');
+  el.innerHTML = REC_OC_GRUPOS_HTML[REC_OC_TAB_ACTIVO] || '<div style="text-align:center;padding:40px;color:#555;">Sin datos en esta pestaña</div>';
+}
+
+/** @param {number} idx - Índice de la sub-pestaña a activar (0=Pendientes en Siesa, 1=En proceso, 2=Recepcionadas) */
+function recOcCambiarTab(idx) {
+  REC_OC_TAB_ACTIVO = idx;
+  renderRecOcTabsYLista();
+}
+
 
 // ─────────────────────────────────────────────────────────────
 // RECEPCIONISTA — Lista de OCs y recepciones en proceso
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Renderiza el HTML de la lista de OCs pendientes y recepciones en proceso.
- * @param {Object} siesa - Respuesta de la API de OCs (contiene .ordenes y .simulado)
+ * Arma el HTML de cada sub-pestaña (Pendientes en Siesa / En proceso /
+ * Recepcionadas), lo cachea en REC_OC_GRUPOS_HTML/COUNT y pinta la activa.
+ * @param {Object} siesa - Respuesta de la API de OCs (contiene .ordenes, .simulado, .error_siesa)
  * @param {Array<Object>} dbRecs - Recepciones en proceso desde la DB local
  * @param {Object} [confirmadas] - Respuesta paginada de /api/recepcion/?estado=CONFIRMADA
  */
 function renderListaRecepciones(siesa, dbRecs, confirmadas) {
-  const el = document.getElementById('contenido-recepcion');
-  if (!el) return;
-  let html = '';
-
-  // Sección 1: OCs de Siesa
+  // Grupo 0: OCs de Siesa
+  let htmlSiesa = '';
   if (siesa.simulado) {
-    html += `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#facc15;border:1px solid #333300;">
+    htmlSiesa = `<div style="background:#1a1a00;border-radius:10px;padding:10px 12px;font-size:12px;color:#facc15;border:1px solid #333300;">
       ⚡ Connekta en simulación — conecta credenciales para ver OCs reales de Siesa
     </div>`;
   } else if (siesa.error_siesa) {
-    html += `<div style="background:#1a0d0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#f59e0b;border:1px solid #332222;">
+    htmlSiesa = `<div style="background:#1a0d0d;border-radius:10px;padding:10px 12px;font-size:12px;color:#f59e0b;border:1px solid #332222;">
       ⚠ Siesa no respondió — no se pudo consultar OCs pendientes. Reintenta en un momento.
     </div>`;
   } else if (SIESA_OCS.length) {
-    html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin-bottom:8px;">OCs PENDIENTES EN SIESA</div>`;
-    html += SIESA_OCS.map((oc, i) => {
+    htmlSiesa = SIESA_OCS.map((oc, i) => {
       const sinProd = oc.items.filter(it => !it.producto_id).length;
       const totalUds = oc.items.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
       const wmsEstado = oc.recepcion_wms_estado;
@@ -115,13 +138,15 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
         </div>`;
     }).join('');
   } else {
-    html += `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin OCs pendientes en Siesa</div>`;
+    htmlSiesa = `<div style="background:#0d1a0d;border-radius:10px;padding:10px 12px;font-size:12px;color:#4ade80;border:1px solid #1a2a1a;">✓ Sin OCs pendientes en Siesa</div>`;
   }
+  REC_OC_GRUPOS_HTML[0] = htmlSiesa;
+  REC_OC_GRUPOS_COUNT[0] = SIESA_OCS.length;
 
-  // Sección 2: Recepciones en proceso (desde DB)
+  // Grupo 1: Recepciones en proceso (desde DB)
+  let htmlProceso = '';
   if (dbRecs.length) {
-    html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin:10px 0 8px;">EN PROCESO</div>`;
-    html += dbRecs.map(r => `
+    htmlProceso = dbRecs.map(r => `
       <div class="rec-card">
         <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
         <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'}</div>
@@ -131,16 +156,20 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
           Continuar escaneo
         </button>
       </div>`).join('');
+  } else {
+    htmlProceso = `<div style="text-align:center;padding:40px;color:#555;">Sin recepciones en proceso</div>`;
   }
+  REC_OC_GRUPOS_HTML[1] = htmlProceso;
+  REC_OC_GRUPOS_COUNT[1] = dbRecs.length;
 
-  // Sección 3: Recepciones ya confirmadas — para hacerles seguimiento
+  // Grupo 2: Recepciones ya confirmadas — para hacerles seguimiento
   // (ej. verificar si Siesa ya procesó la entrada contable o sigue pendiente)
   const confRecs = (confirmadas && confirmadas.recepciones) || [];
   const confTotal = (confirmadas && confirmadas.total) || 0;
   const confTotalPag = Math.max(1, Math.ceil(confTotal / 50));
+  let htmlConfirmadas = '';
   if (confRecs.length) {
-    html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin:10px 0 8px;">RECEPCIONADAS <span style="color:#555;font-weight:400;">(${confTotal})</span></div>`;
-    html += confRecs.map(r => {
+    htmlConfirmadas = confRecs.map(r => {
       const fecha = r.fecha_confirmacion ? new Date(r.fecha_confirmacion).toLocaleDateString('es-CO') : '—';
       const siesaBadge = r.siesa_triggered
         ? `<span style="color:#4ade80;font-size:11px;font-weight:700;">✓ Sincronizada con Siesa</span>`
@@ -163,7 +192,7 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
     }).join('');
 
     if (confTotalPag > 1) {
-      html += `
+      htmlConfirmadas += `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">
           <button onclick="_recepcionConfirmadasPagina(${_RECEPCION_CONFIRM_PAGE - 1})" ${_RECEPCION_CONFIRM_PAGE <= 1 ? 'disabled' : ''}
             style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_RECEPCION_CONFIRM_PAGE <= 1 ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_RECEPCION_CONFIRM_PAGE <= 1 ? 'default' : 'pointer'};">
@@ -176,17 +205,13 @@ function renderListaRecepciones(siesa, dbRecs, confirmadas) {
           </button>
         </div>`;
     }
+  } else {
+    htmlConfirmadas = `<div style="text-align:center;padding:40px;color:#555;">Sin recepciones confirmadas aún</div>`;
   }
+  REC_OC_GRUPOS_HTML[2] = htmlConfirmadas;
+  REC_OC_GRUPOS_COUNT[2] = confTotal;
 
-  if (!html) {
-    html = `<div style="text-align:center;padding:50px 20px;">
-      <div style="font-size:50px;">✓</div>
-      <div style="font-size:22px;font-weight:700;margin-top:12px;">Sin recepciones</div>
-      <button onclick="_refreshBtn(event, cargarRecepciones)" style="margin-top:20px;padding:12px 24px;font-size:15px;background:#fff;color:#000;border:none;border-radius:10px;cursor:pointer;">Actualizar</button>
-    </div>`;
-  }
-
-  el.innerHTML = html;
+  renderRecOcTabsYLista();
 }
 
 /**
