@@ -603,6 +603,61 @@ notificar es superficie sin estrenar, que es la lección más cara del proyecto.
 
 ---
 
+## Las fotos no se guardaban — 2026-08-03
+
+**Durante tres días el módulo pidió fotos y las tiró.** El frontend mandaba:
+
+```js
+storage_ref: 'inline://pendiente-subida',
+hash_sha256: '0'.repeat(64),
+```
+
+El navegador comprimía la imagen, mandaba el tamaño y las dimensiones, y la
+imagen se descartaba. La fila decía que había una foto del tablero, con una
+referencia que no apuntaba a nada y un hash de ceros.
+
+**Y el formulario exigía la foto del tablero para dejar guardar.** Obligaba a
+tomar una evidencia que después tiraba.
+
+Es exactamente lo que este módulo existe para impedir. La regla 7 dice *"la base
+guarda referencia, hash, bytes y dimensiones — nunca el binario"*: se implementó
+la mitad de "nunca el binario" y **nunca la referencia**. `AlmacenDeFotos` estaba
+declarado como `Protocol` en `puertos.py` sin una sola implementación.
+
+> **Lo que lo hacía indetectable:** los 1088 tests pasaban. Ninguno guardaba una
+> foto y la volvía a leer, porque no había con qué. El guard de huérfanos no lo
+> vio —el `Protocol` no es un endpoint— y el de fotos-fuera-de-la-base tampoco:
+> **estaba en verde justamente porque no se guardaba nada.**
+
+### Arreglado, y por qué así
+
+`flota/adaptadores/almacen_fotos.py`, detrás del `Protocol`. Volumen de Railway,
+no S3: es lo que existe el lunes sin cuenta nueva ni credenciales. El día que
+haga falta R2 se cambia esa clase y el dominio no se entera — para eso estaba
+declarado el puerto.
+
+**Direccionado por contenido:** el archivo se llama como su propio SHA-256. La
+misma foto dos veces ocupa un archivo —ocho ángulos por turno, cinco vehículos,
+todos los días— y **el hash no se puede falsear**: si el archivo cambia, deja de
+coincidir con su nombre.
+
+**El cliente ya no decide `storage_ref` ni `hash_sha256`.** Manda la imagen; el
+servidor la escribe y pone la ruta y el hash reales. Un test manda una referencia
+falsa y exige que se ignore.
+
+**Si el almacén falla, la fila queda `pendiente_evidencia` con el motivo escrito
+y el turno se registra igual.** Bloquear el traspaso porque el disco falló deja
+el camión en el patio a las 5 a.m.; callarlo es peor. El health lo cuenta.
+
+### Configuración
+
+`FLOTA_FOTOS_DIR` apuntando al volumen montado. **Sin default silencioso**: si
+falta, el almacén levanta. Un default a `/tmp` guardaría las fotos y las perdería
+en el próximo deploy — peor que un hueco visible, porque da una evidencia que se
+evapora.
+
+---
+
 ## Catálogo de ítems de inspección — sembrado el 2026-08-02
 
 Fuente de las plantillas `furgon_liviano_v1` y `camion_v1`. **Vive acá y en la

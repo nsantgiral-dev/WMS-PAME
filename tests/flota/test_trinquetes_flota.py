@@ -118,7 +118,17 @@ class TestTrinqueteSinDegradacionSilenciosa:
             for nodo in ast.walk(arbol):
                 if not isinstance(nodo, ast.ExceptHandler):
                     continue
-                cuerpo = [n for n in nodo.body if not isinstance(n, ast.Expr)]
+                # Se descarta SOLO el docstring, no cualquier expresión. Un
+                # `except` cuyo único cuerpo es una llamada —`campos.update(...)`,
+                # `logger.error(...)`— maneja de verdad; filtrarlo como si fuera
+                # un docstring lo marcaba igual que un `pass`. Falso positivo
+                # propio, encontrado el 2026-08-03.
+                def _es_docstring(n):
+                    return (isinstance(n, ast.Expr)
+                            and isinstance(n.value, ast.Constant)
+                            and isinstance(n.value.value, str))
+
+                cuerpo = [n for n in nodo.body if not _es_docstring(n)]
                 if not cuerpo or all(isinstance(n, ast.Pass) for n in cuerpo):
                     violaciones.append(f'{_rel(ruta)}:{nodo.lineno} — except que traga')
         assert not violaciones, (
@@ -187,11 +197,22 @@ class TestTrinqueteSinDegradacionSilenciosa:
 class TestTrinqueteFotosFueraDeLaBase:
 
     def test_ninguna_columna_de_texto_guarda_binario(self):
+        """El objetivo es la BASE, no el transporte.
+
+        Se revisa `modelos.py` —donde se declaran las columnas— y no todo el
+        módulo. Decodificar un data URL en la frontera para escribir un archivo
+        es legítimo y necesario: la regla 7 prohíbe el binario en una columna,
+        no en un request. Marcar `almacen_fotos.py` sería un falso positivo, y
+        un guard con falsos positivos termina desactivado.
+
+        La garantía dura no es este test: es el CHECK
+        `storage_ref NOT LIKE 'data:%'`, verificado contra PostgreSQL real.
+        """
         sospechosos = re.compile(
             r'(b64encode|b64decode|base64\.|toDataURL|data:image/)', re.IGNORECASE
         )
         violaciones = []
-        for ruta in _archivos_py(_FLOTA):
+        for ruta in [os.path.join(_FLOTA, 'adaptadores', 'modelos.py')]:
             for i, linea in enumerate(_leer(ruta).splitlines(), 1):
                 sin_comentario = linea.split('#')[0]
                 if sospechosos.search(sin_comentario):

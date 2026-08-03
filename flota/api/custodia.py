@@ -96,6 +96,36 @@ def custodia_activa(placa):
     }), 200
 
 
+@custodia_bp.route('/foto/<int:foto_id>', methods=['GET'])
+@jwt_required()
+def ver_foto(foto_id):
+    """Devuelve el archivo. Un almacén de solo escritura no es un almacén.
+
+    Si la foto no se puede recuperar, la evidencia no existe — da igual que la
+    fila diga que sí. Por eso el test de guardado incluye recuperarla.
+    """
+    from flask import Response
+
+    from flota.adaptadores.almacen_fotos import AlmacenLocal, ErrorAlmacen
+    from flota.adaptadores.modelos import Foto
+
+    foto = db.session.get(Foto, foto_id)
+    if foto is None:
+        return jsonify({'error': f'No existe la foto {foto_id}'}), 404
+    if foto.estado == 'pendiente_evidencia':
+        return jsonify({
+            'error': 'Esta foto nunca se guardó',
+            'detalle': foto.storage_ref,
+        }), 410
+    try:
+        contenido = AlmacenLocal().leer(foto.storage_ref)
+    except ErrorAlmacen as e:
+        # 410 y no 404: la fila existe y afirma que hay una foto. Que el archivo
+        # no esté es una inconsistencia, no un "no encontrado" cualquiera.
+        return jsonify({'error': str(e)}), 410
+    return Response(contenido, mimetype=foto.mime)
+
+
 @custodia_bp.route('/custodia/cierres-forzados', methods=['GET'])
 @jwt_required()
 def cierres_forzados():

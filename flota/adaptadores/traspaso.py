@@ -218,18 +218,24 @@ def traspasar(
 
 
 def _colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
-    """Ata cada foto a su padre. Un archivo sin padre es un bug (regla 7)."""
+    """Ata cada foto a su padre y GUARDA EL ARCHIVO. Un archivo sin padre es un
+    bug (regla 7); un padre sin archivo es evidencia falsa, que es peor.
+
+    El binario se escribe en el almacén y la fila queda con la referencia y el
+    hash REALES. Si el almacén falla, `guardar_foto` devuelve la fila marcada
+    `pendiente_evidencia` — nunca un hash de ceros.
+    """
+    from flota.adaptadores.almacen_fotos import guardar_foto
+
     for f in fotos or []:
+        campos = guardar_foto(f)
         db.session.add(Foto(
-            clase=f['clase'], entidad_tipo=entidad_tipo, entidad_id=entidad_id,
-            storage_ref=f['storage_ref'], hash_sha256=f['hash_sha256'],
-            bytes=f['bytes'], ancho=f['ancho'], alto=f['alto'],
-            mime=f['mime'], ts_captura=f['ts_captura'] if 'ts_captura' in f else ahora,
+            entidad_tipo=entidad_tipo, entidad_id=entidad_id,
+            ts_captura=f['ts_captura'] if 'ts_captura' in f else ahora,
             gps_lat=f['gps_lat'] if 'gps_lat' in f else None,
             gps_lon=f['gps_lon'] if 'gps_lon' in f else None,
             autor_usuario_id=autor_id,
-            simulado=f['simulado'] if 'simulado' in f else False,
-            estado=f['estado'] if 'estado' in f else 'ok',
+            **campos,
         ))
 
 

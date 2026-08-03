@@ -59,10 +59,20 @@ def _traspasar(mundo, conductor, km, minutos, **kw):
     )
 
 
-def _foto(i):
-    return {'clase': 'evidencia_estado', 'storage_ref': f's3://flota/t{i}.jpg',
-            'hash_sha256': '0' * 64, 'bytes': 1000, 'ancho': 800, 'alto': 600,
-            'mime': 'image/jpeg'}
+# JPEG mínimo real: el almacén decodifica y escribe bytes de verdad.
+_JPEG = ('data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJ'
+         'CQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/'
+         '2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy'
+         'MjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAA'
+         'AAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKB'
+         'kaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNk'
+         'ZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXG'
+         'x8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/APn+iiigD//Z')
+
+
+def _foto(i, clase='evidencia_estado'):
+    return {'clase': clase, 'data_url': _JPEG,
+            'ancho': 800, 'alto': 600, 'mime': 'image/jpeg'}
 
 
 class TestSinHueco:
@@ -127,16 +137,36 @@ class TestAtomicidad:
         assert traspaso.custodia_activa(mundo['veh']).fin_ts is None
         assert LecturaOdometro.query.count() == 1
 
-    def test_una_foto_invalida_revierte_la_custodia_entera(self, mundo):
-        """El binario en la base lo rechaza un CHECK, y el traspaso completo cae."""
-        _traspasar(mundo, 'c1', 100_000, 0)
-        rota = _foto(1) | {'storage_ref': 'data:image/jpeg;base64,/9j/4AAQ'}
+    def test_el_cliente_no_puede_falsear_la_referencia_de_la_foto(self, mundo):
+        """`storage_ref` y `hash_sha256` los pone el SERVIDOR, no el request.
 
-        with pytest.raises(Exception):
-            _traspasar(mundo, 'c2', 100_240, 480, fotos_inicio=[rota])
+        Hasta el 2026-08-03 el frontend mandaba la referencia y el hash, y
+        mandaba `'inline://pendiente-subida'` con ceros. Ahora manda la imagen y
+        el servidor decide: o la guarda y pone la ruta y el hash reales, o la
+        marca `pendiente_evidencia`. Un cliente no puede afirmar que una foto
+        existe.
+        """
+        nueva = _traspasar(mundo, 'c1', 100_000, 0, fotos_inicio=[
+            _foto(1) | {'storage_ref': 'data:image/jpeg;base64,MENTIRA',
+                        'hash_sha256': 'f' * 64}])
+        f = Foto.query.filter_by(entidad_id=nueva.id).one()
+        assert not f.storage_ref.startswith('data:')
+        assert f.hash_sha256 != 'f' * 64
 
-        assert Custodia.query.count() == 1
-        assert traspaso.custodia_activa(mundo['veh']).custodio_conductor_id == mundo['c1']
+    def test_una_foto_que_no_se_pudo_guardar_queda_declarada_y_no_tumba_el_turno(
+            self, mundo, monkeypatch):
+        """El conductor está en el patio a las 5 a.m.: el turno se registra.
+
+        Bloquear el traspaso porque el almacén falló deja el camión adentro. Lo
+        que NO se hace es callarlo — la foto queda `pendiente_evidencia`, el
+        health la cuenta, y alguien puede ir a buscar la que no quedó.
+        """
+        monkeypatch.delenv('FLOTA_FOTOS_DIR', raising=False)
+        nueva = _traspasar(mundo, 'c1', 100_000, 0, fotos_inicio=[_foto(1)])
+        f = Foto.query.filter_by(entidad_id=nueva.id).one()
+        assert f.estado == 'pendiente_evidencia'
+        assert f.hash_sha256 == ''
+        assert 'FLOTA_FOTOS_DIR' in f.storage_ref     # dice POR QUÉ no se guardó
 
 
 class TestArranqueEnFrio:

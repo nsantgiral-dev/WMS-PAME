@@ -265,14 +265,17 @@ async function flotaCapturarAngulo(angulo) {
 
 /** Arma el payload de una foto para el backend: referencia, no binario. */
 function flotaFotoPayload(r, clase) {
+  // Manda la IMAGEN. Hasta el 2026-08-03 mandaba una referencia inventada y un
+  // hash de ceros: el navegador comprimía la foto y la tiraba, y la fila decía
+  // que existía una evidencia que no existía.
+  //
+  // El base64 viaja por la red y no toca la base — el servidor lo decodifica,
+  // escribe el archivo y guarda la ruta y el hash reales. La regla 7 prohíbe el
+  // binario en una columna, no en un request.
   return {
     clase: clase,
-    storage_ref: 'inline://pendiente-subida',
-    hash_sha256: '0'.repeat(64),
-    bytes: Math.round(r.dataUrl.length * 0.75),
+    data_url: r.dataUrl,
     ancho: r.ancho, alto: r.alto, mime: 'image/jpeg',
-    estado: (clase === 'foto_dato' && Math.max(r.ancho, r.alto) < 1600)
-      ? 'pendiente_evidencia' : 'ok',
   };
 }
 
@@ -560,8 +563,13 @@ async function flotaAbrirDocumentos(placa) {
     const color = x.vencido ? 'var(--red)' : (x.dias_para_vencer <= 30 ? 'var(--yellow)' : 'var(--green)');
     const nota = x.vencido ? `VENCIDO hace ${-x.dias_para_vencer} días`
                            : `vence en ${x.dias_para_vencer} días`;
+    // Enlace a la foto: sin poder recuperarla, el almacén es de solo escritura
+    // y la evidencia no existe aunque la fila diga que sí.
+    const foto = x.foto_id
+      ? ` · <a href="${API}/flota/foto/${x.foto_id}" target="_blank" style="color:var(--pm-light)">ver foto</a>`
+      : ' · <span style="color:var(--tx3)">sin foto</span>';
     return `<li style="color:${color}"><b>${x.tipo}</b> ${x.numero} · ${x.entidad}
-      · ${x.fecha_vencimiento} — ${nota}</li>`;
+      · ${x.fecha_vencimiento} — ${nota}${foto}</li>`;
   }).join('');
   if (!filas) filas = '<li style="color:var(--tx2)">Ninguno registrado todavía.</li>';
 

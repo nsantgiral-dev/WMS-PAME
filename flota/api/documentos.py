@@ -127,18 +127,17 @@ def guardar_documento(placa):
     try:
         db.session.flush()
         if 'foto' in datos and datos['foto']:
-            f = datos['foto']
+            from datetime import datetime
+
+            from flota.adaptadores.almacen_fotos import guardar_foto
+
+            campos = guardar_foto(datos['foto'])
             foto = Foto(
-                clase='foto_dato', entidad_tipo='documento', entidad_id=doc.id,
-                storage_ref=f['storage_ref'], hash_sha256=f['hash_sha256'],
-                bytes=f['bytes'], ancho=f['ancho'], alto=f['alto'],
-                mime=f['mime'], ts_captura=f['ts_captura'] if 'ts_captura' in f else None,
+                entidad_tipo='documento', entidad_id=doc.id,
+                ts_captura=datetime.utcnow(),
                 autor_usuario_id=int(get_jwt_identity()),
-                estado=f['estado'] if 'estado' in f else 'ok',
+                **campos,
             )
-            if foto.ts_captura is None:
-                from datetime import datetime
-                foto.ts_captura = datetime.utcnow()
             db.session.add(foto)
             db.session.flush()
             doc.foto_id = foto.id
