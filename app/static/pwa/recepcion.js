@@ -7,6 +7,9 @@
 // Dependencias cross-module (de packing.js): imprimirEtiquetaLPN()
 // ══════════════════════════════════════════════════════════════════
 
+// Página actual de la sección "RECEPCIONADAS" (recepciones ya CONFIRMADA, para seguimiento)
+let _RECEPCION_CONFIRM_PAGE = 1;
+
 /**
  * Carga y renderiza la lista de recepciones activas (OCs de Siesa + DB).
  * @param {boolean} [silencioso=false] - true omite el spinner de carga inicial
@@ -20,17 +23,29 @@ async function cargarRecepciones(silencioso = false) {
     el.innerHTML = '<div style="text-align:center;padding:40px;color:#666;">Cargando...</div>';
   }
   try {
-    const [siesa, db] = await Promise.all([
+    const [siesa, db, confirmadas] = await Promise.all([
       get('/api/siesa/ordenes-compra').catch(() => ({ ordenes: [] })),
-      get('/api/recepcion/?estado=EN_PROCESO').catch(() => ({ recepciones: [] }))
+      get('/api/recepcion/?estado=EN_PROCESO').catch(() => ({ recepciones: [] })),
+      get(`/api/recepcion/?estado=CONFIRMADA&page=${_RECEPCION_CONFIRM_PAGE}`)
+        .catch(() => ({ recepciones: [], total: 0, pagina_actual: _RECEPCION_CONFIRM_PAGE }))
     ]);
     SIESA_OCS = siesa.ordenes || [];
     // Guard post-await: el operario pudo haber entrado a escaneo mientras las APIs respondían
     if (RECEPCION_ACTUAL) return;
-    renderListaRecepciones(siesa, db.recepciones || []);
+    renderListaRecepciones(siesa, db.recepciones || [], confirmadas);
   } catch (e) {
     if (!silencioso) el.innerHTML = '<div style="color:#ef4444;">Error cargando</div>';
   }
+}
+
+/**
+ * Cambia de página en la sección "RECEPCIONADAS" y recarga solo esa vista.
+ * @param {number} page - Número de página destino (1-indexed)
+ */
+function _recepcionConfirmadasPagina(page) {
+  if (page < 1) return;
+  _RECEPCION_CONFIRM_PAGE = page;
+  cargarRecepciones(true);
 }
 
 
@@ -42,8 +57,9 @@ async function cargarRecepciones(silencioso = false) {
  * Renderiza el HTML de la lista de OCs pendientes y recepciones en proceso.
  * @param {Object} siesa - Respuesta de la API de OCs (contiene .ordenes y .simulado)
  * @param {Array<Object>} dbRecs - Recepciones en proceso desde la DB local
+ * @param {Object} [confirmadas] - Respuesta paginada de /api/recepcion/?estado=CONFIRMADA
  */
-function renderListaRecepciones(siesa, dbRecs) {
+function renderListaRecepciones(siesa, dbRecs, confirmadas) {
   const el = document.getElementById('contenido-recepcion');
   if (!el) return;
   let html = '';
@@ -111,6 +127,51 @@ function renderListaRecepciones(siesa, dbRecs) {
           Continuar escaneo
         </button>
       </div>`).join('');
+  }
+
+  // Sección 3: Recepciones ya confirmadas — para hacerles seguimiento
+  // (ej. verificar si Siesa ya procesó la entrada contable o sigue pendiente)
+  const confRecs = (confirmadas && confirmadas.recepciones) || [];
+  const confTotal = (confirmadas && confirmadas.total) || 0;
+  const confTotalPag = Math.max(1, Math.ceil(confTotal / 50));
+  if (confRecs.length) {
+    html += `<div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 6px;border-bottom:1px solid #222;margin:10px 0 8px;">RECEPCIONADAS <span style="color:#555;font-weight:400;">(${confTotal})</span></div>`;
+    html += confRecs.map(r => {
+      const fecha = r.fecha_confirmacion ? new Date(r.fecha_confirmacion).toLocaleDateString('es-CO') : '—';
+      const siesaBadge = r.siesa_triggered
+        ? `<span style="color:#4ade80;font-size:11px;font-weight:700;">✓ Sincronizada con Siesa</span>`
+        : `<span style="color:#f59e0b;font-size:11px;font-weight:700;">⏳ Pendiente en Siesa</span>`;
+      const itemsHtml = (r.items || []).map(it => `
+        <div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid #222;font-size:11px;">
+          <span style="color:#ccc;">${it.producto_codigo || ''}</span>
+          <span style="color:#888;">OC: ${it.cantidad_ordenada} → Rec: <strong style="color:${it.es_exceso ? '#f59e0b' : it.es_faltante ? '#3b82f6' : '#4ade80'};">${it.cantidad_recibida}</strong></span>
+        </div>`).join('');
+      return `
+        <div class="rec-card">
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="rec-titulo">OC: ${r.numero_oc_siesa}</div>
+            <span style="font-size:11px;color:#666;">${fecha}</span>
+          </div>
+          <div class="rec-sub">${r.proveedor_nombre || 'Sin proveedor'} · ${r.total_items} ítem(s)${r.es_parcial ? ' · <span style="color:#f59e0b;">PARCIAL</span>' : ''}</div>
+          <div style="margin-top:8px;">${siesaBadge}</div>
+          <div style="margin-top:8px;background:#111;border-radius:8px;padding:6px 8px;max-height:150px;overflow-y:auto;">${itemsHtml}</div>
+        </div>`;
+    }).join('');
+
+    if (confTotalPag > 1) {
+      html += `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;">
+          <button onclick="_recepcionConfirmadasPagina(${_RECEPCION_CONFIRM_PAGE - 1})" ${_RECEPCION_CONFIRM_PAGE <= 1 ? 'disabled' : ''}
+            style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_RECEPCION_CONFIRM_PAGE <= 1 ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_RECEPCION_CONFIRM_PAGE <= 1 ? 'default' : 'pointer'};">
+            ← Anterior
+          </button>
+          <span style="font-size:12px;color:#555;">Pág ${_RECEPCION_CONFIRM_PAGE}/${confTotalPag}</span>
+          <button onclick="_recepcionConfirmadasPagina(${_RECEPCION_CONFIRM_PAGE + 1})" ${_RECEPCION_CONFIRM_PAGE >= confTotalPag ? 'disabled' : ''}
+            style="padding:8px 14px;background:#1a1a1a;border:1px solid #333;color:${_RECEPCION_CONFIRM_PAGE >= confTotalPag ? '#333' : '#aaa'};border-radius:8px;font-size:13px;cursor:${_RECEPCION_CONFIRM_PAGE >= confTotalPag ? 'default' : 'pointer'};">
+            Siguiente →
+          </button>
+        </div>`;
+    }
   }
 
   if (!html) {
