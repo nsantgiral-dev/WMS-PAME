@@ -103,16 +103,29 @@ def _enviar_email_con_dlq(asunto: str, cuerpo_html: str, cuerpo_texto: str, tipo
         try:
             from app.models.siesa_job import SiesaJob as _SJ
             from app.extensions import db as _db
-            from datetime import date as _date
-            # Deduplicar por tipo_alerta + día para no acumular N jobs idénticos
-            # durante un downtime de Resend que dura múltiples ciclos del scheduler.
-            _idem = f'ALERTA-{tipo_alerta}-{_date.today().isoformat()}'
-            # [M1] Fix: REINTENTANDO state doesn't exist — after failure, estado='PENDIENTE'.
-            # Include PROCESANDO (DLQ running) and FALLIDO (exhausted retries) to avoid dupes.
+            from app.utils.fecha import dia_operativo as _dia
+            # Deduplicar por tipo_alerta + DÍA para no acumular N jobs idénticos
+            # durante un downtime de Resend que dura varios ciclos del scheduler.
+            #
+            # La clave con la fecha ya estaba escrita acá y **la consulta la
+            # ignoraba**: filtraba por `payload.contains(tipo_alerta)` sin
+            # ninguna cota temporal. Como la lista de estados incluye FALLIDO
+            # —reintentos agotados, la fila queda para siempre—, el primer
+            # fallo definitivo de un tipo de alerta SILENCIABA ESE TIPO PARA
+            # SIEMPRE: meses después, con Resend caído otra vez, el job no se
+            # encolaba porque "ya había uno".
+            #
+            # El wrapper existe justamente para que una alerta perdida quede
+            # visible en la cola (SF_JOB_SILENCIOSO). Al mes de vida, dejaba de
+            # cumplir su única función.
+            #
+            # Con la fecha DENTRO de la comparación, un FALLIDO viejo no bloquea
+            # el de hoy y sigue evitando duplicados dentro del mismo día.
+            _idem = f'ALERTA-{tipo_alerta}-{_dia().isoformat()}'
             _ya_en_cola = _SJ.query.filter(
                 _SJ.tipo == 'ALERTA_EMAIL',
                 _SJ.estado.in_(['PENDIENTE', 'PROCESANDO', 'FALLIDO']),
-                _SJ.payload.contains(f'"tipo_alerta": "{tipo_alerta}"'),
+                _SJ.payload.contains(f'"idem_key": "{_idem}"'),
             ).first()
             if not _ya_en_cola:
                 _SJ.encolar(

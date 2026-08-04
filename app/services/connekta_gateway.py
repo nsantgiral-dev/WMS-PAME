@@ -33,6 +33,16 @@ _TZ_BOGOTA = ZoneInfo('America/Bogota')
 logger = logging.getLogger(__name__)
 
 
+class ConnektaPaginacionError(Exception):
+    """Una página de una consulta paginada falló.
+
+    Se levanta en vez de devolver lo que sí llegó: un inventario al que le
+    faltan páginas **no se distingue de uno completo** — los productos ausentes
+    se leen como inexistentes, no como desconocidos. Es la regla 0 aplicada a
+    una consulta: ante dato ausente, declararlo, no rellenarlo con silencio.
+    """
+
+
 class ConnektaCircuitOpenError(Exception):
     """Raised when circuit breaker is OPEN — Siesa no disponible.
     DLQ handlers catch this to NOT waste retries."""
@@ -2351,12 +2361,20 @@ class ConnektaGateway:
 
             def _fetch(p, _bod=bodega_id, _tam=tam):
                 try:
-                    return self._get(self.api_inventario, {
+                    res = self._get(self.api_inventario, {
                         'paginacion': f'numPag={p}|tamPag={_tam}',
                         'parametros': f"f150_id = ''{_bod}'' AND f400_cant_existencia_1 > 0"
                     })
-                except Exception:
-                    return {'_error': True, 'detalle': {'Table': []}}
+                    # `_get` devuelve None cuando el circuit breaker bloquea o
+                    # la respuesta no es 200. Sin esto, el `res.get('_error')`
+                    # de abajo reventaba con AttributeError sobre None.
+                    if res is None:
+                        return {'_error': True, 'motivo': 'sin respuesta',
+                                'pagina': p, 'detalle': {'Table': []}}
+                    return res
+                except Exception as e:
+                    return {'_error': True, 'motivo': str(e)[:120],
+                            'pagina': p, 'detalle': {'Table': []}}
 
             with ThreadPoolExecutor(max_workers=batch) as ex:
                 batch_results = list(ex.map(_fetch, pages_in_batch))
@@ -2364,7 +2382,25 @@ class ConnektaGateway:
             done = False
             for res in batch_results:
                 if res.get('_error'):
-                    continue
+                    # NO se sigue de largo. Saltar una página deja su stock
+                    # afuera del resultado, y el llamador recibe un inventario
+                    # INCOMPLETO que no se distingue de uno completo: los
+                    # productos de esa página aparecen como si no existieran.
+                    #
+                    # Antes esto era `continue` a secas — sin log, sin contador
+                    # y sin abortar. Una consulta de diagnóstico que descarta
+                    # páginas en silencio informa lo contrario de lo que pasó.
+                    logger.error(
+                        '[CONNEKTA] stock %s: página %s falló (%s) — se aborta '
+                        'la consulta: un inventario parcial que parece completo '
+                        'es peor que un error',
+                        bodega_id, res.get('pagina', '?'),
+                        res.get('motivo', 'sin motivo'))
+                    raise ConnektaPaginacionError(
+                        f'La consulta de stock de {bodega_id} falló en la página '
+                        f'{res.get("pagina", "?")}: {res.get("motivo", "")}. '
+                        f'No se devuelve un inventario parcial.'
+                    )
                 rows = res.get('detalle', {}).get('Table', [])
                 if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
                     done = True
