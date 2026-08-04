@@ -9,6 +9,7 @@ Tres responsabilidades:
 import logging
 from datetime import datetime
 from app.extensions import db
+from app.models.lpn import EstadoLPN
 from app.models.producto import Producto
 from app.models.producto_empaque import ProductoEmpaque
 from app.models.lpn import LPN
@@ -40,7 +41,7 @@ def scan_barcode(codigo_barras: str, almacen_id: int = None):
     # ── Paso 1: ¿Es un LPN conocido? ──────────────────────────────────────────
     if codigo.startswith('LPN-'):
         lpn = LPN.query.filter_by(codigo=codigo).first()
-        if lpn and lpn.estado == 'ACTIVO':
+        if lpn and lpn.estado == EstadoLPN.ACTIVO:
             return {
                 'tipo': 'LPN',
                 'producto': lpn.producto.to_dict() if lpn.producto else None,
@@ -229,7 +230,7 @@ def consumir_lpn(codigo_lpn: str):
     lpn = LPN.query.filter_by(codigo=codigo_lpn).first()
     if not lpn:
         raise ValueError(f'LPN {codigo_lpn} no existe')
-    if lpn.estado != 'ACTIVO':
+    if lpn.estado != EstadoLPN.ACTIVO:
         raise ValueError(f'LPN {codigo_lpn} no está ACTIVO (estado actual: {lpn.estado})')
 
     unidades = lpn.cantidad_actual

@@ -463,6 +463,14 @@ class ArmadorService:
         # Relleno inteligente (si gatillo B y queda espacio)
         items_relleno = []
         if gatillo == 'PELIGRO_CONSTITUCIONAL' and cbm_acum < cbm_objetivo:
+            # Los productos del ranking, en UNA consulta. Antes era un
+            # `filter_by(codigo_siesa=ref).first()` por iteración — hasta 500
+            # consultas para armar un contenedor.
+            _refs = [i['referencia'] for i in items_china]
+            _prods = {p.codigo_siesa: p for p in
+                      Producto.query.filter(Producto.codigo_siesa.in_(_refs)).all()} \
+                if _refs else {}
+
             # Obtener productos China con demanda y margen para ranking
             for item in items_china:
                 ref = item['referencia']
@@ -480,7 +488,7 @@ class ArmadorService:
                 costo_fob = float(ficha.costo_fob_usd or 0)
 
                 # Proxy de margen: precio_venta - costo (simplificado)
-                prod = Producto.query.filter_by(codigo_siesa=ref).first()
+                prod = _prods.get(ref)
                 margen_u = (prod.precio_venta or 0) - (prod.precio_compra or 0) if prod else 0
                 margen_cbm = (margen_u * u_por_caja / cbm_caja) if cbm_caja > 0 else 0
 

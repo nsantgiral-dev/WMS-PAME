@@ -411,7 +411,7 @@ def verificar_y_alertar_stock_critico(app=None):
         try:
             from app.models.ubicacion import Ubicacion
             from app.models.inventario import UbicacionProducto
-            from app.models.lpn import LPN
+            from app.models.lpn import LPN, EstadoLPN
             from app.models.producto import Producto
             from sqlalchemy import func as _func
 
@@ -456,7 +456,7 @@ def verificar_y_alertar_stock_critico(app=None):
                 .filter(
                     LPN.producto_id.in_(prod_ids_cands),
                     LPN.almacen_id.in_(almacen_ids_cands),
-                    LPN.estado == 'ACTIVO',
+                    LPN.estado == EstadoLPN.ACTIVO,
                     Ubicacion.tipo_zona == 'RESERVA',
                 )
                 .with_entities(LPN.almacen_id, LPN.producto_id)

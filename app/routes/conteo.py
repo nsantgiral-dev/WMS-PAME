@@ -43,7 +43,13 @@ def listar_sesiones():
                  _jl(SesionConteo.operario),
                  _jl(SesionConteo.aprobador),
                  _jl(SesionConteo.editor),
+                 # CC2 y su operario...
                  _jl(SesionConteo.hijo_conteo)
+                 .joinedload(SesionConteo.operario),
+                 # ...y CC3, que `to_dict()` lee cuando CC1≠CC2. Sin esto son
+                 # dos lazy loads por sesión con descuadre, en una página de 30.
+                 _jl(SesionConteo.hijo_conteo)
+                 .joinedload(SesionConteo.hijo_conteo)
                  .joinedload(SesionConteo.operario),
              )
              .order_by(SesionConteo.fecha_creacion.desc()))

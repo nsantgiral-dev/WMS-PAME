@@ -2,6 +2,22 @@ from datetime import datetime
 from app.extensions import db
 
 
+class EstadoLPN:
+    """Los estados de un LPN, con nombre.
+
+    Era el único modelo del repo que asignaba su estado como literal suelto
+    —`self.estado = 'CONSUMIDO'`— mientras los demás (EstadoPicking,
+    EstadoPacking, EstadoConteo, EstadoRecepcion...) tienen su clase. Un literal
+    repartido en ocho archivos es un typo esperando: `'CONSUMIDO '` con espacio
+    no falla en ningún lado, simplemente deja de coincidir en los filtros.
+    """
+
+    ACTIVO    = 'ACTIVO'
+    CONSUMIDO = 'CONSUMIDO'
+
+    TODOS = (ACTIVO, CONSUMIDO)
+
+
 class LPN(db.Model):
     """
     License Plate Number — instancia física de un empaque en el almacén.
@@ -26,7 +42,7 @@ class LPN(db.Model):
     empaque_id = db.Column(db.Integer, db.ForeignKey('producto_empaques.id'), nullable=True)
     factor_conversion = db.Column(db.Integer, nullable=False)   # copia inmutable al nacer
     cantidad_actual = db.Column(db.Integer, nullable=False)     # UNDs reales (puede < factor si parcial)
-    estado = db.Column(db.String(20), nullable=False, default='ACTIVO')
+    estado = db.Column(db.String(20), nullable=False, default=EstadoLPN.ACTIVO)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=True)
     ubicacion_id = db.Column(db.Integer, db.ForeignKey('ubicaciones.id'), nullable=True)
     recepcion_id = db.Column(db.Integer, db.ForeignKey('recepciones.id'), nullable=True)
@@ -64,12 +80,12 @@ class LPN(db.Model):
         ).filter_by(
             producto_id=producto_id,
             almacen_id=almacen_id,
-            estado='ACTIVO'
+            estado=EstadoLPN.ACTIVO
         ).all()
 
     def consumir(self):
         """Marca el LPN como consumido (paca abierta). Llama a commit() externamente."""
-        self.estado = 'CONSUMIDO'
+        self.estado = EstadoLPN.CONSUMIDO
         self.fecha_consumo = datetime.utcnow()
 
     def to_dict(self):

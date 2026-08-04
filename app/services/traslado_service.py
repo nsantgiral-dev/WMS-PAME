@@ -650,8 +650,8 @@ class TrasladoService:
         # EN_TRANSITO; esto cubre el caso de LPNs que quedaron en ACTIVO por
         # algún fallo intermedio.
         try:
-            from app.models.lpn import LPN
-            LPN.query.filter_by(traslado_id=s.id, estado='ACTIVO').update(
+            from app.models.lpn import LPN, EstadoLPN
+            LPN.query.filter_by(traslado_id=s.id, estado=EstadoLPN.ACTIVO).update(
                 {'estado': EstadoTraslado.EN_TRANSITO}, synchronize_session=False
             )
         except Exception as e_lpn:
@@ -895,7 +895,7 @@ class TrasladoService:
             from app.models.lpn import LPN
             now_utc = datetime.utcnow()
             for lpn in LPN.query.filter_by(traslado_id=s.id, estado='EN_TRANSITO').all():
-                lpn.estado = 'CONSUMIDO'
+                lpn.estado = EstadoLPN.CONSUMIDO
                 lpn.fecha_consumo = now_utc
         except Exception as e_lpn:
             logger.warning(f'[TRASLADO] Error consumiendo LPNs para {s.codigo}: {e_lpn}')

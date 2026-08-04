@@ -25,6 +25,7 @@ Retorna:
 import logging
 from sqlalchemy import func
 from app.extensions import db
+from app.models.lpn import EstadoLPN
 from app.models.ubicacion import Ubicacion
 from app.models.inventario import UbicacionProducto
 from app.models.lpn import LPN
@@ -143,7 +144,7 @@ def _pre_reponer(producto_id: int, almacen_id: int, deficit: int) -> int:
         .filter(
             LPN.producto_id == producto_id,
             LPN.almacen_id == almacen_id,
-            LPN.estado == 'ACTIVO',
+            LPN.estado == EstadoLPN.ACTIVO,
             Ubicacion.tipo_zona == 'RESERVA',
         )
         .order_by(LPN.fecha_creacion.asc())

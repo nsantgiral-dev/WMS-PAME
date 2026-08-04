@@ -19,6 +19,7 @@ Reglas:
 import logging
 from datetime import datetime
 from app.extensions import db
+from app.models.lpn import EstadoLPN
 from app.models.ubicacion import Ubicacion
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.lpn import LPN
@@ -80,7 +81,7 @@ def verificar_stock_picking(almacen_id: int = None):
         ).filter(
             LPN.producto_id == inv.producto_id,
             LPN.almacen_id == ub_picking.almacen_id,
-            LPN.estado == 'ACTIVO',
+            LPN.estado == EstadoLPN.ACTIVO,
             Ubicacion.tipo_zona == 'RESERVA',
         ).order_by(LPN.fecha_creacion.asc()).first()  # FIFO
 
@@ -191,7 +192,7 @@ def confirmar_reposicion(tarea_id: int, abastecedor_id: int, lpn_codigo_escanead
         raise ValueError(f'Tarea en estado {tarea.estado} — no se puede confirmar')
 
     lpn = tarea.lpn
-    if not lpn or lpn.estado != 'ACTIVO':
+    if not lpn or lpn.estado != EstadoLPN.ACTIVO:
         raise ValueError('El LPN de la tarea no está disponible')
 
     # Validar escaneo si se envió código

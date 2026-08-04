@@ -71,6 +71,16 @@ class BloqueoRecompraService:
         bloqueados_nuevos = 0
         capital_inmovilizado = 0
 
+        # Los productos que el loop va a necesitar, en UNA consulta. Antes era
+        # `Producto.query.get(id)` por iteración: con 2000 SKUs y 25% sin
+        # movimiento, ~500 consultas individuales.
+        _candidatos = [pid for pid in stock_map
+                       if pid not in ya_bloqueados_ids
+                       and pid not in productos_con_picks]
+        _productos = {p.id: p for p in
+                      Producto.query.filter(Producto.id.in_(_candidatos)).all()} \
+            if _candidatos else {}
+
         for producto_id, stock in stock_map.items():
             if producto_id in ya_bloqueados_ids:
                 continue
@@ -78,7 +88,7 @@ class BloqueoRecompraService:
                 continue  # tiene demanda en 12 meses — no bloquear
 
             # Velocity=0 + stock>0 → cadáver
-            producto = Producto.query.get(producto_id)
+            producto = _productos.get(producto_id)
             if not producto:
                 continue
 
@@ -246,7 +256,14 @@ class BloqueoRecompraService:
         from app.models.inventario import UbicacionProducto
         from sqlalchemy import func
 
-        bloqueos = ProductoBloqueado.query.filter_by(activo=True).all()
+        # `joinedload`: el loop de abajo lee `b.producto` por cada bloqueo. Con
+        # lazy, son N SELECT extra — uno por SKU bloqueado, que es justo la
+        # lista que crece cuando el problema empeora.
+        from sqlalchemy.orm import joinedload
+
+        bloqueos = (ProductoBloqueado.query
+                    .options(joinedload(ProductoBloqueado.producto))
+                    .filter_by(activo=True).all())
         producto_ids = [b.producto_id for b in bloqueos if b.esta_bloqueado()]
 
         if not producto_ids:
@@ -301,7 +318,11 @@ class BloqueoRecompraService:
     @staticmethod
     def listar_fugas():
         """Lista todas las fugas registradas (compras por fuera del sistema)."""
-        fugas = FugaRecompra.query.order_by(FugaRecompra.fecha.desc()).limit(100).all()
+        from sqlalchemy.orm import joinedload
+
+        fugas = (FugaRecompra.query
+                 .options(joinedload(FugaRecompra.producto))
+                 .order_by(FugaRecompra.fecha.desc()).limit(100).all())
         return [{
             'id': f.id,
             'producto_codigo': f.producto.codigo_siesa if f.producto else '',

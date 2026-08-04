@@ -694,9 +694,9 @@ class MobileService:
             # rastrear qué pacas físicas van en cada envío.
             if lpn_codigo and tarea.tipo_documento == 'TRASLADO' and tarea.referencia_documento:
                 try:
-                    from app.models.lpn import LPN
+                    from app.models.lpn import LPN, EstadoLPN
                     from app.models.traslado import SolicitudTraslado
-                    lpn = LPN.query.filter_by(codigo=lpn_codigo, estado='ACTIVO').first()
+                    lpn = LPN.query.filter_by(codigo=lpn_codigo, estado=EstadoLPN.ACTIVO).first()
                     if lpn and lpn.producto_id == producto.id:
                         traslado = SolicitudTraslado.query.filter_by(
                             codigo=tarea.referencia_documento
