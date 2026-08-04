@@ -56,14 +56,14 @@ señales que en el día a día se explican una por una y solo se ven juntas.
 
 ---
 
-## Un dato sensible que hoy ve el rol `compras`
+## Qué ve el rol `compras` — decidido
 
-Desde 2026-08-04, el rol `compras` accede a **valor FOB, valor nacionalizado y
-proveedor** de los contenedores de importación. Se abrió porque su propia
-pantalla los consume y estaba rota sin ellos.
+Desde 2026-08-04 el rol `compras` accede a **valor FOB, valor nacionalizado y
+proveedor** de los contenedores de importación.
 
-⬚ **Decisión pendiente:** ratificar o revertir. Es sobre a quién le mostrás
-márgenes de importación.
+**Ratificado.** El criterio: quien decide qué comprar necesita ver el costo real
+de traerlo. Un comprador que solo ve el precio de lista está decidiendo sobre un
+número que no es el costo.
 
 ---
 

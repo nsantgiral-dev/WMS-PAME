@@ -28,7 +28,7 @@
 | 002 | Neiva Centro | `NC1` |
 | 004 | Pitalito Centro | `PC1` |
 | 006 | Florencia Centro | `FC1` |
-| 005 | Pitalito Terminal | ⬚ *sin fila en `almacenes`* |
+| 005 | **Bodega Pitalito** | ⬚ *falta crear* — hoy solo almacena, **será CDI** |
 | 007–009 | Ferias | ⬚ *sin fila* |
 
 ---

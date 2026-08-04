@@ -14,9 +14,12 @@
 | `almacen_id` | **obligatorio** | Sin esto no ve tareas |
 
 > Hay dos formas de habilitar packing: el rol `empacador`, o el flag
-> `puede_empacar` sobre un operario. La segunda sirve para quien hace las dos
-> cosas según el día. **Decidí cuál usás y sé consistente** — si la mitad son rol
-> y la mitad flag, nadie sabe a quién buscar.
+> `puede_empacar` sobre un operario. El código las trata igual.
+>
+> **El flag no se marca por conveniencia.** Confirmar packing emite una factura
+> electrónica. Criterio acordado: 30 días de picking sin errores de cantidad, y
+> que la persona entienda qué dispara su confirmación. Lo autoriza el jefe de
+> almacén.
 
 ---
 

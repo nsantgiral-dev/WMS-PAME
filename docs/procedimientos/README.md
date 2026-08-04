@@ -38,7 +38,45 @@ La mayoría de los procedimientos fallan porque solo documentan la primera.
 
 **Consecuencia práctica:** *"operario"* no es un cargo. Es una pantalla con tres
 interruptores. Dos personas con el mismo rol pueden hacer trabajos distintos, y
-quien crea el usuario tiene que saber cuáles marcar. Cada ficha lo dice explícito.
+quien crea el usuario tiene que saber cuáles marcar.
+
+### Qué habilita cada capacidad, de verdad
+
+| Flag | Por defecto | Qué habilita |
+|---|---|---|
+| `puede_picar` | ✅ **sí** | Tomar tareas de picking. Y **solo con este flag se puede hacer el primer conteo (CC1)** del conteo cíclico |
+| `puede_empacar` | ❌ no | **Todo lo que hace un empacador.** El código los trata igual: `_puede_empacar()` = rol `empacador` **o** este flag |
+| `puede_abastecer` | ❌ no | Reposición **RESERVA → PICKING** |
+
+### La combinación decide qué pantalla se abre
+
+| picar | empacar | abastecer | Al entrar ve |
+|:---:|:---:|:---:|---|
+| ✅ | ❌ | ❌ | Operario — picking |
+| ❌ | ✅ | ❌ | **Empacador, directo** |
+| ❌ | ❌ | ✅ | **Reposición, directo** |
+| ✅ | ✅ | ❌ | Operario (empaca cuando se lo asignan) |
+| ✅ | ❌ | ✅ | Operario **con botón para cambiar** a reposición |
+| ❌ | ❌ | ❌ | Operario **sin nada que hacer** ← la trampa |
+
+### Criterio para marcarlos
+
+> **`puede_empacar` no es "puede ayudar en packing".**
+>
+> Es la facultad de **emitir una factura electrónica**: confirmar el packing
+> dispara `244328 → 142945 → 142943` y genera el documento fiscal.
+>
+> Marcárselo a alguien porque hoy falta gente es darle la llave de la
+> facturación. **Es un ascenso, no una conveniencia.**
+
+| Flag | Se marca cuando | Lo autoriza |
+|---|---|---|
+| `puede_picar` | Siempre, salvo empacador o abastecedor puro | jefe de almacén |
+| `puede_empacar` | **30 días de picking sin errores de cantidad** + entiende que su confirmación factura | jefe de almacén |
+| `puede_abastecer` | Conoce el layout y la diferencia reserva/picking | jefe de almacén |
+
+**Se revisan al cambiar de puesto, no solo al ingresar.** Un flag que quedó
+marcado de un reemplazo de hace seis meses es un permiso que nadie decidió.
 
 ---
 
@@ -50,17 +88,40 @@ quien crea el usuario tiene que saber cuáles marcar. Cada ficha lo dice explíc
 | 002 | Neiva Centro | `NC1` | 004 | tienda, operario, empacador |
 | **003** | **Bodega CD (centro de distribución)** | `NB1` | 999 | **todos los de piso + gestión** |
 | 004 | Pitalito Centro | `PC1` | 999 | tienda |
-| 005 | Pitalito Terminal | ⬚ *sin fila en `almacenes`* | 999 | ⬚ |
+| **005** | **Bodega Pitalito** | ⬚ *falta crear en `almacenes`* | 999 | hoy: almacenamiento · **meta: CDI** |
 | 006 | Florencia Centro | `FC1` | 013 | tienda |
-| 007–009 | Ferias | ⬚ *sin fila en `almacenes`* | 999 | ⬚ |
+| 007–009 | Ferias | ⬚ *falta crear* | 999 | ⬚ *estacional* |
 
 > **Hueco conocido:** los CO 005 y 007–009 no tienen fila en `almacenes`. Una
 > custodia de vehículo o un traslado que termine ahí queda declarado como
-> `pendiente_sede` — el sistema no inventa la sede, la reporta. Mientras no se
-> creen, ningún procedimiento debe asumir que existen.
+> `pendiente_sede` — el sistema no inventa la sede, la reporta.
 
 **El CO 003 es el corazón.** Picking, packing, recepción, traslados y flota
 ocurren ahí. Las demás sedes son puntos de venta que consumen y solicitan.
+
+### CO 005 — Bodega Pitalito: el segundo centro de distribución
+
+Hoy es **solo almacenamiento**. La meta es convertirlo en **CDI — el próximo
+003**, con su propia operación de picking, packing y despacho para el sur.
+
+Eso cambia lo que hay que preparar, y conviene tenerlo claro desde ahora:
+
+| Cuando 005 sea CDI | Qué implica |
+|---|---|
+| Necesita fila en `almacenes` con `centro_op_siesa = '005'` | Sin eso no se le puede asignar personal ni recibir traslados |
+| Roles de piso propios: operario, empacador, recepcionista | Cada uno con `almacen_id` apuntando a 005, **no a 003** |
+| Traslados 003 → 005 dejan de ser reposición de tienda | Pasan a ser abastecimiento entre centros |
+| Su propia flota y custodia de vehículos | El módulo ya lo soporta: la custodia es por sede |
+| Layout y ubicaciones propias | El recorrido de picking se calcula por almacén |
+
+**Lo que NO cambia:** los procedimientos de esta carpeta. Un operario de 005 hace
+lo mismo que uno de 003 — cambia el `almacen_id`, no el trabajo. Esa es la
+prueba de que estos documentos están escritos al nivel correcto.
+
+> **Riesgo a vigilar en la transición:** durante el período en que 005 recibe
+> mercancía pero todavía no despacha, todo lo que le llega queda como inventario
+> que nadie consume. Es el mismo estado "en tránsito" del que hablan las fichas
+> de traslado, pero sostenido en el tiempo.
 
 ---
 

@@ -30,8 +30,25 @@ Cuando creás un usuario:
 > No da error — entra y la lista de tareas sale **vacía**. La persona cree que no
 > hay trabajo y vos creés que está trabajando.
 
-⬚ **Falta definir:** quién autoriza marcar `puede_empacar` o `puede_abastecer` y
-con qué criterio. Hoy es una casilla que alguien marca sin regla escrita.
+### Criterio para los flags — definido 2026-08-04
+
+| Flag | Se marca cuando | Lo autoriza |
+|---|---|---|
+| `puede_picar` | Siempre, salvo empacador o abastecedor puro | jefe de almacén |
+| `puede_empacar` | **30 días de picking sin errores de cantidad** + entiende que su confirmación emite factura | jefe de almacén |
+| `puede_abastecer` | Conoce el layout y la diferencia reserva/picking | jefe de almacén |
+
+> **`puede_empacar` no es "puede ayudar en packing".** Es la facultad de emitir
+> una **factura electrónica**: confirmar el packing dispara
+> `244328 → 142945 → 142943`. Marcárselo a alguien porque hoy falta gente es
+> darle la llave de la facturación. Es un ascenso, no una conveniencia.
+
+**Se revisan al cambiar de puesto, no solo al ingresar.** Un flag que quedó
+marcado de un reemplazo de hace seis meses es un permiso que nadie decidió.
+
+**Y la combinación decide qué pantalla abre** — ver la tabla en el
+[README](../README.md). Los tres apagados dan la pantalla de operario sin nada
+que hacer.
 
 ---
 

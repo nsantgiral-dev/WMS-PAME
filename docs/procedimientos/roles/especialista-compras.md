@@ -41,8 +41,11 @@ armador, bloqueos y kardex tenían listas de permisos propias que no incluían a
 Se corrigió. Ahora ves también **valor FOB, valor nacionalizado y proveedor** de
 los contenedores.
 
-⬚ **Pendiente de ratificación de gerencia:** si esos números no deberían estar a
-la vista de este rol, se revierte.
+**Ratificado por gerencia el 2026-08-04:** este rol ve **todo lo de compras**,
+incluidos los valores de importación. El criterio es simple y conviene tenerlo
+escrito: *quien decide qué comprar necesita ver el costo real de traerlo.* Un
+comprador que no ve el FOB ni el nacionalizado está decidiendo sobre el precio
+de lista, que no es el costo.
 
 ---
 
