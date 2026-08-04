@@ -53,6 +53,47 @@ function flotaNombreAngulo(a) {
   return a.replace(/_/g, ' ');
 }
 
+/** Llena un `<select>` con las sedes. Una sola función para los dos sitios.
+ *
+ * **El endpoint devuelve una LISTA, no `{almacenes: [...]}`**:
+ *
+ *     return jsonify([a.to_dict() for a in almacenes]), 200
+ *
+ * El código hacía `d.almacenes || []` → `undefined || []` → array vacío. El
+ * desplegable de sede salía **sin una sola opción**, en la entrega y en el
+ * modal de escritorio, y nunca funcionó desde que se escribió (2026-08-03).
+ * Se toleran las dos formas porque un cambio de contrato no puede volver a
+ * vaciar la pantalla en silencio.
+ *
+ * Y si la consulta falla, **se dice**. Antes el `catch` se la tragaba y el
+ * `<select>` quedaba vacío: indistinguible de "no hay sedes". Un desplegable
+ * vacío sin explicación es la regla 5 rota en la cara del usuario.
+ *
+ * Los códigos son los centros de costo reales — NB1, NC1, NS1, FC1, PC1 — y van
+ * primero: es lo que la gente busca con la vista.
+ */
+async function flotaLlenarSedes(idSelect) {
+  const sel = document.getElementById(idSelect);
+  if (!sel) return;
+  const vacia = '<option value="">— la sede no está en el maestro —</option>';
+  try {
+    const d = await get('/api/almacenes');
+    const lista = Array.isArray(d) ? d : (d.almacenes || []);
+    if (!lista.length) {
+      sel.innerHTML = vacia;
+      return;
+    }
+    sel.innerHTML = vacia + lista.map(a =>
+      `<option value="${a.id}">${a.codigo} · ${a.nombre}</option>`).join('');
+  } catch (e) {
+    // Ruidoso: la custodia va a quedar `pendiente_sede` y quien entrega tiene
+    // que saber por qué, no descubrirlo en el health la semana que viene.
+    sel.innerHTML = `<option value="">— no se pudo cargar la lista —</option>`;
+    alerta('No se pudieron cargar las sedes: ' + e.message +
+           '. La custodia va a quedar pendiente_sede.', 'error');
+  }
+}
+
 /** Dice de dónde salió el número de llantas, porque no todas las fuentes valen igual. */
 function flotaNotaLlantas() {
   const n = FLOTA_ESTADO.posiciones_llanta;
@@ -274,14 +315,11 @@ async function flotaCambiarTipoCustodio() {
       }).join('') +
       '</select>';
   } else {
-    const d = await get('/api/almacenes');
-    det.innerHTML = '<select id="flota-sede"><option value="">' +
-      '— la sede no está en el maestro —</option>' +
-      (d.almacenes || []).map(a =>
-        `<option value="${a.id}">${a.codigo} · ${a.nombre}</option>`).join('') +
-      '</select><p style="color:var(--yellow);font-size:12px">Si la sede no aparece, dejá la ' +
+    det.innerHTML = '<select id="flota-sede"></select>' +
+      '<p style="color:var(--yellow);font-size:12px">Si la sede no aparece, dejá la ' +
       'primera opción: la custodia queda declarada <b>pendiente_sede</b> y el health la ' +
       'cuenta. No se inventa una sede.</p>';
+    await flotaLlenarSedes('flota-sede');
   }
 }
 
@@ -1262,13 +1300,7 @@ async function flotaCondAbrirEntrega() {
   // teclea el odómetro. Cuando toque "cómo estaba", ya están.
   flotaPrecargarReferencias();
 
-  try {
-    const d = await get('/api/almacenes');
-    document.getElementById('cf-sede').innerHTML =
-      '<option value="">— la sede no está en el maestro —</option>' +
-      (d.almacenes || []).map(a =>
-        `<option value="${a.id}">${a.codigo} · ${a.nombre}</option>`).join('');
-  } catch (e) { /* se entrega igual: queda pendiente_sede y el health lo cuenta */ }
+  await flotaLlenarSedes('cf-sede');
 }
 
 /** Muestra el motivo solo cuando queda fuera de sede. */

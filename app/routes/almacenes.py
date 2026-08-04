@@ -10,17 +10,23 @@ almacenes_bp = Blueprint('almacenes', __name__)
 
 
 from app.routes._auth_helpers import (_solo_admin, _es_personal_almacen,
-                                       _es_admin_o_jefe, _es_control_flota)
+                                       _es_admin_o_jefe, _es_control_flota,
+                                       _lee_flota)
 
 @almacenes_bp.route('/', methods=['GET'])
 @jwt_required()
 def listar_almacenes():
-    # `_es_control_flota` se suma aparte en vez de ensanchar
-    # `_es_personal_almacen`: ese helper autoriza operaciones de almacén, y
-    # meter ahí a control_flota le daría permisos que el procedimiento le niega.
-    # La pantalla de flota necesita la lista de sedes para registrar una
-    # custodia, y nada más.
-    if not (_es_personal_almacen() or _es_control_flota()):
+    # Se suma `LECTURA_FLOTA` aparte en vez de ensanchar `_es_personal_almacen`:
+    # ese helper autoriza OPERACIONES de almacén, y meter ahí a flota daría
+    # permisos que el procedimiento niega. Acá solo se necesita LEER la lista de
+    # sedes.
+    #
+    # El conductor entra por la misma puerta desde el 2026-08-03: al entregar el
+    # turno tiene que declarar dónde queda el vehículo, y sin la lista el
+    # desplegable sale vacío. El guard de permisos no lo atrapó porque
+    # `/api/almacenes` sin barra final devuelve 308 y el guard medía el
+    # redirect, no el destino.
+    if not (_es_personal_almacen() or _lee_flota()):
         return jsonify({'error': 'Sin permiso para listar almacenes'}), 403
     almacenes = Almacen.query.filter_by(activo=True).all()
     return jsonify([a.to_dict() for a in almacenes]), 200

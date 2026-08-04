@@ -98,6 +98,28 @@ def _es_control_flota():
     return u if u.rol in Roles.GESTION or u.rol == Roles.CONTROL_FLOTA else None
 
 
+def _lee_flota():
+    """Devuelve el usuario si puede LEER datos que la pantalla de flota usa.
+
+    Más ancho que `_es_control_flota` en una sola cosa: incluye al conductor.
+    Al entregar el turno tiene que declarar dónde queda el vehículo, y para eso
+    necesita la lista de sedes. Sin ella el desplegable sale vacío y la custodia
+    queda `pendiente_sede` sin razón.
+
+    Solo lectura de maestros, nunca operación: el conductor no crea ni edita
+    almacenes. Se separa de `_es_personal_almacen` por eso — ese helper autoriza
+    operaciones, y ensancharlo daría permisos que ningún procedimiento concede.
+    """
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return None
+    u = Usuario.query.get(uid)
+    if not u or not u.activo:
+        return None
+    return u if u.rol in Roles.LECTURA_FLOTA else None
+
+
 def _es_personal_almacen():
     """Retorna el usuario si pertenece al personal de almacén (excluye conductor y tienda)."""
     try:

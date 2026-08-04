@@ -194,7 +194,16 @@ class TestCargaInicialPorRol:
                     # corrida esto encontró `StockSiesa.fecha_sync`, una columna
                     # que no existe, reventando el health del Vigía.
                     try:
-                        codigo = client.get(url, headers=cab).status_code
+                        # `follow_redirects` NO es un detalle: sin esto,
+                        # `/api/almacenes` devolvía 308 —Flask redirige a la
+                        # versión con barra— y el guard lo daba por bueno. Toda
+                        # URL sin barra final pasaba SIN que nadie le revisara
+                        # los permisos, y así se coló el 403 del conductor sobre
+                        # la lista de sedes (2026-08-03). El guard medía el
+                        # redirect, no el destino: la proxy dentro del propio
+                        # guard.
+                        codigo = client.get(url, headers=cab,
+                                            follow_redirects=True).status_code
                     except Exception as e:
                         negados.append(f'{rol:<14} {funcion:<24} {url}  REVIENTA: {e}')
                         continue
@@ -255,7 +264,8 @@ class TestCargaInicialPorRol:
             u = _usuario_con_rol(db, rol, almacen)
             cab = {'Authorization': f'Bearer {_token(app, u)}'}
             try:
-                if client.get(url, headers=cab).status_code != 403:
+                if client.get(url, headers=cab,
+                              follow_redirects=True).status_code != 403:
                     ya_no_falla.append(f'{rol} {url}')
             except Exception:
                 continue
@@ -274,3 +284,38 @@ class TestCargaInicialPorRol:
             f'Se agregaron excepciones: {NEGACIONES_ESPERADAS}. '
             'Antes de aceptarlas, revisar si el rol debería abrir esa pantalla.'
         )
+
+
+class TestElGuardMideElDestinoNoElRedirect:
+    """TRINQUETE SOBRE EL TRINQUETE — el 308 tapaba el 403.
+
+    `/api/almacenes` (sin barra final) devuelve **308**: Flask redirige a
+    `/api/almacenes/`. Sin `follow_redirects`, este guard leía el 308, lo daba
+    por bueno, y **toda URL sin barra final quedaba sin revisar**.
+
+    Así se coló que el conductor no pudiera leer la lista de sedes: la pantalla
+    de entrega de turno mostraba un desplegable vacío y el guard estaba en verde
+    (2026-08-03). Es la sexta vez en el proyecto que un guard mide algo parecido
+    a la propiedad en vez de la propiedad.
+    """
+
+    def test_el_guard_sigue_los_redirects(self):
+        import inspect
+        fuente = inspect.getsource(
+            TestCargaInicialPorRol.test_ninguna_pantalla_devuelve_403_al_rol_que_la_abre)
+        assert 'follow_redirects=True' in fuente, (
+            'sin esto, un 308 tapa el 403 del destino y el guard queda ciego '
+            'para toda URL sin barra final')
+
+    def test_hay_urls_sin_barra_final_que_dependen_de_esto(self):
+        """Si algún día no quedara ninguna, este guard dejaría de proteger algo
+        y habría que saberlo — un trinquete sobre cero es arqueología."""
+        import os
+        sin_barra = []
+        for modulo in sorted(a for a in os.listdir(_PWA) if a.endswith('.js')):
+            for _, url in _gets_por_funcion(modulo):
+                if not url.endswith('/') and '?' not in url:
+                    sin_barra.append(url)
+        assert sin_barra, (
+            'ninguna URL sin barra final: revisar si este guard sigue '
+            'protegiendo algo — un trinquete sobre cero es arqueología')

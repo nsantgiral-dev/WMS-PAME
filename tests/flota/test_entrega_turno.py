@@ -314,3 +314,104 @@ class TestElBotonDiceLoQueHace:
         js = (_PWA / 'flota.js').read_text(encoding='utf-8')
         assert 'flotaCondAbrirEntrega' in js, 'no hay gesto de entrega'
         assert js.count('flotaCondAbrirEntrega') >= 2, 'definido y sin caller'
+
+
+class TestElDesplegableDeSedeNoPuedeSalirVacio:
+    """Tres bugs encadenados, y el visible era el tercero (2026-08-03).
+
+    El `<select>` de "¿qué sede?" salía **sin una sola opción**. Debajo había:
+
+      1. `/api/almacenes` devuelve una LISTA, no `{almacenes: [...]}`. El código
+         hacía `d.almacenes || []` → `undefined || []` → vacío. Nunca funcionó,
+         ni en la entrega ni en el modal de escritorio.
+      2. El conductor no tenía permiso: el guard era `_es_personal_almacen() or
+         _es_control_flota()`.
+      3. El `catch` se tragaba el fallo y dejaba el `<select>` vacío —
+         indistinguible de "no hay sedes".
+
+    Y el guard de permisos no atrapó el (2) porque `/api/almacenes` sin barra
+    final devuelve **308**, no 403: medía el redirect, no el destino.
+    """
+
+    def test_el_endpoint_devuelve_una_lista(self, client, jwt_token_admin):
+        """Si algún día devuelve un objeto, el frontend tiene que enterarse
+        acá y no con un desplegable vacío en el patio."""
+        r = client.get('/api/almacenes/', headers=_auth(jwt_token_admin))
+        assert r.status_code == 200
+        assert isinstance(r.get_json(), list), (
+            'cambió el contrato: revisá flotaLlenarSedes()')
+
+    def test_un_conductor_puede_leer_las_sedes(self, client, db, app):
+        """Sin esto, quien entrega el turno no puede decir dónde queda el
+        vehículo — y la custodia queda `pendiente_sede` sin razón."""
+        from flask_jwt_extended import create_access_token
+
+        from app.models.usuario import Usuario
+
+        u = Usuario(email='cond-sede@x.com', nombre='C', rol='conductor', activo=True)
+        u.set_password('x')
+        db.session.add(u)
+        db.session.commit()
+        with app.app_context():
+            t = create_access_token(identity=str(u.id))
+        r = client.get('/api/almacenes/', headers=_auth(t))
+        assert r.status_code == 200, r.get_json()
+
+    def test_tienda_sigue_sin_poder(self, client, db, app):
+        """Se agregó `conductor`, no se abrió la puerta.
+
+        Nota sobre `_es_personal_almacen()`: es una LISTA NEGRA —todos menos
+        conductor y tienda— con nombre de lista blanca. Un operario, compras o
+        gerencia ya podían listar almacenes antes de este cambio. Queda anotado
+        como deuda: el nombre promete una cosa y el cuerpo hace otra. Acá se
+        verifica lo único que ese helper sí excluye.
+        """
+        from flask_jwt_extended import create_access_token
+
+        from app.models.usuario import Usuario
+
+        u = Usuario(email='tienda-sede@x.com', nombre='T', rol='tienda', activo=True)
+        u.set_password('x')
+        db.session.add(u)
+        db.session.commit()
+        with app.app_context():
+            t = create_access_token(identity=str(u.id))
+        assert client.get('/api/almacenes/', headers=_auth(t)).status_code == 403
+
+    def test_el_conductor_no_puede_crear_almacenes(self, client, db, app):
+        """Leer los maestros no es administrarlos."""
+        from flask_jwt_extended import create_access_token
+
+        from app.models.usuario import Usuario
+
+        u = Usuario(email='cond-crea@x.com', nombre='C', rol='conductor', activo=True)
+        u.set_password('x')
+        db.session.add(u)
+        db.session.commit()
+        with app.app_context():
+            t = create_access_token(identity=str(u.id))
+        r = client.post('/api/almacenes/', json={'codigo': 'XX1', 'nombre': 'X'},
+                        headers=_auth(t))
+        assert r.status_code == 403
+
+    def test_una_sola_funcion_llena_los_dos_desplegables(self):
+        """El mismo desempaquetado en dos sitios diverge — ya costó 25×."""
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        assert js.count('function flotaLlenarSedes') == 1
+        assert js.count("flotaLlenarSedes('") == 2, (
+            'la entrega y el modal de escritorio tienen que usar la misma')
+
+    def test_tolera_las_dos_formas_de_respuesta(self):
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        i = js.index('async function flotaLlenarSedes')
+        assert 'Array.isArray(d)' in js[i:i + 900], (
+            'si el contrato cambia, la pantalla se vacía en silencio otra vez')
+
+    def test_si_falla_lo_dice_en_vez_de_quedar_vacio(self):
+        """Un desplegable vacío sin explicación es la regla 5 rota en la cara
+        del usuario: parece que no hay sedes."""
+        js = (_PWA / 'flota.js').read_text(encoding='utf-8')
+        i = js.index('async function flotaLlenarSedes')
+        cuerpo = js[i:i + 1400]
+        assert 'alerta(' in cuerpo, 'el fallo se sigue tragando'
+        assert 'no se pudo cargar' in cuerpo
