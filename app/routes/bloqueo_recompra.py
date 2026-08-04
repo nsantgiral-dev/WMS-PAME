@@ -9,7 +9,7 @@ GET  /api/compras/bloqueados/fugas     — lista de fugas (compras por fuera del
 """
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
-from app.routes._auth_helpers import _es_admin_o_jefe, _get_uid
+from app.routes._auth_helpers import _es_compras, _get_uid
 
 bloqueo_bp = Blueprint('bloqueo_recompra', __name__)
 
@@ -18,7 +18,7 @@ bloqueo_bp = Blueprint('bloqueo_recompra', __name__)
 @jwt_required()
 def listar_bloqueados():
     """Vista en pesos: SKUs bloqueados × costo × existencia."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin/gerente puede ver bloqueos'}), 403
     from app.services.bloqueo_recompra_service import BloqueoRecompraService
     resultado = BloqueoRecompraService.vista_capital_inmovilizado()
@@ -29,7 +29,7 @@ def listar_bloqueados():
 @jwt_required()
 def poblar_bloqueos():
     """Genera lista inicial de bloqueos (velocity=0 12m + stock>0)."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin/gerente puede poblar bloqueos'}), 403
     from app.services.bloqueo_recompra_service import BloqueoRecompraService
     try:
@@ -43,6 +43,8 @@ def poblar_bloqueos():
 @jwt_required()
 def verificar_oc():
     """Verifica si items de una OC están bloqueados (pre-check antes de generar OC)."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para verificar órdenes de compra'}), 403
     data = request.get_json() or {}
     codigos = data.get('codigos', [])
     if not codigos:
@@ -56,6 +58,8 @@ def verificar_oc():
 @jwt_required()
 def desbloquear(bloqueo_id):
     """Desbloquea un producto con restricciones (cantidad + vigencia + motivo)."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para desbloquear SKUs'}), 403
     uid = _get_uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
@@ -79,7 +83,7 @@ def desbloquear(bloqueo_id):
 @jwt_required()
 def listar_fugas():
     """Lista de fugas: recepciones de SKUs bloqueados (compras por fuera del sistema)."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin/gerente puede ver fugas'}), 403
     from app.services.bloqueo_recompra_service import BloqueoRecompraService
     fugas = BloqueoRecompraService.listar_fugas()

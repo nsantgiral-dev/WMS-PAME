@@ -92,14 +92,14 @@ _MODULOS = {m for m, _, _ in PANTALLAS}
 # vacía o incompleta.
 # ══════════════════════════════════════════════════════════════════════════
 BASELINE_HEREDADO = {
-    # El rol `compras` no está en los guards de los blueprints que su propia
-    # pantalla consume: armador, bloqueos y kardex tienen listas propias.
+    # `armador` y `bloqueo_recompra` se unificaron en `_es_compras()` el
+    # 2026-08-04 — estaban a medias, con unos endpoints en `_es_admin_o_jefe()`
+    # y otros SIN NINGÚN guard. Al cerrar el agujero, el rol `compras` recuperó
+    # su propia pantalla y estas cuatro líneas salieron solas.
+    #
+    # Queda `kardex`, que tiene lista propia y no se tocó: es otro módulo.
     ('compras', '/api/kardex/clasificacion-sb?meses=12'),
     ('compras', '/api/kardex/pronostico-tsb?meses=12'),
-    ('compras', '/api/compras/armador/propuesta?tipo='),
-    ('compras', '/api/compras/rop-dual'),
-    ('compras', '/api/compras/bloqueados'),
-    ('compras', '/api/compras/bloqueados/fugas'),
     # `tienda` con punto de venta sin configurar: el guard exige bodega y el
     # usuario de prueba no la tiene. Puede ser del fixture o del guard — hay
     # que mirarlo con un usuario de tienda real.

@@ -12,7 +12,7 @@ import logging
 import os
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
-from app.routes._auth_helpers import _es_admin_o_jefe, _get_uid
+from app.routes._auth_helpers import _es_admin_o_jefe, _es_gestion, _get_uid
 from app.extensions import db
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,11 @@ def ejecutar_cusum(nombre_serie):
 @jwt_required()
 def listar_alarmas():
     """Lista alarmas, opcionalmente filtradas por serie y estado."""
+    # Cerrar una alarma es SILENCIAR EL DETECTOR. El endpoint tenía el guard
+    # anti-silencio (causa de 20 chars mínimo) y no tenía guard de QUIÉN: el
+    # autor pensó en que no se cerrara sin explicación, no en quién podía.
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para ver alarmas del Vigía'}), 403
     serie = request.args.get('serie')
     solo_abiertas = request.args.get('solo_abiertas', 'true').lower() != 'false'
 
@@ -118,6 +123,11 @@ def listar_alarmas():
 @jwt_required()
 def cerrar_alarma(alarma_id):
     """Cierra una alarma con causa + responsable (anti-silencio: min 20 chars)."""
+    # Cerrar una alarma es SILENCIAR EL DETECTOR. El endpoint tenía el guard
+    # anti-silencio (causa de 20 chars mínimo) y no tenía guard de QUIÉN: el
+    # autor pensó en que no se cerrara sin explicación, no en quién podía.
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para cerrar alarmas del Vigía'}), 403
     uid = _get_uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
@@ -152,6 +162,11 @@ def cerrar_alarma(alarma_id):
 @jwt_required()
 def listar_series():
     """Lista series disponibles con estadísticas básicas."""
+    # Cerrar una alarma es SILENCIAR EL DETECTOR. El endpoint tenía el guard
+    # anti-silencio (causa de 20 chars mínimo) y no tenía guard de QUIÉN: el
+    # autor pensó en que no se cerrara sin explicación, no en quién podía.
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para ver las series del Vigía'}), 403
     from app.services.vigia_service import SerieVigia
     from app.extensions import db
     from sqlalchemy import func
@@ -181,6 +196,11 @@ def listar_series():
 @jwt_required()
 def resumen_vigia():
     """Resumen para el panel: series agrupadas por CO + alarmas abiertas."""
+    # Cerrar una alarma es SILENCIAR EL DETECTOR. El endpoint tenía el guard
+    # anti-silencio (causa de 20 chars mínimo) y no tenía guard de QUIÉN: el
+    # autor pensó en que no se cerrara sin explicación, no en quién podía.
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para ver el panel del Vigía'}), 403
     from app.services.vigia_service import SerieVigia, AlarmaVigia
     from app.extensions import db
     from sqlalchemy import func
@@ -247,6 +267,11 @@ def resumen_vigia():
 @jwt_required()
 def salud_conectores():
     """G0: Latencia de conectores. Bandera roja si >24h sin datos."""
+    # Cerrar una alarma es SILENCIAR EL DETECTOR. El endpoint tenía el guard
+    # anti-silencio (causa de 20 chars mínimo) y no tenía guard de QUIÉN: el
+    # autor pensó en que no se cerrara sin explicación, no en quién podía.
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para ver la salud de conectores'}), 403
     from app.services.vigia_service import VigiaService
     resultado = VigiaService.salud_conectores()
     return jsonify(resultado), 200

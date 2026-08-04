@@ -523,6 +523,8 @@ def resumen():
 @jwt_required()
 def listar_acuerdos():
     """Lista acuerdos marco (vigentes por default)."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver acuerdos marco'}), 403
     from app.models.acuerdo_marco import AcuerdoMarco
     solo_vigentes = request.args.get('solo_vigentes', 'true').lower() != 'false'
     q = AcuerdoMarco.query
@@ -539,6 +541,8 @@ def listar_acuerdos():
 @jwt_required()
 def crear_acuerdo():
     """Registra un acuerdo marco negociado."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para registrar acuerdos marco'}), 403
     from app.models.acuerdo_marco import AcuerdoMarco
     data = request.get_json() or {}
     required = ['producto_id', 'proveedor_id', 'precio_unitario', 'vigencia_desde', 'vigencia_hasta']
@@ -568,6 +572,8 @@ def crear_acuerdo():
 @jwt_required()
 def registrar_precio():
     """Registra una cotización o precio de lista."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para registrar precios de proveedor'}), 403
     from app.models.acuerdo_marco import PrecioProveedor
     data = request.get_json() or {}
     from datetime import date as _d
@@ -591,6 +597,8 @@ def registrar_precio():
 @jwt_required()
 def comparador(producto_id):
     """Los 3-5 mejores precios vigentes lado a lado."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver el comparador de precios'}), 403
     from app.services.compras_inteligencia_service import ComprasInteligenciaService
     return jsonify(ComprasInteligenciaService.comparador_precios(producto_id))
 
@@ -599,6 +607,8 @@ def comparador(producto_id):
 @jwt_required()
 def clasificar_rama(producto_id):
     """Determina rama de compra: acuerdo vigente / cotización / lista."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para clasificar ramas'}), 403
     from app.services.compras_inteligencia_service import ComprasInteligenciaService
     return jsonify(ComprasInteligenciaService.clasificar_sku_compra(producto_id))
 
@@ -607,6 +617,8 @@ def clasificar_rama(producto_id):
 @jwt_required()
 def detectar_deriva():
     """Dock Lock de compras: precio facturado vs pactado."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver la deriva de precios'}), 403
     meses = request.args.get('meses', 3, type=int)
     from app.services.compras_inteligencia_service import ComprasInteligenciaService
     return jsonify(ComprasInteligenciaService.detectar_deriva(meses))
@@ -616,5 +628,7 @@ def detectar_deriva():
 @jwt_required()
 def calendario_vencimientos():
     """Agenda de renegociación: acuerdos por vencer + candidatos."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver vencimientos de acuerdos'}), 403
     from app.services.compras_inteligencia_service import ComprasInteligenciaService
     return jsonify(ComprasInteligenciaService.calendario_vencimientos())

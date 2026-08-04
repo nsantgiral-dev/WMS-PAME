@@ -9,7 +9,7 @@ GET  /api/compras/armador/sigma-lt  — σ_LT medido vs conservador
 """
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
-from app.routes._auth_helpers import _es_admin_o_jefe
+from app.routes._auth_helpers import _es_compras
 
 armador_bp = Blueprint('armador', __name__)
 
@@ -18,7 +18,7 @@ armador_bp = Blueprint('armador', __name__)
 @jwt_required()
 def rop_dual():
     """ROP dual: nacional (LT=5d) + China (LT=105d, σ_LT medido)."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin puede ver ROP'}), 403
     nivel = request.args.get('nivel_servicio', 0.95, type=float)
     from app.services.armador_service import ArmadorService
@@ -33,7 +33,7 @@ def rop_dual():
 @jwt_required()
 def propuesta_contenedor():
     """Propuesta de contenedor — shadow hasta G5 completo."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin puede ver propuesta'}), 403
     tipo = request.args.get('tipo', '40STD')
     presupuesto = request.args.get('presupuesto_cop', None, type=float)
@@ -52,6 +52,8 @@ def propuesta_contenedor():
 @jwt_required()
 def tipos_de_contenedor():
     """Catálogo de contenedores con su CBM útil — alimenta el selector del panel."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver tipos de contenedor'}), 403
     from app.services.armador_service import tipos_contenedor
     return jsonify({'tipos': tipos_contenedor()}), 200
 
@@ -60,6 +62,8 @@ def tipos_de_contenedor():
 @jwt_required()
 def estado_g5():
     """Estado de compuertas G5 del Armador."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver el estado G5'}), 403
     from app.services.armador_service import ArmadorService
     return jsonify(ArmadorService.verificar_g5()), 200
 
@@ -68,6 +72,8 @@ def estado_g5():
 @jwt_required()
 def sigma_lt():
     """σ_LT medido de contenedores vs default conservador."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver sigma_LT'}), 403
     from app.services.armador_service import ArmadorService
     return jsonify(ArmadorService.calcular_sigma_lt_real()), 200
 
@@ -76,6 +82,8 @@ def sigma_lt():
 @jwt_required()
 def listar_contenedores():
     """Lista contenedores registrados."""
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver contenedores de importación'}), 403
     from app.models.importacion import Contenedor
     contenedores = Contenedor.query.order_by(Contenedor.fecha_creacion.desc()).all()
     return jsonify({
@@ -88,7 +96,7 @@ def listar_contenedores():
 @jwt_required()
 def crear_contenedor():
     """Registra un contenedor (histórico o en curso)."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin puede registrar contenedores'}), 403
     from app.models.importacion import Contenedor
     from app.extensions import db
