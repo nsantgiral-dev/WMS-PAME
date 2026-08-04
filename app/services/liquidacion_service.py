@@ -22,6 +22,7 @@ from app.extensions import db
 from app.models.recaudo_entrega import RecaudoEntrega, EstadoEntrega
 from app.models.ruta_despacho import RutaDespacho, EstadoFinancieroRuta
 from app.models.siesa_job import SiesaJob
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -687,7 +688,7 @@ class LiquidacionService:
             f'WMS Ruta #{ruta_id} | '
             f'Conductor: {conductor.nombre} ({conductor.cedula}) | '
             f'Vehículo: {vehiculo.placa if vehiculo else "N/A"} | '
-            f'Fecha: {datetime.utcnow().strftime("%Y-%m-%d")}'
+            f'Fecha: {_ahora_bogota().strftime("%Y-%m-%d")}'
         )
 
         resumen = {'rc_encolados': 0, 'nc_encolados': 0, 'dc_encolados': 0,

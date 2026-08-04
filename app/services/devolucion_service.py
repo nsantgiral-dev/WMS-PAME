@@ -30,6 +30,7 @@ from app.models.ubicacion import Ubicacion
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
 from sqlalchemy.exc import IntegrityError as _IntegrityError
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ def crear_tareas_desde_discrepancias(discrepancias: list, almacen_id: int, times
                     continue
                 # CANCELADO u otro: recrear la tarea
 
-            codigo = f'DEV-{producto_id}-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}'
+            codigo = f'DEV-{producto_id}-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}'
             tarea = TareaDevolucion(
                 codigo=codigo,
                 producto_id=producto_id,

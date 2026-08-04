@@ -28,8 +28,11 @@ def _tendencia_7d():
     from app.extensions import db
     from sqlalchemy import func, cast, Date
 
-    hoy = datetime.utcnow().date()
-    inicio_ventana = datetime.combine(hoy - timedelta(days=6), datetime.min.time())
+    # Día OPERATIVO (Colombia), no día UTC. Las columnas guardan UTC naive, así
+    # que el corte se expresa en ese mismo marco: `inicio_del_dia_utc`.
+    from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+    hoy = dia_operativo()
+    inicio_ventana = inicio_del_dia_utc(hoy - timedelta(days=6))
 
     # Una query por modelo, agrupada por día
     picking_rows = (
@@ -77,8 +80,12 @@ class DashboardService:
     @staticmethod
     def kpis_operativos(almacen_id: int):
         """KPIs principales del almacén en tiempo real."""
-        hoy = datetime.utcnow().date()
-        inicio_hoy = datetime.combine(hoy, datetime.min.time())
+        # "Completado hoy" con corte UTC se REINICIA A LAS 7 P.M. Colombia, en
+        # mitad del turno de la tarde, y arrastra el trabajo de la noche
+        # anterior. El día operativo empieza a medianoche de acá.
+        from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+        hoy = dia_operativo()
+        inicio_hoy = inicio_del_dia_utc(hoy)
 
         # --- PICKING — 3 counts en 1 query con aggregación condicional ---
         p_row = db.session.query(
@@ -192,7 +199,9 @@ class DashboardService:
         operario_ids = [o.id for o in operarios]
 
         # [28] Consolidar los 4 COUNT queries por operario en queries batch con GROUP BY
-        hoy = datetime.utcnow().date()
+        # (acá había un `hoy = utcnow().date()` que nadie usaba: el filtro es
+        #  `fecha_inicio`. Se quitó — una variable muerta con un bug adentro
+        #  invita a copiarla al próximo sitio.)
 
         pickings_por_op = {
             row.operario_id: row.cnt
@@ -332,8 +341,12 @@ class DashboardService:
         from app.models.traslado import SolicitudTraslado
         from app.models.ruta_despacho import RutaDespacho
 
-        hoy = datetime.utcnow().date()
-        inicio_hoy = datetime.combine(hoy, datetime.min.time())
+        # "Completado hoy" con corte UTC se REINICIA A LAS 7 P.M. Colombia, en
+        # mitad del turno de la tarde, y arrastra el trabajo de la noche
+        # anterior. El día operativo empieza a medianoche de acá.
+        from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+        hoy = dia_operativo()
+        inicio_hoy = inicio_del_dia_utc(hoy)
 
         t_row = db.session.query(
             func.count(SolicitudTraslado.id).filter(SolicitudTraslado.estado == 'EN_PICKING').label('en_picking'),

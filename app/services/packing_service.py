@@ -10,6 +10,7 @@ from app.models.packing import TareaPacking, ItemPacking, EstadoPacking
 from app.models.picking import TareaPicking
 from app.services.connekta_gateway import connekta
 import logging
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class PackingService:
         if existente:
             raise ValueError(f'Ya existe una tarea de packing para el pedido {numero_pedido_siesa}')
 
-        codigo = f'PACK-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        codigo = f'PACK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
         tarea = TareaPacking(
             codigo=codigo,
@@ -101,7 +102,7 @@ class PackingService:
         if existente:
             raise ValueError(f'Ya existe una tarea de packing para el pedido {numero_pedido_siesa}')
 
-        codigo = f'PACK-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        codigo = f'PACK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
         tarea = TareaPacking(
             codigo=codigo,

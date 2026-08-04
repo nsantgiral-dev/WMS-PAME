@@ -94,7 +94,7 @@ class TestFechaHoyBogota:
         assert 1 <= month <= 12
         assert 1 <= day <= 31
 
-    @patch('app.services.connekta_gateway.datetime')
+    @patch('app.utils.fecha.datetime')
     def test_23_utc_es_dia_anterior_en_bogota(self, mock_dt):
         # 23:00 UTC del 15 de julio = 18:00 COT del 15 de julio (mismo día)
         # 05:30 UTC del 16 de julio = 00:30 COT del 16 de julio
@@ -106,7 +106,7 @@ class TestFechaHoyBogota:
         # 04:59 UTC = 23:59 COT del 15 → debería ser '20260715'
         assert resultado == '20260715'
 
-    @patch('app.services.connekta_gateway.datetime')
+    @patch('app.utils.fecha.datetime')
     def test_06_utc_es_mismo_dia_en_bogota(self, mock_dt):
         # 06:00 UTC = 01:00 COT → mismo día
         mock_dt.now.return_value = datetime(2026, 7, 16, 6, 0, tzinfo=ZoneInfo('UTC')).astimezone(_TZ_BOGOTA)

@@ -257,7 +257,24 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 2. **F_CIA = 1, NUNCA 8215** — 8215 es el tenant Connekta, no la compañía Siesa
 3. **POST NUNCA reintenta en 5xx/timeout** — solo en 429. Un timeout no significa que falló (incidente RC-00002744)
 4. **DecimalConSigno = 21 chars exactos** — `+000000000000000.0000` → `f'{signo}{abs(v):020.4f}'`
-5. **Fechas = YYYYMMDD sin separadores** — timezone Bogotá (UTC-5), no UTC. Después de 7PM Colombia, UTC es el día siguiente
+5. **Fechas = YYYYMMDD sin separadores** — timezone Bogotá (UTC-5), no UTC. Después de 7PM Colombia, UTC es el día siguiente.
+
+   **Una sola implementación: `app/utils/fecha.py`.** Esta regla ya existía, ya
+   tenía un helper y ya tenía cuatro tests en verde — y se aplicaba en 4 de 16
+   sitios. Los tests verificaban EL HELPER en aislamiento, nunca que alguien lo
+   llamara. Auditado el 2026-08-04: 16 fechas en el gateway + 4 fuera + 13
+   códigos, todas en UTC.
+
+   Lo que costaba, y no era solo `f350_fecha`:
+   · vencimientos de cartera a 30 días contados desde el día equivocado;
+   · `SIESA-INI-{prod}-{fecha}` como clave de idempotencia — cambiaba a las
+     7 p.m., y dos cargas de stock separadas por ese minuto entraban las dos;
+   · el KPI "completado hoy" reiniciándose a las 7 p.m., en mitad del turno;
+   · el cupo diario de conteo del operario, reiniciado a la misma hora.
+
+   Los timestamps técnicos (`created_at`) SIGUEN en UTC y eso es correcto. Lo
+   que no puede salir de UTC es una fecha que alguien LEE como día.
+   Trinquete: `tests/test_siesa_fecha_bogota.py`.
 6. **Pre-flag antes de POST** — `siesa_*_triggered = True` ANTES del POST, revert si falla
 7. **Secuencialidad DLQ: NC → RC → DC** — cada uno espera al anterior
 8. **`f470_desc_varible` es TYPO INTENCIONAL** — nombre exacto del spec para 142951, 173066, 173076, 173079. Sin este campo (2000 chars), el registro plano se desalinea

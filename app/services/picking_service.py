@@ -7,6 +7,7 @@ from datetime import datetime
 import uuid
 from sqlalchemy import case
 from app.extensions import db
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 from app.models.picking import TareaPicking, EstadoPicking
@@ -267,7 +268,7 @@ class PickingService:
         tareas_creadas = []
 
         for asig in fefo['asignaciones']:
-            codigo = f'PICK-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+            codigo = f'PICK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
             tarea = TareaPicking(
                 codigo=codigo,

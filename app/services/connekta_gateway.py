@@ -279,11 +279,55 @@ class ConnektaGateway:
                 )
 
     @staticmethod
+    def _ahora_bogota() -> datetime:
+        """LA fuente de la fecha para todo lo que va a Siesa.
+
+        Una política, una función. Antes había un helper que devolvía el string
+        formateado y **doce sitios que calculaban la fecha por su cuenta** con
+        `datetime.utcnow()`. Los tres formatos que hacen falta —YYYYMMDD, ISO, y
+        hoy+N días— salen ahora de acá, así que corregir la zona en un lugar los
+        corrige a todos.
+        """
+        from app.utils.fecha import ahora_bogota
+
+        return ahora_bogota()
+
+    @staticmethod
     def _fecha_hoy_bogota() -> str:
         """Fecha actual en zona horaria Bogotá (UTC-5) formato YYYYMMDD.
-        Siesa rechaza documentos con fecha futura o período contable cerrado.
-        datetime.utcnow() causa fecha incorrecta después de 7PM Colombia."""
-        return datetime.now(_TZ_BOGOTA).strftime('%Y%m%d')
+
+        Siesa rechaza documentos con fecha futura o período contable cerrado, y
+        `datetime.utcnow()` da la fecha de MAÑANA después de las 7 p.m. Colombia
+        — que es justo cuando se cierra el despacho del día.
+
+        **Existía desde el 2026-07-21 y se usaba en 4 de 16 sitios.** Los otros
+        12 seguían con `utcnow()`, y la suite estaba en verde porque los tests
+        verificaban ESTE MÉTODO en aislamiento, no que alguien lo llamara. Un
+        test sobre la implementación y no sobre la propiedad.
+        """
+        from app.utils.fecha import fecha_hoy_bogota
+
+        return fecha_hoy_bogota()
+
+    @staticmethod
+    def _fecha_iso_bogota() -> str:
+        """YYYY-MM-DD en hora Colombia. Para los campos que llevan guiones
+        (`f421_fecha_entrega`), que son la excepción y no la regla."""
+        from app.utils.fecha import fecha_iso_bogota
+
+        return fecha_iso_bogota()
+
+    @staticmethod
+    def _fecha_bogota_mas(dias: int) -> str:
+        """Hoy + N días, en hora Colombia, formato YYYYMMDD.
+
+        Para vencimientos de cartera. Sumar días sobre `utcnow()` arrastra el
+        error del día base: un vencimiento a 30 días calculado a las 8 p.m.
+        vencía un día antes de lo pactado.
+        """
+        from app.utils.fecha import fecha_bogota_mas
+
+        return fecha_bogota_mas(dias)
 
     @staticmethod
     def _fmt_valor(v) -> str:
@@ -465,7 +509,7 @@ class ConnektaGateway:
         return {
             'simulado': True,
             'operacion': operacion,
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': ConnektaGateway._ahora_bogota().isoformat(),
             'mensaje': f'{operacion} simulado exitosamente',
             'payload': payload or {}
         }
@@ -540,7 +584,7 @@ class ConnektaGateway:
                 'nombre': nombre_conector,
                 'mensaje': 'POST bloqueado en modo ensayo — payload certificado, sin impacto en Siesa',
                 'payload': payload,
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': ConnektaGateway._ahora_bogota().isoformat()
             }
 
         # Circuit breaker: si OPEN, fail-fast sin HTTP
@@ -1102,7 +1146,7 @@ class ConnektaGateway:
         fecha: AAAAMMDD — si None usa hoy. Devuelve JSON crudo para descubrir campos.
         """
         if not fecha:
-            fecha = datetime.utcnow().strftime('%Y%m%d')
+            fecha = self._fecha_hoy_bogota()
 
         return self._get(
             'papeleriamedellin_monitos_facturas_wms',
@@ -1393,7 +1437,7 @@ class ConnektaGateway:
                     'Es obligatorio (pos 131, ancho 2) en connector 142945.'
                 )
         # Siesa: fecha en formato YYYYMMDD (8 chars max)
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
 
         # Filtrar ítems con cantidad 0 — Siesa acepta líneas vacías sin rechazar el documento
         # pero no descarga inventario, causando discrepancias silenciosas.
@@ -1521,10 +1565,10 @@ class ConnektaGateway:
                 logger.warning(f'[CONNEKTA] Pre-check factura falló: {_e} — continuando con POST')
 
         from datetime import timedelta
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         consec_int = int(consec_docto_pedido) if str(consec_docto_pedido).isdigit() else consec_docto_pedido
         # Vencimiento a 30 días — Siesa usará condición de pago del pedido si la tiene
-        fecha_vcto = (datetime.utcnow() + timedelta(days=30)).strftime('%Y%m%d')
+        fecha_vcto = self._fecha_bogota_mas(30)
 
         payload = {
             'Docto_ventas_comercial': [{
@@ -1570,8 +1614,8 @@ class ConnektaGateway:
         Usado exclusivamente por DespachoParialService — no toca flujo de packing.
         """
         from datetime import timedelta
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
-        fecha_vcto = (datetime.utcnow() + timedelta(days=30)).strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
+        fecha_vcto = self._fecha_bogota_mas(30)
         cia = int(self.id_cia_siesa)
 
         # Nombres de campo verificados empíricamente contra JSON real de API_v2_Ventas_Pedidos
@@ -1768,8 +1812,8 @@ class ConnektaGateway:
                 'Agrega la variable en Railway con el código de tipo de documento de entrada OC en Siesa.'
             )
         # Siesa espera fecha sin guiones: YYYYMMDD (8 chars). f421_fecha_entrega usa YYYY-MM-DD.
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
-        fecha_hoy_iso = datetime.utcnow().strftime('%Y-%m-%d')
+        fecha_hoy = self._fecha_hoy_bogota()
+        fecha_hoy_iso = self._fecha_iso_bogota()
 
         # F_CIA debe ser entero según especificación Siesa/Connekta
         cia = int(self.id_cia_siesa)
@@ -1931,7 +1975,7 @@ class ConnektaGateway:
         # faltante ahí nunca podrá registrarse hasta que los compromisos se liberen.
         siesa_motivo = self.motivo_ajuste_entrada if es_entrada else self.motivo_ajuste_salida
 
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         cia = int(self.id_cia_siesa)
 
         payload = {
@@ -2027,7 +2071,7 @@ class ConnektaGateway:
         Usa SIESA_TIPO_DOCTO_TRASLADO (TRA) y SIESA_MOTIVO_TRASLADO (01).
         Siesa mueve el stock entre bodegas — vendedores ya no ven las unidades averiadas.
         """
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         cia_averias = int(self.id_cia_siesa)
 
         payload = {
@@ -2160,7 +2204,7 @@ class ConnektaGateway:
             raise ValueError(
                 'SIESA_MOTIVO_TRASLADO no configurado — requerido para transferencias internas 173066'
             )
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         tipo_docto = self.tipo_docto_traslado or 'TRA'
         _centro_op = centro_op or self.centro_op
 
@@ -2335,7 +2379,7 @@ class ConnektaGateway:
                     f'Item sin codigo_siesa en requisicion_traslado: {_item.get("codigo") or _item}. '
                     'Nunca usar código interno WMS como fallback hacia Siesa.'
                 )
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
 
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
@@ -2494,7 +2538,7 @@ class ConnektaGateway:
                 if _item.get('factor_empaque', 1) > 1
                 else round(float(abs(_item.get('cantidad', 0))), 4),
             )
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         # CO del documento debe coincidir con el CO de la bodega de salida (46089).
         # _co_de_bodega resuelve desde Almacen.centro_op_siesa: NB1→003, NS1→001, etc.
         _co_sts = self._co_de_bodega(bodega_origen)
@@ -2595,7 +2639,7 @@ class ConnektaGateway:
             raise ValueError(
                 'SIESA_TIPO_DOCTO_RIT no configurado — requerido como referencia en 174930'
             )
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],
             'Documentos': [
@@ -2654,7 +2698,7 @@ class ConnektaGateway:
                     f'Item sin codigo_siesa en transferencia_transito_entrada: {_item.get("codigo") or _item}. '
                     'Nunca usar código interno WMS como fallback hacia Siesa.'
                 )
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
 
         # CO del documento destino (bodega_entrada = NC1, NS1, etc.)
         _co_ent = co_destino or self.centro_op
@@ -2843,7 +2887,7 @@ class ConnektaGateway:
                     f'Item sin codigo_siesa en transferencia_directa: {_item.get("codigo") or _item}. '
                     'Nunca usar código interno WMS como fallback hacia Siesa.'
                 )
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        fecha_hoy = self._fecha_hoy_bogota()
 
         payload = {
             'Inicial': [{'F_CIA': int(self.id_cia_siesa)}],

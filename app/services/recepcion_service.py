@@ -12,6 +12,7 @@ from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.ubicacion import Ubicacion
 from app.models.picking import TareaPicking
 from app.services.connekta_gateway import connekta
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class RecepcionService:
         if existente:
             raise ValueError(f'Ya existe una recepción para la OC {numero_oc_siesa}')
 
-        codigo = f'REC-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        codigo = f'REC-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
         recepcion = RecepcionMercancia(
             codigo=codigo,

@@ -25,6 +25,7 @@ from app.models.ubicacion import Ubicacion
 from app.models.siesa_job import SiesaJob, EstadoSiesaJob
 from app.services.connekta_gateway import connekta
 from app.services.recepcion_service import RecepcionService
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class DevolucionClienteService:
                     f'no puede superar la cantidad facturada ({cant_fact})'
                 )
 
-        codigo = f'DEVC-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{tarea_packing_id}'
+        codigo = f'DEVC-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{tarea_packing_id}'
         devolucion = DevolucionCliente(
             codigo=codigo,
             tarea_packing_id=tarea_packing_id,

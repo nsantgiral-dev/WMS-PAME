@@ -9,6 +9,7 @@ from datetime import datetime
 from app.extensions import db
 from app.models.conteo import SesionConteo, EstadoConteo
 from app.services.connekta_gateway import connekta
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -312,7 +313,7 @@ class ConteoService:
         sesion_origen: CC1 para CC2, CC2 para CC3.
         """
         numero = 3 if (sesion_origen.es_segundo_conteo) else 2
-        codigo = f'CC{numero}-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        codigo = f'CC{numero}-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
         segundo = SesionConteo(
             codigo=codigo,
@@ -544,7 +545,7 @@ class ConteoService:
             )
             return existente
 
-        codigo = f'AUD-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
+        codigo = f'AUD-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{str(uuid.uuid4())[:6].upper()}'
 
         sesion = SesionConteo(
             codigo=codigo,
@@ -705,7 +706,8 @@ class ConteoService:
 
         creadas = []
         omitidas = 0
-        hoy = datetime.utcnow().strftime('%Y%m%d')
+        from app.utils.fecha import fecha_hoy_bogota
+        hoy = fecha_hoy_bogota()
         for reg in registros:
             if reg.ubicacion_id in activos_set:
                 omitidas += 1

@@ -358,9 +358,15 @@ class MobileService:
         if tarea.ubicacion_id:
             # Una sola query: capacidad del operario + conteos de hoy juntos
             from sqlalchemy import text as _text
-            hoy = datetime.utcnow().date()
-            inicio_hoy = datetime.combine(hoy, dtime.min)
-            fin_hoy = datetime.combine(hoy, dtime.max)
+            # `capacidad_diaria_conteo` es un CUPO DIARIO. Con corte UTC se
+            # reiniciaba a las 7 p.m. Colombia y el operario podía hacer el
+            # doble en el turno de la tarde sin que nada lo notara.
+            from datetime import timedelta as _td
+
+            from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+            hoy = dia_operativo()
+            inicio_hoy = inicio_del_dia_utc(hoy)
+            fin_hoy = inicio_del_dia_utc(hoy + _td(days=1))
             _row = db.session.execute(
                 _text("""
                     SELECT u.capacidad_diaria_conteo,
@@ -369,7 +375,7 @@ class MobileService:
                     LEFT JOIN sesiones_conteo sc
                         ON sc.operario_id = u.id
                         AND sc.fecha_inicio >= :inicio
-                        AND sc.fecha_inicio <= :fin
+                        AND sc.fecha_inicio < :fin
                     WHERE u.id = :uid
                     GROUP BY u.capacidad_diaria_conteo
                 """),

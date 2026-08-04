@@ -23,6 +23,7 @@ from app.models.producto_empaque import ProductoEmpaque
 from app.models.inventario import UbicacionProducto, MovimientoInventario
 from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 # Mapeo certificado por consultor Siesa (estático — no cambia sin nueva bodega)
 _BODEGA_CO_MAP = {
@@ -62,7 +63,8 @@ class TrasladoService:
 
     @staticmethod
     def _codigo_solicitud():
-        hoy = datetime.utcnow().strftime('%Y%m%d')
+        from app.utils.fecha import fecha_hoy_bogota
+        hoy = fecha_hoy_bogota()
         uid = str(uuid.uuid4())[:4].upper()
         return f'ST-{hoy}-{uid}'
 
@@ -974,7 +976,7 @@ class TrasladoService:
                     db.session.add(ub_general)
                     db.session.flush()
                 tarea = _TP(
-                    codigo=f'PICK-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{uuid.uuid4().hex[:6].upper()}',
+                    codigo=f'PICK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{uuid.uuid4().hex[:6].upper()}',
                     producto_id=item.producto_id,
                     cantidad_solicitada=cantidad,
                     ubicacion_id=ub_general.id,
@@ -1033,7 +1035,7 @@ class TrasladoService:
             cantidad = item.cantidad_aprobada or item.cantidad_solicitada
             if not cantidad or cantidad <= 0 or not item.producto_id:
                 continue
-            codigo = f'PICK-{datetime.utcnow().strftime("%Y%m%d%H%M%S")}-{uuid.uuid4().hex[:6].upper()}'
+            codigo = f'PICK-{_ahora_bogota().strftime("%Y%m%d%H%M%S")}-{uuid.uuid4().hex[:6].upper()}'
             tarea = TareaPicking(
                 codigo=codigo,
                 producto_id=item.producto_id,

@@ -514,8 +514,8 @@ def reintentar_siesa(id):
 
     if debug:
         # Construir payload sin llamar a Siesa — solo para inspección
-        from datetime import datetime as _dt
-        fecha_hoy = _dt.utcnow().strftime('%Y%m%d')
+        from app.utils.fecha import fecha_hoy_bogota
+        fecha_hoy = fecha_hoy_bogota()
         payload_preview = {
             'Inicial': [{'F_CIA': connekta.id_cia_siesa}],
             'Documentos': [{

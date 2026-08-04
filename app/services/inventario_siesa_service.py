@@ -461,7 +461,10 @@ def _run_carga_inicial(app):
     global _estado_carga
 
     with app.app_context():
-        fecha_hoy = datetime.utcnow().strftime('%Y%m%d')
+        # Sufijo de la clave de idempotencia: con utcnow cambiaba a las 7 p.m.
+        # y dos cargas separadas por ese minuto entraban las dos.
+        from app.utils.fecha import fecha_hoy_bogota
+        fecha_hoy = fecha_hoy_bogota()
         cargados = 0
         actualizados = 0
         sin_producto_wms = 0

@@ -26,6 +26,7 @@ from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
 from app.models.producto_clasificacion_abc import ProductoClasificacionABC
 from app.services.connekta_gateway import connekta
+from app.utils.fecha import ahora_bogota as _ahora_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -246,7 +247,7 @@ class ABCService:
 
                         codigo = (
                             f'CC-WATCHDOG-'
-                            f'{datetime.utcnow().strftime("%Y%m%d")}-'
+                            f'{_ahora_bogota().strftime("%Y%m%d")}-'
                             f'{str(uuid.uuid4())[:6].upper()}'
                         )
                         sesion = SesionConteo(
@@ -468,7 +469,7 @@ class ABCService:
 
                 codigo = (
                     f'CC-{clasificacion}-'
-                    f'{datetime.utcnow().strftime("%Y%m%d")}-'
+                    f'{_ahora_bogota().strftime("%Y%m%d")}-'
                     f'{str(uuid.uuid4())[:6].upper()}'
                 )
                 sesion = SesionConteo(
