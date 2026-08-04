@@ -726,17 +726,23 @@ class ABCService:
                     logger.error(f'[ABC] Pre-turno prewarm falló: {e}', exc_info=True)
 
         def _liberar_zombis():
-            """Libera tareas EN_PROCESO >2h sin progreso — cada 30 min."""
+            """Libera tareas EN_PROCESO >2h sin progreso — cada 30 min.
+
+            El lock 2015 se tomaba y **no se liberaba nunca**. Los advisory
+            locks de sesión viven en la CONEXIÓN: la conexión volvía al pool
+            tomada, y la corrida siguiente se encontraba el lock ocupado y hacía
+            `return`. El job dejaba de correr, en silencio y sin error — las
+            tareas zombi se quedaban EN_PROCESO para siempre.
+            """
+            from app.utils.lock import advisory_lock
+
             with app.app_context():
                 try:
-                    from app.extensions import db as _db
-                    _lock = _db.session.execute(
-                        _db.text('SELECT pg_try_advisory_lock(2015)')
-                    ).scalar()
-                    if not _lock:
-                        return
-                    from app.services.conteo_service import ConteoService
-                    ConteoService.liberar_tareas_zombi(timeout_horas=2)
+                    with advisory_lock(2015, 'liberar_zombis') as tomado:
+                        if not tomado:
+                            return
+                        from app.services.conteo_service import ConteoService
+                        ConteoService.liberar_tareas_zombi(timeout_horas=2)
                 except Exception as e:
                     logger.error(f'[ABC] Liberación de tareas zombi falló: {e}', exc_info=True)
                     try:

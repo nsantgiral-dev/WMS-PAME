@@ -110,14 +110,26 @@ class ReconciliacionService:
     @staticmethod
     def _ejecutar_sweep():
         from app.models.packing import TareaPacking
-        from sqlalchemy import text as _text
+        from app.utils.lock import advisory_lock
 
-        # Advisory lock: evita que 2 workers Gunicorn ejecuten sweep simultáneamente
-        lock = db.session.execute(_text('SELECT pg_try_advisory_lock(2014)')).scalar()
-        if not lock:
-            logger.info('[RECONCILIACION] Lock no disponible — omitiendo sweep')
-            return
+        # Advisory lock: evita que 2 workers Gunicorn ejecuten sweep simultáneamente.
+        #
+        # El lock 2014 se tomaba y NO se liberaba nunca. Los advisory locks de
+        # sesión viven en la conexión: volvía al pool tomada y el sweep siguiente
+        # se encontraba el lock ocupado. Dejaba de correr en silencio — y este
+        # sweep es el que detecta tareas de packing que Siesa YA proceso y el WMS
+        # cree que no. Sin él, el inventario diverge del ERP sin que nada avise.
+        with advisory_lock(2014, 'reconciliacion_sweep') as tomado:
+            if not tomado:
+                logger.info('[RECONCILIACION] Lock no disponible — omitiendo sweep')
+                return
+            ReconciliacionService._sweep_con_lock(TareaPacking)
 
+    @staticmethod
+    def _sweep_con_lock(TareaPacking):
+        """El trabajo del sweep. Separado para que el `with` del lock envuelva
+        TODO el cuerpo sin reindentar cuarenta líneas — un diff de indentación
+        masivo esconde el cambio real en la revisión."""
         # Tareas VERIFICADO o DESPACHADO con siesa_triggered=False.
         # No se exige bultos: tareas bloqueadas por guard anti-duplicado en cerrar_packing
         # nunca alcanzan a crear bultos pero Siesa ya procesó la factura.
