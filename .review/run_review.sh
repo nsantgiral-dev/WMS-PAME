@@ -9,6 +9,9 @@ set -euo pipefail
 # ── Configuración ────────────────────────────────────────────
 PROYECTO_DIR="${WMS_DIR:-$HOME/PROYECTOS/WMS-PAME-1}"
 APP_DIR="$PROYECTO_DIR/app"
+# El modulo de flota vive FUERA de app/ (frontera hexagonal: dominio puro,
+# puertos, adaptadores, api). Sin esto ninguno de los 9 agentes lo veia.
+FLOTA_DIR="$PROYECTO_DIR/flota"
 REVIEW_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROMPTS_DIR="$REVIEW_DIR/prompts"
 REPORTS_DIR="$REVIEW_DIR/reports"
@@ -25,6 +28,11 @@ MAX_CHARS_SERVICES=120000
 MAX_CHARS_ROUTES=150000
 MAX_CHARS_SIESA=150000
 MAX_CHARS_ALL=180000
+# Flota entera mide ~162KB: entra completa. Se agrega COMO BLOQUE APARTE,
+# despues del corte de app/, para que no le robe espacio a lo que ya se
+# revisaba — app/services solo mide 1.2MB contra una cota de 120KB, asi que
+# cualquier byte que flota ocupe ahi es un byte de servicios que se deja de ver.
+MAX_CHARS_FLOTA=180000
 
 # ── Colores ──────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -132,6 +140,7 @@ build_context() {
     done
 
     # Escribir archivos al contexto respetando el límite
+    local leidos=0
     for archivo in "${all_files[@]}"; do
         [ -r "$archivo" ] || continue
 
@@ -139,15 +148,33 @@ build_context() {
         local current_size
         current_size=$(wc -c < "$ctx_file" 2>/dev/null || echo 0)
         if [ "$current_size" -ge "$max_chars" ]; then
-            printf '\n=== [TRUNCADO: límite de %d bytes alcanzado — %d archivos más omitidos] ===\n' \
-                "$max_chars" "$(( ${#all_files[@]} ))" >> "$ctx_file"
+            # Los que FALTAN, no el total: el mensaje anterior imprimia
+            # ${#all_files[@]} —todos— y hacia parecer que no se habia leido
+            # nada. Un aviso con el numero equivocado es peor que ninguno.
+            printf '\n=== [TRUNCADO: límite de %d bytes alcanzado — %d de %d archivos omitidos] ===\n' \
+                "$max_chars" "$(( ${#all_files[@]} - leidos ))" "${#all_files[@]}" >> "$ctx_file"
             break
         fi
 
         printf '=== ARCHIVO: %s ===\n' "${archivo#$PROYECTO_DIR/}" >> "$ctx_file"
         cat "$archivo" >> "$ctx_file"
         printf '\n' >> "$ctx_file"
+        leidos=$(( leidos + 1 ))
     done
+}
+
+# ── Función: agrega el módulo flota como bloque propio ──
+# Se llama DESPUES de build_context, con su propia cota: asi flota es aditiva y
+# no compite por el presupuesto de app/, que ya se trunca al 10%.
+append_flota() {
+    local ctx_file="$1"
+    shift
+    [ -d "$FLOTA_DIR" ] || return 0
+    printf '\n\n=== MODULO FLOTA (fuera de app/, frontera hexagonal) ===\n' >> "$ctx_file"
+    local tmp="${ctx_file}.flota"
+    build_context "$tmp" "$MAX_CHARS_FLOTA" "$@"
+    cat "$tmp" >> "$ctx_file"
+    rm -f "$tmp"
 }
 
 # ── Función: contexto especializado para agente siesa_logic ──
@@ -222,6 +249,8 @@ CTX_DEBT="$TEMP_DIR/ctx_debt.txt"
 build_context "$CTX_BUGS" "$MAX_CHARS_SERVICES" \
     "$APP_DIR/services" \
     "$APP_DIR/models"
+# Dominio + adaptadores: la logica de negocio y los datos de flota.
+append_flota "$CTX_BUGS" "$FLOTA_DIR/dominio" "$FLOTA_DIR/adaptadores"
 
 # invariants: bugs context + últimas migraciones (para verificar DB constraints reales)
 CTX_INVARIANTS="$TEMP_DIR/ctx_invariants.txt"
@@ -246,21 +275,26 @@ build_context "$CTX_SECURITY" "$MAX_CHARS_ROUTES" \
     "$APP_DIR/__init__.py" \
     "$APP_DIR/extensions.py" \
     "$PROYECTO_DIR/config.py"
+# Los blueprints de flota tienen sus propios @jwt_required y sus propias listas
+# de roles: es donde ya aparecieron tres 403 que ninguna pantalla esperaba.
+append_flota "$CTX_SECURITY" "$FLOTA_DIR/api"
 
 # performance: servicios + modelos + rutas (necesita ver todo el stack)
 build_context "$CTX_PERF" "$MAX_CHARS_ALL" \
     "$APP_DIR/services" \
     "$APP_DIR/models" \
     "$APP_DIR/routes"
+append_flota "$CTX_PERF" "$FLOTA_DIR"
 
 # siesa_logic: solo archivos de integración (contexto enfocado y profundo)
 build_siesa_context "$CTX_SIESA" "$MAX_CHARS_SIESA"
 
 # tech_debt: todo el código (necesita visión global)
 build_context "$CTX_DEBT" "$MAX_CHARS_ALL" "$APP_DIR"
+append_flota "$CTX_DEBT" "$FLOTA_DIR"
 
 # Contar archivos totales analizados
-NUM_ARCHIVOS=$(find "$APP_DIR" -name "*.py" ! -path "*/__pycache__/*" ! -path "*/venv/*" ! -path "*/migrations/*" 2>/dev/null | wc -l | tr -d ' ')
+NUM_ARCHIVOS=$(find "$APP_DIR" "$FLOTA_DIR" -name "*.py" ! -path "*/__pycache__/*" ! -path "*/venv/*" ! -path "*/migrations/*" 2>/dev/null | wc -l | tr -d ' ')
 
 # ── Inyectar known_issues en cada prompt ────────────────────
 KNOWN_ISSUES="$REVIEW_DIR/known_issues.json"
