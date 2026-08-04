@@ -22,17 +22,29 @@ LOG_FILE="$REPORTS_DIR/${FECHA}_review.log"
 
 # Modelo a usar (cambiar a claude-opus-4-6 para análisis más profundo)
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}"
+# Cuántos agentes a la vez. Nueve en paralelo con contextos de 200-380 KB se
+# atropellan — medido el 2026-08-03: 2 murieron y 2 devolvieron basura. Con 3
+# tarda mas y termina.
+CONCURRENCIA="${CONCURRENCIA:-3}"
 
 # Límite de chars por contexto de agente (200KB ≈ ~50K tokens)
-MAX_CHARS_SERVICES=120000
-MAX_CHARS_ROUTES=150000
+# Presupuesto por agente: ~200 KB de input TOTAL (prompt + codigo + flota).
+#
+# No es un numero de gusto: el 2026-08-03, con nueve agentes en paralelo, los
+# inputs de 374 y 381 KB fallaron, los de 212 y 223 KB murieron sin escribir, y
+# los de 154 a 205 KB terminaron bien. Se elige el rango que funciono.
+MAX_CHARS_SERVICES=100000
+MAX_CHARS_ROUTES=140000
 MAX_CHARS_SIESA=150000
-MAX_CHARS_ALL=180000
+MAX_CHARS_ALL=140000
 # Flota entera mide ~162KB: entra completa. Se agrega COMO BLOQUE APARTE,
 # despues del corte de app/, para que no le robe espacio a lo que ya se
 # revisaba — app/services solo mide 1.2MB contra una cota de 120KB, asi que
 # cualquier byte que flota ocupe ahi es un byte de servicios que se deja de ver.
-MAX_CHARS_FLOTA=180000
+MAX_CHARS_FLOTA=100000
+# Para los contextos que ya van llenos de app/ (performance, tech_debt) flota
+# entra con una porcion mas chica: el dominio, que es donde vive la politica.
+MAX_CHARS_FLOTA_CORTO=55000
 
 # ── Colores ──────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -144,10 +156,27 @@ build_context() {
     for archivo in "${all_files[@]}"; do
         [ -r "$archivo" ] || continue
 
-        # Verificar tamaño antes de agregar
-        local current_size
+        # Se PROYECTA el tamaño: antes se miraba el acumulado y recién ahí se
+        # cortaba, así que el último archivo entraba entero por encima del
+        # límite. El contexto de `performance` terminó en 350 KB contra una cota
+        # de 180 KB, y ese exceso es lo que mató al agente.
+        local current_size file_size
         current_size=$(wc -c < "$ctx_file" 2>/dev/null || echo 0)
-        if [ "$current_size" -ge "$max_chars" ]; then
+        file_size=$(wc -c < "$archivo" 2>/dev/null || echo 0)
+        # Si el archivo NO cabe entero, entra RECORTADO — no se salta.
+        #
+        # `connekta_gateway.py` mide 184 KB, mas que la cota de su propio
+        # contexto. Saltarlo dejaba al agente de Siesa revisando la integracion
+        # sin el archivo de la integracion. Medio archivo dice algo; ninguno no.
+        local restante=$(( max_chars - current_size ))
+        if [ "$file_size" -gt "$restante" ]; then
+            if [ "$restante" -gt 20000 ]; then
+                printf '=== ARCHIVO (RECORTADO a %d de %d bytes): %s ===\n' \
+                    "$restante" "$file_size" "${archivo#$PROYECTO_DIR/}" >> "$ctx_file"
+                head -c "$restante" "$archivo" >> "$ctx_file"
+                printf '\n=== [CORTE — el resto del archivo no entra] ===\n' >> "$ctx_file"
+                leidos=$(( leidos + 1 ))
+            fi
             # Los que FALTAN, no el total: el mensaje anterior imprimia
             # ${#all_files[@]} —todos— y hacia parecer que no se habia leido
             # nada. Un aviso con el numero equivocado es peor que ninguno.
@@ -212,9 +241,21 @@ build_siesa_context() {
     for archivo in "${siesa_files[@]}"; do
         [ -r "$archivo" ] || continue
 
-        local current_size
+        # Mismo arreglo que en build_context: se proyecta, no se mira el
+        # acumulado. Antes el contexto de siesa terminaba en 196 KB contra una
+        # cota de 150 KB.
+        local current_size file_size restante
         current_size=$(wc -c < "$ctx_file" 2>/dev/null || echo 0)
-        if [ "$current_size" -ge "$max_chars" ]; then
+        file_size=$(wc -c < "$archivo" 2>/dev/null || echo 0)
+        restante=$(( max_chars - current_size ))
+        if [ "$file_size" -gt "$restante" ]; then
+            # Recortado, no salteado: ver el motivo en build_context.
+            if [ "$restante" -gt 20000 ]; then
+                printf '=== ARCHIVO (RECORTADO a %d de %d bytes): %s ===\n' \
+                    "$restante" "$file_size" "${archivo#$PROYECTO_DIR/}" >> "$ctx_file"
+                head -c "$restante" "$archivo" >> "$ctx_file"
+                printf '\n=== [CORTE — el resto del archivo no entra] ===\n' >> "$ctx_file"
+            fi
             printf '\n=== [TRUNCADO: límite de %d bytes alcanzado] ===\n' "$max_chars" >> "$ctx_file"
             break
         fi
@@ -284,14 +325,14 @@ build_context "$CTX_PERF" "$MAX_CHARS_ALL" \
     "$APP_DIR/services" \
     "$APP_DIR/models" \
     "$APP_DIR/routes"
-append_flota "$CTX_PERF" "$FLOTA_DIR"
+MAX_CHARS_FLOTA=$MAX_CHARS_FLOTA_CORTO append_flota "$CTX_PERF" "$FLOTA_DIR/dominio"
 
 # siesa_logic: solo archivos de integración (contexto enfocado y profundo)
 build_siesa_context "$CTX_SIESA" "$MAX_CHARS_SIESA"
 
 # tech_debt: todo el código (necesita visión global)
 build_context "$CTX_DEBT" "$MAX_CHARS_ALL" "$APP_DIR"
-append_flota "$CTX_DEBT" "$FLOTA_DIR"
+MAX_CHARS_FLOTA=$MAX_CHARS_FLOTA_CORTO append_flota "$CTX_DEBT" "$FLOTA_DIR/dominio"
 
 # Contar archivos totales analizados
 NUM_ARCHIVOS=$(find "$APP_DIR" "$FLOTA_DIR" -name "*.py" ! -path "*/__pycache__/*" ! -path "*/venv/*" ! -path "*/migrations/*" 2>/dev/null | wc -l | tr -d ' ')
@@ -356,12 +397,39 @@ run_agent() {
     printf '\n\n' >> "$input_file"
     cat "$ctx_file" >> "$input_file"
 
-    # Llamar a Claude Code en modo no-interactivo
-    local resultado
-    if resultado=$(claude --print --model "$CLAUDE_MODEL" < "$input_file" 2>>"$LOG_FILE"); then
-        :
-    else
-        warn "Agente $agent_name terminó con código de error — usando resultado parcial"
+    # Llamar a Claude Code, con un reintento.
+    #
+    # Nueve peticiones simultáneas de 200-380 KB se atropellan: en la corrida
+    # del 2026-08-03 dos agentes murieron sin escribir nada y dos devolvieron el
+    # stub de fallo. El reintento cubre el caso transitorio.
+    local resultado="" intento fallo=1
+    for intento in 1 2; do
+        if resultado=$(claude --print --model "$CLAUDE_MODEL" < "$input_file" 2>>"$LOG_FILE"); then
+            fallo=0
+            break
+        fi
+        warn "Agente $agent_name falló (intento $intento/2)"
+        sleep 5
+    done
+
+    if [ "$fallo" -eq 1 ]; then
+        # **Un agente que falla no puede parecer un agente limpio.** Antes caía
+        # al mismo stub que un parseo fallido —0 issues, score 0— y en el HTML
+        # eso se lee como "no encontró problemas". Es lo contrario: no miró.
+        python3 - "$agent_name" > "$output_file" <<'FAILEOF'
+import json, sys
+print(json.dumps({
+    "agent": sys.argv[1],
+    "issues": [],
+    "score": None,
+    "failed": True,
+    "summary": "AGENTE NO EJECUTADO — la llamada al modelo falló dos veces. "
+               "Esto NO significa que no haya problemas: significa que nadie "
+               "los buscó. Revisar el log.",
+}, ensure_ascii=False))
+FAILEOF
+        err "Agente ${BOLD}$agent_name${NC} NO SE EJECUTÓ — marcado como fallido"
+        return 0
     fi
 
     # Extraer JSON de la respuesta
@@ -384,35 +452,51 @@ echo ""
 log "Ejecutando ${BOLD}9 agentes en paralelo${NC}..."
 echo ""
 
-run_agent "bugs"        "$PROMPTS_DIR/01_bugs.md"        "$CTX_BUGS"     &
-PID_BUGS=$!
+# Lista de agentes: nombre | prompt | contexto
+AGENTES=(
+  "bugs|01_bugs.md|$CTX_BUGS"
+  "security|02_security.md|$CTX_SECURITY"
+  "performance|03_performance.md|$CTX_PERF"
+  "siesa_logic|04_siesa_logic.md|$CTX_SIESA"
+  "tech_debt|05_tech_debt.md|$CTX_DEBT"
+  "siesa_spec|05_siesa_spec.md|$CTX_SIESA"
+  "patterns|06_patterns.md|$CTX_DEBT"
+  "resilience|07_resilience.md|$CTX_PERF"
+  "invariants|08_invariants.md|$CTX_INVARIANTS"
+)
 
-run_agent "security"    "$PROMPTS_DIR/02_security.md"    "$CTX_SECURITY" &
-PID_SECURITY=$!
+# Se lanzan de a CONCURRENCIA, no los nueve de golpe.
+#
+# Con nueve simultaneos y contextos de 200-380 KB, el 2026-08-03 murieron dos
+# agentes sin escribir nada y otros dos devolvieron el stub de fallo. Tarda mas
+# y termina, que es la unica velocidad que sirve.
+lanzados=0
+for entrada in "${AGENTES[@]}"; do
+    IFS="|" read -r nombre prompt ctx <<< "$entrada"
+    run_agent "$nombre" "$PROMPTS_DIR/$prompt" "$ctx" &
+    lanzados=$(( lanzados + 1 ))
+    if [ "$(( lanzados % CONCURRENCIA ))" -eq 0 ]; then
+        wait || warn "un agente del lote termino con error — se sigue"
+    fi
+done
+wait || warn "un agente del ultimo lote termino con error — se sigue"
 
-run_agent "performance" "$PROMPTS_DIR/03_performance.md" "$CTX_PERF"     &
-PID_PERF=$!
-
-run_agent "siesa_logic" "$PROMPTS_DIR/04_siesa_logic.md" "$CTX_SIESA"    &
-PID_SIESA=$!
-
-run_agent "tech_debt"   "$PROMPTS_DIR/05_tech_debt.md"   "$CTX_DEBT"     &
-PID_DEBT=$!
-
-run_agent "siesa_spec"   "$PROMPTS_DIR/05_siesa_spec.md"   "$CTX_SIESA"    &
-PID_SIESA_SPEC=$!
-
-run_agent "patterns"     "$PROMPTS_DIR/06_patterns.md"     "$CTX_DEBT"     &
-PID_PATTERNS=$!
-
-run_agent "resilience"   "$PROMPTS_DIR/07_resilience.md"   "$CTX_PERF"     &
-PID_RESILIENCE=$!
-
-run_agent "invariants"   "$PROMPTS_DIR/08_invariants.md"   "$CTX_INVARIANTS" &
-PID_INVARIANTS=$!
-
-# Esperar a que todos terminen
-wait $PID_BUGS $PID_SECURITY $PID_PERF $PID_SIESA $PID_DEBT $PID_SIESA_SPEC $PID_PATTERNS $PID_RESILIENCE $PID_INVARIANTS
+# Red de seguridad: si un agente murio tan temprano que no escribio su JSON, el
+# merge fallaria por archivo inexistente y se perderia TODO el resto.
+for entrada in "${AGENTES[@]}"; do
+    a="${entrada%%|*}"
+    if [ ! -s "$TEMP_DIR/${a}.json" ]; then
+        err "Agente ${BOLD}$a${NC} no dejo resultado — se marca como no ejecutado"
+        python3 - "$a" > "$TEMP_DIR/${a}.json" <<'MISSEOF'
+import json, sys
+print(json.dumps({
+    "agent": sys.argv[1], "issues": [], "score": None, "failed": True,
+    "summary": "AGENTE NO EJECUTADO — murio sin escribir resultado. "
+               "Cero issues aca significa que nadie miro, no que este limpio.",
+}, ensure_ascii=False))
+MISSEOF
+    fi
+done
 
 echo ""
 log "Todos los agentes completados. Generando reporte..."
