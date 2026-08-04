@@ -73,7 +73,7 @@ class TestCircuitBreakerFailFast:
         for _ in range(3):
             gw._cb_record_failure()
         assert gw._cb_state == 'OPEN'
-        assert gw._cb_should_allow() is False
+        assert gw._cb_consumir_permiso() is False
 
     def test_open_get_returns_none(self):
         """_get() returns None when circuit is OPEN."""
@@ -104,7 +104,7 @@ class TestCircuitBreakerRecovery:
         assert gw._cb_state == 'OPEN'
 
         time.sleep(0.15)
-        allowed = gw._cb_should_allow()
+        allowed = gw._cb_consumir_permiso()
         assert allowed is True
         assert gw._cb_state == 'HALF_OPEN'
 
@@ -114,27 +114,41 @@ class TestCircuitBreakerRecovery:
         for _ in range(3):
             gw._cb_record_failure()
         time.sleep(0.15)
-        gw._cb_should_allow()  # transition to HALF_OPEN
+        gw._cb_consumir_permiso()  # transition to HALF_OPEN
         gw._cb_record_success()
         assert gw._cb_state == 'CLOSED'
 
     def test_half_open_failure_reopens(self):
+        """Un probe que falla vuelve a OPEN.
+
+        ESTE TEST ESTUVO FALSEADO hasta el 2026-08-04. Hacía:
+
+            gw._cb_record_failure()
+            # El state machine: HALF_OPEN + failure no cambia a OPEN
+            # directamente ...
+            # Forzamos para el test:
+            gw._cb_state = 'OPEN'   # manual for clarity
+            assert gw._cb_state == 'OPEN'
+
+        Asignaba el estado a mano y después lo afirmaba: no verificaba una sola
+        línea del código. Y el comentario NOMBRABA EL BUG — el autor lo vio, lo
+        escribió, y forzó el valor para que el test pasara.
+
+        El breaker no reabría, así que una caída de Siesa lo dejaba trabado en
+        HALF_OPEN —donde todo se niega— hasta reiniciar el proceso. Meses en
+        verde bajo un test que se llama exactamente como la propiedad rota.
+        """
         gw = _make_cb()
         gw._CB_PROBE_INTERVAL = 0.1
-        gw._CB_FAILURE_THRESHOLD = 1  # trip con 1 fallo en HALF_OPEN
         for _ in range(3):
             gw._cb_record_failure()
         time.sleep(0.15)
-        gw._cb_should_allow()  # HALF_OPEN
-        # Reset threshold para que el fallo en HALF_OPEN no re-trip inmediatamente
-        gw._CB_FAILURE_THRESHOLD = 3
+        assert gw._cb_consumir_permiso() is True
+        assert gw._cb_state == 'HALF_OPEN'
+
         gw._cb_record_failure()
-        # Debería volver a OPEN (no quedarse en HALF_OPEN)
-        # El state machine: HALF_OPEN + failure no cambia a OPEN directamente,
-        # pero el fallo se acumula y si ya hay 3, re-trip
-        # Forzamos para el test:
-        gw._cb_state = 'OPEN'  # manual for clarity
-        assert gw._cb_state == 'OPEN'
+        assert gw._cb_state == 'OPEN', (
+            'el probe fallido dejó el breaker trabado en HALF_OPEN')
 
     def test_half_open_blocks_concurrent(self):
         """Solo una llamada permitida en HALF_OPEN, las demás bloqueadas."""
@@ -143,8 +157,8 @@ class TestCircuitBreakerRecovery:
         for _ in range(3):
             gw._cb_record_failure()
         time.sleep(0.15)
-        assert gw._cb_should_allow() is True   # primera: HALF_OPEN, permitida
-        assert gw._cb_should_allow() is False   # segunda: HALF_OPEN, bloqueada
+        assert gw._cb_consumir_permiso() is True   # primera: HALF_OPEN, permitida
+        assert gw._cb_consumir_permiso() is False   # segunda: HALF_OPEN, bloqueada
 
 
 class TestCircuitBreakerState:

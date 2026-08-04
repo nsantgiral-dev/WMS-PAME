@@ -357,6 +357,20 @@ class ConnektaGateway:
             cutoff = now - self._CB_WINDOW_SECONDS
             self._cb_failures = [t for t in self._cb_failures if t > cutoff]
 
+            # Un probe que falla vuelve a OPEN. Sin esto el estado se quedaba
+            # en HALF_OPEN —donde TODO se niega— y el breaker no volvía a
+            # intentar nunca: la caída de Siesa se convertía en una caída
+            # permanente del gateway hasta reiniciar el proceso.
+            #
+            # Es el camino NORMAL de un circuit breaker: abre, prueba, sigue
+            # caído. Que ese camino lo trabara volvía inútil todo el mecanismo.
+            if self._cb_state == 'HALF_OPEN':
+                self._cb_state = 'OPEN'
+                logger.warning(
+                    '[CONNEKTA CB] probe falló — vuelve a OPEN, reintento en %ds',
+                    self._CB_PROBE_INTERVAL)
+                return
+
             if len(self._cb_failures) >= self._CB_FAILURE_THRESHOLD and self._cb_state == 'CLOSED':
                 self._cb_state = 'OPEN'
                 self._cb_opened_at = datetime.now(_TZ_BOGOTA).isoformat()
@@ -379,8 +393,20 @@ class ConnektaGateway:
                 # Éxito en operación normal — limpiar fallos acumulados
                 self._cb_failures.clear()
 
-    def _cb_should_allow(self) -> bool:
-        """Decide si permitir la llamada HTTP."""
+    def _cb_consumir_permiso(self) -> bool:
+        """Pide permiso para UNA llamada HTTP. **Consume estado.**
+
+        Se llamaba `_cb_should_allow`: un nombre de pregunta para un método que
+        MUTA — transiciona OPEN → HALF_OPEN y gasta el único probe permitido.
+        Con ese nombre, `_get()` la llamaba dos veces y un comentario decía
+        "redundante para claridad".
+
+        No era redundante: la primera llamada gastaba el probe y devolvía True,
+        la segunda veía HALF_OPEN y devolvía False. **La llamada HTTP nunca
+        salía**, y el breaker quedaba en HALF_OPEN para siempre.
+
+        Se llama EXACTAMENTE UNA VEZ por intento.
+        """
         with self._cb_lock:
             if self._cb_state == 'CLOSED':
                 return True
@@ -515,17 +541,15 @@ class ConnektaGateway:
         }
 
     def _get(self, nombre_api: str, params_extra: dict = None, timeout: int = 30, url: str = None):
-        # Circuit breaker: check ANTES de simulación — si Siesa está caído, no simular
-        if self._cb_state != 'CLOSED' and not self.modo_simulacion:
-            if not self._cb_should_allow():
-                logger.warning('[CONNEKTA CB] GET %s bloqueado — circuit %s', nombre_api, self._cb_state)
-                return None
-
         if self.modo_simulacion:
+            # En simulación no hay HTTP que proteger: pedir permiso acá gastaría
+            # el probe sin salir a la red. El bloque que estaba antes de esta
+            # línea ya venía condicionado a `not modo_simulacion`, así que solo
+            # servía para consumir el permiso DOS veces.
             return self._simular(f'GET_{nombre_api}', params_extra)
 
-        # Circuit breaker: si OPEN, fail-fast sin HTTP (redundante para claridad)
-        if not self._cb_should_allow():
+        # Circuit breaker: una sola vez por intento. Ver `_cb_consumir_permiso`.
+        if not self._cb_consumir_permiso():
             logger.warning('[CONNEKTA CB] GET %s bloqueado — circuit %s', nombre_api, self._cb_state)
             return None
 
@@ -588,7 +612,7 @@ class ConnektaGateway:
             }
 
         # Circuit breaker: si OPEN, fail-fast sin HTTP
-        if not self._cb_should_allow():
+        if not self._cb_consumir_permiso():
             raise ConnektaCircuitOpenError(
                 f'Circuit breaker OPEN — POST {id_conector} bloqueado. '
                 f'Siesa no disponible desde {self._cb_opened_at}'
