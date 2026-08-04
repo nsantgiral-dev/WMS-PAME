@@ -21,6 +21,8 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
+from app.routes._auth_helpers import Roles
+from flota.api._permisos import MAESTROS_FLOTA, exige
 from app.models.vehiculo import Vehiculo
 from flota.adaptadores.modelos import DocumentoVehiculo, Foto
 
@@ -52,6 +54,7 @@ def _serializar(d):
 
 @documentos_bp.route('/vehiculo/<placa>/documentos', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver los documentos')
 def listar_documentos(placa):
     try:
         vehiculo = _vehiculo(placa)
@@ -72,6 +75,7 @@ def listar_documentos(placa):
 
 @documentos_bp.route('/vehiculo/<placa>/documentos', methods=['POST'])
 @jwt_required()
+@exige(MAESTROS_FLOTA, 'registrar un documento')
 def guardar_documento(placa):
     """Crea o reemplaza el documento de un tipo para ese vehículo.
 

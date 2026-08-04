@@ -17,6 +17,8 @@ from flask import Blueprint, jsonify
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
+from app.routes._auth_helpers import Roles
+from flota.api._permisos import exige
 from app.models.conductor import Conductor
 from app.models.ruta_despacho import RutaDespacho
 from app.models.vehiculo import Vehiculo
@@ -46,6 +48,7 @@ def _conductor_del_token():
 
 @conductor_bp.route('/conductor/mi-turno', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver tu turno')
 def mi_turno():
     """Qué vehículo le toca hoy, de dónde salió esa placa, y si está libre."""
     conductor = _conductor_del_token()
@@ -113,6 +116,7 @@ def mi_turno():
 
 @conductor_bp.route('/conductor/mis-reportes', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver tus reportes')
 def mis_reportes():
     """Sus turnos y en qué van.
 

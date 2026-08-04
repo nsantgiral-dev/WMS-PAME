@@ -19,6 +19,8 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
+from app.routes._auth_helpers import Roles
+from flota.api._permisos import MAESTROS_FLOTA, exige
 from app.models.vehiculo import Vehiculo
 from flota.adaptadores.modelos import FichaTecnica
 
@@ -63,6 +65,7 @@ def _serializar(placa, ficha):
 
 @ficha_bp.route('/vehiculo/<placa>/ficha', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver la ficha tecnica')
 def obtener_ficha(placa):
     try:
         vehiculo = _vehiculo(placa)
@@ -74,6 +77,7 @@ def obtener_ficha(placa):
 
 @ficha_bp.route('/vehiculo/<placa>/ficha', methods=['PUT'])
 @jwt_required()
+@exige(MAESTROS_FLOTA, 'modificar la ficha tecnica')
 def guardar_ficha(placa):
     """Crea o actualiza. Los CHECK de la base son la última palabra.
 

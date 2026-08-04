@@ -16,6 +16,8 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
+from app.routes._auth_helpers import Roles
+from flota.api._permisos import MAESTROS_FLOTA, exige
 from app.routes._auth_helpers import _es_gestion
 from app.models.vehiculo import Vehiculo
 from flota.api._tiempo import iso_utc
@@ -70,6 +72,7 @@ def _lecturas_dominio(vehiculo_id):
 
 @custodia_bp.route('/custodia/activa/<placa>', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver la custodia activa')
 def custodia_activa(placa):
     """Quién responde por este vehículo ahora mismo, y con cuántos kilómetros.
 
@@ -117,6 +120,7 @@ def custodia_activa(placa):
 
 @custodia_bp.route('/foto/<int:foto_id>', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver fotos de flota')
 def ver_foto(foto_id):
     """Devuelve el archivo. Un almacén de solo escritura no es un almacén.
 
@@ -147,6 +151,7 @@ def ver_foto(foto_id):
 
 @custodia_bp.route('/custodia/<int:custodia_id>/fotos', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver las fotos de un turno')
 def fotos_de_custodia(custodia_id):
     """Qué fotos quedaron de un turno, con su ángulo y su estado.
 
@@ -197,6 +202,7 @@ def fotos_de_custodia(custodia_id):
 
 @custodia_bp.route('/custodia/fuera-de-sede', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver los vehiculos fuera de sede')
 def fuera_de_sede():
     """Vehículos que están pasando la noche fuera del control de la empresa.
 
@@ -235,6 +241,7 @@ def fuera_de_sede():
 
 @custodia_bp.route('/custodia/cierres-forzados', methods=['GET'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver los cierres forzados')
 def cierres_forzados():
     """Turnos cerrados sin la firma del custodio anterior, con nombre.
 
@@ -275,6 +282,7 @@ def cierres_forzados():
 
 @custodia_bp.route('/custodia/traspaso', methods=['POST'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'registrar un traspaso de turno')
 def custodia_traspaso():
     """Cierra el turno anterior y abre el nuevo, atómicamente.
 
@@ -360,6 +368,7 @@ def custodia_traspaso():
 
 @custodia_bp.route('/odometro', methods=['POST'])
 @jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'registrar una lectura de odometro')
 def registrar_odometro():
     """Una lectura suelta: tanqueo, cierre de día, OT, o corrección.
 
