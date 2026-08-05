@@ -537,12 +537,24 @@ class TestTrinqueteMotorDeProduccion:
         """
         from flota.adaptadores import modelos as m
 
+        # Se ENUMERAN las tablas de flota, no se listan a mano.
+        #
+        # La lista escrita a mano omitió `flota_aviso` el día que se creó, y
+        # nadie lo notó: la suite de PostgreSQL cuenta por prefijo de nombre
+        # (`ck_flota%`) y esta contaba siete modelos concretos. Los dos números
+        # dejaron de describir el mismo conjunto sin que nada se pusiera rojo,
+        # porque la suite de PostgreSQL está deseleccionada en CI.
+        #
+        # Un trinquete que compara dos conteos tiene que contar LO MISMO. Si el
+        # criterio de uno es "las tablas que se llaman flota_*", el del otro
+        # también.
+        from app.extensions import db as _db
+
         reales = sum(
             1
-            for M in (m.Foto, m.FichaTecnica, m.DocumentoVehiculo,
-                      m.LecturaOdometro, m.Custodia,
-                      m.PlantillaInspeccion, m.ItemInspeccion)
-            for c in M.__table__.constraints
+            for nombre, tabla in _db.metadata.tables.items()
+            if nombre.startswith('flota_')
+            for c in tabla.constraints
             if c.__class__.__name__ == 'CheckConstraint'
         )
         declarado = re.search(r'assert n == (\d+)', _leer(self._PG))

@@ -240,9 +240,16 @@ class TestQuienPuedeRecibir:
         _traspasar(mundo, 'c1', 100_000, 0)
         with pytest.raises(CustodiaInvalida) as e:
             self._recibir(mundo, 'c2', QuienPide.CONDUCTOR)
-        # El mensaje nombra a la persona y dice qué tiene que pasar.
+        # El mensaje nombra a la persona y dice CÓMO se destraba, no solo que
+        # está trabado. El 2026-08-05 decía «tiene que cerrar su turno primero»
+        # y Yesid preguntó «¿cómo se hace?»; después apretó el único botón que
+        # decía *Cerrar* —el del modal— y perdió las trece fotos que llevaba.
         assert 'Turno A' in str(e.value)
-        assert 'cerrar su turno primero' in str(e.value)
+        assert 'Entregar turno' in str(e.value), (
+            'el mensaje tiene que nombrar el gesto concreto que destraba')
+        assert 'SU usuario' in str(e.value), (
+            'sin decir con qué cuenta, la instrucción manda a buscar el botón '
+            'en la pantalla equivocada')
 
     def test_y_el_turno_del_otro_queda_intacto(self, mundo):
         """Un rechazo no puede dejar a medias lo que rechazó."""

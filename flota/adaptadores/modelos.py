@@ -34,7 +34,8 @@ from datetime import datetime
 from sqlalchemy import DDL, event
 
 from app.extensions import db
-from flota.dominio.valores import ANGULOS_FOTO, ClaseFoto
+from flota.dominio.valores import (ANGULOS_FOTO, TIPOS_DOCUMENTO,
+                                   TIPOS_SIN_VENCIMIENTO, ClaseFoto)
 
 # ── Vocabularios permitidos ──────────────────────────────────────────────────
 # Se declaran acá y se convierten en CHECK. Un enum de Python que la base no
@@ -47,7 +48,8 @@ DISTRIBUCION     = ('correa', 'cadena', 'sin_dato')
 TRANSMISION_FINAL = ('cadena', 'correa', 'cardan', 'sin_dato')
 FUENTE           = ('manual_fabricante', 'concesionario', 'placa_motor',
                     'taller', 'estimado', 'sin_dato')
-TIPO_DOCUMENTO   = ('soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad')
+# El vocabulario vive en el dominio: la tabla lo sigue, no al reves.
+TIPO_DOCUMENTO   = TIPOS_DOCUMENTO
 ESTADO_DOCUMENTO = ('vigente', 'no_encontrado')
 ORIGEN_LECTURA   = ('entrega', 'preoperacional', 'cierre_dia', 'ot', 'tanqueo', 'correccion')
 CUSTODIO_TIPO    = ('conductor', 'sede')
@@ -70,6 +72,11 @@ APLICA_A         = ('furgon_liviano', 'camion', 'motocarro')
 DIAS_DE_PLAZO = {'bloqueante': 0, 'mayor': 7, 'menor': 30}
 
 LADO_LARGO_MINIMO_FOTO_DATO = 1600
+
+#: Para los CHECK. Se arma del dominio para que agregar un tipo que no vence
+#: no exija acordarse de dos literales SQL sueltos.
+_SIN_VENCIMIENTO_SQL = '(%s)' % ', '.join(
+    f"'{x}'" for x in TIPOS_SIN_VENCIMIENTO)
 
 
 def _en(columna, valores):
@@ -205,13 +212,26 @@ class DocumentoVehiculo(db.Model):
     __table_args__ = (
         _en('tipo', TIPO_DOCUMENTO),
         _en('estado', ESTADO_DOCUMENTO),
+        # El vencimiento se exige SALVO para los tipos que no vencen. La tarjeta
+        # de propiedad acredita titularidad y no caduca: exigirle fecha obligaba
+        # a inventar una para poder guardar (el 2026-08-05 quedo '2045-08-20 --
+        # vence en 6955 dias'). El invariante no se afloja para todos: se hace
+        # condicional al tipo, como `custodio_estado` y como las dimensiones de
+        # foto.
         db.CheckConstraint(
             "(estado = 'vigente' AND fecha_expedicion IS NOT NULL "
-            " AND fecha_vencimiento IS NOT NULL "
-            " AND length(trim(numero)) > 0 AND length(trim(entidad)) > 0) OR "
+            " AND length(trim(numero)) > 0 AND length(trim(entidad)) > 0 "
+            " AND (fecha_vencimiento IS NOT NULL OR tipo IN %s)) OR "
             "(estado = 'no_encontrado' AND fecha_expedicion IS NULL "
-            " AND fecha_vencimiento IS NULL)",
+            " AND fecha_vencimiento IS NULL)" % _SIN_VENCIMIENTO_SQL,
             name='ck_flota_doc_estado_coherente',
+        ),
+        # Y al reves: un tipo que no vence tampoco puede TENER vencimiento. Sin
+        # esto, la fila inventada de ayer seguiria siendo legal y el aviso de
+        # renovacion la perseguiria como si fuera real.
+        db.CheckConstraint(
+            "tipo NOT IN %s OR fecha_vencimiento IS NULL" % _SIN_VENCIMIENTO_SQL,
+            name='ck_flota_doc_sin_vencimiento',
         ),
         db.CheckConstraint(
             'fecha_vencimiento IS NULL OR fecha_vencimiento >= fecha_expedicion',

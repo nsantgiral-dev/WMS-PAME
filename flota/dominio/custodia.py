@@ -65,6 +65,12 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
       conversación es entre él y quien tiene el vehículo. El admin de zona
       **sí**, y queda marcado como forzado — es la única salida cuando alguien
       se fue sin cerrar y el camión tiene que salir.
+
+    El mensaje del rechazo dice CÓMO se destraba, no solo que está trabado. El
+    2026-08-05 decía «tiene que cerrar su turno primero» y Yesid preguntó «¿cómo
+    se hace?»; después apretó el único botón que decía *Cerrar* —el del modal— y
+    perdió todo lo que había cargado. Un mensaje que nombra un gesto sin decir
+    dónde está manda a la gente a buscar la palabra en la pantalla.
     """
     if custodia_vigente is None:
         return Veredicto(True, False, '')
@@ -75,7 +81,9 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
         return Veredicto(
             False, False,
             f'El {placa or "vehículo"} lo tiene {quien}{cuando}. '
-            f'Si lo vas a recibir vos, {quien} tiene que cerrar su turno primero.'
+            f'Para recibirlo vos, {quien} tiene que entrar con SU usuario y '
+            f'apretar «Entregar turno». Si no está disponible, un admin de zona '
+            f'puede forzar el cierre y queda registrado quién lo autorizó.'
         )
 
     return Veredicto(

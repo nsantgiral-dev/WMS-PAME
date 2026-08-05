@@ -168,14 +168,14 @@ class TestElEsquemaSeCreaEnPostgres:
         codigos = {p.codigo for p in PlantillaInspeccion.query.all()}
         assert {'furgon_liviano_v1', 'camion_v1'} <= codigos
 
-    def test_los_38_check_quedaron_en_la_base(self, esquema):
+    def test_todos_los_check_quedaron_en_la_base(self, esquema):
         """Un CHECK que PostgreSQL no entiende no llega a existir."""
         with esquema.connect() as c:
             n = c.execute(text(
                 "SELECT count(*) FROM information_schema.table_constraints "
                 "WHERE constraint_type='CHECK' AND constraint_name LIKE 'ck_flota%'"
             )).scalar()
-        assert n == 42, f'Se esperaban 42 CHECK de flota en PostgreSQL, hay {n}'
+        assert n == 46, f'Se esperaban 46 CHECK de flota en PostgreSQL, hay {n}'
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -333,3 +333,54 @@ class TestElScriptDeLimpiezaDejaElTriggerComoEstaba:
         with pytest.raises(Exception, match='append-only'):
             with esquema.begin() as c:
                 c.execute(text('DELETE FROM flota_lectura_odometro'))
+
+
+@pytest.mark.postgres
+class TestTarjetaDePropiedadNoVence:
+    """El invariante «un documento vigente tiene vencimiento» era falso.
+
+    La tarjeta de propiedad acredita titularidad y no caduca — ni en el papel ni
+    en el RUNT. Exigirle fecha obligaba a inventar una: el 2026-08-05, cargando
+    el THP696, quedó `2045-08-20` — «vence en 6955 días». Un dato fabricado
+    dentro del módulo cuyo lema es que inventarlo es peor que no tenerlo.
+
+    Se verifica contra PostgreSQL porque un CHECK condicional es exactamente
+    donde SQLite y PostgreSQL se comportan distinto con NULL, y porque el
+    trinquete de conteo exige que un CHECK nuevo se ejerza en el motor real.
+    """
+
+    def _insertar(self, conexion, tipo, vencimiento, veh, estado='vigente'):
+        conexion.execute(text(
+            "INSERT INTO flota_documento_vehiculo "
+            "(vehiculo_id, tipo, numero, entidad, fecha_expedicion, "
+            " fecha_vencimiento, estado) "
+            "VALUES (:v, :t, 'N-1', 'Entidad', '2026-01-01', :f, :e)"),
+            {'v': veh, 't': tipo, 'f': vencimiento, 'e': estado})
+
+    def test_la_tarjeta_entra_SIN_vencimiento(self, esquema, semilla):
+        with esquema.begin() as c:
+            self._insertar(c, 'tarjeta_propiedad', None, semilla['veh'])
+
+    def test_la_tarjeta_NO_puede_traer_vencimiento(self, esquema, semilla):
+        """La otra mitad: si pudiera tenerlo, la fila inventada de ayer seguiría
+        siendo legal y el aviso de renovación la perseguiría como si fuera real."""
+        with pytest.raises(IntegrityError):
+            with esquema.begin() as c:
+                self._insertar(c, 'tarjeta_propiedad', '2045-08-20', semilla['veh'])
+
+    def test_el_SOAT_sigue_exigiendo_vencimiento(self, esquema, semilla):
+        """El invariante no se aflojó para todos: se hizo condicional al tipo."""
+        with pytest.raises(IntegrityError):
+            with esquema.begin() as c:
+                self._insertar(c, 'soat', None, semilla['veh'])
+
+    def test_el_SOAT_con_vencimiento_entra(self, esquema, semilla):
+        with esquema.begin() as c:
+            self._insertar(c, 'soat', '2027-01-01', semilla['veh'])
+
+    def test_no_encontrado_sigue_sin_fechas(self, esquema, semilla):
+        with esquema.begin() as c:
+            c.execute(text(
+                "INSERT INTO flota_documento_vehiculo "
+                "(vehiculo_id, tipo, numero, entidad, estado) "
+                "VALUES (:v, 'rtm', '', '', 'no_encontrado')"), {'v': semilla['veh']})

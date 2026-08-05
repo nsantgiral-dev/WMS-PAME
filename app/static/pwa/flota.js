@@ -53,6 +53,47 @@ function flotaNombreAngulo(a) {
   return a.replace(/_/g, ' ');
 }
 
+/** Los ángulos que van en la GRILLA: todos menos el tablero.
+ *
+ * El tablero tiene su propio campo arriba —es `foto_dato`, mínimo 1600 px, sin
+ * recompresión— y estaba TAMBIÉN en la grilla: se pedía dos veces y se mandaban
+ * dos fotos. Lo reportó Yesid el 2026-08-05.
+ *
+ * Se filtra en un solo lugar y los tres formularios lo usan: el mismo filtro
+ * escrito tres veces se arregla en uno y diverge en los otros dos.
+ */
+function flotaAngulosDeGrilla(angulos) {
+  return (angulos || []).filter(a => a !== 'tablero');
+}
+
+/** La convención de orientación y numeración, tal como la definió Yesid.
+ *
+ * Sin esto `lateral_izq` y `llanta_3` **no significan nada**. Lo dijo él mismo
+ * el 2026-08-05, después de tomar las trece fotos del THP696: *"cada persona
+ * puede tomar diferentes puntos de referencia"*. Tenía razón — el izquierdo de
+ * uno es el derecho del otro si uno se para de frente al camión y el otro
+ * detrás.
+ *
+ * Y lo que se pierde no es prolijidad: la evidencia se toma para poder decir
+ * CUÁL rueda tenía el flanco herido. Sin convención no lo dice, y trece fotos
+ * pasan a ser trece fotos.
+ *
+ * Va en la pantalla y no en un instructivo aparte: quien la necesita está
+ * parado al lado del vehículo con el teléfono en la mano.
+ */
+function flotaConvencionFotos() {
+  return `<div style="border-left:3px solid var(--pm-light);padding:6px 10px;
+       margin:8px 0;font-size:13px;color:var(--tx2)">
+    <b>Cómo orientarse</b> — siempre igual, o las fotos no se pueden comparar
+    entre turnos:<br>
+    · <b>Izquierda y derecha</b> se toman <b>mirando el vehículo de frente</b>
+      (parado adelante, mirando hacia atrás). Nunca desde el portón.<br>
+    · <b>Llanta 1 = delantera derecha.</b> Las siguientes van en sentido
+      <b>antihorario</b>: 2 delantera izquierda, 3 trasera izquierda,
+      4 trasera derecha.
+  </div>`;
+}
+
 /** Llena un `<select>` con las sedes. Una sola función para los dos sitios.
  *
  * **El endpoint devuelve una LISTA, no `{almacenes: [...]}`**:
@@ -77,7 +118,16 @@ async function flotaLlenarSedes(idSelect) {
   if (!sel) return;
   const vacia = '<option value="">— la sede no está en el maestro —</option>';
   try {
-    const d = await get('/api/almacenes');
+    // CON barra final. Sin ella Flask responde 308 hacia `/api/almacenes/`, y
+    // detrás del proxy de Railway ese `Location` sale como `http://` —la app no
+    // tenía ProxyFix, así que Flask no veía el `X-Forwarded-Proto`—. Desde una
+    // página HTTPS eso es contenido mixto: el navegador lo bloquea, el `catch`
+    // se dispara y el desplegable queda en «no se pudo cargar la lista», que es
+    // lo que impidió entregar el turno el 2026-08-05.
+    //
+    // ProxyFix ya está puesto y arregla la clase entera; esta barra elimina el
+    // redirect de raíz para que ni siquiera dependa de eso.
+    const d = await get('/api/almacenes/');
     const lista = Array.isArray(d) ? d : (d.almacenes || []);
     if (!lista.length) {
       sel.innerHTML = vacia;
@@ -167,7 +217,12 @@ function flotaAsegurarModal() {
           <div id="flota-modal-placa" class="flota-modal-placa"></div>
           <div id="flota-modal-titulo" style="font-size:12px;color:var(--tx2);"></div>
         </div>
-        <button class="btn-flota" onclick="flotaCerrarModal()">Cerrar</button>
+        <!-- NO dice "Cerrar". El rechazo de traspaso pide «cerrar el turno» y
+             este era el único botón con esa palabra en pantalla: Yesid lo
+             apretó buscando cumplir la instrucción y perdió lo cargado. Un
+             botón cuyo nombre coincide con otra acción del sistema no es
+             ambiguo por descuido — es una trampa. -->
+        <button class="btn-flota" onclick="flotaCerrarModal()">✕ Salir</button>
       </div>
       <div id="flota-recibo" style="padding:16px;"></div>
     </div>`;
@@ -212,8 +267,32 @@ function flotaAbrirModal(titulo, placa) {
   document.body.style.overflow = 'hidden';
 }
 
-/** Cierra el modal y devuelve el scroll a la página. */
+/** Cuánto trabajo sin guardar hay ahora mismo en el formulario abierto.
+ *
+ * Las fotos viven SOLO en memoria de JavaScript hasta que se confirma el turno.
+ * No es una decisión: comprimir trece fotos y sostenerlas en `localStorage`
+ * excede la cuota del navegador. Lo que sí se puede es no perderlas sin avisar.
+ */
+function flotaTrabajoSinGuardar() {
+  let n = Object.keys(FLOTA_FOTOS).length;
+  if (FLOTA_FOTO_TABLERO) n += 1;
+  return n;
+}
+
+/** Cierra el modal y devuelve el scroll a la página.
+ *
+ * Pregunta antes si hay fotos cargadas. El 2026-08-05 Yesid perdió DOS VECES
+ * todo lo que había tomado: la primera buscando el botón que el mensaje de
+ * error le pedía apretar, la segunda cuando la entrega falló. Trece fotos son
+ * quince minutos parado al lado del camión — no se descartan en silencio.
+ */
 function flotaCerrarModal() {
+  const n = flotaTrabajoSinGuardar();
+  if (n && !confirm(
+        `Tenés ${n} foto(s) tomadas y sin guardar. Si salís se pierden y hay ` +
+        `que tomarlas de nuevo.\n\n¿Salir igual?`)) return;
+  FLOTA_FOTOS = {};
+  FLOTA_FOTO_TABLERO = null;
   const m = document.getElementById('flota-modal');
   if (m) m.style.display = 'none';
   document.body.style.overflow = '';
@@ -269,11 +348,13 @@ function flotaRenderRecibo() {
       📷 Foto del tablero</button>
     <span id="flota-tablero-ok" style="margin-left:8px"></span>
 
-    <p style="margin-top:14px"><b>Las ${FLOTA_ANGULOS.length} fotos</b> — orden fijo</p>
+    <p style="margin-top:14px"><b>${flotaAngulosDeGrilla(FLOTA_ANGULOS).length} fotos más</b>
+       — orden fijo. La del tablero ya está arriba.</p>
+    ${flotaConvencionFotos()}
     ${flotaNotaLlantas()}
     <div id="flota-angulos">`;
 
-  FLOTA_ANGULOS.forEach(a => {
+  flotaAngulosDeGrilla(FLOTA_ANGULOS).forEach(a => {
     html += `<div style="display:inline-block;margin:3px">
       <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
              style="display:none" onchange="flotaCapturarAngulo('${a}')">
@@ -294,7 +375,8 @@ function flotaRenderRecibo() {
          confirmar, y el encabezado puede quedar fuera de pantalla. Dos veces la
          misma placa no es redundancia — es que el gesto irreversible diga sobre
          qué vehículo se ejerce. -->
-    <button class="btn-primary" id="flota-guardar" style="margin-top:16px;width:100%;font-size:18px"
+    <button class="btn-primary" id="flota-guardar" data-placa="${FLOTA_PLACA}"
+            style="margin-top:16px;width:100%;font-size:18px"
             onclick="flotaGuardarRecibo()">Confirmar recibo de turno · ${FLOTA_PLACA}</button>
     <div id="flota-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
@@ -588,6 +670,31 @@ function flotaPesoAproximado(payload) {
   return Math.round(total * 0.75 / 1024);
 }
 
+/** La placa del formulario que está en pantalla, verificada contra la global.
+ *
+ * Devuelve la placa, o `null` tras escribir el motivo en `idError`. Una sola
+ * función para los tres formularios (recibo de escritorio, recibo del conductor,
+ * entrega): la misma política implementada tres veces diverge, y acá divergir
+ * significa que uno de los tres vuelve a guardar en el vehículo equivocado.
+ */
+function flotaPlacaDelFormulario(idBoton, idError) {
+  const err = document.getElementById(idError);
+  const boton = document.getElementById(idBoton);
+  const placa = boton ? boton.dataset.placa : '';
+  if (!placa) {
+    err.textContent = 'El formulario no sabe de qué vehículo es. Cerralo y abrilo ' +
+      'de nuevo — no se manda nada hasta que esté claro.';
+    return null;
+  }
+  if (placa !== FLOTA_PLACA) {
+    err.textContent = `Este formulario es del ${placa} y la pantalla se movió al ` +
+      `${FLOTA_PLACA}. No se guarda nada: las fotos quedarían en el vehículo ` +
+      `equivocado. Abrí de nuevo el del ${placa}.`;
+    return null;
+  }
+  return placa;
+}
+
 /** Valida y envía el recibo de turno. Encola si no hay señal. */
 async function flotaGuardarRecibo() {
   const err = document.getElementById('flota-error');
@@ -604,12 +711,28 @@ async function flotaGuardarRecibo() {
     return;
   }
 
+  // LA PLACA SALE DEL FORMULARIO, NO DE LA GLOBAL.
+  //
+  // El 2026-08-05 Yesid reportó que las fotos de la THP696 quedaron guardadas
+  // en la UPQ606. La causa: el rótulo del botón se escribía al DIBUJAR el
+  // formulario y `payload.placa` se leía al APRETARLO — dos lecturas de una
+  // variable global en dos momentos, y tres funciones (`flotaAbrirFicha`,
+  // `flotaAbrirOdometro`, `flotaAbrirDocumentos`) la cambian sin redibujar el
+  // recibo. El resultado era evidencia con hash y GPS atada al vehículo
+  // equivocado, con el rótulo del vehículo correcto en pantalla.
+  //
+  // Sellar la placa en el DOM no alcanza por sí solo: la comprobación de abajo
+  // es la que convierte un error silencioso en uno que se ve. Limpiar el estado
+  // en esas tres funciones habría tapado el síntoma sin cerrar la clase.
+  const placa = flotaPlacaDelFormulario('flota-guardar', 'flota-error');
+  if (!placa) return;
+
   const tipo = document.getElementById('flota-custodio-tipo').value;
   const payload = {
-    placa: FLOTA_PLACA,
+    placa: placa,
     km: km,
     custodio_tipo: tipo,
-    fotos_inicio: FLOTA_ANGULOS.filter(a => FLOTA_FOTOS[a])
+    fotos_inicio: flotaAngulosDeGrilla(FLOTA_ANGULOS).filter(a => FLOTA_FOTOS[a])
       .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado', a))
       .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato', 'tablero')]),
   };
@@ -621,9 +744,12 @@ async function flotaGuardarRecibo() {
     else payload.custodio_estado = 'pendiente_sede';
   }
 
-  const faltan = FLOTA_ANGULOS.filter(a => !FLOTA_FOTOS[a]).length;
-  if (faltan && !confirm(`Faltan ${faltan} de las 8 fotos. El turno se registra igual y ` +
-                         `queda contado como incompleto. ¿Confirmás?`)) return;
+  // El tablero no se cuenta acá: ya se validó arriba y es obligatorio. Contarlo
+  // hacía que el aviso dijera "faltan N" incluyendo una foto que sí estaba.
+  const grilla = flotaAngulosDeGrilla(FLOTA_ANGULOS);
+  const faltan = grilla.filter(a => !FLOTA_FOTOS[a]).length;
+  if (faltan && !confirm(`Faltan ${faltan} de las ${grilla.length} fotos. El turno se ` +
+                         `registra igual y queda contado como incompleto. ¿Confirmás?`)) return;
 
   const n = payload.fotos_inicio.length;
   const restaurar = flotaBotonOcupado(
@@ -637,7 +763,7 @@ async function flotaGuardarRecibo() {
     const d = await r.json();
     if (!r.ok) { err.textContent = d.error || 'No se pudo registrar'; return; }
     alerta('Turno recibido ✓' + (d.linea_base ? ' (línea base)' : ''), 'exito');
-    flotaAbrirRecibo(FLOTA_PLACA);
+    flotaAbrirRecibo(placa);
   } catch (e) {
     err.textContent = 'Sin conexión: ' + e.message;
   } finally {
@@ -894,9 +1020,14 @@ async function flotaAbrirDocumentos(placa) {
       return `<li style="color:var(--red)"><b>${x.tipo}</b> — NO ENCONTRADO
         · hallazgo bloqueante</li>`;
     }
-    const color = x.vencido ? 'var(--red)' : (x.dias_para_vencer <= 30 ? 'var(--yellow)' : 'var(--green)');
-    const nota = x.vencido ? `VENCIDO hace ${-x.dias_para_vencer} días`
-                           : `vence en ${x.dias_para_vencer} días`;
+    // La tarjeta de propiedad NO vence: acredita titularidad mientras el
+    // vehículo sea del titular. Antes había que inventarle una fecha para poder
+    // guardar y quedaba «vence en 6955 días», que es ruido con aspecto de dato.
+    const color = !x.vence ? 'var(--green)'
+      : (x.vencido ? 'var(--red)' : (x.dias_para_vencer <= 30 ? 'var(--yellow)' : 'var(--green)'));
+    const nota = !x.vence ? 'no vence'
+      : (x.vencido ? `VENCIDO hace ${-x.dias_para_vencer} días`
+                   : `vence en ${x.dias_para_vencer} días`);
     // Botón y no `<a href>`: el endpoint exige el token en un header y una
     // pestaña nueva no manda headers. Este enlace devolvía 401 siempre — y como
     // nadie lo abrió, pasó por bueno desde que se escribió.
@@ -913,7 +1044,7 @@ async function flotaAbrirDocumentos(placa) {
              onclick="flotaVerFoto(${a.id}, '${x.tipo}')">ver ${a.es_pdf ? 'PDF' : 'imagen'}</button>`;
     }
     return `<li style="color:${color}"><b>${x.tipo}</b> ${x.numero} · ${x.entidad}
-      · ${x.fecha_vencimiento} — ${nota}${foto}</li>`;
+      ${x.vence ? '· ' + x.fecha_vencimiento + ' ' : ''}— ${nota}${foto}</li>`;
   }).join('');
   if (!filas) filas = '<li style="color:var(--tx2)">Ninguno registrado todavía.</li>';
 
@@ -926,7 +1057,7 @@ async function flotaAbrirDocumentos(placa) {
 
     <hr style="border-color:var(--brd-b);margin:14px 0">
     <label>Tipo</label>
-    <select id="doc-tipo" style="width:100%;padding:6px">
+    <select id="doc-tipo" style="width:100%;padding:6px" onchange="flotaDocTipoCambio()">
       <option value="soat">SOAT</option>
       <option value="rtm">Tecnomecánica (RTM)</option>
       <option value="poliza_rc">Póliza RC</option>
@@ -946,8 +1077,14 @@ async function flotaAbrirDocumentos(placa) {
       <input id="doc-entidad" style="width:100%;padding:6px">
       <label>Fecha de expedición</label>
       <input type="date" id="doc-expedicion" style="width:100%;padding:6px">
-      <label>Fecha de vencimiento</label>
-      <input type="date" id="doc-vencimiento" style="width:100%;padding:6px">
+      <div id="doc-caja-vencimiento">
+        <label>Fecha de vencimiento</label>
+        <input type="date" id="doc-vencimiento" style="width:100%;padding:6px">
+      </div>
+      <p id="doc-no-vence" style="display:none;color:var(--tx2);font-size:13px">
+        La tarjeta de propiedad <b>no vence</b>: acredita titularidad mientras el
+        vehículo sea del titular. No se le pide fecha — inventarle una la volvería
+        indistinguible de un documento que sí caduca.</p>
       <label style="display:block;margin-top:8px">Archivo del documento</label>
       <!-- Dos entradas y no una: el atributo capture abre la cámara directo, y
            sin él el teléfono ofrece el explorador de archivos. Con una sola
@@ -971,6 +1108,31 @@ async function flotaAbrirDocumentos(placa) {
             onclick="flotaGuardarDocumento()">Guardar documento</button>
     <div id="doc-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
+
+  // El formulario arranca en SOAT, que sí vence — pero si el primer gesto del
+  // usuario es cambiar el tipo, `onchange` no se dispara al dibujar. Se llama
+  // una vez para que el estado inicial y el estado tras un cambio se armen por
+  // el mismo camino: dos caminos para el mismo estado divergen.
+  flotaDocTipoCambio();
+}
+
+/** Los tipos que no vencen. Espejo de `TIPOS_SIN_VENCIMIENTO` del dominio.
+ *
+ * El servidor manda `vence` en cada fila y además ignora el vencimiento de
+ * estos tipos aunque el cliente lo mande: acá es solo para no PEDIR el dato.
+ * La regla vive en el dominio; esto es cortesía de formulario.
+ */
+const FLOTA_TIPOS_SIN_VENCIMIENTO = ['tarjeta_propiedad'];
+
+/** Esconde la fecha de vencimiento en los documentos que no vencen. */
+function flotaDocTipoCambio() {
+  const tipo = document.getElementById('doc-tipo').value;
+  const vence = FLOTA_TIPOS_SIN_VENCIMIENTO.indexOf(tipo) === -1;
+  const caja = document.getElementById('doc-caja-vencimiento');
+  const aviso = document.getElementById('doc-no-vence');
+  if (caja) caja.style.display = vence ? 'block' : 'none';
+  if (aviso) aviso.style.display = vence ? 'none' : 'block';
+  if (!vence) document.getElementById('doc-vencimiento').value = '';
 }
 
 /** Oculta los campos cuando el documento no apareció: no hay de dónde sacarlos. */
@@ -1033,8 +1195,11 @@ async function flotaGuardarDocumento() {
     cuerpo.entidad = document.getElementById('doc-entidad').value.trim();
     cuerpo.fecha_expedicion = document.getElementById('doc-expedicion').value;
     cuerpo.fecha_vencimiento = document.getElementById('doc-vencimiento').value;
-    if (!cuerpo.numero || !cuerpo.entidad || !cuerpo.fecha_vencimiento) {
-      err.textContent = 'Con el documento a la vista: número, entidad y vencimiento. ' +
+    const vence = FLOTA_TIPOS_SIN_VENCIMIENTO.indexOf(cuerpo.tipo) === -1;
+    if (!vence) cuerpo.fecha_vencimiento = '';
+    if (!cuerpo.numero || !cuerpo.entidad || (vence && !cuerpo.fecha_vencimiento)) {
+      err.textContent = 'Con el documento a la vista: número, entidad' +
+        (vence ? ' y vencimiento' : '') + '. ' +
         'Si no lo tenés, marcá "No aparece" — es una afirmación distinta.';
       return;
     }
@@ -1261,7 +1426,7 @@ async function flotaCondAbrirRecibo() {
     alerta('Sin señal: se piden las fotos fijas, sin las de llanta', 'error');
   }
 
-  let angulos = FLOTA_ANGULOS.map(a => `<div style="display:inline-block;margin:3px">
+  let angulos = flotaAngulosDeGrilla(FLOTA_ANGULOS).map(a => `<div style="display:inline-block;margin:3px">
     <input type="file" id="flota-f-${a}" accept="image/*" capture="environment"
            style="display:none" onchange="flotaCapturarAngulo('${a}')">
     <button type="button" class="btn-flota" id="flota-b-${a}"
@@ -1278,8 +1443,11 @@ async function flotaCondAbrirRecibo() {
     <button type="button" class="btn-flota" style="margin-top:8px"
             onclick="document.getElementById('flota-foto-tablero').click()">📷 Foto del tablero</button>
     <span id="flota-tablero-ok" style="margin-left:8px"></span>
-    <p style="margin-top:12px"><b>Las ${FLOTA_ANGULOS.length} fotos</b></p><div>${angulos}</div>
-    <button class="btn-primary" id="cf-guardar" onclick="flotaCondGuardar()">Confirmar ${FLOTA_PLACA}</button>
+    <p style="margin-top:12px"><b>${flotaAngulosDeGrilla(FLOTA_ANGULOS).length} fotos más</b>
+       — la del tablero ya está arriba.</p>
+    ${flotaConvencionFotos()}<div>${angulos}</div>
+    <button class="btn-primary" id="cf-guardar" data-placa="${FLOTA_PLACA}"
+            onclick="flotaCondGuardar()">Confirmar ${FLOTA_PLACA}</button>
     <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
 }
 
@@ -1358,6 +1526,7 @@ async function flotaCondAbrirEntrega() {
       ${Object.keys(FLOTA_REFERENCIA).length
         ? '<span style="font-size:12px;color:var(--tx2)">— "cómo estaba" te muestra la de cuando lo recibiste</span>'
         : ''}</p>
+    ${flotaConvencionFotos()}
     <div>${angulos}</div>
 
     <label class="input-label" style="margin-top:12px">¿Dónde queda el vehículo?</label>
@@ -1376,7 +1545,7 @@ async function flotaCondAbrirEntrega() {
     <div id="cf-sede-caja"><label class="input-label">¿Qué sede?</label>
       <select id="cf-sede" class="input-field"></select></div>
 
-    <button class="btn-primary" id="cf-guardar"
+    <button class="btn-primary" id="cf-guardar" data-placa="${FLOTA_PLACA}"
             onclick="flotaCondEntregar()">Entregar ${FLOTA_PLACA}</button>
     <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
 
@@ -1419,8 +1588,11 @@ async function flotaCondEntregar() {
 
   // Dónde está y quién responde: dos hechos. Fuera de sede el vehículo NO pasa
   // a la sede — sigue siendo del conductor, que es quien lo tiene.
+  const placa = flotaPlacaDelFormulario('cf-guardar', 'cf-error');
+  if (!placa) return;
+
   const payload = {
-    placa: FLOTA_PLACA, km: km,
+    placa: placa, km: km,
     ubicacion: ubicacion,
     fotos_fin: FLOTA_ANGULOS_ENTREGA.filter(a => FLOTA_FOTOS[a])
       .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado', a))
@@ -1475,14 +1647,18 @@ async function flotaCondGuardar() {
     err.textContent = 'Falta la foto del tablero: el número necesita respaldo verificable.';
     return;
   }
-  const faltan = FLOTA_ANGULOS.filter(a => !FLOTA_FOTOS[a]).length;
-  if (faltan && !confirm(`Faltan ${faltan} de las ${FLOTA_ANGULOS.length} fotos. ` +
+  const grilla = flotaAngulosDeGrilla(FLOTA_ANGULOS);
+  const faltan = grilla.filter(a => !FLOTA_FOTOS[a]).length;
+  if (faltan && !confirm(`Faltan ${faltan} de las ${grilla.length} fotos. ` +
       `El turno se registra igual y queda contado como incompleto. ¿Confirmás?`)) return;
 
+  const placa = flotaPlacaDelFormulario('cf-guardar', 'cf-error');
+  if (!placa) return;
+
   const payload = {
-    placa: FLOTA_PLACA, km: km, custodio_tipo: 'conductor',
+    placa: placa, km: km, custodio_tipo: 'conductor',
     custodio_conductor_id: FLOTA_COND.conductor.id,
-    fotos_inicio: FLOTA_ANGULOS.filter(a => FLOTA_FOTOS[a])
+    fotos_inicio: flotaAngulosDeGrilla(FLOTA_ANGULOS).filter(a => FLOTA_FOTOS[a])
       .map(a => flotaFotoPayload(FLOTA_FOTOS[a], 'evidencia_estado', a))
       .concat([flotaFotoPayload(FLOTA_FOTO_TABLERO, 'foto_dato', 'tablero')]),
   };

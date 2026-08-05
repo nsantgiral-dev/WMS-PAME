@@ -109,6 +109,23 @@ ANGULOS_FIJOS = (
     'cajon_abierto', 'interior_cabina', 'tablero',
 )
 
+#: `tablero` se pide APARTE, no dentro de la grilla.
+#:
+#: Es la foto del odómetro: `foto_dato`, mínimo 1600 px, sin recompresión —
+#: parámetros distintos de los otros seis, que son `evidencia_estado`. Estaba en
+#: los dos sitios: el formulario mostraba «Foto del tablero (obligatoria)» y
+#: además un botón `tablero` en la grilla, y el payload mandaba las DOS. Yesid
+#: lo reportó el 2026-08-05: *"la opción para cargar la foto del tablero se
+#: encuentra en el registro del kilometraje y en el registro general de las
+#: partes del vehículo"*.
+#:
+#: Sigue en `ANGULOS_FIJOS` porque el ángulo `tablero` existe y se guarda; lo
+#: que cambia es que la grilla no lo vuelva a pedir.
+ANGULO_TABLERO = 'tablero'
+
+#: Los ángulos que la GRILLA muestra. El tablero se pide en su propio campo.
+ANGULOS_GRILLA = tuple(a for a in ANGULOS_FIJOS if a != ANGULO_TABLERO)
+
 #: Vocabulario completo de `flota_foto.angulo`.
 #:
 #: Hasta el 2026-08-03 las fotos se guardaban **sin ángulo**: ocho archivos
@@ -276,6 +293,39 @@ class QuienPide(str, Enum):
 
     CONDUCTOR  = 'conductor'
     ADMIN_ZONA = 'admin_zona'
+
+
+#: Los documentos que el módulo persigue. El vocabulario vive acá y la tabla lo
+#: sigue, igual que los ángulos de foto y las clases de foto.
+TIPOS_DOCUMENTO = ('soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad')
+
+#: Documentos que NO vencen. La tarjeta de propiedad acredita titularidad
+#: mientras el vehículo sea del titular: no tiene fecha de vencimiento, ni en el
+#: documento ni en el RUNT.
+#:
+#: Se descubrió el 2026-08-05, cargando el THP696: el invariante «un documento
+#: vigente tiene vencimiento» era falso, y para poder guardar hubo que escribir
+#: `2045-08-20` — «vence en 6955 días». Un dato inventado dentro del módulo cuyo
+#: lema es que inventarlo es peor que no tenerlo.
+#:
+#: El invariante no se afloja para todos: se hace condicional al tipo, igual que
+#: `custodio_estado` y que las dimensiones de foto.
+TIPOS_SIN_VENCIMIENTO = ('tarjeta_propiedad',)
+
+
+def exige_vencimiento(tipo_documento: str) -> bool:
+    """¿Este tipo de documento tiene fecha de vencimiento?
+
+    Sin `.get(tipo, True)`: un tipo desconocido tiene que reventar. Asumir que
+    vence es el default seguro para el health, pero acá el costo de callar es
+    que alguien agregue un tipo y nadie note que quedó fuera de la regla.
+    """
+    if tipo_documento not in TIPOS_DOCUMENTO:
+        raise ValueError(
+            f'tipo de documento desconocido: {tipo_documento!r}. '
+            f'Conocidos: {", ".join(TIPOS_DOCUMENTO)}.'
+        )
+    return tipo_documento not in TIPOS_SIN_VENCIMIENTO
 
 
 class ClaseFoto(str, Enum):

@@ -5,6 +5,7 @@ import logging
 from datetime import timedelta
 from flask import Flask, send_from_directory
 from flask_compress import Compress
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 from app.extensions import db, migrate, jwt, cors
 
@@ -74,6 +75,20 @@ def create_app():
     app.config['JWT_SECRET_KEY'] = secret_key
     app.config['SECRET_KEY'] = secret_key
     app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=7)
+
+    # Detrás del proxy de Railway. Sin esto Flask cree que el esquema es `http`
+    # y construye TODO redirect con `Location: http://…`; desde una página HTTPS
+    # el navegador lo bloquea como contenido mixto y la llamada muere en el
+    # `catch` del cliente.
+    #
+    # Se descubrió por `/api/almacenes` (sin barra → 308): el desplegable de
+    # sede quedaba vacío y no se podía entregar el turno. Pero afecta a
+    # cualquier redirect y a cualquier `url_for(_external=True)`, así que el
+    # arreglo va acá y no en el sitio donde se notó.
+    #
+    # Confía en un solo salto de proxy — el de Railway. Más saltos declarados
+    # que proxies reales dejaría falsificar la IP de origen desde el cliente.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=0)
 
     db.init_app(app)
     migrate.init_app(app, db)

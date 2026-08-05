@@ -433,7 +433,8 @@ class TestVistaDelConductor:
         }, headers=_auth(self._token(app, usuario)))
         assert r.status_code == 409
         assert 'Víctor' in r.get_json()['error']
-        assert 'cerrar su turno primero' in r.get_json()['error']
+        # Dice cómo, no solo que no. Ver el test hermano en test_traspaso_t1.
+        assert 'Entregar turno' in r.get_json()['error']
 
     def test_mis_reportes_muestra_si_le_cerraron_el_turno(
             self, app, client, db, flota_mundo, conductor_con_cuenta):

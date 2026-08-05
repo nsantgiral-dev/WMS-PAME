@@ -28,6 +28,7 @@ from app.models.vehiculo import Vehiculo
 from flota.adaptadores.almacen_fotos import ErrorAlmacen
 from flota.adaptadores.modelos import DocumentoVehiculo, Foto
 from flota.dominio.errores import FotoInvalida
+from flota.dominio.valores import exige_vencimiento
 
 documentos_bp = Blueprint('flota_documentos', __name__)
 
@@ -62,6 +63,10 @@ def _serializar(d):
     # Día operativo de Bogotá, no UTC: `vencido` y `dias_para_vencer` son la
     # respuesta a "¿sale este camión?", y en UTC cambiaban a las 7 p.m.
     hoy = dia_operativo()
+    # `vence` distingue "no vence nunca" de "no sabemos cuándo vence". Sin ese
+    # campo la pantalla tiene que adivinar por la ausencia de fecha, y adivinar
+    # es como la tarjeta de propiedad terminó con '2045-08-20'.
+    vence = exige_vencimiento(d.tipo)
     vencido = (d.fecha_vencimiento is not None and d.fecha_vencimiento < hoy)
     return {
         'id': d.id, 'tipo': d.tipo, 'estado': d.estado,
@@ -76,6 +81,7 @@ def _serializar(d):
         'adjunto': _adjunto(d),
         # Se calcula acá y no en el cliente: la misma pregunta contestada en dos
         # lugares termina con dos respuestas.
+        'vence': vence,
         'vencido': vencido,
         'dias_para_vencer': (d.fecha_vencimiento - hoy).days if d.fecha_vencimiento else None,
     }
@@ -135,6 +141,15 @@ def guardar_documento(placa):
 
     try:
         expedicion, vencimiento = _fecha('fecha_expedicion'), _fecha('fecha_vencimiento')
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    # Un tipo que no vence NO puede traer vencimiento, ni siquiera si el cliente
+    # lo manda. Aceptarlo dejaría entrar la fecha inventada por otra puerta y el
+    # aviso de renovación la perseguiría como si fuera real.
+    try:
+        if not exige_vencimiento(datos['tipo']):
+            vencimiento = None
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
