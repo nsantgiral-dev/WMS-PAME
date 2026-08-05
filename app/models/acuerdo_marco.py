@@ -11,6 +11,7 @@ El acuerdo marco convierte la negociación en algoritmo:
 """
 from datetime import datetime, date
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 
 class Proveedor(db.Model):
@@ -65,12 +66,12 @@ class AcuerdoMarco(db.Model):
 
     @property
     def vigente(self):
-        hoy = date.today()
+        hoy = _dia_operativo()
         return self.activo and self.vigencia_desde <= hoy <= self.vigencia_hasta
 
     @property
     def dias_para_vencer(self):
-        return (self.vigencia_hasta - date.today()).days
+        return (self.vigencia_hasta - _dia_operativo()).days
 
     def to_dict(self):
         return {

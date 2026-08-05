@@ -40,6 +40,7 @@ import logging
 from datetime import date, timedelta
 
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def _costos_acuerdo_vigente(refs):
     from app.models.acuerdo_marco import AcuerdoMarco
     from app.models.producto import Producto
 
-    hoy = date.today()
+    hoy = _dia_operativo()
     filas = (
         db.session.query(Producto.codigo_siesa, AcuerdoMarco.precio_unitario,
                          AcuerdoMarco.vigencia_hasta)
@@ -124,7 +125,7 @@ def _costos_cotizacion(refs, meses=6):
     from app.models.acuerdo_marco import PrecioProveedor
     from app.models.producto import Producto
 
-    desde = date.today() - timedelta(days=meses * 30)
+    desde = _dia_operativo() - timedelta(days=meses * 30)
     filas = (
         db.session.query(Producto.codigo_siesa, PrecioProveedor.precio_unitario,
                          PrecioProveedor.fecha)
@@ -170,7 +171,7 @@ def _costos_kardex(refs):
         .group_by(KardexMovimiento.referencia)
         .all()
     )
-    hoy = date.today()
+    hoy = _dia_operativo()
     salida = {}
     for ref, valor, cant, ultima in filas:
         c = float(cant or 0)

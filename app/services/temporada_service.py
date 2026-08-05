@@ -21,6 +21,7 @@ import logging
 from datetime import date
 
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ class TemporadaService:
         from sqlalchemy import func
         from collections import defaultdict
 
-        desde = date.today().replace(year=date.today().year - anios)
+        desde = _dia_operativo().replace(year=_dia_operativo().year - anios)
 
         def _por_dia(conceptos, naturaleza):
             return (

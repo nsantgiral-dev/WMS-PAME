@@ -23,6 +23,7 @@ import os
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -309,7 +310,7 @@ class KardexService:
         from app.services.connekta_gateway import connekta
 
         if not fecha_hasta:
-            fecha_hasta = date.today().strftime('%Y%m%d')
+            fecha_hasta = _dia_operativo().strftime('%Y%m%d')
 
         from datetime import date as _date_k
         try:
@@ -795,7 +796,7 @@ class KardexService:
         """
         from sqlalchemy import func
 
-        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
 
         # ── 1. Reconciliación en UNIDADES × mes × bodega ──────────
         ventas_mes_bodega = (
@@ -909,7 +910,7 @@ class KardexService:
                 f'antes de calcular. El sistema prefiere no responder a responder con hueco.'
             )
 
-        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
 
         if nivel == 'red':
             # Clasificación: agregar toda la red, no por bodega
@@ -1015,8 +1016,8 @@ class KardexService:
         """
         from sqlalchemy import func
 
-        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
-        dias_ventana = (date.today() - fecha_limite).days
+        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
+        dias_ventana = (_dia_operativo() - fecha_limite).days
 
         if nivel == 'red':
             k_kardex = KardexMovimiento.referencia
@@ -1117,7 +1118,7 @@ class KardexService:
         """
         from sqlalchemy import func
 
-        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
 
         def _lunes(f):
             return f - timedelta(days=f.weekday())
@@ -1225,7 +1226,7 @@ class KardexService:
         if estacionales_extra:
             estacionales_set.update(estacionales_extra)
 
-        fecha_limite = date.today() - timedelta(days=ventana_meses * 30)
+        fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
         dias_ventana = ventana_meses * 30
 
         # Demanda diaria por SKU a nivel RED (agregando todas las bodegas)

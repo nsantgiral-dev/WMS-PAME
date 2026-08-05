@@ -476,12 +476,6 @@ DEUDA_SIN_UI = {
         'Comparador por SKU. La pantalla compara en lote.',
     '/api/compras/precios/registrar':
         'Registro manual de un precio de proveedor. **Es una de las dos entradas de precio del sistema** y no tiene pantalla: hoy los precios solo entran por acuerdo marco. Conectarla mejoraría la cobertura de costo del armador.',
-    '/api/config/mapeo-unidades':
-        'CONFIGURACIÓN SIN PANTALLA. El mapeo de unidades de empaque decide cuántas unidades tiene una caja: si falta, el picking pide cantidades imposibles. Hoy solo se puede cargar por API. Es de las que MÁS falta conectar.',
-    '/api/config/mapeo-unidades/<int:id>':
-        'CONFIGURACIÓN SIN PANTALLA — ver /api/config/mapeo-unidades.',
-    '/api/config/mapeo-unidades/tipos-sin-mapeo':
-        'CONFIGURACIÓN SIN PANTALLA — y es el diagnóstico: dice qué tipos de empaque no tienen mapeo. Sin pantalla, nadie sabe cuántos faltan.',
     '/api/conteo/abc/sincronizar':
         'Recalcula la clasificación ABC. El cron la corre a las 2am; el manual es para después de una carga masiva.',
     '/api/conteo/mis-tareas':

@@ -456,7 +456,7 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-operarios') await cargarOperarios();
   else if (TAB === 'tab-usuarios') await cargarUsuarios();
   else if (TAB === 'tab-stock') await cargarStock();
-  else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); }
+  else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); await mapeoUnidadesCargar(); }
   else if (TAB === 'tab-muelle') await cargarMuelle();
   else if (TAB === 'tab-rutas') await cargarRutas();
   else if (TAB === 'tab-inventario') await cargarInventario();
@@ -2531,5 +2531,119 @@ async function siesaVerRemision() {
       max-height:220px;overflow:auto;">${JSON.stringify(r, null, 2)}</pre>`;
   } catch (e) {
     out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAPEO DE UNIDADES DE NEGOCIO — la pantalla que el sistema daba por hecha
+//
+// `siesa_sync_service` auto-inserta cada tipo de inventario nuevo que Siesa
+// devuelve, con `unidad_negocio_id` vacío, y su comentario dice:
+//
+//     "El admin los verá en /api/config/mapeo-unidades y los completa con un
+//      click"
+//
+// Ese click nunca existió. Y la consecuencia no es cosmética: aprobar un
+// traslado LEVANTA si algún producto no tiene unidad de negocio —
+//
+//     "Productos sin Unidad de Negocio configurada: X.
+//      Configura el mapeo en /api/config/mapeo-unidades y vuelve a aprobar."
+//
+// — o sea que el sistema sabe exactamente qué hay que hacer y manda a la
+// persona a un endpoint que no puede abrir desde el navegador.
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function mapeoUnidadesCargar() {
+  const el = document.getElementById('mapeo-unidades');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:14px;color:#666;">Cargando…</div>';
+
+  const [mapeos, diag] = await Promise.all([
+    get('/api/config/mapeo-unidades').catch(e => ({ _error: e.message })),
+    get('/api/config/mapeo-unidades/tipos-sin-mapeo').catch(e => ({ _error: e.message })),
+  ]);
+
+  if (mapeos._error) {
+    el.innerHTML = `<div class="tabla-card" style="color:var(--red)">
+      No se pudo cargar el mapeo: ${mapeos._error}</div>`;
+    return;
+  }
+
+  const lista = Array.isArray(mapeos) ? mapeos : [];
+  // Los vacíos primero: son los que bloquean traslados AHORA.
+  const pendientes = lista.filter(m => !(m.unidad_negocio_id || '').trim());
+  const completos = lista.filter(m => (m.unidad_negocio_id || '').trim());
+
+  const fila = (m) => {
+    const vacio = !(m.unidad_negocio_id || '').trim();
+    return `<div class="tabla-fila" style="align-items:center;gap:8px;">
+      <span class="tabla-nombre" style="flex:1;font-size:13px;">
+        <b>${m.tipo_inv_siesa}</b>
+        <span style="display:block;font-size:11px;color:var(--tx3);">${m.descripcion || ''}</span>
+      </span>
+      <input id="mu-${m.id}" value="${m.unidad_negocio_id || ''}"
+             placeholder="unidad" maxlength="10"
+             style="width:90px;padding:5px;border-radius:6px;font-size:13px;
+                    border:1px solid ${vacio ? 'var(--red)' : 'var(--brd)'};
+                    background:var(--bg);color:var(--tx);">
+      <button class="btn-flota" style="padding:4px 10px;font-size:12px;"
+              onclick="mapeoUnidadesGuardar(${m.id})">Guardar</button>
+    </div>`;
+  };
+
+  const bloqueados = diag._error ? null : (diag.total_sin_unidad_negocio || 0);
+
+  el.innerHTML = `
+    <div class="tabla-card">
+      <div class="tabla-titulo">Unidades de negocio (Siesa)</div>
+      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+        Cada tipo de inventario de Siesa necesita su unidad de negocio.
+        <b>Siesa no la hereda de la bodega</b>, así que sin este mapeo un
+        traslado no se puede aprobar.
+      </p>
+
+      ${pendientes.length ? `
+        <div style="border-left:3px solid var(--red);padding:8px 10px;margin-bottom:10px;
+                    background:var(--bg-s);border-radius:6px;">
+          <b style="color:var(--red);font-size:13px;">
+            ${pendientes.length} tipo(s) sin asignar</b>
+          <p style="font-size:11px;color:var(--tx2);margin:4px 0 0;">
+            El sync los descubrió solo. Mientras estén vacíos, cualquier traslado
+            que incluya uno de sus productos falla al aprobar.
+          </p>
+        </div>
+        ${pendientes.map(fila).join('')}
+        <hr style="border-color:var(--brd);margin:12px 0;">
+      ` : `<p style="font-size:12px;color:var(--green);margin-bottom:10px;">
+             ✓ Todos los tipos tienen unidad asignada</p>`}
+
+      ${completos.map(fila).join('')}
+
+      ${bloqueados === null
+        ? `<p style="font-size:11px;color:var(--tx3);margin-top:10px;">
+             No se pudo consultar cuántos productos están sin unidad: ${diag._error}</p>`
+        : bloqueados > 0
+          ? `<p style="font-size:12px;color:var(--yellow);margin-top:10px;">
+               <b>${bloqueados} producto(s) activos sin unidad de negocio.</b>
+               No se pueden trasladar hasta que su tipo tenga mapeo.</p>`
+          : `<p style="font-size:12px;color:var(--green);margin-top:10px;">
+               Ningún producto activo quedó sin unidad.</p>`}
+    </div>`;
+}
+
+/** Guarda una unidad. Vacío NO se acepta: sería volver al estado que bloquea. */
+async function mapeoUnidadesGuardar(id) {
+  const input = document.getElementById(`mu-${id}`);
+  const valor = (input?.value || '').trim();
+  if (!valor) {
+    alerta('La unidad de negocio no puede quedar vacía — es lo que bloquea el traslado', 'error');
+    return;
+  }
+  try {
+    await put(`/api/config/mapeo-unidades/${id}`, { unidad_negocio_id: valor });
+    alerta('Unidad guardada ✓', 'exito');
+    mapeoUnidadesCargar();
+  } catch (e) {
+    alerta('No se pudo guardar: ' + e.message, 'error');
   }
 }

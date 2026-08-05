@@ -14,6 +14,7 @@ from app.models.recaudo_entrega import RecaudoEntrega
 from app.models.vehiculo import Vehiculo
 from app.models.ruta_maestra import RutaMaestra, RutaMaestraParada
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho, EstadoFinancieroRuta
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -340,7 +341,7 @@ class RutaService:
             q = q.filter_by(estado=estado)
         # Rango de fechas (default: hoy si no se especifica)
         if fecha_desde or fecha_hasta:
-            fd = _date.fromisoformat(fecha_desde) if fecha_desde else _date.today()
+            fd = _date.fromisoformat(fecha_desde) if fecha_desde else _dia_operativo()
             fh = _date.fromisoformat(fecha_hasta) if fecha_hasta else fd
             if fh < fd:
                 fd, fh = fh, fd
@@ -348,7 +349,7 @@ class RutaService:
                          RutaDespacho.fecha_programada <= fh)
         else:
             # Sin filtro explícito → solo hoy para no cargar todo el histórico
-            q = q.filter(RutaDespacho.fecha_programada == _date.today())
+            q = q.filter(RutaDespacho.fecha_programada == _dia_operativo())
         return q.paginate(page=page, per_page=50, error_out=False)
 
     @staticmethod

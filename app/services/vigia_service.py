@@ -30,6 +30,7 @@ from datetime import datetime, date, timedelta, timezone
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ TZ_BOGOTA = ZoneInfo('America/Bogota')
 
 
 def hoy_bogota():
-    """Fecha de negocio de hoy. NUNCA date.today(), que da la del servidor."""
+    """Fecha de negocio de hoy. NUNCA _dia_operativo(), que da la del servidor."""
     return datetime.now(TZ_BOGOTA).date()
 
 
@@ -168,7 +169,7 @@ def fecha_negocio(ts):
 def _lunes_semana_actual():
     """Lunes de la semana en curso EN BOGOTÁ — esta semana NUNCA se evalúa.
 
-    Con date.today() el guard se abría cinco horas antes: entre las 7 p.m. del
+    Con _dia_operativo() el guard se abría cinco horas antes: entre las 7 p.m. del
     domingo y medianoche en Bogotá, el servidor UTC ya está en lunes y la
     semana que aún no cierra se vuelve evaluable con el domingo incompleto.
     Un conteo bajo es exactamente lo que el CUSUM lee como colapso — falsa

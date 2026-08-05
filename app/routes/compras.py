@@ -16,6 +16,7 @@ from sqlalchemy import func, case, desc
 from sqlalchemy.orm import selectinload, joinedload
 from app.extensions import db
 from app.routes._auth_helpers import _es_compras, Roles
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 compras_bp = Blueprint('compras', __name__)
 
@@ -530,7 +531,7 @@ def listar_acuerdos():
     q = AcuerdoMarco.query
     if solo_vigentes:
         from datetime import date as _d
-        hoy = _d.today()
+        hoy = _dia_operativo()
         q = q.filter(AcuerdoMarco.activo == True,
                       AcuerdoMarco.vigencia_hasta >= hoy)
     acuerdos = q.order_by(AcuerdoMarco.vigencia_hasta).all()
@@ -586,7 +587,7 @@ def registrar_precio():
         condicion_pago=data.get('condicion_pago'),
         fuente=data.get('fuente', 'COTIZACION'),
         cotizado_por=data.get('cotizado_por'),
-        fecha=_d.today(),
+        fecha=_dia_operativo(),
     )
     db.session.add(p)
     db.session.commit()

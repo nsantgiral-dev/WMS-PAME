@@ -186,7 +186,9 @@ def _run_sync(app):
                 f'Completa el mapeo en /api/config/mapeo-unidades: {lista}'
             )
             # Auto-insertar tipos desconocidos con unidad_negocio_id=NULL
-            # El admin los verá en /api/config/mapeo-unidades y los completa con un click
+            # El admin los ve en la pestaña Siesa → Unidades de negocio, marcados
+            # en rojo, y los completa ahí. Esa pantalla no existió hasta el
+            # 2026-08-05: el sync venía creando filas para un gesto inexistente.
             for tipo in lista:
                 existe = SiesaMapeoUnidades.query.filter_by(tipo_inv_siesa=tipo).first()
                 if not existe:

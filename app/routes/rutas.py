@@ -10,6 +10,7 @@ from app.models.ruta_despacho import RutaDespacho
 from app.routes._auth_helpers import _es_admin_o_jefe, _solo_admin, Roles
 from app.models.recaudo_entrega import EstadoEntrega
 from app.services.ruta_service import RutaService, ConflictError
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -627,7 +628,7 @@ def liquidacion_dashboard():
     fecha_desde_str = request.args.get('fecha_desde') or request.args.get('fecha')
     fecha_hasta_str = request.args.get('fecha_hasta')
     try:
-        fecha_desde = _date.fromisoformat(fecha_desde_str) if fecha_desde_str else _date.today()
+        fecha_desde = _date.fromisoformat(fecha_desde_str) if fecha_desde_str else _dia_operativo()
         fecha_hasta = _date.fromisoformat(fecha_hasta_str) if fecha_hasta_str else fecha_desde
     except ValueError:
         return jsonify({'error': 'Formato de fecha inválido — usar YYYY-MM-DD'}), 400

@@ -10,6 +10,7 @@ máxima, y vigencia. Desbloqueo vencido = bloqueado de nuevo.
 """
 from datetime import datetime, date
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 
 class ProductoBloqueado(db.Model):
@@ -37,7 +38,7 @@ class ProductoBloqueado(db.Model):
         if not self.activo:
             return False
         if self.desbloqueado_por_id and self.vigencia_desbloqueo:
-            if date.today() <= self.vigencia_desbloqueo:
+            if _dia_operativo() <= self.vigencia_desbloqueo:
                 return False  # desbloqueo temporal vigente
             else:
                 # Vigencia expirada → vuelve a estar bloqueado

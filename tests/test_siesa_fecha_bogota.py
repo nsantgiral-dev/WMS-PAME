@@ -233,7 +233,15 @@ class TestNadieMasArmaFechasDeNegocioConUtcnow:
 
     #: Formatear una fecha o pedir el `.date()` es tratarla como DÍA. Ahí la
     #: zona importa. Un `utcnow()` guardado en una columna, no.
-    _PATRONES = ("utcnow().strftime", "utcnow().date()")
+    #
+    # `date.today()` se agregó el 2026-08-05: el guard original solo perseguía
+    # `utcnow()` y dejó pasar 33 sitios. Y no eran menores — `AcuerdoMarco.vigente`
+    # daba por vencido un acuerdo CINCO HORAS ANTES, lo que hacía que la
+    # jerarquía de costos cayera a una fuente peor sin que nada lo dijera.
+    #
+    # A diferencia de `utcnow()`, que es legítimo para timestamps técnicos,
+    # **`date.today()` siempre es una pregunta de negocio**: qué día es hoy.
+    _PATRONES = ("utcnow().strftime", "utcnow().date()", "date.today()")
 
     @classmethod
     def _ofensas(cls):

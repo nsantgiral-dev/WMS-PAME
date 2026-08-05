@@ -167,7 +167,7 @@ class TrasladoService:
         if sin_unidad:
             raise ValueError(
                 f'Productos sin Unidad de Negocio configurada: {", ".join(sin_unidad)}. '
-                f'Configura el mapeo en /api/config/mapeo-unidades y vuelve a aprobar.'
+                f'Asignala en Siesa → Unidades de negocio y volvé a aprobar.'
             )
 
         s.siesa_error = None

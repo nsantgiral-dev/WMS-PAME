@@ -17,6 +17,7 @@ Calendario de vencimientos:
 import logging
 from datetime import date, timedelta
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ class ComprasInteligenciaService:
         if not producto:
             return {'error': f'Producto {producto_id} no encontrado'}
 
-        hoy = date.today()
+        hoy = _dia_operativo()
 
         # Buscar acuerdo vigente
         acuerdo = AcuerdoMarco.query.filter(
@@ -107,7 +108,7 @@ class ComprasInteligenciaService:
         from app.models.producto import Producto
         from sqlalchemy import func
 
-        hoy = date.today()
+        hoy = _dia_operativo()
         fecha_limite = hoy - timedelta(days=meses * 30)
 
         # Acuerdos vigentes indexados por producto
@@ -198,7 +199,7 @@ class ComprasInteligenciaService:
         from app.models.producto import Producto
         from sqlalchemy import func
 
-        hoy = date.today()
+        hoy = _dia_operativo()
         limite_alerta = hoy + timedelta(days=DIAS_ALERTA_VENCIMIENTO * 2)
         inicio_trimestre = hoy - timedelta(days=90)
 
@@ -269,7 +270,7 @@ class ComprasInteligenciaService:
         """
         from app.models.acuerdo_marco import AcuerdoMarco, PrecioProveedor
 
-        hoy = date.today()
+        hoy = _dia_operativo()
 
         # Acuerdos vigentes
         acuerdos = AcuerdoMarco.query.filter(

@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, date, timedelta
 from app.extensions import db
 from app.models.producto_bloqueado import ProductoBloqueado, FugaRecompra
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +234,7 @@ class BloqueoRecompraService:
         bloqueo.desbloqueado_por_id = usuario_id
         bloqueo.motivo_desbloqueo = motivo.strip()
         bloqueo.cantidad_autorizada = cantidad_autorizada
-        bloqueo.vigencia_desbloqueo = date.today() + timedelta(days=vigencia_dias)
+        bloqueo.vigencia_desbloqueo = _dia_operativo() + timedelta(days=vigencia_dias)
         bloqueo.fecha_desbloqueo = datetime.utcnow()
 
         db.session.commit()

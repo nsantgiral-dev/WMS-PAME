@@ -10,6 +10,7 @@ from app.extensions import db
 from app.models.bulto import Bulto, EstadoBulto
 from app.models.packing import TareaPacking, EstadoPacking
 from app.models.ruta_despacho import RutaDespacho, EstadoRutaDespacho
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ class MuelleService:
 
     @staticmethod
     def obtener_manifiesto() -> dict:
-        hoy = date.today()
+        hoy = _dia_operativo()
         bultos = (
             Bulto.query
             .options(selectinload(Bulto.tarea))

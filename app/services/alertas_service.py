@@ -21,6 +21,7 @@ import logging
 import os
 import json
 from datetime import datetime
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
 
@@ -598,9 +599,9 @@ def enviar_resumen_diario(app=None):
             from app.extensions import db
             from sqlalchemy import func
 
-            ayer_inicio = datetime.combine(date.today() - timedelta(days=1),
+            ayer_inicio = datetime.combine(_dia_operativo() - timedelta(days=1),
                                            datetime.min.time())
-            ayer_fin    = datetime.combine(date.today(), datetime.min.time())
+            ayer_fin    = datetime.combine(_dia_operativo(), datetime.min.time())
 
             # Pedidos despachados ayer (picking completado)
             try:
@@ -702,7 +703,7 @@ def enviar_resumen_diario(app=None):
             if anomalias:
                 logger.warning(f'[RESUMEN] Anomalías detectadas: {anomalias}')
 
-            ayer_str = (date.today() - timedelta(days=1)).strftime('%d/%m/%Y')
+            ayer_str = (_dia_operativo() - timedelta(days=1)).strftime('%d/%m/%Y')
             _enviar_resumen_diario(ayer_str, pedidos_despachados, bultos_empacados,
                                    tareas_ok, jobs_ok, jobs_fallidos, anomalias=anomalias)
 

@@ -18,6 +18,7 @@ import os
 from datetime import date, timedelta
 from collections import defaultdict
 from app.extensions import db
+from app.utils.fecha import dia_operativo as _dia_operativo
 
 
 def sigma_ltd(lt_dias, sigma_d, d_avg, sigma_lt, r_dias=0):
@@ -581,8 +582,8 @@ class ArmadorService:
                 valor_nac_estimado = valor_fob_total * factor_nac * 4200
 
         # Ventana de llegada
-        eta_min = date.today() + timedelta(days=int(lt_china - sigma_lt))
-        eta_max = date.today() + timedelta(days=int(lt_china + sigma_lt))
+        eta_min = _dia_operativo() + timedelta(days=int(lt_china - sigma_lt))
+        eta_max = _dia_operativo() + timedelta(days=int(lt_china + sigma_lt))
 
         return {
             'modo': modo,
