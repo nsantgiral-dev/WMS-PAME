@@ -3498,12 +3498,16 @@ class ConnektaGateway:
         La consulta dinámica `CONNEKTA_CONSULTA_NC_CONSECUTIVO` debe devolver,
         sin parámetros, las columnas crudas de la tabla:
 
-            SELECT TOP 200 f350_rowid, f350_id_co, f350_id_tipo_docto,
+            SELECT TOP 100 f350_rowid, f350_id_co, f350_id_tipo_docto,
                    f350_consec_docto, f350_fecha, f350_ind_estado,
                    f350_total_db
             FROM t350_co_docto_contable
-            WHERE f350_id_tipo_docto = 'NCE'
+            WHERE f350_id_tipo_docto = ''NCE''
             ORDER BY f350_rowid DESC
+
+        Las comillas van dobladas (regla 15) y el tope es 100 (regla 10:
+        páginas grandes devuelven registros fantasma con todo en NULL — y acá
+        un fantasma sería una candidata más en la desambiguación).
 
         El filtrado fino es del lado del WMS a propósito (mismo criterio que
         `get_remision_desde_pedido`): así un cambio de negocio no obliga a
@@ -3513,11 +3517,15 @@ class ConnektaGateway:
             return []
         res = self._get(
             self.consulta_nc_consecutivo,
-            params_extra={'paginacion': 'numPag=1|tamPag=200'},
+            params_extra={'paginacion': 'numPag=1|tamPag=100'},
             url=self.url_get_dinamico,
         )
         detalle = res.get('detalle', {}) if isinstance(res, dict) else {}
-        return detalle.get('Datos') or detalle.get('Table') or []
+        filas = detalle.get('Datos') or detalle.get('Table') or []
+        # Un registro fantasma (regla 10) llega con todo en NULL. Descartarlo
+        # acá y no en el filtro: una fila sin rowid no es una NC, es basura de
+        # paginación, y contarla como candidata rompería la desambiguación.
+        return [f for f in filas if f.get('f350_rowid')]
 
     def get_max_rowid_nc(self) -> int | None:
         """Mayor `f350_rowid` de NCE **antes** de crear la nuestra.
