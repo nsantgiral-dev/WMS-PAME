@@ -4,6 +4,7 @@ import click
 import logging
 from datetime import timedelta
 from flask import Flask, send_from_directory
+from flask_compress import Compress
 from dotenv import load_dotenv
 from app.extensions import db, migrate, jwt, cors
 
@@ -77,6 +78,22 @@ def create_app():
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
+
+    # Gzip sobre lo que se transmite en texto. Los 915 KB de JS del PWA bajan a
+    # ~200 KB, y las respuestas grandes de la API (catálogo, inventario, kardex)
+    # comprimen todavía mejor.
+    #
+    # Se aplica al cuerpo, no al contrato: los clientes que no mandan
+    # `Accept-Encoding: gzip` reciben el mismo texto de siempre. Por eso no hay
+    # variable de entorno para apagarlo — no hay un caso en que apagarlo sirva.
+    app.config.setdefault('COMPRESS_MIMETYPES', [
+        'text/html', 'text/css', 'text/plain',
+        'application/json', 'application/javascript', 'text/javascript',
+    ])
+    # Por debajo de ~1 KB comprimir cuesta más CPU de lo que ahorra en red, y
+    # deja el `Content-Length` peor de lo que estaba.
+    app.config.setdefault('COMPRESS_MIN_SIZE', 1024)
+    Compress(app)
     allowed_origin = os.getenv('APP_URL', '*')
     cors.init_app(app, resources={r"/api/*": {"origins": allowed_origin}})
 
@@ -144,34 +161,80 @@ def create_app():
             return jsonify({'status': 'unhealthy'}), 503
         return jsonify({'status': 'ok'}), 200
 
+    def _version_pwa():
+        """Sello de versión del PWA: el mtime más nuevo de la carpeta.
+
+        Antes se leía solo el de `app.js`. Un deploy que tocara `flota.js` y no
+        `app.js` dejaba la versión igual — y con el service worker cacheando
+        por versión eso sería servir código viejo indefinidamente. El sello
+        tiene que moverse cuando se mueve CUALQUIER archivo que se cachea.
+        """
+        pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
+        try:
+            return max(int(os.path.getmtime(os.path.join(pwa_dir, n)))
+                       for n in os.listdir(pwa_dir)
+                       if not n.startswith('.'))
+        except (OSError, ValueError):
+            return 0
+
     @app.route('/static/pwa/sw.js')
     def pwa_sw():
         from flask import make_response as _mkr
         pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
         with open(os.path.join(pwa_dir, 'sw.js'), encoding='utf-8') as _f:
             _content = _f.read()
-        try:
-            _v = int(os.path.getmtime(os.path.join(pwa_dir, 'app.js')))
-        except Exception:
-            _v = 0
-        resp = _mkr(f'// v{_v}\n' + _content, 200)
+        # Constante, no comentario: el service worker la usa para nombrar su
+        # caché. Un nombre fijo hacía que el `activate` —que borra las cachés
+        # con otro nombre— nunca borrara nada.
+        resp = _mkr(f'const SW_VERSION = "{_version_pwa()}";\n' + _content, 200)
         resp.headers['Content-Type'] = 'application/javascript'
+        # El sw es el único canal por el que llega una versión nueva: nunca se
+        # cachea. Son ~2 KB.
         resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        return resp
+
+    # `no-cache` y NO `no-store`.
+    #
+    # Los dos obligan a preguntar antes de usar el archivo; la diferencia es que
+    # `no-store` prohíbe guardarlo, así que la respuesta siempre viaja completa.
+    # Con `no-cache` el navegador manda su ETag y el servidor contesta 304 sin
+    # cuerpo cuando el archivo no cambió. La garantía de frescura es idéntica —
+    # se pregunta siempre— y lo que desaparece son los bytes.
+    #
+    # Eran 915 KB de JS sin comprimir en CADA carga de CADA pantalla, y el
+    # service worker estaba en network-first, así que ni él los ahorraba. Es la
+    # mayor parte de los ~390 GB de red del mes.
+    _PWA_CACHE = 'no-cache, must-revalidate'
+    _PWA_COMPRIMIBLES = ('.js', '.css', '.html', '.json', '.svg')
+
+    def _servir_pwa(filename):
+        pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
+        resp = send_from_directory(pwa_dir, filename, conditional=True)
+        resp.headers['Cache-Control'] = _PWA_CACHE
+        # `send_from_directory` devuelve la respuesta como un stream de archivo,
+        # y para respuestas en stream flask-compress excluye gzip a propósito
+        # (solo ofrece zstd/br/deflate). Resultado: la compresión quedaba
+        # instalada, configurada y sin efecto sobre justo los archivos que
+        # motivaron instalarla — un `Content-Encoding` ausente y ningún error.
+        #
+        # Materializar el cuerpo la saca del camino de stream y habilita gzip,
+        # que es el único que todo navegador entiende. Son archivos de ~100 KB
+        # y con la caché del service worker se piden una vez por deploy.
+        #
+        # Solo para texto: una PNG ya está comprimida y bufferearla no ahorra
+        # un byte.
+        if filename.endswith(_PWA_COMPRIMIBLES):
+            resp.direct_passthrough = False
+            resp.set_data(resp.get_data())
         return resp
 
     @app.route('/static/pwa/<path:filename>')
     def pwa_files(filename):
-        pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
-        resp = send_from_directory(pwa_dir, filename)
-        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        return resp
+        return _servir_pwa(filename)
 
     @app.route('/pwa')
     def pwa():
-        pwa_dir = os.path.join(app.root_path, 'static', 'pwa')
-        resp = send_from_directory(pwa_dir, 'index.html')
-        resp.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        return resp
+        return _servir_pwa('index.html')
 
     # ── CLI: flask create-admin ────────────────────────────────────────────
     @app.cli.command('create-admin')
