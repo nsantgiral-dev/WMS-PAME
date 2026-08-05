@@ -290,12 +290,30 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
     for (const item of propuesta.items) {
       const isRelleno = item.tipo === 'RELLENO';
       const border = isRelleno ? '1px dashed var(--blue)' : '1px solid var(--brd)';
+      // El margen por CBM es la metrica que DECIDE el orden del relleno y
+      // hasta el 2026-08-05 no se mostraba en ninguna parte. Valia 0 para
+      // todos —el maestro nunca tiene precio— y nadie podia notarlo mirando
+      // la pantalla: la metrica ordenaba y era invisible.
+      //
+      // Ahora va con su procedencia. Una fila sobre cotizacion vigente y una
+      // sobre margen supuesto no valen lo mismo, y el comite firma la fila.
+      const sup = item.precio_es_supuesto;
+      const margen = isRelleno && item.margen_por_cbm !== undefined
+        ? `<div style="font-size:10px;color:${sup ? 'var(--yellow)' : 'var(--green)'};">
+             ${item.margen_por_cbm_rango
+               ? `margen/CBM ${item.margen_por_cbm_rango[0]}–${item.margen_por_cbm_rango[1]}`
+               : `margen/CBM ${item.margen_por_cbm}`}
+             <span style="color:var(--tx3);">· ${item.margen_fuente || 'SIN_COSTO'}</span>
+             ${sup ? '<b> · supuesto</b>' : ''}
+           </div>`
+        : '';
       html += `<div style="background:var(--bg-s);border:${border};border-radius:6px;padding:6px 10px;margin-bottom:3px;
         display:flex;justify-content:space-between;align-items:center;font-size:11px;">
         <div>
           <span style="color:var(--tx);">${item.referencia}</span>
           <span style="color:var(--tx3);margin-left:6px;">${item.cajas} cajas</span>
           ${isRelleno ? '<span style="color:var(--blue);margin-left:4px;font-size:9px;">RELLENO</span>' : ''}
+          ${margen}
         </div>
         <div style="text-align:right;color:var(--tx3);">
           ${item.cbm} CBM | ${item.peso_kg} kg
@@ -303,6 +321,23 @@ function _renderArmador(el, propuesta, g5, sigma, rop) {
       </div>`;
     }
     html += '</div>';
+  }
+
+  // Sobre que datos se armo este contenedor. Sin esto, uno armado enteramente
+  // sobre margen supuesto se ve identico a uno armado sobre cotizaciones.
+  const cob = propuesta.margen_cobertura;
+  if (cob && cob.total_skus) {
+    const sinCosto = cob.sin_costo || 0;
+    const supuestos = cob.precio_supuesto || 0;
+    const grave = sinCosto > cob.total_skus / 2;
+    html += `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;font-size:11px;
+      background:var(--bg-s);border-left:3px solid ${grave ? 'var(--red)' : 'var(--yellow)'};">
+      <b>Sobre qué datos se armó esto</b><br>
+      ${cob.con_costo}/${cob.total_skus} SKU con costo de alguna fuente
+      ${sinCosto ? ` · <span style="color:var(--red)">${sinCosto} sin costo de ninguna</span>` : ''}
+      ${supuestos ? ` · ${supuestos} con precio supuesto` : ''}
+      ${grave ? '<br><b style="color:var(--red)">Más de la mitad del ranking no tiene costo: el orden no es una decisión informada.</b>' : ''}
+    </div>`;
   }
 
   // Excluidos

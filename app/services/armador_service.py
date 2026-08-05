@@ -462,14 +462,32 @@ class ArmadorService:
 
         # Relleno inteligente (si gatillo B y queda espacio)
         items_relleno = []
+        margen_cobertura = None
         if gatillo == 'PELIGRO_CONSTITUCIONAL' and cbm_acum < cbm_objetivo:
-            # Los productos del ranking, en UNA consulta. Antes era un
-            # `filter_by(codigo_siesa=ref).first()` por iteración — hasta 500
-            # consultas para armar un contenedor.
+            # ── EL CABLE DE COSTO Y PRECIO ────────────────────────────────
+            #
+            # Antes acá se leía `Producto.precio_venta - Producto.precio_compra`.
+            # La sincronización de Siesa **NUNCA puebla ninguno de los dos**
+            # (declarado en costo_service.py). Los dos valían 0, así que
+            # `margen_por_cbm` valía 0 PARA TODOS LOS CANDIDATOS.
+            #
+            # El efecto no era un error visible: era un ranking que ordenaba
+            # por una constante. `sort()` es estable, así que devolvía el orden
+            # de entrada con aspecto de decisión — y el recorte por presupuesto,
+            # que invierte ese mismo orden, cortaba por lo mismo.
+            #
+            # `temporada_service` ya había tenido este bug exacto y se corrigió
+            # ahí. No se propagó acá: la misma política en dos sitios, arreglada
+            # en uno.
+            #
+            # `resolver_costos` elige el costo por jerarquía —acuerdo vigente >
+            # cotización > kardex > maestro— y devuelve `cu` = margen unitario,
+            # DECLARANDO de qué fuente salió y si el precio es supuesto.
+            from app.services.costo_service import resolver_costos, resumen_por_fuente
+
             _refs = [i['referencia'] for i in items_china]
-            _prods = {p.codigo_siesa: p for p in
-                      Producto.query.filter(Producto.codigo_siesa.in_(_refs)).all()} \
-                if _refs else {}
+            _costos = resolver_costos(_refs) if _refs else {}
+            margen_cobertura = resumen_por_fuente(_costos) if _costos else None
 
             # Obtener productos China con demanda y margen para ranking
             for item in items_china:
@@ -487,9 +505,10 @@ class ArmadorService:
                 peso_caja = float(ficha.peso_kg_por_caja or 0)
                 costo_fob = float(ficha.costo_fob_usd or 0)
 
-                # Proxy de margen: precio_venta - costo (simplificado)
-                prod = _prods.get(ref)
-                margen_u = (prod.precio_venta or 0) - (prod.precio_compra or 0) if prod else 0
+                # Margen unitario con procedencia. `cu` es lo que se pierde si
+                # el ítem falta: precio de venta menos costo.
+                _c = _costos.get(ref) or {}
+                margen_u = float(_c.get('cu') or 0)
                 margen_cbm = (margen_u * u_por_caja / cbm_caja) if cbm_caja > 0 else 0
 
                 # Restricción anti-500-días
@@ -506,12 +525,30 @@ class ArmadorService:
                     'peso_kg': round(peso_caja, 1),
                     'costo_fob_usd': round(costo_fob * u_por_caja, 2),
                     'margen_por_cbm': round(margen_cbm, 2),
+                    # De dónde salió el margen. Un Q* sobre cotización vigente y
+                    # uno sobre un margen supuesto no valen lo mismo, y el comité
+                    # tiene derecho a ver cuál es cuál en la fila que va a firmar.
+                    'margen_fuente': _c.get('fuente', 'SIN_COSTO'),
+                    'precio_fuente': _c.get('fuente_precio', 'MARGEN_SUPUESTO'),
+                    'precio_es_supuesto': bool(_c.get('precio_es_supuesto')),
+                    # ±10 puntos de margen mueven la decisión: para las filas
+                    # supuestas se muestra rango, no un punto falsamente preciso.
+                    'margen_por_cbm_rango': (
+                        [round(v * u_por_caja / cbm_caja, 2) for v in _c['cu_rango']]
+                        if _c.get('cu_rango') and cbm_caja > 0 else None),
                     'cobertura_post': round(cobertura_post, 1),
                     'tipo': 'RELLENO',
                 })
 
-            # Ordenar por margen/CBM (la métrica reina)
-            items_relleno.sort(key=lambda x: x['margen_por_cbm'], reverse=True)
+            # Ordenar por margen/CBM (la métrica reina).
+            #
+            # Desempate por costo FOB ascendente: entre dos ítems con el MISMO
+            # margen —el caso cuando ninguno tiene costo de ninguna fuente—
+            # entra primero el más barato. Sin este desempate, `sort` estable
+            # devuelve el orden de entrada y el resultado vuelve a parecer una
+            # decisión sin serlo.
+            items_relleno.sort(
+                key=lambda x: (-x['margen_por_cbm'], x['costo_fob_usd']))
 
             # Llenar espacio restante
             for item in items_relleno:
@@ -568,6 +605,10 @@ class ArmadorService:
             'items_deficit': sum(1 for i in contenedor_items if i['tipo'] == 'DEFICIT'),
             'items_relleno': sum(1 for i in contenedor_items if i['tipo'] == 'RELLENO'),
             'excluidos': excluidos,
+            # Cobertura del margen POR FUENTE. Sin esto, un contenedor armado
+            # enteramente sobre margen supuesto se ve igual que uno armado
+            # sobre cotizaciones vigentes.
+            'margen_cobertura': margen_cobertura,
             'recorte_presupuesto': recorte_sugerido,
             'valor_fob_usd': round(valor_fob_total, 2),
             'valor_nacionalizado_cop_estimado': round(valor_nac_estimado),
