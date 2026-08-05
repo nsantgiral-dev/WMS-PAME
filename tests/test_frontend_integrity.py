@@ -462,6 +462,107 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
+    '/api/admin/remision/<int:packing_id>':
+        'Remisión en PDF. Falta el gesto de impresión.',
+    '/api/auth/me':
+        'DUPLICADO: el login ya devuelve el usuario completo. Pedirlo otra vez es un viaje de red por un dato que el cliente tiene. Candidato a BORRAR, no a conectar.',
+    '/api/compras/armador/contenedores':
+        'Listado de contenedores. El armador muestra la propuesta, no el histórico.',
+    '/api/compras/bloqueados/verificar':
+        'Verifica una OC contra la lista de bloqueados. Sin gesto en compras.',
+    '/api/compras/clasificar-rama/<int:producto_id>':
+        'Clasificación manual de un SKU. La pantalla clasifica en lote.',
+    '/api/compras/precios/comparador/<int:producto_id>':
+        'Comparador por SKU. La pantalla compara en lote.',
+    '/api/compras/precios/registrar':
+        'Registro manual de un precio de proveedor. **Es una de las dos entradas de precio del sistema** y no tiene pantalla: hoy los precios solo entran por acuerdo marco. Conectarla mejoraría la cobertura de costo del armador.',
+    '/api/config/mapeo-unidades':
+        'CONFIGURACIÓN SIN PANTALLA. El mapeo de unidades de empaque decide cuántas unidades tiene una caja: si falta, el picking pide cantidades imposibles. Hoy solo se puede cargar por API. Es de las que MÁS falta conectar.',
+    '/api/config/mapeo-unidades/<int:id>':
+        'CONFIGURACIÓN SIN PANTALLA — ver /api/config/mapeo-unidades.',
+    '/api/config/mapeo-unidades/tipos-sin-mapeo':
+        'CONFIGURACIÓN SIN PANTALLA — y es el diagnóstico: dice qué tipos de empaque no tienen mapeo. Sin pantalla, nadie sabe cuántos faltan.',
+    '/api/conteo/abc/sincronizar':
+        'Recalcula la clasificación ABC. El cron la corre a las 2am; el manual es para después de una carga masiva.',
+    '/api/conteo/mis-tareas':
+        'DUPLICADO: la pantalla lista con /api/conteo/?filtros.',
+    '/api/dashboard/kpis':
+        'DUPLICADO de /api/dashboard/resumen-completo, que es el que consume el panel. Dos endpoints que calculan lo mismo divergen: el día que cambie un KPI, uno de los dos queda mintiendo.',
+    '/api/dashboard/movimientos':
+        'DUPLICADO: /resumen-completo ya trae los movimientos del panel.',
+    '/api/despacho_parcial/<int:packing_id>/compromisos':
+        'Diagnóstico del paso 244328. Se lee para entender por qué falló un despacho parcial, no para operar.',
+    '/api/despacho_parcial/<int:packing_id>/facturar-rm-manual':
+        'RECUPERACIÓN SIN GESTO: factura una remisión existente cuando la cadena 244328→142945→142943 se cortó en el último paso.',
+    '/api/empaques/lpn/<string:codigo>/consumir':
+        ('Consumo manual de un LPN. Sin UI, un empaque que se abrió y no se '
+         'escaneó queda ACTIVO para siempre: el sistema cree que hay una paca '
+         'entera donde hay unidades sueltas.'),
+    '/api/empaques/sync':
+        'Sincronización de empaques. Corre por cron a las 2:30am.',
+    '/api/empaques/sync/estado':
+        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
+    '/api/inventario/ajuste':
+        'Ajuste directo de inventario por API. La pantalla ajusta por conteo, que es el camino con segunda firma. Este endpoint SALTA esa fricción — conectarlo a un botón sería quitarle el control al conteo cíclico. Se deja sin UI A PROPÓSITO.',
+    '/api/inventario/movimientos':
+        'Kardex de movimientos por producto. Útil para auditar un faltante; hoy solo por API.',
+    '/api/inventario/stock/<int:producto_id>':
+        'Stock de un producto. Lectura puntual sin pantalla.',
+    '/api/mobile/mis-tareas':
+        'DUPLICADO de /api/mobile/tarea-actual.',
+    '/api/muelle/historial':
+        'Historial del muelle. La pantalla muestra el estado actual, no el histórico.',
+    '/api/muelle/manifiesto':
+        'Manifiesto de carga imprimible. Falta el botón de imprimir.',
+    '/api/packing/<int:id>/forzar-siesa':
+        'RECUPERACIÓN SIN GESTO. Fuerza el envío a Siesa de una tarea trabada. Es más peligroso que reconciliar —CREA documentos— y por eso no entró al panel junto con los otros: necesita confirmación explícita y un motivo escrito antes de exponerlo. Hasta entonces, curl con JWT de admin.',
+    '/api/packing/crear-desde-picking':
+        'Alta manual de packing. El flujo normal la crea sola.',
+    '/api/packing/crear-manual':
+        'Alta manual de packing sin picking previo.',
+    '/api/picking/crear':
+        'Alta manual de tarea de picking. El sync de pedidos las crea.',
+    '/api/picking/fefo':
+        'Cálculo FEFO. Se consume dentro del flujo, no como endpoint.',
+    '/api/picking/mis-tareas-activas':
+        'DUPLICADO: la pantalla usa /api/mobile/tarea-actual (una tarea a la vez, por diseño — un operario con lista elige, y elegir rompe el orden de recorrido).',
+    '/api/picking/purgar-ceros':
+        'Limpieza de picks en cero. Mantenimiento puntual.',
+    '/api/picking/siguiente-tarea':
+        'DUPLICADO de /api/mobile/tarea-actual, que es el que usa la pantalla de operario. Quedó de una versión anterior del flujo.',
+    '/api/recepcion/crear':
+        'Crear recepción sin OC. La pantalla siempre parte de una OC.',
+    '/api/reposicion/alertas/smtp-check':
+        'Diagnóstico de SMTP. La pantalla tiene /alertas/test-email, que además ENVÍA. Este solo verifica la conexión — DUPLICADO parcial.',
+    '/api/reposicion/mis-tareas':
+        'DUPLICADO de /api/reposicion/tarea-actual.',
+    '/api/reposicion/pre-verificar-ola':
+        'Simulación de una ola de reposición antes de lanzarla.',
+    '/api/reposicion/sync-ubicaciones/estado':
+        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
+    '/api/rutas/<int:id>/liquidar-completo':
+        'Liquidación en un paso. La pantalla liquida por partes (NC→RC→DC), que es lo que permite ver dónde falla la cadena. El atajo esconde el punto de fallo.',
+    '/api/rutas/<int:id>/sugeridos':
+        'Bultos sugeridos para una ruta. El muelle asigna a mano.',
+    '/api/siesa/carga-inventario-estado':
+        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
+    '/api/siesa/cargar-inventario':
+        'Carga inicial de inventario desde Siesa. Se corre UNA VEZ en el go-live, con la bodega quieta y bajo acta. Un botón permanente invita a correrla dos veces.',
+    '/api/siesa/sync-estado':
+        'PROGRESO SIN POLLING. Devuelve el avance de una sincronización larga; la pantalla dispara la sync y no vuelve a preguntar. El usuario ve un botón que "no hace nada" durante minutos. Conectar con un poll, o borrarlo y aceptar que la sync es a ciegas.',
+    '/api/siesa/sync-pedidos-estado':
+        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
+    '/api/siesa/sync-productos':
+        'Sincronización del catálogo. Corre por cron; el disparo manual es para cuando entra un producto nuevo y no se quiere esperar.',
+    '/api/siesa/terceros-contacto':
+        'Consulta de contacto de terceros. Se usó para verificar el maestro contra producción desde la app, no desde una sesión de desarrollo.',
+    '/api/traslados/<int:id>/reintentar-siesa':
+        'RECUPERACIÓN SIN GESTO. Dispara el 174646 (requisición formal), que NO está en el flujo normal — el real usa 173076 al despachar y 173079 al recibir. Se usa cuando el consultor Siesa pide una requisición previa. Conectar cuando ese caso deje de ser excepcional.',
+    '/api/traslados/bodegas-siesa':
+        'Catálogo de bodegas. La pantalla usa el maestro local.',
+    '/api/traslados/recuperar-packing':
+        'RECUPERACIÓN SIN GESTO para un traslado cuyo packing quedó a medias.',
+
     '/api/kardex/reconstruir':
         'Decisión: ¿le creo al stock diario? Reconstruye la serie hacia atrás. '
         'Su lugar es como precondición de la descensura, no como botón suelto.',
@@ -494,62 +595,11 @@ DEUDA_SIN_UI = {
 # Inventario heredado, sin clasificar. No fabricamos razones que no conocemos:
 # al tocar cualquiera de estos, o se conecta o se mueve a DEUDA_SIN_UI con su
 # motivo. Esta lista también solo puede encoger.
-BASELINE_HEREDADO = {
-    '/api/admin/remision/<int:packing_id>',
-    '/api/auth/me',
-    '/api/compras/armador/contenedores',
-    '/api/compras/bloqueados/verificar',
-    '/api/compras/clasificar-rama/<int:producto_id>',
-    '/api/compras/precios/comparador/<int:producto_id>',
-    '/api/compras/precios/registrar',
-    '/api/config/mapeo-unidades',
-    '/api/config/mapeo-unidades/<int:id>',
-    '/api/config/mapeo-unidades/tipos-sin-mapeo',
-    '/api/conteo/abc/sincronizar',
-    '/api/conteo/mis-tareas',
-    '/api/dashboard/kpis',
-    '/api/dashboard/movimientos',
-    '/api/despacho_parcial/<int:packing_id>/compromisos',
-    '/api/despacho_parcial/<int:packing_id>/facturar-rm-manual',
-    '/api/empaques/lpn/<string:codigo>/consumir',
-    '/api/empaques/sync',
-    '/api/empaques/sync/estado',
-    '/api/inventario/ajuste',
-    '/api/inventario/movimientos',
-    '/api/inventario/stock/<int:producto_id>',
-    '/api/mobile/mis-tareas',
-    '/api/muelle/historial',
-    '/api/muelle/manifiesto',
-    '/api/packing/<int:id>/forzar-siesa',
-    '/api/packing/<int:id>/reconciliar',
-    '/api/packing/<int:id>/remision',
-    '/api/packing/crear-desde-picking',
-    '/api/packing/crear-manual',
-    '/api/picking/crear',
-    '/api/picking/fefo',
-    '/api/picking/mis-tareas-activas',
-    '/api/picking/purgar-ceros',
-    '/api/picking/siguiente-tarea',
-    '/api/recepcion/crear',
-    '/api/reposicion/alertas/smtp-check',
-    '/api/reposicion/mis-tareas',
-    '/api/reposicion/pre-verificar-ola',
-    '/api/reposicion/sync-ubicaciones/estado',
-    '/api/rutas/<int:id>/liquidar-completo',
-    '/api/rutas/<int:id>/sugeridos',
-    '/api/siesa/carga-inventario-estado',
-    '/api/siesa/cargar-inventario',
-    '/api/siesa/jobs-fallidos',
-    '/api/siesa/monitor',
-    '/api/siesa/sync-estado',
-    '/api/siesa/sync-pedidos-estado',
-    '/api/siesa/sync-productos',
-    '/api/siesa/terceros-contacto',
-    '/api/siesa/trigger-dlq',
-    '/api/traslados/<int:id>/reintentar-siesa',
-    '/api/traslados/bodegas-siesa',
-    '/api/traslados/recuperar-packing',
-}
+BASELINE_HEREDADO = set()   # <- vacio: los 54 quedaron clasificados el 2026-08-05.
+#
+# Un baseline en CERO no significa que no haya deuda: significa que toda la que
+# hay tiene nombre y motivo escrito en DEUDA_SIN_UI. La diferencia es que ahora
+# se puede decidir sobre ella.
 
 TOLERADOS = set(DEUDA_SIN_UI) | BASELINE_HEREDADO
 

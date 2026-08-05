@@ -456,7 +456,7 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-operarios') await cargarOperarios();
   else if (TAB === 'tab-usuarios') await cargarUsuarios();
   else if (TAB === 'tab-stock') await cargarStock();
-  else if (TAB === 'tab-connekta') await cargarConnekta();
+  else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); }
   else if (TAB === 'tab-muelle') await cargarMuelle();
   else if (TAB === 'tab-rutas') await cargarRutas();
   else if (TAB === 'tab-inventario') await cargarInventario();
@@ -2409,3 +2409,127 @@ async function verificarModoSistema() {
 }
 
 document.addEventListener('DOMContentLoaded', verificarModoSistema);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RECUPERACIÓN SIESA — las herramientas que existían y nadie podía alcanzar
+//
+// Nueve endpoints de recuperación estaban construidos, probados y desplegados
+// SIN UN SOLO GESTO que los disparara. El día que Siesa falle, la persona que
+// necesita reintentar un despacho o resolver un job colgado tenía que abrir
+// una terminal y armar un curl con un JWT.
+//
+// Una capacidad de recuperación que solo se alcanza por curl no existe cuando
+// hace falta: hace falta justo el día en que nadie tiene tiempo de armar un
+// curl. Van acá, en la pestaña donde alguien mira cuando algo se rompe.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Estado de la cola y de los sincronizadores. Lo primero que se mira. */
+async function siesaRecuperacionCargar() {
+  const el = document.getElementById('siesa-recuperacion');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:14px;color:#666;">Consultando…</div>';
+
+  // Se piden en paralelo y CADA UNO declara si falló. Un panel de recuperación
+  // que se cae entero porque una consulta falla es inútil justo cuando importa.
+  const [monitor, fallidos] = await Promise.all([
+    get('/api/siesa/monitor').catch(e => ({ _error: e.message })),
+    get('/api/siesa/jobs-fallidos').catch(e => ({ _error: e.message })),
+  ]);
+
+  const bloque = (titulo, datos, render) => datos._error
+    ? `<div class="tabla-fila"><span class="tabla-nombre">${titulo}</span>
+         <span style="color:var(--red);font-size:12px;">no se pudo consultar: ${datos._error}</span></div>`
+    : render(datos);
+
+  el.innerHTML = `
+    <div class="tabla-card">
+      <div class="tabla-titulo">Recuperación Siesa</div>
+      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+        Herramientas para cuando algo no llegó a Siesa. Todas dejan registro con
+        tu nombre.
+      </p>
+      ${bloque('Cola DLQ', monitor, d => `
+        <div class="tabla-fila"><span class="tabla-nombre">Jobs pendientes</span>
+          <span class="badge ${(d.pendientes||0) ? 'badge-yellow' : 'badge-green'}">${d.pendientes ?? '—'}</span></div>
+        <div class="tabla-fila"><span class="tabla-nombre">Jobs fallidos</span>
+          <span class="badge ${(d.fallidos||0) ? 'badge-red' : 'badge-green'}">${d.fallidos ?? '—'}</span></div>`)}
+      ${bloque('Fallidos', fallidos, d => {
+        const js = d.jobs || [];
+        if (!js.length) return '<div class="tabla-fila"><span class="tabla-nombre">Sin jobs fallidos</span></div>';
+        return js.slice(0, 10).map(j => `
+          <div class="tabla-fila" style="align-items:flex-start;">
+            <span class="tabla-nombre" style="font-size:12px;">
+              <b>${j.tipo || '?'}</b> #${j.id}<br>
+              <span style="color:var(--tx3);font-size:11px;">${(j.ultimo_error || '').slice(0, 90)}</span>
+            </span>
+          </div>`).join('');
+      })}
+      <button class="btn-flota" style="width:100%;margin-top:10px;"
+              onclick="siesaDispararDLQ()">Procesar la cola ahora</button>
+      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+        El cron la procesa cada 5 minutos. Esto la adelanta — no reintenta lo que
+        ya agotó sus 3 intentos.
+      </p>
+    </div>
+
+    <div class="tabla-card" style="margin-top:12px;">
+      <div class="tabla-titulo">Resolver una tarea de packing</div>
+      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+        Cuando el WMS cree que no se despachó y Siesa ya lo procesó, o al revés.
+      </p>
+      <input id="rec-packing-id" type="number" inputmode="numeric"
+             placeholder="ID de la tarea de packing"
+             style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);">
+      <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <button class="btn-flota" style="flex:1" onclick="siesaReconciliarPacking()">
+          Reconciliar</button>
+        <button class="btn-flota" style="flex:1" onclick="siesaVerRemision()">
+          Ver remisión</button>
+      </div>
+      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+        <b>Reconciliar</b> pregunta a Siesa si la factura ya existe y, si existe,
+        marca la tarea como despachada. No crea nada — por eso es seguro.
+      </p>
+      <div id="rec-resultado" style="margin-top:10px;"></div>
+    </div>`;
+}
+
+/** Adelanta el ciclo de la cola. No fuerza nada: solo no espera los 5 minutos. */
+async function siesaDispararDLQ() {
+  try {
+    const r = await post('/api/siesa/trigger-dlq', {});
+    alerta(r.mensaje || 'Cola disparada — se procesa en segundo plano', 'exito');
+    setTimeout(siesaRecuperacionCargar, 3000);
+  } catch (e) {
+    alerta('No se pudo disparar la cola: ' + e.message, 'error');
+  }
+}
+
+/** Pregunta a Siesa si esa tarea ya tiene factura. NO crea documentos. */
+async function siesaReconciliarPacking() {
+  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
+  const out = document.getElementById('rec-resultado');
+  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Preguntando a Siesa…</p>';
+  try {
+    const r = await post(`/api/packing/${id}/reconciliar`, {});
+    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
+      ${r.mensaje || 'Reconciliada'}</p>`;
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
+
+/** La remisión de una tarea — para cotejar contra el documento físico. */
+async function siesaVerRemision() {
+  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
+  const out = document.getElementById('rec-resultado');
+  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  try {
+    const r = await get(`/api/packing/${id}/remision`);
+    out.innerHTML = `<pre style="font-size:11px;white-space:pre-wrap;color:var(--tx2);
+      max-height:220px;overflow:auto;">${JSON.stringify(r, null, 2)}</pre>`;
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
