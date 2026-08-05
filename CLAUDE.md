@@ -714,12 +714,30 @@ servicio por C.O.). `vigia_service.py`, panel en `vigia.js`.
 |-----|--------------|--------|
 | `cargar_ventas_desde_txt()` | Línea base histórica (26 semanas de μ_ref/σ_ref) | Backfill admin, bloqueado salvo `VIGIA_CARGAR_TXT=true` |
 | `alimentar_adopcion_picking()` | `adopcion_picking`, `brecha_picking` | Cron lunes 05:30 Bogotá + botón en el panel |
-| Ingesta Connekta | Facturación, líneas, frecuencia | **No implementada** |
+| Ingesta Connekta | Facturación, líneas, frecuencia | **Implementada, APAGADA** — `VIGIA_INGESTA_FACTURACION=true` |
 | Generic Transfer | Planillas de ruta | **No implementada** — requiere configuración en Siesa |
 
 **Connekta alimenta hacia adelante; la línea base solo entra por el TXT.** Por eso
 el cargador se conserva como herramienta de backfill en vez de eliminarse, y por
 eso `VIGIA_CARGAR_TXT` no debe volver a `false` antes de verificar la carga.
+
+### Antes de encender `VIGIA_INGESTA_FACTURACION` (2026-08-05)
+
+La ingesta viva replica la agregación del cargador TXT —`despachos` suma
+cantidad, `facturacion` suma valor neto, `facturas` cuenta documentos únicos—
+porque **si midiera otra cosa el CUSUM leería la diferencia de método como un
+desplome del negocio.** Un detector que dispara por cambiar de fuente es peor
+que no tener detector.
+
+Paso obligatorio: Vigía → **«Verificar ingesta de facturación»** sobre un lunes
+ya cargado por el TXT. Compara vivo contra histórico sin escribir nada y
+responde `apto_para_encender`. Solo entonces se pone la variable.
+
+Tres cosas que la ingesta NO hace, a propósito:
+· no escribe la semana en curso — una semana a medias parece un desplome;
+· **no escribe 0 cuando Siesa no responde** — cero es "no se vendió", hueco es
+  "no sabemos", y un cero fabricado es una alarma de colapso que no ocurrió;
+· no sobrescribe filas `HISTORICO`.
 
 ### Campo `fuente` en `serie_vigia`
 

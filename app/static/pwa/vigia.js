@@ -218,6 +218,17 @@ function _vigiaRenderPanel(el, data, salud) {
         Adopcion y brecha, desde tareas vivas. Automatico cada lunes 05:30.
       </span>
     </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px;">
+      <button onclick="vigiaCompararIngesta()"
+        style="padding:8px 16px;background:transparent;border:1px solid var(--yellow);border-radius:8px;color:var(--yellow);font-size:12px;font-weight:700;cursor:pointer;">
+        Verificar ingesta de facturacion
+      </button>
+      <span style="font-size:11px;color:var(--tx3);">
+        Las series de negocio (despachos, facturacion, facturas) todavia NO se
+        alimentan solas. Esto compara una semana calculada en vivo contra la
+        historica: si coincide, se puede encender el cron.
+      </span>
+    </div>
   </div>`;
 
   el.innerHTML = html;
@@ -509,5 +520,60 @@ async function vigiaAlimentarPicking() {
     cargarVigia();
   } catch (e) {
     alerta('Error: ' + (e.message || e), 'error');
+  }
+}
+
+
+/** Contrasta una semana calculada en vivo contra la línea base del TXT.
+ *
+ * Es la pregunta que decide si la ingesta de facturación se puede encender: si
+ * la agregación viva no reproduce la histórica, el CUSUM leería esa diferencia
+ * de método como un desplome del negocio.
+ *
+ * Por defecto COMPARA, no escribe. Escribir es el segundo paso y solo tiene
+ * sentido después de ver que coincide.
+ */
+async function vigiaCompararIngesta() {
+  const semana = prompt(
+    'Lunes de una semana YA cargada por el TXT (YYYY-MM-DD).\n\n' +
+    'Se calcula esa semana con la fuente viva y se compara con la histórica.\n' +
+    'No se escribe nada.');
+  if (!semana) return;
+
+  const el = document.getElementById('vigia-contenido') || document.body;
+  const caja = document.createElement('div');
+  caja.className = 'tabla-card';
+  caja.innerHTML = '<p style="color:var(--tx3)">Consultando Siesa…</p>';
+  el.prepend(caja);
+
+  try {
+    const r = await post(`/api/vigia/ingesta/facturacion?comparar=true`, { semana });
+    if (r.error) { caja.innerHTML = `<p style="color:var(--red)">${r.error}</p>`; return; }
+
+    const filas = (r.filas || []).map(f => {
+      const color = f.estado === 'OK' ? 'var(--green)'
+                  : f.estado === 'DIFIERE' ? 'var(--red)' : 'var(--tx3)';
+      return `<li style="color:${color}">
+        <b>${f.serie || f.co}</b> — vivo ${f.vivo ?? '—'} · histórico ${f.historico ?? '—'}
+        ${f.desvio_pct != null ? ` · ${f.desvio_pct > 0 ? '+' : ''}${f.desvio_pct}%` : ''}
+        <span style="color:var(--tx3)">${f.estado}</span></li>`;
+    }).join('');
+
+    caja.innerHTML = `
+      <div class="tabla-titulo">Ingesta vs línea base — semana ${r.semana}</div>
+      <p style="font-size:13px;color:${r.apto_para_encender ? 'var(--green)' : 'var(--red)'}">
+        <b>${r.apto_para_encender
+              ? 'Coincide: la ingesta viva reproduce la histórica.'
+              : 'NO coincide todavía.'}</b><br>
+        ${r.coinciden} iguales · ${r.difieren} difieren · ${r.sin_linea_base} sin base
+      </p>
+      ${r.apto_para_encender ? '' :
+        `<p style="font-size:12px;color:var(--yellow)">Encender el cron con series
+         que no coinciden haría que el CUSUM lea la diferencia de método como un
+         desplome del negocio. Revisar antes de poner
+         <code>VIGIA_INGESTA_FACTURACION=true</code>.</p>`}
+      <ul style="line-height:1.7;font-size:12.5px">${filas}</ul>`;
+  } catch (e) {
+    caja.innerHTML = `<p style="color:var(--red)">${e.message}</p>`;
   }
 }

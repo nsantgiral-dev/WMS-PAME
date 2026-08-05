@@ -617,6 +617,237 @@ class VigiaService:
         }
 
     @staticmethod
+    def alimentar_series_facturacion(semana=None, cos=None) -> dict:
+        """Alimenta hacia adelante las TRES series que venían solo del TXT.
+
+        `despachos_{co}`, `facturacion_{co}` y `facturas_{co}` tenían línea base
+        histórica y **ninguna ingesta viva**. El CUSUM vigilaba dos series de
+        cinco: la adopción del picking, y nada del negocio.
+
+        ── COMPARABILIDAD, que es lo único que hace válido el CUSUM ──────────
+
+        La línea base salió de un export de FACTURACIÓN de Siesa. Si la ingesta
+        hacia adelante se calculara desde la operación del WMS, mediría otra
+        cosa —el WMS no ve las ventas de mostrador— y el CUSUM leería esa
+        diferencia estructural como un desplome. **Un detector que dispara por
+        cambiar de fuente es peor que no tener detector.**
+
+        Por eso se consulta la misma fuente y se replica la agregación EXACTA
+        del cargador TXT:
+
+            despachos_{co}   = suma de cantidad por línea      (no cuenta líneas)
+            facturacion_{co} = suma de valor neto
+            facturas_{co}    = documentos únicos
+
+        (El docstring del cargador dice "líneas despachadas" y el código suma
+        `cantidad`. El contrato es el código: con él se construyó la base.)
+
+        ── LO QUE ESTA FUNCIÓN NO HACE, A PROPÓSITO ─────────────────────────
+
+        · **No escribe la semana en curso.** Una semana a medias parece un
+          desplome. Solo semanas cerradas.
+        · **No escribe 0 cuando Siesa no responde.** Un cero es "no se vendió";
+          un hueco es "no sabemos". Escribir 0 ante un fallo de red dispararía
+          una alarma de colapso operativo que no ocurrió — el error más caro
+          que puede cometer un detector.
+        · **No toca las filas HISTORICO.** La línea base es irreemplazable: sin
+          las 26 semanas de referencia el CUSUM queda ciego ~6 meses.
+        """
+        from datetime import timedelta
+
+        from app.services.connekta_gateway import ConnektaGateway
+
+        lunes_actual = _lunes_semana_actual()
+        semana = semana or (lunes_actual - timedelta(days=7))
+
+        if semana >= lunes_actual:
+            return {'error': 'semana en curso — una semana a medias parece un '
+                             'desplome. Solo se alimentan semanas cerradas.',
+                    'semana': semana.isoformat()}
+
+        connekta = ConnektaGateway()
+        if connekta.modo_simulacion:
+            return {'error': 'modo simulación — no se escriben series con datos '
+                             'inventados (regla 8)', 'semana': semana.isoformat()}
+
+        cos = cos or VigiaService._cos_a_vigilar()
+        domingo = semana + timedelta(days=6)
+
+        escritas, huecos, detalle = 0, [], {}
+        for co in cos:
+            filas = VigiaService._facturas_de_semana(connekta, co, semana, domingo)
+            if filas is None:
+                # Regla 0: dato ausente se declara, no se rellena con cero.
+                huecos.append(co)
+                logger.error(
+                    '[VIGIA] CO %s semana %s: Siesa no respondió. NO se escribe '
+                    '0 — un cero acá es una alarma de colapso que no ocurrió.',
+                    co, semana)
+                continue
+
+            cantidad = sum(f['cantidad'] for f in filas)
+            valor = sum(f['valor'] for f in filas)
+            documentos = len({f['documento'] for f in filas})
+
+            for serie, val, regs in (
+                (f'despachos_{co}',   cantidad,   len(filas)),
+                (f'facturacion_{co}', valor,      len(filas)),
+                (f'facturas_{co}',    documentos, documentos),
+            ):
+                if VigiaService._upsert_serie(serie, semana, val, regs):
+                    escritas += 1
+            detalle[co] = {'lineas': len(filas), 'cantidad': cantidad,
+                           'valor': round(valor, 2), 'documentos': documentos}
+
+        db.session.commit()
+        return {
+            'semana': semana.isoformat(),
+            'cos_procesados': len(cos) - len(huecos),
+            'series_escritas': escritas,
+            # Los huecos van en la respuesta, no solo en el log: si un CO deja
+            # de responder tres semanas seguidas, eso ES el hallazgo.
+            'cos_sin_dato': huecos,
+            'detalle': detalle,
+        }
+
+    @staticmethod
+    def comparar_con_linea_base(semana, cos=None) -> dict:
+        """Calcula la semana con la fuente VIVA y la compara con el TXT.
+
+        **Sin escribir nada.** Es la pregunta que decide si el cron se puede
+        encender: ¿la agregación viva reproduce la histórica?
+
+        Si no coincide, el CUSUM leería esa diferencia de método como un
+        desplome del negocio y mandaría a alguien a investigar una caída que
+        nunca ocurrió. Encender la ingesta sin haber corrido esto es confiar en
+        que dos cálculos coinciden sin haberlo mirado.
+        """
+        from datetime import timedelta
+
+        from app.services.connekta_gateway import ConnektaGateway
+
+        connekta = ConnektaGateway()
+        if connekta.modo_simulacion:
+            return {'error': 'modo simulación — la comparación no significaría nada'}
+
+        cos = cos or VigiaService._cos_a_vigilar()
+        domingo = semana + timedelta(days=6)
+        filas_out, iguales, distintas, sin_base = [], 0, 0, 0
+
+        for co in cos:
+            filas = VigiaService._facturas_de_semana(connekta, co, semana, domingo)
+            if filas is None:
+                filas_out.append({'co': co, 'estado': 'SIN_DATO'})
+                continue
+            vivo = {
+                f'despachos_{co}': sum(f['cantidad'] for f in filas),
+                f'facturacion_{co}': sum(f['valor'] for f in filas),
+                f'facturas_{co}': len({f['documento'] for f in filas}),
+            }
+            for serie, valor_vivo in vivo.items():
+                base = SerieVigia.query.filter_by(serie=serie, semana=semana).first()
+                if base is None or base.fuente != 'HISTORICO':
+                    sin_base += 1
+                    filas_out.append({'serie': serie, 'vivo': round(valor_vivo, 2),
+                                      'historico': None, 'estado': 'SIN_BASE'})
+                    continue
+                hist = float(base.valor)
+                # 1% de tolerancia: redondeos de Siesa, no diferencias de método.
+                ok = abs(valor_vivo - hist) <= max(abs(hist) * 0.01, 0.01)
+                iguales += ok
+                distintas += (not ok)
+                filas_out.append({
+                    'serie': serie, 'vivo': round(valor_vivo, 2),
+                    'historico': round(hist, 2),
+                    'desvio_pct': round((valor_vivo - hist) / hist * 100, 2) if hist else None,
+                    'estado': 'OK' if ok else 'DIFIERE',
+                })
+
+        return {
+            'semana': semana.isoformat(),
+            'coinciden': iguales,
+            'difieren': distintas,
+            'sin_linea_base': sin_base,
+            # El veredicto explícito. Un reporte que hay que interpretar es un
+            # reporte que se interpreta mal bajo presión.
+            'apto_para_encender': distintas == 0 and iguales > 0,
+            'filas': filas_out,
+        }
+
+    @staticmethod
+    def _cos_a_vigilar():
+        """Los CO con serie histórica. Vigilar uno sin línea base no sirve:
+        el CUSUM necesita μ_ref y σ_ref para poder comparar contra algo."""
+        filas = (db.session.query(SerieVigia.serie)
+                 .filter(SerieVigia.serie.like('facturacion_%'))
+                 .distinct().all())
+        return sorted({f[0].split('_', 1)[1] for f in filas if '_' in f[0]})
+
+    @staticmethod
+    def _facturas_de_semana(connekta, co, desde, hasta):
+        """Líneas de factura del CO en el rango. `None` si Siesa no respondió.
+
+        La distinción entre `[]` y `None` es la del módulo entero: una lista
+        vacía es "no se facturó", `None` es "no sabemos". La primera se
+        escribe; la segunda se declara como hueco.
+        """
+        filas = []
+        try:
+            for pag in range(1, 100):
+                res = connekta._get('API_v2_Ventas_Facturas_DesdePedido', {
+                    'paginacion': f'numPag={pag}|tamPag=100',
+                    'parametros': (
+                        f"f350_id_co = ''{co}'' "
+                        f"AND f350_fecha >= {desde.strftime('%Y%m%d')} "
+                        f"AND f350_fecha <= {hasta.strftime('%Y%m%d')}"
+                    ),
+                })
+                if res is None:
+                    return None          # breaker abierto o respuesta no-200
+                rows = res.get('detalle', {}).get('Table', [])
+                if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                    break
+                for r in rows:
+                    # Anuladas fuera: en Siesa estado 9 es anulado, y sumarlas
+                    # inflaría la facturación de la semana.
+                    if str(r.get('f350_ind_estado', '')) == '9':
+                        continue
+                    filas.append({
+                        'cantidad': float(r.get('f470_cant_base') or 0),
+                        'valor': float(r.get('f470_vlr_neto') or 0),
+                        'documento': f"{r.get('f350_id_tipo_docto', '')}"
+                                     f"-{r.get('f350_consec_docto', '')}",
+                    })
+                if len(rows) < 100:
+                    break
+        except Exception as e:
+            logger.error('[VIGIA] CO %s: fallo consultando facturas: %s', co, e)
+            return None
+        return filas
+
+    @staticmethod
+    def _upsert_serie(serie, semana, valor, registros):
+        """Escribe o actualiza una fila PRODUCCION. Devuelve True si es nueva.
+
+        **Nunca pisa una fila HISTORICO.** La línea base entró por el TXT una
+        sola vez y no se puede reconstruir: sin las 26 semanas de referencia el
+        CUSUM queda ciego seis meses.
+        """
+        existente = SerieVigia.query.filter_by(serie=serie, semana=semana).first()
+        if existente is not None:
+            if existente.fuente == 'HISTORICO':
+                logger.warning(
+                    '[VIGIA] %s %s es HISTORICO — no se sobrescribe con producción',
+                    serie, semana)
+                return False
+            existente.valor = valor
+            existente.registros = registros
+            return False
+        db.session.add(SerieVigia(serie=serie, semana=semana, valor=valor,
+                                  registros=registros, fuente='PRODUCCION'))
+        return True
+
+    @staticmethod
     def salud_conectores() -> dict:
         """
         G0: Verifica la latencia de los conectores de datos.
@@ -1024,15 +1255,48 @@ def alimentar_series_vivas(app=None):
     from flask import current_app as _app
     ctx_app = app or _app._get_current_object()
 
+    import os
+
     with ctx_app.app_context():
+        resultado = None
         try:
             resultado = VigiaService.alimentar_adopcion_picking()
             logger.info('[VIGIA_SCHEDULER] Series vivas alimentadas — %d semanas, %d series nuevas',
                         resultado.get('semanas_procesadas', 0), resultado.get('series_creadas', 0))
-            return resultado
         except Exception as e:
             logger.exception('[VIGIA_SCHEDULER] Fallo alimentando series vivas: %s', e)
-            return None
+
+        # Las tres series de negocio: nacen APAGADAS (regla 10).
+        #
+        # El primer ciclo no es el estado estable: consulta Siesa por CADA C.O.
+        # y escribe series que el CUSUM va a evaluar de inmediato. Encenderlo
+        # sin haber verificado que la agregación coincide con la línea base
+        # convierte una diferencia de método en una alarma de colapso.
+        #
+        # Se enciende con VIGIA_INGESTA_FACTURACION=true DESPUÉS de correr
+        # `alimentar_series_facturacion` a mano sobre una semana ya cargada por
+        # el TXT y comprobar que los tres números dan lo mismo.
+        if os.getenv('VIGIA_INGESTA_FACTURACION', '').lower() != 'true':
+            logger.info('[VIGIA_SCHEDULER] Ingesta de facturación APAGADA '
+                        '(VIGIA_INGESTA_FACTURACION != true)')
+            return resultado
+
+        try:
+            fact = VigiaService.alimentar_series_facturacion()
+            if fact.get('cos_sin_dato'):
+                # No es un detalle: un C.O. sin dato tres semanas seguidas es
+                # indistinguible de un C.O. que dejó de facturar, y el CUSUM no
+                # lo va a ver porque no hay fila que evaluar.
+                logger.error('[VIGIA_SCHEDULER] C.O. SIN DATO esta semana: %s — '
+                             'no se escribió cero, quedó el hueco declarado',
+                             fact['cos_sin_dato'])
+            logger.info('[VIGIA_SCHEDULER] Facturación %s — %d C.O., %d series',
+                        fact.get('semana'), fact.get('cos_procesados', 0),
+                        fact.get('series_escritas', 0))
+        except Exception as e:
+            logger.exception('[VIGIA_SCHEDULER] Fallo en ingesta de facturación: %s', e)
+
+        return resultado
 
 
 def init_scheduler(app):

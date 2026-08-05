@@ -330,3 +330,52 @@ def backtest_florencia():
     from app.services.vigia_service import VigiaService
     resultado = VigiaService.backtest_florencia()
     return jsonify(resultado), 200
+
+@vigia_bp.route('/ingesta/facturacion', methods=['POST'])
+@jwt_required()
+def ingesta_facturacion():
+    """Alimenta las 3 series de negocio de una semana CERRADA.
+
+    Existe para poder correrla A MANO sobre una semana que el TXT ya cargó y
+    comprobar que los tres números coinciden. Ese es el paso que decide si el
+    cron se puede encender: si la agregación viva no reproduce la histórica, el
+    CUSUM leería la diferencia de método como un desplome.
+
+    Sin este endpoint, encender `VIGIA_INGESTA_FACTURACION=true` sería confiar
+    en que el cálculo coincide sin haberlo comprobado nunca.
+
+    Body opcional: {"semana": "2026-07-20"}  (lunes de la semana)
+    """
+    if not _es_gestion():
+        return jsonify({'error': 'Sin permiso para alimentar series del Vigía'}), 403
+
+    from datetime import date
+
+    from app.services.vigia_service import VigiaService
+
+    datos = request.get_json(silent=True) or {}
+    semana = None
+    if datos.get('semana'):
+        try:
+            semana = date.fromisoformat(datos['semana'])
+        except ValueError:
+            return jsonify({'error': 'semana debe ser YYYY-MM-DD (lunes)'}), 400
+        if semana.weekday() != 0:
+            return jsonify({
+                'error': 'la semana se identifica por su LUNES',
+                'recibido': datos['semana'],
+            }), 400
+
+    # `?comparar=true` NO escribe: calcula la semana con la fuente viva y la
+    # contrasta con la histórica. Es el paso previo obligatorio a encender el
+    # cron, y por eso es el modo por defecto del botón en el panel.
+    if (request.args.get('comparar', '') or datos.get('comparar')) in ('true', True, '1'):
+        if semana is None:
+            return jsonify({'error': 'para comparar hay que indicar la semana '
+                                     '(un lunes ya cargado por el TXT)'}), 400
+        return jsonify(VigiaService.comparar_con_linea_base(semana)), 200
+
+    resultado = VigiaService.alimentar_series_facturacion(semana=semana)
+    if resultado.get('error'):
+        return jsonify(resultado), 409
+    return jsonify(resultado), 200
