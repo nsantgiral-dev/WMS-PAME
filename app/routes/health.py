@@ -74,6 +74,103 @@ def health_ping():
 
 
 
+#: Columnas que `_filas_nc_encabezado` necesita de la consulta dinámica.
+_COLUMNAS_NC_CONSECUTIVO = (
+    'f350_rowid', 'f350_id_co', 'f350_id_tipo_docto', 'f350_consec_docto',
+    'f350_fecha', 'f350_ind_estado', 'f350_total_db',
+)
+
+
+@health_bp.route('/nc-consecutivo', methods=['GET'])
+@jwt_required()
+def health_nc_consecutivo():
+    """Prueba la consulta del consecutivo de NC SIN escribir nada en Siesa.
+
+    Existe por el mismo motivo que «Verificar ingesta de facturación» en Vigía:
+    encender una integración y ver si se rompe en producción no es un método.
+    Acá el costo de equivocarse es peor que un error visible — una consulta que
+    devuelve columnas con otro nombre haría que `get_consec_nc_creada` no
+    encontrara candidatas y el motivo DIAN quedara manual **en silencio**,
+    indistinguible de no haberlo configurado.
+
+    Acepta `?consulta=<nombre>` para probar una consulta recién registrada
+    ANTES de ponerla en `CONNEKTA_CONSULTA_NC_CONSECUTIVO`. Sin el parámetro
+    prueba la que está configurada.
+
+    Es de solo lectura: un GET a Connekta y nada más.
+    """
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Acceso restringido a roles de gestión'}), 403
+    from flask import request
+
+    from app.services.connekta_gateway import connekta
+
+    nombre = (request.args.get('consulta') or '').strip() or connekta.consulta_nc_consecutivo
+    if not nombre:
+        return jsonify({
+            'apto': False,
+            'motivo': 'No hay consulta configurada ni pasada en ?consulta=',
+            'siguiente_paso': (
+                'Registrar la consulta dinámica en Connekta y probarla acá con '
+                '?consulta=<nombre> antes de fijar CONNEKTA_CONSULTA_NC_CONSECUTIVO.'
+            ),
+        }), 200
+
+    _original = connekta.consulta_nc_consecutivo
+    try:
+        connekta.consulta_nc_consecutivo = nombre
+        filas = connekta._filas_nc_encabezado()
+    except Exception as e:
+        return jsonify({
+            'apto': False, 'consulta': nombre,
+            'motivo': f'La consulta falló: {str(e)[:300]}',
+            'siguiente_paso': 'Verificar el nombre exacto en Connekta y que devuelva filas.',
+        }), 200
+    finally:
+        connekta.consulta_nc_consecutivo = _original
+
+    if not filas:
+        # Cero filas NO es apto: puede ser una consulta correcta sobre una
+        # empresa sin NC, o una consulta rota. No se distingue, y una
+        # integración que no se puede distinguir de rota no se enciende.
+        return jsonify({
+            'apto': False, 'consulta': nombre, 'filas': 0,
+            'motivo': 'La consulta respondió sin filas — no se puede verificar '
+                      'qué columnas trae.',
+            'siguiente_paso': 'Crear una NC de prueba en Siesa, o revisar el WHERE '
+                              f'(debe filtrar f350_id_tipo_docto = {connekta.tipo_docto_nota_credito}).',
+        }), 200
+
+    presentes = set(filas[0].keys())
+    faltan = [c for c in _COLUMNAS_NC_CONSECUTIVO if c not in presentes]
+    # Fantasmas de paginación (regla 10): filas con todo en NULL.
+    fantasmas = sum(1 for f in filas if not f.get('f350_rowid'))
+
+    apto = not faltan
+    return jsonify({
+        'apto': apto,
+        'consulta': nombre,
+        'configurada_ahora': _original or None,
+        'filas': len(filas),
+        'columnas_faltantes': faltan,
+        'columnas_recibidas': sorted(presentes),
+        'filas_fantasma_descartadas': fantasmas,
+        'ejemplo': filas[0] if filas else None,
+        'motivo': None if apto else (
+            f'Faltan columnas que el WMS necesita: {", ".join(faltan)}. '
+            'Con una columna ausente la NC no se puede identificar y el motivo '
+            'DIAN queda manual sin avisar.'
+        ),
+        'siguiente_paso': (
+            f'Poner CONNEKTA_CONSULTA_NC_CONSECUTIVO={nombre} en Railway.'
+            if apto and _original != nombre else
+            'Ya está configurada y responde bien.' if apto else
+            'Corregir el SELECT de la consulta en Connekta y volver a probar.'
+        ),
+    }), 200
+
+
 @health_bp.route('/siesa', methods=['GET'])
 @jwt_required()
 def health_siesa():

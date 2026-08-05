@@ -483,3 +483,102 @@ class TestElJobDelMotivo:
         _marcar_motivo_dian_manual(job, 'otro fallo')
         db.session.refresh(devolucion)
         assert devolucion.siesa_motivo_dian is None
+
+
+class TestVerificarLaConsultaAntesDeEncender:
+    """`/api/health/nc-consecutivo` — probar sin escribir, como Vigía.
+
+    Sin esto, el único método para saber si la consulta quedó bien registrada
+    sería encenderla y esperar la próxima devolución. Y el fallo no es ruidoso:
+    una columna con otro nombre hace que no haya candidatas, el job falle y el
+    motivo quede manual — **indistinguible de no haberlo configurado nunca**.
+    """
+
+    def _pedir(self, client, token, **qs):
+        from urllib.parse import urlencode
+        url = '/api/health/nc-consecutivo'
+        if qs:
+            url += '?' + urlencode(qs)
+        return client.get(url, headers={'Authorization': f'Bearer {token}'})
+
+    def test_un_operario_no_entra(self, client, jwt_token):
+        assert self._pedir(client, jwt_token).status_code == 403
+
+    def test_sin_configurar_lo_dice_y_no_finge(self, client, jwt_token_admin):
+        r = self._pedir(client, jwt_token_admin)
+        assert r.status_code == 200
+        assert r.get_json()['apto'] is False
+
+    def test_una_consulta_que_trae_todo_es_apta(self, client, jwt_token_admin):
+        from app.services.connekta_gateway import connekta
+
+        with patch.object(type(connekta), '_filas_nc_encabezado',
+                          lambda self: [_fila(57, 100.0, 900)]):
+            r = self._pedir(client, jwt_token_admin, consulta='q_ok')
+        d = r.get_json()
+        assert d['apto'] is True
+        assert d['columnas_faltantes'] == []
+        assert 'CONNEKTA_CONSULTA_NC_CONSECUTIVO=q_ok' in d['siguiente_paso']
+
+    def test_una_columna_ausente_NO_es_apta_y_la_nombra(self, client, jwt_token_admin):
+        """El modo de fallo real: la consulta responde, con otras columnas."""
+        from app.services.connekta_gateway import connekta
+
+        fila = _fila(57, 100.0, 900)
+        del fila['f350_total_db']
+        with patch.object(type(connekta), '_filas_nc_encabezado', lambda self: [fila]):
+            r = self._pedir(client, jwt_token_admin, consulta='q_incompleta')
+        d = r.get_json()
+        assert d['apto'] is False
+        assert 'f350_total_db' in d['columnas_faltantes']
+
+    def test_cero_filas_no_se_da_por_bueno(self, client, jwt_token_admin):
+        """Una consulta correcta sobre una empresa sin NC y una consulta rota
+        se ven igual desde acá. No se distinguen, así que no se aprueba."""
+        from app.services.connekta_gateway import connekta
+
+        with patch.object(type(connekta), '_filas_nc_encabezado', lambda self: []):
+            r = self._pedir(client, jwt_token_admin, consulta='q_vacia')
+        assert r.get_json()['apto'] is False
+
+    def test_si_la_consulta_revienta_lo_reporta_sin_500(self, client, jwt_token_admin):
+        from app.services.connekta_gateway import connekta
+
+        def _explota(self):
+            raise RuntimeError('no existe la consulta')
+
+        with patch.object(type(connekta), '_filas_nc_encabezado', _explota):
+            r = self._pedir(client, jwt_token_admin, consulta='q_mala')
+        assert r.status_code == 200
+        assert r.get_json()['apto'] is False
+        assert 'no existe la consulta' in r.get_json()['motivo']
+
+    def test_probar_una_candidata_no_pisa_la_configurada(self, client, jwt_token_admin):
+        """Se prueba en caliente cambiando un atributo del gateway: si no se
+        restaurara, una prueba dejaría la integración apuntando a otra cosa."""
+        from app.services.connekta_gateway import connekta
+
+        connekta.consulta_nc_consecutivo = 'la_de_produccion'
+        try:
+            with patch.object(type(connekta), '_filas_nc_encabezado',
+                              lambda self: [_fila(57, 100.0, 900)]):
+                self._pedir(client, jwt_token_admin, consulta='q_candidata')
+            assert connekta.consulta_nc_consecutivo == 'la_de_produccion'
+        finally:
+            connekta.consulta_nc_consecutivo = ''
+
+    def test_las_columnas_que_exige_son_las_que_el_gateway_usa(self):
+        """TRINQUETE — si el gateway empieza a leer otra columna y esta lista
+        no se mueve, el verificador aprueba una consulta que no sirve."""
+        import inspect
+
+        from app.routes.health import _COLUMNAS_NC_CONSECUTIVO
+        from app.services.connekta_gateway import ConnektaGateway
+
+        fuente = inspect.getsource(ConnektaGateway.get_consec_nc_creada)
+        for col in ('f350_id_co', 'f350_id_tipo_docto', 'f350_ind_estado',
+                    'f350_fecha', 'f350_rowid', 'f350_total_db',
+                    'f350_consec_docto'):
+            assert col in fuente
+            assert col in _COLUMNAS_NC_CONSECUTIVO, (
+                f'{col} se usa para identificar la NC y el verificador no la exige')
