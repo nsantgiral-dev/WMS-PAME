@@ -633,3 +633,20 @@ def calendario_vencimientos():
         return jsonify({'error': 'Sin permiso para ver vencimientos de acuerdos'}), 403
     from app.services.compras_inteligencia_service import ComprasInteligenciaService
     return jsonify(ComprasInteligenciaService.calendario_vencimientos())
+
+@compras_bp.route('/proveedores', methods=['GET'])
+@jwt_required()
+def listar_proveedores():
+    """Maestro de proveedores. Existe porque sin él no se puede registrar un
+    precio: la pantalla necesita saber a quién se le cotizó.
+
+    Era el eslabón que faltaba — `precios/registrar` estaba construido y sin
+    pantalla, y una pantalla de registro sin lista de proveedores tampoco se
+    puede armar.
+    """
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver proveedores'}), 403
+    from app.models.acuerdo_marco import Proveedor
+    provs = Proveedor.query.order_by(Proveedor.nombre).all()
+    return jsonify([{'id': p.id, 'codigo': p.codigo, 'nombre': p.nombre,
+                     'nit': p.nit} for p in provs]), 200

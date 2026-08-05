@@ -11,6 +11,9 @@
 async function compCargarAcuerdos() {
   const el = document.getElementById('comp-sec-acuerdos');
   if (!el) return;
+  // El buscador de precios por producto vive acá: es donde alguien de compras
+  // ya está mirando el precio de algo.
+  _preciosAsegurarBuscador(el);
   el.innerHTML = '<div style="color:var(--tx3);padding:20px;">Cargando acuerdos...</div>';
 
   try {
@@ -661,4 +664,140 @@ function _renderNacional(el, rop) {
       se diseña con el Dueño de Compras, porque nadie ha ejecutado ese flujo todavía.
     </div>`;
   el.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRECIOS POR PRODUCTO — comparador + registro
+//
+// Dos endpoints huérfanos que eran la misma pantalla:
+// `precios/comparador/<id>` y `precios/registrar`.
+//
+// El segundo importa más de lo que parece: es UNA DE LAS DOS ENTRADAS DE
+// PRECIO del sistema. Hasta hoy los precios solo entraban por acuerdo marco,
+// así que `costo_service` —la jerarquía que decide el costo de un SKU y que el
+// armador usa para ordenar el contenedor— se quedaba sin la capa de cotización
+// para todo producto sin acuerdo vigente.
+//
+// Registrar una cotización acá mueve el costo de ese SKU de KARDEX_PROMEDIO
+// (un promedio de hace meses) a COTIZACION (un precio de este trimestre).
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _PRECIOS_PRODUCTO = null;
+let _PRECIOS_PROVEEDORES = [];
+
+/** Busca un producto y muestra sus precios vigentes. */
+async function preciosBuscarProducto() {
+  const q = (document.getElementById('precio-buscar')?.value || '').trim();
+  const el = document.getElementById('precios-panel');
+  if (!q || !el) return;
+  el.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Buscando…</p>';
+  try {
+    const d = await get(`/api/productos/?q=${encodeURIComponent(q)}&per_page=1`);
+    const prod = (d.productos || d.items || [])[0];
+    if (!prod) { el.innerHTML = '<p style="color:var(--yellow);font-size:12px;">Sin resultados</p>'; return; }
+    _PRECIOS_PRODUCTO = prod;
+    await preciosRenderComparador();
+  } catch (e) {
+    el.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
+
+async function preciosRenderComparador() {
+  const el = document.getElementById('precios-panel');
+  const p = _PRECIOS_PRODUCTO;
+  if (!el || !p) return;
+
+  const [cmp, provs] = await Promise.all([
+    get(`/api/compras/precios/comparador/${p.id}`).catch(e => ({ _error: e.message })),
+    _PRECIOS_PROVEEDORES.length
+      ? Promise.resolve(_PRECIOS_PROVEEDORES)
+      : get('/api/compras/proveedores').catch(() => []),
+  ]);
+  if (Array.isArray(provs)) _PRECIOS_PROVEEDORES = provs;
+
+  const filas = cmp._error
+    ? `<p style="color:var(--red);font-size:12px;">${cmp._error}</p>`
+    : ((cmp.precios || []).length
+        ? (cmp.precios || []).map(x => `
+            <div class="tabla-fila">
+              <span class="tabla-nombre" style="font-size:12px;">
+                ${x.proveedor}
+                <span style="color:var(--tx3);"> · ${x.fuente || x.tipo || ''}</span>
+              </span>
+              <span style="font-size:13px;font-weight:700;">$${(x.precio || 0).toLocaleString('es-CO')}</span>
+            </div>`).join('')
+        : `<p style="font-size:12px;color:var(--yellow);">
+             Sin precios vigentes. El costo de este SKU sale del kardex — un
+             promedio, no un precio pactado.</p>`);
+
+  el.innerHTML = `
+    <div class="tabla-card">
+      <div class="tabla-titulo">${p.codigo_siesa} · ${p.nombre || ''}</div>
+      ${filas}
+      <hr style="border-color:var(--brd);margin:12px 0;">
+      <div style="font-size:12px;font-weight:700;margin-bottom:6px;">Registrar una cotización</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
+        <select id="precio-prov" style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
+          <option value="">— proveedor —</option>
+          ${(_PRECIOS_PROVEEDORES || []).map(v =>
+            `<option value="${v.id}">${v.nombre}</option>`).join('')}
+        </select>
+        <input id="precio-valor" type="number" step="0.01" placeholder="precio unitario"
+               style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
+        <input id="precio-cant" type="number" placeholder="cantidad cotizada"
+               style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
+        <input id="precio-quien" placeholder="quién cotizó"
+               style="padding:6px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;">
+      </div>
+      <button class="btn-flota" style="width:100%;margin-top:8px;"
+              onclick="preciosRegistrar()">Registrar cotización</button>
+      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+        Queda con tu nombre y la fecha de hoy. Mueve el costo de este SKU de
+        promedio del kardex a cotización vigente — y eso cambia cómo se ordena
+        el contenedor.
+      </p>
+    </div>`;
+}
+
+async function preciosRegistrar() {
+  const p = _PRECIOS_PRODUCTO;
+  const prov = parseInt(document.getElementById('precio-prov')?.value, 10);
+  const valor = parseFloat(document.getElementById('precio-valor')?.value);
+  if (!p || !Number.isFinite(prov)) { alerta('Elegí el proveedor', 'error'); return; }
+  if (!Number.isFinite(valor) || valor <= 0) { alerta('El precio tiene que ser mayor a cero', 'error'); return; }
+
+  const cant = parseInt(document.getElementById('precio-cant')?.value, 10);
+  try {
+    await post('/api/compras/precios/registrar', {
+      producto_id: p.id,
+      proveedor_id: prov,
+      precio_unitario: valor,
+      cantidad_cotizada: Number.isFinite(cant) ? cant : null,
+      cotizado_por: (document.getElementById('precio-quien')?.value || '').trim(),
+      fuente: 'COTIZACION',
+    });
+    alerta('Cotización registrada ✓', 'exito');
+    preciosRenderComparador();
+  } catch (e) {
+    alerta('No se pudo registrar: ' + e.message, 'error');
+  }
+}
+
+
+/** Inserta el buscador de precios arriba del listado de acuerdos. */
+function _preciosAsegurarBuscador(contenedor) {
+  if (document.getElementById('precio-buscar')) return;
+  const caja = document.createElement('div');
+  caja.className = 'tabla-card';
+  caja.style.marginBottom = '12px';
+  caja.innerHTML = `
+    <div class="tabla-titulo">Precios por producto</div>
+    <div style="display:flex;gap:6px;">
+      <input id="precio-buscar" placeholder="código o nombre del producto"
+             style="flex:1;padding:7px;border-radius:6px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);font-size:12px;"
+             onkeydown="if(event.key==='Enter')preciosBuscarProducto()">
+      <button class="btn-flota" onclick="preciosBuscarProducto()">Buscar</button>
+    </div>
+    <div id="precios-panel" style="margin-top:10px;"></div>`;
+  contenedor.parentNode.insertBefore(caja, contenedor);
 }

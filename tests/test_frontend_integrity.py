@@ -472,10 +472,6 @@ DEUDA_SIN_UI = {
         'Verifica una OC contra la lista de bloqueados. Sin gesto en compras.',
     '/api/compras/clasificar-rama/<int:producto_id>':
         'Clasificación manual de un SKU. La pantalla clasifica en lote.',
-    '/api/compras/precios/comparador/<int:producto_id>':
-        'Comparador por SKU. La pantalla compara en lote.',
-    '/api/compras/precios/registrar':
-        'Registro manual de un precio de proveedor. **Es una de las dos entradas de precio del sistema** y no tiene pantalla: hoy los precios solo entran por acuerdo marco. Conectarla mejoraría la cobertura de costo del armador.',
     '/api/conteo/abc/sincronizar':
         'Recalcula la clasificación ABC. El cron la corre a las 2am; el manual es para después de una carga masiva.',
     '/api/conteo/mis-tareas':
@@ -492,10 +488,6 @@ DEUDA_SIN_UI = {
         ('Consumo manual de un LPN. Sin UI, un empaque que se abrió y no se '
          'escaneó queda ACTIVO para siempre: el sistema cree que hay una paca '
          'entera donde hay unidades sueltas.'),
-    '/api/empaques/sync':
-        'Sincronización de empaques. Corre por cron a las 2:30am.',
-    '/api/empaques/sync/estado':
-        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
     '/api/inventario/ajuste':
         'Ajuste directo de inventario por API. La pantalla ajusta por conteo, que es el camino con segunda firma. Este endpoint SALTA esa fricción — conectarlo a un botón sería quitarle el control al conteo cíclico. Se deja sin UI A PROPÓSITO.',
     '/api/inventario/movimientos':
@@ -532,20 +524,12 @@ DEUDA_SIN_UI = {
         'DUPLICADO de /api/reposicion/tarea-actual.',
     '/api/reposicion/pre-verificar-ola':
         'Simulación de una ola de reposición antes de lanzarla.',
-    '/api/reposicion/sync-ubicaciones/estado':
-        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
     '/api/rutas/<int:id>/liquidar-completo':
         'Liquidación en un paso. La pantalla liquida por partes (NC→RC→DC), que es lo que permite ver dónde falla la cadena. El atajo esconde el punto de fallo.',
     '/api/rutas/<int:id>/sugeridos':
         'Bultos sugeridos para una ruta. El muelle asigna a mano.',
-    '/api/siesa/carga-inventario-estado':
-        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
     '/api/siesa/cargar-inventario':
         'Carga inicial de inventario desde Siesa. Se corre UNA VEZ en el go-live, con la bodega quieta y bajo acta. Un botón permanente invita a correrla dos veces.',
-    '/api/siesa/sync-estado':
-        'PROGRESO SIN POLLING. Devuelve el avance de una sincronización larga; la pantalla dispara la sync y no vuelve a preguntar. El usuario ve un botón que "no hace nada" durante minutos. Conectar con un poll, o borrarlo y aceptar que la sync es a ciegas.',
-    '/api/siesa/sync-pedidos-estado':
-        'PROGRESO SIN POLLING — ver /api/siesa/sync-estado.',
     '/api/siesa/sync-productos':
         'Sincronización del catálogo. Corre por cron; el disparo manual es para cuando entra un producto nuevo y no se quiere esperar.',
     '/api/siesa/terceros-contacto':

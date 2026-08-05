@@ -241,7 +241,8 @@ class TestNadieMasArmaFechasDeNegocioConUtcnow:
     #
     # A diferencia de `utcnow()`, que es legítimo para timestamps técnicos,
     # **`date.today()` siempre es una pregunta de negocio**: qué día es hoy.
-    _PATRONES = ("utcnow().strftime", "utcnow().date()", "date.today()")
+    _PATRONES = ("utcnow().strftime", "utcnow().date()", "date.today()",
+                 "default=date.today")   # <- sin parentesis: default de columna
 
     @classmethod
     def _ofensas(cls):

@@ -103,7 +103,11 @@ class PrecioProveedor(db.Model):
     fuente = db.Column(db.String(20), default='COTIZACION')
     # COTIZACION, FACTURA, ACUERDO_MARCO, LISTA_PRECIOS
     cotizado_por = db.Column(db.String(100))
-    fecha = db.Column(db.Date, nullable=False, default=date.today)
+    # `default=_dia_operativo` y no `date.today`: sin parentesis, el guard de
+    # fechas no lo veia. En Railway `date.today()` es UTC, asi que una
+    # cotizacion registrada despues de las 7 p.m. quedaba fechada MAÑANA — y la
+    # jerarquia de costos la compara contra la vigencia de los acuerdos.
+    fecha = db.Column(db.Date, nullable=False, default=_dia_operativo)
     vigente = db.Column(db.Boolean, default=True)
 
     producto = db.relationship('Producto', backref='precios_historicos', lazy='select')

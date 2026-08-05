@@ -205,6 +205,7 @@ function mostrarSegunRol(rol) {
 
 /** Clear all polling intervals and reset active reception/return state. */
 function pararTimers() {
+  clearInterval(_SYNC_TIMER);
   clearInterval(TIMER_ADMIN);
   clearInterval(TIMER_OPERARIO);
   clearInterval(TIMER_REC);
@@ -456,7 +457,7 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-operarios') await cargarOperarios();
   else if (TAB === 'tab-usuarios') await cargarUsuarios();
   else if (TAB === 'tab-stock') await cargarStock();
-  else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); await mapeoUnidadesCargar(); }
+  else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); await syncEstadosCargar(); await mapeoUnidadesCargar(); }
   else if (TAB === 'tab-muelle') await cargarMuelle();
   else if (TAB === 'tab-rutas') await cargarRutas();
   else if (TAB === 'tab-inventario') await cargarInventario();
@@ -2646,4 +2647,74 @@ async function mapeoUnidadesGuardar(id) {
   } catch (e) {
     alerta('No se pudo guardar: ' + e.message, 'error');
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESTADO DE LOS SINCRONIZADORES
+//
+// Cinco endpoints reportaban el avance de sincronizaciones largas y NADIE los
+// consultaba. Dos de esas syncs se disparan desde el PWA: la persona tocaba el
+// botón y la pantalla no volvía a decir nada durante minutos.
+//
+// Un botón que no responde se toca dos veces — y en `sync-pedidos` eso es una
+// segunda paginación completa contra Siesa mientras la primera sigue corriendo.
+//
+// Los otros tres corren por cron. Su estado importa igual, y por otra razón:
+// es la única forma de saber si un cron dejó de correr. Un sincronizador
+// muerto no avisa; simplemente los datos envejecen.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _SYNC_TIMER = null;
+
+const _SYNCS = [
+  { id: 'productos',   nombre: 'Catálogo de productos', url: '/api/siesa/sync-estado',                     cron: '30 min, 7-20h' },
+  { id: 'pedidos',     nombre: 'Pedidos comprometidos', url: '/api/siesa/sync-pedidos-estado',             cron: 'cada minuto, 7-20h' },
+  { id: 'inventario',  nombre: 'Carga de inventario',   url: '/api/siesa/carga-inventario-estado',         cron: 'manual' },
+  { id: 'empaques',    nombre: 'Empaques',              url: '/api/empaques/sync/estado',                  cron: '2:30 a.m.' },
+  { id: 'ubicaciones', nombre: 'Ubicaciones',           url: '/api/reposicion/sync-ubicaciones/estado',    cron: '3:00 a.m.' },
+];
+
+async function syncEstadosCargar() {
+  const el = document.getElementById('sync-estados');
+  if (!el) return;
+
+  const datos = await Promise.all(_SYNCS.map(s =>
+    get(s.url).then(d => ({ ...s, d })).catch(e => ({ ...s, _error: e.message }))));
+
+  const enCurso = datos.some(x => x.d && x.d.en_curso);
+
+  el.innerHTML = `
+    <div class="tabla-card">
+      <div class="tabla-titulo">Sincronizadores</div>
+      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+        Cuándo corrió cada uno y cómo le fue. <b>Un sincronizador que deja de
+        correr no avisa</b> — los datos simplemente envejecen.
+      </p>
+      ${datos.map(x => {
+        if (x._error) return `<div class="tabla-fila">
+          <span class="tabla-nombre" style="font-size:12.5px;">${x.nombre}</span>
+          <span style="font-size:11px;color:var(--red);">no se pudo consultar</span></div>`;
+        const d = x.d || {};
+        const err = d.ultimo_error;
+        const color = d.en_curso ? 'var(--yellow)' : err ? 'var(--red)' : 'var(--green)';
+        const texto = d.en_curso ? 'corriendo…' : err ? 'falló' : 'ok';
+        return `<div class="tabla-fila" style="align-items:flex-start;">
+          <span class="tabla-nombre" style="font-size:12.5px;">
+            ${x.nombre}
+            <span style="display:block;font-size:10.5px;color:var(--tx3);">${x.cron}</span>
+            ${err ? `<span style="display:block;font-size:10.5px;color:var(--red);">${String(err).slice(0,110)}</span>` : ''}
+          </span>
+          <span style="text-align:right;">
+            <span style="font-size:11px;color:${color};font-weight:700;">${texto}</span>
+            <span style="display:block;font-size:10.5px;color:var(--tx3);">
+              ${d.ultimo_inicio ? horaColombia(d.ultimo_inicio) : 'sin registro'}</span>
+          </span>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  // Mientras algo corre, se refresca solo. Cuando nada corre, se deja de
+  // preguntar: un poll permanente es lo que infla la factura de red.
+  clearInterval(_SYNC_TIMER);
+  if (enCurso) _SYNC_TIMER = setInterval(syncEstadosCargar, 5000);
 }
