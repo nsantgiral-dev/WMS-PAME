@@ -584,7 +584,25 @@ vencer, y se repite solo si escala de nivel.
 Tres plantillas, categoría `utility`, parámetros como **lista explícita** (son
 posicionales: reordenarlos manda la dirección donde va la fecha, sin error).
 
-**Enviadas a aprobación el 2026-08-03**, las tres en `Pending`:
+**Enviadas a aprobación el 2026-08-03**; al 2026-08-05 las tres ya existen en
+WhatsApp Manager. Lo que la pantalla de plantillas muestra como *Not rated* es
+la **calificación de calidad**, no el estado de aprobación — son dos cosas
+distintas y solo la segunda habilita el envío.
+
+> **Implementado el 2026-08-05, apagado:** `flota_documento_vence` ya tiene
+> tubería completa —dominio, canal, tabla, barrido, callback y pantalla— porque
+> `DocumentoVehiculo` existe y se está cargando. Las otras dos **no se
+> implementaron a propósito**: no existe la tabla `flota_hallazgo` ni un
+> endpoint para crear hallazgos, así que no hay de qué avisar. Construirlas hoy
+> sería superficie sin estrenar, que es la lección más cara del proyecto.
+>
+> Falta para encenderlo: los **ids definitivos de Gupshup** (los de abajo son
+> los `temp` de mientras estaban `Pending`), `GUPSHUP_TEMPLATE_IDS`,
+> `FLOTA_AVISO_TELEFONOS`, `FLOTA_AVISOS=true` y —como segunda decisión
+> separada— `FLOTA_AVISOS_REALES=true`. El panel de flota muestra en qué estado
+> está sin que haya que ir a mirar variables.
+
+Las tres, tal como se enviaron:
 
 | Plantilla | Destinatario | Cuerpo |
 |---|---|---|
@@ -606,11 +624,13 @@ WhatsApp no admite condicionales, así que no puede concordar número ni género
 recibe `"15 de agosto de 2026"`. El ISO se lee como un error del sistema —es el
 `2026-07-15` que salió a producción en cartera— y el numérico es ambiguo.
 
-> **Toca código que ya existe:** `flota/adaptadores/medicion.py::_hoy()` usa
-> `date.today()`, aislado en una función a propósito. **El día de implementar
-> este aviso es el día de pasarlo a hora Bogotá** — regla 5 del CLAUDE.md del
-> WMS: después de las 7PM Colombia, UTC ya es el día siguiente, y un SOAT que
-> vence hoy aparecería vencido ayer.
+> **Resuelto el 2026-08-05.** `flota/adaptadores/medicion.py::_hoy()` usaba
+> `date.today()`, aislado en una función esperando exactamente este momento. Ya
+> devuelve `dia_operativo()`. Al seguir la raíz aparecieron dos sitios más en
+> `flota/` con el mismo problema —`vencido`/`dias_para_vencer` de cada documento
+> y la ruta del día del conductor—: el trinquete de fechas solo vigilaba `app/`,
+> y `flota/` es un paquete hermano. Ahora enumera sus raíces y verifica que cada
+> una exista.
 
 **3. Cada plantilla tiene DOS identificadores.** Descubierto al enviarlas:
 

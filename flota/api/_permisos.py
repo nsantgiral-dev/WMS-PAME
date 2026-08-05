@@ -76,4 +76,40 @@ def exige(roles, que=''):
     return decorador
 
 
-__all__ = ['exige', 'MAESTROS_FLOTA']
+def exige_secreto(variable: str, que: str = ''):
+    """Para lo que llama una máquina, no una persona.
+
+    Un webhook de proveedor no puede llevar JWT: quien lo invoca es Gupshup, no
+    un usuario. La alternativa NO es dejarlo abierto —cualquiera podría declarar
+    entregado un aviso que nunca llegó, y ese es justo el dato que el módulo
+    existe para hacer confiable— sino un secreto compartido en la URL.
+
+    **Nace cerrado.** Sin la variable configurada responde 503 y no acepta nada.
+    Un webhook que se abre solo porque falta configuración es la regla 10 al
+    revés: lo peligroso pasa cuando alguien NO hizo algo.
+
+    Es un decorador propio y con nombre para que el trinquete de permisos pueda
+    reconocerlo. Una ruta sin `exige` ni `exige_secreto` sigue fallando el
+    trinquete — que es el punto.
+    """
+    import os
+
+    def decorador(f):
+        @wraps(f)
+        def envoltura(*args, **kwargs):
+            from flask import request
+
+            esperado = (os.getenv(variable) or '').strip()
+            if not esperado:
+                return jsonify({
+                    'error': f'{que or f.__name__} no está configurado',
+                    'detalle': f'falta {variable}',
+                }), 503
+            if request.args.get('token') != esperado:
+                return jsonify({'error': 'token inválido'}), 403
+            return f(*args, **kwargs)
+        return envoltura
+    return decorador
+
+
+__all__ = ['exige', 'exige_secreto', 'MAESTROS_FLOTA']

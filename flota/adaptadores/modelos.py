@@ -198,6 +198,10 @@ class DocumentoVehiculo(db.Model):
     # afloja, se hace condicional a un estado que a su vez está constreñido.
     estado = db.Column(db.String(20), nullable=False, server_default='vigente')
 
+    # Sin backref: `Vehiculo` vive en `app/` y este módulo no le agrega
+    # atributos — la dirección de la dependencia es flota → app, nunca al revés.
+    vehiculo = db.relationship('Vehiculo', lazy=True)
+
     __table_args__ = (
         _en('tipo', TIPO_DOCUMENTO),
         _en('estado', ESTADO_DOCUMENTO),
@@ -681,3 +685,64 @@ class ItemInspeccion(db.Model):
     def dias_de_plazo(self) -> int:
         """Regla 6: se calcula, no se elige."""
         return DIAS_DE_PLAZO[self.criticidad]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# aviso — qué se le mandó a quién, y si llegó
+# ═══════════════════════════════════════════════════════════════════════════
+
+ESTADO_AVISO = ('encolado', 'entregado_al_proveedor', 'entregado', 'leido', 'fallido')
+
+# `entregado_al_proveedor` y `entregado` son estados distintos A PROPÓSITO.
+#
+# Gupshup responde `submitted` y eso significa "lo recibí", no "llegó". En
+# cartera esa confusión costó semanas: el tablero decía enviado y el teléfono
+# nunca sonó. Acá pesa más — el sistema existe para que un hallazgo vencido no
+# se quede quieto; si el aviso no llega y nadie se entera, falló justo donde
+# tenía que funcionar.
+
+
+class Aviso(db.Model):
+    """Un aviso mandado (o intentado) hacia una persona.
+
+    Fila por evento, no por consulta: `clave` es única, así que el cron puede
+    correr todas las noches sin repetir el mismo vencimiento. Un documento
+    RENOVADO genera clave nueva porque la clave lleva la fecha del hito.
+    """
+
+    __tablename__ = 'flota_aviso'
+
+    id    = db.Column(db.Integer, primary_key=True)
+    clave = db.Column(db.String(200), nullable=False, unique=True)
+
+    plantilla = db.Column(db.String(60), nullable=False)
+    telefono  = db.Column(db.String(30), nullable=False)
+    # Los parámetros posicionales, tal como se mandaron. Se guardan para poder
+    # RECONSTRUIR el texto que la persona leyó: sin esto, un mensaje mal armado
+    # es imposible de diagnosticar después.
+    parametros = db.Column(db.Text, nullable=False)
+
+    estado = db.Column(db.String(30), nullable=False, server_default='encolado')
+    # Id del proveedor. Es lo único que permite cruzar un evento de entrega
+    # entrante con la fila que lo espera.
+    proveedor_msg_id = db.Column(db.String(120), nullable=True)
+    detalle = db.Column(db.Text, nullable=True)
+
+    # Regla 8: el doble deja rastro en el REGISTRO, no solo en el código.
+    simulado = db.Column(db.Boolean, nullable=False, server_default='0')
+
+    creado_ts   = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    entregado_ts = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        _en('estado', ESTADO_AVISO),
+        db.CheckConstraint("length(trim(telefono)) > 0", name='ck_flota_aviso_telefono'),
+        # Un id de proveedor es obligatorio en cuanto salió: sin él no hay forma
+        # de saber si llegó, y el aviso se vuelve incomprobable.
+        db.CheckConstraint(
+            "estado IN ('encolado', 'fallido') OR "
+            "(proveedor_msg_id IS NOT NULL AND length(trim(proveedor_msg_id)) > 0)",
+            name='ck_flota_aviso_id_proveedor',
+        ),
+        db.Index('ix_flota_aviso_proveedor', 'proveedor_msg_id'),
+    )

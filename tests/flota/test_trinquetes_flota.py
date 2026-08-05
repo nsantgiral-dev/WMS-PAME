@@ -276,7 +276,17 @@ class TestTrinqueteCobertura:
 # Exentos POR NATURALEZA, no por deuda. Mismo criterio que `_EXENTOS_POR_REGLA`
 # en el guard global, donde `/api/health/` ya está exento: un health lo leen
 # monitores y operación desde consola, no una pantalla.
-_EXENTOS_POR_REGLA = ('/flota/health',)
+#
+# `/flota/avisos/entrega` es el callback de Gupshup: lo llama una máquina, no
+# una persona, así que no puede tener pantalla. Pero la pregunta del trinquete
+# —QUÉ DECISIÓN INFORMA— sí tiene respuesta, y por eso se exime en vez de
+# borrarse: es lo ÚNICO que mueve un aviso de "el proveedor lo aceptó" a
+# "llegó". Sin él, `sin_confirmar_6h` crecería para siempre y el panel diría que
+# nada se entregó nunca.
+#
+# La exención no queda en un comentario: `TestElWebhookAlimentaElPanel` verifica
+# que el número que se ve en pantalla se mueva por este endpoint.
+_EXENTOS_POR_REGLA = ('/flota/health', '/flota/avisos/entrega')
 
 _PWA = os.path.join(_RAIZ, 'app', 'static', 'pwa')
 
@@ -346,12 +356,34 @@ class TestTrinqueteEndpointsSinConsumidor:
         )
 
     def test_la_lista_de_exentos_no_crece(self):
-        """Anti-podredumbre: la exención es una categoría, no un basurero."""
-        assert len(_EXENTOS_POR_REGLA) <= 1, (
+        """Anti-podredumbre: la exención es una categoría, no un basurero.
+
+        Tope subido de 1 a 2 el 2026-08-05, a mano y con motivo: entró
+        `/flota/avisos/entrega`, el callback de Gupshup. Es la segunda vez que
+        aplica el criterio original —"lo llaman monitores o máquinas, no una
+        pantalla"—, no una categoría nueva.
+
+        Subir este número tiene que doler. Si un tercero aparece, la pregunta no
+        es cuál es el tope sino por qué el módulo está generando endpoints que
+        nadie mira.
+        """
+        assert len(_EXENTOS_POR_REGLA) <= 2, (
             'Se agregó un exento nuevo. Un endpoint sin consumidor casi nunca '
             'necesita un tab: suele necesitar ser procedencia dentro de la '
             'pantalla que ya usa ese dato.'
         )
+
+    def test_cada_exento_tiene_su_motivo_verificado(self):
+        """Los dos exentos están atados a una afirmación, no a un comentario.
+
+        `/flota/health` lo ejerce `test_health_esta_montado`; el callback,
+        `TestElWebhookAlimentaElPanel`. Una exención respaldada solo por prosa
+        sobrevive a que su motivo deje de ser cierto.
+        """
+        fuente = _leer(os.path.join(os.path.dirname(__file__),
+                                    'test_trinquetes_flota.py'))
+        assert 'TestElWebhookAlimentaElPanel' in fuente
+        assert 'def test_health_esta_montado' in fuente
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -707,3 +739,42 @@ class TestTrinqueteResetConoceAFlota:
         # dónde está escrita la función, no cuándo se ejecuta.
         i_fotos = reset.index("print(f'  {_limpiar_fotos_huerfanas(db)}')")
         assert i_borrado < i_fotos
+
+
+class TestElWebhookAlimentaElPanel:
+    """Respalda la exención de `/flota/avisos/entrega` con una afirmación.
+
+    Un endpoint exento "por naturaleza" es la puerta por la que vuelve el
+    problema que el trinquete persigue: superficie construida que nadie ejerce.
+    Acá la exención está atada a que su efecto SÍ se vea — si el webhook dejara
+    de mover el número del panel, esto falla y la exención deja de estar
+    justificada.
+    """
+
+    def test_el_evento_de_entrega_baja_el_contador_que_se_muestra(
+            self, app, db, monkeypatch):
+        import json as _json
+        from datetime import datetime, timedelta
+
+        from flota.adaptadores.avisos import (
+            avisos_sin_confirmar, registrar_entrega)
+        from flota.adaptadores.modelos import Aviso
+
+        db.session.add(Aviso(
+            clave='k-trinquete', plantilla='flota_documento_vence',
+            telefono='573001112233', parametros=_json.dumps(['A', 'B', 'C']),
+            estado='entregado_al_proveedor', proveedor_msg_id='gs-1',
+            simulado=False, creado_ts=datetime.utcnow() - timedelta(hours=9),
+        ))
+        db.session.commit()
+
+        assert avisos_sin_confirmar(6) == 1, 'el panel debería estar avisando'
+        registrar_entrega('gs-1', 'delivered')
+        assert avisos_sin_confirmar(6) == 0, (
+            'el webhook dejó de ser lo que mueve el número visible: su exención '
+            'del trinquete ya no está justificada')
+
+    def test_el_panel_muestra_ese_numero(self):
+        js = _leer(os.path.join(_PWA, 'flota.js'))
+        assert 'sin_confirmar_6h' in js, (
+            'el número que justifica el webhook no se ve en ninguna pantalla')

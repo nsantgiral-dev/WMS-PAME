@@ -123,6 +123,7 @@ async function cargarFlota() {
     }
     let html = await flotaBloqueFueraDeSede();
     html += await flotaBloqueForzados();
+    html += await flotaBloqueAvisos();
     html += '<div class="tabla-card"><div class="tabla-titulo">Expedientes de flota</div>' +
       '<p style="font-size:12px;color:var(--tx2);margin:0 0 12px">El alta y la baja de ' +
       'vehículos se hacen en <b>Rutas → Vehículos</b>. Acá vive el expediente de cada uno.</p><div>';
@@ -1528,4 +1529,93 @@ async function flotaCondMisReportes() {
   }
   el.innerHTML = '<hr style="border-color:#333;margin:14px 0">' +
     '<ul style="line-height:1.7;padding-left:18px">' + filas.join('') + '</ul>';
+}
+
+
+/** Qué avisos salieron, a quién, y si llegaron.
+ *
+ * Va en el tablero y no escondido en una sub-pantalla porque el número que
+ * importa —cuántos salieron y nunca confirmaron entrega— es el que descubre el
+ * modo de fallo real: el canal acepta mensajes que no llegan. Un contador de
+ * "enviados" no lo puede ver, y en cartera esa confusión costó semanas de creer
+ * que se había avisado.
+ *
+ * Los avisos SIMULADOS se muestran distintos de los reales. `CanalNotificacionDev`
+ * costó una hora de creer que 1.485 personas habían recibido un cobro que nunca
+ * salió; un tablero que los pinta igual reproduce ese error de un vistazo.
+ */
+async function flotaBloqueAvisos() {
+  let d;
+  try {
+    d = await get('/flota/avisos');
+  } catch (e) {
+    return '';
+  }
+  const avisos = d.avisos || [];
+
+  const estado = (a) => {
+    if (a.estado === 'fallido') return `<span style="color:var(--red)">no salió</span>`;
+    if (a.estado === 'entregado_al_proveedor') {
+      // El estado que hace honesto al resto: el proveedor dijo "lo recibí".
+      return `<span style="color:var(--yellow)">aceptado, sin confirmar entrega</span>`;
+    }
+    if (a.estado === 'entregado') return `<span style="color:var(--green)">entregado</span>`;
+    if (a.estado === 'leido') return `<span style="color:var(--green)">leído</span>`;
+    return a.estado;
+  };
+
+  let filas = avisos.slice(0, 12).map(a => {
+    let params = a.parametros;
+    try { params = JSON.parse(a.parametros).join(' · '); } catch (e) {}
+    return `<li${a.simulado ? ' style="opacity:.6"' : ''}>
+      ${a.simulado ? '<b style="color:var(--yellow)">[SIMULADO]</b> ' : ''}
+      ${a.telefono} — ${params} · ${estado(a)}
+      ${a.detalle ? `<br><small style="color:var(--red)">${a.detalle}</small>` : ''}</li>`;
+  }).join('');
+  if (!filas) filas = '<li style="color:var(--tx2)">Ninguno todavía.</li>';
+
+  const alarma = d.sin_confirmar_6h > 0
+    ? `<p style="color:var(--red)"><b>${d.sin_confirmar_6h} aviso(s) salieron hace más de
+       6 horas y nunca confirmaron entrega.</b> El proveedor los aceptó y no hay
+       evidencia de que hayan llegado — que es el modo de fallo que este registro
+       existe para hacer visible.</p>`
+    : '';
+
+  const apagado = !d.encendido
+    ? `<p style="color:var(--tx2)">Los avisos están <b>apagados</b>
+       (<code>FLOTA_AVISOS</code>). Nace apagado a propósito: un cron que escribe
+       no se enciende solo.</p>`
+    : (!d.canal_real
+        ? `<p style="color:var(--yellow)">Encendido en modo <b>simulado</b>: se
+           registra todo y no sale ningún WhatsApp. Para mandar de verdad,
+           <code>FLOTA_AVISOS_REALES=true</code>.</p>`
+        : '');
+
+  return `<div class="tabla-card">
+    <div class="tabla-titulo">Avisos de vencimiento</div>
+    ${apagado}${alarma}
+    <ul style="line-height:1.7">${filas}</ul>
+    <button class="btn-flota" onclick="flotaBarrerAvisos()">Revisar vencimientos ahora</button>
+  </div>`;
+}
+
+/** Dispara el barrido a mano. Existe para poder ejercerlo ANTES de encender el
+ * cron — un barrido que solo corre de noche es uno que nadie vio correr. */
+async function flotaBarrerAvisos() {
+  try {
+    const r = await fetch(API + '/flota/avisos/barrer', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    const d = await r.json();
+    if (!r.ok) { alerta(d.error || 'No se pudo', 'error'); return; }
+    if (d.motivo) { alerta(d.motivo, 'advertencia'); return; }
+    alerta(`Revisados ${d.revisados} · en ventana ${d.en_ventana} · ` +
+           `enviados ${d.enviados} · ya avisados ${d.ya_avisados}` +
+           (d.sin_destinatario ? ` · SIN DESTINATARIO ${d.sin_destinatario}` : ''),
+           d.sin_destinatario ? 'advertencia' : 'exito');
+    flotaTablero();
+  } catch (e) {
+    alerta('Sin conexión: ' + e.message, 'error');
+  }
 }

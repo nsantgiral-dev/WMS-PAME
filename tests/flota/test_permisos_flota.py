@@ -80,7 +80,12 @@ class TestTodaRutaDeFlotaTieneControlDeRol:
                         f.attr if isinstance(f, ast.Attribute) else
                         getattr(f, 'id', ''))
                 es_ruta = 'route' in nombres
-                if es_ruta and 'exige' not in nombres:
+                # `exige_secreto` es para lo que llama una MÁQUINA: un webhook
+                # de proveedor no puede llevar JWT porque quien lo invoca no es
+                # un usuario. No afloja el trinquete — una ruta sin ninguno de
+                # los dos sigue fallando, y el guard de secreto nace cerrado
+                # (503 sin la variable) en vez de abierto.
+                if es_ruta and not {'exige', 'exige_secreto'} & set(nombres):
                     # `health` usa su propio guard, anterior a este módulo.
                     if '_es_control_flota' in ast.dump(nodo):
                         continue
@@ -198,3 +203,55 @@ class TestLaOperacionDelTurnoSigueAbiertaAlConductor:
                             headers=_auth(t)).get_json()
         assert cuerpo['tu_rol'] == 'operario'
         assert cuerpo['roles_permitidos']
+
+
+class TestElGuardDeSecretoNoEsUnaPuertaAbierta:
+    """`exige_secreto` existe para webhooks, no para saltarse el trinquete.
+
+    Si fuera un decorador que solo marca la ruta como "exenta", habría cambiado
+    un endpoint sin control por uno con la apariencia de control — que es peor,
+    porque el trinquete queda en verde.
+    """
+
+    def test_sin_la_variable_responde_503_y_no_ejecuta(self, client, monkeypatch):
+        monkeypatch.delenv('FLOTA_AVISO_WEBHOOK_TOKEN', raising=False)
+        r = client.post('/flota/avisos/entrega',
+                        json={'payload': {'gsId': 'x', 'type': 'delivered'}})
+        assert r.status_code == 503, (
+            'nace cerrado: un webhook que se abre porque falta configuración '
+            'invierte la regla 10 — lo peligroso pasaría cuando alguien NO hizo algo')
+
+    def test_sin_token_en_la_url_rechaza(self, client, monkeypatch):
+        monkeypatch.setenv('FLOTA_AVISO_WEBHOOK_TOKEN', 'secreto')
+        assert client.post('/flota/avisos/entrega', json={}).status_code == 403
+
+    def test_con_token_equivocado_rechaza(self, client, monkeypatch):
+        monkeypatch.setenv('FLOTA_AVISO_WEBHOOK_TOKEN', 'secreto')
+        assert client.post('/flota/avisos/entrega?token=x',
+                           json={}).status_code == 403
+
+    def test_con_el_token_correcto_entra(self, app, db, client, monkeypatch):
+        monkeypatch.setenv('FLOTA_AVISO_WEBHOOK_TOKEN', 'secreto')
+        r = client.post('/flota/avisos/entrega?token=secreto',
+                        json={'payload': {'gsId': 'x', 'type': 'delivered'}})
+        assert r.status_code == 200
+
+    def test_el_trinquete_sigue_atrapando_una_ruta_sin_ningun_guard(self):
+        """Se ejerce contra código sintético: si el reconocimiento del guard
+        nuevo hubiera vuelto permisivo al extractor, esto lo delata."""
+        import ast as _ast
+
+        fuente = (
+            "@bp.route('/x', methods=['POST'])\n"
+            "@jwt_required()\n"
+            "def sin_guard():\n"
+            "    return {}\n"
+        )
+        nodo = _ast.parse(fuente).body[0]
+        nombres = []
+        for d in nodo.decorator_list:
+            f = d.func if isinstance(d, _ast.Call) else d
+            nombres.append(f.attr if isinstance(f, _ast.Attribute)
+                           else getattr(f, 'id', ''))
+        assert 'route' in nombres
+        assert not {'exige', 'exige_secreto'} & set(nombres)

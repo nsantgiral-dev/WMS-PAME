@@ -97,4 +97,30 @@ class AlmacenDeFotos(Protocol):
         ...
 
 
-__all__ = ['CampoMedido', 'MedidorDeFlota', 'AlmacenDeFotos']
+class CanalDeAviso(Protocol):
+    """Por dónde sale un aviso hacia una persona.
+
+    Detrás de un `Protocol` para que el servicio que decide QUÉ avisar no sepa
+    que existe Gupshup — y para que el doble de pruebas sea un objeto, no un
+    monkeypatch. El doble deja rastro propio (`simulado=True` en la fila, regla
+    8): `CanalNotificacionDev` ya costó una hora de creer que 1.485 personas
+    habían recibido un cobro que nunca salió.
+
+    `enviar` devuelve el id que asignó el proveedor, o levanta. **No devuelve
+    `None` ni `False` ante un fallo**: un canal que degrada hacia algo que se
+    parece al éxito es la regla 5, y acá el costo es que un hallazgo vencido se
+    quede quieto creyendo que se avisó.
+    """
+
+    def enviar(self, telefono: str, plantilla: str,
+               parametros: List[str]) -> str:
+        """Devuelve el id del proveedor. Levanta `AvisoNoEnviado` si no salió."""
+        ...
+
+    @property
+    def simulado(self) -> bool:
+        """¿Este canal manda de verdad? La fila lo guarda, no solo el log."""
+        ...
+
+
+__all__ = ['CampoMedido', 'MedidorDeFlota', 'AlmacenDeFotos', 'CanalDeAviso']

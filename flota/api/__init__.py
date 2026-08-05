@@ -17,6 +17,7 @@ def registrar_flota(app):
     # existe para ninguno de los dos, y esa es la forma más silenciosa de que
     # una tabla no llegue a producción.
     from flota.adaptadores import modelos  # noqa: F401
+    from flota.api.avisos import avisos_bp
     from flota.api.conductor import conductor_bp
     from flota.api.custodia import custodia_bp
     from flota.api.documentos import documentos_bp
@@ -28,6 +29,7 @@ def registrar_flota(app):
     app.register_blueprint(ficha_bp, url_prefix='/flota')
     app.register_blueprint(documentos_bp, url_prefix='/flota')
     app.register_blueprint(conductor_bp, url_prefix='/flota')
+    app.register_blueprint(avisos_bp, url_prefix='/flota')
 
 
 __all__ = ['registrar_flota']
