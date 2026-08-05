@@ -17,6 +17,7 @@ from flask import Blueprint, jsonify
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from app.extensions import db
+from app.utils.fecha import dia_operativo
 from app.routes._auth_helpers import Roles
 from flota.api._permisos import exige
 from app.models.conductor import Conductor
@@ -68,7 +69,7 @@ def mi_turno():
     # y el conductor elige — nunca se queda sin poder registrar.
     ruta_hoy = RutaDespacho.query.filter(
         RutaDespacho.conductor_id == conductor.id,
-        RutaDespacho.fecha_programada == date.today(),
+        RutaDespacho.fecha_programada == dia_operativo(),
         RutaDespacho.vehiculo_id.isnot(None),
     ).first()
 

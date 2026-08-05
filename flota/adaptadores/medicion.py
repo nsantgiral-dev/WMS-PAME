@@ -19,6 +19,7 @@ from typing import List, Optional
 from sqlalchemy import inspect as _inspect
 
 from app.extensions import db
+from app.utils.fecha import dia_operativo
 
 # Las ocho del recibo de turno: frontal, trasera, lateral izq, lateral der,
 # cajón abierto, interior cabina, tablero, llantas.
@@ -26,12 +27,14 @@ FOTOS_POR_CUSTODIA = 8
 
 
 def _hoy() -> _date:
-    """Fecha de corte de los vencimientos.
+    """Fecha de corte de los vencimientos, en día operativo de Bogotá.
 
-    Aislada en una función para que el día que haya que pasarla a hora Bogotá
-    —Siesa ya obligó a eso en los payloads— se cambie en un solo lugar.
+    Estaba aislada acá esperando exactamente este cambio. `date.today()` en
+    Railway es UTC: a partir de las 7 p.m. Colombia daba el día de mañana, así
+    que un SOAT que vence hoy aparecía vencido una noche antes — y el tablero
+    de flota cuenta vencidos.
     """
-    return _date.today()
+    return dia_operativo()
 
 
 # Tablas que la tanda 1 va a crear. Mientras no existan, los campos que

@@ -279,15 +279,26 @@ class QuienPide(str, Enum):
 
 
 class ClaseFoto(str, Enum):
-    """Regla 7: hay dos clases de foto y no comparten parámetros.
+    """Regla 7: las clases no comparten parámetros.
 
     EVIDENCIA_ESTADO prueba cómo estaba algo. Se puede degradar.
     FOTO_DATO es la fuente de un número que alguien va a auditar. Degradarla
     es perder el respaldo del número.
+    DOCUMENTO_ADJUNTO es un archivo que alguien SUBE, no una foto que la app
+    toma: el SOAT llega por correo en PDF y fotografiar la pantalla donde se
+    abre es un rodeo que además degrada el original.
+
+    Por qué DOCUMENTO_ADJUNTO no es un FOTO_DATO más: el mínimo de 1600 px
+    existe porque un odómetro de seis dígitos a 800×600 no se lee. Un PDF no
+    tiene píxeles, y el dato que el documento respalda —el vencimiento— además
+    se digita en su propio campo y se compara con él. Meterlo en FOTO_DATO
+    obligaría a aflojar el umbral del odómetro, que es lo que ese umbral
+    existe para impedir.
     """
 
-    EVIDENCIA_ESTADO = 'evidencia_estado'
-    FOTO_DATO        = 'foto_dato'
+    EVIDENCIA_ESTADO  = 'evidencia_estado'
+    FOTO_DATO         = 'foto_dato'
+    DOCUMENTO_ADJUNTO = 'documento_adjunto'
 
 
 class EntidadFoto(str, Enum):

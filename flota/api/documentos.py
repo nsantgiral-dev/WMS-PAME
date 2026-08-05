@@ -21,10 +21,13 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 from sqlalchemy.exc import IntegrityError
 
 from app.extensions import db
+from app.utils.fecha import dia_operativo
 from app.routes._auth_helpers import Roles
 from flota.api._permisos import MAESTROS_FLOTA, exige
 from app.models.vehiculo import Vehiculo
+from flota.adaptadores.almacen_fotos import ErrorAlmacen
 from flota.adaptadores.modelos import DocumentoVehiculo, Foto
+from flota.dominio.errores import FotoInvalida
 
 documentos_bp = Blueprint('flota_documentos', __name__)
 
@@ -36,8 +39,29 @@ def _vehiculo(placa):
     return v
 
 
+def _adjunto(d):
+    """Qué archivo respalda este documento, o `None` si no hay ninguno.
+
+    Devuelve el estado también: una fila que dice `pendiente_evidencia` afirma
+    que hubo un archivo y que no se guardó. Ocultarlo detrás de un id lo vuelve
+    indistinguible de un adjunto sano hasta que alguien lo abre.
+    """
+    if not d.foto_id:
+        return None
+    f = db.session.get(Foto, d.foto_id)
+    if f is None:
+        return None
+    return {
+        'id': f.id, 'mime': f.mime, 'clase': f.clase, 'estado': f.estado,
+        'es_pdf': f.mime == 'application/pdf',
+        'bytes': f.bytes, 'ancho': f.ancho, 'alto': f.alto,
+    }
+
+
 def _serializar(d):
-    hoy = date.today()
+    # Día operativo de Bogotá, no UTC: `vencido` y `dias_para_vencer` son la
+    # respuesta a "¿sale este camión?", y en UTC cambiaban a las 7 p.m.
+    hoy = dia_operativo()
     vencido = (d.fecha_vencimiento is not None and d.fecha_vencimiento < hoy)
     return {
         'id': d.id, 'tipo': d.tipo, 'estado': d.estado,
@@ -45,6 +69,11 @@ def _serializar(d):
         'fecha_expedicion': d.fecha_expedicion.isoformat() if d.fecha_expedicion else None,
         'fecha_vencimiento': d.fecha_vencimiento.isoformat() if d.fecha_vencimiento else None,
         'foto_id': d.foto_id,
+        # El adjunto puede ser un PDF: la pantalla necesita saberlo para
+        # decidir si lo pinta o lo abre. `foto_id` se conserva porque hay
+        # clientes que ya lo leen, pero el nombre miente desde que se aceptan
+        # archivos — el que describe la cosa es este.
+        'adjunto': _adjunto(d),
         # Se calcula acá y no en el cliente: la misma pregunta contestada en dos
         # lugares termina con dos respuestas.
         'vencido': vencido,
@@ -128,14 +157,20 @@ def guardar_documento(placa):
     doc.estado, doc.numero, doc.entidad = estado, numero, entidad
     doc.fecha_expedicion, doc.fecha_vencimiento = expedicion, vencimiento
 
+    # `archivo` es el nombre correcto desde que se aceptan PDF; `foto` se sigue
+    # leyendo porque hay clientes desplegados que lo mandan. Uno solo de los
+    # dos: si llegaran los dos, gana el nombre nuevo y no se adivina cuál quiso
+    # mandar quien mandó ambos.
+    adjunto = datos['archivo'] if datos.get('archivo') else datos.get('foto')
+
     try:
         db.session.flush()
-        if 'foto' in datos and datos['foto']:
+        if adjunto:
             from datetime import datetime
 
             from flota.adaptadores.almacen_fotos import guardar_foto
 
-            campos = guardar_foto(datos['foto'])
+            campos = guardar_foto(adjunto)
             foto = Foto(
                 entidad_tipo='documento', entidad_id=doc.id,
                 ts_captura=datetime.utcnow(),
@@ -146,6 +181,12 @@ def guardar_documento(placa):
             db.session.flush()
             doc.foto_id = foto.id
         db.session.commit()
+    except (FotoInvalida, ErrorAlmacen) as e:
+        # 400 y no 500: el archivo que llegó no sirve, y eso es información
+        # accionable para quien lo está subiendo — no un fallo del servidor.
+        db.session.rollback()
+        return jsonify({'error': 'El archivo adjunto no se puede aceptar',
+                        'detalle': str(e)[:300]}), 400
     except IntegrityError as e:
         db.session.rollback()
         return jsonify({

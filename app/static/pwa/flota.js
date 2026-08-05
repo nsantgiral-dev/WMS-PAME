@@ -391,7 +391,11 @@ function flotaFotoPayload(r, clase, angulo) {
     // con `frontal` sin tomar la primera del arreglo es `trasera`.
     angulo: angulo || null,
     data_url: r.dataUrl,
-    ancho: r.ancho, alto: r.alto, mime: 'image/jpeg',
+    // `ancho`/`alto` van en null cuando el adjunto es un PDF: no tiene píxeles.
+    // El servidor no le cree al mime declarado acá —lo saca del data URL— pero
+    // mandar 'image/jpeg' sobre un PDF sería escribir algo que se sabe falso.
+    ancho: r.ancho || null, alto: r.alto || null,
+    mime: r.mime || 'image/jpeg',
   };
 }
 
@@ -412,10 +416,22 @@ function flotaFotoPayload(r, clase, angulo) {
  * el atajo de caché tendría su propia copia del HTML y las dos divergirían —
  * el mismo fallback en dos sitios, que en este repo ya costó 25×.
  */
-function flotaPintarFoto(cont, url, bytes, titulo) {
-  cont.innerHTML = `
-    <p style="margin:0 0 6px"><b>${titulo || 'Foto'}</b> · ${Math.round(bytes / 1024)} KB —
-      <a href="${url}" target="_blank" style="color:var(--pm-light)">abrir en grande</a></p>
+function flotaPintarFoto(cont, url, bytes, titulo, mime) {
+  const cabecera = `
+    <p style="margin:0 0 6px"><b>${titulo || 'Archivo'}</b> · ${Math.round(bytes / 1024)} KB —
+      <a href="${url}" target="_blank" style="color:var(--pm-light)">abrir en grande</a></p>`;
+  // Un PDF metido en un <img> no falla ruidosamente: pinta un icono roto y
+  // parece que el archivo no esta. Se distingue por tipo, no por esperanza.
+  if (mime === 'application/pdf') {
+    cont.innerHTML = cabecera + `
+      <object data="${url}" type="application/pdf"
+              style="width:100%;height:60vh;border-radius:8px;border:1px solid #333">
+        <p style="color:var(--tx2)">Este navegador no muestra PDF incrustado —
+          usa "abrir en grande".</p>
+      </object>`;
+    return;
+  }
+  cont.innerHTML = cabecera + `
     <img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid #333">
     <p style="font-size:11px;color:var(--tx3);margin-top:4px">
       Si es el tablero: hacé zoom y verificá que se lean los seis dígitos.
@@ -441,7 +457,7 @@ function flotaPrecargarReferencias() {
   Object.values(FLOTA_REFERENCIA).forEach(id => {
     fetch(`${API}/flota/foto/${id}`, { headers: { Authorization: 'Bearer ' + TOKEN } })
       .then(r => (r.ok ? r.blob() : null))
-      .then(b => { if (b) FLOTA_REF_CACHE[id] = { url: URL.createObjectURL(b), size: b.size }; })
+      .then(b => { if (b) FLOTA_REF_CACHE[id] = { url: URL.createObjectURL(b), size: b.size, mime: b.type }; })
       .catch(() => { /* se baja al tocar, como antes */ });
   });
 }
@@ -456,7 +472,7 @@ async function flotaVerFoto(fotoId, titulo) {
   }
   // Si ya se precargó, es instantáneo: sin viaje a la red, sin espera.
   const ya = FLOTA_REF_CACHE[fotoId];
-  if (ya) { flotaPintarFoto(cont, ya.url, ya.size, titulo); return; }
+  if (ya) { flotaPintarFoto(cont, ya.url, ya.size, titulo, ya.mime); return; }
 
   cont.innerHTML = '<p style="color:var(--tx3)">Trayendo la foto…</p>';
   try {
@@ -473,7 +489,7 @@ async function flotaVerFoto(fotoId, titulo) {
       return;
     }
     const blob = await r.blob();
-    flotaPintarFoto(cont, URL.createObjectURL(blob), blob.size, titulo);
+    flotaPintarFoto(cont, URL.createObjectURL(blob), blob.size, titulo, blob.type);
   } catch (e) {
     cont.innerHTML = `<p style="color:var(--red)">Sin conexión: ${e.message}</p>`;
   }
@@ -863,10 +879,18 @@ async function flotaAbrirDocumentos(placa) {
     // Botón y no `<a href>`: el endpoint exige el token en un header y una
     // pestaña nueva no manda headers. Este enlace devolvía 401 siempre — y como
     // nadie lo abrió, pasó por bueno desde que se escribió.
-    const foto = x.foto_id
-      ? ` · <button class="btn-flota" style="padding:2px 8px;font-size:12px"
-             onclick="flotaVerFoto(${x.foto_id}, '${x.tipo}')">ver foto</button>`
-      : ' · <span style="color:var(--tx3)">sin foto</span>';
+    const a = x.adjunto;
+    let foto;
+    if (!a) {
+      foto = ' · <span style="color:var(--tx3)">sin archivo</span>';
+    } else if (a.estado === 'pendiente_evidencia') {
+      // La fila afirma que hay un archivo y el almacén no lo tiene. Decirlo
+      // acá y no al abrirlo: si se ve igual que uno sano, nadie lo revisa.
+      foto = ' · <span style="color:var(--red)">archivo NO guardado</span>';
+    } else {
+      foto = ` · <button class="btn-flota" style="padding:2px 8px;font-size:12px"
+             onclick="flotaVerFoto(${a.id}, '${x.tipo}')">ver ${a.es_pdf ? 'PDF' : 'imagen'}</button>`;
+    }
     return `<li style="color:${color}"><b>${x.tipo}</b> ${x.numero} · ${x.entidad}
       · ${x.fecha_vencimiento} — ${nota}${foto}</li>`;
   }).join('');
@@ -903,11 +927,19 @@ async function flotaAbrirDocumentos(placa) {
       <input type="date" id="doc-expedicion" style="width:100%;padding:6px">
       <label>Fecha de vencimiento</label>
       <input type="date" id="doc-vencimiento" style="width:100%;padding:6px">
-      <label style="display:block;margin-top:8px">Foto del documento</label>
+      <label style="display:block;margin-top:8px">Archivo del documento</label>
+      <!-- Dos entradas y no una: el atributo capture abre la cámara directo, y
+           sin él el teléfono ofrece el explorador de archivos. Con una sola
+           había que elegir cuál de las dos cosas hacer imposible — y el SOAT
+           llega por correo en PDF, así que la que sobraba era la cámara. -->
       <input type="file" id="doc-foto" accept="image/*" capture="environment"
-             style="display:none" onchange="flotaCapturarDocumento()">
+             style="display:none" onchange="flotaCapturarDocumento(this)">
+      <input type="file" id="doc-archivo" accept="image/*,application/pdf"
+             style="display:none" onchange="flotaCapturarDocumento(this)">
       <button type="button" class="btn-flota"
               onclick="document.getElementById('doc-foto').click()">📷 Foto</button>
+      <button type="button" class="btn-flota" style="margin-left:6px"
+              onclick="document.getElementById('doc-archivo').click()">📎 Archivo (PDF o imagen)</button>
       <span id="doc-foto-ok" style="margin-left:8px"></span>
     </div>
     <p id="doc-aviso-no" style="display:none;color:var(--red)">
@@ -927,16 +959,45 @@ function flotaDocEstadoCambio() {
   document.getElementById('doc-aviso-no').style.display = no ? 'block' : 'none';
 }
 
-/** Captura la foto del documento — clase foto_dato, sin recompresión en servidor. */
-async function flotaCapturarDocumento() {
-  const f = document.getElementById('doc-foto').files[0];
+/** Lee un archivo tal cual, sin pasarlo por canvas. Para lo que no es imagen. */
+function flotaLeerArchivo(archivo) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = reject;
+    reader.onload = ev => resolve({
+      dataUrl: ev.target.result, ancho: null, alto: null,
+      mime: archivo.type, nombre: archivo.name, bytes: archivo.size,
+    });
+    reader.readAsDataURL(archivo);
+  });
+}
+
+/** Toma el adjunto del documento: PDF tal cual, imagen comprimida.
+ *
+ * Clase `documento_adjunto`, no `foto_dato`. No es una sutileza de vocabulario:
+ * `foto_dato` exige 1600 px o queda declarada rota, y con el CHECK de la tabla
+ * **una foto de SOAT de 1200 px ni siquiera se podía guardar** — devolvía 409
+ * "viola una regla de la base" mientras la pantalla prometía que quedaría como
+ * pendiente_evidencia. El umbral existe para el odómetro fotografiado a las
+ * 5 a.m.; el vencimiento del SOAT además se digita en su propio campo.
+ */
+async function flotaCapturarDocumento(input) {
+  const f = input.files[0];
   if (!f) return;
-  const r = await flotaComprimir(f, 'foto_dato');
-  FLOTA_FOTO_DOC = r;
-  document.getElementById('doc-foto-ok').innerHTML =
-    (Math.max(r.ancho, r.alto) < 1600)
-      ? `<span style="color:var(--yellow)">✓ ${r.ancho}×${r.alto} — queda pendiente_evidencia</span>`
-      : `<span style="color:var(--green)">✓ ${r.ancho}×${r.alto}</span>`;
+  const aviso = document.getElementById('doc-foto-ok');
+  try {
+    FLOTA_FOTO_DOC = (f.type === 'application/pdf')
+      ? await flotaLeerArchivo(f)
+      : await flotaComprimir(f, 'foto_dato');
+  } catch (e) {
+    FLOTA_FOTO_DOC = null;
+    aviso.innerHTML = `<span style="color:var(--red)">No se pudo leer el archivo: ${e.message}</span>`;
+    return;
+  }
+  const r = FLOTA_FOTO_DOC;
+  aviso.innerHTML = r.ancho
+    ? `<span style="color:var(--green)">✓ ${r.ancho}×${r.alto}</span>`
+    : `<span style="color:var(--green)">✓ ${f.name} · ${Math.round(f.size / 1024)} KB</span>`;
 }
 
 /** Valida y guarda el documento. */
@@ -956,7 +1017,9 @@ async function flotaGuardarDocumento() {
         'Si no lo tenés, marcá "No aparece" — es una afirmación distinta.';
       return;
     }
-    if (FLOTA_FOTO_DOC) cuerpo.foto = flotaFotoPayload(FLOTA_FOTO_DOC, 'foto_dato');
+    if (FLOTA_FOTO_DOC) {
+      cuerpo.archivo = flotaFotoPayload(FLOTA_FOTO_DOC, 'documento_adjunto');
+    }
   }
 
   try {

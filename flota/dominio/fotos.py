@@ -22,6 +22,57 @@ ResolvedorDePadre = Callable[[EntidadFoto, int], bool]
 LADO_LARGO_MINIMO_FOTO_DATO = 1600
 CALIDAD_MINIMA_FOTO_DATO = 75
 
+# Qué formatos acepta cada clase.
+#
+# Las fotos que toma la app son imágenes y punto. Un adjunto de documento
+# también puede ser el PDF que mandó la aseguradora — obligar a fotografiar la
+# pantalla donde se abre ese PDF degrada el original y no agrega nada.
+MIMES_IMAGEN = ('image/jpeg', 'image/png', 'image/webp')
+MIMES_DOCUMENTO = MIMES_IMAGEN + ('application/pdf',)
+
+
+def mimes_permitidos(clase: ClaseFoto) -> tuple:
+    return MIMES_DOCUMENTO if clase == ClaseFoto.DOCUMENTO_ADJUNTO else MIMES_IMAGEN
+
+
+def exige_dimensiones(clase: ClaseFoto) -> bool:
+    """¿Esta clase obliga a tener ancho y alto?
+
+    Un PDF no tiene píxeles. Guardarle `0×0` para satisfacer una columna NOT
+    NULL sería un número que miente sobre un archivo que sí existe; guardarle
+    `1×1` es peor. La ausencia se modela con ausencia (regla 4), y el CHECK de
+    la tabla dice exactamente esto mismo para que la base no dependa de que
+    alguien pase por acá.
+    """
+    return clase != ClaseFoto.DOCUMENTO_ADJUNTO
+
+
+def validar_formato(clase: ClaseFoto, mime: str,
+                    ancho: int | None, alto: int | None) -> None:
+    """El archivo es de un tipo que esa clase acepta, y trae lo que debe traer.
+
+    Levanta `FotoInvalida`. No normaliza, no rellena, no elige por el llamador:
+    un mime desconocido guardado "por si acaso" es un archivo que después nadie
+    puede abrir y que la fila afirma que es evidencia.
+    """
+    permitidos = mimes_permitidos(clase)
+    if mime not in permitidos:
+        raise FotoInvalida(
+            f'{mime!r} no se acepta para {clase.value}. '
+            f'Permitidos: {", ".join(permitidos)}.'
+        )
+    if exige_dimensiones(clase):
+        if not ancho or not alto:
+            raise FotoInvalida(
+                f'{clase.value} exige ancho y alto: son la evidencia de que la '
+                f'imagen sirve para lo que se tomó (recibido {ancho}x{alto}).'
+            )
+    elif (ancho is None) != (alto is None):
+        raise FotoInvalida(
+            f'dimensiones a medias ({ancho}x{alto}): o están las dos o no está '
+            'ninguna. Una sola no describe nada.'
+        )
+
 
 def validar_paternidad(foto: Foto, resolver: ResolvedorDePadre) -> None:
     """Toda foto cuelga de una fila que existe. Un archivo sin padre es un bug.
@@ -78,6 +129,11 @@ __all__ = [
     'ResolvedorDePadre',
     'LADO_LARGO_MINIMO_FOTO_DATO',
     'CALIDAD_MINIMA_FOTO_DATO',
+    'MIMES_IMAGEN',
+    'MIMES_DOCUMENTO',
+    'mimes_permitidos',
+    'exige_dimensiones',
+    'validar_formato',
     'validar_paternidad',
     'validar_integridad_de_clase',
 ]

@@ -28,7 +28,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple
 
-_MIMES = {'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp'}
+from flota.dominio.fotos import validar_formato
+from flota.dominio.valores import ClaseFoto
+
+#: Extensión en disco por tipo de archivo. **No es la política de qué se
+#: acepta** — eso lo decide `flota.dominio.fotos.validar_formato` según la
+#: clase, y este mapa solo sabe cómo nombrar el archivo. Separado a propósito:
+#: si el almacén decidiera qué es aceptable, la regla viviría en dos sitios.
+_MIMES = {
+    'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp',
+    'application/pdf': '.pdf',
+}
 
 
 class ErrorAlmacen(Exception):
@@ -122,10 +132,15 @@ def guardar_foto(datos: dict) -> dict:
     `pendiente_evidencia`, con la referencia del fallo y sin hash. El health lo
     cuenta y alguien puede ir a buscar la foto que no quedó.
     """
+    clase = ClaseFoto(datos['clase'])
+    # Un adjunto puede no tener dimensiones (PDF) o tenerlas (una foto del
+    # papel). Las demás clases las exigen: `validar_formato` lo comprueba abajo,
+    # contra el mime ya resuelto, no contra el que el cliente dice traer.
     campos = {
         'clase': datos['clase'],
         'bytes': datos['bytes'] if 'bytes' in datos else 0,
-        'ancho': datos['ancho'], 'alto': datos['alto'],
+        'ancho': datos['ancho'] if 'ancho' in datos else None,
+        'alto': datos['alto'] if 'alto' in datos else None,
         'mime': datos['mime'] if 'mime' in datos else 'image/jpeg',
         'simulado': datos['simulado'] if 'simulado' in datos else False,
         # Qué parte del vehículo muestra. Si no viene, queda NULL y el health lo
@@ -145,6 +160,10 @@ def guardar_foto(datos: dict) -> dict:
     contenido, mime = desde_data_url(
         datos['data_url'] if 'data_url' in datos else '')
     campos.update({'bytes': len(contenido), 'mime': mime})
+    # El mime que manda a la validación es el del contenido, no el declarado en
+    # el JSON: si el cliente dijera 'image/jpeg' y subiera otra cosa, la fila
+    # afirmaría un formato que el archivo no tiene.
+    validar_formato(clase, mime, campos['ancho'], campos['alto'])
     try:
         ref = AlmacenLocal().guardar(contenido, mime)
         campos.update({

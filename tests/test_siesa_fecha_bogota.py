@@ -229,7 +229,17 @@ class TestNadieMasArmaFechasDeNegocioConUtcnow:
     correcto: lo que no puede salir de UTC es una fecha que alguien LEE como día.
     """
 
-    _RAIZ = Path(__file__).resolve().parents[1] / 'app'
+    # `flota/` es un paquete hermano de `app/`, no un subpaquete — y por eso el
+    # guard no lo veía. Sobrevivieron tres sitios, los tres fechas de negocio:
+    # el corte de vencimientos del tablero de flota, `vencido`/`dias_para_vencer`
+    # de cada SOAT, y la ruta del día del conductor. Un SOAT que vence hoy
+    # aparecía vencido desde las 7 p.m. de ayer.
+    #
+    # La lección no es "faltaba flota": es que el alcance de un guard es una
+    # decisión que caduca. Se enumeran las raíces y el test de abajo verifica
+    # que cada una exista, para que renombrar un paquete no lo apague en
+    # silencio.
+    _RAICES = ('app', 'flota')
 
     #: Formatear una fecha o pedir el `.date()` es tratarla como DÍA. Ahí la
     #: zona importa. Un `utcnow()` guardado en una columna, no.
@@ -245,9 +255,15 @@ class TestNadieMasArmaFechasDeNegocioConUtcnow:
                  "default=date.today")   # <- sin parentesis: default de columna
 
     @classmethod
+    def _dirs(cls):
+        base = Path(__file__).resolve().parents[1]
+        return [base / r for r in cls._RAICES]
+
+    @classmethod
     def _ofensas(cls):
         malas = []
-        for f in sorted(cls._RAIZ.rglob('*.py')):
+        fuentes = [f for d in cls._dirs() for f in sorted(d.rglob('*.py'))]
+        for f in fuentes:
             if '__pycache__' in str(f):
                 continue
             texto = f.read_text(encoding='utf-8')
@@ -261,9 +277,27 @@ class TestNadieMasArmaFechasDeNegocioConUtcnow:
                 if n in docs or linea.strip().startswith('#'):
                     continue
                 if any(p in linea for p in cls._PATRONES):
-                    rel = f.relative_to(cls._RAIZ.parent)
+                    rel = f.relative_to(Path(__file__).resolve().parents[1])
                     malas.append(f'{rel}:{n}  {linea.strip()[:70]}')
         return malas
+
+    def test_las_raices_vigiladas_existen(self):
+        """Una raíz que dejó de existir apaga el guard sobre ella sin avisar."""
+        faltan = [d.name for d in self._dirs() if not d.is_dir()]
+        assert not faltan, (
+            f'raíces del guard que ya no existen: {faltan}. Renombrar un '
+            'paquete no puede dejar de vigilarlo en silencio.')
+
+    def test_vigila_flota_y_no_solo_app(self):
+        """TRINQUETE del alcance. `flota/` estuvo fuera y costó tres sitios.
+
+        Se ejerce contra un archivo real del paquete, no contra la lista: la
+        lista es la declaración, esto es la comprobación de que la declaración
+        surte efecto.
+        """
+        vistos = {f for d in self._dirs() for f in d.rglob('*.py')}
+        raiz = Path(__file__).resolve().parents[1]
+        assert (raiz / 'flota' / 'api' / 'documentos.py') in vistos
 
     def test_ninguna_fecha_de_negocio_sale_de_utcnow(self):
         malas = self._ofensas()

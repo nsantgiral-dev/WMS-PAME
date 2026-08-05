@@ -34,7 +34,7 @@ from datetime import datetime
 from sqlalchemy import DDL, event
 
 from app.extensions import db
-from flota.dominio.valores import ANGULOS_FOTO
+from flota.dominio.valores import ANGULOS_FOTO, ClaseFoto
 
 # ── Vocabularios permitidos ──────────────────────────────────────────────────
 # Se declaran acá y se convierten en CHECK. Un enum de Python que la base no
@@ -53,7 +53,9 @@ ORIGEN_LECTURA   = ('entrega', 'preoperacional', 'cierre_dia', 'ot', 'tanqueo', 
 CUSTODIO_TIPO    = ('conductor', 'sede')
 CUSTODIO_ESTADO  = ('resuelto', 'pendiente_sede')
 UBICACION        = ('sede', 'taller', 'fuera_de_sede')
-CLASE_FOTO       = ('evidencia_estado', 'foto_dato')
+# El vocabulario vive en el dominio: la tabla lo sigue, no al reves. Escrito
+# asi y no a mano para que agregar una clase no exija acordarse de esta linea.
+CLASE_FOTO       = tuple(c.value for c in ClaseFoto)
 ENTIDAD_FOTO     = ('custodia_inicio', 'custodia_fin', 'odometro', 'documento', 'hallazgo')
 ESTADO_FOTO      = ('ok', 'pendiente_evidencia')
 # El vocabulario vive en el dominio: la tabla lo sigue, no al reves.
@@ -429,8 +431,12 @@ class Foto(db.Model):
     storage_ref = db.Column(db.Text, nullable=False)
     hash_sha256 = db.Column(db.String(64), nullable=False)
     bytes       = db.Column(db.Integer, nullable=False)
-    ancho       = db.Column(db.Integer, nullable=False)
-    alto        = db.Column(db.Integer, nullable=False)
+    # NULL solo para `documento_adjunto`: un PDF no tiene pixeles. Guardarle
+    # 0x0 para satisfacer un NOT NULL seria un numero que miente sobre un
+    # archivo que si existe. El CHECK de abajo impone exactamente eso, y
+    # `flota.dominio.fotos.exige_dimensiones` dice lo mismo del lado del codigo.
+    ancho       = db.Column(db.Integer, nullable=True)
+    alto        = db.Column(db.Integer, nullable=True)
     mime        = db.Column(db.String(40), nullable=False)
 
     # Qué parte del vehículo muestra. NULL a proposito y no un default:
@@ -462,7 +468,14 @@ class Foto(db.Model):
             'angulo IS NULL OR angulo IN (%s)' % ', '.join(f"'{a}'" for a in ANGULO_FOTO),
             name='ck_flota_angulo'),
         _en('estado', ESTADO_FOTO),
-        db.CheckConstraint('bytes > 0 AND ancho > 0 AND alto > 0', name='ck_flota_foto_medidas'),
+        # Dimensiones condicionales por clase. Un archivo de 0 bytes nunca es
+        # valido; unas dimensiones ausentes solo lo son para un adjunto, y solo
+        # si faltan LAS DOS: una sola no describe nada.
+        db.CheckConstraint(
+            "bytes > 0 AND ("
+            "(ancho IS NOT NULL AND alto IS NOT NULL AND ancho > 0 AND alto > 0) OR "
+            "(clase = 'documento_adjunto' AND ancho IS NULL AND alto IS NULL))",
+            name='ck_flota_foto_medidas'),
         # Regla 7 — el binario nunca vive en la base. Se impide en la base y no
         # solo en la revisión: `recaudo_entrega.foto_entrega` es base64 en una
         # columna Text y así empezó.
