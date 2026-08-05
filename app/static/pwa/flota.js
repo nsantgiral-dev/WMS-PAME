@@ -751,8 +751,12 @@ async function flotaAbrirFicha(placa) {
   el.innerHTML = `<div class="tabla-card">
     <p style="color:var(--tx2);font-size:13px">Se llena parado al lado del vehículo: el
     kilometraje está en el tablero, el aceite en la tapa del motor o en la última factura,
-    la medida de llanta en el flanco. <b>Lo que no sepas, dejalo en <code>sin_dato</code></b> —
+    la medida de llanta en el flanco. <b>Lo que no sepas, dejalo vacío o en <code>sin_dato</code></b> —
     el sistema lo declara y lo persigue. Inventarlo es peor que no tenerlo.</p>
+    <p style="color:var(--yellow);font-size:13px">El texto gris de cada campo es un
+    <b>ejemplo de formato</b>, no la respuesta de este vehículo. Copiarlo sin mirar llena
+    la ficha de datos plausibles y ajenos — y eso no se nota nunca, porque un hueco se ve
+    y un valor inventado no.</p>
 
     ${!d.existe ? '<p style="color:var(--yellow)">Este vehículo todavía no tiene ficha.</p>'
                 : `<p>${d.completa ? '<span style="color:var(--green)">Ficha completa</span>'
@@ -778,25 +782,41 @@ async function flotaAbrirFicha(placa) {
     <label style="color:var(--yellow)">¿De dónde salió el dato de distribución?</label>
     ${flotaSelect('distribucion_fuente', v('distribucion_fuente') || 'sin_dato')}
     <label>Km de cambio de distribución</label>
-    <input type="number" id="fi-distribucion_km_cambio" value="${v('distribucion_km_cambio')}" style="width:100%;padding:6px">
+    <input type="number" id="fi-distribucion_km_cambio" value="${v('distribucion_km_cambio')}"
+           placeholder="ej. 60000 — está en el manual, no lo estimes"
+           style="width:100%;padding:6px">
 
     <label>Transmisión final (fuerza a la rueda)</label>${flotaSelect('transmision_final', v('transmision_final') || 'sin_dato')}
 
     <label>Aceite de motor (API + viscosidad)</label>
-    <input id="fi-aceite_motor_spec" value="${v('aceite_motor_spec')}" placeholder="15W40 CI-4" style="width:100%;padding:6px">
+    <input id="fi-aceite_motor_spec" value="${v('aceite_motor_spec')}"
+           placeholder="ej. 15W40 CI-4 (viscosidad + norma API)"
+           style="width:100%;padding:6px">
     <label>Litros de aceite de motor</label>
-    <input type="number" step="0.1" id="fi-aceite_motor_litros" value="${v('aceite_motor_litros')}" style="width:100%;padding:6px">
+    <input type="number" step="0.1" id="fi-aceite_motor_litros" value="${v('aceite_motor_litros')}"
+           placeholder="ej. 7.5 — lo que se le echa en un cambio"
+           style="width:100%;padding:6px">
     <label>Aceite de caja</label>
-    <input id="fi-aceite_caja_spec" value="${v('aceite_caja_spec')}" style="width:100%;padding:6px">
+    <input id="fi-aceite_caja_spec" value="${v('aceite_caja_spec')}"
+           placeholder="ej. 80W90 GL-4 (caja mecánica) · ATF (automática)"
+           style="width:100%;padding:6px">
     <label>Aceite de diferencial</label>
-    <input id="fi-aceite_diferencial_spec" value="${v('aceite_diferencial_spec')}" style="width:100%;padding:6px">
+    <input id="fi-aceite_diferencial_spec" value="${v('aceite_diferencial_spec')}"
+           placeholder="ej. 85W140 GL-5 — suele NO ser el mismo de la caja"
+           style="width:100%;padding:6px">
     <label>Refrigerante</label>
-    <input id="fi-refrigerante_spec" value="${v('refrigerante_spec')}" style="width:100%;padding:6px">
+    <input id="fi-refrigerante_spec" value="${v('refrigerante_spec')}"
+           placeholder="ej. verde etilenglicol 50/50 · rojo orgánico — anotá el COLOR"
+           style="width:100%;padding:6px">
 
     <label>Medida de llanta</label>
-    <input id="fi-medida_llanta" value="${v('medida_llanta')}" placeholder="195R15C" style="width:100%;padding:6px">
+    <input id="fi-medida_llanta" value="${v('medida_llanta')}"
+           placeholder="ej. 195R15C — está impresa en el flanco"
+           style="width:100%;padding:6px">
     <label>Norma de emisiones</label>
-    <input id="fi-norma_emisiones" value="${v('norma_emisiones')}" style="width:100%;padding:6px">
+    <input id="fi-norma_emisiones" value="${v('norma_emisiones')}"
+           placeholder="ej. Euro IV · Euro V — va en la tarjeta de propiedad"
+           style="width:100%;padding:6px">
     <label><input type="checkbox" id="fi-tiene_furgon" ${f.tiene_furgon ? 'checked' : ''}> Tiene furgón</label>
 
     <button class="btn-primary" style="margin-top:16px;width:100%;font-size:18px"

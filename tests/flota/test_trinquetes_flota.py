@@ -778,3 +778,55 @@ class TestElWebhookAlimentaElPanel:
         js = _leer(os.path.join(_PWA, 'flota.js'))
         assert 'sin_confirmar_6h' in js, (
             'el número que justifica el webhook no se ve en ninguna pantalla')
+
+
+class TestCadaCampoLibreDeLaFichaTieneGuiaDeFormato:
+    """Lo pidió Yesid el 2026-08-05, llenando la primera ficha real.
+
+    «Es bueno que tenga una guía así como aparece en la medida de la llanta.»
+    Tenían guía 2 de 8 campos de texto libre. Sin ella, cada persona inventa su
+    formato y en tres fichas el campo deja de ser comparable — que es la forma
+    en que una columna se convierte en tradición oral.
+
+    Es la clase de cosa que ningún test iba a encontrar y ninguna revisión de
+    código tampoco: el formulario funcionaba perfecto.
+    """
+
+    def _js(self):
+        return _leer(os.path.join(_PWA, 'flota.js'))
+
+    def test_ningun_campo_de_texto_de_la_ficha_queda_sin_placeholder(self):
+        js = self._js()
+        campos = ['aceite_motor_spec', 'aceite_caja_spec',
+                  'aceite_diferencial_spec', 'refrigerante_spec',
+                  'medida_llanta', 'norma_emisiones',
+                  'aceite_motor_litros', 'distribucion_km_cambio']
+        sin_guia = []
+        for c in campos:
+            i = js.find(f"id=\"fi-{c}\"")
+            assert i > 0, f'el campo {c} desapareció del formulario'
+            # El input termina en el `>` de su etiqueta.
+            bloque = js[i:js.find('>', i)]
+            if 'placeholder' not in bloque:
+                sin_guia.append(c)
+        assert not sin_guia, (
+            f'Campos de la ficha sin ejemplo de formato: {sin_guia}. '
+            'Quien la llena está parado al lado del camión: si el campo no dice '
+            'qué forma espera, cada quien escribe la suya.')
+
+    def test_los_ejemplos_se_declaran_como_ejemplos(self):
+        """Un ejemplo sin marcar se copia tal cual.
+
+        Una ficha llena de valores plausibles y ajenos es peor que una con
+        huecos: el hueco se ve y el valor inventado no. Es la regla 0 aplicada a
+        un placeholder.
+        """
+        js = self._js()
+        for c in ('aceite_caja_spec', 'aceite_diferencial_spec',
+                  'refrigerante_spec', 'medida_llanta'):
+            i = js.find(f"id=\"fi-{c}\"")
+            bloque = js[i:js.find('>', i)]
+            assert 'ej.' in bloque, f'el placeholder de {c} no se declara como ejemplo'
+
+    def test_la_pantalla_avisa_que_el_gris_no_es_la_respuesta(self):
+        assert 'ejemplo de formato' in self._js()
