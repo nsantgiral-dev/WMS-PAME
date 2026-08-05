@@ -96,6 +96,31 @@ class ConnektaGateway:
             'CONNEKTA_NOMBRE_CONECTOR_NOTA_CREDITO_CRUZAR',
             'PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2',
         )
+        # Motivo DIAN sobre una NC YA creada — segundo POST, nunca el mismo que
+        # crea (Entidades dinámicas exige que el documento exista de verdad,
+        # con su consecutivo real: no acepta consec_docto=0 como "el de esta
+        # misma transacción", a diferencia de Cuotas CxC y Movimientos).
+        # Verificado en vivo 2026-08-03 contra NCE-00000057 — ver CLAUDE.md
+        # "Motivo DIAN SÍ se pudo automatizar".
+        self.conector_nc_motivo_dian = os.getenv(
+            'CONNEKTA_CONECTOR_NC_MOTIVO_DIAN', '251546'
+        )
+        self.nombre_conector_nc_motivo_dian = os.getenv(
+            'CONNEKTA_NOMBRE_CONECTOR_NC_MOTIVO_DIAN',
+            'PapeleriaMedellin_NotaCredito_CrearCruzarDian_WMS',
+        )
+        # Consulta dinámica que devuelve el encabezado (t350_co_docto_contable)
+        # para averiguar qué consecutivo asignó Siesa. **Sin default**: la
+        # exploración del 2026-08-03 usó una consulta de SQL crudo que no es
+        # apta para producción. Mientras esta variable esté vacía el motivo DIAN
+        # sigue siendo manual, y `/api/health/siesa` lo dice con todas las
+        # letras — un paso manual invisible es peor que uno declarado.
+        self.consulta_nc_consecutivo = os.getenv('CONNEKTA_CONSULTA_NC_CONSECUTIVO', '')
+        # Concepto DIAN de nota crédito (t741_mm_maestro_detalle, maestro
+        # MUNOECO017): 1=Devolución parcial de bienes (genérico de devolución,
+        # el que usa hoy contabilidad a mano), 2=Anulación de FE, 3=Rebaja o
+        # descuento parcial, 4=Ajuste de precio, 5=Otros.
+        self.concepto_dian_nc = os.getenv('SIESA_CONCEPTO_DIAN_NC', '1')
         self.conector_nota_directa    = os.getenv('CONNEKTA_CONECTOR_NOTA_DIRECTA',    '142903')
         self.conector_docto_contable  = os.getenv('CONNEKTA_CONECTOR_DOCTO_CONTABLE',  '142882')
         # Tipo documento nota crédito electrónica en Siesa
@@ -3438,6 +3463,160 @@ class ConnektaGateway:
         return self._post(
             self.conector_nota_credito_cruzar,
             self.nombre_conector_nota_credito_cruzar,
+            payload,
+            url=self.url_post_dinamico,
+            extra_params={'idSistema': self.id_sistema},
+        )
+
+    # ── Motivo DIAN sobre la NC ya creada (251546, segundo POST) ────────────
+    #
+    # El paso 3 del "Procedimiento Manual" del CLAUDE.md. No se puede hacer en
+    # el mismo POST que crea la NC: Entidades dinámicas necesita el consecutivo
+    # REAL del documento, y con `F_CONSEC_AUTO_REG=1` ese número todavía no
+    # existe cuando la sección se procesa. De ahí las tres piezas de abajo:
+    # mirar el rowid máximo ANTES, crear (251126), y después identificar la
+    # fila nueva para dispararle el motivo.
+
+    @property
+    def puede_fijar_motivo_dian(self) -> bool:
+        """¿Está todo lo necesario para automatizar el motivo DIAN?
+
+        Falta la consulta dinámica registrada en Connekta (la exploración usó
+        SQL crudo, no apto para producción). Mientras falte, el motivo se sigue
+        poniendo a mano y `/api/health/siesa` lo reporta — nadie tiene que
+        adivinar si el paso manual sigue vivo.
+        """
+        return bool(
+            self.consulta_nc_consecutivo
+            and self.conector_nc_motivo_dian
+            and not self.modo_simulacion
+        )
+
+    def _filas_nc_encabezado(self) -> list:
+        """Filas recientes de `t350_co_docto_contable` para NCE en este CO.
+
+        La consulta dinámica `CONNEKTA_CONSULTA_NC_CONSECUTIVO` debe devolver,
+        sin parámetros, las columnas crudas de la tabla:
+
+            SELECT TOP 200 f350_rowid, f350_id_co, f350_id_tipo_docto,
+                   f350_consec_docto, f350_fecha, f350_ind_estado,
+                   f350_total_db
+            FROM t350_co_docto_contable
+            WHERE f350_id_tipo_docto = 'NCE'
+            ORDER BY f350_rowid DESC
+
+        El filtrado fino es del lado del WMS a propósito (mismo criterio que
+        `get_remision_desde_pedido`): así un cambio de negocio no obliga a
+        reeditar una consulta en Siesa.
+        """
+        if not self.consulta_nc_consecutivo:
+            return []
+        res = self._get(
+            self.consulta_nc_consecutivo,
+            params_extra={'paginacion': 'numPag=1|tamPag=200'},
+            url=self.url_get_dinamico,
+        )
+        detalle = res.get('detalle', {}) if isinstance(res, dict) else {}
+        return detalle.get('Datos') or detalle.get('Table') or []
+
+    def get_max_rowid_nc(self) -> int | None:
+        """Mayor `f350_rowid` de NCE **antes** de crear la nuestra.
+
+        Es la marca de agua que después distingue "la NC que acabo de crear" de
+        una idéntica creada esta misma mañana por otra devolución del mismo
+        valor. Nunca propaga la excepción: esto corre en el camino crítico de
+        la NC y ningún fallo acá puede impedir que la nota se cree.
+        """
+        try:
+            filas = self._filas_nc_encabezado()
+            rowids = [int(f.get('f350_rowid') or 0) for f in filas]
+            return max(rowids) if rowids else None
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_max_rowid_nc falló (no bloqueante): %s', e)
+            return None
+
+    def get_consec_nc_creada(self, valor_cruce: float, fecha: str,
+                             rowid_minimo: int | None = None) -> int:
+        """Consecutivo real de la NC recién creada. Levanta si hay duda.
+
+        Filtra por CO + NCE + fecha + estado Elaboración + valor, y exige
+        **exactamente una** coincidencia. Con cero o con varias, falla:
+        escribirle el motivo DIAN a la nota equivocada es un error fiscal en
+        un documento de un tercero que no lo pidió, y el costo de no hacerlo
+        es que contabilidad siga poniendo el motivo a mano un día más.
+        Regla 0 — ante dato ausente, fallar hacia el lado conservador.
+        """
+        filas = self._filas_nc_encabezado()
+        candidatas = []
+        for f in filas:
+            if (f.get('f350_id_co') or '').strip() != self.centro_op:
+                continue
+            if (f.get('f350_id_tipo_docto') or '').strip() != self.tipo_docto_nota_credito:
+                continue
+            if int(f.get('f350_ind_estado') or 0) != 0:
+                continue          # ya aprobada: el motivo ya está puesto
+            _f = str(f.get('f350_fecha') or '')[:10].replace('-', '')
+            if _f != fecha:
+                continue
+            if rowid_minimo is not None and int(f.get('f350_rowid') or 0) <= rowid_minimo:
+                continue          # existía antes de nuestro POST
+            if abs(float(f.get('f350_total_db') or 0) - float(valor_cruce)) > 0.01:
+                continue
+            candidatas.append(f)
+
+        if len(candidatas) != 1:
+            raise Exception(
+                f'No se pudo identificar sin ambigüedad la NC recién creada '
+                f'({len(candidatas)} candidatas para CO={self.centro_op} '
+                f'{self.tipo_docto_nota_credito} fecha={fecha} '
+                f'valor={valor_cruce:.2f} rowid>{rowid_minimo}). '
+                'El motivo DIAN se deja manual para esta nota — poner el motivo '
+                'sobre un documento equivocado es peor que no ponerlo.'
+            )
+        return int(candidatas[0]['f350_consec_docto'])
+
+    def trigger_motivo_dian_nc(self, consec_nc: int, concepto: str = '') -> dict:
+        """251546, **solo** la sección Entidades dinámicas — el paso 3 manual.
+
+        No crea ni aprueba nada: le adjunta el concepto DIAN a una NC que ya
+        existe en Elaboración. Verificado en vivo 2026-08-03 contra
+        NCE-00000057 (`codigo:0`). Los códigos de maestro no son adivinables y
+        no están en el texto de ayuda del Asistente — salieron de consultar
+        `t744/t747/t740/t741` directamente; ver CLAUDE.md antes de tocarlos.
+
+        `f753_dato_numerico=0` con `f753_id_maestro*` poblados: el atributo
+        `co015_concepto_nc` es de tipo maestro genérico y rechaza el numérico
+        suelto.
+        """
+        cia = int(self.id_cia_siesa)
+        entidad = {
+            'F_CIA': cia,
+            'F_ACTUALIZA_REG': 1,
+            'f350_id_co': self.centro_op,
+            'f350_id_tipo_docto': self.tipo_docto_nota_credito,
+            'f350_consec_docto': int(consec_nc),
+            'f753_id_grupo_entidad': 'FE_CONCEPTOS NC 2.1',
+            'f753_id_entidad': 'EUNOECO015',
+            'f753_id_atributo': 'co015_concepto_nc',
+            'f753_dato_numerico': 0,
+            'f753_id_tipo_entidad': 'G504_1',
+            'f753_dato_texto': '',
+            'f753_id_maestro': 'MUNOECO017',
+            'f753_id_maestro_detalle': str(concepto or self.concepto_dian_nc),
+        }
+        payload = {
+            'Inicial': [{'F_CIA': cia}],
+            'Entidades dinámicas': [entidad],
+            'Final': [{'F_CIA': cia}],
+        }
+        logger.info(
+            '[CONNEKTA] Motivo DIAN (%s): %s-%s concepto=%s',
+            self.nombre_conector_nc_motivo_dian, self.tipo_docto_nota_credito,
+            consec_nc, entidad['f753_id_maestro_detalle'],
+        )
+        return self._post(
+            self.conector_nc_motivo_dian,
+            self.nombre_conector_nc_motivo_dian,
             payload,
             url=self.url_post_dinamico,
             extra_params={'idSistema': self.id_sistema},

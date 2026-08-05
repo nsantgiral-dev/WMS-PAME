@@ -50,6 +50,19 @@ class DevolucionCliente(db.Model):
     siesa_nc_triggered_at = db.Column(db.DateTime, nullable=True)
     siesa_nc_response = db.Column(db.Text, nullable=True)
 
+    # Consecutivo real que Siesa le asignó a la NC. El WMS nunca lo sabía: el
+    # POST no lo devuelve, así que contabilidad tenía que BUSCAR el documento en
+    # Auditoría para aprobarlo. Se resuelve por consulta después de crear.
+    siesa_nc_consec = db.Column(db.String(30), nullable=True)
+
+    # Motivo DIAN (paso 3 del procedimiento manual): 'AUTOMATICO' si el WMS se
+    # lo puso vía 251546, 'MANUAL' si no pudo y queda para contabilidad. NULL =
+    # todavía sin intentar. Es un tri-estado a propósito: "no lo intenté" y "lo
+    # intenté y no pude" mandan a la misma persona a hacer cosas distintas.
+    siesa_motivo_dian = db.Column(db.String(20), nullable=True)
+    siesa_motivo_dian_at = db.Column(db.DateTime, nullable=True)
+    siesa_motivo_dian_detalle = db.Column(db.Text, nullable=True)
+
     # 142946 se crea en Elaboración (CLAUDE.md Regla #21) — Siesa no cruza la
     # cartera solo ni al crear ni al aprobar el documento (verificado con NCE-
     # 00000048). Estos campos son seguimiento interno del WMS, NO un estado de
@@ -85,6 +98,9 @@ class DevolucionCliente(db.Model):
             'observaciones': self.observaciones,
             'siesa_nc_triggered': self.siesa_nc_triggered,
             'siesa_nc_triggered_at': self.siesa_nc_triggered_at.isoformat() if self.siesa_nc_triggered_at else None,
+            'siesa_nc_consec': self.siesa_nc_consec,
+            'siesa_motivo_dian': self.siesa_motivo_dian,
+            'siesa_motivo_dian_detalle': self.siesa_motivo_dian_detalle,
             'nc_aprobada_siesa': self.nc_aprobada_siesa,
             'nc_aprobada_siesa_at': self.nc_aprobada_siesa_at.isoformat() if self.nc_aprobada_siesa_at else None,
             'nc_aprobada_siesa_por': self.nc_aprobada_por.nombre if self.nc_aprobada_por else None,

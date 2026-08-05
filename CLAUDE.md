@@ -670,20 +670,44 @@ verificar/reescribir cada uno explícitamente, no confiar en lo que se ve):
   "valor de ejemplo no guardado" — quedaron resueltos poniéndolos Fijo
   explícitamente (`G504_1` y `0` respectivamente).
 
-### Pendiente de implementar en código
+### Estado: integrado a código (2026-08-05), **apagado** hasta registrar la consulta
 
-- Registrar formalmente una consulta dinámica en Connekta para el paso 2
-  (hoy se usó la consulta cruda de exploración `papeleriamedellin_pame_
-  descubrir_tablas` — no apta para producción tal cual).
-- Nuevo método en `connekta_gateway.py` (ej. `trigger_motivo_dian_nc()`)
-  para el POST 2, con conector `251546` (env vars nuevas
-  `CONNEKTA_CONECTOR_NC_MOTIVO_DIAN` / `..._NOMBRE`).
-- Enganchar en `siesa_job_service.py` como paso encadenado después de que
-  `NOTA_CREDITO_DEVOLUCION_CLIENTE` confirme éxito — mismo patrón de
-  secuencialidad que ya existe para NC→RC→DC.
-- Decidir cómo mapear la devolución del WMS al concepto DIAN correcto (hoy
-  todo usa el genérico `1`=Devolución parcial — revisar si alguna vez
-  aplica `2`/`3`/`4` según el caso de negocio).
+`trigger_motivo_dian_nc()` (POST 2) + `get_consec_nc_creada()` +
+`get_max_rowid_nc()` en `connekta_gateway.py`; job `MOTIVO_DIAN_NC`
+encadenado en `siesa_job_service.py` después de que
+`NOTA_CREDITO_DEVOLUCION_CLIENTE` confirme éxito. Trinquete:
+`tests/test_nc_motivo_dian.py`.
+
+**Job aparte, no inline.** Si el motivo fallara dentro del job de la NC, el
+reintento del DLQ entraría por la guarda `siesa_nc_triggered` y devolvería
+`{'idempotente': True}` sin volver a intentarlo nunca — un reintento que
+parece exitoso y no hace nada. Y la NC ya existe en Siesa cuando el motivo se
+intenta: nada de este paso puede ponerla en riesgo.
+
+**Cómo se identifica la NC recién creada** (el gap del 2026-07-31, "el WMS
+nunca sabe qué consecutivo asigna Siesa"): marca de agua `MAX(f350_rowid)`
+tomada **antes** del POST de creación, y después filtro por CO + NCE + fecha +
+estado Elaboración + valor exacto del cruce. Exige **exactamente una**
+coincidencia: con cero o con varias falla y el motivo queda manual. Escribirle
+el concepto DIAN al documento de otro tercero es un error fiscal; el costo de
+no hacerlo es un paso a mano más. Regla 0.
+
+El consecutivo real queda en `DevolucionCliente.siesa_nc_consec` — vale por sí
+solo aunque el motivo falle: contabilidad tenía que buscar el documento en
+Auditoría para aprobarlo.
+
+**Falta (bloquea el encendido):** registrar la consulta dinámica en Connekta y
+ponerla en `CONNEKTA_CONSULTA_NC_CONSECUTIVO`. Debe devolver, sin parámetros,
+las columnas crudas de `t350_co_docto_contable` (`f350_rowid`, `f350_id_co`,
+`f350_id_tipo_docto`, `f350_consec_docto`, `f350_fecha`, `f350_ind_estado`,
+`f350_total_db`) para NCE, ordenadas por rowid descendente — el SQL exacto está
+en el docstring de `_filas_nc_encabezado`. Mientras la variable esté vacía el
+motivo sigue siendo manual y **`/api/health/siesa` lo declara** en
+`pasos_manuales_nc` (junto con "aprobar", que sigue sin solución de API).
+
+Pendientes menores:
+- `SIESA_CONCEPTO_DIAN_NC` (default `1`=Devolución parcial) es global. Si
+  alguna vez aplica `2`/`3`/`4` según el caso de negocio, el mapeo va acá.
 - Probar con una devolución parcial genuina end-to-end (pendiente también
   de 251126) antes de confiar en esto para producción.
 
@@ -778,6 +802,7 @@ no se afloja el criterio.
 | NOTA_CREDITO_FACTURA | 142946 | `recaudo.siesa_nc_triggered` (pre-flag) | 1ro |
 | RECIBO_CAJA | 142888 | `recaudo.siesa_rc_triggered` (pre-flag) | 2do (espera NC) |
 | DOCUMENTO_CONTABLE_RET | 142882 | `recaudo.siesa_dc_triggered` (pre-flag) | 3ro (espera RC) |
+| MOTIVO_DIAN_NC | 251546 | `devolucion.siesa_motivo_dian` | tras NOTA_CREDITO_DEVOLUCION_CLIENTE |
 | ALERTA_EMAIL | Resend API | N/A | — |
 
 ### Backoff

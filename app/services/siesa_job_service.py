@@ -21,6 +21,7 @@ from app.extensions import db
 from app.models.siesa_job import SiesaJob, EstadoSiesaJob
 from app.models.packing import EstadoPacking
 from app.models.conteo import EstadoConteo
+from app.utils.fecha import fecha_hoy_bogota
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +241,7 @@ def _run_dlq_jobs():
                 logger.error(
                     f'[DLQ] Job {job.id} ({job.tipo}) FALLIDO tras {job.intentos} intentos: {error_msg}'
                 )
+                _marcar_motivo_dian_manual(job, error_msg)
                 _crear_alerta_admin(job)
             else:
                 logger.warning(
@@ -252,6 +254,30 @@ def _run_dlq_jobs():
 
 
 _BACKOFF_LABELS = ['5 min', '15 min', '45 min']
+
+
+def _marcar_motivo_dian_manual(job: SiesaJob, error_msg: str):
+    """Un MOTIVO_DIAN_NC agotado devuelve el paso a contabilidad, por escrito.
+
+    Sin esto el tri-estado se queda en NULL para siempre y la devolución
+    aparece como "sin intentar" cuando en realidad se intentó y no se pudo —
+    la clase de silencio que hace que un paso manual se salte porque nadie
+    recuerda si aplica.
+    """
+    if job.tipo != 'MOTIVO_DIAN_NC':
+        return
+    try:
+        from app.models.devolucion_cliente import DevolucionCliente as _DC
+        devolucion = db.session.get(_DC, job.get_payload().get('devolucion_id'))
+        if not devolucion or devolucion.siesa_motivo_dian == 'AUTOMATICO':
+            return
+        devolucion.siesa_motivo_dian = 'MANUAL'
+        devolucion.siesa_motivo_dian_at = datetime.utcnow()
+        devolucion.siesa_motivo_dian_detalle = error_msg[:500]
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error('[DLQ] no se pudo marcar motivo DIAN manual (job=%s): %s', job.id, e)
 
 
 def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: list,
@@ -924,6 +950,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         valor_cruce = sum(
             (lin['f470_vlr_neto_prorrateado'] for lin in lineas_nc), Decimal(0)
         )
+        # Marca de agua ANTES de crear: distingue nuestra NC de otra idéntica
+        # creada hoy por otra devolución del mismo valor. Nunca bloqueante —
+        # `get_max_rowid_nc` se traga sus propios errores; sin marca la
+        # identificación posterior es más estricta, no más laxa.
+        _puede_dian = connekta.puede_fijar_motivo_dian
+        _rowid_antes = connekta.get_max_rowid_nc() if _puede_dian else None
+        _fecha_nc = fecha_hoy_bogota()
         resultado = connekta.trigger_nota_factura_crear_cruzar(
             tipo_docto_fe=tipo_docto_fe,
             consec_fe=consec_fe,
@@ -951,7 +984,81 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
+
+        # Paso 3 del procedimiento manual (motivo DIAN) — job aparte, nunca
+        # inline: si fallara acá, el reintento del DLQ entraría por la guarda
+        # de idempotencia de arriba y nunca volvería a intentarlo. Y nada de lo
+        # que pase con el motivo puede tocar la NC, que ya existe en Siesa.
+        if devolucion and not _es_ensayo:
+            try:
+                if _puede_dian:
+                    SiesaJob.encolar(
+                        'MOTIVO_DIAN_NC',
+                        {
+                            'devolucion_id': devolucion.id,
+                            'valor_cruce': float(valor_cruce),
+                            'fecha': _fecha_nc,
+                            'rowid_antes': _rowid_antes,
+                        },
+                        referencia_tipo='devolucion_cliente',
+                        referencia_id=devolucion.id,
+                    )
+                else:
+                    devolucion.siesa_motivo_dian = 'MANUAL'
+                    devolucion.siesa_motivo_dian_at = datetime.utcnow()
+                    devolucion.siesa_motivo_dian_detalle = (
+                        'automatización no configurada '
+                        '(falta CONNEKTA_CONSULTA_NC_CONSECUTIVO)'
+                        if not connekta.modo_simulacion else 'modo simulación'
+                    )
+                db.session.commit()
+            except Exception as _e:
+                db.session.rollback()
+                logger.error(
+                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: NC OK pero no se '
+                    'pudo encadenar el motivo DIAN — queda manual: %s', job.id, _e
+                )
         return resultado
+
+    if job.tipo == 'MOTIVO_DIAN_NC':
+        # 251546 — le pone el concepto DIAN a una NC que ya existe en
+        # Elaboración (paso 3 del "Procedimiento Manual" del CLAUDE.md).
+        # Aprobar (paso 4) sigue sin solución de API.
+        from app.models.devolucion_cliente import DevolucionCliente as _DC
+        devolucion = db.session.get(_DC, payload.get('devolucion_id'))
+        if not devolucion:
+            return {'sin_devolucion': True, 'devolucion_id': payload.get('devolucion_id')}
+
+        if devolucion.siesa_motivo_dian == 'AUTOMATICO':
+            logger.info(
+                '[DLQ] MOTIVO_DIAN_NC job=%s: devolución %s ya tiene motivo — idempotente',
+                job.id, devolucion.id
+            )
+            return {'idempotente': True, 'devolucion_id': devolucion.id}
+
+        consec_nc = int(devolucion.siesa_nc_consec) if devolucion.siesa_nc_consec \
+            else connekta.get_consec_nc_creada(
+                valor_cruce=payload['valor_cruce'],
+                fecha=payload['fecha'],
+                rowid_minimo=payload.get('rowid_antes'),
+            )
+        # Se guarda ANTES del POST y por separado: saber qué NCE es ya vale por
+        # sí solo (contabilidad la tenía que buscar a mano en Auditoría), y si
+        # el motivo falla no hay razón para volver a resolver el consecutivo.
+        if not devolucion.siesa_nc_consec:
+            devolucion.siesa_nc_consec = str(consec_nc)
+            db.session.commit()
+
+        resultado = connekta.trigger_motivo_dian_nc(consec_nc)
+        if not resultado.get('modo_ensayo'):
+            devolucion.siesa_motivo_dian = 'AUTOMATICO'
+            devolucion.siesa_motivo_dian_at = datetime.utcnow()
+            devolucion.siesa_motivo_dian_detalle = (
+                f'{connekta.tipo_docto_nota_credito}-{consec_nc} '
+                f'concepto={connekta.concepto_dian_nc}'
+            )
+            db.session.commit()
+        return {**resultado, 'consec_nc': consec_nc}
 
     if job.tipo == 'RECIBO_CAJA':
         # 142888 — Recibo de caja (cobro del conductor)

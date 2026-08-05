@@ -155,6 +155,37 @@ def health_siesa():
         )
         resultado['ok'] = False
 
+    # Pasos que siguen siendo manuales en Siesa. No son un fallo — son trabajo
+    # de una persona todos los días, y la única forma de que nadie los olvide
+    # (o los haga de más) es que estén escritos en un sitio consultable.
+    _dian_auto = connekta.puede_fijar_motivo_dian
+    resultado['pasos_manuales_nc'] = {
+        'cruzar_cartera': {
+            'automatizado': True,
+            'detalle': f'conector {connekta.conector_nota_credito_cruzar} (crea + cruza)',
+        },
+        'motivo_dian': {
+            'automatizado': _dian_auto,
+            'detalle': (
+                f'conector {connekta.conector_nc_motivo_dian}, consulta '
+                f'{connekta.consulta_nc_consecutivo}'
+            ) if _dian_auto else (
+                'MANUAL — falta registrar la consulta dinámica del consecutivo '
+                'en Connekta y ponerla en CONNEKTA_CONSULTA_NC_CONSECUTIVO. '
+                'Mientras tanto contabilidad pone el concepto DIAN a mano '
+                '(tab Entidades → FE_CONCEPTOS NC 2.1).'
+            ),
+        },
+        'aprobar': {
+            'automatizado': False,
+            'detalle': (
+                'MANUAL sin solución de API — el motor de Siesa procesa '
+                'Entidades (753) después del registro que aprueba (461). '
+                'Ver CLAUDE.md "Por qué la aprobación de NC NO se pudo automatizar".'
+            ),
+        },
+    }
+
     # ── 2. Conectividad Connekta ─────────────────────────────────────────────
     if connekta.modo_simulacion:
         resultado['conectividad'] = {'estado': 'simulado', 'detalle': 'modo_simulacion activo'}
