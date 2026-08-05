@@ -699,6 +699,7 @@ class VigiaService:
                     escritas += 1
             detalle[co] = {'lineas': len(filas), 'cantidad': cantidad,
                            'valor': round(valor, 2), 'documentos': documentos}
+            VigiaService._escribir_precio_realizado(co, semana, filas)
 
         db.session.commit()
         return {
@@ -710,6 +711,106 @@ class VigiaService:
             'cos_sin_dato': huecos,
             'detalle': detalle,
         }
+
+    #: Ventana del precio realizado VIVO. Doce semanas: suficiente para promediar
+    #: el ruido de una semana rara, corto para que un cambio de lista se note.
+    VENTANA_PRECIO_REALIZADO_SEMANAS = 12
+
+    @staticmethod
+    def _escribir_precio_realizado(co, semana, filas):
+        """Precio realizado de la semana, por SKU. Idempotente por construcción.
+
+        ── POR QUÉ NO SE ACUMULA SOBRE `TOTAL` ──────────────────────────────
+
+        El cargador TXT escribe `periodo='TOTAL'` con toda la historia, y
+        `costo_service._precios_realizados` lee ESA fila. Sumarle la semana
+        encima tendría dos problemas, y el segundo es el grave:
+
+          · No sería idempotente: correr la misma semana dos veces contaría el
+            doble.
+          · `_precios_realizados` arma un dict por referencia SIN filtrar
+            periodo. Con varias filas por SKU, cuál gana es **arbitrario**.
+
+        Por eso cada semana es su propia fila (`S-YYYY-MM-DD`), y el promedio
+        vivo se RECALCULA desde ellas — recalcular es idempotente, acumular no.
+
+        `TOTAL` queda intacto: es la historia del TXT y no se puede reconstruir.
+        """
+        from app.models.precio_realizado import PrecioRealizado
+
+        acumulado = defaultdict(lambda: {'valor': 0.0, 'cantidad': 0.0, 'lineas': 0})
+        for f in filas:
+            ref = f.get('referencia')
+            if not ref or f['cantidad'] <= 0:
+                continue
+            # Por C.O. y agregado de red, igual que el TXT.
+            for clave in ((ref, co), (ref, None)):
+                a = acumulado[clave]
+                a['valor'] += f['valor']
+                a['cantidad'] += f['cantidad']
+                a['lineas'] += 1
+
+        etiqueta = f'S-{semana.isoformat()}'
+        for (ref, centro), a in acumulado.items():
+            fila = PrecioRealizado.query.filter_by(
+                referencia=ref, centro_operacion=centro, periodo=etiqueta).first()
+            if fila is None:
+                fila = PrecioRealizado(referencia=ref, centro_operacion=centro,
+                                       periodo=etiqueta)
+                db.session.add(fila)
+            fila.valor_total = a['valor']
+            fila.cantidad_total = a['cantidad']
+            # El cociente de los totales, no el promedio de cocientes — son
+            # cosas distintas y la segunda pesa igual una venta de 1 unidad que
+            # una de 500.
+            fila.precio_realizado = a['valor'] / a['cantidad'] if a['cantidad'] else 0
+            fila.lineas = a['lineas']
+
+        VigiaService._recalcular_precio_vivo(
+            {ref for ref, _ in acumulado}, semana)
+
+    @staticmethod
+    def _recalcular_precio_vivo(refs, hasta_semana):
+        """Promedio de las últimas N semanas → `periodo='VIVO'`.
+
+        Se RECALCULA desde las filas semanales, no se acumula: correr dos veces
+        la misma semana da el mismo resultado.
+
+        `costo_service` prefiere esta fila sobre `TOTAL` cuando existe, y el
+        motivo es de negocio: un precio de las últimas doce semanas describe
+        mejor lo que hoy se cobra que un promedio de toda la historia, que
+        arrastra listas viejas.
+        """
+        from datetime import timedelta
+
+        from app.models.precio_realizado import PrecioRealizado
+
+        desde = f'S-{(hasta_semana - timedelta(weeks=VigiaService.VENTANA_PRECIO_REALIZADO_SEMANAS)).isoformat()}'
+        hasta = f'S-{hasta_semana.isoformat()}'
+
+        for ref in refs:
+            for centro in (None,):   # el agregado de red es el que lee costo_service
+                semanales = (PrecioRealizado.query
+                             .filter(PrecioRealizado.referencia == ref,
+                                     PrecioRealizado.centro_operacion.is_(centro),
+                                     PrecioRealizado.periodo >= desde,
+                                     PrecioRealizado.periodo <= hasta,
+                                     PrecioRealizado.periodo.like('S-%'))
+                             .all())
+                valor = sum(float(x.valor_total or 0) for x in semanales)
+                cant = sum(float(x.cantidad_total or 0) for x in semanales)
+                if cant <= 0:
+                    continue
+                vivo = PrecioRealizado.query.filter_by(
+                    referencia=ref, centro_operacion=centro, periodo='VIVO').first()
+                if vivo is None:
+                    vivo = PrecioRealizado(referencia=ref, centro_operacion=centro,
+                                           periodo='VIVO')
+                    db.session.add(vivo)
+                vivo.valor_total = valor
+                vivo.cantidad_total = cant
+                vivo.precio_realizado = valor / cant
+                vivo.lineas = sum(int(x.lineas or 0) for x in semanales)
 
     @staticmethod
     def comparar_con_linea_base(semana, cos=None) -> dict:
@@ -818,6 +919,9 @@ class VigiaService:
                         'valor': float(r.get('f470_vlr_neto') or 0),
                         'documento': f"{r.get('f350_id_tipo_docto', '')}"
                                      f"-{r.get('f350_consec_docto', '')}",
+                        # Misma consulta, segunda salida — igual que hace el
+                        # cargador TXT: "mismo archivo, misma pasada".
+                        'referencia': (r.get('f120_referencia') or '').strip(),
                     })
                 if len(rows) < 100:
                     break

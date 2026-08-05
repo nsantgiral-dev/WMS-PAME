@@ -195,12 +195,34 @@ def _precios_realizados(refs):
     escalera clandestina — el margen que sale de aquí es el que se obtiene.
     """
     from app.models.precio_realizado import PrecioRealizado
+
     filas = (PrecioRealizado.query
              .filter(PrecioRealizado.referencia.in_(refs))
              .filter(PrecioRealizado.centro_operacion.is_(None))
+             .filter(PrecioRealizado.periodo.in_(('VIVO', 'TOTAL')))
              .all())
-    return {f.referencia: float(f.precio_realizado or 0)
-            for f in filas if float(f.precio_realizado or 0) > 0}
+
+    # VIVO (últimas 12 semanas, alimentado por la ingesta del Vigía) gana sobre
+    # TOTAL (toda la historia del export TXT). El motivo es de negocio: un
+    # precio del último trimestre describe mejor lo que hoy se cobra que un
+    # promedio que arrastra listas de hace dos años.
+    #
+    # **Sin ingesta viva, esto se comporta EXACTAMENTE como antes**: si no hay
+    # fila VIVO, gana TOTAL, que es la única que existía. Es la garantía de que
+    # encender la ingesta no cambia nada hasta que haya datos que lo justifiquen.
+    #
+    # Y el filtro por periodo no es cosmético: sin él la consulta traía TODAS
+    # las filas del SKU —incluidas las semanales— y cuál ganaba en el dict era
+    # arbitrario.
+    salida = {}
+    for f in filas:
+        precio = float(f.precio_realizado or 0)
+        if precio <= 0:
+            continue
+        anterior = salida.get(f.referencia)
+        if anterior is None or (f.periodo == 'VIVO'):
+            salida[f.referencia] = precio
+    return salida
 
 
 def dispersion_precio_por_co(ref):

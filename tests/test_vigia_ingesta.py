@@ -312,3 +312,126 @@ class TestLaComparacionContraLaLineaBase:
         js = (Path(__file__).resolve().parents[1] / 'app' / 'static' / 'pwa'
               / 'vigia.js').read_text(encoding='utf-8')
         assert js.count('vigiaCompararIngesta') >= 2, 'definida y sin caller'
+
+
+class TestPrecioRealizadoHaciaAdelante:
+    """`PrecioRealizado` solo se llenaba con el TXT bloqueado.
+
+    Es el precio al que DE VERDAD se vende —valor/cantidad sobre ventas reales,
+    neto de descuentos y de la escalera clandestina—. Sin alimentación viva, la
+    jerarquía de costos usa un promedio de toda la historia que arrastra listas
+    de hace años.
+
+    La misma consulta que alimenta las series lo trae. Segunda salida de la
+    misma pasada, igual que hace el cargador TXT.
+    """
+
+    def _correr(self, filas, co='003'):
+        gw = _gw_falso(filas)
+        with patch('app.services.connekta_gateway.ConnektaGateway', return_value=gw):
+            return VigiaService.alimentar_series_facturacion(cos=[co])
+
+    def _fila_ref(self, ref, cant, valor, doc='A'):
+        f = _fila(cant, valor, doc)
+        f['f120_referencia'] = ref
+        return f
+
+    def test_escribe_el_precio_de_la_semana(self, app, db, base_historica):
+        from app.models.precio_realizado import PrecioRealizado
+
+        self._correr([self._fila_ref('SKU1', 10, 1000)])
+        semanal = PrecioRealizado.query.filter_by(
+            referencia='SKU1', centro_operacion=None,
+            periodo=f'S-{_lunes_pasado().isoformat()}').first()
+        assert semanal is not None
+        assert float(semanal.precio_realizado) == 100.0
+
+    def test_es_el_cociente_de_los_totales_no_el_promedio_de_cocientes(
+            self, app, db, base_historica):
+        """Una venta de 1 unidad a $500 y otra de 99 a $100 dan $104, no $300.
+
+        El promedio de cocientes pesa igual una venta chica que una grande — y
+        la escalera de descuentos vive justo en las grandes.
+        """
+        from app.models.precio_realizado import PrecioRealizado
+
+        self._correr([self._fila_ref('SKU1', 1, 500),
+                      self._fila_ref('SKU1', 99, 9900)])
+        f = PrecioRealizado.query.filter_by(
+            referencia='SKU1', centro_operacion=None,
+            periodo=f'S-{_lunes_pasado().isoformat()}').first()
+        assert float(f.precio_realizado) == pytest.approx(104.0, abs=0.01)
+
+    def test_correr_la_misma_semana_dos_veces_NO_duplica(self, app, db, base_historica):
+        """La trampa de un acumulador: por eso cada semana es su propia fila y
+        el promedio se RECALCULA, no se suma."""
+        from app.models.precio_realizado import PrecioRealizado
+
+        self._correr([self._fila_ref('SKU1', 10, 1000)])
+        self._correr([self._fila_ref('SKU1', 10, 1000)])
+        vivo = PrecioRealizado.query.filter_by(
+            referencia='SKU1', centro_operacion=None, periodo='VIVO').first()
+        assert float(vivo.cantidad_total) == 10, 'se contó dos veces'
+        assert float(vivo.precio_realizado) == 100.0
+
+    def test_no_toca_la_fila_TOTAL_del_TXT(self, app, db, base_historica):
+        from app.models.precio_realizado import PrecioRealizado
+
+        db.session.add(PrecioRealizado(
+            referencia='SKU1', centro_operacion=None, periodo='TOTAL',
+            valor_total=999999, cantidad_total=1, precio_realizado=999999))
+        db.session.commit()
+
+        self._correr([self._fila_ref('SKU1', 10, 1000)])
+        total = PrecioRealizado.query.filter_by(
+            referencia='SKU1', centro_operacion=None, periodo='TOTAL').first()
+        assert float(total.precio_realizado) == 999999, 'se pisó la historia del TXT'
+
+
+class TestLaLecturaDeCostoNoCambiaSinIngesta:
+    """La garantía que hace seguro este cambio.
+
+    `costo_service._precios_realizados` ahora prefiere VIVO sobre TOTAL. Si no
+    hay ingesta viva —el estado de hoy— tiene que comportarse EXACTAMENTE como
+    antes: gana TOTAL, que era la única fila que existía.
+    """
+
+    def test_sin_fila_VIVO_gana_TOTAL(self, app, db):
+        from app.models.precio_realizado import PrecioRealizado
+        from app.services.costo_service import _precios_realizados
+
+        db.session.add(PrecioRealizado(
+            referencia='SKU9', centro_operacion=None, periodo='TOTAL',
+            valor_total=1000, cantidad_total=10, precio_realizado=100))
+        db.session.commit()
+        assert _precios_realizados(['SKU9']) == {'SKU9': 100.0}
+
+    def test_con_fila_VIVO_gana_VIVO(self, app, db):
+        """Un precio del último trimestre describe mejor lo que hoy se cobra."""
+        from app.models.precio_realizado import PrecioRealizado
+        from app.services.costo_service import _precios_realizados
+
+        db.session.add_all([
+            PrecioRealizado(referencia='SKU9', centro_operacion=None, periodo='TOTAL',
+                            valor_total=1000, cantidad_total=10, precio_realizado=100),
+            PrecioRealizado(referencia='SKU9', centro_operacion=None, periodo='VIVO',
+                            valor_total=1400, cantidad_total=10, precio_realizado=140),
+        ])
+        db.session.commit()
+        assert _precios_realizados(['SKU9']) == {'SKU9': 140.0}
+
+    def test_las_filas_SEMANALES_no_se_cuelan_en_la_lectura(self, app, db):
+        """Antes la consulta traía TODAS las filas del SKU y cuál ganaba en el
+        dict era arbitrario. Ese es el bug que el filtro por periodo evita."""
+        from app.models.precio_realizado import PrecioRealizado
+        from app.services.costo_service import _precios_realizados
+
+        db.session.add_all([
+            PrecioRealizado(referencia='SKU9', centro_operacion=None, periodo='TOTAL',
+                            valor_total=1000, cantidad_total=10, precio_realizado=100),
+            PrecioRealizado(referencia='SKU9', centro_operacion=None, periodo='S-2026-01-05',
+                            valor_total=90, cantidad_total=10, precio_realizado=9),
+        ])
+        db.session.commit()
+        assert _precios_realizados(['SKU9']) == {'SKU9': 100.0}, (
+            'una fila semanal se coló y desplazó al TOTAL')
