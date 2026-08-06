@@ -21,6 +21,7 @@ global.document = {
   createElement: () => mkEl('x'),
 };
 global.window = { open: () => null };
+global.navigator = { userAgent: 'node-test', onLine: true, vibrate: () => {} };
 global.API = '';
 global.TOKEN = 't';
 global.alerta = (m, t) => { global._ultimaAlerta = [t, m]; };
