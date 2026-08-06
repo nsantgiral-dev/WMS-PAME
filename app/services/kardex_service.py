@@ -799,9 +799,22 @@ class KardexService:
         fecha_limite = _dia_operativo() - timedelta(days=ventana_meses * 30)
 
         # ── 1. Reconciliación en UNIDADES × mes × bodega ──────────
+        # `extract` y no `to_char`: `to_char` es de PostgreSQL y en SQLite
+        # revienta con un 500. Eso dejaba este endpoint —la compuerta de
+        # completitud, que ahora alimenta el semáforo de la pantalla Modelos—
+        # **imposible de ejercer en la suite**: en producción funcionaba y
+        # ningún test lo tocaba nunca.
+        #
+        # `extract('year'|'month')` es SQL estándar y SQLAlchemy lo traduce a
+        # los dos motores. El 'YYYY-MM' se compone en Python, donde formatear no
+        # depende del dialecto. El resultado es idéntico; lo que cambia es que
+        # ahora se puede verificar.
+        _anio = func.extract('year', KardexMovimiento.fecha)
+        _mes = func.extract('month', KardexMovimiento.fecha)
         ventas_mes_bodega = (
             db.session.query(
-                func.to_char(KardexMovimiento.fecha, 'YYYY-MM').label('mes'),
+                _anio.label('anio'),
+                _mes.label('mes_num'),
                 KardexMovimiento.bodega,
                 func.sum(KardexMovimiento.cantidad).label('unidades'),
                 func.count().label('registros'),
@@ -809,14 +822,8 @@ class KardexService:
             .filter(KardexMovimiento.fecha >= fecha_limite)
             .filter(KardexMovimiento.concepto.in_(CONCEPTOS_VENTA))
             .filter(KardexMovimiento.naturaleza == 2)
-            .group_by(
-                func.to_char(KardexMovimiento.fecha, 'YYYY-MM'),
-                KardexMovimiento.bodega,
-            )
-            .order_by(
-                func.to_char(KardexMovimiento.fecha, 'YYYY-MM'),
-                KardexMovimiento.bodega,
-            )
+            .group_by(_anio, _mes, KardexMovimiento.bodega)
+            .order_by(_anio, _mes, KardexMovimiento.bodega)
             .all()
         )
 
@@ -864,7 +871,8 @@ class KardexService:
                 f'antes de calcular tasas — el sistema NO debe ignorarlos.'
             ) if conceptos_desconocidos else None,
             'ventas_por_mes_bodega': [{
-                'mes': r.mes,
+                # Mismo formato que antes: 'YYYY-MM'.
+                'mes': f'{int(r.anio):04d}-{int(r.mes_num):02d}',
                 'bodega': r.bodega,
                 'unidades_vendidas': float(r.unidades or 0),
                 'registros': r.registros,

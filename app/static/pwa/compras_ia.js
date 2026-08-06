@@ -539,6 +539,9 @@ async function _cargarTSB(el) {
 async function modelosCargar() {
   const el = document.getElementById('modelos-container');
   if (!el) return;
+  // Sin await: el semáforo no puede retrasar el modelo que la persona pidió.
+  // Si tarda o falla, aparece después y dice que no se pudo verificar.
+  modelosSemaforoKardex();
   if (_MODELOS_SUBTAB === 'sb') await _cargarClasificacionSB(el);
   else if (_MODELOS_SUBTAB === 'tsb') await _cargarTSB(el);
 }
@@ -637,7 +640,7 @@ function _renderNacional(el, rop) {
       <th style="padding:5px;">Colchón</th>
     </tr></thead><tbody>`;
 
-  for (const it of items.slice(0, 60)) {
+  items.slice(0, 60).forEach((it, i) => {
     const cens = it.censurado;
     const fc = it.factor_censura || 1;
     const procColor = cens ? 'var(--red)' : (fc > 1.15 ? 'var(--yellow)' : 'var(--green)');
@@ -650,13 +653,17 @@ function _renderNacional(el, rop) {
       </td>
       <td style="padding:5px;color:var(--tx);">${it.d_avg_diaria}/d
         <span style="color:var(--tx3);font-size:10px;"> σ ${it.sigma_d_diaria}</span></td>
-      <td style="padding:5px;color:${procColor};font-size:10px;">${proc}</td>
+      <td style="padding:5px;color:${procColor};font-size:10px;">
+        <span onclick="repoVerEvidencia('${it.referencia}', 'rep-ev-${i}')"
+              title="Ver qué días estuvo agotado — la evidencia de esta corrección"
+              style="cursor:pointer;text-decoration:underline dotted;">${proc}</span></td>
       <td style="padding:5px;color:var(--tx3);">${it.stock_actual}</td>
       <td style="padding:5px;color:var(--tx);font-weight:700;">${it.rop}</td>
       <td style="padding:5px;color:${it.cobertura_dias < 7 ? 'var(--red)' : 'var(--tx3)'};">${it.cobertura_dias}d</td>
       <td style="padding:5px;color:var(--tx3);font-size:10px;">${it.ss_formula_anterior} → ${it.safety_stock}</td>
-    </tr>`;
-  }
+    </tr>
+    <tr id="rep-ev-${i}" data-abierto="0"></tr>`;
+  });
   html += `</tbody></table></div>
     <div style="font-size:10px;color:var(--tx3);margin-top:8px;line-height:1.6;">
       ● = bajo punto de reorden. σ_d: ${rop.estimador_sigma_d}.<br>
@@ -800,4 +807,140 @@ function _preciosAsegurarBuscador(contenedor) {
     </div>
     <div id="precios-panel" style="margin-top:10px;"></div>`;
   contenedor.parentNode.insertBefore(caja, contenedor);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ¿SON CONFIABLES ESTOS MODELOS? — semáforo sobre la pantalla Modelos
+//
+// La clasificación S-B y el pronóstico TSB se leen del kardex. Si el kardex
+// tiene conceptos sin clasificar, esos modelos están calculados sobre una serie
+// con agujeros — y salen igual de convincentes.
+//
+// El semáforo no repite la compuerta: la consulta y manda a donde se ARREGLA.
+// Un indicador rojo sin acción al lado se aprende a ignorar en dos semanas.
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function modelosSemaforoKardex() {
+  const el = document.getElementById('modelos-semaforo');
+  if (!el) return;
+  let d;
+  try {
+    d = await get('/api/kardex/reconciliar?meses=12');
+  } catch (e) {
+    // No se puede afirmar que sea confiable si no se pudo preguntar.
+    el.innerHTML = `<div style="border:1px solid var(--yellow);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--yellow);">
+      No se pudo verificar la completitud del kardex (${e.message}). Los modelos
+      de abajo pueden estar calculados sobre una serie incompleta.</div>`;
+    return;
+  }
+  const ok = d.compuerta_ok === true;
+  const sin = (d.conceptos_desconocidos || []).length;
+  el.innerHTML = ok
+    ? `<div style="border:1px solid var(--green);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--tx3);">
+         <b style="color:var(--green);">✓ Kardex completo</b> —
+         ${(d.total_registros_kardex || 0).toLocaleString('es-CO')} movimientos,
+         todos los conceptos clasificados. Los modelos de abajo leen de acá.</div>`
+    : `<div style="border:1px solid var(--red);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:11px;color:var(--red);line-height:1.6;">
+         <b>✗ ${sin} concepto(s) del kardex sin clasificar.</b> Los modelos de
+         abajo están calculados sobre una serie con agujeros y no lo dicen por sí
+         solos. Arreglarlo en <b>Inventario › Datos › ¿Le creo al kardex?</b>
+         antes de decidir con estos números.</div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LA EVIDENCIA DE LA DEMANDA CORREGIDA — qué días estuvo agotado
+//
+// La fila de Reposición ya dice «62d con stock · +18%». Ese +18% mueve el punto
+// de reorden y por lo tanto la plata que se compra. Hasta hoy la única forma de
+// ver de dónde salía era la consola.
+//
+// Es el mismo patrón que costó caro con el margen del armador: un número que
+// DECIDE y que nadie puede mirar. La diferencia entre un modelo y una
+// superstición es poder abrir el dato.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Abre/cierra el detalle de días con stock de un SKU. */
+async function repoVerEvidencia(referencia, idFila) {
+  const fila = document.getElementById(idFila);
+  if (!fila) return;
+  if (fila.dataset.abierto === '1') {
+    fila.innerHTML = '';
+    fila.dataset.abierto = '0';
+    return;
+  }
+  fila.dataset.abierto = '1';
+  fila.innerHTML = `<td colspan="7" style="padding:8px;color:var(--tx3);font-size:11px;">Trayendo el stock día por día…</td>`;
+
+  let d;
+  try {
+    d = await get('/api/kardex/stock-diario?referencia=' + encodeURIComponent(referencia));
+  } catch (e) {
+    fila.innerHTML = `<td colspan="7" style="padding:8px;color:var(--red);font-size:11px;">${e.message}</td>`;
+    return;
+  }
+
+  const dias = d.dias || [];
+  if (!dias.length) {
+    fila.innerHTML = `<td colspan="7" style="padding:8px;font-size:11px;color:var(--yellow);">
+      Sin stock diario reconstruido para ${referencia}. Por eso su demanda figura
+      como CENSURADA: no hay con qué saber qué días estuvo agotado.
+      Correr <b>Reconstruir stock diario</b> en Inventario › Datos.</td>`;
+    return;
+  }
+
+  const sinStock = dias.filter(x => !x.tuvo_stock);
+  const fechas = dias.map(x => x.fecha).sort();
+  const bodegas = [...new Set(dias.map(x => x.bodega))];
+
+  // EL TOPE DEL ENDPOINT SE DECLARA. `/stock-diario` devuelve máximo 365 filas,
+  // y con varias bodegas esas 365 filas son MENOS de 365 días — con 5 bodegas,
+  // ~73 días. Mostrar la ventana recortada como si fuera completa haría que
+  // alguien concluya "estuvo agotado 3 días" sobre dos meses de historia.
+  const truncado = dias.length >= 365;
+
+  // Se agrupan los días agotados en tramos: 62 fechas sueltas no se leen, tres
+  // rachas sí. El agotado importa por su duración, no por su cantidad.
+  const porBodega = {};
+  sinStock.forEach(x => { (porBodega[x.bodega] = porBodega[x.bodega] || []).push(x.fecha); });
+  const tramos = [];
+  Object.entries(porBodega).forEach(([bod, fs]) => {
+    fs.sort();
+    let ini = null, prev = null;
+    const cerrar = () => { if (ini) tramos.push({ bodega: bod, desde: ini, hasta: prev }); };
+    fs.forEach(f => {
+      const dia = new Date(f + 'T00:00:00');
+      if (prev && (dia - new Date(prev + 'T00:00:00')) === 86400000) { prev = f; return; }
+      cerrar(); ini = f; prev = f;
+    });
+    cerrar();
+  });
+  tramos.sort((a, b) => (b.hasta > a.hasta ? 1 : -1));
+
+  const _d = f => new Date(f + 'T00:00:00').toLocaleDateString('es-CO',
+    { day: '2-digit', month: 'short' });
+  const _largo = t => Math.round(
+    (new Date(t.hasta + 'T00:00:00') - new Date(t.desde + 'T00:00:00')) / 86400000) + 1;
+
+  fila.innerHTML = `<td colspan="7" style="padding:10px;background:var(--bg-s);">
+    <div style="font-size:11px;color:var(--tx2);line-height:1.7;">
+      <b style="color:var(--tx);">${referencia}</b> —
+      ${dias.length} día-bodega registrado(s) ·
+      ${fechas.length ? _d(fechas[0]) + ' → ' + _d(fechas[fechas.length - 1]) : '—'} ·
+      bodega(s): ${bodegas.join(', ')}<br>
+      <span style="color:${sinStock.length ? 'var(--red)' : 'var(--green)'};">
+        ${sinStock.length} día-bodega SIN stock</span>
+      ${tramos.length ? ` en ${tramos.length} racha(s)` : ''}
+      ${truncado ? `<div style="color:var(--yellow);margin-top:4px;">
+        La consulta devuelve máximo 365 filas y llegó al tope: con varias bodegas
+        esto <b>no cubre el año entero</b>. Lo que ves es la parte más reciente,
+        no toda la ventana que usó el modelo.</div>` : ''}
+    </div>
+    ${tramos.length ? `<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px;">
+      ${tramos.slice(0, 12).map(t => `<span style="background:#F8717122;border:1px solid var(--red);border-radius:6px;padding:3px 8px;font-size:10px;color:var(--red);">
+        ${t.bodega}: ${_d(t.desde)}${t.desde === t.hasta ? '' : '–' + _d(t.hasta)}
+        <b>(${_largo(t)}d)</b></span>`).join('')}
+      ${tramos.length > 12 ? `<span style="font-size:10px;color:var(--tx3);align-self:center;">+${tramos.length - 12} racha(s) más</span>` : ''}
+    </div>` : `<div style="margin-top:6px;font-size:11px;color:var(--green);">
+      Nunca se agotó en la ventana registrada — su demanda no necesita corrección.</div>`}
+  </td>`;
 }

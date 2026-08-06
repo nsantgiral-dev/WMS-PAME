@@ -97,9 +97,15 @@ BASELINE_HEREDADO = {
     # y otros SIN NINGÚN guard. Al cerrar el agujero, el rol `compras` recuperó
     # su propia pantalla y estas cuatro líneas salieron solas.
     #
-    # Queda `kardex`, que tiene lista propia y no se tocó: es otro módulo.
-    ('compras', '/api/kardex/clasificacion-sb?meses=12'),
-    ('compras', '/api/kardex/pronostico-tsb?meses=12'),
+    # `kardex` cerrado el 2026-08-06, al conectarle pantalla a la compuerta y a
+    # la evidencia de días sin stock: sus endpoints de LECTURA pasaron a
+    # `_es_compras()`, que es superconjunto estricto de `_es_admin_o_jefe()`
+    # —admin y jefe no pierden nada, entran gerente y compras—. Los que
+    # escriben (`reconstruir`, `descargar`) siguen restringidos.
+    #
+    # El motivo: quien firma la compra tiene derecho a ver la evidencia del
+    # número que la sostiene. Mostrarle «+18% por días sin stock» y negarle el
+    # detalle es pedirle que confíe.
     # `tienda` con punto de venta sin configurar: el guard exige bodega y el
     # usuario de prueba no la tiene. Puede ser del fixture o del guard — hay
     # que mirarlo con un usuario de tienda real.

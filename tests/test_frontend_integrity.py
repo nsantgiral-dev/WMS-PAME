@@ -526,16 +526,6 @@ DEUDA_SIN_UI = {
         'Consulta de contacto de terceros. Se usó para verificar el maestro contra producción desde la app, no desde una sesión de desarrollo.',
     '/api/traslados/bodegas-siesa':
         'Catálogo de bodegas. La pantalla usa el maestro local.',
-
-    '/api/kardex/reconstruir':
-        'Decisión: ¿le creo al stock diario? Reconstruye la serie hacia atrás. '
-        'Su lugar es como precondición de la descensura, no como botón suelto.',
-    '/api/kardex/stock-diario':
-        'Decisión: ¿por qué este SKU tiene esa demanda corregida? Es la evidencia '
-        'de los días sin stock. Va como detalle expandible junto al SKU en Reposición.',
-    '/api/kardex/reconciliar':
-        'Decisión: ¿le creo al kardex? Compuerta de completitud y conceptos sin '
-        'clasificar. Va como semáforo de confianza en la pantalla Modelos.',
     '/api/kardex/tasa-servida-corregida':
         'Descensura M0.2. Doblemente huérfana: sin UI Y sin consumidor aguas abajo. '
         'No necesita pantalla — necesita que TSB, ROP y newsvendor la consuman, y '

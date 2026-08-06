@@ -10,7 +10,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
 import logging
 
-from app.routes._auth_helpers import _es_admin_o_jefe, _get_uid
+from app.routes._auth_helpers import _es_admin_o_jefe, _es_compras, _get_uid
 
 logger = logging.getLogger(__name__)
 
@@ -166,8 +166,11 @@ def perfil_mensual():
 @jwt_required()
 def reconciliar():
     """COMPUERTA: cruza kardex vs facturación para verificar completitud."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin puede reconciliar'}), 403
+    # `_es_compras()` y no `_es_admin_o_jefe()`: la compuerta la lee el semáforo
+    # de la pantalla Modelos, que abre el rol `compras`. Es lectura pura, y quien
+    # firma la compra tiene derecho a saber si los modelos son confiables.
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver la compuerta del kardex'}), 403
     meses = request.args.get('meses', 12, type=int)
     from app.services.kardex_service import KardexService
     try:
@@ -200,7 +203,7 @@ def clasificacion_sb():
     """Clasificación Syntetos-Boylan a nivel de RED.
     Lee estacionales de tabla ABC (rol=ESTACIONAL). Override adicional
     con ?estacionales_extra=REF1,REF2 para etiquetado provisional."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin puede clasificar'}), 403
     meses = request.args.get('meses', 12, type=int)
     est_raw = request.args.get('estacionales_extra', '')
@@ -217,8 +220,11 @@ def clasificacion_sb():
 @jwt_required()
 def stock_diario():
     """Stock reconstruido por referencia + bodega."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin puede ver stock diario'}), 403
+    # Lectura: es la evidencia del «+18% por 62 días sin stock» que la fila de
+    # Reposición ya muestra. Negársela a quien decide la compra sería mostrarle
+    # el número y esconderle de dónde salió.
+    if not _es_compras():
+        return jsonify({'error': 'Sin permiso para ver stock diario'}), 403
     ref = request.args.get('referencia')
     bod = request.args.get('bodega')
     if not ref:
@@ -245,7 +251,7 @@ def stock_diario():
 def pronostico_tsb():
     """TSB (Teunter-Syntetos-Babai) para demanda intermitente/grumosa.
     Spec §2.M0.3: TSB debe ganar a media móvil 8 sem en MASE."""
-    if not _es_admin_o_jefe():
+    if not _es_compras():
         return jsonify({'error': 'Solo admin puede ver pronósticos'}), 403
     meses = request.args.get('meses', 12, type=int)
     alpha = request.args.get('alpha', 0.15, type=float)
