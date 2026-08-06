@@ -169,10 +169,15 @@ class TestIdentificarLaNCReciénCreada:
         with pytest.raises(Exception):
             self._resolver([_fila(57, 73150.0, 900, tipo='FEW')])
 
-    def test_el_valor_tolera_centavos_pero_no_pesos(self):
-        assert self._resolver([_fila(57, 73150.004, 900)]) == 57
-        with pytest.raises(Exception):
-            self._resolver([_fila(57, 73151.0, 900)])
+    def test_el_valor_ya_no_filtra_porque_siempre_es_cero_en_elaboracion(self):
+        """Verificado en vivo 2026-08-06 contra ~10 NCE reales de Siesa QA:
+        f350_total_db es SIEMPRE 0 mientras f350_ind_estado==0 (Elaboración,
+        el único estado en el que este método busca — Regla #21), y solo se
+        llena al aprobar a mano. Filtrar por él acá eliminaba SIEMPRE a la
+        única candidata real, así que el motivo DIAN nunca se ponía solo. El
+        valor ahora es puramente diagnóstico: no importa si coincide o no."""
+        assert self._resolver([_fila(57, 0.0, 900)], valor=73150.0) == 57
+        assert self._resolver([_fila(57, 0.0, 900)], valor=1.0) == 57
 
     def test_el_mensaje_dice_cuantas_vio_y_con_que_filtros(self):
         """Un "no se pudo" sin datos obliga a reproducirlo para diagnosticar."""
@@ -525,12 +530,12 @@ class TestVerificarLaConsultaAntesDeEncender:
         from app.services.connekta_gateway import connekta
 
         fila = _fila(57, 100.0, 900)
-        del fila['f350_total_db']
+        del fila['f350_ind_estado']
         with patch.object(type(connekta), '_filas_nc_encabezado', lambda self: [fila]):
             r = self._pedir(client, jwt_token_admin, consulta='q_incompleta')
         d = r.get_json()
         assert d['apto'] is False
-        assert 'f350_total_db' in d['columnas_faltantes']
+        assert 'f350_ind_estado' in d['columnas_faltantes']
 
     def test_cero_filas_no_se_da_por_bueno(self, client, jwt_token_admin):
         """Una consulta correcta sobre una empresa sin NC y una consulta rota
@@ -577,8 +582,10 @@ class TestVerificarLaConsultaAntesDeEncender:
 
         fuente = inspect.getsource(ConnektaGateway.get_consec_nc_creada)
         for col in ('f350_id_co', 'f350_id_tipo_docto', 'f350_ind_estado',
-                    'f350_fecha', 'f350_rowid', 'f350_total_db',
-                    'f350_consec_docto'):
+                    'f350_fecha', 'f350_rowid', 'f350_consec_docto'):
             assert col in fuente
             assert col in _COLUMNAS_NC_CONSECUTIVO, (
                 f'{col} se usa para identificar la NC y el verificador no la exige')
+        assert 'f350_total_db' not in _COLUMNAS_NC_CONSECUTIVO, (
+            'ya no filtra por este campo (siempre 0 en Elaboración, ver '
+            '2026-08-06) — exigirlo en el verificador sería pedir de más')

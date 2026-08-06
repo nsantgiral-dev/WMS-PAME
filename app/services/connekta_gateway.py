@@ -3547,12 +3547,31 @@ class ConnektaGateway:
                              rowid_minimo: int | None = None) -> int:
         """Consecutivo real de la NC recién creada. Levanta si hay duda.
 
-        Filtra por CO + NCE + fecha + estado Elaboración + valor, y exige
-        **exactamente una** coincidencia. Con cero o con varias, falla:
-        escribirle el motivo DIAN a la nota equivocada es un error fiscal en
-        un documento de un tercero que no lo pidió, y el costo de no hacerlo
-        es que contabilidad siga poniendo el motivo a mano un día más.
-        Regla 0 — ante dato ausente, fallar hacia el lado conservador.
+        Filtra por CO + NCE + fecha + estado Elaboración + rowid posterior
+        al watermark, y exige **exactamente una** coincidencia. Con cero o
+        con varias, falla: escribirle el motivo DIAN a la nota equivocada
+        es un error fiscal en un documento de un tercero que no lo pidió, y
+        el costo de no hacerlo es que contabilidad siga poniendo el motivo
+        a mano un día más. Regla 0 — ante dato ausente, fallar hacia el
+        lado conservador.
+
+        NO filtra por `f350_total_db` pese a recibir `valor_cruce` (se deja
+        solo para el mensaje de diagnóstico si falla). Verificado en vivo
+        el 2026-08-06 contra ~10 NCE reales de Siesa QA (incluida NCE-58,
+        la propia devolución de PD1369): `f350_total_db` es SIEMPRE 0
+        mientras `f350_ind_estado == 0` (Elaboración — el único estado en
+        el que este método busca, Regla #21) y solo se llena cuando alguien
+        aprueba el documento a mano en Siesa. Filtrar por ese campo en este
+        punto del flujo no distinguía nunca ninguna candidata — todas las
+        filas en Elaboración muestran 0 — así que el motivo DIAN nunca se
+        ponía solo, sin importar qué tan bien estuviera configurada la
+        consulta dinámica. El valor real del cruce sí está disponible de
+        inmediato (se ve en vivo en CxC → Facturas de la NC), pero en otra
+        tabla (T353, vía `API_v2_CxC_General`) — usarlo requeriría verificar
+        en vivo los nombres de campo de esa tabla antes de confiar en ellos
+        (mismo criterio que con `f753_id_grupo_entidad` y `G504_1`, ver
+        CLAUDE.md); mientras eso no se haga, CO + tipo + fecha + estado +
+        rowid-tras-watermark es la desambiguación disponible.
         """
         filas = self._filas_nc_encabezado()
         candidatas = []
@@ -3568,8 +3587,6 @@ class ConnektaGateway:
                 continue
             if rowid_minimo is not None and int(f.get('f350_rowid') or 0) <= rowid_minimo:
                 continue          # existía antes de nuestro POST
-            if abs(float(f.get('f350_total_db') or 0) - float(valor_cruce)) > 0.01:
-                continue
             candidatas.append(f)
 
         if len(candidatas) != 1:
@@ -3577,7 +3594,8 @@ class ConnektaGateway:
                 f'No se pudo identificar sin ambigüedad la NC recién creada '
                 f'({len(candidatas)} candidatas para CO={self.centro_op} '
                 f'{self.tipo_docto_nota_credito} fecha={fecha} '
-                f'valor={valor_cruce:.2f} rowid>{rowid_minimo}). '
+                f'valor_cruce={valor_cruce:.2f} (solo diagnóstico, no filtra) '
+                f'rowid>{rowid_minimo}). '
                 'El motivo DIAN se deja manual para esta nota — poner el motivo '
                 'sobre un documento equivocado es peor que no ponerlo.'
             )

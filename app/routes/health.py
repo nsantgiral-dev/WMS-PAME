@@ -75,9 +75,12 @@ def health_ping():
 
 
 #: Columnas que `_filas_nc_encabezado` necesita de la consulta dinámica.
+#: `f350_total_db` NO está acá a propósito — verificado en vivo el 2026-08-06
+#: que es siempre 0 en Elaboración (ver docstring de `get_consec_nc_creada`),
+#: así que dejó de usarse para identificar la NC.
 _COLUMNAS_NC_CONSECUTIVO = (
     'f350_rowid', 'f350_id_co', 'f350_id_tipo_docto', 'f350_consec_docto',
-    'f350_fecha', 'f350_ind_estado', 'f350_total_db',
+    'f350_fecha', 'f350_ind_estado',
 )
 
 
