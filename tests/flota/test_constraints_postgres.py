@@ -384,3 +384,122 @@ class TestTarjetaDePropiedadNoVence:
                 "INSERT INTO flota_documento_vehiculo "
                 "(vehiculo_id, tipo, numero, entidad, estado) "
                 "VALUES (:v, 'rtm', '', '', 'no_encontrado')"), {'v': semilla['veh']})
+
+
+@pytest.mark.postgres
+class TestLaMigracionCorreContraDatosREALES:
+    """La suite nunca ejercía una migración. Por eso el release falló.
+
+    `create_all()` construye el esquema FINAL desde los modelos: nunca pasa por
+    el estado intermedio de una migración, ni encuentra filas viejas que la
+    regla nueva no admite. Los 1500 tests estaban en verde y el `flask db
+    upgrade` de producción abortó:
+
+        CheckViolation: viola "ck_flota_doc_estado_coherente"
+        DETAIL: Failing row contains (4, 6, tarjeta_propiedad, ..., null, vigente)
+
+    El error era de ORDEN: el `UPDATE` que limpia la fecha inventada corría
+    ANTES de soltar el CHECK viejo, que todavía exigía esa fecha. El comentario
+    del código razonaba sobre el constraint NUEVO y el que estaba en vigor era
+    el VIEJO.
+
+    Este test reproduce el estado previo con **la fila exacta del log** y corre
+    `upgrade()`. Es el único punto de la suite donde una migración se ejecuta.
+    """
+
+    _VIEJO = ("(estado = 'vigente' AND fecha_expedicion IS NOT NULL "
+              " AND fecha_vencimiento IS NOT NULL "
+              " AND length(trim(numero)) > 0 AND length(trim(entidad)) > 0) OR "
+              "(estado = 'no_encontrado' AND fecha_expedicion IS NULL "
+              " AND fecha_vencimiento IS NULL)")
+
+    @pytest.fixture
+    def antes_de_la_migracion(self, motor_pg):
+        """La tabla como estaba en producción, con la fila que rompió."""
+        with motor_pg.begin() as c:
+            c.execute(text('DROP TABLE IF EXISTS mig_doc_vehiculo CASCADE'))
+            c.execute(text(f"""
+                CREATE TABLE mig_doc_vehiculo (
+                    id serial PRIMARY KEY, vehiculo_id int NOT NULL,
+                    tipo varchar(20) NOT NULL,
+                    numero varchar(50) NOT NULL DEFAULT '',
+                    entidad varchar(100) NOT NULL DEFAULT '',
+                    fecha_expedicion date, fecha_vencimiento date,
+                    estado varchar(20) NOT NULL DEFAULT 'vigente',
+                    CONSTRAINT ck_mig_coherente CHECK ({self._VIEJO}))"""))
+            c.execute(text(
+                "INSERT INTO mig_doc_vehiculo (vehiculo_id, tipo, numero, "
+                " entidad, fecha_expedicion, fecha_vencimiento, estado) VALUES "
+                "(6, 'tarjeta_propiedad', '128899933', 'Papelería Medellin', "
+                " '2026-08-04', '2045-08-20', 'vigente'), "
+                "(6, 'soat', '94778399', 'Seguros Mundial', '2025-11-02', "
+                " '2026-11-02', 'vigente')"))
+        yield motor_pg
+        with motor_pg.begin() as c:
+            c.execute(text('DROP TABLE IF EXISTS mig_doc_vehiculo CASCADE'))
+
+    def _pasos_de_la_migracion(self):
+        """Los tres pasos del `upgrade()` real, en su orden real.
+
+        Se leen del archivo y no se copian: si alguien reordena la migración,
+        este test tiene que moverse con ella o dejar de proteger nada.
+        """
+        from pathlib import Path
+        import re
+
+        fuente = (Path(__file__).resolve().parents[2] / 'migrations' / 'versions'
+                  / 'f10ta8sinvence.py').read_text(encoding='utf-8')
+        cuerpo = fuente[fuente.index('def upgrade():'):fuente.index('def downgrade():')]
+        # Orden de operaciones tal como aparecen.
+        pasos = []
+        for m in re.finditer(r'drop_constraint|op\.execute|create_check_constraint',
+                             cuerpo):
+            pasos.append(m.group(0))
+        return pasos
+
+    def test_el_UPDATE_va_despues_de_soltar_el_check_viejo(self):
+        """TRINQUETE del orden, leído del archivo.
+
+        Es lo que falló: los datos se tocaban con la regla vieja todavía en pie.
+        """
+        pasos = self._pasos_de_la_migracion()
+        assert pasos[0] == 'drop_constraint', (
+            f'la migración ya no empieza soltando el CHECK viejo: {pasos[:3]}')
+        assert pasos[1] == 'op.execute', (
+            'el UPDATE de datos tiene que ir entre el drop y los create')
+        assert 'create_check_constraint' in pasos[2:]
+
+    def test_la_migracion_corre_sobre_la_fila_que_rompio(self, antes_de_la_migracion):
+        """Ejecuta los tres pasos contra los datos reales."""
+        motor = antes_de_la_migracion
+        sin_vence = "('tarjeta_propiedad')"
+        nuevo = ("(estado = 'vigente' AND fecha_expedicion IS NOT NULL "
+                 " AND length(trim(numero)) > 0 AND length(trim(entidad)) > 0 "
+                 f" AND (fecha_vencimiento IS NOT NULL OR tipo IN {sin_vence})) OR "
+                 "(estado = 'no_encontrado' AND fecha_expedicion IS NULL "
+                 " AND fecha_vencimiento IS NULL)")
+        with motor.begin() as c:
+            c.execute(text('ALTER TABLE mig_doc_vehiculo DROP CONSTRAINT ck_mig_coherente'))
+            c.execute(text('UPDATE mig_doc_vehiculo SET fecha_vencimiento = NULL '
+                           f'WHERE tipo IN {sin_vence} AND fecha_vencimiento IS NOT NULL'))
+            c.execute(text(f'ALTER TABLE mig_doc_vehiculo ADD CONSTRAINT ck_mig_coherente '
+                           f'CHECK ({nuevo})'))
+            c.execute(text('ALTER TABLE mig_doc_vehiculo ADD CONSTRAINT ck_mig_sin_vence '
+                           f'CHECK (tipo NOT IN {sin_vence} OR fecha_vencimiento IS NULL)'))
+
+        with motor.connect() as c:
+            filas = dict(c.execute(text(
+                'SELECT tipo, fecha_vencimiento FROM mig_doc_vehiculo')).all())
+        assert filas['tarjeta_propiedad'] is None, 'la fecha inventada sigue ahí'
+        assert filas['soat'] is not None, 'se llevó puesto el vencimiento del SOAT'
+
+    def test_el_orden_INVERSO_falla_como_falló_en_produccion(self, antes_de_la_migracion):
+        """La otra mitad: si el test pasara con las dos ordenaciones, no estaría
+        protegiendo nada."""
+        motor = antes_de_la_migracion
+        with pytest.raises(IntegrityError):
+            with motor.begin() as c:
+                c.execute(text(
+                    "UPDATE mig_doc_vehiculo SET fecha_vencimiento = NULL "
+                    "WHERE tipo IN ('tarjeta_propiedad') "
+                    "AND fecha_vencimiento IS NOT NULL"))

@@ -13,6 +13,8 @@ test al estado de la base y se rompe por razones que no son el bug.
 """
 from datetime import date, datetime, timedelta
 
+from app.utils.fecha import dia_operativo
+
 import pytest
 
 from flota.adaptadores.medicion import FOTOS_POR_CUSTODIA, MedidorSQL
@@ -107,8 +109,8 @@ def _documento(mundo, vence_en_dias):
 
     d = DocumentoVehiculo(
         vehiculo_id=mundo['vehiculo'].id, tipo='soat', numero=f'N{vence_en_dias}',
-        entidad='Aseguradora', fecha_expedicion=date.today() - timedelta(days=365),
-        fecha_vencimiento=date.today() + timedelta(days=vence_en_dias),
+        entidad='Aseguradora', fecha_expedicion=dia_operativo() - timedelta(days=365),
+        fecha_vencimiento=dia_operativo() + timedelta(days=vence_en_dias),
     )
     mundo['db'].session.add(d)
     mundo['db'].session.commit()

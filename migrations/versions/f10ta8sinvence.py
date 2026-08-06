@@ -49,14 +49,30 @@ _COHERENTE_VIEJO = (
 
 
 def upgrade():
-    # Primero los datos, después el CHECK: al revés la migración aborta contra
-    # las filas que el CHECK nuevo ya no admite.
+    # ORDEN: soltar el CHECK VIEJO, después los datos, después los nuevos.
+    #
+    # La primera versión ponía el UPDATE adelante «para que el CHECK nuevo no
+    # encuentre filas que no admite». El razonamiento era sobre el constraint
+    # equivocado: el que estaba en vigor durante el UPDATE era el VIEJO, que
+    # exige `fecha_vencimiento IS NOT NULL` para todo documento vigente. Poner
+    # esa fecha en NULL lo violaba, y el release abortó en producción:
+    #
+    #   CheckViolation: ... viola "ck_flota_doc_estado_coherente"
+    #   DETAIL: Failing row contains (4, 6, tarjeta_propiedad, ..., null, vigente)
+    #
+    # Una migración que cambia una regla y además arregla los datos tiene que
+    # dejar de exigir la regla vieja ANTES de tocar las filas. Entre el drop y
+    # el create no hay ventana de riesgo: Alembic corre todo en una transacción
+    # y PostgreSQL hace el DDL transaccional.
+    with op.batch_alter_table('flota_documento_vehiculo') as batch:
+        batch.drop_constraint('ck_flota_doc_estado_coherente', type_='check')
+
     op.execute(
         "UPDATE flota_documento_vehiculo SET fecha_vencimiento = NULL "
         f"WHERE tipo IN {_SIN_VENCE} AND fecha_vencimiento IS NOT NULL"
     )
+
     with op.batch_alter_table('flota_documento_vehiculo') as batch:
-        batch.drop_constraint('ck_flota_doc_estado_coherente', type_='check')
         batch.create_check_constraint('ck_flota_doc_estado_coherente', _COHERENTE_NUEVO)
         batch.create_check_constraint(
             'ck_flota_doc_sin_vencimiento',

@@ -913,3 +913,74 @@ class TestNingunEnumSeComparaPorIdentidad:
                             and lado.value.id in self._ENUMS):
                         marcado = True
         assert not marcado
+
+
+class TestLosTestsUsanElMismoRelojQueElSistema:
+    """El build de Railway falló a las 19:05 hora Colombia. Solo a esa hora.
+
+        tests/flota/test_endpoints_t1.py:237
+        assert r.get_json()['dias_para_vencer'] == 20
+        E   assert 21 == 20
+
+    El test armaba la fecha esperada con `date.today()` —UTC en el contenedor—
+    y el endpoint respondía con `dia_operativo()` —Bogotá—. Entre las 7 p.m. y
+    medianoche los dos relojes están en días distintos, así que el mismo commit
+    pasaba de día y fallaba de noche.
+
+    **Un guard que falla según la hora se termina ignorando**, y ese es el daño
+    real: no el build perdido, sino que la próxima falla legítima se lea como
+    "otra vez lo de la hora". Por eso el alcance de este trinquete son los tests
+    de flota y no todo `tests/` — acá cada fecha se compara contra una respuesta
+    del sistema; en `tests/test_costo_service.py` la mayoría solo siembra datos.
+    """
+
+    _RAIZ_TESTS = os.path.join(_RAIZ, 'tests', 'flota')
+
+    def test_ningun_test_de_flota_calcula_su_fecha_en_UTC(self):
+        """Por AST y no por texto.
+
+        La primera versión buscaba la cadena en cada línea y se atrapó a sí
+        misma: sus propias líneas de detección la contienen. Excluir este
+        archivo entero habría dejado el guard ciego sobre él. Lo que hace ilegal
+        a la llamada es que SEA una llamada, no que la palabra aparezca — y eso
+        solo lo distingue el árbol.
+        """
+        malas = []
+        for archivo in sorted(os.listdir(self._RAIZ_TESTS)):
+            if not archivo.endswith('.py'):
+                continue
+            ruta = os.path.join(self._RAIZ_TESTS, archivo)
+            for nodo in ast.walk(ast.parse(_leer(ruta), filename=ruta)):
+                if not isinstance(nodo, ast.Call):
+                    continue
+                f = nodo.func
+                # `date.today()` — el receptor puede venir aliasado.
+                if (isinstance(f, ast.Attribute) and f.attr == 'today'
+                        and isinstance(f.value, ast.Name)
+                        and f.value.id in ('date', '_date', 'datetime')):
+                    malas.append(f'{archivo}:{nodo.lineno}')
+        assert not malas, (
+            '\nTests de flota que arman su fecha en UTC mientras el sistema '
+            'responde en Bogotá:\n'
+            + '\n'.join(f'  · {m}' for m in malas)
+            + '\n\nUsar `dia_operativo()`. Estos tests fallan solo entre las '
+              '7 p.m. y medianoche — y un guard que falla según la hora se '
+              'termina ignorando.')
+
+    def test_el_detector_no_esta_ciego(self):
+        """Se ejerce contra código sintético: si el patrón deja de encontrar
+        nada, el test de arriba pasa vacío para siempre."""
+        def _detecta(fuente):
+            for nodo in ast.walk(ast.parse(fuente)):
+                if (isinstance(nodo, ast.Call)
+                        and isinstance(nodo.func, ast.Attribute)
+                        and nodo.func.attr == 'today'
+                        and isinstance(nodo.func.value, ast.Name)
+                        and nodo.func.value.id in ('date', '_date', 'datetime')):
+                    return True
+            return False
+
+        assert _detecta("f = date.today() + timedelta(days=20)\n")
+        assert not _detecta("f = dia_operativo() + timedelta(days=20)\n")
+        # Y no confunde una CADENA que menciona el patrón con una llamada.
+        assert not _detecta("aviso = 'no uses date.today() acá'\n")

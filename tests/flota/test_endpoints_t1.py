@@ -8,6 +8,8 @@ nadie se entera.
 """
 from datetime import datetime
 
+from app.utils.fecha import dia_operativo
+
 import pytest
 
 from flota.adaptadores.modelos import Custodia, LecturaOdometro
@@ -230,8 +232,8 @@ class TestDocumentos:
         from datetime import date, timedelta
         r = client.post(self._url(flota_mundo), json={
             'tipo': 'soat', 'numero': 'S-1', 'entidad': 'Aseguradora',
-            'fecha_expedicion': (date.today() - timedelta(days=100)).isoformat(),
-            'fecha_vencimiento': (date.today() + timedelta(days=20)).isoformat(),
+            'fecha_expedicion': (dia_operativo() - timedelta(days=100)).isoformat(),
+            'fecha_vencimiento': (dia_operativo() + timedelta(days=20)).isoformat(),
         }, headers=_auth(jwt_token_admin))
         assert r.status_code == 201
         assert r.get_json()['dias_para_vencer'] == 20
@@ -262,7 +264,7 @@ class TestDocumentos:
         from datetime import date
         r = client.post(self._url(flota_mundo), json={
             'tipo': 'rtm', 'estado': 'no_encontrado',
-            'fecha_vencimiento': date.today().isoformat(),
+            'fecha_vencimiento': dia_operativo().isoformat(),
         }, headers=_auth(jwt_token_admin))
         assert r.get_json()['fecha_vencimiento'] is None
 
@@ -280,8 +282,8 @@ class TestDocumentos:
         for dias in (10, 400):
             client.post(self._url(flota_mundo), json={
                 'tipo': 'soat', 'numero': f'S-{dias}', 'entidad': 'Aseguradora',
-                'fecha_expedicion': date.today().isoformat(),
-                'fecha_vencimiento': (date.today() + timedelta(days=dias)).isoformat(),
+                'fecha_expedicion': dia_operativo().isoformat(),
+                'fecha_vencimiento': (dia_operativo() + timedelta(days=dias)).isoformat(),
             }, headers=_auth(jwt_token_admin))
         assert DocumentoVehiculo.query.filter_by(tipo='soat').count() == 1
 
