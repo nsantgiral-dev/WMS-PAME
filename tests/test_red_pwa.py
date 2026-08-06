@@ -132,12 +132,18 @@ class TestElServiceWorkerNoPuedeServirCodigoViejo:
             return re.search(r'const SW_VERSION = "(\d+)"',
                              self._sw(client)).group(1)
 
-        antes = _sello()
+        antes = int(_sello())
         objetivo = os.path.join(app.root_path, 'static', 'pwa', 'flota.js')
         st = os.stat(objetivo)
         try:
-            os.utime(objetivo, (st.st_atime, st.st_mtime + 5000))
-            assert _sello() != antes
+            # Se lo pone por encima del máximo ACTUAL, no de su propio mtime.
+            # Sumarle un delta fijo a `flota.js` fallaba si otro archivo se
+            # había tocado más recientemente — el sello es el máximo de la
+            # carpeta, así que mover un archivo que no es el más nuevo no lo
+            # mueve. El test medía la implementación que tenía en la cabeza,
+            # no la propiedad.
+            os.utime(objetivo, (st.st_atime, antes + 5000))
+            assert int(_sello()) == antes + 5000
         finally:
             os.utime(objetivo, (st.st_atime, st.st_mtime))
 

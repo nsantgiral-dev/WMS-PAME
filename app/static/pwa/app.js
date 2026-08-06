@@ -783,9 +783,17 @@ async function cargarPedidos() {
         let accionBtn = '';
         if (p.siesa_triggered) {
           // Estado final: Siesa tiene la factura
+          // Los DOS papeles: la remisión descarga inventario y viaja con el
+          // camión; la factura cobra. El endpoint de remisión existía sin
+          // botón desde que se escribió.
+          const _bt = 'width:100%;background:#1a1a1a;color:#fff;border:none;'
+                    + 'padding:5px 8px;border-radius:6px;font-size:11px;'
+                    + 'font-weight:600;cursor:pointer;margin-top:6px;';
           const btnRemision = p.packing_id
-            ? `<button onclick="imprimirFacturaAdmin(${p.packing_id})"
-                style="margin-top:6px;width:100%;background:#1a1a1a;color:#fff;border:none;padding:5px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">
+            ? `<button onclick="imprimirRemisionAdmin(${p.packing_id})" style="${_bt}">
+                🖨 Remisión
+               </button>
+               <button onclick="imprimirFacturaAdmin(${p.packing_id})" style="${_bt}">
                 🖨 Factura
                </button>`
             : '';
@@ -1751,27 +1759,55 @@ function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); 
 // ─────────────────────────────────────────────────────────────
 
 /** @param {number} packingId - Packing task ID to fetch and print the invoice for. */
-async function imprimirFacturaAdmin(packingId) {
+/** Abre un documento del servidor en una ventana para imprimir.
+ *
+ * Los documentos que se imprimen —factura, remisión— los sirve un endpoint que
+ * exige JWT en un header, y **un `<a href target=_blank>` no manda headers**.
+ * Ese enlace devuelve 401 siempre, y como nadie lo abre hasta el día que hay que
+ * imprimir, pasa por bueno durante meses. Ya ocurrió con «ver foto» en flota.
+ *
+ * Una sola función para los tres documentos: el mismo bloque estaba copiado en
+ * `packing.js` y dos veces en este archivo, y la tercera copia ya decía «error
+ * al obtener la remisión» dentro de la función de la factura.
+ */
+async function imprimirDocumento(url, que) {
   try {
-    const res = await fetch(`/api/admin/factura/${packingId}`, {
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
+    const res = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      alerta(d.error || 'No se pudo obtener la factura', 'error');
-      return;
+      alerta(d.error || `No se pudo generar ${que}`, 'error');
+      return false;
     }
     const html = await res.text();
     const ventana = window.open('', '_blank');
     if (!ventana) {
-      alerta('El navegador bloqueó la ventana emergente — permite popups para este sitio', 'advertencia');
-      return;
+      alerta('El navegador bloqueó la ventana emergente — permití popups para este sitio',
+             'advertencia');
+      return false;
     }
     ventana.document.write(html);
     ventana.document.close();
+    return true;
   } catch (e) {
-    alerta('Error de conexión al obtener la remisión', 'error');
+    alerta(`Sin conexión al generar ${que}: ${e.message}`, 'error');
+    return false;
   }
+}
+
+/** @param {number} packingId */
+async function imprimirFacturaAdmin(packingId) {
+  await imprimirDocumento(`/api/admin/factura/${packingId}`, 'la factura');
+}
+
+/** La remisión de un despacho ya confirmado por Siesa.
+ *
+ * El endpoint existía desde antes y **no lo llamaba ninguna pantalla**: la
+ * remisión es el papel que viaja con el camión, se generaba bien y no había
+ * botón. Es distinta de la factura — la remisión descarga inventario, la
+ * factura cobra— y quien despacha necesita las dos.
+ */
+async function imprimirRemisionAdmin(packingId) {
+  await imprimirDocumento(`/api/admin/remision/${packingId}`, 'la remisión');
 }
 
 // ADMIN — Facturar remisión existente (carril de recuperación 142943)
@@ -2481,18 +2517,208 @@ async function siesaRecuperacionCargar() {
       <input id="rec-packing-id" type="number" inputmode="numeric"
              placeholder="ID de la tarea de packing"
              style="width:100%;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);">
+      <!-- ORDEN POR RIESGO, no por frecuencia. Lo que solo LEE va arriba; lo
+           que puede crear un documento fiscal duplicado va abajo y separado.
+           Un panel de emergencia donde el botón peligroso queda al lado del
+           inocuo se usa a las 6 p.m. con prisa. -->
       <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+        <button class="btn-flota" style="flex:1" onclick="siesaVerCompromisos()">
+          ¿Por qué falló?</button>
         <button class="btn-flota" style="flex:1" onclick="siesaReconciliarPacking()">
           Reconciliar</button>
         <button class="btn-flota" style="flex:1" onclick="siesaVerRemision()">
           Ver remisión</button>
       </div>
       <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
-        <b>Reconciliar</b> pregunta a Siesa si la factura ya existe y, si existe,
-        marca la tarea como despachada. No crea nada — por eso es seguro.
+        Los tres solo <b>leen</b>. <b>Reconciliar</b> pregunta a Siesa si la
+        factura ya existe y, si existe, marca la tarea como despachada — no crea
+        nada. <b>¿Por qué falló?</b> trae los compromisos del pedido (paso
+        244328): si las cantidades comprometidas no cuadran, ahí está la causa.
       </p>
       <div id="rec-resultado" style="margin-top:10px;"></div>
+
+      <hr style="border:0;border-top:1px solid var(--brd);margin:14px 0 10px;">
+      <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">
+        Crean documentos en Siesa</div>
+      <p style="font-size:11px;color:var(--tx3);margin:0 0 8px;">
+        Usar solo después de mirar arriba. Los dos pueden dejar una factura
+        <b>duplicada</b> si el documento ya existía — y una factura duplicada se
+        anula con una nota crédito, a mano, en contabilidad.
+      </p>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <input id="rec-rm-tipo" placeholder="Tipo RM (ej. RS)" maxlength="4"
+               style="width:110px;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);text-transform:uppercase;">
+        <input id="rec-rm-consec" type="number" inputmode="numeric" placeholder="Consecutivo"
+               style="flex:1;min-width:110px;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);">
+        <button class="btn-flota" style="flex:1;min-width:130px;border-color:var(--red);color:var(--red);"
+                onclick="siesaFacturarRMManual()">Facturar esa RM</button>
+      </div>
+      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+        Para cuando la remisión SÍ existe en Siesa y el WMS no guardó su número:
+        se busca en Siesa y se escribe acá. Crea la factura (142943) sobre esa RM.
+      </p>
+      <button class="btn-flota" style="width:100%;margin-top:8px;border-color:var(--red);color:var(--red);"
+              onclick="siesaForzarPacking()">Forzar el envío completo a Siesa</button>
+      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+        Reejecuta la cadena entera (244328→142945→142943) sobre una tarea ya
+        DESPACHADO. Es para lo que se cerró en modo ensayo y nunca llegó a Siesa
+        real. <b>Si ya había llegado, duplica.</b> Solo admin.
+      </p>
+    </div>
+
+    <div class="tabla-card" style="margin-top:12px;">
+      <div class="tabla-titulo">Traslados trabados</div>
+      <p style="font-size:12px;color:var(--tx2);margin:0 0 10px;">
+        Un traslado que quedó a medias entre bodegas. Sin esto había que
+        arreglarlo por consola.
+      </p>
+      <button class="btn-flota" style="width:100%;" onclick="siesaRecuperarPackingTraslados()">
+        Recrear los packings que faltan</button>
+      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+        Crea la tarea de packing de las solicitudes que quedaron en EN_PICKING o
+        EN_PACKING sin ella. No toca Siesa: solo repara el WMS.
+      </p>
+      <div style="display:flex;gap:6px;margin-top:10px;flex-wrap:wrap;">
+        <input id="rec-traslado-id" type="number" inputmode="numeric"
+               placeholder="ID de la solicitud"
+               style="flex:1;min-width:130px;padding:8px;border-radius:8px;border:1px solid var(--brd);background:var(--bg);color:var(--tx);">
+        <button class="btn-flota" style="flex:1;min-width:150px;border-color:var(--red);color:var(--red);"
+                onclick="siesaReintentarTraslado()">Requisición formal (174646)</button>
+      </div>
+      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
+        <b>174646 NO es parte del flujo normal</b> — el traslado real usa 173076
+        al despachar y 173079 al recibir. Esto es para cuando el consultor de
+        Siesa pide una requisición previa. Solo en EN_PICKING o APROBADA.
+      </p>
+      <div id="rec-traslado-resultado" style="margin-top:10px;"></div>
     </div>`;
+}
+
+/** Diagnóstico: qué cantidades tiene comprometidas Siesa para ese pedido.
+ *
+ * Es el paso 244328 de la cadena, y cuando un despacho parcial falla, la causa
+ * suele estar acá: lo comprometido no coincide con lo que se quiere despachar.
+ * Va primero en el panel porque es lo único que responde POR QUÉ antes de que
+ * alguien apriete algo que escribe.
+ */
+async function siesaVerCompromisos() {
+  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
+  const out = document.getElementById('rec-resultado');
+  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Preguntando a Siesa…</p>';
+  try {
+    const r = await get(`/api/despacho_parcial/${id}/compromisos`);
+    const filas = r.compromisos || [];
+    if (!filas.length) {
+      out.innerHTML = `<p style="color:var(--yellow);font-size:12px;">
+        Siesa no reporta compromisos para el pedido ${r.pedido || id}. Si el
+        pedido existe, es que el paso 244328 nunca corrió.</p>`;
+      return;
+    }
+    out.innerHTML = `<div style="font-size:12px;">
+      <p style="margin:0 0 6px;color:var(--tx2);">Pedido <b>${r.pedido || ''}</b> —
+        ${filas.length} línea(s) comprometida(s) en Siesa:</p>
+      ${filas.map(f => `<div class="tabla-fila">
+          <span class="tabla-nombre">${f.f120_referencia || '?'}</span>
+          <span>${f.f400_cant_comprometida_1 ?? '—'}</span>
+        </div>`).join('')}</div>`;
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
+
+/** Factura una RM cuyo número se leyó en Siesa a mano. CREA un documento. */
+async function siesaFacturarRMManual() {
+  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
+  const tipo = (document.getElementById('rec-rm-tipo')?.value || '').trim().toUpperCase();
+  const consec = parseInt(document.getElementById('rec-rm-consec')?.value, 10);
+  const out = document.getElementById('rec-resultado');
+  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  if (!tipo || !Number.isFinite(consec)) {
+    alerta('Faltan el tipo y el consecutivo de la remisión', 'error');
+    return;
+  }
+  // La confirmación nombra el documento y la consecuencia. Un «¿estás seguro?»
+  // pelado se contesta que sí sin leerlo.
+  if (!confirm(`Se va a crear la FACTURA en Siesa sobre la remisión ${tipo}-${consec} ` +
+               `(tarea ${id}).
+
+Si esa remisión ya estaba facturada, queda una ` +
+               `factura DUPLICADA que hay que anular con nota crédito a mano.
+
+` +
+               `¿Verificaste en Siesa que no tiene factura?`)) return;
+  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Facturando…</p>';
+  try {
+    const r = await post(`/api/despacho_parcial/${id}/facturar-rm-manual`,
+                         { tipo_rm: tipo, consec_rm: consec });
+    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
+      ${r.mensaje || 'Factura creada'} ${r.consec_fe ? '· FE ' + r.consec_fe : ''}</p>`;
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
+
+/** Reejecuta la cadena completa. El botón más peligroso del panel. */
+async function siesaForzarPacking() {
+  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
+  const out = document.getElementById('rec-resultado');
+  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
+  if (!confirm(`Se va a REEJECUTAR la cadena completa hacia Siesa para la tarea ${id}:
+` +
+               `compromisos (244328) → remisión (142945) → factura (142943).
+
+` +
+               `Si esos documentos ya existen en Siesa, quedan DUPLICADOS.
+
+` +
+               `Antes de seguir: ¿usaste «Reconciliar» para confirmar que Siesa ` +
+               `NO tiene la factura?`)) return;
+  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Reenviando la cadena…</p>';
+  try {
+    const r = await post(`/api/packing/${id}/forzar-siesa`, {});
+    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
+      ${r.mensaje || 'Cadena reenviada'}</p>`;
+    setTimeout(siesaRecuperacionCargar, 2000);
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
+
+/** Repara traslados sin tarea de packing. Solo toca el WMS, no Siesa. */
+async function siesaRecuperarPackingTraslados() {
+  const out = document.getElementById('rec-traslado-resultado');
+  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Buscando traslados sin packing…</p>';
+  try {
+    const r = await post('/api/traslados/recuperar-packing', {});
+    const n = r.creados ?? r.recuperados ?? 0;
+    out.innerHTML = `<p style="color:${n ? 'var(--green)' : 'var(--tx2)'};font-size:12px;">
+      ${n ? `${n} packing(s) recreado(s)` : 'No había traslados sin packing'}</p>`;
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
+}
+
+/** Dispara el 174646 sobre una solicitud. Fuera del flujo normal. */
+async function siesaReintentarTraslado() {
+  const id = parseInt(document.getElementById('rec-traslado-id')?.value, 10);
+  const out = document.getElementById('rec-traslado-resultado');
+  if (!Number.isFinite(id)) { alerta('Poné el ID de la solicitud', 'error'); return; }
+  if (!confirm(`Se va a crear una REQUISICIÓN formal (174646) en Siesa para la ` +
+               `solicitud ${id}.
+
+Esto NO es parte del flujo normal de traslados. ` +
+               `Solo hacelo si el consultor de Siesa lo pidió.
+
+¿Continuar?`)) return;
+  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Enviando…</p>';
+  try {
+    const r = await post(`/api/traslados/${id}/reintentar-siesa`, {});
+    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
+      ${r.mensaje || 'Requisición creada'} ${r.consecutivo ? '· ' + r.consecutivo : ''}</p>`;
+  } catch (e) {
+    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
+  }
 }
 
 /** Adelanta el ciclo de la cola. No fuerza nada: solo no espera los 5 minutos. */

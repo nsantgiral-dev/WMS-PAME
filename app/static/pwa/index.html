@@ -1216,7 +1216,15 @@
     <div id="tab-muelle" class="admin-content" style="display:none;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
         <div style="font-size:16px;font-weight:700;">🚛 Monitor de Muelle</div>
-        <div id="muelle-contador" style="font-size:12px;color:#666;"></div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <!-- El manifiesto es el papel que va con el conductor y contra el que
+               firma el cliente. El endpoint existía sin botón. -->
+          <button onclick="muelleImprimirManifiesto()"
+            style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">
+            🖨 Manifiesto
+          </button>
+          <div id="muelle-contador" style="font-size:12px;color:#666;"></div>
+        </div>
       </div>
 
       <!-- Ruta activa -->

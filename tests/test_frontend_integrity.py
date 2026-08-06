@@ -462,8 +462,6 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
-    '/api/admin/remision/<int:packing_id>':
-        'Remisión en PDF. Falta el gesto de impresión.',
     '/api/auth/me':
         'DUPLICADO: el login ya devuelve el usuario completo. Pedirlo otra vez es un viaje de red por un dato que el cliente tiene. Candidato a BORRAR, no a conectar.',
     '/api/compras/armador/contenedores':
@@ -480,10 +478,6 @@ DEUDA_SIN_UI = {
         'DUPLICADO de /api/dashboard/resumen-completo, que es el que consume el panel. Dos endpoints que calculan lo mismo divergen: el día que cambie un KPI, uno de los dos queda mintiendo.',
     '/api/dashboard/movimientos':
         'DUPLICADO: /resumen-completo ya trae los movimientos del panel.',
-    '/api/despacho_parcial/<int:packing_id>/compromisos':
-        'Diagnóstico del paso 244328. Se lee para entender por qué falló un despacho parcial, no para operar.',
-    '/api/despacho_parcial/<int:packing_id>/facturar-rm-manual':
-        'RECUPERACIÓN SIN GESTO: factura una remisión existente cuando la cadena 244328→142945→142943 se cortó en el último paso.',
     '/api/empaques/lpn/<string:codigo>/consumir':
         ('Consumo manual de un LPN. Sin UI, un empaque que se abrió y no se '
          'escaneó queda ACTIVO para siempre: el sistema cree que hay una paca '
@@ -498,10 +492,6 @@ DEUDA_SIN_UI = {
         'DUPLICADO de /api/mobile/tarea-actual.',
     '/api/muelle/historial':
         'Historial del muelle. La pantalla muestra el estado actual, no el histórico.',
-    '/api/muelle/manifiesto':
-        'Manifiesto de carga imprimible. Falta el botón de imprimir.',
-    '/api/packing/<int:id>/forzar-siesa':
-        'RECUPERACIÓN SIN GESTO. Fuerza el envío a Siesa de una tarea trabada. Es más peligroso que reconciliar —CREA documentos— y por eso no entró al panel junto con los otros: necesita confirmación explícita y un motivo escrito antes de exponerlo. Hasta entonces, curl con JWT de admin.',
     '/api/packing/crear-desde-picking':
         'Alta manual de packing. El flujo normal la crea sola.',
     '/api/packing/crear-manual':
@@ -534,12 +524,8 @@ DEUDA_SIN_UI = {
         'Sincronización del catálogo. Corre por cron; el disparo manual es para cuando entra un producto nuevo y no se quiere esperar.',
     '/api/siesa/terceros-contacto':
         'Consulta de contacto de terceros. Se usó para verificar el maestro contra producción desde la app, no desde una sesión de desarrollo.',
-    '/api/traslados/<int:id>/reintentar-siesa':
-        'RECUPERACIÓN SIN GESTO. Dispara el 174646 (requisición formal), que NO está en el flujo normal — el real usa 173076 al despachar y 173079 al recibir. Se usa cuando el consultor Siesa pide una requisición previa. Conectar cuando ese caso deje de ser excepcional.',
     '/api/traslados/bodegas-siesa':
         'Catálogo de bodegas. La pantalla usa el maestro local.',
-    '/api/traslados/recuperar-packing':
-        'RECUPERACIÓN SIN GESTO para un traslado cuyo packing quedó a medias.',
 
     '/api/kardex/reconstruir':
         'Decisión: ¿le creo al stock diario? Reconstruye la serie hacia atrás. '

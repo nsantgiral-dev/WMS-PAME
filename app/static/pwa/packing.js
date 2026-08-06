@@ -771,23 +771,8 @@ function empMostrarBotonFactura(packingId, numeroPedido) {
 
 /** Imprime factura electrónica en ventana emergente. @param {number} packingId */
 async function empImprimirFactura(packingId) {
-  try {
-    const resp = await fetch(`/api/packing/${packingId}/factura`, {
-      headers: { 'Authorization': 'Bearer ' + TOKEN }
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      alerta(err.error || 'No se pudo generar la factura', 'error');
-      return;
-    }
-    const html = await resp.text();
-    const win = window.open('', '_blank');
-    if (!win) { alerta('Permite ventanas emergentes para imprimir la factura', 'error'); return; }
-    win.document.write(html);
-    win.document.close();
-  } catch (e) {
-    alerta('Error de conexión al generar factura', 'error');
-  }
+  // Usa `imprimirDocumento` de app.js: era el mismo bloque copiado.
+  await imprimirDocumento(`/api/packing/${packingId}/factura`, 'la factura');
 }
 
 // ─────────────────────────────────────────────────────────────

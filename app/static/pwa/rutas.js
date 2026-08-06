@@ -2676,3 +2676,93 @@ function verExpedienteVehiculo(placa) {
   // la ficha, o el modal escribiría sobre un contenedor que todavía no existe.
   cargarFlota().then(() => flotaAbrirFicha(placa));
 }
+
+// ─────────────────────────────────────────────────────────────
+// MANIFIESTO DE CARGA — el papel que va con el conductor
+// ─────────────────────────────────────────────────────────────
+
+/** Imprime el manifiesto del día: qué bultos salen, agrupados por destino.
+ *
+ * `/api/muelle/manifiesto` existía desde antes y **no lo llamaba ninguna
+ * pantalla**. El servicio ya agrupa por parada y cuenta bultos por tipo; lo que
+ * faltaba era el gesto.
+ *
+ * Por qué importa que sea papel y no una pantalla: es lo que el conductor lleva
+ * y contra lo que el cliente firma. Hoy esa cuenta se hace de memoria, y una
+ * caja de menos aparece tres días después sin forma de saber si salió.
+ *
+ * El documento se arma acá porque el endpoint devuelve datos, no HTML. El
+ * criterio para eso es del servidor —qué bultos, qué agrupación, qué día
+ * operativo— y esta función solo lo dibuja.
+ */
+async function muelleImprimirManifiesto() {
+  let d;
+  try {
+    d = await get('/api/muelle/manifiesto');
+  } catch (e) {
+    alerta('No se pudo traer el manifiesto: ' + e.message, 'error');
+    return;
+  }
+  const paradas = d.manifiesto || [];
+  if (!paradas.length) {
+    alerta('No hay bultos cargados hoy — no hay manifiesto que imprimir', 'advertencia');
+    return;
+  }
+
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const cuerpo = paradas.map(par => `
+    <h2>${esc(par.destino)} <span class="tot">${par.total_bultos} bulto(s)</span></h2>
+    <table>
+      <thead><tr><th>Pedido</th><th>Cliente</th><th>Bultos</th><th class="firma">Recibido</th></tr></thead>
+      <tbody>${par.pedidos.map(p => `
+        <tr>
+          <td>${esc(p.numero_pedido)}</td>
+          <td>${esc(p.cliente)}</td>
+          <td>${p.total_bultos} · ${Object.entries(p.resumen || {})
+                .map(([t, n]) => `${esc(t)}×${n}`).join(' ')}</td>
+          <td class="firma"></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`).join('');
+
+  const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">
+    <title>Manifiesto de carga ${esc(d.fecha)}</title>
+    <style>
+      body{font-family:system-ui,-apple-system,sans-serif;margin:24px;color:#000}
+      h1{font-size:20px;margin:0 0 2px}
+      .sub{color:#555;font-size:13px;margin-bottom:18px}
+      h2{font-size:15px;margin:20px 0 6px;border-bottom:2px solid #000;padding-bottom:3px}
+      .tot{font-weight:400;color:#555;font-size:13px}
+      table{width:100%;border-collapse:collapse;font-size:13px}
+      th,td{border:1px solid #999;padding:6px 8px;text-align:left;vertical-align:top}
+      th{background:#eee}
+      /* La columna de firma se imprime vacía a propósito: es donde el cliente
+         firma que recibió esos bultos. Un manifiesto sin dónde firmar es una
+         lista, no un comprobante. */
+      .firma{width:26%}
+      tbody .firma{height:34px}
+      .pie{margin-top:26px;font-size:12px;color:#555;display:flex;
+           justify-content:space-between;gap:30px}
+      .pie div{border-top:1px solid #000;padding-top:4px;flex:1}
+      @media print{body{margin:10mm} .noprint{display:none}}
+    </style></head><body>
+    <h1>Manifiesto de carga</h1>
+    <div class="sub">${esc(d.fecha)} · ${d.total_bultos} bulto(s) · ${paradas.length} parada(s)</div>
+    ${cuerpo}
+    <div class="pie">
+      <div>Entregó (bodega)</div><div>Recibió (conductor)</div><div>Placa</div>
+    </div>
+    <button class="noprint" onclick="window.print()"
+      style="margin-top:20px;padding:10px 18px;font-size:14px;cursor:pointer">Imprimir</button>
+    </body></html>`;
+
+  const ventana = window.open('', '_blank');
+  if (!ventana) {
+    alerta('El navegador bloqueó la ventana emergente — permití popups', 'advertencia');
+    return;
+  }
+  ventana.document.write(html);
+  ventana.document.close();
+}
