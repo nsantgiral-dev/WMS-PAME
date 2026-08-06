@@ -916,8 +916,12 @@ async function repoVerEvidencia(referencia, idFila) {
   });
   tramos.sort((a, b) => (b.hasta > a.hasta ? 1 : -1));
 
+  // `day: 'numeric'` y no `'2-digit'`: el patrón de es-CO ignora el relleno con
+  // cero y devuelve «1 de jul» igual. Verificado contra ICU — dejar `2-digit`
+  // declaraba una intención que no ocurre, y alguien la leería como garantía de
+  // ancho fijo al alinear la lista.
   const _d = f => new Date(f + 'T00:00:00').toLocaleDateString('es-CO',
-    { day: '2-digit', month: 'short' });
+    { day: 'numeric', month: 'short' });
   const _largo = t => Math.round(
     (new Date(t.hasta + 'T00:00:00') - new Date(t.desde + 'T00:00:00')) / 86400000) + 1;
 
