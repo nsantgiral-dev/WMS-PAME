@@ -318,14 +318,23 @@ def custodia_traspaso():
     # descarga de responsabilidad a quien efectivamente lo tiene.
     if ubicacion is not None:
         exigido = custodio_de_ubicacion(ubicacion)
-        if tipo is not exigido:
+        # `!=` y no `is not`. Comparar enums por IDENTIDAD asume que la clase se
+        # cargó una sola vez, y con `flota/` fuera de `app/` el mismo módulo
+        # puede quedar importado por dos rutas distintas: dos clases, miembros
+        # distintos, `is` falso entre valores iguales.
+        #
+        # El síntoma fue un 400 diciendo «Un vehículo en «sede» queda bajo
+        # custodia de tipo «sede», no «sede»» — un mensaje que compara un valor
+        # consigo mismo y afirma que difieren. Lo encontró el test de día
+        # completo, y solo al correr la suite entera: aislado pasaba.
+        if tipo != exigido:
             return jsonify({
                 'error': f'Un vehículo en «{ubicacion.value}» queda bajo custodia '
                          f'de tipo «{exigido.value}», no «{tipo.value}».',
                 'motivo': ('Fuera de sede el vehículo sigue en manos del '
                            'conductor: pasarlo a la sede diría que responde '
                            'alguien que no lo vio.'
-                           if ubicacion is Ubicacion.FUERA_DE_SEDE else
+                           if ubicacion == Ubicacion.FUERA_DE_SEDE else
                            'En sede o taller responde la sede, no el conductor '
                            'que ya se fue.'),
             }), 400

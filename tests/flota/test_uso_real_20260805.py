@@ -70,7 +70,12 @@ class TestLaPlacaViajaConElFormulario:
         """
         js = _js()
         assert js.count('function flotaPlacaDelFormulario') == 1
-        assert js.count('flotaPlacaDelFormulario(') == 4   # 1 definición + 3 usos
+        # 1 definición + los SEIS formularios que escriben contra una placa:
+        # recibo de escritorio, recibo del conductor, entrega, ficha, odómetro y
+        # documentos. La primera pasada selló solo los tres que mandan fotos, y
+        # el que quedó afuera —la ficha— guardó en el vehículo equivocado esa
+        # misma tarde.
+        assert js.count('flotaPlacaDelFormulario(') == 7
 
     def test_la_comprobacion_compara_las_dos_fuentes(self):
         js = _js()
@@ -335,3 +340,222 @@ class TestLaConvencionEstaEnLaPantalla:
         assert js.count('${flotaConvencionFotos()}') == 3, (
             'un formulario que pide fotos sin la convención produce fotos que no '
             'se pueden comparar con las de los otros')
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# SEGUNDA RONDA — lo que Yesid encontró después del primer arreglo
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestUnConductorPuedeSoltarSuPropioVehiculo:
+    """El gesto más común del día estaba bloqueado, y el mensaje era absurdo.
+
+    Víctor tenía el UPQ606. Al apretar «Entregar UPQ606» recibía:
+    *«El UPQ606 lo tiene Victor desde 04/08 a las 01:54. Si lo vas a recibir
+    vos, Victor tiene que cerrar su turno primero.»* — dicho al propio Víctor.
+
+    La causa: el adaptador decidía comparando el custodio ENTRANTE con el
+    vigente. Al entregar a una sede el custodio entrante no es un conductor, así
+    que la comparación daba falso y caía en el rechazo pensado para *«no le
+    quites el vehículo a otro»*. El guard que protege a un conductor de otro
+    estaba impidiendo que el dueño lo soltara.
+
+    La pregunta correcta no es «¿a quién va?» sino «¿quién lo tiene ahora?».
+    """
+
+    def _veredicto(self, es_el_custodio_actual):
+        from datetime import datetime
+
+        from flota.dominio.custodia import QuienPide, puede_recibir
+        from flota.dominio.valores import Custodia
+
+        c = Custodia(vehiculo_id=1, custodio_tipo='conductor',
+                     inicio_ts=datetime(2026, 8, 4, 1, 54),
+                     registrado_por_usuario_id=1, km_inicio=100,
+                     custodio_conductor_id=9)
+        return puede_recibir(c, QuienPide.CONDUCTOR,
+                             nombre_custodio_actual='Víctor', placa='UPQ606',
+                             es_el_custodio_actual=es_el_custodio_actual)
+
+    def test_el_custodio_actual_puede_cerrar_su_turno(self):
+        v = self._veredicto(True)
+        assert v.puede is True
+        assert v.requiere_forzado is False, (
+            'cerrar el turno propio no es un forzado: no hay nada que forzar')
+
+    def test_otro_conductor_sigue_sin_poder_quitarselo(self):
+        """El guard no se aflojó: se le corrigió la pregunta."""
+        v = self._veredicto(False)
+        assert v.puede is False
+        assert 'Víctor' in v.mensaje
+
+    def test_el_adaptador_resuelve_por_USUARIO_no_por_conductor(self):
+        """Quien pide se identifica con su cuenta; `Conductor.usuario_id` los une.
+
+        Comparar ids de conductor era justamente el error: al entregar a una
+        sede no hay conductor entrante con el que comparar.
+        """
+        from pathlib import Path
+
+        fuente = (Path(__file__).resolve().parents[2] / 'flota' / 'adaptadores'
+                  / 'traspaso.py').read_text(encoding='utf-8')
+        i = fuente.index('es_el_custodio_actual = (')
+        cuerpo = fuente[i:i + 400]
+        assert 'custodio_conductor.usuario_id' in cuerpo
+        assert 'registrado_por_usuario_id' in cuerpo
+
+
+class TestElVisorExisteDondeSeUsa:
+    """«No da opciones para el cómo estaba» — Yesid, 2:09 PM.
+
+    Lo que veía era mi propio mensaje de error: *«la pantalla no tiene dónde
+    mostrar la foto — falta #flota-visor»*. El div estaba en el recibo de
+    escritorio y en documentos, y faltaba en las DOS pantallas del conductor —
+    que son las únicas donde el botón «cómo estaba» existe.
+
+    El botón no estaba roto: estaba en una pantalla sin dónde pintar.
+    """
+
+    def test_las_cuatro_pantallas_tienen_visor(self):
+        js = _js()
+        assert js.count('id="flota-visor"') == 4, (
+            'una pantalla que ofrece «cómo estaba» sin visor produce un botón '
+            'que responde con un error interno')
+
+    def test_el_error_sigue_siendo_ruidoso(self):
+        """No se quitó el mensaje: se quitó la causa. Si mañana aparece una
+        quinta pantalla sin visor, tiene que gritar igual."""
+        js = _js()
+        assert 'falta #flota-visor' in js
+
+
+class TestLaFichaNoDiceGuardadaSobreOtroVehiculo:
+    """«Sale ficha guardada y no almacena» — en tres vehículos.
+
+    Dos causas distintas se sumaban y las dos daban el mismo síntoma:
+
+    1. El service worker cacheaba `/flota/*` (ver `tests/test_red_pwa.py`): la
+       ficha se guardaba bien y el GET siguiente devolvía la respuesta vieja.
+    2. `flotaGuardarFicha` armaba la URL con `FLOTA_PLACA` — la misma global
+       mutable que cruzó las fotos. La ficha se guardaba en OTRO vehículo.
+
+    La segunda es la que da miedo: no perdía el dato, lo ponía en el expediente
+    de otro camión y decía «guardada ✓».
+    """
+
+    def test_ningun_destino_de_escritura_sale_de_la_global(self):
+        js = _js()
+        malas = [l.strip() for l in js.split('\n')
+                 if 'FLOTA_PLACA' in l and ('/ficha' in l or '/documentos' in l)]
+        assert not malas, f'volvió a construir la URL con la global: {malas}'
+
+    def test_los_seis_formularios_sellan_su_placa(self):
+        js = _js()
+        assert js.count('data-placa=') == 6, (
+            'recibo escritorio, recibo conductor, entrega, ficha, odómetro y '
+            'documentos: los seis escriben contra una placa')
+
+    def test_el_aviso_de_guardado_dice_sobre_QUE_vehiculo(self):
+        """Un «guardada ✓» sin placa no se puede desmentir mirando la pantalla."""
+        js = _js()
+        i = js.index("'Ficha guardada y completa ✓'")
+        assert "+ ' · ' + placa" in js[i:i + 400]
+
+
+class TestElDiaCompletoDeUnConductor:
+    """Recibir y ENTREGAR, de punta a punta, por HTTP.
+
+    Este test no existía y por eso el bloqueo llegó a producción: había tests de
+    recibir y tests del dominio de entregar, pero ninguno que hiciera el día
+    entero contra los endpoints. La entrega a sede —el gesto de las 6 p.m., el
+    más frecuente de todos— nunca se había ejercido completa.
+
+    Es la lección de la tanda 1 aplicada a los tests, no al producto: una cosa
+    construida y verificada de verdad vale más que cinco probadas por partes.
+    """
+
+    @pytest.fixture
+    def mundo(self, app, db):
+        from flask_jwt_extended import create_access_token
+
+        from app.models.almacen import Almacen
+        from app.models.conductor import Conductor
+        from app.models.usuario import Usuario
+        from app.models.vehiculo import Vehiculo
+
+        veh = Vehiculo(placa='DIA100', tipo='NHR', activo=True)
+        alm = Almacen(codigo='DIA-SEDE', nombre='Sede del día')
+        u = Usuario(email='victor-dia@x.com', nombre='Víctor',
+                    rol='conductor', activo=True)
+        u.set_password('x')
+        db.session.add_all([veh, alm, u])
+        db.session.flush()
+        c = Conductor(nombre='Víctor', cedula='DIA-1', activo=True, usuario_id=u.id)
+        db.session.add(c)
+        db.session.commit()
+        with app.app_context():
+            token = create_access_token(identity=str(u.id))
+        return {'placa': veh.placa, 'alm': alm.id, 'con': c.id, 'token': token}
+
+    def _post(self, client, mundo, payload):
+        return client.post('/flota/custodia/traspaso', json=payload,
+                           headers={'Authorization': f"Bearer {mundo['token']}"})
+
+    def test_recibe_y_despues_ENTREGA_a_la_sede(self, client, mundo):
+        recibo = self._post(client, mundo, {
+            'placa': mundo['placa'], 'km': 100_000,
+            'custodio_tipo': 'conductor', 'custodio_conductor_id': mundo['con'],
+        })
+        assert recibo.status_code in (200, 201), recibo.get_json()
+
+        entrega = self._post(client, mundo, {
+            'placa': mundo['placa'], 'km': 100_180,
+            'custodio_tipo': 'sede', 'custodio_sede_id': mundo['alm'],
+            'ubicacion': 'sede',
+        })
+        assert entrega.status_code in (200, 201), (
+            f'un conductor no pudo entregar su propio vehículo: '
+            f'{entrega.get_json()}')
+
+    def test_y_puede_dejarlo_FUERA_de_sede_con_motivo(self, client, mundo):
+        self._post(client, mundo, {
+            'placa': mundo['placa'], 'km': 100_000,
+            'custodio_tipo': 'conductor', 'custodio_conductor_id': mundo['con'],
+        })
+        r = self._post(client, mundo, {
+            'placa': mundo['placa'], 'km': 100_200,
+            'custodio_tipo': 'conductor', 'custodio_conductor_id': mundo['con'],
+            'ubicacion': 'fuera_de_sede',
+            'ubicacion_motivo': 'se quedó sin batería en Pitalito',
+        })
+        assert r.status_code in (200, 201), r.get_json()
+
+    def test_pero_OTRO_conductor_sigue_sin_poder_quitarselo(self, app, client, db, mundo):
+        """El guard no se aflojó."""
+        from flask_jwt_extended import create_access_token
+
+        from app.models.conductor import Conductor
+        from app.models.usuario import Usuario
+
+        self._post(client, mundo, {
+            'placa': mundo['placa'], 'km': 100_000,
+            'custodio_tipo': 'conductor', 'custodio_conductor_id': mundo['con'],
+        })
+
+        otro_u = Usuario(email='otro-dia@x.com', nombre='Otro',
+                         rol='conductor', activo=True)
+        otro_u.set_password('x')
+        db.session.add(otro_u)
+        db.session.flush()
+        otro_c = Conductor(nombre='Otro', cedula='DIA-2', activo=True,
+                           usuario_id=otro_u.id)
+        db.session.add(otro_c)
+        db.session.commit()
+        with app.app_context():
+            token = create_access_token(identity=str(otro_u.id))
+
+        r = client.post('/flota/custodia/traspaso', json={
+            'placa': mundo['placa'], 'km': 100_050,
+            'custodio_tipo': 'conductor', 'custodio_conductor_id': otro_c.id,
+        }, headers={'Authorization': f'Bearer {token}'})
+        assert r.status_code == 409
+        assert 'Víctor' in r.get_json()['error']

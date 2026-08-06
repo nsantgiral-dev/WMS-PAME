@@ -46,7 +46,7 @@ class Hueco:
 
 def puede_recibir(custodia_vigente, quien_pide: QuienPide,
                   nombre_custodio_actual: str = '', placa: str = '',
-                  desde: str = '') -> Veredicto:
+                  desde: str = '', es_el_custodio_actual: bool = False) -> Veredicto:
     """Si quien pide puede abrir custodia sobre este vehículo.
 
     QUÉ AFIRMA: si la operación está permitida y si necesita un forzado
@@ -56,7 +56,10 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
     veces en un mes significa que los conductores no están cerrando turno, y eso
     lo dice el contador del health, no esta función.
 
-    Tres casos:
+    Cuatro casos:
+
+    · **Quien pide YA es el custodio** — se puede, siempre y sin forzado. Está
+      cerrando su propio turno; a quién se lo entregue es otra decisión.
 
     · **Sin custodia vigente** — se puede, sin más.
     · **Vigente del mismo conductor** — se puede: recibir lo que ya se tiene es
@@ -73,6 +76,23 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
     dónde está manda a la gente a buscar la palabra en la pantalla.
     """
     if custodia_vigente is None:
+        return Veredicto(True, False, '')
+
+    # CERRAR EL TURNO PROPIO SIEMPRE SE PUEDE.
+    #
+    # Esta rama faltaba y bloqueaba el gesto más común del día. El adaptador
+    # decidía por comparación de custodios —`vigente.custodio_conductor_id ==
+    # custodio_conductor_id`—, y al ENTREGAR a una sede el custodio entrante no
+    # es un conductor: la comparación daba falso y caía en el rechazo de abajo.
+    #
+    # Resultado, el 2026-08-05: Víctor no podía entregar el UPQ606 que él mismo
+    # tenía, y el mensaje que recibía hablaba de RECIBIRLO — «si lo vas a
+    # recibir vos, Víctor tiene que cerrar su turno primero», dicho al propio
+    # Víctor. El guard que existe para que nadie le quite el vehículo a otro
+    # estaba impidiendo que su dueño lo soltara.
+    #
+    # La pregunta correcta no es «¿a quién va?» sino «¿quién lo tiene ahora?».
+    if es_el_custodio_actual:
         return Veredicto(True, False, '')
 
     if quien_pide == QuienPide.CONDUCTOR:

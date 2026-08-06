@@ -263,7 +263,9 @@ def custodio_de_ubicacion(ubicacion: 'Ubicacion') -> CustodioTipo:
     con riesgo real, y por eso además exige motivo escrito y sale marcado en el
     tablero de control de flota.
     """
-    if ubicacion is Ubicacion.FUERA_DE_SEDE:
+    # `==` y no `is`: ver la nota en `flota/api/custodia.py`. Un enum comparado
+    # por identidad depende de que su módulo se haya cargado una sola vez.
+    if ubicacion == Ubicacion.FUERA_DE_SEDE:
         return CustodioTipo.CONDUCTOR
     return CustodioTipo.SEDE
 

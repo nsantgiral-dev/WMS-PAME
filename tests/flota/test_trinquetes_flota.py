@@ -842,3 +842,74 @@ class TestCadaCampoLibreDeLaFichaTieneGuiaDeFormato:
 
     def test_la_pantalla_avisa_que_el_gris_no_es_la_respuesta(self):
         assert 'ejemplo de formato' in self._js()
+
+
+class TestNingunEnumSeComparaPorIdentidad:
+    """TRINQUETE — `is` sobre un enum asume que su módulo se cargó una sola vez.
+
+    `flota/` vive FUERA de `app/`, y el mismo módulo puede quedar importado por
+    dos rutas distintas: dos clases enum, miembros distintos, `is` falso entre
+    valores iguales. El resultado no es un error de importación sino una regla
+    de negocio que rechaza lo correcto.
+
+    Pasó el 2026-08-05: la entrega a sede devolvía 400 con el mensaje «Un
+    vehículo en «sede» queda bajo custodia de tipo «sede», no «sede»» — un texto
+    que compara un valor consigo mismo y afirma que difieren. Aislado el test
+    pasaba; solo apareció al correr la suite entera.
+
+    Se vigila por AST y no por texto: `is not None` es legítimo y una regex que
+    busque " is " lo marca igual.
+    """
+
+    _ENUMS = ('CustodioTipo', 'CustodioEstado', 'Ubicacion', 'OrigenLectura',
+              'ClaseFoto', 'EntidadFoto', 'QuienPide')
+
+    def test_ningun_is_contra_un_miembro_de_enum(self):
+        violaciones = []
+        for ruta in _archivos_py(_FLOTA):
+            arbol = ast.parse(_leer(ruta), filename=ruta)
+            for nodo in ast.walk(arbol):
+                if not isinstance(nodo, ast.Compare):
+                    continue
+                if not any(isinstance(op, (ast.Is, ast.IsNot)) for op in nodo.ops):
+                    continue
+                for lado in [nodo.left] + list(nodo.comparators):
+                    # `X.MIEMBRO` donde X es uno de los enums del dominio.
+                    if (isinstance(lado, ast.Attribute)
+                            and isinstance(lado.value, ast.Name)
+                            and lado.value.id in self._ENUMS):
+                        violaciones.append(
+                            f'{_rel(ruta)}:{nodo.lineno} — '
+                            f'{lado.value.id}.{lado.attr} comparado con is')
+        assert not violaciones, (
+            '\n' + '\n'.join(f'  · {v}' for v in violaciones)
+            + '\n\nUsar `==`. Un enum comparado por identidad falla en silencio '
+              'si su módulo se importa por dos rutas — y el fallo es una regla '
+              'de negocio rechazando lo correcto, no un ImportError.')
+
+    def test_el_detector_ve_el_patron(self):
+        """Sin esto, un cambio de nombre deja el guard en verde para siempre."""
+        arbol = ast.parse('x = tipo is not CustodioTipo.SEDE\n')
+        encontrado = False
+        for nodo in ast.walk(arbol):
+            if isinstance(nodo, ast.Compare) and any(
+                    isinstance(o, (ast.Is, ast.IsNot)) for o in nodo.ops):
+                for lado in [nodo.left] + list(nodo.comparators):
+                    if (isinstance(lado, ast.Attribute)
+                            and isinstance(lado.value, ast.Name)
+                            and lado.value.id in self._ENUMS):
+                        encontrado = True
+        assert encontrado
+
+    def test_is_not_None_sigue_siendo_legitimo(self):
+        """El guard no puede castigar la comparación correcta con None."""
+        arbol = ast.parse('if vigente is not None: pass\n')
+        marcado = False
+        for nodo in ast.walk(arbol):
+            if isinstance(nodo, ast.Compare):
+                for lado in [nodo.left] + list(nodo.comparators):
+                    if (isinstance(lado, ast.Attribute)
+                            and isinstance(lado.value, ast.Name)
+                            and lado.value.id in self._ENUMS):
+                        marcado = True
+        assert not marcado

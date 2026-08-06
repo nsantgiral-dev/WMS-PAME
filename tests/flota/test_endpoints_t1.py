@@ -446,8 +446,22 @@ class TestVistaDelConductor:
         traspaso.traspasar(
             vehiculo_id=flota_mundo['veh'], km=100_000, registrado_por_usuario_id=usuario.id,
             custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=conductor.id)
+        # El admin tiene que ser OTRO usuario, no un `1` mágico.
+        #
+        # Desde el 2026-08-05 «quien pide ES el custodio actual» significa algo:
+        # cerrar el turno propio no es un cierre forzado. Con `usuario_id=1`
+        # coincidiendo por casualidad con la cuenta del conductor, este test
+        # afirmaba un forzado que no ocurría.
+        from app.models.usuario import Usuario
+        admin = Usuario(email='admin-forzado@x.com', nombre='Admin',
+                        rol='admin', activo=True)
+        admin.set_password('x')
+        db.session.add(admin)
+        db.session.commit()
+
         traspaso.traspasar(
-            vehiculo_id=flota_mundo['veh'], km=100_100, registrado_por_usuario_id=1,
+            vehiculo_id=flota_mundo['veh'], km=100_100,
+            registrado_por_usuario_id=admin.id,
             custodio_tipo=CustodioTipo.SEDE, custodio_sede_id=flota_mundo['alm'],
             quien_pide=QuienPide.ADMIN_ZONA, motivo_forzado='se fue sin cerrar')
 

@@ -30,15 +30,37 @@ self.addEventListener('activate', (event) => {
 // 915 KB de JS por cada carga de cada pantalla, y con `no-store` en el servidor
 // ni el navegador los reusaba. Es la mayor parte de los ~390 GB de red del mes.
 //
-// La API queda afuera a propósito: un pedido, un inventario o una custodia
-// servidos de caché son datos viejos presentados como actuales, que es la peor
-// clase de dato en un WMS.
+// SE CACHEA POR LISTA BLANCA, NO POR EXCLUSIÓN.
+//
+// La primera versión excluía `/api/` y cacheaba todo lo demás. El módulo de
+// flota no cuelga de `/api/` sino de `/flota/`, así que sus GET quedaron
+// cacheados: la ficha técnica se guardaba bien, se volvía a pedir, y el
+// navegador devolvía la respuesta VIEJA —la de antes de guardar—. En pantalla:
+// «Ficha guardada y completa ✓» e inmediatamente el formulario en blanco.
+// Yesid lo reportó en tres vehículos el 2026-08-05.
+//
+// La lección no es que faltaba `/flota/` en la lista de exclusiones. Es que una
+// lista de exclusiones es la forma equivocada de escribir esto: cada módulo
+// nuevo montado en un prefijo nuevo entra al caché **por omisión**, y el fallo
+// no es un error sino datos viejos presentados como actuales — la peor clase de
+// dato en un WMS, y la más difícil de notar.
+//
+// Con lista blanca, lo que no está declarado va a la red. Un módulo nuevo no
+// puede quedar cacheado por olvido.
+function esDelShell(url) {
+  // Los archivos estáticos del PWA: JS, CSS, imágenes, manifest.
+  if (url.pathname.startsWith('/static/')) return true;
+  // La página en sí.
+  if (url.pathname === '/pwa' || url.pathname === '/pwa/') return true;
+  return false;
+}
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET') return;
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith('/api/')) return;
-  // El propio sw y el manifest son el canal de actualización: nunca de caché.
+  if (!esDelShell(url)) return;
+  // El propio sw es el canal de actualización: nunca de caché.
   if (url.pathname.endsWith('/sw.js')) return;
 
   event.respondWith(

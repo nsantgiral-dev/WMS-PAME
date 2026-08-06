@@ -146,6 +146,19 @@ def traspasar(
         and vigente.custodio_conductor_id is not None
         and vigente.custodio_conductor_id == custodio_conductor_id
     )
+    # ¿Quien está pidiendo esto ES el custodio actual? Es otra pregunta que
+    # `mismo_custodio`, y la diferencia es el día entero: al ENTREGAR a una sede
+    # el custodio entrante no es un conductor, así que `mismo_custodio` da falso
+    # y el conductor quedaba sin poder soltar su propio vehículo.
+    #
+    # Se resuelve por USUARIO y no por conductor porque quien pide se identifica
+    # con su cuenta; el vínculo `Conductor.usuario_id` es el que los une.
+    es_el_custodio_actual = (
+        vigente is not None
+        and vigente.custodio_conductor is not None
+        and vigente.custodio_conductor.usuario_id is not None
+        and vigente.custodio_conductor.usuario_id == registrado_por_usuario_id
+    )
     forzado = False
     if vigente is not None and not mismo_custodio:
         nombre = (vigente.custodio_conductor.nombre
@@ -155,6 +168,7 @@ def traspasar(
             nombre_custodio_actual=nombre,
             placa=Vehiculo.query.get(vehiculo_id).placa if vehiculo_id else '',
             desde=vigente.inicio_ts.strftime('%d/%m a las %H:%M'),
+            es_el_custodio_actual=es_el_custodio_actual,
         )
         if not veredicto.puede:
             raise CustodiaInvalida(veredicto.mensaje)

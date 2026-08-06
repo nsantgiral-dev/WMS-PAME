@@ -794,7 +794,8 @@ function flotaAbrirOdometro(placa) {
       <input id="od-motivo" style="width:100%;padding:6px">
     </div>
     <button class="btn-primary" style="margin-top:14px;width:100%"
-            onclick="flotaEnviarOdometro()">Registrar lectura</button>
+            onclick="flotaEnviarOdometro()" id="od-guardar"
+            data-placa="${placa}">Registrar lectura</button>
     <div id="od-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 }
@@ -817,8 +818,10 @@ async function flotaEnviarOdometro() {
     err.textContent = 'Una corrección sin motivo es indistinguible de un error de digitación.';
     return;
   }
+  const placa = flotaPlacaDelFormulario('od-guardar', 'od-error');
+  if (!placa) return;
   try {
-    await flotaRegistrarOdometro(FLOTA_PLACA, km, origen, motivo);
+    await flotaRegistrarOdometro(placa, km, origen, motivo);
     alerta('Lectura registrada ✓', 'exito');
     flotaAbrirOdometro(FLOTA_PLACA);
   } catch (e) {
@@ -946,7 +949,8 @@ async function flotaAbrirFicha(placa) {
     <label><input type="checkbox" id="fi-tiene_furgon" ${f.tiene_furgon ? 'checked' : ''}> Tiene furgón</label>
 
     <button class="btn-primary" style="margin-top:16px;width:100%;font-size:18px"
-            onclick="flotaGuardarFicha()">Guardar ficha</button>
+            onclick="flotaGuardarFicha()" id="fi-guardar"
+            data-placa="${placa}">Guardar ficha</button>
     <div id="fi-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 }
@@ -985,17 +989,26 @@ async function flotaGuardarFicha() {
     return;
   }
 
+  // La MISMA clase que cruzó las fotos el 2026-08-05, en el formulario de al
+  // lado. Se arregló para los tres que mandan fotos y no para éste, y el
+  // síntoma fue peor de leer: la ficha se guardaba —en OTRO vehículo—, la
+  // pantalla decía «Ficha guardada y completa ✓», y al reabrir el vehículo
+  // estaba vacío. Un éxito que miente sobre a qué se aplicó.
+  const placa = flotaPlacaDelFormulario('fi-guardar', 'fi-error');
+  if (!placa) return;
+
   try {
-    const r = await fetch(API + '/flota/vehiculo/' + encodeURIComponent(FLOTA_PLACA) + '/ficha', {
+    const r = await fetch(API + '/flota/vehiculo/' + encodeURIComponent(placa) + '/ficha', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
       body: JSON.stringify(campos),
     });
     const d = await r.json();
     if (!r.ok) { err.textContent = d.detalle || d.error || 'No se pudo guardar'; return; }
-    alerta(d.completa ? 'Ficha guardada y completa ✓'
-                      : 'Ficha guardada — falta: ' + d.atributos_sin_dato.join(', '), 'exito');
-    flotaAbrirFicha(FLOTA_PLACA);
+    alerta((d.completa ? 'Ficha guardada y completa ✓'
+                       : 'Ficha guardada — falta: ' + d.atributos_sin_dato.join(', '))
+           + ' · ' + placa, 'exito');
+    flotaAbrirFicha(placa);
   } catch (e) {
     err.textContent = 'Sin conexión: ' + e.message;
   }
@@ -1105,7 +1118,8 @@ async function flotaAbrirDocumentos(placa) {
       no un campo vacío — y el health lo cuenta aparte de los vencidos.</p>
 
     <button class="btn-primary" style="margin-top:14px;width:100%"
-            onclick="flotaGuardarDocumento()">Guardar documento</button>
+            onclick="flotaGuardarDocumento()" id="doc-guardar"
+            data-placa="${placa}">Guardar documento</button>
     <div id="doc-error" style="color:var(--red);margin-top:8px"></div>
   </div>`;
 
@@ -1187,6 +1201,8 @@ async function flotaCapturarDocumento(input) {
 async function flotaGuardarDocumento() {
   const err = document.getElementById('doc-error');
   err.textContent = '';
+  const placa = flotaPlacaDelFormulario('doc-guardar', 'doc-error');
+  if (!placa) return;
   const estado = document.getElementById('doc-estado').value;
   const cuerpo = { tipo: document.getElementById('doc-tipo').value, estado: estado };
 
@@ -1209,7 +1225,7 @@ async function flotaGuardarDocumento() {
   }
 
   try {
-    const r = await fetch(API + '/flota/vehiculo/' + encodeURIComponent(FLOTA_PLACA) + '/documentos', {
+    const r = await fetch(API + '/flota/vehiculo/' + encodeURIComponent(placa) + '/documentos', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
       body: JSON.stringify(cuerpo),
@@ -1218,7 +1234,7 @@ async function flotaGuardarDocumento() {
     if (!r.ok) { err.textContent = d.detalle || d.error || 'No se pudo guardar'; return; }
     alerta(estado === 'no_encontrado' ? 'Registrado como NO ENCONTRADO' : 'Documento guardado ✓',
            estado === 'no_encontrado' ? 'advertencia' : 'exito');
-    flotaAbrirDocumentos(FLOTA_PLACA);
+    flotaAbrirDocumentos(placa);
   } catch (e) {
     err.textContent = 'Sin conexión: ' + e.message;
   }
@@ -1446,6 +1462,11 @@ async function flotaCondAbrirRecibo() {
     <p style="margin-top:12px"><b>${flotaAngulosDeGrilla(FLOTA_ANGULOS).length} fotos más</b>
        — la del tablero ya está arriba.</p>
     ${flotaConvencionFotos()}<div>${angulos}</div>
+    <!-- Sin este div, «cómo estaba» responde «la pantalla no tiene dónde
+         mostrar la foto». Estaba en el recibo de escritorio y en documentos, y
+         faltaba en las DOS pantallas del conductor — que son las únicas donde
+         ese botón existe. -->
+    <div id="flota-visor" style="margin-top:12px"></div>
     <button class="btn-primary" id="cf-guardar" data-placa="${FLOTA_PLACA}"
             onclick="flotaCondGuardar()">Confirmar ${FLOTA_PLACA}</button>
     <div id="cf-error" style="color:var(--red);margin-top:8px"></div>`;
@@ -1528,6 +1549,7 @@ async function flotaCondAbrirEntrega() {
         : ''}</p>
     ${flotaConvencionFotos()}
     <div>${angulos}</div>
+    <div id="flota-visor" style="margin-top:12px"></div>
 
     <label class="input-label" style="margin-top:12px">¿Dónde queda el vehículo?</label>
     <select id="cf-ubicacion" class="input-field" onchange="flotaEntregaUbicacionCambio()">
