@@ -829,8 +829,8 @@ async function cargarPedidos() {
         } else {
           // Sin tareas — listo para despachar
           accionBtn = `<button onclick="iniciarDespachoDesdeSiesa(${i})"
-            style="flex-shrink:0;background:#fff;color:#000;border:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            Despachar
+            style="flex-shrink:0;background:var(--pm);color:#fff;border:none;padding:10px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Aprobar
           </button>`;
         }
 
@@ -1842,7 +1842,7 @@ async function iniciarDespachoDesdeSiesa(idx) {
     return;
   }
   const totalUds = itemsValidos.reduce((s, it) => s + (it.cantidad_pendiente || 0), 0);
-  if (!confirm(`¿Iniciar despacho ${pedido.numero_pedido}?\n${itemsValidos.length} productos · ${totalUds} uds → ${pedido.cliente || 'cliente'}`)) return;
+  if (!confirm(`¿Aprobar pedido ${pedido.numero_pedido}?\n${itemsValidos.length} productos · ${totalUds} uds → ${pedido.cliente || 'cliente'}`)) return;
 
   try {
     const r = await post('/api/siesa/iniciar-despacho', {
@@ -1856,12 +1856,12 @@ async function iniciarDespachoDesdeSiesa(idx) {
     if (r.error) { alerta(r.error, 'error'); return; }
     if (r.errores && r.errores.length) {
       console.warn(`[DESPACHO] ${pedido.numero_pedido} — ${r.errores.length} línea(s) sin stock, excluidas de picking y packing:`, r.errores);
-      alerta(`Despacho iniciado — ${r.errores.length} línea(s) sin stock quedaron fuera (pedido parcial). Detalle en consola.`, 'advertencia');
+      alerta(`Pedido aprobado — ${r.errores.length} línea(s) sin stock quedaron fuera (pedido parcial). Detalle en consola.`, 'advertencia');
     } else {
-      alerta(`Despacho iniciado — Packing ${r.packing_codigo}`, 'exito');
+      alerta(`Pedido aprobado — Packing ${r.packing_codigo}`, 'exito');
     }
     setTimeout(cargarPedidos, 800);
-  } catch (e) { alerta('Error iniciando despacho', 'error'); }
+  } catch (e) { alerta('Error aprobando pedido', 'error'); }
 }
 
 // confirmarDespachoSiesa eliminado — el único gatillo hacia Siesa
