@@ -33,25 +33,101 @@ class TestVentanaTemporada:
 
 
 class TestDescensuraTemporada:
-    """Lo que se agotó en enero no puede leerse como 'no se vendía'."""
+    """Lo que se agotó en enero no puede leerse como 'no se vendía'.
+
+    Devuelve `(demanda, censurado)` desde el 2026-08-08. El segundo valor no es
+    cosmético: es lo que la fila del pedido de temporada necesita para declarar
+    que ese Q* se calculó sobre demanda subestimada. Antes se descartaba, y un
+    Q* sobre demanda censurada se veía idéntico a uno sobre demanda real — en
+    una fila que sí declara si el COSTO es supuesto o añejo.
+    """
 
     def test_sin_quiebres_no_cambia_nada(self):
         from app.services.temporada_service import TemporadaService
-        assert TemporadaService._descensurar(900, 90, 90) == 900
+        dem, censurado = TemporadaService._descensurar(900, 90, 90)
+        assert dem == 900
+        assert censurado is False
 
     def test_agotado_la_mitad_duplica_la_demanda(self):
         """450 unidades en 45 de 90 días = 900 de demanda real."""
         from app.services.temporada_service import TemporadaService
-        assert TemporadaService._descensurar(450, 45, 90) == 900
+        dem, censurado = TemporadaService._descensurar(450, 45, 90)
+        assert dem == 900
+        assert censurado is False
 
     def test_nunca_encoge_la_demanda(self):
         """Más días con stock que la ventana es dato sucio: no debe reducir."""
         from app.services.temporada_service import TemporadaService
-        assert TemporadaService._descensurar(900, 120, 90) == 900
+        dem, _ = TemporadaService._descensurar(900, 120, 90)
+        assert dem == 900
 
-    def test_sin_dias_de_stock_devuelve_lo_observado(self):
+    def test_sin_dias_de_stock_devuelve_lo_observado_Y_LO_DECLARA(self):
+        """EL caso que se perdía.
+
+        Sin StockDiario no se puede corregir, así que se devuelve lo observado
+        —conservador, correcto—. Lo que faltaba era decirlo: ese número
+        SUBESTIMA y entraba al newsvendor sin una sola marca.
+        """
         from app.services.temporada_service import TemporadaService
-        assert TemporadaService._descensurar(500, 0, 90) == 500
+        dem, censurado = TemporadaService._descensurar(500, 0, 90)
+        assert dem == 500
+        assert censurado is True, (
+            'volvió a perderse la censura: el Q* se calcula sobre demanda '
+            'subestimada y la fila no lo dice')
+
+    def test_consume_la_politica_unica_y_no_su_propio_min(self):
+        """TRINQUETE — era la TERCERA implementación del mismo denominador.
+
+        El CLAUDE.md ya lo había escrito: «si un fallback se parchea en dos
+        sitios, la tercera implementación divergirá y esa vez nadie estará
+        comparando». Numéricamente coincidían; lo que divergía era que solo una
+        declaraba la censura.
+        """
+        import ast
+        import inspect
+
+        from app.services.temporada_service import TemporadaService
+
+        import textwrap
+        # `dedent` y no `lstrip`: getsource devuelve el método con su sangría de
+        # clase, y lstrip solo corrige la primera línea.
+        fuente = textwrap.dedent(inspect.getsource(TemporadaService._descensurar))
+        arbol = ast.parse(fuente)
+        llamadas = {n.func.id for n in ast.walk(arbol)
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        assert 'dias_expuestos' in llamadas, (
+            '_descensurar volvió a calcular su propio denominador')
+        assert 'min' not in llamadas, (
+            'el `min(dias, ventana)` propio es exactamente la reimplementación '
+            'que la política única existe para evitar')
+
+
+class TestLaFilaDeclaraSiLaDemandaEstaCensurada:
+    """La misma regla que la fila ya aplica al costo, aplicada a la demanda.
+
+    El comentario que acompaña a `fuente_costo` dice: «un Q* sobre cotización
+    vigente y uno sobre promedio de hace 18 meses no valen lo mismo». Vale igual
+    para la demanda, y hasta hoy no se declaraba.
+    """
+
+    def test_el_servicio_propaga_la_censura_a_la_fila(self):
+        import inspect
+
+        from app.services.temporada_service import TemporadaService
+
+        fuente = inspect.getsource(TemporadaService.preparar_pedido_temporada)
+        assert "'demanda_censurada'" in fuente
+        assert "'temporadas_censuradas'" in fuente
+
+    def test_y_dice_CUALES_temporadas_no_solo_que_si(self):
+        """«Está censurada» no basta: con tres temporadas hay que saber cuál,
+        porque una censura en la temporada chica pesa distinto que en la grande."""
+        import inspect
+
+        from app.services.temporada_service import TemporadaService
+
+        fuente = inspect.getsource(TemporadaService.preparar_pedido_temporada)
+        assert 'temporadas_censuradas.append' in fuente
 
 
 class TestCuCoPorSku:
@@ -197,6 +273,74 @@ class TestPoliticaDatoAusente:
         # Ambos consumidores deben llamar a la política, no inventar la suya
         assert src.count('dias_expuestos(') >= 3, \
             'S-B y la descensura deben consumir dias_expuestos(), no reimplementarlo'
+
+    def test_el_guard_de_arriba_medía_una_proxy(self):
+        """Y por eso dejó pasar DOS reimplementaciones.
+
+        Contar apariciones de `dias_expuestos(` en UN archivo responde «¿se usa
+        en algún lado?», no «¿alguien la reimplementó?». Con el conteo en 3 por
+        los tres call sites legítimos de `kardex_service`, pasaban en verde:
+
+          · `TemporadaService._descensurar` — en OTRO archivo, que el guard ni
+            miraba. Reimplementaba el `min(dias, ventana)` y descartaba el flag
+            de censura.
+          · `calcular_tasa_servida_corregida` — en el MISMO archivo, dividiendo
+            por `dias_con_stock` crudo sin pasar por la política.
+
+        Este test no reemplaza al de arriba: lo acompaña. El de abajo mide la
+        propiedad.
+        """
+        import inspect
+
+        from app.services import kardex_service as ks
+
+        assert inspect.getsource(ks).count('dias_expuestos(') >= 3
+
+    def test_nadie_reimplementa_el_denominador(self):
+        """LA PROPIEDAD, por AST y sobre TODOS los servicios.
+
+        La firma de una reimplementación es un `min(...)` dentro de una función
+        que recibe días con stock. Se busca eso, no una cadena.
+        """
+        import ast
+        from pathlib import Path
+
+        raiz = Path(__file__).resolve().parents[1] / 'app' / 'services'
+        sospechosas = []
+        for archivo in sorted(raiz.glob('*.py')):
+            arbol = ast.parse(archivo.read_text(encoding='utf-8'))
+            for fn in [n for n in ast.walk(arbol)
+                       if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+                if fn.name == 'dias_expuestos':
+                    continue
+                nombres = {a.arg for a in fn.args.args}
+                if not ({'dias_con_stock', 'dias_stock'} & nombres):
+                    continue
+                usa_min = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                              and n.func.id == 'min' for n in ast.walk(fn))
+                usa_politica = any(
+                    isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == 'dias_expuestos' for n in ast.walk(fn))
+                if usa_min and not usa_politica:
+                    sospechosas.append(f'{archivo.name}:{fn.lineno} {fn.name}()')
+        assert not sospechosas, (
+            '\nFunciones que calculan su propio denominador de días con stock:\n'
+            + '\n'.join(f'  · {s}' for s in sospechosas)
+            + '\n\nUsar `dias_expuestos()`. No es estilo: la política devuelve '
+              'ADEMÁS si el número quedó censurado, y ese segundo valor es lo que '
+              'permite declarar un Q* calculado sobre demanda subestimada.')
+
+    def test_el_detector_ve_una_reimplementacion(self):
+        """Ejercido contra código sintético: si deja de encontrar, pasa vacío."""
+        import ast
+
+        fuente = ('def f(demanda, dias_con_stock, ventana=90):\n'
+                  '    d = min(int(dias_con_stock), ventana)\n'
+                  '    return demanda * (ventana / d)\n')
+        fn = ast.parse(fuente).body[0]
+        usa_min = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                      and n.func.id == 'min' for n in ast.walk(fn))
+        assert {a.arg for a in fn.args.args} & {'dias_con_stock'} and usa_min
 
 
 class TestBandaSensibilidad:

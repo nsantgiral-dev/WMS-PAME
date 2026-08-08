@@ -958,12 +958,25 @@ class KardexService:
             .all()
         )
 
+        # UNIÓN de claves, no solo las que tienen StockDiario.
+        #
+        # El bucle iteraba `dias_stock.items()`: un SKU que VENDIÓ y no tiene
+        # serie de stock reconstruida **no aparecía en el resultado**. Y ese es
+        # exactamente el censurado — el que más importa declarar. Desaparecer no
+        # es conservador: es indistinguible de "no se vendió".
+        dias_ventana = (_dia_operativo() - fecha_limite).days
+        claves = set(dias_stock) | set(ventas)
+
         tasas = []
-        for key, dias in dias_stock.items():
+        for key in claves:
             venta_bruta = float(ventas.get(key, 0))
             devolucion = float(devoluciones.get(key, 0))
             demanda_neta = max(venta_bruta - devolucion, 0)
-            dias_int = int(dias)
+            # Política única — la misma que usan la descensura y S-B. Topa los
+            # días a la ventana y DECLARA cuando no hubo con qué corregir.
+            # Antes dividía por `dias` crudo: era la cuarta implementación del
+            # mismo denominador, y la única que no decía nada.
+            dias_int, censurado = dias_expuestos(dias_stock.get(key, 0), dias_ventana)
             tasa = round(demanda_neta / dias_int, 4) if dias_int > 0 else 0
 
             entry = {
@@ -974,6 +987,9 @@ class KardexService:
                 'dias_con_stock': dias_int,
                 'tasa_servida_corregida': tasa,
                 'velocity_cero': demanda_neta == 0,
+                # False = corregido de verdad. True = no había StockDiario y el
+                # número SUBESTIMA. Mismo contrato que `demanda_diaria_corregida`.
+                'censurado': censurado,
             }
             if nivel == 'bodega' and '|' in key:
                 entry['bodega'] = key.split('|')[1]
@@ -991,9 +1007,12 @@ class KardexService:
             'ventana_meses': ventana_meses,
             'nivel': nivel,
             'fecha_limite': fecha_limite.isoformat(),
+            'censurados': sum(1 for x in tasas if x['censurado']),
             'nota': (
                 'tasa_servida_corregida = demanda servida corregida por quiebres. '
-                'NO es demanda real — la cobertura de rutas es parámetro exógeno.'
+                'NO es demanda real — la cobertura de rutas es parámetro exógeno. '
+                'Las filas con censurado=True no tienen StockDiario: su tasa '
+                'SUBESTIMA y se calculó sobre días calendario.'
             ),
             'tasas': tasas,
         }

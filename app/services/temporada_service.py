@@ -21,6 +21,10 @@ import logging
 from datetime import date
 
 from app.extensions import db
+# La política única del denominador cuando falta StockDiario.
+# Se importa acá y no dentro de un método: `_descensurar` la usa y es
+# estático — un import local la escondería de quien lea la firma.
+from app.services.kardex_service import dias_expuestos
 from app.utils.fecha import dia_operativo as _dia_operativo
 
 logger = logging.getLogger(__name__)
@@ -134,11 +138,26 @@ class TemporadaService:
 
         Si un SKU tuvo stock 40 de los 90 días, lo vendido en esos 40 días es
         la tasa real: proyectarla a 90 es la demanda que hubo, no la servida.
+
+        Devuelve `(demanda_corregida, censurado)`.
+
+        **El denominador sale de `dias_expuestos`, no de un `min` propio.** Esta
+        función reimplementaba la política —el mismo `min(dias, ventana)` y el
+        mismo caso de cero— y el CLAUDE.md ya había escrito qué pasa con eso:
+        *"si un fallback se parchea en dos sitios, la tercera implementación
+        divergirá y esa vez nadie estará comparando"*. Era la tercera.
+
+        Numéricamente coincidían. Lo que se perdía era **el segundo valor**:
+        `dias_expuestos` devuelve si el número quedó CENSURADO, y acá se
+        descartaba. Con `dias_con_stock = 0` las dos devuelven la demanda sin
+        corregir —conservador, correcto— pero solo una lo dice. Ese número
+        entraba al newsvendor subestimado y sin una sola marca, en una fila que
+        sí declara la procedencia del costo.
         """
-        if not dias_con_stock or dias_con_stock <= 0:
-            return demanda
-        d = min(int(dias_con_stock), dias_ventana)
-        return demanda * (dias_ventana / d)
+        n, censurado = dias_expuestos(dias_con_stock, dias_ventana)
+        if n <= 0:
+            return demanda, True
+        return demanda * (dias_ventana / n), censurado
 
     @staticmethod
     def preparar_pedido_temporada(margen_pct: float = 0.40,
@@ -205,9 +224,13 @@ class TemporadaService:
                 continue
 
             ventas_pasadas = []
+            temporadas_censuradas = []
             for t, dem in sorted(info['por_temporada'].items()):
                 dias = info['dias_stock_por_temporada'].get(t, 0)
-                ventas_pasadas.append(round(TemporadaService._descensurar(dem, dias), 1))
+                corregida, censurada = TemporadaService._descensurar(dem, dias)
+                ventas_pasadas.append(round(corregida, 1))
+                if censurada:
+                    temporadas_censuradas.append(t)
 
             if not ventas_pasadas:
                 continue
@@ -230,6 +253,14 @@ class TemporadaService:
                 'costo_confiable': info_costo.get('confiable', False),
                 'costo_anejo': info_costo.get('anejo', False),
                 'dias_antiguedad_costo': info_costo.get('dias_antiguedad'),
+                # PROCEDENCIA DE LA DEMANDA, no solo del costo. La fila ya
+                # declaraba si el costo era supuesto o añejo; la demanda entraba
+                # sin decir nada. Un Q* sobre demanda descensurada de verdad y
+                # uno sobre demanda censurada —sin StockDiario— se veían
+                # idénticos, y el segundo SUBESTIMA. Es la misma regla que el
+                # comentario de arriba aplica al costo.
+                'demanda_censurada': bool(temporadas_censuradas),
+                'temporadas_censuradas': temporadas_censuradas,
                 'precio_es_supuesto': info_costo.get('precio_es_supuesto', False),
                 'margen_supuesto': info_costo.get('margen_supuesto'),
                 'cu_rango': info_costo.get('cu_rango'),

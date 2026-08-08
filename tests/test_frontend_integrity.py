@@ -527,9 +527,12 @@ DEUDA_SIN_UI = {
     '/api/traslados/bodegas-siesa':
         'Catálogo de bodegas. La pantalla usa el maestro local.',
     '/api/kardex/tasa-servida-corregida':
-        'Descensura M0.2. Doblemente huérfana: sin UI Y sin consumidor aguas abajo. '
-        'No necesita pantalla — necesita que TSB, ROP y newsvendor la consuman, y '
-        'aparecer como procedencia junto al SKU: "1.240 u/mes, +18% por 62 días sin stock".',
+        'Descensura M0.2. Sigue sin UI y sin consumidor aguas abajo, PERO desde el '
+        '2026-08-08 ya no diverge: consume dias_expuestos() como el resto y declara '
+        'censurado. Antes dividia por dias crudo y OMITIA del resultado a los SKU sin '
+        'StockDiario — los censurados. Es redundante con demanda_diaria_corregida, que '
+        'si tiene consumidores (ROP, armador) y ya usa la politica: la decision '
+        'pendiente es BORRARLA, no conectarla.',
     '/api/kardex/newsvendor':
         'Calculadora pura. Su llamador (TemporadaService) la consume en el servidor, '
         'no por HTTP. Decisión que debería informar: el "¿y si...?" del comité — '

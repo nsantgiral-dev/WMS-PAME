@@ -500,3 +500,84 @@ class TestNewsvendor:
         """Endpoint /api/kardex/newsvendor está registrado."""
         rules = [r.rule for r in app.url_map.iter_rules()]
         assert any('newsvendor' in r for r in rules)
+
+
+class TestLaTasaServidaNoEsconde_a_los_censurados:
+    """La cuarta implementación del mismo denominador — la que no decía nada.
+
+    `calcular_tasa_servida_corregida` dividía por `dias_con_stock` crudo, sin
+    pasar por `dias_expuestos`, y **iteraba solo sobre las claves que tenían
+    StockDiario**. Un SKU que vendió y no tiene serie reconstruida no aparecía
+    en el resultado.
+
+    Desaparecer no es conservador: es indistinguible de «no se vendió». Y es
+    justo el censurado, el que más importa declarar.
+
+    El guard anti-divergencia no lo atrapó porque contaba apariciones de
+    `dias_expuestos(` en el archivo, y ya había tres legítimas.
+    """
+
+    def _sembrar(self, db, con_stock, sin_stock):
+        from datetime import date, timedelta
+
+        from app.services.kardex_service import KardexMovimiento, StockDiario
+        from app.utils.fecha import dia_operativo
+
+        hoy = dia_operativo()
+        for ref in (con_stock, sin_stock):
+            db.session.add(KardexMovimiento(
+                referencia=ref, bodega='NB1', fecha=hoy - timedelta(days=5),
+                concepto=501, naturaleza=2, cantidad=100, tipo_docto='XX'))
+        # Solo uno tiene serie de stock reconstruida.
+        for i in range(30):
+            db.session.add(StockDiario(
+                referencia=con_stock, bodega='NB1',
+                fecha=hoy - timedelta(days=i), stock_cierre=5, tuvo_stock=True))
+        db.session.commit()
+
+    def test_el_SKU_sin_StockDiario_APARECE_declarado(self, app, db):
+        from app.services.kardex_service import KardexService
+
+        self._sembrar(db, 'CON-STOCK', 'SIN-STOCK')
+        r = KardexService.calcular_tasa_servida_corregida(12, 'bodega')
+        refs = {x['referencia']: x for x in r['tasas']}
+
+        assert 'SIN-STOCK' in refs, (
+            'volvió a desaparecer: un SKU que vendió sin serie de stock se '
+            'lee como si no existiera')
+        assert refs['SIN-STOCK']['censurado'] is True
+        assert refs['CON-STOCK']['censurado'] is False
+
+    def test_el_censurado_usa_dias_calendario_y_no_cero(self, app, db):
+        """`dias_expuestos` cae a calendario — conservador — en vez de dividir
+        por cero o inventar un denominador chico que dispararía la tasa."""
+        from app.services.kardex_service import KardexService
+
+        self._sembrar(db, 'CON-STOCK', 'SIN-STOCK')
+        r = KardexService.calcular_tasa_servida_corregida(12, 'bodega')
+        censurado = next(x for x in r['tasas'] if x['referencia'] == 'SIN-STOCK')
+        # 12 meses x 30 días: el denominador es la ventana, no 0 ni 1.
+        assert censurado['dias_con_stock'] > 300, censurado['dias_con_stock']
+        assert 0 < censurado['tasa_servida_corregida'] < 1
+
+    def test_el_resumen_cuenta_los_censurados(self, app, db):
+        """Un total sin decir cuántos subestiman no se puede interpretar."""
+        from app.services.kardex_service import KardexService
+
+        self._sembrar(db, 'CON-STOCK', 'SIN-STOCK')
+        r = KardexService.calcular_tasa_servida_corregida(12, 'bodega')
+        assert r['censurados'] == 1
+
+    def test_consume_la_politica_unica(self):
+        """TRINQUETE — era la cuarta reimplementación del denominador."""
+        import ast
+        import inspect
+        import textwrap
+
+        from app.services.kardex_service import KardexService
+
+        fuente = textwrap.dedent(
+            inspect.getsource(KardexService.calcular_tasa_servida_corregida))
+        llamadas = {n.func.id for n in ast.walk(ast.parse(fuente))
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        assert 'dias_expuestos' in llamadas
