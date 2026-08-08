@@ -9,9 +9,27 @@ class EstadoSiesaJob:
     COMPLETADO   = 'COMPLETADO'
     FALLIDO      = 'FALLIDO'
     REINTENTANDO = 'REINTENTANDO'
+    #: Un humano decidió que este job no se va a intentar más. **No es
+    #: COMPLETADO**: nada llegó a Siesa.
+    #:
+    #: Existía como `COMPLETADO` + una marca `descartado: true` dentro del JSON
+    #: de `resultado`. Cualquier consulta que filtrara por estado —y son todas—
+    #: contaba esos jobs como envíos exitosos. Con 103 AJUSTE_CONTEO
+    #: descartables, era la diferencia entre "103 ajustes llegaron a Siesa" y
+    #: "103 ajustes se abandonaron": la misma clase de evidencia falsa que el
+    #: módulo entero existe para impedir.
+    #:
+    #: `EstadoDevolucion` ya tenía DESCARTADO desde antes. El vocabulario
+    #: estaba; a este enum le faltaba la palabra.
+    DESCARTADO   = 'DESCARTADO'
 
     # Estados que aún pueden procesarse (útil para filtros de dedup/idempotencia)
     ACTIVOS = frozenset({PENDIENTE, PROCESANDO, REINTENTANDO})
+
+    #: Terminales — ya no se procesan, pero significan cosas distintas.
+    #: Separados a propósito: quien cuente "terminados" tiene que elegir si
+    #: incluye lo abandonado, no heredarlo por descuido.
+    TERMINALES = frozenset({COMPLETADO, FALLIDO, DESCARTADO})
 
 
 # Backoff exponencial: intento 1 → 5min, 2 → 15min, 3 → 45min, 4 → 120min, 5 → 180min

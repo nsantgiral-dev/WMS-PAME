@@ -795,12 +795,138 @@ def omitir_segundo_conteo(id):
     return jsonify({'ok': True, 'sesion_id': id, 'estado': 'DESCUADRE'}), 200
 
 
+#: Qué se le hace a la sesión de cada job descartado. El nombre es lo que
+#: aparece en el preview, así que dice la consecuencia, no el mecanismo.
+_RESET = 'reset_a_descuadre'
+_YA_AJUSTADA = 'sin_tocar_ya_ajustada'
+_HUERFANA = 'QUEDA_HUERFANA'
+_SIN_SESION = 'job_sin_sesion_en_payload'
+_NO_EXISTE = 'sesion_no_existe'
+_OTRO_ESTADO = 'sin_tocar_otro_estado'
+
+
+def _plan_descarte_ajustes():
+    """Qué haría un descarte de AJUSTE_CONTEO — **sin hacer nada**.
+
+    Fuente única del preview y del POST. Que sean el mismo cálculo es el punto:
+    un preview que estima por su cuenta lo que el POST hace por la suya es un
+    preview que miente el día que uno de los dos cambie. Hoy mismo costó 93
+    jobs tener una política escrita dos veces.
+
+    Devuelve el plan completo, incluida **la parte que no se toca**. El endpoint
+    viejo respondía `{descartados, sesiones_reset}`: con 103 jobs y 12 sesiones
+    reseteadas, nada decía dónde quedaron las otras 91. Una acción masiva que
+    solo reporta lo que hizo obliga a confiar; una que reporta lo que dejó atrás
+    se puede auditar.
+    """
+    from app.models.siesa_job import SiesaJob, EstadoSiesaJob
+    from app.models.conteo import SesionConteo, EstadoConteo
+
+    fallidos = (SiesaJob.query
+                .filter(SiesaJob.tipo == 'AJUSTE_CONTEO',
+                        SiesaJob.estado == EstadoSiesaJob.FALLIDO)
+                .all())
+
+    items = []
+    for job in fallidos:
+        sid = (job.get_payload() or {}).get('sesion_id')
+        if not sid:
+            items.append({'job_id': job.id, 'sesion_id': None,
+                          'accion': _SIN_SESION, 'estado_sesion': None,
+                          'por_que': 'el payload no dice a qué sesión pertenece'})
+            continue
+
+        s = db.session.get(SesionConteo, int(sid))
+        if s is None:
+            items.append({'job_id': job.id, 'sesion_id': int(sid),
+                          'accion': _NO_EXISTE, 'estado_sesion': None,
+                          'por_que': 'la sesión ya no está en la base'})
+        elif s.estado != EstadoConteo.AJUSTANDO:
+            items.append({'job_id': job.id, 'sesion_id': s.id,
+                          'accion': (_YA_AJUSTADA if s.estado == EstadoConteo.AJUSTADO
+                                     else _OTRO_ESTADO),
+                          'estado_sesion': s.estado,
+                          'por_que': f'la sesión ya está en {s.estado}, no en AJUSTANDO'})
+        elif s.siesa_triggered:
+            # El caso que hay que ver ANTES de apretar el botón.
+            #
+            # El descarte solo resetea sesiones `AJUSTANDO and not
+            # siesa_triggered`. Y el barrido de `siesa_job_service` que rescata
+            # sesiones atascadas filtra por `siesa_triggered == False`. Una
+            # sesión AJUSTANDO CON el flag puesto no la toca ninguno de los dos
+            # y se queda sin job: nadie la vuelve a mirar, y no aparece en
+            # ningún contador.
+            items.append({'job_id': job.id, 'sesion_id': s.id,
+                          'accion': _HUERFANA,
+                          'estado_sesion': s.estado,
+                          'por_que': (
+                              'AJUSTANDO con siesa_triggered=True: el descarte no la '
+                              'resetea y el barrido de sesiones atascadas la ignora. '
+                              'Al quedarse sin job no la recoge nadie. Revisar a mano '
+                              'si el ajuste llegó a Siesa antes de descartar.')})
+        else:
+            items.append({'job_id': job.id, 'sesion_id': s.id,
+                          'accion': _RESET, 'estado_sesion': s.estado,
+                          'por_que': 'AJUSTANDO sin marca de envío: vuelve a DESCUADRE'})
+
+    resumen = {}
+    for it in items:
+        resumen[it['accion']] = resumen.get(it['accion'], 0) + 1
+
+    return {
+        'jobs_fallidos': len(fallidos),
+        'resumen': resumen,
+        'huerfanas': sorted({it['sesion_id'] for it in items
+                             if it['accion'] == _HUERFANA and it['sesion_id']}),
+        'items': items,
+    }
+
+
+@conteo_bp.route('/descartar-fallos/preview', methods=['GET'])
+@jwt_required()
+def preview_descartar_fallos():
+    """GET — qué pasaría si se descartaran los AJUSTE_CONTEO fallidos.
+
+    No escribe nada. Existe porque la acción es masiva e irreversible en la
+    práctica (un job descartado no se vuelve a intentar), y porque su parte
+    peligrosa —las sesiones que quedan huérfanas— no se ve en ningún contador
+    después de ejecutarla.
+    """
+    from app.models.usuario import Usuario
+
+    try:
+        uid = int(get_jwt_identity())
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Token inválido'}), 401
+    u = Usuario.query.get(uid)
+    if not u or u.rol not in Roles.LEAD:
+        return jsonify({'error': 'Sin permiso'}), 403
+
+    plan = _plan_descarte_ajustes()
+    plan['ejecutado'] = False
+    if plan['huerfanas']:
+        plan['advertencia'] = (
+            f'{len(plan["huerfanas"])} sesión(es) quedarían en AJUSTANDO sin job y '
+            f'sin barrido que las recoja: {plan["huerfanas"]}. Verificá en Siesa si '
+            f'el ajuste llegó antes de descartar.'
+        )
+    return jsonify(plan), 200
+
+
 @conteo_bp.route('/descartar-fallos', methods=['POST'])
 @jwt_required()
 def descartar_fallos_dlq():
     """
     Descarta todos los jobs AJUSTE_CONTEO FALLIDO y resetea sus sesiones
     de AJUSTANDO → DESCUADRE para que el admin pueda re-aprobar o cancelar.
+
+    Los jobs quedan en **DESCARTADO**, no en COMPLETADO. Antes se escribía
+    COMPLETADO con una marca `descartado: true` dentro del JSON de `resultado`:
+    toda consulta que filtrara por estado los contaba como envíos exitosos a
+    Siesa. Nada de esto llegó a Siesa.
+
+    Devuelve el mismo plan que `/descartar-fallos/preview`, con `ejecutado:
+    true` — incluida la parte que NO se tocó, que es la que hay que mirar.
     """
     import json as _json
     from app.models.siesa_job import SiesaJob, EstadoSiesaJob
@@ -815,43 +941,40 @@ def descartar_fallos_dlq():
     if not u or u.rol not in Roles.LEAD:
         return jsonify({'error': 'Sin permiso'}), 403
 
-    fallidos = SiesaJob.query.filter(
-        SiesaJob.tipo == 'AJUSTE_CONTEO',
-        SiesaJob.estado == EstadoSiesaJob.FALLIDO,
-    ).all()
-
-    sesiones_ids = set()
+    plan = _plan_descarte_ajustes()
     ahora = datetime.utcnow()
-    for job in fallidos:
-        p = job.get_payload()
-        sid = p.get('sesion_id')
-        if sid:
-            sesiones_ids.add(int(sid))
-        job.estado = EstadoSiesaJob.COMPLETADO
+
+    for it in plan['items']:
+        job = db.session.get(SiesaJob, it['job_id'])
+        if job is None:
+            continue
+        job.estado = EstadoSiesaJob.DESCARTADO
         job.resultado = _json.dumps({
             'descartado': True,
             'por_usuario': uid,
             'fecha': ahora.isoformat(),
+            'accion_sobre_sesion': it['accion'],
         })
         job.fecha_completado = ahora
+        if it['accion'] == _RESET:
+            s = db.session.get(SesionConteo, it['sesion_id'])
+            if s and s.estado == EstadoConteo.AJUSTANDO and not s.siesa_triggered:
+                s.estado = EstadoConteo.DESCUADRE
 
-    # Sesiones atascadas en AJUSTANDO → DESCUADRE para que el admin decida
-    sesiones_reset = 0
-    for sid in sesiones_ids:
-        s = SesionConteo.query.get(sid)
-        if s and s.estado == EstadoConteo.AJUSTANDO and not s.siesa_triggered:
-            s.estado = EstadoConteo.DESCUADRE
-            sesiones_reset += 1
-
-    descartados = len(fallidos)
-    if descartados:
+    if plan['items']:
         db.session.commit()
         logger.info(
-            f'[CONTEO DLQ] {descartados} jobs descartados por usuario #{uid} '
-            f'— {sesiones_reset} sesiones reseteadas a DESCUADRE'
+            '[CONTEO DLQ] %s jobs DESCARTADOS por usuario #%s — plan: %s%s',
+            plan['jobs_fallidos'], uid, plan['resumen'],
+            (f' — HUÉRFANAS: {plan["huerfanas"]}' if plan['huerfanas'] else ''),
         )
 
-    return jsonify({'descartados': descartados, 'sesiones_reset': sesiones_reset}), 200
+    plan['ejecutado'] = True
+    # Compatibilidad con quien ya leía estas dos claves. Se conservan con el
+    # mismo significado; lo que cambia es que ahora no son lo único que hay.
+    plan['descartados'] = plan['jobs_fallidos']
+    plan['sesiones_reset'] = plan['resumen'].get(_RESET, 0)
+    return jsonify(plan), 200
 
 
 @conteo_bp.route('/exportar', methods=['GET'])

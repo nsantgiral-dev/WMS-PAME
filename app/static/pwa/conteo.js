@@ -358,9 +358,48 @@ async function conteoReintentarFallos() {
   } catch (e) { alerta('Error de conexión', 'error'); }
 }
 
-/** Discard failed DLQ jobs and reset stuck AJUSTANDO sessions to DESCUADRE. */
+/**
+ * Discard failed DLQ jobs, showing the real plan first.
+ *
+ * El confirm anterior prometía "las sesiones atascadas vuelven a DESCUADRE" y
+ * eso solo es cierto para una parte. Una sesión AJUSTANDO cuyo ajuste ya pudo
+ * haber llegado a Siesa no se resetea —resetearla arriesga un doble ajuste de
+ * inventario— y tampoco la recoge el barrido: se queda trabada y sin job.
+ * Prometer lo que no pasa es peor que no prometer nada, porque nadie va a ir a
+ * buscar esas sesiones.
+ */
 async function conteoDescartarFallos() {
-  if (!confirm('Descartar los ajustes fallidos?\n\nLas sesiones atascadas en AJUSTANDO vuelven a DESCUADRE para que puedas re-aprobar o cancelar.')) return;
+  let plan;
+  try {
+    const rp = await fetch(API + '/api/conteo/descartar-fallos/preview', {
+      headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    plan = await rp.json();
+    if (!rp.ok) { alerta(plan.error || 'Error', 'error'); return; }
+  } catch (e) { alerta('Error de conexión', 'error'); return; }
+
+  if (!plan.jobs_fallidos) { alerta('No hay ajustes fallidos que descartar', 'info'); return; }
+
+  const etiquetas = {
+    reset_a_descuadre: 'vuelven a DESCUADRE (podés re-aprobar o cancelar)',
+    sin_tocar_ya_ajustada: 'ya estaban AJUSTADAS — no se tocan',
+    sin_tocar_otro_estado: 'están en otro estado — no se tocan',
+    QUEDA_HUERFANA: '⚠ QUEDAN TRABADAS en AJUSTANDO, sin nadie que las recoja',
+    job_sin_sesion_en_payload: 'sin sesión en el payload',
+    sesion_no_existe: 'su sesión ya no está en la base'
+  };
+  const detalle = Object.entries(plan.resumen)
+    .map(([k, n]) => `  · ${n} ${etiquetas[k] || k}`)
+    .join('\n');
+
+  let texto = `Descartar ${plan.jobs_fallidos} ajuste(s) fallido(s)?\n\n${detalle}\n\n`
+    + 'Descartar NO los envía a Siesa: los marca como abandonados.';
+  if (plan.huerfanas && plan.huerfanas.length) {
+    texto += `\n\n⚠ Sesiones ${plan.huerfanas.join(', ')} quedan trabadas. `
+      + 'Verificá en Siesa si el ajuste llegó ANTES de descartar.';
+  }
+  if (!confirm(texto)) return;
+
   try {
     const r = await fetch(API + '/api/conteo/descartar-fallos', {
       method: 'POST',
@@ -368,7 +407,11 @@ async function conteoDescartarFallos() {
     });
     const d = await r.json();
     if (r.ok) {
-      alerta(`${d.descartados} jobs descartados · ${d.sesiones_reset} sesiones a DESCUADRE`, 'exito');
+      const aviso = (d.huerfanas && d.huerfanas.length)
+        ? ` · ${d.huerfanas.length} trabada(s): ${d.huerfanas.join(', ')}`
+        : '';
+      alerta(`${d.descartados} descartados · ${d.sesiones_reset} a DESCUADRE${aviso}`,
+             aviso ? 'advertencia' : 'exito');
       await cargarConteoStats();
       await cargarConteos(_CONTEO_PAGE);
     } else {
