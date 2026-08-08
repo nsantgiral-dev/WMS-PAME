@@ -297,20 +297,18 @@ class ConnektaGateway:
         else:
             # Validación de arranque — variables obligatorias en modo producción real.
             # El servidor no debe arrancar sin estas; fallarían silencios en producción.
-            _faltantes = []
-            if not self.cond_pago_ventas:
-                _faltantes.append('SIESA_COND_PAGO_VENTAS')
-            if not self.motivo_traslado:
-                _faltantes.append('SIESA_MOTIVO_TRASLADO')
-            if not self.lista_precio:
-                _faltantes.append('SIESA_LISTA_PRECIO')
-            if not self.unidad_negocio:
-                _faltantes.append('SIESA_UNIDAD_NEGOCIO')
-            if _faltantes:
+            #
+            # La lista NO se escribe acá. Estaba escrita acá —cuatro variables— y
+            # `health.py` tenía otra de nueve, con solo cuatro en común. Diez
+            # variables con guard de fallo duro no estaban en ninguna de las dos,
+            # entre ellas `SIESA_TIPO_DOCTO_AJUSTE`: 93 jobs en FALLIDO y dos
+            # meses sin que un solo conteo cíclico llegara a Siesa.
+            from app.services.vars_criticas import problemas as _problemas_vars
+
+            for _p in _problemas_vars():
                 logger.critical(
-                    '[CONNEKTA] Variables obligatorias no configuradas: %s. '
-                    'Las operaciones que las requieran fallarán en tiempo de ejecución.',
-                    ', '.join(_faltantes),
+                    '[CONNEKTA] %s [%s] — %s Rompe: %s',
+                    _p['variable'], _p['estado'], _p['detalle'], _p['rompe'],
                 )
 
     @staticmethod

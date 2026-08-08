@@ -18,17 +18,10 @@ from app.routes._auth_helpers import _es_gestion
 health_bp = Blueprint('health', __name__)
 logger = logging.getLogger(__name__)
 
-_VARS_CRITICAS = [
-    ('SIESA_MOTIVO_TRASLADO',         'Motivo para transferencias (173076/173079)'),
-    ('SIESA_TIPO_DOCTO_TRANSITO_SALIDA',  'Tipo doc salida en tránsito (conector 173076)'),
-    ('SIESA_TIPO_DOCTO_TRANSITO_ENTRADA', 'Tipo doc entrada en tránsito (conector 173079)'),
-    ('SIESA_BODEGA_TRANSITO',         'Bodega de tránsito (TRA1 u otro)'),
-    ('SIESA_UBICACION_ENTRADA_DEFAULT', 'Ubicación ancla en bodega destino para 173079 (multi-ubicaciones) — usar REC en todas las sedes'),
-    ('SIESA_UNIDAD_NEGOCIO',           'Unidad de negocio 173076/173079 — Siesa NO hereda de bodega en traslados, obligatorio'),
-    ('SIESA_COND_PAGO_VENTAS',        'Condición de pago ventas fallback (C01 u otro)'),
-    ('SIESA_TIPO_DOCTO_FACTURA',      'Tipo doc factura electrónica (conector 238925)'),
-    ('SIESA_TIPO_DOCTO_ENTRADA_OC',   'Tipo doc entrada por OC (conector 142948)'),
-]
+# El catálogo de variables NO vive acá. Vivía, y esa era la falla: el gateway
+# tenía su propia lista de obligatorias y las dos divergieron hasta que
+# `SIESA_TIPO_DOCTO_AJUSTE` quedó fuera de ambas y costó 93 jobs en FALLIDO.
+# Ver `app/services/vars_criticas.py`.
 
 
 @health_bp.route('/ping', methods=['GET'])
@@ -236,13 +229,29 @@ def health_siesa():
     }
 
     # ── 1. Variables de entorno ──────────────────────────────────────────────
-    for var, descripcion in _VARS_CRITICAS:
-        val = os.getenv(var, '')
-        estado = 'ok' if val else 'FALTA'
-        resultado['variables'][var] = {'valor': val or None, 'estado': estado, 'descripcion': descripcion}
-        if not val:
-            resultado['ok'] = False
-            resultado['advertencias'].append(f'Variable {var} no configurada ({descripcion})')
+    #
+    # Se reportan TODAS las del catálogo, no solo las rotas: el que lee el
+    # health a las 6 a.m. necesita ver qué valor va a usar el gateway, no
+    # solamente qué falta. `valor_efectivo` muestra el default heredado — ver
+    # una variable VACIA y su default al lado es lo que hace obvio que el
+    # problema es la declaración en blanco, no la ausencia.
+    from app.services.vars_criticas import (
+        VARS_CRITICAS, estado as _estado_var, valor_efectivo, problemas,
+    )
+
+    for _v in VARS_CRITICAS:
+        resultado['variables'][_v.nombre] = {
+            'valor': valor_efectivo(_v),
+            'estado': _estado_var(_v),
+            'descripcion': _v.rompe,
+        }
+
+    for _p in problemas():
+        resultado['ok'] = False
+        resultado['advertencias'].append(
+            f'Variable {_p["variable"]} [{_p["estado"]}]: {_p["detalle"]} '
+            f'Rompe: {_p["rompe"]}'
+        )
 
     # Verificación especial: bodega_transito vs modo
     bod_transito = os.getenv('SIESA_BODEGA_TRANSITO', '')
