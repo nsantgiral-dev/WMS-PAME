@@ -229,6 +229,10 @@ function layoutRenderUbicaciones() {
         <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
           <div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            <button onclick="layoutAbrirModalEsquemaCuerpo('${idsCuerpoCsv}')"
+              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+              📐 Esquema
+            </button>
             <button onclick="layoutImprimirEtiquetasCuerpo('${idsCuerpoCsv}')"
               style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
               🖨 Etiquetas
@@ -1242,5 +1246,80 @@ function layoutAbrirModalVerEntrepano(idsCsv) {
 
 function layoutCerrarModalVerEntrepano() {
   const m = document.getElementById('modal-layout-ver-entrepano');
+  if (m) m.style.display = 'none';
+}
+
+// ── Modal: Esquema visual (boceto) de un Cuerpo ─────────────────────────────
+// Dibujo literal del Cuerpo: una fila por Entrepaño (nivel 1 = piso, abajo),
+// una caja por Hueco. Reusa _layoutUbicacionesCache — no hay endpoint nuevo.
+// huecos_por_nivel es variable por entrepaño, así que cada fila es su propio
+// contenedor con scroll horizontal independiente, no una sola grilla con
+// columnas compartidas.
+
+/** Open the visual schematic modal for a full cuerpo, grouped by nivel (piso=1 abajo). */
+function layoutAbrirModalEsquemaCuerpo(idsCsv) {
+  const ids = idsCsv.split(',').map(Number);
+  const huecos = ids.map(id => _layoutUbicacionesCache.find(u => u.id === id)).filter(Boolean);
+  if (!huecos.length) return;
+  const m = document.getElementById('modal-layout-esquema-cuerpo');
+  if (!m) return;
+
+  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  const zona = huecos[0].tipo_zona; // un cuerpo es 100% de una sola zona
+  const color = _ZONA_COLOR[zona] || '#888';
+
+  const niveles = new Map();
+  huecos.forEach(u => {
+    if (!niveles.has(u.nivel)) niveles.set(u.nivel, []);
+    niveles.get(u.nivel).push(u);
+  });
+  const nivelesOrden = [...niveles.keys()].sort((a, b) => b - a); // 1 (piso) abajo
+
+  document.getElementById('layout-esquema-titulo').textContent =
+    `${codigoCuerpo} · ${zona} · ${huecos.length} hueco(s)`;
+
+  document.getElementById('layout-esquema-leyenda').innerHTML = `
+    <div><span style="display:inline-block;width:10px;height:10px;border:2px solid ${color};border-radius:3px;background:${color}33;margin-right:4px;vertical-align:middle;"></span>Con SKU</div>
+    <div><span style="display:inline-block;width:10px;height:10px;border:2px solid ${color};border-radius:3px;margin-right:4px;vertical-align:middle;"></span>Vacío</div>`;
+
+  document.getElementById('layout-esquema-filas').innerHTML =
+    nivelesOrden.map(nivel => _layoutRenderEsquemaFila(nivel, niveles.get(nivel), color)).join('');
+
+  m.style.display = 'flex';
+}
+
+/** Una fila de Entrepaño: cajas de tamaño fijo en su propio contenedor con scroll horizontal. */
+function _layoutRenderEsquemaFila(nivel, huecos, color) {
+  const boxes = huecos.slice().sort((a, b) => a.hueco - b.hueco)
+    .map(u => _layoutRenderEsquemaHuecoBox(u, color)).join('');
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+      <div style="width:28px;flex-shrink:0;font-size:10px;font-weight:800;color:var(--tx2);text-align:right;">N${nivel}</div>
+      <div style="flex:1;min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;">
+        <div style="display:inline-flex;gap:4px;">${boxes}</div>
+      </div>
+    </div>`;
+}
+
+/** Una caja de Hueco: contorno = vacío, relleno = con SKU, coloreado por zona. */
+function _layoutRenderEsquemaHuecoBox(u, color) {
+  const asignado = !!u.producto_asignado_codigo;
+  const huecoLabel = u.codigo.split('-').pop();
+  const skuCorto = asignado
+    ? (u.producto_asignado_codigo.length > 8 ? u.producto_asignado_codigo.slice(0, 7) + '…' : u.producto_asignado_codigo)
+    : '—';
+  const titulo = asignado
+    ? `${u.codigo} — ${u.producto_asignado_nombre || u.producto_asignado_codigo} (${u.stock_actual ?? 0} UND)`
+    : `${u.codigo} — vacío`;
+  return `
+    <div title="${titulo}" style="min-width:44px;width:44px;height:38px;border:2px solid ${color};border-radius:6px;background:${asignado ? color + '33' : 'transparent'};display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;${!u.activo ? 'opacity:0.4;' : ''}">
+      <div style="font-size:9px;font-weight:800;color:var(--tx);line-height:1;">${huecoLabel}</div>
+      <div style="font-size:7px;font-weight:600;color:${asignado ? color : 'var(--tx3)'};line-height:1.3;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuCorto}</div>
+    </div>`;
+}
+
+/** Close the cuerpo schematic modal. */
+function layoutCerrarModalEsquemaCuerpo() {
+  const m = document.getElementById('modal-layout-esquema-cuerpo');
   if (m) m.style.display = 'none';
 }
