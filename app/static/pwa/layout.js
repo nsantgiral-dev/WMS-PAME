@@ -1127,6 +1127,7 @@ function _layoutAsignarEntFilaEdicion(u, huecoLabel, zona) {
       <div style="display:flex;gap:6px;">
         <input id="layout-asignar-ent-codigo-${u.id}" type="text" placeholder="Código o código de barras" autocomplete="off"
           onkeydown="if(event.key==='Enter'){event.preventDefault();layoutBuscarProductoEntrepano(${u.id});}"
+          onblur="layoutBuscarProductoEntrepano(${u.id})"
           style="flex:1;min-width:0;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;box-sizing:border-box;">
         <input id="layout-asignar-ent-cantidad-${u.id}" type="number" min="1" placeholder="Cant."
           onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}"
@@ -1187,9 +1188,25 @@ function layoutAsignarEntSiguiente(huecoId) {
 async function layoutConfirmarAsignarEntrepano() {
   let ok = 0; const errores = [];
   for (const u of _layoutAsignarEntHuecos) {
-    const productoId = _layoutAsignarEntProductos[u.id];
     const cantidad = parseInt(document.getElementById(`layout-asignar-ent-cantidad-${u.id}`)?.value);
-    if (!productoId || isNaN(cantidad) || cantidad <= 0) continue;
+    const codigoTexto = document.getElementById(`layout-asignar-ent-codigo-${u.id}`)?.value.trim();
+
+    if (isNaN(cantidad) || cantidad <= 0) {
+      if (codigoTexto) errores.push(`${u.codigo.split('-').pop()}: falta la cantidad`);
+      continue;
+    }
+    // Red de seguridad: si el teclado móvil no disparó Enter/blur a tiempo,
+    // el código quedó escrito pero sin resolver contra el catálogo. Se
+    // resuelve aquí mismo en vez de descartar la fila en silencio — así el
+    // usuario ve un motivo real ("no encontrado") y no un mensaje genérico.
+    if (!_layoutAsignarEntProductos[u.id] && codigoTexto) {
+      await layoutBuscarProductoEntrepano(u.id);
+    }
+    const productoId = _layoutAsignarEntProductos[u.id];
+    if (!productoId) {
+      if (codigoTexto) errores.push(`${u.codigo.split('-').pop()}: producto "${codigoTexto}" no encontrado`);
+      continue;
+    }
     const capRaw = document.getElementById(`layout-asignar-ent-capacidad-${u.id}`)?.value;
     const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
     try {
