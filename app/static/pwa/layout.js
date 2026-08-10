@@ -23,6 +23,20 @@ const _ZONAS_TABS = ['PICKING', 'RESERVA', 'AVERIAS', 'IMPORTADOS', 'GENERAL'];
 // "capacidad máxima del hueco" porque hueco y SKU son la misma cosa.
 const _ZONAS_SLOT_UNICO = ['PICKING', 'IMPORTADOS'];
 
+// Regla 0 del proyecto (una política, una función): estas dos derivaciones se
+// repetían inline en 4 y 3 sitios respectivamente antes de extraerlas — un
+// cambio futuro al formato de código o al color por defecto solo se aplica
+// aquí, no en cada call site por separado.
+/** Código del Cuerpo (PREFIJO-PASILLOFILA-CNN) a partir del código completo de un hueco. */
+function _layoutCodigoCuerpo(codigo) {
+  return codigo.split('-').slice(0, 3).join('-');
+}
+
+/** Color de zona con el mismo fallback en todo el módulo. */
+function _layoutColorZona(zona) {
+  return _ZONA_COLOR[zona] || '#888';
+}
+
 /**
  * Switch the active zone tab and re-render ubicaciones for that zone.
  * @param {string} zona - Zone key: 'PICKING', 'RESERVA', 'AVERIAS', or 'GENERAL'.
@@ -70,7 +84,7 @@ async function cargarLayout() {
  * @returns {string} HTML string for the ubicacion card.
  */
 function _layoutRenderUbicacionCard(u) {
-  const color = _ZONA_COLOR[u.tipo_zona] || '#888';
+  const color = _layoutColorZona(u.tipo_zona);
   const skuLabel = u.producto_asignado_codigo
     ? `📦 ${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`
     : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
@@ -221,7 +235,7 @@ function layoutRenderUbicaciones() {
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     } else if (g.tipo === 'cuerpo') {
       // Nomenclatura real del código: {PREFIJO_ZONA}-{PASILLO}{FILA}-C{CUERPO} — ej. PIK-A1-C01.
-      const codigoCuerpo = g.items[0].codigo.split('-').slice(0, 3).join('-');
+      const codigoCuerpo = _layoutCodigoCuerpo(g.items[0].codigo);
       const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
       const idsCuerpoCsv = g.items.map(u => u.id).join(',');
       const zonaCuerpo = g.items[0].tipo_zona; // un cuerpo es 100% de una sola zona
@@ -1035,7 +1049,7 @@ let _layoutAsignarEntEditando = new Set(); // ids de hueco con SKU ya asignado q
 
 function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
   const zona = huecos[0].tipo_zona;
-  const color = _ZONA_COLOR[zona] || '#888';
+  const color = _layoutColorZona(zona);
   const nivel = huecos[0].nivel;
   const idsCsv = huecos.map(u => u.id).join(',');
   const sinAsignar = huecos.filter(u => !u.producto_asignado_codigo).length;
@@ -1086,7 +1100,7 @@ function layoutAbrirModalAsignarEntrepano(idsCsv, zona) {
   _layoutAsignarEntEditando = new Set();
   const m = document.getElementById('modal-layout-asignar-entrepano');
   if (!m) return;
-  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  const codigoCuerpo = _layoutCodigoCuerpo(huecos[0].codigo);
   document.getElementById('layout-asignar-ent-titulo').textContent = `${codigoCuerpo} · ${huecos.length} hueco(s) — deja en blanco los que no vayas a asignar hoy`;
   _layoutRenderFilasAsignarEntrepano();
   const resEl = document.getElementById('layout-asignar-ent-resultado');
@@ -1233,7 +1247,7 @@ function layoutAbrirModalVerEntrepano(idsCsv) {
   if (!huecos.length) return;
   const m = document.getElementById('modal-layout-ver-entrepano');
   if (!m) return;
-  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  const codigoCuerpo = _layoutCodigoCuerpo(huecos[0].codigo);
   document.getElementById('layout-ver-ent-titulo').textContent = `${codigoCuerpo} · Entrepaño ${huecos[0].nivel} · ${huecos.length} hueco(s)`;
   const cont = document.getElementById('layout-ver-ent-filas');
   cont.innerHTML = huecos.map(u => {
@@ -1264,9 +1278,9 @@ function layoutAbrirModalEsquemaCuerpo(idsCsv) {
   const m = document.getElementById('modal-layout-esquema-cuerpo');
   if (!m) return;
 
-  const codigoCuerpo = huecos[0].codigo.split('-').slice(0, 3).join('-');
+  const codigoCuerpo = _layoutCodigoCuerpo(huecos[0].codigo);
   const zona = huecos[0].tipo_zona; // un cuerpo es 100% de una sola zona
-  const color = _ZONA_COLOR[zona] || '#888';
+  const color = _layoutColorZona(zona);
 
   const niveles = new Map();
   huecos.forEach(u => {
