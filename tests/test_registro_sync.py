@@ -168,6 +168,61 @@ class TestCoberturaDeCodigosDeBarras:
         assert c['hay_catalogo'] is False
 
 
+class TestLaListaDeLosQueNoSeEscanean:
+    """2.118 SKU que el operario tiene que teclear. La lista existe para que
+    alguien de bodega la mire y diga si reconoce productos comunes — la pregunta
+    «¿alguno es de alta rotación?» necesita demanda, que necesita el kardex, que
+    necesita el corte."""
+
+    _URL = '/api/productos/sin-codigo-barras'
+
+    def _prod(self, db, codigo, barras=None):
+        from app.models.producto import Producto
+        p = Producto(codigo=codigo, nombre=f'Producto {codigo}',
+                     codigo_barras=barras, activo=True)
+        db.session.add(p); db.session.commit()
+        return p
+
+    @pytest.fixture
+    def h(self, jwt_token_admin):
+        return {'Authorization': f'Bearer {jwt_token_admin}'}
+
+    def test_lista_solo_los_que_no_tienen(self, client, db, h):
+        self._prod(db, 'CON', '7701234567890')
+        self._prod(db, 'SIN1')
+        self._prod(db, 'SIN2', '')
+
+        d = client.get(self._URL, headers=h).get_json()
+        assert d['total'] == 2
+        assert {p['codigo'] for p in d['productos']} == {'SIN1', 'SIN2'}
+
+    def test_viene_con_el_denominador(self, client, db, h):
+        """Una lista de 2.118 sin el total se lee como catástrofe o como nada,
+        según el ánimo del que la mire."""
+        self._prod(db, 'CON', '770')
+        self._prod(db, 'SIN1')
+        d = client.get(self._URL, headers=h).get_json()
+        assert d['cobertura']['productos_activos'] == 2
+        assert d['cobertura']['porcentaje'] == 50.0
+
+    def test_csv_se_puede_bajar(self, client, db, h):
+        self._prod(db, 'SIN1')
+        r = client.get(self._URL + '?formato=csv', headers=h)
+        assert r.status_code == 200
+        assert 'text/csv' in r.headers['Content-Type']
+        assert 'attachment' in r.headers['Content-Disposition']
+        assert 'SIN1' in r.get_data(as_text=True)
+
+    def test_sin_catalogo_no_dice_0_por_ciento(self, client, db, h):
+        d = client.get(self._URL, headers=h).get_json()
+        assert d['total'] == 0
+        assert d['cobertura']['hay_catalogo'] is False
+        assert d['cobertura']['porcentaje'] is None
+
+    def test_sin_token_no_pasa(self, client):
+        assert client.get(self._URL).status_code == 401
+
+
 class TestElEndpointExponeLoPersistido:
 
     def test_setup_inicial_trae_persistido_y_cobertura(self, db):

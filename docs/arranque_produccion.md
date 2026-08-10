@@ -18,14 +18,63 @@ El arranque es el momento en que estos dos mundos se alinean por primera vez con
 
 ---
 
+## ⚠️ Antes de seguir este documento al pie de la letra
+
+**Casi todo lo de las Fases 1 y 2 ya está hecho.** Medido contra producción el
+2026-08-10:
+
+| Qué | Estado medido | Cómo se verifica |
+|---|---|---|
+| Catálogo | **26.294 productos activos** | `cobertura.hay_catalogo` |
+| Códigos de barras | **24.176 de 26.294 — 91,9%** | `cobertura.porcentaje` |
+| Ubicaciones físicas (CDI) | **45** | `GET /api/almacenes/1/ubicaciones` |
+| Stock inicial | **sin correr** | `persistido.stock.alguna_vez_ok` |
+| Almacenes | **7 de 9 CO** (faltan 008 y 009, ferias esporádicas) | `GET /api/almacenes/` |
+
+Correr el sync de catálogo el día del corte «por las dudas» son ~26.000
+productos contra Siesa sin necesidad, en el día que menos margen hay.
+
+**Este documento tenía esas casillas sin marcar no porque el trabajo faltara,
+sino porque no había forma de medirlo.** Ahora la hay: cada fase de abajo
+termina con la consulta que responde si ya se hizo. Una casilla que se marca por
+memoria vale lo mismo que no tenerla.
+
+### La consulta que responde por casi todo
+
+Desde la consola del navegador, logueado como admin:
+
+```js
+var tk=localStorage.getItem('wms_token')
+var hh={Authorization:'Bearer '+tk}
+fetch('/api/siesa/setup-inicial-estado',{headers:hh}).then(r=>r.json()).then(d=>console.log(d.persistido,d.cobertura))
+```
+
+`cobertura` sale de la base y dice qué hay **ahora**. `persistido` sale de
+`registros_sync` y dice qué **corrió**, sobreviviendo a los reinicios.
+
+Las dos responden preguntas distintas y las dos hacen falta: `alguna_vez_ok:
+false` con `hay_catalogo: true` significa «el catálogo está, pero ningún sync
+quedó registrado» — que es lo normal si se cargó antes de que existiera el
+registro (2026-08-10).
+
+---
+
 ## Fase 0 — Requisitos previos (hacer antes del día D)
 
 - [ ] Railway tiene la última versión desplegada (verificar en el dashboard)
 - [ ] La base de datos tiene todas las migraciones aplicadas (`flask db upgrade`)
+- [ ] **Existe el servicio `worker`** con `python worker.py` — sin él los 8
+      schedulers pesados no corren **y no avisan**. Se confirma en sus logs:
+      `[WORKER] Alive — schedulers corriendo` cada 5 min ✅ *verificado 2026-08-10*
 - [ ] Existe al menos un usuario administrador creado
-- [ ] Las ubicaciones físicas de la bodega están creadas en el WMS (estantes, zonas)
-- [ ] Se coordinó con Siesa/Connekta que el entorno de producción está activo
+- [x] Las ubicaciones físicas de la bodega están creadas — **45 en el CDI**, verificado 2026-08-10
+- [ ] **`CONNEKTA_URL` apunta a producción, no a `serviciosqa`** — con
+      `CONNEKTA_IKEY`/`ITOKEN` de producción en el mismo movimiento.
+      Se verifica en `/api/health/siesa` → `siesa_destino.parece_qa: false`
+- [ ] Las 20 variables críticas en `ok` — `/api/health/siesa` → `advertencias: []`
 - [ ] Los operarios tienen usuario y contraseña en el WMS
+- [ ] **Cada almacén que va a operar tiene al menos un usuario asignado.** Un
+      almacén sin gente es un almacén donde nadie puede facturar ni contar
 - [ ] Se eligió una **fecha/hora de corte**: el momento exacto desde el cual el WMS es el sistema oficial
 
 ---
@@ -42,8 +91,17 @@ Admin → pestaña Siesa → Sincronizar catálogo
 ```
 
 - Esperar a que termine (puede tomar 2–5 minutos dependiendo del catálogo)
-- Verificar que el contador de productos subió correctamente
 - **Repetible sin riesgo:** si falla a mitad, se puede volver a ejecutar
+
+**¿Hace falta?** Antes de correrlo, medir:
+
+```js
+fetch('/api/productos/?per_page=1',{headers:hh}).then(r=>r.json()).then(d=>console.log('productos:',d.total))
+```
+
+Si ya hay decenas de miles, **el catálogo está** y esta fase se salta. El
+2026-08-10 había 26.294. Correrlo igual no rompe nada, pero son ~26.000
+consultas a Siesa el día que menos margen hay.
 
 ---
 
@@ -63,6 +121,20 @@ Admin → pestaña Siesa → Sync códigos de barras EAN
 - **Repetible sin riesgo:** sobreescribe el campo `codigo_barras` con el valor de Siesa
 - Después del arranque, el cron nocturno (02:00) lo mantiene actualizado automáticamente
 
+**Verificar cobertura, no que «terminó».** Un sync que actualizó 3 productos
+reporta lo mismo que uno que cubrió 24.000:
+
+```
+Admin → Siesa → ¿Cuántos NO se pueden escanear?
+```
+
+Da el porcentaje real y la lista de los que faltan, con CSV para repartir en
+bodega. El 2026-08-10: **91,9% cubierto, 2.118 sin código**.
+
+Los que falten hay que teclearlos a mano en la operación. Si alguno es de alta
+rotación, conviene saberlo **antes** del corte y no cuando el operario esté con
+la pistola en la mano.
+
 ---
 
 ## Fase 3 — Cargar stock inicial
@@ -74,6 +146,23 @@ Admin → pestaña Siesa → Sync códigos de barras EAN
 ```
 Admin → pestaña Siesa → Cargar stock inicial
 ```
+
+**Antes de apretarlo, comprobar que no se corrió ya:**
+
+```js
+fetch('/api/siesa/setup-inicial-estado',{headers:hh}).then(r=>r.json()).then(d=>console.log(d.persistido.stock))
+```
+
+- `alguna_vez_ok: false` → nunca corrió. Adelante.
+- `alguna_vez_ok: true` → **ya se cargó**. Ver `ultima_exitosa.inicio` para
+  cuándo. No volver a correrlo sin decidirlo (ver abajo).
+- `ultima_corrida.ok: null` → una corrida quedó **abierta**: el proceso murió a
+  mitad. No es lo mismo que fallida — hay que mirar qué alcanzó a entrar antes
+  de decidir.
+
+Ese registro sobrevive a los reinicios de Railway. Hasta el 2026-08-10 vivía en
+memoria y se borraba en cada deploy: la única defensa contra cargarlo dos veces
+era la memoria de quien lo había hecho.
 
 ### Por qué solo una vez
 
@@ -97,6 +186,10 @@ Antes de dar luz verde a los operarios:
 
 - [ ] Buscar 3–5 productos por código en el PWA → aparecen con nombre correcto
 - [ ] Escanear el código de barras de un producto con la cámara → lo reconoce
+- [ ] **Escanear uno de los que NO tienen código** (lista en `Admin → Siesa →
+      ¿Cuántos NO se pueden escanear?`) → tiene que fallar con un mensaje
+      entendible, no en silencio. Son 2.118 SKU y el operario se los va a
+      encontrar
 - [ ] Verificar que una tarea de picking de prueba aparece en la lista del operario
 - [ ] Confirmar que la reconciliación (`Admin → Reconciliación`) muestra datos coherentes con Siesa
 - [ ] Confirmar que el sync nocturno está activo (el scheduler arranca automáticamente con la app)

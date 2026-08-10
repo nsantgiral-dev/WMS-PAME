@@ -1216,6 +1216,11 @@ async function cargarConnekta() {
           ↻ Sincronizar barcodes ahora
         </button>
         <div id="sync-barras-resultado" style="margin-top:8px;font-size:12px;color:#666;min-height:16px;"></div>
+        <button onclick="barcodesCobertura()"
+          style="width:100%;margin-top:8px;padding:10px;background:#1a1a1a;color:#93c5fd;border:1px solid #333;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;">
+          ¿Cuántos NO se pueden escanear?
+        </button>
+        <div id="barras-cobertura" style="margin-top:8px;font-size:12px;color:#666;"></div>
       </div>
 
       <!-- Diagnóstico barcodes Siesa -->
@@ -1299,6 +1304,73 @@ async function setupInicial() {
 }
 
 /** Trigger EAN barcode sync from Siesa and poll for completion. */
+/**
+ * Cuántos SKU activos NO se pueden escanear, y cuáles.
+ *
+ * El resultado del sync decía «completado» igual si actualizó 3 productos que
+ * si los cubrió todos. Esto mide la cobertura contra la base, que es lo que le
+ * pasa al operario con la pistola en la mano.
+ *
+ * La lista se muestra recortada y con enlace al CSV completo: 2.118 nombres en
+ * un panel no los lee nadie, y una lista que nadie lee es lo mismo que no
+ * tenerla.
+ */
+async function barcodesCobertura() {
+  const el = document.getElementById('barras-cobertura');
+  if (!el) return;
+  el.innerHTML = '<span style="color:#93c5fd;">Contando…</span>';
+  let d;
+  try {
+    d = await get('/api/productos/sin-codigo-barras?per_page=20');
+  } catch (e) {
+    el.innerHTML = `<span style="color:#f87171;">No se pudo consultar: ${e.message}</span>`;
+    return;
+  }
+  const c = d.cobertura || {};
+  if (!c.hay_catalogo) {
+    el.innerHTML = '<span style="color:#fbbf24;">No hay catálogo cargado — '
+      + 'sincronizalo antes de mirar cobertura.</span>';
+    return;
+  }
+  const muestra = (d.productos || [])
+    .map(p => `<div style="padding:2px 0;border-bottom:1px solid #1a1a1a;">
+      <code style="color:#93c5fd;">${p.codigo}</code> ${p.nombre || ''}</div>`)
+    .join('');
+  el.innerHTML = `
+    <div style="color:#e5e5e5;margin-bottom:6px;">
+      <strong>${c.con_codigo_barras.toLocaleString('es-CO')}</strong> de
+      <strong>${c.productos_activos.toLocaleString('es-CO')}</strong> se pueden escanear
+      (${c.porcentaje}%).
+    </div>
+    <div style="color:${c.sin_codigo_barras ? '#fbbf24' : '#4ade80'};margin-bottom:8px;">
+      ${c.sin_codigo_barras.toLocaleString('es-CO')} hay que teclearlos a mano.
+    </div>
+    ${d.total ? `<div style="max-height:180px;overflow:auto;font-size:11px;">${muestra}</div>
+    <div style="margin-top:6px;font-size:11px;color:#666;">
+      Mostrando ${d.productos.length} de ${d.total.toLocaleString('es-CO')} ·
+      <a href="#" onclick="barcodesDescargarFaltantes();return false;"
+         style="color:#93c5fd;">bajar la lista completa (CSV)</a>
+    </div>` : ''}`;
+}
+
+/** Baja el CSV de los que no se pueden escanear, para repartirlo en bodega. */
+async function barcodesDescargarFaltantes() {
+  try {
+    const r = await fetch(API + '/api/productos/sin-codigo-barras?formato=csv',
+                          { headers: { Authorization: 'Bearer ' + TOKEN } });
+    if (!r.ok) { alerta('No se pudo bajar la lista', 'error'); return; }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'productos_sin_codigo_barras.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alerta('No se pudo bajar la lista: ' + e.message, 'error');
+  }
+}
+
 async function syncBarcodes() {
   const res = document.getElementById('sync-barras-resultado');
   if (!res) return;

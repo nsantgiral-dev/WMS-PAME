@@ -43,6 +43,68 @@ def listar_productos():
     }), 200
 
 
+@productos_bp.route('/sin-codigo-barras', methods=['GET'])
+@jwt_required()
+def productos_sin_codigo_barras():
+    """Los productos activos que NO se pueden escanear.
+
+    Medido el 2026-08-10: 2.118 de 26.294 (8.1%). Cada uno es un SKU que el
+    operario tiene que teclear a mano — más lento, y con la posibilidad de
+    picar el producto equivocado.
+
+    **La pregunta buena no es cuántos son, es si alguno es de alta rotación**, y
+    eso hoy no se puede responder: necesita demanda, la demanda necesita el
+    kardex, y el kardex necesita el corte a producción. Por eso esto devuelve la
+    lista y no un ranking: la ordena alguien de bodega que reconozca los
+    nombres, no un cálculo que todavía no tiene insumos.
+
+    `formato=csv` para bajarla y repartirla.
+    """
+    if not _es_personal_almacen():
+        return jsonify({'error': 'Sin permiso para listar productos'}), 403
+
+    from app.services.inventario_siesa_service import cobertura_catalogo
+
+    q = (Producto.query
+         .filter(Producto.activo.is_(True),
+                 db.or_(Producto.codigo_barras.is_(None),
+                        Producto.codigo_barras == ''))
+         .order_by(Producto.codigo))
+
+    if request.args.get('formato') == 'csv':
+        import csv
+        import io
+        from flask import Response
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(['codigo', 'nombre', 'categoria', 'codigo_barras_empaque'])
+        for p in q.all():
+            w.writerow([p.codigo, p.nombre, p.categoria or '',
+                        p.codigo_barras_empaque or ''])
+        return Response(
+            buf.getvalue(), mimetype='text/csv',
+            headers={'Content-Disposition':
+                     'attachment; filename=productos_sin_codigo_barras.csv'})
+
+    page = request.args.get('page', 1, type=int)
+    per_page = min(request.args.get('per_page', 100, type=int), 500)
+    pag = q.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        # La cobertura va en la misma respuesta a propósito: una lista de 2.118
+        # sin el denominador se lee como catástrofe o como nada, según el ánimo
+        # de quien la mire.
+        'cobertura': cobertura_catalogo(),
+        'productos': [{'id': p.id, 'codigo': p.codigo, 'nombre': p.nombre,
+                       'categoria': p.categoria,
+                       'codigo_barras_empaque': p.codigo_barras_empaque}
+                      for p in pag.items],
+        'total': pag.total,
+        'paginas': pag.pages,
+        'pagina_actual': page,
+    }), 200
+
+
 @productos_bp.route('/<int:id>', methods=['GET'])
 @jwt_required()
 def obtener_producto(id):
