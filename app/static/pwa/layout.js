@@ -1289,11 +1289,11 @@ function layoutAbrirModalEsquemaCuerpo(idsCsv) {
   });
   const nivelesOrden = [...niveles.keys()].sort((a, b) => b - a); // 1 (piso) abajo
   const maxHuecos = Math.max(...[...niveles.values()].map(hs => hs.length));
-  // Ancho de riel COMPARTIDO por todas las repisas del cuerpo (44px caja + 4px
+  // Ancho de riel COMPARTIDO por todas las repisas del cuerpo (60px caja + 4px
   // separación, sin la última) — una repisa con menos huecos que la más
   // cargada se ve con espacio libre real, como una góndola desabastecida, en
   // vez de encogerse a su propio ancho.
-  const anchoRiel = maxHuecos * 48 - 4;
+  const anchoRiel = maxHuecos * 64 - 4;
 
   document.getElementById('layout-esquema-titulo').textContent =
     `${codigoCuerpo} · ${zona} · ${huecos.length} hueco(s)`;
@@ -1330,26 +1330,30 @@ function _layoutRenderEsquemaFila(nivel, huecos, color) {
     .map(u => _layoutRenderEsquemaHuecoBox(u, color)).join('');
   return `
     <div style="position:relative;margin-bottom:16px;">
-      <div style="position:absolute;left:0;top:-13px;font-size:8px;font-weight:800;color:#fff;background:#3d4148;padding:1px 5px;border-radius:3px;">N${nivel}</div>
-      <div style="display:flex;align-items:flex-end;gap:4px;min-height:42px;">${boxes}</div>
+      <div style="position:absolute;left:0;top:-13px;font-size:8px;font-weight:800;color:#fff;background:#3d4148;padding:1px 5px;border-radius:3px;white-space:nowrap;">Entrepaño ${nivel}</div>
+      <div style="display:flex;align-items:flex-end;gap:4px;min-height:56px;">${boxes}</div>
       <div style="height:6px;margin-top:4px;background:linear-gradient(180deg,#c89b6c,#9c7248);border-radius:2px;box-shadow:0 3px 4px rgba(0,0,0,.3);"></div>
     </div>`;
 }
 
-/** Una caja de Hueco apoyada en la repisa: vacío = bajo y solo contorno, con SKU = más alto y relleno, coloreado por zona. */
+/**
+ * Una caja de Hueco apoyada en la repisa: vacío = bajo y solo contorno, con
+ * SKU = más alto y relleno, coloreado por zona. Muestra la DESCRIPCIÓN del
+ * producto (no el código SKU) — el esquema es para personal nuevo que aún
+ * no memoriza códigos y se guía mejor por el nombre del artículo; el código
+ * completo sigue disponible en el tooltip al pasar el mouse/dedo.
+ */
 function _layoutRenderEsquemaHuecoBox(u, color) {
   const asignado = !!u.producto_asignado_codigo;
   const huecoLabel = u.codigo.split('-').pop();
-  const skuCorto = asignado
-    ? (u.producto_asignado_codigo.length > 8 ? u.producto_asignado_codigo.slice(0, 7) + '…' : u.producto_asignado_codigo)
-    : '—';
+  const descripcion = asignado ? (u.producto_asignado_nombre || u.producto_asignado_codigo) : '—';
   const titulo = asignado
-    ? `${u.codigo} — ${u.producto_asignado_nombre || u.producto_asignado_codigo} (${u.stock_actual ?? 0} UND)`
+    ? `${u.codigo} — ${u.producto_asignado_codigo} — ${u.producto_asignado_nombre || ''} (${u.stock_actual ?? 0} UND)`
     : `${u.codigo} — vacío`;
   return `
-    <div title="${titulo}" style="min-width:44px;width:44px;height:${asignado ? 38 : 30}px;border:2px solid ${color};border-radius:6px 6px 3px 3px;background:${asignado ? color + '33' : 'transparent'};box-shadow:${asignado ? '0 2px 3px rgba(0,0,0,.25)' : 'none'};display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;${!u.activo ? 'opacity:0.4;' : ''}">
-      <div style="font-size:9px;font-weight:800;color:var(--tx);line-height:1;">${huecoLabel}</div>
-      <div style="font-size:7px;font-weight:600;color:${asignado ? color : 'var(--tx3)'};line-height:1.3;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuCorto}</div>
+    <div title="${titulo}" style="min-width:60px;width:60px;height:${asignado ? 52 : 30}px;border:2px solid ${color};border-radius:6px 6px 3px 3px;background:${asignado ? color + '33' : 'transparent'};box-shadow:${asignado ? '0 2px 3px rgba(0,0,0,.25)' : 'none'};display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2px 3px;box-sizing:border-box;flex-shrink:0;${!u.activo ? 'opacity:0.4;' : ''}">
+      <div style="font-size:8px;font-weight:800;color:var(--tx);line-height:1;margin-bottom:2px;">${huecoLabel}</div>
+      <div style="font-size:8px;font-weight:600;color:${asignado ? color : 'var(--tx3)'};line-height:1.15;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${descripcion}</div>
     </div>`;
 }
 
