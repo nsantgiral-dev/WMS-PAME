@@ -1,0 +1,132 @@
+"""
+Las nueve copias del maestro de bodegas tienen que decir lo mismo.
+
+El 2026-08-10, armando los almacenes que faltaban, apareció que la relación
+bodega ↔ CO ↔ nombre está escrita en nueve sitios y ninguno es la fuente:
+
+  · `almacenes` (tabla) — la única con autoridad real, y a propósito
+    incompleta: solo los PV que ya operan.
+  · `tienda_oc._BODEGA_CO_MAP` — el ÚNICO con el mapeo CO completo de las 10.
+  · `traslado_service._BODEGAS_PREWARM` — a cuáles se les calienta el stock.
+  · `inventario_siesa_service._BODEGAS_PV`.
+  · cinco mapas de nombres en el JS, uno de ellos inline en un `onchange`.
+
+Este archivo **no arregla la duplicación**. Unificarlas es un refactor sobre
+código que hoy funciona, y hacerlo justo antes de un corte a producción es la
+lección de «validar contra producción real» al revés. Lo que hace es que la
+próxima divergencia se vea en el build en vez de en un traslado rechazado.
+
+El caso real que lo motivó: `PT1` y `FN1` estaban en `_BODEGA_CO_MAP` y en los
+mapas del JS desde hacía meses, pero **no existían como `almacen`**. La app
+sabía a qué CO pertenecían y aun así no se podía operar con ellas.
+"""
+import json
+import re
+from pathlib import Path
+
+_RAIZ = Path(__file__).resolve().parents[1]
+_PWA = _RAIZ / 'app' / 'static' / 'pwa'
+
+#: Las 10 bodegas que son punto de venta. Verificado contra el maestro de Siesa
+#: el 2026-08-10 — ver la tabla en CLAUDE.md, sección "Bodegas y Centros de
+#: Operación". NO incluye AV1/TRA1/BC99 (servicio) ni FD1/ND1/PD1 (duplicadas).
+BODEGAS_PV = frozenset({
+    'NB1', 'NS1', 'NS2', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1',
+})
+
+#: Bodega → CO. Fuente: maestro de Siesa + `CO PAME.xlsx`, confirmado contra
+#: `tienda_oc._BODEGA_CO_MAP` que ya lo tenía completo.
+BODEGA_CO = {
+    'NS1': '001', 'NS2': '001', 'NC1': '002', 'NB1': '003', 'PC1': '004',
+    'PT1': '005', 'FC1': '006', 'FN1': '007', 'FP1': '008', 'FF1': '009',
+}
+
+
+def _lista_py(archivo: Path, nombre: str) -> set:
+    """Los strings de una lista literal `NOMBRE = [...]` en un .py."""
+    texto = archivo.read_text(encoding='utf-8')
+    m = re.search(rf'^{nombre}\s*=\s*\[(.*?)\]', texto, re.M | re.S)
+    assert m, f'no está {nombre} en {archivo.name} — ¿lo renombraron?'
+    return set(re.findall(r"'([A-Z0-9]+)'", m.group(1)))
+
+
+class TestLasListasDePythonCoinciden:
+
+    def test_prewarm_cubre_exactamente_los_puntos_de_venta(self):
+        """Una bodega de más gasta una consulta a Siesa cada 4 minutos. Una de
+        menos deja ese PV con stock frío y el operario esperando."""
+        prewarm = _lista_py(
+            _RAIZ / 'app' / 'services' / 'traslado_service.py', '_BODEGAS_PREWARM')
+        assert prewarm == set(BODEGAS_PV), (
+            f'sobran: {prewarm - set(BODEGAS_PV)} · faltan: {set(BODEGAS_PV) - prewarm}')
+
+    def test_bodegas_pv_de_inventario_coincide(self):
+        pv = _lista_py(
+            _RAIZ / 'app' / 'services' / 'inventario_siesa_service.py', '_BODEGAS_PV')
+        assert pv == set(BODEGAS_PV)
+
+    def test_el_mapa_de_CO_esta_completo_y_de_acuerdo(self):
+        """`_BODEGA_CO_MAP` es el único sitio del código con las 10 → CO. Si
+        diverge de acá, una tienda factura contra el centro de operación
+        equivocado y eso es un error contable, no un bug de pantalla."""
+        texto = (_RAIZ / 'app' / 'routes' / 'tienda_oc.py').read_text(encoding='utf-8')
+        m = re.search(r'_BODEGA_CO_MAP\s*=\s*\{(.*?)\}', texto, re.S)
+        assert m, 'no está _BODEGA_CO_MAP en tienda_oc.py'
+        real = dict(re.findall(r"'([A-Z0-9]+)'\s*:\s*'(\d+)'", m.group(1)))
+        assert real == BODEGA_CO, (
+            f'\nen el código: {real}\nesperado:     {BODEGA_CO}')
+
+
+class TestLosMapasDelJSCoinciden:
+    """Cinco mapas de nombres en el JS. Un PV que falte en uno se muestra con su
+    código crudo —`FN1`— donde los demás dicen el nombre: el operario no
+    reconoce su propia tienda."""
+
+    _MAPAS = (
+        ('traslados.js', 1), ('tienda.js', 1), ('app.js', 3),
+    )
+
+    def _bodegas_mencionadas(self, archivo: str) -> set:
+        texto = (_PWA / archivo).read_text(encoding='utf-8')
+        # Solo dentro de contextos que parezcan mapa/lista de bodegas: una
+        # mención suelta en un comentario no es un mapa.
+        encontradas = set()
+        for m in re.finditer(r"'((?:N|P|F)[A-Z0-9]\d)'\s*[:,]", texto):
+            encontradas.add(m.group(1))
+        for m in re.finditer(r"id:\s*'((?:N|P|F)[A-Z0-9]\d)'", texto):
+            encontradas.add(m.group(1))
+        for m in re.finditer(r'value="((?:N|P|F)[A-Z0-9]\d)"', texto):
+            encontradas.add(m.group(1))
+        return encontradas & BODEGAS_PV      # ignora lo que no sea PV
+
+    def test_ningun_js_conoce_menos_bodegas_que_las_que_operan(self):
+        incompletos = {}
+        for archivo, _ in self._MAPAS:
+            faltan = BODEGAS_PV - self._bodegas_mencionadas(archivo)
+            if faltan:
+                incompletos[archivo] = sorted(faltan)
+        assert not incompletos, (
+            f'\nMapas de nombres del PWA a los que les faltan bodegas:\n'
+            + '\n'.join(f'  · {k}: {v}' for k, v in incompletos.items())
+            + '\n\nEse PV se va a mostrar con su código crudo en vez del nombre.')
+
+    def test_el_detector_ve_algo(self):
+        """Un patrón que deja de encontrar pasa vacío para siempre."""
+        assert len(self._bodegas_mencionadas('app.js')) >= 8
+
+
+class TestLaTablaDeCLAUDEmdSigueAhi:
+    """La tabla de CLAUDE.md es lo que lee un humano antes de tocar un traslado.
+    Si se borra, vuelve a vivir solo en un `.docx` que nadie puede grepear."""
+
+    def test_estan_las_diez_bodegas_documentadas(self):
+        doc = (_RAIZ / 'CLAUDE.md').read_text(encoding='utf-8')
+        i = doc.find('### Bodegas y Centros de Operación')
+        assert i != -1, 'desapareció la tabla de bodegas de CLAUDE.md'
+        seccion = doc[i:i + 4000]
+        faltan = [b for b in sorted(BODEGAS_PV) if f'`{b}`' not in seccion]
+        assert not faltan, f'sin documentar en CLAUDE.md: {faltan}'
+
+    def test_declara_que_999_no_lleva_almacen(self):
+        doc = (_RAIZ / 'CLAUDE.md').read_text(encoding='utf-8')
+        assert '999' in doc and 'ADMINISTRATIVO' in doc

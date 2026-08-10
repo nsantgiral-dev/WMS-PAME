@@ -171,6 +171,48 @@ Motivos son códigos **obligatorios** en Siesa (Inventarios > Maestros > Concept
 
 ## Mappings
 
+### Bodegas y Centros de Operación (maestro real de Siesa)
+
+Verificado contra el maestro de Siesa el 2026-08-10 (`docs/siesa-specs/`, export
+de bodegas + `CO PAME`). Vive acá y no solo en el `.docx` porque un `.docx` no se
+puede grepear, y esta es la tabla que hace falta cada vez que se toca un traslado.
+
+| CO | Descripción Siesa | Bodega | Nombre de bodega | Notas |
+|----|-------------------|--------|------------------|-------|
+| 001 | NEIVA SUR | `NS1` | NEIVA SUR PRINCIPAL | |
+| 001 | NEIVA SUR | `NS2` | NEIVA SUR FUNDACIÓN | Segundo PV bajo el mismo CO |
+| 002 | NEIVA CENTRO | `NC1` | NEIVA CENTRO | |
+| 003 | NEIVA BODEGA CD | `NB1` | NEIVA BODEGA CD | CDI. Default de `CONNEKTA_BODEGA`/`CENTRO_OP` |
+| 004 | PITALITO CENTRO | `PC1` | PITALITO CENTRO | |
+| 005 | PITALITO TERMINAL | `PT1` | PITALITO TERMINAL | En proceso de volverse CDI como NB1 |
+| 006 | FLORENCIA CENTRO | `FC1` | FLORENCIA CENTRO | |
+| 007 | FERIA NEIVA | `FN1` | FERIA NEIVA | **Es Santa Lucía Plaza y opera todo el año** — el nombre en Siesa es viejo |
+| 008 | FERIA PITALITO | `FP1` | FERIA PITALITO | Temporal, muy esporádica |
+| 009 | FERIA FLORENCIA | `FF1` | FERIA FLORENCIA | Temporal, muy esporádica |
+| 999 | ADMINISTRATIVO | — | — | Contable. **No lleva almacén en el WMS** |
+
+**Bodegas de servicio** (no son puntos de venta, no llevan almacén):
+`AV1` Averías CDI (`SIESA_BODEGA_AVERIAS`) · `TRA1` Bodega en Tránsito
+(`SIESA_BODEGA_TRANSITO`) · `BC99` Bodega Contratación (no la usa el WMS).
+
+**Ignorar:** `FD1`, `ND1`, `PD1` — bodegas «DUPLICADA» en Siesa. El WMS no las
+toca y no debe empezar a tocarlas.
+
+⚠️ **Esta tabla está repartida en nueve sitios del código** y ninguno es la
+fuente. La tabla `almacenes` es la única con autoridad real (la lee el resto de
+la app), pero está incompleta a propósito: solo tiene los PV que ya operan.
+Los otros ocho son mapas de nombres y listas de prewarm que hay que actualizar a
+mano cuando entra una bodega:
+
+`app/routes/tienda_oc.py` (`_BODEGA_CO_MAP`, el único con el mapeo CO completo) ·
+`app/services/traslado_service.py` (`_BODEGAS_PREWARM`) ·
+`app/services/inventario_siesa_service.py` (`_BODEGAS_PV`) ·
+`app/static/pwa/traslados.js` · `app/static/pwa/tienda.js` ·
+`app/static/pwa/app.js` (tres veces, una inline en un `onchange`).
+
+Hay un trinquete (`tests/test_bodegas_coherentes.py`) que exige que las listas
+coincidan entre sí. No arregla la duplicación — avisa cuando diverge.
+
 ### CO → Caja
 
 ```
