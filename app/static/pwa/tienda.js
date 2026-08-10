@@ -13,12 +13,11 @@ const _BODEGAS_ORIGEN = [
   { id: 'NB1', nombre: 'Bodega Principal' },
   { id: 'NC1', nombre: 'Neiva Centro' },
   { id: 'NS1', nombre: 'Neiva Sur Principal' },
-  { id: 'NS2', nombre: 'Neiva Sur Fundación' },
   { id: 'FC1', nombre: 'Florencia Centro' },
   { id: 'PC1', nombre: 'Pitalito Centro' },
   { id: 'PT1', nombre: 'Pitalito Terminal' },
   { id: 'FF1', nombre: 'Feria Florencia' },
-  { id: 'FN1', nombre: 'Feria Neiva' },
+  { id: 'FN1', nombre: 'Santa Lucía Plaza' },
   { id: 'FP1', nombre: 'Feria Pitalito' },
 ];
 

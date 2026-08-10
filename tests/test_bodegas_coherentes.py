@@ -27,17 +27,23 @@ from pathlib import Path
 _RAIZ = Path(__file__).resolve().parents[1]
 _PWA = _RAIZ / 'app' / 'static' / 'pwa'
 
-#: Las 10 bodegas que son punto de venta. Verificado contra el maestro de Siesa
-#: el 2026-08-10 — ver la tabla en CLAUDE.md, sección "Bodegas y Centros de
+#: Las 9 bodegas que el WMS opera. Verificado contra el maestro de Siesa el
+#: 2026-08-10 — ver la tabla en CLAUDE.md, sección "Bodegas y Centros de
 #: Operación". NO incluye AV1/TRA1/BC99 (servicio) ni FD1/ND1/PD1 (duplicadas).
+#:
+#: `NS2` (NEIVA SUR FUNDACIÓN) existe en Siesa y **no se opera**: se sacó de los
+#: nueve sitios el 2026-08-10 tras verificar contra producción que tenía **cero
+#: usuarios asignados**. Una bodega fantasma en el desplegable de punto de venta
+#: no es cosmética — es una opción que alguien puede elegir por error y quedar
+#: facturando contra una sede que nadie mira.
 BODEGAS_PV = frozenset({
-    'NB1', 'NS1', 'NS2', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1',
+    'NB1', 'NS1', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1',
 })
 
 #: Bodega → CO. Fuente: maestro de Siesa + `CO PAME.xlsx`, confirmado contra
 #: `tienda_oc._BODEGA_CO_MAP` que ya lo tenía completo.
 BODEGA_CO = {
-    'NS1': '001', 'NS2': '001', 'NC1': '002', 'NB1': '003', 'PC1': '004',
+    'NS1': '001', 'NC1': '002', 'NB1': '003', 'PC1': '004',
     'PT1': '005', 'FC1': '006', 'FN1': '007', 'FP1': '008', 'FF1': '009',
 }
 
@@ -78,41 +84,65 @@ class TestLasListasDePythonCoinciden:
 
 
 class TestLosMapasDelJSCoinciden:
-    """Cinco mapas de nombres en el JS. Un PV que falte en uno se muestra con su
-    código crudo —`FN1`— donde los demás dicen el nombre: el operario no
-    reconoce su propia tienda."""
+    """Cinco mapas de nombres en el JS, tres de ellos en el mismo archivo.
 
+    **Se mide cada mapa por separado, no el archivo.** La primera versión de
+    este test escaneaba `app.js` entero, y por eso no vio que
+    `_USR_NOMBRES_BOD` no tenía `NB1`: los otros dos mapas del mismo archivo sí
+    lo tenían y el conjunto daba completo. Un guard que mide el agregado
+    cuando el defecto vive en una parte es un guard en verde sobre algo roto —
+    el mismo error que ya costó tres veces en este repo.
+
+    Un PV que falte en un mapa se muestra con su código crudo —`FN1`— donde los
+    demás dicen el nombre: el operario no reconoce su propia tienda.
+    """
+
+    #: (archivo, etiqueta, patrón que aísla ESE mapa). El patrón recorta el
+    #: bloque; después se buscan códigos de bodega solo adentro.
     _MAPAS = (
-        ('traslados.js', 1), ('tienda.js', 1), ('app.js', 3),
+        ('traslados.js', '_REQ_BODEGA_NOMBRES', r'_REQ_BODEGA_NOMBRES\s*=\s*\{(.*?)\}'),
+        ('tienda.js', '_BODEGAS_ORIGEN', r'_BODEGAS_ORIGEN\s*=\s*\[(.*?)\]'),
+        ('app.js', '_USR_NOMBRES_BOD', r'_USR_NOMBRES_BOD\s*=\s*\{(.*?)\}'),
+        ('app.js', 'onchange nombres={}', r'const nombres=\{(.*?)\}'),
+        ('app.js', '<option> punto de venta', r'(<option value="[A-Z]{2}\d".*?u-bodega|id="u-bodega-siesa".*?</select>)'),
     )
 
-    def _bodegas_mencionadas(self, archivo: str) -> set:
+    def _bodegas_del_mapa(self, archivo: str, patron: str) -> set:
         texto = (_PWA / archivo).read_text(encoding='utf-8')
-        # Solo dentro de contextos que parezcan mapa/lista de bodegas: una
-        # mención suelta en un comentario no es un mapa.
-        encontradas = set()
-        for m in re.finditer(r"'((?:N|P|F)[A-Z0-9]\d)'\s*[:,]", texto):
-            encontradas.add(m.group(1))
-        for m in re.finditer(r"id:\s*'((?:N|P|F)[A-Z0-9]\d)'", texto):
-            encontradas.add(m.group(1))
-        for m in re.finditer(r'value="((?:N|P|F)[A-Z0-9]\d)"', texto):
-            encontradas.add(m.group(1))
-        return encontradas & BODEGAS_PV      # ignora lo que no sea PV
+        m = re.search(patron, texto, re.S)
+        assert m, f'no se encontró el mapa {patron[:30]!r} en {archivo}'
+        return set(re.findall(r'\b([NPF][A-Z]\d)\b', m.group(1))) & BODEGAS_PV
 
-    def test_ningun_js_conoce_menos_bodegas_que_las_que_operan(self):
+    def test_cada_mapa_por_separado_conoce_las_nueve(self):
         incompletos = {}
-        for archivo, _ in self._MAPAS:
-            faltan = BODEGAS_PV - self._bodegas_mencionadas(archivo)
+        for archivo, etiqueta, patron in self._MAPAS:
+            faltan = BODEGAS_PV - self._bodegas_del_mapa(archivo, patron)
             if faltan:
-                incompletos[archivo] = sorted(faltan)
+                incompletos[f'{archivo} › {etiqueta}'] = sorted(faltan)
         assert not incompletos, (
-            f'\nMapas de nombres del PWA a los que les faltan bodegas:\n'
+            '\nMapas del PWA a los que les faltan bodegas:\n'
             + '\n'.join(f'  · {k}: {v}' for k, v in incompletos.items())
-            + '\n\nEse PV se va a mostrar con su código crudo en vez del nombre.')
+            + '\n\nEse PV se muestra con su código crudo en vez del nombre.')
 
-    def test_el_detector_ve_algo(self):
+    def test_ningun_mapa_ofrece_una_bodega_que_no_se_opera(self):
+        """El otro lado. `NS2` estaba en los cinco mapas sin operarse: una
+        opción elegible que lleva a facturar contra una sede que nadie mira."""
+        sobrantes = {}
+        for archivo, etiqueta, patron in self._MAPAS:
+            texto = (_PWA / archivo).read_text(encoding='utf-8')
+            m = re.search(patron, texto, re.S)
+            de_mas = set(re.findall(r'\b([NPF][A-Z]\d)\b', m.group(1))) - BODEGAS_PV
+            if de_mas:
+                sobrantes[f'{archivo} › {etiqueta}'] = sorted(de_mas)
+        assert not sobrantes, (
+            '\nBodegas ofrecidas que el WMS no opera:\n'
+            + '\n'.join(f'  · {k}: {v}' for k, v in sobrantes.items()))
+
+    def test_el_detector_ve_cada_mapa(self):
         """Un patrón que deja de encontrar pasa vacío para siempre."""
-        assert len(self._bodegas_mencionadas('app.js')) >= 8
+        for archivo, etiqueta, patron in self._MAPAS:
+            n = len(self._bodegas_del_mapa(archivo, patron))
+            assert n >= 9, f'{archivo} › {etiqueta}: solo detectó {n} bodegas'
 
 
 class TestLaTablaDeCLAUDEmdSigueAhi:

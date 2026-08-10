@@ -1978,9 +1978,9 @@ async function iniciarDespachoDesdeSiesa(idx) {
 // ─────────────────────────────────────────────────────────────
 
 const _USR_NOMBRES_BOD = {
-  'NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación',
+  'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
   'FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal',
-  'FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito',
+  'FF1':'Feria Florencia','FN1':'Santa Lucía Plaza','FP1':'Feria Pitalito',
 };
 let USUARIOS_GRUPOS = [];       // [{clave, titulo, count, html}] — solo bodegas con usuarios
 let USUARIOS_TAB_ACTIVA = null; // clave del grupo/pestaña activa
@@ -2114,18 +2114,17 @@ function _formUsuario(u = {}) {
       <!-- Campos tienda / picker_traslado / packer_traslado -->
       <div id="u-tienda-fields" style="display:${_TIENDA_ROLES.includes(u.rol)?'block':'none'};">
         <select id="u-bodega-siesa"
-          onchange="(function(sel){const nombres={'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal','NS2':'Neiva Sur Fundación','FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Feria Neiva','FP1':'Feria Pitalito'};document.getElementById('u-nombre-pv').value=nombres[sel.value]||'';})(this)"
+          onchange="(function(sel){const nombres={'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal','FC1':'Florencia Centro','PC1':'Pitalito Centro','PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Santa Lucía Plaza','FP1':'Feria Pitalito'};document.getElementById('u-nombre-pv').value=nombres[sel.value]||'';})(this)"
           style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #f59e0b;border-radius:8px;color:#fff;font-size:14px;box-sizing:border-box;">
           <option value="">— Seleccionar bodega —</option>
           <option value="NB1" ${u.bodega_siesa_id==='NB1'?'selected':''}>NB1 — Bodega Principal</option>
           <option value="NC1" ${u.bodega_siesa_id==='NC1'?'selected':''}>NC1 — Neiva Centro</option>
           <option value="NS1" ${u.bodega_siesa_id==='NS1'?'selected':''}>NS1 — Neiva Sur Principal</option>
-          <option value="NS2" ${u.bodega_siesa_id==='NS2'?'selected':''}>NS2 — Neiva Sur Fundación</option>
           <option value="FC1" ${u.bodega_siesa_id==='FC1'?'selected':''}>FC1 — Florencia Centro</option>
           <option value="PC1" ${u.bodega_siesa_id==='PC1'?'selected':''}>PC1 — Pitalito Centro</option>
           <option value="PT1" ${u.bodega_siesa_id==='PT1'?'selected':''}>PT1 — Pitalito Terminal</option>
           <option value="FF1" ${u.bodega_siesa_id==='FF1'?'selected':''}>FF1 — Feria Florencia</option>
-          <option value="FN1" ${u.bodega_siesa_id==='FN1'?'selected':''}>FN1 — Feria Neiva</option>
+          <option value="FN1" ${u.bodega_siesa_id==='FN1'?'selected':''}>FN1 — Santa Lucía Plaza</option>
           <option value="FP1" ${u.bodega_siesa_id==='FP1'?'selected':''}>FP1 — Feria Pitalito</option>
         </select>
         <input id="u-nombre-pv" type="hidden" value="${u.nombre_punto_venta || ''}">

@@ -180,7 +180,7 @@ puede grepear, y esta es la tabla que hace falta cada vez que se toca un traslad
 | CO | Descripción Siesa | Bodega | Nombre de bodega | Notas |
 |----|-------------------|--------|------------------|-------|
 | 001 | NEIVA SUR | `NS1` | NEIVA SUR PRINCIPAL | |
-| 001 | NEIVA SUR | `NS2` | NEIVA SUR FUNDACIÓN | Segundo PV bajo el mismo CO |
+| 001 | NEIVA SUR | `NS2` | NEIVA SUR FUNDACIÓN | **No se opera.** Existe en Siesa; el WMS la sacó el 2026-08-10 tras verificar 0 usuarios asignados |
 | 002 | NEIVA CENTRO | `NC1` | NEIVA CENTRO | |
 | 003 | NEIVA BODEGA CD | `NB1` | NEIVA BODEGA CD | CDI. Default de `CONNEKTA_BODEGA`/`CENTRO_OP` |
 | 004 | PITALITO CENTRO | `PC1` | PITALITO CENTRO | |
