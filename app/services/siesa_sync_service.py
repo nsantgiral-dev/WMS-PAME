@@ -45,6 +45,11 @@ def _run_sync(app):
         errores = 0
         total_procesados = 0
 
+        # Se abre DESPUÉS del advisory lock: una corrida que no llegó a
+        # ejecutar porque otro worker la tenía no es una corrida.
+        from app.services import registro_sync_service as _reg
+        _reg_id = _reg.abrir('catalogo')
+
         try:
             from datetime import datetime as _dt_sync
             _sync_inicio = _dt_sync.utcnow()
@@ -169,6 +174,7 @@ def _run_sync(app):
             db.session.rollback()
             _sync_estado['en_curso'] = False
             _sync_estado['ultimo_error'] = str(e)
+            _reg.cerrar_error(_reg_id, e)
             return
         finally:
             if lock_adquirido:
@@ -211,6 +217,7 @@ def _run_sync(app):
         _sync_estado['ultimo_resultado'] = resultado
         _sync_estado['ultimo_error'] = None
         _sync_estado['en_curso'] = False
+        _reg.cerrar_ok(_reg_id, resultado)
 
 
 def iniciar_sync_background(app, forzar=False):

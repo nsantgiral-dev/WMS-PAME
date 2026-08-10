@@ -42,6 +42,9 @@ def _run_sync(app):
             _sync_estado['en_curso'] = False
             return
 
+        from app.services import registro_sync_service as _reg
+        _reg_id = _reg.abrir('barcodes')
+
         actualizados = 0
         sin_producto = 0
         errores = 0
@@ -146,10 +149,12 @@ def _run_sync(app):
             }
             _sync_estado['ultimo_resultado'] = resultado
             _sync_estado['ultimo_error'] = None
+            _reg.cerrar_ok(_reg_id, resultado)
             logger.info(f'[BARCODE SYNC] Completado: {resultado}')
 
         except Exception as e:
             _sync_estado['ultimo_error'] = str(e)
+            _reg.cerrar_error(_reg_id, e)
             logger.error(f'[BARCODE SYNC] Error fatal: {e}')
             try:
                 db.session.rollback()
@@ -177,7 +182,24 @@ def ejecutar_sync(app):
 
 
 def get_estado():
-    return dict(_sync_estado)
+    """Estado del sync + **cobertura real**, que es la pregunta de verdad.
+
+    `_sync_estado` dice cómo fue la última corrida y se borra en cada deploy.
+    `cobertura` dice cuántos productos tienen código de barras hoy — sale de la
+    base y no se evapora. Un sync exitoso que actualizó 3 de 12.000 productos se
+    veía igual que uno que los cubrió todos: ambos `ultimo_error: null`.
+    """
+    salida = dict(_sync_estado)
+    try:
+        from app.services.inventario_siesa_service import cobertura_catalogo
+        from app.services import registro_sync_service as _reg
+        salida['cobertura'] = cobertura_catalogo()
+        salida['persistido'] = _reg.estado_persistido(
+            'barcodes', bool(_sync_estado.get('ultimo_resultado')))
+    except Exception as e:
+        # Declarado, no omitido: un campo que desaparece se lee como "no aplica".
+        salida['cobertura'] = {'_error_lectura': str(e)[:200]}
+    return salida
 
 
 def init_scheduler(app):

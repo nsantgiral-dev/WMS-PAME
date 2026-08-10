@@ -470,6 +470,12 @@ def _run_carga_inicial(app):
         sin_producto_wms = 0
         errores = 0
 
+        # La corrida más importante de registrar: la carga inicial de stock va
+        # UNA vez, y correrla dos veces duplica el inventario de arranque. Hasta
+        # hoy la única defensa era la memoria de quien la ejecutó.
+        from app.services import registro_sync_service as _reg
+        _reg_id = _reg.abrir('stock')
+
         # Advisory lock de PostgreSQL — protege contra carga simultánea entre workers Gunicorn
         from sqlalchemy import text as _text
         lock_adquirido = False
@@ -730,6 +736,7 @@ def _run_carga_inicial(app):
             db.session.rollback()
             _estado_carga['ultimo_error'] = str(e)
             _estado_carga['en_curso'] = False
+            _reg.cerrar_error(_reg_id, e)
             try:
                 from app.services.alertas_service import enviar_email, _config_resend
                 if _config_resend():
@@ -769,6 +776,7 @@ def _run_carga_inicial(app):
         _estado_carga['ultimo_resultado'] = resultado
         _estado_carga['ultimo_error'] = None
         _estado_carga['en_curso'] = False
+        _reg.cerrar_ok(_reg_id, resultado)
 
 
 def iniciar_carga_inventario(app, forzar: bool = False):
@@ -1074,6 +1082,13 @@ def _run_setup_inicial(app):
     """Ejecuta sync de catálogo y luego carga de stock en secuencia, en un solo hilo."""
     global _estado_setup
     from app.services.siesa_sync_service import _run_sync
+    from app.services import registro_sync_service as _reg
+
+    # El setup abre su propio registro además de los de catálogo y stock: los
+    # tres pasos pueden correrse sueltos, y "se corrió la secuencia completa" es
+    # una afirmación distinta de "se corrieron los pasos".
+    with app.app_context():
+        _reg_id = _reg.abrir('setup_inicial')
 
     try:
         _estado_setup['fase'] = 'catalogo'
@@ -1091,10 +1106,14 @@ def _run_setup_inicial(app):
 
         _estado_setup['fase'] = 'completado'
         _estado_setup['ultimo_error'] = None
+        with app.app_context():
+            _reg.cerrar_ok(_reg_id, {'fase': 'completado'})
     except Exception as e:
         logger.error(f'[SETUP] Error en setup inicial: {e}')
         _estado_setup['ultimo_error'] = str(e)
         _estado_setup['fase'] = 'error'
+        with app.app_context():
+            _reg.cerrar_error(_reg_id, e)
     finally:
         _estado_setup['en_curso'] = False
 
@@ -1122,12 +1141,68 @@ def iniciar_setup_inicial(app):
 
 
 def estado_setup_inicial():
+    """Qué pasos del arranque corrieron — **leído de la tabla, no de la memoria**.
+
+    Los campos `resultado_*` siguen viniendo de los dicts de módulo y siguen
+    valiendo lo mismo que antes: se borran en cada deploy. Se conservan para no
+    romper a quien ya los lee, pero **no son la respuesta a «¿ya se cargó?»**.
+
+    Esa la contesta `persistido`, que sale de `registros_sync`. La diferencia se
+    midió en producción el 2026-08-10: `resultado_catalogo: null` después de
+    tres deploys el mismo día, sin forma de distinguir «nunca corrió» de «corrió
+    antes del último reinicio».
+    """
     from app.services.siesa_sync_service import estado_sync
+    from app.services import registro_sync_service as _reg
+
+    _cat = estado_sync().get('ultimo_resultado')
     return {
         'en_curso': _estado_setup['en_curso'],
         'fase': _estado_setup['fase'],
         'ultimo_inicio': _estado_setup['ultimo_inicio'].isoformat() if _estado_setup['ultimo_inicio'] else None,
-        'resultado_catalogo': estado_sync().get('ultimo_resultado'),
+        # En memoria — se pierden al reiniciar. Ver docstring.
+        'resultado_catalogo': _cat,
         'resultado_stock': _estado_carga['ultimo_resultado'],
         'ultimo_error': _estado_setup['ultimo_error'],
+        # En la base — sobreviven al deploy. ESTO es lo que hay que mirar.
+        'persistido': {
+            'catalogo': _reg.estado_persistido('catalogo', bool(_cat)),
+            'barcodes': _reg.estado_persistido('barcodes'),
+            'stock': _reg.estado_persistido('stock', bool(_estado_carga['ultimo_resultado'])),
+            'setup_inicial': _reg.estado_persistido('setup_inicial'),
+        },
+        'cobertura': cobertura_catalogo(),
+    }
+
+
+def cobertura_catalogo():
+    """Cuántos productos hay y cuántos tienen código de barras. De la base.
+
+    «Códigos de barras cargados» era una casilla que nadie podía marcar con
+    honestidad: el endpoint de sync reportaba el resultado de la última corrida
+    —en memoria— y no la cobertura real. Un sync exitoso que actualizó 3 de
+    12.000 productos se veía igual que uno que los cubrió todos.
+
+    Sin `porcentaje` calculado cuando no hay productos: dividir por cero para
+    mostrar `0%` diría «no hay cobertura» cuando la verdad es «no hay catálogo»,
+    que es un problema distinto y anterior.
+    """
+    from app.models.producto import Producto
+
+    try:
+        activos = Producto.query.filter_by(activo=True).count()
+        con_barras = (Producto.query
+                      .filter(Producto.activo.is_(True),
+                              Producto.codigo_barras.isnot(None),
+                              Producto.codigo_barras != '')
+                      .count())
+    except Exception as e:
+        return {'_error_lectura': str(e)[:200]}
+
+    return {
+        'productos_activos': activos,
+        'con_codigo_barras': con_barras,
+        'sin_codigo_barras': activos - con_barras,
+        'porcentaje': round(100.0 * con_barras / activos, 1) if activos else None,
+        'hay_catalogo': activos > 0,
     }
