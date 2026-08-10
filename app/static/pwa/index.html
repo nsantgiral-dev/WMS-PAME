@@ -1467,9 +1467,14 @@
               <select id="veh-form-tipo"
                 style="width:100%;padding:11px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
                 <option value="">— Tipo —</option>
+                <!-- Todo valor de acá tiene que existir en
+                     `flota.dominio.valores.POSICIONES_LLANTA_POR_TIPO`, o el
+                     vehículo pide 4 fotos de llanta por fallback hasta que
+                     alguien le levante la ficha. Hay un test que lo exige. -->
                 <option value="NHR">NHR</option>
                 <option value="Turbo">Turbo</option>
                 <option value="Camión">Camión</option>
+                <option value="Camioneta">Camioneta</option>
                 <option value="Van">Van</option>
                 <option value="Moto">Moto</option>
               </select>
