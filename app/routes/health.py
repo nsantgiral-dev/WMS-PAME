@@ -38,23 +38,12 @@ def health_ping():
         # datos en pantalla son de prueba. En un ensayo con vestuario hay
         # credenciales reales y datos ficticios a la vez — sin esta variable el
         # banner se apagaría justo cuando más se necesita.
-        import os as _os
-        from urllib.parse import urlparse as _up
-        # A QUÉ SIESA APUNTA. `modo` decía 'produccion' con solo NO ser
-        # simulación ni ensayo — y con CONNEKTA_URL fijada a serviciosqa el
-        # banner quedaba APAGADO justo en el escenario para el que se
-        # construyó: datos de pruebas leyéndose como reales.
-        _h = _up(getattr(connekta, 'url_get_dinamico', '') or '').netloc.lower()
-        _destino_pruebas = any(x in _h for x in ('qa', 'test', 'dev', 'pruebas'))
-
-        if _destino_pruebas:
-            modo = 'datos_de_prueba'
-        elif _os.environ.get('WMS_ENSAYO', '').lower() == 'true':
-            modo = 'ensayo'
-        else:
-            modo = ('simulacion' if connekta.modo_simulacion
-                    else 'ensayo' if getattr(connekta, 'modo_ensayo', False)
-                    else 'produccion')
+        # A QUÉ SIESA APUNTA. `connekta.modo_datos()` es LA función — esto lo
+        # calculaba por su cuenta, y otras tres partes también. Dos de las
+        # cuatro no miraban el host, y una de esas pintaba «PRODUCCIÓN» en
+        # verde sobre QA.
+        modo = connekta.modo_datos()
+        _h = connekta.host_siesa.lower()
         return jsonify({
             'ok': True,
             'modo': modo,
@@ -179,19 +168,14 @@ def health_siesa():
     # Longitud de la SECRET_KEY, nunca la clave. Es la forma de MEDIR producción
     # antes de imponer una validación que podría impedir el arranque.
     import os as _os
-    from urllib.parse import urlparse
     _sk = len((_os.getenv('SECRET_KEY') or '').encode())
-    # url_get_dinamico es la que de verdad se usa para el kardex
-    _host_connekta = urlparse(getattr(connekta, 'url_get_dinamico', '') or '').netloc
-    _parece_qa = any(x in _host_connekta.lower() for x in ('qa', 'test', 'dev', 'pruebas'))
+    _host_connekta = connekta.host_siesa
+    _parece_qa = connekta.apunta_a_pruebas
 
     resultado = {
         'timestamp': datetime.utcnow().isoformat(),
-        'modo': (
-            'simulacion' if connekta.modo_simulacion
-            else 'ensayo' if connekta.modo_ensayo
-            else 'produccion'
-        ),
+        # Decía 'produccion' con solo tener credenciales, aunque apuntara a QA.
+        'modo': connekta.modo_datos(),
         # A QUÉ SIESA APUNTA. El default del gateway es
         # serviciosqa.siesacloud.com — QA. Si CONNEKTA_URL no está fija en
         # Railway, todo lo que se descargue viene del ambiente de pruebas.

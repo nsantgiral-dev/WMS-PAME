@@ -776,15 +776,29 @@ class TestBannerReglaCero:
         assert bloque.count('_pintarBannerModo(null)') >= 2, \
             'tanto el catch como el !r.ok deben pintar el banner'
 
-    def test_el_backend_separa_ensayo_de_conectividad(self):
+    def test_el_backend_separa_ensayo_de_conectividad(self, monkeypatch):
         """WMS_ENSAYO es independiente de Connekta a propósito.
 
         Los flags de connekta dicen si los POST llegan a Siesa; NO dicen si los
         datos en pantalla son de prueba. En un ensayo con vestuario hay
         credenciales reales y datos ficticios a la vez.
+
+        **Se ejerce la función, no se busca la palabra en un archivo.** Antes
+        este test hacía `assert "'ensayo'" in src` sobre `health.py`, y se
+        rompió el 2026-08-10 cuando el cálculo se unificó en
+        `connekta.modo_datos()` — el comportamiento mejoró y el guard falló.
+        Medía dónde estaba escrito, no qué hacía.
         """
-        import os
-        ruta = os.path.join(os.path.dirname(__file__), '..', 'app', 'routes', 'health.py')
-        src = open(ruta).read()
-        assert "WMS_ENSAYO" in src
-        assert "'ensayo'" in src
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'url_get_dinamico',
+                            'https://servicios.siesacloud.com/api/x', raising=False)
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        monkeypatch.setattr(connekta, 'modo_ensayo', False, raising=False)
+
+        monkeypatch.delenv('WMS_ENSAYO', raising=False)
+        assert connekta.modo_datos() == 'produccion'
+
+        monkeypatch.setenv('WMS_ENSAYO', 'true')
+        assert connekta.modo_datos() == 'ensayo', (
+            'WMS_ENSAYO dejó de pesar: el banner se apagaría en un ensayo con '
+            'credenciales reales, que es justo cuando hace falta')

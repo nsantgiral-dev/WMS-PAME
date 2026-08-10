@@ -3035,8 +3035,62 @@ class ConnektaGateway:
     # Estado
     # ==========================================
 
+    @property
+    def apunta_a_pruebas(self) -> bool:
+        """El host de Connekta parece un ambiente de pruebas.
+
+        Se mira `url_get_dinamico` porque es la que de verdad se usa para el
+        kardex — el dato que después alimenta decisiones de compra.
+        """
+        from urllib.parse import urlparse
+        host = urlparse(self.url_get_dinamico or '').netloc.lower()
+        # `pru` y no solo `pruebas`: el backend real de Siesa QA se llama
+        # `wspapeleriamedpru.siesacloud.com` — apareció en los errores del DLQ
+        # el 2026-08-10 y `pruebas` no lo habría reconocido.
+        #
+        # Se amplía hacia la sobre-detección a propósito. Los dos errores no
+        # cuestan lo mismo: un falso «datos de prueba» hace que alguien
+        # verifique; un falso «producción» hace que confíe en números de QA
+        # para decidir compras. Regla 0.
+        return any(x in host for x in ('qa', 'test', 'dev', 'pru'))
+
+    @property
+    def host_siesa(self) -> str:
+        from urllib.parse import urlparse
+        return urlparse(self.url_get_dinamico or '').netloc
+
+    def modo_datos(self) -> str:
+        """`datos_de_prueba` | `ensayo` | `simulacion` | `produccion`.
+
+        **LA función que contesta en qué ambiente estamos.** Había cuatro, y dos
+        de ellas no miraban el host: el 2026-08-10 la pantalla de Siesa mostraba
+        «PRODUCCIÓN · Listo para operar» en verde, con el banner rojo de «DATOS
+        DE PRUEBA» arriba, en la misma vista. Las dos salían del mismo backend.
+
+        El orden no es arbitrario: **el destino manda sobre el modo**. Tener
+        credenciales reales y POSTs habilitados no es producción si los
+        documentos aterrizan en el Siesa de pruebas. Un «PRODUCCIÓN» en verde
+        sobre QA es exactamente la evidencia falsa que este proyecto existe para
+        no producir.
+        """
+        import os as _os
+
+        if self.apunta_a_pruebas:
+            return 'datos_de_prueba'
+        if (_os.environ.get('WMS_ENSAYO', '') or '').lower() == 'true':
+            return 'ensayo'
+        if self.modo_simulacion:
+            return 'simulacion'
+        if self.modo_ensayo:
+            return 'ensayo'
+        return 'produccion'
+
     def estado(self):
         return {
+            # Lo primero que se lee, y lo que decide el color en pantalla.
+            'modo_datos': self.modo_datos(),
+            'apunta_a_pruebas': self.apunta_a_pruebas,
+            'siesa_host': self.host_siesa or None,
             'modo_simulacion': self.modo_simulacion,
             'modo_ensayo': self.modo_ensayo,
             'connekta_configurado': not self.modo_simulacion,

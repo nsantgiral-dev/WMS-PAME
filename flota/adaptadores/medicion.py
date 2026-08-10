@@ -85,26 +85,13 @@ class MedidorSQL:
         Mismo vocabulario que `/api/health/ping` a propósito: dos nombres para
         el mismo estado es un nombre que miente esperando su turno.
         """
-        import os
-        from urllib.parse import urlparse
-
         from app.services.connekta_gateway import connekta
 
-        # Acceso directo, sin `getattr(..., default)`: los tres atributos se
-        # fijan en `Connekta.__init__`. Si alguno desapareciera, esto tiene que
-        # reventar — un default silencioso acá devuelve 'produccion' con datos
-        # de QA, que es exactamente el escenario para el que existe el campo.
-        host = urlparse(connekta.url_get_dinamico or '').netloc.lower()
-        if any(x in host for x in ('qa', 'test', 'dev', 'pruebas')):
-            return 'datos_de_prueba'
-        ensayo_wms = os.getenv('WMS_ENSAYO')
-        if ensayo_wms is not None and ensayo_wms.lower() == 'true':
-            return 'ensayo'
-        if connekta.modo_simulacion:
-            return 'simulacion'
-        if connekta.modo_ensayo:
-            return 'ensayo'
-        return 'produccion'
+        # Acceso directo, sin `getattr(..., default)`: si el método
+        # desapareciera esto tiene que reventar — un default silencioso acá
+        # devuelve 'produccion' con datos de QA, que es exactamente el
+        # escenario para el que existe el campo.
+        return connekta.modo_datos()
 
     def datos_reales(self) -> bool:
         """Solo un `produccion` explícito afirma que los números son reales.

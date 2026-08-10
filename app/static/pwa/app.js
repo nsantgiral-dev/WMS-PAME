@@ -1167,16 +1167,34 @@ async function cargarConnekta() {
   if (!el) return;
   try {
     const d = await get('/api/packing/connekta/estado');
+    // El color y la palabra salen de `modo_datos`, que MIRA EL HOST. Antes
+    // salían solo de las credenciales: con `CONNEKTA_URL` en serviciosqa esta
+    // pantalla decía «PRODUCCIÓN · Listo para operar» en verde, con el banner
+    // rojo de «DATOS DE PRUEBA» arriba, en la misma vista. Los dos venían del
+    // mismo backend.
+    //
+    // El destino manda sobre el modo: tener credenciales reales y POSTs
+    // habilitados no es producción si los documentos aterrizan en el Siesa de
+    // pruebas.
     let color, estado, detalle;
-    if (d.modo_simulacion) {
+    if (d.modo_datos === 'datos_de_prueba') {
+      color = '#f87171'; estado = 'DATOS DE PRUEBA';
+      detalle = `Siesa apunta a <b>${d.siesa_host || '?'}</b> — nada de lo que se `
+        + 'envíe llega al Siesa real. NO usar estos números para decidir.';
+    } else if (d.modo_datos === 'simulacion') {
       color = '#facc15'; estado = 'SIMULACIÓN';
       detalle = 'Sin credenciales — todo simulado localmente';
-    } else if (d.modo_ensayo) {
+    } else if (d.modo_datos === 'ensayo') {
       color = '#fb923c'; estado = 'MODO ENSAYO';
       detalle = 'Credenciales activas · GETs reales · POSTs bloqueados en servidor';
-    } else {
+    } else if (d.modo_datos === 'produccion') {
       color = '#4ade80'; estado = 'PRODUCCIÓN';
       detalle = d.mensaje || 'Listo para operar';
+    } else {
+      // Backend viejo o campo ausente: NO se asume producción. Un verde de más
+      // es peor que un "no sé" — es la regla 0 aplicada al banner.
+      color = '#a3a3a3'; estado = 'AMBIENTE DESCONOCIDO';
+      detalle = 'El servidor no informó a qué Siesa apunta. Verificar antes de operar.';
     }
     el.innerHTML = `
       <div class="tabla-card">

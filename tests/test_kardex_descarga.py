@@ -417,10 +417,29 @@ class TestElBannerNoSeApagaConDatosDePrueba:
     su silencio se lee como confirmación.
     """
 
-    def test_el_modo_considera_el_destino_de_siesa(self):
-        src = _src('app/routes/health.py')
-        assert 'datos_de_prueba' in src
-        assert '_destino_pruebas' in src
+    def test_el_modo_considera_el_destino_de_siesa(self, monkeypatch):
+        """Se ejerce la función, no se busca la palabra en `health.py`.
+
+        Antes era `assert 'datos_de_prueba' in src`. El 2026-08-10 el cálculo
+        se unificó en `connekta.modo_datos()` —había cinco copias, dos de ellas
+        ignoraban el host y una pintaba «PRODUCCIÓN» en verde sobre QA— y este
+        guard falló pese a que la propiedad quedó mejor protegida. Medía en qué
+        archivo estaba el texto.
+        """
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        monkeypatch.setattr(connekta, 'modo_ensayo', False, raising=False)
+        monkeypatch.delenv('WMS_ENSAYO', raising=False)
+
+        monkeypatch.setattr(connekta, 'url_get_dinamico',
+                            'https://serviciosqa.siesacloud.com/api/x', raising=False)
+        assert connekta.modo_datos() == 'datos_de_prueba', (
+            'con CONNEKTA_URL en QA el banner quedaría apagado justo en el '
+            'escenario para el que se construyó')
+
+        monkeypatch.setattr(connekta, 'url_get_dinamico',
+                            'https://servicios.siesacloud.com/api/x', raising=False)
+        assert connekta.modo_datos() == 'produccion'
 
     def test_ping_expone_el_host(self):
         src = _src('app/routes/health.py')
