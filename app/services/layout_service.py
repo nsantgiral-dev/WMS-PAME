@@ -48,6 +48,7 @@ from app.models.conteo import SesionConteo
 from app.models.recepcion import ItemRecepcion
 from app.models.lpn import LPN
 from app.models.devolucion import TareaDevolucion
+from app.models.devolucion_cliente import LineaDevolucionCliente
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -249,18 +250,27 @@ def _motivo_referencias_nullable(ubicacion_id: int) -> str | None:
     Tablas con FK nullable hacia ubicaciones que NO están en
     _motivo_historial_bloqueante/_motivo_historial_operativo_real por
     separado: ItemRecepcion (dos columnas: ubicacion_id y
-    ubicacion_cross_dock_id), TareaDevolucion y LPN. Aunque nullable=True
-    permite que el REGISTRO exista sin ubicación, Postgres igual bloquea el
-    DELETE de la ubicación mientras una fila la referencie (regla NO ACTION)
-    — así que también hay que revisarlas aquí, no solo las NOT NULL. Un LPN
-    que sigue apuntando aquí es además una señal real: representa una
-    estiba/pallet físico que puede seguir presente en el hueco.
+    ubicacion_cross_dock_id), TareaDevolucion, LPN y LineaDevolucionCliente.
+    Aunque nullable=True permite que el REGISTRO exista sin ubicación,
+    Postgres igual bloquea el DELETE de la ubicación mientras una fila la
+    referencie (regla NO ACTION) — así que también hay que revisarlas aquí,
+    no solo las NOT NULL. Un LPN que sigue apuntando aquí es además una señal
+    real: representa una estiba/pallet físico que puede seguir presente en
+    el hueco.
 
     Descubierto en producción (2026-07-27): eliminar_cuerpo(forzar=True) sobre
     PIK-A1-C01 crasheaba con IntegrityError porque items_recepcion.ubicacion_id
     apuntaba ahí y nadie lo revisaba ni lo desvinculaba. Se verificó la lista
     completa de FKs reales contra information_schema.table_constraints en vez
     de confiar en memoria — salieron 8 tablas, no las 4 que este módulo conocía.
+
+    Repetido en producción (2026-08-10), mismo síntoma y misma ubicación
+    (PIK-A1-C01): lineas_devolucion_cliente.ubicacion_id (migración
+    3ecf0c939454, módulo Devolución de Cliente) se creó DESPUÉS de esa
+    auditoría y nunca se agregó aquí — 9na FK real, no 8. Recordatorio de la
+    Regla 0 (una política, una función): cada FK nueva hacia ubicaciones debe
+    sumarse a esta lista en el mismo commit que la crea, no esperar a que
+    truene en producción para descubrirla.
     """
     if ItemRecepcion.query.filter(
         db.or_(
@@ -273,6 +283,8 @@ def _motivo_referencias_nullable(ubicacion_id: int) -> str | None:
         return 'tiene tareas de devolución asociadas'
     if LPN.query.filter_by(ubicacion_id=ubicacion_id).first():
         return 'tiene LPN(s) asociados'
+    if LineaDevolucionCliente.query.filter_by(ubicacion_id=ubicacion_id).first():
+        return 'tiene línea(s) de devolución de cliente asociada(s)'
     return None
 
 
@@ -364,19 +376,21 @@ def _borrar_historial_de(ubicacion_id: int):
     eliminar_cuerpo() — cuando el usuario pidió explícitamente saltarse el
     guardarraíl de historial (uso: pruebas, nunca el camino normal).
 
-    Lista de las 8 tablas reales con FK hacia ubicaciones, verificada contra
+    Lista de las 9 tablas reales con FK hacia ubicaciones, verificada contra
     information_schema.table_constraints (no contra memoria — la primera
     versión de esta función solo conocía 4 y crasheó en producción dos veces
     seguidas con IntegrityError: primero por SesionConteo, después por
     ItemRecepcion, ambas con FK NOT NULL o NO ACTION que ninguna vía anterior
-    revisaba). Dos estrategias según lo que permite cada esquema:
+    revisaba; una tercera vez el 2026-08-10 por LineaDevolucionCliente, tabla
+    creada después de esa auditoría). Dos estrategias según lo que permite
+    cada esquema:
 
       - FK NOT NULL (no se puede desvincular, hay que borrar la fila entera):
         TareaPicking, TareaReposicion, SesionConteo.
       - FK nullable (el registro tiene sentido sin ubicación — se desvincula
         con UPDATE ... SET ubicacion_id = NULL, preservando el historial real
         en vez de borrarlo): MovimientoInventario, ItemRecepcion (dos
-        columnas), LPN, TareaDevolucion.
+        columnas), LPN, TareaDevolucion, LineaDevolucionCliente.
 
     UbicacionProducto no aparece aquí — su FK también es NOT NULL, pero ya se
     borra aparte en cada llamador (eliminar_ubicacion/eliminar_fila/
@@ -400,6 +414,8 @@ def _borrar_historial_de(ubicacion_id: int):
     LPN.query.filter_by(ubicacion_id=ubicacion_id).update(
         {'ubicacion_id': None}, synchronize_session=False)
     TareaDevolucion.query.filter_by(ubicacion_id=ubicacion_id).update(
+        {'ubicacion_id': None}, synchronize_session=False)
+    LineaDevolucionCliente.query.filter_by(ubicacion_id=ubicacion_id).update(
         {'ubicacion_id': None}, synchronize_session=False)
 
 

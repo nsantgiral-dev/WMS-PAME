@@ -514,6 +514,85 @@ def test_eliminar_ubicacion_individual_forzar_desvincula_tarea_devolucion(db, al
     assert tarea_refrescada.ubicacion_id is None
 
 
+def _crear_devolucion_cliente(almacen_id):
+    from app.extensions import db as _db
+    from app.models.packing import TareaPacking
+    from app.models.devolucion_cliente import DevolucionCliente
+    tarea = TareaPacking(
+        codigo='PK-LAYOUT-DEVC', tipo_documento='PEDIDO', estado='DESPACHADO',
+        almacen_id=almacen_id,
+    )
+    _db.session.add(tarea)
+    _db.session.flush()
+    devolucion = DevolucionCliente(
+        codigo='DEVC-LAYOUT-1', tarea_packing_id=tarea.id,
+        tipo_docto_fe='FEW', consec_fe='1', almacen_id=almacen_id,
+    )
+    _db.session.add(devolucion)
+    _db.session.flush()
+    return devolucion
+
+
+def test_eliminar_ubicacion_individual_bloquea_por_linea_devolucion_cliente(db, almacen, producto):
+    from app.models.devolucion_cliente import LineaDevolucionCliente
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    devolucion = _crear_devolucion_cliente(almacen.id)
+    db.session.add(LineaDevolucionCliente(
+        devolucion_id=devolucion.id, producto_id=producto.id, codigo_siesa=producto.codigo,
+        cantidad_facturada=5, cantidad_devuelta=5, ubicacion_id=ub.id,
+    ))
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='devolución de cliente'):
+        svc.eliminar_ubicacion(ub.id)
+    assert Ubicacion.query.get(ub.id) is not None
+
+
+def test_eliminar_ubicacion_individual_forzar_desvincula_linea_devolucion_cliente(db, almacen, producto):
+    from app.models.devolucion_cliente import LineaDevolucionCliente
+    ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    devolucion = _crear_devolucion_cliente(almacen.id)
+    linea = LineaDevolucionCliente(
+        devolucion_id=devolucion.id, producto_id=producto.id, codigo_siesa=producto.codigo,
+        cantidad_facturada=5, cantidad_devuelta=5, ubicacion_id=ub.id,
+    )
+    db.session.add(linea)
+    db.session.commit()
+    linea_id = linea.id
+
+    resultado = svc.eliminar_ubicacion(ub.id, forzar=True)
+
+    assert resultado['codigo'] == ub.codigo
+    assert Ubicacion.query.get(ub.id) is None
+    linea_refrescada = LineaDevolucionCliente.query.get(linea_id)
+    assert linea_refrescada is not None
+    assert linea_refrescada.ubicacion_id is None
+
+
+def test_eliminar_cuerpo_forzar_desvincula_linea_devolucion_cliente(db, almacen, producto):
+    """
+    Regresión (2026-08-10): eliminar_cuerpo(forzar=True) sobre un cuerpo con
+    huecos referenciados por lineas_devolucion_cliente crasheaba con
+    IntegrityError (500 sin controlar) porque esa tabla no estaba en la lista
+    de FKs reales hacia ubicaciones — mismo síntoma que el incidente de
+    ItemRecepcion del 2026-07-27, pero con una tabla creada después de esa
+    auditoría.
+    """
+    from app.models.devolucion_cliente import LineaDevolucionCliente
+    ubicaciones = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')
+    devolucion = _crear_devolucion_cliente(almacen.id)
+    db.session.add(LineaDevolucionCliente(
+        devolucion_id=devolucion.id, producto_id=producto.id, codigo_siesa=producto.codigo,
+        cantidad_facturada=5, cantidad_devuelta=5, ubicacion_id=ubicaciones[0].id,
+    ))
+    db.session.commit()
+
+    resultado = svc.eliminar_cuerpo(almacen.id, 'A', 1, 1, forzar=True)
+
+    assert resultado['total'] == 1
+    assert Ubicacion.query.get(ubicaciones[0].id) is None
+
+
 # ── editar_fila / eliminar_fila — mecanismo legado sobre 'estante' ───────────
 # Ningún mecanismo nuevo escribe 'estante'; se prueba construyendo directo,
 # igual que quedaron las ubicaciones creadas antes del rediseño de 5 ejes.
