@@ -1288,6 +1288,12 @@ function layoutAbrirModalEsquemaCuerpo(idsCsv) {
     niveles.get(u.nivel).push(u);
   });
   const nivelesOrden = [...niveles.keys()].sort((a, b) => b - a); // 1 (piso) abajo
+  const maxHuecos = Math.max(...[...niveles.values()].map(hs => hs.length));
+  // Ancho de riel COMPARTIDO por todas las repisas del cuerpo (44px caja + 4px
+  // separación, sin la última) — una repisa con menos huecos que la más
+  // cargada se ve con espacio libre real, como una góndola desabastecida, en
+  // vez de encogerse a su propio ancho.
+  const anchoRiel = maxHuecos * 48 - 4;
 
   document.getElementById('layout-esquema-titulo').textContent =
     `${codigoCuerpo} · ${zona} · ${huecos.length} hueco(s)`;
@@ -1296,26 +1302,41 @@ function layoutAbrirModalEsquemaCuerpo(idsCsv) {
     <div><span style="display:inline-block;width:10px;height:10px;border:2px solid ${color};border-radius:3px;background:${color}33;margin-right:4px;vertical-align:middle;"></span>Con SKU</div>
     <div><span style="display:inline-block;width:10px;height:10px;border:2px solid ${color};border-radius:3px;margin-right:4px;vertical-align:middle;"></span>Vacío</div>`;
 
-  document.getElementById('layout-esquema-filas').innerHTML =
-    nivelesOrden.map(nivel => _layoutRenderEsquemaFila(nivel, niveles.get(nivel), color)).join('');
+  const repisas = nivelesOrden.map(nivel => _layoutRenderEsquemaFila(nivel, niveles.get(nivel), color)).join('');
+
+  // Marco de góndola: riel superior + parales laterales + base, todo scrollea
+  // como una sola unidad (un solo contenedor, no una fila scrolleando distinto
+  // a otra) — el mismo tipo de scroll horizontal contenido que ya se probó en
+  // mobile para este módulo, ahora aplicado al conjunto completo del dibujo.
+  document.getElementById('layout-esquema-filas').innerHTML = `
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 2px 10px;">
+      <div style="width:${anchoRiel + 20}px;">
+        <div style="height:9px;background:linear-gradient(180deg,${color},${color}aa);border-radius:4px 4px 0 0;"></div>
+        <div style="display:flex;">
+          <div style="width:10px;flex-shrink:0;background:linear-gradient(90deg,#3d4148,#6b6f78,#3d4148);"></div>
+          <div style="flex:1;padding-top:14px;">${repisas}</div>
+          <div style="width:10px;flex-shrink:0;background:linear-gradient(90deg,#3d4148,#6b6f78,#3d4148);"></div>
+        </div>
+        <div style="height:12px;background:linear-gradient(180deg,#4a4d54,#2b2d32);border-radius:0 0 5px 5px;box-shadow:0 4px 6px rgba(0,0,0,.35);"></div>
+      </div>
+    </div>`;
 
   m.style.display = 'flex';
 }
 
-/** Una fila de Entrepaño: cajas de tamaño fijo en su propio contenedor con scroll horizontal. */
+/** Una repisa (Entrepaño): cajas apoyadas sobre un tablón físico, ancho compartido por todo el cuerpo (ver anchoRiel). */
 function _layoutRenderEsquemaFila(nivel, huecos, color) {
   const boxes = huecos.slice().sort((a, b) => a.hueco - b.hueco)
     .map(u => _layoutRenderEsquemaHuecoBox(u, color)).join('');
   return `
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-      <div style="width:28px;flex-shrink:0;font-size:10px;font-weight:800;color:var(--tx2);text-align:right;">N${nivel}</div>
-      <div style="flex:1;min-width:0;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px;">
-        <div style="display:inline-flex;gap:4px;">${boxes}</div>
-      </div>
+    <div style="position:relative;margin-bottom:16px;">
+      <div style="position:absolute;left:0;top:-13px;font-size:8px;font-weight:800;color:#fff;background:#3d4148;padding:1px 5px;border-radius:3px;">N${nivel}</div>
+      <div style="display:flex;align-items:flex-end;gap:4px;min-height:42px;">${boxes}</div>
+      <div style="height:6px;margin-top:4px;background:linear-gradient(180deg,#c89b6c,#9c7248);border-radius:2px;box-shadow:0 3px 4px rgba(0,0,0,.3);"></div>
     </div>`;
 }
 
-/** Una caja de Hueco: contorno = vacío, relleno = con SKU, coloreado por zona. */
+/** Una caja de Hueco apoyada en la repisa: vacío = bajo y solo contorno, con SKU = más alto y relleno, coloreado por zona. */
 function _layoutRenderEsquemaHuecoBox(u, color) {
   const asignado = !!u.producto_asignado_codigo;
   const huecoLabel = u.codigo.split('-').pop();
@@ -1326,7 +1347,7 @@ function _layoutRenderEsquemaHuecoBox(u, color) {
     ? `${u.codigo} — ${u.producto_asignado_nombre || u.producto_asignado_codigo} (${u.stock_actual ?? 0} UND)`
     : `${u.codigo} — vacío`;
   return `
-    <div title="${titulo}" style="min-width:44px;width:44px;height:38px;border:2px solid ${color};border-radius:6px;background:${asignado ? color + '33' : 'transparent'};display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;${!u.activo ? 'opacity:0.4;' : ''}">
+    <div title="${titulo}" style="min-width:44px;width:44px;height:${asignado ? 38 : 30}px;border:2px solid ${color};border-radius:6px 6px 3px 3px;background:${asignado ? color + '33' : 'transparent'};box-shadow:${asignado ? '0 2px 3px rgba(0,0,0,.25)' : 'none'};display:flex;flex-direction:column;align-items:center;justify-content:center;flex-shrink:0;${!u.activo ? 'opacity:0.4;' : ''}">
       <div style="font-size:9px;font-weight:800;color:var(--tx);line-height:1;">${huecoLabel}</div>
       <div style="font-size:7px;font-weight:600;color:${asignado ? color : 'var(--tx3)'};line-height:1.3;max-width:40px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${skuCorto}</div>
     </div>`;
