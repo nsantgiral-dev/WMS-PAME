@@ -248,7 +248,14 @@ class TestRegistrarCobroRecaudo:
             'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
             'f461_id_sucursal_pedido_rem': '001',
         }
-        mock_connekta.get_cxc_general = MagicMock(return_value={'f253_id': '13050502'})
+        # Forma real verificada en vivo (2026-08-11): lista de filas, una por
+        # factura del cliente — NUNCA un dict único. tipo/consec deben matchear
+        # tarea.tipo_docto_pedido_siesa/consec_docto_pedido_siesa del fixture
+        # recaudo_liq ('PD'/999) para que registrar_cobro_recaudo la encuentre.
+        mock_connekta.get_cxc_general = MagicMock(return_value=[
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_total_db': 2000000, 'f353_total_cr': 0},
+        ])
         return mock_connekta
 
     def test_contado_sin_retenciones_rc_bruto(self, app, db, recaudo_liq):
@@ -298,6 +305,35 @@ class TestRegistrarCobroRecaudo:
         with pytest.raises(ValueError, match='NC debe ir primero'):
             with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
                 LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
+
+    def test_matchea_f253_id_correcto_entre_varias_filas(self, app, db, recaudo_liq):
+        """
+        get_cxc_general puede devolver varias filas del mismo cliente con
+        f253_id DISTINTO por factura (verificado en vivo 2026-08-11, NIT
+        1000124053: 9 filas con 13050501, 2 con 13050502) — hay que tomar
+        la fila de LA factura que se está cobrando, no la primera del
+        cliente ni una de otra factura.
+        """
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        mock_connekta = self._mock_siesa()
+        # Decoy (otra factura del mismo cliente, distinto f253_id) + la real
+        mock_connekta.get_cxc_general.return_value = [
+            {'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': 1,
+             'f253_id': '99999999', 'f353_total_db': 100, 'f353_total_cr': 0},
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_total_db': 2000000, 'f353_total_cr': 0},
+        ]
+        from app.services.liquidacion_service import LiquidacionService
+        from app.models.siesa_job import SiesaJob
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1, retenciones=[])
+
+        job = SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_id=recaudo.id).first()
+        assert job is not None
+        assert job.get_payload()['cuenta_cxc'] == '13050502', (
+            'Tomó el f253_id de la factura equivocada (o el fallback)'
+        )
 
     def test_retenciones_detalle_guardado(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)

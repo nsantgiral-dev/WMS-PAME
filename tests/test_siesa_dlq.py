@@ -114,6 +114,58 @@ class TestPreFlagRC:
         assert resultado.get('idempotente') is True
         mc.trigger_recibo_caja.assert_not_called()
 
+    def test_preflight_factura_ya_saldada_no_llama_al_post(self, app, db, recaudo_factory):
+        """API_v2_CxC_General ya muestra la factura sin saldo (otra vía la
+        cruzó) — no se debe mandar un RC duplicado. Campos reales
+        verificados en vivo 2026-08-11: f353_id_tipo_docto_cruce/
+        f353_consec_docto_cruce/f353_total_db/f353_total_cr."""
+        recaudo = recaudo_factory()
+        job = self._make_rc_job(db, recaudo)
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            mc.modo_ensayo = False
+            mc.get_cxc_general.return_value = [
+                {'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': '5020',
+                 'f353_total_db': 1500000, 'f353_total_cr': 1500000},
+            ]
+            from app.services.siesa_job_service import _ejecutar_job
+            resultado = _ejecutar_job(job)
+
+        assert resultado.get('ya_existente') is True
+        mc.trigger_recibo_caja.assert_not_called()
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_rc_triggered is True
+
+    def test_timeout_pero_factura_ya_saldada_no_revierte_flag(self, app, db, recaudo_factory):
+        """Regla #3: un timeout no significa que el POST falló. Si tras la
+        excepción la factura ya no tiene saldo, el RC sí entró — no
+        revertir el pre-flag (evita el duplicado del incidente RC-00002744)."""
+        recaudo = recaudo_factory()
+        job = self._make_rc_job(db, recaudo)
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            mc.modo_ensayo = False
+            mc.trigger_recibo_caja.side_effect = Exception('Connekta timeout')
+            # Primera llamada (pre-flight, antes del POST): aún con saldo, no
+            # bloquea el intento. Segunda llamada (dentro del except, tras el
+            # timeout): ya saldada — confirma que el POST sí entró a Siesa.
+            mc.get_cxc_general.side_effect = [
+                [{'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': '5020',
+                  'f353_total_db': 1500000, 'f353_total_cr': 0}],
+                [{'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': '5020',
+                  'f353_total_db': 1500000, 'f353_total_cr': 1500000}],
+            ]
+            from app.services.siesa_job_service import _ejecutar_job
+            resultado = _ejecutar_job(job)
+
+        assert resultado.get('timeout_pero_exitoso') is True
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_rc_triggered is True, 'No debe revertir — el RC sí entró'
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Secuencialidad — NC → RC → DC

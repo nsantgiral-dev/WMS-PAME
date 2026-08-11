@@ -355,6 +355,42 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
     return lineas_nc
 
 
+def _factura_saldada_en_siesa(connekta, nit: str, tipo_docto_fe: str, consec_fe) -> bool:
+    """
+    ¿La factura ya no tiene saldo pendiente en Siesa? Usado por RECIBO_CAJA
+    en dos momentos: (a) pre-flight antes del POST, para no duplicar un RC
+    ya aplicado por otra vía (cross-flow WMS↔Cartera); (b) tras un POST que
+    lanzó excepción, para distinguir un timeout que sí entró (Regla #3 del
+    CLAUDE.md — nunca asumir que un timeout significa que falló) de uno que
+    de verdad no aplicó nada.
+
+    Consulta la factura EXACTA (get_cxc_general + match por
+    f353_id_tipo_docto_cruce/f353_consec_docto_cruce), no un filtro
+    aproximado por tipo/valor/fecha — esos campos (f350_id_tipo_docto,
+    f354_valor, f350_fecha) no existen en la respuesta real de
+    API_v2_CxC_General (verificado en vivo 2026-08-11); un filtro basado en
+    ellos nunca puede coincidir con nada.
+
+    No propaga excepciones — el caller decide qué hacer si esto no puede
+    resolverse (nunca debe bloquear el flujo principal del RC).
+    """
+    try:
+        if not (nit and tipo_docto_fe and consec_fe):
+            return False
+        cxc = connekta.get_cxc_general(nit)
+        fila = next((
+            r for r in cxc
+            if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == tipo_docto_fe
+            and str(r.get('f353_consec_docto_cruce', '')) == str(consec_fe)
+        ), None)
+        if not fila:
+            return False
+        saldo = float(fila.get('f353_total_db', 0)) - float(fila.get('f353_total_cr', 0))
+        return saldo <= 0.5  # tolerancia de centavos
+    except Exception:
+        return False
+
+
 def _ejecutar_job(job: SiesaJob) -> dict:
     """Despacha el job al handler correcto según su tipo."""
     from app.services.connekta_gateway import connekta
@@ -1092,32 +1128,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 )
                 monto_payload = monto_actual
 
-        # Pre-flight API 21: verificar si ya existe RC (cross-flow WMS↔Cartera)
-        try:
-            nit_rc = payload.get('tercero_nit', '')
-            if nit_rc and hasattr(connekta, 'get_cxc_general'):
-                from datetime import date as _date_rc
-                cxc = connekta.get_cxc_general(nit_rc)
-                if cxc and isinstance(cxc, list):
-                    hoy_str = _date_rc.today().strftime('%Y%m%d')
-                    rc_existente = any(
-                        str(r.get('f350_id_tipo_docto', '')).strip() == 'RC'
-                        and abs(float(r.get('f354_valor', 0)) - monto_payload) < 100
-                        and str(r.get('f350_fecha', '')).startswith(hoy_str[:6])
-                        for r in cxc if isinstance(r, dict)
-                    )
-                    if rc_existente:
-                        logger.info(
-                            '[DLQ] RECIBO_CAJA job=%s: RC ya existe en Siesa '
-                            '(pre-flight API 21) — marcando completado sin enviar',
-                            job.id
-                        )
-                        if recaudo:
-                            recaudo.siesa_rc_triggered = True
-                            db.session.commit()
-                        return {'ya_existente': True, 'recaudo_id': payload.get('recaudo_id')}
-        except Exception as _e_preflight:
-            logger.debug('[DLQ] Pre-flight API 21 falló (no bloqueante): %s', _e_preflight)
+        # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?
+        # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía)
+        nit_rc = payload.get('tercero_nit', '')
+        if _factura_saldada_en_siesa(connekta, nit_rc, payload.get('tipo_docto_fe', ''), payload.get('consec_fe', '')):
+            logger.info(
+                '[DLQ] RECIBO_CAJA job=%s: factura %s-%s ya sin saldo pendiente '
+                '(pre-flight) — marcando completado sin enviar',
+                job.id, payload.get('tipo_docto_fe', ''), payload.get('consec_fe', ''),
+            )
+            if recaudo:
+                recaudo.siesa_rc_triggered = True
+                db.session.commit()
+            return {'ya_existente': True, 'recaudo_id': payload.get('recaudo_id')}
 
         # Pre-flag: marcar ANTES del POST para cerrar el crash window.
         if recaudo:
@@ -1137,20 +1160,12 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 notas=payload.get('notas', ''),
             )
         except Exception as _e_post:
-            # POST falló — verificar API 21 antes de revertir (timeout que sí entró)
-            _rc_entro = False
-            try:
-                nit_rc = payload.get('tercero_nit', '')
-                if nit_rc and hasattr(connekta, 'get_cxc_general'):
-                    cxc = connekta.get_cxc_general(nit_rc)
-                    if cxc and isinstance(cxc, list):
-                        _rc_entro = any(
-                            str(r.get('f350_id_tipo_docto', '')).strip() == 'RC'
-                            and abs(float(r.get('f354_valor', 0)) - monto_payload) < 100
-                            for r in cxc if isinstance(r, dict)
-                        )
-            except Exception:
-                pass
+            # POST falló — verificar el saldo real antes de revertir (Regla #3:
+            # un timeout no significa que falló, puede que sí haya entrado)
+            _rc_entro = _factura_saldada_en_siesa(
+                connekta, payload.get('tercero_nit', ''),
+                payload.get('tipo_docto_fe', ''), payload.get('consec_fe', ''),
+            )
             if _rc_entro:
                 logger.info(
                     '[DLQ] RECIBO_CAJA job=%s: POST falló pero API 21 confirma '

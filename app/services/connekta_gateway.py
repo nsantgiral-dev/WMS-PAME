@@ -3419,6 +3419,36 @@ class ConnektaGateway:
             )
             return fallback
 
+    def get_cxc_general(self, nit: str) -> list:
+        """
+        GET API_v2_CxC_General filtrado por tercero (f200_id) — todas las
+        filas de cartera de ese cliente. Cada fila trae su propio f253_id
+        real (auxiliar de cruce, Regla #11 del CLAUDE.md: nunca hardcodear,
+        propagar desde acá) y saldo (f353_total_db/f353_total_cr).
+
+        El f253_id PUEDE variar entre facturas del mismo cliente —
+        verificado en vivo 2026-08-11 (NIT 1000124053: 9 filas con
+        f253_id='13050501', 2 filas con '13050502'). El caller debe
+        matchear por f353_id_tipo_docto_cruce/f353_consec_docto_cruce de la
+        factura específica, nunca asumir que la primera fila es "el"
+        auxiliar del tercero.
+
+        Nota de alias (2026-08-11): el campo real de NIT en esta respuesta
+        es f200_id, NO f350_id_tercero (ese no existe acá) — mismo patrón
+        de aliases reales-vs-spec ya documentado para get_pedido_cabecera.
+        """
+        if self.modo_simulacion or not nit:
+            return []
+        try:
+            res = self._get('API_v2_CxC_General', {
+                'paginacion': 'numPag=1|tamPag=100',
+                'parametros': f"f200_id = ''{nit}''",
+            })
+            return res.get('detalle', {}).get('Table', [])
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_cxc_general(%s) falló: %s', nit, e)
+            return []
+
     def trigger_nota_factura_crear_cruzar(self, tipo_docto_fe: str, consec_fe,
                                            lineas: list, valor_cruce: float,
                                            notas: str = '') -> dict:
@@ -3801,6 +3831,10 @@ class ConnektaGateway:
             'F358_FECHA_VCTO': '',
             'F358_REFERENCIA_OTROS': '',
             'F358_FECHA_CONSIGNACION': '',
+            # Igual que arriba: campos 'Dep'/'No' del spec, vacíos porque no
+            # aplican (sin cheque devuelto, sin banco alterno) pero el plano
+            # de ancho fijo los necesita presentes. Sin esto, el registro
+            # llegaba a 160 bytes en vez de los 478 exigidos.
             'F358_ID_CAUSALES_DEVOLUCION': '',
             'F358_ID_TERCERO': '',
             'F358_NOTAS': '',

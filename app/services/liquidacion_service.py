@@ -205,10 +205,19 @@ class LiquidacionService:
                     nit = cabecera.get('f200_id_pedido_fact', '')
                     # CxC account from API if available
                     try:
-                        if hasattr(connekta, 'get_cxc_general') and nit:
+                        if nit:
                             cxc_data = connekta.get_cxc_general(nit)
-                            if cxc_data:
-                                cuenta_cxc = cxc_data.get('f253_id', '')
+                            # f253_id puede variar entre facturas del mismo
+                            # cliente — matchear por la factura exacta, nunca
+                            # tomar la primera fila (ver connekta_gateway.py,
+                            # get_cxc_general).
+                            fila_cxc = next((
+                                r for r in cxc_data
+                                if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == tipo_docto
+                                and str(r.get('f353_consec_docto_cruce', '')) == str(consec_docto)
+                            ), None)
+                            if fila_cxc:
+                                cuenta_cxc = fila_cxc.get('f253_id', '')
                     except Exception as e_cxc:
                         logger.warning(
                             '[LIQUIDACION] get_cxc_general falló para recaudo %d (NIT %s): %s',
@@ -472,10 +481,17 @@ class LiquidacionService:
                 sucursal = cabecera.get('f461_id_sucursal_pedido_rem', '001')
                 # CxC account
                 try:
-                    if hasattr(connekta, 'get_cxc_general') and nit:
+                    if nit:
                         cxc_data = connekta.get_cxc_general(nit)
-                        if cxc_data:
-                            cuenta_cxc = cxc_data.get('f253_id', '')
+                        # f253_id puede variar entre facturas del mismo
+                        # cliente — matchear por la factura exacta.
+                        fila_cxc = next((
+                            r for r in cxc_data
+                            if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == tipo_docto_fe
+                            and str(r.get('f353_consec_docto_cruce', '')) == str(consec_fe)
+                        ), None)
+                        if fila_cxc:
+                            cuenta_cxc = fila_cxc.get('f253_id', '')
                 except Exception as e_cxc:
                     logger.warning(
                         '[LIQUIDACION] get_cxc_general falló para recaudo %d: %s',

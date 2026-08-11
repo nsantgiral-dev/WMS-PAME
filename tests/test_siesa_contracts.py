@@ -109,6 +109,14 @@ class TestContract142888:
             assert seccion in payload, f'Sección "{seccion}" falta en payload 142888'
 
     def test_header_campos_obligatorios(self):
+        """
+        Lista completa de las 33 columnas del spec (record 357/0, hasta
+        F357_IND_VALIDA_MEDPAGO en byte 596) — no solo las que el código
+        mandaba antes. El job real 439 falló con "Tamaño del registro = 430,
+        exigido = 596" porque a esta sección le faltaban 11 campos 'Dep'
+        (F351_*/F357_REFERENCIA) — un plano de ancho fijo no tolera un
+        campo ausente aunque su valor de negocio sea opcional.
+        """
         gw = _make_gateway()
         payload = self._capture_payload(gw)
         header = payload['RCyotrosingresos'][0]
@@ -117,12 +125,21 @@ class TestContract142888:
             'F350_CONSEC_DOCTO', 'F350_FECHA', 'F357_ID_CAJA', 'F357_FECHA_RECAUDO',
             'F350_ID_TERCERO', 'F357_ID_MONEDA_INGRESO', 'F357_VALOR_INGRESO',
             'F357_ID_MONEDA_APLICAR', 'F357_VALOR_APLICAR_REAL', 'F357_ID_COBRADOR',
-            'F357_ID_UN', 'F357_ID_FE', 'F350_ID_CLASE_DOCTO',
+            'F357_ID_UN', 'F357_ID_CCOSTO', 'F357_ID_FE', 'F350_ID_CLASE_DOCTO',
             'F350_IND_ESTADO', 'F350_IND_IMPRESION', 'F350_NOTAS',
-            'F357_IND_VALIDA_MEDPAGO',
+            'F351_ID_AUXILIAR_AJUSTE', 'F351_ID_CCOSTO_AJUSTE',
+            'F351_ID_AUXILIAR_PP', 'F351_ID_CCOSTO_PP',
+            'F351_ID_AUXILIAR_OTRO_ING', 'F351_ID_TERCERO_OTRO_ING',
+            'F351_ID_SUCURSAL_OTRO_ING', 'F351_ID_CO_OTRO_ING',
+            'F351_ID_UN_OTRO_ING', 'F351_ID_CCOSTO_OTRO_ING',
+            'F357_REFERENCIA', 'F357_IND_VALIDA_MEDPAGO',
         ]
         for campo in campos_obligatorios:
             assert campo in header, f'Campo "{campo}" falta en RCyotrosingresos'
+        assert len(header) == len(campos_obligatorios), (
+            f'RCyotrosingresos tiene {len(header)} campos, spec exige '
+            f'{len(campos_obligatorios)} — revisar si sobra o falta alguno'
+        )
 
     def test_header_valores_fijos(self):
         gw = _make_gateway()
@@ -134,6 +151,12 @@ class TestContract142888:
         assert header['F_CONSEC_AUTO_REG'] == 1, 'Consecutivo automático'
 
     def test_caja_campos_obligatorios(self):
+        """
+        Lista completa de las 20 columnas del spec para la sección Caja
+        (record 357/1, hasta f358_docto_banco_cg en byte 478). El job real
+        439 falló con "Tamaño del registro = 160, exigido = 478" porque
+        faltaban 5 campos después de F358_FECHA_CONSIGNACION.
+        """
         gw = _make_gateway()
         payload = self._capture_payload(gw)
         caja = payload['Caja'][0]
@@ -142,10 +165,16 @@ class TestContract142888:
             'F358_ID_MEDIOS_PAGO', 'F358_VALOR', 'F358_ID_BANCO',
             'F358_NRO_CHEQUE', 'F358_NRO_CUENTA', 'F358_COD_SEGURIDAD',
             'F358_NRO_AUTORIZACION', 'F358_FECHA_VCTO', 'F358_REFERENCIA_OTROS',
-            'F358_FECHA_CONSIGNACION', 'f358_docto_banco_cg',
+            'F358_FECHA_CONSIGNACION', 'F358_ID_CAUSALES_DEVOLUCION',
+            'F358_ID_TERCERO', 'F358_NOTAS', 'F358_ID_CCOSTO',
+            'f358_nro_alt_docto_banco', 'f358_docto_banco_cg',
         ]
         for campo in campos:
             assert campo in caja, f'Campo "{campo}" falta en Caja'
+        assert len(caja) == len(campos), (
+            f'Caja tiene {len(caja)} campos, spec exige {len(campos)} — '
+            'revisar si sobra o falta alguno'
+        )
 
     def test_caja_efectivo_banco_vacio(self):
         gw = _make_gateway()
@@ -437,3 +466,56 @@ class TestGetRowidsFacturaPaginacion:
             rows = gw.get_rowids_factura('FEW', '1462')
         assert len(rows) == 1
         assert rows[0]['f120_referencia'] == 'PROD-001'
+
+
+# ═══════════════════════════════════════════════════════════════════
+# get_cxc_general — Regla #11: auxiliar real (f253_id) para el cruce del RC
+# ═══════════════════════════════════════════════════════════════════
+
+class TestGetCxcGeneral:
+
+    def test_filtra_por_f200_id_no_f350_id_tercero(self):
+        """El campo real de NIT en API_v2_CxC_General es f200_id — verificado
+        en vivo 2026-08-11. f350_id_tercero no existe en esa respuesta."""
+        gw = _make_gateway()
+        with patch.object(gw, '_get', return_value={'detalle': {'Table': []}}) as mock_get:
+            gw.get_cxc_general('1000124053')
+        params = mock_get.call_args[0][1]
+        assert "f200_id = ''1000124053''" in params['parametros']
+
+    def test_tam_pag_no_excede_100(self):
+        gw = _make_gateway()
+        with patch.object(gw, '_get', return_value={'detalle': {'Table': []}}) as mock_get:
+            gw.get_cxc_general('900123456')
+        params = mock_get.call_args[0][1]
+        tam_pag = int(params['paginacion'].split('tamPag=')[1])
+        assert tam_pag <= 100
+
+    def test_devuelve_lista_de_filas_no_un_dict(self):
+        """Un cliente puede tener varias facturas con saldo — nunca asumir
+        una sola fila (ver test_matchea_f253_id_correcto_entre_varias_filas
+        en test_liquidacion.py para el bug real que esto habría causado)."""
+        gw = _make_gateway()
+        filas = [
+            {'f353_id_tipo_docto_cruce': 'FEW', 'f353_consec_docto_cruce': 1445, 'f253_id': '13050501'},
+            {'f353_id_tipo_docto_cruce': 'FE3', 'f353_consec_docto_cruce': 7775, 'f253_id': '13050502'},
+        ]
+        with patch.object(gw, '_get', return_value={'detalle': {'Table': filas}}):
+            rows = gw.get_cxc_general('1000124053')
+        assert isinstance(rows, list)
+        assert len(rows) == 2
+
+    def test_sin_nit_no_consulta(self):
+        gw = _make_gateway()
+        with patch.object(gw, '_get') as mock_get:
+            rows = gw.get_cxc_general('')
+        mock_get.assert_not_called()
+        assert rows == []
+
+    def test_error_no_propaga_devuelve_lista_vacia(self):
+        """No debe bloquear el camino crítico del RC (mismo criterio que
+        get_vencimiento_factura/get_max_rowid_nc)."""
+        gw = _make_gateway()
+        with patch.object(gw, '_get', side_effect=Exception('timeout')):
+            rows = gw.get_cxc_general('900123456')
+        assert rows == []
