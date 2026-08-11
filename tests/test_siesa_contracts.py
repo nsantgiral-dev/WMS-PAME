@@ -63,7 +63,26 @@ def _assert_21_chars(payload, path=''):
 # ═══════════════════════════════════════════════════════════════════
 
 class TestContract142888:
-    """Valida payload de trigger_recibo_caja contra spec DOCX 142888."""
+    """Valores y formatos del payload de `trigger_recibo_caja`.
+
+    **NO verifica el payload contra el spec DOCX, aunque el nombre del archivo
+    lo sugiera.** Las listas de `campos_obligatorios` de abajo se copiaron a
+    mano DEL PROPIO CÓDIGO, y las aserciones son `campo in header` — un
+    chequeo de subconjunto que no puede detectar un campo que falta si ese
+    campo tampoco está en la lista copiada.
+
+    Resultado: durante meses estos tests pasaron en verde mientras el
+    encabezado mandaba 22 de los 33 campos que exige el DOCX, y **ningún
+    recibo de caja llegó nunca a Siesa** (POST 142888 HTTP 400, "Tamaño del
+    registro = 430. Tamaño registro exigido = 596", 2026-08-11).
+
+    La conformidad con el spec se verifica en `tests/test_payload_vs_docx.py`,
+    que LEE el `.docx` en cada corrida en vez de confiar en una copia.
+
+    Lo de acá sigue valiendo, pero por otra cosa: comprueba VALORES fijos
+    (`F_CIA == 1`, clase 13, consecutivo automático) y formatos, que el spec
+    declara pero no fija.
+    """
 
     def _capture_payload(self, gw, **kwargs):
         """Ejecuta trigger_recibo_caja y captura el payload enviado a _post."""

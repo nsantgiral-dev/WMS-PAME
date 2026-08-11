@@ -3757,10 +3757,35 @@ class ConnektaGateway:
             'F350_IND_ESTADO': 1,
             'F350_IND_IMPRESION': 0,
             'F350_NOTAS': notas[:2000] if notas else '',
+            # ── Ajuste y otros ingresos: NO se usan, pero OCUPAN SU ANCHO ────
+            #
+            # Connekta convierte este JSON en un plano posicional. Omitir un
+            # campo no lo deja vacío: **acorta la línea y corre todo lo que
+            # sigue**. Sin estos once, el registro medía 430 y Siesa exige 596
+            # — y el `F357_IND_VALIDA_MEDPAGO` de abajo aterrizaba en la
+            # posición 430 en vez de la 596, que es la que el error señalaba
+            # como «obligatorio y numérico».
+            #
+            # Verificado el 2026-08-11 contra `docs/siesa-specs/142888
+            # API_v1_ReciboCaja.docx`: la sección son 33 campos, no 22.
+            # Mandábamos 22 y ningún RC llegó nunca a Siesa (job 439).
+            'F351_ID_AUXILIAR_AJUSTE': '',
+            'F351_ID_CCOSTO_AJUSTE': '',
+            'F351_ID_AUXILIAR_PP': '',
+            'F351_ID_CCOSTO_PP': '',
+            'F351_ID_AUXILIAR_OTRO_ING': '',
+            'F351_ID_TERCERO_OTRO_ING': '',
+            'F351_ID_SUCURSAL_OTRO_ING': '',
+            'F351_ID_CO_OTRO_ING': '',
+            'F351_ID_UN_OTRO_ING': '',
+            'F351_ID_CCOSTO_OTRO_ING': '',
+            'F357_REFERENCIA': '',
             'F357_IND_VALIDA_MEDPAGO': 0,
         }
 
         # --- Sección Caja (Medio de Pago) ---
+        # 20 campos según el DOCX. Mandábamos 15: el registro medía 160 contra
+        # 478 exigidos. Mismo defecto que el encabezado.
         caja = {
             'F_CIA': cia,
             'F350_ID_CO': co,
@@ -3776,6 +3801,14 @@ class ConnektaGateway:
             'F358_FECHA_VCTO': '',
             'F358_REFERENCIA_OTROS': '',
             'F358_FECHA_CONSIGNACION': '',
+            'F358_ID_CAUSALES_DEVOLUCION': '',
+            'F358_ID_TERCERO': '',
+            'F358_NOTAS': '',
+            'F358_ID_CCOSTO': '',
+            'f358_nro_alt_docto_banco': '',
+            # Iba en la posición 15 de 15 y le corresponde la 20 de 20: aunque
+            # se mandaba, su valor aterrizaba en el offset equivocado. Por eso
+            # las consignaciones tampoco habrían funcionado.
             'f358_docto_banco_cg': '',
         }
 
@@ -3869,24 +3902,43 @@ class ConnektaGateway:
                 'F350_IND_ESTADO': 1,
                 'F350_IND_IMPRESION': 0,
                 'F350_NOTAS': notas[:2000] if notas else '',
+                # Faltaba. Ver la nota de abajo: mismo defecto que el 142888.
+                'f350_id_mandato': '',
             }],
+            # Orden y campos según `docs/siesa-specs/142882 - API_v1_
+            # DocumentoContable 428272.docx`, verificado el 2026-08-11.
+            #
+            # Faltaban F351_ID_FE, F351_DOCTO_BANCO y F351_NRO_DOCTO_BANCO —
+            # el mismo defecto que dejó al 142888 mandando 22 de 33 campos y
+            # que hizo que ningún recibo de caja llegara nunca a Siesa.
+            #
+            # **Este conector no se ha ejercitado nunca contra Siesa.** El
+            # arreglo sale del spec, no de una corrida exitosa: es la corrección
+            # mejor fundada disponible, no una verificación. Se confirma la
+            # primera vez que una liquidación con retención llegue al DLQ.
             'Movimientocontable': [{
                 'F_CIA': cia,
                 'F350_ID_CO': co,
                 'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
                 'F350_CONSEC_DOCTO': 0,
-                'F351_NRO_REGISTRO': 1,
                 'F351_ID_AUXILIAR': cuenta_puc,
+                'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_CO_MOV': co,
                 'F351_ID_UN': self.unidad_negocio or '99',
                 'F351_ID_CCOSTO': '',
+                'F351_ID_FE': '',
                 'F351_VALOR_DB': self._fmt_valor(monto),
                 'F351_VALOR_CR': self._fmt_valor(0),
                 'F351_VALOR_DB_ALT': self._fmt_valor(monto),
                 'F351_VALOR_CR_ALT': self._fmt_valor(0),
                 'F351_BASE_GRAVABLE': self._fmt_valor(base_gravable),
+                'F351_DOCTO_BANCO': '',
+                'F351_NRO_DOCTO_BANCO': '',
                 'F351_NOTAS': '',
-                'F351_ID_TERCERO': tercero_nit,
+                # Fuera del spec — no se borran porque alguien los puso a
+                # propósito y no hay corrida real que diga si estorban. Van al
+                # final para no desplazar a los 18 declarados.
+                'F351_NRO_REGISTRO': 1,
                 'F351_ID_SUCURSAL': sucursal or '001',
             }],
             'MovimientoCxC': [{

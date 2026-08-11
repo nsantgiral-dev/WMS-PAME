@@ -895,7 +895,8 @@ venv/bin/python -m pytest tests/test_siesa_dlq.py tests/test_liquidacion.py test
 | Tier | Archivo | Tests | Qué valida |
 |------|---------|-------|------------|
 | 1 | test_siesa_formatos.py | 27 | `_fmt_valor` 21 chars, timezone, CO→Caja, forma_pago→medio |
-| 2 | test_siesa_contracts.py | 25 | Payloads vs spec DOCX (142888, 142882, 142946) |
+| 2 | test_siesa_contracts.py | 25 | Valores y formatos fijos (F_CIA=1, clase docto, consecutivo auto). **NO compara contra el DOCX** pese al nombre — sus listas se copiaron del código y usan `in`, que no detecta un campo ausente |
+| 6 | test_payload_vs_docx.py | 11 | **Conformidad real con el spec**: lee el `.docx` y exige mismos campos y mismo orden (142888, 142882). Ver Regla 1 |
 | 3 | test_siesa_dlq.py | 6 | Pre-flag, revert en fallo, secuencialidad NC→RC→DC |
 | 4 | test_liquidacion.py | 20 | Flujos de recaudo, retenciones PUC |
 | 5 | test_siesa_guards.py | 7 | Guards fail-fast (bodega, codigo_siesa, motivo, consec) |
