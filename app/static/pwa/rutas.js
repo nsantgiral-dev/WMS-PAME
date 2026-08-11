@@ -1087,7 +1087,8 @@ async function cargarListaMaestras() {
   if (!el) return;
   try {
     const d = await get('/api/rutas/maestras?activas=false');
-    const maestras = d.maestras || [];
+    // Más reciente primero: la que se acaba de crear queda de primera.
+    const maestras = (d.maestras || []).slice().sort((a, b) => b.id - a.id);
     if (!maestras.length) {
       el.innerHTML = '<div style="color:#555;text-align:center;padding:40px;">Sin rutas maestras. Crea la primera con el botón +</div>';
       return;
