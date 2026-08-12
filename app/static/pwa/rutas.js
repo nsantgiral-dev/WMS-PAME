@@ -1902,11 +1902,15 @@ function _condRenderFormParada() {
   //  · LIBRE:    cualquier otro caso (Siesa no respondió, dato incompleto) —
   //              Regla 0, ante dato ausente, conservador: se pregunta a mano
   //              en vez de asumir.
-  const mostrarValorDinamico = p.es_contado === true && p.valor_factura != null
+  const hayValorConocido = p.valor_factura != null
     && !!(p.items && p.items.length) && p.items.every(it => it.valor_unitario != null);
+  const mostrarValorDinamico = p.es_contado === true && hayValorConocido;
   const modoPago = p.es_contado === false ? 'CREDITO' : (mostrarValorDinamico ? 'DINAMICO' : 'LIBRE');
   el._modoPago = modoPago;
   el._mostrarValorDinamico = mostrarValorDinamico;
+  // El valor de la factura se muestra siempre que se conozca — hasta en
+  // crédito, donde es solo informativo (no cobra, no dispara el toggle).
+  el._hayValorConocido = hayValorConocido;
   el._valorAjustado = p.valor_factura;
 
   const tipoPagoInicial = (r && r.motivo_descuento) ? 'PARCIAL' : 'TOTAL';
@@ -1997,6 +2001,14 @@ function _condRenderFormParada() {
 
     <div id="cond-entrega-payload" style="display:${estadoUi === 'ENTREGADO' ? 'block' : 'none'};">
       ${modoPago === 'CREDITO' ? `
+      ${hayValorConocido ? `
+      <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
+        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
+          $${Number(p.valor_factura).toLocaleString('es-CO')}
+        </div>
+      </div>
+      ` : ''}
       <div style="margin-bottom:14px;padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:13px;color:#aaa;display:flex;align-items:center;gap:10px;">
         💳 Pedido a crédito — no se cobra en la entrega. La cartera se gestiona aparte.
       </div>
@@ -2114,7 +2126,9 @@ function condRecalcularPago() {
   const divBultosDev = document.getElementById('cond-bultos-devolucion');
   if (divBultosDev) divBultosDev.style.display = hayAjuste ? 'block' : 'none';
 
-  if (!el._mostrarValorDinamico) return;
+  // El valor se recalcula si se conoce, aunque sea crédito (ahí es solo
+  // informativo — no hay toggle Total/Parcial que sincronizar).
+  if (!el._hayValorConocido) return;
 
   const deduccion = items.reduce((s, it) => s + it.devuelto * (it.valor_unitario || 0), 0);
   const valorAjustado = Math.max(0, Math.round(p.valor_factura - deduccion));
@@ -2126,6 +2140,8 @@ function condRecalcularPago() {
       ? `<span style="text-decoration:line-through;color:#888;font-size:12px;font-weight:500;display:block;margin-bottom:2px;">$${Number(p.valor_factura).toLocaleString('es-CO')}</span>$${valorAjustado.toLocaleString('es-CO')}`
       : `$${valorAjustado.toLocaleString('es-CO')}`;
   }
+
+  if (el._modoPago !== 'DINAMICO') return;  // resto solo aplica al toggle Total/Parcial
 
   const inpParcial = document.getElementById('cond-monto-parcial');
   if (inpParcial) inpParcial.max = valorAjustado;
