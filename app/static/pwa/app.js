@@ -262,7 +262,8 @@ function scannerLaser() {
       const a = document.activeElement;
       const esForm = a && ['INPUT','TEXTAREA','SELECT'].includes(a.tagName);
       const hayModal = document.getElementById('modal-problema');
-      if (!CAMARA_ACTIVA && !esForm && !hayModal) inp.focus();
+      const haySeleccion = (window.getSelection() || '').toString().length > 0;
+      if (!CAMARA_ACTIVA && !esForm && !hayModal && !haySeleccion) inp.focus();
     };
     document.addEventListener('click', focus);
     setInterval(focus, 1000);
