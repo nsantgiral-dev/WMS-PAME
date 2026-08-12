@@ -11,15 +11,24 @@ let _liqRetenciones = {}; // { recaudoId: [{tipo, nombre, puc, tasa, base, valor
 const _liqFmt = v => '$' + Number(v || 0).toLocaleString('es-CO');
 
 // ── Catálogo de retenciones (se sobreescribe con datos del backend) ──────────
+// Fallback únicamente — la fuente real es CATALOGO_RETENCIONES en
+// liquidacion_service.py (retenciones_disponibles en la respuesta del
+// backend). Mantener sincronizado a mano solo como default antes de que
+// llegue esa respuesta; ver ese archivo para la fecha de verificación.
 let _liqRetencionesDisponibles = [
-  {tipo:'RETEFUENTE_2.5', nombre:'Retefuente Compras 2.5%', puc:'13551501', tasa:0.025},
-  {tipo:'RETEFUENTE_1.5', nombre:'Retefuente Bancos 1.5%', puc:'13551502', tasa:0.015},
-  {tipo:'RETEIVA', nombre:'ReteIVA 15%', puc:'13551701', tasa:0.15},
-  {tipo:'ICA_3', nombre:'ICA 3x1000', puc:'13551801', tasa:0.003},
-  {tipo:'ICA_4.14', nombre:'ICA 4.14x1000', puc:'13551802', tasa:0.00414},
-  {tipo:'ICA_6.9', nombre:'ICA 6.9x1000', puc:'13551803', tasa:0.0069},
-  {tipo:'ICA_8', nombre:'ICA 8x1000', puc:'13551804', tasa:0.008},
-  {tipo:'ICA_11.04', nombre:'ICA 11.04x1000', puc:'13551805', tasa:0.01104},
+  {tipo:'RETEFUENTE_2.5', nombre:'Retención por Compras 2.5%', puc:'13551501', tasa:0.025},
+  {tipo:'RETEFUENTE_1.5', nombre:'Retención Bancos 1.5%', puc:'13551502', tasa:0.015},
+  {tipo:'RETEIVA', nombre:'ReteIVA Ventas 15%', puc:'13551701', tasa:0.15},
+  {tipo:'ICA_4X1000', nombre:'ICA Retenido a Favor 4x1000', puc:'13551801', tasa:0.004},
+  {tipo:'ICA_3X1000', nombre:'ICA Retenido a Favor 3x1000', puc:'13551802', tasa:0.003},
+  {tipo:'ICA_6X1000', nombre:'ICA Retenido a Favor 6x1000', puc:'13551803', tasa:0.006},
+  {tipo:'ICA_10X1000', nombre:'ICA Retenido a Favor 10x1000', puc:'13551804', tasa:0.010},
+  {tipo:'ICA_11X1000', nombre:'ICA Retenido a Favor 11x1000', puc:'13551805', tasa:0.011},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_3X1000', nombre:'Autorretención ICA Neiva 3x1000', puc:'13559501', tasa:0.003},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_3.5X1000', nombre:'Autorretención ICA Neiva 3.5x1000', puc:'13559502', tasa:0.0035},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_4.5X1000', nombre:'Autorretención ICA Neiva 4.5x1000', puc:'13559503', tasa:0.0045},
+  {tipo:'AUTORRETENCION_ICA_NEIVA_8X1000', nombre:'Autorretención ICA Neiva 8x1000', puc:'13559504', tasa:0.008},
+  {tipo:'AUTORRETENCION_ICA_PITALITO_4X1000', nombre:'Autorretención ICA Pitalito 4x1000', puc:'13559505', tasa:0.004},
 ];
 
 // ── Navegación interna ──────────────────────────────────────────────────────
@@ -607,13 +616,19 @@ async function liqToggleCobro(rutaId, recaudoId) {
       html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mSiesa || mCobrado)} · CO: ${df.co_factura || '—'} · CxC: ${df.cuenta_cxc || 'fallback'}</div>`;
     }
 
-    // Retenciones checkboxes
+    // Retenciones checkboxes — premarcada la que el conductor eligió en
+    // campo (pantalla de última milla, Pago Parcial); el admin decide si la
+    // mantiene, la cambia o la quita antes de confirmar el cobro.
+    const motivoSugerido = preview.motivo_descuento_sugerido || '';
     html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
+    if (motivoSugerido) {
+      html += `<div style="font-size:11px;color:#c084fc;margin-bottom:6px;">Sugerido por el conductor en campo — verifica antes de confirmar.</div>`;
+    }
     (preview.retenciones_disponibles || []).forEach(ret => {
       if (ret.monto_estimado <= 0) return;
       html += `
         <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:var(--tx2);cursor:pointer;">
-          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" onchange="liqPreviewCobro(${recaudoId})">
+          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${ret.tipo===motivoSugerido?'checked':''} onchange="liqPreviewCobro(${recaudoId})">
           ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
         </label>`;
     });

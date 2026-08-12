@@ -1631,6 +1631,7 @@ let _COND_PARADAS = [];         // paradas de la ruta activa
 let _COND_PARADA_FORM = null;   // parada en formulario de confirmación
 let _COND_SYNCING = false;
 let _COND_OFFLINE_INIT = false;
+let _COND_RETENCIONES = [];     // catálogo de motivos (mismo que Liquidación de escritorio)
 
 // ── IndexedDB helper (módulo conductor) ──────────────────────────
 const _condDB = (() => {
@@ -1774,6 +1775,7 @@ async function condAbrirParadas(rutaId) {
   }
   _COND_RUTA_ACTIVA = { id: rutaId };
   _COND_PARADAS = data.paradas || [];
+  _COND_RETENCIONES = data.retenciones_disponibles || _COND_RETENCIONES;
   _condRenderParadas(data);
 }
 
@@ -1855,6 +1857,8 @@ function _condRenderParadas(d) {
  */
 function condAbrirFormParada(idx) {
   _COND_PARADA_FORM = { ..._COND_PARADAS[idx], _idx: idx };
+  const el = document.getElementById('cond-contenido');
+  if (el) el._tipoPagoSel = null;  // no arrastrar la selección de la parada anterior
   _condRenderFormParada();
 }
 
@@ -1870,6 +1874,14 @@ function _condRenderFormParada() {
   const montoActual  = r ? (r.monto_cobrado || 0) : 0;
   const obsActual    = r ? (r.observaciones || '') : '';
   const rechazadosActuales = r ? (r.bultos_rechazados_ids || []) : [];
+
+  // Total/Parcial solo aplica a entrega completa de pedidos de contado, y
+  // solo si Siesa respondió el valor de la factura al abrir la ruta — si
+  // faltó (offline, Siesa caída), cae al campo libre de siempre.
+  const mostrarTotalParcial = estadoActual === 'ENTREGADO' && p.es_contado === true && p.valor_factura != null;
+  const tipoPagoInicial = (r && r.motivo_descuento) ? 'PARCIAL' : 'TOTAL';
+  el._tipoPagoSel = el._tipoPagoSel || tipoPagoInicial;
+  const motivoActual = r ? (r.motivo_descuento || '') : '';
 
   el.innerHTML = `
     <div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
@@ -1942,6 +1954,47 @@ function _condRenderFormParada() {
       }).join('')}
     </div>
 
+    ${mostrarTotalParcial ? `
+    <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
+      <div style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
+        $${Number(p.valor_factura).toLocaleString('es-CO')}
+      </div>
+    </div>
+
+    <div id="cond-pago-toggle-wrap" style="margin-bottom:14px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">PAGO</label>
+      <div style="display:flex;gap:6px;">
+        <button type="button" onclick="condSelTipoPago('TOTAL')" id="cond-tipopago-TOTAL"
+          style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
+          ✓ Pago Total
+        </button>
+        <button type="button" onclick="condSelTipoPago('PARCIAL')" id="cond-tipopago-PARCIAL"
+          style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
+          ⚠ Pago Parcial
+        </button>
+      </div>
+    </div>
+
+    <div id="cond-parcial-detalle" style="margin-bottom:14px;display:none;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO PAGADO ($)</label>
+      <input type="number" id="cond-monto-parcial" value="${motivoActual ? montoActual : ''}" min="0" max="${Math.floor(p.valor_factura)}" step="1"
+        oninput="condActualizarMotivoVisible()"
+        style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+
+      <div id="cond-motivo-wrap" style="margin-top:12px;display:none;">
+        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
+        <select id="cond-motivo-descuento"
+          style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
+          <option value="">— Seleccionar —</option>
+          ${_COND_RETENCIONES.map(ret =>
+            `<option value="${ret.tipo}" ${ret.tipo===motivoActual?'selected':''}>${ret.nombre}</option>`
+          ).join('')}
+        </select>
+      </div>
+    </div>
+    ` : ''}
+
     <div id="cond-forma-pago-wrap" style="margin-bottom:14px;display:${estadoActual === 'RECHAZADO' ? 'none' : 'block'};">
       <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
       <select id="cond-forma-pago"
@@ -1953,7 +2006,7 @@ function _condRenderFormParada() {
       </select>
     </div>
 
-    <div id="cond-monto-wrap" style="margin-bottom:14px;display:${estadoActual === 'RECHAZADO' ? 'none' : 'block'};">
+    <div id="cond-monto-wrap" style="margin-bottom:14px;display:${estadoActual === 'RECHAZADO' || mostrarTotalParcial ? 'none' : 'block'};">
       <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
       <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
         style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
@@ -1997,6 +2050,44 @@ function _condRenderFormParada() {
 
   // Guardar estado seleccionado
   el._estadoSel = estadoActual;
+
+  if (mostrarTotalParcial) {
+    condSelTipoPago(el._tipoPagoSel);
+  }
+}
+
+/**
+ * Selecciona Pago Total o Pago Parcial en el formulario del conductor
+ * (solo visible para pedidos de contado entregados completos) y ajusta la UI.
+ * @param {string} tipo - 'TOTAL' o 'PARCIAL'
+ */
+function condSelTipoPago(tipo) {
+  const el = document.getElementById('cond-contenido');
+  if (!el) return;
+  el._tipoPagoSel = tipo;
+
+  ['TOTAL','PARCIAL'].forEach(t => {
+    const btn = document.getElementById('cond-tipopago-' + t);
+    if (!btn) return;
+    const activo = t === tipo;
+    btn.style.borderColor = activo ? (t === 'TOTAL' ? '#16a34a' : '#d97706') : '#ddd';
+    btn.style.background  = activo ? (t === 'TOTAL' ? '#f0fdf4' : '#fffbeb') : '#fff';
+    btn.style.color       = activo ? (t === 'TOTAL' ? '#15803d' : '#b45309') : '#aaa';
+  });
+
+  const detalle = document.getElementById('cond-parcial-detalle');
+  if (detalle) detalle.style.display = tipo === 'PARCIAL' ? 'block' : 'none';
+  if (tipo === 'PARCIAL') condActualizarMotivoVisible();
+}
+
+/** Muestra el desplegable de motivo solo si el conductor ya escribió un monto parcial menor a la factura. */
+function condActualizarMotivoVisible() {
+  const p = _COND_PARADA_FORM;
+  const wrap = document.getElementById('cond-motivo-wrap');
+  const inp = document.getElementById('cond-monto-parcial');
+  if (!wrap || !inp || !p) return;
+  const monto = parseInt(inp.value, 10) || 0;
+  wrap.style.display = (monto > 0 && monto < Math.floor(p.valor_factura)) ? 'block' : 'none';
 }
 
 /**
@@ -2027,9 +2118,27 @@ function condSelEstado(estado) {
 
   const mostrarPago = estado !== 'RECHAZADO';
   const divFormaPago = document.getElementById('cond-forma-pago-wrap');
-  const divMonto     = document.getElementById('cond-monto-wrap');
-  if (divFormaPago) divFormaPago.style.display = mostrarPago ? 'block' : 'none';
-  if (divMonto)     divMonto.style.display     = mostrarPago ? 'block' : 'none';
+
+  const p = _COND_PARADA_FORM;
+  const mostrarTotalParcial = !!p && estado === 'ENTREGADO' && p.es_contado === true && p.valor_factura != null;
+  const divValorFactura = document.getElementById('cond-valorfactura-wrap');
+  const divPagoToggle   = document.getElementById('cond-pago-toggle-wrap');
+  const divMonto        = document.getElementById('cond-monto-wrap');
+
+  if (mostrarTotalParcial && !divValorFactura) {
+    // El bloque Total/Parcial no se llegó a renderizar (la parada abrió en
+    // un estado distinto a Entregado) — recién ahora hace falta, re-render.
+    _condRenderFormParada();
+    return;
+  }
+
+  if (divFormaPago)     divFormaPago.style.display     = mostrarPago ? 'block' : 'none';
+  if (divValorFactura)  divValorFactura.style.display  = mostrarTotalParcial ? 'block' : 'none';
+  if (divPagoToggle)    divPagoToggle.style.display    = mostrarTotalParcial ? 'block' : 'none';
+  if (divMonto)         divMonto.style.display         = (mostrarPago && !mostrarTotalParcial) ? 'block' : 'none';
+
+  const divDetalle = document.getElementById('cond-parcial-detalle');
+  if (divDetalle) divDetalle.style.display = (mostrarTotalParcial && el._tipoPagoSel === 'PARCIAL') ? 'block' : 'none';
 }
 
 /** Previsualiza la foto de evidencia seleccionada por el conductor. */
@@ -2172,10 +2281,49 @@ async function condGuardarParada() {
     } catch (_) { alerta('Error procesando la foto', 'error'); return; }
   }
 
+  // ── Pago Total/Parcial (solo entrega completa de pedidos de contado) ──
+  // El resto de estados (PARCIAL física, RECHAZADO) y los pedidos a crédito
+  // siguen usando `monto` del campo libre de siempre, sin tocar nada aquí.
+  const mostrarTotalParcial = estadoEntrega === 'ENTREGADO' && p.es_contado === true && p.valor_factura != null;
+  let montoFinal = monto;
+  let motivoDescuentoFinal = null;
+  let montoDescuentoFinal = 0;
+
+  if (mostrarTotalParcial) {
+    const valorFactura = Math.round(p.valor_factura);
+    const tipoPago = el._tipoPagoSel || 'TOTAL';
+    if (tipoPago === 'TOTAL') {
+      montoFinal = valorFactura;
+    } else {
+      const montoParcial = parseInt(document.getElementById('cond-monto-parcial')?.value, 10) || 0;
+      if (montoParcial <= 0) {
+        alerta('Ingresa el monto que pagó el cliente', 'error');
+        document.getElementById('cond-monto-parcial')?.focus();
+        return;
+      }
+      if (montoParcial >= valorFactura) {
+        alerta('El monto es igual o mayor a la factura — usa "Pago Total"', 'error');
+        document.getElementById('cond-monto-parcial')?.focus();
+        return;
+      }
+      const motivo = document.getElementById('cond-motivo-descuento')?.value || '';
+      if (!motivo) {
+        alerta('Selecciona el motivo del descuento', 'error');
+        document.getElementById('cond-motivo-descuento')?.focus();
+        return;
+      }
+      montoFinal = montoParcial;
+      motivoDescuentoFinal = motivo;
+      montoDescuentoFinal = valorFactura - montoParcial;
+    }
+  }
+
   const payload = {
     estado_entrega:    estadoEntrega,
     forma_pago:        formaPago || null,
-    monto_cobrado:     monto,
+    monto_cobrado:     montoFinal,
+    motivo_descuento:  motivoDescuentoFinal,
+    monto_descuento:   montoDescuentoFinal,
     observaciones:     obs || null,
     foto_entrega:      fotoBase64 || null,
     bultos_rechazados: bultosRechazados,
@@ -2190,7 +2338,9 @@ async function condGuardarParada() {
       _COND_PARADAS[idx].recaudo = {
         estado_entrega:        estadoEntrega,
         forma_pago:            formaPago || null,
-        monto_cobrado:         monto,
+        monto_cobrado:         montoFinal,
+        motivo_descuento:      motivoDescuentoFinal,
+        monto_descuento:       montoDescuentoFinal,
         observaciones:         obs || null,
         foto_entrega:          fotoBase64 || null,
         bultos_rechazados_ids: bultosRechazados,

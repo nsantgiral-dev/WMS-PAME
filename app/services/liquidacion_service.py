@@ -27,39 +27,36 @@ from app.utils.fecha import ahora_bogota as _ahora_bogota
 logger = logging.getLogger(__name__)
 
 
-# Mapeo motivo_descuento → cuenta PUC auxiliar Siesa (serie 1355)
-RETENCION_PUC = {
-    'RETEFUENTE_2.5':   '13551501',   # Retefuente Compras 2.5%
-    'RETEFUENTE_1.5':   '13551502',   # Retefuente Bancos 1.5%
-    'RETEIVA':          '13551701',   # ReteIVA 15%
-    'ICA_3':            '13551801',   # ICA 3x1000
-    'ICA_4.14':         '13551802',   # ICA 4.14x1000
-    'ICA_6.9':          '13551803',   # ICA 6.9x1000
-    'ICA_8':            '13551804',   # ICA 8x1000
-    'ICA_11.04':        '13551805',   # ICA 11.04x1000
-    'AUTORETENCION_ICA_3':    '13559501',
-    'AUTORETENCION_ICA_4.14': '13559502',
-    'AUTORETENCION_ICA_6.9':  '13559503',
-    'AUTORETENCION_ICA_8':    '13559504',
-    'AUTORETENCION_ICA_11.04':'13559505',
+# Catálogo de retenciones — FUENTE ÚNICA (tipo → puc/tasa/nombre).
+# Verificado 2026-08-12 contra el gestor de cartera real de Papelería Medellín
+# (captura del maestro de cuentas). El catálogo anterior vivía partido en 3
+# diccionarios paralelos (PUC/tasa/nombre) sincronizados solo a mano por
+# compartir las mismas claves — así fue como la tasa correcta terminó pegada
+# a la cuenta PUC equivocada para las 5 cuentas ICA (13551801-805) sin que
+# nada lo detectara. RETENCION_PUC/RETENCION_TASA/_NOMBRES_RETENCION abajo
+# son vistas derivadas de este dict, nunca se editan por separado.
+# 13551800 (ICA 2024) y 13559500 (AUTORRETENCION 2023) quedan fuera: son
+# cuentas legacy sin tasa x1000 en el nombre, no hay dato confiable para
+# mapearlas — Regla 0, ante dato ausente no se inventa.
+CATALOGO_RETENCIONES = {
+    'RETEFUENTE_2.5': {'puc': '13551501', 'tasa': 0.025,  'nombre': 'Retención por Compras 2.5%'},
+    'RETEFUENTE_1.5': {'puc': '13551502', 'tasa': 0.015,  'nombre': 'Retención Bancos 1.5%'},
+    'RETEIVA':        {'puc': '13551701', 'tasa': 0.15,   'nombre': 'ReteIVA Ventas 15%'},
+    'ICA_4X1000':     {'puc': '13551801', 'tasa': 0.004,  'nombre': 'ICA Retenido a Favor 4x1000'},
+    'ICA_3X1000':     {'puc': '13551802', 'tasa': 0.003,  'nombre': 'ICA Retenido a Favor 3x1000'},
+    'ICA_6X1000':     {'puc': '13551803', 'tasa': 0.006,  'nombre': 'ICA Retenido a Favor 6x1000'},
+    'ICA_10X1000':    {'puc': '13551804', 'tasa': 0.010,  'nombre': 'ICA Retenido a Favor 10x1000'},
+    'ICA_11X1000':    {'puc': '13551805', 'tasa': 0.011,  'nombre': 'ICA Retenido a Favor 11x1000'},
+    'AUTORRETENCION_ICA_NEIVA_3X1000':    {'puc': '13559501', 'tasa': 0.003,  'nombre': 'Autorretención ICA Neiva 3x1000'},
+    'AUTORRETENCION_ICA_NEIVA_3.5X1000':  {'puc': '13559502', 'tasa': 0.0035, 'nombre': 'Autorretención ICA Neiva 3.5x1000'},
+    'AUTORRETENCION_ICA_NEIVA_4.5X1000':  {'puc': '13559503', 'tasa': 0.0045, 'nombre': 'Autorretención ICA Neiva 4.5x1000'},
+    'AUTORRETENCION_ICA_NEIVA_8X1000':    {'puc': '13559504', 'tasa': 0.008,  'nombre': 'Autorretención ICA Neiva 8x1000'},
+    'AUTORRETENCION_ICA_PITALITO_4X1000': {'puc': '13559505', 'tasa': 0.004,  'nombre': 'Autorretención ICA Pitalito 4x1000'},
 }
 
-# Tasas de retención para cálculo automático
-RETENCION_TASA = {
-    'RETEFUENTE_2.5': 0.025,
-    'RETEFUENTE_1.5': 0.015,
-    'RETEIVA':        0.15,
-    'ICA_3':          0.003,
-    'ICA_4.14':       0.00414,
-    'ICA_6.9':        0.0069,
-    'ICA_8':          0.008,
-    'ICA_11.04':      0.01104,
-    'AUTORETENCION_ICA_3':    0.003,
-    'AUTORETENCION_ICA_4.14': 0.00414,
-    'AUTORETENCION_ICA_6.9':  0.0069,
-    'AUTORETENCION_ICA_8':    0.008,
-    'AUTORETENCION_ICA_11.04':0.01104,
-}
+# Vistas derivadas — solo lectura, generadas del catálogo único de arriba.
+RETENCION_PUC  = {k: v['puc']  for k, v in CATALOGO_RETENCIONES.items()}
+RETENCION_TASA = {k: v['tasa'] for k, v in CATALOGO_RETENCIONES.items()}
 
 
 class LiquidacionService:
@@ -79,8 +76,8 @@ class LiquidacionService:
         from app.services.connekta_gateway import connekta
 
         retenciones_disponibles = [
-            {'tipo': k, 'nombre': _nombre_retencion(k), 'puc': RETENCION_PUC[k], 'tasa': v}
-            for k, v in RETENCION_TASA.items()
+            {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
+            for k, v in CATALOGO_RETENCIONES.items()
         ]
 
         resultado_recaudos = []
@@ -236,7 +233,8 @@ class LiquidacionService:
 
         # ── Retenciones disponibles ─────────────────────────────────
         retenciones_disponibles = []
-        for tipo_ret, tasa in RETENCION_TASA.items():
+        for tipo_ret, datos_ret in CATALOGO_RETENCIONES.items():
+            tasa = datos_ret['tasa']
             # RETEIVA: base = total_iva, all others: base = base_gravable
             if tipo_ret == 'RETEIVA':
                 base_calculo = total_iva
@@ -245,8 +243,8 @@ class LiquidacionService:
             monto_estimado = round(base_calculo * tasa, 2) if datos_disponibles else 0
             retenciones_disponibles.append({
                 'tipo': tipo_ret,
-                'nombre': _nombre_retencion(tipo_ret),
-                'puc': RETENCION_PUC[tipo_ret],
+                'nombre': datos_ret['nombre'],
+                'puc': datos_ret['puc'],
                 'tasa': tasa,
                 'base': base_calculo,
                 'monto_estimado': monto_estimado,
@@ -299,6 +297,10 @@ class LiquidacionService:
                 'datos_disponibles': datos_disponibles,
             },
             'retenciones_disponibles': retenciones_disponibles,
+            # Motivo que el conductor eligió en campo (Pago Parcial, pantalla
+            # de última milla) — el admin lo ve premarcado abajo pero decide:
+            # puede quitarlo o cambiarlo antes de confirmar el cobro.
+            'motivo_descuento_sugerido': recaudo.motivo_descuento or '',
             'acciones_pendientes': acciones_pendientes,
             'flags': {
                 'siesa_nc_triggered': recaudo.siesa_nc_triggered or False,
@@ -1056,23 +1058,6 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
     )
 
 
-# Nombres legibles para las retenciones
-_NOMBRES_RETENCION = {
-    'RETEFUENTE_2.5':   'Retefuente Compras 2.5%',
-    'RETEFUENTE_1.5':   'Retefuente Bancos 1.5%',
-    'RETEIVA':          'ReteIVA 15%',
-    'ICA_3':            'ICA 3x1000',
-    'ICA_4.14':         'ICA 4.14x1000',
-    'ICA_6.9':          'ICA 6.9x1000',
-    'ICA_8':            'ICA 8x1000',
-    'ICA_11.04':        'ICA 11.04x1000',
-    'AUTORETENCION_ICA_3':    'Autoretención ICA 3x1000',
-    'AUTORETENCION_ICA_4.14': 'Autoretención ICA 4.14x1000',
-    'AUTORETENCION_ICA_6.9':  'Autoretención ICA 6.9x1000',
-    'AUTORETENCION_ICA_8':    'Autoretención ICA 8x1000',
-    'AUTORETENCION_ICA_11.04':'Autoretención ICA 11.04x1000',
-}
-
-
 def _nombre_retencion(tipo: str) -> str:
-    return _NOMBRES_RETENCION.get(tipo, tipo)
+    entrada = CATALOGO_RETENCIONES.get(tipo)
+    return entrada['nombre'] if entrada else tipo

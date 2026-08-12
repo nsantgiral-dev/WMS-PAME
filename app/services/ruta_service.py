@@ -581,6 +581,7 @@ class RutaService:
                              .options(_sl(ItemPacking.producto))
                              .all())
                 tareas_map[tid] = {
+                    '_tarea':        t,  # retirado antes de devolver — ver más abajo
                     'tarea_id':      tid,
                     'numero_pedido': t.numero_pedido_siesa,
                     'cliente':       t.cliente or '',
@@ -611,17 +612,79 @@ class RutaService:
             if r.tarea_id in tareas_map:
                 tareas_map[r.tarea_id]['recaudo'] = r.to_dict()
 
+        # Precarga valor_factura/es_contado — una vez, cuando el conductor abre
+        # la lista. El resultado completo (`d`) se cachea entero en el
+        # dispositivo (ver condAbrirParadas en rutas.js), así que esto es lo
+        # único que necesita conectividad; la confirmación de cada parada ya
+        # funciona offline sin volver a tocar Siesa.
+        for tid, p in tareas_map.items():
+            t = p.pop('_tarea')
+            valor_factura, es_contado = RutaService._valor_y_cond_pago(t)
+            p['valor_factura'] = valor_factura
+            p['es_contado']    = es_contado
+
         paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
         # Ojo: `paradas` está indexado por tarea_id, así que cada entrada es una
         # factura, no una parada física. La parada real es DISTINCT cliente.
         gestionadas = sum(1 for p in paradas if p['recaudo'])
+
+        # Mismo catálogo que usa Liquidación de escritorio (CATALOGO_RETENCIONES
+        # en liquidacion_service.py) — una sola fuente, el conductor y el admin
+        # ven siempre las mismas cuentas/tasas.
+        from app.services.liquidacion_service import CATALOGO_RETENCIONES
+        retenciones_disponibles = [
+            {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
+            for k, v in CATALOGO_RETENCIONES.items()
+        ]
+
         return {
-            'paradas':              paradas,
-            'total_paradas':        len(paradas),
-            'facturas_gestionadas': gestionadas,
+            'paradas':                 paradas,
+            'total_paradas':           len(paradas),
+            'facturas_gestionadas':    gestionadas,
             # Alias de transición para PWA en caché — retirar post go-live
-            'paradas_gestionadas':  gestionadas,
+            'paradas_gestionadas':     gestionadas,
+            'retenciones_disponibles': retenciones_disponibles,
         }
+
+    @staticmethod
+    def _valor_y_cond_pago(tarea) -> tuple:
+        """`(valor_factura, es_contado)` de la FE real de una tarea, o
+        `(None, None)` si Siesa no responde — nunca levanta. Alimenta el
+        toggle Pago Total/Parcial del conductor; si no hay dato, el frontend
+        cae al campo libre de siempre (sin bloquear la pantalla).
+
+        `es_contado`: igual criterio que `trigger_factura_desde_remision` en
+        connekta_gateway.py — cond_pago vacío se trata como contado (mismo
+        fallback que ya se usa al facturar), y CONTADO = coincide con
+        `SIESA_COND_PAGO_VENTAS`. Cualquier otra condición (30D, C30...) es
+        crédito.
+        """
+        from app.services.connekta_gateway import connekta
+        from app.services.fe_resolver import resolver_fe_o_none
+
+        tipo_fe, consec_fe = resolver_fe_o_none(tarea)
+        if not tipo_fe or not consec_fe:
+            return None, None
+
+        valor_factura = None
+        try:
+            lineas = connekta.get_rowids_factura(tipo_fe, consec_fe)
+            if lineas:
+                valor_factura = round(sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas), 2)
+        except Exception as e:
+            logger.warning('[RUTAS] valor_factura falló para tarea %s (FE %s-%s): %s',
+                            tarea.id, tipo_fe, consec_fe, e)
+
+        es_contado = None
+        try:
+            cabecera = connekta.get_pedido_cabecera(
+                tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
+            cond_pago_siesa = (cabecera or {}).get('f430_id_cond_pago') or ''
+            es_contado = (not cond_pago_siesa) or (cond_pago_siesa == connekta.cond_pago_ventas)
+        except Exception as e:
+            logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
+
+        return valor_factura, es_contado
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:
@@ -654,6 +717,20 @@ class RutaService:
                 raise ValueError('El monto cobrado debe ser mayor a 0 en una entrega parcial')
             if not (data.get('observaciones') or '').strip():
                 raise ValueError('Las observaciones son obligatorias en una entrega parcial')
+
+        # Motivo del descuento (Pago Parcial de contado, ver pantalla del
+        # conductor) — no se revalida contra Siesa acá (rompería el flujo
+        # offline de esta pantalla); solo se valida que el tipo exista en el
+        # catálogo real. El admin en Liquidación es el filtro final antes de
+        # tocar Siesa.
+        motivo_descuento = (data.get('motivo_descuento') or '').strip() or None
+        if motivo_descuento:
+            from app.services.liquidacion_service import CATALOGO_RETENCIONES
+            if motivo_descuento not in CATALOGO_RETENCIONES:
+                raise ValueError(f'motivo_descuento inválido: {motivo_descuento}')
+        monto_descuento = float(data.get('monto_descuento') or 0)
+        if monto_descuento < 0:
+            raise ValueError('monto_descuento no puede ser negativo')
 
         foto = data.get('foto_entrega', '') or None
         if foto and len(foto) > 2_000_000:
@@ -712,6 +789,8 @@ class RutaService:
         recaudo.estado_entrega        = estado_entrega
         recaudo.forma_pago            = forma_pago
         recaudo.monto_cobrado         = data.get('monto_cobrado', 0) or 0
+        recaudo.motivo_descuento      = motivo_descuento
+        recaudo.monto_descuento       = monto_descuento
         recaudo.observaciones         = data.get('observaciones', '') or None
         recaudo.foto_entrega          = foto
         recaudo.bultos_rechazados_ids = list(ids_rechazados_set & ids_tarea)
