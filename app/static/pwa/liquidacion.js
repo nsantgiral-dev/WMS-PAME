@@ -397,11 +397,21 @@ function _liqRenderDetalle() {
     if (esLiquidada) {
       // Botones de acción por tipo de parada
       if ((estado === 'RECHAZADO' || estado === 'PARCIAL') && !rec.siesa_nc_triggered) {
-        html += `
-          <button onclick="liqEnviarNC(${ruta.id}, ${rec.id})"
-            style="width:100%;margin-top:8px;padding:12px;background:#1e3a5f;color:#60a5fa;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            Enviar Nota Crédito (NC)
-          </button>`;
+        // Ya no se dispara la NC directo desde acá — Liquidar en WMS ya armó
+        // la devolución pendiente; recepción la confirma en el módulo de
+        // Devoluciones (verifica físicamente y ESO dispara la NC real, con
+        // cruce automático de cartera).
+        if (rec.devolucion_pendiente) {
+          html += `
+            <div style="text-align:center;padding:8px;color:#93c5fd;font-size:12px;font-weight:700;margin-top:8px;background:#0f2a3f;border-radius:8px;">
+              🔵 Enviado a Devoluciones (${rec.devolucion_pendiente.codigo}) — pendiente de que recepción confirme
+            </div>`;
+        } else {
+          html += `
+            <div style="text-align:center;padding:8px;color:#fca5a5;font-size:12px;font-weight:700;margin-top:8px;background:#3a1616;border-radius:8px;">
+              ⚠ No se pudo enviar a Devoluciones — revisar logs, contactar soporte
+            </div>`;
+        }
       }
       if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO' && !rec.siesa_rc_triggered) {
         const rcDisabled = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
@@ -551,25 +561,6 @@ async function liqLiquidarWMS(rutaId) {
 }
 
 // ── Fase 2: Acciones per-recaudo ──────────────────────────────────────────
-
-async function liqEnviarNC(rutaId, recaudoId) {
-  if (!confirm('¿Enviar Nota Crédito (NC) a Siesa para esta parada?')) return;
-  try {
-    const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/enviar-nc`, {
-      method: 'POST',
-      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: '{}',
-    });
-    const d = await r.json();
-    if (r.ok && d.ok) {
-      alerta('NC encolada correctamente', 'exito');
-      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
-      _liqRenderDetalle();
-    } else {
-      alerta(d.error || 'Error al enviar NC', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
-}
 
 async function liqToggleCobro(rutaId, recaudoId) {
   const panel = document.getElementById(`liq-cobro-panel-${recaudoId}`);

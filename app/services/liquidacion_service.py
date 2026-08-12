@@ -74,6 +74,7 @@ class LiquidacionService:
 
         recaudos = RecaudoEntrega.query.filter_by(ruta_id=ruta_id).all()
         from app.services.connekta_gateway import connekta
+        from app.models.devolucion_cliente import DevolucionCliente
 
         retenciones_disponibles = [
             {'tipo': k, 'nombre': v['nombre'], 'puc': v['puc'], 'tasa': v['tasa']}
@@ -139,6 +140,19 @@ class LiquidacionService:
 
             rd['factura_siesa'] = factura_siesa
             rd['retenciones_disponibles'] = retenciones_disponibles
+
+            # Parcial/Rechazado ya no disparan la NC directo — arman una
+            # DevolucionCliente pendiente que recepción confirma (ver
+            # _crear_devolucion_pendiente). El admin ve acá si ya se envió.
+            devolucion = (DevolucionCliente.query
+                          .filter_by(recaudo_entrega_id=recaudo.id)
+                          .filter(DevolucionCliente.estado != 'CANCELADA')
+                          .first())
+            rd['devolucion_pendiente'] = (
+                {'id': devolucion.id, 'codigo': devolucion.codigo, 'estado': devolucion.estado}
+                if devolucion else None
+            )
+
             resultado_recaudos.append(rd)
 
         result = {
@@ -309,107 +323,6 @@ class LiquidacionService:
             },
             'jobs_estado': jobs_estado,
             'siesa_horario_ok': siesa_horario_ok,
-        }
-
-    @staticmethod
-    def enviar_nc_recaudo(recaudo_id: int, admin_id: int = None,
-                          cantidades_verificadas: list = None) -> dict:
-        """
-        Enqueues NC (Nota Crédito) for a single recaudo.
-
-        Used in per-recaudo liquidation flow. Only valid for PARCIAL/RECHAZADO.
-        Idempotent: raises if NC already triggered.
-        """
-        recaudo = RecaudoEntrega.query.get(recaudo_id)
-        if not recaudo:
-            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
-
-        tarea = recaudo.tarea
-        if not tarea:
-            raise ValueError(f'Recaudo {recaudo_id} sin tarea asociada')
-
-        # Validate estado
-        estado = recaudo.estado_entrega
-        if estado not in (EstadoEntrega.PARCIAL, EstadoEntrega.RECHAZADO):
-            raise ValueError(
-                f'NC solo aplica para PARCIAL/RECHAZADO, recaudo {recaudo_id} '
-                f'está en estado {estado}'
-            )
-
-        # Idempotent guard
-        if recaudo.siesa_nc_triggered:
-            raise ValueError(
-                f'NC ya fue disparada para recaudo {recaudo_id} — '
-                'no se puede re-encolar (idempotencia)'
-            )
-
-        # La FE, no el pedido: `get_rowids_factura` filtra por `f350_*`
-        # —el documento consultado— y acá se pasaba `*_pedido_siesa` con la
-        # variable llamada `_fe`. Job 440 (2026-08-11): 400 de Siesa
-        # buscando una factura de tipo 'PD'. Ver `fe_resolver`.
-        from app.services.fe_resolver import FENoEncontrada, resolver_fe
-        try:
-            tipo_docto_fe, consec_fe = resolver_fe(tarea)
-        except FENoEncontrada as _e_fe:
-            tipo_docto_fe = consec_fe = ''
-        if not tipo_docto_fe or not consec_fe:
-            raise ValueError(
-                f'Tarea {tarea.id} sin tipo_docto/consec_docto — '
-                'no se puede vincular a factura Siesa'
-            )
-
-        # If verified quantities provided, update items_entregados
-        if cantidades_verificadas is not None:
-            recaudo.items_entregados = cantidades_verificadas
-
-        # Determine items for NC
-        items_devueltos = recaudo.items_entregados if estado == EstadoEntrega.PARCIAL else None
-
-        notas = (
-            f'Liquidación per-recaudo | NC recaudo #{recaudo_id} | '
-            f'Estado: {estado} | Admin: {admin_id}'
-        )
-
-        # Pre-flag ANTES de encolar (patrón pre-flag estándar)
-        recaudo.siesa_nc_triggered = True
-
-        _encolar_nota_credito(
-            recaudo, tipo_docto_fe, consec_fe,
-            items_devueltos=items_devueltos,
-            notas=notas,
-            admin_id=admin_id,
-        )
-
-        # Add accion_origen to the last enqueued job's payload
-        last_job = SiesaJob.query.filter_by(
-            referencia_tipo='RecaudoEntrega',
-            referencia_id=recaudo_id,
-            tipo='NOTA_CREDITO_FACTURA',
-        ).order_by(SiesaJob.id.desc()).first()
-
-        if last_job:
-            import json
-            payload = json.loads(last_job.payload)
-            payload['accion_origen'] = 'liquidacion_per_recaudo'
-            last_job.payload = json.dumps(payload, ensure_ascii=False)
-
-        db.session.commit()
-
-        # Trigger immediate DLQ processing
-        try:
-            from app.services.siesa_job_service import disparar_dlq_inmediato
-            disparar_dlq_inmediato()
-        except Exception:
-            pass
-
-        logger.info(
-            '[LIQUIDACION] enviar_nc_recaudo: recaudo %d, job %s encolado',
-            recaudo_id, last_job.id if last_job else '?'
-        )
-
-        return {
-            'ok': True,
-            'job_id': last_job.id if last_job else None,
         }
 
     @staticmethod
@@ -945,42 +858,6 @@ def _obtener_tercero(tarea) -> tuple:
         tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa
     )
     return '', '001'
-
-
-def _encolar_nota_credito(recaudo: RecaudoEntrega, tipo_docto_fe: str,
-                           consec_fe, items_devueltos: list,
-                           notas: str, admin_id: int = None):
-    """Encola job NOTA_CREDITO_FACTURA en la DLQ."""
-    # Construir lista de ítems devueltos para el payload
-    items_para_nc = []
-    if items_devueltos:
-        for it in items_devueltos:
-            cant_devuelta = it.get('cantidad_devuelta') or it.get('devuelto', 0)
-            if int(cant_devuelta) > 0:
-                items_para_nc.append({
-                    'codigo': it.get('codigo', ''),
-                    'cantidad_devuelta': int(cant_devuelta),
-                })
-
-    SiesaJob.encolar(
-        tipo='NOTA_CREDITO_FACTURA',
-        payload={
-            'recaudo_id': recaudo.id,
-            'tipo_docto_fe': tipo_docto_fe,
-            'consec_fe': str(consec_fe),
-            'items_devueltos': items_para_nc,
-            'es_total': not bool(items_devueltos),
-            'causal_devolucion': recaudo.causal_devolucion or '',
-            'notas': notas,
-        },
-        referencia_tipo='RecaudoEntrega',
-        referencia_id=recaudo.id,
-        creado_por_id=admin_id,
-    )
-    logger.info(
-        '[LIQUIDACION] Encolado NOTA_CREDITO_FACTURA para recaudo %d (FE %s-%s)',
-        recaudo.id, tipo_docto_fe, consec_fe
-    )
 
 
 def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: str,

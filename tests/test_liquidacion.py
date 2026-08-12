@@ -245,33 +245,10 @@ class TestRetencionesPUC:
 # Per-recaudo methods (liquidación guiada)
 # ═══════════════════════════════════════════════════════════════════
 
-class TestEnviarNCRecaudo:
-
-    def test_rechazado_encola_nc(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='RECHAZADO', pago='EFECTIVO')
-        from app.services.liquidacion_service import LiquidacionService
-        mock_connekta = MagicMock()
-        mock_connekta.get_factura_desde_pedido.return_value = []
-        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
-             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
-            resultado = LiquidacionService.enviar_nc_recaudo(recaudo.id, admin_id=1)
-        assert resultado['ok'] is True
-        assert resultado['job_id'] is not None
-        db.session.refresh(recaudo)
-        assert recaudo.siesa_nc_triggered is True
-
-    def test_entregado_rechaza_nc(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO')
-        from app.services.liquidacion_service import LiquidacionService
-        with pytest.raises(ValueError, match='PARCIAL/RECHAZADO'):
-            LiquidacionService.enviar_nc_recaudo(recaudo.id, admin_id=1)
-
-    def test_nc_idempotente(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='RECHAZADO', pago='EFECTIVO', nc=True)
-        from app.services.liquidacion_service import LiquidacionService
-        with pytest.raises(ValueError, match='idempotencia'):
-            LiquidacionService.enviar_nc_recaudo(recaudo.id, admin_id=1)
-
+# TestEnviarNCRecaudo se eliminó junto con LiquidacionService.enviar_nc_recaudo
+# — ese camino disparaba la NC directo (250696, sin cruce automático),
+# bypaseando la devolución pendiente que ahora arma _crear_devolucion_pendiente.
+# Dejarlo vivo habría sido un atajo peligroso al lado del flujo real.
 
 class TestRegistrarCobroRecaudo:
 

@@ -551,34 +551,6 @@ def preview_siesa_recaudo(ruta_id, recaudo_id):
     return jsonify(resultado), 200
 
 
-@rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/enviar-nc', methods=['POST'])
-@jwt_required()
-def enviar_nc_recaudo(ruta_id, recaudo_id):
-    """Encola Nota Crédito para un recaudo específico (PARCIAL/RECHAZADO)."""
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe puede enviar NC'}), 403
-    uid = _uid()
-    if not uid:
-        return jsonify({'error': 'Token inválido'}), 401
-    from app.models.recaudo_entrega import RecaudoEntrega
-    recaudo = RecaudoEntrega.query.get(recaudo_id)
-    if not recaudo or recaudo.ruta_id != ruta_id:
-        return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
-    data = request.get_json() or {}
-    try:
-        from app.services.liquidacion_service import LiquidacionService
-        resultado = LiquidacionService.enviar_nc_recaudo(
-            recaudo_id,
-            admin_id=uid,
-            cantidades_verificadas=data.get('cantidades_verificadas'),
-        )
-    except LookupError as e:
-        return jsonify({'error': str(e)}), 404
-    except ValueError as e:
-        return jsonify({'error': str(e)}), 400
-    return jsonify(resultado), 200
-
-
 @rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/registrar-cobro', methods=['POST'])
 @jwt_required()
 def registrar_cobro_recaudo(ruta_id, recaudo_id):
