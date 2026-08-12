@@ -73,6 +73,62 @@ def _plantilla_docx(nombre_archivo: str) -> dict:
     return secciones
 
 
+#: Tipos de dato del DOCX. Sirven de ancla: en la tabla de campos, el nombre
+#: siempre viene seguido de su tipo.
+_TIPOS_DOCX = {'Entero', 'Alfanumerico', 'Alfanumérico', 'Decimal', 'Fecha',
+               'DecimalConSigno'}
+
+
+def _tabla_docx(nombre_archivo: str) -> dict:
+    """`{seccion: [(campo, obligatorio, pos, ancho)]}` desde la tabla del DOCX.
+
+    Segundo formato de spec. El 142888 y el 142882 traen una plantilla JSON; el
+    142946 trae una **tabla con posición y ancho por campo**, que es más
+    informativa —permite calcular el largo del registro— y no se puede leer con
+    el mismo parser.
+
+    Que existan dos formatos no es un detalle: es la razón por la que «verificar
+    contra el spec» se hacía a ojo y terminaba siendo «verificar contra lo que
+    ya escribimos».
+    """
+    ruta = _SPECS / nombre_archivo
+    assert ruta.exists(), f'falta el spec {nombre_archivo}'
+    xml = zipfile.ZipFile(ruta).read('word/document.xml').decode('utf-8')
+    texto = unescape(re.sub(r'<[^>]+>', '', re.sub(r'</w:p>', '\n', xml)))
+    L = [re.sub(r'\s+', ' ', l).strip() for l in texto.split('\n') if l.strip()]
+
+    try:
+        inicio = L.index('Request Body') + 1
+    except ValueError:
+        inicio = 0
+
+    # Una sección es una palabra sola, capitalizada, de 5+ letras. Descarta
+    # 'Dep' (3) y las descripciones, que llevan espacios.
+    def es_seccion(l):
+        return bool(re.fullmatch(r'[A-Z][a-zA-Z]{4,}', l)) and l not in _TIPOS_DOCX
+
+    secciones, actual, i = {}, None, inicio
+    while i < len(L):
+        if es_seccion(L[i]):
+            actual = L[i]
+            secciones.setdefault(actual, [])
+            i += 1
+            continue
+        if (actual and re.fullmatch(r'[A-Za-z0-9_]+', L[i])
+                and i + 1 < len(L) and L[i + 1] in _TIPOS_DOCX):
+            resto = L[i + 2:i + 8]
+            nums = [x for x in resto if re.fullmatch(r'\d+', x)]
+            oblig = next((x for x in resto if x in ('Si', 'Sí', 'No')), '?')
+            secciones[actual].append((
+                L[i], oblig,
+                int(nums[0]) if nums else None,
+                int(nums[1]) if len(nums) > 1 else None))
+            i += 2
+            continue
+        i += 1
+    return secciones
+
+
 def _campos_del_dict(fuente: str, nombre_var: str, desde: int = 0) -> list:
     """Los keys de un dict literal `nombre_var = {...}`, en orden de escritura.
 
@@ -187,6 +243,67 @@ class TestDocumentoContable142882:
         nuevas = enviadas - set(self._SECCIONES_QUE_MANDAMOS)
         assert not nuevas, (
             f'secciones nuevas sin verificar contra el DOCX: {sorted(nuevas)}')
+
+
+class TestNotaFactura142946:
+    """El único de los tres que **sí se ejercitó en vivo** — y el único completo.
+
+    Verificado el 2026-08-11: 22/22 en `Doctoventascomercial`, 27/27 en
+    `Movimientos`. Sin defectos.
+
+    Eso no es casualidad y es la lección del episodio: 142946 se probó contra
+    Siesa real (NCE-00000050 sobre FEW-1463, y después el 251126 con FEW-1466).
+    Los otros dos —142888 y 142882— nunca corrieron, y a los dos les faltaban
+    campos. **«Verificado contra el spec» sin una corrida real no significaba
+    nada**, porque el test que decía verificarlo comparaba el código consigo
+    mismo.
+
+    Se fija acá para que siga completo, no porque haya algo que arreglar.
+
+    El encabezado se arma en helpers compartidos (`_build_header_docto_ventas_nc`,
+    `_build_transportador_vacio`) y no inline — buscarlo solo en el cuerpo del
+    trigger da un falso «faltan 21 campos». La primera medición dio eso; el dato
+    era mío, no del código.
+    """
+
+    _DOCX = '142946 - API_v1_Ventas_Comercial_NotaFactura 428509.docx'
+
+    @pytest.fixture(scope='class')
+    def spec(self):
+        return _tabla_docx(self._DOCX)
+
+    @pytest.fixture(scope='class')
+    def fuente(self):
+        t = _GATEWAY.read_text(encoding='utf-8')
+
+        def cuerpo(nombre):
+            i = t.find(f'    def {nombre}')
+            assert i != -1, f'no existe {nombre} — ¿se renombró?'
+            j = t.find('\n    def ', i + 10)
+            return t[i:j if j > 0 else i + 6000]
+
+        return (cuerpo('trigger_nota_factura(')
+                + cuerpo('_build_header_docto_ventas_nc')
+                + cuerpo('_build_transportador_vacio'))
+
+    @pytest.mark.parametrize('seccion', ['Doctoventascomercial', 'Movimientos'])
+    def test_no_falta_ningun_campo(self, spec, fuente, seccion):
+        faltan = [(c, ob, p, a) for c, ob, p, a in spec[seccion]
+                  if f"'{c}'" not in fuente]
+        assert not faltan, (
+            f'\n{seccion}: faltan {len(faltan)} campos del DOCX:\n'
+            + '\n'.join(f'  {"OBLIGATORIO" if ob in ("Si", "Sí") else "opcional"}  '
+                        f'{c} (pos {p}, ancho {a})' for c, ob, p, a in faltan))
+
+    def test_el_spec_trae_posiciones_y_anchos(self, spec):
+        """Este DOCX permite calcular el largo del registro. Si el parser
+        dejara de leer posiciones, los tests seguirían pasando sobre listas
+        vacías."""
+        campos = spec['Doctoventascomercial']
+        assert len(campos) == 22
+        assert all(p and a for _, _, p, a in campos), 'hay campos sin pos/ancho'
+        fin = max(p + a - 1 for _, _, p, a in campos)
+        assert fin == 522, f'el registro terminaba en 522 y ahora en {fin}'
 
 
 class TestElDetectorNoEstaCiego:
