@@ -731,9 +731,13 @@ class RutaService:
             if not (data.get('observaciones') or '').strip():
                 raise ValueError('El motivo del rechazo es obligatorio')
         if estado_entrega == EstadoEntrega.PARCIAL:
-            monto = float(data.get('monto_cobrado') or 0)
-            if monto <= 0:
-                raise ValueError('El monto cobrado debe ser mayor a 0 en una entrega parcial')
+            # monto>0 solo aplica si de verdad se cobra en la puerta — un
+            # pedido a crédito con devolución parcial no cobra nada ahí (solo
+            # genera NC por lo devuelto), forzar monto>0 bloquearía ese caso.
+            if forma_pago != FormaPago.CREDITO:
+                monto = float(data.get('monto_cobrado') or 0)
+                if monto <= 0:
+                    raise ValueError('El monto cobrado debe ser mayor a 0 en una entrega parcial')
             if not (data.get('observaciones') or '').strip():
                 raise ValueError('Las observaciones son obligatorias en una entrega parcial')
 

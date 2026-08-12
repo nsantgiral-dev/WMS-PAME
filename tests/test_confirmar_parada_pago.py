@@ -159,6 +159,26 @@ class TestParcialVuelveAExigirPago:
         assert recaudo.forma_pago == 'EFECTIVO'
         assert float(recaudo.monto_cobrado) == 40000
 
+    def test_parcial_credito_no_exige_monto(self, app, db, parada_lista):
+        """Pedido a crédito con devolución parcial no cobra nada en la
+        puerta (solo genera NC por lo devuelto) — forzar monto>0 ahí
+        bloquearía este caso real, no es un descuido de captura."""
+        from app.services.ruta_service import RutaService
+        ruta, tarea, usuario_id = parada_lista
+
+        recaudo_id, _ = RutaService.confirmar_parada(ruta.id, tarea.id, usuario_id, {
+            'estado_entrega': 'PARCIAL',
+            'forma_pago': 'CREDITO',
+            'monto_cobrado': 0,
+            'observaciones': 'Cliente no quiso 2 unidades, pedido a crédito',
+            'bultos_rechazados': [],
+        })
+
+        from app.models.recaudo_entrega import RecaudoEntrega
+        recaudo = RecaudoEntrega.query.get(recaudo_id)
+        assert recaudo.forma_pago == 'CREDITO'
+        assert float(recaudo.monto_cobrado) == 0
+
 
 class TestCatalogoRetencionesUnaFuente:
     """El bug que originó esta sesión: 3 diccionarios paralelos que

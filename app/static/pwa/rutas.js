@@ -1894,14 +1894,18 @@ function _condRenderFormParada() {
   const obsActual    = r ? (r.observaciones || '') : '';
   const rechazadosActuales = r ? (r.bultos_rechazados_ids || []) : [];
 
-  // Valor dinámico (Valor a Cobrar + Pago Total/Parcial) solo si Siesa dio
-  // el valor de la factura, el pedido es de contado, Y hay precio real por
-  // cada referencia — si falta uno solo, no se puede garantizar el
-  // recálculo y se cae al campo libre de siempre (Regla 0: ante dato
-  // ausente, conservador). Independiente de esto, Referencias siempre se
-  // puede ajustar — hasta un pedido a crédito puede entregarse incompleto.
+  // Modo de pago — 3 posibles, según lo que Siesa confirmó de este pedido:
+  //  · CREDITO:  es_contado === false confirmado → no se cobra en la puerta,
+  //              no tiene sentido preguntar monto ni forma de pago.
+  //  · DINAMICO: contado confirmado Y Siesa dio el valor de la factura Y hay
+  //              precio real por cada referencia → Valor a Cobrar + Total/Parcial.
+  //  · LIBRE:    cualquier otro caso (Siesa no respondió, dato incompleto) —
+  //              Regla 0, ante dato ausente, conservador: se pregunta a mano
+  //              en vez de asumir.
   const mostrarValorDinamico = p.es_contado === true && p.valor_factura != null
     && !!(p.items && p.items.length) && p.items.every(it => it.valor_unitario != null);
+  const modoPago = p.es_contado === false ? 'CREDITO' : (mostrarValorDinamico ? 'DINAMICO' : 'LIBRE');
+  el._modoPago = modoPago;
   el._mostrarValorDinamico = mostrarValorDinamico;
   el._valorAjustado = p.valor_factura;
 
@@ -1992,7 +1996,12 @@ function _condRenderFormParada() {
     </div>
 
     <div id="cond-entrega-payload" style="display:${estadoUi === 'ENTREGADO' ? 'block' : 'none'};">
-      ${mostrarValorDinamico ? `
+      ${modoPago === 'CREDITO' ? `
+      <div style="margin-bottom:14px;padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:13px;color:#aaa;display:flex;align-items:center;gap:10px;">
+        💳 Pedido a crédito — no se cobra en la entrega. La cartera se gestiona aparte.
+      </div>
+      ` : `
+      ${modoPago === 'DINAMICO' ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
         <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
         <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
@@ -2049,6 +2058,7 @@ function _condRenderFormParada() {
           ).join('')}
         </select>
       </div>
+      `}
     </div>
 
     <div style="margin-bottom:14px;">
@@ -2285,8 +2295,12 @@ async function condGuardarParada() {
     }
   }
 
-  const formaPago = document.getElementById('cond-forma-pago')?.value || '';
-  if ((estadoEntrega === 'ENTREGADO' || estadoEntrega === 'PARCIAL') && !formaPago) {
+  // Crédito confirmado por Siesa: no hay campo de forma de pago en el DOM
+  // (no tiene sentido preguntarlo, ya lo sabemos) — se fija directo.
+  const cobraEnLaPuerta = estadoEntrega === 'ENTREGADO' || estadoEntrega === 'PARCIAL';
+  const esCredito = cobraEnLaPuerta && el._modoPago === 'CREDITO';
+  const formaPago = esCredito ? 'CREDITO' : (document.getElementById('cond-forma-pago')?.value || '');
+  if (cobraEnLaPuerta && !esCredito && !formaPago) {
     alerta('Selecciona la forma de pago antes de confirmar', 'error');
     document.getElementById('cond-forma-pago')?.focus();
     return;
@@ -2322,15 +2336,16 @@ async function condGuardarParada() {
     } catch (_) { alerta('Error procesando la foto', 'error'); return; }
   }
 
-  // ── Monto: Valor a Cobrar dinámico (Total/Parcial) si hay datos reales de
-  // Siesa para toda la factura, o campo libre si no — igual en entrega
-  // completa o con ajuste, ya no es exclusivo de una ni de otra.
+  // ── Monto: crédito confirmado → 0 fijo, nada que preguntar. Si no, Valor a
+  // Cobrar dinámico (Total/Parcial) cuando hay datos reales de Siesa, o
+  // campo libre si no — igual en entrega completa o con ajuste.
   let montoFinal = 0;
   let motivoDescuentoFinal = null;
   let montoDescuentoFinal = 0;
-  const cobraEnLaPuerta = estadoEntrega === 'ENTREGADO' || estadoEntrega === 'PARCIAL';
 
-  if (cobraEnLaPuerta && el._mostrarValorDinamico) {
+  if (esCredito) {
+    // montoFinal ya es 0 — no hay nada que leer del DOM en este modo.
+  } else if (cobraEnLaPuerta && el._mostrarValorDinamico) {
     const valorBase = el._valorAjustado != null ? el._valorAjustado : Math.round(p.valor_factura);
     const tipoPago = el._tipoPagoSel || 'TOTAL';
     if (tipoPago === 'TOTAL') {
