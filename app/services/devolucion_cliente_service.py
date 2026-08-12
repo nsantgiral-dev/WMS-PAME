@@ -109,11 +109,20 @@ class DevolucionClienteService:
     @staticmethod
     def crear_devolucion(tarea_packing_id: int, tipo_docto_fe: str, consec_fe: str,
                          almacen_id: int, recepcionista_id: int, lineas: list,
-                         es_total: bool = False, observaciones: str = None) -> DevolucionCliente:
+                         es_total: bool = False, observaciones: str = None,
+                         recaudo_entrega_id: int = None, commit: bool = True) -> DevolucionCliente:
         """
         Crea la cabecera ABIERTA + líneas con cantidad_devuelta > 0.
         lineas: [{producto_id, codigo_siesa, cantidad_facturada, cantidad_devuelta,
                   es_averiado, f470_id_unidad_medida, f150_id_bodega, f470_rowid}]
+
+        `recaudo_entrega_id`: solo lo pasa Liquidación de ruta (ver
+        liquidacion_service._crear_devolucion_pendiente) — enlaza esta
+        devolución al RecaudoEntrega que la originó.
+
+        `commit=False`: para cuando el caller (Liquidación) ya está dentro de
+        su propia transacción por lote y hace un solo commit al final — no
+        confirmar acá partiría esa atomicidad a la mitad.
         """
         tarea = db.session.get(TareaPacking, tarea_packing_id)
         if not tarea:
@@ -145,6 +154,7 @@ class DevolucionClienteService:
             estado=EstadoDevolucionCliente.ABIERTA,
             es_total=bool(es_total),
             observaciones=observaciones,
+            recaudo_entrega_id=recaudo_entrega_id,
         )
         db.session.add(devolucion)
         db.session.flush()
@@ -163,18 +173,30 @@ class DevolucionClienteService:
             )
             db.session.add(linea)
 
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
         logger.info('[DEV_CLIENTE] Devolución creada: %s · pedido %s · %d línea(s)',
                     codigo, tarea.numero_pedido_siesa, len(lineas_validas))
         return devolucion
 
     @staticmethod
-    def confirmar_entrada_fisica(devolucion_id: int, recepcionista_id: int) -> DevolucionCliente:
+    def confirmar_entrada_fisica(devolucion_id: int, recepcionista_id: int,
+                                  lineas_ajustadas: list = None) -> DevolucionCliente:
         """
         Confirma la devolución: ingresa el stock físico y encola la NC (142946).
         Calca el patrón de recepcion_service.confirmar_recepcion / devolucion_service.confirmar_ubicacion:
         GET a Siesa antes de los row-locks de inventario, with_for_update para
         serializar confirmaciones concurrentes, SiesaJob creado antes del commit final.
+
+        `lineas_ajustadas`: opcional, [{producto_id, cantidad_devuelta, es_averiado}].
+        Para las devoluciones que Liquidación de ruta arma sola (ver
+        recaudo_entrega_id) con lo que declaró el conductor — la
+        recepcionista puede corregir la cantidad real contada aquí, antes de
+        que se valide contra Siesa y entre al inventario. Ninguna línea se
+        agrega ni se quita, solo se ajusta cantidad_devuelta/es_averiado de
+        las que ya existen.
         """
         devolucion = (DevolucionCliente.query
                       .filter_by(id=devolucion_id)
@@ -201,6 +223,26 @@ class DevolucionClienteService:
         if devolucion.estado != EstadoDevolucionCliente.ABIERTA:
             raise ValueError(f'No se puede confirmar en estado {devolucion.estado}')
 
+        # Ajuste de la recepcionista sobre lo declarado (si vino algo distinto
+        # de lo contado físicamente) — ANTES de la revalidación contra Siesa,
+        # para que valide el número real que va a entrar al inventario.
+        if lineas_ajustadas:
+            por_producto = {int(l['producto_id']): l for l in lineas_ajustadas if l.get('producto_id') is not None}
+            for linea in devolucion.lineas:
+                ajuste = por_producto.get(linea.producto_id)
+                if not ajuste:
+                    continue
+                cant_fact = float(linea.cantidad_facturada or 0)
+                cant_nueva = max(0.0, min(float(ajuste.get('cantidad_devuelta') or 0), cant_fact))
+                linea.cantidad_devuelta = cant_nueva
+                linea.es_averiado = bool(ajuste.get('es_averiado'))
+
+            if not any(float(l.cantidad_devuelta or 0) > 0 for l in devolucion.lineas):
+                raise ValueError(
+                    'Ajustaste todas las líneas a 0 — si el cliente no devolvió nada, '
+                    'cancela esta devolución en vez de confirmarla vacía'
+                )
+
         # [C6] Re-GET a Siesa ANTES de tomar row-locks de inventario — revalida
         # que lo contado no exceda lo facturado ahora mismo (el dato pudo cambiar
         # entre la búsqueda y la confirmación).
@@ -217,6 +259,8 @@ class DevolucionClienteService:
                 facturado_actual[ref] = float(row.get('f470_cant_base') or 0)
 
         for linea in devolucion.lineas:
+            if float(linea.cantidad_devuelta or 0) <= 0:
+                continue  # la recepcionista la ajustó a 0 — no hay nada que validar ni ingresar
             cant_fact_actual = facturado_actual.get(linea.codigo_siesa)
             if cant_fact_actual is None:
                 raise ValueError(
@@ -231,6 +275,8 @@ class DevolucionClienteService:
 
         # Ingresar al inventario — locks adquiridos DESPUÉS del GET a Siesa
         for linea in devolucion.lineas:
+            if float(linea.cantidad_devuelta or 0) <= 0:
+                continue
             ubicacion = DevolucionClienteService._resolver_ubicacion(
                 producto_id=linea.producto_id,
                 almacen_id=devolucion.almacen_id,
@@ -283,6 +329,7 @@ class DevolucionClienteService:
                 'es_averiado': l.es_averiado,
             }
             for l in devolucion.lineas
+            if float(l.cantidad_devuelta or 0) > 0
         ]
         SiesaJob.encolar(
             tipo='NOTA_CREDITO_DEVOLUCION_CLIENTE',
@@ -324,6 +371,23 @@ class DevolucionClienteService:
         devolucion.observaciones = motivo or devolucion.observaciones
         db.session.commit()
         return devolucion
+
+    @staticmethod
+    def listar_pendientes_de_ruta() -> list:
+        """
+        Devoluciones ABIERTAS que se originaron en una liquidación de ruta
+        (Liquidar en WMS → entrega Parcial/Rechazada), aún sin confirmar por
+        recepción. Ya vienen armadas con las líneas exactas que declaró el
+        conductor (parcial) o toda la factura (total) — la recepcionista
+        solo verifica físicamente y ajusta si hace falta, no arma nada desde
+        cero. Una fila por pedido — cada recaudo genera a lo sumo una.
+        """
+        devoluciones = (DevolucionCliente.query
+                         .filter(DevolucionCliente.recaudo_entrega_id.isnot(None))
+                         .filter_by(estado=EstadoDevolucionCliente.ABIERTA)
+                         .order_by(DevolucionCliente.fecha_creacion.asc())
+                         .all())
+        return [d.to_dict() for d in devoluciones]
 
     @staticmethod
     def listar_pendientes_aprobacion_nc() -> list:

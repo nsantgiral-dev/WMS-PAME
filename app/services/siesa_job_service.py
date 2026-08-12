@@ -1021,6 +1021,32 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 except Exception:
                     db.session.rollback()
 
+        # Bridge Liquidación de ruta → Devoluciones: si esta devolución se
+        # originó en una entrega Parcial/Rechazada ("Liquidar en WMS", ver
+        # liquidacion_service._crear_devolucion_pendiente), avisarle al
+        # RecaudoEntrega que su NC ya salió — es la señal que el RECIBO_CAJA
+        # dependiente (depende_de_nc) está esperando para poder dispararse.
+        if devolucion and not _es_ensayo and devolucion.recaudo_entrega_id:
+            try:
+                from app.models.recaudo_entrega import RecaudoEntrega as _REC
+                recaudo_origen = db.session.get(_REC, devolucion.recaudo_entrega_id)
+                if recaudo_origen and not recaudo_origen.siesa_nc_triggered:
+                    recaudo_origen.siesa_nc_triggered = True
+                    db.session.commit()
+                    logger.info(
+                        '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: recaudo %s '
+                        'marcado siesa_nc_triggered=True — RC dependiente puede dispararse',
+                        job.id, recaudo_origen.id
+                    )
+            except Exception as _e:
+                db.session.rollback()
+                logger.critical(
+                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: NC de devolución %s OK pero '
+                    'fallo el bridge a recaudo %s — el RC dependiente quedará bloqueado hasta '
+                    'revisión manual: %s',
+                    job.id, devolucion.id, devolucion.recaudo_entrega_id, _e
+                )
+
         # Paso 3 del procedimiento manual (motivo DIAN) — job aparte, nunca
         # inline: si fallara acá, el reintento del DLQ entraría por la guarda
         # de idempotencia de arriba y nunca volvería a intentarlo. Y nada de lo

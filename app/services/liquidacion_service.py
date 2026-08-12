@@ -785,10 +785,17 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     Flujos:
       CONTADO + ENTREGADO completo        → RC
       CONTADO + ENTREGADO + retención     → RC + DC
-      CONTADO + PARCIAL                   → NC → RC (secuencial en DLQ)
+      CONTADO + PARCIAL                   → devolución pendiente → RC espera esa NC
       CRÉDITO + ENTREGADO                 → noop (queda en cartera para Gestor)
-      CRÉDITO + PARCIAL                   → NC solamente
-      RECHAZADO                           → NC total
+      CRÉDITO + PARCIAL                   → devolución pendiente solamente
+      RECHAZADO                           → devolución pendiente total
+
+    "Devolución pendiente" (ver _crear_devolucion_pendiente): PARCIAL/RECHAZADO
+    ya no disparan la NC (250696) directo desde acá — arman una
+    DevolucionCliente ABIERTA que la recepcionista confirma físicamente en
+    Devoluciones. Esa confirmación dispara la NC real (251126, con cruce
+    automático de cartera) y marca recaudo.siesa_nc_triggered=True (bridge en
+    siesa_job_service.py), que es lo que destraba el RC dependiente.
     """
     tarea = recaudo.tarea
     if not tarea:
@@ -820,18 +827,19 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     monto = float(recaudo.monto_cobrado or 0)
     resultado = {'rc': 0, 'nc': 0, 'dc': 0, 'credito': 0, 'ya_procesado': 0}
 
-    # ── RECHAZADO: NC total ──────────────────────────────────────
+    # ── RECHAZADO: devolución pendiente total (recepción confirma → NC) ──
     if estado == EstadoEntrega.RECHAZADO:
         if recaudo.siesa_nc_triggered:
             resultado['ya_procesado'] = 1
             return resultado
-        _encolar_nota_credito(
-            recaudo, tipo_docto_fe, consec_fe,
+        if _crear_devolucion_pendiente(
+            recaudo, tarea, tipo_docto_fe, consec_fe,
             items_devueltos=None,  # None = devolución total
             notas=f'{notas_base} | RECHAZADO total',
-            admin_id=admin_id,
-        )
-        resultado['nc'] = 1
+        ):
+            resultado['nc'] = 1
+        else:
+            resultado['ya_procesado'] = 1
         return resultado
 
     # ── CRÉDITO + ENTREGADO: noop ────────────────────────────────
@@ -839,28 +847,28 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
         resultado['credito'] = 1
         return resultado
 
-    # ── CRÉDITO + PARCIAL: solo NC ───────────────────────────────
+    # ── CRÉDITO + PARCIAL: devolución pendiente (recepción confirma → NC) ──
     if es_credito and estado == EstadoEntrega.PARCIAL:
         if recaudo.siesa_nc_triggered:
             resultado['ya_procesado'] = 1
             return resultado
-        _encolar_nota_credito(
-            recaudo, tipo_docto_fe, consec_fe,
+        if _crear_devolucion_pendiente(
+            recaudo, tarea, tipo_docto_fe, consec_fe,
             items_devueltos=recaudo.items_entregados,
             notas=f'{notas_base} | PARCIAL crédito — devolución',
-            admin_id=admin_id,
-        )
-        resultado['nc'] = 1
+        ):
+            resultado['nc'] = 1
+        else:
+            resultado['ya_procesado'] = 1
         return resultado
 
-    # ── CONTADO + PARCIAL: NC → luego RC (secuencial) ────────────
+    # ── CONTADO + PARCIAL: devolución pendiente → RC espera esa NC ──────
     if not es_credito and estado == EstadoEntrega.PARCIAL:
         if not recaudo.siesa_nc_triggered:
-            _encolar_nota_credito(
-                recaudo, tipo_docto_fe, consec_fe,
+            _crear_devolucion_pendiente(
+                recaudo, tarea, tipo_docto_fe, consec_fe,
                 items_devueltos=recaudo.items_entregados,
                 notas=f'{notas_base} | PARCIAL contado — devolución',
-                admin_id=admin_id,
             )
             resultado['nc'] = 1
 
@@ -973,6 +981,116 @@ def _encolar_nota_credito(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         '[LIQUIDACION] Encolado NOTA_CREDITO_FACTURA para recaudo %d (FE %s-%s)',
         recaudo.id, tipo_docto_fe, consec_fe
     )
+
+
+def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: str,
+                                 consec_fe, items_devueltos, notas: str) -> bool:
+    """
+    "Liquidar en WMS" ya no crea la NC directo (250696, sin cruce automático
+    de cartera) — arma una DevolucionCliente ABIERTA con recaudo_entrega_id
+    apuntando a este recaudo. La recepcionista la confirma en el módulo de
+    Devoluciones (251126, con cruce automático de cartera) — eso dispara la
+    NC real, y el bridge en siesa_job_service.py (job
+    NOTA_CREDITO_DEVOLUCION_CLIENTE) marca recaudo.siesa_nc_triggered=True
+    al terminar, destrabando el RECIBO_CAJA que dependa de esa NC.
+
+    Quién decide qué se devolvió pasa de "lo que declaró el conductor en la
+    calle" a "lo que la recepcionista contó físicamente" — la razón real de
+    este cambio, no solo evitar la NC duplicada.
+
+    items_devueltos=None → devolución total (Rechazado): todas las líneas
+    reales de la factura, cantidad completa. Si no, solo las líneas con
+    cantidad_devuelta > 0 que declaró el conductor (ver RecaudoEntrega.
+    items_entregados) — la recepcionista puede ajustarlas antes de confirmar.
+
+    Devuelve False sin hacer nada si ya existe una devolución (ABIERTA o
+    CONFIRMADA) para este recaudo — evita duplicar el pendiente si
+    "Liquidar en WMS" se vuelve a apretar antes de que la recepcionista
+    confirme la primera vez.
+    """
+    from app.models.devolucion_cliente import DevolucionCliente
+    from app.models.producto import Producto
+    from app.services.connekta_gateway import connekta
+    from app.services.devolucion_cliente_service import DevolucionClienteService
+
+    ya_existe = (DevolucionCliente.query
+                 .filter_by(recaudo_entrega_id=recaudo.id)
+                 .filter(DevolucionCliente.estado != 'CANCELADA')
+                 .first())
+    if ya_existe:
+        logger.info(
+            '[LIQUIDACION] recaudo %d ya tiene devolución pendiente %s — no se duplica',
+            recaudo.id, ya_existe.codigo
+        )
+        return False
+
+    rowids_data = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
+    if not rowids_data:
+        raise ValueError(
+            f'No se obtuvieron líneas de FE {tipo_docto_fe}-{consec_fe} — '
+            'no se puede armar la devolución pendiente'
+        )
+
+    declarado_por_codigo = None  # None = total, dict = parcial
+    if items_devueltos:
+        declarado_por_codigo = {}
+        for it in items_devueltos:
+            cant = it.get('cantidad_devuelta') or it.get('devuelto', 0)
+            if float(cant or 0) > 0:
+                declarado_por_codigo[it.get('codigo')] = float(cant)
+
+    lineas = []
+    for row in rowids_data:
+        ref = (row.get('f120_referencia') or '').strip()
+        if not ref:
+            continue
+        producto = Producto.query.filter_by(codigo_siesa=ref).first()
+        if not producto:
+            logger.warning(
+                '[LIQUIDACION] devolución pendiente recaudo %d: referencia Siesa %r '
+                'sin producto WMS — omitida', recaudo.id, ref
+            )
+            continue
+        cant_facturada = float(row.get('f470_cant_base') or 0)
+        if declarado_por_codigo is None:
+            cant_devuelta = cant_facturada
+        else:
+            cant_devuelta = declarado_por_codigo.get(producto.codigo, 0)
+        if cant_devuelta <= 0:
+            continue
+        lineas.append({
+            'producto_id': producto.id,
+            'codigo_siesa': ref,
+            'cantidad_facturada': cant_facturada,
+            'cantidad_devuelta': min(cant_devuelta, cant_facturada),
+            'f470_id_unidad_medida': (row.get('f470_id_unidad_medida') or '').strip(),
+            'f150_id_bodega': (row.get('f150_id') or '').strip(),
+            'f470_rowid': str(row.get('f470_rowid') or ''),
+        })
+
+    if not lineas:
+        raise ValueError(
+            f'Sin líneas para armar la devolución pendiente del recaudo {recaudo.id} — '
+            'revisar códigos declarados por el conductor vs factura real en Siesa'
+        )
+
+    DevolucionClienteService.crear_devolucion(
+        tarea_packing_id=tarea.id,
+        tipo_docto_fe=tipo_docto_fe,
+        consec_fe=consec_fe,
+        almacen_id=tarea.almacen_id,
+        recepcionista_id=None,
+        lineas=lineas,
+        es_total=(declarado_por_codigo is None),
+        observaciones=notas,
+        recaudo_entrega_id=recaudo.id,
+        commit=False,
+    )
+    logger.info(
+        '[LIQUIDACION] Devolución pendiente creada para recaudo %d (FE %s-%s, %d línea(s))',
+        recaudo.id, tipo_docto_fe, consec_fe, len(lineas)
+    )
+    return True
 
 
 def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,

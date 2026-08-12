@@ -321,3 +321,111 @@ class TestNotaCreditoDevolucionCliente:
         db.session.refresh(devolucion)
         assert devolucion.siesa_nc_triggered is True
         assert devolucion.siesa_nc_triggered_at is not None
+
+    def test_bridge_marca_siesa_nc_triggered_en_recaudo_de_ruta(self, app, db, almacen, producto):
+        """Devolución originada en Liquidación de ruta (_crear_devolucion_pendiente,
+        recaudo_entrega_id seteado) — al confirmarse la NC acá, el RecaudoEntrega
+        de origen también debe quedar siesa_nc_triggered=True, porque es lo que
+        el RECIBO_CAJA dependiente (depende_de_nc) está esperando para dispararse."""
+        from app.models.usuario import Usuario
+        from app.models.conductor import Conductor
+        from app.models.ruta_despacho import RutaDespacho
+        from app.models.packing import TareaPacking
+        from app.models.recaudo_entrega import RecaudoEntrega
+
+        user = Usuario(email='cond_bridge@test.com', nombre='Conductor Bridge',
+                        rol='conductor', activo=True)
+        user.set_password('test123')
+        db.session.add(user)
+        db.session.flush()
+        conductor = Conductor(usuario_id=user.id, nombre='Conductor Bridge',
+                               cedula='9998877', activo=True)
+        db.session.add(conductor)
+        db.session.flush()
+        ruta = RutaDespacho(conductor_id=conductor.id, tipo_ruta='Urbana', estado='ENTREGADA')
+        db.session.add(ruta)
+        db.session.flush()
+        tarea = TareaPacking(
+            codigo='PK-BRIDGE-DLQ', estado='DESPACHADO', almacen_id=almacen.id,
+            tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa=777,
+            numero_pedido_siesa='PED-BRIDGE',
+        )
+        db.session.add(tarea)
+        db.session.flush()
+        recaudo = RecaudoEntrega(
+            ruta_id=ruta.id, tarea_id=tarea.id, estado_entrega='PARCIAL',
+            forma_pago='EFECTIVO', monto_cobrado=40000, siesa_nc_triggered=False,
+        )
+        db.session.add(recaudo)
+        db.session.flush()
+
+        devolucion = self._make_devolucion(db, almacen, siesa_nc_triggered=False)
+        devolucion.recaudo_entrega_id = recaudo.id
+        db.session.commit()
+
+        from app.models.siesa_job import SiesaJob
+        job = SiesaJob.encolar('NOTA_CREDITO_DEVOLUCION_CLIENTE', {
+            'devolucion_id': devolucion.id,
+            'tipo_docto_fe': 'FEW', 'consec_fe': '5555',
+            'items_devueltos': [{'codigo': producto.codigo_siesa, 'cantidad_devuelta': 4}],
+            'es_total': False,
+        })
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            mc.causal_devolucion_default = '01'
+            mc.motivo_ventas = '01'
+            mc.uom_default = 'UND'
+            mc.bodega = 'NB1'
+            mc.bodega_averias = 'AV1'
+            mc.get_rowids_factura.return_value = [{
+                'f470_rowid': '999', 'f120_referencia': producto.codigo_siesa,
+                'f470_cant_base': 10, 'f470_id_unidad_medida': 'UND', 'f150_id': 'NB1',
+                'f470_vlr_neto': 1000,
+            }]
+            mc.trigger_nota_factura_crear_cruzar.return_value = {'codigo': 0}
+            from app.services.siesa_job_service import _ejecutar_job
+            _ejecutar_job(job)
+
+        db.session.refresh(devolucion)
+        assert devolucion.siesa_nc_triggered is True
+
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_nc_triggered is True
+
+    def test_bridge_no_toca_recaudo_sin_recaudo_entrega_id(self, app, db, almacen, producto):
+        """Una devolución armada normal por recepción (recaudo_entrega_id=None,
+        el caso de siempre) no debe intentar tocar ningún RecaudoEntrega."""
+        devolucion = self._make_devolucion(db, almacen, siesa_nc_triggered=False)
+        assert devolucion.recaudo_entrega_id is None
+
+        from app.models.siesa_job import SiesaJob
+        job = SiesaJob.encolar('NOTA_CREDITO_DEVOLUCION_CLIENTE', {
+            'devolucion_id': devolucion.id,
+            'tipo_docto_fe': 'FEW', 'consec_fe': '5555',
+            'items_devueltos': [{'codigo': producto.codigo_siesa, 'cantidad_devuelta': 4}],
+            'es_total': False,
+        })
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.modo_simulacion = False
+            mc.causal_devolucion_default = '01'
+            mc.motivo_ventas = '01'
+            mc.uom_default = 'UND'
+            mc.bodega = 'NB1'
+            mc.bodega_averias = 'AV1'
+            mc.get_rowids_factura.return_value = [{
+                'f470_rowid': '999', 'f120_referencia': producto.codigo_siesa,
+                'f470_cant_base': 10, 'f470_id_unidad_medida': 'UND', 'f150_id': 'NB1',
+                'f470_vlr_neto': 1000,
+            }]
+            mc.trigger_nota_factura_crear_cruzar.return_value = {'codigo': 0}
+            from app.services.siesa_job_service import _ejecutar_job
+            resultado = _ejecutar_job(job)
+
+        db.session.refresh(devolucion)
+        assert devolucion.siesa_nc_triggered is True
+        # No debe reventar ni intentar nada raro por no tener recaudo vinculado
+        assert 'consec_nc' in resultado or resultado is not None

@@ -1213,8 +1213,10 @@ async function cargarDevoluciones(silencioso = false) {
         </div>`).join('');
     }
 
+    html += `<div id="panel-pendientes-ruta"></div>`;
+
     html += `
-      <div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 8px;border-bottom:1px solid #222;margin-bottom:10px;margin-top:${rechazados.length ? 16 : 0}px;">
+      <div style="font-size:12px;font-weight:600;color:#aaa;padding:4px 0 8px;border-bottom:1px solid #222;margin-bottom:10px;margin-top:16px;">
         DEVOLUCIÓN DE CLIENTE
       </div>
       <div class="rec-card">
@@ -1234,6 +1236,8 @@ async function cargarDevoluciones(silencioso = false) {
 
     el.innerHTML = html;
 
+    cargarPendientesDeRuta();
+
     // Solo admin/jefe_almacen — coincide con el gate del backend (Roles.SUPERVISION)
     if (OPERARIO && ['admin', 'jefe_almacen'].includes(OPERARIO.rol)) {
       cargarPendientesAprobacionNC();
@@ -1242,6 +1246,53 @@ async function cargarDevoluciones(silencioso = false) {
     if (badge) badge.style.display = 'none';
     el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando devoluciones</div>';
   }
+}
+
+/**
+ * Devoluciones que Liquidación de ruta armó solas (entrega Parcial/Rechazada
+ * de un conductor) y siguen esperando que recepción las confirme. Ya vienen
+ * con las líneas exactas — parcial trae solo lo que el conductor declaró
+ * devuelto, total trae el pedido completo — la recepcionista solo verifica
+ * y ajusta si hace falta, no arma nada desde cero.
+ */
+async function cargarPendientesDeRuta() {
+  const cont = document.getElementById('panel-pendientes-ruta');
+  if (!cont) return;
+  try {
+    const r = await get('/api/devoluciones/pendientes-de-ruta');
+    const pendientes = r.pendientes || [];
+    if (!pendientes.length) { cont.innerHTML = ''; return; }
+
+    cont.innerHTML = `
+      <div style="font-size:12px;font-weight:600;color:#93c5fd;padding:4px 0 8px;border-bottom:1px solid #0f2a3f;margin-bottom:10px;">
+        🔵 ${pendientes.length} DEVOLUCIÓN${pendientes.length !== 1 ? 'ES' : ''} DE RUTA PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE CONFIRMAR
+      </div>` +
+      pendientes.map(d => `
+        <div class="rec-card" style="border-color:#1e3a5f;background:#0a1420;margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${d.id})">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+            <div>
+              <div class="rec-titulo" style="font-size:14px;">${d.numero_pedido_siesa || '—'}</div>
+              <div class="rec-sub">${d.cliente || 'Cliente sin nombre'}</div>
+            </div>
+            <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;background:${d.es_total ? '#3a1616' : '#1a2a1a'};color:${d.es_total ? '#f3a79f' : '#86efac'};">
+              ${d.es_total ? 'DEVOLUCIÓN TOTAL' : 'DEVOLUCIÓN PARCIAL'}
+            </span>
+          </div>
+          <div style="margin-top:8px;font-size:12px;color:#93c5fd;">
+            ${d.lineas.length} referencia${d.lineas.length !== 1 ? 's' : ''} · toca para verificar y confirmar
+          </div>
+        </div>`).join('');
+  } catch (e) {
+    cont.innerHTML = '';
+  }
+}
+
+/** Abre la pantalla de confirmación con una devolución de ruta ya armada. */
+function abrirPendienteDeRuta(devolucionId) {
+  get('/api/devoluciones/' + devolucionId).then(devolucion => {
+    DEVOLUCION_ACTUAL = devolucion;
+    renderLineasDevolucion(devolucion);
+  }).catch(() => alerta('No se pudo abrir la devolución', 'error'));
 }
 
 /**
@@ -1323,16 +1374,22 @@ function renderLineasDevolucion(datos) {
   const el = document.getElementById('contenido-devoluciones');
   if (!el) return;
 
+  // Si datos.id existe, es una devolución que Liquidación de ruta ya armó
+  // (ver abrirPendienteDeRuta) — las cantidades vienen precargadas con lo
+  // que el conductor declaró; la recepcionista verifica/ajusta, no cuenta
+  // desde cero. Si no, es la búsqueda manual de siempre (todo en 0).
+  const esPendienteDeRuta = !!datos.id;
+
   const filas = (datos.lineas || []).map((l, i) => `
     <div class="rec-card" style="margin-bottom:10px;">
       <div style="font-size:16px;font-weight:700;">${l.producto_nombre}</div>
       <div style="font-size:12px;color:#666;margin-bottom:8px;">${l.producto_codigo} · Facturado: ${l.cantidad_facturada}</div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span style="font-size:12px;color:#aaa;">Devuelto:</span>
-        <input id="cant-dev-${i}" type="number" min="0" max="${l.cantidad_facturada}" step="1" value="0"
+        <input id="cant-dev-${i}" type="number" min="0" max="${l.cantidad_facturada}" step="1" value="${l.cantidad_devuelta || 0}"
           style="width:90px;padding:10px;background:#111;border:1px solid #333;border-radius:8px;color:#fff;font-size:16px;text-align:center;" />
         <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#f87171;cursor:pointer;margin-left:auto;">
-          <input id="averiado-dev-${i}" type="checkbox" style="width:18px;height:18px;" /> Averiado
+          <input id="averiado-dev-${i}" type="checkbox" style="width:18px;height:18px;" ${l.es_averiado ? 'checked' : ''} /> Averiado
         </label>
       </div>
     </div>`).join('');
@@ -1346,7 +1403,13 @@ function renderLineasDevolucion(datos) {
       <span style="font-size:14px;font-weight:700;">Pedido ${datos.numero_pedido_siesa} · ${datos.cliente || '—'}</span>
     </div>
 
+    ${esPendienteDeRuta ? `
+    <div style="margin-bottom:10px;padding:10px 12px;background:#0a1420;border:1px solid #1e3a5f;border-radius:8px;font-size:12px;color:#93c5fd;">
+      🔵 Declarado por el conductor en la entrega — verifica físicamente y ajusta si algo no coincide antes de confirmar.
+    </div>
+    ` : `
     <div style="font-size:12px;color:#666;margin-bottom:10px;">Cuenta cuánto trajo el conductor de cada línea — deja en 0 lo que no se devolvió</div>
+    `}
 
     ${filas}
 
@@ -1379,24 +1442,53 @@ async function confirmarDevolucionCliente() {
       f150_id_bodega: l.f150_id_bodega,
       f470_rowid: l.f470_rowid,
     };
-  }).filter(l => l.cantidad_devuelta > 0);
+  });
 
-  if (!lineas.length) { alerta('Cuenta al menos una unidad devuelta', 'advertencia'); return; }
+  const esPendienteDeRuta = !!datos.id;
+  let devolucionId = datos.id;
+
+  if (esPendienteDeRuta) {
+    // Ya existe (Liquidación de ruta la armó) — no se crea de nuevo, solo se
+    // confirma con lo que la recepcionista verificó/ajustó. Se manda TODO,
+    // incluidas las líneas en 0 — así el backend sabe cuáles bajar, no solo
+    // cuáles quedan igual.
+    if (estado) { estado.textContent = '⏳ Ingresando stock y generando Nota Crédito...'; estado.style.color = '#93c5fd'; }
+    try {
+      await post(`/api/devoluciones/${devolucionId}/confirmar`, { lineas });
+    } catch (e) {
+      if (estado) {
+        estado.innerHTML = `Error al confirmar: ${e.status ? e.message : 'Error de conexión'}<br>
+          <button onclick="reintentarConfirmarDevolucion(${devolucionId})"
+            style="margin-top:8px;padding:8px 14px;background:#f59e0b;color:#000;border:none;border-radius:8px;cursor:pointer;">
+            Reintentar confirmación
+          </button>`;
+        estado.style.color = '#ef4444';
+      }
+      return;
+    }
+    vibrar(); flash();
+    alerta('✓ Devolución confirmada — stock ingresado, Nota Crédito en proceso', 'exito');
+    DEVOLUCION_ACTUAL = null;
+    setTimeout(cargarDevoluciones, 800);
+    return;
+  }
+
+  const lineasNuevas = lineas.filter(l => l.cantidad_devuelta > 0);
+  if (!lineasNuevas.length) { alerta('Cuenta al menos una unidad devuelta', 'advertencia'); return; }
 
   const esTotal = (datos.lineas || []).every(l => {
-    const encontrada = lineas.find(x => x.codigo_siesa === l.codigo_siesa);
+    const encontrada = lineasNuevas.find(x => x.codigo_siesa === l.codigo_siesa);
     return !!encontrada && encontrada.cantidad_devuelta === l.cantidad_facturada;
   });
 
   if (estado) { estado.textContent = '⏳ Creando devolución...'; estado.style.color = '#93c5fd'; }
-  let devolucionId;
   try {
     const rCrear = await post('/api/devoluciones/', {
       tarea_packing_id: datos.tarea_packing_id,
       tipo_docto_fe: datos.tipo_docto_fe,
       consec_fe: datos.consec_fe,
       almacen_id: datos.almacen_id,
-      lineas,
+      lineas: lineasNuevas,
       es_total: esTotal
     });
     devolucionId = rCrear.devolucion.id;

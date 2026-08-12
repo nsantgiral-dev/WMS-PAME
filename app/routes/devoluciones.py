@@ -94,8 +94,10 @@ def confirmar_devolucion(devolucion_id):
     usuario = _es_recepcion()
     if not usuario:
         return jsonify({'error': 'Sin permiso para confirmar devoluciones'}), 403
+    data = request.get_json(silent=True) or {}
     try:
-        devolucion = DevolucionClienteService.confirmar_entrada_fisica(devolucion_id, usuario.id)
+        devolucion = DevolucionClienteService.confirmar_entrada_fisica(
+            devolucion_id, usuario.id, lineas_ajustadas=data.get('lineas'))
         return jsonify({
             'mensaje': 'Devolución confirmada — stock ingresado, Nota Crédito en proceso hacia Siesa',
             'devolucion': devolucion.to_dict(),
@@ -124,6 +126,20 @@ def cancelar_devolucion(devolucion_id):
         return jsonify({'mensaje': 'Devolución cancelada', 'devolucion': devolucion.to_dict()}), 200
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
+
+
+@devoluciones_bp.route('/pendientes-de-ruta', methods=['GET'])
+@jwt_required()
+def pendientes_de_ruta():
+    """
+    Devoluciones que Liquidación de ruta armó automáticamente (entrega
+    Parcial/Rechazada) y siguen esperando que recepción las confirme
+    físicamente — ya vienen con las líneas exactas, por pedido.
+    """
+    if not _es_recepcion():
+        return jsonify({'error': 'Sin permiso para ver devoluciones'}), 403
+    pendientes = DevolucionClienteService.listar_pendientes_de_ruta()
+    return jsonify({'pendientes': pendientes, 'total': len(pendientes)}), 200
 
 
 @devoluciones_bp.route('/pendientes-aprobacion-nc', methods=['GET'])

@@ -62,6 +62,17 @@ def _run_procesar(recaudo, db):
         return resultado
 
 
+def _mock_rowids_una_linea(codigo_siesa='PROD-001', cant_base=5, vlr_neto=100000):
+    """PARCIAL/RECHAZADO ahora arman una DevolucionCliente (_crear_devolucion_pendiente)
+    que necesita get_rowids_factura real para construir sus líneas — antes
+    _encolar_nota_credito no tocaba Siesa en este punto, solo encolaba el job."""
+    return patch('app.services.connekta_gateway.connekta.get_rowids_factura', return_value=[{
+        'f120_referencia': codigo_siesa, 'f470_cant_base': cant_base,
+        'f470_vlr_neto': vlr_neto, 'f470_id_unidad_medida': 'UND',
+        'f150_id': 'NB1', 'f470_rowid': '123',
+    }])
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Flujos principales
 # ═══════════════════════════════════════════════════════════════════
@@ -105,22 +116,36 @@ class TestContadoEntregado:
 
 class TestContadoParcial:
 
-    def test_parcial_contado_encola_nc_y_rc(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000)
-        resultado = _run_procesar(recaudo, db)
+    def test_parcial_contado_encola_nc_y_rc(self, app, db, recaudo_liq, producto):
+        items = [{'codigo': producto.codigo, 'cantidad_devuelta': 2}]
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000, items_ent=items)
+        with _mock_rowids_una_linea(codigo_siesa=producto.codigo_siesa):
+            resultado = _run_procesar(recaudo, db)
         assert resultado['nc'] == 1
         assert resultado['rc'] == 1
 
         from app.models.siesa_job import SiesaJob
-        nc = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='NOTA_CREDITO_FACTURA').all()
+        from app.models.devolucion_cliente import DevolucionCliente
         rc = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='RECIBO_CAJA').all()
-        assert len(nc) == 1
         assert len(rc) == 1
+        # NC ya no se encola directo — se arma una devolución pendiente que
+        # recepción confirma; ESO dispara la NC real (251126).
+        assert SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='NOTA_CREDITO_FACTURA').count() == 0
+        devolucion = DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first()
+        assert devolucion is not None
+        assert devolucion.estado == 'ABIERTA'
+        assert devolucion.es_total is False
+        assert len(devolucion.lineas) == 1
+        assert float(devolucion.lineas[0].cantidad_devuelta) == 2
 
-    def test_parcial_rc_depende_de_nc(self, app, db, recaudo_liq):
-        """RC de parcial contado debe tener depende_de_nc=True."""
-        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000)
-        _run_procesar(recaudo, db)
+    def test_parcial_rc_depende_de_nc(self, app, db, recaudo_liq, producto):
+        """RC de parcial contado debe tener depende_de_nc=True — sigue esperando
+        a que la NC salga, solo que ahora la dispara recepción al confirmar la
+        devolución pendiente, no Liquidación directo."""
+        items = [{'codigo': producto.codigo, 'cantidad_devuelta': 2}]
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=800000, items_ent=items)
+        with _mock_rowids_una_linea(codigo_siesa=producto.codigo_siesa):
+            _run_procesar(recaudo, db)
 
         import json
         from app.models.siesa_job import SiesaJob
@@ -145,27 +170,40 @@ class TestCreditoEntregado:
 
 class TestCreditoParcial:
 
-    def test_credito_parcial_solo_nc(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='PARCIAL', pago='CREDITO', monto=0)
-        resultado = _run_procesar(recaudo, db)
+    def test_credito_parcial_solo_nc(self, app, db, recaudo_liq, producto):
+        items = [{'codigo': producto.codigo, 'cantidad_devuelta': 1}]
+        recaudo = recaudo_liq(estado='PARCIAL', pago='CREDITO', monto=0, items_ent=items)
+        with _mock_rowids_una_linea(codigo_siesa=producto.codigo_siesa):
+            resultado = _run_procesar(recaudo, db)
         assert resultado['nc'] == 1
         assert resultado['rc'] == 0
         assert resultado['dc'] == 0
 
+        from app.models.devolucion_cliente import DevolucionCliente
+        devolucion = DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first()
+        assert devolucion is not None
+        assert devolucion.es_total is False
+
 
 class TestRechazado:
 
-    def test_rechazado_encola_nc_total(self, app, db, recaudo_liq):
+    def test_rechazado_encola_nc_total(self, app, db, recaudo_liq, producto):
         recaudo = recaudo_liq(estado='RECHAZADO', pago='EFECTIVO', monto=0)
-        resultado = _run_procesar(recaudo, db)
+        with _mock_rowids_una_linea(codigo_siesa=producto.codigo_siesa):
+            resultado = _run_procesar(recaudo, db)
         assert resultado['nc'] == 1
         assert resultado['rc'] == 0
 
-        import json
+        # Ya no se encola NOTA_CREDITO_FACTURA directo — Rechazado arma una
+        # devolución pendiente TOTAL (todas las líneas de la factura real).
         from app.models.siesa_job import SiesaJob
-        nc = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='NOTA_CREDITO_FACTURA').first()
-        payload = json.loads(nc.payload)
-        assert payload.get('es_total') is True
+        from app.models.devolucion_cliente import DevolucionCliente
+        assert SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='NOTA_CREDITO_FACTURA').count() == 0
+        devolucion = DevolucionCliente.query.filter_by(recaudo_entrega_id=recaudo.id).first()
+        assert devolucion is not None
+        assert devolucion.es_total is True
+        assert len(devolucion.lineas) == 1
+        assert float(devolucion.lineas[0].cantidad_devuelta) == 5  # = cant_base mockeada (línea completa)
 
     def test_rechazado_ya_procesado(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='RECHAZADO', pago='EFECTIVO', nc=True)

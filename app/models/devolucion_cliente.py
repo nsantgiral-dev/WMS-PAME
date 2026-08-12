@@ -32,6 +32,13 @@ class DevolucionCliente(db.Model):
     tarea_packing_id = db.Column(db.Integer, db.ForeignKey('tareas_packing.id'), nullable=False)
     numero_pedido_siesa = db.Column(db.String(50))  # solo referencia/display
 
+    # NULL = devolución armada desde cero por la recepcionista (flujo original).
+    # No-NULL = se originó en una entrega Parcial/Rechazada de ruta (Liquidación
+    # "Liquidar en WMS") — al confirmar esta devolución, el job
+    # NOTA_CREDITO_DEVOLUCION_CLIENTE también marca siesa_nc_triggered=True en
+    # ese RecaudoEntrega, destrabando el RECIBO_CAJA que depende de esa NC.
+    recaudo_entrega_id = db.Column(db.Integer, db.ForeignKey('recaudos_entrega.id'), nullable=True)
+
     # Tipo/consec REALES de la factura electrónica (de connekta.get_detalle_factura),
     # NUNCA los _pedido_siesa de TareaPacking — ver hallazgo del DOCX 142946 en el plan.
     tipo_docto_fe = db.Column(db.String(20), nullable=False)
@@ -76,6 +83,7 @@ class DevolucionCliente(db.Model):
 
     # Relaciones
     tarea_packing = db.relationship('TareaPacking', lazy=True)
+    recaudo_entrega = db.relationship('RecaudoEntrega', lazy=True)
     almacen = db.relationship('Almacen', lazy=True)
     recepcionista = db.relationship('Usuario', lazy=True, foreign_keys=[recepcionista_id])
     nc_aprobada_por = db.relationship('Usuario', lazy=True, foreign_keys=[nc_aprobada_siesa_por])
@@ -88,6 +96,7 @@ class DevolucionCliente(db.Model):
             'codigo': self.codigo,
             'tarea_packing_id': self.tarea_packing_id,
             'numero_pedido_siesa': self.numero_pedido_siesa,
+            'recaudo_entrega_id': self.recaudo_entrega_id,
             'tipo_docto_fe': self.tipo_docto_fe,
             'consec_fe': self.consec_fe,
             'cliente': self.cliente,
