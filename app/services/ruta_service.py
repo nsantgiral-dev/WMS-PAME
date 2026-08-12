@@ -612,16 +612,18 @@ class RutaService:
             if r.tarea_id in tareas_map:
                 tareas_map[r.tarea_id]['recaudo'] = r.to_dict()
 
-        # Precarga valor_factura/es_contado — una vez, cuando el conductor abre
-        # la lista. El resultado completo (`d`) se cachea entero en el
-        # dispositivo (ver condAbrirParadas en rutas.js), así que esto es lo
-        # único que necesita conectividad; la confirmación de cada parada ya
-        # funciona offline sin volver a tocar Siesa.
+        # Precarga valor_factura/es_contado/valores por referencia — una vez,
+        # cuando el conductor abre la lista. El resultado completo (`d`) se
+        # cachea entero en el dispositivo (ver condAbrirParadas en rutas.js),
+        # así que esto es lo único que necesita conectividad; la confirmación
+        # de cada parada ya funciona offline sin volver a tocar Siesa.
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
-            valor_factura, es_contado = RutaService._valor_y_cond_pago(t)
+            valor_factura, es_contado, valores_ref = RutaService._valor_y_cond_pago(t)
             p['valor_factura'] = valor_factura
             p['es_contado']    = es_contado
+            for item in p['items']:
+                item['valor_unitario'] = valores_ref.get(item['codigo'])
 
         paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
         # Ojo: `paradas` está indexado por tarea_id, así que cada entrada es una
@@ -648,29 +650,43 @@ class RutaService:
 
     @staticmethod
     def _valor_y_cond_pago(tarea) -> tuple:
-        """`(valor_factura, es_contado)` de la FE real de una tarea, o
-        `(None, None)` si Siesa no responde — nunca levanta. Alimenta el
-        toggle Pago Total/Parcial del conductor; si no hay dato, el frontend
-        cae al campo libre de siempre (sin bloquear la pantalla).
+        """`(valor_factura, es_contado, valores_por_referencia)` de la FE real
+        de una tarea. Cualquiera puede salir `None`/`{}` si Siesa no responde
+        — nunca levanta. Alimenta el toggle Pago Total/Parcial del conductor
+        y el recálculo en vivo cuando ajusta cantidades entregadas; si falta
+        el dato, el frontend cae al campo libre de siempre (sin bloquear la
+        pantalla).
 
         `es_contado`: igual criterio que `trigger_factura_desde_remision` en
         connekta_gateway.py — cond_pago vacío se trata como contado (mismo
         fallback que ya se usa al facturar), y CONTADO = coincide con
         `SIESA_COND_PAGO_VENTAS`. Cualquier otra condición (30D, C30...) es
         crédito.
+
+        `valores_por_referencia`: `{codigo: valor_neto_unitario}` — el valor
+        real de Siesa por unidad de cada línea (`f470_vlr_neto / f470_cant_base`),
+        para poder restar exactamente lo que vale una devolución parcial en
+        vez de prorratear el total de la factura a ojo.
         """
         from app.services.connekta_gateway import connekta
         from app.services.fe_resolver import resolver_fe_o_none
 
         tipo_fe, consec_fe = resolver_fe_o_none(tarea)
         if not tipo_fe or not consec_fe:
-            return None, None
+            return None, None, {}
 
         valor_factura = None
+        valores_por_referencia = {}
         try:
             lineas = connekta.get_rowids_factura(tipo_fe, consec_fe)
             if lineas:
                 valor_factura = round(sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas), 2)
+                for ln in lineas:
+                    codigo = str(ln.get('f120_referencia', '')).strip()
+                    cant = float(ln.get('f470_cant_base', 0) or 0)
+                    vlr_neto = float(ln.get('f470_vlr_neto', 0) or 0)
+                    if codigo and cant > 0:
+                        valores_por_referencia[codigo] = round(vlr_neto / cant, 4)
         except Exception as e:
             logger.warning('[RUTAS] valor_factura falló para tarea %s (FE %s-%s): %s',
                             tarea.id, tipo_fe, consec_fe, e)
@@ -684,7 +700,7 @@ class RutaService:
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
-        return valor_factura, es_contado
+        return valor_factura, es_contado, valores_por_referencia
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:
@@ -704,7 +720,10 @@ class RutaService:
         if forma_pago and forma_pago not in FormaPago.VALIDOS:
             raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
 
-        # Validación de campos obligatorios por estado
+        # Validación de campos obligatorios por estado. Entregado y Parcial
+        # pasan por el mismo toggle Pago Total/Parcial en el conductor — los
+        # dos capturan forma de pago y monto contra el valor real (completo o
+        # ajustado por lo devuelto).
         if estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
             if not forma_pago:
                 raise ValueError('Forma de pago es obligatoria para registrar una entrega')
@@ -756,8 +775,10 @@ class RutaService:
         bultos_rechazados_ids = data.get('bultos_rechazados', [])
         if estado_entrega == EstadoEntrega.RECHAZADO and not bultos_rechazados_ids:
             bultos_rechazados_ids = [b.id for b in bultos_tarea]
-        if estado_entrega == EstadoEntrega.PARCIAL and not bultos_rechazados_ids:
-            raise ValueError('Para entrega parcial debes indicar cuáles bultos fueron rechazados')
+        # PARCIAL no exige seleccionar bultos rechazados — la devolución se
+        # rastrea por referencia (items_entregados), no por bulto completo.
+        # Los bultos de esta tarea quedan ENTREGADO (el checklist de "bulto
+        # rechazado" es exclusivo de RECHAZADO).
 
         ahora = datetime.utcnow()
         ids_rechazados_set = set(bultos_rechazados_ids)

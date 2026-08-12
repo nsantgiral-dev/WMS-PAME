@@ -1862,6 +1862,22 @@ function condAbrirFormParada(idx) {
   _condRenderFormParada();
 }
 
+/**
+ * Cantidades entregadas/devueltas actuales por referencia, leyendo los
+ * inputs en vivo (o el valor precargado si el DOM aún no se tocó).
+ * Fuente única para "hay ajuste", el recálculo de valor y el payload final.
+ */
+function _condItemsAjustados() {
+  const p = _COND_PARADA_FORM;
+  if (!p || !p.items) return [];
+  return p.items.map((it, idx) => {
+    const pedido = it.cantidad_pedida || 0;
+    const inp = document.getElementById('item-entregado-' + idx);
+    const entregado = inp ? Math.max(0, Math.min(parseInt(inp.value) || 0, pedido)) : pedido;
+    return { ...it, idx, pedido, entregado, devuelto: pedido - entregado };
+  });
+}
+
 /** Renderiza el formulario de confirmacion de parada con estado, pago, foto y items. */
 function _condRenderFormParada() {
   const el = document.getElementById('cond-contenido');
@@ -1869,16 +1885,26 @@ function _condRenderFormParada() {
   if (!el || !p) return;
 
   const r = p.recaudo;
-  const estadoActual = r ? r.estado_entrega : 'ENTREGADO';
+  // RESULTADO ya solo tiene 2 opciones — "parcial" no es un botón, surge
+  // solo si el conductor ajusta alguna cantidad en Referencias. Un recaudo
+  // viejo con estado_entrega=PARCIAL se edita igual que un Entregado.
+  const estadoUi = (r && r.estado_entrega === 'RECHAZADO') ? 'RECHAZADO' : 'ENTREGADO';
   const formaActual  = r ? (r.forma_pago || '') : '';
   const montoActual  = r ? (r.monto_cobrado || 0) : 0;
   const obsActual    = r ? (r.observaciones || '') : '';
   const rechazadosActuales = r ? (r.bultos_rechazados_ids || []) : [];
 
-  // Total/Parcial solo aplica a entrega completa de pedidos de contado, y
-  // solo si Siesa respondió el valor de la factura al abrir la ruta — si
-  // faltó (offline, Siesa caída), cae al campo libre de siempre.
-  const mostrarTotalParcial = estadoActual === 'ENTREGADO' && p.es_contado === true && p.valor_factura != null;
+  // Valor dinámico (Valor a Cobrar + Pago Total/Parcial) solo si Siesa dio
+  // el valor de la factura, el pedido es de contado, Y hay precio real por
+  // cada referencia — si falta uno solo, no se puede garantizar el
+  // recálculo y se cae al campo libre de siempre (Regla 0: ante dato
+  // ausente, conservador). Independiente de esto, Referencias siempre se
+  // puede ajustar — hasta un pedido a crédito puede entregarse incompleto.
+  const mostrarValorDinamico = p.es_contado === true && p.valor_factura != null
+    && !!(p.items && p.items.length) && p.items.every(it => it.valor_unitario != null);
+  el._mostrarValorDinamico = mostrarValorDinamico;
+  el._valorAjustado = p.valor_factura;
+
   const tipoPagoInicial = (r && r.motivo_descuento) ? 'PARCIAL' : 'TOTAL';
   el._tipoPagoSel = el._tipoPagoSel || tipoPagoInicial;
   const motivoActual = r ? (r.motivo_descuento || '') : '';
@@ -1896,18 +1922,18 @@ function _condRenderFormParada() {
     </div>
 
     <div style="margin-bottom:14px;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">RESULTADO ENTREGA</label>
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">RESULTADO</label>
       <div style="display:flex;gap:6px;" id="cond-estado-btns">
-        ${['ENTREGADO','PARCIAL','RECHAZADO'].map(e => `
+        ${['ENTREGADO','RECHAZADO'].map(e => `
           <button onclick="condSelEstado('${e}')"
             id="cond-estado-${e}"
-            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoActual ? (e==='ENTREGADO'?'#16a34a':e==='PARCIAL'?'#d97706':'#dc2626') : '#ddd'};background:${e===estadoActual ? (e==='ENTREGADO'?'#f0fdf4':e==='PARCIAL'?'#fffbeb':'#fef2f2') : '#fff'};color:${e===estadoActual ? (e==='ENTREGADO'?'#15803d':e==='PARCIAL'?'#b45309':'#b91c1c') : '#aaa'};">
-            ${e === 'ENTREGADO' ? '✓ Entregado' : e === 'PARCIAL' ? '⚠ Parcial' : '✗ Rechazado'}
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid ${e===estadoUi ? (e==='ENTREGADO'?'#16a34a':'#dc2626') : '#ddd'};background:${e===estadoUi ? (e==='ENTREGADO'?'#f0fdf4':'#fef2f2') : '#fff'};color:${e===estadoUi ? (e==='ENTREGADO'?'#15803d':'#b91c1c') : '#aaa'};">
+            ${e === 'ENTREGADO' ? '✓ Entregado' : '✗ Rechazado'}
           </button>`).join('')}
       </div>
     </div>
 
-    <div id="cond-bultos-rechazo" style="margin-bottom:14px;display:${estadoActual !== 'ENTREGADO' ? 'block' : 'none'};">
+    <div id="cond-bultos-rechazo" style="margin-bottom:14px;display:${estadoUi === 'RECHAZADO' ? 'block' : 'none'};">
       <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">BULTOS RECHAZADOS</label>
       ${p.bultos.map(b => `
         <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;">
@@ -1917,14 +1943,14 @@ function _condRenderFormParada() {
         </label>`).join('')}
     </div>
 
-    <div id="cond-items-parcial" style="margin-bottom:14px;display:${estadoActual === 'PARCIAL' ? 'block' : 'none'};">
-      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS ENTREGADAS</label>
-      <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Ajusta la cantidad entregada por referencia. Lo que no se entregó queda como devolución.</div>
+    <div id="cond-items-parcial" style="margin-bottom:14px;display:${estadoUi === 'ENTREGADO' ? 'block' : 'none'};">
+      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">REFERENCIAS</label>
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Precargadas con la cantidad del pedido. Ajusta solo si algo no se entregó — lo que baje queda como devolución.</div>
       ${(p.items && p.items.length ? p.items : []).map((it, idx) => {
         const pedido = it.cantidad_pedida || 0;
         const prevEntregado = (() => {
-          if (!rechazadosActuales.length && r && r.items_entregados) {
-            const prev = (r.items_entregados || []).find(x => x.codigo === it.codigo);
+          if (r && r.items_entregados && r.items_entregados.length) {
+            const prev = r.items_entregados.find(x => x.codigo === it.codigo);
             return prev ? prev.cantidad_entregada : pedido;
           }
           return pedido;
@@ -1954,62 +1980,75 @@ function _condRenderFormParada() {
       }).join('')}
     </div>
 
-    ${mostrarTotalParcial ? `
-    <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
-      <div style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
-        $${Number(p.valor_factura).toLocaleString('es-CO')}
-      </div>
+    <div id="cond-bultos-devolucion" style="margin-bottom:14px;display:none;">
+      <label style="font-size:12px;color:#555;font-weight:700;display:block;margin-bottom:8px;">BULTOS CON DEVOLUCIÓN</label>
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:10px;">Opcional — en cuál caja/bulto físico va lo que vuelve a bodega.</div>
+      ${p.bultos.map(b => `
+        <label style="display:flex;align-items:center;gap:10px;padding:10px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:6px;cursor:pointer;">
+          <input type="checkbox" value="${b.id}" ${rechazadosActuales.includes(b.id) ? 'checked' : ''}
+            style="width:18px;height:18px;cursor:pointer;" id="chk-bulto-dev-${b.id}">
+          <span style="font-size:13px;color:#374151;">${b.codigo_barras} · ${b.tipo} ${b.numero}/${b.total}</span>
+        </label>`).join('')}
     </div>
 
-    <div id="cond-pago-toggle-wrap" style="margin-bottom:14px;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">PAGO</label>
-      <div style="display:flex;gap:6px;">
-        <button type="button" onclick="condSelTipoPago('TOTAL')" id="cond-tipopago-TOTAL"
-          style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
-          ✓ Pago Total
-        </button>
-        <button type="button" onclick="condSelTipoPago('PARCIAL')" id="cond-tipopago-PARCIAL"
-          style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
-          ⚠ Pago Parcial
-        </button>
+    <div id="cond-entrega-payload" style="display:${estadoUi === 'ENTREGADO' ? 'block' : 'none'};">
+      ${mostrarValorDinamico ? `
+      <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
+        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
+          $${Number(p.valor_factura).toLocaleString('es-CO')}
+        </div>
       </div>
-    </div>
 
-    <div id="cond-parcial-detalle" style="margin-bottom:14px;display:none;">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO PAGADO ($)</label>
-      <input type="number" id="cond-monto-parcial" value="${motivoActual ? montoActual : ''}" min="0" max="${Math.floor(p.valor_factura)}" step="1"
-        oninput="condActualizarMotivoVisible()"
-        style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+      <div id="cond-pago-toggle-wrap" style="margin-bottom:14px;">
+        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">PAGO</label>
+        <div style="display:flex;gap:6px;">
+          <button type="button" onclick="condSelTipoPago('TOTAL')" id="cond-tipopago-TOTAL"
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
+            ✓ Pago Total
+          </button>
+          <button type="button" onclick="condSelTipoPago('PARCIAL')" id="cond-tipopago-PARCIAL"
+            style="flex:1;padding:14px 4px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;border:2px solid #ddd;background:#fff;color:#aaa;">
+            ⚠ Pago Parcial
+          </button>
+        </div>
+      </div>
 
-      <div id="cond-motivo-wrap" style="margin-top:12px;display:none;">
-        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
-        <select id="cond-motivo-descuento"
+      <div id="cond-parcial-detalle" style="margin-bottom:14px;display:none;">
+        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO PAGADO ($)</label>
+        <input type="number" id="cond-monto-parcial" value="${motivoActual ? montoActual : ''}" min="0" max="${Math.floor(p.valor_factura)}" step="1"
+          oninput="condActualizarMotivoVisible()"
+          style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+
+        <div id="cond-motivo-wrap" style="margin-top:12px;display:none;">
+          <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
+          <select id="cond-motivo-descuento"
+            style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
+            <option value="">— Seleccionar —</option>
+            ${_COND_RETENCIONES.map(ret =>
+              `<option value="${ret.tipo}" ${ret.tipo===motivoActual?'selected':''}>${ret.nombre}</option>`
+            ).join('')}
+          </select>
+        </div>
+      </div>
+      ` : `
+      <div id="cond-monto-wrap" style="margin-bottom:14px;">
+        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
+        <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
+          style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
+      </div>
+      `}
+
+      <div id="cond-forma-pago-wrap" style="margin-bottom:14px;">
+        <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
+        <select id="cond-forma-pago"
           style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
           <option value="">— Seleccionar —</option>
-          ${_COND_RETENCIONES.map(ret =>
-            `<option value="${ret.tipo}" ${ret.tipo===motivoActual?'selected':''}>${ret.nombre}</option>`
+          ${['EFECTIVO','TRANSFERENCIA','CHEQUE','CREDITO','EXENTO'].map(f =>
+            `<option value="${f}" ${f===formaActual?'selected':''}>${f.charAt(0)+f.slice(1).toLowerCase()}</option>`
           ).join('')}
         </select>
       </div>
-    </div>
-    ` : ''}
-
-    <div id="cond-forma-pago-wrap" style="margin-bottom:14px;display:${estadoActual === 'RECHAZADO' ? 'none' : 'block'};">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">FORMA DE PAGO</label>
-      <select id="cond-forma-pago"
-        style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
-        <option value="">— Seleccionar —</option>
-        ${['EFECTIVO','TRANSFERENCIA','CHEQUE','CREDITO','EXENTO'].map(f =>
-          `<option value="${f}" ${f===formaActual?'selected':''}>${f.charAt(0)+f.slice(1).toLowerCase()}</option>`
-        ).join('')}
-      </select>
-    </div>
-
-    <div id="cond-monto-wrap" style="margin-bottom:14px;display:${estadoActual === 'RECHAZADO' || mostrarTotalParcial ? 'none' : 'block'};">
-      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MONTO COBRADO ($)</label>
-      <input type="number" id="cond-monto" value="${montoActual}" min="0" step="100"
-        style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
     </div>
 
     <div style="margin-bottom:14px;">
@@ -2037,23 +2076,50 @@ function _condRenderFormParada() {
       ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#4ade80;">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
     </div>
 
-    <div style="position:sticky;bottom:16px;display:flex;flex-direction:column;gap:8px;">
+    <div style="position:sticky;bottom:16px;">
       <button onclick="condGuardarParada()"
         style="width:100%;padding:20px;background:#1d4ed8;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
         ${r ? '💾 Actualizar Confirmación' : '✓ Confirmar Parada'}
       </button>
-      ${!r ? `<button onclick="condNoSePudoEntregar()"
-        style="width:100%;padding:14px;background:#1a0d0d;color:#f87171;border:1px solid #7f1d1d;border-radius:12px;font-size:15px;font-weight:700;cursor:pointer;">
-        🚫 No se pudo entregar
-      </button>` : ''}
     </div>`;
 
   // Guardar estado seleccionado
-  el._estadoSel = estadoActual;
+  el._estadoSel = estadoUi;
 
-  if (mostrarTotalParcial) {
+  if (mostrarValorDinamico) {
     condSelTipoPago(el._tipoPagoSel);
   }
+  condRecalcularPago();
+}
+
+/** Recalcula valor a cobrar + visibilidad de "Bultos con devolución" según lo tecleado en Referencias. */
+function condRecalcularPago() {
+  const el = document.getElementById('cond-contenido');
+  const p = _COND_PARADA_FORM;
+  if (!el || !p) return;
+
+  const items = _condItemsAjustados();
+  const hayAjuste = items.some(it => it.devuelto > 0);
+
+  const divBultosDev = document.getElementById('cond-bultos-devolucion');
+  if (divBultosDev) divBultosDev.style.display = hayAjuste ? 'block' : 'none';
+
+  if (!el._mostrarValorDinamico) return;
+
+  const deduccion = items.reduce((s, it) => s + it.devuelto * (it.valor_unitario || 0), 0);
+  const valorAjustado = Math.max(0, Math.round(p.valor_factura - deduccion));
+  el._valorAjustado = valorAjustado;
+
+  const campoValor = document.getElementById('cond-valorfactura-monto');
+  if (campoValor) {
+    campoValor.innerHTML = hayAjuste
+      ? `<span style="text-decoration:line-through;color:#888;font-size:12px;font-weight:500;display:block;margin-bottom:2px;">$${Number(p.valor_factura).toLocaleString('es-CO')}</span>$${valorAjustado.toLocaleString('es-CO')}`
+      : `$${valorAjustado.toLocaleString('es-CO')}`;
+  }
+
+  const inpParcial = document.getElementById('cond-monto-parcial');
+  if (inpParcial) inpParcial.max = valorAjustado;
+  condActualizarMotivoVisible();
 }
 
 /**
@@ -2080,30 +2146,33 @@ function condSelTipoPago(tipo) {
   if (tipo === 'PARCIAL') condActualizarMotivoVisible();
 }
 
-/** Muestra el desplegable de motivo solo si el conductor ya escribió un monto parcial menor a la factura. */
+/** Muestra el desplegable de motivo solo si el conductor ya escribió un monto parcial menor al valor a cobrar. */
 function condActualizarMotivoVisible() {
-  const p = _COND_PARADA_FORM;
+  const el = document.getElementById('cond-contenido');
   const wrap = document.getElementById('cond-motivo-wrap');
   const inp = document.getElementById('cond-monto-parcial');
-  if (!wrap || !inp || !p) return;
+  if (!wrap || !inp || !el) return;
   const monto = parseInt(inp.value, 10) || 0;
-  wrap.style.display = (monto > 0 && monto < Math.floor(p.valor_factura)) ? 'block' : 'none';
+  const techo = el._valorAjustado != null ? el._valorAjustado : 0;
+  wrap.style.display = (monto > 0 && monto < techo) ? 'block' : 'none';
 }
 
 /**
- * Selecciona el estado de entrega en el formulario del conductor y ajusta la UI.
- * @param {string} estado - 'ENTREGADO', 'PARCIAL' o 'RECHAZADO'
+ * Selecciona el resultado de la parada en el formulario del conductor y ajusta la UI.
+ * "Parcial" ya no es una opción propia — surge solo si el conductor ajusta
+ * alguna cantidad en Referencias (ver condRecalcularPago/condGuardarParada).
+ * @param {string} estado - 'ENTREGADO' o 'RECHAZADO'
  */
 function condSelEstado(estado) {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
   el._estadoSel = estado;
 
-  ['ENTREGADO','PARCIAL','RECHAZADO'].forEach(e => {
+  ['ENTREGADO','RECHAZADO'].forEach(e => {
     const btn = document.getElementById('cond-estado-' + e);
     if (!btn) return;
     const activo = e === estado;
-    const colores = { ENTREGADO: ['#16a34a','#f0fdf4','#15803d'], PARCIAL: ['#d97706','#fffbeb','#b45309'], RECHAZADO: ['#dc2626','#fef2f2','#b91c1c'] };
+    const colores = { ENTREGADO: ['#16a34a','#f0fdf4','#15803d'], RECHAZADO: ['#dc2626','#fef2f2','#b91c1c'] };
     const [borde, fondo, texto] = activo ? colores[e] : ['#ddd','#fff','#aaa'];
     btn.style.borderColor = borde;
     btn.style.background  = fondo;
@@ -2111,34 +2180,18 @@ function condSelEstado(estado) {
   });
 
   const divRechazo = document.getElementById('cond-bultos-rechazo');
-  if (divRechazo) divRechazo.style.display = estado !== 'ENTREGADO' ? 'block' : 'none';
+  if (divRechazo) divRechazo.style.display = estado === 'RECHAZADO' ? 'block' : 'none';
 
   const divItems = document.getElementById('cond-items-parcial');
-  if (divItems) divItems.style.display = estado === 'PARCIAL' ? 'block' : 'none';
+  if (divItems) divItems.style.display = estado === 'ENTREGADO' ? 'block' : 'none';
 
-  const mostrarPago = estado !== 'RECHAZADO';
-  const divFormaPago = document.getElementById('cond-forma-pago-wrap');
+  const divPayload = document.getElementById('cond-entrega-payload');
+  if (divPayload) divPayload.style.display = estado === 'ENTREGADO' ? 'block' : 'none';
 
-  const p = _COND_PARADA_FORM;
-  const mostrarTotalParcial = !!p && estado === 'ENTREGADO' && p.es_contado === true && p.valor_factura != null;
-  const divValorFactura = document.getElementById('cond-valorfactura-wrap');
-  const divPagoToggle   = document.getElementById('cond-pago-toggle-wrap');
-  const divMonto        = document.getElementById('cond-monto-wrap');
+  const divBultosDev = document.getElementById('cond-bultos-devolucion');
+  if (divBultosDev && estado === 'RECHAZADO') divBultosDev.style.display = 'none';
 
-  if (mostrarTotalParcial && !divValorFactura) {
-    // El bloque Total/Parcial no se llegó a renderizar (la parada abrió en
-    // un estado distinto a Entregado) — recién ahora hace falta, re-render.
-    _condRenderFormParada();
-    return;
-  }
-
-  if (divFormaPago)     divFormaPago.style.display     = mostrarPago ? 'block' : 'none';
-  if (divValorFactura)  divValorFactura.style.display  = mostrarTotalParcial ? 'block' : 'none';
-  if (divPagoToggle)    divPagoToggle.style.display    = mostrarTotalParcial ? 'block' : 'none';
-  if (divMonto)         divMonto.style.display         = (mostrarPago && !mostrarTotalParcial) ? 'block' : 'none';
-
-  const divDetalle = document.getElementById('cond-parcial-detalle');
-  if (divDetalle) divDetalle.style.display = (mostrarTotalParcial && el._tipoPagoSel === 'PARCIAL') ? 'block' : 'none';
+  if (estado === 'ENTREGADO') condRecalcularPago();
 }
 
 /** Previsualiza la foto de evidencia seleccionada por el conductor. */
@@ -2176,6 +2229,7 @@ function condActualizarDevuelto(idx, pedido) {
   if (val < 0) { val = 0; inp.value = 0; }
   if (val > pedido) { val = pedido; inp.value = pedido; }
   div.textContent = pedido - val;
+  condRecalcularPago();
 }
 
 /** Valida, recopila datos del formulario y guarda la confirmacion de parada (online u offline). */
@@ -2184,71 +2238,58 @@ async function condGuardarParada() {
   const p = _COND_PARADA_FORM;
   if (!el || !p) return;
 
-  const estadoEntrega = el._estadoSel || 'ENTREGADO';
-  const formaPago     = document.getElementById('cond-forma-pago')?.value || '';
-  const monto         = parseFloat(document.getElementById('cond-monto')?.value || 0) || 0;
-  const obs           = document.getElementById('cond-obs')?.value?.trim() || '';
-
-  // Validación por campo según estado
-  if (estadoEntrega !== 'RECHAZADO') {
-    if (!formaPago) {
-      alerta('Selecciona la forma de pago antes de confirmar', 'error');
-      document.getElementById('cond-forma-pago')?.focus();
-      return;
-    }
-    if (estadoEntrega === 'PARCIAL' && monto <= 0) {
-      alerta('Ingresa el monto cobrado por la parte entregada', 'error');
-      document.getElementById('cond-monto')?.focus();
-      return;
-    }
-    if (estadoEntrega === 'PARCIAL' && !obs) {
-      alerta('Escribe una observación: qué se entregó y qué se devolvió', 'error');
-      document.getElementById('cond-obs')?.focus();
-      return;
-    }
-  }
+  const estadoUi = el._estadoSel || 'ENTREGADO';
+  const obs      = document.getElementById('cond-obs')?.value?.trim() || '';
 
   // Observaciones obligatorias para RECHAZADO
-  if (estadoEntrega === 'RECHAZADO' && !obs) {
+  if (estadoUi === 'RECHAZADO' && !obs) {
     alerta('Escribe el motivo del rechazo (ej: cliente cerrado, dirección incorrecta)', 'error');
     document.getElementById('cond-obs')?.focus();
     return;
   }
 
-  // Bultos rechazados
+  // Bultos rechazados — solo aplica a Rechazado.
   const bultosRechazados = [];
-  if (estadoEntrega !== 'ENTREGADO') {
+  if (estadoUi === 'RECHAZADO') {
     p.bultos.forEach(b => {
       const chk = document.getElementById('chk-bulto-' + b.id);
       if (chk && chk.checked) bultosRechazados.push(b.id);
     });
-    if (estadoEntrega === 'PARCIAL' && !bultosRechazados.length) {
-      alerta('Para entrega parcial selecciona qué bultos fueron rechazados', 'error');
-      return;
+  }
+
+  // "Parcial" no es un botón — surge solo si el conductor bajó alguna
+  // cantidad en Referencias. estadoEntrega es lo que de verdad se envía.
+  let estadoEntrega = estadoUi;
+  let itemsEntregados = [];
+  let bultosDevolucion = [];
+
+  if (estadoUi === 'ENTREGADO') {
+    const itemsAjustados = _condItemsAjustados();
+    const hayAjuste = itemsAjustados.some(it => it.devuelto > 0);
+    estadoEntrega = hayAjuste ? 'PARCIAL' : 'ENTREGADO';
+
+    if (hayAjuste) {
+      itemsEntregados = itemsAjustados.map(it => ({
+        codigo: it.codigo, nombre: it.nombre, unidad: it.unidad || 'und',
+        cantidad_pedida: it.pedido, cantidad_entregada: it.entregado,
+      }));
+      p.bultos.forEach(b => {
+        const chk = document.getElementById('chk-bulto-dev-' + b.id);
+        if (chk && chk.checked) bultosDevolucion.push(b.id);
+      });
+      if (!obs) {
+        alerta('Escribe una observación: qué se entregó y qué se devolvió', 'error');
+        document.getElementById('cond-obs')?.focus();
+        return;
+      }
     }
   }
 
-  // Ítems con cantidades para PARCIAL
-  const itemsEntregados = [];
-  if (estadoEntrega === 'PARCIAL' && p.items && p.items.length) {
-    let hayDevolucion = false;
-    p.items.forEach((it, idx) => {
-      const pedido    = it.cantidad_pedida || 0;
-      const inp       = document.getElementById('item-entregado-' + idx);
-      const entregado = inp ? Math.max(0, Math.min(parseInt(inp.value) || pedido, pedido)) : pedido;
-      if (entregado < pedido) hayDevolucion = true;
-      itemsEntregados.push({
-        codigo:             it.codigo,
-        nombre:             it.nombre,
-        unidad:             it.unidad || 'und',
-        cantidad_pedida:    pedido,
-        cantidad_entregada: entregado,
-      });
-    });
-    if (!hayDevolucion) {
-      alerta('Si no hay devolución de referencias, usa "Entregado" en lugar de Parcial', 'advertencia');
-      return;
-    }
+  const formaPago = document.getElementById('cond-forma-pago')?.value || '';
+  if ((estadoEntrega === 'ENTREGADO' || estadoEntrega === 'PARCIAL') && !formaPago) {
+    alerta('Selecciona la forma de pago antes de confirmar', 'error');
+    document.getElementById('cond-forma-pago')?.focus();
+    return;
   }
 
   // Foto (base64 comprimida — máx 800×600 @ JPEG 0.65)
@@ -2281,19 +2322,19 @@ async function condGuardarParada() {
     } catch (_) { alerta('Error procesando la foto', 'error'); return; }
   }
 
-  // ── Pago Total/Parcial (solo entrega completa de pedidos de contado) ──
-  // El resto de estados (PARCIAL física, RECHAZADO) y los pedidos a crédito
-  // siguen usando `monto` del campo libre de siempre, sin tocar nada aquí.
-  const mostrarTotalParcial = estadoEntrega === 'ENTREGADO' && p.es_contado === true && p.valor_factura != null;
-  let montoFinal = monto;
+  // ── Monto: Valor a Cobrar dinámico (Total/Parcial) si hay datos reales de
+  // Siesa para toda la factura, o campo libre si no — igual en entrega
+  // completa o con ajuste, ya no es exclusivo de una ni de otra.
+  let montoFinal = 0;
   let motivoDescuentoFinal = null;
   let montoDescuentoFinal = 0;
+  const cobraEnLaPuerta = estadoEntrega === 'ENTREGADO' || estadoEntrega === 'PARCIAL';
 
-  if (mostrarTotalParcial) {
-    const valorFactura = Math.round(p.valor_factura);
+  if (cobraEnLaPuerta && el._mostrarValorDinamico) {
+    const valorBase = el._valorAjustado != null ? el._valorAjustado : Math.round(p.valor_factura);
     const tipoPago = el._tipoPagoSel || 'TOTAL';
     if (tipoPago === 'TOTAL') {
-      montoFinal = valorFactura;
+      montoFinal = valorBase;
     } else {
       const montoParcial = parseInt(document.getElementById('cond-monto-parcial')?.value, 10) || 0;
       if (montoParcial <= 0) {
@@ -2301,8 +2342,8 @@ async function condGuardarParada() {
         document.getElementById('cond-monto-parcial')?.focus();
         return;
       }
-      if (montoParcial >= valorFactura) {
-        alerta('El monto es igual o mayor a la factura — usa "Pago Total"', 'error');
+      if (montoParcial >= valorBase) {
+        alerta('El monto es igual o mayor al valor a cobrar — usa "Pago Total"', 'error');
         document.getElementById('cond-monto-parcial')?.focus();
         return;
       }
@@ -2314,7 +2355,14 @@ async function condGuardarParada() {
       }
       montoFinal = montoParcial;
       motivoDescuentoFinal = motivo;
-      montoDescuentoFinal = valorFactura - montoParcial;
+      montoDescuentoFinal = valorBase - montoParcial;
+    }
+  } else if (cobraEnLaPuerta) {
+    montoFinal = parseFloat(document.getElementById('cond-monto')?.value || 0) || 0;
+    if (estadoEntrega === 'PARCIAL' && montoFinal <= 0) {
+      alerta('Ingresa el monto cobrado por la parte entregada', 'error');
+      document.getElementById('cond-monto')?.focus();
+      return;
     }
   }
 
@@ -2326,7 +2374,7 @@ async function condGuardarParada() {
     monto_descuento:   montoDescuentoFinal,
     observaciones:     obs || null,
     foto_entrega:      fotoBase64 || null,
-    bultos_rechazados: bultosRechazados,
+    bultos_rechazados: estadoEntrega === 'RECHAZADO' ? bultosRechazados : bultosDevolucion,
     items_entregados:  itemsEntregados.length ? itemsEntregados : null,
   };
 
@@ -2343,7 +2391,7 @@ async function condGuardarParada() {
         monto_descuento:       montoDescuentoFinal,
         observaciones:         obs || null,
         foto_entrega:          fotoBase64 || null,
-        bultos_rechazados_ids: bultosRechazados,
+        bultos_rechazados_ids: payload.bultos_rechazados,
         items_entregados:      itemsEntregados.length ? itemsEntregados : null,
       };
       const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
@@ -2393,47 +2441,6 @@ async function condVolverAParadas(recargar = false) {
   }
 }
 
-/** Registra una parada como no entregada (rechazo rapido) con motivo opcional. */
-async function condNoSePudoEntregar() {
-  const p = _COND_PARADA_FORM;
-  if (!p) return;
-  const obs = prompt('Motivo (opcional):', 'Cliente no disponible');
-  if (obs === null) return;
-  const payload = {
-    estado_entrega: 'RECHAZADO',
-    forma_pago:     'EXENTO',
-    monto_cobrado:  0,
-    observaciones:  obs || 'Cliente no disponible',
-    bultos_rechazados: [],
-  };
-  if (!navigator.onLine) {
-    await _condDB.enqueue({ tipo: 'confirmar', rutaId: _COND_RUTA_ACTIVA.id, tareaId: p.tarea_id, payload });
-    const idx = _COND_PARADAS.findIndex(x => x.tarea_id === p.tarea_id);
-    if (idx >= 0) {
-      _COND_PARADAS[idx].recaudo = { ...payload, bultos_rechazados_ids: [], items_entregados: null };
-      const gestionadas = _COND_PARADAS.filter(x => x.recaudo).length;
-      await _condDB.set('paradas_' + _COND_RUTA_ACTIVA.id, { paradas: _COND_PARADAS, facturas_gestionadas: gestionadas, paradas_gestionadas: gestionadas });
-    }
-    await _condActualizarBarras();
-    alerta('Registrado sin conexión — se enviará al reconectar', 'advertencia');
-    await condAbrirParadas(_COND_RUTA_ACTIVA.id);
-    return;
-  }
-  try {
-    const r = await fetch(API + `/api/rutas/${_COND_RUTA_ACTIVA.id}/paradas/${p.tarea_id}/confirmar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify(payload)
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Registrado como no entregado', 'advertencia');
-      await condAbrirParadas(_COND_RUTA_ACTIVA.id);
-    } else {
-      alerta(d.error || 'Error al registrar', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
-}
 
 /** Cierra la ruta del conductor marcandola como entregada (online u offline). */
 async function condCerrarRuta() {
