@@ -52,24 +52,19 @@ class DevolucionClienteService:
                 '(despacho no confirmado) — no se puede procesar una devolución todavía'
             )
 
-        # Resolver tipo/consec REALES de la FE — nunca los _pedido_siesa
-        filas_fe = connekta.get_detalle_factura(
-            tipo_docto_rm=tarea.rm_tipo or '',
-            consec_rm=tarea.rm_consec or 0,
-            consec_pedido=tarea.consec_docto_pedido_siesa,
-        )
-        if not filas_fe:
+        # Resolver tipo/consec REALES de la FE — nunca los _pedido_siesa.
+        #
+        # Esto vivía acá y SOLO acá. Liquidación hacía lo que este mismo
+        # comentario prohíbe, en seis sitios, y por eso ninguna nota crédito de
+        # ruta llegó nunca a Siesa (job 440, 2026-08-11). Un comentario protege
+        # al archivo donde está escrito y a ninguno más: ahora es una función.
+        from app.services.fe_resolver import FENoEncontrada, resolver_fe
+        try:
+            tipo_docto_fe, consec_fe = resolver_fe(tarea, gateway=connekta)
+        except FENoEncontrada as e:
             raise ValueError(
-                f'No se pudo localizar la factura electrónica del pedido {numero_pedido_siesa} '
-                'en Siesa — verifica que la FE ya se haya generado'
-            )
-        cab = filas_fe[0]
-        tipo_docto_fe = str(cab.get('f350_id_tipo_docto') or '').strip()
-        consec_fe = str(cab.get('f350_consec_docto') or '').strip()
-        if not tipo_docto_fe or not consec_fe:
-            raise ValueError(
-                f'La factura electrónica del pedido {numero_pedido_siesa} no trae '
-                'tipo/consecutivo de documento — no se puede continuar'
+                f'No se pudo localizar la factura electrónica del pedido '
+                f'{numero_pedido_siesa} en Siesa — {e}'
             )
 
         # Líneas reales de la FE (cantidad facturada, bodega, uom, rowid)

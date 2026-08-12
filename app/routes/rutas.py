@@ -823,13 +823,13 @@ def liquidar_completo(id):
 
             # Obtener base gravable desde Siesa si es posible, fallback a monto_cobrado
             base_gravable = float(recaudo.monto_cobrado or 0)
-            if tarea and tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+            # La FE, no el pedido — ver `app/services/fe_resolver.py`.
+            from app.services.fe_resolver import resolver_fe_o_none
+            _tipo_fe, _consec_fe = resolver_fe_o_none(tarea) if tarea else (None, None)
+            if _tipo_fe and _consec_fe:
                 try:
                     from app.services.connekta_gateway import connekta
-                    lineas_raw = connekta.get_rowids_factura(
-                        tarea.tipo_docto_pedido_siesa,
-                        tarea.consec_docto_pedido_siesa,
-                    )
+                    lineas_raw = connekta.get_rowids_factura(_tipo_fe, _consec_fe)
                     if lineas_raw:
                         base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
                 except Exception as e:
@@ -855,8 +855,10 @@ def liquidar_completo(id):
                         'Las retenciones se encolarán pero pueden fallar en Siesa.'
                     )
 
-            tipo_docto_fe = tarea.tipo_docto_pedido_siesa or '' if tarea else ''
-            consec_fe = tarea.consec_docto_pedido_siesa or '' if tarea else ''
+            # La FE, no el pedido — ver `app/services/fe_resolver.py`. Acá se
+            # reusa lo ya resuelto arriba en vez de volver a consultar Siesa.
+            tipo_docto_fe = _tipo_fe or ''
+            consec_fe = _consec_fe or ''
             notas_base = f'WMS Ruta #{id} | Liquidación completa'
 
             for ret in retenciones:

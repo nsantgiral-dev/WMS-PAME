@@ -95,12 +95,11 @@ class LiquidacionService:
             rd['consec_docto'] = tarea.consec_docto_pedido_siesa or '' if tarea else ''
 
             factura_siesa = None
-            if tarea and tarea.tipo_docto_pedido_siesa and tarea.consec_docto_pedido_siesa:
+            from app.services.fe_resolver import resolver_fe_o_none
+            _tipo_fe, _consec_fe = resolver_fe_o_none(tarea) if tarea else (None, None)
+            if _tipo_fe and _consec_fe:
                 try:
-                    lineas_raw = connekta.get_rowids_factura(
-                        tarea.tipo_docto_pedido_siesa,
-                        tarea.consec_docto_pedido_siesa,
-                    )
+                    lineas_raw = connekta.get_rowids_factura(_tipo_fe, _consec_fe)
                     if lineas_raw:
                         lineas = []
                         base_gravable = 0
@@ -173,8 +172,12 @@ class LiquidacionService:
         if not tarea:
             raise ValueError(f'Recaudo {recaudo_id} sin tarea asociada')
 
+        # El PEDIDO — para mostrar. La factura se resuelve aparte: son
+        # documentos distintos con numeraciones distintas.
         tipo_docto = tarea.tipo_docto_pedido_siesa or ''
         consec_docto = tarea.consec_docto_pedido_siesa or ''
+        from app.services.fe_resolver import resolver_fe_o_none
+        _tipo_fe, _consec_fe = resolver_fe_o_none(tarea)
         estado = recaudo.estado_entrega
         forma_pago = (recaudo.forma_pago or '').upper()
 
@@ -186,11 +189,11 @@ class LiquidacionService:
         co_factura = ''
         cuenta_cxc = ''
 
-        if tipo_docto and consec_docto:
+        if _tipo_fe and _consec_fe:
             from app.services.connekta_gateway import connekta
             try:
                 # Factura lines: base_gravable, IVA, neto
-                lineas_raw = connekta.get_rowids_factura(tipo_docto, consec_docto)
+                lineas_raw = connekta.get_rowids_factura(_tipo_fe, _consec_fe)
                 if lineas_raw:
                     for ln in lineas_raw:
                         base_gravable += float(ln.get('f470_vlr_bruto', 0))
@@ -338,8 +341,15 @@ class LiquidacionService:
                 'no se puede re-encolar (idempotencia)'
             )
 
-        tipo_docto_fe = tarea.tipo_docto_pedido_siesa or ''
-        consec_fe = tarea.consec_docto_pedido_siesa or ''
+        # La FE, no el pedido: `get_rowids_factura` filtra por `f350_*`
+        # —el documento consultado— y acá se pasaba `*_pedido_siesa` con la
+        # variable llamada `_fe`. Job 440 (2026-08-11): 400 de Siesa
+        # buscando una factura de tipo 'PD'. Ver `fe_resolver`.
+        from app.services.fe_resolver import FENoEncontrada, resolver_fe
+        try:
+            tipo_docto_fe, consec_fe = resolver_fe(tarea)
+        except FENoEncontrada as _e_fe:
+            tipo_docto_fe = consec_fe = ''
         if not tipo_docto_fe or not consec_fe:
             raise ValueError(
                 f'Tarea {tarea.id} sin tipo_docto/consec_docto — '
@@ -446,8 +456,15 @@ class LiquidacionService:
                 'secuencialidad: NC debe ir primero'
             )
 
-        tipo_docto_fe = tarea.tipo_docto_pedido_siesa or ''
-        consec_fe = tarea.consec_docto_pedido_siesa or ''
+        # La FE, no el pedido: `get_rowids_factura` filtra por `f350_*`
+        # —el documento consultado— y acá se pasaba `*_pedido_siesa` con la
+        # variable llamada `_fe`. Job 440 (2026-08-11): 400 de Siesa
+        # buscando una factura de tipo 'PD'. Ver `fe_resolver`.
+        from app.services.fe_resolver import FENoEncontrada, resolver_fe
+        try:
+            tipo_docto_fe, consec_fe = resolver_fe(tarea)
+        except FENoEncontrada as _e_fe:
+            tipo_docto_fe = consec_fe = ''
         if not tipo_docto_fe or not consec_fe:
             raise ValueError(
                 f'Tarea {tarea.id} sin tipo_docto/consec_docto — '
@@ -485,10 +502,19 @@ class LiquidacionService:
                         cxc_data = connekta.get_cxc_general(nit)
                         # f253_id puede variar entre facturas del mismo
                         # cliente — matchear por la factura exacta.
+                        # OJO con la asimetría: `get_rowids_factura` necesita
+                        # la FACTURA (filtra por f350_*), pero el cruce de CxC
+                        # referencia el PEDIDO — `f353_*_docto_cruce` trae
+                        # 'PD'/consec del pedido, verificado en vivo el
+                        # 2026-08-11. Usar acá la FE resuelta hace que no
+                        # matchee ninguna fila y la cuenta caiga al fallback
+                        # `SIESA_CXC_AUXILIAR`, que es la regla 11 al revés.
+                        _tipo_cruce = tarea.tipo_docto_pedido_siesa or ''
+                        _consec_cruce = tarea.consec_docto_pedido_siesa or ''
                         fila_cxc = next((
                             r for r in cxc_data
-                            if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == tipo_docto_fe
-                            and str(r.get('f353_consec_docto_cruce', '')) == str(consec_fe)
+                            if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == _tipo_cruce
+                            and str(r.get('f353_consec_docto_cruce', '')) == str(_consec_cruce)
                         ), None)
                         if fila_cxc:
                             cuenta_cxc = fila_cxc.get('f253_id', '')
@@ -767,8 +793,15 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
         raise ValueError(f'Recaudo {recaudo.id} sin tarea asociada')
 
     # Datos de la factura
-    tipo_docto_fe = tarea.tipo_docto_pedido_siesa or ''
-    consec_fe = tarea.consec_docto_pedido_siesa or ''
+    # La FE, no el pedido: `get_rowids_factura` filtra por `f350_*`
+    # —el documento consultado— y acá se pasaba `*_pedido_siesa` con la
+    # variable llamada `_fe`. Job 440 (2026-08-11): 400 de Siesa
+    # buscando una factura de tipo 'PD'. Ver `fe_resolver`.
+    from app.services.fe_resolver import FENoEncontrada, resolver_fe
+    try:
+        tipo_docto_fe, consec_fe = resolver_fe(tarea)
+    except FENoEncontrada as _e_fe:
+        tipo_docto_fe = consec_fe = ''
     if not tipo_docto_fe or not consec_fe:
         raise ValueError(
             f'Tarea {tarea.id} ({tarea.codigo}) sin tipo_docto/consec_docto — '
