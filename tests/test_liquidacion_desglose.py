@@ -458,3 +458,87 @@ class TestLaFEQuedaAnotadaEnLaTarea:
         _anotar(tarea, 'FEW', '1466')
         db.session.refresh(tarea)
         assert (tarea.fe_tipo, tarea.fe_consec) == ('FEW', '1466')
+
+
+class TestLaDistribucionDeValorPorParada:
+    """El insumo del tope de contado declarado, que hoy no existía.
+
+    El valor se calculaba al vuelo, se mostraba al conductor y se descartaba.
+    Para elegir un tope hace falta la distribución, y sacarla exigía volver a
+    consultar Siesa parada por parada.
+
+    **No es `monto_cobrado`.** Ese es lo que se cobró, no lo que estaba en
+    riesgo: en un rechazo vale cero y la exposición fue el total. Un tope
+    calculado sobre esa variable quedaría sistemáticamente bajo — y bajo
+    significa que deja pasar lo que venía a frenar.
+    """
+
+    def _con_valor(self, db, ruta, tarea, valores):
+        from app.models.packing import TareaPacking
+        import uuid
+        for v in valores:
+            t2 = TareaPacking(codigo=f'PK-V-{uuid.uuid4().hex[:6]}', estado='DESPACHADO',
+                              almacen_id=tarea.almacen_id, tipo_docto_pedido_siesa='PD',
+                              consec_docto_pedido_siesa=1, valor_factura=v)
+            db.session.add(t2); db.session.flush()
+            _recaudo(db, ruta.id, t2.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
+        db.session.commit()
+
+    def test_percentiles_sobre_los_valores_anotados(self, client, db, h, ruta_con_tarea):
+        ruta, tarea = ruta_con_tarea
+        self._con_valor(db, ruta, tarea, [100, 200, 300, 400, 8_000_000])
+
+        d = client.get(_URL, headers=h).get_json()['distribucion_valor_parada']
+        assert d['con_valor'] == 5
+        assert d['percentiles']['p50'] == 300
+        assert d['percentiles']['max'] == 8_000_000
+
+    def test_la_cobertura_viaja_con_los_percentiles(self, client, db, h, ruta_con_tarea):
+        """Un umbral puesto sobre una muestra sesgada deja pasar lo que venía a
+        frenar. Y el sesgo no es aleatorio: tiene valor la parada cuya FE
+        alguien resolvió."""
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')  # sin valor
+        self._con_valor(db, ruta, tarea, [500])
+
+        d = client.get(_URL, headers=h).get_json()['distribucion_valor_parada']
+        assert d['con_valor'] == 1
+        assert d['de_un_total_de'] == 2
+        assert d['cobertura_pct'] == 50.0
+
+    def test_sin_valores_no_inventa_percentiles(self, client, db, h, ruta_con_tarea):
+        """`0` como p50 diría que la parada mediana vale cero. La verdad es que
+        no hay ninguna medida."""
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
+        db.session.commit()
+
+        d = client.get(_URL, headers=h).get_json()['distribucion_valor_parada']
+        assert d['percentiles'] is None
+        assert d['cobertura_pct'] is None
+        assert d['con_valor'] == 0
+
+    def test_los_percentiles_son_valores_reales_no_interpolados(self, client, db, h,
+                                                                ruta_con_tarea):
+        """Con pocas muestras, interpolar inventa un monto que no corresponde a
+        ninguna parada — y sobre eso se pondría un tope."""
+        ruta, tarea = ruta_con_tarea
+        self._con_valor(db, ruta, tarea, [10, 20, 30])
+        d = client.get(_URL, headers=h).get_json()['distribucion_valor_parada']
+        assert d['percentiles']['p50'] in (10, 20, 30)
+
+    def test_la_nota_advierte_contra_monto_cobrado(self, client, db, h, ruta_con_tarea):
+        """La advertencia va donde hay percentiles: es ahí donde alguien está
+        a punto de elegir un tope sobre la variable equivocada."""
+        ruta, tarea = ruta_con_tarea
+        self._con_valor(db, ruta, tarea, [1000])
+        d = client.get(_URL, headers=h).get_json()['distribucion_valor_parada']
+        assert 'cobrado' in d['nota']
+
+    def test_el_modelo_rechaza_un_valor_negativo(self, db, ruta_con_tarea):
+        from sqlalchemy.exc import IntegrityError
+        _, tarea = ruta_con_tarea
+        tarea.valor_factura = -1
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()

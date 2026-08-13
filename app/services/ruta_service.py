@@ -706,6 +706,28 @@ class RutaService:
             logger.warning('[RUTAS] valor_factura falló para tarea %s (FE %s-%s): %s',
                             tarea.id, tipo_fe, consec_fe, e)
 
+        # Se anota igual que la FE. Sin esto, la distribución de valores por
+        # parada —el insumo del tope de contado declarado— exige volver a
+        # consultar Siesa parada por parada.
+        #
+        # Anotar no puede romper lo anotado: si el commit falla, el valor ya se
+        # devolvió y lo único que se pierde es el ahorro de la próxima consulta.
+        if valor_factura is not None:
+            try:
+                from app.extensions import db as _db
+                if tarea.valor_factura is None or \
+                        float(tarea.valor_factura) != float(valor_factura):
+                    tarea.valor_factura = valor_factura
+                    _db.session.commit()
+            except Exception as _e_val:
+                try:
+                    from app.extensions import db as _db2
+                    _db2.session.rollback()
+                except Exception:
+                    pass
+                logger.warning('[RUTAS] no se pudo anotar valor_factura en la tarea %s: %s',
+                               tarea.id, _e_val)
+
         es_contado = None
         # El valor CRUDO de Siesa, además del derivado. `es_contado` lo produce
         # esta misma función, así que usarlo para verificar el supuesto que la

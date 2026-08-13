@@ -582,6 +582,42 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
 
 # ── Liquidación — dashboard, detalle, one-click ───────────────────
 
+def _distribucion(valores: list, total_recaudos: int) -> dict:
+    """Percentiles del valor por parada, con su cobertura pegada.
+
+    Sin cobertura los percentiles son un número suelto: describen las paradas
+    que tienen valor anotado, no la operación. Y el sesgo no es aleatorio —
+    tiene valor la parada cuya FE alguien resolvió alguna vez.
+    """
+    n = len(valores)
+    if not n:
+        return {
+            'con_valor': 0, 'de_un_total_de': total_recaudos, 'cobertura_pct': None,
+            'percentiles': None,
+            'nota': ('Ninguna parada tiene valor anotado todavía. Se llena sola '
+                     'cuando alguien abre la liquidación de una ruta.'),
+        }
+    ordenados = sorted(valores)
+
+    def _p(q):
+        # Índice por rango, sin interpolar: con pocas muestras interpolar
+        # inventa un valor que no corresponde a ninguna parada real.
+        i = min(n - 1, max(0, int(round(q * (n - 1)))))
+        return round(ordenados[i], 2)
+
+    return {
+        'con_valor': n,
+        'de_un_total_de': total_recaudos,
+        'cobertura_pct': round(100.0 * n / total_recaudos, 1) if total_recaudos else None,
+        'percentiles': {'p50': _p(.50), 'p75': _p(.75), 'p90': _p(.90),
+                        'p95': _p(.95), 'p99': _p(.99),
+                        'max': round(ordenados[-1], 2)},
+        'nota': ('Exposición por parada (neto de la FE), NO lo cobrado. Un tope '
+                 'calculado sobre monto_cobrado quedaría bajo: en un rechazo '
+                 'ese vale cero y el riesgo fue el total.'),
+    }
+
+
 @rutas_bp.route('/motivos-rechazo', methods=['GET'])
 @jwt_required()
 def motivos_rechazo():
@@ -641,7 +677,7 @@ def liquidacion_desglose():
 
     # ── 1. Desglose ──────────────────────────────────────────────────────
     matriz, por_pago, por_estado, por_modo, por_motivo = {}, {}, {}, {}, {}
-    cruce_modo, credito = {}, []
+    cruce_modo, credito, valores = {}, [], []
     #: Tope declarado, no silencioso. Si se recorta, la respuesta lo dice —
     #: una lista truncada sin avisar se lee como «esas son todas».
     _TOPE_CREDITO = 500
@@ -655,6 +691,9 @@ def liquidacion_desglose():
         # `(sin registrar)` y no `LIBRE`: las paradas confirmadas antes del
         # 2026-08-13 no guardaban el modo. Contarlas como LIBRE inflaría
         # justo el número de riesgo; contarlas como DINAMICO lo escondería.
+        _tv = r.tarea
+        if _tv is not None and _tv.valor_factura is not None:
+            valores.append(float(_tv.valor_factura))
         mp = r.modo_pantalla or '(sin registrar)'
         por_modo[mp] = por_modo.get(mp, 0) + 1
         # El cruce que la matriz de arriba no da: modo × forma de pago. La
@@ -686,6 +725,10 @@ def liquidacion_desglose():
                 # exista. Se llena sola cuando alguien la resuelve.
                 'factura': (f'{_t.fe_tipo}-{_t.fe_consec}'
                             if _t is not None and _t.fe_tipo else None),
+                # La EXPOSICIÓN de la parada, no lo cobrado. `monto_cobrado`
+                # vale cero en un rechazo y el riesgo fue el total.
+                'valor': (float(_t.valor_factura)
+                          if _t is not None and _t.valor_factura is not None else None),
                 'estado_entrega': ee,
                 'modo_pantalla': r.modo_pantalla,
             })
@@ -758,6 +801,18 @@ def liquidacion_desglose():
             'pct_parcial_o_rechazado': (
                 round(100.0 * _no_entregado / total, 1) if total else None),
         },
+        # ── Distribución de valores por parada ──────────────────────────
+        #
+        # El insumo del tope por debajo del cual una parada declarada de
+        # contado pasaría sin evaluación de crédito. Percentiles y no promedio:
+        # un tope se elige mirando la cola, no el centro.
+        #
+        # **La cobertura va primero y no es decorativa.** Si solo una fracción
+        # de las paradas tiene valor anotado, los percentiles describen esa
+        # fracción y no la operación. Un umbral puesto sobre una muestra
+        # sesgada deja pasar justo lo que venía a frenar — y el sesgo acá no es
+        # aleatorio: tienen valor las paradas cuya FE alguien resolvió.
+        'distribucion_valor_parada': _distribucion(valores, total),
         'paradas_credito': {
             'total': por_pago.get('CREDITO', 0),
             'listadas': len(credito),
