@@ -60,6 +60,16 @@ class TareaPacking(db.Model):
     fe_tipo   = db.Column(db.String(10), nullable=True)
     fe_consec = db.Column(db.String(30), nullable=True)
 
+    #: `f430_id_cond_pago` del pedido — lo que el pedido DECLARA sobre cómo se
+    #: va a pagar. Se anota para poder validar la entrega sin red y para saber
+    #: qué condición llevan los pedidos de ruta sin abrir uno por uno en Siesa.
+    #:
+    #: `NULL` = no se ha consultado. `''` = Siesa respondió y el pedido no trae
+    #: condición. **No es lo mismo**, y colapsar esas dos fue lo que puso
+    #: «Valor a Cobrar» en la pantalla del conductor para clientes de condición
+    #: desconocida.
+    cond_pago = db.Column(db.String(10), nullable=True)
+
     #: Valor neto de la FE — la EXPOSICIÓN de esa parada, no lo que se cobró.
     #: Insumo del tope por debajo del cual una parada declarada de contado
     #: pasaría sin evaluación de crédito.
@@ -123,6 +133,7 @@ class TareaPacking(db.Model):
             'tienda_destino': self.tienda_destino,
             'bodega_origen_siesa': self.bodega_origen_siesa,
             'numero_pedido_siesa': self.numero_pedido_siesa,
+            'cond_pago': self.cond_pago,
             'valor_factura': float(self.valor_factura) if self.valor_factura is not None else None,
             'fe_tipo': self.fe_tipo,
             'fe_consec': self.fe_consec,

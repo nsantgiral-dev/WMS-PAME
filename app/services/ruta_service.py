@@ -736,6 +736,15 @@ class RutaService:
         # Con el crudo, «qué condición llevan los pedidos de ruta» y «¿el
         # fallback se disparó?» se responden sin depender de nuestra lectura.
         cond_pago_crudo = None
+        # Si ya se anotó, no se vuelve a preguntar. Además de ahorrar una
+        # consulta por parada en cada carga de ruta, es lo que permite validar
+        # la entrega **sin red**: `confirmar_parada` no puede ir a Siesa.
+        if getattr(tarea, 'cond_pago', None) is not None:
+            from app.services import cond_pago as _cp0
+            return (valor_factura,
+                    _cp0.es_contado_o_none(tarea.cond_pago, connekta.cond_pago_ventas),
+                    valores_por_referencia,
+                    tarea.cond_pago)
         try:
             cabecera = connekta.get_pedido_cabecera(
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
@@ -746,6 +755,20 @@ class RutaService:
             if es_contado is None:
                 _cp.registrar_ausencia(
                     f'pedido {tarea.tipo_docto_pedido_siesa}-{tarea.consec_docto_pedido_siesa}')
+            # Anotar no puede romper lo anotado: si el commit falla, el valor ya
+            # se devolvió y solo se pierde el ahorro de la próxima consulta.
+            try:
+                from app.extensions import db as _db_cp
+                tarea.cond_pago = cond_pago_crudo
+                _db_cp.session.commit()
+            except Exception as _e_cp:
+                try:
+                    from app.extensions import db as _db_cp2
+                    _db_cp2.session.rollback()
+                except Exception:
+                    pass
+                logger.warning('[RUTAS] no se pudo anotar cond_pago en la tarea %s: %s',
+                               tarea.id, _e_cp)
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
