@@ -52,6 +52,36 @@ class TareaPacking(db.Model):
     rm_tipo   = db.Column(db.String(10), nullable=True)
     rm_consec = db.Column(db.Integer,    nullable=True)
 
+    #: La FACTURA que Siesa asignó al facturar desde esa remisión. No estaba, y
+    #: su ausencia fue la causa raíz del job 440: seis sitios le pasaban el
+    #: PEDIDO a `get_rowids_factura`, que filtra por `f350_*` (la factura).
+    #: `NULL` = todavía no se resolvió, no «no existe». La llena
+    #: `fe_resolver.resolver_fe` la primera vez que alguien la pida.
+    fe_tipo   = db.Column(db.String(10), nullable=True)
+    fe_consec = db.Column(db.String(30), nullable=True)
+
+    #: Valor neto de la FE — la EXPOSICIÓN de esa parada, no lo que se cobró.
+    #: Insumo del tope por debajo del cual una parada declarada de contado
+    #: pasaría sin evaluación de crédito.
+    #: NO confundir con `RecaudoEntrega.monto_cobrado`: en una parada rechazada
+    #: ese vale cero y acá el riesgo fue el total. Un tope calculado sobre el
+    #: monto cobrado quedaría sistemáticamente bajo.
+    #: `NULL` = no se ha calculado, no «vale cero».
+    valor_factura = db.Column(db.Numeric(14, 2), nullable=True)
+
+    __table_args__ = (
+        # Mismo CHECK que la migración. Solo allá, `create_all()` no lo tendría
+        # y ningún test lo ejercitaría — media factura se leería como una.
+        db.CheckConstraint(
+            '(fe_tipo IS NULL AND fe_consec IS NULL) OR '
+            '(fe_tipo IS NOT NULL AND fe_consec IS NOT NULL)',
+            name='ck_packing_fe_completa'),
+        # Un valor negativo no es una parada: sería un error de suma o una FE
+        # mal leída. Cero sí es posible (factura anulada, líneas en cero).
+        db.CheckConstraint('valor_factura IS NULL OR valor_factura >= 0',
+                           name='ck_packing_valor_no_negativo'),
+    )
+
     # Alerta: pedido anulado en Siesa mientras el WMS lo procesaba
     pedido_anulado_siesa = db.Column(db.Boolean, default=False)
     pedido_estado_siesa_detectado = db.Column(db.String(10))
@@ -93,6 +123,9 @@ class TareaPacking(db.Model):
             'tienda_destino': self.tienda_destino,
             'bodega_origen_siesa': self.bodega_origen_siesa,
             'numero_pedido_siesa': self.numero_pedido_siesa,
+            'valor_factura': float(self.valor_factura) if self.valor_factura is not None else None,
+            'fe_tipo': self.fe_tipo,
+            'fe_consec': self.fe_consec,
             'tipo_docto_pedido_siesa': self.tipo_docto_pedido_siesa,
             'consec_docto_pedido_siesa': self.consec_docto_pedido_siesa,
             'almacen_id': self.almacen_id,

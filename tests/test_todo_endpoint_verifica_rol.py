@@ -49,6 +49,11 @@ _ABIERTAS_A_PROPOSITO = {
     ('health.py', 'health_ping'),
     # Devuelve TU propio usuario. Pedir rol para saber tu rol es circular.
     ('auth.py', 'me'),
+    # Catálogo de motivos de rechazo: lo necesita el CONDUCTOR, que es el rol
+    # más bajo del sistema, y no expone nada del negocio — son siete etiquetas
+    # fijas. Pedir rol acá dejaría al conductor sin poder registrar un rechazo,
+    # que es justo lo que este catálogo vino a hacer más difícil de falsear.
+    ('rutas.py', 'motivos_rechazo'),
     # Catálogo DANE de municipios: dato público, sin nada del negocio.
     ('rutas.py', 'listar_municipios'),
     # El stub 503 de flota cuando el módulo no importa. No toca datos.

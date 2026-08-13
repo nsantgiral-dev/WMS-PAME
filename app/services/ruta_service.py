@@ -619,9 +619,19 @@ class RutaService:
         # de cada parada ya funciona offline sin volver a tocar Siesa.
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
-            valor_factura, es_contado, valores_ref = RutaService._valor_y_cond_pago(t)
+            valor_factura, es_contado, valores_ref, cond_pago_crudo = \
+                RutaService._valor_y_cond_pago(t)
             p['valor_factura'] = valor_factura
             p['es_contado']    = es_contado
+            # `''` = Siesa respondió sin condición. `None` = no se pudo
+            # preguntar. Son cosas distintas y colapsarlas fue el defecto.
+            p['cond_pago']     = cond_pago_crudo
+            # El modo lo calculaba `rutas.js` y se descartaba: el desglose
+            # sabía qué eligió el conductor, no qué opciones tenía enfrente.
+            from app.services import cond_pago as _cpm
+            _hay_valor = valor_factura is not None and bool(p['items']) and all(
+                it.get('valor_unitario') is not None for it in p['items'])
+            p['modo_pago'] = _cpm.modo_pantalla(es_contado, _hay_valor)
             for item in p['items']:
                 item['valor_unitario'] = valores_ref.get(item['codigo'])
 
@@ -657,11 +667,16 @@ class RutaService:
         el dato, el frontend cae al campo libre de siempre (sin bloquear la
         pantalla).
 
-        `es_contado`: igual criterio que `trigger_factura_desde_remision` en
-        connekta_gateway.py — cond_pago vacío se trata como contado (mismo
-        fallback que ya se usa al facturar), y CONTADO = coincide con
-        `SIESA_COND_PAGO_VENTAS`. Cualquier otra condición (30D, C30...) es
-        crédito.
+        `es_contado`: `True` | `False` | **`None` cuando no se sabe**.
+
+        Hasta el 2026-08-13 un `f430_id_cond_pago` vacío daba `True` —se
+        trataba como contado— y `rutas.js` mostraba «Valor a Cobrar». O sea que
+        al conductor se le pedía cobrarle a un cliente cuya condición nadie
+        conocía. Ahora devuelve `None` y la pantalla cae al campo libre, que es
+        lo que ya hacía cuando faltaba el valor de la factura.
+
+        La política de cómo leer el vacío vive en `services/cond_pago.py`, no
+        acá: estaba escrita en dos sitios y los dos hacia contado.
 
         `valores_por_referencia`: `{codigo: valor_neto_unitario}` — el valor
         real de Siesa por unidad de cada línea (`f470_vlr_neto / f470_cant_base`),
@@ -691,16 +706,50 @@ class RutaService:
             logger.warning('[RUTAS] valor_factura falló para tarea %s (FE %s-%s): %s',
                             tarea.id, tipo_fe, consec_fe, e)
 
+        # Se anota igual que la FE. Sin esto, la distribución de valores por
+        # parada —el insumo del tope de contado declarado— exige volver a
+        # consultar Siesa parada por parada.
+        #
+        # Anotar no puede romper lo anotado: si el commit falla, el valor ya se
+        # devolvió y lo único que se pierde es el ahorro de la próxima consulta.
+        if valor_factura is not None:
+            try:
+                from app.extensions import db as _db
+                if tarea.valor_factura is None or \
+                        float(tarea.valor_factura) != float(valor_factura):
+                    tarea.valor_factura = valor_factura
+                    _db.session.commit()
+            except Exception as _e_val:
+                try:
+                    from app.extensions import db as _db2
+                    _db2.session.rollback()
+                except Exception:
+                    pass
+                logger.warning('[RUTAS] no se pudo anotar valor_factura en la tarea %s: %s',
+                               tarea.id, _e_val)
+
         es_contado = None
+        # El valor CRUDO de Siesa, además del derivado. `es_contado` lo produce
+        # esta misma función, así que usarlo para verificar el supuesto que la
+        # gobierna no verifica nada: da `None` tanto si la condición falta como
+        # si la consulta falló, y `True` tanto con C01 como —antes— con vacío.
+        # Con el crudo, «qué condición llevan los pedidos de ruta» y «¿el
+        # fallback se disparó?» se responden sin depender de nuestra lectura.
+        cond_pago_crudo = None
         try:
             cabecera = connekta.get_pedido_cabecera(
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
+            from app.services import cond_pago as _cp
             cond_pago_siesa = (cabecera or {}).get('f430_id_cond_pago') or ''
-            es_contado = (not cond_pago_siesa) or (cond_pago_siesa == connekta.cond_pago_ventas)
+            cond_pago_crudo = cond_pago_siesa
+            es_contado = _cp.es_contado_o_none(cond_pago_siesa, connekta.cond_pago_ventas)
+            if es_contado is None:
+                _cp.registrar_ausencia(
+                    f'pedido {tarea.tipo_docto_pedido_siesa}-{tarea.consec_docto_pedido_siesa}')
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
-        return valor_factura, es_contado, valores_por_referencia
+        return valor_factura, es_contado, valores_por_referencia, cond_pago_crudo
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:
@@ -728,8 +777,18 @@ class RutaService:
             if not forma_pago:
                 raise ValueError('Forma de pago es obligatoria para registrar una entrega')
         if estado_entrega == EstadoEntrega.RECHAZADO:
+            # Motivo TIPIFICADO, no texto libre. RECHAZADO era el estado más
+            # barato de los tres —solo pedía prosa— mientras ENTREGADO pedía
+            # forma de pago. Con el control «si no paga, no se entrega», el
+            # camino de menor resistencia era marcar rechazo, y eso convierte
+            # un faltante de inventario en una devolución falsa.
+            from app.services import motivos_rechazo as _mr
+            if not _mr.valido(data.get('motivo_rechazo')):
+                raise ValueError(
+                    'Elegí el motivo del rechazo de la lista — el texto libre '
+                    'no dice si la mercancía volvió al camión')
             if not (data.get('observaciones') or '').strip():
-                raise ValueError('El motivo del rechazo es obligatorio')
+                raise ValueError('El detalle del rechazo es obligatorio')
         if estado_entrega == EstadoEntrega.PARCIAL:
             # monto>0 solo aplica si de verdad se cobra en la puerta — un
             # pedido a crédito con devolución parcial no cobra nada ahí (solo
@@ -813,6 +872,16 @@ class RutaService:
 
         recaudo.estado_entrega        = estado_entrega
         recaudo.forma_pago            = forma_pago
+        # Lo que el conductor tenía enfrente, no solo lo que eligió. Se acepta
+        # del cliente porque el modo depende de datos de Siesa que la parada ya
+        # resolvió; recalcularlo acá exigiría volver a consultar y la
+        # confirmación tiene que poder funcionar offline.
+        _modo = (data.get('modo_pantalla') or '').upper() or None
+        if _modo in ('CREDITO', 'DINAMICO', 'LIBRE'):
+            recaudo.modo_pantalla = _modo
+        from app.services import motivos_rechazo as _mr2
+        _mot = (data.get('motivo_rechazo') or '').strip().upper() or None
+        recaudo.motivo_rechazo = _mot if _mr2.valido(_mot) else None
         recaudo.monto_cobrado         = data.get('monto_cobrado', 0) or 0
         recaudo.motivo_descuento      = motivo_descuento
         recaudo.monto_descuento       = monto_descuento
@@ -994,17 +1063,63 @@ class RutaService:
 
     @staticmethod
     def bultos_rechazados(page: int, limit: int) -> dict:
+        """La lista de trabajo para reingresar mercancía — **sin la que no volvió**.
+
+        Un bulto queda `RECHAZADO` tanto si el cliente lo devolvió como si se
+        lo quedó sin pagar (`NO_PAGO_SE_QUEDO`). Los dos casos entraban a la
+        misma lista, y alguien iba a ir a buscar cajas que no están en el
+        camión.
+
+        Es el defecto que el motivo tipificado vino a impedir y que quedó a
+        medias: el flag `retorna` se construyó y no se cableó a la ruta física.
+        Con el control «si no paga completo, no se entrega» esto pasa de raro a
+        cotidiano.
+
+        Los que no volvieron **no se ocultan**: van en su propio bloque. Uno es
+        «andá a buscarlos»; el otro es «estos no están y alguien tiene que
+        responder por ellos». Filtrarlos en silencio convertiría una pérdida de
+        inventario en una fila que desaparece.
+        """
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.services.motivos_rechazo import SIN_RETORNO
+
+        # Las tareas cuya parada declaró que la mercancía se quedó con el
+        # cliente. Es un conjunto chico —son excepciones— así que se resuelve
+        # con un IN y no con un join por fila.
+        sin_retorno = {
+            (r.ruta_id, r.tarea_id)
+            for r in RecaudoEntrega.query
+            .filter(RecaudoEntrega.motivo_rechazo.in_(SIN_RETORNO)).all()
+        }
+
         q = (Bulto.query
              .options(_sl(Bulto.tarea))
              .filter_by(estado=EstadoBulto.RECHAZADO)
              .order_by(Bulto.fecha_entrega.desc()))
-        total  = q.count()
-        bultos = q.offset((page - 1) * limit).limit(limit).all()
+        todos = q.all()
+
+        def _quedo_con_cliente(b):
+            return (b.ruta_despacho_id, b.tarea_id) in sin_retorno
+
+        retornados = [b for b in todos if not _quedo_con_cliente(b)]
+        no_retornados = [b for b in todos if _quedo_con_cliente(b)]
+
+        total = len(retornados)
+        pagina = retornados[(page - 1) * limit:(page - 1) * limit + limit]
         return {
-            'bultos': [b.to_dict() for b in bultos],
+            'bultos': [b.to_dict() for b in pagina],
             'total':  total,
             'page':   page,
             'pages':  (total + limit - 1) // limit,
+            # Mercancía que salió y no volvió. NO es trabajo de bodega: es una
+            # pérdida que alguien tiene que cerrar contablemente.
+            'no_retornados': {
+                'total': len(no_retornados),
+                'bultos': [b.to_dict() for b in no_retornados[:limit]],
+                'nota': ('Se quedaron con el cliente sin pago. No están en el '
+                         'camión: no hay nada que reingresar, hay algo que '
+                         'cobrar o que dar de baja.'),
+            },
         }
 
     @staticmethod

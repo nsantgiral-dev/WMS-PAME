@@ -1628,6 +1628,10 @@ async function conductorToggle(id, activar) {
 let _COND_RUTAS = [];
 let _COND_RUTA_ACTIVA = null;   // ruta seleccionada
 let _COND_PARADAS = [];         // paradas de la ruta activa
+//: Catálogo de motivos de rechazo. Viene del backend
+//: (`services/motivos_rechazo.py`) y no se escribe acá: dos listas del mismo
+//: dominio divergen, y ya pasó con la condición de pago y los tipos de vehículo.
+let _COND_MOTIVOS = [];
 let _COND_PARADA_FORM = null;   // parada en formulario de confirmación
 let _COND_SYNCING = false;
 let _COND_OFFLINE_INIT = false;
@@ -1775,6 +1779,13 @@ async function condAbrirParadas(rutaId) {
   }
   _COND_RUTA_ACTIVA = { id: rutaId };
   _COND_PARADAS = data.paradas || [];
+  // Se pide una vez por ruta, no por parada. Si falla, el select queda vacío y
+  // la validación del servidor rechaza igual — el conductor ve el error en vez
+  // de guardar un rechazo sin motivo.
+  if (!_COND_MOTIVOS.length) {
+    try { _COND_MOTIVOS = (await get('/api/rutas/motivos-rechazo')).motivos || []; }
+    catch (e) { console.warn('[RUTAS] no se pudo traer el catálogo de motivos', e); }
+  }
   _COND_RETENCIONES = data.retenciones_disponibles || _COND_RETENCIONES;
   _condRenderParadas(data);
 }
@@ -1889,6 +1900,7 @@ function _condRenderFormParada() {
   // solo si el conductor ajusta alguna cantidad en Referencias. Un recaudo
   // viejo con estado_entrega=PARCIAL se edita igual que un Entregado.
   const estadoUi = (r && r.estado_entrega === 'RECHAZADO') ? 'RECHAZADO' : 'ENTREGADO';
+  const motivoRechazoActual = (r && r.motivo_rechazo) || '';
   const formaActual  = r ? (r.forma_pago || '') : '';
   const montoActual  = r ? (r.monto_cobrado || 0) : 0;
   const obsActual    = r ? (r.observaciones || '') : '';
@@ -1905,7 +1917,14 @@ function _condRenderFormParada() {
   const hayValorConocido = p.valor_factura != null
     && !!(p.items && p.items.length) && p.items.every(it => it.valor_unitario != null);
   const mostrarValorDinamico = p.es_contado === true && hayValorConocido;
-  const modoPago = p.es_contado === false ? 'CREDITO' : (mostrarValorDinamico ? 'DINAMICO' : 'LIBRE');
+  // El modo lo decide el backend (`services/cond_pago.modo_pantalla`) — acá
+  // estaba la segunda implementación de la misma política, y por eso el modo
+  // no se podía contar: se calculaba en el navegador y se descartaba.
+  //
+  // Ante campo ausente (backend viejo o caché) cae a LIBRE, que es el modo que
+  // NO afirma nada. Asumir DINAMICO le pediría cobrar un valor que nadie
+  // confirmó; asumir CREDITO le impediría cobrar uno que sí correspondía.
+  const modoPago = p.modo_pago || 'LIBRE';
   el._modoPago = modoPago;
   el._mostrarValorDinamico = mostrarValorDinamico;
   // El valor de la factura se muestra siempre que se conozca — hasta en
@@ -2073,6 +2092,25 @@ function _condRenderFormParada() {
       `}
     </div>
 
+    <!-- Motivo tipificado del rechazo. RECHAZADO era el estado mas barato de
+         los tres (solo pedia prosa) y el control "si no paga, no se entrega"
+         empuja hacia el. Un texto libre no dice lo unico que importa:
+         SI LA MERCANCIA VOLVIO. El catalogo viene del backend, de
+         services/motivos_rechazo.py, para no tener dos listas.
+         Sin backticks: esto vive DENTRO de un template literal. -->
+    <div id="cond-motivo-wrap" style="margin-bottom:14px;display:${estadoUi === 'RECHAZADO' ? 'block' : 'none'};">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL RECHAZO *</label>
+      <select id="cond-motivo"
+        style="width:100%;padding:12px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:14px;box-sizing:border-box;">
+        <option value="">— Elegí el motivo —</option>
+        ${(_COND_MOTIVOS || []).map(m => `
+        <option value="${m.codigo}" ${motivoRechazoActual === m.codigo ? 'selected' : ''}>${m.etiqueta}</option>`).join('')}
+      </select>
+      <p id="cond-motivo-aviso" style="font-size:11px;color:#fbbf24;margin:6px 0 0;display:none;">
+        La mercancía se queda con el cliente. El inventario NO vuelve al camión.
+      </p>
+    </div>
+
     <div style="margin-bottom:14px;">
       <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">OBSERVACIONES</label>
       <textarea id="cond-obs" rows="2"
@@ -2193,6 +2231,9 @@ function condSelEstado(estado) {
   const el = document.getElementById('cond-contenido');
   if (!el) return;
   el._estadoSel = estado;
+
+  const wrapMotivo = document.getElementById('cond-motivo-wrap');
+  if (wrapMotivo) wrapMotivo.style.display = estado === 'RECHAZADO' ? 'block' : 'none';
 
   ['ENTREGADO','RECHAZADO'].forEach(e => {
     const btn = document.getElementById('cond-estado-' + e);
@@ -2400,6 +2441,13 @@ async function condGuardarParada() {
   const payload = {
     estado_entrega:    estadoEntrega,
     forma_pago:        formaPago || null,
+    // Qué modo tenía la pantalla al confirmar, no solo qué eligió el
+    // conductor. En LIBRE puede marcar CREDITO en una parada de contado, y
+    // sin registrarlo esa frecuencia no se puede contar. Viaja en el payload
+    // —y no se recalcula en el servidor— porque la confirmación tiene que
+    // funcionar offline, sin volver a preguntarle a Siesa.
+    modo_pantalla:     el._modoPago || null,
+    motivo_rechazo:    document.getElementById('cond-motivo')?.value || null,
     monto_cobrado:     montoFinal,
     motivo_descuento:  motivoDescuentoFinal,
     monto_descuento:   montoDescuentoFinal,

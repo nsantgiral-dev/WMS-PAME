@@ -582,6 +582,273 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
 
 # ── Liquidación — dashboard, detalle, one-click ───────────────────
 
+def _distribucion(valores: list, total_recaudos: int) -> dict:
+    """Percentiles del valor por parada, con su cobertura pegada.
+
+    Sin cobertura los percentiles son un número suelto: describen las paradas
+    que tienen valor anotado, no la operación. Y el sesgo no es aleatorio —
+    tiene valor la parada cuya FE alguien resolvió alguna vez.
+    """
+    n = len(valores)
+    if not n:
+        return {
+            'con_valor': 0, 'de_un_total_de': total_recaudos, 'cobertura_pct': None,
+            'percentiles': None,
+            'nota': ('Ninguna parada tiene valor anotado todavía. Se llena sola '
+                     'cuando alguien abre la liquidación de una ruta.'),
+        }
+    ordenados = sorted(valores)
+
+    def _p(q):
+        # Índice por rango, sin interpolar: con pocas muestras interpolar
+        # inventa un valor que no corresponde a ninguna parada real.
+        i = min(n - 1, max(0, int(round(q * (n - 1)))))
+        return round(ordenados[i], 2)
+
+    return {
+        'con_valor': n,
+        'de_un_total_de': total_recaudos,
+        'cobertura_pct': round(100.0 * n / total_recaudos, 1) if total_recaudos else None,
+        'percentiles': {'p50': _p(.50), 'p75': _p(.75), 'p90': _p(.90),
+                        'p95': _p(.95), 'p99': _p(.99),
+                        'max': round(ordenados[-1], 2)},
+        'nota': ('Exposición por parada (neto de la FE), NO lo cobrado. Un tope '
+                 'calculado sobre monto_cobrado quedaría bajo: en un rechazo '
+                 'ese vale cero y el riesgo fue el total.'),
+    }
+
+
+@rutas_bp.route('/motivos-rechazo', methods=['GET'])
+@jwt_required()
+def motivos_rechazo():
+    """El catálogo de motivos para el desplegable del conductor.
+
+    Sale del backend y no de una lista en el JS: dos catálogos del mismo
+    dominio divergen. Ya pasó con la lectura de la condición de pago (dos
+    sitios, los dos hacia contado) y con los tipos de vehículo (el dominio
+    conocía «camioneta» y el formulario no la ofrecía).
+
+    Lo puede leer cualquiera que pueda registrar una entrega — el conductor
+    incluido, que es quien lo necesita.
+    """
+    from app.services.motivos_rechazo import para_frontend
+    return jsonify({'motivos': para_frontend()}), 200
+
+
+@rutas_bp.route('/liquidacion/desglose', methods=['GET'])
+@jwt_required()
+def liquidacion_desglose():
+    """Los tres números que faltaban para decidir sobre el flujo de facturación.
+
+    Se estuvieron estimando toda la semana y ninguno se podía sacar de las
+    pantallas existentes — el dashboard agrega por ruta, no desglosa.
+
+    **1. `forma_pago` × `estado_entrega`.** Cuánto del flujo es contado (lo
+    único que se movería si la factura pasa a emitirse en la liquidación) y con
+    qué frecuencia hay PARCIAL o RECHAZADO, que es cuando haría falta la
+    devolución de remisión — y también cuántas veces se ejerce el control «no
+    paga completo, no se entrega», que devuelve mercancía física al camión.
+
+    **2. Rezago de liquidación.** Días entre que la ruta queda ENTREGADA y
+    LIQUIDADA. Hoy no hay ninguna alerta cuando eso no pasa: se buscó en los
+    schedulers y en el servicio de alertas y no existe.
+
+    ⚠️ **Este número es un piso, no una estimación.** Hoy liquidar no tiene
+    consecuencia fiscal; si la factura pasa a emitirse ahí, la tendría. Medir
+    la latencia de un proceso sin consecuencias y proyectarla a uno con
+    consecuencias es un error de método — puede ir para los dos lados. Sirve
+    para decir «no van a tardar menos que esto», no para planear.
+
+    **3. Alertas de condición de pago ausente.** Cuántas veces se emitió una
+    factura como CONTADO porque el pedido no traía `f430_id_cond_pago`.
+
+    Esa pregunta se estuvo discutiendo con conteos de facturas de otro sistema,
+    que **no pueden detectarlo**: el fallback rellena el campo antes de emitir,
+    así que toda factura sale con condición. Contar facturas mira el único
+    lugar donde la evidencia está garantizada limpia. Lo que sí lo detecta es
+    la alerta que el gateway encola, y que vive en esta base.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede ver el desglose'}), 403
+
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.siesa_job import SiesaJob
+    from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
+
+    # ── 1. Desglose ──────────────────────────────────────────────────────
+    matriz, por_pago, por_estado, por_modo, por_motivo = {}, {}, {}, {}, {}
+    cruce_modo, credito, valores = {}, [], []
+    #: Tope declarado, no silencioso. Si se recorta, la respuesta lo dice —
+    #: una lista truncada sin avisar se lee como «esas son todas».
+    _TOPE_CREDITO = 500
+    total = 0
+    for r in RecaudoEntrega.query.all():
+        fp = (r.forma_pago or '(sin forma de pago)').upper()
+        ee = (r.estado_entrega or '(sin estado)').upper()
+        matriz[f'{fp} | {ee}'] = matriz.get(f'{fp} | {ee}', 0) + 1
+        por_pago[fp] = por_pago.get(fp, 0) + 1
+        por_estado[ee] = por_estado.get(ee, 0) + 1
+        # `(sin registrar)` y no `LIBRE`: las paradas confirmadas antes del
+        # 2026-08-13 no guardaban el modo. Contarlas como LIBRE inflaría
+        # justo el número de riesgo; contarlas como DINAMICO lo escondería.
+        _tv = r.tarea
+        if _tv is not None and _tv.valor_factura is not None:
+            valores.append(float(_tv.valor_factura))
+        mp = r.modo_pantalla or '(sin registrar)'
+        por_modo[mp] = por_modo.get(mp, 0) + 1
+        # El cruce que la matriz de arriba no da: modo × forma de pago. La
+        # pregunta de cartera es «paradas donde el conductor pudo elegir y
+        # eligió CRÉDITO», y eso no sale de dos conteos separados.
+        cruce_modo[f'{mp} | {fp}'] = cruce_modo.get(f'{mp} | {fp}', 0) + 1
+        # Las de CRÉDITO, con identificadores. Un conteo no se puede cruzar
+        # contra la cartera; una lista sí. **Es el proxy que SÍ funciona hacia
+        # atrás**: `modo_pantalla` se empezó a registrar el 2026-08-13, pero
+        # una parada marcada CRÉDITO nunca dispara recibo de caja, así que su
+        # factura queda abierta — se haya elegido en modo LIBRE o no.
+        if fp == 'CREDITO' and len(credito) < _TOPE_CREDITO:
+            _t = r.tarea
+            _ru = r.ruta
+            credito.append({
+                'recaudo_id': r.id,
+                'ruta_id': r.ruta_id,
+                'fecha_entregada': (_ru.fecha_entregada.date().isoformat()
+                                    if _ru is not None and _ru.fecha_entregada else None),
+                'cliente': (_t.cliente if _t is not None else None),
+                'pedido': (f'{_t.tipo_docto_pedido_siesa}-{_t.consec_docto_pedido_siesa}'
+                           if _t is not None else None),
+                'remision': (f'{_t.rm_tipo}-{_t.rm_consec}'
+                             if _t is not None and _t.rm_consec else None),
+                # La FACTURA, que es por donde cartera indexa. Se lee de lo
+                # PERSISTIDO — este endpoint no llama a Siesa: resolverla acá
+                # serían cientos de consultas al ERP en un solo request.
+                # `null` = todavía no se resolvió para esa tarea, no que no
+                # exista. Se llena sola cuando alguien la resuelve.
+                'factura': (f'{_t.fe_tipo}-{_t.fe_consec}'
+                            if _t is not None and _t.fe_tipo else None),
+                # La EXPOSICIÓN de la parada, no lo cobrado. `monto_cobrado`
+                # vale cero en un rechazo y el riesgo fue el total.
+                'valor': (float(_t.valor_factura)
+                          if _t is not None and _t.valor_factura is not None else None),
+                'estado_entrega': ee,
+                'modo_pantalla': r.modo_pantalla,
+            })
+        if ee == 'RECHAZADO':
+            mr = r.motivo_rechazo or '(sin registrar)'
+            por_motivo[mr] = por_motivo.get(mr, 0) + 1
+        total += 1
+
+    _no_entregado = sum(v for k, v in por_estado.items() if k in ('PARCIAL', 'RECHAZADO'))
+
+    # ── 2. Rezago ────────────────────────────────────────────────────────
+    from app.models.ruta_despacho import EstadoFinancieroRuta as _EFR
+    from app.utils.fecha import ahora_bogota
+    # Se compara en DÍAS de Bogotá, no en UTC: una ruta entregada a las 8 p.m.
+    # tiene 0 días de rezago, no 1. Regla 5 — lo que alguien LEE como día no
+    # sale de utcnow.
+    hoy = ahora_bogota().date()
+    sin_liquidar, dias = [], []
+    for ruta in (RutaDespacho.query
+                 .filter(RutaDespacho.estado == 'ENTREGADA')
+                 .filter(RutaDespacho.estado_financiero != _EFR.LIQUIDADA)
+                 .all()):
+        # `fecha_entregada` es DateTime y `fecha_programada` es Date — se
+        # normaliza a fecha antes de restar, o revienta al mezclarlas.
+        _fe = ruta.fecha_entregada
+        ref = _fe.date() if _fe else ruta.fecha_programada
+        d = (hoy - ref).days if ref else None
+        if d is not None:
+            dias.append(d)
+        sin_liquidar.append({'ruta_id': ruta.id, 'dias': d,
+                             'estado_financiero': ruta.estado_financiero})
+
+    # ── 3. Alertas de condición ausente ──────────────────────────────────
+    # `count()` y no traer las filas: si algún día son miles, este endpoint no
+    # puede volverse el problema que vino a medir.
+    alertas_cond = (SiesaJob.query
+                    .filter(SiesaJob.tipo == 'ALERTA_EMAIL')
+                    .filter(SiesaJob.payload.like('%data incompleta%'))
+                    .count())
+
+    # EL DENOMINADOR, sin el cual el conteo de arriba no dice nada.
+    #
+    # «0 alertas» significa cosas opuestas según cuántas facturas haya emitido
+    # el gateway: con 5, es «no hemos llegado a probarlo»; con 5.000, es «el
+    # fallback es código muerto». Y acá el denominador va a ser chico —la
+    # cadena de despacho es nueva— así que un cero NO cierra la pregunta.
+    #
+    # Ojo con la confusión que ya costó una vuelta: las ~382.000 facturas del
+    # extracto de Siesa **no pasaron por este gateway**. Sirven para saber si
+    # los PEDIDOS traen condición; no dicen nada del fallback.
+    from app.models.packing import TareaPacking
+    _emitidas = TareaPacking.query.filter(TareaPacking.rm_consec.isnot(None)).count()
+
+    return jsonify({
+        'recaudos': {
+            'total': total,
+            'matriz': matriz,
+            'por_forma_pago': por_pago,
+            'por_estado_entrega': por_estado,
+            'por_modo_pantalla': por_modo,
+            'en_modo_libre': por_modo.get('LIBRE', 0),
+            'motivos_rechazo': por_motivo,
+            'modo_x_forma_pago': cruce_modo,
+            # El caso donde el estado dice RECHAZADO pero el inventario NO
+            # volvió al camión. Es faltante de inventario disfrazado de
+            # devolución, y solo aparece en un conteo físico.
+            'rechazos_sin_retorno': sum(
+                n for m, n in por_motivo.items() if m in _MR_SIN_RETORNO),
+            'parcial_o_rechazado': _no_entregado,
+            'pct_parcial_o_rechazado': (
+                round(100.0 * _no_entregado / total, 1) if total else None),
+        },
+        # ── Distribución de valores por parada ──────────────────────────
+        #
+        # El insumo del tope por debajo del cual una parada declarada de
+        # contado pasaría sin evaluación de crédito. Percentiles y no promedio:
+        # un tope se elige mirando la cola, no el centro.
+        #
+        # **La cobertura va primero y no es decorativa.** Si solo una fracción
+        # de las paradas tiene valor anotado, los percentiles describen esa
+        # fracción y no la operación. Un umbral puesto sobre una muestra
+        # sesgada deja pasar justo lo que venía a frenar — y el sesgo acá no es
+        # aleatorio: tienen valor las paradas cuya FE alguien resolvió.
+        'distribucion_valor_parada': _distribucion(valores, total),
+        'paradas_credito': {
+            'total': por_pago.get('CREDITO', 0),
+            'listadas': len(credito),
+            'truncado': por_pago.get('CREDITO', 0) > len(credito),
+            'detalle': credito,
+            # Cuántas se pueden cruzar documento contra documento y cuántas
+            # solo por cliente+fecha. Sin esta cifra, una lista con la mitad de
+            # las facturas en `null` se lee como si el cruce fuera completo.
+            'con_factura': sum(1 for x in credito if x['factura']),
+            'sin_factura': sum(1 for x in credito if not x['factura']),
+            'nota': ('Una parada marcada CRÉDITO nunca dispara recibo de caja, '
+                     'así que su factura queda abierta en cartera. Sirve hacia '
+                     'atrás; `modo_pantalla` solo desde el 2026-08-13. '
+                     '`factura` sale de lo persistido en la tarea: null = aún '
+                     'no se resolvió, no que no exista.'),
+        },
+        'rezago_liquidacion': {
+            'rutas_entregadas_sin_liquidar': len(sin_liquidar),
+            'dias_max': max(dias) if dias else None,
+            'dias_promedio': round(sum(dias) / len(dias), 1) if dias else None,
+            'detalle': sorted(sin_liquidar,
+                              key=lambda x: (x['dias'] is None, -(x['dias'] or 0)))[:50],
+            'nota': ('Piso, no estimación: hoy liquidar no tiene consecuencia '
+                     'fiscal. Si la factura pasa a emitirse acá, la tendría.'),
+        },
+        'condicion_pago_ausente': {
+            'alertas': alertas_cond,
+            'facturas_emitidas_por_el_gateway': _emitidas,
+            'concluyente': _emitidas >= 50,
+            'nota': ('Veces que se facturó como CONTADO porque el pedido no traía '
+                     'f430_id_cond_pago. Contar facturas NO lo detecta: el '
+                     'fallback rellena el campo antes de emitir.'),
+        },
+    }), 200
+
+
 @rutas_bp.route('/liquidacion/dashboard', methods=['GET'])
 @jwt_required()
 def liquidacion_dashboard():
@@ -595,6 +862,7 @@ def liquidacion_dashboard():
     from app.models.bulto import Bulto
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
 
     # Soporta rango de fechas (fecha_desde/fecha_hasta) o fecha única (backwards compatible)
     fecha_desde_str = request.args.get('fecha_desde') or request.args.get('fecha')
@@ -749,6 +1017,7 @@ def liquidar_completo(id):
     from app.extensions import db
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
     from app.services.liquidacion_service import (
         LiquidacionService, RETENCION_PUC, RETENCION_TASA, _obtener_tercero,
     )
