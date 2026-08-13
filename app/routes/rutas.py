@@ -673,11 +673,16 @@ def liquidacion_desglose():
 
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.connekta_gateway import connekta
     from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
 
     # ── 1. Desglose ──────────────────────────────────────────────────────
     matriz, por_pago, por_estado, por_modo, por_motivo = {}, {}, {}, {}, {}
     cruce_modo, credito, valores = {}, [], []
+    #: Qué condición DECLARA el pedido de cada parada. Responde la verificación
+    #: que se venía planteando como «abrir un pedido en Siesa, dos minutos»,
+    #: pero sobre todos los pedidos a la vez en vez de sobre uno.
+    por_condicion = {}
     #: Tope declarado, no silencioso. Si se recorta, la respuesta lo dice —
     #: una lista truncada sin avisar se lee como «esas son todas».
     _TOPE_CREDITO = 500
@@ -694,6 +699,16 @@ def liquidacion_desglose():
         _tv = r.tarea
         if _tv is not None and _tv.valor_factura is not None:
             valores.append(float(_tv.valor_factura))
+        # `(sin consultar)` no es `(sin condición)`: el primero es que nadie
+        # abrió esa ruta en línea; el segundo es que Siesa respondió sin el
+        # dato. Colapsarlos es el defecto que ya costó una vez.
+        if _tv is None or _tv.cond_pago is None:
+            _clase = '(sin consultar)'
+        else:
+            from app.services import cond_pago as _cpd
+            _clase = _cpd.clasificar(_tv.cond_pago, connekta.cond_pago_ventas)
+            _clase = f'{_clase} ({_tv.cond_pago or "vacío"})'
+        por_condicion[_clase] = por_condicion.get(_clase, 0) + 1
         mp = r.modo_pantalla or '(sin registrar)'
         por_modo[mp] = por_modo.get(mp, 0) + 1
         # El cruce que la matriz de arriba no da: modo × forma de pago. La
@@ -791,6 +806,10 @@ def liquidacion_desglose():
             'por_modo_pantalla': por_modo,
             'en_modo_libre': por_modo.get('LIBRE', 0),
             'motivos_rechazo': por_motivo,
+            # Qué DECLARA el pedido, no qué hizo el conductor. Si sale todo
+            # `contado (C01)`, el bloqueo por mora nunca frena rutas y el
+            # método «No retener pedidos de contado» ya cubre el caso.
+            'condicion_declarada': por_condicion,
             'modo_x_forma_pago': cruce_modo,
             # El caso donde el estado dice RECHAZADO pero el inventario NO
             # volvió al camión. Es faltante de inventario disfrazado de
@@ -862,6 +881,7 @@ def liquidacion_dashboard():
     from app.models.bulto import Bulto
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.connekta_gateway import connekta
     from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
 
     # Soporta rango de fechas (fecha_desde/fecha_hasta) o fecha única (backwards compatible)
@@ -1017,6 +1037,7 @@ def liquidar_completo(id):
     from app.extensions import db
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.connekta_gateway import connekta
     from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
     from app.services.liquidacion_service import (
         LiquidacionService, RETENCION_PUC, RETENCION_TASA, _obtener_tercero,

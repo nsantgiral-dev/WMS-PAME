@@ -240,3 +240,62 @@ class TestLaCadenaDelModoNoSeCortaEnElNavegador:
         conductor cobrar un valor que nadie confirmó."""
         fuente = self._RUTAS_JS.read_text(encoding='utf-8')
         assert "|| 'LIBRE'" in fuente
+
+
+class TestLaCondicionQuedaAnotadaEnLaTarea:
+    """Sin esto, la restricción de la entrega no se puede aplicar.
+
+    El diseño acordado prohíbe `forma_pago = CREDITO` sobre una parada que el
+    pedido declaró de contado. `confirmar_parada` no puede validarlo yendo a
+    Siesa: **tiene que funcionar sin señal**. El dato tiene que estar anotado
+    antes.
+
+    Y responde la verificación que se venía planteando como «abrir un pedido en
+    Siesa, dos minutos» — sobre todos los pedidos a la vez.
+    """
+
+    class _Tarea:
+        id = 1
+        rm_tipo, rm_consec = 'RS', 7
+        tipo_docto_pedido_siesa = 'PD'
+        consec_docto_pedido_siesa = '999'
+        fe_tipo = fe_consec = None
+        valor_factura = None
+        cond_pago = None
+
+    def _preparar(self, monkeypatch, cabecera):
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01', raising=False)
+        monkeypatch.setattr(connekta, 'get_detalle_factura',
+                            lambda **k: [{'f350_id_tipo_docto': 'FEW',
+                                          'f350_consec_docto': '1'}], raising=False)
+        monkeypatch.setattr(connekta, 'get_rowids_factura', lambda *a, **k: [], raising=False)
+        monkeypatch.setattr(connekta, 'get_pedido_cabecera', cabecera, raising=False)
+
+    def test_usa_lo_anotado_sin_volver_a_preguntar(self, monkeypatch):
+        """El ahorro no es lo importante: es que `confirmar_parada` pueda
+        validar sin red."""
+        from app.services import ruta_service as rs
+
+        t = self._Tarea()
+        t.cond_pago = 'C01'
+        self._preparar(
+            monkeypatch,
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
+        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(t)
+        assert crudo == 'C01' and es_contado is True
+
+    def test_lo_anotado_vacio_no_dispara_otra_consulta(self, monkeypatch):
+        """`''` es una respuesta de Siesa —«este pedido no trae condición»—, no
+        la ausencia de respuesta. Volver a preguntar por un vacío anotado sería
+        consultar Siesa en cada carga para siempre."""
+        from app.services import ruta_service as rs
+
+        t = self._Tarea()
+        t.cond_pago = ''
+        self._preparar(
+            monkeypatch,
+            lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
+        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(t)
+        assert crudo == '' and es_contado is None

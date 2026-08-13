@@ -542,3 +542,47 @@ class TestLaDistribucionDeValorPorParada:
         with pytest.raises(IntegrityError):
             db.session.commit()
         db.session.rollback()
+
+
+class TestLaCondicionDeclaradaPorElPedido:
+    """Responde la verificación que se venía planteando como «abrir un pedido
+    en Siesa, dos minutos» — sobre todos los pedidos a la vez.
+
+    Si sale todo `contado (C01)`, el bloqueo por mora nunca frena rutas y el
+    método «No retener pedidos de contado» ya cubre el caso. Si sale `C02`,
+    Siesa lo lee como crédito de un día y retiene.
+    """
+
+    def _parada(self, db, ruta, tarea, cond):
+        from app.models.packing import TareaPacking
+        import uuid
+        t2 = TareaPacking(codigo=f'PK-C-{uuid.uuid4().hex[:6]}', estado='DESPACHADO',
+                          almacen_id=tarea.almacen_id, tipo_docto_pedido_siesa='PD',
+                          consec_docto_pedido_siesa=1, cond_pago=cond)
+        db.session.add(t2); db.session.flush()
+        _recaudo(db, ruta.id, t2.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
+        db.session.commit()
+
+    def test_clasifica_lo_que_declara_el_pedido(self, client, db, h, ruta_con_tarea,
+                                                monkeypatch):
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01', raising=False)
+        ruta, tarea = ruta_con_tarea
+        self._parada(db, ruta, tarea, 'C01')
+        self._parada(db, ruta, tarea, 'C02')
+
+        d = client.get(_URL, headers=h).get_json()['recaudos']['condicion_declarada']
+        assert d['contado (C01)'] == 1
+        assert d['credito (C02)'] == 1
+
+    def test_sin_consultar_no_es_sin_condicion(self, client, db, h, ruta_con_tarea):
+        """`(sin consultar)` = nadie abrió esa ruta en línea. `''` = Siesa
+        respondió y el pedido no trae condición. Colapsarlos es el defecto que
+        ya costó una vez."""
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')  # cond_pago None
+        self._parada(db, ruta, tarea, '')
+
+        d = client.get(_URL, headers=h).get_json()['recaudos']['condicion_declarada']
+        assert d['(sin consultar)'] == 1
+        assert d['ausente (vacío)'] == 1
