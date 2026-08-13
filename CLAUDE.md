@@ -58,7 +58,9 @@ Buscar aquí antes de darlos por inexistentes:
 | 174646 | RequisicionTraslado (RIT) | Requisición de transferencia | Aprobación traslado | — (inline) | `crear_requisicion_traslado()` |
 | 174930 | TransferenciaDesdeRIT | STS desde RIT existente | Despacho traslado (con RIT) | DESPACHO_TRASLADO | `despachar_desde_requisicion()` |
 | 244328 | CompromisosPedido | Actualiza cantidades comprometidas (paso 1 del cierre de pedido) | Cierre packing, completo o parcial (unificado en `DespachoParialService`) | DESPACHO_F470 | `trigger_comprometer_pedido()` |
-| 142946 | NotaFactura (NCE) | Nota crédito por devolución | Liquidación: PARCIAL/RECHAZADO | NOTA_CREDITO_FACTURA | `trigger_nota_factura()` |
+| 142946 / 250696 | NotaFactura (NCE) | Nota crédito, **sin** cruce automático de cartera | ❌ Código muerto — `trigger_nota_factura()` no tiene ningún caller desde el commit `07cb5df` (2026-08-13); ni siquiera está registrado en Connekta. Ver "NCE — qué conector usar" | — | `trigger_nota_factura()` (sin caller) |
+| 251126 | NotaCredito CrearCruzar | Crea la NC **y cruza cartera** en un solo POST | Devolución de Cliente confirmada por recepción **y** Liquidación de ruta (mismo conector para las dos desde `07cb5df`) | NOTA_CREDITO_DEVOLUCION_CLIENTE, NOTA_CREDITO_FACTURA | `trigger_nota_factura_crear_cruzar()` |
+| 251546 | NotaCredito MotivoDIAN | Segundo POST: fija el motivo DIAN sobre la NC ya creada | Encadenado tras `NOTA_CREDITO_DEVOLUCION_CLIENTE` | MOTIVO_DIAN_NC | `trigger_motivo_dian_nc()` |
 | 142888 | ReciboCaja (RC) | Registro de cobro del conductor | Liquidación: CONTADO | RECIBO_CAJA | `trigger_recibo_caja()` |
 | 142882 | DocumentoContable (DC) | Retenciones tributarias | Liquidación: con retención | DOCUMENTO_CONTABLE_RET | `trigger_documento_contable()` |
 
@@ -342,6 +344,24 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
     Devolución de Cliente, no un workaround temporal. Confirmado también que una NC en
     Elaboración ya consume "cantidad pendiente por devolver" de la factura (bloquea intentos
     duplicados contra la misma línea, incluso sin aprobar).
+
+---
+
+## NCE — qué conector usar (y cuáles NO), leer antes de tocar este flujo
+
+La saga completa vive en las secciones de abajo (250878 → 251192 → 251126 →
+251546 → unificación 2026-08-13), pero mezclan intentos fallidos con lo que sí
+quedó en producción — fácil confundirse sobre cuál tocar. Tabla resumen,
+verificada contra Railway y contra Connekta (conectores registrados) el 2026-08-13:
+
+| Conector | Rol | Estado | Usar cuando... |
+|---|---|---|---|
+| **251126** | Crea la NC **y cruza cartera** en un solo POST | ✅ **EN USO** — `trigger_nota_factura_crear_cruzar()`, jobs `NOTA_CREDITO_DEVOLUCION_CLIENTE` **y** `NOTA_CREDITO_FACTURA` (unificados el 2026-08-13, commit `07cb5df` — un solo conector para las dos NC, Regla 0) | Siempre que se dispare una NC real, venga de Devolución de Cliente o de Liquidación de ruta |
+| **251546** | Segundo POST: fija el **motivo DIAN** sobre la NC ya creada (necesita el consecutivo real, no puede ir en el mismo POST que 251126) | ✅ **EN USO**, encendido desde 2026-08-06 (`CONNEKTA_CONSULTA_NC_CONSECUTIVO` registrada) — job `MOTIVO_DIAN_NC` | Se encadena solo, no se llama a mano |
+| **250696** (clon de 142946) | Crea la NC simple, **sin** cruce automático de cartera | ❌ **CÓDIGO MUERTO** — `trigger_nota_factura()` no tiene ningún caller desde `07cb5df` (2026-08-13). Y **no está registrado en Connekta** (confirmado el mismo día) — si algo llegara a llamarlo, fallaría duro, no solo "sin cruzar" | No reconectarlo a ningún job nuevo. Si hace falta un tercer flujo de NC, apuntarlo a 251126 |
+| **250878** | Intento de crear+cruzar+motivo+**aprobar**, todo en un solo POST | ❌ **ABANDONADO** — bloqueo estructural irresoluble (753 siempre se procesa después de 461, el registro que aprueba). No reintentar con variaciones de payload, ya se agotaron | Nunca — dejar como referencia histórica de qué NO intentar |
+| **251192** | Intento de referenciar una NC existente + motivo + **aprobar**, sin crear nada | ❌ **ABANDONADO** — mismo bloqueo que 250878, confirmado también en POST separado de la creación | Nunca |
+| — | **Aprobar** la NC en Siesa | Sin conector — el único paso que sigue 100% manual, sin solución de API | Escritorio de Siesa, ver "Procedimiento Manual" abajo |
 
 ---
 
@@ -712,13 +732,22 @@ verificar/reescribir cada uno explícitamente, no confiar en lo que se ve):
   "valor de ejemplo no guardado" — quedaron resueltos poniéndolos Fijo
   explícitamente (`G504_1` y `0` respectivamente).
 
-### Estado: integrado a código (2026-08-05), **apagado** hasta registrar la consulta
+### Estado: integrado a código (2026-08-05), **ENCENDIDO en producción desde 2026-08-06**
 
 `trigger_motivo_dian_nc()` (POST 2) + `get_consec_nc_creada()` +
 `get_max_rowid_nc()` en `connekta_gateway.py`; job `MOTIVO_DIAN_NC`
 encadenado en `siesa_job_service.py` después de que
 `NOTA_CREDITO_DEVOLUCION_CLIENTE` confirme éxito. Trinquete:
 `tests/test_nc_motivo_dian.py`.
+
+`CONNEKTA_CONSULTA_NC_CONSECUTIVO=papeleriamedellin_WMS_NC_Consecutivo` está
+registrada en Railway (verificado 2026-08-13) — `connekta.puede_fijar_motivo_dian`
+da `True` en producción. Evidencia de que ya corrió con éxito de punta a punta:
+`DevolucionCliente` id 7 (`DEVC-20260806163719-367`, 2026-08-06) quedó con
+`siesa_motivo_dian='AUTOMATICO'`, `siesa_nc_consec=59`, detalle `"NCE-59
+concepto=1"` — sin que nadie tocara Siesa a mano. La devolución id 6, creada
+ese mismo día un poco antes, sí quedó `MANUAL` (detalle "falta
+CONNEKTA_CONSULTA_NC_CONSECUTIVO") — la variable se activó entre esas dos.
 
 **Job aparte, no inline.** Si el motivo fallara dentro del job de la NC, el
 reintento del DLQ entraría por la guarda `siesa_nc_triggered` y devolvería
@@ -738,14 +767,16 @@ El consecutivo real queda en `DevolucionCliente.siesa_nc_consec` — vale por s�
 solo aunque el motivo falle: contabilidad tenía que buscar el documento en
 Auditoría para aprobarlo.
 
-**Falta (bloquea el encendido):** registrar la consulta dinámica en Connekta y
-ponerla en `CONNEKTA_CONSULTA_NC_CONSECUTIVO`. Debe devolver, sin parámetros,
-las columnas crudas de `t350_co_docto_contable` (`f350_rowid`, `f350_id_co`,
-`f350_id_tipo_docto`, `f350_consec_docto`, `f350_fecha`, `f350_ind_estado`,
-`f350_total_db`) para NCE, ordenadas por rowid descendente — el SQL exacto está
-en el docstring de `_filas_nc_encabezado`. Mientras la variable esté vacía el
-motivo sigue siendo manual y **`/api/health/siesa` lo declara** en
-`pasos_manuales_nc` (junto con "aprobar", que sigue sin solución de API).
+La consulta dinámica ya está registrada en Connekta y referenciada en
+`CONNEKTA_CONSULTA_NC_CONSECUTIVO` (ver arriba). Debe devolver, sin
+parámetros, las columnas crudas de `t350_co_docto_contable` (`f350_rowid`,
+`f350_id_co`, `f350_id_tipo_docto`, `f350_consec_docto`, `f350_fecha`,
+`f350_ind_estado`, `f350_total_db`) para NCE, ordenadas por rowid
+descendente — el SQL exacto está en el docstring de `_filas_nc_encabezado`.
+Si esa variable alguna vez queda vacía (rotación de credenciales, cambio de
+ambiente), el motivo vuelve a quedar manual automáticamente — sin cambio de
+código — y **`/api/health/siesa` lo declara** en `pasos_manuales_nc` (junto
+con "aprobar", que sigue sin solución de API y es el único paso que queda).
 
 Pendientes menores:
 - `SIESA_CONCEPTO_DIAN_NC` (default `1`=Devolución parcial) es global. Si
@@ -841,7 +872,8 @@ no se afloja el criterio.
 | AJUSTE_CONTEO | 142951 | `sesion.siesa_triggered` | — |
 | TRASLADO_AVERIAS | 142951 | `tarea_dev.siesa_triggered` | — |
 | DESPACHO_TRASLADO | 174930/173076 | `solicitud.siesa_salida_consec` | — |
-| NOTA_CREDITO_FACTURA | 142946 | `recaudo.siesa_nc_triggered` (pre-flag) | 1ro |
+| NOTA_CREDITO_FACTURA | 251126 (unificado con el job de abajo desde `07cb5df`, ver "NCE — qué conector usar") | `recaudo.siesa_nc_triggered` (pre-flag) | 1ro |
+| NOTA_CREDITO_DEVOLUCION_CLIENTE | 251126 | `devolucion.siesa_nc_triggered` (pre-flag) | — (bridge marca `recaudo.siesa_nc_triggered` si viene de ruta) |
 | RECIBO_CAJA | 142888 | `recaudo.siesa_rc_triggered` (pre-flag) | 2do (espera NC) |
 | DOCUMENTO_CONTABLE_RET | 142882 | `recaudo.siesa_dc_triggered` (pre-flag) | 3ro (espera RC) |
 | MOTIVO_DIAN_NC | 251546 | `devolucion.siesa_motivo_dian` | tras NOTA_CREDITO_DEVOLUCION_CLIENTE |
@@ -970,3 +1002,5 @@ Conectores con spec verificado contra código (julio 2026):
 | 173076 | `173076.docx` | ✓ Limpio (f462_* extras low-risk) |
 | 173079 | `173079 - API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada.docx` | ⚠ Extras: f350_id_clase_docto, f450_id_concepto, f470_ind_naturaleza |
 | 174646 | `174646 - API_v1_Inventarios_Comercial_RequisicionesParaTransferir.docx` | ✓ Limpio (4 extras low-risk) |
+| 251126 | `251126 - PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2.docx` | ✓ 34/34 campos verificados (2026-08-13) — sección Movimientos SÍ declara destino de inventario (`f470_id_bodega`, `f470_id_ubicacion_aux`, `f470_id_lote`, `f470_id_motivo`, `f470_id_causal_devol`), confirma que no es un documento puramente financiero |
+| 251546 | `251546 - PapeleriaMedellin_NotaCredito_CrearCruzarDian_WMS.docx` | ✓ Verificado 2026-08-13 |
