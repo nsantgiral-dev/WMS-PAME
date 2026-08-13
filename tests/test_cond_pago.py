@@ -132,7 +132,10 @@ class TestRutaServiceNoAfirmaContado:
         monkeypatch.setattr(connekta, 'get_pedido_cabecera',
                             lambda *a, **k: {'f430_id_cond_pago': ''}, raising=False)
 
-        _, es_contado, _ = rs.RutaService._valor_y_cond_pago(_Tarea())
+        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(_Tarea())
+        assert crudo == '', (
+            'el campo crudo tiene que viajar: `es_contado` lo deriva esta '
+            'misma función y no sirve para verificar el supuesto que la gobierna')
         assert es_contado is None, (
             'con condición vacía volvió a afirmar contado — la pantalla del '
             'conductor le pediría cobrar sin saber si el cliente es de crédito')
@@ -156,5 +159,45 @@ class TestRutaServiceNoAfirmaContado:
         monkeypatch.setattr(connekta, 'get_pedido_cabecera',
                             lambda *a, **k: {'f430_id_cond_pago': 'C01'}, raising=False)
 
-        _, es_contado, _ = rs.RutaService._valor_y_cond_pago(_Tarea())
+        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(_Tarea())
         assert es_contado is True
+        assert crudo == 'C01', 'el crudo permite distinguir C01 de un vacío'
+
+
+class TestElCrudoDistingueLoQueElDerivadoColapsa:
+    """`es_contado is None` significa dos cosas: Siesa dijo que no hay
+    condición, o Siesa no respondió. El crudo las separa — `''` contra `None`.
+
+    Importa porque la pregunta que se quiere responder («¿cuántos pedidos de
+    ruta vienen sin condición?») se contesta distinto en cada caso: uno es un
+    maestro incompleto, el otro es una consulta caída.
+    """
+
+    class _Tarea:
+        id = 1
+        rm_tipo, rm_consec = 'RS', 7
+        tipo_docto_pedido_siesa = 'PD'
+        consec_docto_pedido_siesa = '999'
+
+    def _correr(self, monkeypatch, cabecera_fn):
+        from app.services import ruta_service as rs
+        from app.services.connekta_gateway import connekta
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        monkeypatch.setattr(connekta, 'get_detalle_factura',
+                            lambda **kw: [{'f350_id_tipo_docto': 'FEW',
+                                           'f350_consec_docto': '1'}], raising=False)
+        monkeypatch.setattr(connekta, 'get_rowids_factura', lambda *a, **k: [], raising=False)
+        monkeypatch.setattr(connekta, 'get_pedido_cabecera', cabecera_fn, raising=False)
+        return rs.RutaService._valor_y_cond_pago(self._Tarea())
+
+    def test_siesa_responde_sin_condicion(self, monkeypatch):
+        _, es_contado, _, crudo = self._correr(
+            monkeypatch, lambda *a, **k: {'f430_id_cond_pago': ''})
+        assert crudo == '' and es_contado is None
+
+    def test_siesa_no_responde(self, monkeypatch):
+        def _explota(*a, **k):
+            raise Exception('Connekta caído')
+        _, es_contado, _, crudo = self._correr(monkeypatch, _explota)
+        assert crudo is None, 'sin consulta no hay dato crudo — no es lo mismo que vacío'
+        assert es_contado is None

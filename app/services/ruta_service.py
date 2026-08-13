@@ -619,9 +619,13 @@ class RutaService:
         # de cada parada ya funciona offline sin volver a tocar Siesa.
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
-            valor_factura, es_contado, valores_ref = RutaService._valor_y_cond_pago(t)
+            valor_factura, es_contado, valores_ref, cond_pago_crudo = \
+                RutaService._valor_y_cond_pago(t)
             p['valor_factura'] = valor_factura
             p['es_contado']    = es_contado
+            # `''` = Siesa respondió sin condición. `None` = no se pudo
+            # preguntar. Son cosas distintas y colapsarlas fue el defecto.
+            p['cond_pago']     = cond_pago_crudo
             for item in p['items']:
                 item['valor_unitario'] = valores_ref.get(item['codigo'])
 
@@ -697,11 +701,19 @@ class RutaService:
                             tarea.id, tipo_fe, consec_fe, e)
 
         es_contado = None
+        # El valor CRUDO de Siesa, además del derivado. `es_contado` lo produce
+        # esta misma función, así que usarlo para verificar el supuesto que la
+        # gobierna no verifica nada: da `None` tanto si la condición falta como
+        # si la consulta falló, y `True` tanto con C01 como —antes— con vacío.
+        # Con el crudo, «qué condición llevan los pedidos de ruta» y «¿el
+        # fallback se disparó?» se responden sin depender de nuestra lectura.
+        cond_pago_crudo = None
         try:
             cabecera = connekta.get_pedido_cabecera(
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
             from app.services import cond_pago as _cp
             cond_pago_siesa = (cabecera or {}).get('f430_id_cond_pago') or ''
+            cond_pago_crudo = cond_pago_siesa
             es_contado = _cp.es_contado_o_none(cond_pago_siesa, connekta.cond_pago_ventas)
             if es_contado is None:
                 _cp.registrar_ausencia(
@@ -709,7 +721,7 @@ class RutaService:
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
-        return valor_factura, es_contado, valores_por_referencia
+        return valor_factura, es_contado, valores_por_referencia, cond_pago_crudo
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:
