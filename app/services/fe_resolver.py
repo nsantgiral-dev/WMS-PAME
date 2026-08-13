@@ -70,6 +70,12 @@ def resolver_fe(tarea, gateway=None) -> tuple:
     if tarea is None:
         raise FENoEncontrada('no hay tarea de packing')
 
+    # Si ya se resolvió una vez, no se vuelve a preguntar. `TareaPacking` no
+    # guardaba la factura y esa ausencia fue la causa raíz del job 440 — cada
+    # consumidor tenía que ir a Siesa, y el que se equivocó pasó el pedido.
+    if getattr(tarea, 'fe_tipo', None) and getattr(tarea, 'fe_consec', None):
+        return tarea.fe_tipo, tarea.fe_consec
+
     filas = connekta.get_detalle_factura(
         tipo_docto_rm=tarea.rm_tipo or '',
         consec_rm=tarea.rm_consec or 0,
@@ -108,7 +114,45 @@ def resolver_fe(tarea, gateway=None) -> tuple:
     logger.info('[FE] pedido %s-%s → factura %s-%s',
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa,
                 tipo, consec)
+    _anotar(tarea, tipo, consec)
     return tipo, consec
+
+
+def _anotar(tarea, tipo: str, consec: str):
+    """Guarda la FE resuelta. **Anotar no puede romper lo anotado.**
+
+    Si el commit falla, la resolución ya es correcta y el llamador la recibe
+    igual: lo único que se pierde es el ahorro de la próxima consulta. Levantar
+    acá convertiría un problema de caché en uno de facturación.
+
+    El doble de simulación NO se persiste: un `SIMFE` guardado sobreviviría al
+    modo simulación y después se leería como una factura real (regla 8 de
+    flota — un doble se declara y no se confunde con el dato).
+
+    Hoy ese guard **no se alcanza desde `resolver_fe`**: la rama de simulación
+    retorna antes de llegar acá. Se conserva y se prueba directamente porque
+    protege el día que alguien mueva esa rama — y porque un guard sin ejercicio
+    es indistinguible de uno que no está. Lo descubrió una mutación que no
+    falló: borrarlo no rompía nada.
+    """
+    if tipo == 'SIMFE':
+        return
+    try:
+        from app.extensions import db
+        if getattr(tarea, 'fe_tipo', None) == tipo and \
+                getattr(tarea, 'fe_consec', None) == consec:
+            return
+        tarea.fe_tipo = tipo
+        tarea.fe_consec = str(consec)
+        db.session.commit()
+    except Exception as e:
+        try:
+            from app.extensions import db as _db
+            _db.session.rollback()
+        except Exception:
+            pass
+        logger.warning('[FE] no se pudo anotar %s-%s en la tarea %s: %s',
+                       tipo, consec, getattr(tarea, 'id', '?'), e)
 
 
 def resolver_fe_o_none(tarea, gateway=None) -> tuple:

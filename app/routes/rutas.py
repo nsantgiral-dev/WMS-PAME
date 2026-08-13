@@ -679,6 +679,13 @@ def liquidacion_desglose():
                            if _t is not None else None),
                 'remision': (f'{_t.rm_tipo}-{_t.rm_consec}'
                              if _t is not None and _t.rm_consec else None),
+                # La FACTURA, que es por donde cartera indexa. Se lee de lo
+                # PERSISTIDO — este endpoint no llama a Siesa: resolverla acá
+                # serían cientos de consultas al ERP en un solo request.
+                # `null` = todavía no se resolvió para esa tarea, no que no
+                # exista. Se llena sola cuando alguien la resuelve.
+                'factura': (f'{_t.fe_tipo}-{_t.fe_consec}'
+                            if _t is not None and _t.fe_tipo else None),
                 'estado_entrega': ee,
                 'modo_pantalla': r.modo_pantalla,
             })
@@ -756,9 +763,16 @@ def liquidacion_desglose():
             'listadas': len(credito),
             'truncado': por_pago.get('CREDITO', 0) > len(credito),
             'detalle': credito,
+            # Cuántas se pueden cruzar documento contra documento y cuántas
+            # solo por cliente+fecha. Sin esta cifra, una lista con la mitad de
+            # las facturas en `null` se lee como si el cruce fuera completo.
+            'con_factura': sum(1 for x in credito if x['factura']),
+            'sin_factura': sum(1 for x in credito if not x['factura']),
             'nota': ('Una parada marcada CRÉDITO nunca dispara recibo de caja, '
                      'así que su factura queda abierta en cartera. Sirve hacia '
-                     'atrás; `modo_pantalla` solo desde el 2026-08-13.'),
+                     'atrás; `modo_pantalla` solo desde el 2026-08-13. '
+                     '`factura` sale de lo persistido en la tarea: null = aún '
+                     'no se resolvió, no que no exista.'),
         },
         'rezago_liquidacion': {
             'rutas_entregadas_sin_liquidar': len(sin_liquidar),

@@ -344,3 +344,117 @@ class TestLoQueCarteraNecesitaCruzar:
         assert '2026-08-13' in pc['nota'], (
             'la nota tiene que decir desde cuándo hay modo_pantalla — sin eso, '
             'un vacío en el histórico se lee como ausencia del fenómeno')
+
+
+class TestLaFacturaParaElCruceDeCartera:
+    """Cartera indexa por FACTURA; la lista salía por pedido, así que el cruce
+    era aproximado por cliente y ventana de fecha — y acá ya sabemos qué pasa
+    con las cifras aproximadas.
+
+    La FE se lee de lo **persistido**. Este endpoint no llama a Siesa: con un
+    tope de 500 paradas, resolverla al vuelo serían cientos de consultas al ERP
+    en un solo request.
+    """
+
+    def test_incluye_la_factura_persistida(self, client, db, h, ruta_con_tarea):
+        ruta, tarea = ruta_con_tarea
+        tarea.fe_tipo, tarea.fe_consec = 'FEW', '1466'
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')
+        db.session.commit()
+
+        pc = client.get(_URL, headers=h).get_json()['paradas_credito']
+        assert pc['detalle'][0]['factura'] == 'FEW-1466'
+        assert pc['con_factura'] == 1 and pc['sin_factura'] == 0
+
+    def test_declara_cuantas_no_tienen_factura(self, client, db, h, ruta_con_tarea):
+        """Una lista con la mitad de las facturas en `null` se lee como si el
+        cruce fuera completo. La cobertura va en la respuesta."""
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')
+        db.session.commit()
+
+        pc = client.get(_URL, headers=h).get_json()['paradas_credito']
+        assert pc['detalle'][0]['factura'] is None
+        assert pc['sin_factura'] == 1
+
+    def test_el_endpoint_no_llama_a_siesa(self, client, db, h, ruta_con_tarea, monkeypatch):
+        """Con 500 paradas, resolver la FE al vuelo sería un bombardeo al ERP
+        desde una pantalla de dashboard."""
+        from app.services.connekta_gateway import connekta
+
+        def _prohibido(*a, **k):
+            raise AssertionError('el desglose llamó a Siesa')
+
+        monkeypatch.setattr(connekta, 'get_detalle_factura', _prohibido, raising=False)
+        monkeypatch.setattr(connekta, 'get_pedido_cabecera', _prohibido, raising=False)
+
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')
+        db.session.commit()
+        assert client.get(_URL, headers=h).status_code == 200
+
+
+class TestLaFEQuedaAnotadaEnLaTarea:
+    """La causa raíz del job 440: `TareaPacking` no guardaba la factura, así
+    que cada consumidor tenía que ir a Siesa — y el que se equivocó pasó el
+    pedido."""
+
+    class _Tarea:
+        id = 1
+        rm_tipo, rm_consec = 'RS', 7
+        tipo_docto_pedido_siesa = 'PD'
+        consec_docto_pedido_siesa = '1308'
+        fe_tipo = fe_consec = None
+
+    def test_usa_lo_anotado_sin_volver_a_preguntar(self, monkeypatch):
+        from app.services.connekta_gateway import connekta
+        from app.services.fe_resolver import resolver_fe
+
+        t = self._Tarea()
+        t.fe_tipo, t.fe_consec = 'FEW', '1466'
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        monkeypatch.setattr(
+            connekta, 'get_detalle_factura',
+            lambda **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')),
+            raising=False)
+        assert resolver_fe(t) == ('FEW', '1466')
+
+    def test_el_doble_de_simulacion_no_se_persiste(self, db, ruta_con_tarea, monkeypatch):
+        """Un `SIMFE` guardado sobreviviría al modo simulación y después se
+        leería como una factura real. Regla 8 de flota.
+
+        Se ejerce sobre una tarea REAL de la base, no sobre un objeto plano: con
+        un objeto plano el `commit` revienta y el `except` de `_anotar` se lo
+        traga, así que el test pasaba aunque el guard no existiera. Lo descubrió
+        una mutación que no falló.
+        """
+        from app.services.connekta_gateway import connekta
+        from app.services.fe_resolver import resolver_fe
+
+        _, tarea = ruta_con_tarea
+        monkeypatch.setattr(connekta, 'modo_simulacion', True, raising=False)
+        monkeypatch.setattr(connekta, 'get_detalle_factura', lambda **k: [], raising=False)
+
+        tipo, _c = resolver_fe(tarea)
+        assert tipo == 'SIMFE'
+        db.session.refresh(tarea)
+        assert tarea.fe_tipo is None, 'el doble se persistió — se leería como real'
+
+
+    def test_anotar_rechaza_el_doble_directamente(self, db, ruta_con_tarea):
+        """El guard de `_anotar` no se alcanza hoy desde `resolver_fe` —la rama
+        de simulación retorna antes— así que se ejerce directo.
+
+        Un guard que nunca se ejecuta es indistinguible de uno que no está: la
+        mutación que lo borró no tumbó ningún test hasta que se escribió esto.
+        """
+        from app.services.fe_resolver import _anotar
+
+        _, tarea = ruta_con_tarea
+        _anotar(tarea, 'SIMFE', '999')
+        db.session.refresh(tarea)
+        assert tarea.fe_tipo is None
+
+        _anotar(tarea, 'FEW', '1466')
+        db.session.refresh(tarea)
+        assert (tarea.fe_tipo, tarea.fe_consec) == ('FEW', '1466')
