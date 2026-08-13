@@ -145,6 +145,44 @@ def validar_cardinalidad(custodias: Sequence[Custodia]) -> None:
         )
 
 
+def validar_un_vehiculo_por_conductor(otras_custodias_abiertas: Sequence[tuple]) -> None:
+    """Un conductor no puede tener más de un vehículo bajo custodia a la vez.
+
+    `otras_custodias_abiertas` es `[(placa, "dd/mm a las HH:MM"), ...]` —
+    las custodias abiertas de ESTE conductor sobre vehículos DISTINTOS al que
+    está por recibir. Vacía = puede recibir.
+
+    QUÉ AFIRMA: que recibir un vehículo nuevo exige haber entregado los demás
+    primero.
+
+    QUÉ NO AFIRMA: cuál de los vehículos es el que el conductor tiene
+    realmente en el patio — eso lo decide una persona, no esta función.
+
+    Motivo: `validar_cardinalidad` impone 0-o-1 custodia activa **por
+    vehículo**, pero nada imponía 0-o-1 **por conductor** — cada apertura
+    solo mira su propio vehículo. El 2026-08-13 esto dejó a un conductor con
+    tres custodias abiertas a la vez (recibió TGZ653, después TGZ655, después
+    UPQ606, sin entregar ninguna) y tumbó `/flota/conductor/mi-turno`
+    (`Custodia.query...one_or_none()` con tres filas — `MultipleResultsFound`)
+    — su pantalla quedó en blanco, sin poder ver ni recibir ningún vehículo.
+    Un conductor manejando dos camiones a la vez tampoco tiene sentido en la
+    operación real: si algo le pasa a uno, no queda claro cuál estaba
+    conduciendo.
+
+    Levanta `CustodiaInvalida`.
+    """
+    if not otras_custodias_abiertas:
+        return
+    detalle = '; '.join(f'{placa} desde {desde}' for placa, desde in otras_custodias_abiertas)
+    plural = len(otras_custodias_abiertas) > 1
+    raise CustodiaInvalida(
+        f'Ya tenés {"otros vehículos" if plural else "otro vehículo"} bajo '
+        f'custodia sin entregar: {detalle}. Entregalo primero (botón «Entregar '
+        f'turno») antes de recibir uno nuevo — no podés responder por dos '
+        f'camiones a la vez.'
+    )
+
+
 def huecos_de_cobertura(custodias: Sequence[Custodia], ahora: datetime) -> List[Hueco]:
     """Tramos sin custodio entre la primera custodia y `ahora`.
 
@@ -232,6 +270,7 @@ __all__ = [
     'Hueco',
     'custodias_activas',
     'validar_cardinalidad',
+    'validar_un_vehiculo_por_conductor',
     'huecos_de_cobertura',
     'validar_arco_exclusivo',
 ]

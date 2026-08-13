@@ -312,4 +312,104 @@ class TestQuienPuedeRecibir:
             mundo['db'].session.execute(text(
                 'UPDATE flota_custodia SET cierre_forzado = 1 WHERE id = :i'), {'i': c.id})
             mundo['db'].session.commit()
-        mundo['db'].session.rollback()
+
+
+class TestUnVehiculoPorConductor:
+    """Un conductor no puede tener dos vehículos bajo custodia a la vez.
+
+    Bug real, 2026-08-13: nada impedía que un conductor recibiera un segundo
+    vehículo sin entregar el primero — cada apertura solo mira SU vehículo
+    (`validar_cardinalidad`), nunca al conductor. Un conductor real terminó
+    con tres custodias abiertas a la vez y tumbó `/flota/conductor/mi-turno`
+    (`MultipleResultsFound`) — su pantalla quedó en blanco.
+    """
+
+    @pytest.fixture
+    def dos_vehiculos(self, mundo):
+        from app.models.vehiculo import Vehiculo
+        veh2 = Vehiculo(placa='TRA002', tipo='Van', activo=True)
+        mundo['db'].session.add(veh2)
+        mundo['db'].session.commit()
+        mundo['veh2'] = veh2.id
+        return mundo
+
+    def test_no_puede_recibir_un_segundo_vehiculo_sin_entregar_el_primero(self, dos_vehiculos):
+        _traspasar(dos_vehiculos, 'c1', 100_000, 0)  # c1 recibe veh (TRA001)
+        with pytest.raises(CustodiaInvalida) as e:
+            traspaso.traspasar(
+                vehiculo_id=dos_vehiculos['veh2'], km=5_000,
+                registrado_por_usuario_id=dos_vehiculos['usr'],
+                custodio_tipo=CustodioTipo.CONDUCTOR,
+                custodio_conductor_id=dos_vehiculos['c1'],
+                quien_pide=QuienPide.CONDUCTOR,
+                ts=_T0 + timedelta(minutes=10),
+            )
+        # El mensaje nombra la placa que ya tiene y el gesto que destraba —
+        # mismo criterio que TestQuienPuedeRecibir, la misma lección de Yesid.
+        assert 'TRA001' in str(e.value)
+        assert 'Entregar turno' in str(e.value)
+
+    def test_el_vehiculo_que_ya_tenia_queda_intacto(self, dos_vehiculos):
+        """Un rechazo no puede dejar a medias lo que rechazó."""
+        _traspasar(dos_vehiculos, 'c1', 100_000, 0)
+        with pytest.raises(CustodiaInvalida):
+            traspaso.traspasar(
+                vehiculo_id=dos_vehiculos['veh2'], km=5_000,
+                registrado_por_usuario_id=dos_vehiculos['usr'],
+                custodio_tipo=CustodioTipo.CONDUCTOR,
+                custodio_conductor_id=dos_vehiculos['c1'],
+                quien_pide=QuienPide.CONDUCTOR,
+                ts=_T0 + timedelta(minutes=10),
+            )
+        vigente = traspaso.custodia_activa(dos_vehiculos['veh'])
+        assert vigente is not None and vigente.fin_ts is None
+        assert traspaso.custodia_activa(dos_vehiculos['veh2']) is None
+
+    def test_recibir_el_mismo_vehiculo_de_nuevo_no_es_conflicto(self, dos_vehiculos):
+        """No-op, no colisión consigo mismo — sigue funcionando igual que antes."""
+        _traspasar(dos_vehiculos, 'c1', 100_000, 0)
+        traspaso.traspasar(
+            vehiculo_id=dos_vehiculos['veh'], km=100_050,
+            registrado_por_usuario_id=dos_vehiculos['usr'],
+            custodio_tipo=CustodioTipo.CONDUCTOR,
+            custodio_conductor_id=dos_vehiculos['c1'],
+            quien_pide=QuienPide.CONDUCTOR,
+            ts=_T0 + timedelta(minutes=10),
+        )
+        assert traspaso.custodia_activa(dos_vehiculos['veh']).custodio_conductor_id == dos_vehiculos['c1']
+
+    def test_entregar_a_una_sede_no_dispara_el_guard(self, dos_vehiculos):
+        """El guard es solo para CONDUCTOR recibiendo — una sede no compite
+        por "un vehículo por conductor". `quien_pide=ADMIN_ZONA` porque el
+        fixture `mundo` no vincula `usuario_id` a los conductores —
+        `es_el_custodio_actual` nunca da true por esa vía acá, y no es lo que
+        este test ejercita (eso ya lo cubre TestQuienPuedeRecibir)."""
+        _traspasar(dos_vehiculos, 'c1', 100_000, 0)
+        # Un admin entrega el vehículo de c1 a la sede — no debe chocar con nada.
+        nueva = traspaso.traspasar(
+            vehiculo_id=dos_vehiculos['veh'], km=100_100,
+            registrado_por_usuario_id=dos_vehiculos['usr'],
+            custodio_tipo=CustodioTipo.SEDE,
+            custodio_sede_id=dos_vehiculos['alm'],
+            quien_pide=QuienPide.ADMIN_ZONA,
+            fotos_fin=[_foto(i) for i in range(8)],
+            ts=_T0 + timedelta(minutes=10),
+        )
+        assert nueva.custodio_tipo == CustodioTipo.SEDE.value
+        assert nueva.custodio_sede_id == dos_vehiculos['alm']
+
+    def test_libre_para_recibir_otro_tras_entregar_el_primero(self, dos_vehiculos):
+        """El camino feliz completo: entregar de verdad libera al conductor."""
+        c = _traspasar(dos_vehiculos, 'c1', 100_000, 0)
+        c.fin_ts = _T0 + timedelta(minutes=5)
+        dos_vehiculos['db'].session.commit()
+
+        nueva = traspaso.traspasar(
+            vehiculo_id=dos_vehiculos['veh2'], km=5_000,
+            registrado_por_usuario_id=dos_vehiculos['usr'],
+            custodio_tipo=CustodioTipo.CONDUCTOR,
+            custodio_conductor_id=dos_vehiculos['c1'],
+            quien_pide=QuienPide.CONDUCTOR,
+            ts=_T0 + timedelta(minutes=10),
+        )
+        assert nueva.vehiculo_id == dos_vehiculos['veh2']

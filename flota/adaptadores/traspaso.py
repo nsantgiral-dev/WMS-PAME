@@ -146,6 +146,25 @@ def traspasar(
         and vigente.custodio_conductor_id is not None
         and vigente.custodio_conductor_id == custodio_conductor_id
     )
+
+    # Un conductor no puede tener dos vehículos bajo custodia a la vez. Se
+    # juzga ANTES de escribir, igual que el resto — ver
+    # dom.validar_un_vehiculo_por_conductor. No aplica si es el mismo
+    # vehículo que ya tiene (eso es el no-op de arriba) ni si quien recibe es
+    # una sede (`custodio_tipo` distinto de CONDUCTOR).
+    if (custodio_tipo == CustodioTipo.CONDUCTOR and custodio_conductor_id is not None
+            and not mismo_custodio):
+        otras_abiertas = Custodia.query.filter(
+            Custodia.custodio_conductor_id == custodio_conductor_id,
+            Custodia.fin_ts.is_(None),
+            Custodia.vehiculo_id != vehiculo_id,
+        ).all()
+        dom.validar_un_vehiculo_por_conductor([
+            (Vehiculo.query.get(o.vehiculo_id).placa,
+             o.inicio_ts.strftime('%d/%m a las %H:%M'))
+            for o in otras_abiertas
+        ])
+
     # ¿Quien está pidiendo esto ES el custodio actual? Es otra pregunta que
     # `mismo_custodio`, y la diferencia es el día entero: al ENTREGAR a una sede
     # el custodio entrante no es un conductor, así que `mismo_custodio` da falso
