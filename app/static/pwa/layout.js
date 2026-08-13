@@ -1270,6 +1270,12 @@ function layoutCerrarModalVerEntrepano() {
 // contenedor con scroll horizontal independiente, no una sola grilla con
 // columnas compartidas.
 
+/** Lee una variable CSS numérica (px) desde :root, con fallback si no está definida. */
+function _layoutCssNum(nombreVar, fallback) {
+  const n = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(nombreVar));
+  return isNaN(n) ? fallback : n;
+}
+
 /** Open the visual schematic modal for a full cuerpo, grouped by nivel (piso=1 abajo). */
 function layoutAbrirModalEsquemaCuerpo(idsCsv) {
   const ids = idsCsv.split(',').map(Number);
@@ -1289,11 +1295,17 @@ function layoutAbrirModalEsquemaCuerpo(idsCsv) {
   });
   const nivelesOrden = [...niveles.keys()].sort((a, b) => b - a); // 1 (piso) abajo
   const maxHuecos = Math.max(...[...niveles.values()].map(hs => hs.length));
-  // Ancho de riel COMPARTIDO por todas las repisas del cuerpo (60px caja + 4px
-  // separación, sin la última) — una repisa con menos huecos que la más
-  // cargada se ve con espacio libre real, como una góndola desabastecida, en
-  // vez de encogerse a su propio ancho.
-  const anchoRiel = maxHuecos * 64 - 4;
+  // Ancho de riel COMPARTIDO por todas las repisas del cuerpo — una repisa con
+  // menos huecos que la más cargada se ve con espacio libre real, como una
+  // góndola desabastecida, en vez de encogerse a su propio ancho. El tamaño
+  // de caja se lee de las variables CSS (--esq-caja-w/--esq-gap), que cambian
+  // en el breakpoint de escritorio (@media min-width:1024px en index.html) —
+  // así el mismo cálculo sirve para mobile y desktop sin ramas de JS por
+  // tamaño de pantalla.
+  const cajaW = _layoutCssNum('--esq-caja-w', 60);
+  const gap = _layoutCssNum('--esq-gap', 4);
+  const posteW = _layoutCssNum('--esq-poste-w', 10);
+  const anchoRiel = maxHuecos * (cajaW + gap) - gap;
 
   document.getElementById('layout-esquema-titulo').textContent =
     `${codigoCuerpo} · ${zona} · ${huecos.length} hueco(s)`;
@@ -1310,14 +1322,14 @@ function layoutAbrirModalEsquemaCuerpo(idsCsv) {
   // mobile para este módulo, ahora aplicado al conjunto completo del dibujo.
   document.getElementById('layout-esquema-filas').innerHTML = `
     <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;padding:2px 2px 10px;">
-      <div style="width:${anchoRiel + 20}px;">
-        <div style="height:9px;background:linear-gradient(180deg,${color},${color}aa);border-radius:4px 4px 0 0;"></div>
+      <div style="width:${anchoRiel + posteW * 2}px;">
+        <div style="height:var(--esq-riel-h);background:linear-gradient(180deg,${color},${color}aa);border-radius:4px 4px 0 0;"></div>
         <div style="display:flex;">
-          <div style="width:10px;flex-shrink:0;background:linear-gradient(90deg,#3d4148,#6b6f78,#3d4148);"></div>
+          <div style="width:var(--esq-poste-w);flex-shrink:0;background:linear-gradient(90deg,#3d4148,#6b6f78,#3d4148);"></div>
           <div style="flex:1;padding-top:14px;">${repisas}</div>
-          <div style="width:10px;flex-shrink:0;background:linear-gradient(90deg,#3d4148,#6b6f78,#3d4148);"></div>
+          <div style="width:var(--esq-poste-w);flex-shrink:0;background:linear-gradient(90deg,#3d4148,#6b6f78,#3d4148);"></div>
         </div>
-        <div style="height:12px;background:linear-gradient(180deg,#4a4d54,#2b2d32);border-radius:0 0 5px 5px;box-shadow:0 4px 6px rgba(0,0,0,.35);"></div>
+        <div style="height:var(--esq-base-h);background:linear-gradient(180deg,#4a4d54,#2b2d32);border-radius:0 0 5px 5px;box-shadow:0 4px 6px rgba(0,0,0,.35);"></div>
       </div>
     </div>`;
 
@@ -1330,8 +1342,8 @@ function _layoutRenderEsquemaFila(nivel, huecos, color) {
     .map(u => _layoutRenderEsquemaHuecoBox(u, color)).join('');
   return `
     <div style="position:relative;margin-bottom:16px;">
-      <div style="position:absolute;left:0;top:-13px;font-size:8px;font-weight:800;color:#fff;background:#3d4148;padding:1px 5px;border-radius:3px;white-space:nowrap;">Entrepaño ${nivel}</div>
-      <div style="display:flex;align-items:flex-end;gap:4px;min-height:56px;">${boxes}</div>
+      <div style="position:absolute;left:0;top:-13px;font-size:var(--esq-font-hueco);font-weight:800;color:#fff;background:#3d4148;padding:1px 5px;border-radius:3px;white-space:nowrap;">Entrepaño ${nivel}</div>
+      <div style="display:flex;align-items:flex-end;gap:var(--esq-gap);min-height:calc(var(--esq-caja-h) + 4px);">${boxes}</div>
       <div style="height:6px;margin-top:4px;background:linear-gradient(180deg,#c89b6c,#9c7248);border-radius:2px;box-shadow:0 3px 4px rgba(0,0,0,.3);"></div>
     </div>`;
 }
@@ -1350,10 +1362,11 @@ function _layoutRenderEsquemaHuecoBox(u, color) {
   const titulo = asignado
     ? `${u.codigo} — ${u.producto_asignado_codigo} — ${u.producto_asignado_nombre || ''} (${u.stock_actual ?? 0} UND)`
     : `${u.codigo} — vacío`;
+  const altoCaja = asignado ? 'var(--esq-caja-h)' : 'var(--esq-caja-h-vac)';
   return `
-    <div title="${titulo}" style="min-width:60px;width:60px;height:${asignado ? 52 : 30}px;border:2px solid ${color};border-radius:6px 6px 3px 3px;background:${asignado ? color + '33' : 'transparent'};box-shadow:${asignado ? '0 2px 3px rgba(0,0,0,.25)' : 'none'};display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2px 3px;box-sizing:border-box;flex-shrink:0;${!u.activo ? 'opacity:0.4;' : ''}">
-      <div style="font-size:8px;font-weight:800;color:var(--tx);line-height:1;margin-bottom:2px;">${huecoLabel}</div>
-      <div style="font-size:8px;font-weight:600;color:${asignado ? color : 'var(--tx3)'};line-height:1.15;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${descripcion}</div>
+    <div title="${titulo}" style="min-width:var(--esq-caja-w);width:var(--esq-caja-w);height:${altoCaja};border:2px solid ${color};border-radius:6px 6px 3px 3px;background:${asignado ? color + '33' : 'transparent'};box-shadow:${asignado ? '0 2px 3px rgba(0,0,0,.25)' : 'none'};display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2px 3px;box-sizing:border-box;flex-shrink:0;${!u.activo ? 'opacity:0.4;' : ''}">
+      <div style="font-size:var(--esq-font-hueco);font-weight:800;color:var(--tx);line-height:1;margin-bottom:2px;">${huecoLabel}</div>
+      <div style="font-size:var(--esq-font-desc);font-weight:600;color:${asignado ? color : 'var(--tx3)'};line-height:1.15;text-align:center;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">${descripcion}</div>
     </div>`;
 }
 
