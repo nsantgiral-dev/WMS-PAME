@@ -312,6 +312,12 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
                 'f470_id_causal_devol': causal,
                 'f470_id_unidad_medida': row.get('f470_id_unidad_medida') or uom_default,
                 'f120_referencia': row.get('f120_referencia', ''),
+                # Devolución total: el prorrateo es la línea entera (factor 1).
+                # Se calcula igual que en la rama parcial para que
+                # `valor_cruce` salga del mismo campo en los dos casos — si
+                # solo una rama lo produjera, el cruce de una NC total valdría
+                # cero y la cartera quedaría abierta sin que nada avisara.
+                'f470_vlr_neto_prorrateado': Decimal(str(row.get('f470_vlr_neto') or 0)),
             })
         return lineas_nc
 
@@ -904,11 +910,29 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'sin_lineas': True, 'recaudo_id': payload.get('recaudo_id')}
 
-        # Paso 3: POST 142946
-        resultado = connekta.trigger_nota_factura(
+        # Paso 3: POST 251126 — crea Y cruza la cartera en un solo POST.
+        #
+        # Antes iba por `trigger_nota_factura` (250696), que SOLO CREA: dejaba
+        # la NC sin cruzar y alguien tenía que apretar «Automático» en el tab
+        # CxC de Siesa, a mano, por cada devolución de ruta.
+        #
+        # Y 250696 no está en uso en Connekta (confirmado 2026-08-13). Este
+        # camino nunca llegó a hacer POST —el job 440 fallaba antes, al
+        # resolver la factura— así que cambiarlo no puede romper nada que
+        # funcionara: apuntaba a un conector que no está registrado.
+        #
+        # 251126 es el que ya se verificó en vivo (FEW-1466, 2026-07-31) y el
+        # que usa Devolución de Cliente. Un solo conector para las dos notas
+        # crédito — Regla 0.
+        valor_cruce = sum(
+            (lin.get('f470_vlr_neto_prorrateado', Decimal(0)) for lin in lineas_nc),
+            Decimal(0),
+        )
+        resultado = connekta.trigger_nota_factura_crear_cruzar(
             tipo_docto_fe=tipo_docto_fe,
             consec_fe=consec_fe,
             lineas=lineas_nc,
+            valor_cruce=float(valor_cruce),
             notas=payload.get('notas', ''),
         )
 

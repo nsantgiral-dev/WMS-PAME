@@ -403,3 +403,58 @@ class TestElDetectorNoEstaCiego:
         fuente = _GATEWAY.read_text(encoding='utf-8')
         i = fuente.find('    def trigger_recibo_caja')
         assert len(_campos_del_dict(fuente[i:], 'header')) >= 33
+
+
+class TestSoloSeUsanLosDosConectoresRegistrados:
+    """Las notas crédito van por 251126 y 251546. Nada más.
+
+    Confirmado con el consultor el 2026-08-13: en Connekta solo están
+    registrados esos dos para nota crédito. Ni el 142946 estándar ni el clon
+    250696 están en uso.
+
+    Y sin embargo `NOTA_CREDITO_FACTURA` (liquidación de ruta) disparaba
+    `trigger_nota_factura` → **250696**, que además SOLO CREA: dejaba la
+    cartera sin cruzar y alguien tenía que apretar «Automático» en Siesa por
+    cada devolución de ruta.
+
+    Ese camino nunca llegó a hacer POST —el job 440 fallaba antes, resolviendo
+    la factura— así que el defecto estaba tapado por otro defecto. Es el
+    escenario más incómodo: dos errores donde el primero esconde al segundo, y
+    arreglar el primero destapa el segundo en producción.
+    """
+
+    _JOBS = _RAIZ / 'app' / 'services' / 'siesa_job_service.py'
+
+    def test_ningun_job_dispara_el_conector_que_solo_crea(self):
+        fuente = self._JOBS.read_text(encoding='utf-8')
+        llamadas = re.findall(r'connekta\.(trigger_nota_factura\w*)\(', fuente)
+        solo_crea = [c for c in llamadas if c == 'trigger_nota_factura']
+        assert not solo_crea, (
+            '\nUn job volvió a llamar `trigger_nota_factura` (250696), que solo '
+            'crea la NC y deja la cartera sin cruzar — además de no estar '
+            'registrado en Connekta.\n'
+            'Usar `trigger_nota_factura_crear_cruzar` (251126).')
+
+    def test_las_dos_notas_credito_usan_el_mismo_conector(self):
+        """Una política, una función. Que liquidación y devolución usaran
+        conectores distintos para el mismo hecho contable fue lo que dejó a una
+        de las dos sin cruzar la cartera durante meses."""
+        fuente = self._JOBS.read_text(encoding='utf-8')
+        llamadas = re.findall(r'connekta\.(trigger_nota_factura\w*)\(', fuente)
+        assert llamadas, 'no se encontró ninguna llamada — ¿cambió el nombre?'
+        assert set(llamadas) == {'trigger_nota_factura_crear_cruzar'}, (
+            f'las NC van por conectores distintos: {sorted(set(llamadas))}')
+
+    def test_las_dos_ramas_producen_el_valor_del_cruce(self):
+        """`valor_cruce` sale de `f470_vlr_neto_prorrateado`. Si solo lo
+        produjera la rama parcial, una NC total cruzaría por CERO y la cartera
+        quedaría abierta sin que nada avisara — el mismo silencio que ya costó
+        una vez con `F353_VLR_CRUCE` en bruto."""
+        fuente = self._JOBS.read_text(encoding='utf-8')
+        i = fuente.find('def _construir_lineas_nc')
+        j = fuente.find('\ndef ', i + 10)
+        cuerpo = fuente[i:j if j > 0 else i + 4000]
+        rama_total = cuerpo[cuerpo.find('if es_total:'):cuerpo.find('devueltos_map')]
+        assert 'f470_vlr_neto_prorrateado' in rama_total, (
+            'la rama es_total dejó de producir el neto — una NC total cruzaría '
+            'por 0 y la factura quedaría abierta en cartera')
