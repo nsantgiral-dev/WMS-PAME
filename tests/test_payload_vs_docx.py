@@ -385,6 +385,96 @@ class TestNotaFactura142946:
         assert fin == 522, f'el registro terminaba en 522 y ahora en {fin}'
 
 
+class TestFacturaDesdeRemision142943:
+    """El único conector en producción cuyo spec no estaba en el repo.
+
+    Llegó el 2026-08-13, después de que una prueba manual en el escritorio de
+    Siesa fallara con **47891 (caja)** sobre un pedido C01. Trae dos cosas que
+    no se sabían.
+
+    ## 1. `f462_id_caja` existe, y lo mandamos en `None`
+
+    El spec lo declara «Obligatoria si hay recaudos» (Dep, 3 chars, pos 2982).
+    Una FE de contado **tiene recaudos** — por eso el escritorio la pidió. El
+    escritorio la resuelve con las preferencias del usuario; el conector no es
+    un usuario y no tiene preferencias.
+
+    El valor ya existe en esta misma clase: `_co_caja_map` (línea ~151), que
+    usa el 142888. **No se cambia todavía a propósito** — mandar la caja hace
+    que Siesa registre el recaudo al facturar, y el WMS vuelve a registrarlo en
+    la liquidación con el 142888. Cuál de los dos sobra es una decisión de
+    diseño, no un campo faltante. Ver `docs/arranque_produccion.md`.
+
+    ## 2. No hay sección `Movimientos` — no se puede facturar parcial
+
+    Secciones: Inicial, Doctoventascomercial, RelacionDoctos, CuotasCxC, Final.
+    `RelacionDoctos` referencia la remisión **por encabezado** (CO + tipo +
+    consecutivo); en ningún lado hay línea ni cantidad.
+
+    Eso decide una discusión abierta: «FE por lo entregado» **no es posible con
+    este conector**. La FE factura la remisión completa. Facturar menos exige
+    que la remisión sea menor —moverla a la liquidación, y con ella la descarga
+    de inventario— o un documento de devolución de remisión que hoy no tiene
+    conector. `F460_ID_TIPO_DOCTO` dice «remision **o devolucion**» y
+    `RelacionDoctos` es una lista, así que el camino existe en el spec; lo que
+    no existe es el conector que cree esa devolución.
+    """
+
+    _DOCX = '142943.docx'
+    _SECCIONES = ('Doctoventascomercial', 'RelacionDoctos', 'CuotasCxC')
+
+    @pytest.fixture(scope='class')
+    def spec(self):
+        return _plantilla_docx(self._DOCX)
+
+    @pytest.fixture(scope='class')
+    def fuente(self):
+        t = _GATEWAY.read_text(encoding='utf-8')
+        i = t.find('    def trigger_factura_desde_remision')
+        assert i != -1, 'no existe trigger_factura_desde_remision — ¿se renombró?'
+        j = t.find('\n    def ', i + 10)
+        return t[i:j if j > 0 else len(t)]
+
+    @pytest.mark.parametrize('seccion', _SECCIONES)
+    def test_no_falta_ningun_campo(self, spec, fuente, seccion):
+        faltan = [c for c in spec[seccion] if f"'{c}'" not in fuente]
+        assert not faltan, f'\n{seccion}: faltan {len(faltan)} campos del DOCX: {faltan}'
+
+    def test_el_spec_no_tiene_movimientos(self, spec):
+        """Si algún día aparece, «FE por lo entregado» pasa a ser posible y hay
+        que volver a leer el spec entero — no seguir asumiendo que no se puede.
+
+        Falla también si el parser deja de leer el DOCX: sin las otras cuatro
+        secciones, «no hay Movimientos» sería cierto por vacío.
+        """
+        assert set(spec) == {'Inicial', 'Doctoventascomercial',
+                             'RelacionDoctos', 'CuotasCxC', 'Final'}, (
+            f'\nCambiaron las secciones del 142943: {sorted(spec)}\n'
+            f'Si apareció `Movimientos`, este conector ya puede facturar '
+            f'cantidades parciales y el rediseño del flujo de contado cambia.')
+        assert len(spec['Doctoventascomercial']) == 50
+        # El vínculo con la remisión es de encabezado: 4 campos del documento
+        # nuevo + 3 del referenciado. Ninguna cantidad.
+        assert len(spec['RelacionDoctos']) == 7
+
+    def test_la_caja_no_se_hardcodea(self, fuente):
+        """`f462_id_caja` puede dejar de ser `None` — pero no con un literal.
+
+        La caja por CO ya está en `_co_caja_map` y la usa el 142888. Una
+        segunda tabla de cajas es exactamente el patrón que la Regla 0 prohíbe:
+        el mismo concepto en dos sitios diverge, y acá divergir significa que
+        el recaudo de la factura y el del recibo caen en cajas distintas.
+        """
+        m = re.search(r"'f462_id_caja':\s*([^,\n]+)", fuente)
+        assert m, 'desapareció f462_id_caja del payload del 142943'
+        valor = m.group(1).strip()
+        assert valor == 'None' or '_co_caja_map' in valor, (
+            f'\nf462_id_caja = {valor}\n'
+            f'Si ya se decidió mandar caja, tiene que salir de `_co_caja_map` '
+            f'—el mismo mapa que usa el 142888— no de un literal ni de un mapa '
+            f'nuevo.')
+
+
 class TestElDetectorNoEstaCiego:
     """Si el lector del DOCX dejara de encontrar secciones, los tests de arriba
     compararían listas vacías y pasarían para siempre."""

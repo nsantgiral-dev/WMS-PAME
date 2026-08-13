@@ -928,7 +928,7 @@ venv/bin/python -m pytest tests/test_siesa_dlq.py tests/test_liquidacion.py test
 |------|---------|-------|------------|
 | 1 | test_siesa_formatos.py | 27 | `_fmt_valor` 21 chars, timezone, CO→Caja, forma_pago→medio |
 | 2 | test_siesa_contracts.py | 25 | Valores y formatos fijos (F_CIA=1, clase docto, consecutivo auto). **NO compara contra el DOCX** pese al nombre — sus listas se copiaron del código y usan `in`, que no detecta un campo ausente |
-| 6 | test_payload_vs_docx.py | 11 | **Conformidad real con el spec**: lee el `.docx` y exige mismos campos y mismo orden (142888, 142882). Ver Regla 1 |
+| 6 | test_payload_vs_docx.py | 27 | **Conformidad real con el spec**: lee el `.docx` y exige mismos campos y mismo orden (142888, 142882, 142946, 251126, 142943). Ver Regla 1 |
 | 3 | test_siesa_dlq.py | 6 | Pre-flag, revert en fallo, secuencialidad NC→RC→DC |
 | 4 | test_liquidacion.py | 20 | Flujos de recaudo, retenciones PUC |
 | 5 | test_siesa_guards.py | 7 | Guards fail-fast (bodega, codigo_siesa, motivo, consec) |
@@ -994,6 +994,7 @@ Conectores con spec verificado contra código (julio 2026):
 |----------|-----------|--------|
 | 142888 | `142888 API_v1_ReciboCaja.docx` | ✓ 15/15 campos CxC verificados |
 | 142882 | `142882 - API_v1_DocumentoContable 428272.docx` | ✓ 29/29 campos MovimientoCxC verificados |
+| 142943 | `142943.docx` | ✓ 50/50 campos. **Sin sección `Movimientos`** — factura la remisión COMPLETA, no admite cantidades parciales. `f462_id_caja` («Obligatoria si hay recaudos») se manda en `None` — ver «La caja de la FE de contado» |
 | 142945 | `142945_API_v1_Ventas_Comercial_RemisionPedido.docx` | ✓ Limpio |
 | 142946 | `142946 - API_v1_Ventas_Comercial_NotaFactura 428509.docx` | ✓ 3 obligatorios agregados. Clon 250696 (dinámico) para Devolución de Cliente — requiere `F350_IND_ESTADO=0`, ver Regla #21 |
 | 142948 | `142948 - API_v1_Compras_Comercial_EntradaOC.docx` | ✓ Limpio (2 extras low-risk) |
@@ -1004,3 +1005,66 @@ Conectores con spec verificado contra código (julio 2026):
 | 174646 | `174646 - API_v1_Inventarios_Comercial_RequisicionesParaTransferir.docx` | ✓ Limpio (4 extras low-risk) |
 | 251126 | `251126 - PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2.docx` | ✓ 34/34 campos verificados (2026-08-13) — sección Movimientos SÍ declara destino de inventario (`f470_id_bodega`, `f470_id_ubicacion_aux`, `f470_id_lote`, `f470_id_motivo`, `f470_id_causal_devol`), confirma que no es un documento puramente financiero |
 | 251546 | `251546 - PapeleriaMedellin_NotaCredito_CrearCruzarDian_WMS.docx` | ✓ Verificado 2026-08-13 |
+
+---
+
+## La caja de la FE de contado — decisión abierta (2026-08-13)
+
+Una prueba manual en el escritorio de Siesa, sobre un pedido **C01 (contado)**,
+falló con **error 47891 (caja)**. Se resolvió configurando la caja en las
+preferencias del usuario `s.giraldo`. **Eso no aplica al WMS**: el conector no
+es un usuario y no tiene preferencias.
+
+El spec del 142943 (`docs/siesa-specs/142943.docx`, incorporado ese mismo día)
+lo confirma: `f462_id_caja` — *«Obligatoria si hay recaudos»*, Dep, 3 chars,
+posición 2982. **El WMS lo manda en `None`.**
+
+### Por qué NO se arregló poniéndole la caja
+
+El valor está a mano (`_co_caja_map`, el mismo que usa el 142888) y el cambio
+es una línea. No se hizo porque **arreglar el síntoma puede ser el error**:
+
+Si Siesa pide caja es porque va a **generar el recaudo al facturar**. Pero en
+el flujo del WMS la plata no se ha recaudado todavía — la recoge el conductor
+horas después, y la liquidación la registra con el **142888**. Ponerle caja a
+la FE significaría:
+
+- registrar en Siesa un ingreso que todavía no ocurrió, y
+- registrarlo **dos veces** cuando el 142888 llegue en la liquidación.
+
+Un `codigo:0` no distingue estos dos casos. Lo que hay que mirar después de la
+corrida en QA no es el código de respuesta: es el **estado de la CxC de la
+factura**. Si nace saldada, el RC de la liquidación sobra y el diseño del
+módulo cambia; si nace pendiente, la caja es solo un campo faltante.
+
+### Las tres salidas posibles
+
+1. **La FE no debe ser de contado.** No propagar `f430_id_cond_pago` = C01 a
+   `f461_id_cond_pago`: la FE nace a crédito, y el RC de la liquidación la
+   salda. Es lo más cercano a la realidad física —la plata llega después— pero
+   contradice lo que el pedido declara.
+2. **La FE es de contado y lleva caja.** Entonces el 142888 de liquidación
+   sobra para las paradas de contado, y hay que quitarlo sin romper el flujo
+   de crédito, que sí lo necesita.
+3. **Siesa pide la caja pero no genera recaudo.** Entonces basta la línea. Es
+   la salida más cómoda y por eso la que hay que probar, no suponer.
+
+Trinquete: `tests/test_payload_vs_docx.py::TestFacturaDesdeRemision142943`.
+`f462_id_caja` puede dejar de ser `None`, pero solo desde `_co_caja_map` —
+una segunda tabla de cajas haría que el recaudo de la factura y el del recibo
+cayeran en cajas distintas (Regla 0, corolario).
+
+### Y lo otro que dice el spec: no se puede facturar parcial
+
+El 142943 **no tiene sección `Movimientos`**. Sus secciones son Inicial,
+Doctoventascomercial, RelacionDoctos, CuotasCxC, Final — y `RelacionDoctos`
+referencia la remisión **por encabezado** (CO + tipo + consecutivo), sin línea
+ni cantidad.
+
+Consecuencia directa sobre el rediseño del flujo de contado: **«FE por lo
+entregado» no es posible con este conector.** La FE factura la remisión
+completa. Las alternativas son mover la remisión (y con ella la descarga de
+inventario) a la liquidación, o crear un documento de devolución de remisión
+por el saldo — `F460_ID_TIPO_DOCTO` admite «remision **o devolucion**» y
+`RelacionDoctos` es una lista, así que el camino existe en el spec. **Lo que no
+existe es un conector que cree esa devolución.**
