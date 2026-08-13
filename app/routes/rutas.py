@@ -582,6 +582,116 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
 
 # ── Liquidación — dashboard, detalle, one-click ───────────────────
 
+@rutas_bp.route('/liquidacion/desglose', methods=['GET'])
+@jwt_required()
+def liquidacion_desglose():
+    """Los tres números que faltaban para decidir sobre el flujo de facturación.
+
+    Se estuvieron estimando toda la semana y ninguno se podía sacar de las
+    pantallas existentes — el dashboard agrega por ruta, no desglosa.
+
+    **1. `forma_pago` × `estado_entrega`.** Cuánto del flujo es contado (lo
+    único que se movería si la factura pasa a emitirse en la liquidación) y con
+    qué frecuencia hay PARCIAL o RECHAZADO, que es cuando haría falta la
+    devolución de remisión — y también cuántas veces se ejerce el control «no
+    paga completo, no se entrega», que devuelve mercancía física al camión.
+
+    **2. Rezago de liquidación.** Días entre que la ruta queda ENTREGADA y
+    LIQUIDADA. Hoy no hay ninguna alerta cuando eso no pasa: se buscó en los
+    schedulers y en el servicio de alertas y no existe.
+
+    ⚠️ **Este número es un piso, no una estimación.** Hoy liquidar no tiene
+    consecuencia fiscal; si la factura pasa a emitirse ahí, la tendría. Medir
+    la latencia de un proceso sin consecuencias y proyectarla a uno con
+    consecuencias es un error de método — puede ir para los dos lados. Sirve
+    para decir «no van a tardar menos que esto», no para planear.
+
+    **3. Alertas de condición de pago ausente.** Cuántas veces se emitió una
+    factura como CONTADO porque el pedido no traía `f430_id_cond_pago`.
+
+    Esa pregunta se estuvo discutiendo con conteos de facturas de otro sistema,
+    que **no pueden detectarlo**: el fallback rellena el campo antes de emitir,
+    así que toda factura sale con condición. Contar facturas mira el único
+    lugar donde la evidencia está garantizada limpia. Lo que sí lo detecta es
+    la alerta que el gateway encola, y que vive en esta base.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén puede ver el desglose'}), 403
+
+    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.siesa_job import SiesaJob
+
+    # ── 1. Desglose ──────────────────────────────────────────────────────
+    matriz, por_pago, por_estado = {}, {}, {}
+    total = 0
+    for r in RecaudoEntrega.query.all():
+        fp = (r.forma_pago or '(sin forma de pago)').upper()
+        ee = (r.estado_entrega or '(sin estado)').upper()
+        matriz[f'{fp} | {ee}'] = matriz.get(f'{fp} | {ee}', 0) + 1
+        por_pago[fp] = por_pago.get(fp, 0) + 1
+        por_estado[ee] = por_estado.get(ee, 0) + 1
+        total += 1
+
+    _no_entregado = sum(v for k, v in por_estado.items() if k in ('PARCIAL', 'RECHAZADO'))
+
+    # ── 2. Rezago ────────────────────────────────────────────────────────
+    from app.models.ruta_despacho import EstadoFinancieroRuta as _EFR
+    from app.utils.fecha import ahora_bogota
+    # Se compara en DÍAS de Bogotá, no en UTC: una ruta entregada a las 8 p.m.
+    # tiene 0 días de rezago, no 1. Regla 5 — lo que alguien LEE como día no
+    # sale de utcnow.
+    hoy = ahora_bogota().date()
+    sin_liquidar, dias = [], []
+    for ruta in (RutaDespacho.query
+                 .filter(RutaDespacho.estado == 'ENTREGADA')
+                 .filter(RutaDespacho.estado_financiero != _EFR.LIQUIDADA)
+                 .all()):
+        # `fecha_entregada` es DateTime y `fecha_programada` es Date — se
+        # normaliza a fecha antes de restar, o revienta al mezclarlas.
+        _fe = ruta.fecha_entregada
+        ref = _fe.date() if _fe else ruta.fecha_programada
+        d = (hoy - ref).days if ref else None
+        if d is not None:
+            dias.append(d)
+        sin_liquidar.append({'ruta_id': ruta.id, 'dias': d,
+                             'estado_financiero': ruta.estado_financiero})
+
+    # ── 3. Alertas de condición ausente ──────────────────────────────────
+    # `count()` y no traer las filas: si algún día son miles, este endpoint no
+    # puede volverse el problema que vino a medir.
+    alertas_cond = (SiesaJob.query
+                    .filter(SiesaJob.tipo == 'ALERTA_EMAIL')
+                    .filter(SiesaJob.payload.like('%data incompleta%'))
+                    .count())
+
+    return jsonify({
+        'recaudos': {
+            'total': total,
+            'matriz': matriz,
+            'por_forma_pago': por_pago,
+            'por_estado_entrega': por_estado,
+            'parcial_o_rechazado': _no_entregado,
+            'pct_parcial_o_rechazado': (
+                round(100.0 * _no_entregado / total, 1) if total else None),
+        },
+        'rezago_liquidacion': {
+            'rutas_entregadas_sin_liquidar': len(sin_liquidar),
+            'dias_max': max(dias) if dias else None,
+            'dias_promedio': round(sum(dias) / len(dias), 1) if dias else None,
+            'detalle': sorted(sin_liquidar,
+                              key=lambda x: (x['dias'] is None, -(x['dias'] or 0)))[:50],
+            'nota': ('Piso, no estimación: hoy liquidar no tiene consecuencia '
+                     'fiscal. Si la factura pasa a emitirse acá, la tendría.'),
+        },
+        'condicion_pago_ausente': {
+            'alertas': alertas_cond,
+            'nota': ('Veces que se facturó como CONTADO porque el pedido no traía '
+                     'f430_id_cond_pago. Contar facturas NO lo detecta: el '
+                     'fallback rellena el campo antes de emitir.'),
+        },
+    }), 200
+
+
 @rutas_bp.route('/liquidacion/dashboard', methods=['GET'])
 @jwt_required()
 def liquidacion_dashboard():

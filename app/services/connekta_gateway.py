@@ -1687,7 +1687,13 @@ class ConnektaGateway:
                 'f430_id_cond_pago no disponible en cabecera y SIESA_COND_PAGO_VENTAS no configurado — '
                 'Connekta V2 .NET serializer colapsa con HTTP 500 si se envía null'
             )
-        if not _cond_pago_siesa and cond_pago == self.cond_pago_ventas:
+        # La lectura del vacío vive en `services/cond_pago.py` — misma política
+        # que usa la pantalla del conductor. Acá el fallback es OBLIGADO
+        # (Connekta V2 colapsa con null), pero la clasificación no puede
+        # divergir entre los dos sitios: eso es lo que hacía que el conductor
+        # viera «Valor a Cobrar» sobre un pedido sin condición conocida.
+        from app.services import cond_pago as _cp
+        if _cp.clasificar(_cond_pago_siesa, self.cond_pago_ventas) == _cp.AUSENTE:
             # Data maestra incompleta — factura se emite como CONTADO pero no bloquea el despacho.
             # Alerta asíncrona para que el equipo comercial corrija el maestro del tercero en Siesa.
             _tercero_alerta = cabecera.get('f200_id_pedido_fact') or 'desconocido'

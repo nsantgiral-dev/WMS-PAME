@@ -67,6 +67,64 @@ async function cargarLiquidacion() {
 // ── Dashboard + KPIs ────────────────────────────────────────────────────────
 
 /** Fetch liquidacion dashboard data for the selected date range and render KPIs. */
+/**
+ * Los tres números que decidían el rediseño de facturación y que se estuvieron
+ * estimando toda la semana: cuánto del flujo es contado, con qué frecuencia hay
+ * PARCIAL o RECHAZADO, y cuánto se tarda alguien en liquidar.
+ *
+ * El rezago se muestra con su advertencia pegada. Hoy liquidar no tiene
+ * consecuencia fiscal; si la factura pasa a emitirse ahí, la tendría. Un número
+ * medido sin consecuencias no predice el mismo proceso con consecuencias — es
+ * un piso, y mostrarlo sin decirlo invita a planear con él.
+ */
+async function liqCargarDesglose() {
+  const el = document.getElementById('liq-desglose');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--tx3);font-size:12px;">Contando…</span>';
+  let d;
+  try {
+    d = await get('/api/rutas/liquidacion/desglose');
+  } catch (e) {
+    el.innerHTML = `<span style="color:var(--red);font-size:12px;">No se pudo consultar: ${e.message}</span>`;
+    return;
+  }
+  const r = d.recaudos || {};
+  const z = d.rezago_liquidacion || {};
+  const c = d.condicion_pago_ausente || {};
+  if (!r.total) {
+    el.innerHTML = '<span style="color:var(--tx3);font-size:12px;">Todavía no hay entregas registradas.</span>';
+    return;
+  }
+  const filas = Object.entries(r.matriz || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `<div class="tabla-fila"><span class="tabla-nombre">${k}</span>
+        <span>${n} · ${Math.round(100 * n / r.total)}%</span></div>`).join('');
+  el.innerHTML = `
+    <div class="tabla-card">
+      <div class="tabla-titulo">Entregas por forma de pago y estado (${r.total})</div>
+      ${filas}
+      <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">
+        <b>${r.parcial_o_rechazado}</b> parciales o rechazadas
+        (${r.pct_parcial_o_rechazado}%) — es la frecuencia con que haría falta
+        devolver mercancía al camión.
+      </p>
+    </div>
+    <div class="tabla-card" style="margin-top:12px;">
+      <div class="tabla-titulo">Rutas entregadas sin liquidar</div>
+      <div class="tabla-fila"><span class="tabla-nombre">Cuántas</span>
+        <span class="badge ${z.rutas_entregadas_sin_liquidar ? 'badge-yellow' : 'badge-green'}">${z.rutas_entregadas_sin_liquidar}</span></div>
+      <div class="tabla-fila"><span class="tabla-nombre">Días máximo</span><span>${z.dias_max ?? '—'}</span></div>
+      <div class="tabla-fila"><span class="tabla-nombre">Días promedio</span><span>${z.dias_promedio ?? '—'}</span></div>
+      <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">${z.nota || ''}</p>
+    </div>
+    <div class="tabla-card" style="margin-top:12px;">
+      <div class="tabla-titulo">Facturas emitidas como contado por dato faltante</div>
+      <div class="tabla-fila"><span class="tabla-nombre">Veces</span>
+        <span class="badge ${c.alertas ? 'badge-red' : 'badge-green'}">${c.alertas}</span></div>
+      <p style="font-size:11px;color:var(--tx3);margin:8px 0 0;">${c.nota || ''}</p>
+    </div>`;
+}
+
 async function liqCargarDashboard() {
   const hoy = new Date().toISOString().split('T')[0];
   const desde = document.getElementById('liq-fecha-desde')?.value || hoy;
@@ -74,6 +132,7 @@ async function liqCargarDashboard() {
   try {
     _liqDashboard = await get(`/api/rutas/liquidacion/dashboard?fecha_desde=${desde}&fecha_hasta=${hasta}`);
     _liqRenderKpis(_liqDashboard.resumen || {});
+    liqCargarDesglose();
     if (_liqSubActual === 'pendientes') liqCargarPendientes();
     else if (_liqSubActual === 'liquidadas') liqCargarLiquidadas();
     else if (_liqSubActual === 'jobs') liqCargarJobs();

@@ -657,11 +657,16 @@ class RutaService:
         el dato, el frontend cae al campo libre de siempre (sin bloquear la
         pantalla).
 
-        `es_contado`: igual criterio que `trigger_factura_desde_remision` en
-        connekta_gateway.py — cond_pago vacío se trata como contado (mismo
-        fallback que ya se usa al facturar), y CONTADO = coincide con
-        `SIESA_COND_PAGO_VENTAS`. Cualquier otra condición (30D, C30...) es
-        crédito.
+        `es_contado`: `True` | `False` | **`None` cuando no se sabe**.
+
+        Hasta el 2026-08-13 un `f430_id_cond_pago` vacío daba `True` —se
+        trataba como contado— y `rutas.js` mostraba «Valor a Cobrar». O sea que
+        al conductor se le pedía cobrarle a un cliente cuya condición nadie
+        conocía. Ahora devuelve `None` y la pantalla cae al campo libre, que es
+        lo que ya hacía cuando faltaba el valor de la factura.
+
+        La política de cómo leer el vacío vive en `services/cond_pago.py`, no
+        acá: estaba escrita en dos sitios y los dos hacia contado.
 
         `valores_por_referencia`: `{codigo: valor_neto_unitario}` — el valor
         real de Siesa por unidad de cada línea (`f470_vlr_neto / f470_cant_base`),
@@ -695,8 +700,12 @@ class RutaService:
         try:
             cabecera = connekta.get_pedido_cabecera(
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
+            from app.services import cond_pago as _cp
             cond_pago_siesa = (cabecera or {}).get('f430_id_cond_pago') or ''
-            es_contado = (not cond_pago_siesa) or (cond_pago_siesa == connekta.cond_pago_ventas)
+            es_contado = _cp.es_contado_o_none(cond_pago_siesa, connekta.cond_pago_ventas)
+            if es_contado is None:
+                _cp.registrar_ausencia(
+                    f'pedido {tarea.tipo_docto_pedido_siesa}-{tarea.consec_docto_pedido_siesa}')
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
