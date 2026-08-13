@@ -1063,17 +1063,63 @@ class RutaService:
 
     @staticmethod
     def bultos_rechazados(page: int, limit: int) -> dict:
+        """La lista de trabajo para reingresar mercancía — **sin la que no volvió**.
+
+        Un bulto queda `RECHAZADO` tanto si el cliente lo devolvió como si se
+        lo quedó sin pagar (`NO_PAGO_SE_QUEDO`). Los dos casos entraban a la
+        misma lista, y alguien iba a ir a buscar cajas que no están en el
+        camión.
+
+        Es el defecto que el motivo tipificado vino a impedir y que quedó a
+        medias: el flag `retorna` se construyó y no se cableó a la ruta física.
+        Con el control «si no paga completo, no se entrega» esto pasa de raro a
+        cotidiano.
+
+        Los que no volvieron **no se ocultan**: van en su propio bloque. Uno es
+        «andá a buscarlos»; el otro es «estos no están y alguien tiene que
+        responder por ellos». Filtrarlos en silencio convertiría una pérdida de
+        inventario en una fila que desaparece.
+        """
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.services.motivos_rechazo import SIN_RETORNO
+
+        # Las tareas cuya parada declaró que la mercancía se quedó con el
+        # cliente. Es un conjunto chico —son excepciones— así que se resuelve
+        # con un IN y no con un join por fila.
+        sin_retorno = {
+            (r.ruta_id, r.tarea_id)
+            for r in RecaudoEntrega.query
+            .filter(RecaudoEntrega.motivo_rechazo.in_(SIN_RETORNO)).all()
+        }
+
         q = (Bulto.query
              .options(_sl(Bulto.tarea))
              .filter_by(estado=EstadoBulto.RECHAZADO)
              .order_by(Bulto.fecha_entrega.desc()))
-        total  = q.count()
-        bultos = q.offset((page - 1) * limit).limit(limit).all()
+        todos = q.all()
+
+        def _quedo_con_cliente(b):
+            return (b.ruta_despacho_id, b.tarea_id) in sin_retorno
+
+        retornados = [b for b in todos if not _quedo_con_cliente(b)]
+        no_retornados = [b for b in todos if _quedo_con_cliente(b)]
+
+        total = len(retornados)
+        pagina = retornados[(page - 1) * limit:(page - 1) * limit + limit]
         return {
-            'bultos': [b.to_dict() for b in bultos],
+            'bultos': [b.to_dict() for b in pagina],
             'total':  total,
             'page':   page,
             'pages':  (total + limit - 1) // limit,
+            # Mercancía que salió y no volvió. NO es trabajo de bodega: es una
+            # pérdida que alguien tiene que cerrar contablemente.
+            'no_retornados': {
+                'total': len(no_retornados),
+                'bultos': [b.to_dict() for b in no_retornados[:limit]],
+                'nota': ('Se quedaron con el cliente sin pago. No están en el '
+                         'camión: no hay nada que reingresar, hay algo que '
+                         'cobrar o que dar de baja.'),
+            },
         }
 
     @staticmethod

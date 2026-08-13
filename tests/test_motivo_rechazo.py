@@ -186,3 +186,79 @@ class TestElModeloRechazaUnMotivoInventado:
         from app.models.recaudo_entrega import RecaudoEntrega
         nombres = {c.name for c in RecaudoEntrega.__table__.constraints}
         assert 'ck_recaudo_motivo_rechazo' in nombres
+
+
+class TestLaMercanciaQueNoVolvioNoEntraALaListaDeReingreso:
+    """El defecto que el motivo tipificado vino a impedir y quedó a medias.
+
+    Un bulto queda `RECHAZADO` tanto si el cliente lo devolvió como si se lo
+    quedó sin pagar. Los dos entraban a `bultos_rechazados()`, que es la lista
+    de trabajo de bodega — **alguien iba a ir a buscar cajas que no están en el
+    camión**.
+
+    El flag `retorna` se construyó el 2026-08-13 y no se cableó a la ruta
+    física. Con el control «si no paga completo, no se entrega» esto pasa de
+    raro a cotidiano, así que dejó de ser teórico.
+
+    Y no se filtran en silencio: van en su propio bloque. Uno es «andá a
+    buscarlos», el otro es «estos no están». Ocultarlos convertiría una pérdida
+    de inventario en una fila que desaparece.
+    """
+
+    def _bulto_rechazado(self, db, ruta, tarea, motivo):
+        import uuid
+
+        from app.models.bulto import Bulto, EstadoBulto
+        from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+
+        b = Bulto(tarea_id=tarea.id, ruta_despacho_id=ruta.id,
+                  codigo_barras=f'B-{uuid.uuid4().hex[:8]}', tipo='CAJA',
+                  numero=1, total=1, estado=EstadoBulto.RECHAZADO)
+        db.session.add(b)
+        db.session.add(RecaudoEntrega(
+            ruta_id=ruta.id, tarea_id=tarea.id,
+            estado_entrega=EstadoEntrega.RECHAZADO, forma_pago=None,
+            monto_cobrado=0, motivo_rechazo=motivo))
+        db.session.commit()
+        return b
+
+    def test_el_que_se_quedo_con_el_cliente_sale_de_la_lista(self, db, recaudo_ctx):
+        from app.services.ruta_service import RutaService
+        ruta, tarea, _ = recaudo_ctx
+        self._bulto_rechazado(db, ruta, tarea, 'NO_PAGO_SE_QUEDO')
+
+        r = RutaService.bultos_rechazados(page=1, limit=50)
+        assert r['total'] == 0, 'bodega iría a buscar mercancía que no volvió'
+        assert r['no_retornados']['total'] == 1
+
+    def test_una_devolucion_normal_sigue_en_la_lista(self, db, recaudo_ctx):
+        from app.services.ruta_service import RutaService
+        ruta, tarea, _ = recaudo_ctx
+        self._bulto_rechazado(db, ruta, tarea, 'CLIENTE_CERRADO')
+
+        r = RutaService.bultos_rechazados(page=1, limit=50)
+        assert r['total'] == 1
+        assert r['no_retornados']['total'] == 0
+
+    def test_no_se_ocultan_se_separan(self, db, recaudo_ctx):
+        """Filtrarlos en silencio convertiría una pérdida de inventario en una
+        fila que desaparece."""
+        from app.services.ruta_service import RutaService
+        ruta, tarea, _ = recaudo_ctx
+        self._bulto_rechazado(db, ruta, tarea, 'NO_PAGO_SE_QUEDO')
+
+        r = RutaService.bultos_rechazados(page=1, limit=50)
+        assert r['no_retornados']['bultos'], 'no basta el conteo: hay que poder ir a verlos'
+        assert 'cobrar' in r['no_retornados']['nota']
+
+    def test_un_rechazo_sin_motivo_registrado_sigue_en_la_lista(self, db, recaudo_ctx):
+        """Los rechazos anteriores al motivo tipificado no tienen código. Ante
+        la duda la mercancía SÍ vuelve — sacarla de la lista sin evidencia
+        dejaría inventario sin reingresar. Regla 0."""
+        from app.services.ruta_service import RutaService
+        ruta, tarea, _ = recaudo_ctx
+        self._bulto_rechazado(db, ruta, tarea, None)
+
+        r = RutaService.bultos_rechazados(page=1, limit=50)
+        assert r['total'] == 1
+        assert r['no_retornados']['total'] == 0
