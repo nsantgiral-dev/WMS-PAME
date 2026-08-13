@@ -914,11 +914,20 @@ class RutaService:
             )
 
         ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
+
+        # PARCIAL/RECHAZADO caen solos al módulo de Devoluciones al liquidar —
+        # ver LiquidacionService.crear_devoluciones_pendientes_ruta. RC/DC
+        # siguen siendo manuales en el módulo Liquidación (revisión de
+        # retenciones y monto Siesa vs. conductor).
+        from app.services.liquidacion_service import LiquidacionService
+        resumen_devoluciones = LiquidacionService.crear_devoluciones_pendientes_ruta(id)
+
         db.session.commit()
         return {
             'ok':              True,
             'total_recaudado': ruta.total_recaudado(),
             'ruta':            ruta.to_dict(),
+            'devoluciones_pendientes_creadas': resumen_devoluciones['creadas'],
         }
 
     @staticmethod
@@ -960,6 +969,11 @@ class RutaService:
         ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
         ruta.fecha_cierre = ahora
         _ruta_id = ruta.id
+        db.session.flush()
+
+        from app.services.liquidacion_service import LiquidacionService
+        LiquidacionService.crear_devoluciones_pendientes_ruta(_ruta_id)
+
         db.session.commit()
 
         ruta = (RutaDespacho.query

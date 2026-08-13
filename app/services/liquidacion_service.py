@@ -688,6 +688,78 @@ class LiquidacionService:
         )
         return resumen
 
+    @staticmethod
+    def crear_devoluciones_pendientes_ruta(ruta_id: int) -> dict:
+        """
+        Arma la DevolucionCliente pendiente (ver _crear_devolucion_pendiente)
+        para cada recaudo PARCIAL/RECHAZADO de la ruta. Llamada automáticamente
+        desde RutaService.liquidar_ruta/forzar_cierre_ruta — así la devolución
+        cae sola al módulo de Devoluciones al liquidar, sin que el admin tenga
+        que dispararla a mano recaudo por recaudo (ese paso manual se perdió
+        al eliminar el botón "Enviar Nota Crédito (NC)" del módulo Liquidación
+        sin dejar reemplazo — bug real detectado en producción, ruta #16 /
+        PD1350: 0 SiesaJobs, 0 devoluciones creadas).
+
+        A propósito NO toca RC/DC — esos siguen siendo manuales en el módulo
+        Liquidación (ahí el admin revisa retenciones y el monto Siesa vs. lo
+        que declaró el conductor antes de confirmar el cobro; automatizarlos
+        quitaría esa revisión).
+
+        Idempotente (_crear_devolucion_pendiente no duplica si ya existe) y
+        nunca lanza — un recaudo con error (p.ej. FE no resuelta) queda para
+        el flujo manual de respaldo (Rutas → "Enviar a Siesa") en vez de
+        tumbar la liquidación completa.
+        """
+        from app.services.fe_resolver import FENoEncontrada, resolver_fe
+
+        recaudos = (RecaudoEntrega.query
+                    .filter_by(ruta_id=ruta_id)
+                    .filter(RecaudoEntrega.estado_entrega.in_(
+                        [EstadoEntrega.RECHAZADO, EstadoEntrega.PARCIAL]))
+                    .all())
+        resumen = {'creadas': 0, 'errores': []}
+
+        for recaudo in recaudos:
+            if recaudo.siesa_nc_triggered:
+                continue
+            tarea = recaudo.tarea
+            if not tarea:
+                continue
+            try:
+                tipo_docto_fe, consec_fe = resolver_fe(tarea)
+            except FENoEncontrada:
+                tipo_docto_fe = consec_fe = ''
+            if not tipo_docto_fe or not consec_fe:
+                logger.warning(
+                    '[LIQUIDACION] crear_devoluciones_pendientes_ruta: recaudo %d '
+                    'sin FE resuelta — queda para el flujo manual', recaudo.id
+                )
+                continue
+
+            items = (None if recaudo.estado_entrega == EstadoEntrega.RECHAZADO
+                      else recaudo.items_entregados)
+            try:
+                if _crear_devolucion_pendiente(
+                    recaudo, tarea, tipo_docto_fe, consec_fe,
+                    items_devueltos=items,
+                    notas=f'WMS Ruta #{ruta_id} | Liquidar en WMS | {recaudo.estado_entrega}',
+                ):
+                    resumen['creadas'] += 1
+            except Exception as e:
+                logger.error(
+                    '[LIQUIDACION] crear_devoluciones_pendientes_ruta: recaudo %d: %s',
+                    recaudo.id, e
+                )
+                resumen['errores'].append({'recaudo_id': recaudo.id, 'error': str(e)})
+
+        db.session.commit()
+        logger.info(
+            '[LIQUIDACION] crear_devoluciones_pendientes_ruta: ruta %d — '
+            '%d devolución(es) creada(s), %d error(es)',
+            ruta_id, resumen['creadas'], len(resumen['errores'])
+        )
+        return resumen
+
 
 def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                        admin_id: int = None) -> dict:
