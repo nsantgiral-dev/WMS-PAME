@@ -641,6 +641,10 @@ def liquidacion_desglose():
 
     # ── 1. Desglose ──────────────────────────────────────────────────────
     matriz, por_pago, por_estado, por_modo, por_motivo = {}, {}, {}, {}, {}
+    cruce_modo, credito = {}, []
+    #: Tope declarado, no silencioso. Si se recorta, la respuesta lo dice —
+    #: una lista truncada sin avisar se lee como «esas son todas».
+    _TOPE_CREDITO = 500
     total = 0
     for r in RecaudoEntrega.query.all():
         fp = (r.forma_pago or '(sin forma de pago)').upper()
@@ -653,6 +657,31 @@ def liquidacion_desglose():
         # justo el número de riesgo; contarlas como DINAMICO lo escondería.
         mp = r.modo_pantalla or '(sin registrar)'
         por_modo[mp] = por_modo.get(mp, 0) + 1
+        # El cruce que la matriz de arriba no da: modo × forma de pago. La
+        # pregunta de cartera es «paradas donde el conductor pudo elegir y
+        # eligió CRÉDITO», y eso no sale de dos conteos separados.
+        cruce_modo[f'{mp} | {fp}'] = cruce_modo.get(f'{mp} | {fp}', 0) + 1
+        # Las de CRÉDITO, con identificadores. Un conteo no se puede cruzar
+        # contra la cartera; una lista sí. **Es el proxy que SÍ funciona hacia
+        # atrás**: `modo_pantalla` se empezó a registrar el 2026-08-13, pero
+        # una parada marcada CRÉDITO nunca dispara recibo de caja, así que su
+        # factura queda abierta — se haya elegido en modo LIBRE o no.
+        if fp == 'CREDITO' and len(credito) < _TOPE_CREDITO:
+            _t = r.tarea
+            _ru = r.ruta
+            credito.append({
+                'recaudo_id': r.id,
+                'ruta_id': r.ruta_id,
+                'fecha_entregada': (_ru.fecha_entregada.date().isoformat()
+                                    if _ru is not None and _ru.fecha_entregada else None),
+                'cliente': (_t.cliente if _t is not None else None),
+                'pedido': (f'{_t.tipo_docto_pedido_siesa}-{_t.consec_docto_pedido_siesa}'
+                           if _t is not None else None),
+                'remision': (f'{_t.rm_tipo}-{_t.rm_consec}'
+                             if _t is not None and _t.rm_consec else None),
+                'estado_entrega': ee,
+                'modo_pantalla': r.modo_pantalla,
+            })
         if ee == 'RECHAZADO':
             mr = r.motivo_rechazo or '(sin registrar)'
             por_motivo[mr] = por_motivo.get(mr, 0) + 1
@@ -712,6 +741,7 @@ def liquidacion_desglose():
             'por_modo_pantalla': por_modo,
             'en_modo_libre': por_modo.get('LIBRE', 0),
             'motivos_rechazo': por_motivo,
+            'modo_x_forma_pago': cruce_modo,
             # El caso donde el estado dice RECHAZADO pero el inventario NO
             # volvió al camión. Es faltante de inventario disfrazado de
             # devolución, y solo aparece en un conteo físico.
@@ -720,6 +750,15 @@ def liquidacion_desglose():
             'parcial_o_rechazado': _no_entregado,
             'pct_parcial_o_rechazado': (
                 round(100.0 * _no_entregado / total, 1) if total else None),
+        },
+        'paradas_credito': {
+            'total': por_pago.get('CREDITO', 0),
+            'listadas': len(credito),
+            'truncado': por_pago.get('CREDITO', 0) > len(credito),
+            'detalle': credito,
+            'nota': ('Una parada marcada CRÉDITO nunca dispara recibo de caja, '
+                     'así que su factura queda abierta en cartera. Sirve hacia '
+                     'atrás; `modo_pantalla` solo desde el 2026-08-13.'),
         },
         'rezago_liquidacion': {
             'rutas_entregadas_sin_liquidar': len(sin_liquidar),

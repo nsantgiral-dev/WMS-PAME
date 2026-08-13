@@ -283,3 +283,64 @@ class TestElDenominadorDelFallback:
         denominador de un fallback que vive ahí."""
         c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
         assert c['facturas_emitidas_por_el_gateway'] == 0
+
+
+class TestLoQueCarteraNecesitaCruzar:
+    """La hipótesis del Gestor: paradas donde el conductor pudo elegir y eligió
+    CRÉDITO deberían aparecer como facturas abiertas en cartera.
+
+    **No se puede probar hacia atrás.** `modo_pantalla` se empezó a registrar
+    el 2026-08-13 y todo lo anterior es NULL — justo el período donde se
+    acumularon los $79,3 M. Decirlo importa: una consulta que devuelve vacío
+    porque el dato no existía se lee como «no ocurre».
+
+    Lo que sí funciona sobre todo el histórico es el proxy directo: una parada
+    marcada CRÉDITO **nunca dispara recibo de caja**, así que su factura queda
+    abierta — se haya elegido en modo LIBRE o no. Y para cruzarla contra
+    cartera hace falta el identificador, no el conteo.
+    """
+
+    def test_cruza_modo_con_forma_de_pago(self, client, db, h, ruta_con_tarea):
+        ruta, tarea = ruta_con_tarea
+        r1 = _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')
+        r1.modo_pantalla = 'LIBRE'
+        r2 = _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
+        r2.modo_pantalla = 'LIBRE'
+        db.session.commit()
+
+        d = client.get(_URL, headers=h).get_json()['recaudos']
+        assert d['modo_x_forma_pago']['LIBRE | CREDITO'] == 1
+        assert d['modo_x_forma_pago']['LIBRE | EFECTIVO'] == 1
+
+    def test_lista_las_de_credito_con_identificadores(self, client, db, h, ruta_con_tarea):
+        """Un conteo no se puede cruzar contra la cartera. Una lista sí."""
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')
+        db.session.commit()
+
+        pc = client.get(_URL, headers=h).get_json()['paradas_credito']
+        assert pc['total'] == 1
+        fila = pc['detalle'][0]
+        assert fila['pedido'] == 'PD-777'
+        assert 'ruta_id' in fila and 'cliente' in fila
+
+    def test_una_parada_sin_modo_registrado_igual_aparece(self, client, db, h, ruta_con_tarea):
+        """El proxy funciona hacia atrás: no depende de `modo_pantalla`."""
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')  # sin modo
+        db.session.commit()
+        pc = client.get(_URL, headers=h).get_json()['paradas_credito']
+        assert pc['total'] == 1
+        assert pc['detalle'][0]['modo_pantalla'] is None
+
+    def test_declara_si_trunco(self, client, db, h):
+        """Una lista recortada sin avisar se lee como «esas son todas» — la
+        misma clase de silencio que el `0%` sin denominador."""
+        pc = client.get(_URL, headers=h).get_json()['paradas_credito']
+        assert 'truncado' in pc and 'listadas' in pc
+
+    def test_explica_hasta_donde_sirve(self, client, db, h):
+        pc = client.get(_URL, headers=h).get_json()['paradas_credito']
+        assert '2026-08-13' in pc['nota'], (
+            'la nota tiene que decir desde cuándo hay modo_pantalla — sin eso, '
+            'un vacío en el histórico se lee como ausencia del fenómeno')
