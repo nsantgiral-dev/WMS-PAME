@@ -1271,8 +1271,8 @@ async function cargarPendientesDeRuta() {
         <div class="rec-card" style="border-color:#1e3a5f;background:#0a1420;margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${d.id})">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <div class="rec-titulo" style="font-size:14px;">${d.numero_pedido_siesa || '—'}</div>
-              <div class="rec-sub">${d.cliente || 'Cliente sin nombre'}</div>
+              <div class="rec-titulo" style="font-size:14px;color:#e2eef8;">${d.numero_pedido_siesa || '—'}</div>
+              <div class="rec-sub" style="color:#93c5fd;">${d.cliente || 'Cliente sin nombre'}</div>
             </div>
             <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;background:${d.es_total ? '#3a1616' : '#1a2a1a'};color:${d.es_total ? '#f3a79f' : '#86efac'};">
               ${d.es_total ? 'DEVOLUCIÓN TOTAL' : 'DEVOLUCIÓN PARCIAL'}
@@ -1315,9 +1315,9 @@ async function cargarPendientesAprobacionNC() {
       </div>` +
       pendientes.map(d => `
         <div class="rec-card" style="border-color:#78350f;background:#1a1408;margin-bottom:8px;">
-          <div class="rec-titulo" style="font-size:14px;">${d.codigo} — ${d.numero_pedido_siesa || '—'}</div>
-          <div class="rec-sub">${d.cliente || 'Cliente sin nombre'} · FE ${d.tipo_docto_fe}-${d.consec_fe}</div>
-          <div style="margin-top:4px;font-size:11px;color:#888;">
+          <div class="rec-titulo" style="font-size:14px;color:#fde68a;">${d.codigo} — ${d.numero_pedido_siesa || '—'}</div>
+          <div class="rec-sub" style="color:#d4a94f;">${d.cliente || 'Cliente sin nombre'} · FE ${d.tipo_docto_fe}-${d.consec_fe}</div>
+          <div style="margin-top:4px;font-size:11px;color:#a08650;">
             NC creada en Siesa: ${d.siesa_nc_triggered_at ? new Date(d.siesa_nc_triggered_at).toLocaleString('es-CO') : '—'}
           </div>
           <button onclick="marcarNCAprobada(${d.id})"
