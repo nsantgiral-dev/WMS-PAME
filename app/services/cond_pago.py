@@ -86,3 +86,36 @@ def registrar_ausencia(contexto: str, tercero: str = ''):
         '[COND_PAGO] ausente en %s%s — no se asume contado',
         contexto, f' (tercero {tercero})' if tercero else '',
     )
+
+
+# ── Modo de la pantalla del conductor ─────────────────────────────────────
+#: Los tres modos que puede mostrar la parada. Vivían calculados en
+#: `rutas.js:1908` y no se podían contar: el desglose sabía qué eligió el
+#: conductor, no qué opciones tenía enfrente.
+CREDITO_PANTALLA = 'CREDITO'   # no se cobra en la puerta, no se pregunta monto
+DINAMICO = 'DINAMICO'          # contado confirmado y valor conocido → Total/Parcial
+LIBRE = 'LIBRE'                # **el conductor elige sin restricción**
+
+
+def modo_pantalla(es_contado, hay_valor_conocido: bool) -> str:
+    """Qué modo de pago ve el conductor en esa parada.
+
+    `LIBRE` es donde vive el riesgo y por eso hay que poder contarlo: el
+    conductor puede marcar CREDITO en una parada de contado, y
+    `confirmar_parada` no ata `forma_pago` a la condición del pedido — solo
+    valida que el valor esté en la lista.
+
+    Y los dos huecos se refuerzan: un pedido con `cond_pago` vacío produce **a
+    la vez** una factura emitida como contado (por el fallback del gateway) y
+    una parada en LIBRE (porque `es_contado` no es `True` confirmado). El mismo
+    dato faltante abre las dos puertas.
+
+    `es_contado` es `True` | `False` | `None`. Solo el `False` **confirmado**
+    muestra CRÉDITO: ante `None` no se afirma nada y se deja elegir, que es lo
+    correcto — pero hay que saber cuántas veces pasa.
+    """
+    if es_contado is False:
+        return CREDITO_PANTALLA
+    if es_contado is True and hay_valor_conocido:
+        return DINAMICO
+    return LIBRE

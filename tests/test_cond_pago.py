@@ -201,3 +201,42 @@ class TestElCrudoDistingueLoQueElDerivadoColapsa:
         _, es_contado, _, crudo = self._correr(monkeypatch, _explota)
         assert crudo is None, 'sin consulta no hay dato crudo — no es lo mismo que vacío'
         assert es_contado is None
+
+
+class TestLaCadenaDelModoNoSeCortaEnElNavegador:
+    """La columna, la migración y el conteo pueden estar perfectos y el modo no
+    registrarse nunca — si el JS deja de mandarlo, todo queda `(sin registrar)`
+    y el desglose se ve sano.
+
+    Es función-sin-caller con una vuelta más: acá el eslabón que falta está en
+    el cliente, así que ningún test de servidor lo nota. Una mutación que quitó
+    el campo del payload no tumbó nada hasta que se escribió esto.
+    """
+
+    from pathlib import Path
+    _RAIZ = Path(__file__).resolve().parents[1]
+    _RUTAS_JS = _RAIZ / 'app' / 'static' / 'pwa' / 'rutas.js'
+
+    def test_el_payload_de_confirmacion_manda_el_modo(self):
+        fuente = self._RUTAS_JS.read_text(encoding='utf-8')
+        i = fuente.find('async function condGuardarParada()')
+        assert i != -1, 'no está condGuardarParada — ¿se renombró?'
+        bloque = fuente[i:i + 6000]
+        assert 'modo_pantalla:' in bloque, (
+            'el payload de confirmación dejó de mandar `modo_pantalla`. La '
+            'columna se llenaría con NULL siempre y el conteo de paradas en '
+            'LIBRE —que es el caso de riesgo— daría 0 sin que nada falle.')
+
+    def test_el_modo_lo_decide_el_backend(self):
+        """La política vive en `cond_pago.modo_pantalla`. Si el JS vuelve a
+        calcularlo, son dos implementaciones y divergen — que es exactamente lo
+        que pasó con la lectura del `cond_pago` vacío."""
+        fuente = self._RUTAS_JS.read_text(encoding='utf-8')
+        assert "p.modo_pago || 'LIBRE'" in fuente, (
+            'el JS volvió a calcular el modo por su cuenta')
+
+    def test_ante_campo_ausente_cae_a_LIBRE(self):
+        """LIBRE es el modo que NO afirma nada. Asumir DINAMICO le pediría al
+        conductor cobrar un valor que nadie confirmó."""
+        fuente = self._RUTAS_JS.read_text(encoding='utf-8')
+        assert "|| 'LIBRE'" in fuente

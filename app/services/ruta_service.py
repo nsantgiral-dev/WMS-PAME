@@ -626,6 +626,12 @@ class RutaService:
             # `''` = Siesa respondió sin condición. `None` = no se pudo
             # preguntar. Son cosas distintas y colapsarlas fue el defecto.
             p['cond_pago']     = cond_pago_crudo
+            # El modo lo calculaba `rutas.js` y se descartaba: el desglose
+            # sabía qué eligió el conductor, no qué opciones tenía enfrente.
+            from app.services import cond_pago as _cpm
+            _hay_valor = valor_factura is not None and bool(p['items']) and all(
+                it.get('valor_unitario') is not None for it in p['items'])
+            p['modo_pago'] = _cpm.modo_pantalla(es_contado, _hay_valor)
             for item in p['items']:
                 item['valor_unitario'] = valores_ref.get(item['codigo'])
 
@@ -834,6 +840,13 @@ class RutaService:
 
         recaudo.estado_entrega        = estado_entrega
         recaudo.forma_pago            = forma_pago
+        # Lo que el conductor tenía enfrente, no solo lo que eligió. Se acepta
+        # del cliente porque el modo depende de datos de Siesa que la parada ya
+        # resolvió; recalcularlo acá exigiría volver a consultar y la
+        # confirmación tiene que poder funcionar offline.
+        _modo = (data.get('modo_pantalla') or '').upper() or None
+        if _modo in ('CREDITO', 'DINAMICO', 'LIBRE'):
+            recaudo.modo_pantalla = _modo
         recaudo.monto_cobrado         = data.get('monto_cobrado', 0) or 0
         recaudo.motivo_descuento      = motivo_descuento
         recaudo.monto_descuento       = monto_descuento

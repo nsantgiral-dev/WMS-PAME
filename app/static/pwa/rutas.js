@@ -1905,7 +1905,14 @@ function _condRenderFormParada() {
   const hayValorConocido = p.valor_factura != null
     && !!(p.items && p.items.length) && p.items.every(it => it.valor_unitario != null);
   const mostrarValorDinamico = p.es_contado === true && hayValorConocido;
-  const modoPago = p.es_contado === false ? 'CREDITO' : (mostrarValorDinamico ? 'DINAMICO' : 'LIBRE');
+  // El modo lo decide el backend (`services/cond_pago.modo_pantalla`) — acá
+  // estaba la segunda implementación de la misma política, y por eso el modo
+  // no se podía contar: se calculaba en el navegador y se descartaba.
+  //
+  // Ante campo ausente (backend viejo o caché) cae a LIBRE, que es el modo que
+  // NO afirma nada. Asumir DINAMICO le pediría cobrar un valor que nadie
+  // confirmó; asumir CREDITO le impediría cobrar uno que sí correspondía.
+  const modoPago = p.modo_pago || 'LIBRE';
   el._modoPago = modoPago;
   el._mostrarValorDinamico = mostrarValorDinamico;
   // El valor de la factura se muestra siempre que se conozca — hasta en
@@ -2400,6 +2407,12 @@ async function condGuardarParada() {
   const payload = {
     estado_entrega:    estadoEntrega,
     forma_pago:        formaPago || null,
+    // Qué modo tenía la pantalla al confirmar, no solo qué eligió el
+    // conductor. En LIBRE puede marcar CREDITO en una parada de contado, y
+    // sin registrarlo esa frecuencia no se puede contar. Viaja en el payload
+    // —y no se recalcula en el servidor— porque la confirmación tiene que
+    // funcionar offline, sin volver a preguntarle a Siesa.
+    modo_pantalla:     el._modoPago || null,
     monto_cobrado:     montoFinal,
     motivo_descuento:  motivoDescuentoFinal,
     monto_descuento:   montoDescuentoFinal,

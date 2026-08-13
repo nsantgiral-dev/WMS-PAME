@@ -622,7 +622,7 @@ def liquidacion_desglose():
     from app.models.siesa_job import SiesaJob
 
     # ── 1. Desglose ──────────────────────────────────────────────────────
-    matriz, por_pago, por_estado = {}, {}, {}
+    matriz, por_pago, por_estado, por_modo = {}, {}, {}, {}
     total = 0
     for r in RecaudoEntrega.query.all():
         fp = (r.forma_pago or '(sin forma de pago)').upper()
@@ -630,6 +630,11 @@ def liquidacion_desglose():
         matriz[f'{fp} | {ee}'] = matriz.get(f'{fp} | {ee}', 0) + 1
         por_pago[fp] = por_pago.get(fp, 0) + 1
         por_estado[ee] = por_estado.get(ee, 0) + 1
+        # `(sin registrar)` y no `LIBRE`: las paradas confirmadas antes del
+        # 2026-08-13 no guardaban el modo. Contarlas como LIBRE inflaría
+        # justo el número de riesgo; contarlas como DINAMICO lo escondería.
+        mp = r.modo_pantalla or '(sin registrar)'
+        por_modo[mp] = por_modo.get(mp, 0) + 1
         total += 1
 
     _no_entregado = sum(v for k, v in por_estado.items() if k in ('PARCIAL', 'RECHAZADO'))
@@ -664,12 +669,27 @@ def liquidacion_desglose():
                     .filter(SiesaJob.payload.like('%data incompleta%'))
                     .count())
 
+    # EL DENOMINADOR, sin el cual el conteo de arriba no dice nada.
+    #
+    # «0 alertas» significa cosas opuestas según cuántas facturas haya emitido
+    # el gateway: con 5, es «no hemos llegado a probarlo»; con 5.000, es «el
+    # fallback es código muerto». Y acá el denominador va a ser chico —la
+    # cadena de despacho es nueva— así que un cero NO cierra la pregunta.
+    #
+    # Ojo con la confusión que ya costó una vuelta: las ~382.000 facturas del
+    # extracto de Siesa **no pasaron por este gateway**. Sirven para saber si
+    # los PEDIDOS traen condición; no dicen nada del fallback.
+    from app.models.packing import TareaPacking
+    _emitidas = TareaPacking.query.filter(TareaPacking.rm_consec.isnot(None)).count()
+
     return jsonify({
         'recaudos': {
             'total': total,
             'matriz': matriz,
             'por_forma_pago': por_pago,
             'por_estado_entrega': por_estado,
+            'por_modo_pantalla': por_modo,
+            'en_modo_libre': por_modo.get('LIBRE', 0),
             'parcial_o_rechazado': _no_entregado,
             'pct_parcial_o_rechazado': (
                 round(100.0 * _no_entregado / total, 1) if total else None),
@@ -685,6 +705,8 @@ def liquidacion_desglose():
         },
         'condicion_pago_ausente': {
             'alertas': alertas_cond,
+            'facturas_emitidas_por_el_gateway': _emitidas,
+            'concluyente': _emitidas >= 50,
             'nota': ('Veces que se facturó como CONTADO porque el pedido no traía '
                      'f430_id_cond_pago. Contar facturas NO lo detecta: el '
                      'fallback rellena el campo antes de emitir.'),

@@ -51,6 +51,20 @@ class RecaudoEntrega(db.Model):
     # [{tipo, puc, tasa, monto, base, siesa_triggered, job_id}]
     retenciones_detalle = db.Column(db.JSON, nullable=True)
 
+    #: En qué modo estaba la pantalla del conductor al confirmar esta parada.
+    #: `LIBRE` es el caso de riesgo: elige forma de pago sin restricción,
+    #: incluido CREDITO en una parada de contado. `NULL` = se confirmó antes de
+    #: que esto se midiera, que NO es lo mismo que LIBRE.
+    #: Mismo CHECK que la migración — si viviera solo allá, `create_all()` no
+    #: lo tendría y ningún test lo ejercitaría.
+    modo_pantalla = db.Column(db.String(12), nullable=True)
+
+    __table_args__ = (
+        db.CheckConstraint(
+            "modo_pantalla IS NULL OR modo_pantalla IN ('CREDITO','DINAMICO','LIBRE')",
+            name='ck_recaudo_modo_pantalla'),
+    )
+
     # Idempotencia Siesa — flags independientes por conector
     siesa_rc_triggered  = db.Column(db.Boolean, default=False)   # 142888 ReciboCaja
     siesa_nc_triggered  = db.Column(db.Boolean, default=False)   # 142946 NotaFactura
@@ -77,6 +91,7 @@ class RecaudoEntrega(db.Model):
             'tarea_id':              self.tarea_id,
             'estado_entrega':        self.estado_entrega,
             'forma_pago':            self.forma_pago or '',
+            'modo_pantalla':         self.modo_pantalla,
             'monto_cobrado':         float(self.monto_cobrado) if self.monto_cobrado else 0,
             'observaciones':         self.observaciones or '',
             'bultos_rechazados_ids': self.bultos_rechazados_ids or [],

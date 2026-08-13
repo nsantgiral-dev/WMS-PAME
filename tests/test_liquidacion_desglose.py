@@ -208,3 +208,78 @@ class TestPermisos:
     def test_un_operario_no_ve_el_desglose(self, client, jwt_token):
         r = client.get(_URL, headers={'Authorization': f'Bearer {jwt_token}'})
         assert r.status_code == 403
+
+
+class TestElModoDePantalla:
+    """`LIBRE` es donde vive el riesgo y no se estaba contando.
+
+    En LIBRE el conductor elige forma de pago sin restricción, incluido
+    CREDITO en una parada de contado — y `confirmar_parada` solo valida que el
+    valor esté en la lista, nada lo ata a la condición del pedido.
+
+    Y los dos huecos se refuerzan: un pedido con `cond_pago` vacío produce a la
+    vez una factura emitida como CONTADO (fallback del gateway) y una parada en
+    LIBRE (`es_contado` no es `True` confirmado). El mismo dato faltante abre
+    las dos puertas.
+    """
+
+    def test_cuenta_las_paradas_en_modo_libre(self, client, db, h, ruta_con_tarea):
+        ruta, tarea = ruta_con_tarea
+        for modo in ('LIBRE', 'LIBRE', 'DINAMICO'):
+            r = _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
+            r.modo_pantalla = modo
+        db.session.commit()
+
+        d = client.get(_URL, headers=h).get_json()['recaudos']
+        assert d['en_modo_libre'] == 2
+        assert d['por_modo_pantalla']['DINAMICO'] == 1
+
+    def test_lo_historico_no_se_cuenta_como_LIBRE(self, client, db, h, ruta_con_tarea):
+        """Las paradas anteriores al 2026-08-13 no guardaban el modo. Contarlas
+        como LIBRE inflaría justo el número de riesgo; como DINAMICO lo
+        escondería. El hueco declarado es el único valor honesto."""
+        ruta, tarea = ruta_con_tarea
+        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')  # sin modo
+
+        d = client.get(_URL, headers=h).get_json()['recaudos']
+        assert d['en_modo_libre'] == 0
+        assert d['por_modo_pantalla']['(sin registrar)'] == 1
+
+    def test_el_modelo_rechaza_un_modo_inventado(self, db, ruta_con_tarea):
+        from sqlalchemy.exc import IntegrityError
+        ruta, tarea = ruta_con_tarea
+        r = RecaudoEntrega(ruta_id=ruta.id, tarea_id=tarea.id,
+                           estado_entrega=EstadoEntrega.ENTREGADO,
+                           forma_pago='EFECTIVO', modo_pantalla='CUALQUIERA')
+        db.session.add(r)
+        with pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
+
+
+class TestElDenominadorDelFallback:
+    """Sin denominador, «0 alertas» no dice nada.
+
+    Con 5 facturas emitidas significa «no hemos llegado a probarlo»; con 5.000,
+    «el fallback es código muerto». Y acá va a ser chico —la cadena de despacho
+    es nueva— así que un cero NO cierra la pregunta.
+    """
+
+    def test_viene_el_denominador(self, client, db, h):
+        c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
+        assert 'facturas_emitidas_por_el_gateway' in c
+
+    def test_con_pocas_facturas_no_es_concluyente(self, client, db, h, ruta_con_tarea):
+        _, tarea = ruta_con_tarea
+        tarea.rm_tipo, tarea.rm_consec = 'RS', 1
+        db.session.commit()
+        c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
+        assert c['facturas_emitidas_por_el_gateway'] == 1
+        assert c['concluyente'] is False, (
+            'con una sola factura emitida, cero alertas no prueba nada')
+
+    def test_sin_remision_no_cuenta_como_factura_emitida(self, client, db, h, ruta_con_tarea):
+        """Una tarea sin RM nunca llegó al 142943 — no puede estar en el
+        denominador de un fallback que vive ahí."""
+        c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
+        assert c['facturas_emitidas_por_el_gateway'] == 0
