@@ -582,6 +582,23 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
 
 # ── Liquidación — dashboard, detalle, one-click ───────────────────
 
+@rutas_bp.route('/motivos-rechazo', methods=['GET'])
+@jwt_required()
+def motivos_rechazo():
+    """El catálogo de motivos para el desplegable del conductor.
+
+    Sale del backend y no de una lista en el JS: dos catálogos del mismo
+    dominio divergen. Ya pasó con la lectura de la condición de pago (dos
+    sitios, los dos hacia contado) y con los tipos de vehículo (el dominio
+    conocía «camioneta» y el formulario no la ofrecía).
+
+    Lo puede leer cualquiera que pueda registrar una entrega — el conductor
+    incluido, que es quien lo necesita.
+    """
+    from app.services.motivos_rechazo import para_frontend
+    return jsonify({'motivos': para_frontend()}), 200
+
+
 @rutas_bp.route('/liquidacion/desglose', methods=['GET'])
 @jwt_required()
 def liquidacion_desglose():
@@ -620,9 +637,10 @@ def liquidacion_desglose():
 
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
 
     # ── 1. Desglose ──────────────────────────────────────────────────────
-    matriz, por_pago, por_estado, por_modo = {}, {}, {}, {}
+    matriz, por_pago, por_estado, por_modo, por_motivo = {}, {}, {}, {}, {}
     total = 0
     for r in RecaudoEntrega.query.all():
         fp = (r.forma_pago or '(sin forma de pago)').upper()
@@ -635,6 +653,9 @@ def liquidacion_desglose():
         # justo el número de riesgo; contarlas como DINAMICO lo escondería.
         mp = r.modo_pantalla or '(sin registrar)'
         por_modo[mp] = por_modo.get(mp, 0) + 1
+        if ee == 'RECHAZADO':
+            mr = r.motivo_rechazo or '(sin registrar)'
+            por_motivo[mr] = por_motivo.get(mr, 0) + 1
         total += 1
 
     _no_entregado = sum(v for k, v in por_estado.items() if k in ('PARCIAL', 'RECHAZADO'))
@@ -690,6 +711,12 @@ def liquidacion_desglose():
             'por_estado_entrega': por_estado,
             'por_modo_pantalla': por_modo,
             'en_modo_libre': por_modo.get('LIBRE', 0),
+            'motivos_rechazo': por_motivo,
+            # El caso donde el estado dice RECHAZADO pero el inventario NO
+            # volvió al camión. Es faltante de inventario disfrazado de
+            # devolución, y solo aparece en un conteo físico.
+            'rechazos_sin_retorno': sum(
+                n for m, n in por_motivo.items() if m in _MR_SIN_RETORNO),
             'parcial_o_rechazado': _no_entregado,
             'pct_parcial_o_rechazado': (
                 round(100.0 * _no_entregado / total, 1) if total else None),
@@ -727,6 +754,7 @@ def liquidacion_dashboard():
     from app.models.bulto import Bulto
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
 
     # Soporta rango de fechas (fecha_desde/fecha_hasta) o fecha única (backwards compatible)
     fecha_desde_str = request.args.get('fecha_desde') or request.args.get('fecha')
@@ -881,6 +909,7 @@ def liquidar_completo(id):
     from app.extensions import db
     from app.models.recaudo_entrega import RecaudoEntrega
     from app.models.siesa_job import SiesaJob
+    from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
     from app.services.liquidacion_service import (
         LiquidacionService, RETENCION_PUC, RETENCION_TASA, _obtener_tercero,
     )

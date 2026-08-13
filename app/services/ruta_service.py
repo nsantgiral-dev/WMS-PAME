@@ -755,8 +755,18 @@ class RutaService:
             if not forma_pago:
                 raise ValueError('Forma de pago es obligatoria para registrar una entrega')
         if estado_entrega == EstadoEntrega.RECHAZADO:
+            # Motivo TIPIFICADO, no texto libre. RECHAZADO era el estado más
+            # barato de los tres —solo pedía prosa— mientras ENTREGADO pedía
+            # forma de pago. Con el control «si no paga, no se entrega», el
+            # camino de menor resistencia era marcar rechazo, y eso convierte
+            # un faltante de inventario en una devolución falsa.
+            from app.services import motivos_rechazo as _mr
+            if not _mr.valido(data.get('motivo_rechazo')):
+                raise ValueError(
+                    'Elegí el motivo del rechazo de la lista — el texto libre '
+                    'no dice si la mercancía volvió al camión')
             if not (data.get('observaciones') or '').strip():
-                raise ValueError('El motivo del rechazo es obligatorio')
+                raise ValueError('El detalle del rechazo es obligatorio')
         if estado_entrega == EstadoEntrega.PARCIAL:
             # monto>0 solo aplica si de verdad se cobra en la puerta — un
             # pedido a crédito con devolución parcial no cobra nada ahí (solo
@@ -847,6 +857,9 @@ class RutaService:
         _modo = (data.get('modo_pantalla') or '').upper() or None
         if _modo in ('CREDITO', 'DINAMICO', 'LIBRE'):
             recaudo.modo_pantalla = _modo
+        from app.services import motivos_rechazo as _mr2
+        _mot = (data.get('motivo_rechazo') or '').strip().upper() or None
+        recaudo.motivo_rechazo = _mot if _mr2.valido(_mot) else None
         recaudo.monto_cobrado         = data.get('monto_cobrado', 0) or 0
         recaudo.motivo_descuento      = motivo_descuento
         recaudo.monto_descuento       = monto_descuento
