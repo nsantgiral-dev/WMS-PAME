@@ -59,7 +59,11 @@ def _plantilla_docx(nombre_archivo: str) -> dict:
 
     secciones, actual = {}, None
     for l in lineas:
-        m = re.match(r'"(\w+)":\s*\[', l)
+        # El nombre de sección admite espacios y puntos: el 251126 los usa
+        # (`"Docto. ventas comercial"`). Un `\w+` los deja fuera y el parser
+        # devuelve secciones vacías — que es el modo de fallo peligroso, porque
+        # comparar contra una lista vacía pasa siempre.
+        m = re.match(r'"([\w. ]+)":\s*\[', l)
         if m:
             actual = m.group(1)
             secciones[actual] = []
@@ -243,6 +247,81 @@ class TestDocumentoContable142882:
         nuevas = enviadas - set(self._SECCIONES_QUE_MANDAMOS)
         assert not nuevas, (
             f'secciones nuevas sin verificar contra el DOCX: {sorted(nuevas)}')
+
+
+class TestNotaCredito251126:
+    """El conector que de verdad usa Devolución de Cliente — **no el 142946**.
+
+    Los dos flujos de nota crédito usan conectores dinámicos, no el estándar:
+
+        NOTA_CREDITO_FACTURA            (liquidación) → 250696
+        NOTA_CREDITO_DEVOLUCION_CLIENTE (devolución)  → 251126
+
+    Importa porque las respuestas del consultor sobre «el 142946 autogenera la
+    Devolución de Ventas y reversa inventario y costo» son sobre un conector
+    que no disparamos en ningún flujo. Lo que sí se puede afirmar del 251126 es
+    lo que dice su propio spec, y su sección `Movimientos` **declara destino de
+    inventario**: `f470_id_bodega`, `f470_id_ubicacion_aux`, `f470_id_lote`,
+    `f470_id_motivo`, `f470_id_causal_devol`.
+
+    Una nota crédito puramente financiera no necesitaría saber a qué bodega ni
+    a qué ubicación vuelve la mercancía. Esta sí lo lleva, y nosotros lo
+    mandamos — verificado 2026-08-13, 34/34 campos.
+
+    Como el 142946, el encabezado se arma en helpers compartidos; buscarlo solo
+    en el cuerpo del trigger da un falso «faltan 3».
+    """
+
+    _DOCX = '251126 - PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2.docx'
+
+    #: Los campos que hacen que esta NC afecte inventario y no solo cartera.
+    #: Si alguno desaparece, la mercancía devuelta deja de tener destino
+    #: declarado — y eso no se ve en cartera, se ve en el inventario meses
+    #: después.
+    _CAMPOS_DE_INVENTARIO = (
+        'f470_id_bodega', 'f470_id_ubicacion_aux', 'f470_id_lote',
+        'f470_id_motivo', 'f470_id_causal_devol', 'f470_rowid_movto',
+    )
+
+    @pytest.fixture(scope='class')
+    def spec(self):
+        return _plantilla_docx(self._DOCX)
+
+    @pytest.fixture(scope='class')
+    def fuente(self):
+        t = _GATEWAY.read_text(encoding='utf-8')
+
+        def cuerpo(nombre):
+            i = t.find(f'    def {nombre}')
+            assert i != -1, f'no existe {nombre} — ¿se renombró?'
+            j = t.find('\n    def ', i + 10)
+            return t[i:j if j > 0 else i + 6000]
+
+        return (cuerpo('trigger_nota_factura_crear_cruzar')
+                + cuerpo('_build_header_docto_ventas_nc')
+                + cuerpo('_build_transportador_vacio'))
+
+    @pytest.mark.parametrize('seccion',
+                             ['Docto. ventas comercial', 'Cuotas CxC', 'Movimientos'])
+    def test_no_falta_ningun_campo(self, spec, fuente, seccion):
+        faltan = [c for c in spec[seccion] if f"'{c}'" not in fuente]
+        assert not faltan, f'\n{seccion}: faltan {len(faltan)} campos del DOCX: {faltan}'
+
+    def test_la_NC_declara_destino_de_inventario(self, fuente):
+        """Lo que distingue una NC que devuelve mercancía de una que solo
+        mueve plata."""
+        faltan = [c for c in self._CAMPOS_DE_INVENTARIO if f"'{c}'" not in fuente]
+        assert not faltan, (
+            f'\nLa NC dejó de declarar destino de inventario: {faltan}\n'
+            f'Sin bodega/ubicación, la mercancía devuelta no vuelve a ningún '
+            f'lado en Siesa — y el costo queda debitado sin venta.')
+
+    def test_el_spec_trae_las_tres_secciones(self, spec):
+        """Si el parser dejara de reconocer nombres con espacios y puntos
+        —`Docto. ventas comercial`— devolvería secciones vacías y los tests de
+        arriba compararían contra nada."""
+        assert set(spec) >= {'Docto. ventas comercial', 'Cuotas CxC', 'Movimientos'}
+        assert len(spec['Movimientos']) == 19
 
 
 class TestNotaFactura142946:
