@@ -233,7 +233,8 @@ class TestSecuencialidad:
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
-            with pytest.raises(Exception, match='RC depende de NC pendiente'):
+            from app.services.siesa_job_service import DependenciaPendiente
+            with pytest.raises(DependenciaPendiente, match='espera la NC'):
                 _ejecutar_job(job)
         mc.trigger_recibo_caja.assert_not_called()
 
@@ -254,7 +255,8 @@ class TestSecuencialidad:
         with patch('app.services.connekta_gateway.connekta') as mc:
             mc.modo_simulacion = False
             from app.services.siesa_job_service import _ejecutar_job
-            with pytest.raises(Exception, match='DC depende de RC'):
+            from app.services.siesa_job_service import DependenciaPendiente
+            with pytest.raises(DependenciaPendiente, match='espera el RC'):
                 _ejecutar_job(job)
         mc.trigger_documento_contable.assert_not_called()
 

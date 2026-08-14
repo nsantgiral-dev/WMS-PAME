@@ -59,6 +59,34 @@ RETENCION_PUC  = {k: v['puc']  for k, v in CATALOGO_RETENCIONES.items()}
 RETENCION_TASA = {k: v['tasa'] for k, v in CATALOGO_RETENCIONES.items()}
 
 
+def base_de_retencion(tipo_ret: str, base_gravable: float, total_iva: float) -> float:
+    """Sobre qué valor se calcula esa retención. **Una función.**
+
+    El reteIVA va sobre el **IVA**; todo lo demás sobre el subtotal. Parece
+    trivial y estaba escrito en tres sitios, uno de ellos así:
+
+        base_gravable * 0.19 * tasa        ← rutas.py, hasta el 2026-08-13
+
+    Eso **inventa** un IVA del 19% sobre el subtotal en vez de usar el que
+    Siesa reporta. Es exactamente lo que CLAUDE.md prohíbe —«usar API 45
+    (`f461_vlr_bruto`, `f461_vlr_imp`), NO dividir por 1.19»— en su forma
+    multiplicativa.
+
+    En una factura con líneas **exentas** el IVA real es menor que el 19% del
+    subtotal, así que la retención salía inflada: plata de más retenida a un
+    cliente, en un documento contable que alguien tiene que corregir a mano.
+    """
+    return float(total_iva or 0) if tipo_ret == 'RETEIVA' else float(base_gravable or 0)
+
+
+def monto_de_retencion(tipo_ret: str, base_gravable: float, total_iva: float) -> float:
+    """El valor a retener, redondeado a centavos."""
+    tasa = RETENCION_TASA.get(tipo_ret, 0)
+    if not tasa:
+        return 0.0
+    return round(base_de_retencion(tipo_ret, base_gravable, total_iva) * tasa, 2)
+
+
 class LiquidacionService:
 
     @staticmethod
@@ -249,12 +277,9 @@ class LiquidacionService:
         retenciones_disponibles = []
         for tipo_ret, datos_ret in CATALOGO_RETENCIONES.items():
             tasa = datos_ret['tasa']
-            # RETEIVA: base = total_iva, all others: base = base_gravable
-            if tipo_ret == 'RETEIVA':
-                base_calculo = total_iva
-            else:
-                base_calculo = base_gravable
-            monto_estimado = round(base_calculo * tasa, 2) if datos_disponibles else 0
+            base_calculo = base_de_retencion(tipo_ret, base_gravable, total_iva)
+            monto_estimado = (monto_de_retencion(tipo_ret, base_gravable, total_iva)
+                              if datos_disponibles else 0)
             retenciones_disponibles.append({
                 'tipo': tipo_ret,
                 'nombre': datos_ret['nombre'],
@@ -357,6 +382,20 @@ class LiquidacionService:
 
         estado = recaudo.estado_entrega
         forma_pago = (recaudo.forma_pago or '').upper()
+
+        # El ESTADO manda, no solo la forma de pago.
+        #
+        # Se validaba `forma_pago` y no el estado, así que una petición directa
+        # registraba un cobro —y disparaba un RC real a Siesa— sobre una parada
+        # RECHAZADA (no se entregó nada) o ENTREGADO_SIN_PAGO (se entregó y el
+        # cliente no pagó). Plata que no existe, en un documento financiero.
+        #
+        # La validación vive acá y no en la ruta porque el endpoint no es la
+        # única puerta: lo mismo que acaba de costar el guard de packing.
+        if estado not in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
+            raise ValueError(
+                f'No se puede registrar cobro sobre una parada {estado}: '
+                f'solo ENTREGADO o PARCIAL representan dinero recibido')
 
         # Validate: forma_pago not CREDITO/EXENTO
         if forma_pago in ('CREDITO', 'EXENTO'):
@@ -510,13 +549,8 @@ class LiquidacionService:
                     )
                     continue
 
-                # RETEIVA: base = total_iva; others: base = base_gravable
-                if tipo_ret == 'RETEIVA':
-                    base_ret = total_iva
-                else:
-                    base_ret = base_gravable
-
-                monto_ret = round(base_ret * tasa, 2)
+                base_ret = base_de_retencion(tipo_ret, base_gravable, total_iva)
+                monto_ret = monto_de_retencion(tipo_ret, base_gravable, total_iva)
                 if monto_ret <= 0:
                     logger.warning(
                         '[LIQUIDACION] retención %s monto=0 (base=%.2f, tasa=%.4f) — omitido',

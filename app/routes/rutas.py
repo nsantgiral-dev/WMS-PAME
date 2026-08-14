@@ -1173,6 +1173,10 @@ def liquidar_completo(id):
 
             # Obtener base gravable desde Siesa si es posible, fallback a monto_cobrado
             base_gravable = float(recaudo.monto_cobrado or 0)
+            # El IVA REAL de la factura. Sin esto, el cálculo de abajo lo
+            # inventaba multiplicando el subtotal por 0.19 — y en una factura
+            # con líneas exentas eso infla la retención.
+            total_iva = 0.0
             # La FE, no el pedido — ver `app/services/fe_resolver.py`.
             from app.services.fe_resolver import resolver_fe_o_none
             _tipo_fe, _consec_fe = resolver_fe_o_none(tarea) if tarea else (None, None)
@@ -1182,6 +1186,7 @@ def liquidar_completo(id):
                     lineas_raw = connekta.get_rowids_factura(_tipo_fe, _consec_fe)
                     if lineas_raw:
                         base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
+                        total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
                 except Exception as e:
                     logger.warning(
                         '[LIQUIDAR-COMPLETO] No se pudo obtener base gravable Siesa para '
@@ -1235,12 +1240,10 @@ def liquidar_completo(id):
                 if RETENCION_PUC[tipo_ret] in _pucs_en_cola:
                     continue
 
-                tasa = RETENCION_TASA.get(tipo_ret, 0)
-                # Para RETEIVA se aplica sobre el IVA, no sobre la base
-                if tipo_ret == 'RETEIVA':
-                    monto_ret = round(base_gravable * 0.19 * tasa, 2)
-                else:
-                    monto_ret = round(base_gravable * tasa, 2)
+                # Una función, tres sitios. Acá estaba la tercera versión, y
+                # era la equivocada: `base_gravable * 0.19` inventa el IVA.
+                from app.services.liquidacion_service import monto_de_retencion
+                monto_ret = monto_de_retencion(tipo_ret, base_gravable, total_iva)
 
                 if monto_ret <= 0:
                     continue

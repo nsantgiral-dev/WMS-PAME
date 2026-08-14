@@ -85,7 +85,10 @@ def _get_o_crear_ubicacion_general(almacen_id: int) -> Ubicacion:
 
 
 _cache_inventario_siesa = {'data': None, 'ts': None}
-_cache_inventario_multibodega = {'data': None, 'ts': None}
+#: `ts` es la hora de la última descarga **que trajo datos de Siesa**, no la de
+#: la última vez que se armó el diccionario. `degradado` dice si lo que hay
+#: salió solo de la BD porque la API no respondió.
+_cache_inventario_multibodega = {'data': None, 'ts': None, 'degradado': False}
 _descarga_multibodega_en_curso = False
 _CACHE_TTL_SEGUNDOS = 3600  # 1 hora — evita re-descargar en reconciliaciones frecuentes
 _REFRESH_INTERVALO = 2700   # 45 min — refresh periódico del cache multi-bodega
@@ -290,8 +293,14 @@ def _descargar_inventario_siesa_raw(forzar=False):
 
     api_data = _descargar_todas_bodegas_custom()
 
-    if api_data is None:
-        logger.warning('[INV-SIESA] Custom query falló — usando solo BD')
+    _degradado = api_data is None
+    if _degradado:
+        # La API no respondió: lo que sigue sale de `stock_siesa`, que puede
+        # tener horas o días. Se devuelve igual —quedarse sin inventario
+        # rompería más de lo que arregla— pero **no se sella como fresco**.
+        logger.error(
+            '[INV-SIESA] Custom query falló — se responde con el stock '
+            'persistido en BD, que NO se acaba de verificar contra Siesa.')
         api_data = {}
 
     inventario_global = {}
@@ -314,7 +323,24 @@ def _descargar_inventario_siesa_raw(forzar=False):
     logger.info('[INV-SIESA] Descarga completa: %d productos en %s', total, sorted(inventario_global.keys()))
 
     _cache_inventario_multibodega['data'] = inventario_global
-    _cache_inventario_multibodega['ts'] = datetime.utcnow()
+    _cache_inventario_multibodega['degradado'] = _degradado
+    if not _degradado:
+        _cache_inventario_multibodega['ts'] = datetime.utcnow()
+    else:
+        # NO se refresca la marca de tiempo.
+        #
+        # Ponerle `utcnow()` a un inventario que salió de la BD porque Siesa no
+        # respondió es un sello fresco sobre un dato viejo: el TTL de una hora
+        # lo daba por vigente y se usaba para **proponer traslados**. Nadie
+        # podía distinguir «Siesa dice esto» de «esto es lo último que supimos».
+        #
+        # Dejando la marca vieja, el TTL vence y el siguiente llamador
+        # reintenta. El circuit breaker acota el costo de reintentar contra un
+        # Siesa caído.
+        logger.warning(
+            '[INV-SIESA] Cache marcado DEGRADADO — la marca de tiempo sigue '
+            'siendo la de la última descarga real (%s)',
+            _cache_inventario_multibodega['ts'])
 
     _guardar_stock_en_bd(inventario_global)
 

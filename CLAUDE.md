@@ -899,6 +899,25 @@ por un camino que no pase por `confirmar_parada`.
 
 ---
 
+## La tanda media de la auditoría — E, F, G, I, J, K, L (2026-08-13)
+
+Siete defectos, y **cuatro comparten una sola forma: un valor con dos
+significados.**
+
+| | Qué pasaba | Ahora |
+|---|---|---|
+| **F** | `base_gravable * 0.19` en `rutas.py` **inventaba el IVA**. Con líneas exentas la retención salía casi al doble (28.500 vs 15.000 sobre un caso real). Tercera copia de la fórmula, y la única equivocada | `base_de_retencion()` / `monto_de_retencion()` — una función, tres sitios. Detector **por AST**: el de texto se atrapaba en su propio docstring |
+| **G** | El cobro validaba `forma_pago` y no `estado_entrega`: se registraba dinero sobre una parada RECHAZADA o ENTREGADO_SIN_PAGO | Validado **en el servicio**, no en la ruta — el endpoint no es la única puerta |
+| **E** | El RC que espera su NC gastaba reintento. Backoff `[5,15,45,120,180]` × 5 ≈ **6 horas**, y lo que lo desbloquea es una recepción física que puede ser mañana → FALLIDO, cobro nunca enviado | `DependenciaPendiente` no gasta reintento. El precedente estaba al lado: `ConnektaCircuitOpenError` tampoco |
+| **J** | Antes de facturar una remisión se preguntaba «¿el **pedido** tiene FE?». En un segundo parcial, la FE del primero contestaba que sí → tarea marcada hecha **sin facturar la segunda remisión** | `get_factura_desde_remision` — que existía, estaba probada y **no tenía un solo caller** |
+| **K** | Un 429 a mitad de sincronización abortaba la paginación, y los pedidos de las páginas no leídas **se borraban**, reportados en `eliminados` como limpieza normal | El borrado exige barrido completo. El resultado declara `paginacion_completa` |
+| **L** | La API de inventario falla → se cae a la BD (horas o días vieja) → y se le pone `utcnow()`. **Sello fresco sobre dato viejo**, usado para proponer traslados | La marca de tiempo solo avanza con datos de Siesa; el cache declara `degradado` |
+| **I** | El 173066 omitía `f470_rowid_movto`, que sus dos hermanos mandan en `0` | Se agrega. **Y deja un dato**: venía corriendo en producción sin él, lo que es evidencia —no prueba— de que Connekta mapea por nombre y no por posición |
+
+Trinquete: `tests/test_auditoria_tanda_media.py` (7 mutaciones, las 7 rojas).
+
+---
+
 ## Dos escaladas de autorización (2026-08-13)
 
 Las dos verificadas ejecutando la aplicación con credenciales de cada rol.

@@ -58,6 +58,11 @@ def _run_sync(app):
         eliminados = 0
         paginas_leidas = 0
         anulados_detectados = []
+        # ¿Se leyeron TODAS las páginas? Un barrido incompleto no puede decidir
+        # qué borrar: los pedidos que no se alcanzaron a leer se leen igual que
+        # los que ya no existen. Regla 0, la misma de `ConnektaPaginacionError`.
+        paginacion_completa = False
+        motivo_incompleta = None
 
         try:
             # estado=3 → Comprometido: inventario físicamente reservado en Siesa
@@ -71,10 +76,11 @@ def _run_sync(app):
                 # [M3] Cota temporal: si Siesa tarda mucho por página, no bloquear el scheduler
                 _elapsed = (datetime.utcnow() - _sync_inicio).total_seconds()
                 if _elapsed > _MAX_MINUTOS_PAGINACION * 60:
-                    logger.warning(
-                        f'[PEDIDOS_SYNC] Paginación abortada tras {_elapsed:.0f}s '
-                        f'({pag} páginas) — cota temporal alcanzada'
-                    )
+                    motivo_incompleta = (
+                        f'cota temporal alcanzada tras {_elapsed:.0f}s en la '
+                        f'página {pag}')
+                    logger.warning('[PEDIDOS_SYNC] Paginación abortada: %s',
+                                   motivo_incompleta)
                     break
                 try:
                     res = connekta._get(connekta.api_pedidos, {
@@ -85,9 +91,13 @@ def _run_sync(app):
                     all_items.extend(rows)
                     paginas_leidas += 1
                     if len(rows) < TAM_PAG:
+                        # Página corta = última página. Éste es el ÚNICO camino
+                        # que deja el barrido completo.
+                        paginacion_completa = True
                         break
                 except Exception as e:
-                    logger.warning(f'[PEDIDOS_SYNC] Página {pag}: {e}')
+                    motivo_incompleta = f'la página {pag} falló: {e}'
+                    logger.error('[PEDIDOS_SYNC] %s', motivo_incompleta)
                     break
 
             # Filtrar bodega NB1 en Python (CO ya filtrado en Siesa)
@@ -254,8 +264,23 @@ def _run_sync(app):
                 logger.warning(f'[PEDIDOS_SYNC] Detección anulados falló silenciosamente: {_e}')
             # ────────────────────────────────────────────────────────────────────
 
-            # [08] Eliminar pedidos que ya no tienen pendiente — bulk delete por IDs conocidos
-            # evita cargar todos los registros en memoria con .all()
+            # [08] Eliminar pedidos que ya no tienen pendiente.
+            #
+            # **Solo si el barrido fue completo.** Con la paginación abortada a
+            # medias —un 429, un timeout, la cota temporal— los pedidos de las
+            # páginas que no se leyeron no están en `claves_activas`, y borrarlos
+            # es indistinguible de una limpieza normal: se reportaban en
+            # `eliminados` como si nada.
+            #
+            # El operario que va a pickear ese pedido no lo encuentra, y la causa
+            # —una respuesta 429 media hora antes— no aparece en ningún lado.
+            if not paginacion_completa:
+                logger.error(
+                    '[PEDIDOS_SYNC] NO se elimina nada: barrido incompleto (%s). '
+                    '%s páginas leídas, %s ítems. Los pedidos no leídos se '
+                    'conservan — se reconcilian en el próximo ciclo completo.',
+                    motivo_incompleta, paginas_leidas, len(all_items),
+                )
             todos_ids = db.session.query(
                 PedidoSiesa.id,
                 PedidoSiesa.tipo_docto,
@@ -267,7 +292,7 @@ def _run_sync(app):
             ids_a_borrar = [
                 r.id for r in todos_ids
                 if (r.tipo_docto, r.consec_docto, r.centro_op, r.bodega, r.item_codigo) not in claves_activas
-            ]
+            ] if paginacion_completa else []
             if ids_a_borrar:
                 PedidoSiesa.query.filter(PedidoSiesa.id.in_(ids_a_borrar)).delete(synchronize_session=False)
                 eliminados = len(ids_a_borrar)
@@ -282,6 +307,10 @@ def _run_sync(app):
                 'upserts': upserts,
                 'eliminados': eliminados,
                 'anulados_detectados': len(anulados_detectados),
+                # Sin esto, `eliminados: 0` tras un barrido roto se lee como
+                # «no había nada que borrar».
+                'paginacion_completa': paginacion_completa,
+                'motivo_incompleta': motivo_incompleta,
             }
             logger.info(f'[PEDIDOS_SYNC] OK: {resultado}')
             _sync_estado['ultimo_resultado'] = resultado

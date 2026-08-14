@@ -2410,6 +2410,17 @@ class ConnektaGateway:
                 'f470_id_ext1_detalle': None,
                 'f470_id_ext2_detalle': None,
                 'f470_id_un_movto': self.unidad_negocio,
+                # Último campo del spec, y el único que este conector omitía.
+                # Sus dos hermanos —173076 y 173079— lo mandan en `0`, que acá
+                # es relleno: no hay renglón de origen que referenciar.
+                #
+                # NOTA para la pregunta abierta sobre el mapeo por nombre vs
+                # por posición: **173066 venía corriendo en producción sin este
+                # campo**. Si el plano fuera estrictamente posicional por orden
+                # de claves, omitir el último habría acortado el registro y
+                # Siesa lo habría rechazado. No lo hizo. Es evidencia —no
+                # prueba— de que Connekta mapea por nombre.
+                'f470_rowid_movto': 0,
             }],
             'Final': [{'F_CIA': int(self.id_cia_siesa)}],
         }

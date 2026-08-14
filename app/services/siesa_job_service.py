@@ -15,7 +15,7 @@ Tipos de job implementados:
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from app.extensions import db
 from app.models.siesa_job import SiesaJob, EstadoSiesaJob
@@ -71,6 +71,27 @@ def procesar_jobs_pendientes(app=None):
     except Exception as e:
         logger.error(f'[DLQ] Error inesperado en procesar_jobs_pendientes: {e}', exc_info=True)
         return 0
+
+
+class DependenciaPendiente(Exception):
+    """El job no puede correr todavía porque otro paso no ha ocurrido.
+
+    **No es un fallo, y por eso no gasta reintento.**
+
+    El recibo de caja de una parada PARCIAL espera a que salga su nota
+    crédito, y esa NC la desbloquea una **recepción física en bodega**: alguien
+    que confirma la devolución. Con el backoff `[5,15,45,120,180]` y 5
+    intentos, la espera total es de ~6 horas.
+
+    Una ruta municipal liquidada por la tarde espera a una persona que puede
+    llegar mañana. El job se quedaba FALLIDO y **el cobro nunca entraba a
+    Siesa** — la cartera fantasma otra vez, por un reloj.
+
+    `intentos` mide fallos. Esperar no es uno. Confundirlos es la misma clase
+    de «un contador, dos significados» que ya costó las banderas de
+    idempotencia. El precedente estaba al lado: `ConnektaCircuitOpenError`
+    tampoco gasta reintento.
+    """
 
 
 _ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
@@ -220,6 +241,17 @@ def _run_dlq_jobs():
 
         except Exception as e:
             from app.services.connekta_gateway import ConnektaCircuitOpenError
+            if isinstance(e, DependenciaPendiente):
+                # Esperar no es fallar. Se reprograma sin gastar reintento —
+                # si no, una ruta liquidada por la tarde agota los 5 intentos
+                # en 6 horas esperando una recepción que ocurre mañana, y el
+                # cobro no entra nunca.
+                job.estado = EstadoSiesaJob.PENDIENTE
+                job.proximo_intento = datetime.utcnow() + timedelta(minutes=30)
+                job.error_ultimo = str(e)[:2000]
+                db.session.commit()
+                logger.info('[DLQ] Job %s en espera: %s', job.id, e)
+                continue
             if isinstance(e, ConnektaCircuitOpenError):
                 # Circuit breaker abierto — NO gastar reintento.
                 # El job se queda en PROCESANDO/PENDIENTE y se reintenta
@@ -1168,12 +1200,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             )
             return {'idempotente': True, 'recaudo_id': recaudo.id}
 
-        # Secuencialidad: si depende de NC, verificar que NC ya pasó
+        # Secuencialidad: si depende de NC, verificar que NC ya pasó.
+        # `DependenciaPendiente` y no `Exception`: esperar no gasta reintento.
         if payload.get('depende_de_nc') and recaudo and not recaudo.siesa_nc_triggered:
-            # NC aún no procesada — reintento con backoff
-            raise Exception(
-                f'RECIBO_CAJA job={job.id}: RC depende de NC pendiente para '
-                f'recaudo {recaudo.id} — reintento en próximo ciclo DLQ'
+            raise DependenciaPendiente(
+                f'RECIBO_CAJA job={job.id}: RC espera la NC del recaudo '
+                f'{recaudo.id}, que la desbloquea la recepción física de la '
+                f'devolución. Sigue pendiente.'
             )
 
         # Re-read monto: si el recaudo fue editado post-enqueue, usar el valor actual
@@ -1288,9 +1321,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
         # Siesa no ha reducido el saldo por el cash todavía.
         if recaudo and not recaudo.siesa_rc_triggered:
-            raise Exception(
-                f'DOCUMENTO_CONTABLE_RET job={job.id}: DC depende de RC para '
-                f'recaudo {recaudo.id} — reintento en próximo ciclo DLQ'
+            raise DependenciaPendiente(
+                f'DOCUMENTO_CONTABLE_RET job={job.id}: DC espera el RC del '
+                f'recaudo {recaudo.id}. Sigue pendiente.'
             )
 
         # Pre-flag: cerrar crash window (misma lógica que RC), por cuenta.
