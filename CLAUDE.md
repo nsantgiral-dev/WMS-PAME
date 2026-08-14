@@ -1099,6 +1099,47 @@ Trinquete: `tests/test_idempotencia_retenciones.py` (5 mutaciones).
 
 ---
 
+## Las 28 requisiciones huérfanas — consultar demasiado pronto (2026-08-14)
+
+La primera auditoría contra producción agrupó los 53 errores de traslado por
+causa. **La más numerosa —28— no era un rechazo:**
+
+> «174646 aceptada por Siesa pero el WMS no pudo leer el consecutivo. El
+> despacho usará 173076 (fallback). La RIT huérfana debe cerrarse manualmente.»
+
+La RIT **sí entra**. Lo que falla es leerla de vuelta — y la causa está escrita
+en este mismo archivo:
+
+**Regla 20:** *«Después de POST exitoso, Siesa tarda ~10-12 s en procesar — no
+consultar inmediatamente.»*
+
+`aprobar_solicitud` hace el POST del 174646 y consulta el consecutivo **en la
+línea siguiente**. Llega temprano, no encuentra nada, marca la RIT como
+huérfana y despacha por el fallback. Veintiocho requisiciones sueltas en Siesa
+que alguien tiene que cerrar a mano.
+
+Se descartó el truncamiento antes de buscar en otro lado: `f440_referencia`
+mide 20 y el código del traslado 16.
+
+**El reintento va en el despacho, no en un `sleep`.** Dormir 10 segundos en el
+request de aprobación castiga a quien aprueba por un problema de tiempos del
+ERP; el despacho ocurre minutos u horas después y para entonces la espera que
+la Regla 20 pedía ya pasó sin que nadie la haya esperado.
+
+Trinquete: `tests/test_rit_huerfana.py`.
+
+### Y la agrupación por causa es lo que lo hizo visible
+
+`TRA-12` devolvía **53 filas** y ninguna se podía triar. Agrupadas por firma
+—el mensaje sin los identificadores que cambian— quedaron **4 causas**, y tres
+de las cuatro **no son defectos de código**: permisos del conector (4), red
+(2), y esta lectura temprana (28). El rechazo estructural real son 19.
+
+Un hallazgo por fila convierte un problema en una lista, y una lista larga se
+ignora.
+
+---
+
 ## Auditoría de invariantes de frontera (2026-08-13)
 
 `app/services/auditoria/` · `tests/flujo/` · `GET /api/auditoria/flujo`

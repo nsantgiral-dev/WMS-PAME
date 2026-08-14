@@ -515,6 +515,35 @@ class TrasladoService:
         if not items_payload:
             raise ValueError('No hay ítems con cantidad para despachar')
 
+        # ── Segundo intento de leer el consecutivo de la RIT ─────────────
+        #
+        # Al aprobar, la RIT se consulta **inmediatamente** después del POST. La
+        # Regla 20 dice que Siesa tarda ~10-12 s en procesar, así que esa
+        # consulta llega temprano y devuelve vacío: el WMS marca la RIT como
+        # huérfana y despacha por el fallback 173076.
+        #
+        # La primera auditoría contra producción encontró **28 traslados así**,
+        # cada uno con una requisición suelta en Siesa que alguien tiene que
+        # cerrar a mano.
+        #
+        # Acá ya pasaron minutos u horas desde la aprobación, que es lo que la
+        # Regla 20 pedía esperar. No se duerme en el request: se pregunta de
+        # nuevo en el siguiente momento natural del flujo.
+        if not _skip_siesa and not s.siesa_requisicion_consec and s.siesa_error \
+                and 'no pudo leer el consecutivo' in (s.siesa_error or ''):
+            try:
+                _rec = siesa_traslado.recuperar_consec_rit(s.codigo)
+                if _rec:
+                    s.siesa_requisicion_consec = _rec
+                    s.siesa_error = None
+                    db.session.commit()
+                    logger.info(
+                        '[TRASLADO] %s: consecutivo de RIT recuperado en el '
+                        'despacho (%s) — ya no queda huérfana', s.codigo, _rec)
+            except Exception as _e_rec:
+                logger.warning('[TRASLADO] %s: segundo intento de leer la RIT '
+                               'falló: %s', s.codigo, _e_rec)
+
         try:
             if _skip_siesa:
                 logger.info(
