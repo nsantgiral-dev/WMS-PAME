@@ -1099,6 +1099,52 @@ Trinquete: `tests/test_idempotencia_retenciones.py` (5 mutaciones).
 
 ---
 
+## El acta de corte no cortaba del todo (2026-08-14)
+
+`reset_transaccional.py` es **deny-by-default**: solo vacía lo que está en
+`OPERATIVAS`. Eso protege la memoria analítica, y tiene una consecuencia que no
+se ve — **una tabla que no está en ninguna lista sobrevive al corte con los
+datos del ensayo**.
+
+Había **cinco sin clasificar**, y dos eran `devoluciones_cliente` y
+`lineas_devolucion_cliente`: justo las tres devoluciones de prueba del 28 de
+julio que la auditoría de flujo venía reportando. Después del corte habrían
+seguido ahí, reportándose para siempre como si fueran operación real.
+
+### Y dos órdenes que habrían hecho fallar el corte
+
+| Tabla | Apunta a | Se borraba |
+|---|---|---|
+| `devoluciones_cliente` | `tareas_packing`, `recaudos_entrega` | **después** |
+| `sesiones_conteo` | `tareas_picking` | **catorce posiciones después** |
+
+El `DELETE` del padre falla por clave foránea y el `except` del bucle lo imprime
+como un aviso entre otros. Es el mismo tropiezo que ya costó una vez con
+`flota_lectura_odometro` —documentado en el propio script— y que el orden mal
+puesto reintroducía.
+
+**Lo encontró el trinquete, no una corrida.** Una corrida solo lo habría
+mostrado el día del corte, que es el día en que alguien improvisa un `DELETE` a
+mano — exactamente lo que el script existe para evitar.
+
+### El corte tiene que afirmar que cortó
+
+`ok` solo medía que la memoria analítica hubiera sobrevivido. Con tablas
+operativas llenas el script imprimía la línea roja y **devolvía 0**: decía
+«RESET COMPLETO» y daba permiso para arrancar. Ahora el éxito exige las dos
+cosas.
+
+### `precios_realizados` es analítica, no operativa
+
+No es una lista de precios: es `valor / cantidad` sobre ventas reales, neto de
+descuentos. Alimenta el **Cu del newsvendor** —margen medido en vez de
+supuesto— y mide la escalera de precios entre C.O. Borrarla devuelve los
+modelos al margen supuesto sin que nadie lo note.
+
+Trinquete: `tests/test_acta_de_corte.py`.
+
+---
+
 ## Las 28 requisiciones huérfanas — consultar demasiado pronto (2026-08-14)
 
 La primera auditoría contra producción agrupó los 53 errores de traslado por

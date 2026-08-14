@@ -48,10 +48,27 @@ VERDE, ROJO, AMAR, GRIS, FIN = '\033[92m', '\033[91m', '\033[93m', '\033[90m', '
 
 # Se vacían. Orden importa: hijos antes que padres por las FKs.
 OPERATIVAS = [
+    # Devolución de cliente PRIMERO: apunta a `tareas_packing` y a
+    # `recaudos_entrega`, que se vacían más abajo. Sin este orden el DELETE de
+    # esas dos falla por clave foránea, el `except` de abajo lo imprime como un
+    # aviso más, y el corte termina a medias.
+    #
+    # Es el mismo tropiezo que ya costó una vez con `flota_lectura_odometro`.
+    # Estas dos tablas simplemente **no estaban en ninguna lista**: ni operativa
+    # ni protegida, así que sobrevivían al corte con los datos del ensayo — las
+    # tres devoluciones de prueba del 28 de julio que la auditoría reporta.
+    'lineas_devolucion_cliente',
+    'devoluciones_cliente',
     'items_packing',
     'bultos',
     'recaudos_entrega',
     'tareas_packing',
+    # `sesiones_conteo` apunta a `tareas_picking` (la tarea que genera un
+    # conteo tras un descuadre), así que va ANTES. Estaba catorce posiciones
+    # más abajo: el DELETE de `tareas_picking` fallaba por FK y el bucle lo
+    # imprimía como un aviso. Lo encontró el trinquete de orden, no una
+    # corrida — y una corrida solo lo habría mostrado el día del corte.
+    'sesiones_conteo',
     'tareas_picking',
     'tareas_devolucion',
     'tareas_reposicion',
@@ -60,7 +77,6 @@ OPERATIVAS = [
     'items_solicitud_traslado',
     'solicitudes_traslado',
     'rutas_despacho',
-    'sesiones_conteo',
     'movimientos_inventario',
     'siesa_jobs',
     'pedidos_siesa',
@@ -73,13 +89,28 @@ OPERATIVAS = [
     # levantamiento de campo. Media mañana recorriendo cinco vehículos, con la
     # foto del tablero y la medida de llanta en la mano. Borrarlas en el corte
     # obliga a hacerlo dos veces, y la segunda nadie la hace.
-    'flota_foto',
+    # La lectura apunta a la foto del odómetro, así que va antes. El script
+    # ya compensaba este orden deshabilitando triggers en Postgres; con el
+    # orden correcto ese apaño queda de más, pero se conserva —quitarlo el día
+    # del corte es una decisión aparte.
     'flota_lectura_odometro',
+    'flota_foto',
     'flota_custodia',
+    # Avisos enviados durante el ensayo. Como las fotos y las lecturas: es
+    # registro de la prueba, no expediente del vehículo.
+    'flota_aviso',
+    # Bitácora de corridas de sincronización. Se vuelve a llenar sola en la
+    # primera sync después del corte.
+    'registros_sync',
 ]
 
 # NUNCA. Si aparecen en OPERATIVAS, el script aborta.
 PROTEGIDAS_ANALITICAS = {
+    # NO es una lista de precios: es `valor / cantidad` sobre ventas reales,
+    # neto de descuentos. Alimenta el Cu del newsvendor —margen medido en vez
+    # de supuesto— y mide la escalera de precios entre C.O. Borrarlo devuelve
+    # los modelos al margen supuesto sin que nadie lo note.
+    'precios_realizados': 'margen medido del newsvendor y escalera de precios',
     'serie_vigia': 'línea base del CUSUM — sin ella, ciego ~6 meses',
     'alarma_vigia': 'la alarma de Florencia, primera certificada',
     'kardex_movimientos': 'historia de demanda que alimenta los 4 modelos',
@@ -247,8 +278,15 @@ def main():
                     sobrantes.append(f'{t}: {n}')
             except Exception:
                 pass
+        # Hasta hoy esto se imprimía en rojo y el script devolvía 0 igual: el
+        # corte terminaba diciendo «RESET COMPLETO» con tablas operativas
+        # llenas. `ok` solo medía que la memoria analítica hubiera sobrevivido
+        # — media verificación. Un corte tiene que afirmar que cortó.
+        corto_de_verdad = not sobrantes
         if sobrantes:
             print(f'\n  {ROJO}NO quedaron vacías:{FIN} ' + ', '.join(sobrantes))
+            print(f'  {GRIS}Suele ser una clave foránea: una tabla que apunta a '
+                  f'ésta se borra después, o no está en OPERATIVAS.{FIN}')
 
         if args.fotos:
             print(f'\n  {VERDE}Limpiando archivos huérfanos de flota…{FIN}')
@@ -276,13 +314,17 @@ def main():
                 print(f'    · {c}')
 
         print('\n  ' + '─' * 54)
-        if ok:
+        if ok and corto_de_verdad:
             print(f'  {VERDE}RESET COMPLETO{FIN} — memoria analítica intacta.')
             print(f'  {GRIS}Siguiente: rellenar y correr scripts/verificar_carga_vigia.py.')
             print(f'  Con los mismos hashes debe dar CERTIFICADO idéntico — si el canon')
             print(f'  sigue reproduciendo S-=6.30, la limpieza fue quirúrgica.{FIN}\n')
             return 0
-        print(f'  {ROJO}RESET CON PÉRDIDAS{FIN} — revisar antes de continuar.\n')
+        if not corto_de_verdad:
+            print(f'  {ROJO}RESET INCOMPLETO{FIN} — quedaron tablas operativas '
+                  f'con datos. NO se puede arrancar sobre esto.\n')
+        else:
+            print(f'  {ROJO}RESET CON PÉRDIDAS{FIN} — revisar antes de continuar.\n')
         return 1
 
 
