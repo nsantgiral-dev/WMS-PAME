@@ -1199,10 +1199,28 @@ def liquidar_completo(id):
             consec_fe = _consec_fe or ''
             notas_base = f'WMS Ruta #{id} | Liquidación completa'
 
+            # Lo que la bandera pretendía evitar, hecho sobre la cola: un job
+            # DC vivo para este recaudo y esta cuenta significa que ya se
+            # encoló. Mirar la cola es lo que corresponde — la bandera del
+            # recaudo habla de lo enviado, no de lo encolado.
+            _pucs_en_cola = set()
+            for _j in SiesaJob.query.filter_by(
+                    tipo='DOCUMENTO_CONTABLE_RET',
+                    referencia_tipo='RecaudoEntrega',
+                    referencia_id=recaudo.id).all():
+                if _j.estado in ('FALLIDO', 'DESCARTADO'):
+                    continue
+                try:
+                    _pucs_en_cola.add((_j.get_payload() or {}).get('cuenta_puc'))
+                except Exception:
+                    pass
+
             for ret in retenciones:
                 tipo_ret = ret.get('tipo', '')
                 if tipo_ret not in RETENCION_PUC:
                     errores.append(f'Tipo de retención desconocido: {tipo_ret}')
+                    continue
+                if RETENCION_PUC[tipo_ret] in _pucs_en_cola:
                     continue
 
                 tasa = RETENCION_TASA.get(tipo_ret, 0)
@@ -1241,7 +1259,20 @@ def liquidar_completo(id):
             if tipos_ret:
                 recaudo.motivo_descuento = ','.join(tipos_ret)
                 recaudo.monto_descuento = monto_total_ret
-                recaudo.siesa_dc_triggered = True  # prevent duplicate enqueue in liquidar_ruta_siesa
+                # NO se toca `siesa_dc_triggered` acá.
+                #
+                # Hasta el 2026-08-13 esta línea la encendía «para evitar doble
+                # encolado», y esa misma bandera es la GUARDA DE IDEMPOTENCIA
+                # del ejecutor (`siesa_job_service.py`). El resultado: cada job
+                # que este endpoint encolaba leía la bandera, se declaraba
+                # idempotente y se marcaba completado **sin enviar nada**.
+                #
+                # **Ningún documento de retención llegó nunca a Siesa por esta
+                # vía**, y el log, la pantalla y el tablero decían que sí.
+                #
+                # Una bandera con dos significados —«ya encolé» y «ya envié»—
+                # no puede servir para los dos. El anti-doble-encolado vive
+                # ahora en `_ya_hay_dc_encolado`, que mira la cola.
 
     db.session.commit()
 

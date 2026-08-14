@@ -899,6 +899,61 @@ por un camino que no pase por `confirmar_parada`.
 
 ---
 
+## Las tres banderas de idempotencia financiera (2026-08-13)
+
+Tres auditorías independientes convergieron sobre el mismo par de líneas:
+
+```
+rutas.py:1244              recaudo.siesa_dc_triggered = True   # «evitar doble encolado»
+siesa_job_service.py:1249  if recaudo.siesa_dc_triggered: return {'idempotente': True}
+```
+
+El endpoint de liquidar-completo encolaba los documentos de retención y acto
+seguido encendía **la bandera que el ejecutor usa como guarda**. Cada job la
+leía, se declaraba idempotente y se marcaba completado **sin enviar nada**.
+
+**Ningún documento de retención llegó nunca a Siesa por esa vía**, y el log, la
+pantalla y el tablero informaban éxito.
+
+Lo que lo volvía indetectable: la verificación ya pedida —«una liquidación con
+retención, que nunca ha corrido»— **no lo habría descubierto**. La corrida se ve
+exitosa desde el WMS. Solo abrir Siesa y no encontrar el documento lo revela.
+
+### La causa de fondo: una bandera, dos significados
+
+«Ya encolé» y «ya envié» no son lo mismo. Con el mismo booleano para los dos,
+uno de los dos está siempre mal.
+
+| | Antes | Ahora |
+|---|---|---|
+| Anti-doble-encolado | la bandera de envío | `_pucs_en_cola` — mira la cola |
+| Guarda del ejecutor | `siesa_dc_triggered` (booleano) | `pucs_enviadas()` — **por cuenta PUC** |
+
+### Y las retenciones son N, no una
+
+Retefuente + reteIVA + ICA son **tres documentos**. Con la guarda sobre un
+booleano, el primer job la encendía y los otros dos se declaraban idempotentes
+sin enviarse: tres jobs completados, un documento en Siesa.
+
+`siesa_dc_pucs` (`m007retencionesporpuc`) guarda las cuentas ya enviadas. Se
+escribe ANTES del POST y se revierte solo ante fallo explícito — mismo patrón
+de la Regla 6, por documento en vez de por recaudo. Un JSON ilegible se lee
+como «no sé qué se envió» y **no reenvía**: un documento contable duplicado es
+un ajuste manual en el ERP.
+
+`siesa_dc_triggered` se conserva y sigue significando «se envió al menos una».
+Lo que dejó de ser es la guarda.
+
+### La nota crédito marcaba DESPUÉS del POST
+
+Era la única de las tres. Un crash entre el POST y el commit dejaba la bandera
+en False, el DLQ reintentaba y Siesa recibía una **segunda nota crédito**. RC y
+DC ya pre-marcaban; ésta no, y nada explicaba por qué.
+
+Trinquete: `tests/test_idempotencia_retenciones.py` (5 mutaciones).
+
+---
+
 ## Auditoría de invariantes de frontera (2026-08-13)
 
 `app/services/auditoria/` · `tests/flujo/` · `GET /api/auditoria/flujo`

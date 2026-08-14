@@ -124,6 +124,14 @@ class RecaudoEntrega(db.Model):
     siesa_rc_triggered  = db.Column(db.Boolean, default=False)   # 142888 ReciboCaja
     siesa_nc_triggered  = db.Column(db.Boolean, default=False)   # 142946 NotaFactura
     siesa_dc_triggered  = db.Column(db.Boolean, default=False)   # 142882 DocumentoContable
+    #: Las cuentas PUC de retención **ya enviadas**, en JSON.
+    #:
+    #: `siesa_dc_triggered` es un booleano y las retenciones son N: un cliente
+    #: con retefuente + reteIVA + ICA genera tres documentos distintos. Con una
+    #: sola bandera, el primer job la enciende y los otros dos se declaran
+    #: idempotentes **sin enviar nada** — el tablero cuenta tres completados y
+    #: en Siesa hay uno.
+    siesa_dc_pucs = db.Column(db.Text, nullable=True)
 
     # Trazabilidad
     confirmado_por  = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
@@ -131,6 +139,30 @@ class RecaudoEntrega(db.Model):
     editado_en      = db.Column(db.DateTime)
 
     fecha_confirmacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    # ── Retenciones ya enviadas, por cuenta PUC ──────────────────────────
+    def pucs_enviadas(self) -> set:
+        import json
+        try:
+            return set(json.loads(self.siesa_dc_pucs or '[]'))
+        except (ValueError, TypeError):
+            # Un JSON ilegible se trata como «no sé qué se envió», y ante no
+            # saber NO se reenvía: un documento contable duplicado es un ajuste
+            # manual en el ERP. Regla 0.
+            return {'__ILEGIBLE__'}
+
+    def marcar_puc_enviada(self, cuenta_puc: str):
+        import json
+        pucs = self.pucs_enviadas() | {cuenta_puc}
+        self.siesa_dc_pucs = json.dumps(sorted(pucs))
+        self.siesa_dc_triggered = True
+
+    def desmarcar_puc(self, cuenta_puc: str):
+        """Revierte ante fallo explícito — la otra mitad del pre-flag."""
+        import json
+        pucs = self.pucs_enviadas() - {cuenta_puc}
+        self.siesa_dc_pucs = json.dumps(sorted(pucs))
+        self.siesa_dc_triggered = bool(pucs)
     fecha_creacion     = db.Column(db.DateTime, default=datetime.utcnow)
 
     # Relaciones

@@ -928,32 +928,42 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             (lin.get('f470_vlr_neto_prorrateado', Decimal(0)) for lin in lineas_nc),
             Decimal(0),
         )
-        resultado = connekta.trigger_nota_factura_crear_cruzar(
-            tipo_docto_fe=tipo_docto_fe,
-            consec_fe=consec_fe,
-            lineas=lineas_nc,
-            valor_cruce=float(valor_cruce),
-            notas=payload.get('notas', ''),
-        )
+        # PRE-flag, no post-flag (Regla 6). Era la única de las tres que
+        # marcaba DESPUÉS del POST: un crash entre el POST y el commit dejaba
+        # la bandera en False, el DLQ reintentaba y Siesa recibía una **segunda
+        # nota crédito**. RC y DC ya marcaban antes; ésta no, y nada explicaba
+        # por qué.
+        if recaudo:
+            recaudo.siesa_nc_triggered = True
+            db.session.commit()
 
-        # Marcar idempotencia
-        _es_ensayo = bool(resultado.get('modo_ensayo'))
-        if recaudo and not _es_ensayo:
-            try:
-                recaudo.siesa_nc_triggered = True
-                db.session.commit()
-            except Exception as _e:
-                db.session.rollback()
-                logger.critical(
-                    '[DLQ] NOTA_CREDITO_FACTURA job=%s: Siesa OK pero fallo '
-                    'siesa_nc_triggered — recaudo %s en riesgo de NC duplicada: %s',
-                    job.id, recaudo.id, _e
-                )
+        try:
+            resultado = connekta.trigger_nota_factura_crear_cruzar(
+                tipo_docto_fe=tipo_docto_fe,
+                consec_fe=consec_fe,
+                lineas=lineas_nc,
+                valor_cruce=float(valor_cruce),
+                notas=payload.get('notas', ''),
+            )
+        except Exception as _e_post:
+            # Fallo explícito: no se creó nada, se revierte para que el DLQ
+            # reintente. La otra mitad del pre-flag.
+            if recaudo:
                 try:
-                    recaudo.siesa_nc_triggered = True
+                    recaudo.siesa_nc_triggered = False
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
+            raise _e_post
+
+        _es_ensayo = bool(resultado.get('modo_ensayo'))
+        if recaudo and _es_ensayo:
+            # Modo ensayo: el POST se bloqueó, no hay documento que proteger.
+            try:
+                recaudo.siesa_nc_triggered = False
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
         return resultado
 
     if job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE':
@@ -1246,12 +1256,19 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         from app.models.recaudo_entrega import RecaudoEntrega as _RE
         recaudo = _RE.query.get(payload.get('recaudo_id'))
 
-        if recaudo and recaudo.siesa_dc_triggered:
+        # La guarda es POR CUENTA PUC, no por recaudo.
+        #
+        # Las retenciones son N: retefuente + reteIVA + ICA son tres documentos
+        # distintos. Con la guarda sobre el booleano, el primer job la encendía
+        # y **los otros dos se declaraban idempotentes sin enviar nada** — tres
+        # jobs completados, un documento en Siesa.
+        _puc = payload.get('cuenta_puc')
+        if recaudo and _puc and _puc in recaudo.pucs_enviadas():
             logger.info(
-                '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: recaudo %s ya tiene '
-                'siesa_dc_triggered=True — idempotente', job.id, recaudo.id
+                '[DLQ] DOCUMENTO_CONTABLE_RET job=%s: recaudo %s ya envió la '
+                'cuenta %s — idempotente', job.id, recaudo.id, _puc
             )
-            return {'idempotente': True, 'recaudo_id': recaudo.id}
+            return {'idempotente': True, 'recaudo_id': recaudo.id, 'cuenta_puc': _puc}
 
         # Secuencialidad: NI de retenciones DEBE ir DESPUÉS del RC.
         # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
@@ -1262,9 +1279,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'recaudo {recaudo.id} — reintento en próximo ciclo DLQ'
             )
 
-        # Pre-flag: cerrar crash window (misma lógica que RC)
-        if recaudo:
-            recaudo.siesa_dc_triggered = True
+        # Pre-flag: cerrar crash window (misma lógica que RC), por cuenta.
+        if recaudo and _puc:
+            recaudo.marcar_puc_enviada(_puc)
             db.session.commit()
 
         try:
@@ -1281,18 +1298,18 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 notas=payload.get('notas', ''),
             )
         except Exception as _e_post:
-            if recaudo:
+            if recaudo and _puc:
                 try:
-                    recaudo.siesa_dc_triggered = False
+                    recaudo.desmarcar_puc(_puc)
                     db.session.commit()
                 except Exception:
                     db.session.rollback()
             raise _e_post
 
         _es_ensayo = bool(resultado.get('modo_ensayo'))
-        if recaudo and _es_ensayo:
+        if recaudo and _puc and _es_ensayo:
             try:
-                recaudo.siesa_dc_triggered = False
+                recaudo.desmarcar_puc(_puc)
                 db.session.commit()
             except Exception:
                 db.session.rollback()
