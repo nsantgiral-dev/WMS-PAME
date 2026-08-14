@@ -801,6 +801,7 @@ function reqCambiarTab(idx) {
 
 const _REQ_BODEGA_NOMBRES = {
   'NB1':'Bodega Principal','NC1':'Neiva Centro','NS1':'Neiva Sur Principal',
+  'NS2':'Neiva Sur Fundación (parqueo licitaciones)',
   'FC1':'Florencia Centro','PC1':'Pitalito Centro',
   'PT1':'Pitalito Terminal','FF1':'Feria Florencia','FN1':'Santa Lucía Plaza','FP1':'Feria Pitalito',
 };

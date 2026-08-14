@@ -181,7 +181,9 @@ def precalentar_cache_multibodega(app=None):
     threading.Thread(target=_worker, daemon=True).start()
 
 
-_BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
+# NS2 no es punto de venta: es la bodega de parqueo de licitaciones. Sin
+# ella, su stock es invisible para el WMS y para la reconciliación.
+_BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'NS2', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
 
 
 def _descargar_una_pasada_custom():

@@ -27,15 +27,29 @@ from pathlib import Path
 _RAIZ = Path(__file__).resolve().parents[1]
 _PWA = _RAIZ / 'app' / 'static' / 'pwa'
 
-#: Las 9 bodegas que el WMS opera. Verificado contra el maestro de Siesa el
-#: 2026-08-10 — ver la tabla en CLAUDE.md, sección "Bodegas y Centros de
-#: Operación". NO incluye AV1/TRA1/BC99 (servicio) ni FD1/ND1/PD1 (duplicadas).
+#: **Dos listas, no una.** Confundirlas fue el error del 2026-08-10.
 #:
-#: `NS2` (NEIVA SUR FUNDACIÓN) existe en Siesa y **no se opera**: se sacó de los
-#: nueve sitios el 2026-08-10 tras verificar contra producción que tenía **cero
-#: usuarios asignados**. Una bodega fantasma en el desplegable de punto de venta
-#: no es cosmética — es una opción que alguien puede elegir por error y quedar
-#: facturando contra una sede que nadie mira.
+#: `NS2` (NEIVA SUR FUNDACIÓN) se sacó de los nueve sitios «tras verificar cero
+#: usuarios asignados». El criterio respondía *¿alguien trabaja ahí?* cuando la
+#: pregunta era *¿algo se mueve por ahí?* — y NS2 es la **bodega de parqueo de
+#: licitaciones**: lo que sale por relación de entrega antes de que exista
+#: contrato se traslada ahí para que NB1 no quede con inventario que
+#: físicamente no está. Tenía stock (6 SKU / 121 und) y el traslado se venía
+#: haciendo a mano porque el WMS ya no la conocía.
+#:
+#: La preocupación original **sigue siendo válida**, solo que era sobre la otra
+#: lista: una bodega de parqueo en el desplegable de punto de venta es una
+#: opción que alguien elige por error y queda facturando contra una sede que
+#: nadie mira.
+
+#: Bodegas que el WMS OPERA: stock, traslados, reconciliación. Incluye las de
+#: parqueo. NO incluye AV1/TRA1/BC99 (servicio) ni FD1/ND1/PD1 (duplicadas).
+BODEGAS_OPERADAS = frozenset({
+    'NB1', 'NS1', 'NS2', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1',
+})
+
+#: Bodegas que son PUNTO DE VENTA — las que se le pueden asignar a un usuario.
+#: Un subconjunto: NS2 mueve inventario pero nadie vende desde ahí.
 BODEGAS_PV = frozenset({
     'NB1', 'NS1', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1',
 })
@@ -43,7 +57,7 @@ BODEGAS_PV = frozenset({
 #: Bodega → CO. Fuente: maestro de Siesa + `CO PAME.xlsx`, confirmado contra
 #: `tienda_oc._BODEGA_CO_MAP` que ya lo tenía completo.
 BODEGA_CO = {
-    'NS1': '001', 'NC1': '002', 'NB1': '003', 'PC1': '004',
+    'NS1': '001', 'NS2': '001', 'NC1': '002', 'NB1': '003', 'PC1': '004',
     'PT1': '005', 'FC1': '006', 'FN1': '007', 'FP1': '008', 'FF1': '009',
 }
 
@@ -63,13 +77,19 @@ class TestLasListasDePythonCoinciden:
         menos deja ese PV con stock frío y el operario esperando."""
         prewarm = _lista_py(
             _RAIZ / 'app' / 'services' / 'traslado_service.py', '_BODEGAS_PREWARM')
-        assert prewarm == set(BODEGAS_PV), (
-            f'sobran: {prewarm - set(BODEGAS_PV)} · faltan: {set(BODEGAS_PV) - prewarm}')
+        # OPERADAS, no PV: el prewarm calienta stock, y NS2 tiene stock aunque
+        # nadie venda desde ahí.
+        assert prewarm == set(BODEGAS_OPERADAS), (
+            f'sobran: {prewarm - set(BODEGAS_OPERADAS)} · '
+            f'faltan: {set(BODEGAS_OPERADAS) - prewarm}')
 
     def test_bodegas_pv_de_inventario_coincide(self):
+        # El nombre de la constante dice `_BODEGAS_PV` pero lo que hace es
+        # descargar STOCK. Se compara contra OPERADAS: dejar NS2 fuera hace
+        # invisible su inventario, que es justo lo que se acaba de corregir.
         pv = _lista_py(
             _RAIZ / 'app' / 'services' / 'inventario_siesa_service.py', '_BODEGAS_PV')
-        assert pv == set(BODEGAS_PV)
+        assert pv == set(BODEGAS_OPERADAS)
 
     def test_el_mapa_de_CO_esta_completo_y_de_acuerdo(self):
         """`_BODEGA_CO_MAP` es el único sitio del código con las 10 → CO. Si
@@ -111,7 +131,7 @@ class TestLosMapasDelJSCoinciden:
         texto = (_PWA / archivo).read_text(encoding='utf-8')
         m = re.search(patron, texto, re.S)
         assert m, f'no se encontró el mapa {patron[:30]!r} en {archivo}'
-        return set(re.findall(r'\b([NPF][A-Z]\d)\b', m.group(1))) & BODEGAS_PV
+        return set(re.findall(r'\b([NPF][A-Z]\d)\b', m.group(1))) & BODEGAS_OPERADAS
 
     def test_cada_mapa_por_separado_conoce_las_nueve(self):
         incompletos = {}
@@ -125,13 +145,20 @@ class TestLosMapasDelJSCoinciden:
             + '\n\nEse PV se muestra con su código crudo en vez del nombre.')
 
     def test_ningun_mapa_ofrece_una_bodega_que_no_se_opera(self):
-        """El otro lado. `NS2` estaba en los cinco mapas sin operarse: una
-        opción elegible que lleva a facturar contra una sede que nadie mira."""
+        """El otro lado: un mapa no puede ofrecer una bodega que el WMS no
+        opera — sería una opción que lleva a facturar contra una sede que nadie
+        mira.
+
+        Se compara contra `BODEGAS_OPERADAS`, que incluye las de parqueo. Lo
+        que NO puede aparecer es una bodega de parqueo en el desplegable de
+        **punto de venta** de un usuario, y eso lo vigila
+        `test_el_desplegable_de_usuario_solo_ofrece_puntos_de_venta`.
+        """
         sobrantes = {}
         for archivo, etiqueta, patron in self._MAPAS:
             texto = (_PWA / archivo).read_text(encoding='utf-8')
             m = re.search(patron, texto, re.S)
-            de_mas = set(re.findall(r'\b([NPF][A-Z]\d)\b', m.group(1))) - BODEGAS_PV
+            de_mas = set(re.findall(r'\b([NPF][A-Z]\d)\b', m.group(1))) - BODEGAS_OPERADAS
             if de_mas:
                 sobrantes[f'{archivo} › {etiqueta}'] = sorted(de_mas)
         assert not sobrantes, (
@@ -154,9 +181,41 @@ class TestLaTablaDeCLAUDEmdSigueAhi:
         i = doc.find('### Bodegas y Centros de Operación')
         assert i != -1, 'desapareció la tabla de bodegas de CLAUDE.md'
         seccion = doc[i:i + 4000]
-        faltan = [b for b in sorted(BODEGAS_PV) if f'`{b}`' not in seccion]
+        faltan = [b for b in sorted(BODEGAS_OPERADAS) if f'`{b}`' not in seccion]
         assert not faltan, f'sin documentar en CLAUDE.md: {faltan}'
 
     def test_declara_que_999_no_lleva_almacen(self):
         doc = (_RAIZ / 'CLAUDE.md').read_text(encoding='utf-8')
         assert '999' in doc and 'ADMINISTRATIVO' in doc
+
+
+class TestElParqueoNoEsUnPuntoDeVenta:
+    """La preocupación que hizo sacar NS2 era correcta — sobre la otra lista.
+
+    `NS2` (Fundación) es la bodega de **parqueo de licitaciones**: mueve
+    inventario y hay que poder trasladarle. Lo que no es, es un punto de venta.
+
+    Ofrecerla en el desplegable donde se le asigna sede a un usuario es una
+    opción que alguien elige por error y queda facturando contra un sitio que
+    nadie mira. Sacarla de TODAS las listas por ese motivo fue arreglar el
+    problema correcto en el lugar equivocado: dejó su stock invisible y obligó
+    a licitaciones a hacer el traslado a mano.
+    """
+
+    def test_el_desplegable_de_usuario_solo_ofrece_puntos_de_venta(self):
+        """El `<select>` de sede en el alta de usuario."""
+        texto = (_PWA / 'app.js').read_text(encoding='utf-8')
+        opciones = set(re.findall(r"<option value=\"([NPF][A-Z]\d)\"", texto))
+        assert opciones, 'no se encontró el desplegable de sede — ¿se renombró?'
+        de_mas = opciones - BODEGAS_PV
+        assert not de_mas, (
+            f'\nEl desplegable de sede ofrece {sorted(de_mas)}, que no son '
+            f'puntos de venta.\nUna bodega de parqueo elegible como sede deja '
+            f'a alguien facturando contra un sitio que nadie mira.')
+
+    def test_las_dos_listas_no_son_la_misma(self):
+        """Si alguien las vuelve a fusionar, o se pierde el stock de parqueo o
+        se ofrece una sede que no existe. Las dos ya pasaron."""
+        assert BODEGAS_PV < BODEGAS_OPERADAS, (
+            'BODEGAS_PV tiene que ser un subconjunto ESTRICTO de OPERADAS')
+        assert BODEGAS_OPERADAS - BODEGAS_PV == {'NS2'}

@@ -8,7 +8,7 @@ from app.routes._auth_helpers import Roles
 from app.services.traslado_service import TrasladoService
 
 _BODEGA_CO_MAP = {
-    'NC1': '002', 'NS1': '001', 'PC1': '004', 'FC1': '006',
+    'NC1': '002', 'NS1': '001', 'NS2': '001', 'PC1': '004', 'FC1': '006',
     'FF1': '009', 'FN1': '007', 'NB1': '003', 'PT1': '005',
 }
 

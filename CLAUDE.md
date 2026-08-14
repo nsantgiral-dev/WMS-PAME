@@ -216,7 +216,7 @@ puede grepear, y esta es la tabla que hace falta cada vez que se toca un traslad
 | CO | Descripción Siesa | Bodega | Nombre de bodega | Notas |
 |----|-------------------|--------|------------------|-------|
 | 001 | NEIVA SUR | `NS1` | NEIVA SUR PRINCIPAL | |
-| 001 | NEIVA SUR | `NS2` | NEIVA SUR FUNDACIÓN | **No se opera.** Existe en Siesa; el WMS la sacó el 2026-08-10 tras verificar 0 usuarios asignados |
+| 001 | NEIVA SUR | `NS2` | NEIVA SUR FUNDACIÓN | **Bodega de PARQUEO de licitaciones**, no punto de venta. Se sacó el 2026-08-10 «tras verificar 0 usuarios asignados» y se devolvió el 2026-08-14: ese criterio responde «¿alguien trabaja ahí?» cuando la pregunta era «¿algo se mueve por ahí?». Tenía stock (6 SKU / 121 und) y es el destino del traslado que licitaciones ya hacía a mano |
 | 002 | NEIVA CENTRO | `NC1` | NEIVA CENTRO | |
 | 003 | NEIVA BODEGA CD | `NB1` | NEIVA BODEGA CD | CDI. Default de `CONNEKTA_BODEGA`/`CENTRO_OP` |
 | 004 | PITALITO CENTRO | `PC1` | PITALITO CENTRO | |

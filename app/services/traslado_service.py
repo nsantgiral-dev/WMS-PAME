@@ -1548,7 +1548,12 @@ class TrasladoService:
 # ── Stock pre-warmer — carga cache de todas las bodegas al arrancar ───────────
 
 # Todas las bodegas configuradas en el selector "Pedir desde" del frontend.
-_BODEGAS_PREWARM = ['NB1', 'NS1', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
+# NS2 va acá aunque no tenga usuarios asignados: es una bodega de PARQUEO,
+# no un punto de venta. Se sacó el 2026-08-10 «tras verificar 0 usuarios» —
+# un criterio que responde «¿alguien trabaja ahí?» cuando la pregunta era
+# «¿algo se mueve por ahí?». Tiene stock y es el destino del traslado que
+# licitaciones ya hace a mano.
+_BODEGAS_PREWARM = ['NB1', 'NS1', 'NS2', 'NC1', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
 
 
 def init_scheduler(app):
