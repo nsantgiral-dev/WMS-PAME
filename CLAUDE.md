@@ -1141,7 +1141,31 @@ descuentos. Alimenta el **Cu del newsvendor** —margen medido en vez de
 supuesto— y mide la escalera de precios entre C.O. Borrarla devuelve los
 modelos al margen supuesto sin que nadie lo note.
 
-Trinquete: `tests/test_acta_de_corte.py`.
+### El script no verificaba contra qué base borraba
+
+Tomaba `DATABASE_URL` y ejecutaba. Y **el `DATABASE_URL` de una sesión de
+desarrollo apunta a la base de producción en Railway** — comprobado el
+2026-08-14: `metro.proxy.rlwy.net/railway`, 51.808 filas.
+
+Con eso, un `--ejecutar` recuperado del historial de la terminal vacía
+producción. No hace falta equivocarse: basta con repetir un comando.
+
+Ahora `--ejecutar` no alcanza — hay que **escribir el host**:
+
+```bash
+venv/bin/python scripts/reset_transaccional.py                      # simulacro
+venv/bin/python scripts/reset_transaccional.py --ejecutar \
+    --confirmar-destino <host>                                      # de verdad
+```
+
+Es el único gesto que no se puede hacer por inercia, y obliga a mirar a dónde
+va el borrado antes de que ocurra. El simulacro sigue sin fricción: es lo que
+alguien corre para decidir, y ponerle trabas lo empuja a saltárselo.
+
+Trinquete: `tests/test_acta_de_corte.py` — invoca el script de verdad contra un
+sqlite temporal y exige `exit 2`. Las versiones anteriores buscaban el nombre
+de la función en el fuente: quitar la llamada dejaba la definición intacta y el
+test seguía verde.
 
 ---
 

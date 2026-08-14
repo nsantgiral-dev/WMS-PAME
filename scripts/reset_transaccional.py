@@ -190,6 +190,52 @@ def _limpiar_fotos_huerfanas(db):
     return f'{borrados} archivos huérfanos borrados · {liberado / 1_048_576:.1f} MB liberados'
 
 
+def _describir_destino():
+    """`(host, base)` de la conexión, SIN la contraseña."""
+    import os
+    from urllib.parse import urlparse
+    url = os.getenv('DATABASE_URL', '')
+    if not url:
+        from app import create_app
+        url = create_app().config.get('SQLALCHEMY_DATABASE_URI', '')
+    u = urlparse(url)
+    return (u.hostname or 'local', (u.path or '').lstrip('/') or '(archivo)')
+
+
+def _destino_confirmado(args) -> bool:
+    """Nadie vacía una base sin nombrarla.
+
+    El script no verificaba **contra qué base** borraba: tomaba `DATABASE_URL`
+    y ejecutaba. Y el `DATABASE_URL` de una sesión de desarrollo apunta a la
+    base de **producción** en Railway — comprobado el 2026-08-14, `metro.proxy
+    .rlwy.net/railway`, 51.808 filas.
+
+    Con eso, `--ejecutar` recuperado del historial de la terminal vacía
+    producción. No hace falta equivocarse: basta con repetir un comando.
+
+    Por eso `--ejecutar` ya no alcanza: hay que **escribir el host**. Es el
+    único gesto que no se puede hacer por inercia, y obliga a mirar a dónde va
+    el borrado antes de que ocurra.
+    """
+    host, base = _describir_destino()
+    print()
+    print(f'  {AMAR}DESTINO:{FIN} {host} · base {base}')
+    if not args.ejecutar:
+        return True
+    if not args.confirmar_destino:
+        print(f'  {ROJO}Falta --confirmar-destino.{FIN} Para vaciar hay que '
+              f'nombrar la base:')
+        print(f'    {GRIS}--ejecutar --confirmar-destino {host}{FIN}\n')
+        return False
+    if args.confirmar_destino != host:
+        print(f'  {ROJO}El destino no coincide.{FIN} Escribiste '
+              f'{args.confirmar_destino!r} y la conexión apunta a {host!r}.')
+        print(f'  {GRIS}Si de verdad querías la otra base, cambiá DATABASE_URL '
+              f'— no el parámetro.{FIN}\n')
+        return False
+    return True
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -198,9 +244,16 @@ def main():
     p.add_argument('--fotos', action='store_true',
                    help='Borra tambien los archivos huerfanos del volumen de '
                         'flota. Solo DESPUES de vaciar las filas.')
+    p.add_argument('--confirmar-destino', metavar='HOST',
+                   help='El host de la base que se va a vaciar. Obligatorio '
+                        'junto con --ejecutar: hay que escribirlo, no basta '
+                        'con repetir el comando.')
     args = p.parse_args()
 
     if not _guard():
+        return 2
+
+    if not _destino_confirmado(args):
         return 2
 
     from app import create_app

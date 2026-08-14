@@ -113,3 +113,130 @@ class TestElCorteAfirmaQueCorto:
                   'stock_diario', 'precios_realizados'):
             assert t in clasificacion['analiticas'], t
             assert t not in clasificacion['operativas'], t
+
+
+class TestNadieVaciaUnaBaseSinNombrarla:
+    """El script no verificaba **contra qué base** borraba.
+
+    Tomaba `DATABASE_URL` y ejecutaba. Y el `DATABASE_URL` de una sesión de
+    desarrollo apunta a la base de **producción** en Railway — comprobado el
+    2026-08-14: `metro.proxy.rlwy.net/railway`, 51.808 filas.
+
+    Con eso, un `--ejecutar` recuperado del historial de la terminal vacía
+    producción. No hace falta equivocarse: basta con repetir un comando.
+
+    Por eso `--ejecutar` ya no alcanza: hay que **escribir el host**. Es el
+    único gesto que no se puede hacer por inercia.
+    """
+
+    @staticmethod
+    def _correr(*args):
+        """Invoca el script de verdad, contra una base temporal descartable.
+
+        Las dos primeras versiones de estos tests buscaban `_destino_confirmado`
+        en el fuente. Quitar la LLAMADA dejaba la DEFINICIÓN intacta y el test
+        seguía verde; moverla después de abrir la app, también. Es el quinto
+        tropiezo igual del repo: un detector de texto no sabe si el código se
+        ejecuta.
+
+        Con un `DATABASE_URL` a un sqlite temporal, si el guard desapareciera el
+        script correría contra una base vacía — sin daño, pero con otro código
+        de salida.
+        """
+        import os
+        import subprocess
+        import sys
+        import tempfile
+
+        raiz = pathlib.Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            entorno = dict(os.environ)
+            entorno['DATABASE_URL'] = f'sqlite:///{tmp}/corte.db'
+            entorno['SYNC_SCHEDULER'] = 'false'
+            return subprocess.run(
+                [sys.executable, str(raiz / 'scripts' / 'reset_transaccional.py'),
+                 *args],
+                cwd=str(raiz), env=entorno, capture_output=True, text=True,
+                timeout=120)
+
+    def test_ejecutar_solo_no_alcanza(self):
+        r = self._correr('--ejecutar')
+        assert r.returncode == 2, (
+            f'\n`--ejecutar` sin nombrar el destino NO fue bloqueado '
+            f'(exit={r.returncode}).\n{r.stdout[-600:]}')
+        assert 'confirmar-destino' in r.stdout
+
+    def test_un_destino_que_no_coincide_se_rechaza(self):
+        r = self._correr('--ejecutar', '--confirmar-destino', 'otra-base')
+        assert r.returncode == 2
+        assert 'no coincide' in r.stdout
+
+    def test_el_simulacro_no_necesita_confirmacion(self):
+        """El simulacro tiene que seguir siendo trivial de correr: es lo que
+        alguien hace para decidir, y ponerle fricción lo empuja a saltárselo."""
+        r = self._correr()
+        assert r.returncode == 0, r.stdout[-600:]
+        assert 'DESTINO' in r.stdout
+
+
+    def test_el_destino_se_describe_sin_la_contrasena(self, monkeypatch, capsys):
+        """El host y la base sí; las credenciales no.
+
+        Se verifica EJECUTANDO con una URL que trae usuario y contraseña, y
+        exigiendo que ninguno aparezca en lo que el script escribe. Buscar
+        `u.password` en el fuente no sirve: `urlparse(url)` ya contiene la
+        cadena `url)` y el test se atrapaba solo — el mismo tropiezo de
+        siempre.
+        """
+        import argparse
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location('_rt3', _SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.setenv(
+            'DATABASE_URL',
+            'postgresql://usuario_secreto:CLAVE_SECRETA@host-real:5432/railway')
+        host, base = mod._describir_destino()
+        assert host == 'host-real' and base == 'railway'
+
+        mod._destino_confirmado(argparse.Namespace(
+            ejecutar=False, confirmar_destino=None))
+        salida = capsys.readouterr().out
+        assert 'CLAVE_SECRETA' not in salida
+        assert 'usuario_secreto' not in salida
+        assert 'host-real' in salida, 'el destino tiene que verse'
+
+    @pytest.mark.parametrize('argv,esperado', [
+        (['--ejecutar'], False),
+        (['--ejecutar', '--confirmar-destino', 'base-que-no-es'], False),
+        ([], True),
+    ])
+    def test_bloquea_salvo_que_el_destino_coincida(self, argv, esperado,
+                                                   monkeypatch, capsys):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('_rt', _SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        monkeypatch.setattr(mod, '_describir_destino',
+                            lambda: ('host-real', 'railway'))
+
+        import argparse
+        args = argparse.Namespace(
+            ejecutar='--ejecutar' in argv,
+            confirmar_destino=(argv[argv.index('--confirmar-destino') + 1]
+                               if '--confirmar-destino' in argv else None))
+        assert mod._destino_confirmado(args) is esperado
+        capsys.readouterr()
+
+    def test_con_el_destino_correcto_deja_pasar(self, monkeypatch):
+        import argparse
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('_rt2', _SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        monkeypatch.setattr(mod, '_describir_destino', lambda: ('host-real', 'railway'))
+        args = argparse.Namespace(ejecutar=True, confirmar_destino='host-real')
+        assert mod._destino_confirmado(args) is True
