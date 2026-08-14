@@ -430,6 +430,21 @@ function _liqRenderDetalle() {
         </div>`;
     }
 
+    // La mercancia se entrego y el cliente no pago. NO es un rechazo: no hay
+    // nota credito (nada volvio) ni recibo de caja (no entro plata). La
+    // factura queda abierta en cartera y quien liquida decide si escala.
+    if (estado === 'ENTREGADO_SIN_PAGO') {
+      html += `
+        <div style="margin-bottom:8px;padding:8px;background:#3a1616;border-radius:8px;border-left:3px solid #f87171;">
+          <div style="font-size:10px;color:#f87171;font-weight:700;margin-bottom:4px;">ENTREGADO SIN PAGO</div>
+          <div style="font-size:12px;color:#fca5a5;">${rec.observaciones || 'Sin detalle registrado'}</div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:6px;">
+            La mercancía quedó con el cliente y no se cobró. No genera nota
+            crédito ni recibo de caja — la factura queda abierta en cartera.
+          </div>
+        </div>`;
+    }
+
     if (estado === 'RECHAZADO') {
       html += `
         <div style="margin-bottom:8px;">
@@ -472,7 +487,11 @@ function _liqRenderDetalle() {
             </div>`;
         }
       }
-      if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO' && !rec.siesa_rc_triggered) {
+      // `ENTREGADO_SIN_PAGO` va en la exclusion junto a RECHAZADO. Sin eso el
+      // boton aparecia: su `forma_pago` es null, asi que `!esCred` daba true y
+      // la pantalla ofrecia registrar un cobro que nunca ocurrio.
+      if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO'
+          && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered) {
         const rcDisabled = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
         html += `
           <button onclick="liqToggleCobro(${ruta.id}, ${rec.id})" ${rcDisabled ? 'disabled' : ''}

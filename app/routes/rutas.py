@@ -1004,6 +1004,10 @@ def liquidacion_dashboard():
         paradas_entregadas = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.ENTREGADO)
         paradas_parciales = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.PARCIAL)
         paradas_rechazadas = sum(1 for r in recaudos if r.estado_entrega == EstadoEntrega.RECHAZADO)
+        # Cuenta aparte. Sumarla a rechazadas diría que la mercancía volvió;
+        # sumarla a entregadas diría que se cobró. No es ninguna de las dos.
+        paradas_sin_pago = sum(1 for r in recaudos
+                               if r.estado_entrega == EstadoEntrega.ENTREGADO_SIN_PAGO)
 
         # Contadores Siesa
         siesa_nc = sum(1 for r in recaudos if r.siesa_nc_triggered)
@@ -1058,6 +1062,7 @@ def liquidacion_dashboard():
         rd['paradas_entregadas'] = paradas_entregadas
         rd['paradas_parciales'] = paradas_parciales
         rd['paradas_rechazadas'] = paradas_rechazadas
+        rd['paradas_sin_pago'] = paradas_sin_pago
         rd['siesa_nc_enviados'] = siesa_nc
         rd['siesa_rc_enviados'] = siesa_rc
         rd['siesa_dc_enviados'] = siesa_dc

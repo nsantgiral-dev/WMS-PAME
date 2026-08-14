@@ -843,6 +843,62 @@ Dos listas con semántica distinta — elegir mal tiene consecuencias silenciosa
 
 ---
 
+## `ENTREGADO_SIN_PAGO` — el cuarto estado (2026-08-13)
+
+Decidido por Dirección de Operaciones. `NO_PAGO_SE_QUEDO` era un **motivo**
+dentro de `RECHAZADO`, y `RECHAZADO` significa «los bultos vuelven al camión».
+**El estado afirmaba una cosa y el motivo la negaba.**
+
+Mientras fue excepcional se podía vivir con eso. El control «si no paga
+completo, no se entrega» lo vuelve cotidiano, y entonces cada consumidor del
+estado tiene que acordarse de mirar el motivo. Alguno se olvida — ya pasó con
+la lista de reingreso, que mandaba a bodega a buscar cajas que nunca volvieron.
+
+### El conductor no gana un botón
+
+Sigue contestando la pregunta que sabe contestar —**¿volvió la mercancía?**— y
+el servidor traduce eso al estado, **una vez, en la frontera**
+(`confirmar_parada`). Cada consumidor recibe la verdad sin acordarse de nada:
+los de hoy y los que se escriban después.
+
+Por eso `EstadoEntrega.ACEPTADOS_DEL_CONDUCTOR` excluye el estado nuevo: es
+real, pero no es una opción de pantalla.
+
+| | Qué significa | Documentos |
+|---|---|---|
+| `RECHAZADO` | Los bultos vuelven | Nota crédito total |
+| `ENTREGADO_SIN_PAGO` | **Quedaron con el cliente, sin pagar** | **Ninguno.** La factura queda abierta en cartera |
+
+No se automatiza nada a propósito: tratarlo como crédito otorgado sería dar
+crédito que nadie evaluó. La parada llega marcada y quien liquida decide si
+escala (BK-OPS-01 §3.5).
+
+### Y la restricción del punto 4, que iba junta
+
+`forma_pago = CREDITO` sobre una parada declarada de contado se rechaza. Se
+valida contra `tareas_packing.cond_pago` (anotada al cargar la ruta), **no
+contra Siesa**: la confirmación tiene que funcionar sin señal. Si la condición
+no se alcanzó a anotar **no se bloquea** — no saber no es evidencia de contado
+(Regla 0), y una parada trabada en la calle no la desbloquea nadie.
+
+### Dos cosas que se arreglaron de paso
+
+`EstadoEntrega` estaba definida **dos veces** —`models/recaudo_entrega.py` y
+`services/ruta_service.py`— con los mismos valores y distinto nombre de tupla
+(`TODOS` / `VALIDOS`). Agregar un estado a una sola era cuestión de tiempo.
+Ahora el servicio importa la del modelo.
+
+Y `bultos_rechazados()` **subcontaba**: miraba solo bultos marcados
+`RECHAZADO`, así que los que el conductor no tildó desaparecían del bloque de
+responsabilidad. Ahora el bloque lo define la **parada**, no el bulto.
+
+Trinquete: `tests/test_entregado_sin_pago.py` (19 tests, 7 mutaciones).
+Migración: `m006entregadosinpago` — reclasifica el histórico y pone dos CHECK,
+uno de ellos el invariante que impide que la combinación vieja vuelva a entrar
+por un camino que no pase por `confirmar_parada`.
+
+---
+
 ## Pendientes del WMS
 
 `docs/pendientes_wms.md` — la lista viva, contrastada contra BK-OPS-01 v2.1

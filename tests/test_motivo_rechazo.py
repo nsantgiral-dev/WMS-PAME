@@ -206,19 +206,33 @@ class TestLaMercanciaQueNoVolvioNoEntraALaListaDeReingreso:
     """
 
     def _bulto_rechazado(self, db, ruta, tarea, motivo):
+        """Una parada rechazada con su bulto.
+
+        El estado del recaudo lo decide el motivo, igual que lo hace
+        `confirmar_parada`: `NO_PAGO_SE_QUEDO` **ya no puede convivir con
+        RECHAZADO** —hay un CHECK que lo impide— porque el estado afirmaría que
+        los bultos volvieron y el motivo lo negaría.
+
+        Y el bulto sigue el mismo criterio: si no volvió, no se marca
+        `RECHAZADO`, que diría que está en el camión.
+        """
         import uuid
 
         from app.models.bulto import Bulto, EstadoBulto
         from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+        from app.services import motivos_rechazo as mr
 
+        volvio = mr.retorna_mercancia(motivo)
         b = Bulto(tarea_id=tarea.id, ruta_despacho_id=ruta.id,
                   codigo_barras=f'B-{uuid.uuid4().hex[:8]}', tipo='CAJA',
-                  numero=1, total=1, estado=EstadoBulto.RECHAZADO)
+                  numero=1, total=1,
+                  estado=EstadoBulto.RECHAZADO if volvio else EstadoBulto.ENTREGADO)
         db.session.add(b)
         db.session.add(RecaudoEntrega(
             ruta_id=ruta.id, tarea_id=tarea.id,
-            estado_entrega=EstadoEntrega.RECHAZADO, forma_pago=None,
-            monto_cobrado=0, motivo_rechazo=motivo))
+            estado_entrega=(EstadoEntrega.RECHAZADO if volvio
+                            else EstadoEntrega.ENTREGADO_SIN_PAGO),
+            forma_pago=None, monto_cobrado=0, motivo_rechazo=motivo))
         db.session.commit()
         return b
 
@@ -229,7 +243,15 @@ class TestLaMercanciaQueNoVolvioNoEntraALaListaDeReingreso:
 
         r = RutaService.bultos_rechazados(page=1, limit=50)
         assert r['total'] == 0, 'bodega iría a buscar mercancía que no volvió'
-        assert r['no_retornados']['total'] == 1
+        # DOS, no uno: el bloque lo define la PARADA, no el bulto. Si el
+        # cliente se quedó con la mercancía, se quedó con toda la de esa
+        # parada — el bulto que la fixture ya había entregado incluido.
+        #
+        # La consulta vieja miraba solo bultos marcados `RECHAZADO` y
+        # **subcontaba**: los que no estaban en el checklist del conductor
+        # desaparecían del bloque de responsabilidad sin que nadie los echara
+        # de menos.
+        assert r['no_retornados']['total'] == 2
 
     def test_una_devolucion_normal_sigue_en_la_lista(self, db, recaudo_ctx):
         from app.services.ruta_service import RutaService

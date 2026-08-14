@@ -8,8 +8,9 @@ conversación, y así es como se cuelan errores de atribución: en la penúltima
 pasada el respaldo de base de datos figuraba como pendiente del WMS cuando el
 diagnóstico lo asigna a Sistemas sobre la base de **Siesa**.
 
-**Nada de lo que queda es código.** Lo que falta es configuración, una decisión
-de negocio y verificación contra producción.
+**Nada de lo que queda es código.** Lo que falta es configuración y verificación
+contra producción — la única decisión de negocio que bloqueaba se cerró el
+2026-08-13 y ya está implementada.
 
 ---
 
@@ -35,27 +36,15 @@ de negocio y verificación contra producción.
 
 ---
 
-## 2 · Decisión de negocio — antes del piloto
+## 2 · Decisión de negocio — **CERRADA el 2026-08-13**
 
-**¿`NO_PAGO_SE_QUEDO` es un motivo o un estado propio?**
+`NO_PAGO_SE_QUEDO` es un **estado propio**, no un motivo. Decidido por
+Dirección de Operaciones, en línea con lo que BK-OPS-01 v2.1 §4.2 ya razonaba.
 
-Hoy es un motivo dentro de `RECHAZADO`. Pero `RECHAZADO` significa «los bultos
-vuelven» y este motivo dice lo contrario: **el estado afirma una cosa y el
-motivo la niega**.
+Implementado junto con la **restricción del punto 4**, que compartía la
+validación. Ver «`ENTREGADO_SIN_PAGO` — el cuarto estado» en `CLAUDE.md`.
 
-Mientras sea excepcional funciona. El control «si no paga, no se entrega» lo
-vuelve cotidiano, y entonces cada consumidor del estado tiene que acordarse de
-mirar el motivo. Alguno se va a olvidar — ya pasó una vez con la lista de
-reingreso de bodega.
-
-Dueño: Dirección de Operaciones (BK-OPS-01 §6.1.1). Hay que decidirlo **antes**
-de acumular datos históricos bajo un modelo que se contradice.
-
-De esa decisión cuelga la **restricción del punto 4** —prohibir `forma_pago =
-CREDITO` sobre una parada declarada de contado—. El dato ya está persistido
-(`tareas_packing.cond_pago`, migración `m005condpagoparada`), así que
-`confirmar_parada` puede validar sin red. Se implementan juntas: comparten la
-validación, y separarlas dejaría el modelo a medias.
+**No queda ninguna decisión de negocio bloqueando al WMS.**
 
 ---
 
@@ -120,6 +109,8 @@ De la lista del §4.2, cuatro de cinco:
 - ✅ Separación de los bultos que no vuelven en su propia lista
 - ✅ Alerta de ruta entregada sin liquidar — `services/rezago_liquidacion.py`,
   cron 06:30, con la regla de cierre de mes (`cruza_mes`)
+- ✅  como estado propio + la restricción del punto 4 —
+  `m006entregadosinpago`
 - ⏳ Que el recibo de caja entre a Siesa — **no es código**
 
 Y cuatro diseños **retirados**, que no hay que implementar por inercia: diferir

@@ -3,10 +3,41 @@ from app.extensions import db
 
 
 class EstadoEntrega:
+    """Qué pasó en la puerta del cliente. **Un solo catálogo.**
+
+    Hasta el 2026-08-13 esta clase estaba definida **dos veces** —acá y en
+    `services/ruta_service.py`— con los mismos tres valores y distinto nombre
+    para la tupla (`TODOS` / `VALIDOS`). Agregar un estado a una y no a la otra
+    era cuestión de tiempo.
+    """
     ENTREGADO = 'ENTREGADO'
     PARCIAL = 'PARCIAL'
     RECHAZADO = 'RECHAZADO'
-    TODOS = (ENTREGADO, PARCIAL, RECHAZADO)
+    #: **La mercancía se entregó y el cliente no pagó.** No es un rechazo:
+    #: `RECHAZADO` significa que los bultos vuelven al camión, y acá no vuelven.
+    #:
+    #: Existía como motivo dentro de `RECHAZADO` y el modelo se contradecía —
+    #: el estado afirmaba una cosa y el motivo la negaba. Mientras fue
+    #: excepcional se podía vivir con eso; el control «si no paga completo, no
+    #: se entrega» lo vuelve cotidiano, y entonces **cada consumidor del estado
+    #: tendría que acordarse de mirar el motivo**. Ya pasó una vez, con la
+    #: lista de reingreso de bodega.
+    ENTREGADO_SIN_PAGO = 'ENTREGADO_SIN_PAGO'
+
+    TODOS = (ENTREGADO, PARCIAL, RECHAZADO, ENTREGADO_SIN_PAGO)
+    #: Alias del nombre que usaba la copia de `ruta_service`. Se conserva para
+    #: no romper llamadores; es la misma tupla, no otra lista.
+    VALIDOS = TODOS
+
+    #: Lo que el conductor puede mandar. `ENTREGADO_SIN_PAGO` **no está**: no
+    #: es un botón, lo deriva el servidor del motivo del rechazo. La pregunta
+    #: que se le hace al conductor sigue siendo «¿volvió la mercancía?», que
+    #: es la que sabe contestar — no «¿qué estado contable corresponde?».
+    ACEPTADOS_DEL_CONDUCTOR = (ENTREGADO, PARCIAL, RECHAZADO)
+
+    #: Estados en los que la mercancía **no volvió al camión**. La lista de
+    #: reingreso de bodega se define por acá y no por el estado del bulto.
+    SIN_RETORNO = (ENTREGADO, PARCIAL, ENTREGADO_SIN_PAGO)
 
 
 class RecaudoEntrega(db.Model):
@@ -75,6 +106,18 @@ class RecaudoEntrega(db.Model):
             "'CLIENTE_CERRADO','DIRECCION_ERRADA','NO_PIDIO','MERCANCIA_AVERIADA',"
             "'FUERA_DE_HORARIO','NO_PAGO','NO_PAGO_SE_QUEDO')",
             name='ck_recaudo_motivo_rechazo'),
+        db.CheckConstraint(
+            "estado_entrega IN ('ENTREGADO','PARCIAL','RECHAZADO','ENTREGADO_SIN_PAGO')",
+            name='ck_recaudo_estado_entrega'),
+        # El invariante que da sentido al estado nuevo: si la mercancía se
+        # quedó con el cliente, el estado tiene que decirlo. Sin esto, la
+        # combinación vieja —RECHAZADO + NO_PAGO_SE_QUEDO— podría volver a
+        # entrar por cualquier camino que no pase por `confirmar_parada`, y el
+        # modelo se contradiría otra vez sin que nadie lo note.
+        db.CheckConstraint(
+            "motivo_rechazo IS NULL OR motivo_rechazo <> 'NO_PAGO_SE_QUEDO' "
+            "OR estado_entrega = 'ENTREGADO_SIN_PAGO'",
+            name='ck_recaudo_sin_pago_no_es_rechazo'),
     )
 
     # Idempotencia Siesa — flags independientes por conector

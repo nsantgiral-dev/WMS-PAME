@@ -288,15 +288,23 @@ class LiquidacionService:
             }
 
         # ── Determine pending actions ────────────────────────────────
+        #
+        # `ENTREGADO_SIN_PAGO` no genera NINGÚN documento y se declara acá de
+        # forma explícita. Sin esta línea el caso quedaba fuera «por
+        # casualidad» —su `forma_pago` es `None`, que cae en la lista de
+        # exclusión de abajo— y una parada de ese estado a la que alguien le
+        # pusiera forma de pago habría propuesto un recibo de caja por plata
+        # que nadie recibió.
         acciones_pendientes = []
-        if estado in (EstadoEntrega.PARCIAL, EstadoEntrega.RECHAZADO):
-            if not recaudo.siesa_nc_triggered:
-                acciones_pendientes.append('NOTA_CREDITO_FACTURA')
-        if forma_pago not in ('CREDITO', 'EXENTO', '') and estado != EstadoEntrega.RECHAZADO:
-            if not recaudo.siesa_rc_triggered:
-                acciones_pendientes.append('RECIBO_CAJA')
-            if not recaudo.siesa_dc_triggered:
-                acciones_pendientes.append('DOCUMENTO_CONTABLE_RET')
+        if estado != EstadoEntrega.ENTREGADO_SIN_PAGO:
+            if estado in (EstadoEntrega.PARCIAL, EstadoEntrega.RECHAZADO):
+                if not recaudo.siesa_nc_triggered:
+                    acciones_pendientes.append('NOTA_CREDITO_FACTURA')
+            if forma_pago not in ('CREDITO', 'EXENTO', '') and estado != EstadoEntrega.RECHAZADO:
+                if not recaudo.siesa_rc_triggered:
+                    acciones_pendientes.append('RECIBO_CAJA')
+                if not recaudo.siesa_dc_triggered:
+                    acciones_pendientes.append('DOCUMENTO_CONTABLE_RET')
 
         return {
             'recaudo_id': recaudo_id,
@@ -810,7 +818,24 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     forma_pago = (recaudo.forma_pago or '').upper()
     es_credito = forma_pago == 'CREDITO'
     monto = float(recaudo.monto_cobrado or 0)
-    resultado = {'rc': 0, 'nc': 0, 'dc': 0, 'credito': 0, 'ya_procesado': 0}
+    resultado = {'rc': 0, 'nc': 0, 'dc': 0, 'credito': 0, 'ya_procesado': 0,
+                 # Cuenta aparte y no dentro de `credito`: un crédito lo
+                 # autorizó alguien; esto no lo autorizó nadie.
+                 'sin_pago': 0}
+
+    # ── ENTREGADO_SIN_PAGO: la excepción. No se automatiza nada. ─────────
+    #
+    # La mercancía se entregó y el cliente no pagó. No hay nota crédito —nada
+    # volvió que devolver— ni recibo de caja —no entró plata—. **La factura ya
+    # existe y queda abierta en cartera**, que es exactamente donde el Gestor
+    # la ve.
+    #
+    # Lo que no debe pasar automáticamente es que esto se trate como crédito
+    # otorgado: nadie evaluó a ese cliente. La parada llega marcada, quien
+    # liquida la ve y decide si escala (BK-OPS-01 §3.5).
+    if estado == EstadoEntrega.ENTREGADO_SIN_PAGO:
+        resultado['sin_pago'] = 1
+        return resultado
 
     # ── RECHAZADO: devolución pendiente total (recepción confirma → NC) ──
     if estado == EstadoEntrega.RECHAZADO:

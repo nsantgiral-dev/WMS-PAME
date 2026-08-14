@@ -23,11 +23,10 @@ class ConflictError(ValueError):
     """Señala un conflicto de unicidad (HTTP 409)."""
 
 
-class EstadoEntrega:
-    ENTREGADO = 'ENTREGADO'
-    PARCIAL   = 'PARCIAL'
-    RECHAZADO = 'RECHAZADO'
-    VALIDOS   = (ENTREGADO, PARCIAL, RECHAZADO)
+# `EstadoEntrega` vivía definida acá **y** en `models/recaudo_entrega.py`, con
+# los mismos valores y distinto nombre de tupla. Se importa la del modelo: un
+# estado agregado en un solo lado era cuestión de tiempo.
+from app.models.recaudo_entrega import EstadoEntrega  # noqa: E402,F401
 
 
 class FormaPago:
@@ -785,12 +784,43 @@ class RutaService:
             raise ValueError('Esta factura no pertenece a la ruta')
 
         estado_entrega = data.get('estado_entrega', '').upper()
-        if estado_entrega not in EstadoEntrega.VALIDOS:
-            raise ValueError(f'estado_entrega debe ser {", ".join(EstadoEntrega.VALIDOS)}')
+        # `ACEPTADOS_DEL_CONDUCTOR` y no `VALIDOS`: `ENTREGADO_SIN_PAGO` es un
+        # estado real pero **no un botón**. Lo deriva el servidor unas líneas
+        # más abajo, del motivo del rechazo.
+        if estado_entrega not in EstadoEntrega.ACEPTADOS_DEL_CONDUCTOR:
+            raise ValueError(
+                f'estado_entrega debe ser {", ".join(EstadoEntrega.ACEPTADOS_DEL_CONDUCTOR)}')
 
         forma_pago = (data.get('forma_pago') or '').upper() or None
         if forma_pago and forma_pago not in FormaPago.VALIDOS:
             raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
+
+        # ── La restricción del diseño: contado no se convierte en crédito ──
+        #
+        # «Sobre una parada declarada de contado no se puede registrar forma de
+        # pago a crédito» (BK-OPS-01 §3.4). El conductor no tiene facultad de
+        # otorgar crédito en la puerta; si el cliente se lleva la mercancía sin
+        # pagar, el camino es el motivo tipificado, que deja documento.
+        #
+        # Se valida contra lo ANOTADO en la tarea (`m005condpagoparada`), no
+        # contra Siesa: esta confirmación **tiene que funcionar sin señal**. Si
+        # la condición no se alcanzó a anotar, no se bloquea — no saber no es
+        # evidencia de contado (Regla 0).
+        if forma_pago == FormaPago.CREDITO:
+            from app.services import cond_pago as _cp_r
+            from app.services.connekta_gateway import connekta as _cx_r
+            _tarea_cp = TareaPacking.query.get(tarea_id)
+            _anotada = getattr(_tarea_cp, 'cond_pago', None) if _tarea_cp else None
+            # Sin `is not None`: `clasificar` ya devuelve AUSENTE ante `None`
+            # o vacío, y AUSENTE no es CONTADO. Agregar la comprobación no
+            # cambiaba ningún resultado —lo verificó una mutación— y tener dos
+            # lugares donde se decide qué es «no saber» es exactamente lo que
+            # `cond_pago.py` existe para evitar.
+            if _cp_r.clasificar(_anotada, _cx_r.cond_pago_ventas) == _cp_r.CONTADO:
+                raise ValueError(
+                    'Este pedido es de contado: no se puede registrar como crédito. '
+                    'Si el cliente no pagó, marcá Rechazado y elegí el motivo — '
+                    'ahí queda registrado si la mercancía volvió o se quedó con él.')
 
         # Validación de campos obligatorios por estado. Entregado y Parcial
         # pasan por el mismo toggle Pago Total/Parcial en el conductor — los
@@ -812,6 +842,21 @@ class RutaService:
                     'no dice si la mercancía volvió al camión')
             if not (data.get('observaciones') or '').strip():
                 raise ValueError('El detalle del rechazo es obligatorio')
+
+            # ── De motivo a estado, UNA vez y acá ──────────────────────────
+            #
+            # El conductor contesta la pregunta que sabe contestar («¿volvió la
+            # mercancía?»). El servidor traduce eso al estado que corresponde.
+            #
+            # Antes esta traducción no existía y el estado quedaba en
+            # RECHAZADO: **cada consumidor tenía que acordarse de mirar el
+            # motivo**, y uno se olvidó — la lista de reingreso mandaba a
+            # bodega a buscar cajas que nunca volvieron. Traducir en la
+            # frontera lo arregla para todos los consumidores a la vez, los de
+            # hoy y los que se escriban después.
+            if not _mr.retorna_mercancia(data.get('motivo_rechazo')):
+                estado_entrega = EstadoEntrega.ENTREGADO_SIN_PAGO
+
         if estado_entrega == EstadoEntrega.PARCIAL:
             # monto>0 solo aplica si de verdad se cobra en la puerta — un
             # pedido a crédito con devolución parcial no cobra nada ahí (solo
@@ -861,6 +906,12 @@ class RutaService:
         bultos_rechazados_ids = data.get('bultos_rechazados', [])
         if estado_entrega == EstadoEntrega.RECHAZADO and not bultos_rechazados_ids:
             bultos_rechazados_ids = [b.id for b in bultos_tarea]
+        elif estado_entrega == EstadoEntrega.ENTREGADO_SIN_PAGO:
+            # Los bultos NO vuelven: físicamente se entregaron. Marcarlos
+            # RECHAZADO diría que están en el camión, que es la mentira de
+            # inventario que este estado vino a impedir. Lo que falta es el
+            # pago, y eso lo dice `estado_entrega`, no el bulto.
+            bultos_rechazados_ids = []
         # PARCIAL no exige seleccionar bultos rechazados — la devolución se
         # rastrea por referencia (items_entregados), no por bulto completo.
         # Los bultos de esta tarea quedan ENTREGADO (el checklist de "bulto
@@ -1104,20 +1155,27 @@ class RutaService:
         inventario en una fila que desaparece.
         """
         from app.models.recaudo_entrega import RecaudoEntrega
-        from app.services.motivos_rechazo import SIN_RETORNO
 
-        # Las tareas cuya parada declaró que la mercancía se quedó con el
-        # cliente. Es un conjunto chico —son excepciones— así que se resuelve
-        # con un IN y no con un join por fila.
+        # Las paradas donde la mercancía se quedó con el cliente. Se consulta
+        # por **estado** y no por motivo: desde el 2026-08-13 eso es
+        # `ENTREGADO_SIN_PAGO`, un estado propio. Preguntarle al motivo era
+        # justamente lo que había que recordar hacer en cada consumidor.
         sin_retorno = {
             (r.ruta_id, r.tarea_id)
             for r in RecaudoEntrega.query
-            .filter(RecaudoEntrega.motivo_rechazo.in_(SIN_RETORNO)).all()
+            .filter(RecaudoEntrega.estado_entrega ==
+                    EstadoEntrega.ENTREGADO_SIN_PAGO).all()
         }
 
+        # Los bultos de esas paradas ya NO se marcan `RECHAZADO` —no volvieron,
+        # así que quedan `ENTREGADO`—, pero los históricos sí lo están. Se
+        # traen los dos: el bloque lo define la parada, no el bulto.
         q = (Bulto.query
              .options(_sl(Bulto.tarea))
-             .filter_by(estado=EstadoBulto.RECHAZADO)
+             .filter(db.or_(
+                 Bulto.estado == EstadoBulto.RECHAZADO,
+                 db.tuple_(Bulto.ruta_despacho_id, Bulto.tarea_id).in_(
+                     list(sin_retorno)) if sin_retorno else db.false()))
              .order_by(Bulto.fecha_entrega.desc()))
         todos = q.all()
 
