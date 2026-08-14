@@ -738,10 +738,16 @@ class RutaService:
         # Si ya se anotó, no se vuelve a preguntar. Además de ahorrar una
         # consulta por parada en cada carga de ruta, es lo que permite validar
         # la entrega **sin red**: `confirmar_parada` no puede ir a Siesa.
+        # `cobra_en_la_puerta`, no `es_contado_o_none`: la pantalla del
+        # conductor pregunta "¿cobro acá?", no "¿es literalmente el código de
+        # contado?" — C02 (condición de ruta) también se cobra en la puerta,
+        # es el código que el vendedor captura para que la FE se apruebe en
+        # Siesa. Ver `cond_pago.cobra_en_la_puerta`.
         if getattr(tarea, 'cond_pago', None) is not None:
             from app.services import cond_pago as _cp0
             return (valor_factura,
-                    _cp0.es_contado_o_none(tarea.cond_pago, connekta.cond_pago_ventas),
+                    _cp0.cobra_en_la_puerta(
+                        tarea.cond_pago, connekta.cond_pago_ventas, connekta.cond_pago_ruta),
                     valores_por_referencia,
                     tarea.cond_pago)
         try:
@@ -750,7 +756,8 @@ class RutaService:
             from app.services import cond_pago as _cp
             cond_pago_siesa = (cabecera or {}).get('f430_id_cond_pago') or ''
             cond_pago_crudo = cond_pago_siesa
-            es_contado = _cp.es_contado_o_none(cond_pago_siesa, connekta.cond_pago_ventas)
+            es_contado = _cp.cobra_en_la_puerta(
+                cond_pago_siesa, connekta.cond_pago_ventas, connekta.cond_pago_ruta)
             if es_contado is None:
                 _cp.registrar_ausencia(
                     f'pedido {tarea.tipo_docto_pedido_siesa}-{tarea.consec_docto_pedido_siesa}')
@@ -795,12 +802,21 @@ class RutaService:
         if forma_pago and forma_pago not in FormaPago.VALIDOS:
             raise ValueError(f'forma_pago inválido. Válidos: {", ".join(FormaPago.VALIDOS)}')
 
-        # ── La restricción del diseño: contado no se convierte en crédito ──
+        # ── La restricción del diseño: lo que se cobra en la puerta no se
+        # convierte en crédito ──
         #
         # «Sobre una parada declarada de contado no se puede registrar forma de
         # pago a crédito» (BK-OPS-01 §3.4). El conductor no tiene facultad de
         # otorgar crédito en la puerta; si el cliente se lleva la mercancía sin
         # pagar, el camino es el motivo tipificado, que deja documento.
+        #
+        # `cobra_en_la_puerta`, no `clasificar(...) == CONTADO`: C02 (la
+        # condición de ruta que el vendedor captura para que la FE se apruebe
+        # en Siesa) es, de cara al cliente, tan de contado como C01 — la
+        # misma razón por la que la pantalla del conductor la trata igual en
+        # `_valor_y_cond_pago`. Antes de este cambio, un pedido capturado
+        # como C02 podía marcarse `forma_pago=CREDITO` sin que nada lo
+        # impidiera.
         #
         # Se valida contra lo ANOTADO en la tarea (`m005condpagoparada`), no
         # contra Siesa: esta confirmación **tiene que funcionar sin señal**. Si
@@ -811,12 +827,11 @@ class RutaService:
             from app.services.connekta_gateway import connekta as _cx_r
             _tarea_cp = TareaPacking.query.get(tarea_id)
             _anotada = getattr(_tarea_cp, 'cond_pago', None) if _tarea_cp else None
-            # Sin `is not None`: `clasificar` ya devuelve AUSENTE ante `None`
-            # o vacío, y AUSENTE no es CONTADO. Agregar la comprobación no
-            # cambiaba ningún resultado —lo verificó una mutación— y tener dos
-            # lugares donde se decide qué es «no saber» es exactamente lo que
-            # `cond_pago.py` existe para evitar.
-            if _cp_r.clasificar(_anotada, _cx_r.cond_pago_ventas) == _cp_r.CONTADO:
+            # `is True` y no una comparación de clase: `cobra_en_la_puerta`
+            # devuelve `None` ante dato ausente, y `None` no es evidencia de
+            # contado (Regla 0) — mismo criterio que ya regía acá.
+            if _cp_r.cobra_en_la_puerta(
+                    _anotada, _cx_r.cond_pago_ventas, _cx_r.cond_pago_ruta) is True:
                 raise ValueError(
                     'Este pedido es de contado: no se puede registrar como crédito. '
                     'Si el cliente no pagó, marcá Rechazado y elegí el motivo — '

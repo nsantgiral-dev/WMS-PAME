@@ -97,6 +97,38 @@ def es_contado_o_none(cond_pago_siesa, cond_pago_contado):
     return clase == CONTADO
 
 
+def cobra_en_la_puerta(cond_pago_siesa, cond_pago_contado, cond_pago_ruta):
+    """`True` | `False` | `None` — si el conductor tiene que cobrar en la puerta.
+
+    Pregunta distinta de `aprobable_en_ruta`, aunque comparten los mismos dos
+    códigos. Esa responde si Siesa **aprueba** la FE con esa condición —ahí
+    C01 (contado) es `False` y C02 (ruta) es `True`, porque el invariante de
+    aprobación de Siesa mira si la cartera cuadra, no si el cliente paga en
+    la puerta—. Esta responde si el cliente **paga al momento de la
+    entrega** — y ahí C01 y C02 dan la MISMA respuesta: sí. El vendedor
+    puede capturar cualquiera de los dos códigos para un pedido de ruta que
+    de cara al cliente es de contado (C02 es el que además se aprueba en
+    Siesa); la pantalla del conductor y la validación de consistencia tienen
+    que reconocer los dos, no solo C01.
+
+    Fusionarlas en una sola función ya se probó y rompe la otra pregunta:
+    si `clasificar` tratara C02 como CONTADO, `aprobable_en_ruta('C02', ...)`
+    empezaría a dar `False` para el único código que sí se aprueba. Por eso
+    viven separadas — una función, una pregunta (Regla 0).
+
+    `None` = ausente, mismo criterio que `es_contado_o_none`: no se afirma
+    nada sobre un dato que no está.
+    """
+    clase = clasificar(cond_pago_siesa, cond_pago_contado)
+    if clase == AUSENTE:
+        return None
+    if clase == CONTADO:
+        return True
+    valor = (cond_pago_siesa or '').strip()
+    _ruta = (cond_pago_ruta or '').strip()
+    return bool(_ruta) and valor == _ruta
+
+
 def registrar_ausencia(contexto: str, tercero: str = ''):
     """Deja rastro cuando el dato falta. **No es cosmético.**
 
