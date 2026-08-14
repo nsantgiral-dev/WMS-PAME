@@ -143,6 +143,44 @@ class TestElDetectorNoEstaCiego:
         db.session.commit()
         assert self._res('TRA-12')['total'] == 1
 
+    def test_agrupa_por_causa_y_no_por_solicitud(self, db, almacen,
+                                                 actores_traslado):
+        """53 filas no se pueden triar; dos causas sí.
+
+        La primera corrida contra producción devolvió 53 hallazgos de TRA-12 —
+        traslados distintos con el mismo puñado de errores repetidos. Un
+        hallazgo por fila convierte un problema en una lista, y una lista larga
+        se ignora.
+        """
+        from tests.flujo import conductor_de_flujo as cf
+        mismos = [cf.flujo_traslado(db, almacen, actores_traslado['tienda'].id,
+                                    actores_traslado['admin'].id,
+                                    actores_traslado['operario'].id)
+                  for _ in range(3)]
+        for i, s in enumerate(mismos):
+            s.estado = 'EN_PACKING'
+            # Mismo error, distinto número de documento: una sola causa.
+            s.siesa_error = f'RIT 174646: error en la linea 3 del documento {900 + i}'
+        db.session.commit()
+
+        r = self._res('TRA-12')
+        assert r['total'] == 1, 'tres traslados con la misma causa son un hallazgo'
+        assert '3 traslado(s)' in r['hallazgos'][0]['referencia']
+
+    def test_causas_distintas_no_se_mezclan(self, db, almacen, actores_traslado):
+        from tests.flujo import conductor_de_flujo as cf
+        a = cf.flujo_traslado(db, almacen, actores_traslado['tienda'].id,
+                              actores_traslado['admin'].id,
+                              actores_traslado['operario'].id)
+        b = cf.flujo_traslado(db, almacen, actores_traslado['tienda'].id,
+                              actores_traslado['admin'].id,
+                              actores_traslado['operario'].id)
+        a.estado = b.estado = 'EN_PACKING'
+        a.siesa_error = 'RIT 174646: error al importar el plano'
+        b.siesa_error = 'motivo de traslado invalido'
+        db.session.commit()
+        assert self._res('TRA-12')['total'] == 2
+
     def test_un_error_ya_superado_no_grita(self, db, traslado):
         """Con el movimiento de cierre presente, el error es ruido histórico —
         el reintento funcionó. Avisar igual entrena a ignorar el canal."""

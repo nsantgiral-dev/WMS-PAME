@@ -149,19 +149,36 @@ def un_error_de_siesa_no_se_queda_callado(ctx=None):
     """`siesa_error` con movimiento de cierre presente es ruido histórico —el
     reintento funcionó—. Sin cierre y sin estado terminal, es trabajo pendiente
     que nadie tiene asignado."""
-    out = []
+    # Se agrupa por CAUSA, no por solicitud.
+    #
+    # La primera corrida devolvió 53 filas y ninguna se podía triar: cincuenta
+    # y tres traslados distintos con —probablemente— dos o tres errores
+    # distintos repetidos. Un hallazgo por fila convierte un problema en una
+    # lista, y una lista larga se ignora.
+    #
+    # La firma es el mensaje sin los identificadores que cambian entre
+    # documentos: lo que queda es la causa.
+    import re as _re
+    grupos = {}
     for s in _solicitudes():
         if not s.siesa_error or s.estado in _TERMINALES:
             continue
         cierre = (s.siesa_entrada_consec if s.modo_transferencia == 'EN_TRANSITO'
                   else s.siesa_salida_consec)
-        if not cierre:
-            out.append(Hallazgo(
-                referencia=s.codigo or f'traslado#{s.id}',
-                detalle=f'{s.estado} · {s.siesa_error[:150]}',
-                datos={'modo': s.modo_transferencia},
-            ))
-    return out
+        if cierre:
+            continue
+        firma = _re.sub(r'\d+', 'N', (s.siesa_error or '')[:220])
+        grupos.setdefault(firma, []).append(s)
+
+    return [
+        Hallazgo(
+            referencia=f'{len(ss)} traslado(s) · ej. {ss[0].codigo or ss[0].id}',
+            detalle=firma,
+            datos={'codigos': [x.codigo for x in ss[:15]],
+                   'estados': sorted({x.estado for x in ss})},
+        )
+        for firma, ss in sorted(grupos.items(), key=lambda kv: -len(kv[1]))
+    ]
 
 
 # ── Frontera: estado ↔ documentos ────────────────────────────────────────
