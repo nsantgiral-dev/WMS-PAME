@@ -755,34 +755,32 @@ def liquidacion_desglose():
     _no_entregado = sum(v for k, v in por_estado.items() if k in ('PARCIAL', 'RECHAZADO'))
 
     # ── 2. Rezago ────────────────────────────────────────────────────────
-    from app.models.ruta_despacho import EstadoFinancieroRuta as _EFR
-    from app.utils.fecha import ahora_bogota
-    # Se compara en DÍAS de Bogotá, no en UTC: una ruta entregada a las 8 p.m.
-    # tiene 0 días de rezago, no 1. Regla 5 — lo que alguien LEE como día no
-    # sale de utcnow.
-    hoy = ahora_bogota().date()
-    sin_liquidar, dias = [], []
-    for ruta in (RutaDespacho.query
-                 .filter(RutaDespacho.estado == 'ENTREGADA')
-                 .filter(RutaDespacho.estado_financiero != _EFR.LIQUIDADA)
-                 .all()):
-        # `fecha_entregada` es DateTime y `fecha_programada` es Date — se
-        # normaliza a fecha antes de restar, o revienta al mezclarlas.
-        _fe = ruta.fecha_entregada
-        ref = _fe.date() if _fe else ruta.fecha_programada
-        d = (hoy - ref).days if ref else None
-        if d is not None:
-            dias.append(d)
-        sin_liquidar.append({'ruta_id': ruta.id, 'dias': d,
-                             'estado_financiero': ruta.estado_financiero})
+    # La política vive en `services/rezago_liquidacion.py` porque el cron de
+    # las 06:30 lee exactamente lo mismo. Duplicarla haría que el correo
+    # hablara de un universo y esta pantalla de otro — y el que nadie mira es
+    # el correo.
+    from app.services import rezago_liquidacion as _rz
+    _diag = _rz.diagnostico()
+    sin_liquidar, dias = _diag['rutas'], _diag['dias']
 
     # ── 3. Alertas de condición ausente ──────────────────────────────────
     # `count()` y no traer las filas: si algún día son miles, este endpoint no
     # puede volverse el problema que vino a medir.
-    alertas_cond = (SiesaJob.query
-                    .filter(SiesaJob.tipo == 'ALERTA_EMAIL')
-                    .filter(SiesaJob.payload.like('%data incompleta%'))
-                    .count())
+    #
+    # Se filtra por `tipo_alerta`, NO por una frase del cuerpo. Esto decía
+    # `like('%data incompleta%')` y al reescribirse el texto de la alerta el
+    # contador se quedó en cero para siempre — sin fallar, que es lo peligroso.
+    # El tipo es la identidad del aviso; la prosa es presentación.
+    def _cuenta_alertas(tipo):
+        return (SiesaJob.query
+                .filter(SiesaJob.tipo == 'ALERTA_EMAIL')
+                .filter(SiesaJob.payload.like(f'%"tipo_alerta": "{tipo}"%'))
+                .count())
+
+    alertas_cond = _cuenta_alertas('DATA_MAESTRA_COND_PAGO')
+    # Distinto y más grave: el pedido declaraba contado y la FE va a quedar en
+    # Elaboración. Verificado en producción el 2026-08-13.
+    alertas_fe_contado = _cuenta_alertas('FE_CONTADO_NO_APROBABLE')
 
     # EL DENOMINADOR, sin el cual el conteo de arriba no dice nada.
     #
@@ -850,20 +848,32 @@ def liquidacion_desglose():
         },
         'rezago_liquidacion': {
             'rutas_entregadas_sin_liquidar': len(sin_liquidar),
+            'atrasadas': len(_diag['atrasadas']),
+            # La entrega ocurrió en un mes y el recaudo va a registrarse en
+            # otro. Liquidar rápido ya no lo corrige — el período no se mueve.
+            'cruzan_mes': len(_diag['cruzan_mes']),
             'dias_max': max(dias) if dias else None,
             'dias_promedio': round(sum(dias) / len(dias), 1) if dias else None,
             'detalle': sorted(sin_liquidar,
                               key=lambda x: (x['dias'] is None, -(x['dias'] or 0)))[:50],
-            'nota': ('Piso, no estimación: hoy liquidar no tiene consecuencia '
-                     'fiscal. Si la factura pasa a emitirse acá, la tendría.'),
+            'nota': ('Mientras no se liquiden, la factura de cada parada computa '
+                     'mora y consume cupo: es el mecanismo de la cartera '
+                     'fantasma. El cron de las 06:30 alerta sobre esto mismo.'),
         },
         'condicion_pago_ausente': {
             'alertas': alertas_cond,
             'facturas_emitidas_por_el_gateway': _emitidas,
             'concluyente': _emitidas >= 50,
-            'nota': ('Veces que se facturó como CONTADO porque el pedido no traía '
-                     'f430_id_cond_pago. Contar facturas NO lo detecta: el '
+            'nota': ('Veces que el pedido no traía f430_id_cond_pago y la FE salió '
+                     'con la condición de ruta. Contar facturas NO lo detecta: el '
                      'fallback rellena el campo antes de emitir.'),
+        },
+        'fe_contado_no_aprobable': {
+            'alertas': alertas_fe_contado,
+            'nota': ('Pedidos de ruta que declararon CONTADO. Su factura queda en '
+                     'Elaboración —Siesa no la aprueba sin recaudo— con el '
+                     'inventario ya descargado. Cualquier valor > 0 es un '
+                     'documento trabado que alguien tiene que corregir en Siesa.'),
         },
     }), 200
 

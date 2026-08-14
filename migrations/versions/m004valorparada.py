@@ -8,10 +8,16 @@ El valor de una parada se calcula al vuelo en `_valor_y_cond_pago` sumando
 `f470_vlr_neto` de las líneas de la FE, se muestra en la pantalla del conductor
 y se descarta. No queda en ningún lado.
 
-Hace falta para una decisión concreta: **el tope de monto por debajo del cual
-una parada declarada de contado pasa sin evaluación de crédito**. Ese número
-sale de la distribución de valores por parada, y hoy esa distribución no se
-puede calcular sin volver a consultar Siesa parada por parada.
+Hace falta para la pantalla del conductor: el valor a cobrar, el tope del monto
+parcial y la deducción por línea no entregada salen de ahí (`rutas.js`).
+
+ADVERTENCIA (2026-08-13, posterior a esta migración). Esta columna se creó
+además para calcular **el tope de exposición de contado** —el monto por debajo
+del cual una parada pasaba sin evaluación de crédito—. **Ese diseño quedó
+retirado** por BK-OPS-01 v2.1: dependía de que la factura se emitiera en la
+liquidación, y una factura de contado no se aprueba sin recaudo. La columna se
+queda porque la pantalla del conductor la usa; el tope no se implementa. Se
+deja escrito para que nadie lo retome leyendo esta migración.
 
 Y hay un riesgo de medición que esto evita: `recaudos_entrega.monto_cobrado`
 existe y es tentador usarlo como proxy. **No es lo mismo** — es lo que se

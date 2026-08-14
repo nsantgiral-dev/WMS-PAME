@@ -809,9 +809,10 @@ Generado: {hoy}
 def init_scheduler(app):
     """
     Crons diarios:
-      06:00 → alerta ubicaciones huérfanas
-      07:00 → alerta stock crítico sin reserva
-      08:00 → resumen operativo diario
+      05:45 → alerta ubicaciones huérfanas
+      06:15 → alerta stock crítico sin reserva
+      06:30 → alerta rutas entregadas sin liquidar
+      06:45 → resumen operativo diario
     """
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
@@ -841,6 +842,14 @@ def init_scheduler(app):
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
+        func=verificar_y_alertar_rutas_sin_liquidar,
+        trigger=CronTrigger(hour=6, minute=30, timezone='America/Bogota'),
+        kwargs={'app': app},
+        id='alertas_rutas_sin_liquidar',
+        name='Alerta email rutas entregadas sin liquidar (06:30 Bogotá)',
+        replace_existing=True, max_instances=1, misfire_grace_time=600,
+    )
+    scheduler.add_job(
         func=enviar_resumen_diario,
         trigger=CronTrigger(hour=6, minute=45, timezone='America/Bogota'),
         kwargs={'app': app},
@@ -852,5 +861,92 @@ def init_scheduler(app):
     scheduler.start()
     import atexit
     atexit.register(lambda: scheduler.shutdown(wait=False))
-    logger.info('[ALERTAS] Scheduler iniciado — 05:45 huérfanas | 06:15 stock crítico | 06:45 resumen')
+    logger.info('[ALERTAS] Scheduler iniciado — 05:45 huérfanas | 06:15 stock crítico | '
+                '06:30 rutas sin liquidar | 06:45 resumen')
     return scheduler
+
+
+def verificar_y_alertar_rutas_sin_liquidar(app=None):
+    """Cron diario — una ruta entregada que nadie liquidó.
+
+    Lo pide BK-OPS-01 v2.1 §4.2: hoy no existe ninguna alerta y una ruta puede
+    quedarse sin liquidar indefinidamente. La política de qué cuenta como
+    atrasada vive en `services/rezago_liquidacion.py`, la misma que lee el
+    desglose — si divergieran, el correo hablaría de un universo y el tablero
+    de otro.
+    """
+    from flask import current_app as _app
+    ctx_app = app or _app._get_current_object()
+
+    with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2007)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] rutas_sin_liquidar omitida — otro worker ya la ejecuta')
+            return
+        try:
+            from app.services import rezago_liquidacion as _rz
+
+            d = _rz.diagnostico()
+            atrasadas, cruzan = d['atrasadas'], d['cruzan_mes']
+            if not atrasadas and not cruzan:
+                logger.info('[ALERTAS] Todas las rutas entregadas están liquidadas.')
+                return
+
+            logger.warning(
+                '[ALERTAS] %s ruta(s) entregadas sin liquidar (%s cruzan mes) — enviando email.',
+                len(atrasadas) + len(cruzan), len(cruzan))
+            _enviar_alerta_rutas_sin_liquidar(atrasadas, cruzan)
+
+        except Exception as e:
+            logger.error(f'[ALERTAS] Error en verificar_y_alertar_rutas_sin_liquidar: {e}',
+                         exc_info=True)
+            try:
+                _enviar_email_con_dlq(
+                    '[WMS] Scheduler rutas_sin_liquidar falló',
+                    f'<p><b>Error:</b> {str(e)[:400]}</p>',
+                    f'Error: {str(e)[:400]}',
+                    'alertas_scheduler_rutas_sin_liquidar_fallo',
+                )
+            except Exception:
+                pass
+        finally:
+            try:
+                _db.session.rollback()
+                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2007)'))
+                _db.session.commit()
+            except Exception as _fe:
+                logger.error(f'[ALERTAS] Error liberando advisory lock 2007: {_fe}')
+
+
+def _enviar_alerta_rutas_sin_liquidar(atrasadas: list, cruzan_mes: list):
+    """El correo. Las que cruzan mes van primero y con su propia explicación:
+    liquidar rápido ya no las arregla, y quien las reciba tiene que saberlo."""
+    def _fila(f):
+        d = f['dias']
+        return f"  · Ruta {f['ruta_id']} — {d if d is not None else '?'} día(s), {f['estado_financiero']}"
+
+    partes = []
+    if cruzan_mes:
+        partes.append(
+            f'CRUZAN EL MES ({len(cruzan_mes)}) — la entrega ocurrió en un mes y el '
+            f'recaudo va a quedar registrado en otro. Liquidar ya no lo corrige: '
+            f'el período contable no se mueve.\n'
+            + '\n'.join(_fila(f) for f in cruzan_mes))
+    if atrasadas:
+        partes.append(
+            f'ATRASADAS ({len(atrasadas)}) — debían liquidarse el mismo día.\n'
+            + '\n'.join(_fila(f) for f in atrasadas))
+
+    cuerpo = (
+        'Rutas entregadas cuyo cierre financiero no ocurrió.\n\n'
+        + '\n\n'.join(partes)
+        + '\n\nMientras no se liquiden, la factura de cada parada queda abierta: '
+          'computa mora, consume cupo y puede frenar el próximo pedido del mismo '
+          'cliente. Es el mecanismo que produce la cartera fantasma.\n\n'
+          'El recibo de caja de la liquidación es lo que cierra ese saldo.'
+    )
+    _enviar_email_con_dlq(
+        f'[WMS ALERTA] {len(atrasadas) + len(cruzan_mes)} ruta(s) entregadas sin liquidar',
+        f'<pre>{cuerpo}</pre>', cuerpo, 'rutas_entregadas_sin_liquidar',
+    )

@@ -5,13 +5,9 @@ Se estuvieron estimando toda la semana en un intercambio entre el analista de
 cartera, el consultor de Siesa y este repo, y ninguno se podía sacar de las
 pantallas: el dashboard de liquidación agrega por ruta y no desglosa.
 
-  1. `forma_pago` × `estado_entrega` — cuánto del flujo es contado (lo único
-     que se movería si la FE pasa a emitirse en la liquidación) y con qué
-     frecuencia hay PARCIAL o RECHAZADO, que es cuando haría falta devolver
-     mercancía al camión.
-  2. Rezago de liquidación — días entre ENTREGADA y LIQUIDADA. **No existe
-     ninguna alerta** cuando eso no pasa; se buscó en los schedulers y en el
-     servicio de alertas.
+  1. `forma_pago` × `estado_entrega` — cuánto del flujo es contado y con qué
+     frecuencia hay PARCIAL o RECHAZADO.
+  2. Rezago de liquidación — días entre ENTREGADA y LIQUIDADA.
   3. Cuántas veces se facturó como CONTADO porque el pedido no traía
      `f430_id_cond_pago`.
 
@@ -22,17 +18,23 @@ detectarlo**: el fallback rellena el campo antes de emitir, así que toda
 factura sale con condición. Es la huella del fallback, no su ausencia. Lo que
 sí lo detecta es la alerta que el gateway encola, y vive en esta base.
 
-## Sobre el rezago, que es donde el número engaña
+## Sobre el rezago
 
-Hoy liquidar **no tiene consecuencia fiscal**. Si la factura pasa a emitirse
-ahí, la tendría. Medir la latencia de un proceso sin consecuencias y
-proyectarla a uno con consecuencias es un error de método — puede ir para los
-dos lados: la gente se apura cuando importa, o se paraliza por miedo a
-equivocarse.
+Cuando esto se escribió, el rezago no tenía alerta y la nota que lo acompañaba
+advertía que liquirar tarde «no tiene consecuencia fiscal, pero la tendría si
+la factura pasara a emitirse ahí». Las dos cosas cambiaron el 2026-08-13:
 
-Por eso el endpoint devuelve la advertencia **pegada al número**, y hay un test
-que lo exige. Un dato que se puede malinterpretar viaja con su interpretación o
-no viaja.
+  · el rediseño de diferir la factura quedó retirado —una factura de contado no
+    se aprueba sin recaudo, probado en producción— así que esa consecuencia
+    hipotética no va a existir;
+  · **la consecuencia real resultó peor y ya existe**: la factura de ruta nace a
+    un día, y mientras nadie liquide, ese saldo computa mora y consume cupo. Es
+    el mecanismo de la cartera fantasma, no una latencia administrativa.
+
+La alerta la manda ahora el cron de las 06:30 — ver `test_rezago_liquidacion.py`.
+El endpoint sigue devolviendo la advertencia **pegada al número**, con la
+consecuencia correcta. Un dato que se puede malinterpretar viaja con su
+interpretación o no viaja.
 """
 from datetime import date, datetime, timedelta
 
@@ -154,11 +156,17 @@ class TestElRezagoDeLiquidacion:
 
     def test_el_numero_viaja_con_su_advertencia(self, client, db, h):
         """Un dato que se puede malinterpretar viaja con su interpretación o no
-        viaja. El rezago de hoy es un PISO: hoy liquidar no tiene consecuencia
-        fiscal y con el rediseño la tendría."""
+        viaja.
+
+        La nota decía que el rezago era un piso «porque hoy liquidar no tiene
+        consecuencia fiscal, y con el rediseño la tendría». Ese rediseño
+        —diferir la factura a la liquidación— quedó retirado el 2026-08-13, y
+        la consecuencia real resultó ser otra y peor: mientras no se liquide, la
+        factura computa mora y consume cupo.
+        """
         z = client.get(_URL, headers=h).get_json()['rezago_liquidacion']
         assert 'nota' in z and z['nota']
-        assert 'iso' in z['nota'].lower() or 'estimación' in z['nota'].lower()
+        assert 'mora' in z['nota'].lower() and 'cupo' in z['nota'].lower()
 
     def test_una_ruta_sin_fechas_no_revienta(self, client, db, h, ruta_con_tarea):
         """Sin fecha no hay días. Declarar `null` y no inventar 0, que se
@@ -175,16 +183,38 @@ class TestElRezagoDeLiquidacion:
 
 
 class TestLasAlertasDeCondicionAusente:
+    """El contador y el emisor tienen que hablar del mismo aviso.
 
-    def test_cuenta_las_alertas_del_gateway(self, client, db, h):
-        from app.models.siesa_job import SiesaJob
-        SiesaJob.encolar('ALERTA_EMAIL', {
-            'asunto': '[WMS ALERTA] Factura emitida como CONTADO por data incompleta en Siesa',
-            'tercero': '900123456',
+    Estos tests fabricaban el payload a mano con la frase que el contador
+    buscaba (`data incompleta`). Cuando el texto de la alerta se reescribió, el
+    emisor dejó de producir esa frase, el contador se quedó en cero para
+    siempre — y estos tests siguieron en verde, porque se lo escribían ellos
+    mismos. Un test que construye la entrada que verifica no prueba la cadena:
+    prueba el filtro contra su propia copia.
+
+    Ahora la alerta la emite el gateway de verdad.
+    """
+
+    CONTADO = 'C01'
+
+    def _facturar(self, cond_pago, consec=7001):
+        from app.services.connekta_gateway import ConnektaGateway
+        gw = ConnektaGateway()
+        gw.modo_simulacion = True
+        gw.cond_pago_ventas = self.CONTADO
+        gw.cond_pago_ruta = 'C02'
+        gw.trigger_factura_desde_remision('RM', consec, {
+            'f200_id_pedido_fact': '900123456',
+            'f461_id_punto_envio': '001',
+            'f430_id_cond_pago': cond_pago,
         })
+
+    def test_cuenta_la_alerta_que_el_gateway_emite_de_verdad(self, client, db, h):
+        self._facturar('')
         db.session.commit()
         c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
-        assert c['alertas'] == 1
+        assert c['alertas'] == 1, (
+            'el contador y el emisor dejaron de hablar del mismo aviso')
 
     def test_no_cuenta_otras_alertas(self, client, db, h):
         from app.models.siesa_job import SiesaJob
@@ -192,6 +222,22 @@ class TestLasAlertasDeCondicionAusente:
         db.session.commit()
         c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
         assert c['alertas'] == 0
+
+    def test_el_contado_se_cuenta_aparte(self, client, db, h):
+        """Un pedido de contado no es data incompleta: es un documento que va a
+        quedar trabado. Mezclarlos escondería el grave dentro del leve."""
+        self._facturar(self.CONTADO, consec=7002)
+        db.session.commit()
+        d = client.get(_URL, headers=h).get_json()
+        assert d['fe_contado_no_aprobable']['alertas'] == 1
+        assert d['condicion_pago_ausente']['alertas'] == 0
+
+    def test_una_factura_a_credito_no_cuenta_en_ninguno(self, client, db, h):
+        self._facturar('C02', consec=7003)
+        db.session.commit()
+        d = client.get(_URL, headers=h).get_json()
+        assert d['condicion_pago_ausente']['alertas'] == 0
+        assert d['fe_contado_no_aprobable']['alertas'] == 0
 
     def test_explica_por_que_no_sirve_contar_facturas(self, client, db, h):
         """La nota existe porque la pregunta se estuvo respondiendo con el

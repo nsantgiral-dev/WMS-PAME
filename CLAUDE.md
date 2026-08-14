@@ -810,6 +810,36 @@ Dos listas con semántica distinta — elegir mal tiene consecuencias silenciosa
 
 ---
 
+## Alerta de ruta entregada sin liquidar (2026-08-13)
+
+`services/rezago_liquidacion.py` + cron 06:30 Bogotá. Lo pedía BK-OPS-01 v2.1
+§4.2: *«Hoy no existe ninguna: una ruta puede quedar sin liquidar
+indefinidamente y nadie se entera.»*
+
+Era literal aunque el número sí existiera en el desglose. **Un número en una
+pantalla que alguien tiene que abrir no es una alerta.** El mismo documento lo
+dice: «alguien que compare tres números una vez al mes deja de hacerlo al
+tercero».
+
+Dos urgencias, y no son la misma:
+
+| | Qué es | Se arregla liquidando |
+|---|---|---|
+| `atrasada` | Debió liquidarse el mismo día | Sí |
+| `cruza_mes` | La entrega fue en un mes y el recaudo cae en otro | **No** — el período contable no se mueve |
+
+`cruza_mes` implementa la regla de cierre de mes del diagnóstico. Se distingue
+por mes calendario y no por «los últimos N días» a propósito: cualquier N sería
+un umbral inventado, y el cruce de mes es un hecho.
+
+Una ruta **sin fecha** cuenta como atrasada, no como al día (Regla 0).
+
+La política vive en un módulo y no en el endpoint porque el cron lee lo mismo:
+si divergieran, el correo hablaría de un universo y el tablero de otro — y el
+que nadie mira es el correo. Trinquete: `tests/test_rezago_liquidacion.py`.
+
+---
+
 ## Vigía — CUSUM de corrimientos operativos
 
 Detecta desplomes en series semanales (facturación, líneas, frecuencia de
@@ -1064,6 +1094,25 @@ y `tests/test_09_guards_criticos.py::TestFallbackCondPagoAlerta`.
 **Cómo medirlo:** `condicion_declarada` en `GET /api/rutas/liquidacion/desglose`
 dice qué condición declara cada pedido de ruta, sobre todos a la vez. Si sale
 algo en `contado`, esos son los que van a quedar en Elaboración.
+
+### Lo que BK-OPS-01 v2.1 retira — no implementar por inercia
+
+El diagnóstico definitivo (2026-08-13) retira cuatro diseños que dependían de
+que una factura de contado pudiera dejar saldo abierto:
+
+1. **Diferir la factura a la liquidación.** Sería extemporáneo ante la DIAN
+   además de imposible: la normativa exige expedirla al momento de la operación.
+2. **La bifurcación por forma de pago en el cierre del packing.**
+3. **El límite de exposición de contado consultado antes de despachar.** Por eso
+   `distribucion_valor_parada` ya no alimenta ninguna decisión — la columna
+   `valor_factura` se queda porque la usa la pantalla del conductor.
+4. **La devolución de remisión operada a mano.** Como la factura siempre existe
+   antes de la entrega, el rechazo se resuelve con nota crédito en contado y en
+   crédito por igual: la asimetría no existe.
+
+El flujo **no cambia**: comprometer → remisionar → facturar al cerrar el
+packing, con la condición que trae el pedido. Lo que faltaba nunca fue
+arquitectura — es que el saldo se cruce el mismo día.
 
 ### Y lo que dice el spec del 142943 sobre facturar parcial
 
