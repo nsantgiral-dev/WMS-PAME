@@ -1099,6 +1099,48 @@ Trinquete: `tests/test_idempotencia_retenciones.py` (5 mutaciones).
 
 ---
 
+## Probar el respaldo antes del corte (2026-08-14)
+
+**Un respaldo que existe no es un respaldo: es un archivo.** Lo que hace falta
+saber es si se puede volver a operar desde él, y eso solo se sabe restaurándolo
+una vez en una base **aparte** y mirándolo.
+
+```bash
+# 1 · foto de producción — SOLO LEE
+venv/bin/python scripts/verificar_restauracion.py --foto produccion.json
+
+# 2 · restaurar el respaldo en una base NUEVA (Railway)
+
+# 3 · comparar
+DATABASE_URL='…copia…' venv/bin/python \
+    scripts/verificar_restauracion.py --contra produccion.json
+```
+
+### No toda diferencia es un fallo
+
+Un respaldo es de un momento anterior, así que **es normal que le falten filas
+operativas**. Lo que no puede faltar es lo que no se regenera:
+
+| | |
+|---|---|
+| `kardex_movimientos`, `serie_vigia`, `stock_diario`, `precios_realizados`… | **irrecuperable** — no vuelve desde Siesa |
+| `pedidos_siesa`, `stock_siesa`, `siesa_jobs`, `movimientos_inventario` | se recargan |
+| cualquier otra | ante la duda, se rechaza |
+
+Tratarlas igual produce una de dos cosas malas: un respaldo bueno rechazado por
+ruido, o **uno malo aprobado porque «total, faltan pocas»**.
+
+También compara la **cabeza de migraciones**: una copia en otra revisión no la
+levanta la app.
+
+### Lo que este script NO prueba
+
+Que la aplicación arranque contra la copia. Eso es apuntar `DATABASE_URL` a la
+copia y abrir `/api/health/ping`. **Un esquema íntegro con la app caída sigue
+siendo una noche perdida.**
+
+---
+
 ## El acta de corte no cortaba del todo (2026-08-14)
 
 `reset_transaccional.py` es **deny-by-default**: solo vacía lo que está en
