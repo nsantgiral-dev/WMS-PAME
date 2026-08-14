@@ -111,6 +111,8 @@ De la lista del §4.2, cuatro de cinco:
   cron 06:30, con la regla de cierre de mes (`cruza_mes`)
 - ✅  como estado propio + la restricción del punto 4 —
   `m006entregadosinpago`
+- ✅ `ENTREGADO_SIN_PAGO` como estado propio, con la restricción del punto 4 —
+  `m006entregadosinpago`
 - ⏳ Que el recibo de caja entre a Siesa — **no es código**
 
 Y cuatro diseños **retirados**, que no hay que implementar por inercia: diferir
