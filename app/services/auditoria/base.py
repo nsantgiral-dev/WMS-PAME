@@ -121,7 +121,9 @@ def _cargar():
     global _cargado
     if _cargado:
         return
-    from app.services.auditoria import venta  # noqa: F401
+    from app.services.auditoria import (  # noqa: F401
+        conteo, devoluciones, recepcion, traslados, venta,
+    )
     _cargado = True
 
 

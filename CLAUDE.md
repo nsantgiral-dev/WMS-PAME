@@ -1147,6 +1147,18 @@ en el catálogo local — **sin contador y sin alerta**, y en
 empacador. El sync de barras, el de empaques, temporada e inventario **todos
 cuentan sus `sin_producto`**; el de pedidos es el único que no. Es `VTA-01`.
 
+### Cobertura — 5 flujos, 33 invariantes
+
+| Flujo | Invariantes | El riesgo propio de ese flujo |
+|---|---|---|
+| `venta` | 11 | Sale mercancía sin documento fiscal |
+| `traslados` | 7 | **El limbo**: el STS disparó y el ETS no. El stock no falta ni sobra — está en la bodega puente, donde nadie pregunta. Y nadie reclama: una tienda que no recibió un traslado que no pidió, no llama |
+| `conteo` | 6 | **Nadie reclama un ajuste.** Entra al ERP, cuadra el papel contra la realidad equivocada, y reaparece en el siguiente conteo físico meses después |
+| `devoluciones` | 5 | Mercancía y dinero vuelven **por caminos distintos**; si uno ocurre y el otro no, no se ve desde ninguno de los dos |
+| `recepcion` | 4 | El espejo de venta: entra mercancía que el ERP no registró |
+
+**Lo que falta está escrito**, no olvidado: `tests/flujo/test_cobertura_invariantes.py::SIN_CUBRIR` lista los flujos sin invariantes con el motivo. Un auditor que cubre uno de seis devuelve `0 hallazgos` para lo que no mira — el denominador tiene que ser visible.
+
 ### Cómo agregar uno
 
 Decorar con `@invariante(...)` en el módulo del flujo. El registro es por

@@ -45,7 +45,7 @@ def _sufijo():
     return uuid.uuid4().hex[:6]
 
 
-def sembrar_catalogo(db, almacen, n=2, con_stock=50):
+def sembrar_catalogo(db, almacen, n=2, con_stock=50, unidad_negocio='001'):
     """Productos con stock en una ubicación de PICKING.
 
     Devuelve `(productos, ubicacion)`. El stock es lo que hace que
@@ -65,8 +65,12 @@ def sembrar_catalogo(db, almacen, n=2, con_stock=50):
     productos = []
     for i in range(n):
         s = _sufijo()
+        # `unidad_negocio_id`: los traslados la exigen por producto — Siesa NO
+        # la hereda de la bodega. Sin ella, `aprobar_solicitud` aborta. El arnés
+        # chocó con ese guard la primera vez, que es exactamente lo que se
+        # espera de un arnés que usa el camino real.
         p = Producto(codigo=f'FLU{i}{s}', nombre=f'PRODUCTO DE FLUJO {i}',
-                     codigo_siesa=f'SIE{i}{s}')
+                     codigo_siesa=f'SIE{i}{s}', unidad_negocio_id=unidad_negocio)
         db.session.add(p)
         db.session.flush()
         db.session.add(UbicacionProducto(ubicacion_id=ub.id, producto_id=p.id,
@@ -191,3 +195,35 @@ def flujo_completo(db, almacen, usuario_id, conductor_id,
     hacer_ruta(db, flujo, conductor_id)
     hacer_entrega(db, flujo, **entrega)
     return flujo
+
+
+# ── Traslados ────────────────────────────────────────────────────────────
+
+def flujo_traslado(db, almacen, solicitante_id, aprobador_id, operario_id,
+                   cantidad=10, aprobar=8, recibir=None, modo='EN_TRANSITO'):
+    """Solicitud → aprobación → picking → despacho (STS) → recepción (ETS).
+
+    Igual que el de venta: cada etapa se avanza con el servicio real. Y por
+    defecto **recorta en cada paso** —10 solicitadas, 8 aprobadas, y lo enviado
+    es lo que el picking encuentre— porque el recorte es el caso normal, no la
+    excepción.
+    """
+    from app.services.traslado_service import TrasladoService
+
+    productos, _ = sembrar_catalogo(db, almacen, n=2)
+    items = [{'producto_id': p.id, 'cantidad_solicitada': cantidad} for p in productos]
+
+    sol = TrasladoService.crear_solicitud(
+        solicitante_id=solicitante_id, bodega_destino='PC1',
+        nombre_punto_venta='PITALITO CENTRO', items=items,
+        bodega_origen='NB1')
+    TrasladoService.enviar_solicitud(sol.id)
+
+    from app.models.traslado import ItemSolicitudTraslado
+    aprobados = [{'id': it.id, 'cantidad_aprobada': aprobar}
+                 for it in ItemSolicitudTraslado.query.filter_by(solicitud_id=sol.id).all()]
+    TrasladoService.aprobar_solicitud(sol.id, aprobador_id,
+                                      items_aprobados=aprobados,
+                                      operario_id=operario_id)
+    db.session.commit()
+    return sol
