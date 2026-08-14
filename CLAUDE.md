@@ -2,8 +2,9 @@
 
 ## Stack
 
-- **Backend**: Flask + SQLAlchemy + PostgreSQL + Gunicorn (Railway)
-- **Frontend**: PWA vanilla JS modularizada (app.js + 13 módulos)
+- **Backend**: Flask + SQLAlchemy + PostgreSQL + Gunicorn (Railway). **Dos
+  paquetes, no uno**: `app/` (127 archivos) y `flota/` (29) — ver abajo
+- **Frontend**: PWA vanilla JS modularizada (app.js + 16 módulos)
 - **Integración ERP**: Connekta V2/V3 → Siesa Enterprise
 - **DLQ**: SiesaJob con reintentos + backoff exponencial (5→15→45 min, max 3)
 - **Tests**: pytest (612 passing), CI en Railway buildCommand
@@ -25,9 +26,41 @@ tienda.js       (1,160)         Módulo tienda
 etiquetas.js      (110)         Impresión de etiquetas
 vigia.js          (513)         Panel CUSUM, alarmas, carga de series
 compras_ia.js     (394)         Acuerdos marco, Armador, deriva, inteligencia inventario
+flota.js        (1,839)         Custodia de vehículos, ficha, documentos, avisos
+kardex.js         (446)         Motor kardex
+temporada.js      (365)         Temporada escolar
 ```
 
-Orden de carga: app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
+Orden de carga: app → picking → packing → recepcion → rutas → traslados → conteo → reposicion → liquidacion → layout → tienda → etiquetas → vigia → compras_ia → kardex → temporada → flota. Todas las funciones son globales. Cross-module calls son runtime (onclick), nunca parse-time.
+
+La lista autoritativa del orden real es el `SHELL` de `app/static/pwa/sw.js` —
+es la que el service worker cachea. Si esta tabla y ese arreglo divergen, el
+arreglo gana.
+
+### ⚠️ `flota/` vive FUERA de `app/`
+
+Paquete propio en la raíz, con arquitectura hexagonal (`dominio/`,
+`adaptadores/`, `api/`, `puertos.py`) — distinta del resto del repo, que es
+`routes/` + `services/` + `models/`.
+
+**Un `grep` acotado a `app/` no lo ve.** Sus 17 endpoints están registrados
+(`/flota/*`) y funcionan; buscarlos en `app/routes/` da cero resultados y la
+conclusión natural —«esto es UI muerta»— es falsa. Para verificar si un
+endpoint existe, la fuente es el `url_map`:
+
+```bash
+venv/bin/python -c "
+from app import create_app
+print([str(r) for r in create_app().url_map.iter_rules() if 'flota' in str(r)])"
+```
+
+| Variable | Qué hace |
+|----------|----------|
+| `FLOTA_AVISOS` | Enciende el barrido de vencimientos. **Nace apagado** — un cron que escribe no se enciende solo |
+| `FLOTA_AVISOS_REALES` | Segunda decisión explícita: sin ella el barrido registra pero no manda |
+| `FLOTA_AVISO_TELEFONOS` | Destinatarios |
+| `FLOTA_FOTOS_DIR` | Almacén de fotos de custodia |
+| `GUPSHUP_API_KEY` · `GUPSHUP_SOURCE` · `GUPSHUP_APP_NAME` · `GUPSHUP_TEMPLATE_IDS` | Canal WhatsApp. **`GUPSHUP_SOURCE` es la línea de mensajería cuya habilitación a producción depende de un tercero** — la misma que BK-OPS-01 §4.3 lista bajo Gestor de Cartera. Un número, dos consumidores |
 
 ### Dispatchers fuera de su módulo
 
