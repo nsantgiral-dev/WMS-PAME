@@ -43,6 +43,28 @@ class ConnektaPaginacionError(Exception):
     """
 
 
+class CompromisosNoDisponibles(Exception):
+    """No se pudo preguntar por los compromisos del pedido.
+
+    **No es lo mismo que «no hay compromisos».** Y esa confusión costaba lo
+    peor que puede pasar en este flujo:
+
+    `get_compromisos_pedido` devolvía `[]` ante cualquier excepción —red caída,
+    timeout, 429, Siesa fuera— y `DespachoParialService` lee la lista vacía
+    como «la automatización de Siesa ya procesó el pedido completo». Con eso
+    marcaba la tarea `DESPACHADO` y `siesa_triggered=True` **sin remisión y sin
+    factura**.
+
+    Mercancía saliendo del centro de distribución sin respaldo fiscal, en verde
+    en el tablero. Y la guarda `if tarea.siesa_triggered` bloqueaba el
+    reintento **para siempre**.
+
+    Es la misma regla 0 de `ConnektaPaginacionError`, y el mismo criterio que
+    `get_factura_desde_pedido` ya aplicaba en este archivo: ante dato ausente,
+    declararlo, no rellenarlo con silencio.
+    """
+
+
 class ConnektaCircuitOpenError(Exception):
     """Raised when circuit breaker is OPEN — Siesa no disponible.
     DLQ handlers catch this to NOT waste retries."""
@@ -1247,8 +1269,14 @@ class ConnektaGateway:
             rows = [r for r in rows if 'alerta' not in r]
             return [r for r in rows if float(r.get('f405_cant_por_remisionar_base') or 0) > 0]
         except Exception as e:
-            logger.warning('[CONNEKTA] get_compromisos_pedido falló: %s', e)
-            return []
+            # NO se devuelve `[]`: el llamador lo leería como «el pedido ya se
+            # procesó» y marcaría la tarea DESPACHADO sin remisión ni factura.
+            logger.error('[CONNEKTA] get_compromisos_pedido falló: %s', e)
+            raise CompromisosNoDisponibles(
+                f'No se pudo consultar los compromisos de {tipo_docto}-{consec_docto}: {e}. '
+                f'No se marca el despacho: una lista vacía por fallo de red es '
+                f'indistinguible de un pedido ya procesado.'
+            ) from e
 
     def get_remision_desde_pedido(self, tipo_docto_pedido: str, consec_docto_pedido) -> dict | None:
         """
@@ -1389,6 +1417,10 @@ class ConnektaGateway:
             }
             logger.info('[CONNEKTA] get_pedido_rowid_map %s%s: %s', tipo_docto, consec_docto, result)
             return result
+        except CompromisosNoDisponibles:
+            # Se deja pasar: taparla acá devolvería un mapa vacío, que es la
+            # misma mentira un nivel más arriba.
+            raise
         except Exception as e:
             logger.warning('[CONNEKTA] get_pedido_rowid_map falló: %s', e)
             return {}

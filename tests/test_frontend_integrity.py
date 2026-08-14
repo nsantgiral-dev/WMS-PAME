@@ -462,6 +462,48 @@ _EXENTOS_POR_REGLA = (
 # necesita un tab. La pregunta correcta es QUÉ DECISIÓN DEBERÍA ESTAR INFORMANDO.
 # Un número que el usuario no puede auditar no se obedece: se ignora.
 DEUDA_SIN_UI = {
+    # ── Destapadas el 2026-08-13 al cambiar presencia por adyacencia ──────
+    #
+    # Las once son **rutas parametrizadas que mueven inventario o dinero**, y
+    # ninguna figuraba acá: la comprobación vieja las daba por usadas porque sus
+    # trozos (`/api/picking/` y `/confirmar`) existen sueltos en el frontend,
+    # cada uno por una ruta distinta.
+    #
+    # No se conectan: la operación ya pasa por otro lado. Quedan declaradas —
+    # que es lo que este archivo existe para lograr— y **son candidatas a
+    # borrar**, no a conectar: cada una es una segunda puerta a una operación
+    # crítica, sin la idempotencia ni las guardas de la vía viva.
+    '/api/picking/<int:id>/confirmar':
+        'SEGUNDA PUERTA al descuento de inventario. La vía viva es '
+        'POST /api/mobile/confirmar (picking.js:489). BORRAR, no conectar.',
+    '/api/picking/<int:id>/iniciar':
+        'SEGUNDA PUERTA. La vía viva es /api/mobile/tarea-actual, que asigna e '
+        'inicia en un solo gesto. BORRAR.',
+    '/api/picking/<int:id>/reportar-problema':
+        'DUPLICADO de /api/mobile/reportar-problema, que es el que llama la PWA.',
+    '/api/packing/<int:id>/escanear':
+        'SEGUNDA PUERTA a los datos que van al ERP. La vía viva es '
+        '/api/mobile/escanear. Los aciertos de «escanear» en el JS son texto '
+        'de pantalla, no llamadas — verificado a mano.',
+    '/api/conteo/<int:id>/registrar':
+        'ORIGEN DEL AJUSTE DE INVENTARIO sin consumidor. El conteo se registra '
+        'desde el flujo móvil. Es la más delicada de las once.',
+    '/api/conteo/<int:id>/tarea':
+        'Detalle de una tarea de conteo. La pantalla trae el detalle en el '
+        'listado.',
+    '/api/despacho_parcial/<int:packing_id>/despachar':
+        'SEGUNDA PUERTA al cierre de packing (244328→142945→142943). El cierre '
+        'real pasa por PackingService.cerrar_packing. BORRAR.',
+    '/api/devoluciones/<int:devolucion_id>/cancelar':
+        'Cancelación de devolución. Sin gesto en la pantalla de devoluciones.',
+    '/api/recepcion/<int:id>/cancelar':
+        'Cancelación de recepción. Sin gesto en la pantalla.',
+    '/api/recepcion/<int:id>/iniciar':
+        'La recepción se inicia al abrir la OC, no con una llamada aparte.',
+    '/api/traslados/<int:id>/cancelar':
+        'Cancelación de traslado. El panel cancela desde el detalle, que usa '
+        'otra ruta.',
+
     '/api/auth/me':
         'DUPLICADO: el login ya devuelve el usuario completo. Pedirlo otra vez es un viaje de red por un dato que el cliente tiene. Candidato a BORRAR, no a conectar.',
     '/api/compras/armador/contenedores':
@@ -564,16 +606,46 @@ TOLERADOS = set(DEUDA_SIN_UI) | BASELINE_HEREDADO
 class TestEndpointsSinConsumidor:
     """Nivel 4 — ningún endpoint nuevo puede nacer sin forma de usarse."""
 
+    #: Cuánto texto puede haber entre el prefijo y el sufijo de una URL
+    #: construida por concatenación. `API + \`/api/picking/${id}/confirmar\``
+    #: mete unos pocos caracteres; 120 deja margen de sobra sin volver a
+    #: aceptar dos trozos que viven en archivos distintos.
+    _VENTANA_ADYACENCIA = 120
+
     @staticmethod
     def _segmentos_literales(ruta):
-        """Trozos fijos de la ruta, ignorando <int:id> y demás.
-
-        El JS arma las URLs por concatenación ('/api/x/' + id + '/cerrar'), así
-        que buscar la ruta completa daría falsos positivos. Exigimos que TODOS
-        los trozos literales aparezcan: el prefijo y también lo que va después
-        del parámetro.
-        """
+        """Trozos fijos de la ruta, ignorando <int:id> y demás."""
         return [s for s in re.split(r'<[^>]+>', ruta) if s.strip('/')]
+
+    @classmethod
+    def _esta_construida(cls, ruta, blob):
+        """¿El frontend arma ESTA url, o solo contiene sus pedazos sueltos?
+
+        Antes se exigía **presencia**: que cada trozo apareciera en algún lado
+        del blob. Para `/api/picking/<int:id>/confirmar` los trozos son
+        `/api/picking/` y `/confirmar` — **los dos existen, en archivos
+        distintos y por rutas distintas** (`/api/picking/${id}/reabrir` aporta
+        el primero, cualquier otro endpoint el segundo). La ruta se declaraba
+        usada sin que nadie la llamara.
+
+        Y la clase que el agujero tapaba es exactamente la parametrizada, que
+        es la que mueve inventario: confirmar picking, escanear en packing,
+        registrar un conteo, despachar un parcial. Por eso ninguna figuraba en
+        la deuda declarada.
+
+        Ahora se exige **adyacencia**: el sufijo tiene que aparecer cerca del
+        prefijo, que es lo que produce una concatenación real.
+        """
+        segs = cls._segmentos_literales(ruta)
+        if not segs:
+            return True
+        if len(segs) == 1:
+            return segs[0].rstrip('/') in blob
+        pre, post = segs[0].rstrip('/'), segs[1].rstrip('/')
+        for m in re.finditer(re.escape(pre), blob):
+            if post in blob[m.end():m.end() + cls._VENTANA_ADYACENCIA]:
+                return True
+        return False
 
     def _huerfanos(self, app):
         blob = _all_code() + _read('index.html') if os.path.exists(
@@ -585,7 +657,7 @@ class TestEndpointsSinConsumidor:
                 continue
             if any(x in ruta for x in _EXENTOS_POR_REGLA):
                 continue
-            if all(s.rstrip('/') in blob for s in self._segmentos_literales(ruta)):
+            if self._esta_construida(ruta, blob):
                 continue
             huerfanos.add(ruta)
         return huerfanos

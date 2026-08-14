@@ -899,6 +899,58 @@ por un camino que no pase por `confirmar_parada`.
 
 ---
 
+## Despacho marcado sin documento fiscal — `[]` con tres significados (2026-08-13)
+
+`get_compromisos_pedido` devolvía `[]` en tres situaciones distintas:
+
+```
+modo simulación          → []
+parámetros inválidos     → []
+CUALQUIER excepción      → []      ← red caída, timeout, 429, Siesa fuera
+```
+
+Y `DespachoParialService` lee la lista vacía como **«la automatización de Siesa
+ya procesó el pedido completo»**: marca la tarea `DESPACHADO` y
+`siesa_triggered = True`. **Sin remisión y sin factura.**
+
+Mercancía saliendo del CD sin respaldo fiscal, en verde en el tablero. Y la
+guarda `if tarea.siesa_triggered` bloqueaba el reintento **para siempre**.
+
+Se disparaba con cualquier caída del ERP durante un cierre de empaque.
+
+Ahora levanta `CompromisosNoDisponibles`. Es la misma regla que ya tenía
+`ConnektaPaginacionError` en el mismo archivo, y el mismo criterio que
+`get_factura_desde_pedido` ya aplicaba: **ante dato ausente, declararlo, no
+rellenarlo con silencio.** Esta consulta era la inconsistente, y la que más
+costaba.
+
+Trinquete: `tests/test_compromisos_vacios.py`.
+
+---
+
+## El trinquete de rutas huérfanas medía presencia, no adyacencia (2026-08-13)
+
+```python
+if all(s.rstrip('/') in blob for s in self._segmentos_literales(ruta)):
+    continue            # ← la ruta se eximía, en silencio
+```
+
+Para `/api/picking/<int:id>/confirmar` los trozos son `/api/picking/` y
+`/confirmar`. **Los dos existen en el frontend, por separado** — el primero lo
+aporta `/api/picking/${id}/reabrir`, el segundo cualquier otro endpoint. La ruta
+se declaraba usada sin que nadie la llamara.
+
+**La clase que el agujero tapaba es exactamente la parametrizada, que es la que
+mueve inventario.** Por eso ninguna figuraba en la deuda declarada.
+
+Al exigir adyacencia aparecieron **once**, todas de esa clase: confirmar
+picking, escanear en packing, registrar un conteo, despachar un parcial. Quedan
+declaradas en `DEUDA_SIN_UI` con su motivo, y **son candidatas a borrar, no a
+conectar**: cada una es una segunda puerta a una operación crítica, sin la
+idempotencia de la vía viva.
+
+---
+
 ## Las tres banderas de idempotencia financiera (2026-08-13)
 
 Tres auditorías independientes convergieron sobre el mismo par de líneas:
@@ -1203,7 +1255,7 @@ venv/bin/python -m pytest tests/test_siesa_dlq.py tests/test_liquidacion.py test
 |------|---------|-------|------------|
 | 1 | test_siesa_formatos.py | 27 | `_fmt_valor` 21 chars, timezone, CO→Caja, forma_pago→medio |
 | 2 | test_siesa_contracts.py | 25 | Valores y formatos fijos (F_CIA=1, clase docto, consecutivo auto). **NO compara contra el DOCX** pese al nombre — sus listas se copiaron del código y usan `in`, que no detecta un campo ausente |
-| 6 | test_payload_vs_docx.py | 27 | **Conformidad real con el spec**: lee el `.docx` y exige mismos campos y mismo orden (142888, 142882, 142946, 251126, 142943). Ver Regla 1 |
+| 6 | test_payload_vs_docx.py | 27 | **Conformidad real con el spec**: lee el `.docx` y exige los mismos campos (142888, 142882, 142946, 251126, 142943). Ver Regla 1. ⚠️ También compara el orden, pero **que el orden importe NO está probado** — ver la nota del encabezado del archivo |
 | 3 | test_siesa_dlq.py | 6 | Pre-flag, revert en fallo, secuencialidad NC→RC→DC |
 | 4 | test_liquidacion.py | 20 | Flujos de recaudo, retenciones PUC |
 | 5 | test_siesa_guards.py | 7 | Guards fail-fast (bodega, codigo_siesa, motivo, consec) |

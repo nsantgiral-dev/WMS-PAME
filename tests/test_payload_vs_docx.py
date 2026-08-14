@@ -29,9 +29,29 @@ intencional): un campo mal nombrado u omitido desalinea el registro entero.
 
 ## Qué mide este archivo
 
-Que las secciones del payload tengan **los mismos campos, en el mismo orden**
-que la plantilla JSON del DOCX. No los valores — esos dependen del caso. La
-estructura, que es lo que el plano posicional exige y lo que se rompió.
+Que las secciones del payload tengan **los mismos campos** que la plantilla
+JSON del DOCX, y en el mismo orden. No los valores — esos dependen del caso.
+
+## ⚠️ Una premisa que este archivo daba por probada y NO lo está
+
+Se repitió toda la semana —y está escrita en varios sitios— que «en un plano
+posicional el orden de las claves ES la posición». **Eso no está demostrado.**
+
+Lo que el episodio del 142888 demuestra es que **omitir** campos acorta el
+registro y desalinea lo que sigue. No demuestra que el orden de las claves del
+JSON fije el desplazamiento: Connekta podría mapear por nombre y armar el plano
+en el orden que él sabe.
+
+Y hay **contraevidencia en producción**: dos conectores mandan sus secciones en
+un orden distinto al de su spec —uno de ellos con seis campos extra
+intercalados— y los dos corrieron en vivo con éxito.
+
+**Consecuencia práctica.** La comprobación de campos faltantes es sólida y hay
+que conservarla: el defecto del 142888 fue real y costó que ningún recibo de
+caja llegara nunca. La de ORDEN se conserva por precaución —cuesta poco y
+alinea con el spec— pero **no debe usarse para justificar trabajo de
+reordenamiento** hasta que el proveedor confirme si el mapeo es por nombre o
+por posición. Es una pregunta de una línea.
 
 Se lee el `.docx` en cada corrida en vez de copiar la lista acá: una copia
 diverge del original, y la divergencia entre dos copias de la misma verdad ya
@@ -177,9 +197,9 @@ class TestReciboCaja142888:
     def test_el_encabezado_respeta_el_orden_del_spec(self, spec, fuente):
         real = _campos_del_dict(fuente, 'header')
         assert real == spec['RCyotrosingresos'], (
-            '\nEl orden no coincide con el DOCX. En un plano posicional el '
-            'orden ES la posición: un campo correcto en el offset equivocado '
-            'escribe su valor sobre otro campo.')
+            '\nEl orden no coincide con el DOCX. Se mantiene el orden del spec '
+            'por precaución, NO porque esté probado que importe — ver la nota '
+            'del encabezado de este archivo.')
 
     def test_la_seccion_caja_tiene_los_20_campos(self, spec, fuente):
         esperado = spec['Caja']

@@ -79,8 +79,17 @@ class DespachoParialService:
         f430_rowid = cabecera.get('f430_rowid')
         compromisos_siesa = connekta.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
 
-        # Idempotencia: compromisos vacíos = automation Siesa ya procesó el pedido completo.
-        # Se marca DESPACHADO directamente sin volver a llamar 244328.
+        # Idempotencia: compromisos vacíos = automation Siesa ya procesó el pedido
+        # completo. Se marca DESPACHADO directamente sin volver a llamar 244328.
+        #
+        # Esto **solo es válido porque la consulta ahora distingue «no hay» de
+        # «no pude preguntar»**: hasta el 2026-08-13 `get_compromisos_pedido`
+        # devolvía `[]` ante cualquier fallo de red, y este bloque marcaba la
+        # tarea DESPACHADO sin remisión ni factura — con la guarda
+        # `siesa_triggered` bloqueando el reintento para siempre.
+        #
+        # Si vuelve a devolver `[]` ante un error, esta línea vuelve a ser
+        # mercancía saliendo sin respaldo fiscal, en verde.
         if not compromisos_siesa:
             logger.info(
                 '[DESPACHO_PARCIAL] compromisos vacíos — automation Siesa ya procesó tarea=%s pedido=%s',
