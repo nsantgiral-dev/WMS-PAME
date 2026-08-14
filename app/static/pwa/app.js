@@ -458,7 +458,7 @@ async function cargarAdmin(desdeTimer = false) {
   else if (TAB === 'tab-operarios') await cargarOperarios();
   else if (TAB === 'tab-usuarios') await cargarUsuarios();
   else if (TAB === 'tab-stock') await cargarStock();
-  else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); await syncEstadosCargar(); await mapeoUnidadesCargar(); }
+  else if (TAB === 'tab-connekta') { await cargarConnekta(); await siesaRecuperacionCargar(); await syncEstadosCargar(); await mapeoUnidadesCargar(); await cargarAuditoriaFlujo(); }
   else if (TAB === 'tab-muelle') await cargarMuelle();
   else if (TAB === 'tab-rutas') await cargarRutas();
   else if (TAB === 'tab-inventario') await cargarInventario();
@@ -3033,4 +3033,64 @@ async function syncEstadosCargar() {
   // preguntar: un poll permanente es lo que infla la factura de red.
   clearInterval(_SYNC_TIMER);
   if (enCurso) _SYNC_TIMER = setInterval(syncEstadosCargar, 5000);
+}
+
+
+/** Auditoría de invariantes de frontera — `/api/auditoria/flujo`.
+ *
+ * Los mismos invariantes que corren en CI sobre un pedido sintético, acá
+ * corridos sobre los datos reales. Si algo aparece acá y no allá, es un
+ * problema de datos y no de código.
+ *
+ * Se pinta el CATÁLOGO completo, no solo lo roto: «0 hallazgos» y «no corrió
+ * nada» se leen igual, y esa confusión es la que hace inútil un tablero.
+ */
+async function cargarAuditoriaFlujo() {
+  const el = document.getElementById('auditoria-flujo');
+  if (!el) return;
+  try {
+    const d = await get('/api/auditoria/flujo');
+    const sev = { BLOQUEA: '#dc2626', AVISA: '#f59e0b', OBSERVA: '#6b7280' };
+
+    const filas = (d.resultados || []).map(r => {
+      const roto = r.total > 0 || r.error;
+      const color = roto ? (sev[r.severidad] || '#6b7280') : '#16a34a';
+      const detalle = r.error
+        ? `<div style="color:#f87171;font-size:11px;">no se pudo evaluar: ${r.error}</div>`
+        : (r.hallazgos || []).slice(0, 5).map(h =>
+            `<div style="font-size:11px;color:var(--tx3);padding-left:8px;">
+               · <b>${h.referencia}</b> — ${h.detalle}</div>`).join('');
+      return `
+        <div style="padding:8px 0;border-bottom:1px solid var(--brd);">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${color};flex:none;"></span>
+            <b style="font-size:12px;">${r.codigo}</b>
+            <span style="font-size:11px;color:var(--tx3);">${r.frontera}</span>
+            <span style="margin-left:auto;font-size:11px;color:${color};font-weight:700;">
+              ${r.error ? 'ERROR' : (r.total || 0)}</span>
+          </div>
+          ${roto ? `<div style="font-size:11px;color:var(--tx2);margin:4px 0 2px 16px;">${r.consecuencia}</div>` : ''}
+          ${detalle}
+          ${r.truncado ? '<div style="font-size:10px;color:var(--tx3);padding-left:8px;">(mostrando los primeros 100)</div>' : ''}
+        </div>`;
+    }).join('');
+
+    const bloq = d.bloqueantes || 0;
+    el.innerHTML = `
+      <div class="tabla-card">
+        <div class="tabla-titulo">Auditoría de flujo
+          <span style="font-size:11px;font-weight:400;color:var(--tx3);">
+            · ${d.invariantes_corridos} invariantes · ${bloq} hallazgo(s) bloqueante(s)</span>
+        </div>
+        <div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${d.nota || ''}</div>
+        ${filas}
+        <button onclick="cargarAuditoriaFlujo()"
+          style="margin-top:10px;padding:8px 14px;border:none;border-radius:8px;cursor:pointer;background:var(--brd);color:var(--tx);font-size:12px;font-weight:700;">
+          Volver a auditar
+        </button>
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<div class="tabla-card" style="color:#f87171;">
+      No se pudo correr la auditoría: ${e.message || e}</div>`;
+  }
 }

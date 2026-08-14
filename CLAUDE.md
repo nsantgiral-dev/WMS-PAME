@@ -899,6 +899,65 @@ por un camino que no pase por `confirmar_parada`.
 
 ---
 
+## Auditoría de invariantes de frontera (2026-08-13)
+
+`app/services/auditoria/` · `tests/flujo/` · `GET /api/auditoria/flujo`
+
+### El hueco que tapa
+
+La suite tiene ~1900 tests y **ninguno puede fallar por un defecto de
+frontera**: cada archivo arma su propia `TareaPacking(...)` desde cero, así que
+verifica cada etapa con datos que él mismo fabricó coherentes. La coherencia
+*entre* etapas no se ejercita nunca.
+
+No es un fallo de los tests — es su forma. Un unitario que construyera todo el
+flujo dejaría de ser unitario.
+
+### Un invariante, dos fuentes de datos
+
+```
+tests/flujo/     → un pedido sintético recorrido con los SERVICIOS REALES
+/api/auditoria   → los datos que ya están en la base
+```
+
+La regla se escribe **una vez**. Escribirla dos veces sería la divergencia que
+la Regla 0 prohíbe: el test pasaría, la auditoría diría otra cosa, y nadie
+sabría cuál creer.
+
+### El arnés no inserta filas
+
+Cada etapa se avanza llamando al servicio que la operación llama
+(`confirmar_picking`, `crear_desde_picking`, `confirmar_parada`). Un arnés que
+escribe `TareaPacking(...)` directo solo prueba que la base acepta esas filas.
+
+**El camino por defecto hace picking parcial** (recoge 7 de 10). Operaciones
+confirmó que es el caso real; un arnés que solo ejerce el caso feliz verifica
+un flujo que nadie tiene.
+
+### Severidad
+
+`BLOQUEA` el dato ya está mal · `AVISA` se degrada solo · `OBSERVA` hay que
+poder contarlo. La distinción existe para que el canal siga siendo legible.
+
+### Lo que encontró al escribirlo
+
+`pedidos_sync_service.py:145` deja `producto_id = None` cuando el ítem no está
+en el catálogo local — **sin contador y sin alerta**, y en
+`packing_service.py:188` eso se convierte en «Producto None» en la pantalla del
+empacador. El sync de barras, el de empaques, temporada e inventario **todos
+cuentan sus `sin_producto`**; el de pedidos es el único que no. Es `VTA-01`.
+
+### Cómo agregar uno
+
+Decorar con `@invariante(...)` en el módulo del flujo. El registro es por
+decorador y no por lista al final: una lista que hay que acordarse de
+actualizar es un invariante que algún día no corre y nadie nota.
+
+**Todo invariante nuevo necesita su test de detector ciego** — romper el flujo
+a propósito y exigir que lo vea. Sin eso `0 hallazgos` no significa nada.
+
+---
+
 ## Pendientes del WMS
 
 `docs/pendientes_wms.md` — la lista viva, contrastada contra BK-OPS-01 v2.1
