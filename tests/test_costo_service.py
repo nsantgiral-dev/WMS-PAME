@@ -103,7 +103,11 @@ class TestSesgoConservador:
         pr = Proveedor(codigo='PRV2', nombre='P2')
         db.session.add_all([p, pr])
         db.session.flush()
-        hoy = date.today()
+        # `hoy_operativo()`: `resolver_costos` filtra con `dia_operativo()`, y
+        # con un solo día de margen en `vigencia_desde` este test pasaba en CI
+        # por casualidad — el desfase UTC/Bogotá lo consumía entero.
+        from tests.conftest import hoy_operativo
+        hoy = hoy_operativo()
         db.session.add(AcuerdoMarco(
             producto_id=p.id, proveedor_id=pr.id, precio_unitario=5000,
             vigencia_desde=hoy - timedelta(days=1), vigencia_hasta=hoy + timedelta(days=30)))

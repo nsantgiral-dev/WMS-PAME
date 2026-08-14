@@ -321,3 +321,24 @@ def jwt_token_abastecedor(app, usuario_abastecedor):
     from flask_jwt_extended import create_access_token
     with app.app_context():
         return create_access_token(identity=str(usuario_abastecedor.id))
+
+
+def hoy_operativo():
+    """El día de HOY como lo ve el código, no como lo ve el contenedor.
+
+    Un test que arma fechas con `date.today()` y las compara contra código que
+    usa `dia_operativo()` **funciona en Bogotá y falla en CI**, porque el
+    contenedor corre en UTC y entre las 7 p.m. y la medianoche de Colombia ya
+    es el día siguiente allá.
+
+    Rompió el build del 2026-08-13 a las 20:41: `test_desbloqueo_con_vigencia_expira`
+    ponía la vigencia en `date.today() - 1` (= el 13 en UTC-del-14) y el modelo
+    la comparaba contra `dia_operativo()` (= el 13). «Ayer» y «hoy» eran el
+    mismo día, el desbloqueo seguía vigente y el test fallaba.
+
+    Son **cinco horas al día** en que la suite miente, y de un solo lado: pasa
+    local, falla en el deploy. Regla 5 — lo que alguien LEE como día no sale de
+    `utcnow()`, y eso vale también para los tests.
+    """
+    from app.utils.fecha import dia_operativo
+    return dia_operativo()

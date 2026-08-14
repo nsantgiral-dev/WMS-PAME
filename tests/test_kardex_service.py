@@ -317,7 +317,9 @@ class TestBloqueoRecompra:
     def test_desbloqueo_con_vigencia_expira(self, app, db, almacen, producto):
         """Desbloqueo vencido = bloqueado de nuevo."""
         from app.models.producto_bloqueado import ProductoBloqueado
-        from datetime import date as _d, timedelta as _td
+        from datetime import timedelta as _td
+
+        from tests.conftest import hoy_operativo
 
         bloqueo = ProductoBloqueado(
             producto_id=producto.id, motivo='TEST',
@@ -325,7 +327,11 @@ class TestBloqueoRecompra:
             desbloqueado_por_id=1,
             motivo_desbloqueo='urgente',
             cantidad_autorizada=50,
-            vigencia_desbloqueo=_d.today() - _td(days=1),  # ayer = vencido
+            # `hoy_operativo()` y NO `date.today()`: el modelo compara contra
+            # `dia_operativo()`, y en el contenedor de CI (UTC) esos dos no son
+            # el mismo día entre las 7 p.m. y la medianoche de Bogotá. Este
+            # test rompió el build del 2026-08-13 a las 20:41 por eso exacto.
+            vigencia_desbloqueo=hoy_operativo() - _td(days=1),  # ayer = vencido
         )
         db.session.add(bloqueo)
         db.session.commit()

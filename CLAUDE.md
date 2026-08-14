@@ -1004,6 +1004,16 @@ if resultado.get('modo_ensayo'):
 ## Testing
 
 ```bash
+# ⚠️ ANTES DE PUSHEAR ALGO CON FECHAS — el reloj del CI no es el tuyo
+#
+# Railway corre en UTC. Entre las 7 p.m. y la medianoche de Bogotá, allá ya es
+# el día siguiente: un test que arma fechas con `date.today()` y las compara
+# contra código que usa `dia_operativo()` **pasa local y rompe el deploy**.
+# Cinco horas al día, de un solo lado, y reintentar «lo arregla».
+#
+# Rompió el build 52c0e4de (2026-08-13 20:41). Ver `tests/conftest.py::hoy_operativo`.
+TZ=UTC venv/bin/python -m pytest tests/ -q -m "not postgres"
+
 # Suite completa
 venv/bin/python -m pytest tests/ -v --tb=short
 
