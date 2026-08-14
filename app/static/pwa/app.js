@@ -3048,6 +3048,14 @@ async function syncEstadosCargar() {
 async function cargarAuditoriaFlujo() {
   const el = document.getElementById('auditoria-flujo');
   if (!el) return;
+
+  // Mientras corre, decirlo. La auditoría tarda segundos y repinta un
+  // resultado idéntico: sin esto, un botón que funciona **no se distingue de
+  // uno muerto**. Es el mismo problema de «0 hallazgos vs no corrió», en la
+  // pantalla en vez de en el reporte.
+  const btn = el.querySelector('button');
+  if (btn) { btn.disabled = true; btn.textContent = 'Auditando…'; }
+
   try {
     const d = await get('/api/auditoria/flujo');
     const sev = { BLOQUEA: '#dc2626', AVISA: '#f59e0b', OBSERVA: '#6b7280' };
@@ -3076,11 +3084,15 @@ async function cargarAuditoriaFlujo() {
     }).join('');
 
     const bloq = d.bloqueantes || 0;
+    // La hora de ESTA corrida. Es lo único que hace visible que el botón hizo
+    // algo cuando el resultado no cambió.
+    const hora = new Date().toLocaleTimeString('es-CO');
     el.innerHTML = `
       <div class="tabla-card">
         <div class="tabla-titulo">Auditoría de flujo
           <span style="font-size:11px;font-weight:400;color:var(--tx3);">
-            · ${d.invariantes_corridos} invariantes · ${bloq} hallazgo(s) bloqueante(s)</span>
+            · ${d.invariantes_corridos} invariantes · ${bloq} hallazgo(s) bloqueante(s)
+            · <span title="hora de esta corrida">${hora}</span></span>
         </div>
         <div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${d.nota || ''}</div>
         ${filas}
@@ -3091,6 +3103,9 @@ async function cargarAuditoriaFlujo() {
       </div>`;
   } catch (e) {
     el.innerHTML = `<div class="tabla-card" style="color:#f87171;">
-      No se pudo correr la auditoría: ${e.message || e}</div>`;
+      No se pudo correr la auditoría: ${e.message || e}
+      <button onclick="cargarAuditoriaFlujo()"
+        style="margin-left:10px;padding:6px 12px;border:none;border-radius:8px;cursor:pointer;">
+        Reintentar</button></div>`;
   }
 }

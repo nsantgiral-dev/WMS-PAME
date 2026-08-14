@@ -114,3 +114,75 @@ class TestElDetectorNoEstaCiego:
 
     def test_cuenta_los_descuadres_abiertos(self, sesion):
         assert _res('CNT-06')['total'] == 1
+
+
+# ── Reposición ───────────────────────────────────────────────────────────
+
+@pytest.fixture
+def reposicion(db, almacen, producto, ub_reserva, ub_picking):
+    """Una reposición completada y enviada — el estado sano."""
+    import uuid
+
+    from app.models.tarea_reposicion import TareaReposicion
+    t = TareaReposicion(
+        codigo=f'REP-{uuid.uuid4().hex[:6]}', producto_id=producto.id,
+        almacen_id=almacen.id, cantidad_unidades=50,
+        ubicacion_reserva_id=ub_reserva.id, ubicacion_picking_id=ub_picking.id,
+        estado='COMPLETADA', unidades_movidas=50, siesa_enviado=True)
+    db.session.add(t)
+    db.session.commit()
+    return t
+
+
+def _rep(codigo):
+    r = auditoria.auditar('reposicion')
+    return next(x for x in r['resultados'] if x['codigo'] == codigo)
+
+
+class TestReposicionSana:
+
+    def test_ningun_bloqueante(self, reposicion):
+        r = auditoria.auditar('reposicion')
+        assert not [x for x in r['resultados']
+                    if x['severidad'] == auditoria.BLOQUEA and x['total']]
+
+    def test_ninguno_revienta(self, reposicion):
+        assert not auditoria.auditar('reposicion')['errores']
+
+
+class TestDetectorReposicion:
+    """El descuadre de este flujo es invisible para cualquier cuadre por sumas:
+    el total no cambia, se mueve de una ubicación a otra."""
+
+    def test_ve_una_completada_que_no_llego_a_siesa(self, db, reposicion):
+        reposicion.siesa_enviado = False
+        db.session.commit()
+        assert _rep('REP-01')['total'] == 1
+
+    def test_ve_un_envio_sobre_una_tarea_sin_completar(self, db, reposicion):
+        """173066 NO es idempotente: duplica el movimiento si se reintenta."""
+        reposicion.estado = 'EN_PROCESO'
+        db.session.commit()
+        assert _rep('REP-02')['total'] == 1
+
+    def test_ve_que_se_movio_mas_de_lo_pedido(self, db, reposicion):
+        reposicion.unidades_movidas = 80      # pedidas: 50
+        db.session.commit()
+        assert _rep('REP-03')['total'] == 1
+
+    def test_mover_menos_es_normal(self, db, reposicion):
+        """La ubicación de origen puede no tener todo."""
+        reposicion.unidades_movidas = 30
+        db.session.commit()
+        assert _rep('REP-03')['total'] == 0
+
+    def test_ve_origen_igual_a_destino(self, db, reposicion, ub_picking):
+        reposicion.ubicacion_reserva_id = ub_picking.id
+        db.session.commit()
+        assert _rep('REP-04')['total'] == 1
+
+    def test_cuenta_las_que_estan_en_curso(self, db, reposicion):
+        reposicion.estado = 'EN_PROCESO'
+        reposicion.siesa_enviado = False
+        db.session.commit()
+        assert _rep('REP-05')['total'] == 1

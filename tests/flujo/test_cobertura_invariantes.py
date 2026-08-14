@@ -12,12 +12,12 @@ from app.services import auditoria
 #: Flujos con invariantes escritos. Esta lista **solo puede crecer**: si un
 #: flujo desaparece de acá es que alguien borró sus invariantes, y eso tiene
 #: que doler.
-FLUJOS_CUBIERTOS = {'venta', 'traslados', 'conteo', 'devoluciones', 'recepcion'}
+FLUJOS_CUBIERTOS = {'venta', 'traslados', 'conteo', 'devoluciones',
+                    'recepcion', 'reposicion'}
 
 #: Flujos del WMS que mueven inventario o dinero y **todavía no tienen
 #: invariantes**. Escrito para que se vea, no para que se olvide.
 SIN_CUBRIR = {
-    'reposicion': 'RESERVA→PICKING. Mueve inventario entre ubicaciones (173066).',
     'flota': 'Custodia de vehículos. No mueve inventario ni dinero.',
     'tienda': 'Pedidos de tienda. Se apoya en traslados, que sí está cubierto.',
     'compras_ia': 'Propuestas, no ejecuta movimientos.',

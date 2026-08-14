@@ -204,3 +204,65 @@ class TestElEndpointDeAuditoria:
         res = r.get_json()['resultados']
         assert len(res) == r.get_json()['invariantes_corridos']
         assert all(x['consecuencia'] and x['frontera'] for x in res)
+
+
+class TestElBordeEntrePickingYPacking:
+    """Los dos invariantes que más hallazgos produjeron en producción, y los
+    dos que no tenían detector ciego.
+
+    El primer VTA-20 comparaba `TareaPicking.cantidad_recogida` **en vivo**
+    contra lo empacado, y `reabrir_picking` pone esa cantidad en cero
+    (`picking_service.py:519`). Un pedido pickeado, empacado y con su picking
+    reabierto después salía como «empacado 7 > recogido 3» sin que nadie
+    hubiera empacado de más.
+
+    Comparar un valor mutable contra un consumo histórico mide dos momentos
+    distintos. Ahora se compara contra el snapshot que el propio packing
+    guardó.
+    """
+
+    @staticmethod
+    def _res(codigo):
+        r = auditoria.auditar('venta')
+        return next(x for x in r['resultados'] if x['codigo'] == codigo)
+
+    def test_ve_que_se_empaco_mas_de_lo_que_el_picking_entrego(self, db, flujo):
+        from app.models.packing import ItemPacking
+        it = ItemPacking.query.filter_by(tarea_id=flujo.packing_id).first()
+        it.cantidad_real = (it.cantidad_esperada or 0) + 5
+        db.session.commit()
+        assert self._res('VTA-20')['total'] == 1
+
+    def test_reabrir_el_picking_NO_dispara_el_bloqueante(self, db, flujo):
+        """La regresión que este cambio corrige. Se reproduce el escenario
+        real: el picking se reabre después de que el packing ya consumió su
+        cantidad."""
+        from app.models.picking import TareaPicking
+        for t in TareaPicking.query.filter(TareaPicking.id.in_(flujo.pickings)).all():
+            t.cantidad_recogida = 0        # lo que hace `reabrir_picking`
+        db.session.commit()
+        assert self._res('VTA-20')['total'] == 0, (
+            'una reapertura legítima volvió a contarse como empaque de más')
+
+    def test_pero_sí_lo_declara_como_aviso(self, db, flujo):
+        """No se esconde: baja de severidad. Si reabrir pickings de pedidos ya
+        empacados fuera frecuente, eso hay que verlo."""
+        from app.models.picking import TareaPicking
+        for t in TareaPicking.query.filter(TareaPicking.id.in_(flujo.pickings)).all():
+            t.cantidad_recogida = 0
+        db.session.commit()
+        r = self._res('VTA-22')
+        assert r['total'] >= 1
+        assert r['severidad'] == auditoria.AVISA
+
+    def test_un_packing_sin_picking_avisa_pero_no_bloquea(self, db, flujo):
+        """`crear_manual` existe y no deja rastro: un packing manual legítimo
+        es hoy indistinguible de un picking perdido. No se bloquea sobre una
+        pregunta que el modelo no sabe responder."""
+        from app.models.picking import TareaPicking
+        for t in TareaPicking.query.filter(TareaPicking.id.in_(flujo.pickings)).all():
+            t.referencia_documento = 'OTRO-PEDIDO'
+        db.session.commit()
+        r = self._res('VTA-21')
+        assert r['total'] >= 1
+        assert r['severidad'] == auditoria.AVISA

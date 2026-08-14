@@ -122,7 +122,7 @@ def _cargar():
     if _cargado:
         return
     from app.services.auditoria import (  # noqa: F401
-        conteo, devoluciones, recepcion, traslados, venta,
+        conteo, devoluciones, recepcion, reposicion, traslados, venta,
     )
     _cargado = True
 

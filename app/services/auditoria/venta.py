@@ -135,52 +135,85 @@ def no_se_pickea_mas_de_lo_pedido(ctx=None):
     codigo='VTA-20',
     flujo='venta',
     frontera='picking → packing',
-    consecuencia='Se empaca un ítem que nadie recogió. Sale del almacén algo '
-                 'que el inventario todavía cree tener.',
+    consecuencia='Se empacó más de lo que el picking entregó. Sale del almacén '
+                 'algo que el inventario todavía cree tener.',
     severidad=BLOQUEA,
 )
-def lo_empacado_no_supera_lo_recogido(ctx=None):
-    """El packing se arma desde tareas de picking con `cantidad_recogida > 0`.
+def lo_empacado_no_supera_lo_que_el_picking_entrego(ctx=None):
+    """Se compara contra `cantidad_esperada`, **el snapshot que el propio
+    packing guardó** al crearse desde el picking.
 
-    Si un ítem del packing supera lo que se recogió, alguien lo agregó por
-    fuera del flujo — o el picking se reabrió y el packing no se enteró.
+    La primera versión sumaba `TareaPicking.cantidad_recogida` en vivo, y eso
+    daba falsos positivos: `reabrir_picking` **pone la cantidad recogida en
+    cero** (`picking_service.py:519`). Un pedido pickeado, empacado y con su
+    picking reabierto después aparecía como «empacado 7 > recogido 3» sin que
+    nadie hubiera empacado de más.
+
+    Comparar un valor mutable contra un consumo histórico es medir dos momentos
+    distintos. El snapshot no se reescribe.
+    """
+    from app.models.packing import ItemPacking, TareaPacking
+    filas = (db.session.query(ItemPacking, TareaPacking)
+             .join(TareaPacking, ItemPacking.tarea_id == TareaPacking.id)
+             .filter(ItemPacking.cantidad_real > ItemPacking.cantidad_esperada)
+             .limit(500).all())
+    return [
+        Hallazgo(
+            referencia=f'{t.numero_pedido_siesa or t.codigo} / producto#{i.producto_id}',
+            detalle=f'empacado {i.cantidad_real} > lo que entregó el picking '
+                    f'({i.cantidad_esperada})',
+            datos={'packing': t.codigo, 'estado': t.estado},
+        ) for i, t in filas
+    ]
+
+
+@invariante(
+    codigo='VTA-22',
+    flujo='venta',
+    frontera='picking → packing',
+    consecuencia='El picking dice hoy una cantidad distinta de la que el '
+                 'packing consumió. Suele ser una reapertura posterior; si no '
+                 'lo es, una de las dos cifras está mal.',
+    severidad=AVISA,
+)
+def el_picking_actual_coincide_con_lo_que_el_packing_consumio(ctx=None):
+    """`AVISA` y no `BLOQUEA` **a propósito**.
+
+    `reabrir_picking` pone la cantidad recogida en cero, así que una diferencia
+    acá es lo esperable después de una reapertura legítima. Lo que no es
+    esperable es que sea frecuente: si lo es, alguien está reabriendo pickings
+    de pedidos ya empacados y eso sí hay que mirarlo.
+
+    Vive separado de VTA-20 para que el bloqueante siga siendo preciso. Mezclar
+    un caso legítimo con uno grave dentro de la misma severidad es lo que
+    entrena a ignorar el canal.
     """
     from app.models.packing import ItemPacking, TareaPacking
     from app.models.picking import TareaPicking
 
-    # El vínculo entre las dos etapas es el NÚMERO DE PEDIDO, no una FK:
-    # `TareaPicking.referencia_documento` ↔ `TareaPacking.numero_pedido_siesa`.
-    # Por eso se compara por pedido y no en total — sumar todos los pickings de
-    # un producto contra todos sus packings mezclaría pedidos distintos y
-    # taparía justo el caso que se busca.
     recogido = {}
-    for pid_doc, prod_id, cant in (
+    for doc, prod, cant in (
             db.session.query(TareaPicking.referencia_documento,
                              TareaPicking.producto_id,
                              db.func.sum(TareaPicking.cantidad_recogida))
             .filter(TareaPicking.referencia_documento.isnot(None))
             .group_by(TareaPicking.referencia_documento,
                       TareaPicking.producto_id).all()):
-        recogido[(pid_doc, prod_id)] = cant or 0
+        recogido[(doc, prod)] = cant or 0
 
-    empacado = (db.session.query(TareaPacking.numero_pedido_siesa,
-                                 ItemPacking.producto_id,
-                                 db.func.sum(ItemPacking.cantidad_real))
-                .join(ItemPacking, ItemPacking.tarea_id == TareaPacking.id)
-                .group_by(TareaPacking.numero_pedido_siesa,
-                          ItemPacking.producto_id).all())
     out = []
-    for pedido, producto_id, cant in empacado:
-        clave = (pedido, producto_id)
+    for i, t in (db.session.query(ItemPacking, TareaPacking)
+                 .join(TareaPacking, ItemPacking.tarea_id == TareaPacking.id)
+                 .limit(3000).all()):
+        clave = (t.numero_pedido_siesa, i.producto_id)
         if clave not in recogido:
-            # Sin picking previo para ese pedido no hay con qué comparar. No es
-            # «pasa»: es otro invariante (VTA-21), y decirlo acá lo escondería.
-            continue
-        if (cant or 0) > recogido[clave]:
+            continue                      # sin picking: lo mira VTA-21
+        if recogido[clave] != (i.cantidad_esperada or 0):
             out.append(Hallazgo(
-                referencia=f'{pedido} / producto#{producto_id}',
-                detalle=f'empacado {cant} > recogido {recogido[clave]}',
-                datos={'producto_id': producto_id, 'pedido': pedido},
+                referencia=f'{t.numero_pedido_siesa} / producto#{i.producto_id}',
+                detalle=f'el packing consumió {i.cantidad_esperada}; el picking '
+                        f'hoy suma {recogido[clave]}',
+                datos={'packing': t.codigo},
             ))
     return out
 
@@ -190,14 +223,21 @@ def lo_empacado_no_supera_lo_recogido(ctx=None):
     flujo='venta',
     frontera='picking → packing',
     consecuencia='Se empacó un pedido que nunca pasó por picking. Operaciones '
-                 'confirmó que el picking SIEMPRE va primero.',
-    severidad=BLOQUEA,
+                 'confirmó que el picking SIEMPRE va primero — salvo que se '
+                 'haya creado a mano, que hoy no deja rastro.',
+    severidad=AVISA,
 )
 def todo_packing_viene_de_un_picking(ctx=None):
     """Confirmado con operaciones el 2026-08-13: «siempre primero picking».
 
-    `crear_manual` existe y no exige picking previo — es la puerta por la que
-    esto puede pasar sin que nadie lo note.
+    **`AVISA` y no `BLOQUEA`**: `PackingService.crear_manual` existe, no exige
+    picking previo y **no marca el packing de ninguna forma**. Un packing
+    manual legítimo es hoy indistinguible de un picking perdido, y no se puede
+    bloquear sobre una pregunta que el modelo no sabe responder.
+
+    Para que vuelva a ser bloqueante hace falta que `crear_manual` deje su
+    origen escrito. Mientras tanto, esto sirve para contar cuántos hay y
+    decidir si el camino manual se sigue usando.
     """
     from app.models.packing import TareaPacking
     from app.models.picking import TareaPicking

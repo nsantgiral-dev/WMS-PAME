@@ -1147,7 +1147,34 @@ en el catálogo local — **sin contador y sin alerta**, y en
 empacador. El sync de barras, el de empaques, temporada e inventario **todos
 cuentan sus `sin_producto`**; el de pedidos es el único que no. Es `VTA-01`.
 
-### Cobertura — 5 flujos, 33 invariantes
+### La primera corrida contra producción encontró 21 bloqueantes — y dos eran míos
+
+Al correrla sobre datos reales aparecieron 21 hallazgos. **Dos invariantes
+estaban mal planteados y había que arreglarlos antes de que alguien
+investigara:**
+
+`VTA-20` comparaba `TareaPicking.cantidad_recogida` **en vivo** contra lo
+empacado. Pero `reabrir_picking` **pone esa cantidad en cero**
+(`picking_service.py:519`), así que un pedido pickeado, empacado y con su
+picking reabierto después salía como «empacado 7 > recogido 3» sin que nadie
+hubiera empacado de más. **Comparar un valor mutable contra un consumo
+histórico mide dos momentos distintos.** Ahora compara contra
+`ItemPacking.cantidad_esperada`, el snapshot que el propio packing guardó. La
+divergencia con el picking actual vive en `VTA-22`, como `AVISA`.
+
+`VTA-21` («packing sin picking») bloqueaba, pero `PackingService.crear_manual`
+existe, no exige picking y **no marca el packing de ninguna forma**. Un packing
+manual legítimo es indistinguible de un picking perdido: no se puede bloquear
+sobre una pregunta que el modelo no sabe responder. Bajó a `AVISA`.
+
+**Un falso positivo quema la herramienta entera.** Mandar a alguien a
+investigar seis casos que no lo son es cómo se aprende a ignorar el canal — la
+misma lección de los 639 avisos conocidos.
+
+Los otros hallazgos (`VTA-30` despachos sin bultos, `VTA-60` cobros que no
+llegaron al ERP, con cifras) quedan en pie.
+
+### Cobertura — 6 flujos, 39 invariantes
 
 | Flujo | Invariantes | El riesgo propio de ese flujo |
 |---|---|---|
@@ -1156,6 +1183,7 @@ cuentan sus `sin_producto`**; el de pedidos es el único que no. Es `VTA-01`.
 | `conteo` | 6 | **Nadie reclama un ajuste.** Entra al ERP, cuadra el papel contra la realidad equivocada, y reaparece en el siguiente conteo físico meses después |
 | `devoluciones` | 5 | Mercancía y dinero vuelven **por caminos distintos**; si uno ocurre y el otro no, no se ve desde ninguno de los dos |
 | `recepcion` | 4 | El espejo de venta: entra mercancía que el ERP no registró |
+| `reposicion` | 5 | **Ningún cuadre por sumas lo ve**: el total no cambia, se mueve de una ubicación a otra. Aparece cuando un picker no encuentra en PICKING lo que el sistema dice, y reporta un faltante que está en RESERVA |
 
 **Lo que falta está escrito**, no olvidado: `tests/flujo/test_cobertura_invariantes.py::SIN_CUBRIR` lista los flujos sin invariantes con el motivo. Un auditor que cubre uno de seis devuelve `0 hallazgos` para lo que no mira — el denominador tiene que ser visible.
 
