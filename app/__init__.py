@@ -287,6 +287,15 @@ def create_app():
     # ── Schedulers ─────────────────────────────────────────────────────────
     # Arquitectura: web server corre DLQ + pedidos. Worker separado corre
     # los pesados (sync, inventory, prewarm). Nunca compiten por la DB.
+    # Qué arrancó DE VERDAD en este proceso. `/api/health/siesa` lo publica.
+    #
+    # Sin esto, saber si un cron corre exigía adivinar desde variables de
+    # entorno: `HEAVY_SCHEDULERS` ausente apaga ocho schedulers en silencio, y
+    # entre ellos está el de alertas — el que avisa cuando algo no pasó. Una
+    # alerta apagada no falla: se calla, que es indistinguible de «todo bien».
+    app.config['SCHEDULERS_ACTIVOS'] = []
+    app.config['SCHEDULERS_OMITIDOS'] = []
+
     if os.getenv('SYNC_SCHEDULER', 'true').lower() == 'true':
         _app_logger = logging.getLogger(__name__)
         import importlib as _il
@@ -306,10 +315,18 @@ def create_app():
                 try:
                     _mod = _il.import_module(_mod_path)
                     getattr(_mod, _fn_name)(app)
+                    app.config['SCHEDULERS_ACTIVOS'].append(_tag)
                 except Exception as e:
+                    app.config['SCHEDULERS_OMITIDOS'].append(f'{_tag} falló: {e}')
                     _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
+        else:
+            app.config['SCHEDULERS_OMITIDOS'].append(
+                'esenciales (DLQ, pedidos, vigía) — WORKER_SKIP_ESSENTIAL=true')
 
-        # Pesados — solo en worker separado (HEAVY_SCHEDULERS=true)
+        # Pesados — solo en worker separado (HEAVY_SCHEDULERS=true).
+        # `[ALERTAS_SCHEDULER]` vive acá, y con él las cuatro alertas por
+        # correo — incluida la de rutas entregadas sin liquidar. Si esta
+        # variable no está en NINGÚN servicio, esas alertas no existen.
         if os.getenv('HEAVY_SCHEDULERS', 'false').lower() == 'true':
             _scheduler_pesados = [
                 ('app.services.siesa_sync_service',         'init_scheduler',          '[SCHEDULER]'),
@@ -325,7 +342,9 @@ def create_app():
                 try:
                     _mod = _il.import_module(_mod_path)
                     getattr(_mod, _fn_name)(app)
+                    app.config['SCHEDULERS_ACTIVOS'].append(_tag)
                 except Exception as e:
+                    app.config['SCHEDULERS_OMITIDOS'].append(f'{_tag} falló: {e}')
                     _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
             try:
                 from app.services.abc_service import ABCService
@@ -339,6 +358,12 @@ def create_app():
                 _app_logger.error(f'[INV-SIESA] No se pudo iniciar: {e}')
             _app_logger.info('[STARTUP] Schedulers pesados activos (worker mode)')
         else:
+            app.config['SCHEDULERS_OMITIDOS'].append(
+                'pesados (sync, prewarm, ALERTAS, monitor de traslados) — '
+                'HEAVY_SCHEDULERS no es true en este proceso')
             _app_logger.info('[STARTUP] Solo DLQ + pedidos. Pesados corren en worker separado.')
+    else:
+        app.config['SCHEDULERS_OMITIDOS'].append(
+            'TODOS — SYNC_SCHEDULER=false en este proceso')
 
     return app

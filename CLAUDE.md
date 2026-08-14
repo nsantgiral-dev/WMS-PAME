@@ -843,6 +843,18 @@ Dos listas con semántica distinta — elegir mal tiene consecuencias silenciosa
 
 ---
 
+## Pendientes del WMS
+
+`docs/pendientes_wms.md` — la lista viva, contrastada contra BK-OPS-01 v2.1
+§4.2. Existe porque se venía reconstruyendo de memoria en cada conversación, y
+así se cuelan errores de atribución (el respaldo de base de datos figuró como
+pendiente del WMS cuando es de Sistemas, sobre la base de **Siesa**).
+
+**Nada de lo que queda es código**: configuración, una decisión de negocio y
+verificación contra producción.
+
+---
+
 ## Alerta de ruta entregada sin liquidar (2026-08-13)
 
 `services/rezago_liquidacion.py` + cron 06:30 Bogotá. Lo pedía BK-OPS-01 v2.1
@@ -870,6 +882,16 @@ Una ruta **sin fecha** cuenta como atrasada, no como al día (Regla 0).
 La política vive en un módulo y no en el endpoint porque el cron lee lo mismo:
 si divergieran, el correo hablaría de un universo y el tablero de otro — y el
 que nadie mira es el correo. Trinquete: `tests/test_rezago_liquidacion.py`.
+
+⚠️ **`[ALERTAS_SCHEDULER]` está en `_scheduler_pesados`**, detrás de
+`HEAVY_SCHEDULERS=true`. Si esa variable no está en ningún servicio, esta
+alerta —y las otras tres por correo— no salen. **Una alerta apagada no falla:
+se calla**, y callarse es indistinguible de «no hubo nada que avisar».
+
+Por eso `GET /api/health/siesa` publica `schedulers.activos` y
+`schedulers.alertas_por_correo`: **lo que arrancó de verdad en ese proceso**, no
+lo que la variable dice. Son cosas distintas — un import que revienta deja la
+variable en `true` y el cron sin correr. Se consulta por servicio.
 
 ---
 

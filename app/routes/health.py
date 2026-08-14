@@ -11,7 +11,7 @@ se confirma en el primer despacho real — Siesa rechaza con error claro si es i
 """
 import logging
 from datetime import datetime
-from flask import Blueprint, jsonify
+from flask import Blueprint, current_app, jsonify
 from flask_jwt_extended import jwt_required
 from app.routes._auth_helpers import _es_gestion
 
@@ -247,6 +247,27 @@ def health_siesa():
             'el despacho EN_TRANSITO fallará'
         )
         resultado['ok'] = False
+
+    # QUÉ CRONS CORREN EN ESTE PROCESO. Un hecho, no una lectura de variables.
+    #
+    # `HEAVY_SCHEDULERS` ausente apaga ocho schedulers en silencio, y entre
+    # ellos está `[ALERTAS_SCHEDULER]` — el que manda los correos, incluido el
+    # de rutas entregadas sin liquidar. **Una alerta apagada no falla: se
+    # calla**, y callarse es indistinguible de «no hubo nada que avisar».
+    #
+    # Se reporta lo que arrancó y no lo que la variable dice, porque son cosas
+    # distintas: un import que revienta deja la variable en `true` y el cron
+    # sin correr.
+    _activos = current_app.config.get('SCHEDULERS_ACTIVOS') or []
+    resultado['schedulers'] = {
+        'activos': _activos,
+        'omitidos': current_app.config.get('SCHEDULERS_OMITIDOS') or [],
+        'alertas_por_correo': '[ALERTAS_SCHEDULER]' in _activos,
+        'nota': ('`alertas_por_correo` en false significa que NINGUNA alerta por '
+                 'correo sale de este proceso — ni la de rutas sin liquidar, ni '
+                 'la de stock crítico. Si tampoco está en el worker, no existen. '
+                 'Se consulta en cada servicio por separado.'),
+    }
 
     # Pasos que siguen siendo manuales en Siesa. No son un fallo — son trabajo
     # de una persona todos los días, y la única forma de que nadie los olvide

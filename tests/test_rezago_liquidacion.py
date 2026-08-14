@@ -163,3 +163,47 @@ class TestElDesgloseYElCronLeenLoMismo:
         assert 'rezago_liquidacion as _rz' in cuerpo
         assert 'EstadoFinancieroRuta' not in cuerpo, (
             'el desglose volvió a armar la consulta de rezago por su cuenta')
+
+
+class TestLaAlertaTieneQuienLaDispare:
+    """Una alerta registrada en un scheduler que no arranca no existe.
+
+    `alertas_service.init_scheduler` vive en `_scheduler_pesados`, detrás de
+    `HEAVY_SCHEDULERS=true`. Si esa variable no está en NINGÚN servicio, las
+    cuatro alertas por correo —incluida la de rutas sin liquidar— no salen. Y
+    **una alerta apagada no falla: se calla**, que es indistinguible de «no
+    hubo nada que avisar».
+
+    Es el mismo defecto que la alerta vino a resolver, un nivel más arriba.
+    `test_el_cron_esta_registrado` no lo veía: comprobaba que la función
+    estuviera dentro de `init_scheduler`, no que `init_scheduler` corriera.
+    """
+
+    def test_el_health_dice_si_las_alertas_corren(self, client, jwt_token_admin):
+        r = client.get('/api/health/siesa',
+                       headers={'Authorization': f'Bearer {jwt_token_admin}'})
+        # 503 en entorno de prueba (Connekta en simulación) — el cuerpo viaja
+        # igual, y es el cuerpo lo que se está verificando.
+        assert r.status_code in (200, 503)
+        s = r.get_json()['schedulers']
+        assert 'alertas_por_correo' in s
+        assert isinstance(s['activos'], list)
+
+    def test_lo_que_no_arranco_queda_declarado(self, app):
+        """Un scheduler ausente sin registro es un silencio. Con registro es un
+        dato que alguien puede leer."""
+        assert 'SCHEDULERS_OMITIDOS' in app.config
+        assert 'SCHEDULERS_ACTIVOS' in app.config
+
+    def test_alertas_sigue_detras_de_heavy_schedulers(self):
+        """Trinquete de hecho, no de opinión: si algún día se mueve a los
+        esenciales, este test falla y hay que venir a decidirlo a propósito —
+        con los locks de advisory que ya existen para no duplicar."""
+        import pathlib
+        fuente = (pathlib.Path(__file__).resolve().parents[1]
+                  / 'app' / '__init__.py').read_text(encoding='utf-8')
+        i = fuente.find("if os.getenv('HEAVY_SCHEDULERS'")
+        j = fuente.find('else:', i)
+        assert 'alertas_service' in fuente[i:j], (
+            '`alertas_service` se movió de los pesados. Si fue a propósito, '
+            'actualizá este test y la nota de `/api/health/siesa`.')
