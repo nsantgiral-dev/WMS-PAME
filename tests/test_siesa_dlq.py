@@ -85,7 +85,9 @@ class TestPreFlagRC:
 
         assert call_order == [True], 'Flag debe ser True ANTES del POST'
 
-    def test_preflag_revert_si_post_falla(self, app, db, recaudo_factory):
+    def test_revierte_si_se_CONFIRMA_que_el_rc_no_entro(self, app, db, recaudo_factory):
+        """El POST falló y la cartera confirma que la factura sigue con saldo:
+        el recibo no entró, revertir y reintentar es correcto."""
         recaudo = recaudo_factory()
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
@@ -94,12 +96,49 @@ class TestPreFlagRC:
             mc.trigger_recibo_caja.side_effect = Exception('Connekta timeout')
             mc.modo_simulacion = False
             mc.modo_ensayo = False
+            mc.get_cxc_general.return_value = [
+                {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
+                 'f353_total_db': 1500000, 'f353_total_cr': 0},   # sigue con saldo
+            ]
             from app.services.siesa_job_service import _ejecutar_job
             with pytest.raises(Exception, match='Connekta timeout'):
                 _ejecutar_job(job)
 
         db.session.refresh(recaudo)
-        assert recaudo.siesa_rc_triggered is False, 'Flag debe revertir tras fallo'
+        assert recaudo.siesa_rc_triggered is False, 'Flag debe revertir tras fallo confirmado'
+
+    def test_NO_revierte_si_no_se_pudo_verificar(self, app, db, recaudo_factory):
+        """Regla 3, y el incidente RC-00002744.
+
+        El POST falló y la verificación tampoco se pudo hacer —la consulta de
+        cartera también está caída, que es lo normal si Siesa no responde—. No
+        se sabe si el recibo entró.
+
+        **Reintentar ante «no sé» es lo que produce el recibo duplicado**, y un
+        documento financiero duplicado hay que reversarlo a mano. El lado
+        conservador es conservar la bandera y declararlo: si el recibo no
+        entró, la factura queda con saldo abierto y eso el desglose lo ve.
+
+        Antes esto no se podía ni plantear: la verificación devolvía `False`
+        tanto ante «tiene saldo» como ante «no pude preguntar», y encima
+        buscaba por la clave equivocada, así que SIEMPRE decía «no entró».
+        """
+        recaudo = recaudo_factory()
+        job = self._make_rc_job(db, recaudo)
+        db.session.commit()
+
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.trigger_recibo_caja.side_effect = Exception('Connekta timeout')
+            mc.modo_simulacion = False
+            mc.modo_ensayo = False
+            mc.get_cxc_general.side_effect = Exception('Siesa tampoco responde')
+            from app.services.siesa_job_service import _ejecutar_job
+            resultado = _ejecutar_job(job)
+
+        assert resultado.get('verificacion_imposible') is True
+        db.session.refresh(recaudo)
+        assert recaudo.siesa_rc_triggered is True, (
+            'reintentar sin poder verificar es lo que duplica el recibo')
 
     def test_idempotente_si_ya_triggered(self, app, db, recaudo_factory):
         recaudo = recaudo_factory(rc=True)
@@ -116,9 +155,15 @@ class TestPreFlagRC:
 
     def test_preflight_factura_ya_saldada_no_llama_al_post(self, app, db, recaudo_factory):
         """API_v2_CxC_General ya muestra la factura sin saldo (otra vía la
-        cruzó) — no se debe mandar un RC duplicado. Campos reales
-        verificados en vivo 2026-08-11: f353_id_tipo_docto_cruce/
-        f353_consec_docto_cruce/f353_total_db/f353_total_cr."""
+        cruzó) — no se debe mandar un RC duplicado.
+
+        Las filas se arman con el **PEDIDO** (`PD`/`100`), que es lo que traen
+        `f353_*_docto_cruce` — verificado en vivo el 2026-08-11.
+
+        Antes se armaban con la FACTURA (`FE`/`5020`), la misma clave
+        equivocada que buscaba el código. El test fabricaba la entrada que el
+        defecto necesitaba para pasar, así que no podía detectarlo.
+        """
         recaudo = recaudo_factory()
         job = self._make_rc_job(db, recaudo)
         db.session.commit()
@@ -127,7 +172,7 @@ class TestPreFlagRC:
             mc.modo_simulacion = False
             mc.modo_ensayo = False
             mc.get_cxc_general.return_value = [
-                {'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': '5020',
+                {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
                  'f353_total_db': 1500000, 'f353_total_cr': 1500000},
             ]
             from app.services.siesa_job_service import _ejecutar_job
@@ -154,9 +199,9 @@ class TestPreFlagRC:
             # bloquea el intento. Segunda llamada (dentro del except, tras el
             # timeout): ya saldada — confirma que el POST sí entró a Siesa.
             mc.get_cxc_general.side_effect = [
-                [{'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': '5020',
+                [{'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
                   'f353_total_db': 1500000, 'f353_total_cr': 0}],
-                [{'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': '5020',
+                [{'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': '100',
                   'f353_total_db': 1500000, 'f353_total_cr': 1500000}],
             ]
             from app.services.siesa_job_service import _ejecutar_job

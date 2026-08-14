@@ -222,14 +222,14 @@ class LiquidacionService:
                         if nit:
                             cxc_data = connekta.get_cxc_general(nit)
                             # f253_id puede variar entre facturas del mismo
-                            # cliente — matchear por la factura exacta, nunca
-                            # tomar la primera fila (ver connekta_gateway.py,
-                            # get_cxc_general).
-                            fila_cxc = next((
-                                r for r in cxc_data
-                                if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == tipo_docto
-                                and str(r.get('f353_consec_docto_cruce', '')) == str(consec_docto)
-                            ), None)
+                            # cliente — matchear por la exacta, nunca tomar la
+                            # primera fila. La búsqueda vive en
+                            # `services/cxc_cruce.py`: era la TERCERA copia de
+                            # la misma consulta en el repo, y una de las tres
+                            # buscaba por la clave equivocada.
+                            from app.services import cxc_cruce as _cx3
+                            fila_cxc = _cx3.fila_de_la_factura(
+                                cxc_data, tipo_docto, consec_docto)
                             if fila_cxc:
                                 cuenta_cxc = fila_cxc.get('f253_id', '')
                     except Exception as e_cxc:
@@ -432,13 +432,15 @@ class LiquidacionService:
                         # 2026-08-11. Usar acá la FE resuelta hace que no
                         # matchee ninguna fila y la cuenta caiga al fallback
                         # `SIESA_CXC_AUXILIAR`, que es la regla 11 al revés.
-                        _tipo_cruce = tarea.tipo_docto_pedido_siesa or ''
-                        _consec_cruce = tarea.consec_docto_pedido_siesa or ''
-                        fila_cxc = next((
-                            r for r in cxc_data
-                            if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == _tipo_cruce
-                            and str(r.get('f353_consec_docto_cruce', '')) == str(_consec_cruce)
-                        ), None)
+                        # La búsqueda vive en `services/cxc_cruce.py`. Estaba
+                        # escrita acá y otra vez en `siesa_job_service`, con
+                        # claves DISTINTAS y las dos citando esta misma
+                        # verificación en vivo — y la de allá decidía si un
+                        # recibo de caja se reenviaba.
+                        from app.services import cxc_cruce as _cx
+                        fila_cxc = _cx.fila_de_la_factura(
+                            cxc_data, tarea.tipo_docto_pedido_siesa,
+                            tarea.consec_docto_pedido_siesa)
                         if fila_cxc:
                             cuenta_cxc = fila_cxc.get('f253_id', '')
                 except Exception as e_cxc:

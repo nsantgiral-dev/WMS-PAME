@@ -899,6 +899,33 @@ por un camino que no pase por `confirmar_parada`.
 
 ---
 
+## El recibo de caja duplicado — una búsqueda escrita tres veces (2026-08-13)
+
+`f353_id_tipo_docto_cruce` / `f353_consec_docto_cruce` traen el **PEDIDO**, no
+la factura. Verificado en vivo el 2026-08-11.
+
+Esa búsqueda estaba escrita **tres veces** en el repo. Dos usaban la clave
+correcta; la tercera —`_factura_saldada_en_siesa`, en `siesa_job_service`—
+buscaba por la **FACTURA**, citando la misma verificación en vivo.
+
+Y esa tercera es la que decide, tras un POST que lanzó excepción, si el recibo
+de caja **sí entró**. Al no encontrar nunca la fila respondía «no entró», el job
+revertía la bandera y la cola reenviaba: **segundo recibo de caja**. Que es
+exactamente el incidente RC-00002744 que la Regla 3 existe para prevenir.
+
+### Y «no encontré» devolvía lo mismo que «tiene saldo»
+
+`esta_saldada()` ahora devuelve `True` | `False` | **`None`**. Ante `None` la
+Regla 3 manda: **no reintentar**. Un recibo duplicado es un documento
+financiero que alguien reversa a mano; una factura sin recibo queda con saldo
+abierto y eso el desglose lo ve.
+
+Una sola función: `services/cxc_cruce.py`. Trinquete: `tests/test_cxc_cruce.py`
+exige que **ningún** sitio vuelva a armar el match a mano — así fue como
+divergieron.
+
+---
+
 ## Despacho marcado sin documento fiscal — `[]` con tres significados (2026-08-13)
 
 `get_compromisos_pedido` devolvía `[]` en tres situaciones distintas:

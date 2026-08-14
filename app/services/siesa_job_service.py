@@ -361,40 +361,40 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
     return lineas_nc
 
 
-def _factura_saldada_en_siesa(connekta, nit: str, tipo_docto_fe: str, consec_fe) -> bool:
-    """
-    ¿La factura ya no tiene saldo pendiente en Siesa? Usado por RECIBO_CAJA
-    en dos momentos: (a) pre-flight antes del POST, para no duplicar un RC
-    ya aplicado por otra vía (cross-flow WMS↔Cartera); (b) tras un POST que
-    lanzó excepción, para distinguir un timeout que sí entró (Regla #3 del
-    CLAUDE.md — nunca asumir que un timeout significa que falló) de uno que
-    de verdad no aplicó nada.
+def _factura_saldada_en_siesa(connekta, nit: str, recaudo) -> bool | None:
+    """¿La factura ya no tiene saldo en Siesa? `True` | `False` | **`None`**.
 
-    Consulta la factura EXACTA (get_cxc_general + match por
-    f353_id_tipo_docto_cruce/f353_consec_docto_cruce), no un filtro
-    aproximado por tipo/valor/fecha — esos campos (f350_id_tipo_docto,
-    f354_valor, f350_fecha) no existen en la respuesta real de
-    API_v2_CxC_General (verificado en vivo 2026-08-11); un filtro basado en
-    ellos nunca puede coincidir con nada.
+    Usada por RECIBO_CAJA en dos momentos: (a) pre-flight, para no duplicar un
+    RC ya aplicado por otra vía; (b) tras un POST que lanzó excepción, para
+    distinguir un timeout que SÍ entró (Regla 3) de uno que no aplicó nada.
 
-    No propaga excepciones — el caller decide qué hacer si esto no puede
-    resolverse (nunca debe bloquear el flujo principal del RC).
+    ## Dos cosas que estaban mal
+
+    **Buscaba por la FACTURA.** Los campos de cruce traen el **PEDIDO**
+    —verificado en vivo el 2026-08-11 y escrito con esas palabras en
+    `liquidacion_service`, que sí lo hacía bien—. Con la clave equivocada no
+    encontraba nunca ninguna fila.
+
+    **Y devolvía `False` cuando no encontraba.** Así que tras un timeout
+    respondía «el RC no entró», el job revertía la bandera y la cola reenviaba:
+    **segundo recibo de caja**. Exactamente el incidente que la Regla 3 existe
+    para prevenir.
+
+    Ahora la búsqueda vive en `services/cxc_cruce.py` —una sola— y el «no sé»
+    tiene su propio valor. El caller decide, y ante `None` la Regla 3 manda:
+    no reintentar.
     """
+    from app.services import cxc_cruce as _cx
     try:
-        if not (nit and tipo_docto_fe and consec_fe):
-            return False
-        cxc = connekta.get_cxc_general(nit)
-        fila = next((
-            r for r in cxc
-            if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == tipo_docto_fe
-            and str(r.get('f353_consec_docto_cruce', '')) == str(consec_fe)
-        ), None)
-        if not fila:
-            return False
-        saldo = float(fila.get('f353_total_db', 0)) - float(fila.get('f353_total_cr', 0))
-        return saldo <= 0.5  # tolerancia de centavos
-    except Exception:
-        return False
+        tarea = getattr(recaudo, 'tarea', None) if recaudo else None
+        tipo_pedido = getattr(tarea, 'tipo_docto_pedido_siesa', None)
+        consec_pedido = getattr(tarea, 'consec_docto_pedido_siesa', None)
+        if not (nit and tipo_pedido and consec_pedido):
+            return None
+        return _cx.esta_saldada(connekta.get_cxc_general(nit), tipo_pedido, consec_pedido)
+    except Exception as e:                       # noqa: BLE001
+        logger.warning('[DLQ] no se pudo verificar el saldo en Siesa: %s', e)
+        return None
 
 
 def _ejecutar_job(job: SiesaJob) -> dict:
@@ -1191,7 +1191,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?
         # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía)
         nit_rc = payload.get('tercero_nit', '')
-        if _factura_saldada_en_siesa(connekta, nit_rc, payload.get('tipo_docto_fe', ''), payload.get('consec_fe', '')):
+        # `is True` y no truthy: `None` significa «no pude verificar», y saltarse
+        # el envío por no saber dejaría la factura sin recibo para siempre.
+        if _factura_saldada_en_siesa(connekta, nit_rc, recaudo) is True:
             logger.info(
                 '[DLQ] RECIBO_CAJA job=%s: factura %s-%s ya sin saldo pendiente '
                 '(pre-flight) — marcando completado sin enviar',
@@ -1223,16 +1225,28 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             # POST falló — verificar el saldo real antes de revertir (Regla #3:
             # un timeout no significa que falló, puede que sí haya entrado)
             _rc_entro = _factura_saldada_en_siesa(
-                connekta, payload.get('tercero_nit', ''),
-                payload.get('tipo_docto_fe', ''), payload.get('consec_fe', ''),
-            )
-            if _rc_entro:
+                connekta, payload.get('tercero_nit', ''), recaudo)
+            if _rc_entro is True:
                 logger.info(
                     '[DLQ] RECIBO_CAJA job=%s: POST falló pero API 21 confirma '
                     'que RC sí entró a Siesa — manteniendo flag', job.id
                 )
                 return {'timeout_pero_exitoso': True}
-            # Realmente falló — revertir pre-flag
+            if _rc_entro is None:
+                # NO SE SABE. Regla 3: un timeout no significa que falló, y un
+                # recibo de caja duplicado es un documento financiero que
+                # alguien tiene que reversar a mano. Se conserva la bandera —el
+                # lado que NO reintenta— y se declara, porque la factura puede
+                # quedar sin recibo y eso lo ve el desglose como saldo abierto.
+                logger.error(
+                    '[DLQ] RECIBO_CAJA job=%s: POST falló y NO se pudo verificar '
+                    'el saldo del recaudo %s. No se reintenta (Regla 3) — revisar '
+                    'en Siesa si el RC entró.',
+                    job.id, getattr(recaudo, 'id', '?')
+                )
+                return {'verificacion_imposible': True,
+                        'recaudo_id': getattr(recaudo, 'id', None)}
+            # Confirmado que NO entró — revertir pre-flag y reintentar
             if recaudo:
                 try:
                     recaudo.siesa_rc_triggered = False
