@@ -201,10 +201,26 @@ class PackingService:
         }
 
     @staticmethod
-    def confirmar_packing(tarea_id: int, observaciones: str = None, forzar: bool = False):
+    def confirmar_packing(tarea_id: int, observaciones: str = None, forzar: bool = False,
+                          usuario_id: int = None):
         """
         Paso 1: Verifica que todos los ítems fueron escaneados y guarda estado VERIFICADO.
         NO dispara Siesa — eso ocurre en cerrar_packing() después de declarar los bultos.
+
+        ## Por qué la propiedad se verifica ACÁ y no solo en la ruta
+
+        `/api/packing/<id>/confirmar` comprobaba permiso de empaque **y**
+        propiedad de la tarea. `/api/mobile/confirmar` con `tipo='PACKING'`
+        llamaba a este servicio **sin pasar el usuario**: cualquier operario
+        podía confirmar el packing de otro, y sin permiso de empaque.
+
+        El guard estaba en la capa equivocada. Picking ya lo tenía bien
+        —`confirmar_picking` verifica la propiedad dentro del servicio, así que
+        toda vía lo hereda— y packing lo tenía solo en una de sus dos puertas.
+
+        `usuario_id=None` se conserva para los llamadores internos (arneses,
+        scripts) y **se declara en el log**: un bypass silencioso es lo que
+        acaba de costar esto.
         """
         from sqlalchemy.orm import joinedload as _jl
         tarea = (TareaPacking.query
@@ -212,6 +228,25 @@ class PackingService:
                  .filter_by(id=tarea_id).first())
         if not tarea:
             raise ValueError('Tarea no encontrada')
+
+        if usuario_id is None:
+            logger.info(
+                '[PACKING] confirmar_packing tarea=%s SIN usuario — no se '
+                'verifica propiedad (llamador interno)', tarea_id)
+        else:
+            from app.models.usuario import Usuario as _U
+            # `_puede_empacar` es la MISMA función que usa la ruta directa: el
+            # permiso de empaque incluye el flag `puede_empacar`, no solo el
+            # rol. Reimplementarlo acá sería la divergencia de siempre.
+            from app.routes._auth_helpers import Roles as _R, _puede_empacar
+            _u = _U.query.get(usuario_id)
+            if not _u or not _u.activo:
+                raise ValueError('Usuario no válido para confirmar packing')
+            if not _puede_empacar(_u):
+                raise ValueError(f'El rol "{_u.rol}" no puede confirmar packing')
+            if _u.rol not in (_R.ADMIN, _R.SUPERVISOR, _R.JEFE_ALMACEN):
+                if tarea.empacador_id and tarea.empacador_id != usuario_id:
+                    raise ValueError('Esta tarea pertenece a otro empacador')
 
         # [29] El pedido puede anularse en Siesa DESPUÉS de que el empacador inició —
         # verificar aquí también evita que se registre un bulto para un pedido cancelado.

@@ -899,6 +899,53 @@ por un camino que no pase por `confirmar_parada`.
 
 ---
 
+## Dos escaladas de autorización (2026-08-13)
+
+Las dos verificadas ejecutando la aplicación con credenciales de cada rol.
+
+### El atajo que pedía menos que sus partes
+
+```
+/liquidar          → _solo_admin
+/liquidar-siesa    → _solo_admin
+/liquidar-completo → _es_admin_o_jefe   ← hace las DOS, y encima las retenciones
+```
+
+Un jefe de almacén recibía **403 en las dos operaciones granulares y 200 en la
+que las ejecuta a las dos**.
+
+El invariante, que vale más allá del caso: **un endpoint compuesto no puede
+exigir menos que el más estricto de sus componentes.** La forma se repite sola
+— alguien agrupa pasos para que la pantalla haga una sola llamada y le pone el
+permiso de quien va a usar la pantalla, no el de lo que el endpoint ejecuta.
+Trinquete: `tests/test_permiso_compuesto.py`.
+
+### Packing tenía dos puertas y una sin guardia
+
+```
+PUT  /api/packing/<id>/confirmar     → permiso de empaque + propiedad ✓
+POST /api/mobile/confirmar (PACKING) → ninguno de los dos ✗
+```
+
+La vía móvil llamaba al servicio **sin pasar el usuario**, así que no había
+nada que verificar: cualquier operario confirmaba el packing de otro, y sin
+permiso de empaque.
+
+**La causa es de capa, y picking ya la tenía bien**: `confirmar_picking`
+verifica la propiedad *dentro del servicio*, así que toda vía la hereda.
+Packing la tenía en la ruta, y la segunda ruta la esquivaba.
+
+> Un guard en la ruta protege esa ruta. Un guard en el servicio protege la
+> operación.
+
+El servicio usa `_puede_empacar` —la misma función de la ruta, que incluye el
+flag `puede_empacar` y no solo el rol— y la supervisión salta la **propiedad**,
+no el permiso de empaque. `jefe_almacen` no está en `PACKING_ROLES` y sin el
+flag tampoco confirma: era así antes y sigue igual.
+Trinquete: `tests/test_packing_dos_puertas.py`.
+
+---
+
 ## El recibo de caja duplicado — una búsqueda escrita tres veces (2026-08-13)
 
 `f353_id_tipo_docto_cruce` / `f353_consec_docto_cruce` traen el **PEDIDO**, no

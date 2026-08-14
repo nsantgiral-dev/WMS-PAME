@@ -265,7 +265,8 @@ def confirmar_packing(id):
         PackingService.confirmar_packing(
             tarea_id=id,
             observaciones=data.get('observaciones'),
-            forzar=data.get('forzar', False)
+            forzar=data.get('forzar', False),
+            usuario_id=uid,
         )
         tarea = TareaPacking.query.get(id)
         return jsonify({

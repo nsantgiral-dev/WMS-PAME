@@ -1103,9 +1103,21 @@ def liquidar_completo(id):
     """
     One-click: verifica cantidades, aplica retenciones, cambia estado financiero
     y dispara todos los conectores Siesa (NCE/RC/DC).
+
+    **`_solo_admin`, no `_es_admin_o_jefe`.** Este endpoint ejecuta lo mismo que
+    `/liquidar` y `/liquidar-siesa`, que exigen admin — y encima encola las
+    retenciones. Pedía menos que cualquiera de las dos operaciones que hace: un
+    jefe de almacén recibía 403 en las dos granulares y **200** acá.
+
+    El invariante, que vale más allá de este caso: **un endpoint compuesto no
+    puede exigir menos que el más estricto de sus componentes.** Un atajo de
+    conveniencia que relaja el permiso convierte la comodidad en escalada.
+    Trinquete: `tests/test_permiso_compuesto.py`.
     """
-    if not _es_admin_o_jefe():
-        return jsonify({'error': 'Solo admin o jefe de almacén puede liquidar rutas'}), 403
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin puede liquidar rutas — este endpoint '
+                                 'ejecuta las mismas operaciones que /liquidar y '
+                                 '/liquidar-siesa'}), 403
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401

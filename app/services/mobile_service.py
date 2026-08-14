@@ -968,7 +968,11 @@ class MobileService:
             return resultado
 
         elif tipo == 'PACKING':
-            PackingService.confirmar_packing(tarea_id=tarea_id)
+            # `usuario_id` — sin esto, esta vía confirmaba el packing de
+            # cualquier otro empacador y sin permiso de empaque. La ruta
+            # directa sí lo verificaba; ésta no.
+            PackingService.confirmar_packing(tarea_id=tarea_id,
+                                             usuario_id=operario_id)
             from app.models.packing import TareaPacking
             tarea = TareaPacking.query.get(tarea_id)
             return tarea.to_dict()
