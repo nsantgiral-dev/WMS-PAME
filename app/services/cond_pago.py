@@ -5,9 +5,9 @@ Cómo se interpreta la condición de pago de un pedido. **Una función.**
 maestro del cliente está incompleto. Hasta el 2026-08-13 ese vacío se
 interpretaba en **dos sitios**, los dos hacia contado:
 
-  · `connekta_gateway.trigger_factura_desde_remision` — al facturar, cae a
-    `SIESA_COND_PAGO_VENTAS` (obligado: Connekta V2 colapsa con HTTP 500 si el
-    campo va en null) y avisa.
+  · `connekta_gateway.trigger_factura_desde_remision` — al facturar caía a
+    `SIESA_COND_PAGO_VENTAS`, **que es el código de contado**. Hoy cae a
+    `SIESA_COND_PAGO_RUTA` (crédito a un día): ver `aprobable_en_ruta`.
   · `ruta_service._valor_y_cond_pago` — `es_contado = (not cond_pago) or ...`,
     que con vacío da **True**.
 
@@ -23,10 +23,11 @@ maestro está incompleto, la consulta falló, o el cliente de verdad es de
 contado. Tratarlas igual es la Regla 0 al revés — el lado conservador acá no es
 cobrar, es **no afirmar**.
 
-Hoy el daño es acotado (el conductor cobra de más y se devuelve). Con la
-factura diferida al momento de la liquidación —diseño en evaluación— pasaría a
-ser: cliente de crédito leído como contado, sin factura, sin cuenta por cobrar
-y sin consumir cupo. Un crédito otorgado por un campo vacío.
+El daño en pantalla es acotado: el conductor cobra de más y se devuelve. El
+daño del otro lado no lo era — el vacío emitía una factura de contado, y el
+2026-08-13 se probó en producción que **Siesa no la aprueba**. Quedaba el
+inventario descargado, la factura en Elaboración y la liquidación sin CxC
+contra la cual cruzar el recibo. Un campo vacío rompía el ciclo entero.
 
 ## Lo que NO hace esta función
 
@@ -50,12 +51,37 @@ def clasificar(cond_pago_siesa, cond_pago_contado) -> str:
     """`contado` | `credito` | `ausente` a partir de `f430_id_cond_pago`.
 
     `cond_pago_contado` es el código que la empresa usa para contado
-    (`SIESA_COND_PAGO_VENTAS`, típicamente `C01`).
+    (`SIESA_COND_PAGO_VENTAS`). Se configura para **reconocerlo, no para
+    emitirlo** — ver `aprobable_en_ruta`.
     """
     valor = (cond_pago_siesa or '').strip()
     if not valor:
         return AUSENTE
     return CONTADO if valor == (cond_pago_contado or '').strip() else CREDITO
+
+
+def aprobable_en_ruta(cond_pago, cond_pago_contado) -> bool:
+    """`False` si esa condición produce una factura que Siesa **no va a aprobar**.
+
+    Probado en producción el 2026-08-13: dos facturas de contado, por $263.963
+    y $14.200, quedaron **en Elaboración** con el mensaje *«el valor de la
+    cartera debe ser igual al valor de las CxC»*. Es el mismo mensaje de la
+    Regla 21 — no es una rareza de la nota crédito, es el invariante de
+    aprobación de Siesa: **un documento no se aprueba si su cartera no cuadra.**
+    Una FE de contado exige el recaudo en el mismo documento, y en ruta ese
+    recaudo no existe todavía: lo hace el conductor horas después.
+
+    Por eso la factura de ruta nace **a crédito de un día** y el recibo de caja
+    del conductor la salda. No es un rodeo: es lo que físicamente pasa.
+
+    Y por eso `f462_id_caja` del 142943 se manda vacío. Llenarlo haría que
+    Siesa registrara el ingreso al facturar —plata que nadie ha recibido— y
+    otra vez cuando llegue el RC de la liquidación.
+
+    Vive acá y no en el gateway porque la misma pregunta la hace el desglose
+    para contar cuántos pedidos de ruta vienen con una condición que no sirve.
+    """
+    return clasificar(cond_pago, cond_pago_contado) != CONTADO
 
 
 def es_contado_o_none(cond_pago_siesa, cond_pago_contado):
@@ -105,10 +131,10 @@ def modo_pantalla(es_contado, hay_valor_conocido: bool) -> str:
     `confirmar_parada` no ata `forma_pago` a la condición del pedido — solo
     valida que el valor esté en la lista.
 
-    Y los dos huecos se refuerzan: un pedido con `cond_pago` vacío produce **a
-    la vez** una factura emitida como contado (por el fallback del gateway) y
-    una parada en LIBRE (porque `es_contado` no es `True` confirmado). El mismo
-    dato faltante abre las dos puertas.
+    Un pedido con `cond_pago` vacío cae acá en LIBRE, porque `es_contado` no
+    es `True` confirmado. Del lado de la factura ese mismo vacío ya no hace
+    daño —cae a la condición de ruta— pero la parada sigue quedando sin
+    restricción, y eso hay que poder contarlo.
 
     `es_contado` es `True` | `False` | `None`. Solo el `False` **confirmado**
     muestra CRÉDITO: ante `None` no se afirma nada y se deja elegir, que es lo

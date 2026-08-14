@@ -89,7 +89,11 @@ VARS_CRITICAS: tuple = (
     VarCritica('SIESA_UNIDAD_NEGOCIO', None,
                'Traslados 173076/173079 — Siesa NO la hereda de la bodega'),
     VarCritica('SIESA_COND_PAGO_VENTAS', None,
-               'Fallback de condición de pago cuando la cabecera del pedido no la trae'),
+               'El código de CONTADO. No se emite: se reconoce para NO emitirlo — '
+               'una FE de contado no se aprueba sin recaudo (ver cond_pago.aprobable_en_ruta)'),
+    VarCritica('SIESA_COND_PAGO_RUTA', None,
+               'La condición que lleva la FE de ruta si el pedido no trae ninguna: '
+               'crédito a un día, que el recibo de caja del conductor salda'),
     VarCritica('SIESA_LISTA_PRECIO', None,
                'Remisión 142945 (f470_id_lista_precio) — sin ella el documento sale sin precios'),
     VarCritica('SIESA_TIPO_DOCTO_REMISION', None,

@@ -144,7 +144,8 @@ Motivos son códigos **obligatorios** en Siesa (Inventarios > Maestros > Concept
 | `SIESA_MEDIO_PAGO_EFECTIVO` | `EFE` | Medio de pago efectivo |
 | `SIESA_MEDIO_PAGO_TRANSFERENCIA` | `TBA` | Medio de pago transferencia bancaria |
 | `SIESA_MEDIO_PAGO_TARJETA` | `TDC` | Medio de pago tarjeta |
-| `SIESA_COND_PAGO_VENTAS` | `''` | Condición de pago fallback (C01 = contado) |
+| `SIESA_COND_PAGO_VENTAS` | `''` | **El código de CONTADO (C01).** No se emite — se configura para reconocerlo y NO emitirlo. Una FE de contado no se aprueba sin recaudo |
+| `SIESA_COND_PAGO_RUTA` | `''` | **OBLIGATORIO** — la condición que lleva la FE de ruta si el pedido no trae ninguna. Crédito a un día (C02); el RC del conductor la salda |
 
 ### Transporte (173076/173079)
 
@@ -334,7 +335,16 @@ Configurar en Siesa: Maestros asociados > Medios de pago > "Cnta. bancaria"
 18. **PK documental = CO + tipo_docto + consecutivo + cuota** — omitir cualquiera mezcla documentos
 19. **ConniKey y ConniToken son estáticos** — no expiran, no hay refresh flow
 20. **Después de POST exitoso, Siesa tarda ~10-12s en procesar** — no consultar inmediatamente
-21. **142946 (NotaFactura) SIEMPRE con `F350_IND_ESTADO=0` (Elaboración), NUNCA 1 (Aprobado)** —
+21. **Siesa no aprueba un documento cuya cartera no cuadre con sus CxC.**
+
+    Se descubrió en la nota crédito y se creyó una rareza suya. El 2026-08-13
+    apareció **el mismo mensaje** en una factura de venta de contado (dos
+    intentos, $263.963 y $14.200, las dos en Elaboración) — ver «La factura de
+    ruta no puede ser de contado». No es del 142946: es el invariante de
+    aprobación. Cualquier documento que se mande con `F350_IND_ESTADO=1` y no
+    traiga su cruce resuelto queda trabado.
+
+    **142946 (NotaFactura) SIEMPRE con `F350_IND_ESTADO=0` (Elaboración), NUNCA 1 (Aprobado)** —
     verificado en vivo contra Siesa QA (2026-07-29): con estado=1 Siesa rechaza el documento
     completo con `"El valor de la cartera debe ser igual al valor de las CxC"`. El conector
     estándar `API_v1_Ventas_Comercial_NotaFactura` (y su clon 250696) no tiene sección
@@ -994,7 +1004,7 @@ Conectores con spec verificado contra código (julio 2026):
 |----------|-----------|--------|
 | 142888 | `142888 API_v1_ReciboCaja.docx` | ✓ 15/15 campos CxC verificados |
 | 142882 | `142882 - API_v1_DocumentoContable 428272.docx` | ✓ 29/29 campos MovimientoCxC verificados |
-| 142943 | `142943.docx` | ✓ 50/50 campos. **Sin sección `Movimientos`** — factura la remisión COMPLETA, no admite cantidades parciales. `f462_id_caja` («Obligatoria si hay recaudos») se manda en `None` — ver «La caja de la FE de contado» |
+| 142943 | `142943.docx` | ✓ 50/50 campos. **Sin sección `Movimientos`** — factura la remisión COMPLETA, no admite cantidades parciales. `f462_id_caja` («Obligatoria si hay recaudos») se manda vacío **a propósito** — ver «La factura de ruta no puede ser de contado» |
 | 142945 | `142945_API_v1_Ventas_Comercial_RemisionPedido.docx` | ✓ Limpio |
 | 142946 | `142946 - API_v1_Ventas_Comercial_NotaFactura 428509.docx` | ✓ 3 obligatorios agregados. Clon 250696 (dinámico) para Devolución de Cliente — requiere `F350_IND_ESTADO=0`, ver Regla #21 |
 | 142948 | `142948 - API_v1_Compras_Comercial_EntradaOC.docx` | ✓ Limpio (2 extras low-risk) |
@@ -1008,63 +1018,62 @@ Conectores con spec verificado contra código (julio 2026):
 
 ---
 
-## La caja de la FE de contado — decisión abierta (2026-08-13)
+## La factura de ruta no puede ser de contado — resuelto (2026-08-13)
 
-Una prueba manual en el escritorio de Siesa, sobre un pedido **C01 (contado)**,
-falló con **error 47891 (caja)**. Se resolvió configurando la caja en las
-preferencias del usuario `s.giraldo`. **Eso no aplica al WMS**: el conector no
-es un usuario y no tiene preferencias.
+**Probado en producción, no deducido.** Se intentaron dos facturas de contado,
+por **$263.963 y $14.200**: las dos quedaron **en Elaboración** con
 
-El spec del 142943 (`docs/siesa-specs/142943.docx`, incorporado ese mismo día)
-lo confirma: `f462_id_caja` — *«Obligatoria si hay recaudos»*, Dep, 3 chars,
-posición 2982. **El WMS lo manda en `None`.**
+> «el valor de la cartera debe ser igual al valor de las CxC»
 
-### Por qué NO se arregló poniéndole la caja
+Es **el mismo mensaje de la Regla 21**. No es una rareza de la nota crédito:
+es el invariante de aprobación de Siesa — **un documento no se aprueba si su
+cartera no cuadra**. Una FE de contado exige el recaudo dentro del mismo
+documento, y en ruta ese recaudo no existe al facturar: lo hace el conductor
+horas después.
 
-El valor está a mano (`_co_caja_map`, el mismo que usa el 142888) y el cambio
-es una línea. No se hizo porque **arreglar el síntoma puede ser el error**:
+Por eso la factura de ruta nace **a crédito de un día** y el recibo de caja del
+conductor la salda. No es un rodeo contable: es lo que físicamente pasa.
 
-Si Siesa pide caja es porque va a **generar el recaudo al facturar**. Pero en
-el flujo del WMS la plata no se ha recaudado todavía — la recoge el conductor
-horas después, y la liquidación la registra con el **142888**. Ponerle caja a
-la FE significaría:
+### Consecuencias en código
 
-- registrar en Siesa un ingreso que todavía no ocurrió, y
-- registrarlo **dos veces** cuando el 142888 llegue en la liquidación.
+| Qué | Cómo queda |
+|-----|-----------|
+| `f462_id_caja` (142943) | **Vacío, a propósito.** Llenarlo haría que Siesa registrara el ingreso al facturar —plata que nadie recibió— y otra vez cuando llegue el RC de la liquidación |
+| `SIESA_COND_PAGO_VENTAS` | Deja de ser un valor a emitir. Es **el código de contado, configurado para reconocerlo y NO emitirlo** |
+| `SIESA_COND_PAGO_RUTA` | **Nueva y obligatoria.** La condición que lleva la FE cuando el pedido no trae ninguna (C02) |
+| Pedido que declara contado | Se factura igual —bloquear dejaría la remisión hecha y el inventario descargado sin factura— pero **se alerta**: `FE_CONTADO_NO_APROBABLE` |
 
-Un `codigo:0` no distingue estos dos casos. Lo que hay que mirar después de la
-corrida en QA no es el código de respuesta: es el **estado de la CxC de la
-factura**. Si nace saldada, el RC de la liquidación sobra y el diseño del
-módulo cambia; si nace pendiente, la caja es solo un campo faltante.
+### El defecto que este hallazgo destapó
 
-### Las tres salidas posibles
+El fallback del gateway era `_cond_pago_siesa or self.cond_pago_ventas` — es
+decir, **un pedido sin condición de pago producía exactamente la factura que hoy
+se sabe que Siesa no aprueba**, con la remisión ya hecha y el inventario ya
+descargado. La alerta que se mandaba decía «factura emitida como CONTADO por
+data incompleta», que describía mal lo que pasaba: no quedaba emitida, quedaba
+trabada.
 
-1. **La FE no debe ser de contado.** No propagar `f430_id_cond_pago` = C01 a
-   `f461_id_cond_pago`: la FE nace a crédito, y el RC de la liquidación la
-   salda. Es lo más cercano a la realidad física —la plata llega después— pero
-   contradice lo que el pedido declara.
-2. **La FE es de contado y lleva caja.** Entonces el 142888 de liquidación
-   sobra para las paradas de contado, y hay que quitarlo sin romper el flujo
-   de crédito, que sí lo necesita.
-3. **Siesa pide la caja pero no genera recaudo.** Entonces basta la línea. Es
-   la salida más cómoda y por eso la que hay que probar, no suponer.
+Sin `SIESA_COND_PAGO_RUTA` configurada ya no se emite nada: se levanta
+`ValueError`. Es Regla 0 — la RM queda en BD y el reintento del DLQ entra
+directo al 142943 sin duplicarla, que es mejor que un documento que nadie va a
+poder aprobar.
 
-Trinquete: `tests/test_payload_vs_docx.py::TestFacturaDesdeRemision142943`.
-`f462_id_caja` puede dejar de ser `None`, pero solo desde `_co_caja_map` —
-una segunda tabla de cajas haría que el recaudo de la factura y el del recibo
-cayeran en cajas distintas (Regla 0, corolario).
+Trinquetes: `tests/test_cond_pago.py::TestLaFacturaDeRutaNoPuedeSerDeContado`,
+`::TestElHuecoNoSeTapaConElCodigoDeContado`, `::TestElContadoDelPedidoNoPasaCallado`
+y `tests/test_09_guards_criticos.py::TestFallbackCondPagoAlerta`.
 
-### Y lo otro que dice el spec: no se puede facturar parcial
+**Cómo medirlo:** `condicion_declarada` en `GET /api/rutas/liquidacion/desglose`
+dice qué condición declara cada pedido de ruta, sobre todos a la vez. Si sale
+algo en `contado`, esos son los que van a quedar en Elaboración.
 
-El 142943 **no tiene sección `Movimientos`**. Sus secciones son Inicial,
-Doctoventascomercial, RelacionDoctos, CuotasCxC, Final — y `RelacionDoctos`
-referencia la remisión **por encabezado** (CO + tipo + consecutivo), sin línea
-ni cantidad.
+### Y lo que dice el spec del 142943 sobre facturar parcial
 
-Consecuencia directa sobre el rediseño del flujo de contado: **«FE por lo
-entregado» no es posible con este conector.** La FE factura la remisión
-completa. Las alternativas son mover la remisión (y con ella la descarga de
-inventario) a la liquidación, o crear un documento de devolución de remisión
-por el saldo — `F460_ID_TIPO_DOCTO` admite «remision **o devolucion**» y
-`RelacionDoctos` es una lista, así que el camino existe en el spec. **Lo que no
-existe es un conector que cree esa devolución.**
+**No tiene sección `Movimientos`.** Secciones: Inicial, Doctoventascomercial,
+RelacionDoctos, CuotasCxC, Final — y `RelacionDoctos` referencia la remisión
+**por encabezado** (CO + tipo + consecutivo), sin línea ni cantidad. La FE
+factura la remisión completa.
+
+Se deja anotado porque es una propiedad permanente del conector, no porque
+bloquee algo: **el rediseño de facturar en la liquidación se retiró el
+2026-08-13.** Con la factura emitida siempre antes de la entrega, «FE por lo
+entregado» y la devolución de remisión dejan de hacer falta — el rechazo se
+resuelve con nota crédito contra una factura que ya existe.

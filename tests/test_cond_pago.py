@@ -299,3 +299,163 @@ class TestLaCondicionQuedaAnotadaEnLaTarea:
             lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
         _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(t)
         assert crudo == '' and es_contado is None
+
+
+class TestLaFacturaDeRutaNoPuedeSerDeContado:
+    """Lo que se probó en producción el 2026-08-13, en código.
+
+    Dos facturas de contado ($263.963 y $14.200) quedaron **en Elaboración**
+    con «el valor de la cartera debe ser igual al valor de las CxC» — el mismo
+    mensaje de la Regla 21. Siesa no aprueba un documento cuya cartera no
+    cuadra, y una FE de contado exige el recaudo en el mismo documento.
+
+    En ruta ese recaudo no existe al facturar: lo hace el conductor horas
+    después. Por eso la FE nace a crédito de un día y el RC la salda.
+    """
+
+    CONTADO = 'C01'
+    RUTA = 'C02'
+
+    def test_contado_no_es_aprobable(self):
+        assert cp.aprobable_en_ruta(self.CONTADO, self.CONTADO) is False
+
+    def test_credito_a_un_dia_si(self):
+        assert cp.aprobable_en_ruta(self.RUTA, self.CONTADO) is True
+
+    def test_el_vacio_no_se_declara_no_aprobable(self):
+        """`ausente` no es contado. Lo que se emite en ese caso es la condición
+        de ruta, así que el documento sí se aprueba — el problema del vacío es
+        de maestro, no de aprobación, y confundirlos manda la alerta que no es.
+        """
+        assert cp.aprobable_en_ruta('', self.CONTADO) is True
+        assert cp.aprobable_en_ruta(None, self.CONTADO) is True
+
+    @pytest.mark.parametrize('codigo_contado', ['C01', 'CO', 'X9', '001'])
+    def test_el_codigo_de_contado_sale_de_la_configuracion(self, codigo_contado):
+        """Una política, una función — y probada con un código que NO es `C01`.
+
+        Con `C01` en los dos lados, una implementación que lo hardcodee da el
+        mismo resultado que una que consulte `clasificar`, y el test no
+        distingue. La empresa puede cambiar el código de contado en Siesa; si
+        esta función se lo quedó fijo, el desglose contaría un universo y el
+        gateway emitiría sobre otro.
+        """
+        assert cp.aprobable_en_ruta(codigo_contado, codigo_contado) is False
+        assert cp.aprobable_en_ruta('OTRO', codigo_contado) is True
+
+
+class TestElHuecoNoSeTapaConElCodigoDeContado:
+    """El fallback del gateway emitía **exactamente** el valor que hoy se sabe
+    que no se aprueba.
+
+    `cond_pago = _cond_pago_siesa or self.cond_pago_ventas` — y
+    `cond_pago_ventas` es el código de contado. Un pedido sin condición producía
+    una factura que Siesa deja en Elaboración, con la remisión ya hecha y el
+    inventario ya descargado.
+    """
+
+    _GW = __import__('pathlib').Path(__file__).resolve().parents[1] / \
+        'app' / 'services' / 'connekta_gateway.py'
+
+    @pytest.fixture(scope='class')
+    def fuente(self):
+        t = self._GW.read_text(encoding='utf-8')
+        i = t.find('    def trigger_factura_desde_remision')
+        j = t.find('\n    def ', i + 10)
+        return t[i:j]
+
+    def test_el_fallback_es_la_condicion_de_ruta(self, fuente):
+        assert 'self.cond_pago_ruta' in fuente, (
+            'el hueco de f430_id_cond_pago volvió a taparse con otra cosa')
+        assert 'or self.cond_pago_ventas or None' not in fuente, (
+            '\nEl fallback volvió al código de CONTADO (`cond_pago_ventas`).\n'
+            'Eso emite una FE que Siesa no aprueba — con la remisión ya hecha '
+            'y el inventario ya descargado. Usar `cond_pago_ruta`.')
+
+    def test_sin_condicion_de_ruta_no_se_emite(self, fuente):
+        """Preferible a emitir contado: la RM ya está en BD, así que el
+        reintento del DLQ entra directo al 142943 sin duplicarla."""
+        assert 'SIESA_COND_PAGO_RUTA no está configurado' in fuente
+
+    def test_la_alerta_del_vacio_ya_no_miente(self, fuente):
+        """Decía «factura emitida como CONTADO» y con el fallback nuevo eso es
+        falso. Una alerta que describe mal lo que pasó manda a corregir el
+        documento equivocado."""
+        assert 'fue facturado' not in fuente
+        assert 'Factura emitida como CONTADO por data incompleta' not in fuente
+
+    def test_la_variable_esta_en_el_catalogo(self):
+        """Si no está, `/api/health/siesa` dice `ok` con el despacho roto."""
+        from app.services.vars_criticas import VARS_CRITICAS
+        nombres = {v.nombre for v in VARS_CRITICAS}
+        assert 'SIESA_COND_PAGO_RUTA' in nombres
+
+
+class TestElContadoDelPedidoNoPasaCallado:
+    """Ejerce la rama, no el texto.
+
+    La primera versión de este test buscaba `'FE_CONTADO_NO_APROBABLE'` en el
+    fuente. Una mutación que reemplazaba la condición por `elif False:` dejaba
+    el string intacto en el cuerpo muerto y el test seguía en verde — el mismo
+    modo de fallo que CLAUDE.md ya documenta para los detectores de texto.
+
+    No se bloquea el despacho: la remisión ya descargó el inventario y quedarse
+    sin factura es peor. Pero tiene que quedar el aviso, porque hoy nadie se
+    entera hasta que la liquidación no encuentra la cuenta por cobrar.
+    """
+
+    CONTADO = 'C01'
+
+    def _gw(self):
+        from app.services.connekta_gateway import ConnektaGateway
+        g = ConnektaGateway()
+        g.modo_simulacion = True
+        g.cond_pago_ventas = self.CONTADO
+        g.cond_pago_ruta = 'C02'
+        g.punto_envio_default = '001'
+        return g
+
+    def _cabecera(self, cond):
+        return {'f200_id_pedido_fact': '900123', 'f461_id_punto_envio': '001',
+                'f430_id_cond_pago': cond}
+
+    def _alertas(self):
+        from app.models.siesa_job import SiesaJob
+        return [j for j in SiesaJob.query.filter_by(tipo='ALERTA_EMAIL').all()]
+
+    def _tipos(self):
+        # `payload` es Text con JSON serializado, no un dict.
+        import json
+        return {json.loads(j.payload).get('tipo_alerta') for j in self._alertas()}
+
+    def test_un_pedido_de_contado_deja_aviso(self, app, db):
+        gw = self._gw()
+        gw.trigger_factura_desde_remision('RM', 1, self._cabecera(self.CONTADO))
+        db.session.commit()
+        assert 'FE_CONTADO_NO_APROBABLE' in self._tipos(), (
+            '\nSe facturó un pedido de contado sin dejar rastro. Esa FE queda '
+            'en Elaboración y la liquidación no va a encontrar la CxC.')
+
+    def test_un_pedido_a_credito_no_deja_aviso(self, app, db):
+        """Si avisara siempre, el aviso no distingue nada — 639 avisos conocidos
+        ya hicieron invisible al único real una vez."""
+        gw = self._gw()
+        gw.trigger_factura_desde_remision('RM', 2, self._cabecera('C02'))
+        db.session.commit()
+        assert not self._alertas()
+
+    def test_un_pedido_sin_condicion_avisa_otra_cosa(self, app, db):
+        """El vacío es un problema de maestro y la factura sale bien. Mandar la
+        alerta de contado haría que alguien fuera a corregir un documento que
+        no tiene nada malo."""
+        gw = self._gw()
+        gw.trigger_factura_desde_remision('RM', 3, self._cabecera(''))
+        db.session.commit()
+        assert self._tipos() == {'DATA_MAESTRA_COND_PAGO'}
+
+    def test_la_factura_se_emite_igual(self, app, db):
+        """Bloquear acá dejaría la remisión hecha, el inventario descargado y
+        ninguna factura. El aviso no puede convertirse en un bloqueo."""
+        gw = self._gw()
+        r = gw.trigger_factura_desde_remision('RM', 4, self._cabecera(self.CONTADO))
+        assert r is not None

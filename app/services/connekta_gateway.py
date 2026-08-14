@@ -218,11 +218,18 @@ class ConnektaGateway:
         # Condición de pago para entradas de OC — campo f451_id_cond_pago (pos 324, ancho 3/4)
         # Verificar en Siesa: Cartera → Condiciones de pago → código usado en OCs
         self.cond_pago_compras = os.getenv('SIESA_COND_PAGO_COMPRAS', '')
-        # Condición de pago para facturas de venta (CxC) — f461_id_cond_pago en 142943.
-        # Distinto de cond_pago_compras (CxP). El .NET serializer de Connekta V2 colapsa
-        # con HTTP 500 si se envía null — SIESA_COND_PAGO_VENTAS es obligatorio.
-        # Verificar en Siesa: Ventas → Condiciones de pago → código de la condición activa.
+        # El código que la empresa usa para CONTADO. **No es un valor a emitir:
+        # es el que hay que reconocer para no emitirlo.** Ver
+        # `cond_pago.aprobable_en_ruta` — una FE de contado no se aprueba sin
+        # recaudo, y en ruta el recaudo lo hace el conductor horas después.
+        # Verificar en Siesa: Ventas → Condiciones de pago.
         self.cond_pago_ventas = os.getenv('SIESA_COND_PAGO_VENTAS', '')
+        # La condición que lleva la FE de ruta cuando el pedido no trae ninguna.
+        # Crédito a un día: la factura nace con CxC y el RC del conductor la
+        # salda. Hasta el 2026-08-13 este hueco lo tapaba `cond_pago_ventas`
+        # —el código de contado— y eso produce una factura que Siesa deja en
+        # Elaboración con el inventario ya descargado.
+        self.cond_pago_ruta = os.getenv('SIESA_COND_PAGO_RUTA', '')
         # Lista de precio en Siesa — campo requerido f470_id_lista_precio (pos 169, ancho 3)
         # Verificar en Siesa: Ventas → Listas de precio → código de la lista activa
         self.lista_precio = os.getenv('SIESA_LISTA_PRECIO', '')
@@ -1681,47 +1688,92 @@ class ConnektaGateway:
         sucursal     = cabecera.get('f461_id_sucursal_pedido_rem') or None  # None → Siesa hereda del maestro
         tipo_cli     = cabecera.get('f430_id_tipo_cli_fact') or None        # None → Siesa hereda del maestro
         _cond_pago_siesa = cabecera.get('f430_id_cond_pago')
-        cond_pago    = _cond_pago_siesa or self.cond_pago_ventas or None
+        # El hueco se tapa con la condición de RUTA (crédito a un día), NO con
+        # el código de contado. Ver `cond_pago.aprobable_en_ruta`: una FE de
+        # contado queda en Elaboración —probado en producción el 2026-08-13—
+        # y para entonces la remisión ya descargó el inventario.
+        cond_pago    = _cond_pago_siesa or self.cond_pago_ruta or None
         if not cond_pago:
             raise ValueError(
-                'f430_id_cond_pago no disponible en cabecera y SIESA_COND_PAGO_VENTAS no configurado — '
-                'Connekta V2 .NET serializer colapsa con HTTP 500 si se envía null'
+                f'RM {tipo_docto_rm}-{consec_rm}: el pedido no trae f430_id_cond_pago y '
+                'SIESA_COND_PAGO_RUTA no está configurado. No se emite la factura: '
+                'Connekta V2 colapsa con HTTP 500 si el campo va en null, y caer al '
+                'código de contado produce una FE que Siesa no aprueba. '
+                'La RM ya está en BD — el reintento del DLQ va directo al 142943.'
             )
-        # La lectura del vacío vive en `services/cond_pago.py` — misma política
-        # que usa la pantalla del conductor. Acá el fallback es OBLIGADO
-        # (Connekta V2 colapsa con null), pero la clasificación no puede
-        # divergir entre los dos sitios: eso es lo que hacía que el conductor
-        # viera «Valor a Cobrar» sobre un pedido sin condición conocida.
+        # La lectura de la condición vive en `services/cond_pago.py` — misma
+        # política que usa la pantalla del conductor y que cuenta el desglose.
         from app.services import cond_pago as _cp
-        if _cp.clasificar(_cond_pago_siesa, self.cond_pago_ventas) == _cp.AUSENTE:
-            # Data maestra incompleta — factura se emite como CONTADO pero no bloquea el despacho.
-            # Alerta asíncrona para que el equipo comercial corrija el maestro del tercero en Siesa.
-            _tercero_alerta = cabecera.get('f200_id_pedido_fact') or 'desconocido'
+        _clase = _cp.clasificar(_cond_pago_siesa, self.cond_pago_ventas)
+        _tercero_alerta = cabecera.get('f200_id_pedido_fact') or 'desconocido'
+
+        # Dos avisos distintos, y el segundo es el grave. Hasta el 2026-08-13
+        # solo existía el primero, y decía «factura emitida como CONTADO» —
+        # que era falso en los dos casos: con el fallback nuevo no sale de
+        # contado, y cuando el pedido SÍ declara contado la factura no se
+        # emite aprobada, se queda en Elaboración.
+        _aviso = None
+        if _clase == _cp.AUSENTE:
             logger.warning(
-                '[CONNEKTA] RM %s-%s: f430_id_cond_pago vacío — fallback %s (CONTADO). '
-                'Maestro del cliente %s en Siesa sin condición de pago asignada.',
+                '[CONNEKTA] RM %s-%s: f430_id_cond_pago vacío — se usa la condición '
+                'de ruta %s. Maestro del cliente %s sin condición asignada.',
                 tipo_docto_rm, consec_rm, cond_pago, _tercero_alerta
             )
+            _aviso = (
+                'DATA_MAESTRA_COND_PAGO',
+                '[WMS ALERTA] Pedido sin condición de pago en el maestro de Siesa',
+                f'El pedido de la remisión {tipo_docto_rm}-{consec_rm} (cliente '
+                f'{_tercero_alerta}) no trae condición de pago: el maestro del '
+                f'tercero en Siesa está incompleto.\n\n'
+                f'La factura se emitió con la condición de ruta ({cond_pago}), que '
+                f'es la correcta para este flujo — la cartera la salda el recibo de '
+                f'caja del conductor. No hay que hacer nada con este documento.\n\n'
+                f'Acción requerida: asignarle condición de pago al tercero '
+                f'{_tercero_alerta} en Siesa Enterprise.'
+            )
+        elif not _cp.aprobable_en_ruta(_cond_pago_siesa, self.cond_pago_ventas):
+            # El pedido declara CONTADO. Se emite igual —bloquear acá dejaría la
+            # remisión hecha y el inventario descargado sin factura, que es peor—
+            # pero se declara, porque el documento va a quedar en Elaboración y
+            # hoy nadie se entera hasta que la liquidación no encuentra la CxC.
+            logger.error(
+                '[CONNEKTA] RM %s-%s: el pedido declara CONTADO (%s). La FE va a '
+                'quedar en ELABORACIÓN — Siesa no aprueba una factura de contado '
+                'sin recaudo. Cliente %s.',
+                tipo_docto_rm, consec_rm, cond_pago, _tercero_alerta
+            )
+            _aviso = (
+                'FE_CONTADO_NO_APROBABLE',
+                '[WMS ALERTA] Factura de ruta emitida como CONTADO — no se va a aprobar',
+                f'La remisión {tipo_docto_rm}-{consec_rm} (cliente {_tercero_alerta}) '
+                f'viene de un pedido con condición de pago {cond_pago}, que es '
+                f'CONTADO.\n\n'
+                f'Siesa no aprueba una factura de contado sin el recaudo en el mismo '
+                f'documento, y en ruta ese recaudo no existe todavía: lo hace el '
+                f'conductor. Probado el 2026-08-13 con dos facturas ($263.963 y '
+                f'$14.200), las dos quedaron en Elaboración con «el valor de la '
+                f'cartera debe ser igual al valor de las CxC».\n\n'
+                f'Consecuencia: el inventario ya salió (la remisión existe), la '
+                f'factura queda sin aprobar y la liquidación no va a encontrar la '
+                f'cuenta por cobrar contra la cual cruzar el recibo de caja.\n\n'
+                f'Acción requerida: cambiar la condición de pago del pedido en Siesa '
+                f'a la de ruta (crédito a un día) y volver a aprobar el documento. '
+                f'Los pedidos de ruta no deben salir de contado.'
+            )
+
+        if _aviso:
             # Encolar alerta asincrona via DLQ — NO enviar email sync desde el hot
             # path de facturación (el POST HTTP a Resend tiene timeout 15s y bloquea
             # el worker; esta alerta no es operacionalmente urgente).
             try:
                 from app.models.siesa_job import SiesaJob
                 from app.extensions import db as _db_alert
-                _cuerpo = (
-                    f'El pedido RM-{consec_rm} del cliente {_tercero_alerta} fue facturado '
-                    f'automáticamente como CONTADO ({cond_pago}) porque Siesa no devolvió '
-                    f'condición de pago (f430_id_cond_pago vacío).\n\n'
-                    f'Acción requerida: actualizar el maestro del tercero {_tercero_alerta} '
-                    f'en Siesa Enterprise con la condición de pago correcta para evitar '
-                    f'futuras facturas incorrectas y posibles fricciones con el cliente.\n\n'
-                    f'Documento: {tipo_docto_rm}-{consec_rm}'
-                )
+                _tipo_alerta, _asunto, _cuerpo = _aviso
                 SiesaJob.encolar(
                     'ALERTA_EMAIL',
                     {
-                        'tipo_alerta': 'DATA_MAESTRA_COND_PAGO',
-                        'asunto': '[WMS ALERTA] Factura emitida como CONTADO por data incompleta en Siesa',
+                        'tipo_alerta': _tipo_alerta,
+                        'asunto': _asunto,
                         'cuerpo_html': f'<pre>{_cuerpo}</pre>',
                         'cuerpo_texto': _cuerpo,
                     },
