@@ -632,3 +632,93 @@ class TestLaCondicionDeclaradaPorElPedido:
         d = client.get(_URL, headers=h).get_json()['recaudos']['condicion_declarada']
         assert d['(sin consultar)'] == 1
         assert d['ausente (vacío)'] == 1
+
+
+class TestDeContadorAListaDeTrabajo:
+    """Un número dice «pasó N veces»; la lista dice **cuáles**.
+
+    Es la misma diferencia que hubo entre saber que había 159 jobs en la DLQ y
+    poder triarlos. Acá importa más, porque cada una de esas remisiones pudo
+    dejar una factura en Elaboración **con el inventario ya descargado** — que
+    es peor que no facturar: la mercancía ya salió.
+    """
+
+    CONTADO = 'C01'
+
+    def _facturar(self, cond_pago, consec):
+        from app.services.connekta_gateway import ConnektaGateway
+        gw = ConnektaGateway()
+        gw.modo_simulacion = True
+        gw.cond_pago_ventas = self.CONTADO
+        gw.cond_pago_ruta = 'C02'
+        gw.trigger_factura_desde_remision('RM', consec, {
+            'f200_id_pedido_fact': '900123456',
+            'f461_id_punto_envio': '001',
+            'f430_id_cond_pago': cond_pago,
+        })
+
+    def test_la_alerta_nueva_trae_la_remision_en_campo_propio(self, client, db, h):
+        self._facturar('', 8001)
+        db.session.commit()
+        d = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']['documentos']
+        assert len(d) == 1
+        assert d[0]['rm_consec'] == '8001'
+        assert d[0]['campos_propios'] is True
+        assert d[0]['cond_pago_emitida'] == 'C02'
+
+    def test_lo_emitido_con_la_condicion_de_ruta_no_hay_que_revisarlo(self, client, db, h):
+        self._facturar('', 8002)
+        db.session.commit()
+        c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
+        assert c['a_revisar_en_siesa'] == 0
+
+    def test_una_alerta_vieja_si_hay_que_revisarla(self, client, db, h):
+        """El fallback anterior era el código de CONTADO. Esas facturas pudieron
+        quedar en Elaboración y son las que alguien tiene que ir a mirar."""
+        from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar('ALERTA_EMAIL', {
+            'tipo_alerta': 'DATA_MAESTRA_COND_PAGO',
+            'asunto': '[WMS ALERTA] Factura emitida como CONTADO por data incompleta',
+            'cuerpo_texto': 'El pedido RM-4711 del cliente 900999 fue facturado '
+                            'automáticamente como CONTADO (C01)...',
+        })
+        db.session.commit()
+        c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
+        assert c['a_revisar_en_siesa'] == 1
+        doc = c['documentos'][0]
+        assert doc['rm_consec'] == '4711'
+        assert doc['campos_propios'] is False, (
+            'un dato sacado del texto del correo no puede devolverse como si '
+            'fuera un campo')
+
+    def test_las_dos_poblaciones_no_se_mezclan(self, client, db, h):
+        from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar('ALERTA_EMAIL', {
+            'tipo_alerta': 'DATA_MAESTRA_COND_PAGO',
+            'cuerpo_texto': 'El pedido RM-4711 ... CONTADO',
+        })
+        self._facturar('', 8003)
+        db.session.commit()
+        c = client.get(_URL, headers=h).get_json()['condicion_pago_ausente']
+        assert c['alertas'] == 2
+        assert c['a_revisar_en_siesa'] == 1, (
+            'el total mezcla las sanas con las que hay que revisar')
+
+    def test_el_contado_declarado_tambien_lista(self, client, db, h):
+        self._facturar(self.CONTADO, 8004)
+        db.session.commit()
+        d = client.get(_URL, headers=h).get_json()['fe_contado_no_aprobable']['documentos']
+        assert len(d) == 1 and d[0]['rm_consec'] == '8004'
+
+    def test_un_payload_ilegible_no_tumba_el_endpoint(self, client, db, h):
+        """El desglose es lo que se mira cuando algo va mal. No puede ser lo
+        siguiente que se rompe."""
+        from app.models.siesa_job import SiesaJob
+        from app.extensions import db as _db
+        j = SiesaJob.encolar('ALERTA_EMAIL', {'tipo_alerta': 'DATA_MAESTRA_COND_PAGO'})
+        _db.session.flush()
+        j.payload = '{"tipo_alerta": "DATA_MAESTRA_COND_PAGO", roto'
+        db.session.commit()
+        r = client.get(_URL, headers=h)
+        assert r.status_code == 200
+        assert r.get_json()['condicion_pago_ausente']['documentos'] == []

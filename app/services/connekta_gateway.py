@@ -1776,6 +1776,15 @@ class ConnektaGateway:
                         'asunto': _asunto,
                         'cuerpo_html': f'<pre>{_cuerpo}</pre>',
                         'cuerpo_texto': _cuerpo,
+                        # Campos propios, no prosa. Hasta hoy el número de la
+                        # remisión solo existía dentro del texto del correo, y
+                        # sacarlo de ahí obliga a parsear una frase —
+                        # exactamente lo que dejó el contador del desglose en
+                        # cero cuando ese texto se reescribió.
+                        'rm_tipo': tipo_docto_rm,
+                        'rm_consec': str(consec_rm),
+                        'tercero': _tercero_alerta,
+                        'cond_pago_emitida': cond_pago,
                     },
                 )
                 # flush (no commit) — el job se persiste cuando el caller haga commit.

@@ -1091,9 +1091,23 @@ Trinquetes: `tests/test_cond_pago.py::TestLaFacturaDeRutaNoPuedeSerDeContado`,
 `::TestElHuecoNoSeTapaConElCodigoDeContado`, `::TestElContadoDelPedidoNoPasaCallado`
 y `tests/test_09_guards_criticos.py::TestFallbackCondPagoAlerta`.
 
-**Cómo medirlo:** `condicion_declarada` en `GET /api/rutas/liquidacion/desglose`
-dice qué condición declara cada pedido de ruta, sobre todos a la vez. Si sale
-algo en `contado`, esos son los que van a quedar en Elaboración.
+**Cómo medirlo, hacia adelante:** `condicion_declarada` en
+`GET /api/rutas/liquidacion/desglose` dice qué condición declara cada pedido de
+ruta, sobre todos a la vez. Si sale algo en `contado`, esos van a quedar en
+Elaboración.
+
+**Y hacia atrás — el daño que ya pudo ocurrir.** El mismo endpoint devuelve
+`condicion_pago_ausente.a_revisar_en_siesa` con su lista de remisiones. Son las
+que se facturaron **bajo el fallback viejo**, el que emitía contado: cada una
+pudo dejar una FE en Elaboración con el inventario ya descargado.
+
+La distinción es estructural, no por fecha: las alertas nuevas llevan
+`cond_pago_emitida` en el payload; las viejas no. Una fecha de corte escrita en
+el código se desincroniza del despliegue real.
+
+Las alertas viejas solo tienen el número de remisión **dentro del texto del
+correo**, así que se saca de ahí — y se marca con `campos_propios: false`. Un
+dato parseado de una prosa no se devuelve como si fuera un campo.
 
 ### Lo que BK-OPS-01 v2.1 retira — no implementar por inercia
 

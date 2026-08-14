@@ -771,16 +771,66 @@ def liquidacion_desglose():
     # `like('%data incompleta%')` y al reescribirse el texto de la alerta el
     # contador se quedó en cero para siempre — sin fallar, que es lo peligroso.
     # El tipo es la identidad del aviso; la prosa es presentación.
-    def _cuenta_alertas(tipo):
+    def _jobs_alerta(tipo):
         return (SiesaJob.query
                 .filter(SiesaJob.tipo == 'ALERTA_EMAIL')
                 .filter(SiesaJob.payload.like(f'%"tipo_alerta": "{tipo}"%'))
-                .count())
+                .order_by(SiesaJob.id.desc()))
+
+    def _cuenta_alertas(tipo):
+        return _jobs_alerta(tipo).count()
 
     alertas_cond = _cuenta_alertas('DATA_MAESTRA_COND_PAGO')
     # Distinto y más grave: el pedido declaraba contado y la FE va a quedar en
     # Elaboración. Verificado en producción el 2026-08-13.
     alertas_fe_contado = _cuenta_alertas('FE_CONTADO_NO_APROBABLE')
+
+    def _documentos_a_revisar(tipo, limite=200):
+        """De contador a lista de trabajo.
+
+        Un número dice «pasó N veces»; esto dice **cuáles**, que es lo que
+        alguien puede ir a mirar en Siesa. Es la misma diferencia que hubo
+        entre saber que había 159 jobs en la DLQ y poder triarlos.
+
+        `cond_pago_emitida` separa dos poblaciones que el contador mezclaba:
+
+          · presente → la FE salió con la condición de ruta. Sano.
+          · ausente  → se emitió bajo el fallback viejo, que era el código de
+            CONTADO. **Esa factura pudo quedar en Elaboración con la remisión
+            ya hecha**, y es lo que hay que ir a revisar.
+
+        La distinción es estructural y no por fecha a propósito: una fecha de
+        corte escrita acá se desincroniza del despliegue real.
+        """
+        import json as _json
+        import re as _re
+        salida = []
+        for job in _jobs_alerta(tipo).limit(limite).all():
+            try:
+                p = _json.loads(job.payload)
+            except Exception:
+                continue
+            rm = p.get('rm_consec')
+            if rm is None:
+                # Alerta vieja: el número de la remisión solo vive dentro del
+                # texto del correo. Se saca de ahí y **se marca**, en vez de
+                # devolverlo como si fuera un campo.
+                m = _re.search(r'RM-(\d+)', p.get('cuerpo_texto') or '')
+                rm = m.group(1) if m else None
+            emitida = p.get('cond_pago_emitida')
+            salida.append({
+                'rm_tipo': p.get('rm_tipo'),
+                'rm_consec': rm,
+                'tercero': p.get('tercero'),
+                'cond_pago_emitida': emitida,
+                'fecha': job.fecha_creacion.isoformat() if job.fecha_creacion else None,
+                'campos_propios': 'rm_consec' in p,
+                'revisar_en_siesa': emitida is None,
+            })
+        return salida
+
+    _docs_cond = _documentos_a_revisar('DATA_MAESTRA_COND_PAGO')
+    _docs_contado = _documentos_a_revisar('FE_CONTADO_NO_APROBABLE')
 
     # EL DENOMINADOR, sin el cual el conteo de arriba no dice nada.
     #
@@ -864,12 +914,23 @@ def liquidacion_desglose():
             'alertas': alertas_cond,
             'facturas_emitidas_por_el_gateway': _emitidas,
             'concluyente': _emitidas >= 50,
-            'nota': ('Veces que el pedido no traía f430_id_cond_pago y la FE salió '
-                     'con la condición de ruta. Contar facturas NO lo detecta: el '
-                     'fallback rellena el campo antes de emitir.'),
+            'documentos': _docs_cond,
+            # LA CIFRA QUE IMPORTA de esta sección, y no es el total.
+            #
+            # Hasta el 2026-08-13 el hueco de `f430_id_cond_pago` se tapaba con
+            # el código de CONTADO. Cada una de estas remisiones pudo dejar una
+            # factura en Elaboración **con el inventario ya descargado** — que
+            # es peor que no facturar, porque la mercancía ya salió.
+            'a_revisar_en_siesa': sum(1 for d in _docs_cond if d['revisar_en_siesa']),
+            'nota': ('Veces que el pedido no traía f430_id_cond_pago. Contar '
+                     'facturas NO lo detecta: el fallback rellena el campo antes '
+                     'de emitir. `a_revisar_en_siesa` son las emitidas bajo el '
+                     'fallback viejo (contado): revisar si la FE quedó en '
+                     'Elaboración. Las nuevas salen con la condición de ruta.'),
         },
         'fe_contado_no_aprobable': {
             'alertas': alertas_fe_contado,
+            'documentos': _docs_contado,
             'nota': ('Pedidos de ruta que declararon CONTADO. Su factura queda en '
                      'Elaboración —Siesa no la aprueba sin recaudo— con el '
                      'inventario ya descargado. Cualquier valor > 0 es un '
