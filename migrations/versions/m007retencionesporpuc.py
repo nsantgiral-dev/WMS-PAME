@@ -51,7 +51,11 @@ def upgrade():
     # manual en el ERP. Regla 0: el lado conservador es no reenviar.
     op.execute(
         "UPDATE recaudos_entrega SET siesa_dc_pucs = '[\"__HISTORICO__\"]' "
-        "WHERE siesa_dc_triggered = 1"
+        # `WHERE <bool>` y no `= 1`: en Postgres `boolean = integer` es un
+        # error de tipo, y esto corre en el `releaseCommand` — habría tumbado
+        # el deploy entero. SQLite lo aceptaba, y los tests usan `create_all()`,
+        # así que **ninguna prueba lo ejercitaba**.
+        "WHERE siesa_dc_triggered"
     )
 
 
