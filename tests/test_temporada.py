@@ -484,3 +484,49 @@ class TestSelloDeHoraDelActa:
         """Una hora sin zona declarada es una hora que hay que adivinar."""
         src = self._js()
         assert 'hora de Colombia' in src and 'UTC' in src
+
+
+class TestElCuNoSeFabricaCuandoVale_0:
+    """`cu == 0` no es dato ausente: es «se vende a pérdida, no compres».
+
+    `costo_service` lo calcula como `max(venta − costo, 0)`. El fallback
+    `info_costo.get('cu') or max(venta − costo, costo * margen_pct)` lo leía
+    como hueco y fabricaba **markup sobre costo** — el error que el propio
+    `costo_service.py:53-67` documenta por haber movido el ratio crítico de
+    0,583 a 0,442.
+
+    Estaba dormido: sin `precios_realizados` todo precio es supuesto y `cu > 0`
+    siempre. Se armaba solo el día que llegara el precio medido.
+    """
+
+    def test_no_hay_fallback_de_cu_por_AST(self):
+        """Por AST: un detector de texto se atrapa en este mismo docstring."""
+        import ast
+        import pathlib
+
+        arbol = ast.parse(pathlib.Path('app/services/temporada_service.py').read_text())
+        for n in ast.walk(arbol):
+            if not (isinstance(n, ast.Assign) and len(n.targets) == 1):
+                continue
+            destino = n.targets[0]
+            if not (isinstance(destino, ast.Name) and destino.id == 'cu'):
+                continue
+            # `float(info_costo['cu'])` — sin `or` en la expresión.
+            tiene_or = any(isinstance(x, ast.BoolOp) and isinstance(x.op, ast.Or)
+                           for x in ast.walk(n.value))
+            assert not tiene_or, (
+                'volvió el fallback del Cu. Con `cu == 0` fabrica un margen y '
+                'el ratio crítico pasa de 0 (no comprar) a 0,308 (comprar): se '
+                'compra el SKU que pierde plata, en el lado irreversible.')
+
+    def test_el_markup_y_el_margen_no_son_lo_mismo(self):
+        """La aritmética que el fallback reintroducía, para que quede medida.
+
+        Con m=0,40: markup da 0,400×costo y el margen canónico 0,667×costo.
+        """
+        costo, m = 100.0, 0.40
+        markup = costo * m
+        canonico = costo / (1 - m) - costo
+        assert round(markup, 2) == 40.0
+        assert round(canonico, 2) == 66.67
+        assert canonico / markup > 1.6

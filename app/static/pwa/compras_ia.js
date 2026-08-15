@@ -394,7 +394,21 @@ function _renderDeriva(el, data) {
   html += _compKpi(sobre, 'Sobrecostos', sobre > 0 ? 'var(--red)' : 'var(--green)');
   html += '</div>';
 
-  if (n === 0) {
+  if (n === 0 && data.nota) {
+    // `nota` viene cuando la comparación NO se pudo hacer — hoy siempre, porque
+    // no hay un solo acuerdo marco registrado (`POST /api/compras/acuerdos` no
+    // tiene pantalla). Pintar el verde acá era un todo-claro fabricado sobre
+    // una consulta que nunca corrió: cero derivas porque no se comparó nada,
+    // presentado como «los precios coinciden».
+    //
+    // Es `[]` con dos significados, y el caro es el que se veía. Un todo-claro
+    // falso en una pantalla de compras es peor que una pantalla vacía: la vacía
+    // hace preguntar.
+    html += `<div style="color:var(--tx3);padding:20px;text-align:center;font-size:13px;
+      background:var(--bg-s);border:1px dashed var(--brd);border-radius:8px;">
+      <div style="font-weight:700;margin-bottom:4px;">No se comparó nada</div>
+      ${data.nota}</div>`;
+  } else if (n === 0) {
     html += '<div style="color:var(--green);padding:20px;text-align:center;font-size:13px;">Sin derivas detectadas — precios facturados coinciden con acuerdos.</div>';
   } else {
     html += '<div style="font-size:12px;font-weight:700;color:var(--tx);margin-bottom:6px;">Derivas precio facturado vs pactado</div>';

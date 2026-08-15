@@ -931,7 +931,22 @@ class KardexService:
 
         # Días con stock
         dias_stock = dict(
-            db.session.query(stock_group_key, func.count())
+            # `count(distinct(fecha))`, **no `count()`**. `StockDiario` es único
+            # en (referencia, bodega, fecha): agrupando solo por referencia, un
+            # `count()` cuenta **bodega-día** y no día. Con 3 bodegas, un SKU con
+            # stock 100 días reportaba 300, la demanda diaria salía dividida por
+            # 3, y el `min(n, dias_calendario)` de `dias_expuestos` saturaba el
+            # factor de censura en 1,00 — la pantalla pintaba «360d con stock ·
+            # +0%» en verde justo donde la corrección se había perdido.
+            #
+            # Dirección del error: **comprar de menos**. Y `clasificar_syntetos_boylan`
+            # contaba bien sobre la misma tabla, así que S-B y ROP daban números
+            # distintos del mismo SKU.
+            #
+            # Agrupando por referencia|bodega da lo mismo que `count()` —las
+            # filas ya son únicas por fecha dentro del grupo—, así que el
+            # `distinct` es correcto en los dos modos.
+            db.session.query(stock_group_key, func.count(func.distinct(StockDiario.fecha)))
             .filter(StockDiario.fecha >= fecha_limite)
             .filter(StockDiario.tuvo_stock == True)
             .group_by(stock_group_key)
@@ -1054,7 +1069,22 @@ class KardexService:
             k_stock = StockDiario.referencia + '|' + StockDiario.bodega
 
         dias_stock = dict(
-            db.session.query(k_stock, func.count())
+            # `count(distinct(fecha))`, **no `count()`**. `StockDiario` es único
+            # en (referencia, bodega, fecha): agrupando solo por referencia, un
+            # `count()` cuenta **bodega-día** y no día. Con 3 bodegas, un SKU con
+            # stock 100 días reportaba 300, la demanda diaria salía dividida por
+            # 3, y el `min(n, dias_calendario)` de `dias_expuestos` saturaba el
+            # factor de censura en 1,00 — la pantalla pintaba «360d con stock ·
+            # +0%» en verde justo donde la corrección se había perdido.
+            #
+            # Dirección del error: **comprar de menos**. Y `clasificar_syntetos_boylan`
+            # contaba bien sobre la misma tabla, así que S-B y ROP daban números
+            # distintos del mismo SKU.
+            #
+            # Agrupando por referencia|bodega da lo mismo que `count()` —las
+            # filas ya son únicas por fecha dentro del grupo—, así que el
+            # `distinct` es correcto en los dos modos.
+            db.session.query(k_stock, func.count(func.distinct(StockDiario.fecha)))
             .filter(StockDiario.fecha >= fecha_limite)
             .filter(StockDiario.tuvo_stock == True)  # noqa: E712
             .group_by(k_stock)
@@ -1170,9 +1200,12 @@ class KardexService:
 
         # Días con stock por (ref, semana) — el denominador de cada semana
         dias_stock = defaultdict(int)
+        # `.distinct()`: sin él, un SKU con stock el mismo día en 3 bodegas
+        # devuelve 3 filas y suma 3 al denominador de esa semana.
         for ref, f in (db.session.query(StockDiario.referencia, StockDiario.fecha)
                        .filter(StockDiario.fecha >= fecha_limite)
-                       .filter(StockDiario.tuvo_stock == True).all()):  # noqa: E712
+                       .filter(StockDiario.tuvo_stock == True)
+                       .distinct().all()):  # noqa: E712
             dias_stock[(ref, _lunes(f))] += 1
 
         crudo = defaultdict(float)

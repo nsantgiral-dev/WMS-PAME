@@ -97,9 +97,12 @@ class TemporadaService:
         # Días con stock por (ref, temporada) y por (ref, año) — el denominador
         # de la descensura tiene que ser del mismo periodo que el numerador.
         dias_stock = defaultdict(int)
+        # `.distinct()`: `StockDiario` es único en (referencia, bodega, fecha),
+        # así que sin él un SKU en 3 bodegas suma 3 días por cada día real —
+        # y este denominador decide **qué SKU es de temporada**.
         for ref, f in db.session.query(StockDiario.referencia, StockDiario.fecha) \
                 .filter(StockDiario.fecha >= desde) \
-                .filter(StockDiario.tuvo_stock == True).all():  # noqa: E712
+                .filter(StockDiario.tuvo_stock == True).distinct().all():  # noqa: E712
             dias_stock[(ref, temporada_de(f))] += 1
 
         dem_temp = defaultdict(lambda: defaultdict(float))
@@ -235,7 +238,23 @@ class TemporadaService:
             if not ventas_pasadas:
                 continue
 
-            cu = float(info_costo.get('cu') or max(venta - costo, costo * margen_pct))
+            # **Sin `or`.** `costo_service` calcula `cu = max(venta − costo, 0)`,
+            # así que `cu == 0` no es dato ausente: es «este SKU se vende a
+            # pérdida, no compres más». El `or` lo leía como hueco y fabricaba
+            # `costo * margen_pct`, que además es **markup sobre costo** — el
+            # error que `costo_service.py:53-67` documenta con veinte líneas por
+            # haber movido el ratio crítico de 0,583 a 0,442.
+            #
+            # Con m=0,40 daba 0,400×costo contra 0,667×costo canónico (1,67×), y
+            # con el margen de CHINA (0,435), 1,92×. El efecto sobre la decisión
+            # es que el ratio crítico pasa de 0 —Q* ≈ 0, no comprar— a 0,308,
+            # o sea Q* = μ − 0,5σ: **se compra el SKU que pierde plata**, en el
+            # lado irreversible.
+            #
+            # Que la clave exista está garantizado: una referencia sin costo de
+            # ninguna fuente ya salió por `costo_fantasma` unas líneas arriba, y
+            # `resolver_costos` siempre escribe `cu` cuando devuelve una fila.
+            cu = float(info_costo['cu'])
             co = costo * (tasa_capital + tasa_liquidacion)
 
             items.append({

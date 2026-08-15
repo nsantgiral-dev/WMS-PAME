@@ -135,3 +135,51 @@ class TestEndpoints:
     def test_comparador_endpoint(self, app):
         rules = [r.rule for r in app.url_map.iter_rules()]
         assert any('comparador' in r for r in rules)
+
+
+class TestElTodoClaroNoSeFabrica:
+    """`total: 0` significa dos cosas y solo una es buena noticia.
+
+    `detectar_deriva_precios` devuelve `{'derivas': [], 'total': 0, 'nota':
+    'Sin acuerdos vigentes para comparar'}` cuando no hay con qué comparar — y
+    hoy es siempre, porque `POST /api/compras/acuerdos` no tiene pantalla y no
+    hay un solo acuerdo marco registrado.
+
+    La pantalla ignoraba `nota` y pintaba en verde «Sin derivas detectadas —
+    precios facturados coinciden con acuerdos». Cero derivas porque nadie
+    comparó, presentado como que los precios coinciden.
+
+    Es `[]` con dos significados —el mismo patrón que ya costó una vez con
+    `get_compromisos_pedido`— y acá el caro es el que se veía.
+    """
+
+    def test_el_servicio_declara_que_no_comparo(self, db):
+        from app.services.compras_inteligencia_service import ComprasInteligenciaService
+        r = ComprasInteligenciaService.detectar_deriva()
+        assert r['total'] == 0
+        assert r.get('nota'), (
+            'el servicio dejó de declarar por qué no hay derivas. Sin `nota`, '
+            'la pantalla no puede distinguir «no hay desvíos» de «no se comparó».')
+
+    def test_la_pantalla_consume_la_nota(self):
+        """Por AST sobre el JS: que `nota` se lea, no solo que esté escrita.
+
+        Un `grep` acá se atraparía en este propio docstring — pasó cinco veces
+        en este repo.
+        """
+        import pathlib
+        import re
+
+        js = pathlib.Path('app/static/pwa/compras_ia.js').read_text()
+        cuerpo = re.search(r'function _renderDeriva\(.*?\n}\n', js, re.S)
+        assert cuerpo, 'ya no existe _renderDeriva'
+        src = cuerpo.group(0)
+        assert 'data.nota' in src, (
+            'la pantalla de deriva volvió a ignorar `nota`: pinta el todo-claro '
+            'verde sobre una comparación que nunca ocurrió.')
+        # Y el verde solo puede salir cuando NO hay nota.
+        i_nota = src.index('data.nota')
+        i_verde = src.index('Sin derivas detectadas')
+        assert i_nota < i_verde, (
+            'el mensaje verde se evalúa antes que la nota — el todo-claro falso '
+            'vuelve a ganar.')
