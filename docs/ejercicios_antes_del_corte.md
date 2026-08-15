@@ -184,3 +184,26 @@ QA y paciencia.
   cuál faltó. «0 hallazgos» y «no se miró» tienen que verse distinto.
 - La fecha y el ambiente. Un ejercicio en QA no certifica producción, y el
   registro es lo que evita discutirlo dentro de un mes.
+
+
+---
+
+# Pendientes con fecha
+
+## Sábado 2026-08-15 — aplazado por falta de Siesa QA
+
+**El ejercicio 1 (liquidación real) no se pudo hacer: no hay Siesa QA los
+sábados.** Queda para el primer día hábil con ambiente disponible, y sigue
+siendo el que bloquea el ciclo del dinero.
+
+## Antes de mover `CONNEKTA_URL` a producción
+
+**Quitar `SKIP_FE_CHECK` primero.** Hoy está en `true` contra QA, que es
+inofensivo. Apaga el guard anti-duplicado de factura —`get_factura_desde_pedido`
+devuelve lista vacía sin preguntarle a Siesa— y sus tres llamadores vivos
+(packing, despacho parcial, reconciliación) leen eso como «no hay factura
+previa, seguí».
+
+Son **dos variables que tienen que moverse juntas** y nada las ataba. Desde el
+2026-08-15, `/api/health/siesa` lo declara como combinación peligrosa en cuanto
+la URL deja de ser QA.

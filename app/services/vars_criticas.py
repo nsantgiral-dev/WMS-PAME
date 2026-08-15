@@ -196,7 +196,41 @@ def problemas() -> List[dict]:
                 f'{var.nombre} no está configurada y no tiene default usable.'
             ),
         })
+    salida.extend(_combinaciones_peligrosas())
     return salida
+
+
+#: Variables que por separado están bien y **juntas rompen algo**. Ninguna lista
+#: de «¿está configurada?» las puede ver: el defecto no está en un valor, está
+#: en el par.
+def _combinaciones_peligrosas() -> List[dict]:
+    import os
+
+    fuera = []
+    url = (os.getenv('CONNEKTA_URL') or '').lower()
+    apunta_a_qa = 'serviciosqa' in url or 'localhost' in url
+
+    if os.getenv('SKIP_FE_CHECK', '').lower() == 'true' and not apunta_a_qa:
+        fuera.append({
+            'variable': 'SKIP_FE_CHECK + CONNEKTA_URL',
+            'estado': 'PELIGROSA',
+            'rompe': 'facturas duplicadas',
+            'valor_efectivo': f'SKIP_FE_CHECK=true contra {url or "(sin URL)"}',
+            'detalle': (
+                'SKIP_FE_CHECK apaga el guard anti-duplicado: '
+                '`get_factura_desde_pedido` devuelve lista vacía sin preguntarle '
+                'a Siesa, y sus TRES llamadores vivos —packing, despacho parcial '
+                'y la reconciliación— leen eso como «no hay factura previa, '
+                'seguí». Su propio docstring dice «solo QA — nunca en '
+                'producción».\n\n'
+                'Mientras CONNEKTA_URL apunta a QA es inofensivo. El día que '
+                'alguien la mueva a producción —que es el primer paso del '
+                'go-live— el guard queda apagado sin que nadie lo note: son dos '
+                'variables que tienen que moverse juntas y nada las ataba.\n\n'
+                'Quitar SKIP_FE_CHECK ANTES de cambiar CONNEKTA_URL.'
+            ),
+        })
+    return fuera
 
 
 def nombres_faltantes() -> List[str]:
