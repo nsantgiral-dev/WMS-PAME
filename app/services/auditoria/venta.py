@@ -45,7 +45,7 @@ def toda_linea_del_pedido_tiene_producto_local(ctx=None):
     filas = (PedidoSiesa.query
              .filter(PedidoSiesa.producto_id.is_(None))
              .filter(PedidoSiesa.cantidad_pendiente > 0)
-             .limit(500).all())
+             .order_by(PedidoSiesa.id.desc()).limit(500).all())
     return [
         Hallazgo(
             referencia=f'{p.numero_pedido} / {p.item_codigo}',
@@ -82,7 +82,7 @@ def el_nombre_del_pedido_coincide_con_el_del_catalogo(ctx=None):
     filas = (db.session.query(PedidoSiesa, Producto)
              .join(Producto, PedidoSiesa.producto_id == Producto.id)
              .filter(PedidoSiesa.cantidad_pendiente > 0)
-             .limit(1000).all())
+             .order_by(PedidoSiesa.id.desc()).limit(1000).all())
     out = []
     for p, prod in filas:
         a, b = _norm(p.item_descripcion), _norm(prod.nombre)
@@ -118,7 +118,7 @@ def no_se_pickea_mas_de_lo_pedido(ctx=None):
     from app.models.picking import TareaPicking
     filas = (TareaPicking.query
              .filter(TareaPicking.cantidad_recogida > TareaPicking.cantidad_solicitada)
-             .limit(500).all())
+             .order_by(TareaPicking.id.desc()).limit(500).all())
     return [
         Hallazgo(
             referencia=t.codigo or f'picking#{t.id}',
@@ -156,7 +156,7 @@ def lo_empacado_no_supera_lo_que_el_picking_entrego(ctx=None):
     filas = (db.session.query(ItemPacking, TareaPacking)
              .join(TareaPacking, ItemPacking.tarea_id == TareaPacking.id)
              .filter(ItemPacking.cantidad_real > ItemPacking.cantidad_esperada)
-             .limit(500).all())
+             .order_by(ItemPacking.id.desc()).limit(500).all())
     return [
         Hallazgo(
             referencia=f'{t.numero_pedido_siesa or t.codigo} / producto#{i.producto_id}',
@@ -204,7 +204,7 @@ def el_picking_actual_coincide_con_lo_que_el_packing_consumio(ctx=None):
     out = []
     for i, t in (db.session.query(ItemPacking, TareaPacking)
                  .join(TareaPacking, ItemPacking.tarea_id == TareaPacking.id)
-                 .limit(3000).all()):
+                 .order_by(ItemPacking.id.desc()).limit(3000).all()):
         clave = (t.numero_pedido_siesa, i.producto_id)
         if clave not in recogido:
             continue                      # sin picking: lo mira VTA-21
@@ -247,7 +247,7 @@ def todo_packing_viene_de_un_picking(ctx=None):
         .filter(TareaPicking.referencia_documento.isnot(None)).all()}
     filas = (TareaPacking.query
              .filter(TareaPacking.numero_pedido_siesa.isnot(None))
-             .limit(1000).all())
+             .order_by(TareaPacking.id.desc()).limit(1000).all())
     return [
         Hallazgo(
             referencia=t.codigo or f'packing#{t.id}',
@@ -275,7 +275,7 @@ def toda_tarea_despachada_tiene_bultos(ctx=None):
     con_bultos = {r[0] for r in db.session.query(Bulto.tarea_id).distinct().all()}
     filas = (TareaPacking.query
              .filter(TareaPacking.estado == 'DESPACHADO')
-             .limit(1000).all())
+             .order_by(TareaPacking.id.desc()).limit(1000).all())
     return [
         Hallazgo(
             referencia=t.codigo or f'packing#{t.id}',
@@ -300,7 +300,7 @@ def todo_bulto_entregado_pertenece_a_una_ruta(ctx=None):
     filas = (Bulto.query
              .filter(Bulto.estado.in_((EstadoBulto.ENTREGADO, EstadoBulto.RECHAZADO)))
              .filter(Bulto.ruta_despacho_id.is_(None))
-             .limit(500).all())
+             .order_by(Bulto.id.desc()).limit(500).all())
     return [
         Hallazgo(
             referencia=b.codigo_barras or f'bulto#{b.id}',
@@ -336,7 +336,7 @@ def el_estado_de_la_parada_concuerda_con_el_de_sus_bultos(ctx=None):
     out = []
     for r in (RecaudoEntrega.query
               .filter(RecaudoEntrega.estado_entrega == EstadoEntrega.RECHAZADO)
-              .limit(500).all()):
+              .order_by(RecaudoEntrega.id.desc()).limit(500).all()):
         bultos = Bulto.query.filter_by(ruta_despacho_id=r.ruta_id,
                                        tarea_id=r.tarea_id).all()
         if bultos and all(b.estado == EstadoBulto.ENTREGADO for b in bultos):
@@ -368,7 +368,7 @@ def las_paradas_en_modo_libre_se_pueden_contar(ctx=None):
     from app.models.recaudo_entrega import RecaudoEntrega
     filas = (RecaudoEntrega.query
              .filter(RecaudoEntrega.modo_pantalla == LIBRE)
-             .limit(500).all())
+             .order_by(RecaudoEntrega.id.desc()).limit(500).all())
     return [
         Hallazgo(
             referencia=f'ruta#{r.ruta_id}/tarea#{r.tarea_id}',
@@ -406,7 +406,7 @@ def un_cobro_registrado_llego_a_siesa(ctx=None):
                             RecaudoEntrega.siesa_rc_triggered.is_(None)))
              .filter(RecaudoEntrega.estado_entrega.in_(
                  (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)))
-             .limit(500).all())
+             .order_by(RecaudoEntrega.id.desc()).limit(500).all())
     return [
         Hallazgo(
             referencia=f'ruta#{r.ruta_id}/tarea#{r.tarea_id}',
@@ -436,7 +436,7 @@ def ninguna_parada_de_ruta_declara_contado(ctx=None):
 
     filas = (TareaPacking.query
              .filter(TareaPacking.cond_pago.isnot(None))
-             .limit(1000).all())
+             .order_by(TareaPacking.id.desc()).limit(1000).all())
     return [
         Hallazgo(
             referencia=t.codigo or f'packing#{t.id}',

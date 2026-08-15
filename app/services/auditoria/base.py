@@ -44,6 +44,13 @@ AVISA = 'AVISA'
 OBSERVA = 'OBSERVA'
 
 _SEVERIDADES = (BLOQUEA, AVISA, OBSERVA)
+#: Consultas que llenaron su tope. **No es lo mismo que `truncado`**, que cuenta
+#: hallazgos: esto dice que la auditoría no llegó a MIRAR todo el universo, y
+#: por eso «0 hallazgos» puede significar «dejó de buscar».
+#:
+#: Se limpia al empezar cada corrida — si persistiera entre corridas, un tope
+#: alcanzado una vez ensuciaría el reporte para siempre.
+_AUDITORIA_TRUNCADA = set()
 
 
 @dataclass
@@ -134,6 +141,9 @@ def auditar(flujo: Optional[str] = None, ctx=None) -> dict:
     el auditor es lo que se mira cuando algo va mal y no puede ser lo siguiente
     que se rompe.
     """
+    # Limpio en cada corrida: un tope alcanzado una vez no puede ensuciar el
+    # reporte para siempre.
+    _AUDITORIA_TRUNCADA.clear()
     inv = registrados(flujo)
     resultados, total = [], 0
     for i in inv:
@@ -158,8 +168,12 @@ def auditar(flujo: Optional[str] = None, ctx=None) -> dict:
             'truncado': len(hallazgos) > 100,
         })
     rotos = [r for r in resultados if r['total'] or r['error']]
+    consultas_truncadas = sorted(_AUDITORIA_TRUNCADA)
     return {
         'invariantes_corridos': len(inv),
+        # El universo mirado. Si esto trae algo, «0 hallazgos» significa «no se
+        # buscó en todo», y hay que subir el tope antes de creerle al panel.
+        'consultas_truncadas': consultas_truncadas,
         'invariantes_rotos': len(rotos),
         'hallazgos_totales': total,
         # Sin esto, «0 hallazgos» no se distingue de «no corrió nada».

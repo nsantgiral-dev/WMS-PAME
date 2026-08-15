@@ -16,15 +16,30 @@ exceso **por encima de esa tolerancia**, porque significa que se recibió y se
 va a pagar mercancía que nadie autorizó.
 """
 from app.models.recepcion import EstadoRecepcion
-from app.services.auditoria.base import AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
+from app.services.auditoria.base import _AUDITORIA_TRUNCADA,  AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
 
 
 def _recepciones(estados=None, limite=1000):
+    """Las filas a auditar, **las más recientes primero**.
+
+    `order_by(id.desc())` no es cosmética. El `.limit()` corta ANTES de que los
+    invariantes filtren —el predicado corre en Python sobre lo que ya volvió—,
+    así que sin orden el tope se llena con las filas más viejas y **en cuanto un
+    flujo pasa el límite la auditoría deja de ver las violaciones nuevas**. El
+    panel diría «0 hallazgos» porque dejó de mirar, no porque esté limpio.
+
+    Y cuando el tope se alcanza se **declara**: `truncado` cuenta HALLAZGOS y no
+    tiene nada que ver con esto. Son dos truncamientos distintos y uno estaba
+    invisible.
+    """
     from app.models.recepcion import RecepcionMercancia as Recepcion
     q = Recepcion.query
     if estados:
         q = q.filter(Recepcion.estado.in_(estados))
-    return q.limit(limite).all()
+    filas = q.order_by(Recepcion.id.desc()).limit(limite).all()
+    if len(filas) >= limite:
+        _AUDITORIA_TRUNCADA.add(f'{__name__}:{limite}')
+    return filas
 
 
 @invariante(
@@ -93,7 +108,7 @@ def el_exceso_respeta_la_tolerancia(ctx=None):
     más y hay una tolerancia por línea—. Lo es pasarse de esa tolerancia."""
     from app.models.recepcion import ItemRecepcion
     out = []
-    for it in ItemRecepcion.query.limit(5000).all():
+    for it in ItemRecepcion.query.order_by(ItemRecepcion.id.desc()).limit(5000).all():
         ordenada = float(it.cantidad_ordenada or 0)
         recibida = float(it.cantidad_recibida or 0)
         if ordenada <= 0 or recibida <= ordenada:

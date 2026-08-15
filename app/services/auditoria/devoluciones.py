@@ -23,15 +23,30 @@ existe para cubrir— pero nunca más. Una devolución por encima de lo facturad
 genera una nota crédito mayor que la factura: cartera en negativo y un saldo a
 favor que nadie otorgó.
 """
-from app.services.auditoria.base import AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
+from app.services.auditoria.base import _AUDITORIA_TRUNCADA,  AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
 
 
 def _devoluciones(estados=None, limite=1000):
+    """Las filas a auditar, **las más recientes primero**.
+
+    `order_by(id.desc())` no es cosmética. El `.limit()` corta ANTES de que los
+    invariantes filtren —el predicado corre en Python sobre lo que ya volvió—,
+    así que sin orden el tope se llena con las filas más viejas y **en cuanto un
+    flujo pasa el límite la auditoría deja de ver las violaciones nuevas**. El
+    panel diría «0 hallazgos» porque dejó de mirar, no porque esté limpio.
+
+    Y cuando el tope se alcanza se **declara**: `truncado` cuenta HALLAZGOS y no
+    tiene nada que ver con esto. Son dos truncamientos distintos y uno estaba
+    invisible.
+    """
     from app.models.devolucion_cliente import DevolucionCliente
     q = DevolucionCliente.query
     if estados:
         q = q.filter(DevolucionCliente.estado.in_(estados))
-    return q.limit(limite).all()
+    filas = q.order_by(DevolucionCliente.id.desc()).limit(limite).all()
+    if len(filas) >= limite:
+        _AUDITORIA_TRUNCADA.add(f'{__name__}:{limite}')
+    return filas
 
 
 @invariante(
@@ -53,7 +68,7 @@ def no_se_devuelve_mas_de_lo_facturado(ctx=None):
                     f'{ln.cantidad_facturada}',
             datos={'producto_id': ln.producto_id},
         )
-        for ln in LineaDevolucionCliente.query.limit(5000).all()
+        for ln in LineaDevolucionCliente.query.order_by(LineaDevolucionCliente.id.desc()).limit(5000).all()
         if float(ln.cantidad_devuelta or 0) > float(ln.cantidad_facturada or 0)
     ]
 

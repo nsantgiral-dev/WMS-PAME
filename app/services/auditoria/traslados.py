@@ -26,17 +26,27 @@ tienda recibe menos— pero ninguno puede inventar. Una desigualdad al revés es
 mercancía que apareció de la nada entre dos etapas.
 """
 from app.extensions import db
-from app.services.auditoria.base import AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
+from app.services.auditoria.base import _AUDITORIA_TRUNCADA,  AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
 
 _TERMINALES = ('ENTREGADA', 'RECHAZADA', 'CANCELADA', 'REVERTIDA')
 
 
-def _solicitudes(estados=None):
+def _solicitudes(estados=None, limite=1000):
+    """Las solicitudes a auditar, **las más recientes primero**.
+
+    Sin `order_by`, el `.limit()` se llenaba con las más viejas — y el predicado
+    de cada invariante corre en Python sobre lo que ya volvió, así que en cuanto
+    los traslados pasaran el tope la auditoría dejaba de ver los nuevos. El
+    panel diría «0 hallazgos» porque dejó de mirar.
+    """
     from app.models.traslado import SolicitudTraslado
     q = SolicitudTraslado.query
     if estados:
         q = q.filter(SolicitudTraslado.estado.in_(estados))
-    return q.limit(1000).all()
+    filas = q.order_by(SolicitudTraslado.id.desc()).limit(limite).all()
+    if len(filas) >= limite:
+        _AUDITORIA_TRUNCADA.add(f'{__name__}:{limite}')
+    return filas
 
 
 # ── Frontera: aprobación → picking → recepción (cantidades) ──────────────
@@ -59,7 +69,7 @@ def las_cantidades_solo_bajan(ctx=None):
     """
     from app.models.traslado import ItemSolicitudTraslado
     out = []
-    for it in ItemSolicitudTraslado.query.limit(5000).all():
+    for it in ItemSolicitudTraslado.query.order_by(ItemSolicitudTraslado.id.desc()).limit(5000).all():
         sol = it.cantidad_solicitada or 0
         apr = it.cantidad_aprobada
         env = it.cantidad_enviada or 0
