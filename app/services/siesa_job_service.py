@@ -1362,6 +1362,53 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 db.session.rollback()
         return resultado
 
+    if job.tipo == 'COMPROMISOS_RIT':
+        # 174720 — registra sobre la RIT las cantidades que packing confirmó.
+        #
+        # Se encolaba desde `traslado_service` y **no tenía rama acá**: caía en
+        # el `raise` de abajo, quemaba los 5 intentos en ~6 h y moría FALLIDO.
+        # El reintento que el comentario del encolado promete nunca funcionó.
+        #
+        # No es cosmético: sin compromisos, `despachar()` no puede usar el
+        # 174930 —que toma las cantidades de la RIT— y cae al 173076 dejando
+        # una RIT suelta. Que este job entre a tiempo es lo que evita esa
+        # RIT suelta; que no entre ya no descuadra el inventario.
+        from app.models.traslado import SolicitudTraslado
+        from app.services.siesa_traslado_adapter import siesa_traslado
+
+        payload = job.get_payload()
+        s = db.session.get(SolicitudTraslado, payload.get('solicitud_id'))
+        if not s:
+            return {'omitido': True, 'motivo': 'la solicitud ya no existe'}
+        if s.siesa_compromisos_ok:
+            return {'idempotente': True, 'motivo': 'compromisos ya registrados'}
+        if s.siesa_salida_consec:
+            # Ya se despachó por la vía de respaldo con las cantidades reales.
+            # Registrar compromisos ahora no cambiaría ese STS y sí dejaría la
+            # RIT diciendo algo distinto de lo que se movió.
+            return {'omitido': True,
+                    'motivo': f'ya despachado (STS {s.siesa_salida_consec}) — '
+                              f'la RIT queda suelta, no se toca'}
+        if not s.siesa_requisicion_consec:
+            raise DependenciaPendiente(
+                f'{s.codigo}: la RIT todavía no tiene consecutivo — '
+                f'esperar a que 174646 lo resuelva')
+
+        siesa_traslado.registrar_compromisos(
+            consec_rit=s.siesa_requisicion_consec,
+            bodega_origen=s.bodega_origen_siesa,
+            bodega_destino=s.bodega_destino_siesa,
+            items=payload.get('items') or [],
+            codigo=s.codigo,
+        )
+        # Después del POST, igual que en el camino en línea: esta bandera abre
+        # la compuerta del 174930, no evita un duplicado.
+        s.siesa_compromisos_ok = True
+        s.siesa_error = None
+        db.session.commit()
+        logger.info('[DLQ] %s compromisos 174720 registrados en reintento', s.codigo)
+        return {'compromisos_registrados': True, 'codigo': s.codigo}
+
     raise ValueError(f'Tipo de job no reconocido: {job.tipo}')
 
 

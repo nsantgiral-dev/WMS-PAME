@@ -62,6 +62,23 @@ class SolicitudTraslado(db.Model):
     siesa_salida_consec = db.Column(db.Integer)       # 173076 o 173066
     siesa_entrada_consec = db.Column(db.Integer)      # 173079
     siesa_error = db.Column(db.Text)                  # último error de Siesa (para debug)
+    #: ¿El 174720 registró los compromisos sobre la RIT? **Decide qué conector
+    #: despacha**, y por eso no puede vivir en `siesa_error`.
+    #:
+    #: El 174930 no manda cantidades: Siesa las toma de lo comprometido en la
+    #: RIT. Si el 174720 no entró, ahí siguen las **originales del 174646**, y
+    #: el STS sale por lo pedido en vez de por lo empacado. El 173076 sí lleva
+    #: `cantidad_enviada`, que es lo real.
+    #:
+    #: **Se enciende DESPUÉS del POST, no antes.** Es al revés de la Regla 6 a
+    #: propósito: acá la bandera no evita un duplicado, **abre una compuerta**.
+    #: Un pre-flag dejaría la puerta abierta ante un crash entre el POST y el
+    #: commit, y despacharíamos sobre una suposición. Ante la duda, el lado
+    #: barato es reenviar el 174720 (reafirma las mismas cantidades sobre la
+    #: misma RIT); el caro es mandar a Siesa un STS por cantidades que nadie
+    #: empacó.
+    siesa_compromisos_ok = db.Column(db.Boolean, default=False,
+                                     server_default='false', nullable=False)
     inventario_descontado = db.Column(db.Boolean, default=False, server_default='false')
 
     # Timestamps

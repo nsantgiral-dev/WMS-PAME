@@ -45,15 +45,13 @@ _APP = _RAIZ / 'app'
 #: qué cuesta. Un job que nadie despacha no es un hueco de código, es una
 #: promesa que la operación cree cumplida.
 SIN_HANDLER = {
-    'COMPROMISOS_RIT':
-        'Reintento del 174720 (compromisos de la requisición de traslado). '
-        'Encolado en traslado_service.py:400, sin rama en _ejecutar_job: cae '
-        'en el raise genérico, quema los 5 reintentos (~6 h) y muere FALLIDO. '
-        'Los compromisos de la RIT no se disparan nunca por esta vía, así que '
-        'el traslado queda sin la reserva en Siesa y el stock de origen se '
-        'puede comprometer dos veces. DECISIÓN PENDIENTE: escribir el handler '
-        'o borrar el encolado — pero no dejarlo prometiendo un reintento que '
-        'no existe.',
+    # Vacío a propósito. `COMPROMISOS_RIT` vivió acá hasta el 2026-08-15 y ya
+    # tiene handler: el reintento del 174720 que el encolado prometía y que
+    # nunca corrió. Ver `_ejecutar_job`.
+    #
+    # Una entrada nueva acá no es un lugar donde aparcar trabajo: es una
+    # promesa rota que se declara con su costo, mientras se decide entre
+    # escribir el handler o borrar el encolado.
 }
 
 

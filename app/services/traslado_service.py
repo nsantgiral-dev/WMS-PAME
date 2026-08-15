@@ -387,9 +387,14 @@ class TrasladoService:
                     items=_comp_items,
                     codigo=s.codigo,
                 )
+                # DESPUÉS del POST, no antes: esta bandera no evita un
+                # duplicado, abre la compuerta del 174930. Ver el comentario de
+                # la columna en `models/traslado.py`.
+                s.siesa_compromisos_ok = True
                 s.siesa_error = None
                 logger.info('[TRASLADO] %s compromisos 174720 registrados', s.codigo)
             except Exception as e_comp:
+                s.siesa_compromisos_ok = False
                 s.siesa_error = f'174720: {e_comp}'
                 logger.error('[TRASLADO] %s Error compromisos: %s', s.codigo, e_comp)
                 # Encolar en DLQ para reintento automático — sin esto, despachar()
@@ -546,12 +551,48 @@ class TrasladoService:
                     '[TRASLADO] %s: siesa_salida_consec=%s ya existe (recovery) — saltando Siesa',
                     s.codigo, s.siesa_salida_consec,
                 )
-            elif s.siesa_requisicion_consec:
-                # Flujo completo: 174646 + 174720 ya disparados — usar 174930
+            elif s.siesa_requisicion_consec and s.siesa_compromisos_ok:
+                # 174930 **no manda cantidades**: Siesa las toma de lo
+                # comprometido en la RIT. Por eso no alcanza con que la RIT
+                # exista — hace falta que el 174720 haya entrado. Hasta el
+                # 2026-08-15 esto solo miraba el consecutivo y el comentario
+                # decía «174646 + 174720 ya disparados», que era una suposición:
+                # con el 174720 fallido, el STS salía por lo PEDIDO y no por lo
+                # empacado, y la diferencia quedaba en la bodega de tránsito,
+                # que es donde nadie pregunta.
                 res = siesa_traslado.despachar_desde_rit(
                     consec_rit=s.siesa_requisicion_consec,
                     codigo=s.codigo,
                 )
+            elif s.siesa_requisicion_consec:
+                # RIT creada y compromisos sin registrar. Se cae al 173076/173066
+                # —que sí llevan `cantidad_enviada`— en vez de frenar el
+                # despacho: la mercancía sale con los números correctos y lo que
+                # queda es una RIT suelta, condición conocida y ya declarada.
+                # Es el mismo camino que la RIT sin consecutivo legible.
+                logger.warning(
+                    '[TRASLADO] %s compromisos 174720 NO registrados — se despacha '
+                    'por 173076/173066 con las cantidades de packing. La RIT %s '
+                    'queda suelta en Siesa.', s.codigo, s.siesa_requisicion_consec)
+                if s.modo_transferencia == 'EN_TRANSITO':
+                    bodega_transito = s.bodega_transito_siesa or siesa_traslado.bodega_transito
+                    if not bodega_transito:
+                        raise ValueError('SIESA_BODEGA_TRANSITO no configurada — usar modo DIRECTA')
+                    res = siesa_traslado.registrar_salida_transito(
+                        bodega_origen=s.bodega_origen_siesa,
+                        bodega_transito=bodega_transito,
+                        items=items_payload,
+                        codigo=s.codigo,
+                        consec_requisicion=None,
+                        bodega_destino=s.bodega_destino_siesa,
+                    )
+                else:
+                    res = siesa_traslado.registrar_salida_directa(
+                        bodega_origen=s.bodega_origen_siesa,
+                        bodega_destino=s.bodega_destino_siesa,
+                        items=items_payload,
+                        codigo=s.codigo,
+                    )
             elif s.modo_transferencia == 'EN_TRANSITO':
                 # Fallback manual: sin RIT, usar 173076 directamente
                 bodega_transito = s.bodega_transito_siesa or siesa_traslado.bodega_transito
