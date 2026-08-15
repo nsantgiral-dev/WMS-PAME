@@ -45,12 +45,24 @@ _ROUTES_EXCLUIDOS = {
 
 
 def _all_test_content():
-    """Lee todo el contenido de todos los archivos de test."""
+    """Lee todo el contenido de todos los archivos de test, **recursivo**.
+
+    Miraba solo el primer nivel de `tests/`, así que los seis archivos de
+    `tests/flujo/` eran invisibles: un servicio ejercitado únicamente por el
+    arnés de flujo —que es el que lo recorre de punta a punta con los
+    servicios reales— se reportaba como *sin tests*.
+
+    El efecto era el peor de los dos posibles: no dejaba pasar código
+    **cubierto**, así que empujaba a escribir un test de relleno arriba para
+    apagar el guard. Un trinquete que se apaga con una línea deja de medir lo
+    que dice medir.
+    """
     content = ''
-    for f in os.listdir(_TESTS_DIR):
-        if f.startswith('test_') and f.endswith('.py'):
-            with open(os.path.join(_TESTS_DIR, f)) as fh:
-                content += fh.read()
+    for raiz, _dirs, archivos in os.walk(_TESTS_DIR):
+        for f in archivos:
+            if f.startswith('test_') and f.endswith('.py'):
+                with open(os.path.join(raiz, f)) as fh:
+                    content += fh.read()
     return content
 
 

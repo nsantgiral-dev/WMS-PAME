@@ -563,19 +563,20 @@ class ConnektaGateway:
         return solo_digitos[:8] if len(solo_digitos) >= 8 else ''
 
     def _co_de_bodega(self, bodega_siesa_id: str) -> str:
-        """CO Siesa de una bodega desde el modelo Almacen.
+        """CO Siesa de una bodega. Delega en `services.bodegas.co_de_bodega`.
+
         Siesa exige CO(documento) == CO(bodega_salida) — errores 46089/46090.
-        Fallback a centro_op_traslado si no hay registro configurado."""
-        if not bodega_siesa_id:
-            return self.centro_op_traslado
-        try:
-            from app.models.almacen import Almacen
-            alm = Almacen.query.filter_by(bodega_siesa_id=bodega_siesa_id).first()
-            if alm and alm.centro_op_siesa:
-                return alm.centro_op_siesa
-        except Exception:
-            pass
-        return self.centro_op_traslado
+
+        Antes esta función leía `almacenes` y, si no encontraba la fila, caía a
+        `centro_op_traslado` (003). Para cualquier bodega que no fuera NB1 eso
+        es el CO equivocado, y el documento se rechaza. Peor: los llamadores del
+        ETS resolvían el CO de **destino** con un diccionario literal propio, así
+        que un mismo payload 173079 podía traer el CO base resuelto por esta
+        función y el CO de entrada resuelto por otra fuente que no coincidía.
+        Una pregunta, dos políticas, dentro del mismo documento.
+        """
+        from app.services.bodegas import co_de_bodega
+        return co_de_bodega(bodega_siesa_id, por_defecto=self.centro_op_traslado)
 
     @staticmethod
     def _fmt_alterno(codigo: str) -> str:
@@ -1719,12 +1720,17 @@ class ConnektaGateway:
         tercero      = cabecera.get('f200_id_pedido_fact') or ''
         sucursal     = cabecera.get('f461_id_sucursal_pedido_rem') or None  # None → Siesa hereda del maestro
         tipo_cli     = cabecera.get('f430_id_tipo_cli_fact') or None        # None → Siesa hereda del maestro
+        from app.services import cond_pago as _cp
         _cond_pago_siesa = cabecera.get('f430_id_cond_pago')
         # El hueco se tapa con la condición de RUTA (crédito a un día), NO con
         # el código de contado. Ver `cond_pago.aprobable_en_ruta`: una FE de
         # contado queda en Elaboración —probado en producción el 2026-08-13—
         # y para entonces la remisión ya descargó el inventario.
-        cond_pago    = _cond_pago_siesa or self.cond_pago_ruta or None
+        # **Una función, no un `or` acá.** Este mismo fallback vivía también en
+        # la pantalla del conductor, con el resultado opuesto: la FE salía en
+        # C02 —que hay que cobrar— y la parada quedaba en LIBRE, sin pedir
+        # cobro. Es el corolario de la Regla 0, y ya costó una vez.
+        cond_pago    = _cp.cond_pago_efectiva(_cond_pago_siesa, self.cond_pago_ruta) or None
         if not cond_pago:
             raise ValueError(
                 f'RM {tipo_docto_rm}-{consec_rm}: el pedido no trae f430_id_cond_pago y '
@@ -1735,7 +1741,6 @@ class ConnektaGateway:
             )
         # La lectura de la condición vive en `services/cond_pago.py` — misma
         # política que usa la pantalla del conductor y que cuenta el desglose.
-        from app.services import cond_pago as _cp
         _clase = _cp.clasificar(_cond_pago_siesa, self.cond_pago_ventas)
         _tercero_alerta = cabecera.get('f200_id_pedido_fact') or 'desconocido'
 

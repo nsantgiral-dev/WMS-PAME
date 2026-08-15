@@ -186,42 +186,75 @@ class TestElContadoNoSeConvierteEnCredito:
         tarea.cond_pago = valor
         db.session.commit()
 
-    def test_credito_sobre_parada_de_contado_se_rechaza(self, db, parada, monkeypatch):
+    @pytest.fixture(autouse=True)
+    def _codigos(self, monkeypatch):
+        """Los DOS códigos, siempre.
+
+        Fijar solo `cond_pago_ventas` dejaba a `cond_pago_ruta` en lo que
+        trajera el entorno —vacío— y ahí C02 y C04 son indistinguibles: todo
+        caía a «no se sabe» y **nada se bloqueaba**. La versión anterior de
+        `test_credito_sobre_parada_a_credito_pasa` sembraba C02 y pasaba en
+        verde por esa rama, no por la política que decía probar.
+        """
         from app.services.connekta_gateway import connekta
         monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01')
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', 'C02')
+
+    @pytest.mark.parametrize('cond,etiqueta', [
+        ('C01', 'contado de mostrador'),
+        ('C02', 'ruta — el conductor cobra y el RC salda'),
+    ])
+    def test_credito_donde_habia_que_cobrar_se_rechaza(self, db, parada, cond, etiqueta):
+        """**C02 es el caso que importa**, y hasta el 2026-08-14 no bloqueaba.
+
+        La restricción preguntaba por contado documental, y toda venta de ruta
+        es C02 → 'credito' → no bloqueaba nunca. El control estaba en verde
+        sobre la única población a la que se aplica.
+        """
         ruta, tarea, u = parada
-        self._con_condicion(db, tarea, 'C01')
-        with pytest.raises(ValueError, match='de contado'):
+        self._con_condicion(db, tarea, cond)
+        with pytest.raises(ValueError, match='se cobra en la entrega'):
             RutaService.confirmar_parada(ruta.id, tarea.id, u.id, {
                 'estado_entrega': 'ENTREGADO',
                 'forma_pago': FormaPago.CREDITO})
 
-    def test_credito_sobre_parada_a_credito_pasa(self, db, parada, monkeypatch):
-        from app.services.connekta_gateway import connekta
-        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01')
+    def test_credito_sobre_credito_real_pasa(self, db, parada):
+        """C04 a 30 días: entregar y firmar sin cobrar es lo correcto."""
         ruta, tarea, u = parada
-        self._con_condicion(db, tarea, 'C02')
+        self._con_condicion(db, tarea, 'C04')
         RutaService.confirmar_parada(ruta.id, tarea.id, u.id, {
             'estado_entrega': 'ENTREGADO',
             'forma_pago': FormaPago.CREDITO})
         r = RecaudoEntrega.query.filter_by(ruta_id=ruta.id, tarea_id=tarea.id).first()
         assert r.forma_pago == FormaPago.CREDITO
 
-    def test_sin_condicion_anotada_no_bloquea(self, db, parada, monkeypatch):
-        """Regla 0. No saber no es evidencia de contado, y una parada trabada
-        en la calle no la desbloquea nadie."""
-        from app.services.connekta_gateway import connekta
-        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01')
+    def test_sin_condicion_anotada_no_bloquea(self, db, parada):
+        """Regla 0. No saber no es evidencia, y una parada trabada en la calle
+        no la desbloquea nadie."""
         ruta, tarea, u = parada
         assert tarea.cond_pago is None
         RutaService.confirmar_parada(ruta.id, tarea.id, u.id, {
             'estado_entrega': 'ENTREGADO',
             'forma_pago': FormaPago.CREDITO})
 
-    def test_efectivo_sobre_contado_pasa(self, db, parada, monkeypatch):
-        """La restricción es sobre CREDITO, no sobre cobrar."""
+    def test_sin_la_condicion_de_ruta_configurada_no_bloquea(self, db, parada, monkeypatch):
+        """El costo declarado de la degradación.
+
+        Sin `SIESA_COND_PAGO_RUTA`, C02 y C04 no se distinguen y la restricción
+        deja de proteger. Se prefiere eso a bloquear a ciegas —una parada
+        trabada en la calle no la desbloquea nadie— pero queda escrito acá para
+        que nadie lo descubra en producción.
+        """
         from app.services.connekta_gateway import connekta
-        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01')
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', '')
+        ruta, tarea, u = parada
+        self._con_condicion(db, tarea, 'C02')
+        RutaService.confirmar_parada(ruta.id, tarea.id, u.id, {
+            'estado_entrega': 'ENTREGADO',
+            'forma_pago': FormaPago.CREDITO})
+
+    def test_efectivo_sobre_contado_pasa(self, db, parada):
+        """La restricción es sobre CREDITO, no sobre cobrar."""
         ruta, tarea, u = parada
         self._con_condicion(db, tarea, 'C01')
         RutaService.confirmar_parada(ruta.id, tarea.id, u.id, {

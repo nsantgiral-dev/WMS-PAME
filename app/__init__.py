@@ -17,6 +17,52 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
 )
 
+def _registrar_scheduler(app, _il, _logger, mod_path, fn_name, tag, **kwargs):
+    """Registra un scheduler y declara **si de verdad quedó corriendo**.
+
+    Hasta el 2026-08-14 el registro era `getattr(mod, fn)(app)` seguido de
+    `ACTIVOS.append(tag)`: agregaba a la lista con solo no lanzar excepción.
+
+    Y ningún `init_scheduler` lanza cuando falta APScheduler — todos hacen
+
+        except ImportError:
+            logger.error('[X] APScheduler no instalado')
+            return None
+
+    así que en un proceso sin APScheduler **los doce se reportaban activos y
+    ninguno corría**. `/api/health/siesa` publica esa lista precisamente para
+    contestar «qué arrancó de verdad en este proceso, no lo que dice la
+    variable» — y contestaba que sí a todo.
+
+    Es un trinquete midiendo una proxy: «la llamada no reventó» en vez de «el
+    cron quedó programado». El costo del engaño es total y silencioso — DLQ,
+    sync de pedidos, alertas por correo, conteo cíclico, todo apagado con el
+    tablero en verde.
+
+    Ahora se mira el retorno. Los trece devuelven su scheduler (o su hilo) al
+    tener éxito; `tests/test_schedulers_declaran.py` lo exige, porque un
+    `init_scheduler` que no devuelve nada volvería a reportarse como omitido
+    para siempre — el error inverso, igual de inútil.
+    """
+    try:
+        obj = _il.import_module(mod_path)
+        for parte in fn_name.split('.'):
+            obj = getattr(obj, parte)
+        resultado = obj(app, **kwargs) if 'app' not in kwargs else obj(**kwargs)
+    except Exception as e:
+        app.config['SCHEDULERS_OMITIDOS'].append(f'{tag} falló: {e}')
+        _logger.error(f'{tag} No se pudo iniciar: {e}', exc_info=True)
+        return None
+    if not resultado:
+        app.config['SCHEDULERS_OMITIDOS'].append(
+            f'{tag} no arrancó (probablemente APScheduler ausente) — '
+            f'el cron NO está programado en este proceso')
+        _logger.error(f'{tag} no arrancó: devolvió {resultado!r}')
+        return None
+    app.config['SCHEDULERS_ACTIVOS'].append(tag)
+    return resultado
+
+
 def create_app():
     app = Flask(__name__)
 
@@ -312,13 +358,7 @@ def create_app():
                 ('app.services.vigia_service',              'init_scheduler',          '[VIGIA_SCHEDULER]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_esenciales:
-                try:
-                    _mod = _il.import_module(_mod_path)
-                    getattr(_mod, _fn_name)(app)
-                    app.config['SCHEDULERS_ACTIVOS'].append(_tag)
-                except Exception as e:
-                    app.config['SCHEDULERS_OMITIDOS'].append(f'{_tag} falló: {e}')
-                    _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
+                _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)
         else:
             app.config['SCHEDULERS_OMITIDOS'].append(
                 'esenciales (DLQ, pedidos, vigía) — WORKER_SKIP_ESSENTIAL=true')
@@ -339,23 +379,27 @@ def create_app():
                 ('app.services.traslado_monitor_service',   'init_scheduler',          '[TRASLADO_MONITOR]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
-                try:
-                    _mod = _il.import_module(_mod_path)
-                    getattr(_mod, _fn_name)(app)
-                    app.config['SCHEDULERS_ACTIVOS'].append(_tag)
-                except Exception as e:
-                    app.config['SCHEDULERS_OMITIDOS'].append(f'{_tag} falló: {e}')
-                    _app_logger.error(f'{_tag} No se pudo iniciar: {e}', exc_info=True)
-            try:
-                from app.services.abc_service import ABCService
-                ABCService.init_scheduler(app)
-            except Exception as e:
-                _app_logger.error(f'[ABC_SCHEDULER] No se pudo iniciar: {e}', exc_info=True)
-            try:
-                from app.services.inventario_siesa_service import iniciar_refresh_periodico
-                iniciar_refresh_periodico(app=app)
-            except Exception as e:
-                _app_logger.error(f'[INV-SIESA] No se pudo iniciar: {e}')
+                _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)
+            # Estos dos se registran aparte porque su entrada no es una función
+            # de módulo, pero **declaran igual**: hasta el 2026-08-14 arrancaban
+            # sin agregarse a `SCHEDULERS_ACTIVOS` y fallaban sin agregarse a
+            # `SCHEDULERS_OMITIDOS`. `/api/health/siesa` existe para publicar
+            # «lo que arrancó de verdad en este proceso» —no lo que dice la
+            # variable— y tenía dos puntos ciegos justo en el modo de fallo que
+            # describe: un import que revienta deja `HEAVY_SCHEDULERS=true` y
+            # el cron sin correr.
+            #
+            # Lo que se callaba: ABC no genera tareas de conteo cíclico, y
+            # **nadie reclama un conteo que no se pidió**; el refresh deja
+            # envejecer el caché de inventario, que es el insumo de las
+            # propuestas de traslado.
+            for _mod_path, _fn_name, _tag in (
+                ('app.services.abc_service', 'ABCService.init_scheduler',
+                 '[ABC_SCHEDULER]'),
+                ('app.services.inventario_siesa_service', 'iniciar_refresh_periodico',
+                 '[INV_SIESA_REFRESH]'),
+            ):
+                _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)
             _app_logger.info('[STARTUP] Schedulers pesados activos (worker mode)')
         else:
             app.config['SCHEDULERS_OMITIDOS'].append(

@@ -85,16 +85,107 @@ def aprobable_en_ruta(cond_pago, cond_pago_contado) -> bool:
 
 
 def es_contado_o_none(cond_pago_siesa, cond_pago_contado):
-    """`True` | `False` | `None` — para las pantallas.
+    """`True` | `False` | `None` — **contado documental**, no cobro en la puerta.
 
     `None` es el caso que antes se colapsaba a `True`. El frontend ya sabe
     manejarlo: cae al campo libre en vez de mostrar un valor a cobrar que nadie
     confirmó.
+
+    ⚠️ Para decidir qué ve el conductor, la función es
+    `se_cobra_en_la_puerta` — no ésta. Ver el bloque de abajo.
     """
     clase = clasificar(cond_pago_siesa, cond_pago_contado)
     if clase == AUSENTE:
         return None
     return clase == CONTADO
+
+
+# ── Contado documental ≠ cobro en la puerta ───────────────────────────────
+#
+# Son **dos preguntas distintas** y solo coinciden en C01. Durante meses las
+# contestó una sola función, y por eso el conductor no veía el cobro:
+#
+#                                    C01   C02   C04
+#     ¿la FE trae su propio recaudo?  sí    no    no    ← clasificar()
+#     ¿el conductor cobra?            sí    sí    no    ← se_cobra_en_la_puerta()
+#
+# La ruta factura en C02 **precisamente porque** C01 es imposible: una FE de
+# contado no se aprueba sin el recaudo dentro del documento, y ese recaudo lo
+# hace el conductor horas después (ver `aprobable_en_ruta`). Es decir: el
+# motivo por el que C02 no es contado documental es el mismo por el que **sí**
+# se cobra en la puerta. Una función no puede contestar las dos.
+#
+# `clasificar` no se toca: gobierna si la factura se puede aprobar. Cambiarla
+# para arreglar la pantalla rompería la emisión.
+
+def cond_pago_efectiva(cond_pago_siesa, cond_pago_ruta):
+    """La condición con la que el documento **sale de verdad**, no la que el
+    pedido declara. `''` si no se puede determinar.
+
+    El pedido puede venir sin condición —maestro del tercero incompleto— y el
+    gateway no puede emitir `null`: cae a la condición de ruta. Esa caída es
+    una decisión con consecuencia, y hasta el 2026-08-14 estaba escrita **dos
+    veces con resultados opuestos**:
+
+        pedido sin condición
+          ├── FE       → cae a C02  → «la salda el RC del conductor» (dice la alerta)
+          └── pantalla → se queda en ausente → LIBRE → no se le pide cobrar
+
+    La factura salía en una condición que exige cobro y la pantalla no lo
+    pedía. Es el mismo defecto que `se_cobra_en_la_puerta` arregla,
+    reintroducido por el caso ausente — y es el corolario de la Regla 0: **una
+    política, una función.** El mismo fallback en dos sitios diverge.
+
+    No es afirmar sobre un dato ausente: es leer lo que ya se emitió. La
+    ausencia sigue declarándose por su canal (`registrar_ausencia` y la alerta
+    `DATA_MAESTRA_COND_PAGO`) — lo que deja de pasar es que el documento diga
+    una cosa y la pantalla otra.
+    """
+    return (cond_pago_siesa or '').strip() or (cond_pago_ruta or '').strip()
+
+
+def se_cobra_en_la_puerta(cond_pago_siesa, cond_pago_contado, cond_pago_ruta):
+    """`True` | `False` | `None` — ¿el conductor cobra en esta parada?
+
+    `True` para el contado (C01) y para la condición de ruta (C02, crédito a un
+    día que el RC del conductor salda el mismo día). `False` para el crédito
+    real —C04 a 30 días—, que se entrega y se firma sin pedir plata.
+
+    ## Por qué el `None` cuando falta `SIESA_COND_PAGO_RUTA`
+
+    Sin ese código, C02 y C04 son **indistinguibles**: los dos son «distinto de
+    contado». Devolver `False` ahí reintroduciría el defecto entero en silencio
+    —ninguna parada de ruta pediría cobrar— y devolver `True` le pediría plata
+    a un cliente de crédito.
+
+    `None` cae a `LIBRE`, que es el modo que **no afirma nada** y deja elegir al
+    conductor. Es Regla 0 aplicada a la pantalla: el lado conservador no es
+    cobrar ni no cobrar, es no decidir por él. Y `LIBRE` se cuenta en el
+    desglose, así que la falta de configuración se ve en vez de callarse.
+    """
+    # `None` no es `''`. El vacío es «Siesa respondió y el tercero no tiene
+    # condición» —y entonces sabemos que la FE salió en la de ruta—; el `None`
+    # es «no se pudo preguntar», y ahí no se sabe qué lleva la factura ni si
+    # llegó a existir. Colapsarlos ya fue un defecto una vez; acá volvería a
+    # serlo, en la dirección de pedirle plata a alguien sobre un supuesto.
+    if cond_pago_siesa is None:
+        return None
+    ruta = (cond_pago_ruta or '').strip()
+    # La condición que la FE lleva de verdad, no la que el pedido declara: un
+    # pedido sin condición se factura en la de ruta, y esa factura **hay que
+    # cobrarla**. Ver `cond_pago_efectiva`.
+    valor = cond_pago_efectiva(cond_pago_siesa, ruta)
+    if not valor:
+        return None
+    if valor == (cond_pago_contado or '').strip():
+        return True
+    if not ruta:
+        logger.warning(
+            '[COND_PAGO] SIESA_COND_PAGO_RUTA sin configurar: no se puede '
+            'distinguir la condición de ruta del crédito real (cond=%s). '
+            'La parada queda en LIBRE.', valor)
+        return None
+    return valor == ruta
 
 
 def registrar_ausencia(contexto: str, tercero: str = ''):
@@ -123,25 +214,29 @@ DINAMICO = 'DINAMICO'          # contado confirmado y valor conocido → Total/P
 LIBRE = 'LIBRE'                # **el conductor elige sin restricción**
 
 
-def modo_pantalla(es_contado, hay_valor_conocido: bool) -> str:
+def modo_pantalla(se_cobra_en_puerta, hay_valor_conocido: bool) -> str:
     """Qué modo de pago ve el conductor en esa parada.
 
-    `LIBRE` es donde vive el riesgo y por eso hay que poder contarlo: el
-    conductor puede marcar CREDITO en una parada de contado, y
-    `confirmar_parada` no ata `forma_pago` a la condición del pedido — solo
-    valida que el valor esté en la lista.
+    El primer argumento es **`se_cobra_en_la_puerta`**, no `es_contado`. Hasta
+    el 2026-08-14 recibía el segundo, y como toda venta de ruta es C02 —que no
+    es contado documental— **ninguna parada pedía cobrar**. Ver el bloque
+    «Contado documental ≠ cobro en la puerta» arriba.
 
-    Un pedido con `cond_pago` vacío cae acá en LIBRE, porque `es_contado` no
-    es `True` confirmado. Del lado de la factura ese mismo vacío ya no hace
-    daño —cae a la condición de ruta— pero la parada sigue quedando sin
-    restricción, y eso hay que poder contarlo.
+    `LIBRE` es donde vive el riesgo y por eso hay que poder contarlo: sobre una
+    parada sin condición conocida, `confirmar_parada` **no bloquea** el crédito
+    —no saber no es evidencia (Regla 0)— así que el conductor puede marcar
+    CREDITO sobre algo que sí había que cobrar.
 
-    `es_contado` es `True` | `False` | `None`. Solo el `False` **confirmado**
-    muestra CRÉDITO: ante `None` no se afirma nada y se deja elegir, que es lo
-    correcto — pero hay que saber cuántas veces pasa.
+    Un pedido con `cond_pago` vacío cae acá en LIBRE, porque no hay `True`
+    confirmado. Del lado de la factura ese mismo vacío ya no hace daño —cae a
+    la condición de ruta— pero la parada sigue quedando sin restricción.
+
+    Es `True` | `False` | `None`. Solo el `False` **confirmado** muestra
+    CRÉDITO: ante `None` no se afirma nada y se deja elegir, que es lo correcto
+    — pero hay que saber cuántas veces pasa.
     """
-    if es_contado is False:
+    if se_cobra_en_puerta is False:
         return CREDITO_PANTALLA
-    if es_contado is True and hay_valor_conocido:
+    if se_cobra_en_puerta is True and hay_valor_conocido:
         return DINAMICO
     return LIBRE

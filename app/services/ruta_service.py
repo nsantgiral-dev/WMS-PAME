@@ -628,9 +628,18 @@ class RutaService:
             # El modo lo calculaba `rutas.js` y se descartaba: el desglose
             # sabía qué eligió el conductor, no qué opciones tenía enfrente.
             from app.services import cond_pago as _cpm
+            from app.services.connekta_gateway import connekta
             _hay_valor = valor_factura is not None and bool(p['items']) and all(
                 it.get('valor_unitario') is not None for it in p['items'])
-            p['modo_pago'] = _cpm.modo_pantalla(es_contado, _hay_valor)
+            # **No es `es_contado`.** Toda venta de ruta sale en C02, que no es
+            # contado documental pero sí se cobra en la puerta; alimentar el
+            # modo con `es_contado` dejaba TODA parada en CREDITO y el
+            # conductor no veía el cobro en ninguna. Se deriva del código
+            # crudo, que es la única fuente — no de `es_contado`, que ya es una
+            # lectura y responde otra pregunta.
+            p['se_cobra_en_puerta'] = _cpm.se_cobra_en_la_puerta(
+                cond_pago_crudo, connekta.cond_pago_ventas, connekta.cond_pago_ruta)
+            p['modo_pago'] = _cpm.modo_pantalla(p['se_cobra_en_puerta'], _hay_valor)
             for item in p['items']:
                 item['valor_unitario'] = valores_ref.get(item['codigo'])
 
@@ -806,21 +815,36 @@ class RutaService:
         # contra Siesa: esta confirmación **tiene que funcionar sin señal**. Si
         # la condición no se alcanzó a anotar, no se bloquea — no saber no es
         # evidencia de contado (Regla 0).
-        if forma_pago == FormaPago.CREDITO:
+        # Acotada a los estados donde `forma_pago` significa algo. En RECHAZADO
+        # no se pide forma de pago —el camino es el motivo tipificado— pero el
+        # `<select>` puede conservar un valor de un render anterior, y con él
+        # la restricción bloquearía `NO_PAGO_SE_QUEDO`: justo el caso que el
+        # motivo existe para canalizar. Prohibir sin dar salida devuelve al
+        # conductor al camino de menor resistencia (marcar «cliente cerrado»),
+        # que convierte un impago en un faltante de inventario.
+        if forma_pago == FormaPago.CREDITO and \
+                estado_entrega in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
             from app.services import cond_pago as _cp_r
             from app.services.connekta_gateway import connekta as _cx_r
             _tarea_cp = TareaPacking.query.get(tarea_id)
             _anotada = getattr(_tarea_cp, 'cond_pago', None) if _tarea_cp else None
-            # Sin `is not None`: `clasificar` ya devuelve AUSENTE ante `None`
-            # o vacío, y AUSENTE no es CONTADO. Agregar la comprobación no
-            # cambiaba ningún resultado —lo verificó una mutación— y tener dos
-            # lugares donde se decide qué es «no saber» es exactamente lo que
-            # `cond_pago.py` existe para evitar.
-            if _cp_r.clasificar(_anotada, _cx_r.cond_pago_ventas) == _cp_r.CONTADO:
+            # `se_cobra_en_la_puerta`, **no `clasificar`**: la pregunta acá es
+            # si en esta parada había que cobrar, no si la factura era de
+            # contado documental. Con `clasificar` la restricción no se
+            # disparaba NUNCA en ruta —toda venta de ruta es C02, que no es
+            # contado— así que el conductor podía marcar CREDITO sobre
+            # cualquier parada y el control existía sin proteger nada.
+            #
+            # `is True` y no truthiness: `None` es «no se pudo saber» y ahí no
+            # se bloquea (Regla 0) — una parada trabada en la calle no la
+            # desbloquea nadie.
+            if _cp_r.se_cobra_en_la_puerta(
+                    _anotada, _cx_r.cond_pago_ventas, _cx_r.cond_pago_ruta) is True:
                 raise ValueError(
-                    'Este pedido es de contado: no se puede registrar como crédito. '
-                    'Si el cliente no pagó, marcá Rechazado y elegí el motivo — '
-                    'ahí queda registrado si la mercancía volvió o se quedó con él.')
+                    'Este pedido se cobra en la entrega: no se puede registrar '
+                    'como crédito. Si el cliente no pagó, marcá Rechazado y elegí '
+                    'el motivo — ahí queda registrado si la mercancía volvió o se '
+                    'quedó con él.')
 
         # Validación de campos obligatorios por estado. Entregado y Parcial
         # pasan por el mismo toggle Pago Total/Parcial en el conductor — los

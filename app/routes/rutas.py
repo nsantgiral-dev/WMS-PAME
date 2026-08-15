@@ -635,6 +635,33 @@ def motivos_rechazo():
     return jsonify({'motivos': para_frontend()}), 200
 
 
+@rutas_bp.route('/<int:ruta_id>/reconciliacion', methods=['GET'])
+@jwt_required()
+def reconciliacion_ruta(ruta_id):
+    """Las cuatro columnas que tienen que ser iguales, y dónde se rompe.
+
+        entregas que debían cobrarse = cobros = RC en Siesa = recaudo verificado
+
+    Las tres primeras salen de la base y **se verifican entre sí, no contra la
+    plata**: un conductor que cobra $100, registra $100 y entrega $90 produce
+    tres números perfectos. La cuarta la cuenta una persona al cerrar, hoy no
+    tiene captura, y el reporte lo declara en vez de rellenarla.
+
+    La política vive en `services/reconciliacion_ruta.py` y no acá: cuando
+    alguien la ponga en un correo o en un tablero, tiene que leer lo mismo. Si
+    divergieran, el que nadie mira es el correo.
+    """
+    # Muestra montos cobrados, fugas y qué paradas quedaron sin recibo: es
+    # información financiera de la ruta, no operativa. El conductor no la ve.
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
+    from app.services.reconciliacion_ruta import reconciliar
+    try:
+        return jsonify(reconciliar(ruta_id)), 200
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 404
+
+
 @rutas_bp.route('/liquidacion/desglose', methods=['GET'])
 @jwt_required()
 def liquidacion_desglose():

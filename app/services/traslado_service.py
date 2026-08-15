@@ -1584,3 +1584,6 @@ def init_scheduler(app):
         '[STOCK_PREWARM] Scheduler iniciado — %d bodegas cada 4 min',
         len(_BODEGAS_PREWARM),
     )
+    # Ver la nota de `pedidos_sync_service.init_scheduler`: el retorno es lo
+    # que `/api/health/siesa` usa para no mentir sobre lo que está corriendo.
+    return scheduler

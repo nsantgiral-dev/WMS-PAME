@@ -383,3 +383,7 @@ def init_scheduler(app):
     )
     scheduler.start()
     logger.info('[PEDIDOS_SYNC] Scheduler activo — sync cada 1 min entre 7am y 8pm')
+    # Devolver el scheduler NO es cosmético: `app/__init__.py` usa el retorno
+    # para distinguir «arrancó» de «la llamada no reventó». Sin él, un
+    # `return` temprano por ImportError se reporta como scheduler activo.
+    return scheduler

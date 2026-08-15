@@ -144,8 +144,12 @@ def iniciar_refresh_periodico(app):
         t.daemon = True
         t.start()
 
-    threading.Thread(target=_ciclo_refresh, daemon=True).start()
+    _hilo = threading.Thread(target=_ciclo_refresh, daemon=True)
+    _hilo.start()
     _programar_carga_diaria()
+    # No usa APScheduler sino hilos, pero declara igual: el registro mira el
+    # retorno para saber si esto quedó corriendo de verdad.
+    return _hilo
 
 
 def precalentar_cache_multibodega(app=None):

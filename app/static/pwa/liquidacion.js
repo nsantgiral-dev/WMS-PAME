@@ -804,3 +804,103 @@ async function liqReintentarJob(jobId) {
     }
   } catch (e) { alerta(e.message || 'Error', 'error'); }
 }
+
+/* ── Reconciliación de la ruta ──────────────────────────────────────────
+ *
+ * Las cuatro columnas que tienen que ser iguales:
+ *
+ *   entregas que debían cobrarse = cobros = RC en Siesa = recaudo verificado
+ *
+ * Las tres primeras salen de la base y **se verifican entre sí, no contra la
+ * plata**: un conductor que cobra $100, registra $100 y entrega $90 produce
+ * tres números perfectos. La cuarta la cuenta una persona al cerrar y hoy no
+ * tiene captura — se muestra como «sin capturar», no como cero. Un cero ahí
+ * sería una alarma de faltante total que nadie midió.
+ *
+ * La política vive en `services/reconciliacion_ruta.py`. Acá solo se dibuja:
+ * si esta pantalla recalculara algo, sería la segunda implementación de la
+ * misma regla y divergiría — que es como empezó el defecto del clasificador.
+ */
+/** El id sale del detalle ya cargado (`{ruta: {...}}`), no del `_liqDetalleRuta`
+ *  directo: leerlo mal manda `undefined` en la URL y el 404 se lee como «la
+ *  ruta no existe» en vez de «el botón está roto». */
+function liqReconciliarRutaAbierta() {
+  const id = _liqDetalleRuta && _liqDetalleRuta.ruta && _liqDetalleRuta.ruta.id;
+  if (!id) {
+    if (typeof alerta === 'function') alerta('Abre una ruta primero', 'error');
+    return;
+  }
+  return liqAbrirReconciliacion(id);
+}
+
+async function liqAbrirReconciliacion(rutaId) {
+  const body = document.getElementById('liq-modal-body');
+  if (!body) return;
+  const previo = body.innerHTML;
+  body.innerHTML = '<div style="text-align:center;padding:40px;color:#555;">Reconciliando...</div>';
+  try {
+    const d = await get(`/api/rutas/${rutaId}/reconciliacion`);
+    body.innerHTML = _liqRenderReconciliacion(d, previo);
+  } catch (e) {
+    body.innerHTML = previo;
+    if (typeof alerta === 'function') alerta('No se pudo reconciliar la ruta', 'error');
+  }
+}
+
+function _liqRenderReconciliacion(d, previo) {
+  const $ = n => n == null ? '—' : '$' + Number(n).toLocaleString('es-CO');
+  const c = d.columnas || {};
+  const col = (t, x, gris) => `
+    <div style="flex:1;min-width:130px;padding:12px;border-radius:10px;background:${gris ? '#1f2937' : '#111827'};border:1px solid #374151;">
+      <div style="font-size:11px;color:#9ca3af;font-weight:700;text-transform:uppercase;">${t}</div>
+      <div style="font-size:22px;font-weight:800;color:${gris ? '#6b7280' : '#e5e7eb'};">${x.n == null ? 'sin capturar' : x.n}</div>
+      <div style="font-size:12px;color:#9ca3af;">${$(x.valor)}</div>
+    </div>`;
+
+  const fugas = (d.fugas || []).map(f => f.medible
+    ? `<tr><td style="padding:6px;">${f.causa}</td>
+         <td style="padding:6px;text-align:right;font-weight:700;color:${f.documentos ? '#f87171' : '#4ade80'};">${f.documentos}</td>
+         <td style="padding:6px;text-align:right;color:#9ca3af;">${$(f.valor)}</td></tr>`
+    : `<tr><td style="padding:6px;color:#6b7280;">${f.causa}</td>
+         <td colspan="2" style="padding:6px;text-align:right;color:#6b7280;font-style:italic;">no medible — ${f.nota}</td></tr>`
+  ).join('');
+
+  const peor = d.peor_que_la_vara;
+  const veredicto = peor === null
+    ? `<span style="color:#6b7280;">sin paradas cobrables — no se midió</span>`
+    : peor
+      ? `<span style="color:#f87171;font-weight:800;">PEOR que el proceso que reemplaza</span>`
+      : `<span style="color:#4ade80;font-weight:800;">dentro de la vara</span>`;
+
+  return `
+    <div style="padding:4px 0 16px;">
+      <h3 style="margin:0 0 4px;">Reconciliación · ruta ${d.ruta_id}</h3>
+      <div style="font-size:12px;color:#9ca3af;margin-bottom:14px;">
+        Cubre ${d.cobertura.tramos_medibles} de ${d.cobertura.tramos_totales} tramos.
+        ${d.paradas_sin_condicion ? `· ${d.paradas_sin_condicion} parada(s) sin condición de pago, fuera del denominador` : ''}
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+        ${col('Debían cobrarse', c.debian_cobrarse || {})}
+        ${col('Cobros registrados', c.cobros_registrados || {})}
+        ${col('RC en Siesa', c.rc_en_siesa || {})}
+        ${col('Recaudo verificado', c.recaudo_verificado || {}, true)}
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead><tr style="color:#9ca3af;font-size:11px;text-transform:uppercase;">
+          <th style="text-align:left;padding:6px;">Fuga</th>
+          <th style="text-align:right;padding:6px;">Docs</th>
+          <th style="text-align:right;padding:6px;">Valor</th></tr></thead>
+        <tbody>${fugas}</tbody>
+      </table>
+      <div style="margin-top:14px;padding:10px;border-radius:8px;background:#111827;font-size:13px;">
+        Ciclos rotos: <b>${d.ciclos_rotos}</b>
+        ${d.tasa_ciclos_rotos == null ? '' : ` · ${(d.tasa_ciclos_rotos * 100).toFixed(2)}% (vara: ${(d.vara * 100).toFixed(2)}%)`}
+        — ${veredicto}
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:#6b7280;">
+        La cuarta columna no la produce ningún sistema: es el conteo del cierre
+        —efectivo, comprobantes de transferencia y cheques—. Mientras no se
+        capture, el tramo «el recibo entró y la plata no se verificó» no se mide.
+      </div>
+    </div>`;
+}

@@ -1978,7 +1978,16 @@
       <div style="max-width:600px;margin:20px auto;padding:20px;background:var(--bg);border-radius:16px;min-height:80vh;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
           <div style="font-size:16px;font-weight:700;color:var(--tx);">Liquidar Ruta</div>
-          <button onclick="liqCerrarModal()" style="background:none;border:none;color:var(--tx3);font-size:24px;cursor:pointer;">&times;</button>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <!-- Las cuatro columnas que tienen que ser iguales. Se mira ANTES
+                 de liquidar: si la ruta ya viene con fugas, liquidarla las
+                 congela en documentos contables. -->
+            <button id="liq-btn-reconciliar" onclick="liqReconciliarRutaAbierta()"
+              style="background:#1f2937;border:1px solid #374151;color:#e5e7eb;font-size:12px;font-weight:700;padding:6px 12px;border-radius:8px;cursor:pointer;">
+              Reconciliar
+            </button>
+            <button onclick="liqCerrarModal()" style="background:none;border:none;color:var(--tx3);font-size:24px;cursor:pointer;">&times;</button>
+          </div>
         </div>
         <div id="liq-modal-body">
           <div style="text-align:center;padding:40px;color:#555;">Cargando datos de Siesa...</div>

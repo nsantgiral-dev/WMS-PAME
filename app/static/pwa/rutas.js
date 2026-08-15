@@ -1907,16 +1907,24 @@ function _condRenderFormParada() {
   const rechazadosActuales = r ? (r.bultos_rechazados_ids || []) : [];
 
   // Modo de pago — 3 posibles, según lo que Siesa confirmó de este pedido:
-  //  · CREDITO:  es_contado === false confirmado → no se cobra en la puerta,
+  //  · CREDITO:  se_cobra_en_puerta === false confirmado → crédito real (C04),
   //              no tiene sentido preguntar monto ni forma de pago.
-  //  · DINAMICO: contado confirmado Y Siesa dio el valor de la factura Y hay
-  //              precio real por cada referencia → Valor a Cobrar + Total/Parcial.
+  //  · DINAMICO: se cobra en la puerta (C01 o C02) Y Siesa dio el valor de la
+  //              factura Y hay precio real por referencia → Total/Parcial.
   //  · LIBRE:    cualquier otro caso (Siesa no respondió, dato incompleto) —
   //              Regla 0, ante dato ausente, conservador: se pregunta a mano
   //              en vez de asumir.
   const hayValorConocido = p.valor_factura != null
     && !!(p.items && p.items.length) && p.items.every(it => it.valor_unitario != null);
-  const mostrarValorDinamico = p.es_contado === true && hayValorConocido;
+  // `se_cobra_en_puerta`, NO `es_contado`: toda venta de ruta sale en C02, que
+  // no es contado documental pero sí se cobra en la puerta. Con `es_contado`
+  // esto era `false` en TODA parada y el widget del monto no aparecía nunca.
+  //
+  // El `??` cubre la caché vieja del service worker: un cliente que todavía no
+  // recibió el SHELL nuevo recibe el payload nuevo pero sin el campo, y cae al
+  // comportamiento anterior —conservador, no pide cobrar— en vez de romperse.
+  const seCobraEnPuerta = p.se_cobra_en_puerta ?? p.es_contado;
+  const mostrarValorDinamico = seCobraEnPuerta === true && hayValorConocido;
   // El modo lo decide el backend (`services/cond_pago.modo_pantalla`) — acá
   // estaba la segunda implementación de la misma política, y por eso el modo
   // no se podía contar: se calculaba en el navegador y se descartaba.
