@@ -89,14 +89,29 @@ class SolicitudTraslado(db.Model):
         # consecutivo de cierre — significa que el movimiento nunca llegó a Siesa.
         consec_cierre = (self.siesa_entrada_consec if self.modo_transferencia == 'EN_TRANSITO'
                          else self.siesa_salida_consec)
-        estados_terminales = (
-            EstadoTraslado.ENTREGADA, EstadoTraslado.RECHAZADA,
-            EstadoTraslado.CANCELADA, EstadoTraslado.REVERTIDA,
+
+        # ENTREGADA **no** silencia el error, y esa era la trampa (2026-08-14):
+        # `confirmar_recepcion` pone ENTREGADA aunque el 173079 haya fallado
+        # —el estado describe el hecho físico, la mercancía llegó—, así que un
+        # traslado con la entrada nunca registrada en Siesa se pintaba en verde
+        # y sin aviso. Es exactamente el limbo que los invariantes de traslado
+        # existen para detectar: el stock no falta ni sobra, está en la bodega
+        # puente, y nadie reclama.
+        #
+        # Las otras tres sí callan con razón: un traslado RECHAZADO, CANCELADO
+        # o REVERTIDO no debe tener documento de cierre en Siesa, así que un
+        # error viejo ahí no pide ninguna acción.
+        #
+        # El `not consec_cierre` sigue siendo la guarda que evita el ruido: si
+        # el consecutivo existe, el movimiento llegó y no se avisa nada.
+        estados_sin_cierre_esperado = (
+            EstadoTraslado.RECHAZADA, EstadoTraslado.CANCELADA,
+            EstadoTraslado.REVERTIDA,
         )
         siesa_necesita_atencion = (
             bool(self.siesa_error) and
             not consec_cierre and
-            self.estado not in estados_terminales
+            self.estado not in estados_sin_cierre_esperado
         )
         return {
             'id': self.id,

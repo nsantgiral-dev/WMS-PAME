@@ -152,6 +152,53 @@ function _renderTrasladoCard(s) {
     acciones.push(`<span style="font-size:12px;color:#f59e0b;font-weight:600;">🚚 Mercancía en camino — la tienda confirma recepción</span>`);
   }
 
+  // ── Recuperación cuando Siesa falló ────────────────────────────────────
+  //
+  // Las tres funciones existían, estaban probadas y NINGÚN botón las llamaba.
+  // Peor: `traslado_service` escribe en el aviso «Usa WMS Admin → Traslados →
+  // Reintentar despacho» y lo manda por correo — el mensaje de error señalaba
+  // un botón inexistente.
+  //
+  // Se necesitan el día que Siesa falla, que es a las 6 p.m. de un viernes.
+  // Una capacidad de recuperación que exige armar un curl con un JWT **no
+  // existe cuando hace falta**: existe cuando hay tiempo, y cuando hay tiempo
+  // no hace falta.
+  //
+  // Se muestran solo cuando falta el consecutivo que corresponde, para que un
+  // botón visible signifique siempre «esto está trabado» y no decore la
+  // tarjeta de un traslado sano.
+  //
+  // Los rótulos son los que el propio sistema le dicta al operario: el correo
+  // y el `siesa_error` de `traslado_service` dicen «Reintentar despacho», así
+  // que el botón se llama «Reintentar despacho» y no «Reintentar salida». Un
+  // instructivo que nombra un botón que no existe con ese nombre se lee como
+  // «esto no está» y se termina llamando a soporte.
+  const recuperacion = [];
+
+  const faltaSalida = !s.siesa_salida_consec
+    && ['PREPARADO', 'EN_TRANSITO', 'ENTREGADA'].includes(s.estado);
+  const faltaEntrada = s.modo_transferencia === 'EN_TRANSITO'
+    && s.siesa_salida_consec && !s.siesa_entrada_consec
+    && ['EN_TRANSITO', 'ENTREGADA'].includes(s.estado);
+
+  if (faltaSalida) {
+    recuperacion.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar despacho (STS)</button>`);
+  }
+  if (faltaEntrada) {
+    recuperacion.push(`<button onclick="trasReintentarRecepcionSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar recepción (ETS)</button>`);
+  }
+  if (s.estado === 'EN_TRANSITO') {
+    recuperacion.push(`<button onclick="trasRevertir(${s.id})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>`);
+  }
+
+  const bloqueRecuperacion = recuperacion.length ? `
+    <div style="margin-top:10px;padding:8px;background:#170a0a;border:1px solid #7f1d1d;border-radius:8px;">
+      <div style="font-size:10px;color:#fca5a5;font-weight:700;margin-bottom:6px;">
+        ⚠ RECUPERACIÓN — crean documentos en Siesa. Verificá primero en Siesa que el documento no exista.
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">${recuperacion.join('')}</div>
+    </div>` : '';
+
   const operarioTag = s.operario_nombre
     ? `<div style="font-size:11px;color:#7c3aed;margin-bottom:6px;">👷 ${s.operario_nombre}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
     : (s.estado === 'EN_PICKING' ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:6px;">⚠ Sin operario asignado</div>` : '');
@@ -170,6 +217,7 @@ function _renderTrasladoCard(s) {
     ${operarioTag}
     ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
     ${acciones.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">${acciones.join('')}</div>` : ''}
+    ${bloqueRecuperacion}
   </div>`;
 }
 
@@ -712,7 +760,12 @@ async function trasRevertir(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasReintentarRecepcionSiesa(id) {
-  if (!confirm('¿Reintentar registro de entrada en Siesa (173079)? Solo usar si la recepción física ya fue confirmada.')) return;
+  if (!confirm(
+    '¿Reintentar el registro de entrada en Siesa (ETS 173079)?\n\n'
+    + 'Solo si la recepción física ya se confirmó Y verificaste en Siesa que el '
+    + 'documento NO existe.\n\n'
+    + '⚠ Si ya existía, quedan DOS ENTRADAS DUPLICADAS y el inventario de la '
+    + 'bodega destino sube el doble. Anularla es un ajuste a mano en Siesa.')) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/reintentar-recepcion`, {
       method: 'POST',
@@ -730,7 +783,12 @@ async function trasReintentarRecepcionSiesa(id) {
  * @param {number} id - Traslado solicitud ID.
  */
 async function trasReintentarDespachoSiesa(id) {
-  if (!confirm('¿Reintentar notificación a Siesa del despacho? No mueve el estado.')) return;
+  if (!confirm(
+    '¿Reintentar la salida en tránsito en Siesa (STS 173076/174930)?\n\n'
+    + 'No mueve el estado del traslado. Verificá primero en Siesa que el '
+    + 'documento NO exista.\n\n'
+    + '⚠ Si ya existía, quedan DOS SALIDAS DUPLICADAS y la bodega origen '
+    + 'descarga el doble — puede quedar en negativo.')) return;
   try {
     const r = await fetch(API + `/api/traslados/${id}/reintentar-despacho`, {
       method: 'POST',

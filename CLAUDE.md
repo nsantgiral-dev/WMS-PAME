@@ -1087,6 +1087,34 @@ declaradas en `DEUDA_SIN_UI` con su motivo, y **son candidatas a borrar, no a
 conectar**: cada una es una segunda puerta a una operación crítica, sin la
 idempotencia de la vía viva.
 
+### Y la adyacencia tampoco alcanzaba: ahora mide invocación (2026-08-15)
+
+Presencia y adyacencia comparten el mismo punto ciego, que es el que importa:
+**una URL escrita dentro de una función que nadie llama está escrita.**
+
+Los tres botones de recuperación de traslados —`trasRevertir`,
+`trasReintentarDespachoSiesa`, `trasReintentarRecepcionSiesa`— lo satisfacían
+con holgura: `fetch(API + \`/api/traslados/${id}/revertir\`)` es adyacencia de
+manual. Ningún `onclick` las alcanzaba. Y mientras tanto `traslado_service`
+le mandaba al operario, por `siesa_error` y por correo, «WMS Admin → Traslados
+→ Reintentar despacho»: **el sistema daba una instrucción imposible** justo
+cuando la mercancía ya salió y Siesa no tiene documento.
+
+El guard construye ahora un **grafo de llamadas** del PWA y solo cuenta las URL
+que viven en código alcanzable desde un `onclick` del HTML, el arranque de un
+módulo, un `addEventListener` o una función ya alcanzable. Destapó seis rutas
+más, declaradas con su razón verificada; tres de ellas son el JS de las
+pantallas `picker-traslado`/`packer-traslado`, **borradas del HTML y vivas en el
+código** — ~280 líneas que un auditor lee como si describieran la operación de
+hoy.
+
+Lo que el guard no puede ver está escrito en su encabezado (invocación por
+string, sobre todo). Y como un detector de alcance roto marca **todo** como
+alcanzable —el troceo se come un archivo y el guard se apaga en silencio—,
+`TestElDetectorDeAlcanceSeMide` le pone pisos mínimos, un canario por cada
+forma de conexión, y mutaciones: se le quita al repo el `onclick` de cada botón
+**en memoria** y se exige que la ruta caiga como huérfana.
+
 ---
 
 ## Las tres banderas de idempotencia financiera (2026-08-13)

@@ -20,11 +20,105 @@ from pathlib import Path
 
 import pytest
 
-_PWA = Path(__file__).resolve().parents[1] / 'app' / 'static' / 'pwa'
+_RAIZ = Path(__file__).resolve().parents[1]
+_PWA = _RAIZ / 'app' / 'static' / 'pwa'
+_VENDOR = _RAIZ / 'app' / 'static' / 'vendor'
 
 
 def _js(nombre):
     return (_PWA / nombre).read_text(encoding='utf-8')
+
+
+class TestElMotorDeCodigoBarrasEstaAhi:
+    """La impresión de etiquetas figuraba como «bloque construido y nunca
+    ejercitado». No era falta de tiempo: **no tenía forma de fallar visiblemente.**
+
+    JsBarcode es el único motor de código de barras del WMS —producto,
+    ubicación, LPN y bulto salen todos de él— y venía de `cdn.jsdelivr.net`.
+    `sw.js` cachea por lista blanca y **sólo el propio origen**, así que la
+    librería nunca entraba al caché: con la red floja no cargaba.
+
+    Y los cuatro sitios que la usaban la llamaban dentro de `try {} catch (_) {}`.
+    El fallo no producía un error: producía una **etiqueta impresa sin código**,
+    con su texto legible y su membrete, idéntica a una buena hasta que alguien
+    la pasa por el láser. Un bulto sin código no entra al manifiesto, y esa
+    cuenta se termina haciendo de memoria.
+    """
+
+    _ARCHIVO = 'JsBarcode.all.min.js'
+
+    def test_la_libreria_vive_en_el_repo(self):
+        f = _VENDOR / self._ARCHIVO
+        assert f.exists(), (
+            f'falta {f} — sin ella no se imprime ningún código de barras')
+        assert f.stat().st_size > 10_000, 'el archivo parece truncado'
+
+    def test_no_se_carga_desde_un_origen_externo(self):
+        """TRINQUETE. Volver a apuntar al CDN reintroduce el defecto entero:
+        `sw.js` no lo cachea y no hay forma de notarlo hasta el día de imprimir.
+        """
+        html = (_PWA / 'index.html').read_text(encoding='utf-8')
+        externos = [l.strip() for l in html.split('\n')
+                    if 'src=' in l and 'http' in l and 'arcode' in l.lower()]
+        assert not externos, (
+            '\nJsBarcode se está cargando desde otro origen:\n'
+            + '\n'.join(f'  · {e[:110]}' for e in externos)
+            + '\n\nServirlo desde /static/vendor/ — el service worker sólo '
+              'cachea el propio origen.')
+        assert '/static/vendor/' + self._ARCHIVO in html
+
+    def test_el_service_worker_lo_cachea(self):
+        """Si no está en el SHELL, la PWA offline imprime etiquetas mudas."""
+        assert '/static/vendor/' + self._ARCHIVO in _js('sw.js'), (
+            'JsBarcode no está en el SHELL de sw.js')
+
+    def test_nadie_llama_a_JsBarcode_directo(self):
+        """Una política, una función.
+
+        Cuatro sitios lo llamaban con cuatro `catch` propios, y tres de los
+        cuatro eran `catch (_) {}` — silencio puro. Ahora todos pasan por
+        `pintarCodigoBarras()`, que devuelve `false` en vez de callarse.
+        """
+        malas = []
+        for archivo in sorted(_PWA.glob('*.js')):
+            if archivo.name == 'app.js':
+                continue   # define el helper; es el único que puede tocarlo
+            for n, linea in enumerate(archivo.read_text(encoding='utf-8').split('\n'), 1):
+                if re.search(r'\bJsBarcode\s*\(', linea):
+                    malas.append(f'{archivo.name}:{n}  {linea.strip()[:70]}')
+        assert not malas, (
+            '\nLlamadas directas a JsBarcode fuera de app.js:\n'
+            + '\n'.join(f'  · {m}' for m in malas)
+            + '\n\nUsar `pintarCodigoBarras()`, que informa cuando no puede.')
+
+    #: (archivo, función que imprime etiquetas con código de barras)
+    _IMPRESORAS = (
+        ('etiquetas.js', 'function etqImprimir('),
+        ('packing.js', 'function imprimirEtiquetaLPN('),
+        ('packing.js', 'function empImprimirEtiquetas('),
+        ('layout.js', 'function layoutImprimirEtiquetasCuerpo('),
+    )
+
+    def test_toda_impresion_de_etiquetas_verifica_el_motor_antes(self):
+        """El guard va ANTES de armar el `#print-area`: preferimos no imprimir
+        a imprimir una etiqueta muda. La muda se pega en la caja y el problema
+        aparece tres días después, en la ruta."""
+        faltan = []
+        for archivo, firma in self._IMPRESORAS:
+            js = _js(archivo)
+            i = js.find(firma)
+            assert i != -1, f'{archivo}: no está {firma!r} — ¿se renombró?'
+            cuerpo = js[i:i + 900]
+            if 'puedeImprimirEtiquetas(' not in cuerpo:
+                faltan.append(f'{archivo} › {firma}')
+        assert not faltan, (
+            '\nImprimen etiquetas sin verificar que haya motor:\n'
+            + '\n'.join(f'  · {f}' for f in faltan))
+
+    def test_el_helper_existe_una_sola_vez(self):
+        app = _js('app.js')
+        assert app.count('function puedeImprimirEtiquetas(') == 1
+        assert app.count('function pintarCodigoBarras(') == 1
 
 
 class TestLosDocumentosSeAbrenConElToken:
@@ -282,3 +376,112 @@ class TestLosEndpointsDeRecuperacionSiguenAhi:
         r = client.post('/api/packing/1/forzar-siesa',
                         headers={'Authorization': f'Bearer {jwt_token}'})
         assert r.status_code == 403
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Los tres botones de recuperación de traslados
+# ══════════════════════════════════════════════════════════════════════════
+
+class TestLosTresBotonesDeRecuperacionDeTraslado:
+    """Mismo defecto que el panel de arriba, en otro módulo.
+
+    `trasRevertir`, `trasReintentarDespachoSiesa` y `trasReintentarRecepcionSiesa`
+    existían con sus endpoints probados del lado del servidor y **ningún onclick
+    las alcanzaba**. El guard de endpoints sin consumidor no las veía porque
+    comprobaba que la URL apareciera *escrita* en el JS, y estaba escrita — dentro
+    de una función que nadie llamaba.
+
+    Lo que lo volvía urgente: `traslado_service` le escribe al operario, en el
+    `siesa_error` y en el correo de alerta, «WMS Admin → Traslados → Reintentar
+    despacho». Ese botón no existía. El sistema daba una instrucción imposible
+    justo en el momento en que la mercancía ya salió y Siesa no tiene documento.
+    """
+
+    _TRASLADOS = _RAIZ / 'app' / 'static' / 'pwa' / 'traslados.js'
+
+    def _tarjeta(self):
+        """El cuerpo de `_renderTrasladoCard` — la única pantalla del detalle."""
+        js = self._TRASLADOS.read_text(encoding='utf-8')
+        i = js.index('function _renderTrasladoCard(')
+        return js[i:js.index('\nfunction ', i + 10)]
+
+    def _cuerpo(self, fn):
+        js = self._TRASLADOS.read_text(encoding='utf-8')
+        i = js.index(f'async function {fn}(')
+        return js[i:i + 1800]
+
+    _PELIGROSAS = ('trasRevertir', 'trasReintentarDespachoSiesa',
+                   'trasReintentarRecepcionSiesa')
+
+    def test_las_tres_se_disparan_desde_la_tarjeta(self):
+        """EL TEST. Antes las tres existían y ninguna se alcanzaba."""
+        tarjeta = self._tarjeta()
+        for fn in self._PELIGROSAS:
+            assert f'{fn}(' in tarjeta, (
+                f'{fn} existe, su endpoint existe, y ningún botón la llama')
+
+    def test_las_tres_piden_confirmacion(self):
+        for fn in self._PELIGROSAS:
+            assert 'confirm(' in self._cuerpo(fn), (
+                f'{fn} crea un documento en Siesa o mueve inventario sin confirmar')
+
+    def test_la_confirmacion_nombra_la_consecuencia(self):
+        """Un «¿estás seguro?» pelado se contesta que sí sin leerlo.
+
+        Las dos de reintento comparten un riesgo concreto y asimétrico: si el
+        documento YA existía en Siesa, el reintento lo duplica, y una entrada o
+        salida duplicada se anula con un ajuste a mano. Eso tiene que estar en
+        la pregunta, no en un manual.
+        """
+        for fn in ('trasReintentarDespachoSiesa', 'trasReintentarRecepcionSiesa'):
+            cuerpo = self._cuerpo(fn)
+            assert 'DUPLICAD' in cuerpo, (
+                f'{fn} no dice qué pasa si el documento ya existía en Siesa')
+        revertir = self._cuerpo('trasRevertir')
+        assert 'inventario' in revertir and 'Siesa' in revertir, (
+            'trasRevertir no dice que las unidades vuelven al inventario ni que '
+            'el STS queda vivo en Siesa y hay que anularlo a mano')
+
+    def test_las_que_solo_leen_NO_molestan_con_confirmacion(self):
+        """Si todo pide confirmar, la confirmación deja de significar algo."""
+        js = self._TRASLADOS.read_text(encoding='utf-8')
+        for fn in ('trasVerLPNs',):
+            i = js.index(f'async function {fn}(')
+            assert 'confirm(' not in js[i:i + 1200], (
+                f'{fn} solo lee y pide confirmación — eso entrena a confirmar '
+                'sin leer, y después la que importa también se confirma sin leer')
+
+    def test_solo_aparecen_cuando_falta_el_consecutivo(self):
+        """Un botón de emergencia visible en un traslado sano deja de leerse
+        como emergencia. La condición es la misma que usa `to_dict` para decidir
+        si el error pide acción: falta el documento de cierre."""
+        tarjeta = self._tarjeta()
+        assert '!s.siesa_salida_consec' in tarjeta, (
+            'el reintento de despacho se ofrece sin mirar si el STS ya existe')
+        assert '!s.siesa_entrada_consec' in tarjeta, (
+            'el reintento de recepción se ofrece sin mirar si el ETS ya existe')
+
+    def test_el_rotulo_es_el_que_el_sistema_le_dicta_al_operario(self):
+        """«Nombres que mienten», en su forma más barata de evitar.
+
+        `traslado_service` manda por correo «WMS Admin → Traslados → Reintentar
+        despacho». Si el botón se llama «Reintentar salida», el operario busca
+        lo que le dijeron, no lo encuentra, y llama a soporte con la mercancía
+        ya en la calle.
+        """
+        servicio = (_RAIZ / 'app' / 'services' / 'traslado_service.py').read_text(
+            encoding='utf-8')
+        assert 'Reintentar despacho' in servicio, (
+            'cambió el instructivo del servicio — actualiza también el rótulo')
+        tarjeta = self._tarjeta()
+        assert 'Reintentar despacho' in tarjeta, (
+            'el correo manda a apretar «Reintentar despacho» y el botón se '
+            'llama de otra forma')
+
+    @pytest.mark.parametrize('ruta', [
+        '/api/traslados/1/revertir',
+        '/api/traslados/1/reintentar-despacho',
+        '/api/traslados/1/reintentar-recepcion',
+    ])
+    def test_los_endpoints_existen_y_exigen_sesion(self, client, ruta):
+        assert client.post(ruta).status_code == 401, f'{ruta} no exige sesión'

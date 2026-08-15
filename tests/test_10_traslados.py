@@ -1440,3 +1440,88 @@ class TestE2ERecepcionTienda:
 
         s = SolicitudTraslado.query.get(solicitud_en_transito_tienda.id)
         assert s.siesa_entrada_consec == 7654
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# G. La tarjeta verde sobre stock varado
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestElErrorDeSiesaSeVeCuandoPideAccion:
+    """`to_dict` decidía por ESTADO si valía la pena mostrar `siesa_error`, y
+    ENTREGADA estaba en la lista de los que callan.
+
+    Pero `confirmar_recepcion` escribe ENTREGADA **aunque el 173079 haya
+    fallado** — el estado describe el hecho físico: la mercancía llegó a la
+    tienda. El resultado era el peor de los dos mundos: la unidad está en la
+    bodega puente para Siesa, en la tienda para el WMS, y la tarjeta se pinta
+    en verde sin una sola advertencia. Nadie reclama un faltante porque nadie
+    lo ve, y el traslado se descubre meses después cuadrando inventarios.
+
+    La pregunta correcta no es «¿terminó?» sino «¿falta el documento de
+    cierre?». Eso es `not consec_cierre`, que ya estaba en la fórmula.
+    """
+
+    def _dict(self, s):
+        from app.models.traslado import SolicitudTraslado
+        return SolicitudTraslado.query.get(s.id).to_dict()
+
+    def test_entregada_sin_entrada_en_siesa_muestra_el_error(
+            self, app, db, solicitud_entregada_sin_entrada):
+        """EL CASO. ENTREGADA + sin 173079 = stock varado en la bodega puente."""
+        d = self._dict(solicitud_entregada_sin_entrada)
+        assert d['siesa_necesita_atencion'] is True
+        assert d['siesa_error'] and '173079' in d['siesa_error'], (
+            'un traslado entregado sin entrada registrada en Siesa se pinta '
+            'igual que uno sano — el operario no tiene forma de enterarse')
+
+    def test_entregada_con_entrada_registrada_no_avisa_nada(
+            self, app, db, solicitud_entregada_sin_entrada):
+        """Si el consecutivo llegó, un error viejo es ruido: se calla.
+
+        Sin esta mitad, «mostrar siempre» sería igual de inútil que «no mostrar
+        nunca» — 639 avisos hacen invisible al que importa.
+        """
+        s = solicitud_entregada_sin_entrada
+        s.siesa_entrada_consec = 5150
+        db.session.commit()
+        d = self._dict(s)
+        assert d['siesa_necesita_atencion'] is False
+        assert d['siesa_error'] is None
+
+    @pytest.mark.parametrize('estado', ['RECHAZADA', 'CANCELADA', 'REVERTIDA'])
+    def test_los_tres_que_no_esperan_cierre_siguen_callando(
+            self, app, db, solicitud_entregada_sin_entrada, estado):
+        """Un traslado rechazado, cancelado o revertido NO debe tener documento
+        de cierre en Siesa. Un error ahí no pide ninguna acción."""
+        s = solicitud_entregada_sin_entrada
+        s.estado = estado
+        db.session.commit()
+        d = self._dict(s)
+        assert d['siesa_necesita_atencion'] is False
+        assert d['siesa_error'] is None
+
+    def test_el_reintento_exige_exactamente_el_estado_que_se_escribe(
+            self, app, db, client, jwt_token_admin, solicitud_entregada_sin_entrada):
+        """DECLARACIÓN, no arreglo: `confirmar_recepcion` sigue escribiendo
+        ENTREGADA aunque el 173079 falle, y debe seguir haciéndolo.
+
+        `POST /reintentar-recepcion` rechaza con 400 cualquier estado que no
+        sea ENTREGADA (`app/routes/traslados.py:662`). Si la recepción dejara
+        el traslado en EN_TRANSITO al fallar la entrada, el único botón que
+        arregla el problema quedaría inalcanzable justo en el caso para el que
+        existe. La visibilidad se resolvió donde correspondía —en `to_dict`—,
+        no moviendo el estado.
+
+        Este test es el candado: el día que alguien cambie una de las dos
+        puntas sin la otra, falla.
+        """
+        s = solicitud_entregada_sin_entrada
+        assert s.estado == 'ENTREGADA' and s.siesa_entrada_consec is None
+        resp = client.post(
+            f'/api/traslados/{s.id}/reintentar-recepcion',
+            json={},
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code != 400, (
+            'el estado que escribe confirmar_recepcion y el que exige '
+            'reintentar-recepcion dejaron de coincidir')

@@ -101,21 +101,28 @@ class TestScriptIntegrity:
         assert not dupes, f'Scripts duplicados: {set(dupes)}'
 
     def test_sw_caches_all_modules(self):
-        """sw.js SHELL array incluye todos los módulos JS (excepto etiquetas)."""
+        """sw.js SHELL array incluye todos los módulos JS.
+
+        `etiquetas.js` estaba exento desde que se escribió, con el motivo
+        «pre-existente, network-first». Las dos mitades del motivo dejaron de
+        ser ciertas —está en el SHELL y el SW es cache-first desde hace
+        meses—, pero la exención siguió ahí: una excepción sin fecha sobrevive
+        a su razón y deja un módulo fuera del guard para siempre.
+        """
         sw = _read('sw.js')
-        scripts = self._script_tags_in_html()
-        # etiquetas.js puede no estar en SW (pre-existente, network-first)
-        core_scripts = [s for s in scripts if s != 'etiquetas.js']
-        for s in core_scripts:
+        for s in self._script_tags_in_html():
             assert s in sw, f'{s} no está en sw.js SHELL — PWA offline se rompe'
 
     def test_cache_bust_versions(self):
-        """Cada script tag tiene version param para cache busting."""
+        """Cada script tag tiene version param para cache busting.
+
+        Sin `?v=`, un módulo cambiado se sirve viejo desde el caché del
+        navegador hasta que alguien haga Ctrl+F5 — y datos viejos presentados
+        como actuales es la peor clase de dato en un WMS.
+        """
         html = _read('index.html')
         scripts = re.findall(r'<script src="(/static/pwa/\w+\.js[^"]*)"', html)
         for script in scripts:
-            if 'etiquetas.js' in script:
-                continue  # puede no tener version
             assert '?v=' in script, f'{script} sin cache bust version param'
 
     def test_all_js_files_parse(self):
@@ -449,6 +456,275 @@ class TestEndpointIntegrity:
 #
 # NO exige cero huérfanos: exige que el número NUNCA crezca. Es un trinquete.
 # ══════════════════════════════════════════════════════════════════════════
+#
+# ── Alcanzabilidad: la tercera versión del mismo guard (2026-08-15) ────────
+#
+# El guard midió **presencia** («los trozos de la URL están escritos en algún
+# lado»), y en agosto pasó a **adyacencia** («el sufijo aparece cerca del
+# prefijo»), que atrapó once rutas parametrizadas. Las dos versiones comparten
+# el mismo punto ciego, y es el que importa:
+#
+#     una URL escrita dentro de una función que nadie llama está escrita.
+#
+# `trasRevertir`, `trasReintentarDespachoSiesa` y `trasReintentarRecepcionSiesa`
+# lo satisfacían perfectamente: `fetch(API + `/api/traslados/${id}/revertir`)`
+# es adyacencia de manual. Ningún `onclick` las alcanzaba, y mientras tanto
+# `traslado_service` le mandaba al operario, por correo, «WMS Admin → Traslados
+# → Reintentar despacho» — un botón que no existía.
+#
+# Ahora se exige **invocación**: la URL cuenta solo si vive en código que se
+# alcanza desde un `onclick` del HTML, desde el código de arranque de un módulo,
+# desde un `addEventListener`, o desde otra función alcanzable. Es un grafo de
+# llamadas, recorrido desde las raíces.
+#
+# Lo que NO hace, dicho para que nadie lo suponga: no interpreta JavaScript. Un
+# nombre invocado por string (`window[fn]()`) le resulta invisible, y una
+# función que solo llama código muerto se considera muerta aunque el usuario
+# jure lo contrario. Por eso hay pisos mínimos y mutaciones abajo — un detector
+# de alcance que se rompe callado marca todo como huérfano, y una lista larga
+# se ignora.
+#
+# Y sigue midiendo **por ruta, no por método**: `/api/rutas/conductores` cuenta
+# como consumida porque la pantalla hace el GET, aunque el POST que da de alta
+# un conductor esté muerto desde hace meses (ver la deuda de
+# `/api/rutas/usuarios-conductores`). Es el próximo escalón de este guard, y
+# queda escrito acá para que se descubra leyendo y no a los golpes.
+
+
+_ANTES_DE_REGEX = set('(,=:[!&|?{};+-*%~^<>') | {'\n'}
+_PALABRAS_ANTES_DE_REGEX = {'return', 'typeof', 'case', 'in', 'of', 'do',
+                            'else', 'yield', 'await', 'new', 'delete', 'void'}
+_DECL_FUNCION = re.compile(r'(?:^|[\n;{}])\s*(?:async\s+)?function\s+(\w+)\s*\(')
+
+
+def _fin_de_bloque(src, i):
+    """Índice siguiente al `}` que cierra el `{` en `i`.
+
+    Contar llaves a secas no sirve en este repo: el JS arma HTML con plantillas
+    (` `${x}` `), y un `/\\d{2}/` o un `'{'` dentro de una cadena descuadran la
+    cuenta y se llevan por delante media docena de funciones — que entonces
+    quedarían dentro del cuerpo de otra y se declararían alcanzables sin serlo.
+    """
+    n = len(src)
+    prof = 0
+    while i < n:
+        c = src[i]
+        if c == '/' and i + 1 < n and src[i + 1] == '/':
+            i = src.find('\n', i)
+            if i == -1:
+                return n
+            continue
+        if c == '/' and i + 1 < n and src[i + 1] == '*':
+            j = src.find('*/', i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        if c == '/':
+            k = i - 1
+            while k >= 0 and src[k] in ' \t':
+                k -= 1
+            prev = src[k] if k >= 0 else '\n'
+            pal = re.search(r'([A-Za-z_$][\w$]*)$', src[:k + 1])
+            if prev in _ANTES_DE_REGEX or (
+                    pal is not None and pal.group(1) in _PALABRAS_ANTES_DE_REGEX):
+                j, en_clase = i + 1, False
+                while j < n:
+                    d = src[j]
+                    if d == '\\':
+                        j += 2
+                        continue
+                    if d == '[':
+                        en_clase = True
+                    elif d == ']':
+                        en_clase = False
+                    elif (d == '/' and not en_clase) or d == '\n':
+                        break
+                    j += 1
+                i = j + 1
+                continue
+            i += 1
+            continue
+        if c in '"\'':
+            j = i + 1
+            while j < n:
+                if src[j] == '\\':
+                    j += 2
+                    continue
+                if src[j] == c or src[j] == '\n':
+                    break
+                j += 1
+            i = j + 1
+            continue
+        if c == '`':
+            j = i + 1
+            while j < n:
+                if src[j] == '\\':
+                    j += 2
+                    continue
+                if src[j] == '`':
+                    break
+                if src[j] == '$' and j + 1 < n and src[j + 1] == '{':
+                    j = _fin_de_bloque(src, j + 1)     # interpolación
+                    continue
+                j += 1
+            i = j + 1
+            continue
+        if c == '{':
+            prof += 1
+        elif c == '}':
+            prof -= 1
+            if prof == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _trocear(src):
+    """(cuerpos por función declarada, código de arranque del módulo).
+
+    «Arranque» es todo lo que queda fuera de una declaración: se ejecuta al
+    cargar el script, así que es raíz por definición. Separarlo bien importa —
+    `document.addEventListener('DOMContentLoaded', verificarModoSistema)` vive
+    después de la última función del archivo.
+    """
+    cuerpos, tapados = {}, []
+    for m in _DECL_FUNCION.finditer(src):
+        ini = src.index('function', m.start())
+        llave = src.find('{', m.end() - 1)
+        if llave == -1:
+            continue
+        if any(a <= ini < b for a, b in tapados):
+            continue                       # anidada: cuenta dentro de su padre
+        fin = _fin_de_bloque(src, llave)
+        tapados.append((ini, fin))
+        cuerpos[m.group(1)] = cuerpos.get(m.group(1), '') + '\n' + src[ini:fin]
+    tapados.sort()
+    arranque, cur = [], 0
+    for a, b in tapados:
+        arranque.append(src[cur:a])
+        cur = b
+    arranque.append(src[cur:])
+    return cuerpos, '\n'.join(arranque)
+
+
+_PALABRAS_CLAVE = {
+    'if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof',
+    'new', 'await', 'else', 'do', 'delete', 'void', 'in', 'of', 'case',
+    'throw', 'yield', 'super', 'this', 'constructor',
+}
+#: `fn(` en cualquier parte del texto. Cubre la llamada normal **y** el
+#: `onclick="fn(${id})"` que este repo escribe dentro de plantillas — para el
+#: escáner las dos son el mismo texto, y por eso no hay una regla aparte para
+#: atributos: sería una regla que no cambia ningún resultado.
+_LLAMADA = re.compile(r'(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(')
+#: pasada como valor: `addEventListener('x', fn)`, `setTimeout(fn, 0)`,
+#: `Quagga.onDetected(_onQuaggaDetect)`, `_refreshBtn(event, cargarCola)`.
+#: Pasar una función también es invocarla, con un intermediario.
+_COMO_VALOR = re.compile(r'[(,]\s*([A-Za-z_$][\w$]*)\s*[,)]')
+#: `el.onclick = fn;` — asignada ahora, disparada por el navegador después.
+_ASIGNADA = re.compile(r'=\s*([A-Za-z_$][\w$]*)\s*[;,)\n]')
+
+
+def _referencias(texto):
+    """Nombres que este trozo de código puede terminar ejecutando."""
+    r = {m.group(1) for m in _LLAMADA.finditer(texto)} - _PALABRAS_CLAVE
+    for rx in (_COMO_VALOR, _ASIGNADA):
+        r |= {m.group(1) for m in rx.finditer(texto)}
+    return r
+
+
+def _analizar(fuentes, html):
+    """El detector, sin tocar disco: `{archivo: código}` + el HTML.
+
+    Separado de `_grafo()` a propósito — un detector que solo corre contra el
+    repo entero no se puede probar por mutación, y un detector de alcance sin
+    mutaciones es exactamente el que se rompe callado.
+    """
+    cuerpos, arranques = {}, []
+    for f in sorted(fuentes):
+        c, a = _trocear(fuentes[f])
+        for nombre, cuerpo in c.items():
+            cuerpos[nombre] = cuerpos.get(nombre, '') + '\n' + cuerpo
+        arranques.append(a)
+    arranque = '\n'.join(arranques)
+
+    # Raíces: lo que el usuario puede disparar desde el HTML, más lo que corre
+    # solo al cargar cada módulo.
+    raices = {m.group(1) for m in
+              re.finditer(r'\bon\w+="\s*([A-Za-z_$][\w$]*)\s*\(', html)}
+    raices |= _referencias(arranque)
+    raices |= _referencias(re.sub(r'<script[^>]*src[^>]*>', '', html))
+
+    alcanzables, pendientes = set(), [r for r in raices if r in cuerpos]
+    while pendientes:
+        fn = pendientes.pop()
+        if fn in alcanzables:
+            continue
+        alcanzables.add(fn)
+        pendientes += [n for n in _referencias(cuerpos[fn])
+                       if n in cuerpos and n not in alcanzables]
+
+    return cuerpos, alcanzables, arranque, raices
+
+
+_CACHE_GRAFO = {}
+
+
+def _grafo():
+    """(cuerpos, alcanzables, arranque, raíces) del repo — memoizado."""
+    fuentes = {f: _read(f) for f in _all_js_files()}
+    html = _read('index.html')
+    clave = hash((tuple(sorted(fuentes.items())), html))
+    if clave not in _CACHE_GRAFO:
+        _CACHE_GRAFO[clave] = _analizar(fuentes, html)
+    return _CACHE_GRAFO[clave]
+
+
+def _codigo_alcanzable():
+    """El único blob contra el que vale preguntar si una URL se usa."""
+    cuerpos, alcanzables, arranque, _ = _grafo()
+    return _blob_alcanzable(cuerpos, alcanzables, arranque)
+
+
+def _sin_comentarios(src):
+    """El mismo código, sin `//` ni `/* */`.
+
+    Una URL citada en un JSDoc no es un consumidor, y esa distinción no es
+    teórica: un docstring que explica para qué existía algo ya alcanzó una vez
+    para que un diseño retirado volviera a parecer vigente. El guard tiene que
+    medir código, no prosa sobre el código.
+    """
+    n, i, out = len(src), 0, []
+    while i < n:
+        c = src[i]
+        if c == '/' and i + 1 < n and src[i + 1] == '/':
+            j = src.find('\n', i)
+            i = n if j == -1 else j
+            continue
+        if c == '/' and i + 1 < n and src[i + 1] == '*':
+            j = src.find('*/', i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        if c in '"\'`':
+            j = i + 1
+            while j < n:
+                if src[j] == '\\':
+                    j += 2
+                    continue
+                if src[j] == c or (c != '`' and src[j] == '\n'):
+                    break
+                j += 1
+            out.append(src[i:j + 1])
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def _blob_alcanzable(cuerpos, alcanzables, arranque):
+    return _sin_comentarios(
+        arranque + '\n' + '\n'.join(cuerpos[f] for f in sorted(alcanzables)))
+
 
 # Exentos por naturaleza — no necesitan pantalla
 _EXENTOS_POR_REGLA = (
@@ -503,6 +779,56 @@ DEUDA_SIN_UI = {
     '/api/traslados/<int:id>/cancelar':
         'Cancelación de traslado. El panel cancela desde el detalle, que usa '
         'otra ruta.',
+
+    # ── Destapadas el 2026-08-15 al cambiar adyacencia por invocación ─────
+    #
+    # Seis. Sus URLs estaban escritas —y con adyacencia perfecta— dentro de
+    # funciones que **nadie llama**. Cada razón de acá se verificó leyendo el
+    # código citado; donde no se pudo verificar, lo dice.
+    #
+    # Las tres de traslado son un mismo hecho: `index.html:2911` declara que
+    # «pantalla-picker-traslado y pantalla-packer-traslado eliminadas», y el JS
+    # de esas pantallas se quedó. Son ~280 líneas de código muerto que **parece
+    # vivo**: la próxima persona que audite el flujo de traslados lo va a leer
+    # como si describiera la operación de hoy, y no la describe.
+    '/api/traslados/<int:id>/confirmar-packing':
+        'SEGUNDA PUERTA al cierre de packing de traslado, y dispara 174720 otra '
+        'vez. La vía viva es PackingService.cerrar_packing → TrasladoPackingCloser '
+        '(compromisos 174720 + job DESPACHO_TRASLADO), que salta PREPARADO y va a '
+        'EN_TRANSITO. Verificado: confirmar_packing_traslado no tiene más caller '
+        'que esta ruta, y sus dos llamadores JS (confirmarPackingTraslado, '
+        '_trasPackerConfirmar) son del HUD legacy sin pantalla. BORRAR, no conectar.',
+    '/api/traslados/<int:id>/items-picking':
+        'Alimentaba el HUD de conteo ítem por ítem de las pantallas picker/packer '
+        'de traslado, borradas del HTML (index.html:2911). Verificado: sus dos '
+        'únicos llamadores son trasPickerAbrirHUD y trasPackerAbrirHUD, ambos '
+        'inalcanzables. Se pierde nada hoy; el riesgo es creer que sigue viva.',
+    '/api/traslados/mis-traslados':
+        'Lista de traslados asignados al operario. Su único llamador, '
+        'cargarTrasladosOperario, escribe en el contenedor «traslados-operario», '
+        'que NO EXISTE en index.html — verificado por grep: cero apariciones. La '
+        'función retorna en la primera línea aunque alguien la llamara.',
+    '/api/rutas/usuarios-conductores':
+        'Poblaba el selector del formulario de alta de conductor. Verificado: los '
+        'ids que toca (conductores-form, cond-form-usuario, cond-form-error) no '
+        'existen en index.html, así que conductoresMostrarForm reventaría en su '
+        'primera línea. Costo real: **no hay forma de dar de alta un conductor '
+        'desde la PWA** — la pantalla solo lista, activa/desactiva y crea la '
+        'cuenta PWA de uno ya existente. Alta = INSERT a mano en la base.',
+    '/api/picking/<int:id>/cancelar':
+        'Cancelar una tarea de picking con motivo. Verificado: cancelarTareaPicking '
+        '(app.js:690) no se referencia en ningún onclick ni HTML. Lo que la '
+        'pantalla de bodega SÍ ofrece es «auditar», que solo acepta tareas '
+        'BLOQUEADAS (picking_service.py:549). Una tarea PENDIENTE o EN_PROCESO '
+        'que sobra —pedido anulado, ola mal lanzada— no se puede cerrar desde la '
+        'UI: queda ocupando el pool y reteniendo stock reservado.',
+    '/api/picking/<int:id>/reabrir':
+        'Devuelve una tarea al pool. Verificado: reabrirTareaPicking (app.js:679) '
+        'no se referencia en ningún onclick. Sin ella, la tarea de un operario '
+        'que terminó el turno o perdió el equipo se queda asignada a él. OJO al '
+        'conectarla: reabrir pone cantidad_recogida en CERO '
+        '(picking_service.py:519) y eso ya produjo falsos positivos en VTA-20 — '
+        'darle un botón sin decir eso en la confirmación repite el problema.',
 
     '/api/auth/me':
         'DUPLICADO: el login ya devuelve el usuario completo. Pedirlo otra vez es un viaje de red por un dato que el cliente tiene. Candidato a BORRAR, no a conectar.',
@@ -648,8 +974,10 @@ class TestEndpointsSinConsumidor:
         return False
 
     def _huerfanos(self, app):
-        blob = _all_code() + _read('index.html') if os.path.exists(
-            os.path.join(_PWA, 'index.html')) else _all_code()
+        # El blob NO es todo el JS: es solo el código alcanzable. Una URL que
+        # solo existe dentro de una función que nadie llama no cuenta como
+        # consumidor — ver la nota de alcanzabilidad arriba.
+        blob = _codigo_alcanzable()
         huerfanos = set()
         for regla in app.url_map.iter_rules():
             ruta = str(regla)
@@ -716,6 +1044,224 @@ class TestEndpointsSinConsumidor:
         assert len(BASELINE_HEREDADO) <= 54, (
             f'BASELINE_HEREDADO creció a {len(BASELINE_HEREDADO)}. '
             f'La deuda nueva va a DEUDA_SIN_UI con su razón.')
+
+
+class TestElDetectorDeAlcanceSeMide:
+    """Un detector sin detector es una opinión.
+
+    El precedente concreto es del mes pasado: el detector de tipos encolados sin
+    handler veía **3 de 12** porque solo miraba argumentos posicionales, y el
+    roto estaba entre los 9 invisibles. Salió verde y no significaba nada.
+
+    La forma de fallo propia de éste es peor que la de aquél, porque es
+    silenciosa en las dos direcciones:
+
+    · si el troceo se rompe (una llave mal contada), medio archivo cae dentro
+      del cuerpo de otra función y **todo pasa a ser alcanzable** — el guard se
+      apaga sin decirlo;
+    · si el recorrido no reconoce una forma de invocación, se declaran huérfanas
+      rutas que sí se usan, aparece una lista larga, y una lista larga se ignora.
+
+    Por eso acá hay dos cosas: **pisos mínimos** sobre el repo real, y
+    **mutaciones** sobre fuentes sintéticas y sobre el repo mutado en memoria.
+    """
+
+    # ── Pisos: si el detector se rompe, estos números se desploman ─────────
+
+    def test_trocea_practicamente_todas_las_funciones(self):
+        """El Nivel 1 cuenta las funciones por regex sobre el texto crudo. Si el
+        troceo por llaves ve muchas menos, es que se comió unas dentro de otras.
+        """
+        cuerpos, _, _, _ = _grafo()
+        por_regex = set(re.findall(r'(?:async\s+)?function\s+(\w+)', _all_code()))
+        assert len(cuerpos) >= 600, (
+            f'solo {len(cuerpos)} funciones troceadas — el escáner de llaves '
+            f'se está comiendo archivos enteros')
+        perdidas = por_regex - set(cuerpos)
+        assert len(perdidas) <= 15, (
+            f'{len(perdidas)} funciones declaradas que el troceo no ve: '
+            f'{sorted(perdidas)[:10]}')
+
+    def test_la_mayoria_del_codigo_es_alcanzable(self):
+        """Si el recorrido se rompe, esto se desploma y la lista de huérfanos
+        explota. Si el troceo se rompe, se va a 100% y el guard queda ciego."""
+        cuerpos, alcanzables, _, raices = _grafo()
+        proporcion = len(alcanzables) / len(cuerpos)
+        assert 0.85 <= proporcion < 1.0, (
+            f'{len(alcanzables)}/{len(cuerpos)} alcanzables ({proporcion:.0%}) — '
+            f'fuera del rango sano; el detector está midiendo otra cosa')
+        assert len(raices) >= 300, f'solo {len(raices)} raíces'
+
+    #: Una por cada forma de conexión que existe en este repo. Si el detector
+    #: deja de reconocer una, la que le corresponde cae y el fallo dice cuál.
+    _CANARIOS = (
+        ('cargarTrasladosAdmin', 'onclick en index.html'),
+        ('trasReintentarDespachoSiesa', 'onclick dentro de una plantilla JS'),
+        ('procesarScan', 'llamada normal desde otra función alcanzable'),
+        ('verificarModoSistema', 'addEventListener al final del archivo'),
+        ('syncOffline', 'llamada desde el arranque del módulo'),
+        ('_onQuaggaDetect', 'pasada como valor a Quagga.onDetected'),
+        ('_renderTrasladoCard', 'llamada indirecta desde el listado'),
+    )
+
+    @pytest.mark.parametrize('fn,forma', _CANARIOS)
+    def test_los_canarios_siguen_alcanzables(self, fn, forma):
+        _, alcanzables, _, _ = _grafo()
+        assert fn in alcanzables, (
+            f'{fn} dejó de verse alcanzable — el detector ya no reconoce '
+            f'«{forma}», y todo lo que se conecte así va a dar huérfano')
+
+    # ── Mutaciones sobre fuentes sintéticas ────────────────────────────────
+
+    _HTML = '<button onclick="pintar(1)">x</button>'
+
+    def _analiza(self, js, html=None):
+        return _analizar({'m.js': js}, html if html is not None else self._HTML)
+
+    def test_una_funcion_que_nadie_llama_NO_es_alcanzable(self):
+        """LA MUTACIÓN CENTRAL — el caso exacto de los tres botones."""
+        js = '''
+function pintar(id) { return `<b>${id}</b>`; }
+async function revertir(id) { await fetch(`/api/x/${id}/revertir`); }
+'''
+        cuerpos, alcanzables, arranque, _ = self._analiza(js)
+        assert 'pintar' in alcanzables
+        assert 'revertir' not in alcanzables, (
+            'una función suelta se declaró alcanzable — el guard no atraparía '
+            'nada de lo que existe para atrapar')
+        assert '/api/x/' not in _blob_alcanzable(cuerpos, alcanzables, arranque)
+
+    def test_conectarla_desde_la_tarjeta_la_vuelve_alcanzable(self):
+        """El otro lado de la mutación: con el botón puesto, cuenta. Sin esto,
+        un detector que devuelve «huérfano» para todo también pasaría."""
+        js = '''
+function pintar(id) { return `<button onclick="revertir(${id})">x</button>`; }
+async function revertir(id) { await fetch(`/api/x/${id}/revertir`); }
+'''
+        cuerpos, alcanzables, arranque, _ = self._analiza(js)
+        assert 'revertir' in alcanzables
+        assert '/api/x/' in _blob_alcanzable(cuerpos, alcanzables, arranque)
+
+    def test_la_alcanzabilidad_es_transitiva_y_muere_de_raiz(self):
+        """Una cadena de tres se recorre entera; si se corta la raíz, cae toda.
+
+        Es el caso de `cargarTrasladosOperario` → `_renderTrasladoOperario` →
+        `trasConfirmarRecogida`: nadie llama a la primera y las tres están
+        muertas, aunque las dos últimas se llamen entre sí todo el tiempo.
+        """
+        vivo = '''
+function pintar() { return uno(); }
+function uno() { return dos(); }
+function dos() { return fetch('/api/x/hondo'); }
+'''
+        _, alcanzables, _, _ = self._analiza(vivo)
+        assert {'uno', 'dos'} <= alcanzables
+        muerto = vivo.replace('return uno();', 'return 0;')
+        _, alcanzables, _, _ = self._analiza(muerto)
+        assert 'uno' not in alcanzables and 'dos' not in alcanzables
+
+    def test_la_url_en_un_comentario_no_cuenta_como_consumidor(self):
+        js = '''
+function pintar() { /* antes llamaba a /api/x/viejo/confirmar */ return 1; }
+'''
+        cuerpos, alcanzables, arranque, _ = self._analiza(js)
+        assert 'pintar' in alcanzables
+        assert '/api/x/viejo' not in _blob_alcanzable(
+            cuerpos, alcanzables, arranque)
+
+    def test_el_troceo_sobrevive_a_llaves_dentro_de_texto(self):
+        """Regex `{2}`, cadenas con `}` y plantillas anidadas: si cualquiera de
+        las tres descuadra la cuenta, la función siguiente queda dentro de ésta
+        y se declara alcanzable de arrastre."""
+        js = r'''
+function pintar() {
+  const re = /^\d{2}-\w{3}$/;
+  const s = "}}} no cierra nada {{{";
+  return `<i>${[1,2].map(x => `${x}`).join('')}</i>`;
+}
+async function huerfana() { await fetch('/api/x/1/confirmar'); }
+'''
+        cuerpos, alcanzables, arranque, _ = self._analiza(js)
+        assert set(cuerpos) == {'pintar', 'huerfana'}, (
+            f'el troceo no separó las dos funciones: {sorted(cuerpos)}')
+        assert 'huerfana' not in alcanzables
+        assert '/api/x/' not in _blob_alcanzable(cuerpos, alcanzables, arranque)
+
+    def test_una_funcion_asignada_a_un_handler_cuenta_como_invocada(self):
+        """`el.onclick = fn` no lleva paréntesis en ningún lado: la dispara el
+        navegador. Sin esta regla la función daría huérfana y el guard mandaría
+        a declarar deuda sobre algo que sí se usa — así se llena de ruido."""
+        js = '''
+function pintar() { const el = document.body; el.onclick = confirmarTodo; }
+async function confirmarTodo() { await fetch('/api/x/1/confirmar'); }
+'''
+        _, alcanzables, _, _ = self._analiza(js)
+        assert 'confirmarTodo' in alcanzables
+
+    def test_el_codigo_de_arranque_es_raiz_aunque_este_al_final(self):
+        """`document.addEventListener('DOMContentLoaded', fn)` vive DESPUÉS de
+        la última función del archivo. La primera versión del troceo metía todo
+        eso dentro del cuerpo de la última función y perdía la raíz."""
+        js = '''
+function arranca() { return fetch('/api/x/arranque'); }
+document.addEventListener('DOMContentLoaded', arranca);
+'''
+        _, alcanzables, _, _ = self._analiza(js, html='<div></div>')
+        assert 'arranca' in alcanzables
+
+    # ── Mutación sobre el repo real, en memoria ────────────────────────────
+
+    _RECUPERACION = (
+        ('trasRevertir', '/api/traslados/<int:id>/revertir'),
+        ('trasReintentarDespachoSiesa', '/api/traslados/<int:id>/reintentar-despacho'),
+        ('trasReintentarRecepcionSiesa', '/api/traslados/<int:id>/reintentar-recepcion'),
+    )
+
+    def _fuentes(self):
+        return {f: _read(f) for f in _all_js_files()}, _read('index.html')
+
+    def _blob(self, fuentes, html):
+        cuerpos, alcanzables, arranque, _ = _analizar(fuentes, html)
+        return _blob_alcanzable(cuerpos, alcanzables, arranque)
+
+    @pytest.mark.parametrize('fn,ruta', _RECUPERACION)
+    def test_desconectar_el_boton_deja_la_ruta_huerfana(self, fn, ruta):
+        """LA MUTACIÓN QUE IMPORTA, contra el código real.
+
+        Se le quita al repo —en memoria, sin tocar disco— el `onclick` que
+        conecta cada botón de recuperación, y se exige que la ruta caiga como
+        huérfana. Con el guard viejo (adyacencia) las tres seguían pareciendo
+        consumidas: la URL está escrita, dentro de una función que nadie llama.
+        """
+        fuentes, html = self._fuentes()
+        assert TestEndpointsSinConsumidor._esta_construida(
+            ruta, self._blob(fuentes, html)), (
+            f'{ruta} ya está huérfana antes de mutar nada — el botón de {fn} '
+            f'se desconectó')
+
+        fuentes['traslados.js'] = re.sub(
+            r'onclick="' + fn + r'\([^"]*\)"', 'onclick=""',
+            fuentes['traslados.js'])
+        assert not TestEndpointsSinConsumidor._esta_construida(
+            ruta, self._blob(fuentes, html)), (
+            f'quitarle el botón a {fn} NO deja huérfana a {ruta} — el detector '
+            f'no está midiendo invocación')
+
+    def test_la_adyacencia_sola_no_habria_visto_nada_de_esto(self):
+        """El registro de por qué se subió el listón.
+
+        Con el blob completo —lo que medía el guard hasta ayer— las tres rutas
+        pasan aunque se les quite el botón, porque el texto sigue escrito.
+        """
+        fuentes, html = self._fuentes()
+        for fn, _ in self._RECUPERACION:
+            fuentes['traslados.js'] = re.sub(
+                r'onclick="' + fn + r'\([^"]*\)"', 'onclick=""',
+                fuentes['traslados.js'])
+        blob_viejo = '\n'.join(fuentes.values()) + html
+        for _, ruta in self._RECUPERACION:
+            assert TestEndpointsSinConsumidor._esta_construida(ruta, blob_viejo), (
+                f'{ruta}: la premisa de este test dejó de ser cierta')
 
 
 class TestOrganizacionPorDecision:
