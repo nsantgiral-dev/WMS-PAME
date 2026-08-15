@@ -835,3 +835,98 @@ class TestZonaDeCorte:
             and isinstance(n.func.value, ast.Name) and n.func.value.id == 'date'
         ]
         assert not malas, f'date.today() en codigo activo, lineas: {malas}'
+
+
+class TestElCronEvaluaYNoSoloAlimenta:
+    """Vigía era un graficador bajo demanda, no un detector.
+
+    Los dos únicos llamadores de `ejecutar_cusum` en producción eran rutas
+    manuales: el clic del panel y el backtest. El cron semanal **solo
+    alimentaba**. Una serie que nadie clickeaba no se evaluaba nunca, así que un
+    desplome producía cero alarmas hasta que alguien entrara al panel.
+
+    Lo que lo tapaba: el test que protege el cron verifica que `vigia_service`
+    esté en los schedulers esenciales — mide que el ALIMENTADOR arranque, no que
+    el DETECTOR corra. Un trinquete sobre una proxy, del mismo tipo que los seis
+    que la auditoría encontró.
+    """
+
+    def _serie(self, db, nombre, n=30, valor=1000.0, caida_desde=None):
+        from datetime import date, timedelta
+
+        from app.services.vigia_service import SerieVigia
+        lunes = date.today() - timedelta(days=date.today().weekday() + 7 * n)
+        for i in range(n):
+            v = valor
+            if caida_desde is not None and i >= caida_desde:
+                v = valor * 0.4          # desplome sostenido
+            db.session.add(SerieVigia(serie=nombre, semana=lunes + timedelta(weeks=i),
+                                      valor=v, registros=10, fuente='PRODUCCION'))
+        db.session.commit()
+
+    def test_evalua_todas_las_series_con_datos(self, db):
+        from app.services.vigia_service import evaluar_series_vivas
+        self._serie(db, 'facturas_099')
+        self._serie(db, 'despachos_099')
+        r = evaluar_series_vivas()
+        assert r['series_evaluadas'] >= 2
+
+    def test_un_desplome_produce_alarma_sin_que_nadie_clickee(self, db):
+        """El test que habría fallado ayer, y el que importa."""
+        from app.services.vigia_service import AlarmaVigia
+        from app.services.vigia_service import evaluar_series_vivas
+        self._serie(db, 'facturas_098', n=40, caida_desde=28)
+
+        antes = AlarmaVigia.query.filter_by(serie='facturas_098').count()
+        evaluar_series_vivas()
+        despues = AlarmaVigia.query.filter_by(serie='facturas_098').count()
+        assert despues > antes, (
+            'un desplome sostenido no generó ninguna alarma al correr la '
+            'evaluación — el detector no detecta')
+
+    def test_una_serie_corta_no_es_un_fallo_pero_se_cuenta(self, db):
+        """«0 alarmas» y «no se pudo evaluar» no pueden verse igual."""
+        from app.services.vigia_service import evaluar_series_vivas
+        self._serie(db, 'facturas_097', n=3)
+        r = evaluar_series_vivas()
+        assert 'facturas_097' in r['sin_semanas_suficientes']
+
+    def test_una_serie_rota_no_detiene_a_las_demas(self, db, monkeypatch):
+        from app.services import vigia_service as vs
+        self._serie(db, 'facturas_096')
+        self._serie(db, 'facturas_095')
+
+        original = vs.VigiaService.ejecutar_cusum
+
+        def _explota(nombre):
+            if nombre == 'facturas_096':
+                raise RuntimeError('boom')
+            return original(nombre)
+
+        monkeypatch.setattr(vs.VigiaService, 'ejecutar_cusum', staticmethod(_explota))
+        r = vs.evaluar_series_vivas()
+        assert r['fallidas'] and r['series_evaluadas'] >= 1
+
+    def test_ninguna_salida_del_cron_se_salta_la_evaluacion(self):
+        """Había un `return` temprano por `VIGIA_INGESTA_FACTURACION` que dejaba
+        sin evaluar hasta las series que sí se habían alimentado — y esa
+        variable gobierna OTRA cosa.
+
+        Por AST: todo `return` de `alimentar_series_vivas` pasa por el envoltorio.
+        """
+        import ast
+        import pathlib
+
+        arbol = ast.parse(pathlib.Path('app/services/vigia_service.py').read_text())
+        fn = next(n for n in ast.walk(arbol)
+                  if isinstance(n, ast.FunctionDef) and n.name == 'alimentar_series_vivas')
+        sueltos = [
+            r.lineno for r in ast.walk(fn)
+            if isinstance(r, ast.Return) and r.value is not None
+            and not (isinstance(r.value, ast.Call)
+                     and getattr(r.value.func, 'id', None) == '_con_evaluacion')
+        ]
+        assert not sueltos, (
+            f'el cron vuelve a tener salidas que no evalúan (líneas {sueltos}). '
+            f'Alimentar sin evaluar es exactamente el defecto: las series se '
+            f'escriben y nadie las mira.')

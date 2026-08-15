@@ -21,8 +21,12 @@ from sqlalchemy import inspect as _inspect
 from app.extensions import db
 from app.utils.fecha import dia_operativo
 
-# Las ocho del recibo de turno: frontal, trasera, lateral izq, lateral der,
-# cajón abierto, interior cabina, tablero, llantas.
+#: **Ya no gobierna nada.** Las fotos que el sistema exige salen de
+#: `angulos_de_custodia(posiciones_llanta)` —11, 13 o 10 según el vehículo—
+#: y no de una constante. Vivía del modelo viejo, cuando `llantas` era UNA
+#: foto para todas las ruedas; la migración de ángulo lo cambió a una por
+#: posición y esto quedó atrás, dando por completa una custodia con 9 de 13.
+#: Se conserva solo porque `traspaso.py` la reexporta.
 FOTOS_POR_CUSTODIA = 8
 
 
@@ -260,11 +264,38 @@ class MedidorSQL:
                 Foto.entidad_id == custodia_id,
             ))
 
+        # **Cuántas fotos pide el sistema NO es una constante.** El servidor le
+        # arma al conductor `angulos_de_custodia(posiciones_llanta)`: 11 en un
+        # furgón (4 llantas), 13 en un camión o NHR (6), 10 en un motocarro.
+        # Medir contra 8 daba por completa una custodia con 9 de 13 — y lo que
+        # falta son **posiciones de llanta**, que es justo donde está la tuerca
+        # floja o la herida de flanco que el registro existe para atribuir.
+        #
+        # El 8 venía del modelo viejo, cuando `llantas` era UNA foto para todas
+        # las ruedas; la migración de ángulo lo cambió a una por posición y esto
+        # no se actualizó. El test tampoco lo vio: importaba la misma constante,
+        # así que afirmaba la implementación en vez de la regla.
+        from app.models.vehiculo import Vehiculo
+        from flota.adaptadores.modelos import FichaTecnica
+        from flota.dominio.valores import angulos_de_custodia, posiciones_llanta
+
+        fichas = {f.vehiculo_id: f.posiciones_llanta
+                  for f in FichaTecnica.query.all()} if _tabla_existe('flota_ficha_tecnica') else {}
+        # Acceso directo: `Vehiculo.tipo` es NOT NULL, y la regla 5 de este
+        # módulo prohíbe degradar hacia algo que se parezca al éxito. Un
+        # default acá haría caer el resolutor al fallback en silencio.
+        tipos = {v.id: v.tipo for v in Vehiculo.query.all()}
+
+        def _exigidas(vehiculo_id):
+            n, _fuente = posiciones_llanta(fichas.get(vehiculo_id), tipos.get(vehiculo_id))
+            return len(angulos_de_custodia(n))
+
         incompletas = 0
         for c in Custodia.query.all():
-            if _cuantas('custodia_inicio', c.id) < FOTOS_POR_CUSTODIA:
+            exigidas = _exigidas(c.vehiculo_id)
+            if _cuantas('custodia_inicio', c.id) < exigidas:
                 incompletas += 1
-            elif c.fin_ts is not None and _cuantas('custodia_fin', c.id) < FOTOS_POR_CUSTODIA:
+            elif c.fin_ts is not None and _cuantas('custodia_fin', c.id) < exigidas:
                 incompletas += 1
         return incompletas
 

@@ -1346,6 +1346,80 @@ def verificar_carga_historica(semanas=None, cos=None, semana_alarma=None,
     }
 
 
+def _con_evaluacion(resultado):
+    """Alimentar y evaluar son dos pasos, y el segundo faltaba.
+
+    Se envuelve para que **ninguna salida del cron pueda saltárselo**: había un
+    `return` temprano por la variable de la ingesta de facturación que dejaba
+    sin evaluar hasta las series que sí se habían alimentado.
+
+    Si la evaluación revienta no se pierde lo alimentado — eso ya está
+    commiteado y vale por sí solo.
+    """
+    salida = dict(resultado or {})
+    try:
+        salida['evaluacion'] = evaluar_series_vivas()
+    except Exception as e:
+        logger.exception('[VIGIA_SCHEDULER] la evaluación falló entera: %s', e)
+        salida['evaluacion'] = {'error': str(e)}
+    return salida
+
+
+def evaluar_series_vivas() -> dict:
+    """Corre el CUSUM sobre **todas** las series con datos. Exige contexto.
+
+    Hasta el 2026-08-15 esto no existía y nadie lo hacía: los dos únicos
+    llamadores de `ejecutar_cusum` en producción eran rutas manuales —el clic
+    del panel y el backtest—, así que **una serie que nadie clickeaba no se
+    evaluaba nunca**.
+
+    El cron semanal solo alimentaba. Vigía no era un detector: era un
+    graficador bajo demanda, y un desplome producía cero alarmas hasta que
+    alguien entrara al panel y le hiciera clic a esa serie exacta.
+
+    Lo que lo volvía difícil de ver: el test que protege el cron verifica que
+    `vigia_service` esté en la lista de schedulers esenciales — mide que el
+    **alimentador** arranque, no que el **detector** corra. Un trinquete sobre
+    una proxy.
+
+    Una serie que falla no detiene a las demás: el motivo por el que existe
+    esto es que el silencio de una no se coma al resto.
+    """
+    series = [s for (s,) in db.session.query(SerieVigia.serie).distinct().all()]
+    evaluadas, alarmas, sin_datos, fallidas = 0, 0, [], []
+
+    for nombre in sorted(series):
+        try:
+            r = VigiaService.ejecutar_cusum(nombre)
+        except Exception as e:
+            fallidas.append(f'{nombre}: {e}')
+            logger.exception('[VIGIA_SCHEDULER] falló el CUSUM de %s', nombre)
+            continue
+        if r.get('error'):
+            # Sin semanas suficientes todavía. No es un fallo — pero se cuenta,
+            # porque «0 alarmas» y «no se pudo evaluar» no pueden verse igual.
+            sin_datos.append(nombre)
+            continue
+        evaluadas += 1
+        alarmas += r.get('alarmas_nuevas', 0) or 0
+
+    if alarmas:
+        # Hoy este log es el ÚNICO canal: no existe notificación por correo
+        # pese a que el docstring del módulo dice «notifica». Mientras eso siga
+        # así, que al menos grite en el nivel correcto.
+        logger.error('[VIGIA_SCHEDULER] %d alarma(s) nueva(s) sobre %d serie(s) '
+                     'evaluadas — nadie las notifica todavía, hay que abrir el '
+                     'panel', alarmas, evaluadas)
+    else:
+        logger.info('[VIGIA_SCHEDULER] %d serie(s) evaluadas, sin alarmas nuevas '
+                    '(%d sin semanas suficientes)', evaluadas, len(sin_datos))
+    if fallidas:
+        logger.error('[VIGIA_SCHEDULER] series que no se pudieron evaluar: %s', fallidas)
+
+    return {'series_evaluadas': evaluadas, 'alarmas_nuevas': alarmas,
+            'sin_semanas_suficientes': sin_datos, 'fallidas': fallidas}
+
+
 def alimentar_series_vivas(app=None):
     """
     Punto de entrada del cron semanal — corre los lunes 05:30 Bogotá.
@@ -1384,7 +1458,11 @@ def alimentar_series_vivas(app=None):
         if os.getenv('VIGIA_INGESTA_FACTURACION', '').lower() != 'true':
             logger.info('[VIGIA_SCHEDULER] Ingesta de facturación APAGADA '
                         '(VIGIA_INGESTA_FACTURACION != true)')
-            return resultado
+            # **Se evalúa igual.** Este `return` se llevaba por delante la
+            # detección entera: `adopcion_picking` y `brecha_picking` se
+            # alimentan siempre y son evaluables, y quedaban sin mirar por una
+            # variable que gobierna OTRA cosa.
+            return _con_evaluacion(resultado)
 
         try:
             fact = VigiaService.alimentar_series_facturacion()
@@ -1401,7 +1479,7 @@ def alimentar_series_vivas(app=None):
         except Exception as e:
             logger.exception('[VIGIA_SCHEDULER] Fallo en ingesta de facturación: %s', e)
 
-        return resultado
+        return _con_evaluacion(resultado)
 
 
 def init_scheduler(app):

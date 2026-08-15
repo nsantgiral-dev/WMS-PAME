@@ -186,20 +186,56 @@ class TestCustodiasSinFotoCompleta:
         _custodia(mundo, inicio=0)
         assert medidor.custodias_sin_foto_completa() == antes + 1
 
-    def test_siete_fotos_todavia_cuenta(self, mundo):
-        """Siete de ocho no es "casi": el ángulo que falta es el que se discute."""
+    def _exigidas(self, mundo):
+        """Cuántas fotos pide el SISTEMA para este vehículo — del dominio.
+
+        La versión anterior importaba `FOTOS_POR_CUSTODIA` y afirmaba contra
+        ella: verificaba la implementación, no la regla. Por eso estaba en verde
+        mientras el health daba por completa una custodia con 9 de 13 — y lo que
+        faltaba eran **posiciones de llanta**, que es donde está la tuerca floja
+        que el registro existe para atribuir.
+        """
+        from flota.adaptadores.modelos import FichaTecnica
+        from flota.dominio.valores import angulos_de_custodia, posiciones_llanta
+
+        v = mundo['vehiculo']
+        ficha = FichaTecnica.query.filter_by(vehiculo_id=v.id).first()
+        n, _ = posiciones_llanta(ficha.posiciones_llanta if ficha else None, v.tipo)
+        return len(angulos_de_custodia(n))
+
+    def test_una_de_menos_todavia_cuenta(self, mundo):
+        """El ángulo que falta es justo el que se discute después del golpe."""
         medidor = MedidorSQL()
         antes = medidor.custodias_sin_foto_completa()
         c = _custodia(mundo, inicio=0)
-        _fotos(mundo, 'custodia_inicio', c.id, FOTOS_POR_CUSTODIA - 1)
+        _fotos(mundo, 'custodia_inicio', c.id, self._exigidas(mundo) - 1)
         assert medidor.custodias_sin_foto_completa() == antes + 1
 
-    def test_con_las_ocho_deja_de_contar(self, mundo):
+    def test_con_todas_las_del_dominio_deja_de_contar(self, mundo):
         medidor = MedidorSQL()
         antes = medidor.custodias_sin_foto_completa()
         c = _custodia(mundo, inicio=0)
-        _fotos(mundo, 'custodia_inicio', c.id, FOTOS_POR_CUSTODIA)
+        _fotos(mundo, 'custodia_inicio', c.id, self._exigidas(mundo))
         assert medidor.custodias_sin_foto_completa() == antes
+
+    def test_con_OCHO_no_alcanza_si_el_vehiculo_pide_mas(self, mundo):
+        """El defecto exacto, en un test.
+
+        Ocho era el modelo viejo —una sola foto para todas las llantas—. Un
+        camión pide 13 y un furgón 11: con ocho faltan posiciones de rueda, y el
+        health las daba por cubiertas.
+        """
+        import pytest as _pytest
+        exigidas = self._exigidas(mundo)
+        if exigidas <= 8:
+            _pytest.skip(f'este vehículo pide {exigidas}, no aplica')
+        medidor = MedidorSQL()
+        antes = medidor.custodias_sin_foto_completa()
+        c = _custodia(mundo, inicio=0)
+        _fotos(mundo, 'custodia_inicio', c.id, 8)
+        assert medidor.custodias_sin_foto_completa() == antes + 1, (
+            f'con 8 fotos dio por completa una custodia que pide {exigidas} — '
+            f'faltan posiciones de llanta y nadie lo ve')
 
 
 class TestFotosPendienteEvidencia:

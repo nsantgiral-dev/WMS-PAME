@@ -55,6 +55,13 @@ REGISTRADOS = {
     'inventario_siesa_service': 'iniciar_refresh_periodico',
 }
 
+#: Fuera de `app/services/`. El barrido de vencimientos de flota vivía sin
+#: cron: su único caller en producción era el botón «Revisar vencimientos
+#: ahora», así que el aviso de SOAT dependía de que alguien se acordara.
+REGISTRADOS_EXTERNOS = {
+    'flota.adaptadores.avisos': 'init_scheduler',
+}
+
 
 def _funcion(modulo: str, nombre: str):
     arbol = ast.parse((_RAIZ / 'app' / 'services' / f'{modulo}.py').read_text())
@@ -181,3 +188,36 @@ class TestNingunSchedulerQuedaFueraDelRegistro:
             f'{sueltas}) en vez de por `_registrar_scheduler`. Los registrados a '
             f'mano no entran ni en ACTIVOS ni en OMITIDOS: son invisibles para '
             f'/api/health/siesa.')
+
+
+class TestLosDeFueraDeServices:
+    """`flota/` vive fuera de `app/`, y un `grep` acotado a `app/services` no lo
+    ve — la misma trampa que documenta CLAUDE.md."""
+
+    @pytest.mark.parametrize('mod,fn', sorted(REGISTRADOS_EXTERNOS.items()))
+    def test_devuelve_su_scheduler(self, mod, fn):
+        import ast
+
+        ruta = _RAIZ / (mod.replace('.', '/') + '.py')
+        arbol = ast.parse(ruta.read_text())
+        f = next((n for n in ast.walk(arbol)
+                  if isinstance(n, ast.FunctionDef) and n.name == fn), None)
+        assert f is not None, f'{mod}.{fn} no existe'
+        con_valor = [
+            r for r in ast.walk(f)
+            if isinstance(r, ast.Return) and r.value is not None
+            and not (isinstance(r.value, ast.Constant) and r.value.value is None)
+        ]
+        assert con_valor, f'{mod}.{fn} no devuelve su scheduler'
+
+    def test_el_barrido_de_flota_esta_registrado(self):
+        """Tenía un solo caller —un botón— y ningún cron."""
+        import ast
+
+        arbol = ast.parse((_RAIZ / 'app' / '__init__.py').read_text())
+        literales = {n.value for n in ast.walk(arbol)
+                     if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        assert 'flota.adaptadores.avisos' in literales, (
+            'el barrido de vencimientos volvió a quedar sin cron: el aviso de '
+            'SOAT y tecnomecánica depende de que alguien apriete un botón, y la '
+            'ventana son 15 días')

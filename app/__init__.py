@@ -377,6 +377,11 @@ def create_app():
                 ('app.services.traslado_service',           'init_scheduler',          '[STOCK_PREWARM]'),
                 ('app.services.alertas_service',            'init_scheduler',          '[ALERTAS_SCHEDULER]'),
                 ('app.services.traslado_monitor_service',   'init_scheduler',          '[TRASLADO_MONITOR]'),
+                # El barrido de vencimientos de flota. Tenía UN caller: el botón
+                # «Revisar vencimientos ahora», así que el aviso de SOAT y
+                # tecnomecánica dependía de que alguien se acordara. La ventana
+                # son 15 días — lo que tarda una cita de tecnomecánica.
+                ('flota.adaptadores.avisos',                'init_scheduler',          '[FLOTA_AVISOS]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

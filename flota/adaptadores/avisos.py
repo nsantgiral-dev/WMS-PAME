@@ -235,3 +235,81 @@ def avisos_sin_confirmar(horas: int = 6) -> int:
 
 __all__ = ['avisos_encendidos', 'destinatarios', 'barrer_documentos_por_vencer',
            'registrar_entrega', 'avisos_sin_confirmar']
+
+
+def init_scheduler(app):
+    """Cron diario 06:00 Bogotá — el barrido de documentos por vencer.
+
+    Hasta el 2026-08-15 `barrer_documentos_por_vencer` tenía **un solo caller en
+    producción**: el botón «Revisar vencimientos ahora». El aviso de SOAT y
+    tecnomecánica dependía de que una persona se acordara de entrar al tab y
+    apretarlo.
+
+    La ventana es de 15 días (`DIAS_AVISO_DOCUMENTO`) — que es lo que tarda una
+    cita de tecnomecánica en Neiva. Si nadie aprieta el botón dentro de esa
+    ventana, el camión queda parado o lo inmoviliza la autoridad.
+
+    El propio docstring del endpoint decía que existía *«para poder ejercerlo
+    antes de encender el cron»*. El cron nunca se escribió.
+
+    ## Sobre la regla 10 de este módulo
+
+    «Todo cron que escribe nace apagado.» Se cumple sin una variable nueva: el
+    barrido ya consulta `avisos_encendidos()` y con `FLOTA_AVISOS` en false
+    devuelve `{'revisados': 0, ..., 'motivo': 'FLOTA_AVISOS no está en true'}`
+    sin mandar nada. Agregar un segundo interruptor daría dos sitios donde
+    apagar lo mismo, y el segundo se olvida.
+
+    Lo que sí cambia es que **el silencio deja de ser total**: hoy, apagado o
+    no, no había ni un log diario. Ahora hay una línea por día diciendo qué
+    pasó, que es la diferencia entre degradarse y callarse.
+    """
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        logger.error('[FLOTA_AVISOS] APScheduler no instalado')
+        return None
+
+    def _job():
+        with app.app_context():
+            from app.utils.lock import advisory_lock
+
+            # 2016 — libre. Con `--workers=2` dos procesos disparan el mismo
+            # cron, y un aviso duplicado por WhatsApp a las 6 de la mañana es la
+            # forma más rápida de que alguien silencie el canal.
+            with advisory_lock(2016, 'flota_avisos_barrido') as tomado:
+                if not tomado:
+                    return
+                try:
+                    r = barrer_documentos_por_vencer()
+                except Exception as e:
+                    logger.exception('[FLOTA_AVISOS] el barrido falló: %s', e)
+                    return
+                if r.get('motivo'):
+                    logger.info('[FLOTA_AVISOS] barrido sin efecto — %s', r['motivo'])
+                elif r.get('enviados') or r.get('fallidos') or r.get('sin_destinatario'):
+                    # `sin_destinatario` no deja fila: el aviso no se manda Y no
+                    # queda rastro de que ese vencimiento pasó por la ventana.
+                    # Por eso va en el mismo nivel que un fallo.
+                    logger.warning(
+                        '[FLOTA_AVISOS] %s en ventana · %s enviados · %s fallidos · '
+                        '%s sin destinatario%s',
+                        r.get('en_ventana'), r.get('enviados'), r.get('fallidos'),
+                        r.get('sin_destinatario'),
+                        ' (SIMULADO)' if r.get('simulado') else '')
+                else:
+                    logger.info('[FLOTA_AVISOS] %s documentos revisados, ninguno '
+                                'en ventana', r.get('revisados'))
+
+    scheduler = BackgroundScheduler(timezone='America/Bogota')
+    scheduler.add_job(
+        _job, CronTrigger(hour=6, minute=0),
+        id='flota_avisos_barrido', replace_existing=True,
+        max_instances=1, misfire_grace_time=3600,
+    )
+    scheduler.start()
+    logger.info('[FLOTA_AVISOS] Scheduler activo — barrido diario 06:00 Bogotá')
+    # El retorno es lo que `_registrar_scheduler` usa para no mentir sobre lo
+    # que está corriendo. Ver `app/__init__.py`.
+    return scheduler
