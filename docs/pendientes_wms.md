@@ -1,5 +1,10 @@
 # Pendientes del WMS
 
+> **Los cuatro ejercicios que ningún test reemplaza** están escritos paso a
+> paso en [`ejercicios_antes_del_corte.md`](ejercicios_antes_del_corte.md):
+> qué se aprieta, qué se mira, y qué significa que pasó. Los cuatro dejan de
+> ser probables sin consecuencias después del corte.
+
 **Corte: 2026-08-13.** Contrastado contra BK-OPS-01 v2.1 §4.2, que es la lista
 autoritativa del lado del negocio.
 
