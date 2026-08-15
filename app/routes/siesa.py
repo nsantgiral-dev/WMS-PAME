@@ -398,12 +398,27 @@ def debug_inventario_raw():
     }), 200
 
 
+def _buscar_producto_con_origen(codigo):
+    """`(producto, campo_que_hizo_match)` — o `(None, None)`.
+
+    **Saber por qué campo entró es la mitad de la respuesta.** Un código de
+    barras contesta dos preguntas distintas —*qué producto* y *qué unidad de
+    empaque*— y esta función siempre supo las dos: buscaba en cadena y tiraba
+    la segunda.
+
+    Con eso perdido, `/producto/<codigo>` tenía que adivinar si el beep era una
+    caja o una unidad, y adivinaba con `factor > 1`.
+    """
+    for campo in ('codigo', 'codigo_siesa', 'codigo_barras', 'codigo_barras_empaque'):
+        prod = Producto.query.filter_by(**{campo: codigo}).first()
+        if prod:
+            return prod, campo
+    return None, None
+
+
 def _buscar_producto(codigo):
-    """Busca un producto por código WMS, código Siesa, barcode de unidad o barcode de empaque."""
-    return (Producto.query.filter_by(codigo=codigo).first() or
-            Producto.query.filter_by(codigo_siesa=codigo).first() or
-            Producto.query.filter_by(codigo_barras=codigo).first() or
-            Producto.query.filter_by(codigo_barras_empaque=codigo).first())
+    """Compatibilidad: los tres llamadores que solo quieren el producto."""
+    return _buscar_producto_con_origen(codigo)[0]
 
 
 # ──────────────────────────────────────────────
@@ -797,7 +812,7 @@ def buscar_producto(codigo):
     Lookup de producto por código WMS, código Siesa o código de barras (EAN).
     Usado por la PWA para traducir el beep del escáner a un producto_id.
     """
-    prod = _buscar_producto(codigo)
+    prod, campo = _buscar_producto_con_origen(codigo)
 
     # Arquitectura Single Source of Truth: consulta SOLO DB local.
     # Los barcodes se mantienen actualizados por el sync nocturno (02:00).
@@ -808,11 +823,46 @@ def buscar_producto(codigo):
         }), 404
 
     factor = prod.factor_conversion or 1
-    # es_empaque = barcode explícito de empaque, O factor>1 (la OC ya cargó el factor)
-    es_empaque = bool(
-        (prod.codigo_barras_empaque and codigo == prod.codigo_barras_empaque)
-        or factor > 1
-    )
+
+    # ── ¿Fue una caja o una unidad? ──────────────────────────────────────
+    #
+    # Antes: `es_empaque = (codigo == codigo_barras_empaque) OR factor > 1`.
+    #
+    # Un solo código de barras contesta dos preguntas —*qué producto* y *qué
+    # unidad de empaque*— y cuando solo puede contestar la primera, el `or`
+    # **adivinaba la segunda**. El caso caro: `tienda_oc_service` escribe el
+    # `f421_factor` de UNA OC sobre la fila global del `Producto`, así que el
+    # recepcionista del CD escaneaba la EAN de unidad suelta de ese SKU y el
+    # sistema registraba `factor` unidades, con un toast diciendo «Empaque
+    # escaneado → +12 UND».
+    #
+    # **Y el `or` no se puede cambiar por `and`.** Cuando un SKU tiene
+    # `factor > 1` y NO tiene `codigo_barras_empaque` poblado —el proveedor
+    # pegó la EAN de unidad en la caja— el `or` es lo único que hace que la
+    # caja sume 12. Con `and`, ese operario escanea doce veces por caja: se
+    # arreglaría la sobre-recepción y se rompería la recepción normal el mismo
+    # día. Medir antes de imponer.
+    #
+    # Lo que sí se puede: **dejar de decidir por el operario cuando el dato es
+    # ambiguo**. Ahora `None` significa «no sé» y la pantalla pregunta.
+    #
+    # `mobile_service._es_escaneo_empaque` ya exige las dos condiciones y es la
+    # política correcta; queda como el modelo, no como la excepción.
+    if campo == 'codigo_barras_empaque':
+        es_empaque = True                     # explícito: entró por el EAN de caja
+        procedencia = 'ean_empaque'
+    elif campo == 'codigo_barras' and prod.codigo_barras_empaque:
+        # El SKU TIENE EAN de caja y no es éste: entonces esto es una unidad.
+        es_empaque = False
+        procedencia = 'ean_unidad'
+    elif factor > 1:
+        # Ambiguo: `factor > 1` dice que el SKU se compra por caja, no que ESTE
+        # escaneo lo sea. Antes acá se afirmaba `True`.
+        es_empaque = None
+        procedencia = 'ambiguo_sin_ean_empaque'
+    else:
+        es_empaque = False
+        procedencia = 'unidad'
 
     return jsonify({
         'producto_id': prod.id,
@@ -821,9 +871,56 @@ def buscar_producto(codigo):
         'codigo_siesa': prod.codigo_siesa,
         'codigo_barras': prod.codigo_barras,
         'clasificacion_abc': prod.clasificacion_abc,
+        # `None` = no se sabe, y la pantalla tiene que preguntar. No es lo
+        # mismo que `false`, y colapsarlos fue el defecto.
         'es_empaque': es_empaque,
+        'empaque_procedencia': procedencia,
         'factor_conversion': factor,
         'unidad_empaque': prod.unidad_empaque or None,
+    }), 200
+
+
+@siesa_bp.route('/skus-sin-ean-empaque', methods=['GET'])
+@jwt_required()
+def skus_sin_ean_empaque():
+    """Los SKU donde el sistema NO puede distinguir caja de unidad.
+
+    `factor > 1` y `codigo_barras_empaque` vacío: el proveedor pegó la EAN de
+    unidad en la caja y nadie pobló el campo. En esos, `/producto/<codigo>`
+    devuelve `es_empaque: null` y la pantalla del recepcionista **pregunta**.
+
+    Cada fila de acá es una pregunta que el operario va a tener que contestar,
+    varias veces al día. **Es el backlog del sync de EAN, medido**: cerrarla
+    elimina la pregunta para siempre.
+
+    Existe porque la alternativa —dejar que el sistema adivine— es lo que hacía
+    que el CD sobre-recibiera por un factor que había escrito una tienda.
+    """
+    # Mantenimiento de maestro: no es una pantalla de operación.
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.models.producto import Producto
+
+    filas = (Producto.query
+             .filter(Producto.factor_conversion > 1)
+             .filter((Producto.codigo_barras_empaque.is_(None))
+                     | (Producto.codigo_barras_empaque == ''))
+             .order_by(Producto.clasificacion_abc.asc().nullslast(),
+                       Producto.codigo.asc())
+             .limit(500).all())
+    return jsonify({
+        'total': len(filas),
+        'nota': ('SKU donde el escaneo no distingue caja de unidad. La pantalla '
+                 'pregunta en cada uno. Poblar `codigo_barras_empaque` los cierra.'),
+        'truncado': len(filas) >= 500,
+        'skus': [{
+            'codigo': p.codigo,
+            'codigo_siesa': p.codigo_siesa,
+            'nombre': p.nombre,
+            'factor_conversion': p.factor_conversion,
+            'clasificacion_abc': p.clasificacion_abc,
+            'codigo_barras': p.codigo_barras,
+        } for p in filas],
     }), 200
 
 

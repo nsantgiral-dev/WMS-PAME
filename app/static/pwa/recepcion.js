@@ -423,7 +423,24 @@ async function procesarScanRecepcion(codigo) {
         alerta('Código no reconocido: ' + codigo + ' — usa búsqueda manual', 'error');
         return;
       }
-      const esEmp = prod.es_empaque || false;
+      // `es_empaque === null` es «no sé», y NO es lo mismo que `false`.
+      // El `|| false` colapsaba los dos: ante la duda registraba una unidad, o
+      // —peor, con el `or` del servidor— afirmaba una caja que nadie confirmó.
+      //
+      // Pasa cuando el SKU tiene `factor > 1` y no tiene EAN de empaque
+      // poblado: el proveedor pegó la EAN de unidad en la caja. Ahí el sistema
+      // no puede saberlo, y quien sí puede es el que tiene la caja en la mano.
+      let esEmp = prod.es_empaque;
+      if (esEmp === null || esEmp === undefined) {
+        const factor = prod.factor_conversion || 1;
+        esEmp = await _confirmarModal(
+          '¿Unidad o caja?',
+          `Este código no distingue: <strong>${prod.nombre}</strong> se compra ` +
+          `por caja de <strong>${factor}</strong>, pero el código escaneado ` +
+          `sirve para las dos.<br><br>¿Qué tenés en la mano?`,
+          `Caja de ${factor}`, '1 unidad'
+        );
+      }
       await _registrarEscaneoRecepcion(prod.producto_id, 1, esEmp, null);
       if (esEmp && prod.factor_conversion > 1) alerta(`Empaque escaneado → +${prod.factor_conversion} UND`, 'info');
       return;

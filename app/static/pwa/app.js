@@ -1240,6 +1240,16 @@ async function cargarConnekta() {
           ¿Cuántos NO se pueden escanear?
         </button>
         <div id="barras-cobertura" style="margin-top:8px;font-size:12px;color:#666;"></div>
+        <!-- Cada SKU de esta lista es una pregunta que el recepcionista tiene
+             que contestar en cada escaneo: «¿unidad o caja?». El sistema no lo
+             puede saber —el proveedor pegó la EAN de unidad en la caja— y
+             adivinarlo es lo que hacía que el CD sobre-recibiera. Poblar el EAN
+             de empaque cierra la pregunta para siempre. -->
+        <button onclick="skusSinEanEmpaque()"
+          style="width:100%;margin-top:8px;padding:10px;background:#1a1a1a;color:#fbbf24;border:1px solid #333;border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;">
+          ¿En cuántos hay que preguntar «unidad o caja»?
+        </button>
+        <div id="skus-sin-ean-empaque" style="margin-top:8px;font-size:12px;color:#666;"></div>
       </div>
 
       <!-- Diagnóstico barcodes Siesa -->
@@ -3168,5 +3178,32 @@ async function cargarAuditoriaFlujo() {
       <button onclick="cargarAuditoriaFlujo()"
         style="margin-left:10px;padding:6px 12px;border:none;border-radius:8px;cursor:pointer;">
         Reintentar</button></div>`;
+  }
+}
+
+
+/** SKU donde el escaneo no distingue caja de unidad — el backlog del sync de EAN.
+ *
+ *  `factor > 1` y `codigo_barras_empaque` vacío: ahí `/producto/<codigo>`
+ *  devuelve `es_empaque: null` y la pantalla del recepcionista PREGUNTA. Cada
+ *  fila es una pregunta que alguien va a contestar varias veces al día, y
+ *  cerrarla la elimina.
+ */
+async function skusSinEanEmpaque() {
+  const el = document.getElementById('skus-sin-ean-empaque');
+  if (el) el.textContent = 'Consultando...';
+  try {
+    const d = await get('/api/siesa/skus-sin-ean-empaque');
+    if (!el) return;
+    if (!d.total) { el.textContent = '✓ Ninguno: todo escaneo distingue caja de unidad.'; return; }
+    const top = (d.skus || []).slice(0, 10)
+      .map(s => `${s.codigo_siesa || s.codigo} · x${s.factor_conversion}${s.clasificacion_abc ? ' · ' + s.clasificacion_abc : ''}`)
+      .join('<br>');
+    el.innerHTML = `<b style="color:#fbbf24;">${d.total}</b> SKU sin EAN de empaque` +
+      (d.truncado ? ' (lista truncada en 500)' : '') +
+      `<div style="margin-top:6px;line-height:1.5;">${top}</div>` +
+      (d.total > 10 ? `<div style="margin-top:4px;color:#555;">…y ${d.total - 10} más</div>` : '');
+  } catch (e) {
+    if (el) el.textContent = 'Error consultando el backlog de EAN';
   }
 }
