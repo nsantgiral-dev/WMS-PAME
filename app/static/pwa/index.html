@@ -13,7 +13,14 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+  <!-- JsBarcode v3.11.6 (MIT), servido desde el propio origen y cacheado por el
+       service worker. Venía de cdn.jsdelivr.net, que `sw.js` se niega a cachear
+       por ser otro origen: con la red floja no cargaba, y los cuatro sitios que
+       la usan se tragaban el fallo en un `catch` vacío. Resultado: etiquetas de
+       producto, ubicación, LPN y bulto impresas sin código de barras, sin un
+       solo error en pantalla. Un bulto sin código no entra al manifiesto.
+       Al actualizarla, cambiar también el `?v=` y el SHELL de sw.js. -->
+  <script src="/static/vendor/JsBarcode.all.min.js?v=3.11.6"></script>
   <style>
     #print-area { display: none; }
     @media print {

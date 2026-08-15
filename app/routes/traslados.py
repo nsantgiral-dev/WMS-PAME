@@ -6,11 +6,7 @@ from app.models.traslado import SolicitudTraslado, ItemSolicitudTraslado, Estado
 from app.models.usuario import Usuario
 from app.routes._auth_helpers import Roles
 from app.services.traslado_service import TrasladoService
-
-_BODEGA_CO_MAP = {
-    'NC1': '002', 'NS1': '001', 'NS2': '001', 'PC1': '004', 'FC1': '006',
-    'FF1': '009', 'FN1': '007', 'NB1': '003', 'PT1': '005',
-}
+from app.services.bodegas import co_de_bodega
 
 traslados_bp = Blueprint('traslados', __name__)
 logger = logging.getLogger(__name__)
@@ -682,7 +678,7 @@ def reintentar_recepcion_siesa(id):
         if (item.cantidad_recibida or item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada)
     ]
 
-    _co_destino = _BODEGA_CO_MAP.get(s.bodega_destino_siesa)
+    _co_destino = co_de_bodega(s.bodega_destino_siesa)
 
     try:
         res = connekta.transferencia_transito_entrada(

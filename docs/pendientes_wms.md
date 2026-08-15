@@ -68,8 +68,22 @@ Incluir una liquidación **con retención**, que nunca ha corrido.
 Ninguno tiene un solo uso real. El de recuperación tiene reloj: después del
 corte a producción ya no se puede probar sin consecuencias.
 
-- Impresión de etiquetas
-- Recuperación de estado desde Siesa
+- **Impresión de etiquetas** — el bloqueo técnico se cerró el 2026-08-14
+  (JsBarcode servido desde `/static/vendor/` y cacheado por el service worker;
+  antes venía de un CDN que el SW no cachea y los cuatro sitios que lo usaban
+  se tragaban su ausencia en un `catch` vacío, imprimiendo etiquetas sin
+  código). **Falta el ejercicio físico y no lo reemplaza ningún test:** imprimir
+  una de cada tipo —producto, ubicación, paca/caja, bulto— y **pasarlas por el
+  láser del CD**. Media hora de una persona
+- **Recuperación de estado desde Siesa** — el 2026-08-15 se cablearon los tres
+  botones de traslado que existían sin `onclick` (revertir, reintentar despacho,
+  reintentar recepción). Hasta ese día el `siesa_error` y el correo de alerta
+  mandaban al operario a «WMS Admin → Traslados → Reintentar despacho», que **no
+  existía**. Los botones solo aparecen cuando falta el consecutivo que
+  corresponde. **Falta el ejercicio real:** trabar un traslado en QA (STS o ETS
+  fallido) y recuperarlo desde la pantalla, verificando en Siesa que no quedó
+  documento duplicado. Después del corte esto ya no se puede probar sin
+  consecuencias
 - Kardex
 - Los seis arreglos de flota de la ronda de uso real
 

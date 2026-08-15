@@ -1861,6 +1861,66 @@ function beepDone()  { _tono(523, 0.1); setTimeout(() => _tono(659, 0.1), 120); 
  * `packing.js` y dos veces en este archivo, y la tercera copia ya decía «error
  * al obtener la remisión» dentro de la función de la factura.
  */
+
+/**
+ * ¿Se puede pintar un código de barras ahora mismo?
+ *
+ * JsBarcode es el ÚNICO motor de código de barras del WMS: etiquetas de
+ * producto, de ubicación, de LPN y de bulto salen todas de él. Venía de un CDN
+ * externo que `sw.js` no cachea —sólo cachea el propio origen—, así que con la
+ * red floja simplemente no estaba.
+ *
+ * Y los cuatro sitios que lo usaban lo llamaban dentro de `try {} catch (_) {}`.
+ * El resultado no era un error: era una **etiqueta impresa sin código**, con su
+ * texto legible y su membrete, indistinguible de una buena hasta que alguien la
+ * pasa por el láser. Un bulto sin código no entra al manifiesto.
+ *
+ * @returns {boolean}
+ */
+function hayMotorDeCodigoBarras() {
+  return typeof JsBarcode === 'function';
+}
+
+/**
+ * Guard para TODA función que imprime etiquetas. Llamar ANTES de armar el
+ * `#print-area`: si no hay motor, no se imprime nada.
+ *
+ * Es preferible no imprimir a imprimir una etiqueta muda — la etiqueta muda se
+ * pega en la caja y el problema aparece tres días después, en la ruta.
+ *
+ * @param {string} que - qué se iba a imprimir, para el mensaje.
+ * @returns {boolean} true si se puede seguir.
+ */
+function puedeImprimirEtiquetas(que) {
+  if (hayMotorDeCodigoBarras()) return true;
+  alerta(
+    `No se pueden imprimir ${que}: no cargó el generador de códigos de barras. ` +
+    `Recargá la página (Ctrl+F5). Si sigue, avisá a sistemas — imprimir sin ` +
+    `código deja una etiqueta que el láser no lee.`, 'error');
+  return false;
+}
+
+/**
+ * Pinta un código de barras. Devuelve `false` si no pudo, en vez de callarse.
+ *
+ * @param {string} selector - selector CSS del `<svg>`.
+ * @param {string} valor - lo que codifica.
+ * @param {Object} [opciones] - se mezclan sobre CODE128.
+ * @returns {boolean}
+ */
+function pintarCodigoBarras(selector, valor, opciones) {
+  if (!hayMotorDeCodigoBarras() || !valor) return false;
+  try {
+    JsBarcode(selector, valor, Object.assign(
+      { format: 'CODE128', displayValue: false, height: 55, margin: 0 },
+      opciones || {}));
+    return true;
+  } catch (e) {
+    console.error('[BARCODE] no se pudo pintar', selector, valor, e);
+    return false;
+  }
+}
+
 async function imprimirDocumento(url, que) {
   try {
     const res = await fetch(API + url, { headers: { Authorization: 'Bearer ' + TOKEN } });

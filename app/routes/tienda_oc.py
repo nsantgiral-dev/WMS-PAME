@@ -9,16 +9,10 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.tienda_oc_service import TiendaOCService
 from app.services.recepcion_service import RecepcionService
+from app.services.bodegas import co_de_bodega
 
 tienda_oc_bp = Blueprint('tienda_oc', __name__)
 logger = logging.getLogger(__name__)
-
-
-_BODEGA_CO_MAP = {
-    'NC1': '002', 'NS1': '001', 'NS2': '001', 'PC1': '004', 'FC1': '006',
-    'FF1': '009', 'FN1': '007', 'NB1': '003', 'PT1': '005',
-    'FP1': '008',
-}
 
 
 def _get_tienda_user():
@@ -33,7 +27,7 @@ def _get_tienda_user():
         return None
     if not u.bodega_siesa_id:
         return None
-    co_correcto = _BODEGA_CO_MAP.get(u.bodega_siesa_id)
+    co_correcto = co_de_bodega(u.bodega_siesa_id)
     if co_correcto and u.siesa_co_id != co_correcto:
         u.siesa_co_id = co_correcto
         from app.extensions import db

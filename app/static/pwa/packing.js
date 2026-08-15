@@ -787,6 +787,7 @@ async function empImprimirFactura(packingId) {
  * @param {string} productoNombre
  */
 function imprimirEtiquetaLPN(lpn, productoNombre) {
+  if (!puedeImprimirEtiquetas('etiquetas de paca/caja')) return;
   const area = document.getElementById('print-area');
   if (!area) return;
 
@@ -803,11 +804,7 @@ function imprimirEtiquetaLPN(lpn, productoNombre) {
       <div class="el-fecha">${hoy}</div>
     </div>`;
 
-  try {
-    JsBarcode(`#${uid}`, lpn.codigo, {
-      format: 'CODE128', displayValue: false, height: 55, margin: 0
-    });
-  } catch (_) {}
+  pintarCodigoBarras(`#${uid}`, lpn.codigo);
 
   setTimeout(() => {
     window.print();
@@ -818,6 +815,9 @@ function imprimirEtiquetaLPN(lpn, productoNombre) {
 /** Imprime etiquetas de bultos y caja. @param {Array} bultos @param {Object} meta */
 function empImprimirEtiquetas(bultos, meta) {
   if (!bultos?.length) return;
+  // Es la más cara de las cuatro: el código del bulto es contra lo que el
+  // cliente firma en la entrega. Sin barra, esa cuenta se hace de memoria.
+  if (!puedeImprimirEtiquetas('etiquetas de bulto')) return;
 
   const area = document.getElementById('print-area');
   if (!area) return;
@@ -833,13 +833,8 @@ function empImprimirEtiquetas(bultos, meta) {
     </div>`).join('');
 
   // Renderizar códigos de barras antes de imprimir
-  bultos.forEach(b => {
-    try {
-      JsBarcode(`#bc-${b.id}`, b.codigo_barras, {
-        format: 'CODE128', displayValue: false, height: 50, margin: 0
-      });
-    } catch (e) { /* JsBarcode no disponible aún */ }
-  });
+  bultos.forEach(b => pintarCodigoBarras(`#bc-${b.id}`, b.codigo_barras,
+                                         { height: 50 }));
 
   setTimeout(() => {
     window.print();

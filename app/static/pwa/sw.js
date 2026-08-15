@@ -5,7 +5,7 @@
 // borra la anterior. Antes el nombre era fijo: el borrado nunca borraba nada y
 // la versión viajaba en un comentario que nadie leía.
 const CACHE_NAME = 'wms-shell-' + (typeof SW_VERSION === 'string' ? SW_VERSION : 'dev');
-const SHELL = ['/pwa', '/static/pwa/app.js', '/static/pwa/picking.js', '/static/pwa/packing.js', '/static/pwa/recepcion.js', '/static/pwa/rutas.js', '/static/pwa/traslados.js', '/static/pwa/conteo.js', '/static/pwa/reposicion.js', '/static/pwa/liquidacion.js', '/static/pwa/layout.js', '/static/pwa/tienda.js', '/static/pwa/etiquetas.js', '/static/pwa/vigia.js', '/static/pwa/compras_ia.js', '/static/pwa/kardex.js', '/static/pwa/temporada.js', '/static/pwa/flota.js'];
+const SHELL = ['/pwa', '/static/vendor/JsBarcode.all.min.js', '/static/pwa/app.js', '/static/pwa/picking.js', '/static/pwa/packing.js', '/static/pwa/recepcion.js', '/static/pwa/rutas.js', '/static/pwa/traslados.js', '/static/pwa/conteo.js', '/static/pwa/reposicion.js', '/static/pwa/liquidacion.js', '/static/pwa/layout.js', '/static/pwa/tienda.js', '/static/pwa/etiquetas.js', '/static/pwa/vigia.js', '/static/pwa/compras_ia.js', '/static/pwa/kardex.js', '/static/pwa/temporada.js', '/static/pwa/flota.js'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

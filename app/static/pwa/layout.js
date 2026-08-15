@@ -1078,6 +1078,7 @@ function layoutImprimirEtiquetasCuerpo(idsCsv) {
   const ids = idsCsv.split(',').map(Number);
   const huecos = ids.map(id => _layoutUbicacionesCache.find(u => u.id === id)).filter(Boolean).sort((a, b) => a.codigo.localeCompare(b.codigo));
   if (!huecos.length) return;
+  if (!puedeImprimirEtiquetas('etiquetas de ubicación')) return;
   const area = document.getElementById('print-area');
   if (!area) return;
   area.innerHTML = huecos.map(u => {
@@ -1086,7 +1087,7 @@ function layoutImprimirEtiquetasCuerpo(idsCsv) {
       : 'Sin SKU asignado';
     return `<div class="etiqueta-ubicacion"><div class="eu-titulo">${titulo}</div><svg id="ub-bc-${u.id}"></svg><div class="eu-codigo">${u.codigo}</div><div class="eu-zona">${u.tipo_zona}</div></div>`;
   }).join('');
-  huecos.forEach(u => { try { JsBarcode(`#ub-bc-${u.id}`, u.codigo, { format: 'CODE128', displayValue: false, height: 55, margin: 0 }); } catch (e) {} });
+  huecos.forEach(u => pintarCodigoBarras(`#ub-bc-${u.id}`, u.codigo));
   setTimeout(() => { window.print(); setTimeout(() => { area.innerHTML = ''; }, 1000); }, 300);
 }
 

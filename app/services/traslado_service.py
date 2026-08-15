@@ -25,11 +25,7 @@ from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
 from app.utils.fecha import ahora_bogota as _ahora_bogota
 
-# Mapeo certificado por consultor Siesa (estático — no cambia sin nueva bodega)
-_BODEGA_CO_MAP = {
-    'NC1': '002', 'NS1': '001', 'PC1': '004', 'FC1': '006',
-    'FF1': '009', 'FN1': '007', 'NB1': '003', 'PT1': '005',
-}
+from app.services.bodegas import co_de_bodega
 from app.services.siesa_traslado_adapter import siesa_traslado
 
 logger = logging.getLogger(__name__)
@@ -856,7 +852,7 @@ class TrasladoService:
                 s.codigo, s.siesa_entrada_consec,
             )
           else:
-            _co_destino = _BODEGA_CO_MAP.get(s.bodega_destino_siesa)
+            _co_destino = co_de_bodega(s.bodega_destino_siesa)
 
             # Pre-cargar productos para evitar N+1
             _prod_ids = [i.producto_id for i in s.items if i.producto_id]

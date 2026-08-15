@@ -1,25 +1,44 @@
 """
-Las nueve copias del maestro de bodegas tienen que decir lo mismo.
+Las copias del maestro de bodegas tienen que decir lo mismo.
 
 El 2026-08-10, armando los almacenes que faltaban, apareció que la relación
-bodega ↔ CO ↔ nombre está escrita en nueve sitios y ninguno es la fuente:
+bodega ↔ CO ↔ nombre está escrita en muchos sitios y ninguno es la fuente:
 
   · `almacenes` (tabla) — la única con autoridad real, y a propósito
     incompleta: solo los PV que ya operan.
-  · `tienda_oc._BODEGA_CO_MAP` — el ÚNICO con el mapeo CO completo de las 10.
+  · `services/bodegas.BODEGA_CO` — el maestro certificado, desde 2026-08-14.
   · `traslado_service._BODEGAS_PREWARM` — a cuáles se les calienta el stock.
   · `inventario_siesa_service._BODEGAS_PV`.
   · cinco mapas de nombres en el JS, uno de ellos inline en un `onchange`.
 
-Este archivo **no arregla la duplicación**. Unificarlas es un refactor sobre
-código que hoy funciona, y hacerlo justo antes de un corte a producción es la
-lección de «validar contra producción real» al revés. Lo que hace es que la
-próxima divergencia se vea en el build en vez de en un traslado rechazado.
+## Lo que este archivo NO vio, y por qué (2026-08-14)
 
-El caso real que lo motivó: `PT1` y `FN1` estaban en `_BODEGA_CO_MAP` y en los
-mapas del JS desde hacía meses, pero **no existían como `almacen`**. La app
-sabía a qué CO pertenecían y aun así no se podía operar con ellas.
+La versión anterior decía que `tienda_oc._BODEGA_CO_MAP` era «el ÚNICO con el
+mapeo CO completo de las 10». Era el único **completo**; no el único que
+**existía**. Había tres diccionarios con ese mismo nombre:
+
+    app/routes/tienda_oc.py          10   ← el que este test leía
+    app/routes/traslados.py           9   ← sin FP1
+    app/services/traslado_service.py  8   ← sin FP1 ni NS2
+
+Diez tests en verde sobre dos copias rotas, y la de 8 es la que usa
+`TrasladoService.confirmar_recepcion` — la vía viva del ETS 173079. Un traslado
+a NS2 o FP1 salía con CO 003 y lo rechazaba Siesa.
+
+**La lección no es que faltaba mirar dos archivos más.** Es que el test medía
+*una copia* cuando la propiedad era *todas coinciden*: mientras el detector
+tenga escrita a mano la lista de sitios que revisa, el sitio nuevo no entra.
+Por eso ahora el maestro vive en un solo módulo y lo que se vigila es que
+**no exista un segundo**, descubriéndolo por AST sobre todo el árbol.
+
+Por AST y no por texto: los detectores de texto de este repo ya se atraparon
+cinco veces en sus propios docstrings.
+
+El caso real que lo motivó todo: `PT1` y `FN1` estaban en los mapas desde hacía
+meses pero **no existían como `almacen`**. La app sabía a qué CO pertenecían y
+aun así no se podía operar con ellas.
 """
+import ast
 import json
 import re
 from pathlib import Path
@@ -91,16 +110,108 @@ class TestLasListasDePythonCoinciden:
             _RAIZ / 'app' / 'services' / 'inventario_siesa_service.py', '_BODEGAS_PV')
         assert pv == set(BODEGAS_OPERADAS)
 
-    def test_el_mapa_de_CO_esta_completo_y_de_acuerdo(self):
-        """`_BODEGA_CO_MAP` es el único sitio del código con las 10 → CO. Si
-        diverge de acá, una tienda factura contra el centro de operación
-        equivocado y eso es un error contable, no un bug de pantalla."""
-        texto = (_RAIZ / 'app' / 'routes' / 'tienda_oc.py').read_text(encoding='utf-8')
-        m = re.search(r'_BODEGA_CO_MAP\s*=\s*\{(.*?)\}', texto, re.S)
-        assert m, 'no está _BODEGA_CO_MAP en tienda_oc.py'
-        real = dict(re.findall(r"'([A-Z0-9]+)'\s*:\s*'(\d+)'", m.group(1)))
+    def test_el_maestro_de_CO_esta_completo_y_de_acuerdo(self):
+        """`services.bodegas.BODEGA_CO` es el maestro. Si diverge de acá, una
+        tienda factura contra el centro de operación equivocado y eso es un
+        error contable, no un bug de pantalla.
+
+        La copia de este archivo se escribe a mano **a propósito**: un test que
+        importa la constante que verifica no verifica nada.
+        """
+        from app.services.bodegas import BODEGA_CO as real
         assert real == BODEGA_CO, (
             f'\nen el código: {real}\nesperado:     {BODEGA_CO}')
+
+    def test_toda_bodega_operada_tiene_su_CO(self):
+        """Las dos listas tienen que cubrirse: una bodega que el WMS opera y no
+        tiene CO produce `co_destino=None`, y el gateway cae al CO por defecto
+        (003). El documento sale con la bodega de una sede y el CO de otra, que
+        es justo lo que Siesa rechaza (46089/46090)."""
+        from app.services.bodegas import BODEGA_CO as real
+        faltan = BODEGAS_OPERADAS - set(real)
+        assert not faltan, (
+            f'bodegas que el WMS opera y no tienen CO: {sorted(faltan)} — '
+            f'sus traslados salen con el CO equivocado')
+
+
+class TestNoHayUnaSegundaCopiaDelMaestro:
+    """EL TRINQUETE. Lo que falló el 2026-08-14 no fue el contenido: fue que el
+    detector tenía escrita a mano la lista de sitios que revisaba.
+
+    Tres diccionarios `_BODEGA_CO_MAP` con 10, 9 y 8 entradas, y el test leía
+    solo el de 10. Mientras el guard enumere sitios, el sitio nuevo no entra.
+
+    Este busca la **forma** del dato —claves de bodega, valores de CO— en todo
+    el árbol, así que encuentra la copia aunque se llame distinto, viva en otro
+    módulo o la escriba alguien que no leyó nada de esto.
+    """
+
+    #: `'NB1'` — dos letras y un dígito.
+    _CLAVE_BODEGA = re.compile(r'^[A-Z]{2}\d$')
+    #: `'003'` — CO Siesa, tres dígitos.
+    _VALOR_CO = re.compile(r'^\d{3}$')
+
+    #: El único archivo autorizado a contener el maestro.
+    _MAESTRO = ('app', 'services', 'bodegas.py')
+
+    def _es_mapa_de_co(self, nodo):
+        """¿Este dict literal es un mapa bodega→CO?
+
+        Exige ≥3 pares para no confundirse con un dict cualquiera que tenga una
+        clave con esa forma. Un mapa parcial de 2 sería un falso negativo, pero
+        también sería inofensivo: el daño de las copias fue tener casi todas.
+        """
+        if not isinstance(nodo, ast.Dict) or len(nodo.keys) < 3:
+            return False
+        for k, v in zip(nodo.keys, nodo.values):
+            if not (isinstance(k, ast.Constant) and isinstance(k.value, str)):
+                return False
+            if not (isinstance(v, ast.Constant) and isinstance(v.value, str)):
+                return False
+            if not self._CLAVE_BODEGA.match(k.value):
+                return False
+            if not self._VALOR_CO.match(v.value):
+                return False
+        return True
+
+    def _copias(self):
+        maestro = _RAIZ.joinpath(*self._MAESTRO)
+        fuera = []
+        for py in sorted((_RAIZ / 'app').rglob('*.py')):
+            if py == maestro:
+                continue
+            try:
+                arbol = ast.parse(py.read_text(encoding='utf-8'))
+            except SyntaxError:
+                continue
+            for nodo in ast.walk(arbol):
+                if self._es_mapa_de_co(nodo):
+                    fuera.append(f'{py.relative_to(_RAIZ)}:{nodo.lineno}')
+        return fuera
+
+    def test_el_maestro_vive_en_un_solo_archivo(self):
+        copias = self._copias()
+        assert not copias, (
+            '\nHay un mapa bodega→CO fuera de app/services/bodegas.py:\n'
+            + '\n'.join(f'  · {c}' for c in copias)
+            + '\n\nUsar `co_de_bodega()`. Una copia diverge sin que nadie lo '
+              'note, y el resultado es un documento con la bodega de una sede '
+              'y el CO de otra — que Siesa rechaza, dejando la mercancía en la '
+              'bodega de tránsito.')
+
+    def test_el_detector_ve_un_mapa_de_verdad(self):
+        """Un detector que dejó de encontrar pasa vacío para siempre.
+
+        Se le da el maestro real: si no lo reconoce, tampoco reconocería una
+        copia, y el test de arriba estaría verde por ceguera.
+        """
+        maestro = _RAIZ.joinpath(*self._MAESTRO)
+        arbol = ast.parse(maestro.read_text(encoding='utf-8'))
+        encontrados = [n for n in ast.walk(arbol) if self._es_mapa_de_co(n)]
+        assert encontrados, (
+            'el detector no reconoce ni el maestro que vive en bodegas.py — '
+            'si BODEGA_CO cambió de forma, este test hay que reescribirlo, no '
+            'borrarlo')
 
 
 class TestLosMapasDelJSCoinciden:
@@ -219,3 +330,58 @@ class TestElParqueoNoEsUnPuntoDeVenta:
         assert BODEGAS_PV < BODEGAS_OPERADAS, (
             'BODEGAS_PV tiene que ser un subconjunto ESTRICTO de OPERADAS')
         assert BODEGAS_OPERADAS - BODEGAS_PV == {'NS2'}
+
+
+class TestCoDeBodegaResuelve:
+    """El comportamiento, no la tabla. Los tests de arriba comparan literales;
+    estos ejercen la función que arma los documentos."""
+
+    def test_NS2_y_FP1_resuelven_sin_almacen_configurado(self, app, db):
+        """LA REGRESIÓN. Las dos que faltaban en la copia de 8.
+
+        Sin almacén cargado, la versión vieja devolvía `None` y el gateway caía
+        a `centro_op` (003): el ETS 173079 salía con CO 003 y bodega_entrada
+        NS2. Siesa valida que coincidan y lo rechaza — la mercancía se queda en
+        la bodega de tránsito y nadie reclama, porque una tienda que no recibió
+        un traslado que no pidió no llama.
+        """
+        from app.services.bodegas import co_de_bodega
+        assert co_de_bodega('NS2') == '001'
+        assert co_de_bodega('FP1') == '008'
+
+    def test_ninguna_bodega_operada_cae_al_CO_por_defecto(self, app, db):
+        """El modo de fallo era silencioso: devolver el CO de NB1 para todas.
+        Acá se comprueba de una vez que ninguna se resuelve al default."""
+        from app.services.bodegas import co_de_bodega
+        centinela = 'XXX'
+        cayeron = {b for b in BODEGAS_OPERADAS
+                   if co_de_bodega(b, por_defecto=centinela) == centinela}
+        assert not cayeron, f'sin CO resoluble: {sorted(cayeron)}'
+
+    def test_la_tabla_almacenes_manda_sobre_el_certificado(self, app, db):
+        """`almacenes` es la autoridad — el certificado es el respaldo mientras
+        la tabla termine de cargarse."""
+        from app.models.almacen import Almacen
+        from app.services.bodegas import co_de_bodega
+        db.session.add(Almacen(codigo='PV-FP1-T', nombre='Feria Pitalito',
+                               bodega_siesa_id='FP1', centro_op_siesa='777'))
+        db.session.commit()
+        assert co_de_bodega('FP1') == '777'
+
+    def test_una_bodega_desconocida_no_inventa_un_CO(self, app, db):
+        """Devolver un CO plausible para una bodega que nadie conoce es peor
+        que no devolver nada: produce un documento que parece bien armado."""
+        from app.services.bodegas import co_de_bodega
+        assert co_de_bodega('ZZ9') is None
+        assert co_de_bodega('') is None
+
+    def test_el_gateway_usa_la_misma_politica(self, app, db):
+        """El defecto más difícil de ver: un solo payload 173079 traía el CO
+        base resuelto desde `almacenes` y el CO de entrada desde un diccionario
+        literal que no coincidía. Una pregunta, dos políticas, mismo documento.
+        """
+        from app.services.bodegas import co_de_bodega
+        from app.services.connekta_gateway import connekta
+        for b in sorted(BODEGAS_OPERADAS):
+            assert connekta._co_de_bodega(b) == co_de_bodega(
+                b, por_defecto=connekta.centro_op_traslado), b

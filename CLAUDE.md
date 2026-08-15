@@ -234,20 +234,65 @@ puede grepear, y esta es la tabla que hace falta cada vez que se toca un traslad
 **Ignorar:** `FD1`, `ND1`, `PD1` — bodegas «DUPLICADA» en Siesa. El WMS no las
 toca y no debe empezar a tocarlas.
 
-⚠️ **Esta tabla está repartida en nueve sitios del código** y ninguno es la
-fuente. La tabla `almacenes` es la única con autoridad real (la lee el resto de
-la app), pero está incompleta a propósito: solo tiene los PV que ya operan.
-Los otros ocho son mapas de nombres y listas de prewarm que hay que actualizar a
-mano cuando entra una bodega:
+### Bodega → CO: `app/services/bodegas.py`, y ningún otro sitio
 
-`app/routes/tienda_oc.py` (`_BODEGA_CO_MAP`, el único con el mapeo CO completo) ·
-`app/services/traslado_service.py` (`_BODEGAS_PREWARM`) ·
-`app/services/inventario_siesa_service.py` (`_BODEGAS_PV`) ·
-`app/static/pwa/traslados.js` · `app/static/pwa/tienda.js` ·
-`app/static/pwa/app.js` (tres veces, una inline en un `onchange`).
+**`co_de_bodega()` es la única función que contesta esta pregunta.** Lee
+`almacenes.centro_op_siesa` (la autoridad) y cae al maestro certificado
+`BODEGA_CO` cuando esa fila todavía no existe. Un mapa nuevo bodega→CO en
+cualquier otro archivo **rompe el build** — se descubre por AST, no por texto.
 
-Hay un trinquete (`tests/test_bodegas_coherentes.py`) que exige que las listas
-coincidan entre sí. No arregla la duplicación — avisa cuando diverge.
+#### Lo que costó tenerlo escrito tres veces (2026-08-14)
+
+Había tres diccionarios llamados `_BODEGA_CO_MAP`, con **10, 9 y 8** entradas:
+
+| Archivo | Entradas | Faltaban |
+|---|---|---|
+| `routes/tienda_oc.py` | 10 | — |
+| `routes/traslados.py` | 9 | `FP1` |
+| `services/traslado_service.py` | 8 | `FP1`, `NS2` |
+
+La de 8 es la que usa `TrasladoService.confirmar_recepcion`, o sea **la vía
+viva del ETS 173079**. `.get('NS2')` devolvía `None`, y
+`transferencia_transito_entrada` hace `co_destino or self.centro_op`: el
+documento salía con **CO 003** y `bodega_entrada` NS2. Siesa valida
+`CO(bodega_entrada) == CO(doc)` (46089/46090) y lo rechaza — la mercancía se
+queda en la bodega de tránsito, que es el limbo exacto que los invariantes de
+traslado existen para detectar. Y nadie reclama: una tienda que no recibió un
+traslado que no pidió, no llama.
+
+Peor: dentro del **mismo payload**, el CO base se resolvía con
+`connekta._co_de_bodega()` (que sí lee `almacenes`) y el CO de entrada con el
+diccionario literal. Una pregunta, dos políticas, un documento.
+
+**El trinquete estaba en verde con las tres divergiendo**, porque leía solo la
+copia de `tienda_oc.py` — y su docstring afirmaba que era «el único sitio del
+código con las 10». Era el único *completo*, no el único que *existía*.
+
+> La lección no es que faltaba mirar dos archivos más. Es que **el guard medía
+> una copia cuando la propiedad era «todas coinciden»**: mientras el detector
+> lleve escrita a mano la lista de sitios que revisa, el sitio nuevo no entra.
+> Es la misma forma que ya costó en `test_impresion`, en el Nivel 4 de rutas
+> huérfanas y en la fórmula de retención.
+
+La causa de fondo es anterior:
+`migrations/versions/c1d2e3f4g5h6_set_centro_op_siesa_almacenes.py` quedó como
+no-op —*«centro_op_siesa ya manejado por dict en código»*—. Ese es el día en
+que el maestro dejó de ser el maestro sin que nadie lo declarara.
+
+#### Lo que sigue repartido (y por qué se deja)
+
+Las **listas** —no el mapa de CO— siguen en varios sitios, y el trinquete las
+vigila entre sí: `traslado_service._BODEGAS_PREWARM` ·
+`inventario_siesa_service._BODEGAS_PV` · cinco mapas de **nombres** en el JS
+(`traslados.js`, `tienda.js`, `app.js` ×3, una inline en un `onchange`).
+
+No mueven inventario ni deciden un CO: un desacuerdo ahí muestra un código
+crudo donde debería ir un nombre. Unificarlas es refactor cosmético sobre
+código que funciona, y hacerlo antes de un corte es «validar contra producción
+real» al revés.
+
+Trinquete: `tests/test_bodegas_coherentes.py` (18 tests). El detector de copias
+está probado por mutación — reintroducir un mapa lo pone rojo.
 
 ### CO → Caja
 

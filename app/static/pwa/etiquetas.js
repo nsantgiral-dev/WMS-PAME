@@ -71,16 +71,22 @@ async function etqBuscarProducto() {
       </button>
     </div>`;
 
-  try {
-    JsBarcode('#etq-preview-svg', codigoParaBarra, {
-      format: 'CODE128', displayValue: true, height: 50, margin: 0, fontSize: 12
-    });
-  } catch (_) {}
+  // La vista previa es donde el problema tiene que verse: si acá no hay barra,
+  // el botón de imprimir tampoco va a producir una.
+  if (!pintarCodigoBarras('#etq-preview-svg', codigoParaBarra,
+                          { displayValue: true, height: 50, fontSize: 12 })) {
+    const svg = document.getElementById('etq-preview-svg');
+    if (svg) svg.outerHTML =
+      '<div style="padding:10px;border:1px dashed #dc2626;border-radius:6px;'
+      + 'color:#dc2626;font-size:11px;text-align:center;">No cargó el generador '
+      + 'de códigos de barras — recargá la página (Ctrl+F5)</div>';
+  }
 }
 
 function etqImprimir() {
   const prod = ETQ_PRODUCTO_ACTUAL;
   if (!prod || !prod.codigo_para_barra) return;
+  if (!puedeImprimirEtiquetas('etiquetas de producto')) return;
 
   const area = document.getElementById('print-area');
   if (!area) return;
@@ -97,11 +103,7 @@ function etqImprimir() {
       <div class="el-fecha">${hoy}</div>
     </div>`;
 
-  try {
-    JsBarcode(`#${uid}`, prod.codigo_para_barra, {
-      format: 'CODE128', displayValue: false, height: 55, margin: 0
-    });
-  } catch (_) {}
+  pintarCodigoBarras(`#${uid}`, prod.codigo_para_barra);
 
   setTimeout(() => {
     window.print();
