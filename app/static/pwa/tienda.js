@@ -645,7 +645,24 @@ async function tiendaConfirmarRecepcionTraslado() {
     const r = await fetch(API + `/api/traslados/${s.id}/recibir`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
+      // **Los conteos que la tienda acaba de hacer.** Iban vacíos: se contaba
+      // ítem por ítem, se veían las barras de progreso, el modal decía
+      // «¿confirmar como recepción parcial?» — y el cuerpo salía `{}`. El
+      // servidor rellenaba `recibida = enviada` para TODO, así que una tienda
+      // que contaba 3 de 10 hacía que el WMS y Siesa registraran 10.
+      //
+      // Siete unidades sin traza, y `TRA-01` —que exige enviada ≥ recibida— no
+      // podía dispararse porque los dos valores se escribían iguales.
+      //
+      // Es la misma vía y el mismo endpoint que usa Recepción, que sí manda los
+      // conteos (`recepcion.js`). Un endpoint con dos llamadores, uno honesto y
+      // otro no, indistinguibles desde el servidor.
+      body: JSON.stringify({
+        items_recibidos: items.map(i => ({
+          id: i.id,
+          cantidad_recibida: _TIENDA_CONTEOS[i.producto_id] || 0,
+        })),
+      })
     });
     const d = await r.json();
     if (r.ok) {

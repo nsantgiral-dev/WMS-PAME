@@ -136,6 +136,22 @@ def solicitud_entregada_sin_entrada(db, solicitud_en_transito):
 # A. TrasladoService — máquina de estados
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+def _conteos_completos(solicitud):
+    """Lo que una recepción honesta manda: una cantidad por ítem.
+
+    Antes estos tests confirmaban sin conteos y pasaban — o sea que
+    **certificaban el relleno silencioso**: el servidor ponía
+    `recibida = enviada` para todo y `TRA-01` quedaba ciego por construcción.
+    """
+    return [
+        {'id': it.id,
+         'cantidad_recibida': it.cantidad_enviada or it.cantidad_aprobada
+                              or it.cantidad_solicitada}
+        for it in solicitud.items
+    ]
+
+
 class TestTrasladoServicioEstados:
 
     def test_crear_solicitud_ok(self, app, db, usuario_tienda, producto_con_unidad):
@@ -382,6 +398,7 @@ class TestTrasladoServicioEstados:
                 s = TrasladoService.confirmar_recepcion(
                     solicitud_id=solicitud_en_transito.id,
                     usuario_id=usuario_admin.id,
+                    items_recibidos=_conteos_completos(solicitud_en_transito),
                 )
 
             assert s.estado == 'ENTREGADA'
@@ -399,6 +416,7 @@ class TestTrasladoServicioEstados:
                 s = TrasladoService.confirmar_recepcion(
                     solicitud_id=solicitud_en_transito.id,
                     usuario_id=usuario_admin.id,
+                    items_recibidos=_conteos_completos(solicitud_en_transito),
                 )
 
             assert s.siesa_entrada_consec == 5555
@@ -454,6 +472,7 @@ class TestTrasladoServicioEstados:
                 s = TrasladoService.confirmar_recepcion(
                     solicitud_id=solicitud_en_transito.id,
                     usuario_id=usuario_admin.id,
+                    items_recibidos=_conteos_completos(solicitud_en_transito),
                 )
 
             assert s.estado == 'ENTREGADA'
@@ -1074,7 +1093,7 @@ class TestEndpointsTraslados:
                           return_value={'detalle': {'Table': [{'f350_consec_docto': 3001}]}}):
             resp = client.post(
                 f'/api/traslados/{solicitud_en_transito.id}/recibir',
-                json={},
+                json={'items_recibidos': _conteos_completos(solicitud_en_transito)},
                 headers={'Authorization': f'Bearer {jwt_token_admin}'},
             )
         assert resp.status_code == 200
@@ -1372,7 +1391,7 @@ class TestE2ERecepcionTienda:
         with patch.object(connekta, '_post', side_effect=_post_spy):
             resp = client.post(
                 f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
-                json={},
+                json={'items_recibidos': _conteos_completos(solicitud_en_transito_tienda)},
                 headers={'Authorization': f'Bearer {jwt_token_tienda}'},
             )
 
@@ -1397,7 +1416,7 @@ class TestE2ERecepcionTienda:
         with patch.object(connekta, '_post', return_value={'detalle': {'Table': [{'f350_consec_docto': 1}]}}):
             resp = client.post(
                 f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
-                json={},
+                json={'items_recibidos': _conteos_completos(solicitud_en_transito_tienda)},
                 headers={'Authorization': f'Bearer {jwt_token_tienda2}'},
             )
 
@@ -1407,7 +1426,7 @@ class TestE2ERecepcionTienda:
             self, app, db, client, solicitud_en_transito_tienda):
         resp = client.post(
             f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
-            json={},
+            json={'items_recibidos': _conteos_completos(solicitud_en_transito_tienda)},
         )
         assert resp.status_code == 401
 
@@ -1416,7 +1435,7 @@ class TestE2ERecepcionTienda:
         """Solo traslados EN_TRANSITO se pueden recibir."""
         resp = client.post(
             f'/api/traslados/{solicitud_borrador.id}/recibir',
-            json={},
+            json={'items_recibidos': _conteos_completos(solicitud_borrador)},
             headers={'Authorization': f'Bearer {jwt_token_tienda}'},
         )
         # La tienda solo ve sus propias solicitudes; si no es su traslado → 404
@@ -1434,7 +1453,7 @@ class TestE2ERecepcionTienda:
                           return_value={'detalle': {'Table': [{'f350_consec_docto': 7654}]}}):
             client.post(
                 f'/api/traslados/{solicitud_en_transito_tienda.id}/recibir',
-                json={},
+                json={'items_recibidos': _conteos_completos(solicitud_en_transito_tienda)},
                 headers={'Authorization': f'Bearer {jwt_token_tienda}'},
             )
 
@@ -1525,3 +1544,136 @@ class TestElErrorDeSiesaSeVeCuandoPideAccion:
         assert resp.status_code != 400, (
             'el estado que escribe confirmar_recepcion y el que exige '
             'reintentar-recepcion dejaron de coincidir')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Una diferencia que no se puede expresar no es difícil de detectar: es
+#  imposible.
+#
+#  `tienda.js` contaba ítem por ítem, mostraba barras de progreso y abría un
+#  modal que decía «¿Confirmar como recepción parcial?» — y después mandaba
+#  `JSON.stringify({})`. El servidor escribía `recibida = enviada` para TODOS
+#  los ítems: una tienda que contaba 3 de 10 hacía que el WMS y Siesa
+#  registraran 10, y siete unidades desaparecían sin traza.
+#
+#  `TRA-01` (BLOQUEA, `enviada >= recibida`) **no podía dispararse jamás** sobre
+#  esa vía: los dos valores se escribían iguales por construcción. El invariante
+#  estaba verde porque el dato era sintético.
+#
+#  Séptima instancia del mismo patrón en este repo: un sistema que reporta éxito
+#  cuando no ha actuado. `CanalNotificacionDev` devolviendo `True`
+#  incondicionalmente y esta recepción son el mismo defecto — **el silencio
+#  codificado como conformidad**.
+#
+#  Y había DOS puertas: aun mandando `items_recibidos`, un ítem ausente del mapa
+#  caía al mismo relleno.
+#
+#  Lo que esto NO resuelve: qué hacer cuando la diferencia existe —tránsito con
+#  dueño, precinto, tipificación, reloj de 48 h— es diseño de negocio y depende
+#  de un ETS parcial probado contra Siesa. Esto solo la hace **expresable**.
+#  Sin eso, lo demás no tiene sobre qué operar.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestLaRecepcionExigeElConteo:
+
+    @staticmethod
+    def _svc():
+        from app.services.traslado_service import TrasladoService
+        return TrasladoService
+
+    def test_sin_conteos_se_rechaza(self, db, solicitud_en_transito, usuario_admin):
+        """El cuerpo vacío de tienda, en un test."""
+        with pytest.raises(ValueError, match='cantidades contadas'):
+            self._svc().confirmar_recepcion(
+                solicitud_id=solicitud_en_transito.id,
+                usuario_id=usuario_admin.id,
+            )
+
+    def test_un_conteo_incompleto_tambien(self, db, solicitud_en_transito, usuario_admin):
+        """La segunda puerta: un ítem ausente del mapa caía al mismo relleno."""
+        items = solicitud_en_transito.items
+        if len(items) < 2:
+            pytest.skip('hace falta más de un ítem para ejercer el hueco')
+        parcial = [{'id': items[0].id, 'cantidad_recibida': 1}]
+        with pytest.raises(ValueError, match='Faltan las cantidades'):
+            self._svc().confirmar_recepcion(
+                solicitud_id=solicitud_en_transito.id,
+                usuario_id=usuario_admin.id,
+                items_recibidos=parcial,
+            )
+
+    def test_con_conteos_completos_pasa(self, db, solicitud_en_transito, usuario_admin):
+        conteos = [{'id': it.id, 'cantidad_recibida': it.cantidad_enviada or 0}
+                   for it in solicitud_en_transito.items]
+        s = self._svc().confirmar_recepcion(
+            solicitud_id=solicitud_en_transito.id,
+            usuario_id=usuario_admin.id,
+            items_recibidos=conteos,
+        )
+        assert s is not None
+
+    def test_una_diferencia_QUEDA_REGISTRADA(self, db, solicitud_en_transito,
+                                             usuario_admin):
+        """El test que habría sido imposible ayer.
+
+        Recibir menos de lo enviado tiene que dejar `recibida < enviada` en la
+        base. Antes el servidor los igualaba y la diferencia no existía.
+        """
+        conteos = [{'id': it.id, 'cantidad_recibida': max(0, (it.cantidad_enviada or 0) - 1)}
+                   for it in solicitud_en_transito.items]
+        self._svc().confirmar_recepcion(
+            solicitud_id=solicitud_en_transito.id,
+            usuario_id=usuario_admin.id,
+            items_recibidos=conteos,
+        )
+        db.session.refresh(solicitud_en_transito)
+        assert any(it.cantidad_recibida < (it.cantidad_enviada or 0)
+                   for it in solicitud_en_transito.items), (
+            'la diferencia se perdió: el servidor volvió a igualar recibida y '
+            'enviada, y con eso TRA-01 vuelve a ser ciego por construcción')
+
+
+class TestTraUnoDejaDeSerCiego:
+    """`TRA-01` exige `enviada >= recibida`. Con el relleno, los dos valores se
+    escribían iguales y el BLOQUEA no podía dispararse **sobre la población a la
+    que se aplica**."""
+
+    def test_tienda_manda_los_conteos_por_AST(self):
+        """Por AST sobre el JS: que el cuerpo NO sea un objeto vacío.
+
+        Un detector de texto se atraparía en este propio docstring — pasó seis
+        veces en este repo.
+        """
+        import pathlib
+        import re
+
+        js = pathlib.Path('app/static/pwa/tienda.js').read_text()
+        cuerpo = re.search(r'async function tiendaConfirmarRecepcionTraslado\(.*?\n}\n',
+                           js, re.S)
+        assert cuerpo, 'ya no existe tiendaConfirmarRecepcionTraslado'
+        src = cuerpo.group(0)
+        assert 'items_recibidos' in src, (
+            'tienda volvió a confirmar sin mandar los conteos: el servidor va a '
+            'rellenar recibida = enviada y la diferencia desaparece')
+        assert 'JSON.stringify({})' not in src
+
+    def test_el_servidor_no_tiene_fallback_de_relleno(self):
+        """Por AST: ninguna asignación a `cantidad_recibida` puede venir de
+        `cantidad_enviada`."""
+        import ast
+        import pathlib
+
+        arbol = ast.parse(pathlib.Path('app/services/traslado_service.py').read_text())
+        rellenos = []
+        for n in ast.walk(arbol):
+            if not isinstance(n, ast.Assign):
+                continue
+            destinos = [t.attr for t in n.targets if isinstance(t, ast.Attribute)]
+            if 'cantidad_recibida' not in destinos:
+                continue
+            fuentes = {a.attr for a in ast.walk(n.value) if isinstance(a, ast.Attribute)}
+            if 'cantidad_enviada' in fuentes:
+                rellenos.append(n.lineno)
+        assert not rellenos, (
+            f'volvió el relleno `recibida = enviada` (líneas {rellenos}). Con eso '
+            f'TRA-01 no puede disparar y una diferencia deja de ser expresable.')

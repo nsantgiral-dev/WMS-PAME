@@ -873,16 +873,44 @@ class TrasladoService:
         # Guard recovery: emergency commit guardó consec pero commit principal falló
         _skip_siesa_entrada = bool(s.siesa_entrada_consec)
 
-        # Actualizar cantidades recibidas.
-        # Fallback: cantidad_enviada (lo que salió) > cantidad_aprobada > solicitada.
-        if items_recibidos:
-            recibidos_map = {i['id']: i['cantidad_recibida'] for i in items_recibidos}
-            for item in s.items:
-                fallback = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
-                item.cantidad_recibida = recibidos_map.get(item.id, fallback)
-        else:
-            for item in s.items:
-                item.cantidad_recibida = item.cantidad_enviada or item.cantidad_aprobada or item.cantidad_solicitada
+        # ── Cantidades recibidas: se declaran, no se rellenan ────────────
+        #
+        # Hasta el 2026-08-15 esto tenía dos puertas de relleno silencioso:
+        #
+        #   · sin `items_recibidos` → `recibida = enviada` para TODO;
+        #   · con `items_recibidos` incompleto → los ausentes, igual.
+        #
+        # Y tienda mandaba el cuerpo vacío. O sea que por esa vía **una
+        # diferencia no era difícil de detectar: era imposible de expresar**.
+        # El software hacía lo mismo que un auxiliar contando contra el número
+        # impreso de la remisión —confirmar en vez de contar—, solo que sin un
+        # humano a quien preguntarle.
+        #
+        # Es el mismo defecto que `CanalNotificacionDev` devolviendo `True`
+        # incondicionalmente: **el silencio codificado como conformidad.**
+        #
+        # Y volvía ciego a `TRA-01` (BLOQUEA, `enviada >= recibida`): no puede
+        # dispararse sobre dos campos que la escritura iguala por construcción.
+        #
+        # Ahora la recepción exige el conteo. Recepción ya lo mandaba
+        # (`recepcion.js`); era tienda la que no, sobre el MISMO endpoint.
+        if not items_recibidos:
+            raise ValueError(
+                'La recepción exige las cantidades contadas. Sin ellas el '
+                'sistema tendría que suponer que llegó todo lo que salió, y una '
+                'diferencia quedaría sin traza — ni acá ni en Siesa.'
+            )
+        recibidos_map = {i['id']: i['cantidad_recibida'] for i in items_recibidos}
+        faltantes = [it.id for it in s.items if it.id not in recibidos_map]
+        if faltantes:
+            raise ValueError(
+                f'Faltan las cantidades contadas de {len(faltantes)} ítem(s) '
+                f'({faltantes[:5]}). Un ítem sin conteo no se puede dar por '
+                f'recibido completo: eso es exactamente lo que hacía desaparecer '
+                f'la diferencia.'
+            )
+        for item in s.items:
+            item.cantidad_recibida = recibidos_map[item.id]
         db.session.flush()
 
         # ── Trigger Siesa: Entrada tránsito ──
