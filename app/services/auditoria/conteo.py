@@ -125,7 +125,11 @@ def ningun_ajuste_sin_cuenta_fisica(ctx=None):
     consecuencia='Se ajustó un descuadre sin la segunda cuenta que el proceso '
                  'exige. El ajuste descansa en una sola persona contando una '
                  'sola vez.',
-    severidad=AVISA,
+    # BLOQUEA, no AVISA: un ajuste de inventario aprobado sobre una sola cuenta
+    # de una sola persona no es un aviso. Era AVISA mientras el guard no podía
+    # dispararse —preguntaba por la existencia de la fila, y el camino de salto
+    # la conserva—, así que la severidad nunca se puso a prueba.
+    severidad=BLOQUEA,
 )
 def un_descuadre_se_cuenta_dos_veces(ctx=None):
     """El segundo conteo existe porque la causa más común de un descuadre es un
@@ -137,9 +141,23 @@ def un_descuadre_se_cuenta_dos_veces(ctx=None):
             continue
         if s.es_segundo_conteo or s.sesion_origen_id:
             continue
-        # ¿Existe una sesión de segundo conteo que apunte a ésta?
+        # **¿Alguien contó de verdad?** — no «¿existe una fila hija?».
+        #
+        # `POST /api/conteo/<id>/omitir-segundo` es el ÚNICO camino que salta la
+        # doble ciega, y deja el hijo en `CANCELADO` **con su
+        # `sesion_origen_id` intacto** (`routes/conteo.py:784`). Preguntando por
+        # la existencia de la fila, el endpoint diseñado para saltarse el
+        # control producía exactamente el dato que hacía decir «sí, se contó dos
+        # veces».
+        #
+        # El guard medía presencia de fila cuando la propiedad es *hubo una
+        # segunda cuenta*, y estaba en verde sobre el único caso que le importa.
         from app.models.conteo import SesionConteo
-        hay = SesionConteo.query.filter_by(sesion_origen_id=s.id).first()
+        hay = SesionConteo.query.filter(
+            SesionConteo.sesion_origen_id == s.id,
+            SesionConteo.cantidad_fisica.isnot(None),
+            SesionConteo.estado.notin_(('CANCELADO', 'PENDIENTE')),
+        ).first()
         if not hay:
             out.append(Hallazgo(
                 referencia=s.codigo or f'conteo#{s.id}',

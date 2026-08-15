@@ -101,9 +101,35 @@ class TestElDetectorNoEstaCiego:
             codigo=f'CC2-{uuid.uuid4().hex[:6]}', tipo='DIARIO_ABC',
             ubicacion_id=ub_picking.id, almacen_id=almacen.id,
             producto_id=producto.id, estado='MATCH',
-            es_segundo_conteo=True, sesion_origen_id=sesion.id))
+            es_segundo_conteo=True, sesion_origen_id=sesion.id,
+            # **Con cantidad contada.** Una fila hija sin `cantidad_fisica` no
+            # es una segunda cuenta: es una sesión que se abrió.
+            cantidad_fisica=10))
         db.session.commit()
         assert _res('CNT-04')['total'] == 0
+
+    def test_el_camino_que_SALTA_el_segundo_conteo_se_ve(self, db, sesion, almacen,
+                                                         producto, ub_picking):
+        """El detector ciego que faltaba, y el caso que el guard existe para ver.
+
+        `POST /api/conteo/<id>/omitir-segundo` deja el hijo en `CANCELADO` **con
+        su `sesion_origen_id` intacto**. Preguntando «¿existe una fila hija?»,
+        el endpoint diseñado para saltarse la doble ciega producía exactamente
+        el dato que hacía decir «sí, se contó dos veces».
+        """
+        import uuid
+
+        from app.models.conteo import SesionConteo
+        sesion.estado = 'AJUSTADO'
+        db.session.add(SesionConteo(
+            codigo=f'CC2-{uuid.uuid4().hex[:6]}', tipo='DIARIO_ABC',
+            ubicacion_id=ub_picking.id, almacen_id=almacen.id,
+            producto_id=producto.id, estado='CANCELADO',
+            es_segundo_conteo=True, sesion_origen_id=sesion.id))
+        db.session.commit()
+        assert _res('CNT-04')['total'] == 1, (
+            'el hijo cancelado por «omitir segundo conteo» se contó como una '
+            'segunda cuenta — el ajuste descansa en una sola persona')
 
     def test_ve_una_sesion_atascada_ajustando(self, db, sesion):
         """`AJUSTANDO` es una transición, no un estado de reposo: ni contada ni
@@ -159,11 +185,40 @@ class TestDetectorReposicion:
         db.session.commit()
         assert _rep('REP-01')['total'] == 1
 
-    def test_ve_un_envio_sobre_una_tarea_sin_completar(self, db, reposicion):
-        """173066 NO es idempotente: duplica el movimiento si se reintenta."""
-        reposicion.estado = 'EN_PROCESO'
+    def _job(self, db, reposicion, estado, intentos=0, error=None):
+        from app.models.siesa_job import SiesaJob
+        j = SiesaJob(tipo='TRANSFERENCIA_UBICACIONES', estado=estado,
+                     referencia_tipo='TareaReposicion', referencia_id=reposicion.id,
+                     intentos=intentos, error_ultimo=error)
+        j.payload = '{}'
+        db.session.add(j)
         db.session.commit()
+        return j
+
+    def test_ve_el_doble_envio(self, db, reposicion):
+        """El riesgo que este flujo declara: **173066 no es idempotente**, así
+        que dos jobs completados son dos movimientos en Siesa y uno solo en el
+        WMS.
+
+        La versión anterior de REP-02 pedía `siesa_enviado AND estado !=
+        COMPLETADA` — y no había estado alcanzable que lo cumpliera: la bandera
+        solo se escribe DENTRO del post-COMPLETADO. Un BLOQUEA en verde
+        permanente sobre el único peligro que el módulo nombra.
+        """
+        self._job(db, reposicion, 'COMPLETADO')
+        assert _rep('REP-02')['total'] == 0
+        self._job(db, reposicion, 'COMPLETADO')
         assert _rep('REP-02')['total'] == 1
+
+    def test_ve_un_reintento_sobre_un_post_que_pudo_entrar(self, db, reposicion):
+        """La Regla 3 y el aborto del DLQ existen por esto; si dejó rastro, hay
+        que mirarlo."""
+        self._job(db, reposicion, 'FALLIDO', intentos=2, error='timeout')
+        assert _rep('REP-02')['total'] == 1
+
+    def test_un_envio_limpio_no_avisa(self, db, reposicion):
+        self._job(db, reposicion, 'COMPLETADO')
+        assert _rep('REP-02')['total'] == 0
 
     def test_ve_que_se_movio_mas_de_lo_pedido(self, db, reposicion):
         reposicion.unidades_movidas = 80      # pedidas: 50

@@ -147,6 +147,59 @@ class TestDetectorRecepcion:
         db.session.commit()
         assert _rec('REC-01')['total'] == 1
 
+    def test_ve_la_bandera_que_forzo_el_bloque_de_emergencia(self, db, recepcion):
+        """El caso que estaba invisible, y es el peor de los dos.
+
+        El job de ENTRADA_OC fuerza `siesa_triggered = True` **cuando la
+        respuesta NO se pudo guardar** — correcto, porque sin eso el reintento
+        del DLQ crea una entrada duplicada en la cuenta 1435. Pero convierte la
+        bandera en «se intentó y quizá entró».
+
+        Leyéndola sola, el guard estaba en verde exactamente sobre el caso donde
+        nadie sabe qué pasó. La señal honesta es `siesa_response`: existe solo si
+        hubo respuesta y se guardó, que es justo lo que la emergencia no logró.
+        """
+        recepcion.estado = 'CONFIRMADA'
+        recepcion.siesa_triggered = True
+        recepcion.siesa_response = None
+        db.session.commit()
+        assert _rec('REC-01')['total'] == 1, (
+            'una recepción marcada como enviada SIN respuesta guardada pasó como '
+            'conforme — es la bandera de emergencia, no una entrada confirmada')
+
+    def test_una_entrada_con_respuesta_guardada_no_avisa(self, db, recepcion):
+        recepcion.estado = 'CONFIRMADA'
+        recepcion.siesa_triggered = True
+        recepcion.siesa_response = '{"codigo": 0, "consecutivo": 812}'
+        db.session.commit()
+        assert _rec('REC-01')['total'] == 0
+
+    def test_el_estado_fantasma_no_vuelve(self):
+        """El filtro incluía `'CERRADA'`, que no existe en `EstadoRecepcion`
+        (ABIERTA · EN_PROCESO · CONFIRMADA · CANCELADA). Un filtro por un valor
+        imposible no acota: decora."""
+        import ast
+        import pathlib
+
+        from app.models.recepcion import EstadoRecepcion
+
+        # **Por AST, no por texto.** La primera versión de este test buscaba la
+        # cadena en el fuente y se puso roja por su PROPIO docstring, que la
+        # nombra para explicar el defecto. Es la sexta vez que pasa en este
+        # repo: un detector de texto no distingue una constante de una
+        # explicación.
+        arbol = ast.parse(pathlib.Path('app/services/auditoria/recepcion.py').read_text())
+        estados = {
+            n.value for n in ast.walk(arbol)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and n.value.isupper() and n.value.isalpha()
+        }
+        validos = {v for k, v in vars(EstadoRecepcion).items() if not k.startswith('_')}
+        fantasmas = {e for e in estados if e.endswith('ADA') or e.endswith('ESO')} - validos
+        assert not fantasmas, (
+            f'filtra por estados que no existen en EstadoRecepcion: {fantasmas}. '
+            f'Un filtro por un valor imposible no acota: decora.')
+
     def test_un_exceso_dentro_de_tolerancia_no_avisa(self, db, recepcion):
         """Los proveedores mandan de más; por eso hay tolerancia declarada."""
         from app.models.recepcion import ItemRecepcion

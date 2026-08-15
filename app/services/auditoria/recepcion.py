@@ -15,6 +15,7 @@ de más y hay una tolerancia declarada por línea. Lo que sí es un error es un
 exceso **por encima de esa tolerancia**, porque significa que se recibió y se
 va a pagar mercancía que nadie autorizó.
 """
+from app.models.recepcion import EstadoRecepcion
 from app.services.auditoria.base import AVISA, BLOQUEA, OBSERVA, Hallazgo, invariante
 
 
@@ -35,16 +36,48 @@ def _recepciones(estados=None, limite=1000):
     severidad=BLOQUEA,
 )
 def una_recepcion_confirmada_entro_a_siesa(ctx=None):
-    return [
-        Hallazgo(
-            referencia=r.codigo or f'recepcion#{r.id}',
-            detalle=f'{r.estado} sin entrada disparada a Siesa · OC '
-                    f'{r.numero_oc_siesa} · {r.proveedor_nombre or ""}',
-            datos={'parcial': r.es_parcial},
-        )
-        for r in _recepciones(('CONFIRMADA', 'CERRADA'))
-        if not r.siesa_triggered
-    ]
+    """Dos formas de no haber entrado, y la segunda estaba invisible.
+
+    ## `siesa_triggered` no significa «entró»
+
+    El job de ENTRADA_OC tiene un bloque de emergencia que fuerza
+    `siesa_triggered = True` **cuando la respuesta NO se pudo guardar**
+    (`siesa_job_service.py`). Es correcto —sin eso el reintento del DLQ crea una
+    entrada contable duplicada en la cuenta 1435— pero convierte la bandera en
+    «se intentó y quizá entró», no en «entró».
+
+    Un guard que la lee sola está en verde exactamente sobre el caso donde nadie
+    sabe qué pasó. Es la misma forma que `siesa_rc_triggered`, que se enciende
+    ANTES del POST por la Regla 6.
+
+    La señal honesta es `siesa_response`: existe **solo** si hubo respuesta y se
+    guardó, que es justo lo que el bloque de emergencia no logró. Comparar con
+    traslados, que sí exige `siesa_salida_consec`.
+
+    ## Y el estado fantasma
+
+    El filtro incluía `'CERRADA'`, que **no existe** en `EstadoRecepcion`
+    (ABIERTA · EN_PROCESO · CONFIRMADA · CANCELADA). Un filtro por un valor
+    imposible no acota: decora.
+    """
+    out = []
+    for r in _recepciones((EstadoRecepcion.CONFIRMADA,)):
+        if not r.siesa_triggered:
+            out.append(Hallazgo(
+                referencia=r.codigo or f'recepcion#{r.id}',
+                detalle=f'{r.estado} sin entrada disparada a Siesa · OC '
+                        f'{r.numero_oc_siesa} · {r.proveedor_nombre or ""}',
+                datos={'parcial': r.es_parcial, 'causa': 'nunca se disparó'},
+            ))
+        elif not (r.siesa_response or '').strip():
+            out.append(Hallazgo(
+                referencia=r.codigo or f'recepcion#{r.id}',
+                detalle=f'{r.estado} marcada como enviada pero SIN respuesta de '
+                        f'Siesa guardada · OC {r.numero_oc_siesa} — la bandera la '
+                        f'forzó el bloque de emergencia y nadie sabe si entró',
+                datos={'parcial': r.es_parcial, 'causa': 'bandera de emergencia'},
+            ))
+    return out
 
 
 @invariante(
