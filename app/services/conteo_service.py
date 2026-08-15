@@ -91,6 +91,10 @@ class ConteoService:
                 bodega=_bodega_siesa,
             )
 
+        # La procedencia se declara SIEMPRE, no solo cuando falla: un campo que
+        # solo se escribe en el caso malo deja el caso bueno indistinguible del
+        # histórico sin dato.
+        _fuente_existencia = 'SIESA'
         if existencia_ref is None:
             # Fallback a WMS si Siesa no responde
             reg_inv = UbicacionProducto.query.filter_by(
@@ -98,6 +102,7 @@ class ConteoService:
                 producto_id=sesion_pre.producto_id,
             ).first()
             existencia_ref = float(reg_inv.cantidad) if reg_inv else 0.0
+            _fuente_existencia = 'WMS'
             logger.warning(
                 f'[CONTEO] Siesa no respondió para {sesion_pre.codigo} '
                 f'— diferencia calculada contra WMS ({existencia_ref})'
@@ -125,6 +130,7 @@ class ConteoService:
         sesion.operario_id = operario_id
         sesion.cantidad_fisica = cantidad_fisica
         sesion.existencia_siesa = existencia_ref
+        sesion.fuente_existencia = _fuente_existencia
         sesion.lote_id = lote_id
         sesion.fecha_inicio = sesion.fecha_inicio or datetime.utcnow()
 
@@ -156,7 +162,11 @@ class ConteoService:
             )
             return {
                 'resultado': 'MATCH',
-                'mensaje': 'Conteo correcto — inventario cuadra con WMS',
+                # Decía «cuadra con WMS» aunque hubiera comparado contra
+                # Siesa: dos confusiones de procedencia en la misma función.
+                # Quien lee esto necesita saber contra QUÉ cuadró.
+                'mensaje': ('Conteo correcto — inventario cuadra con '
+                            + ('Siesa' if _fuente_existencia == 'SIESA' else 'WMS')),
                 'sesion_id': sesion.id
             }
 
@@ -174,6 +184,7 @@ class ConteoService:
                         raiz.cantidad_fisica = cantidad_fisica  # CC3 es la verdad definitiva
                         raiz.diferencia = diferencia
                         raiz.existencia_siesa = existencia_ref
+                        raiz.fuente_existencia = _fuente_existencia
                         raiz.motivo_codigo = 'AJ-ENT' if diferencia > 0 else 'AJ-SAL'
                         logger.warning(f'[CONTEO] CC3 DESCUADRE — raíz {raiz.codigo} → DESCUADRE, cantidad={cantidad_fisica}')
                     try:
@@ -470,14 +481,36 @@ class ConteoService:
         )
         if existencia_siesa is not None:
             sesion.existencia_siesa = existencia_siesa
+            sesion.fuente_existencia = 'SIESA'
             logger.info(
                 f'[CONTEO] Existencia fiscal Siesa para sesion {sesion.id}: '
                 f'{existencia_siesa} (bodega={bodega_siesa}) — base del ajuste'
             )
         else:
-            logger.warning(
-                f'[CONTEO] Siesa no respondió para sesion {sesion.id} '
-                f'— diferencia calculada contra WMS ({sesion.existencia_siesa}).'
+            # **No se ajusta a ciegas.** Decisión de Operaciones (2026-08-15).
+            #
+            # El ajuste sale a Siesa como un DELTA: `fisica − existencia_siesa`.
+            # Con la base tomada del WMS, Siesa queda en
+            # `siesa_real + (fisica − wms)` en vez de en `fisica` — o sea que
+            # **justo cuando las dos bases discrepan, que es la única razón para
+            # contar, el ajuste empeora el descuadre.**
+            #
+            # Antes esto era un `logger.warning` y el ajuste salía igual.
+            #
+            # El ajuste de inventario es la única transacción de esta operación
+            # que SIEMPRE puede esperar: no detiene una venta, ni un despacho,
+            # ni un recaudo. Si alguien necesita aprobarlo con Siesa caído, no
+            # está corrigiendo la verdad — está desbloqueando una operación, y
+            # entonces el kardex deja de ser una medición para volverse un
+            # residuo que se corrige a sí mismo cada vez que estorba.
+            sesion.fuente_existencia = 'WMS'
+            db.session.commit()
+            raise ValueError(
+                f'Siesa no respondió la existencia de {sesion.producto_codigo_siesa} '
+                f'en {bodega_siesa}. El ajuste NO se aprueba contra el stock del '
+                f'WMS: saldría como delta sobre una base equivocada y dejaría a '
+                f'Siesa peor de lo que está. Reintentar cuando Siesa responda — '
+                f'un ajuste de inventario siempre puede esperar.'
             )
 
         diferencia = sesion.cantidad_fisica - sesion.existencia_siesa

@@ -222,3 +222,42 @@ def se_pueden_contar_los_descuadres_abiertos(ctx=None):
         )
         for s in _sesiones(('DESCUADRE', 'SEGUNDO_CONTEO', 'TERCER_CONTEO'))
     ]
+
+
+@invariante(
+    codigo='CNT-07',
+    flujo='conteo',
+    frontera='existencia → ajuste',
+    consecuencia='El ajuste salió a Siesa como delta sobre una base tomada del '
+                 'WMS. Siesa queda en `siesa_real + (fisica − wms)` en vez de '
+                 'en `fisica`: **el ajuste empeoró el descuadre justo cuando '
+                 'las dos bases discrepaban**, que es la única razón para contar.',
+    severidad=BLOQUEA,
+)
+def ningun_ajuste_sobre_una_base_del_wms(ctx=None):
+    """El defecto que era inauditable hasta que existió la columna.
+
+    `existencia_siesa` prometía procedencia y no la tenía: ante Siesa caído el
+    servicio caía al stock del WMS **con solo un WARNING** y lo guardaba en el
+    mismo campo. Sin registro de la base, ningún invariante podía comprobarlo.
+
+    Desde el 2026-08-15 la aprobación **se niega** en ese caso —decisión de
+    Operaciones: el ajuste de inventario es la única transacción que siempre
+    puede esperar—. Este invariante cubre lo que ya salió antes de esa fecha, y
+    el día que alguien reintroduzca el fallback.
+
+    `NULL` no cuenta: es el histórico anterior a la columna, y darlo por bueno
+    o por malo sería inventar la procedencia en el campo que existe para no
+    inventarla. Solo bloquea el `'WMS'` **explícito**.
+    """
+    return [
+        Hallazgo(
+            referencia=s.codigo or f'conteo#{s.id}',
+            detalle=f'ajuste de {s.diferencia} enviado a Siesa con la existencia '
+                    f'tomada del WMS ({s.existencia_siesa}) — la base no era la '
+                    f'fiscal',
+            datos={'producto': s.producto_codigo_siesa, 'estado': s.estado},
+        )
+        for s in _sesiones()
+        if s.siesa_triggered and s.fuente_existencia == 'WMS'
+    ]

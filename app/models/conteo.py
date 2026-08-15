@@ -44,6 +44,23 @@ class SesionConteo(db.Model):
 
     # Conteo — NUNCA exponer existencia_siesa al operario
     existencia_siesa = db.Column(db.Integer)  # Oculto — viene de Siesa en tiempo real
+    #: **Contra qué se comparó de verdad.** `'SIESA'` | `'WMS'` | `None`.
+    #:
+    #: El nombre `existencia_siesa` promete procedencia y no la tenía: cuando
+    #: Siesa no respondía, el servicio caía al stock del WMS **con solo un
+    #: WARNING** y lo guardaba en la misma columna. El propio docstring de
+    #: `comparar_conteo` lo admitía — «compara contra existencia_siesa (que
+    #: ahora almacena stock WMS)».
+    #:
+    #: Y el ajuste que sale a Siesa es un DELTA: `fisica − existencia_siesa`.
+    #: Si esa base fue el número del WMS, Siesa queda en
+    #: `siesa_real + (fisica − wms)` en vez de en `fisica`. Es decir:
+    #: **precisamente cuando WMS y Siesa discrepan —la única razón para
+    #: contar— el ajuste empeora el descuadre.**
+    #:
+    #: Sin esta columna ningún invariante podía comprobarlo: el defecto no era
+    #: solo indetectable, era inauditable.
+    fuente_existencia = db.Column(db.String(10), nullable=True)
     cantidad_fisica = db.Column(db.Integer)   # Lo que contó el operario
     lote_id = db.Column(db.String(50))        # Obligatorio si maneja_lote=True
 
@@ -134,6 +151,7 @@ class SesionConteo(db.Model):
             'operario_id': self.operario_id,
             'estado': self.estado,
             'existencia_siesa': self.existencia_siesa,
+            'fuente_existencia': self.fuente_existencia,
             'cantidad_fisica': self.cantidad_fisica,
             'lote_id': self.lote_id,
             'diferencia': self.diferencia,
