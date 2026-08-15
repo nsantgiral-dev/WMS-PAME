@@ -56,6 +56,7 @@ def _devoluciones(estados=None, limite=1000):
     consecuencia='La nota crédito sale por más de lo facturado: cartera en '
                  'negativo y un saldo a favor que nadie otorgó.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorDevoluciones::test_ve_que_se_devuelve_mas_de_lo_facturado',
 )
 def no_se_devuelve_mas_de_lo_facturado(ctx=None):
     """Devolver menos es el caso normal —para eso existe el prorrateo del
@@ -81,6 +82,7 @@ def no_se_devuelve_mas_de_lo_facturado(ctx=None):
                  'sigue con el cargo. Tiene la plata cobrada y la mercancía de '
                  'vuelta.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorDevoluciones::test_ve_una_confirmada_sin_nota_credito',
 )
 def una_confirmada_tiene_su_nota_credito(ctx=None):
     """Confirmar la devolución **reingresa el inventario** en el WMS. La nota
@@ -105,6 +107,7 @@ def una_confirmada_tiene_su_nota_credito(ctx=None):
     consecuencia='Se creó una nota crédito por una devolución que después se '
                  'canceló: la cartera se abonó y la mercancía no volvió.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorDevoluciones::test_ve_una_cancelada_que_dejo_nota_credito',
 )
 def una_cancelada_no_dejo_nota_credito(ctx=None):
     return [
@@ -127,6 +130,7 @@ def una_cancelada_no_dejo_nota_credito(ctx=None):
                  'que alguien las apruebe, la cartera del cliente sigue con el '
                  'cargo.',
     severidad=OBSERVA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorDevoluciones::test_cuenta_las_nc_esperando_aprobacion',
 )
 def se_pueden_contar_las_nc_sin_aprobar(ctx=None):
     """Aprobar es manual y **es el estado final del flujo automatizado**, no un
@@ -157,6 +161,7 @@ def se_pueden_contar_las_nc_sin_aprobar(ctx=None):
     consecuencia='La NC no tiene concepto DIAN, y sin él el botón Aprobar de '
                  'Siesa ni siquiera se habilita: contabilidad lo pone a mano.',
     severidad=AVISA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorDevoluciones::test_cuenta_las_nc_esperando_aprobacion',
 )
 def la_nc_lleva_su_motivo_dian(ctx=None):
     """El motivo se automatizó (251546) pero está apagado hasta registrar la

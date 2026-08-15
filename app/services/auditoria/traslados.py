@@ -59,6 +59,7 @@ def _solicitudes(estados=None, limite=1000):
                  'aparece de la nada entre dos etapas y descuadra las dos '
                  'bodegas a la vez.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_ve_que_se_envio_mas_de_lo_aprobado',
 )
 def las_cantidades_solo_bajan(ctx=None):
     """`solicitada ≥ aprobada ≥ enviada ≥ recibida`.
@@ -99,6 +100,7 @@ def las_cantidades_solo_bajan(ctx=None):
     consecuencia='El WMS dice despachado y Siesa no tiene el movimiento: el '
                  'stock sigue contado en la bodega origen, que ya no lo tiene.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_ve_un_despacho_sin_salida_en_siesa',
 )
 def todo_despacho_tiene_su_salida_en_siesa(ctx=None):
     """Una solicitud que pasó de `EN_TRANSITO` en adelante movió inventario
@@ -123,6 +125,7 @@ def todo_despacho_tiene_su_salida_en_siesa(ctx=None):
                  'nunca llegó al destino. No falta ni sobra — está donde nadie '
                  'pregunta.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_ve_la_mercancia_atrapada_en_la_bodega_puente',
 )
 def nada_se_queda_en_la_bodega_puente(ctx=None):
     """El limbo propio de este flujo.
@@ -154,6 +157,7 @@ def nada_se_queda_en_la_bodega_puente(ctx=None):
     consecuencia='Hay un error de Siesa registrado y nadie lo va a mirar: la '
                  'solicitud avanzó igual y el tablero la da por buena.',
     severidad=AVISA,
+    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_ve_un_error_de_siesa_sin_resolver',
 )
 def un_error_de_siesa_no_se_queda_callado(ctx=None):
     """`siesa_error` con movimiento de cierre presente es ruido histórico —el
@@ -200,6 +204,7 @@ def un_error_de_siesa_no_se_queda_callado(ctx=None):
     consecuencia='Una solicitud cancelada que ya movió inventario en Siesa: el '
                  'ERP tiene el movimiento y el WMS lo da por no ocurrido.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_ve_una_cancelada_que_ya_movio_inventario',
 )
 def una_cancelada_no_movio_inventario(ctx=None):
     """Cancelar después de despachar deja las dos bases en desacuerdo, y el
@@ -223,6 +228,7 @@ def una_cancelada_no_movio_inventario(ctx=None):
     consecuencia='Entró al destino algo que nunca salió del origen: el ETS sin '
                  'su STS duplica stock en el ERP.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_ve_una_entrada_sin_salida',
 )
 def no_hay_entrada_sin_salida(ctx=None):
     return [

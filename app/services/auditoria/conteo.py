@@ -54,6 +54,7 @@ def _sesiones(estados=None, limite=2000):
                  'ajuste que se mande a Siesa va a mover una cantidad que '
                  'nadie contó.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_ve_una_diferencia_que_no_es_la_resta',
 )
 def la_diferencia_es_la_resta(ctx=None):
     """`diferencia = cantidad_fisica − existencia_siesa`.
@@ -84,6 +85,7 @@ def la_diferencia_es_la_resta(ctx=None):
     consecuencia='El motivo contradice el signo: el inventario se mueve en una '
                  'dirección y la contabilidad en la otra.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_ve_el_motivo_cruzado',
 )
 def el_motivo_concuerda_con_el_signo(ctx=None):
     """`AJ-ENT` es sobrante (diferencia > 0), `AJ-SAL` es faltante (< 0).
@@ -114,6 +116,7 @@ def el_motivo_concuerda_con_el_signo(ctx=None):
     consecuencia='Se mandó un ajuste de inventario sin que nadie contara nada. '
                  'El ERP queda cuadrado contra una cifra inventada.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_ve_un_ajuste_sin_cuenta_fisica',
 )
 def ningun_ajuste_sin_cuenta_fisica(ctx=None):
     """`siesa_triggered` con `cantidad_fisica` en `NULL`.
@@ -145,6 +148,7 @@ def ningun_ajuste_sin_cuenta_fisica(ctx=None):
     # dispararse —preguntaba por la existencia de la fila, y el camino de salto
     # la conserva—, así que la severidad nunca se puso a prueba.
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_ve_un_ajuste_sin_segundo_conteo',
 )
 def un_descuadre_se_cuenta_dos_veces(ctx=None):
     """El segundo conteo existe porque la causa más común de un descuadre es un
@@ -189,6 +193,7 @@ def un_descuadre_se_cuenta_dos_veces(ctx=None):
     consecuencia='Sesiones que quedaron a mitad del ajuste: el lock se liberó '
                  'y el movimiento a Siesa nunca se confirmó.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_ve_una_sesion_atascada_ajustando',
 )
 def ninguna_sesion_se_queda_ajustando(ctx=None):
     """`AJUSTANDO` es una transición —lock liberado, Siesa en vuelo—, no un
@@ -212,6 +217,7 @@ def ninguna_sesion_se_queda_ajustando(ctx=None):
     consecuencia='Descuadres detectados que nadie resolvió. Cada uno es una '
                  'diferencia conocida que el inventario sigue arrastrando.',
     severidad=OBSERVA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestElDetectorNoEstaCiego::test_cuenta_los_descuadres_abiertos',
 )
 def se_pueden_contar_los_descuadres_abiertos(ctx=None):
     return [
@@ -233,6 +239,7 @@ def se_pueden_contar_los_descuadres_abiertos(ctx=None):
                  'en `fisica`: **el ajuste empeoró el descuadre justo cuando '
                  'las dos bases discrepaban**, que es la única razón para contar.',
     severidad=BLOQUEA,
+    detector_ciego='tests/test_fuente_existencia.py::TestCNT07::test_un_ajuste_sobre_base_del_wms_bloquea',
 )
 def ningun_ajuste_sobre_una_base_del_wms(ctx=None):
     """El defecto que era inauditable hasta que existió la columna.

@@ -1413,6 +1413,39 @@ llegaron al ERP, con cifras) quedan en pie.
 
 **Lo que falta está escrito**, no olvidado: `tests/flujo/test_cobertura_invariantes.py::SIN_CUBRIR` lista los flujos sin invariantes con el motivo. Un auditor que cubre uno de seis devuelve `0 hallazgos` para lo que no mira — el denominador tiene que ser visible.
 
+### La regla del guard — leer antes de escribir cualquier invariante
+
+> **¿Qué escribe el valor que estoy comprobando, y puede el camino roto
+> escribirlo igual?** Si la respuesta es sí, el guard no sirve.
+
+Es la lección más cara de la auditoría del 2026-08-15: **seis guards en verde
+sobre propiedades que la vía sana satisface por construcción.**
+
+| Guard | Medía | Por qué no podía fallar |
+|---|---|---|
+| `TRA-01` | `enviada ≥ recibida` | tienda escribía los dos **iguales** |
+| `REP-02` | `siesa_enviado` sin `COMPLETADA` | la bandera solo existe **dentro** de ese estado |
+| `CNT-04` | ¿existe fila hija? | «omitir segundo conteo» la conserva en `CANCELADO` |
+| `REC-01` | `siesa_triggered` | se fuerza a `True` **cuando falla** |
+| `test_bodegas` | un mapa CO | había **tres**, y leía el bueno |
+| Integridad N4 | la URL está adyacente | estaba **dentro de una función sin llamador** |
+
+Los seis tenían el test de «no dispara cuando está sano». **Ninguno tenía el
+otro.** Los seis se habrían caído al primer intento.
+
+**Por eso `@invariante(...)` exige `detector_ciego`**: la referencia
+`archivo::Clase::test` del test que construye la violación y verifica que el
+invariante la vea. `tests/test_detector_ciego_obligatorio.py` comprueba **por
+AST que la referencia resuelva** — una que apunta a un test borrado afirma una
+cobertura que no existe.
+
+Hoy: **28 de 28 `BLOQUEA` lo cumplen**, y `SIN_DETECTOR` está vacía.
+
+⚠️ **Y ningún detector puede ser de texto.** Solo AST. Los detectores de texto
+se atraparon en sus propios docstrings **siete veces** en una semana — la
+séptima fue el regex que medía esta misma regla y se le escapó `CNT-07`, diez
+minutos después de que se escribiera la advertencia.
+
 ### Cómo agregar uno
 
 Decorar con `@invariante(...)` en el módulo del flujo. El registro es por

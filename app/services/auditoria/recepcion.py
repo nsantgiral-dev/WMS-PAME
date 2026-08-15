@@ -49,6 +49,7 @@ def _recepciones(estados=None, limite=1000):
     consecuencia='El stock del WMS subió y el ERP no registró la entrada: la '
                  'mercancía existe en bodega y no en la cuenta 1435.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorRecepcion::test_ve_una_confirmada_sin_entrada_en_siesa',
 )
 def una_recepcion_confirmada_entro_a_siesa(ctx=None):
     """Dos formas de no haber entrado, y la segunda estaba invisible.
@@ -102,6 +103,7 @@ def una_recepcion_confirmada_entro_a_siesa(ctx=None):
     consecuencia='Se recibió por encima de la tolerancia pactada: mercancía '
                  'que nadie autorizó y que el proveedor va a cobrar.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorRecepcion::test_ve_el_exceso_por_encima_de_la_tolerancia',
 )
 def el_exceso_respeta_la_tolerancia(ctx=None):
     """Recibir de más no es un error por sí solo —los proveedores mandan de
@@ -131,6 +133,7 @@ def el_exceso_respeta_la_tolerancia(ctx=None):
     consecuencia='Se mandó una entrada al ERP sin que nadie recibiera nada: se '
                  'sube inventario que no llegó.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorRecepcion::test_ve_una_entrada_por_cero',
 )
 def ninguna_entrada_sin_mercancia(ctx=None):
     """Una recepción disparada a Siesa con todas sus líneas en cero no es una
@@ -159,6 +162,7 @@ def ninguna_entrada_sin_mercancia(ctx=None):
     consecuencia='Recepciones abiertas hace días: mercancía en el muelle que '
                  'ni entró al inventario ni volvió al proveedor.',
     severidad=OBSERVA,
+    detector_ciego='tests/flujo/test_flujo_devoluciones_recepcion.py::TestDetectorRecepcion::test_cuenta_las_abiertas',
 )
 def se_pueden_contar_las_recepciones_abiertas(ctx=None):
     from app.utils.fecha import ahora_bogota

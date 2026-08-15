@@ -76,6 +76,9 @@ class Invariante:
     consecuencia: str
     severidad: str
     fn: Callable
+    #: `archivo::Clase::test` del test que hace DISPARAR este invariante
+    #: construyendo la violación. Ver el docstring de `invariante()`.
+    detector_ciego: str = None
 
     def __post_init__(self):
         assert self.severidad in _SEVERIDADES, f'severidad inválida: {self.severidad}'
@@ -88,19 +91,46 @@ _REGISTRO: List[Invariante] = []
 
 
 def invariante(codigo: str, flujo: str, frontera: str, consecuencia: str,
-               severidad: str = BLOQUEA):
+               severidad: str = BLOQUEA, detector_ciego: str = None):
     """Registra la función como invariante.
 
     El decorador y no una lista al final del archivo: una lista que hay que
     acordarse de actualizar es un invariante que algún día no corre y nadie
     nota — el mismo patrón que dejó `trigger_factura()` sin caller.
+
+    ## `detector_ciego` — el nombre del test que lo hace DISPARAR
+
+    No el que lo hace pasar: **el que construye la violación y exige que la
+    vea**. Es la lección más cara de la auditoría del 2026-08-15, donde SEIS
+    guards estaban en verde sobre propiedades que la vía sana satisface por
+    construcción:
+
+        TRA-01  sobre dos campos que la escritura iguala
+        REP-02  sobre un flag que solo existe en el estado que exige
+        CNT-04  sobre una fila que el camino de salto conserva
+        REC-01  sobre un booleano que se fuerza AL FALLAR
+        bodegas sobre una de tres copias del mismo mapa
+        nivel 4 sobre una URL dentro de una función sin llamador
+
+    Los seis tenían test de «no dispara cuando está sano». Ninguno tenía el
+    otro. **Los seis se habrían caído al primer intento.**
+
+    La regla que sale de ahí, y que vale más que los seis arreglos:
+
+    > ¿Qué escribe el valor que estoy comprobando, y puede el camino roto
+    > escribirlo igual? Si la respuesta es sí, el guard no sirve.
+
+    Se pide como referencia `archivo::Clase::test` y
+    `tests/test_detector_ciego_obligatorio.py` verifica que **exista**: una
+    referencia que no resuelve es peor que ninguna, porque afirma cobertura.
     """
     def _wrap(fn):
         assert not any(i.codigo == codigo for i in _REGISTRO), \
             f'código de invariante duplicado: {codigo}'
         _REGISTRO.append(Invariante(
             codigo=codigo, flujo=flujo, frontera=frontera,
-            consecuencia=consecuencia, severidad=severidad, fn=fn))
+            consecuencia=consecuencia, severidad=severidad, fn=fn,
+            detector_ciego=detector_ciego))
         return fn
     return _wrap
 

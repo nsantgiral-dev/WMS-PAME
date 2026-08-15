@@ -27,6 +27,7 @@ def _norm(s):
     consecuencia='El operario ve «Producto None» al empacar y nadie sabe qué '
                  'ítem es. El pedido no se puede alistar completo.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_un_item_sin_producto_local',
 )
 def toda_linea_del_pedido_tiene_producto_local(ctx=None):
     """`pedidos_sync_service.py:145` — `producto_id = prod.id if prod else None`.
@@ -64,6 +65,7 @@ def toda_linea_del_pedido_tiene_producto_local(ctx=None):
     consecuencia='El pedido dice un producto y el operario busca otro. Se '
                  'alista lo que no era y el cliente recibe lo que no pidió.',
     severidad=AVISA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_un_nombre_que_no_coincide',
 )
 def el_nombre_del_pedido_coincide_con_el_del_catalogo(ctx=None):
     """Siesa llama al ítem de una forma y el WMS de otra.
@@ -109,6 +111,7 @@ def el_nombre_del_pedido_coincide_con_el_del_catalogo(ctx=None):
     consecuencia='Se pickea más de lo que el cliente pidió. El sobrante sale '
                  'del inventario y no está en ninguna factura.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_que_se_pickeo_de_mas',
 )
 def no_se_pickea_mas_de_lo_pedido(ctx=None):
     """El picking parcial está permitido —confirmado con operaciones— así que
@@ -138,6 +141,7 @@ def no_se_pickea_mas_de_lo_pedido(ctx=None):
     consecuencia='Se empacó más de lo que el picking entregó. Sale del almacén '
                  'algo que el inventario todavía cree tener.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElBordeEntrePickingYPacking::test_ve_que_se_empaco_mas_de_lo_que_el_picking_entrego',
 )
 def lo_empacado_no_supera_lo_que_el_picking_entrego(ctx=None):
     """Se compara contra `cantidad_esperada`, **el snapshot que el propio
@@ -175,6 +179,7 @@ def lo_empacado_no_supera_lo_que_el_picking_entrego(ctx=None):
                  'packing consumió. Suele ser una reapertura posterior; si no '
                  'lo es, una de las dos cifras está mal.',
     severidad=AVISA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElBordeEntrePickingYPacking::test_pero_sí_lo_declara_como_aviso',
 )
 def el_picking_actual_coincide_con_lo_que_el_packing_consumio(ctx=None):
     """`AVISA` y no `BLOQUEA` **a propósito**.
@@ -226,6 +231,7 @@ def el_picking_actual_coincide_con_lo_que_el_packing_consumio(ctx=None):
                  'confirmó que el picking SIEMPRE va primero — salvo que se '
                  'haya creado a mano, que hoy no deja rastro.',
     severidad=AVISA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElBordeEntrePickingYPacking::test_un_packing_sin_picking_avisa_pero_no_bloquea',
 )
 def todo_packing_viene_de_un_picking(ctx=None):
     """Confirmado con operaciones el 2026-08-13: «siempre primero picking».
@@ -267,6 +273,7 @@ def todo_packing_viene_de_un_picking(ctx=None):
     consecuencia='Una tarea despachada sin bultos: la mercancía salió y no hay '
                  'nada que rastrear ni que reingresar si vuelve.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_un_despacho_sin_bultos',
 )
 def toda_tarea_despachada_tiene_bultos(ctx=None):
     from app.models.bulto import Bulto
@@ -294,6 +301,7 @@ def toda_tarea_despachada_tiene_bultos(ctx=None):
     consecuencia='Un bulto entregado sin ruta: nadie sabe quién lo llevó ni a '
                  'qué liquidación pertenece.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_un_bulto_entregado_sin_ruta',
 )
 def todo_bulto_entregado_pertenece_a_una_ruta(ctx=None):
     from app.models.bulto import Bulto, EstadoBulto
@@ -319,6 +327,7 @@ def todo_bulto_entregado_pertenece_a_una_ruta(ctx=None):
     consecuencia='El estado dice que los bultos volvieron y los bultos dicen '
                  'que no. Bodega va a buscar mercancía que no está.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_la_contradiccion_entre_parada_y_bultos',
 )
 def el_estado_de_la_parada_concuerda_con_el_de_sus_bultos(ctx=None):
     """La contradicción que costó el cuarto estado.
@@ -388,6 +397,7 @@ def las_paradas_en_modo_libre_se_pueden_contar(ctx=None):
     consecuencia='La ruta se liquidó y el cobro nunca llegó al ERP. La factura '
                  'queda abierta: es la cartera fantasma.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_un_cobro_que_no_llego_a_siesa',
 )
 def un_cobro_registrado_llego_a_siesa(ctx=None):
     """Una parada de contado con monto cobrado, en una ruta ya liquidada, tiene
@@ -423,6 +433,7 @@ def un_cobro_registrado_llego_a_siesa(ctx=None):
     consecuencia='La factura de esa parada queda en Elaboración con el '
                  'inventario ya descargado.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_una_parada_de_contado',
 )
 def ninguna_parada_de_ruta_declara_contado(ctx=None):
     """Probado en producción el 2026-08-13: una FE de contado no se aprueba sin

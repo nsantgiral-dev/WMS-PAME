@@ -55,6 +55,7 @@ def _tareas(estados=None, limite=2000):
                  'bases suman igual y las dos ubicaciones dicen cosas '
                  'distintas — ningún cuadre global lo ve.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_ve_una_completada_que_no_llego_a_siesa',
 )
 def una_reposicion_completada_llego_a_siesa(ctx=None):
     """El total no cambia, así que este descuadre es invisible para cualquier
@@ -80,6 +81,7 @@ def una_reposicion_completada_llego_a_siesa(ctx=None):
                  'idempotente**: el segundo movimiento vacía la ubicación de '
                  'RESERVA otra vez y el inventario del WMS no lo refleja.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_ve_el_doble_envio',
 )
 def ninguna_reposicion_se_envia_dos_veces(ctx=None):
     """El riesgo que este flujo declara, y que nadie vigilaba.
@@ -150,6 +152,7 @@ def ninguna_reposicion_se_envia_dos_veces(ctx=None):
     consecuencia='Se movieron más unidades de las que la tarea pedía: se vació '
                  'la ubicación de RESERVA más allá de lo planeado.',
     severidad=BLOQUEA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_ve_que_se_movio_mas_de_lo_pedido',
 )
 def no_se_mueve_mas_de_lo_pedido(ctx=None):
     """Mover menos es normal —la ubicación de origen puede no tener todo—;
@@ -174,6 +177,7 @@ def no_se_mueve_mas_de_lo_pedido(ctx=None):
     consecuencia='Origen y destino son la misma ubicación: el movimiento no '
                  'repone nada y en Siesa queda un traslado a sí mismo.',
     severidad=AVISA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_ve_origen_igual_a_destino',
 )
 def el_origen_y_el_destino_son_distintos(ctx=None):
     return [
@@ -195,6 +199,7 @@ def el_origen_y_el_destino_son_distintos(ctx=None):
     consecuencia='Reposiciones tomadas y nunca cerradas: la ubicación de '
                  'PICKING sigue esperando stock que alguien dio por movido.',
     severidad=OBSERVA,
+    detector_ciego='tests/flujo/test_flujo_conteo.py::TestDetectorReposicion::test_cuenta_las_que_estan_en_curso',
 )
 def se_pueden_contar_las_reposiciones_en_curso(ctx=None):
     from app.utils.fecha import ahora_bogota
