@@ -302,6 +302,26 @@ class TestQuienPuedeRecibir:
         self._recibir(mundo, 'c2', QuienPide.ADMIN_ZONA, motivo_forzado='sin cerrar')
         assert medidor.custodias_cerradas_forzadas() == antes + 1
 
+    def test_un_conductor_si_puede_recibir_de_una_sede_sin_admin_ni_motivo(self, mundo):
+        """Una sede no es un custodio al que haya que convencer de soltar: es
+        donde queda un vehículo bien entregado (con sus fotos de cierre ya
+        puestas en esa custodia anterior). El conductor lo toma solo, sin
+        admin y sin forzado — el caso de todos los días a las 5 a.m."""
+        traspaso.traspasar(
+            vehiculo_id=mundo['veh'], km=100_000,
+            registrado_por_usuario_id=mundo['usr'],
+            custodio_tipo=CustodioTipo.SEDE,
+            custodio_sede_id=mundo['alm'],
+            quien_pide=QuienPide.ADMIN_ZONA,
+            fotos_fin=[_foto(i) for i in range(8)],
+            ts=_T0,
+        )
+        nueva = self._recibir(mundo, 'c2', QuienPide.CONDUCTOR)
+        assert nueva.custodio_conductor_id == mundo['c2']
+        anterior = Custodia.query.filter(Custodia.fin_ts.isnot(None)).order_by(
+            Custodia.id.desc()).first()
+        assert anterior.cierre_forzado is False
+
     def test_un_forzado_sin_autor_no_entra_ni_por_SQL_crudo(self, mundo):
         """La base también lo impone: un cierre anónimo dejaría el rastro de
         que pasó algo raro y ninguna forma de saber quién ni por qué."""

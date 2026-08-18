@@ -75,10 +75,17 @@ def mi_turno():
 
     # Quién tiene cada vehículo ahora — para poder decir el nombre en pantalla
     # en vez de un 409 crudo.
+    #
+    # Solo cuenta como "ocupado" si lo tiene un CONDUCTOR. Una sede no es un
+    # custodio que haya que convencer de soltar: es donde queda un vehículo
+    # bien entregado (ver `custodia.puede_recibir`), y cualquiera lo puede
+    # tomar sin fricción — exactamente el caso de todos los días a las 5 a.m.
+    # Marcarlo acá como ocupado lo dejaba deshabilitado en la lista aunque el
+    # backend ya lo permitiera.
     ocupados = {
-        c.vehiculo_id: (c.custodio_conductor.nombre
-                        if c.custodio_conductor is not None else 'una sede')
+        c.vehiculo_id: c.custodio_conductor.nombre
         for c in Custodia.query.filter(Custodia.fin_ts.is_(None)).all()
+        if c.custodio_conductor is not None
     }
     candidatos = [
         Candidato(vehiculo_id=v.id, placa=v.placa, tipo=v.tipo,

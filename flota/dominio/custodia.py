@@ -56,7 +56,7 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
     veces en un mes significa que los conductores no están cerrando turno, y eso
     lo dice el contador del health, no esta función.
 
-    Cuatro casos:
+    Cinco casos:
 
     · **Quien pide YA es el custodio** — se puede, siempre y sin forzado. Está
       cerrando su propio turno; a quién se lo entregue es otra decisión.
@@ -64,10 +64,15 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
     · **Sin custodia vigente** — se puede, sin más.
     · **Vigente del mismo conductor** — se puede: recibir lo que ya se tiene es
       un no-op, no un conflicto.
-    · **Vigente de OTRO** — depende de quién pide. El conductor **no puede**: la
-      conversación es entre él y quien tiene el vehículo. El admin de zona
-      **sí**, y queda marcado como forzado — es la única salida cuando alguien
-      se fue sin cerrar y el camión tiene que salir.
+    · **Vigente de una SEDE** — se puede, sin forzado, para cualquiera que
+      pida. Una sede no es una persona que deba "firmar" el cierre: si el
+      vehículo está ahí es porque alguien YA lo entregó bien (con sus fotos
+      de cierre) — exigir forzado acá le pone la fricción del caso anómalo al
+      caso normal de todos los días (recibirlo en el patio a las 5 a.m.).
+    · **Vigente de OTRO conductor** — depende de quién pide. El conductor
+      **no puede**: la conversación es entre él y quien tiene el vehículo. El
+      admin de zona **sí**, y queda marcado como forzado — es la única salida
+      cuando alguien se fue sin cerrar y el camión tiene que salir.
 
     El mensaje del rechazo dice CÓMO se destraba, no solo que está trabado. El
     2026-08-05 decía «tiene que cerrar su turno primero» y Yesid preguntó «¿cómo
@@ -93,6 +98,19 @@ def puede_recibir(custodia_vigente, quien_pide: QuienPide,
     #
     # La pregunta correcta no es «¿a quién va?» sino «¿quién lo tiene ahora?».
     if es_el_custodio_actual:
+        return Veredicto(True, False, '')
+
+    # UNA SEDE NO TIENE TURNO QUE CERRAR.
+    #
+    # El caso más común del módulo —el vehículo durmió en el patio, el
+    # conductor lo recibe a las 5 a.m.— quedaba tratado igual que "otro
+    # conductor no cerró": bloqueado para cualquier conductor, exigiendo un
+    # admin de zona con motivo escrito cada mañana. Pero la sede no es un
+    # custodio que se fue sin firmar: es el estado en el que un traspaso bien
+    # hecho DEJA el vehículo (`flotaCondAbrirEntrega` → "En la sede"), con
+    # las fotos de cierre de quien lo entregó ya guardadas en esa custodia
+    # anterior. No hay nada que un forzado esté protegiendo acá.
+    if custodia_vigente.custodio_tipo == CustodioTipo.SEDE.value:
         return Veredicto(True, False, '')
 
     if quien_pide == QuienPide.CONDUCTOR:
