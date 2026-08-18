@@ -92,7 +92,7 @@ def es_contado_o_none(cond_pago_siesa, cond_pago_contado):
     confirmó.
 
     ⚠️ Para decidir qué ve el conductor, la función es
-    `se_cobra_en_la_puerta` — no ésta. Ver el bloque de abajo.
+    `cobra_en_la_puerta` — no ésta. Ver el bloque de abajo.
     """
     clase = clasificar(cond_pago_siesa, cond_pago_contado)
     if clase == AUSENTE:
@@ -107,7 +107,7 @@ def es_contado_o_none(cond_pago_siesa, cond_pago_contado):
 #
 #                                    C01   C02   C04
 #     ¿la FE trae su propio recaudo?  sí    no    no    ← clasificar()
-#     ¿el conductor cobra?            sí    sí    no    ← se_cobra_en_la_puerta()
+#     ¿el conductor cobra?            sí    sí    no    ← cobra_en_la_puerta()
 #
 # La ruta factura en C02 **precisamente porque** C01 es imposible: una FE de
 # contado no se aprueba sin el recaudo dentro del documento, y ese recaudo lo
@@ -132,7 +132,7 @@ def cond_pago_efectiva(cond_pago_siesa, cond_pago_ruta):
           └── pantalla → se queda en ausente → LIBRE → no se le pide cobrar
 
     La factura salía en una condición que exige cobro y la pantalla no lo
-    pedía. Es el mismo defecto que `se_cobra_en_la_puerta` arregla,
+    pedía. Es el mismo defecto que `cobra_en_la_puerta` arregla,
     reintroducido por el caso ausente — y es el corolario de la Regla 0: **una
     política, una función.** El mismo fallback en dos sitios diverge.
 
@@ -144,8 +144,15 @@ def cond_pago_efectiva(cond_pago_siesa, cond_pago_ruta):
     return (cond_pago_siesa or '').strip() or (cond_pago_ruta or '').strip()
 
 
-def se_cobra_en_la_puerta(cond_pago_siesa, cond_pago_contado, cond_pago_ruta):
+def cobra_en_la_puerta(cond_pago_siesa, cond_pago_contado, cond_pago_ruta):
     """`True` | `False` | `None` — ¿el conductor cobra en esta parada?
+
+    Pregunta distinta de `aprobable_en_ruta`, aunque comparten los mismos dos
+    códigos. Esa responde si Siesa **aprueba** la FE; ésta, si el cliente
+    **paga al momento de la entrega** — y ahí C01 y C02 dan la MISMA
+    respuesta. Fusionarlas ya se probó y rompe la otra: si `clasificar`
+    tratara C02 como CONTADO, `aprobable_en_ruta('C02', ...)` daría `False`
+    para el único código que sí se aprueba. Una función, una pregunta.
 
     `True` para el contado (C01) y para la condición de ruta (C02, crédito a un
     día que el RC del conductor salda el mismo día). `False` para el crédito
@@ -217,7 +224,7 @@ LIBRE = 'LIBRE'                # **el conductor elige sin restricción**
 def modo_pantalla(se_cobra_en_puerta, hay_valor_conocido: bool) -> str:
     """Qué modo de pago ve el conductor en esa parada.
 
-    El primer argumento es **`se_cobra_en_la_puerta`**, no `es_contado`. Hasta
+    El primer argumento es **`cobra_en_la_puerta`**, no `es_contado`. Hasta
     el 2026-08-14 recibía el segundo, y como toda venta de ruta es C02 —que no
     es contado documental— **ninguna parada pedía cobrar**. Ver el bloque
     «Contado documental ≠ cobro en la puerta» arriba.

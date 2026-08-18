@@ -341,7 +341,14 @@ class DespachoParialService:
             raise ValueError('Tarea sin tipo_docto/consec_docto — imposible facturar')
 
         if tarea.siesa_triggered:
-            facturas_check = connekta.get_factura_desde_pedido(tipo_docto, consec_docto)
+            # Por RM, no por pedido — mismo motivo que el chequeo de abajo (un
+            # segundo parcial del mismo pedido vería la FE del primero y se
+            # marcaría hecho sin facturar su propia remisión). Además,
+            # `get_factura_desde_pedido` depende de la consulta dinámica
+            # `papeleriamedellin_monitos_facturas_wms`, que no existe
+            # registrada en Connekta (verificado en vivo contra QA,
+            # 2026-08-14) — abortaba con 401 antes de poder recuperar nada.
+            facturas_check = connekta.get_factura_desde_remision(tarea.rm_tipo, tarea.rm_consec)
             if facturas_check:
                 raise ValueError(f'Tarea {tarea.id} ya procesada — FE confirmada en Siesa')
             logger.warning(

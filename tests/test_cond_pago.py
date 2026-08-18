@@ -459,3 +459,182 @@ class TestElContadoDelPedidoNoPasaCallado:
         gw = self._gw()
         r = gw.trigger_factura_desde_remision('RM', 4, self._cabecera(self.CONTADO))
         assert r is not None
+
+
+class TestCobraEnLaPuerta:
+    """C02 (condición de ruta) y C01 (contado) responden igual a "¿el
+    conductor cobra acá?" aunque respondan distinto a "¿Siesa aprueba esta
+    condición?" (`aprobable_en_ruta`). El vendedor puede capturar cualquiera
+    de los dos para un pedido de ruta que de cara al cliente es de contado —
+    C02 es el que además se aprueba en Siesa."""
+
+    CONTADO = 'C01'
+    RUTA = 'C02'
+
+    def test_contado_cobra_en_la_puerta(self):
+        assert cp.cobra_en_la_puerta(self.CONTADO, self.CONTADO, self.RUTA) is True
+
+    def test_la_condicion_de_ruta_tambien_cobra_en_la_puerta(self):
+        """El caso que antes no se reconocía: un pedido capturado como C02
+        caía en CREDITO y la pantalla no pedía cobrar nada."""
+        assert cp.cobra_en_la_puerta(self.RUTA, self.CONTADO, self.RUTA) is True
+
+    def test_un_credito_real_no_cobra_en_la_puerta(self):
+        assert cp.cobra_en_la_puerta('30D', self.CONTADO, self.RUTA) is False
+
+    def test_el_vacio_y_el_None_NO_son_lo_mismo(self):
+        """`''` = Siesa contestó y el tercero no tiene condición.
+        `None`  = no se pudo preguntar.
+
+        Con el vacío **sí se sabe qué lleva la factura**: el gateway cae a la
+        condición de ruta, y su propia alerta lo dice —«la cartera la salda el
+        recibo de caja del conductor»—. Dejar la pantalla en «no sé» ahí hacía
+        que la FE saliera en una condición que exige cobro y el conductor no lo
+        pidiera: el mismo fallback escrito dos veces con resultados opuestos.
+
+        Con `None` no se sabe ni si la factura existe. Ahí no se afirma nada.
+        """
+        assert cp.cobra_en_la_puerta('', self.CONTADO, self.RUTA) is True
+        assert cp.cobra_en_la_puerta(None, self.CONTADO, self.RUTA) is None
+
+    def test_sin_condicion_de_ruta_configurada_no_se_afirma(self):
+        """Sin `SIESA_COND_PAGO_RUTA`, C02 y C04 son **indistinguibles**.
+
+        La versión anterior devolvía `False` en ese caso. Con `'30D'` eso es
+        correcto —es crédito real— y por eso el test pasaba; pero **no probaba
+        el C02**, que es donde `False` significa que ninguna parada de ruta
+        pide cobrar, en silencio y sin un solo síntoma. Un test que ejerce solo
+        el caso seguro certifica el peligroso.
+
+        `None` cae a `LIBRE`, que se cuenta en `por_modo_pantalla`: la falta de
+        configuración se ve en vez de callarse.
+        """
+        assert cp.cobra_en_la_puerta(self.RUTA, self.CONTADO, '') is None
+        assert cp.cobra_en_la_puerta('30D', self.CONTADO, '') is None
+        assert cp.cobra_en_la_puerta('', self.CONTADO, '') is None
+        # El contado no depende de la condición de ruta: es el otro código.
+        assert cp.cobra_en_la_puerta(self.CONTADO, self.CONTADO, '') is True
+
+    def test_no_se_puede_confundir_con_aprobable_en_ruta(self):
+        """Las dos preguntas dan respuestas OPUESTAS para los mismos dos
+        códigos — es la razón de que vivan en funciones separadas."""
+        assert cp.cobra_en_la_puerta(self.CONTADO, self.CONTADO, self.RUTA) is True
+        assert cp.aprobable_en_ruta(self.CONTADO, self.CONTADO) is False
+
+        assert cp.cobra_en_la_puerta(self.RUTA, self.CONTADO, self.RUTA) is True
+        assert cp.aprobable_en_ruta(self.RUTA, self.CONTADO) is True
+
+
+class TestLaPantallaDelConductorReconoceLaCondicionDeRuta:
+    """`_valor_y_cond_pago` tiene que usar `cobra_en_la_puerta`, no
+    `es_contado_o_none` — si vuelve a usar la vieja, C02 cae a CRÉDITO y la
+    pantalla deja de pedir cobro para un pedido que sí se cobra en la
+    puerta."""
+
+    class _Tarea:
+        id = 1
+        rm_tipo, rm_consec = 'RS', 7
+        tipo_docto_pedido_siesa = 'PD'
+        consec_docto_pedido_siesa = '999'
+        fe_tipo = fe_consec = None
+        valor_factura = None
+        cond_pago = 'C02'  # ya anotada — no debe volver a consultar Siesa
+
+    def test_un_pedido_anotado_como_ruta_pide_cobro(self, monkeypatch):
+        from app.services import ruta_service as rs
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01', raising=False)
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', 'C02', raising=False)
+        monkeypatch.setattr(connekta, 'get_detalle_factura',
+                            lambda **k: [{'f350_id_tipo_docto': 'FEW',
+                                          'f350_consec_docto': '1'}], raising=False)
+        monkeypatch.setattr(connekta, 'get_rowids_factura', lambda *a, **k: [], raising=False)
+        monkeypatch.setattr(connekta, 'get_pedido_cabecera',
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError('volvió a preguntar')), raising=False)
+
+        _, cobra, _, crudo = rs.RutaService._valor_y_cond_pago(self._Tarea())
+        assert crudo == 'C02'
+        assert cobra is True, (
+            'C02 anotado tiene que pedir cobro en la pantalla del conductor, '
+            'igual que C01')
+
+
+class TestLaRestriccionDeCreditoTambienCubreLaCondicionDeRuta:
+    """`confirmar_parada` tenía que reconocer C02 con la misma restricción
+    que C01: sin esto, un pedido capturado como condición de ruta se podía
+    marcar `forma_pago=CREDITO` sin que nada lo impidiera."""
+
+    @staticmethod
+    def _parada_con_cond_pago(db, almacen, cond_pago):
+        import uuid
+        from app.models.usuario import Usuario
+        from app.models.conductor import Conductor
+        from app.models.ruta_despacho import RutaDespacho
+        from app.models.packing import TareaPacking
+        from app.models.bulto import Bulto
+
+        user = Usuario(email=f'cond_ruta_{uuid.uuid4().hex[:6]}@test.com',
+                       nombre='Conductor Ruta', rol='conductor', activo=True)
+        user.set_password('test123')
+        db.session.add(user)
+        db.session.flush()
+        conductor = Conductor(usuario_id=user.id, nombre='Conductor Ruta',
+                              cedula=uuid.uuid4().hex[:10], activo=True)
+        db.session.add(conductor)
+        db.session.flush()
+
+        ruta = RutaDespacho(conductor_id=conductor.id, tipo_ruta='Urbana', estado='EN_TRANSITO')
+        db.session.add(ruta)
+        db.session.flush()
+
+        tarea = TareaPacking(
+            codigo=f'PK-RUTA-{uuid.uuid4().hex[:6]}', estado='DESPACHADO',
+            almacen_id=almacen.id,
+            tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa=1700,
+            numero_pedido_siesa='PED-RUTA', cond_pago=cond_pago,
+        )
+        db.session.add(tarea)
+        db.session.flush()
+
+        bulto = Bulto(
+            tarea_id=tarea.id, codigo_barras=f'RUTA-{uuid.uuid4().hex[:6]}',
+            tipo='Caja', numero=1, total=1, estado='CARGADO',
+            ruta_despacho_id=ruta.id,
+        )
+        db.session.add(bulto)
+        db.session.commit()
+        return ruta, tarea, conductor.usuario_id
+
+    def test_condicion_de_ruta_rechaza_forma_pago_credito(self, app, db, almacen, monkeypatch):
+        from app.services.ruta_service import RutaService
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01', raising=False)
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', 'C02', raising=False)
+        ruta, tarea, usuario_id = self._parada_con_cond_pago(db, almacen, 'C02')
+
+        with pytest.raises(ValueError, match='no se puede registrar como crédito'):
+            RutaService.confirmar_parada(ruta.id, tarea.id, usuario_id, {
+                'estado_entrega': 'ENTREGADO',
+                'forma_pago': 'CREDITO',
+                'monto_cobrado': 100000,
+            })
+
+    def test_credito_real_si_permite_forma_pago_credito(self, app, db, almacen, monkeypatch):
+        """Caso legítimo: el pedido de verdad es a crédito (no C01 ni C02)."""
+        from app.services.ruta_service import RutaService
+        from app.services.connekta_gateway import connekta
+
+        monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01', raising=False)
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', 'C02', raising=False)
+        ruta, tarea, usuario_id = self._parada_con_cond_pago(db, almacen, '30D')
+
+        recaudo_id, _ = RutaService.confirmar_parada(ruta.id, tarea.id, usuario_id, {
+            'estado_entrega': 'ENTREGADO',
+            'forma_pago': 'CREDITO',
+            'monto_cobrado': 100000,
+        })
+        assert recaudo_id is not None

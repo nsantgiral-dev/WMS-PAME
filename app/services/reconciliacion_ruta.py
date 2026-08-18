@@ -75,7 +75,7 @@ def _monto(valor) -> float:
 def _debia_cobrarse(recaudo, tarea, connekta) -> bool:
     """¿Esta parada tenía que producir plata en la puerta?
 
-    Se pregunta por `se_cobra_en_la_puerta` y **no** por la forma de pago
+    Se pregunta por `cobra_en_la_puerta` y **no** por la forma de pago
     elegida: usar lo que el conductor marcó haría que una parada donde no se
     pidió cobrar saliera del denominador — el defecto se borraría a sí mismo
     de su propia medición.
@@ -86,7 +86,7 @@ def _debia_cobrarse(recaudo, tarea, connekta) -> bool:
     if recaudo.estado_entrega not in (EstadoEntrega.ENTREGADO,
                                       EstadoEntrega.PARCIAL):
         return False
-    return _cp.se_cobra_en_la_puerta(
+    return _cp.cobra_en_la_puerta(
         getattr(tarea, 'cond_pago', None),
         connekta.cond_pago_ventas, connekta.cond_pago_ruta) is True
 
@@ -147,7 +147,7 @@ def reconciliar(ruta_id: int) -> dict:
             # exenta, está **sin clasificar**, y con la cola mezclada nadie
             # nota que el universo se encogió.
             from app.services import cond_pago as _cp
-            if _cp.se_cobra_en_la_puerta(
+            if _cp.cobra_en_la_puerta(
                     getattr(tarea, 'cond_pago', None), connekta.cond_pago_ventas,
                     connekta.cond_pago_ruta) is None:
                 sin_condicion += 1

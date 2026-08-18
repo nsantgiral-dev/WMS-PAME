@@ -53,7 +53,7 @@ class TestLasDosPreguntasNoSonLaMisma:
 
     def test_c02_si_se_cobra_en_la_puerta(self):
         """Y ésta es la que la pantalla necesita."""
-        assert cp.se_cobra_en_la_puerta(RUTA, CONTADO, RUTA) is True
+        assert cp.cobra_en_la_puerta(RUTA, CONTADO, RUTA) is True
 
     def test_las_dos_funciones_discrepan_en_c02_y_eso_es_correcto(self):
         """El test que resume el defecto entero.
@@ -62,7 +62,7 @@ class TestLasDosPreguntasNoSonLaMisma:
         se pone rojo. La duplicación aparente es la distinción real.
         """
         documental = cp.clasificar(RUTA, CONTADO) == cp.CONTADO
-        en_puerta = cp.se_cobra_en_la_puerta(RUTA, CONTADO, RUTA)
+        en_puerta = cp.cobra_en_la_puerta(RUTA, CONTADO, RUTA)
         assert documental is False and en_puerta is True
 
 
@@ -77,7 +77,7 @@ class TestLaTablaCompleta:
         (None, None),           # no se pudo preguntar: no se afirma nada
     ])
     def test_quien_cobra(self, cond, esperado):
-        assert cp.se_cobra_en_la_puerta(cond, CONTADO, RUTA) is esperado
+        assert cp.cobra_en_la_puerta(cond, CONTADO, RUTA) is esperado
 
     @pytest.mark.parametrize('cod_contado,cod_ruta', [
         ('C01', 'C02'), ('CO', 'CR'), ('X9', 'Z1'), ('001', '002'),
@@ -89,9 +89,9 @@ class TestLaTablaCompleta:
         hardcodee da el mismo resultado que una que lea la configuración, y el
         test no distingue. La empresa puede cambiarlos en Siesa.
         """
-        assert cp.se_cobra_en_la_puerta(cod_contado, cod_contado, cod_ruta) is True
-        assert cp.se_cobra_en_la_puerta(cod_ruta, cod_contado, cod_ruta) is True
-        assert cp.se_cobra_en_la_puerta('OTRO', cod_contado, cod_ruta) is False
+        assert cp.cobra_en_la_puerta(cod_contado, cod_contado, cod_ruta) is True
+        assert cp.cobra_en_la_puerta(cod_ruta, cod_contado, cod_ruta) is True
+        assert cp.cobra_en_la_puerta('OTRO', cod_contado, cod_ruta) is False
 
 
 class TestSinLaCondicionDeRutaNoSeAfirmaNada:
@@ -104,12 +104,12 @@ class TestSinLaCondicionDeRutaNoSeAfirmaNada:
 
     @pytest.mark.parametrize('sin_ruta', ['', None, '   '])
     def test_cae_a_none_no_a_false(self, sin_ruta):
-        assert cp.se_cobra_en_la_puerta(RUTA, CONTADO, sin_ruta) is None
-        assert cp.se_cobra_en_la_puerta(CREDITO_REAL, CONTADO, sin_ruta) is None
+        assert cp.cobra_en_la_puerta(RUTA, CONTADO, sin_ruta) is None
+        assert cp.cobra_en_la_puerta(CREDITO_REAL, CONTADO, sin_ruta) is None
 
     def test_el_contado_sigue_reconociendose(self):
         """No depende de la condición de ruta: es el otro código."""
-        assert cp.se_cobra_en_la_puerta(CONTADO, CONTADO, '') is True
+        assert cp.cobra_en_la_puerta(CONTADO, CONTADO, '') is True
 
     def test_none_produce_libre_que_es_contable(self):
         """LIBRE no afirma nada Y se cuenta en el desglose.
@@ -130,7 +130,7 @@ class TestElModoDePantalla:
         (None, True, cp.LIBRE),    # no se pudo preguntar
     ])
     def test_de_la_condicion_al_modo(self, cond, hay_valor, esperado):
-        se_cobra = cp.se_cobra_en_la_puerta(cond, CONTADO, RUTA)
+        se_cobra = cp.cobra_en_la_puerta(cond, CONTADO, RUTA)
         assert cp.modo_pantalla(se_cobra, hay_valor) == esperado
 
     def test_una_parada_de_ruta_normal_llega_a_dinamico(self):
@@ -142,7 +142,7 @@ class TestElModoDePantalla:
         sería cobrar de más: la 142943 factura la remisión entera y la nota
         crédito por lo rechazado sale después, en la liquidación.
         """
-        se_cobra = cp.se_cobra_en_la_puerta(RUTA, CONTADO, RUTA)
+        se_cobra = cp.cobra_en_la_puerta(RUTA, CONTADO, RUTA)
         assert cp.modo_pantalla(se_cobra, True) == cp.DINAMICO
 
 
@@ -156,7 +156,7 @@ class TestMutaciones:
         """La regresión exacta: contestar la pregunta del conductor con
         `clasificar`. Es lo que había hasta hoy, y sobre C02 da lo contrario."""
         mutante = cp.clasificar(RUTA, CONTADO) == cp.CONTADO
-        correcto = cp.se_cobra_en_la_puerta(RUTA, CONTADO, RUTA)
+        correcto = cp.cobra_en_la_puerta(RUTA, CONTADO, RUTA)
         assert mutante is False and correcto is True
 
     def test_m2_sin_ruta_devuelve_false(self):
@@ -171,11 +171,11 @@ class TestMutaciones:
             return None if not v else v in ((ct or '').strip(), (cr or '').strip())
 
         assert mutante(RUTA, CONTADO, '') is False
-        assert cp.se_cobra_en_la_puerta(RUTA, CONTADO, '') is None
+        assert cp.cobra_en_la_puerta(RUTA, CONTADO, '') is None
 
     def test_m3_el_credito_real_pasa_a_cobrarse(self):
         """El error invertido: pedirle plata a un cliente de 30 días."""
-        assert cp.se_cobra_en_la_puerta(CREDITO_REAL, CONTADO, RUTA) is False
+        assert cp.cobra_en_la_puerta(CREDITO_REAL, CONTADO, RUTA) is False
 
     def test_m4_truthiness_en_vez_de_is_true(self):
         """`if se_cobra:` en vez de `is True` trata `None` como False.
@@ -183,8 +183,8 @@ class TestMutaciones:
         En la pantalla da LIBRE igual; en la restricción del punto 4 la
         diferencia es real —bloquear o no— y por eso hay que probarla acá.
         """
-        assert cp.se_cobra_en_la_puerta(None, CONTADO, RUTA) is None
-        assert cp.se_cobra_en_la_puerta(None, CONTADO, RUTA) is not False
+        assert cp.cobra_en_la_puerta(None, CONTADO, RUTA) is None
+        assert cp.cobra_en_la_puerta(None, CONTADO, RUTA) is not False
 
     def test_m5_clasificar_sigue_intacta(self):
         """Si alguien «arregla» `clasificar` para que C02 dé contado, la
@@ -214,7 +214,7 @@ class TestLaRestriccionDelPuntoCuatroEmpiezaAProteger:
             n.func.attr for n in ast.walk(arbol)
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
         }
-        assert 'se_cobra_en_la_puerta' in llamadas, (
+        assert 'cobra_en_la_puerta' in llamadas, (
             'la restricción del punto 4 volvió a preguntar por contado '
             'documental — sobre una parada de ruta eso no bloquea nunca')
 
@@ -244,14 +244,14 @@ class TestLosDosFallbacksApuntanAlMismoLado:
 
     def test_un_pedido_sin_condicion_se_cobra(self):
         """El caso que quedaba en LIBRE. La FE salió en C02: hay que cobrarla."""
-        assert cp.se_cobra_en_la_puerta('', CONTADO, RUTA) is True
+        assert cp.cobra_en_la_puerta('', CONTADO, RUTA) is True
         assert cp.modo_pantalla(
-            cp.se_cobra_en_la_puerta('', CONTADO, RUTA), True) == cp.DINAMICO
+            cp.cobra_en_la_puerta('', CONTADO, RUTA), True) == cp.DINAMICO
 
     def test_sin_ninguna_de_las_dos_no_se_afirma_nada(self):
         """Sin condición y sin `SIESA_COND_PAGO_RUTA` no hay FE que leer —el
         gateway ni siquiera emite, levanta `ValueError`."""
-        assert cp.se_cobra_en_la_puerta('', CONTADO, '') is None
+        assert cp.cobra_en_la_puerta('', CONTADO, '') is None
 
     def test_el_gateway_usa_la_misma_funcion(self):
         """Por AST. Un `or` suelto acá es exactamente cómo divergieron."""
@@ -277,5 +277,5 @@ class TestLosDosFallbacksApuntanAlMismoLado:
 
         Colapsarlos acá le pediría plata a un cliente sobre un supuesto.
         """
-        assert cp.se_cobra_en_la_puerta('', CONTADO, RUTA) is True
-        assert cp.se_cobra_en_la_puerta(None, CONTADO, RUTA) is None
+        assert cp.cobra_en_la_puerta('', CONTADO, RUTA) is True
+        assert cp.cobra_en_la_puerta(None, CONTADO, RUTA) is None
