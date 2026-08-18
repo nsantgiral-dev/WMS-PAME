@@ -370,6 +370,14 @@ function flotaRenderRecibo() {
       <option value="sede">Queda en una sede</option>
     </select>
     <div id="flota-custodio-detalle" style="margin-top:8px"></div>
+    ${c ? `
+    <label style="display:block;margin-top:14px;color:var(--yellow)">Motivo del cierre forzado
+      (solo si quien lo tiene ahora no puede cerrar su propio turno)</label>
+    <input id="flota-motivo-forzado" style="width:100%;padding:6px"
+           placeholder="Ej: el vehículo quedó en la sede, nadie lo puede cerrar por acá">
+    <p style="font-size:12px;color:var(--tx2);margin-top:2px">Solo hace falta si el turno
+      anterior no lo cierra su propio custodio con sus fotos. Si no aplica, dejalo vacío.</p>
+    ` : ''}
 
     <!-- La placa va TAMBIÉN en el botón: es lo último que se mira antes de
          confirmar, y el encabezado puede quedar fuera de pantalla. Dos veces la
@@ -743,6 +751,13 @@ async function flotaGuardarRecibo() {
     if (sede) payload.custodio_sede_id = parseInt(sede, 10);
     else payload.custodio_estado = 'pendiente_sede';
   }
+
+  // Solo existe cuando ya había una custodia vigente (ver flotaRenderRecibo).
+  // Vacío si no aplica: el backend solo lo exige cuando de verdad hace falta,
+  // y mandarlo vacío en el caso normal no cambia nada.
+  const motivoForzadoEl = document.getElementById('flota-motivo-forzado');
+  const motivoForzado = motivoForzadoEl ? motivoForzadoEl.value.trim() : '';
+  if (motivoForzado) payload.motivo_forzado = motivoForzado;
 
   // El tablero no se cuenta acá: ya se validó arriba y es obligatorio. Contarlo
   // hacía que el aviso dijera "faltan N" incluyendo una foto que sí estaba.
