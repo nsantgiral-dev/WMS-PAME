@@ -629,6 +629,14 @@ class RutaService:
             # sabía qué eligió el conductor, no qué opciones tenía enfrente.
             from app.services import cond_pago as _cpm
             from app.services.connekta_gateway import connekta
+            # PRIMERO se llenan los `valor_unitario` — `_hay_valor` los lee.
+            # Estaba al revés: `_hay_valor` se calculaba antes de este bucle,
+            # así que `it.get('valor_unitario')` encontraba la clave ausente en
+            # TODOS los ítems (nunca `None` puesto a propósito, sino no
+            # asignado todavía) y `_hay_valor` daba `False` siempre — el modo
+            # DINAMICO no se disparaba nunca, con o sin C02, con o sin precio.
+            for item in p['items']:
+                item['valor_unitario'] = valores_ref.get(item['codigo'])
             _hay_valor = valor_factura is not None and bool(p['items']) and all(
                 it.get('valor_unitario') is not None for it in p['items'])
             # **No es `es_contado`.** Toda venta de ruta sale en C02, que no es
@@ -640,8 +648,6 @@ class RutaService:
             p['se_cobra_en_puerta'] = _cpm.cobra_en_la_puerta(
                 cond_pago_crudo, connekta.cond_pago_ventas, connekta.cond_pago_ruta)
             p['modo_pago'] = _cpm.modo_pantalla(p['se_cobra_en_puerta'], _hay_valor)
-            for item in p['items']:
-                item['valor_unitario'] = valores_ref.get(item['codigo'])
 
         paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
         # Ojo: `paradas` está indexado por tarea_id, así que cada entrada es una

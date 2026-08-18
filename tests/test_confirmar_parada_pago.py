@@ -277,3 +277,8 @@ class TestListarParadasValorPorReferencia:
         assert parada['valor_factura'] == 50000
         assert parada['es_contado'] is True
         assert parada['items'][0]['valor_unitario'] == 10000  # 50000 / 5 unidades
+        # `_hay_valor` se calculaba ANTES de este mismo bucle que llena
+        # `valor_unitario` — encontraba la clave ausente en todos los ítems y
+        # el modo salía LIBRE siempre, con o sin precio real. Con valor de
+        # factura y valor por ítem completos, tiene que ser DINAMICO.
+        assert parada['modo_pago'] == 'DINAMICO'
