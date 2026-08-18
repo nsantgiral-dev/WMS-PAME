@@ -284,6 +284,24 @@ class TestRegistrarCobroRecaudo:
         assert resultado['monto_neto_rc'] == 2000000  # sin retenciones = bruto
         assert len(resultado['dc_jobs']) == 0
 
+    def test_get_pedido_cabecera_recibe_el_pedido_no_la_fe(self, app, db, recaudo_liq):
+        """`co_factura` salía vacío en producción (PD1411, 2026-08-18):
+        `get_pedido_cabecera` se llamaba con el tipo/consec de la FE en vez
+        del pedido, y Siesa no encuentra un pedido de tipo 'FEW'. Un mock por
+        `return_value` fijo nunca lo habría atrapado — hace falta afirmar CON
+        QUÉ se llamó, no solo qué devolvió."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        mock_connekta = self._mock_siesa()
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['ok'] is True
+        # 'PD'/999 — tipo_docto_pedido_siesa/consec_docto_pedido_siesa del
+        # fixture. NO el tipo/consecutivo de la FE resuelta.
+        mock_connekta.get_pedido_cabecera.assert_called_with('PD', '999')
+
     def test_contado_con_retenciones_rc_neto(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
         from app.services.liquidacion_service import LiquidacionService

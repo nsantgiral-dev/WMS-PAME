@@ -452,8 +452,15 @@ class LiquidacionService:
                     total_neto += float(ln.get('f470_vlr_neto', 0))
                 datos_siesa_ok = True
 
-            # Pedido cabecera: CO + NIT
-            cabecera = connekta.get_pedido_cabecera(tipo_docto_fe, consec_fe)
+            # Pedido cabecera: CO + NIT. El PEDIDO, no la FE — mismo defecto
+            # que el comentario de arriba, reaparecido acá: `get_pedido_cabecera`
+            # busca por *_pedido_siesa, y mandarle el tipo/consec de la FE
+            # ('FEW'-1416, por ejemplo) no encuentra ningún pedido con ese
+            # tipo de documento. Siesa responde vacío, `co_factura` se queda
+            # en '' y el RC nunca se puede encolar — "co_factura vacío" no es
+            # un dato que falte en Siesa, es la pregunta mal hecha.
+            cabecera = connekta.get_pedido_cabecera(
+                tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
             if cabecera:
                 co_factura = cabecera.get('f430_id_co', '')
                 nit = cabecera.get('f200_id_pedido_fact', '')
