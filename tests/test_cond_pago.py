@@ -128,6 +128,15 @@ class TestRutaServiceNoAfirmaContado:
                             lambda **kw: [{'f350_id_tipo_docto': 'FEW',
                                            'f350_consec_docto': '1'}], raising=False)
         monkeypatch.setattr(connekta, 'get_rowids_factura', lambda *a, **k: [], raising=False)
+        # El caso que este test mide es el de `SIESA_COND_PAGO_RUTA` SIN
+        # configurar (ver docstring de `cobra_en_la_puerta`) — hay que fijarlo
+        # explícito y no depender de que el entorno lo traiga vacío. Local lo
+        # trae vacío por accidente; Railway (build) sí tiene C02 configurado
+        # y con eso `cond_pago_efectiva` resuelve a la condición de ruta, que
+        # SÍ cobra en la puerta — este mismo test lo confirmaba en la práctica
+        # antes de fijarlo, rompiendo el build sin que el código estuviera mal.
+        monkeypatch.setattr(connekta, 'cond_pago_ventas', '', raising=False)
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', '', raising=False)
         # Siesa responde, pero sin condición de pago — el caso real.
         monkeypatch.setattr(connekta, 'get_pedido_cabecera',
                             lambda *a, **k: {'f430_id_cond_pago': ''}, raising=False)
@@ -183,6 +192,11 @@ class TestElCrudoDistingueLoQueElDerivadoColapsa:
         from app.services import ruta_service as rs
         from app.services.connekta_gateway import connekta
         monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        # Fijo, no ambiental: `SIESA_COND_PAGO_RUTA` SÍ está configurada en
+        # Railway (C02) y con eso `es_contado` deja de ser `None` — ver el
+        # mismo comentario en `TestRutaServiceNoAfirmaContado`.
+        monkeypatch.setattr(connekta, 'cond_pago_ventas', '', raising=False)
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', '', raising=False)
         monkeypatch.setattr(connekta, 'get_detalle_factura',
                             lambda **kw: [{'f350_id_tipo_docto': 'FEW',
                                            'f350_consec_docto': '1'}], raising=False)
@@ -267,6 +281,11 @@ class TestLaCondicionQuedaAnotadaEnLaTarea:
         from app.services.connekta_gateway import connekta
         monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
         monkeypatch.setattr(connekta, 'cond_pago_ventas', 'C01', raising=False)
+        # Fijo, no ambiental — ver el mismo comentario en
+        # `TestRutaServiceNoAfirmaContado`: en Railway esta variable SÍ trae
+        # C02, y sin fijarla acá `test_lo_anotado_vacio_no_dispara_otra_consulta`
+        # deja de ver `None` para pasar a ver `True`.
+        monkeypatch.setattr(connekta, 'cond_pago_ruta', '', raising=False)
         monkeypatch.setattr(connekta, 'get_detalle_factura',
                             lambda **k: [{'f350_id_tipo_docto': 'FEW',
                                           'f350_consec_docto': '1'}], raising=False)
