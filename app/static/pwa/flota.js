@@ -1372,23 +1372,20 @@ function flotaCondRender() {
     cabeza = `<div style="color:var(--yellow);font-size:14px">Elegí el vehículo que vas a recibir:</div>`;
   }
 
+  // Con origen 'ruta' ya se sabe cuál vehículo le toca — mostrar los otros
+  // cinco al lado invita a tocar el equivocado por error. Solo 'eleccion'
+  // (sin custodia propia ni ruta de hoy) necesita de verdad elegir de una
+  // lista. La ruta sigue siendo sugerencia, no verdad (turno.py) — por eso
+  // queda un escape de un toque, no un botón invisible ni un bloqueo duro.
   let lista = '';
-  if (d.origen !== 'custodia') {
-    lista = '<div style="margin-top:10px">' + (d.candidatos || []).map(c => {
-      if (c.ocupado_por) {
-        // El mensaje nombra a la persona. Un 409 crudo deja al conductor
-        // mirando el celular en el patio sin saber a quién llamar.
-        return `<div style="padding:10px;margin:4px 0;border:1px solid var(--rbg);border-radius:8px;opacity:.75">
-          <b>${c.placa}</b> · ${c.tipo}<br>
-          <span style="color:var(--red);font-size:12px">Lo tiene ${c.ocupado_por}.
-          Si lo vas a recibir vos, tiene que cerrar su turno primero.</span>
-        </div>`;
-      }
-      const sel = c.vehiculo_id === FLOTA_COND_ELEGIDO;
-      return `<button class="btn-flota ${sel ? 'ok' : ''}" onclick="flotaCondElegir(${c.vehiculo_id})"
-        style="display:block;width:100%;text-align:left">
-        ${sel ? '✓ ' : ''}<b style="font-size:19px;letter-spacing:.05em">${c.placa}</b> · ${c.tipo}</button>`;
-    }).join('') + '</div>';
+  if (d.origen === 'eleccion') {
+    lista = flotaCondListaCandidatos();
+  } else if (d.origen === 'ruta') {
+    lista = `<div style="margin-top:8px">
+      <button class="btn-flota" style="font-size:12px;padding:4px 10px"
+              onclick="flotaCondMostrarTodos()">¿No es este tu vehículo? Elegir otro</button>
+      <div id="cond-flota-todos"></div>
+    </div>`;
   }
 
   // Con el turno abierto, flota se colapsa a una línea.
@@ -1424,6 +1421,31 @@ function flotaCondRender() {
     </div>
     <div id="cond-flota-form"></div>
   </div>`;
+}
+
+/** HTML de la lista completa de vehículos elegibles, con quién los tiene. */
+function flotaCondListaCandidatos() {
+  return '<div style="margin-top:10px">' + (FLOTA_COND.candidatos || []).map(c => {
+    if (c.ocupado_por) {
+      // El mensaje nombra a la persona. Un 409 crudo deja al conductor
+      // mirando el celular en el patio sin saber a quién llamar.
+      return `<div style="padding:10px;margin:4px 0;border:1px solid var(--rbg);border-radius:8px;opacity:.75">
+        <b>${c.placa}</b> · ${c.tipo}<br>
+        <span style="color:var(--red);font-size:12px">Lo tiene ${c.ocupado_por}.
+        Si lo vas a recibir vos, tiene que cerrar su turno primero.</span>
+      </div>`;
+    }
+    const sel = c.vehiculo_id === FLOTA_COND_ELEGIDO;
+    return `<button class="btn-flota ${sel ? 'ok' : ''}" onclick="flotaCondElegir(${c.vehiculo_id})"
+      style="display:block;width:100%;text-align:left">
+      ${sel ? '✓ ' : ''}<b style="font-size:19px;letter-spacing:.05em">${c.placa}</b> · ${c.tipo}</button>`;
+  }).join('') + '</div>';
+}
+
+/** Despliega la lista completa cuando el vehículo de la ruta no es el correcto. */
+function flotaCondMostrarTodos() {
+  const el = document.getElementById('cond-flota-todos');
+  if (el) el.innerHTML = flotaCondListaCandidatos();
 }
 
 /** Marca el vehículo elegido de la lista. */
