@@ -551,6 +551,35 @@ def preview_siesa_recaudo(ruta_id, recaudo_id):
     return jsonify(resultado), 200
 
 
+@rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/confirmar-retencion', methods=['POST'])
+@jwt_required()
+def confirmar_retencion_recaudo(ruta_id, recaudo_id):
+    """Decisión del admin sobre el motivo de retención declarado por el
+    conductor en campo — desbloquea (o bloquea a propósito) el registro de
+    cobro. Ver LiquidacionService.confirmar_retencion."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe puede confirmar retenciones'}), 403
+    uid = _uid()
+    if not uid:
+        return jsonify({'error': 'Token inválido'}), 401
+    from app.models.recaudo_entrega import RecaudoEntrega
+    recaudo = RecaudoEntrega.query.get(recaudo_id)
+    if not recaudo or recaudo.ruta_id != ruta_id:
+        return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
+    data = request.get_json() or {}
+    if 'confirmar' not in data:
+        return jsonify({'error': "Falta 'confirmar' (true/false) en el cuerpo"}), 400
+    try:
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.confirmar_retencion(
+            recaudo_id, admin_id=uid, confirmar=bool(data['confirmar']))
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'recaudo': resultado}), 200
+
+
 @rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/registrar-cobro', methods=['POST'])
 @jwt_required()
 def registrar_cobro_recaudo(ruta_id, recaudo_id):

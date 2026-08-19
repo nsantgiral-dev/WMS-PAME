@@ -97,6 +97,19 @@ class RecaudoEntrega(db.Model):
     #: estado dice RECHAZADO pero el inventario no volvió.
     motivo_rechazo = db.Column(db.String(30), nullable=True)
 
+    #: Decisión del admin sobre el `motivo_descuento` que el conductor
+    #: declaró en campo (lo que el cliente dijo, sin verificar). `None` =
+    #: pendiente — el RC queda bloqueado hasta que se decida (Regla 0: ante
+    #: dato sin verificar, no se asume). `True` = el cliente sí tenía derecho
+    #: al descuento, sigue el flujo normal (RC neto + DC de retención).
+    #: `False` = no tenía derecho — el RC sigue bloqueado hasta que el monto
+    #: usado alcance el valor completo de la factura (el admin lo corrige a
+    #: mano cuando el cliente paga la diferencia; no hay un segundo estado de
+    #: "ya pagó el resto" en el WMS a propósito).
+    retencion_confirmada = db.Column(db.Boolean, nullable=True)
+    retencion_confirmada_por = db.Column(db.Integer, db.ForeignKey('usuarios.id'), nullable=True)
+    retencion_confirmada_en = db.Column(db.DateTime, nullable=True)
+
     __table_args__ = (
         db.CheckConstraint(
             "modo_pantalla IS NULL OR modo_pantalla IN ('CREDITO','DINAMICO','LIBRE')",
@@ -170,6 +183,7 @@ class RecaudoEntrega(db.Model):
     tarea             = db.relationship('TareaPacking', backref='recaudo_entrega', uselist=False, lazy=True)
     usuario_confirmador = db.relationship('Usuario', foreign_keys=[confirmado_por], lazy=True)
     usuario_editor      = db.relationship('Usuario', foreign_keys=[editado_por], lazy=True)
+    usuario_retencion   = db.relationship('Usuario', foreign_keys=[retencion_confirmada_por], lazy=True)
 
     def to_dict(self, include_foto=False):
         d = {
@@ -187,6 +201,9 @@ class RecaudoEntrega(db.Model):
             'causal_devolucion':     self.causal_devolucion or '',
             'motivo_descuento':      self.motivo_descuento or '',
             'monto_descuento':       float(self.monto_descuento) if self.monto_descuento else 0,
+            'retencion_confirmada':  self.retencion_confirmada,
+            'retencion_confirmada_por': self.retencion_confirmada_por,
+            'retencion_confirmada_en': self.retencion_confirmada_en.isoformat() if self.retencion_confirmada_en else None,
             'siesa_rc_triggered':    self.siesa_rc_triggered or False,
             'siesa_nc_triggered':    self.siesa_nc_triggered or False,
             'siesa_dc_triggered':    self.siesa_dc_triggered or False,

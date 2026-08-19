@@ -349,6 +349,9 @@ class LiquidacionService:
             # de última milla) — el admin lo ve premarcado abajo pero decide:
             # puede quitarlo o cambiarlo antes de confirmar el cobro.
             'motivo_descuento_sugerido': recaudo.motivo_descuento or '',
+            # None = pendiente de decisión (bloquea el RC), True = confirmada,
+            # False = rechazada (bloquea el RC hasta pagar el valor completo).
+            'retencion_confirmada': recaudo.retencion_confirmada,
             'acciones_pendientes': acciones_pendientes,
             'flags': {
                 'siesa_nc_triggered': recaudo.siesa_nc_triggered or False,
@@ -358,6 +361,37 @@ class LiquidacionService:
             'jobs_estado': jobs_estado,
             'siesa_horario_ok': siesa_horario_ok,
         }
+
+    @staticmethod
+    def confirmar_retencion(recaudo_id: int, admin_id: int, confirmar: bool) -> dict:
+        """Decisión explícita del admin sobre el `motivo_descuento` que el
+        conductor declaró en campo — ver el campo en el modelo y el guard en
+        `registrar_cobro_recaudo`. `confirmar=True` deja seguir el flujo
+        normal (RC neto + DC de retención); `False` bloquea el RC hasta que
+        el monto usado alcance el valor completo de la factura.
+        """
+        recaudo = db.session.query(RecaudoEntrega).with_for_update().get(recaudo_id)
+        if not recaudo:
+            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
+        if not recaudo.motivo_descuento:
+            raise ValueError(
+                f'Recaudo {recaudo_id} no tiene motivo de retención declarado '
+                'por el conductor — no hay nada que confirmar')
+        if recaudo.siesa_rc_triggered:
+            raise ValueError(
+                f'RC ya fue disparado para recaudo {recaudo_id} — la decisión '
+                'ya no aplica')
+
+        recaudo.retencion_confirmada = bool(confirmar)
+        recaudo.retencion_confirmada_por = admin_id
+        recaudo.retencion_confirmada_en = datetime.utcnow()
+        db.session.commit()
+        logger.info(
+            '[LIQUIDACION] Retención %s para recaudo %d (motivo %s) por admin %s',
+            'CONFIRMADA' if confirmar else 'RECHAZADA', recaudo_id,
+            recaudo.motivo_descuento, admin_id
+        )
+        return recaudo.to_dict()
 
     @staticmethod
     def registrar_cobro_recaudo(recaudo_id: int, admin_id: int = None,
@@ -417,6 +451,27 @@ class LiquidacionService:
             raise ValueError(
                 f'Recaudo {recaudo_id} es PARCIAL pero NC no ha sido disparada — '
                 'secuencialidad: NC debe ir primero'
+            )
+
+        # Retención declarada en campo — decisión del admin obligatoria.
+        #
+        # `motivo_descuento` es lo que el CONDUCTOR anotó (lo que el cliente
+        # dijo, sin verificar). Antes, en Liquidación eso era solo una
+        # casilla premarcada "sugerida" — nada impedía crear el RC sin que
+        # nadie se pronunciara sobre si el cliente de verdad tenía derecho al
+        # descuento. Ver `confirmar_retencion()`.
+        if recaudo.motivo_descuento and recaudo.retencion_confirmada is None:
+            raise ValueError(
+                f'El conductor declaró un motivo de retención '
+                f'({recaudo.motivo_descuento}) — confírmalo o recházalo '
+                'antes de registrar el cobro'
+            )
+        if recaudo.motivo_descuento and recaudo.retencion_confirmada is False and any(
+                (r.get('tipo') if isinstance(r, dict) else r) == recaudo.motivo_descuento
+                for r in (retenciones or [])):
+            raise ValueError(
+                f'La retención {recaudo.motivo_descuento} fue rechazada — '
+                'no se puede aplicar en este cobro'
             )
 
         # La FE, no el pedido: `get_rowids_factura` filtra por `f350_*`
@@ -538,6 +593,28 @@ class LiquidacionService:
             monto = total_neto
         else:
             monto = float(recaudo.monto_cobrado or 0)
+
+        # Retención rechazada: el cliente debe pagar el valor completo. Se
+        # destraba solo cuando el monto usado alcanza el neto real de la
+        # factura — no hay un segundo estado de "ya pagó el resto" en el WMS
+        # a propósito (ver el campo en el modelo); el admin corrige el monto
+        # (override, o el toggle "Usar Siesa" del preview) cuando el dinero
+        # llegó, y el bloqueo se resuelve solo.
+        if recaudo.motivo_descuento and recaudo.retencion_confirmada is False:
+            if not (datos_siesa_ok and total_neto > 0):
+                raise ValueError(
+                    'Retención rechazada y sin datos de Siesa para verificar '
+                    'el valor completo de la factura — reintenta cuando '
+                    'Siesa esté disponible'
+                )
+            from app.services.cxc_cruce import TOLERANCIA as _TOL
+            if monto < total_neto - _TOL:
+                raise ValueError(
+                    f'Retención rechazada — el cliente debe pagar el valor '
+                    f'completo (${total_neto:,.2f}). Monto actual: '
+                    f'${monto:,.2f}. Ajusta el monto cuando el cliente pague '
+                    'la diferencia.'
+                )
 
         # ── Calculate retentions ────────────────────────────────────
         import json

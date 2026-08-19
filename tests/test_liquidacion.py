@@ -405,3 +405,146 @@ class TestRegistrarCobroRecaudo:
         assert det[0]['tipo'] == 'RETEFUENTE_2.5'
         assert det[0]['puc'] == '13551501'
         assert det[0]['siesa_triggered'] is True
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Retención declarada en campo — decisión obligatoria del admin (2026-08-19)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestRetencionDeclaradaBloqueaElRC:
+    """`motivo_descuento` es lo que el CONDUCTOR anotó en la pantalla de pago
+    parcial — el motivo tributario que el cliente dijo, sin verificar. Antes
+    era solo una casilla premarcada en Liquidación; ahora bloquea el RC hasta
+    que el admin confirme o rechace explícitamente si el cliente de verdad
+    tenía derecho."""
+
+    def _mock_siesa(self):
+        """Mismo mock que TestRegistrarCobroRecaudo (total_neto=2000000,
+        fila PD/999) — no se comparte por herencia para no re-ejecutar los
+        tests de esa clase bajo este nombre."""
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': 1680672, 'f470_vlr_imp': 319328, 'f470_vlr_neto': 2000000,
+             'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
+        ]
+        mock_connekta.get_pedido_cabecera.return_value = {
+            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
+            'f461_id_sucursal_pedido_rem': '001',
+        }
+        mock_connekta.get_cxc_general = MagicMock(return_value=[
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_total_db': 2000000, 'f353_total_cr': 0},
+        ])
+        return mock_connekta
+
+    def test_pendiente_bloquea_el_rc(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='confírmalo o recházalo'):
+                LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1, retenciones=[])
+
+    def test_confirmada_permite_el_rc(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        recaudo.retencion_confirmada = True
+        db.session.commit()
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[{'tipo': 'RETEFUENTE_2.5'}])
+        assert resultado['ok'] is True
+
+    def test_rechazada_bloquea_hasta_pagar_el_valor_completo(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        recaudo.retencion_confirmada = False
+        db.session.commit()
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='valor completo'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[], monto_override=1000000)
+
+    def test_rechazada_con_monto_completo_permite_el_rc(self, app, db, recaudo_liq):
+        """El admin corrigió el monto a mano tras cobrar la diferencia — se
+        destraba solo, sin un segundo estado de 'ya pagó el resto'."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        recaudo.retencion_confirmada = False
+        db.session.commit()
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[], monto_override=2000000)
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == 2000000
+
+    def test_rechazada_no_se_puede_forzar_en_la_lista_de_retenciones(self, app, db, recaudo_liq):
+        """Aunque el monto ya cubra el valor completo, no se puede colar la
+        retención rechazada en la lista que arma el RC — sería crear el
+        documento de retención (DC) para un motivo que el admin ya dijo que
+        no era legítimo."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        recaudo.retencion_confirmada = False
+        db.session.commit()
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='no se puede aplicar'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1,
+                    retenciones=[{'tipo': 'RETEFUENTE_2.5'}], monto_override=2000000)
+
+    def test_sin_motivo_declarado_no_bloquea_nada(self, app, db, recaudo_liq):
+        """El guard es específico al caso de retención declarada — un
+        parcial sin motivo sigue funcionando exactamente como antes."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['ok'] is True
+
+
+class TestConfirmarRetencion:
+
+    def test_confirma_y_registra_quien_y_cuando(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.confirmar_retencion(recaudo.id, admin_id=7, confirmar=True)
+        assert resultado['retencion_confirmada'] is True
+        db.session.refresh(recaudo)
+        assert recaudo.retencion_confirmada is True
+        assert recaudo.retencion_confirmada_por == 7
+        assert recaudo.retencion_confirmada_en is not None
+
+    def test_rechaza(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.confirmar_retencion(recaudo.id, admin_id=7, confirmar=False)
+        assert resultado['retencion_confirmada'] is False
+
+    def test_sin_motivo_declarado_no_hay_nada_que_confirmar(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(ValueError, match='no tiene motivo'):
+            LiquidacionService.confirmar_retencion(recaudo.id, admin_id=7, confirmar=True)
+
+    def test_no_se_puede_decidir_despues_de_disparado_el_rc(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5', rc=True)
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(ValueError, match='ya no aplica'):
+            LiquidacionService.confirmar_retencion(recaudo.id, admin_id=7, confirmar=True)
+
+    def test_recaudo_inexistente(self, app, db):
+        from app.services.liquidacion_service import LiquidacionService
+        with pytest.raises(LookupError):
+            LiquidacionService.confirmar_retencion(999999, admin_id=7, confirmar=True)

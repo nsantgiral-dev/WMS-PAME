@@ -648,6 +648,17 @@ async function liqToggleCobro(rutaId, recaudoId) {
     return;
   }
   panel.style.display = 'block';
+  await _liqRenderPanelCobro(rutaId, recaudoId);
+}
+
+/**
+ * Trae el preview de Siesa y renderiza el panel de cobro — separado de
+ * liqToggleCobro para poder refrescarlo sin cerrar/reabrir el panel
+ * (liqConfirmarRetencion lo llama tras decidir sobre la retención).
+ */
+async function _liqRenderPanelCobro(rutaId, recaudoId) {
+  const panel = document.getElementById(`liq-cobro-panel-${recaudoId}`);
+  if (!panel) return;
   panel.innerHTML = '<div style="text-align:center;padding:20px;color:#555;">Consultando datos de Siesa...</div>';
 
   try {
@@ -685,19 +696,56 @@ async function liqToggleCobro(rutaId, recaudoId) {
       html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mSiesa || mCobrado)} · CO: ${df.co_factura || '—'} · CxC: ${df.cuenta_cxc || 'fallback'}</div>`;
     }
 
-    // Retenciones checkboxes — premarcada la que el conductor eligió en
-    // campo (pantalla de última milla, Pago Parcial); el admin decide si la
-    // mantiene, la cambia o la quita antes de confirmar el cobro.
+    // Retención declarada en campo — decisión obligatoria del admin
+    // (2026-08-19). `motivo_descuento_sugerido` es lo que el CONDUCTOR
+    // anotó en la pantalla de pago parcial (lo que el cliente dijo, sin
+    // verificar). Antes esto era solo una casilla premarcada; ahora bloquea
+    // el RC hasta que el admin se pronuncie — ver
+    // LiquidacionService.registrar_cobro_recaudo.
     const motivoSugerido = preview.motivo_descuento_sugerido || '';
-    html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
+    const retencionConfirmada = preview.retencion_confirmada;
+    let bloqueadoPorRetencion = false;
+
     if (motivoSugerido) {
-      html += `<div style="font-size:11px;color:#c084fc;margin-bottom:6px;">Sugerido por el conductor en campo — verifica antes de confirmar.</div>`;
+      const nombreMotivo = (preview.retenciones_disponibles || [])
+        .find(r => r.tipo === motivoSugerido)?.nombre || motivoSugerido;
+
+      if (retencionConfirmada === null || retencionConfirmada === undefined) {
+        bloqueadoPorRetencion = true;
+        html += `
+          <div style="margin-bottom:12px;padding:12px;background:#78350f22;border:1px solid #fbbf2444;border-radius:8px;">
+            <div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:4px;">⚠ Retención declarada por el conductor: ${nombreMotivo}</div>
+            <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;">El cliente dijo en la puerta que tenía derecho a este descuento — nadie lo ha verificado todavía. Confirma o rechaza antes de poder registrar el cobro.</div>
+            <div style="display:flex;gap:8px;">
+              <button onclick="liqConfirmarRetencion(${rutaId}, ${recaudoId}, true)" style="flex:1;padding:10px;background:#14532d;color:#4ade80;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✓ Sí tenía derecho</button>
+              <button onclick="liqConfirmarRetencion(${rutaId}, ${recaudoId}, false)" style="flex:1;padding:10px;background:#450a0a;color:#f87171;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✗ No tenía derecho</button>
+            </div>
+          </div>`;
+      } else if (retencionConfirmada === false) {
+        const faltaPagar = Math.max(0, Math.round((mSiesa || 0) - mCobrado));
+        bloqueadoPorRetencion = (mSiesa || 0) - mCobrado > 1;
+        html += `
+          <div style="margin-bottom:12px;padding:12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
+            <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Retención rechazada: ${nombreMotivo}</div>
+            <div style="font-size:11px;color:var(--tx3);">El cliente NO tenía derecho a este descuento — debe pagar el valor completo (${_liqFmt(mSiesa)}).${bloqueadoPorRetencion ? ` Faltan ${_liqFmt(faltaPagar)}. Ajusta el monto cuando el cliente pague la diferencia — el RC sigue bloqueado hasta entonces.` : ' Monto ya cubre el valor completo — puedes continuar.'}</div>
+          </div>`;
+      } else {
+        html += `<div style="margin-bottom:10px;font-size:11px;color:#4ade80;">✓ Retención confirmada — el cliente sí tenía derecho al descuento.</div>`;
+      }
     }
+
+    // Retenciones checkboxes — premarcada la que el conductor eligió en
+    // campo, solo si la retención ya fue CONFIRMADA (si está pendiente o
+    // rechazada, no se ofrece marcarla: ver el bloque de arriba).
+    html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
     (preview.retenciones_disponibles || []).forEach(ret => {
       if (ret.monto_estimado <= 0) return;
+      const esLaSugerida = ret.tipo === motivoSugerido;
+      const marcarla = esLaSugerida && retencionConfirmada === true;
+      const deshabilitarla = esLaSugerida && retencionConfirmada !== true;
       html += `
-        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:var(--tx2);cursor:pointer;">
-          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${ret.tipo===motivoSugerido?'checked':''} onchange="liqPreviewCobro(${recaudoId})">
+        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:${deshabilitarla ? 'var(--tx3)' : 'var(--tx2)'};cursor:${deshabilitarla ? 'not-allowed' : 'pointer'};">
+          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
           ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
         </label>`;
     });
@@ -709,12 +757,20 @@ async function liqToggleCobro(rutaId, recaudoId) {
       html += `<div style="color:#f59e0b;font-size:11px;margin-top:6px;">⚠ Siesa no opera después de 8PM — jobs quedarán en cola</div>`;
     }
 
-    html += `
-      <button onclick="liqRegistrarCobro(${rutaId}, ${recaudoId})" id="liq-btn-cobro-${recaudoId}"
-        style="width:100%;margin-top:12px;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">
-        Confirmar y Enviar RC
-      </button>
-    </div>`;
+    if (bloqueadoPorRetencion) {
+      html += `
+        <button disabled id="liq-btn-cobro-${recaudoId}"
+          style="width:100%;margin-top:12px;padding:14px;background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:8px;font-size:14px;font-weight:800;cursor:not-allowed;">
+          🔒 Registrar Cobro (resuelve la retención primero)
+        </button>`;
+    } else {
+      html += `
+        <button onclick="liqRegistrarCobro(${rutaId}, ${recaudoId})" id="liq-btn-cobro-${recaudoId}"
+          style="width:100%;margin-top:12px;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">
+          Confirmar y Enviar RC
+        </button>`;
+    }
+    html += `</div>`;
 
     panel.innerHTML = html;
 
@@ -726,6 +782,29 @@ async function liqToggleCobro(rutaId, recaudoId) {
   } catch (e) {
     panel.innerHTML = `<div style="padding:12px;color:#ef4444;">${e.message || 'Error obteniendo preview'}</div>`;
   }
+}
+
+/** Decisión del admin sobre la retención que el conductor declaró en campo. */
+async function liqConfirmarRetencion(rutaId, recaudoId, confirmar) {
+  const pregunta = confirmar
+    ? '¿Confirmar que el cliente sí tenía derecho a este descuento?'
+    : '¿Rechazar la retención? El RC quedará bloqueado hasta que el cliente pague el valor completo.';
+  if (!confirm(pregunta)) return;
+  try {
+    const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/confirmar-retencion`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmar }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(confirmar ? 'Retención confirmada' : 'Retención rechazada — falta el pago del valor completo',
+             confirmar ? 'exito' : 'advertencia');
+      await _liqRenderPanelCobro(rutaId, recaudoId);
+    } else {
+      alerta(d.error || 'Error al registrar la decisión', 'error');
+    }
+  } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
 function liqPreviewCobro(recaudoId) {
