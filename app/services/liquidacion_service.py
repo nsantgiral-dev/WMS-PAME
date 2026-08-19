@@ -446,12 +446,21 @@ class LiquidacionService:
                 'no se puede re-encolar (idempotencia)'
             )
 
-        # If PARCIAL: NC must have been triggered first
-        if estado == EstadoEntrega.PARCIAL and not recaudo.siesa_nc_triggered:
-            raise ValueError(
-                f'Recaudo {recaudo_id} es PARCIAL pero NC no ha sido disparada — '
-                'secuencialidad: NC debe ir primero'
-            )
+        # PARCIAL sin NC disparada: NO bloquea la creación del RC (2026-08-19).
+        #
+        # Antes esto era un ValueError duro — el admin no podía ni encolar el
+        # RC mientras recepción no confirmara físicamente la devolución
+        # (horas o días). El RC no necesita esperar: es por lo que el
+        # conductor SÍ entregó (ver el cálculo de `monto` más abajo), un
+        # documento distinto de la NC, que es por lo que volvió.
+        #
+        # La Regla 7 («NC → RC, nunca en paralelo contra la misma factura —
+        # deadlock T353 en SQL Server») sigue intacta: `depende_de_nc` más
+        # abajo encola el job igual, y es el DLQ (`DependenciaPendiente`,
+        # sin gastar reintento) el que espera a que la NC dispare antes de
+        # postear el RC a Siesa — el mismo patrón que ya usa
+        # `_procesar_recaudo` (el botón masivo "Enviar a Siesa" de Rutas)
+        # desde antes. Esta vía nunca lo había adoptado.
 
         # Retención declarada en campo — decisión del admin obligatoria.
         #
@@ -587,8 +596,20 @@ class LiquidacionService:
             )
 
         # ── Determine monto ─────────────────────────────────────────
+        #
+        # PARCIAL: el RC es por lo que el conductor SÍ entregó al admin
+        # (`monto_cobrado`) — NUNCA `total_neto`, que es el valor COMPLETO de
+        # la factura en Siesa sin descontar lo devuelto. La factura misma no
+        # se toca (ni el RC ni la NC la editan): son documentos de cruce
+        # aparte. Usar `total_neto` acá facturaría de más el cobro; la
+        # diferencia (lo devuelto) la cierra la NC contra la factura, no el
+        # RC. ENTREGADO sí prefiere `total_neto` — sin devolución de por
+        # medio, es el dato verificado contra Siesa, más confiable que lo que
+        # el conductor tecleó.
         if monto_override is not None:
             monto = float(monto_override)
+        elif estado == EstadoEntrega.PARCIAL:
+            monto = float(recaudo.monto_cobrado or 0)
         elif datos_siesa_ok and total_neto > 0:
             monto = total_neto
         else:

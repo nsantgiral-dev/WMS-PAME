@@ -332,12 +332,36 @@ class TestRegistrarCobroRecaudo:
         with pytest.raises(ValueError, match='idempotencia'):
             LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
 
-    def test_parcial_sin_nc_rechaza(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', nc=False)
+    def test_parcial_sin_nc_no_bloquea_el_rc(self, app, db, recaudo_liq):
+        """2026-08-19: el RC ya no espera a que la NC dispare para poder
+        crearse — es un documento distinto (lo que el conductor SÍ entregó,
+        no lo que volvió). El DLQ (`depende_de_nc`) espera cortésmente antes
+        de postear a Siesa, sin bloquear al admin de encolarlo — mismo
+        patrón que ya usaba `_procesar_recaudo` (botón masivo de Rutas)."""
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=1500000, nc=False)
         from app.services.liquidacion_service import LiquidacionService
-        with pytest.raises(ValueError, match='NC debe ir primero'):
-            with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
-                LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
+        from app.models.siesa_job import SiesaJob
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['ok'] is True
+
+        job = SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_id=recaudo.id).first()
+        assert job is not None
+        assert job.get_payload()['depende_de_nc'] is True
+
+    def test_parcial_usa_lo_entregado_no_el_total_de_la_factura(self, app, db, recaudo_liq):
+        """El mock de Siesa devuelve total_neto=2000000 (la factura
+        COMPLETA). El conductor entregó 1500000 — el cliente devolvió el
+        resto. El RC tiene que ser por lo que entró, no por la factura."""
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=1500000, nc=False)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['monto_neto_rc'] == 1500000
 
     def test_matchea_f253_id_correcto_entre_varias_filas(self, app, db, recaudo_liq):
         """
