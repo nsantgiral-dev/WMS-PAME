@@ -393,7 +393,8 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
     return lineas_nc
 
 
-def _factura_saldada_en_siesa(connekta, nit: str, recaudo) -> bool | None:
+def _factura_saldada_en_siesa(connekta, nit: str, recaudo,
+                               tipo_docto_fe: str = None, consec_fe=None) -> bool | None:
     """¿La factura ya no tiene saldo en Siesa? `True` | `False` | **`None`**.
 
     Usada por RECIBO_CAJA en dos momentos: (a) pre-flight, para no duplicar un
@@ -402,10 +403,10 @@ def _factura_saldada_en_siesa(connekta, nit: str, recaudo) -> bool | None:
 
     ## Dos cosas que estaban mal
 
-    **Buscaba por la FACTURA.** Los campos de cruce traen el **PEDIDO**
-    —verificado en vivo el 2026-08-11 y escrito con esas palabras en
-    `liquidacion_service`, que sí lo hacía bien—. Con la clave equivocada no
-    encontraba nunca ninguna fila.
+    **Buscaba por la FACTURA.** Los campos de cruce casi siempre traen el
+    **PEDIDO** —verificado en vivo el 2026-08-11 y escrito con esas palabras
+    en `liquidacion_service`, que sí lo hacía bien—. Con la clave equivocada
+    no encontraba nunca ninguna fila.
 
     **Y devolvía `False` cuando no encontraba.** Así que tras un timeout
     respondía «el RC no entró», el job revertía la bandera y la cola reenviaba:
@@ -414,7 +415,9 @@ def _factura_saldada_en_siesa(connekta, nit: str, recaudo) -> bool | None:
 
     Ahora la búsqueda vive en `services/cxc_cruce.py` —una sola— y el «no sé»
     tiene su propio valor. El caller decide, y ante `None` la Regla 3 manda:
-    no reintentar.
+    no reintentar. `cxc_cruce.fila_de_la_factura` prueba PEDIDO primero y cae
+    a FE si no matchea (PD1411/FE-1416, 2026-08-18, no es universal); por eso
+    este helper recibe también `tipo_docto_fe`/`consec_fe` del payload del job.
     """
     from app.services import cxc_cruce as _cx
     try:
@@ -423,7 +426,8 @@ def _factura_saldada_en_siesa(connekta, nit: str, recaudo) -> bool | None:
         consec_pedido = getattr(tarea, 'consec_docto_pedido_siesa', None)
         if not (nit and tipo_pedido and consec_pedido):
             return None
-        return _cx.esta_saldada(connekta.get_cxc_general(nit), tipo_pedido, consec_pedido)
+        return _cx.esta_saldada(connekta.get_cxc_general(nit), tipo_pedido, consec_pedido,
+                                 tipo_docto_fe, consec_fe)
     except Exception as e:                       # noqa: BLE001
         logger.warning('[DLQ] no se pudo verificar el saldo en Siesa: %s', e)
         return None
@@ -1226,7 +1230,9 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         nit_rc = payload.get('tercero_nit', '')
         # `is True` y no truthy: `None` significa «no pude verificar», y saltarse
         # el envío por no saber dejaría la factura sin recibo para siempre.
-        if _factura_saldada_en_siesa(connekta, nit_rc, recaudo) is True:
+        if _factura_saldada_en_siesa(
+                connekta, nit_rc, recaudo,
+                payload.get('tipo_docto_fe'), payload.get('consec_fe')) is True:
             logger.info(
                 '[DLQ] RECIBO_CAJA job=%s: factura %s-%s ya sin saldo pendiente '
                 '(pre-flight) — marcando completado sin enviar',
@@ -1258,7 +1264,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
             # POST falló — verificar el saldo real antes de revertir (Regla #3:
             # un timeout no significa que falló, puede que sí haya entrado)
             _rc_entro = _factura_saldada_en_siesa(
-                connekta, payload.get('tercero_nit', ''), recaudo)
+                connekta, payload.get('tercero_nit', ''), recaudo,
+                payload.get('tipo_docto_fe'), payload.get('consec_fe'))
             if _rc_entro is True:
                 logger.info(
                     '[DLQ] RECIBO_CAJA job=%s: POST falló pero API 21 confirma '

@@ -3,7 +3,7 @@ Cómo se encuentra la fila de cartera de una factura. **Una función.**
 
 `API_v2_CxC_General` devuelve las cuentas por cobrar de un tercero, y para
 localizar la de una factura concreta hay que saber qué traen los campos de
-cruce. La respuesta, verificada en vivo el 2026-08-11 y escrita en
+cruce. La regla general, verificada en vivo el 2026-08-11 y escrita en
 `liquidacion_service`:
 
     f353_id_tipo_docto_cruce / f353_consec_docto_cruce  →  traen el **PEDIDO**
@@ -11,6 +11,13 @@ cruce. La respuesta, verificada en vivo el 2026-08-11 y escrita en
 Es una asimetría incómoda —`get_rowids_factura` sí necesita la FACTURA, porque
 filtra por `f353_*` es del cruce y `f350_*` del documento— y por eso se
 documentó con esas palabras.
+
+**No es universal.** PD1411/FE-1416 (2026-08-18) trajo el cruce indexado por
+la **FE**, no por el pedido — verificado en vivo contra Siesa (fila
+`f353_id_tipo_docto_cruce='FE', consec='1416'`, saldo completo). Se busca
+primero por PEDIDO (la regla, sigue siendo el caso común) y si no aparece
+nada se reintenta por FE — nunca al revés, para no tapar en silencio un
+verdadero "no encontrado" con un match que Siesa no haría.
 
 ## Por qué esto existe como módulo
 
@@ -36,18 +43,11 @@ logger = logging.getLogger(__name__)
 TOLERANCIA = 0.5
 
 
-def fila_de_la_factura(cxc: list, tipo_docto_pedido: str, consec_docto_pedido):
-    """La fila de cartera que corresponde a esa factura, o `None`.
-
-    Se busca por el **PEDIDO**, no por la factura: es lo que traen los campos
-    de cruce. Pasarle la FE resuelta hace que no matchee ninguna fila — y el
-    modo de fallo es silencioso, porque «ninguna fila» se lee igual que «no
-    hay deuda» o que «no pude saber», según quién pregunte.
-    """
-    if not (tipo_docto_pedido and consec_docto_pedido):
+def _match(cxc: list, tipo_docto, consec_docto):
+    if not (tipo_docto and consec_docto):
         return None
-    tipo = str(tipo_docto_pedido).strip()
-    consec = str(consec_docto_pedido).strip()
+    tipo = str(tipo_docto).strip()
+    consec = str(consec_docto).strip()
     return next((
         r for r in (cxc or [])
         if str(r.get('f353_id_tipo_docto_cruce', '')).strip() == tipo
@@ -55,11 +55,28 @@ def fila_de_la_factura(cxc: list, tipo_docto_pedido: str, consec_docto_pedido):
     ), None)
 
 
+def fila_de_la_factura(cxc: list, tipo_docto_pedido: str, consec_docto_pedido,
+                        tipo_docto_fe: str = None, consec_docto_fe=None):
+    """La fila de cartera que corresponde a esa factura, o `None`.
+
+    Se busca primero por el **PEDIDO** — es la regla, lo que traen los campos
+    de cruce en el caso general (verificado en vivo el 2026-08-11). Si no
+    aparece nada y se pasó la FE, se reintenta por FE — la excepción real
+    encontrada en PD1411/FE-1416 (2026-08-18). Nunca al revés: el pedido es
+    la apuesta correcta la mayoría de las veces, y probarla primero evita que
+    un match por FE tape en silencio un "no encontrado" genuino cuando ambos
+    identificadores coincidieran por casualidad.
+    """
+    return _match(cxc, tipo_docto_pedido, consec_docto_pedido) \
+        or _match(cxc, tipo_docto_fe, consec_docto_fe)
+
+
 def saldo_de_la_fila(fila) -> float:
     return float(fila.get('f353_total_db', 0) or 0) - float(fila.get('f353_total_cr', 0) or 0)
 
 
-def esta_saldada(cxc: list, tipo_docto_pedido: str, consec_docto_pedido):
+def esta_saldada(cxc: list, tipo_docto_pedido: str, consec_docto_pedido,
+                  tipo_docto_fe: str = None, consec_docto_fe=None):
     """`True` | `False` | `None`.
 
     **`None` es el caso que importa** y el que antes se colapsaba a `False`: la
@@ -71,7 +88,8 @@ def esta_saldada(cxc: list, tipo_docto_pedido: str, consec_docto_pedido):
     un recibo de caja duplicado es un documento financiero que alguien tiene que
     reversar a mano—. Ante «tiene saldo», reintentar es correcto.
     """
-    fila = fila_de_la_factura(cxc, tipo_docto_pedido, consec_docto_pedido)
+    fila = fila_de_la_factura(cxc, tipo_docto_pedido, consec_docto_pedido,
+                               tipo_docto_fe, consec_docto_fe)
     if fila is None:
         return None
     return saldo_de_la_fila(fila) <= TOLERANCIA

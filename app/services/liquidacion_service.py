@@ -257,7 +257,8 @@ class LiquidacionService:
                             # buscaba por la clave equivocada.
                             from app.services import cxc_cruce as _cx3
                             fila_cxc = _cx3.fila_de_la_factura(
-                                cxc_data, tipo_docto, consec_docto)
+                                cxc_data, tipo_docto, consec_docto,
+                                _tipo_fe, _consec_fe)
                             if fila_cxc:
                                 cuenta_cxc = fila_cxc.get('f253_id', '')
                     except Exception as e_cxc:
@@ -473,11 +474,13 @@ class LiquidacionService:
                         # cliente — matchear por la factura exacta.
                         # OJO con la asimetría: `get_rowids_factura` necesita
                         # la FACTURA (filtra por f350_*), pero el cruce de CxC
-                        # referencia el PEDIDO — `f353_*_docto_cruce` trae
-                        # 'PD'/consec del pedido, verificado en vivo el
-                        # 2026-08-11. Usar acá la FE resuelta hace que no
-                        # matchee ninguna fila y la cuenta caiga al fallback
-                        # `SIESA_CXC_AUXILIAR`, que es la regla 11 al revés.
+                        # casi siempre referencia el PEDIDO — `f353_*_docto_cruce`
+                        # trae 'PD'/consec del pedido, verificado en vivo el
+                        # 2026-08-11. PD1411/FE-1416 (2026-08-18) probó que no
+                        # es universal: esa cartera venía indexada por la FE.
+                        # `fila_de_la_factura` prueba pedido primero y cae a
+                        # FE si no matchea, en vez de quedar en el fallback
+                        # `SIESA_CXC_AUXILIAR` (regla 11 al revés).
                         # La búsqueda vive en `services/cxc_cruce.py`. Estaba
                         # escrita acá y otra vez en `siesa_job_service`, con
                         # claves DISTINTAS y las dos citando esta misma
@@ -486,7 +489,8 @@ class LiquidacionService:
                         from app.services import cxc_cruce as _cx
                         fila_cxc = _cx.fila_de_la_factura(
                             cxc_data, tarea.tipo_docto_pedido_siesa,
-                            tarea.consec_docto_pedido_siesa)
+                            tarea.consec_docto_pedido_siesa,
+                            tipo_docto_fe, consec_fe)
                         if fila_cxc:
                             cuenta_cxc = fila_cxc.get('f253_id', '')
                 except Exception as e_cxc:

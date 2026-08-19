@@ -44,6 +44,30 @@ class TestSeBuscaPorElPedido:
         assert cx.fila_de_la_factura([_FILA], 'PD', None) is None
 
 
+class TestCaeAFEsiElPedidoNoMatchea:
+    """PD1411/FE-1416 (2026-08-18): esa cartera venía indexada por la FE, no
+    el pedido — la regla del 2026-08-11 no es universal."""
+
+    _FILA_FE = {'f353_id_tipo_docto_cruce': 'FE', 'f353_consec_docto_cruce': '1416',
+                'f353_total_db': 58200, 'f353_total_cr': 0}
+
+    def test_encuentra_por_fe_cuando_el_pedido_no_matchea(self):
+        assert cx.fila_de_la_factura(
+            [self._FILA_FE], 'PD', '1411', 'FE', '1416') is self._FILA_FE
+
+    def test_pedido_gana_si_ambos_matchean(self):
+        cxc = [self._FILA_FE, _FILA]
+        assert cx.fila_de_la_factura(cxc, 'PD', 100, 'FE', 1416) is _FILA
+
+    def test_sin_fe_no_matchea_por_fe(self):
+        assert cx.fila_de_la_factura([self._FILA_FE], 'PD', '1411') is None
+
+    def test_esta_saldada_tambien_cae_a_fe(self):
+        assert cx.esta_saldada([self._FILA_FE], 'PD', '1411', 'FE', '1416') is False
+        saldada = dict(self._FILA_FE, f353_total_cr=58200)
+        assert cx.esta_saldada([saldada], 'PD', '1411', 'FE', '1416') is True
+
+
 class TestNoSaberTieneSuPropioValor:
     """`None` es el caso que antes se colapsaba a `False`."""
 
