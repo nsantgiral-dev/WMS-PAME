@@ -1281,21 +1281,21 @@ async function cargarPendientesDeRuta() {
     if (!pendientes.length) { cont.innerHTML = ''; return; }
 
     cont.innerHTML = `
-      <div style="font-size:12px;font-weight:600;color:#93c5fd;padding:4px 0 8px;border-bottom:1px solid #0f2a3f;margin-bottom:10px;">
+      <div style="font-size:12px;font-weight:600;color:var(--pm);padding:4px 0 8px;border-bottom:1px solid var(--brd);margin-bottom:10px;">
         🔵 ${pendientes.length} DEVOLUCIÓN${pendientes.length !== 1 ? 'ES' : ''} DE RUTA PENDIENTE${pendientes.length !== 1 ? 'S' : ''} DE CONFIRMAR
       </div>` +
       pendientes.map(d => `
-        <div class="rec-card" style="border-color:#1e3a5f;background:#0a1420;margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${d.id})">
+        <div class="rec-card" style="margin-bottom:8px;cursor:pointer;" onclick="abrirPendienteDeRuta(${d.id})">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;">
             <div>
-              <div class="rec-titulo" style="font-size:14px;color:#e2eef8;">${d.numero_pedido_siesa || '—'}</div>
-              <div class="rec-sub" style="color:#93c5fd;">${d.cliente || 'Cliente sin nombre'}</div>
+              <div class="rec-titulo" style="font-size:14px;color:var(--tx);">${d.numero_pedido_siesa || '—'}</div>
+              <div class="rec-sub">${d.cliente || 'Cliente sin nombre'}</div>
             </div>
-            <span style="font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;background:${d.es_total ? '#3a1616' : '#1a2a1a'};color:${d.es_total ? '#f3a79f' : '#86efac'};">
+            <span class="badge ${d.es_total ? 'badge-red' : 'badge-green'}">
               ${d.es_total ? 'DEVOLUCIÓN TOTAL' : 'DEVOLUCIÓN PARCIAL'}
             </span>
           </div>
-          <div style="margin-top:8px;font-size:12px;color:#93c5fd;">
+          <div style="margin-top:8px;font-size:12px;color:var(--tx2);">
             ${d.lineas.length} referencia${d.lineas.length !== 1 ? 's' : ''} · toca para verificar y confirmar
           </div>
         </div>`).join('');
@@ -1421,7 +1421,7 @@ function renderLineasDevolucion(datos) {
     </div>
 
     ${esPendienteDeRuta ? `
-    <div style="margin-bottom:10px;padding:10px 12px;background:#0a1420;border:1px solid #1e3a5f;border-radius:8px;font-size:12px;color:#93c5fd;">
+    <div style="margin-bottom:10px;padding:10px 12px;background:var(--bg-s2);border:1px solid var(--brd);border-radius:8px;font-size:12px;color:var(--pm);">
       🔵 Declarado por el conductor en la entrega — verifica físicamente y ajusta si algo no coincide antes de confirmar.
     </div>
     ` : `
