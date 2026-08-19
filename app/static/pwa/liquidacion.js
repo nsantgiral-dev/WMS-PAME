@@ -343,6 +343,120 @@ function liqCerrarModal() {
 }
 
 /** Render the full route detail view with recaudos, retenciones, and action button. */
+// ── Descuento declarado en campo: la decision del admin ──────────────────
+//
+// Cuando el cliente paga menos de la factura alegando una retencion
+// (RETEFUENTE, ReteIVA, ICA), el conductor anota el motivo en la pantalla de
+// pago parcial. Eso es lo que el CLIENTE DIJO en la puerta — nadie lo
+// verifico. El admin es quien tiene que decidir si ese descuento procedia,
+// y esa decision manda sobre el RC: hasta que la tome, no hay cobro que
+// registrar. Ver LiquidacionService.confirmar_retencion y el guard en
+// registrar_cobro_recaudo — el backend rechaza igual, esto es la puerta que
+// el admin ve.
+
+/** Nombre legible del motivo declarado (puede venir mas de uno, separados por coma). */
+function _liqNombreMotivo(rec) {
+  const catalogo = rec.retenciones_disponibles || [];
+  return (rec.motivo_descuento || '')
+    .split(',').filter(Boolean)
+    .map(t => (catalogo.find(r => r.tipo === t) || {}).nombre || t)
+    .join(' + ');
+}
+
+/**
+ * ¿El descuento declarado traba el RC de esta parada?
+ *
+ *   sin motivo  → no traba, nunca hubo nada que verificar.
+ *   pendiente   → traba: ante un dato sin verificar no se asume (Regla 0).
+ *   rechazado   → traba mientras lo cobrado no alcance el valor completo de
+ *                 la factura; el admin edita el monto cuando el cliente paga
+ *                 la diferencia y se destraba solo.
+ *   confirmado  → no traba, sigue el flujo normal (RC neto + DC de retencion).
+ */
+function _liqRetencionTraba(rec, factura) {
+  if (!rec.motivo_descuento) return false;
+  if (rec.retencion_confirmada === true) return false;
+  if (rec.retencion_confirmada === false) {
+    const neto = (factura && factura.total_neto) || 0;
+    // Sin datos de Siesa no hay contra que verificar el valor completo — el
+    // servicio levanta ValueError en ese caso, asi que la pantalla tampoco
+    // deja pasar.
+    if (neto <= 0) return true;
+    return neto - (rec.monto_cobrado || 0) > 1;
+  }
+  return true;
+}
+
+/** La tarjeta de decision, arriba del boton de cobro. */
+function _liqBloqueRetencion(rutaId, rec, factura) {
+  if (!rec.motivo_descuento) {
+    // Sin motivo declarado no hay descuento que verificar — pero si entro
+    // menos plata que la factura, el admin merece saber POR QUE no le
+    // aparece nada que confirmar. El conductor solo puede anotar el motivo
+    // cuando la pantalla de ultima milla trae el valor real de Siesa (modo
+    // dinamico); si la parada salio en modo libre teclea un monto suelto y
+    // el motivo se pierde. Informativo, no bloquea: la decision de que el
+    // gate aplique SOLO con motivo declarado es deliberada.
+    const netoSin = (factura && factura.total_neto) || 0;
+    const faltante = Math.round(netoSin - (rec.monto_cobrado || 0));
+    if (netoSin > 0 && faltante > 1 && rec.estado_entrega === 'ENTREGADO') {
+      return `
+        <div style="margin-top:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;font-size:11px;color:var(--tx3);">
+          Entró ${_liqFmt(rec.monto_cobrado || 0)} de ${_liqFmt(netoSin)} (faltan ${_liqFmt(faltante)}), pero el conductor no declaró ningún motivo de descuento — no hay nada que verificar acá. La diferencia queda como saldo abierto en cartera.
+        </div>`;
+    }
+    return '';
+  }
+  const nombre = _liqNombreMotivo(rec);
+  const desc = rec.monto_descuento || 0;
+  const neto = (factura && factura.total_neto) || 0;
+
+  if (rec.retencion_confirmada === true) {
+    return `
+      <div style="margin-top:8px;padding:8px 10px;background:#14532d22;border:1px solid #4ade8044;border-radius:8px;font-size:11px;color:#4ade80;">
+        ✓ Descuento confirmado: ${nombre} (${_liqFmt(desc)}) — el cliente sí tenía derecho.
+      </div>`;
+  }
+
+  if (rec.retencion_confirmada === false) {
+    const falta = Math.max(0, Math.round(neto - (rec.monto_cobrado || 0)));
+    const trabado = _liqRetencionTraba(rec, factura);
+    return `
+      <div style="margin-top:8px;padding:10px 12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
+        <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Descuento rechazado: ${nombre}</div>
+        <div style="font-size:11px;color:var(--tx3);">
+          El cliente NO tenía derecho — debe pagar el valor completo (${_liqFmt(neto)}).
+          ${trabado
+            ? `Faltan ${_liqFmt(falta)}. Abre el cobro y corrige el monto cuando el cliente pague la diferencia; hasta entonces el RC queda bloqueado.`
+            : 'El monto ya cubre el valor completo — puedes registrar el cobro.'}
+        </div>
+      </div>`;
+  }
+
+  // Pendiente: la puerta. Sin decision no hay RC.
+  return `
+    <div style="margin-top:8px;padding:12px;background:#78350f22;border:1px solid #fbbf2444;border-radius:8px;">
+      <div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:4px;">⚠ Pago parcial por descuento — falta verificar</div>
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:4px;">
+        El conductor declaró <b style="color:var(--tx2);">${nombre}</b> por ${_liqFmt(desc)}:
+        el cliente pagó ${_liqFmt(rec.monto_cobrado || 0)}${neto > 0 ? ` de ${_liqFmt(neto)}` : ''}.
+      </div>
+      <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;">
+        Es lo que el cliente dijo en la puerta — nadie lo ha verificado. ¿Le correspondía ese descuento?
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="liqConfirmarRetencion(${rutaId}, ${rec.id}, true)"
+          style="flex:1;padding:10px;background:#14532d;color:#4ade80;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
+          ✓ Sí le correspondía
+        </button>
+        <button onclick="liqConfirmarRetencion(${rutaId}, ${rec.id}, false)"
+          style="flex:1;padding:10px;background:#450a0a;color:#f87171;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">
+          ✗ No le correspondía
+        </button>
+      </div>
+    </div>`;
+}
+
 function _liqRenderDetalle() {
   const body = document.getElementById('liq-modal-body');
   if (!body || !_liqDetalleRuta) return;
@@ -498,15 +612,29 @@ function _liqRenderDetalle() {
       // nunca en paralelo contra la misma factura) sigue viva: el job se encola
       // con `depende_de_nc` y es el DLQ el que espera antes de postearlo a Siesa
       // — ver LiquidacionService.registrar_cobro_recaudo.
+      // La decision sobre el descuento declarado en campo va en la TARJETA
+      // (_liqBloqueRetencion), no adentro del panel que se abre al pulsar el
+      // boton de cobro: el admin tiene que poder verificarlo antes de que el
+      // RC sea siquiera pulsable, y un panel que solo existe despues de
+      // pulsar el boton no puede ser la puerta de ese boton.
       if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO'
           && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered) {
         const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
-        html += `
+        html += _liqBloqueRetencion(ruta.id, rec, factura);
+        const trabado = _liqRetencionTraba(rec, factura);
+        html += !trabado
+          ? `
           <button onclick="liqToggleCobro(${ruta.id}, ${rec.id})"
             style="width:100%;margin-top:8px;padding:12px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
             Registrar Cobro (RC)
-          </button>
-          ${rcEsperaNC ? `
+          </button>`
+          : `
+          <button disabled
+            style="width:100%;margin-top:8px;padding:12px;background:var(--bg);color:var(--tx3);border:1px solid var(--brd);border-radius:8px;font-size:13px;font-weight:700;cursor:not-allowed;">
+            🔒 Registrar Cobro (resuelve el descuento primero)
+          </button>`;
+        html += `
+          ${rcEsperaNC && !trabado ? `
           <div style="font-size:11px;color:var(--tx3);margin-top:6px;text-align:center;">
             Se encola de una vez — Siesa lo recibe cuando la NC de la devolucion dispare.
           </div>` : ''}
@@ -718,12 +846,12 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
       html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mDefault)} · CO: ${df.co_factura || '—'} · CxC: ${df.cuenta_cxc || 'fallback'}</div>`;
     }
 
-    // Retención declarada en campo — decisión obligatoria del admin
-    // (2026-08-19). `motivo_descuento_sugerido` es lo que el CONDUCTOR
-    // anotó en la pantalla de pago parcial (lo que el cliente dijo, sin
-    // verificar). Antes esto era solo una casilla premarcada; ahora bloquea
-    // el RC hasta que el admin se pronuncie — ver
-    // LiquidacionService.registrar_cobro_recaudo.
+    // Estado del descuento declarado en campo. La DECISION ya no vive acá:
+    // se toma en la tarjeta de la parada (_liqBloqueRetencion), antes de que
+    // el boton de cobro sea pulsable — un panel que solo existe despues de
+    // pulsar el boton no puede ser la puerta del boton. Acá queda el estado
+    // y el candado, por si otro admin decidio distinto entre el render de la
+    // lista y este preview. Ver LiquidacionService.registrar_cobro_recaudo.
     const motivoSugerido = preview.motivo_descuento_sugerido || '';
     const retencionConfirmada = preview.retencion_confirmada;
     let bloqueadoPorRetencion = false;
@@ -735,24 +863,20 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
       if (retencionConfirmada === null || retencionConfirmada === undefined) {
         bloqueadoPorRetencion = true;
         html += `
-          <div style="margin-bottom:12px;padding:12px;background:#78350f22;border:1px solid #fbbf2444;border-radius:8px;">
-            <div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:4px;">⚠ Retención declarada por el conductor: ${nombreMotivo}</div>
-            <div style="font-size:11px;color:var(--tx3);margin-bottom:10px;">El cliente dijo en la puerta que tenía derecho a este descuento — nadie lo ha verificado todavía. Confirma o rechaza antes de poder registrar el cobro.</div>
-            <div style="display:flex;gap:8px;">
-              <button onclick="liqConfirmarRetencion(${rutaId}, ${recaudoId}, true)" style="flex:1;padding:10px;background:#14532d;color:#4ade80;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✓ Sí tenía derecho</button>
-              <button onclick="liqConfirmarRetencion(${rutaId}, ${recaudoId}, false)" style="flex:1;padding:10px;background:#450a0a;color:#f87171;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✗ No tenía derecho</button>
-            </div>
+          <div style="margin-bottom:12px;padding:10px 12px;background:#78350f22;border:1px solid #fbbf2444;border-radius:8px;">
+            <div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:4px;">⚠ Descuento sin verificar: ${nombreMotivo}</div>
+            <div style="font-size:11px;color:var(--tx3);">Cierra este panel y decide en la tarjeta si al cliente le correspondía el descuento — el RC no se puede registrar antes.</div>
           </div>`;
       } else if (retencionConfirmada === false) {
         const faltaPagar = Math.max(0, Math.round((mSiesa || 0) - mCobrado));
         bloqueadoPorRetencion = (mSiesa || 0) - mCobrado > 1;
         html += `
-          <div style="margin-bottom:12px;padding:12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
-            <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Retención rechazada: ${nombreMotivo}</div>
-            <div style="font-size:11px;color:var(--tx3);">El cliente NO tenía derecho a este descuento — debe pagar el valor completo (${_liqFmt(mSiesa)}).${bloqueadoPorRetencion ? ` Faltan ${_liqFmt(faltaPagar)}. Ajusta el monto cuando el cliente pague la diferencia — el RC sigue bloqueado hasta entonces.` : ' Monto ya cubre el valor completo — puedes continuar.'}</div>
+          <div style="margin-bottom:12px;padding:10px 12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
+            <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Descuento rechazado: ${nombreMotivo}</div>
+            <div style="font-size:11px;color:var(--tx3);">El cliente NO tenía derecho — debe pagar el valor completo (${_liqFmt(mSiesa)}).${bloqueadoPorRetencion ? ` Faltan ${_liqFmt(faltaPagar)}: sube el monto de arriba cuando el dinero llegue y el bloqueo se resuelve solo.` : ' El monto ya cubre el valor completo — puedes continuar.'}</div>
           </div>`;
       } else {
-        html += `<div style="margin-bottom:10px;font-size:11px;color:#4ade80;">✓ Retención confirmada — el cliente sí tenía derecho al descuento.</div>`;
+        html += `<div style="margin-bottom:10px;font-size:11px;color:#4ade80;">✓ Descuento confirmado — el cliente sí tenía derecho.</div>`;
       }
     }
 
@@ -809,8 +933,8 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
 /** Decisión del admin sobre la retención que el conductor declaró en campo. */
 async function liqConfirmarRetencion(rutaId, recaudoId, confirmar) {
   const pregunta = confirmar
-    ? '¿Confirmar que el cliente sí tenía derecho a este descuento?'
-    : '¿Rechazar la retención? El RC quedará bloqueado hasta que el cliente pague el valor completo.';
+    ? '¿Confirmar que al cliente sí le correspondía este descuento?'
+    : '¿Rechazar el descuento? El RC queda bloqueado hasta que el cliente pague el valor completo.';
   if (!confirm(pregunta)) return;
   try {
     const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/confirmar-retencion`, {
@@ -820,9 +944,12 @@ async function liqConfirmarRetencion(rutaId, recaudoId, confirmar) {
     });
     const d = await r.json();
     if (r.ok) {
-      alerta(confirmar ? 'Retención confirmada' : 'Retención rechazada — falta el pago del valor completo',
+      alerta(confirmar ? 'Descuento confirmado' : 'Descuento rechazado — falta el pago del valor completo',
              confirmar ? 'exito' : 'advertencia');
-      await _liqRenderPanelCobro(rutaId, recaudoId);
+      // Se recarga la LISTA, no solo el panel: la decision desbloquea (o
+      // bloquea) el boton de cobro de la tarjeta, que vive fuera del panel.
+      _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
+      _liqRenderDetalle();
     } else {
       alerta(d.error || 'Error al registrar la decisión', 'error');
     }

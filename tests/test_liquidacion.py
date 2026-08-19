@@ -647,3 +647,52 @@ class TestLaPantallaNoTrabaElCobroDeUnParcial:
             f'\nEl monto por defecto ya no depende del estado: {linea!r}\n'
             'En PARCIAL tiene que arrancar en lo que trajo el conductor: ese '
             'valor viaja como monto_override y pisa la lógica del servicio.')
+
+
+class TestLaDecisionDelDescuentoViveEnLaTarjeta:
+    """Dónde vive la puerta, no solo que exista.
+
+    La decisión sobre el descuento declarado en campo estaba DENTRO del panel
+    que se abre al pulsar «Registrar Cobro» — o sea, después del botón que
+    pretendía custodiar. Para el admin eso es lo mismo que no existir: la
+    lista no muestra nada que confirmar y el botón se ve normal. La puerta
+    tiene que estar en la tarjeta de la parada, antes de que el botón sea
+    pulsable.
+    """
+
+    import pathlib as _pl
+    _JS = _pl.Path(__file__).resolve().parents[1] / 'app' / 'static' / 'pwa' / 'liquidacion.js'
+
+    def _fuente(self):
+        return self._JS.read_text(encoding='utf-8')
+
+    def test_la_tarjeta_pinta_la_decision_antes_del_boton(self):
+        fuente = self._fuente()
+        i = fuente.find('_liqBloqueRetencion(ruta.id')
+        assert i != -1, (
+            '\nLa lista dejó de pintar el bloque de decisión del descuento. '
+            'Sin él, el admin no tiene dónde confirmar ni rechazar.')
+        j = fuente.find('liqToggleCobro(${ruta.id}', i)
+        assert j != -1 and j > i, (
+            '\nEl bloque de decisión quedó después del botón de cobro (o el '
+            'botón se renombró). La puerta va ANTES.')
+
+    def test_el_boton_de_cobro_se_traba_con_el_descuento_sin_verificar(self):
+        fuente = self._fuente()
+        assert '_liqRetencionTraba(rec, factura)' in fuente, (
+            '\nLa lista dejó de consultar si el descuento traba el RC — el '
+            'botón vuelve a ofrecerse sobre un descuento que nadie verificó.')
+        i = fuente.find('function _liqRetencionTraba')
+        cuerpo = fuente[i:i + 1200]
+        assert 'retencion_confirmada === true' in cuerpo and 'return true' in cuerpo, (
+            '\nLa regla dejó de distinguir pendiente/confirmado/rechazado.')
+
+    def test_decidir_recarga_la_lista_no_solo_el_panel(self):
+        """El botón que la decisión desbloquea vive en la tarjeta. Refrescar
+        solo el panel dejaba el candado puesto hasta recargar a mano."""
+        fuente = self._fuente()
+        i = fuente.find('async function liqConfirmarRetencion')
+        assert i != -1, '¿se renombró la acción de decidir?'
+        cuerpo = fuente[i:i + 1400]
+        assert 'liquidacion-detalle' in cuerpo and '_liqRenderDetalle()' in cuerpo, (
+            '\nDecidir volvió a refrescar solo el panel de cobro.')
