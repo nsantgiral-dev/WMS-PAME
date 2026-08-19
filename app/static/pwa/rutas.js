@@ -2088,7 +2088,7 @@ function _condRenderFormParada() {
           oninput="condActualizarMotivoVisible()"
           style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:18px;font-weight:700;box-sizing:border-box;">
 
-        <div id="cond-motivo-wrap" style="margin-top:12px;display:none;">
+        <div id="cond-motivo-descuento-wrap" style="margin-top:12px;display:none;">
           <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
           <select id="cond-motivo-descuento"
             style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
@@ -2238,10 +2238,10 @@ function condSelTipoPago(tipo) {
   if (tipo === 'PARCIAL') condActualizarMotivoVisible();
 }
 
-/** Muestra el desplegable de motivo solo si el conductor ya escribió un monto parcial menor al valor a cobrar. */
+/** Muestra el desplegable de motivo (del DESCUENTO, no del rechazo) solo si el conductor ya escribió un monto parcial menor al valor a cobrar. */
 function condActualizarMotivoVisible() {
   const el = document.getElementById('cond-contenido');
-  const wrap = document.getElementById('cond-motivo-wrap');
+  const wrap = document.getElementById('cond-motivo-descuento-wrap');
   const inp = document.getElementById('cond-monto-parcial');
   if (!wrap || !inp || !el) return;
   const monto = parseInt(inp.value, 10) || 0;
@@ -2260,6 +2260,11 @@ function condSelEstado(estado) {
   if (!el) return;
   el._estadoSel = estado;
 
+  // Este wrap y el de "motivo del descuento" (pago parcial) compartían el
+  // mismo id hasta 2026-08-19 — getElementById siempre agarraba el otro, así
+  // que el select de motivo de rechazo nunca se mostraba al marcar RECHAZADO
+  // (el backend sí exigía el campo — el conductor quedaba trabado sin ver
+  // por qué). El del descuento se renombró: ver cond-motivo-descuento-wrap.
   const wrapMotivo = document.getElementById('cond-motivo-wrap');
   if (wrapMotivo) wrapMotivo.style.display = estado === 'RECHAZADO' ? 'block' : 'none';
 

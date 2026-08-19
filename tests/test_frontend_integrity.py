@@ -1420,3 +1420,51 @@ class TestBannerReglaCero:
         assert connekta.modo_datos() == 'ensayo', (
             'WMS_ENSAYO dejó de pesar: el banner se apagaría en un ensayo con '
             'credenciales reales, que es justo cuando hace falta')
+
+
+class TestMotivoDeRechazoNoChocaDeId:
+    """2026-08-19: dos `<div id="cond-motivo-wrap">` en la misma plantilla —
+    uno para "motivo del descuento" (pago parcial con crédito, dentro de
+    `cond-entrega-payload`, que se oculta en RECHAZADO), otro para "motivo del
+    rechazo" (el que hace falta mostrar). Los dos vivían en la MISMA cadena de
+    HTML a la vez —no son ramas de un ternario que se excluyen— así que
+    `condSelEstado('RECHAZADO')` pedía `getElementById('cond-motivo-wrap')`
+    y siempre recibía el primero, huérfano dentro de un panel oculto. El
+    select real de motivo nunca se mostraba; el backend sí exigía el campo
+    (`Elegí el motivo del rechazo de la lista...`) — el conductor quedaba
+    trabado sin ver por qué.
+
+    No es un guard genérico "sin ids repetidos": ese swing falso-positiva
+    sobre ids que sí se repiten a propósito en ramas de un `? :` mutuamente
+    excluyentes (ej. `cond-valorfactura-wrap`, CREDITO vs. DINAMICO — nunca
+    coexisten en el HTML final). Este guard verifica la única cosa que
+    importa: que el motivo del descuento y el motivo del rechazo tengan ids
+    DISTINTOS, para que `condSelEstado` alcance el que debe.
+    """
+
+    def _rutas_js(self):
+        # UTF-8 explícito: `_read()` abre con el encoding por defecto del SO
+        # (cp1252 en Windows), que revienta con los caracteres de caja (═) que
+        # ya tiene rutas.js — nada que ver con este guard.
+        with open(os.path.join(_PWA, 'rutas.js'), 'r', encoding='utf-8') as f:
+            return f.read()
+
+    def test_motivo_descuento_y_motivo_rechazo_tienen_ids_distintos(self):
+        src = self._rutas_js()
+        assert src.count('id="cond-motivo-wrap"') == 1, (
+            'cond-motivo-wrap debe aparecer una sola vez (el div del motivo '
+            'de RECHAZO) — si vuelve a aparecer dos veces, getElementById '
+            'vuelve a agarrar el equivocado, como con el motivo de descuento')
+        assert 'id="cond-motivo-descuento-wrap"' in src
+
+    def test_condSelEstado_apunta_al_wrap_de_rechazo(self):
+        src = self._rutas_js()
+        i = src.index('function condSelEstado')
+        bloque = src[i:i + 800]
+        assert "getElementById('cond-motivo-wrap')" in bloque
+
+    def test_condActualizarMotivoVisible_apunta_al_wrap_de_descuento(self):
+        src = self._rutas_js()
+        i = src.index('function condActualizarMotivoVisible')
+        bloque = src[i:i + 400]
+        assert "getElementById('cond-motivo-descuento-wrap')" in bloque
