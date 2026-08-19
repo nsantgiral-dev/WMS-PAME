@@ -336,6 +336,12 @@ class LiquidacionService:
             'recaudo_id': recaudo_id,
             'estado_entrega': estado,
             'forma_pago': forma_pago,
+            # Lo que el conductor declaró haber recibido. La pantalla lo
+            # compara contra el neto de Siesa y, en PARCIAL, lo usa como
+            # monto por defecto del RC (ver `registrar_cobro_recaudo`).
+            # Faltaba en el payload: el front leía `preview.monto_cobrado`
+            # y siempre recibía `undefined` → "Conductor: $0".
+            'monto_cobrado': float(recaudo.monto_cobrado or 0),
             'datos_factura': {
                 'base_gravable': base_gravable,
                 'total_iva': total_iva,

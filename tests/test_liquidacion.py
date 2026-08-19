@@ -572,3 +572,78 @@ class TestConfirmarRetencion:
         from app.services.liquidacion_service import LiquidacionService
         with pytest.raises(LookupError):
             LiquidacionService.confirmar_retencion(999999, admin_id=7, confirmar=True)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# El RC de un PARCIAL va por lo entregado (2026-08-19)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestElPreviewExponeLoQueTrajoElConductor:
+    """El backend ya decidía bien y la pantalla no se enteraba.
+
+    `_liqRenderPanelCobro` lee `preview.monto_cobrado` para comparar contra el
+    neto de Siesa y, en PARCIAL, para proponer el monto del RC. La clave nunca
+    estuvo en el payload: el front recibía `undefined`, mostraba «Conductor:
+    $0» y mandaba `monto_override` = factura completa — que en el servicio
+    tiene prioridad sobre todo lo demás. O sea que la regla de «PARCIAL cobra
+    lo entregado» quedaba muerta en el único camino que la usa.
+    """
+
+    def _mock_siesa(self):
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': 1680672, 'f470_vlr_imp': 319328, 'f470_vlr_neto': 2000000,
+             'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
+        ]
+        mock_connekta.get_pedido_cabecera.return_value = {
+            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
+            'f461_id_sucursal_pedido_rem': '001',
+        }
+        mock_connekta.get_cxc_general = MagicMock(return_value=[])
+        return mock_connekta
+
+    def test_el_preview_trae_el_monto_del_conductor(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=1500000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            preview = LiquidacionService.preview_acciones_recaudo(recaudo.id)
+        assert preview['monto_cobrado'] == 1500000, (
+            '\nSin esta clave la pantalla cree que el conductor trajo $0 y '
+            'propone cobrar la factura completa.')
+        assert preview['estado_entrega'] == 'PARCIAL', (
+            '\nEl front decide el monto por defecto con este campo.')
+
+
+class TestLaPantallaNoTrabaElCobroDeUnParcial:
+    """El guard del navegador, no del servidor.
+
+    El bloqueo duro del backend se quitó el 2026-08-19 (el RC no espera a la
+    NC: son documentos distintos, y el DLQ ya espera solo por `depende_de_nc`).
+    Pero `liquidacion.js` conservó su propio `disabled` — el botón siguió
+    diciendo «Registrar Cobro (espera NC)» y el arreglo no llegó a nadie. Es
+    el mismo hueco de `ENTREGADO_SIN_PAGO`: el servidor decide bien y la
+    pantalla no se entera.
+    """
+
+    import pathlib as _pl
+    _JS = _pl.Path(__file__).resolve().parents[1] / 'app' / 'static' / 'pwa' / 'liquidacion.js'
+
+    def test_el_boton_no_se_deshabilita_esperando_la_nc(self):
+        fuente = self._JS.read_text(encoding='utf-8')
+        assert 'espera NC' not in fuente, (
+            '\nVolvió el bloqueo del botón de RC para PARCIAL sin NC. El RC es '
+            'por lo que el conductor SÍ entregó — se encola de una vez y el '
+            'DLQ espera a la NC antes de postearlo a Siesa (Regla 7 intacta).')
+
+    def test_el_monto_por_defecto_en_parcial_es_lo_entregado(self):
+        fuente = self._JS.read_text(encoding='utf-8')
+        assert "preview.estado_entrega === 'PARCIAL'" in fuente, (
+            '\nLa pantalla dejó de distinguir el PARCIAL — vuelve a proponer '
+            'el neto de Siesa como monto del RC.')
+        i = fuente.find('const mDefault')
+        assert i != -1, '¿se renombró el monto por defecto del panel de cobro?'
+        linea = fuente[i:fuente.find('\n', i)]
+        assert 'esParcial' in linea and 'mCobrado' in linea, (
+            f'\nEl monto por defecto ya no depende del estado: {linea!r}\n'
+            'En PARCIAL tiene que arrancar en lo que trajo el conductor: ese '
+            'valor viaja como monto_override y pisa la lógica del servicio.')

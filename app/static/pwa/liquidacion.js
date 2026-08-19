@@ -490,14 +490,26 @@ function _liqRenderDetalle() {
       // `ENTREGADO_SIN_PAGO` va en la exclusion junto a RECHAZADO. Sin eso el
       // boton aparecia: su `forma_pago` es null, asi que `!esCred` daba true y
       // la pantalla ofrecia registrar un cobro que nunca ocurrio.
+      //
+      // Un PARCIAL sin NC ya NO deshabilita el boton (2026-08-19): el RC es por
+      // lo que el conductor SI entrego, un documento distinto de la NC (que es
+      // por lo devuelto), y el admin no tiene por que esperar horas o dias a que
+      // recepcion confirme la devolucion para encolarlo. La Regla 7 (NC -> RC,
+      // nunca en paralelo contra la misma factura) sigue viva: el job se encola
+      // con `depende_de_nc` y es el DLQ el que espera antes de postearlo a Siesa
+      // — ver LiquidacionService.registrar_cobro_recaudo.
       if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO'
           && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered) {
-        const rcDisabled = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
+        const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
         html += `
-          <button onclick="liqToggleCobro(${ruta.id}, ${rec.id})" ${rcDisabled ? 'disabled' : ''}
-            style="width:100%;margin-top:8px;padding:12px;background:${rcDisabled ? '#333' : '#14532d'};color:${rcDisabled ? '#666' : '#4ade80'};border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            ${rcDisabled ? 'Registrar Cobro (espera NC)' : 'Registrar Cobro (RC)'}
+          <button onclick="liqToggleCobro(${ruta.id}, ${rec.id})"
+            style="width:100%;margin-top:8px;padding:12px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
+            Registrar Cobro (RC)
           </button>
+          ${rcEsperaNC ? `
+          <div style="font-size:11px;color:var(--tx3);margin-top:6px;text-align:center;">
+            Se encola de una vez — Siesa lo recibe cuando la NC de la devolucion dispare.
+          </div>` : ''}
           <div id="liq-cobro-panel-${rec.id}" style="display:none;"></div>`;
       }
       if (esCred) {
@@ -667,6 +679,15 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
     const mCobrado = preview.monto_cobrado || 0;
     const mSiesa = df.total_neto || 0;
     const difieren = mSiesa > 0 && Math.abs(mSiesa - mCobrado) > 1;
+    // En PARCIAL los montos difieren A PROPOSITO: el cliente devolvio parte
+    // del pedido, asi que el conductor trae menos plata que el neto de la
+    // factura. El RC va por lo que SI entro (`monto_cobrado`); la diferencia
+    // la cierra la NC de la devolucion contra la misma factura, no el RC.
+    // Por eso el default del input es el del conductor, no el de Siesa —
+    // antes mandaba `monto_override` = factura completa y pisaba la logica
+    // del backend (`registrar_cobro_recaudo`), cobrando de mas.
+    const esParcial = preview.estado_entrega === 'PARCIAL';
+    const mDefault = esParcial ? (mCobrado || mSiesa) : (mSiesa || mCobrado);
 
     if (!df.datos_disponibles) {
       panel.innerHTML = `<div style="padding:12px;color:#f59e0b;background:#78350f22;border-radius:8px;margin-top:8px;">
@@ -681,19 +702,20 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
     if (difieren) {
       html += `
         <div style="margin-bottom:10px;padding:8px;background:#78350f22;border-radius:6px;">
-          <div style="font-size:11px;color:#fbbf24;font-weight:700;margin-bottom:4px;">⚠ Montos difieren</div>
+          <div style="font-size:11px;color:#fbbf24;font-weight:700;margin-bottom:4px;">${esParcial ? 'Entrega parcial — el RC va por lo entregado' : '⚠ Montos difieren'}</div>
           <div style="font-size:12px;color:var(--tx3);">Conductor: ${_liqFmt(mCobrado)} · Siesa: ${_liqFmt(mSiesa)}</div>
+          ${esParcial ? `<div style="font-size:11px;color:var(--tx3);margin-top:4px;">La diferencia (${_liqFmt(Math.max(0, mSiesa - mCobrado))}) es la devolución — la cierra la NC contra la factura, no este RC.</div>` : ''}
           <div style="margin-top:6px;display:flex;gap:6px;">
             <button onclick="document.getElementById('liq-monto-${recaudoId}').value=${mSiesa}" style="padding:4px 10px;background:var(--pm);color:#fff;border:none;border-radius:4px;font-size:11px;cursor:pointer;">Usar Siesa</button>
             <button onclick="document.getElementById('liq-monto-${recaudoId}').value=${mCobrado}" style="padding:4px 10px;background:var(--bg-s);color:var(--tx2);border:1px solid var(--brd);border-radius:4px;font-size:11px;cursor:pointer;">Usar conductor</button>
           </div>
-          <input type="number" id="liq-monto-${recaudoId}" value="${mSiesa}" step="0.01"
+          <input type="number" id="liq-monto-${recaudoId}" value="${mDefault}" step="0.01"
             onchange="liqPreviewCobro(${recaudoId})"
             style="width:100%;margin-top:6px;padding:6px;background:var(--bg-s);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:12px;">
         </div>`;
     } else {
-      html += `<input type="hidden" id="liq-monto-${recaudoId}" value="${mSiesa || mCobrado}">`;
-      html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mSiesa || mCobrado)} · CO: ${df.co_factura || '—'} · CxC: ${df.cuenta_cxc || 'fallback'}</div>`;
+      html += `<input type="hidden" id="liq-monto-${recaudoId}" value="${mDefault}">`;
+      html += `<div style="font-size:12px;color:var(--tx2);margin-bottom:8px;">Monto: ${_liqFmt(mDefault)} · CO: ${df.co_factura || '—'} · CxC: ${df.cuenta_cxc || 'fallback'}</div>`;
     }
 
     // Retención declarada en campo — decisión obligatoria del admin
