@@ -22,7 +22,7 @@ from app.routes._auth_helpers import _es_gestion
 from app.models.vehiculo import Vehiculo
 from flota.api._tiempo import iso_utc
 from flota.adaptadores import traspaso
-from flota.adaptadores.modelos import FichaTecnica, LecturaOdometro
+from flota.adaptadores.modelos import Custodia, FichaTecnica, LecturaOdometro
 from flota.dominio import odometro as dom_odo
 from flota.dominio.errores import ErrorFlota
 from flota.dominio.valores import (
@@ -115,6 +115,43 @@ def custodia_activa(placa):
             'km_inicio': vigente.km_inicio,
             'linea_base': vigente.linea_base,
         },
+    }), 200
+
+
+@custodia_bp.route('/custodia/vehiculo-de-conductor/<int:conductor_id>', methods=['GET'])
+@jwt_required()
+@exige(Roles.LECTURA_FLOTA, 'ver el vehículo de un conductor')
+def vehiculo_de_conductor(conductor_id):
+    """Qué vehículo tiene HOY este conductor, para quien programa por él.
+
+    Es la contraparte de `custodia_activa/<placa>` (que responde "¿quién tiene
+    este vehículo?"): acá la pregunta es al revés — "¿qué vehículo tiene este
+    conductor?" — y ya existía resuelta en `mi_turno()`
+    (`flota/api/conductor.py`) para el propio conductor, vía el token. Pero
+    quien arma "Programar viaje" es un admin eligiendo por otro conductor, sin
+    su token — así que ese cálculo, hecho una vez por el conductor, no le
+    servía a la pantalla de despacho: el select de vehículo quedaba en blanco
+    aunque la asignación de turno ya existiera.
+
+    No es "el último vehículo que tuvo": es la custodia VIGENTE (`fin_ts` nulo)
+    ahora mismo. Si no tiene ninguna, no hay vehículo que sugerir — y eso se
+    dice, no se rellena con el último que aparezca.
+    """
+    vigente = Custodia.query.filter(
+        Custodia.custodio_conductor_id == conductor_id,
+        Custodia.fin_ts.is_(None),
+    ).one_or_none()
+    if vigente is None:
+        return jsonify({'vehiculo_id': None}), 200
+
+    vehiculo = db.session.get(Vehiculo, vigente.vehiculo_id)
+    if vehiculo is None:
+        return jsonify({'vehiculo_id': None}), 200
+
+    return jsonify({
+        'vehiculo_id': vehiculo.id,
+        'placa': vehiculo.placa,
+        'tipo': vehiculo.tipo,
     }), 200
 
 

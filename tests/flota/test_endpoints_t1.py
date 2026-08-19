@@ -71,6 +71,39 @@ class TestCustodiaActiva:
         assert cuerpo['custodia'] is None
 
 
+class TestVehiculoDeConductor:
+    """Contraparte de `custodia_activa/<placa>`: dado un conductor, qué
+    vehículo tiene — para que "Programar viaje" (admin eligiendo por otro
+    conductor, sin su token) reutilice la misma asignación de turno que ya
+    resuelve `mi_turno()` para el propio conductor."""
+
+    def test_sin_custodia_vigente_no_inventa_un_vehiculo(
+            self, client, jwt_token_admin, flota_mundo):
+        r = client.get(f"/flota/custodia/vehiculo-de-conductor/{flota_mundo['con']}",
+                       headers=_auth(jwt_token_admin))
+        assert r.status_code == 200
+        assert r.get_json()['vehiculo_id'] is None
+
+    def test_con_custodia_vigente_devuelve_ese_vehiculo(
+            self, client, jwt_token_admin, flota_mundo):
+        from flota.adaptadores import traspaso
+        from flota.dominio.valores import CustodioTipo
+
+        traspaso.traspasar(
+            vehiculo_id=flota_mundo['veh'], km=100_000, registrado_por_usuario_id=1,
+            custodio_tipo=CustodioTipo.CONDUCTOR, custodio_conductor_id=flota_mundo['con'])
+
+        r = client.get(f"/flota/custodia/vehiculo-de-conductor/{flota_mundo['con']}",
+                       headers=_auth(jwt_token_admin))
+        cuerpo = r.get_json()
+        assert cuerpo['vehiculo_id'] == flota_mundo['veh']
+        assert cuerpo['placa'] == flota_mundo['placa']
+
+    def test_exige_sesion(self, client, flota_mundo):
+        r = client.get(f"/flota/custodia/vehiculo-de-conductor/{flota_mundo['con']}")
+        assert r.status_code == 401
+
+
 class TestTraspaso:
 
     def _payload(self, m, km=100_000, **kw):

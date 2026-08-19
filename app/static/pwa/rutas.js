@@ -999,6 +999,26 @@ function rutasCancelarForm() {
 }
 
 /**
+ * Al elegir conductor en "Programar viaje", preselecciona el vehículo que
+ * ya tiene asignado en custodia (misma lógica de asignación/cambio de turno
+ * de Flota, GET /flota/custodia/vehiculo-de-conductor) — sin esto, el admin
+ * tenía que buscarlo a mano en la lista completa aunque el sistema ya supiera
+ * cuál es. Sigue siendo editable: si no hay custodia vigente, o el admin
+ * necesita otro vehículo, el select queda libre para elegir cualquiera.
+ */
+async function rutasConductorCambio() {
+  const conductorId = document.getElementById('rutas-form-conductor')?.value;
+  const selVehiculo = document.getElementById('rutas-form-vehiculo');
+  if (!conductorId || !selVehiculo) return;
+  try {
+    const d = await get('/flota/custodia/vehiculo-de-conductor/' + conductorId);
+    if (d.vehiculo_id && selVehiculo.querySelector(`option[value="${d.vehiculo_id}"]`)) {
+      selVehiculo.value = d.vehiculo_id;
+    }
+  } catch (e) {}
+}
+
+/**
  * Selecciona el tipo de ruta (Urbana/Municipal) y actualiza los estilos de los botones.
  * @param {string} tipo - 'Urbana' o 'Municipal'
  */
