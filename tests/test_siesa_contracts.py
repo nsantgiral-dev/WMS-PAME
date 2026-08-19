@@ -220,6 +220,26 @@ class TestContract142888:
         cxc = payload['CxC'][0]
         assert cxc['F353_ID_AUXILIAR_DOCTO_CRUCE'] == '13050501'
 
+    def test_un_real_de_la_factura_no_el_env_global(self):
+        """PD1411/FE-1416 (2026-08-18): `SIESA_UNIDAD_NEGOCIO` fijo (001) se
+        mandaba en TODA factura, aunque la UN real de esa fila de cartera
+        fuera otra (99) — Siesa rechazó el RC dos veces por el mismo motivo
+        (UN no coincide con el auxiliar de caja, y la clave compuesta del
+        cruce no matcheaba). `unidad_negocio` explícito debe ganarle al
+        env var en las DOS secciones que lo usan (header y CxC)."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw, unidad_negocio='99')
+        assert payload['RCyotrosingresos'][0]['F357_ID_UN'] == '99'
+        assert payload['CxC'][0]['F353_ID_UN_DOCTO_CRUCE'] == '99'
+
+    def test_un_fallback_al_env_si_no_se_conoce_la_real(self):
+        """Sin `unidad_negocio` (fila de cartera no encontrada), sigue
+        cayendo al comportamiento previo — no rompe llamadores viejos."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw)
+        assert payload['RCyotrosingresos'][0]['F357_ID_UN'] == (gw.unidad_negocio or '99')
+        assert payload['CxC'][0]['F353_ID_UN_DOCTO_CRUCE'] == (gw.unidad_negocio or '99')
+
     def test_todos_decimal_21_chars(self):
         gw = _make_gateway()
         payload = self._capture_payload(gw)

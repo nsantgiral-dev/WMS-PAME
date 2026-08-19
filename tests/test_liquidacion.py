@@ -368,6 +368,28 @@ class TestRegistrarCobroRecaudo:
             'Tomó el f253_id de la factura equivocada (o el fallback)'
         )
 
+    def test_toma_la_un_real_de_la_fila_no_el_env_global(self, app, db, recaudo_liq):
+        """PD1411/FE-1416 (2026-08-18): la fila de cartera real traía
+        f353_id_un_cruce=99, pero el RC salía con SIESA_UNIDAD_NEGOCIO fijo
+        (001) — Siesa rechazó ("UN diferente a la del auxiliar de caja" +
+        "documento de cruce no existe", mismo motivo). El job encolado debe
+        llevar la UN de la fila, no depender del fallback en connekta."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        mock_connekta = self._mock_siesa()
+        mock_connekta.get_cxc_general.return_value = [
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_id_un_cruce': '99',
+             'f353_total_db': 2000000, 'f353_total_cr': 0},
+        ]
+        from app.services.liquidacion_service import LiquidacionService
+        from app.models.siesa_job import SiesaJob
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1, retenciones=[])
+
+        job = SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_id=recaudo.id).first()
+        assert job.get_payload()['unidad_negocio'] == '99'
+
     def test_retenciones_detalle_guardado(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
         from app.services.liquidacion_service import LiquidacionService

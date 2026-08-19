@@ -438,6 +438,7 @@ class LiquidacionService:
         from app.services.connekta_gateway import connekta
         co_factura = ''
         cuenta_cxc = ''
+        un_cxc = ''
         base_gravable = 0
         total_iva = 0
         total_neto = 0
@@ -486,6 +487,14 @@ class LiquidacionService:
                         # claves DISTINTAS y las dos citando esta misma
                         # verificación en vivo — y la de allá decidía si un
                         # recibo de caja se reenviaba.
+                        # `f353_id_un_cruce` — Unidad de Negocio REAL de esa
+                        # fila, no `SIESA_UNIDAD_NEGOCIO` (global). PD1411/
+                        # FE-1416 (2026-08-18): la UN real era 99, el env var
+                        # mandaba 001 en todo — Siesa rechazó el RC dos veces
+                        # por el mismo motivo («UN diferente a la del
+                        # documento» y «documento de cruce no existe», la
+                        # clave compuesta no podía matchear con la UN mala).
+                        # `gestor-cartera-pame` ya lo resuelve así.
                         from app.services import cxc_cruce as _cx
                         fila_cxc = _cx.fila_de_la_factura(
                             cxc_data, tarea.tipo_docto_pedido_siesa,
@@ -493,6 +502,7 @@ class LiquidacionService:
                             tipo_docto_fe, consec_fe)
                         if fila_cxc:
                             cuenta_cxc = fila_cxc.get('f253_id', '')
+                            un_cxc = fila_cxc.get('f353_id_un_cruce', '')
                 except Exception as e_cxc:
                     logger.warning(
                         '[LIQUIDACION] get_cxc_general falló para recaudo %d: %s',
@@ -637,6 +647,7 @@ class LiquidacionService:
             depende_de_nc=depende_de_nc,
             co_factura=co_factura,
             cuenta_cxc=cuenta_cxc,
+            unidad_negocio=un_cxc,
         )
 
         # Add accion_origen to RC job payload
@@ -1118,7 +1129,8 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                           consec_fe, tercero_nit: str, sucursal: str,
                           monto: float, forma_pago: str, notas: str,
                           admin_id: int = None, depende_de_nc: bool = False,
-                          co_factura: str = '', cuenta_cxc: str = ''):
+                          co_factura: str = '', cuenta_cxc: str = '',
+                          unidad_negocio: str = ''):
     """Encola job RECIBO_CAJA en la DLQ."""
     SiesaJob.encolar(
         tipo='RECIBO_CAJA',
@@ -1132,6 +1144,7 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             'forma_pago': forma_pago,
             'co_factura': co_factura,
             'cuenta_cxc': cuenta_cxc,
+            'unidad_negocio': unidad_negocio,
             'notas': notas,
             'depende_de_nc': depende_de_nc,
         },

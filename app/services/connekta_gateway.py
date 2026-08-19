@@ -3850,6 +3850,7 @@ class ConnektaGateway:
                              tipo_docto_fe: str, consec_fe,
                              co_factura: str = '',
                              cuenta_cxc: str = '',
+                             unidad_negocio: str = '',
                              notas: str = '') -> dict:
         """
         142888 → API_v1_ReciboCaja
@@ -3860,6 +3861,17 @@ class ConnektaGateway:
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
         cuenta_cxc: f253_id real de la factura (ej '13050501'). Si vacío, usa self.cxc_auxiliar
                     como fallback — pero el cruce puede no aplicar si la factura usa otra cuenta.
+        unidad_negocio: `f353_id_un_cruce` REAL de la fila de cartera que cruza (no un valor
+                    global). PD1411/FE-1416 (2026-08-18): `SIESA_UNIDAD_NEGOCIO=001` fijo se
+                    mandaba en toda factura sin mirar la de verdad — esa factura traía UN=99 en
+                    Siesa, y `SIESA_UNIDAD_NEGOCIO` sirvió solo de fallback erróneo. Siesa
+                    rechazó por dos motivos que eran el mismo: "el auxiliar de caja maneja una
+                    U.N. diferente a la del documento" y "el documento de cruce no existe" — la
+                    clave compuesta que arma Siesa (`auxiliar-CO-UN-sucursal-tipo-consec-cuota`)
+                    nunca podía matchear con la UN equivocada. `gestor-cartera-pame` (otro
+                    proyecto del mismo negocio, mismo Siesa) ya resuelve esto leyendo
+                    `f353_id_un_cruce` de la fila de cartera real en vez de un env var — mismo
+                    fix acá. Si vacío, cae a `self.unidad_negocio` (comportamiento previo).
         """
         if not self.tipo_docto_recibo_caja:
             raise ValueError(
@@ -3878,6 +3890,7 @@ class ConnektaGateway:
         )
         # Caja según CO (Siesa: Tesorería → Cajas)
         id_caja = self._co_caja_map.get(co, '999')
+        un = unidad_negocio or self.unidad_negocio or '99'
 
         # --- Sección RCyotrosingresos (Header) ---
         header = {
@@ -3895,7 +3908,7 @@ class ConnektaGateway:
             'F357_ID_MONEDA_APLICAR': 'COP',
             'F357_VALOR_APLICAR_REAL': self._fmt_valor(monto),
             'F357_ID_COBRADOR': self.cobrador_rc,
-            'F357_ID_UN': self.unidad_negocio or '99',
+            'F357_ID_UN': un,
             'F357_ID_CCOSTO': '',
             'F357_ID_FE': self.flujo_efectivo_rc,
             'F350_ID_CLASE_DOCTO': 13,
@@ -3979,7 +3992,7 @@ class ConnektaGateway:
             'F350_CONSEC_DOCTO': 0,
             'F353_ID_AUXILIAR_DOCTO_CRUCE': cuenta_cxc or self.cxc_auxiliar,
             'F353_ID_CO_DOCTO_CRUCE': co_fact,
-            'F353_ID_UN_DOCTO_CRUCE': self.unidad_negocio or '99',
+            'F353_ID_UN_DOCTO_CRUCE': un,
             'F353_ID_SUCURSAL_DOCTO_CRUCE': sucursal or '001',
             'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
             'F353_CONSEC_DOCTO_CRUCE': consec_int,

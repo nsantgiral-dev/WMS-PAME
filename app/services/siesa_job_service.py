@@ -1258,6 +1258,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 consec_fe=payload['consec_fe'],
                 co_factura=payload.get('co_factura', ''),
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
+                unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
             )
         except Exception as _e_post:
