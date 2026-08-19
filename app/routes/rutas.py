@@ -562,8 +562,9 @@ def confirmar_retencion_recaudo(ruta_id, recaudo_id):
     uid = _uid()
     if not uid:
         return jsonify({'error': 'Token inválido'}), 401
+    from app.extensions import db
     from app.models.recaudo_entrega import RecaudoEntrega
-    recaudo = RecaudoEntrega.query.get(recaudo_id)
+    recaudo = db.session.get(RecaudoEntrega, recaudo_id)
     if not recaudo or recaudo.ruta_id != ruta_id:
         return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
     data = request.get_json() or {}
