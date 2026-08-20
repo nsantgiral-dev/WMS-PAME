@@ -1833,7 +1833,15 @@ async function condAbrirParadas(rutaId) {
   el.innerHTML = '<div style="text-align:center;padding:60px;color:#555;">Cargando paradas...</div>';
   let data = null;
   try {
-    if (!navigator.onLine) throw new Error('offline');
+    // `navigator.onLine` NO confirma internet real — solo dice si el
+    // adaptador de red está conectado a algo (cambio de torre en datos
+    // móviles, VPN, redes raras: puede dar `false` con internet
+    // funcionando). Cortar acá antes de intentar la petición real hacía
+    // que el conductor viera "sin conexión" aunque sí tuviera señal — se
+    // saltaba directo a la caché vacía sin comprobar nada.
+    // `cargarRutasConductor()`, la función hermana justo arriba en este
+    // archivo, ya hacía esto bien: intenta la red primero y solo cae a
+    // caché si el fetch de verdad falla. Misma política, ahora en los dos.
     const d = await get('/api/rutas/' + rutaId + '/paradas');
     data = d;
     await _condDB.set('paradas_' + rutaId, d);
