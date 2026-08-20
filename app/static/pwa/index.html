@@ -1271,55 +1271,55 @@
     <!-- MONITOR DE MUELLE -->
     <div id="tab-muelle" class="admin-content" style="display:none;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="font-size:16px;font-weight:700;">🚛 Monitor de Muelle</div>
+        <div style="font-size:18px;font-weight:700;">🚛 Monitor de Muelle</div>
         <div style="display:flex;align-items:center;gap:10px;">
           <!-- El manifiesto es el papel que va con el conductor y contra el que
                firma el cliente. El endpoint existía sin botón. -->
           <button onclick="muelleImprimirManifiesto()"
-            style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">
+            style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;">
             🖨 Manifiesto
           </button>
-          <div id="muelle-contador" style="font-size:12px;color:#666;"></div>
+          <div id="muelle-contador" style="font-size:13px;color:#666;"></div>
         </div>
       </div>
 
       <!-- Ruta activa -->
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
+        <div style="font-size:13px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
         <div style="display:flex;gap:8px;align-items:center;">
           <select id="muelle-ruta-select" onchange="muelleSeleccionarRuta(this.value)"
-            style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:15px;">
             <option value="">— Sin ruta (solo registrar) —</option>
           </select>
-          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
+          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
         </div>
-        <div id="muelle-ruta-info" style="font-size:11px;color:#555;margin-top:6px;min-height:16px;"></div>
+        <div id="muelle-ruta-info" style="font-size:12px;color:#555;margin-top:6px;min-height:16px;"></div>
       </div>
 
       <!-- Scan-to-Truck -->
       <div style="background:var(--bg-s);border:2px solid var(--pm-border);border-radius:12px;padding:14px;margin-bottom:16px;">
-        <div id="muelle-scan-label" style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
+        <div id="muelle-scan-label" style="font-size:13px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
         <!-- Botón cámara visible en móvil -->
         <button id="muelle-scan-activar" onclick="abrirCamaraMuelle()"
-          style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px;">
+          style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
         <div id="camara-box-muelle" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-muelle" style="border-radius:10px;overflow:hidden;"></div>
           <button onclick="cerrarCamara('camara-box-muelle')"
-            style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">
+            style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:14px;cursor:pointer;">
             Cerrar cámara
           </button>
         </div>
         <div id="muelle-scan-campo" style="display:flex;gap:8px;">
           <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
-            style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
+            style="flex:1;padding:12px;font-size:16px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
             onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
             onblur="muelleScanBlur()"
             oninput="this.value=this.value.toUpperCase()">
-          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;">✓</button>
+          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:16px;cursor:pointer;">✓</button>
         </div>
-        <div id="muelle-scan-feedback" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
+        <div id="muelle-scan-feedback" style="font-size:14px;margin-top:8px;min-height:20px;"></div>
       </div>
 
       <!-- Lista agrupada por destino -->
