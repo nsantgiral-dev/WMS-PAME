@@ -364,27 +364,36 @@ function _liqNombreMotivo(rec) {
 }
 
 /**
- * ¿El descuento declarado traba el RC de esta parada?
+ * Lo que el cliente DEBIA pagar por lo que se quedó.
  *
- *   sin motivo  → no traba, nunca hubo nada que verificar.
- *   pendiente   → traba: ante un dato sin verificar no se asume (Regla 0).
- *   rechazado   → traba mientras lo cobrado no alcance el valor completo de
- *                 la factura; el admin edita el monto cuando el cliente paga
- *                 la diferencia y se destraba solo.
- *   confirmado  → no traba, sigue el flujo normal (RC neto + DC de retencion).
+ * No es el neto de la factura: en una entrega PARCIAL devolvió mercancía y
+ * nunca va a pagar ese valor. Es lo que el conductor tenía como "valor a
+ * cobrar" en la puerta — lo que entró más lo que se descontó. En un ENTREGADO
+ * esa suma da el neto de la factura, así que sirve para los dos casos. Espeja
+ * el guard de LiquidacionService.registrar_cobro_recaudo; si las dos reglas
+ * se separan, la pantalla miente sobre cuánto falta.
  */
-function _liqRetencionTraba(rec, factura) {
+function _liqEsperadoRetencion(rec, factura) {
+  const desc = rec.monto_descuento || 0;
+  if (desc > 0) return (rec.monto_cobrado || 0) + desc;
+  return (factura && factura.total_neto) || 0;
+}
+
+/**
+ * ¿El descuento declarado traba el boton de cobro?
+ *
+ * SOLO mientras nadie lo haya verificado: ante un dato sin verificar no se
+ * asume, y en ese estado no hay nada util que hacer adentro del panel.
+ *
+ * Un descuento RECHAZADO no traba el boton, aunque el backend siga sin
+ * aceptar el cobro: la forma de resolverlo es subir el monto cuando el
+ * cliente pague la diferencia, y ese campo vive DENTRO del panel. Trabar el
+ * boton acá encerraba al admin — sin manera de llegar al unico control que
+ * destraba el bloqueo. El guard de verdad es el del servicio.
+ */
+function _liqRetencionTraba(rec) {
   if (!rec.motivo_descuento) return false;
-  if (rec.retencion_confirmada === true) return false;
-  if (rec.retencion_confirmada === false) {
-    const neto = (factura && factura.total_neto) || 0;
-    // Sin datos de Siesa no hay contra que verificar el valor completo — el
-    // servicio levanta ValueError en ese caso, asi que la pantalla tampoco
-    // deja pasar.
-    if (neto <= 0) return true;
-    return neto - (rec.monto_cobrado || 0) > 1;
-  }
-  return true;
+  return rec.retencion_confirmada === null || rec.retencion_confirmada === undefined;
 }
 
 /** La tarjeta de decision, arriba del boton de cobro. */
@@ -419,16 +428,16 @@ function _liqBloqueRetencion(rutaId, rec, factura) {
   }
 
   if (rec.retencion_confirmada === false) {
-    const falta = Math.max(0, Math.round(neto - (rec.monto_cobrado || 0)));
-    const trabado = _liqRetencionTraba(rec, factura);
+    const esperado = _liqEsperadoRetencion(rec, factura);
+    const falta = Math.max(0, Math.round(esperado - (rec.monto_cobrado || 0)));
     return `
       <div style="margin-top:8px;padding:10px 12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
         <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Descuento rechazado: ${nombre}</div>
         <div style="font-size:11px;color:var(--tx3);">
-          El cliente NO tenía derecho — debe pagar el valor completo (${_liqFmt(neto)}).
-          ${trabado
-            ? `Faltan ${_liqFmt(falta)}. Abre el cobro y corrige el monto cuando el cliente pague la diferencia; hasta entonces el RC queda bloqueado.`
-            : 'El monto ya cubre el valor completo — puedes registrar el cobro.'}
+          Al cliente NO le correspondía — debe pagar ${_liqFmt(esperado)}${neto > 0 && Math.abs(esperado - neto) > 1 ? ` (lo que se quedó; la factura completa es ${_liqFmt(neto)} e incluye lo devuelto)` : ''}.
+          ${falta > 1
+            ? `Faltan ${_liqFmt(falta)}: abre el cobro y sube el monto cuando el cliente pague la diferencia — el servicio no acepta el RC antes.`
+            : 'El monto ya cubre lo que debía — puedes registrar el cobro.'}
         </div>
       </div>`;
   }
@@ -621,7 +630,7 @@ function _liqRenderDetalle() {
           && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered) {
         const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
         html += _liqBloqueRetencion(ruta.id, rec, factura);
-        const trabado = _liqRetencionTraba(rec, factura);
+        const trabado = _liqRetencionTraba(rec);
         html += !trabado
           ? `
           <button onclick="liqToggleCobro(${ruta.id}, ${rec.id})"
@@ -868,12 +877,18 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
             <div style="font-size:11px;color:var(--tx3);">Cierra este panel y decide en la tarjeta si al cliente le correspondía el descuento — el RC no se puede registrar antes.</div>
           </div>`;
       } else if (retencionConfirmada === false) {
-        const faltaPagar = Math.max(0, Math.round((mSiesa || 0) - mCobrado));
-        bloqueadoPorRetencion = (mSiesa || 0) - mCobrado > 1;
+        // Misma referencia que el servicio: lo que entró más lo que se
+        // descontó, NO el neto de la factura (que en un PARCIAL incluye lo
+        // devuelto, y el cliente nunca lo va a pagar).
+        const esperado = _liqEsperadoRetencion(
+          { monto_descuento: preview.monto_descuento, monto_cobrado: mCobrado },
+          { total_neto: mSiesa });
+        const faltaPagar = Math.max(0, Math.round(esperado - mCobrado));
+        bloqueadoPorRetencion = faltaPagar > 1;
         html += `
           <div style="margin-bottom:12px;padding:10px 12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
             <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Descuento rechazado: ${nombreMotivo}</div>
-            <div style="font-size:11px;color:var(--tx3);">El cliente NO tenía derecho — debe pagar el valor completo (${_liqFmt(mSiesa)}).${bloqueadoPorRetencion ? ` Faltan ${_liqFmt(faltaPagar)}: sube el monto de arriba cuando el dinero llegue y el bloqueo se resuelve solo.` : ' El monto ya cubre el valor completo — puedes continuar.'}</div>
+            <div style="font-size:11px;color:var(--tx3);">Al cliente NO le correspondía — debe pagar ${_liqFmt(esperado)}.${bloqueadoPorRetencion ? ` Faltan ${_liqFmt(faltaPagar)}: sube el monto de arriba cuando el dinero llegue y el bloqueo se resuelve solo.` : ' El monto ya cubre lo que debía — puedes continuar.'}</div>
           </div>`;
       } else {
         html += `<div style="margin-bottom:10px;font-size:11px;color:#4ade80;">✓ Descuento confirmado — el cliente sí tenía derecho.</div>`;

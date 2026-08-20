@@ -11,7 +11,8 @@ from unittest.mock import patch, MagicMock, call
 def recaudo_liq(db, almacen):
     """Factory para RecaudoEntrega con dependencias mínimas."""
     def _make(estado='ENTREGADO', pago='EFECTIVO', monto=1500000,
-              rc=False, nc=False, dc=False, motivo_desc=None, items_ent=None):
+              rc=False, nc=False, dc=False, motivo_desc=None, items_ent=None,
+              monto_desc=0):
         from app.models.recaudo_entrega import RecaudoEntrega
         from app.models.packing import TareaPacking
         from app.models.ruta_despacho import RutaDespacho
@@ -44,6 +45,7 @@ def recaudo_liq(db, almacen):
             estado_entrega=estado, forma_pago=pago, monto_cobrado=monto,
             siesa_rc_triggered=rc, siesa_nc_triggered=nc, siesa_dc_triggered=dc,
             motivo_descuento=motivo_desc,
+            monto_descuento=monto_desc,
             items_entregados=items_ent,
         )
         db.session.add(recaudo)
@@ -679,13 +681,13 @@ class TestLaDecisionDelDescuentoViveEnLaTarjeta:
 
     def test_el_boton_de_cobro_se_traba_con_el_descuento_sin_verificar(self):
         fuente = self._fuente()
-        assert '_liqRetencionTraba(rec, factura)' in fuente, (
+        assert '_liqRetencionTraba(rec)' in fuente, (
             '\nLa lista dejó de consultar si el descuento traba el RC — el '
             'botón vuelve a ofrecerse sobre un descuento que nadie verificó.')
         i = fuente.find('function _liqRetencionTraba')
         cuerpo = fuente[i:i + 1200]
-        assert 'retencion_confirmada === true' in cuerpo and 'return true' in cuerpo, (
-            '\nLa regla dejó de distinguir pendiente/confirmado/rechazado.')
+        assert 'motivo_descuento' in cuerpo and 'retencion_confirmada' in cuerpo, (
+            '\nLa regla dejó de mirar el descuento declarado y su decision.')
 
     def test_decidir_recarga_la_lista_no_solo_el_panel(self):
         """El botón que la decisión desbloquea vive en la tarjeta. Refrescar
@@ -696,3 +698,129 @@ class TestLaDecisionDelDescuentoViveEnLaTarjeta:
         cuerpo = fuente[i:i + 1400]
         assert 'liquidacion-detalle' in cuerpo and '_liqRenderDetalle()' in cuerpo, (
             '\nDecidir volvió a refrescar solo el panel de cobro.')
+
+
+class TestDescuentoRechazadoEnUnParcial:
+    """El choque entre los dos cambios del 2026-08-19.
+
+    Al rechazar el descuento, el guard exigía que lo cobrado alcanzara el
+    `total_neto` de la factura. En un ENTREGADO eso está bien. En un PARCIAL
+    el cliente devolvió mercancía y **nunca** va a pagar ese valor: el pedido
+    quedaba trabado para siempre, sin salida en la pantalla. La referencia
+    correcta es lo que debía pagar por lo que se quedó — `monto_cobrado +
+    monto_descuento`, el "valor a cobrar" que el conductor tenía en la puerta
+    antes de restarle el descuento. En un ENTREGADO esa suma da el neto, así
+    que la regla es una sola para ambos estados.
+    """
+
+    def _mock_siesa(self):
+        """total_neto = 2.000.000 — la factura COMPLETA, sin descontar lo
+        devuelto."""
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': 1680672, 'f470_vlr_imp': 319328, 'f470_vlr_neto': 2000000,
+             'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
+        ]
+        mock_connekta.get_pedido_cabecera.return_value = {
+            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
+            'f461_id_sucursal_pedido_rem': '001',
+        }
+        mock_connekta.get_cxc_general = MagicMock(return_value=[
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_total_db': 2000000, 'f353_total_cr': 0},
+        ])
+        return mock_connekta
+
+    def _recaudo_parcial_rechazado(self, db, recaudo_liq):
+        """Devolvió 500.000 en mercancía (factura 2.000.000, a cobrar
+        1.500.000), pagó 1.400.000 alegando una retención de 100.000 que el
+        admin declaró improcedente."""
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=1400000,
+                              motivo_desc='RETEFUENTE_2.5', monto_desc=100000)
+        recaudo.retencion_confirmada = False
+        db.session.commit()
+        return recaudo
+
+    def test_no_exige_la_factura_completa_que_incluye_lo_devuelto(self, app, db, recaudo_liq):
+        recaudo = self._recaudo_parcial_rechazado(db, recaudo_liq)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[], monto_override=1500000)
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == 1500000
+
+    def test_sigue_bloqueado_si_no_pago_lo_que_le_correspondia(self, app, db, recaudo_liq):
+        """Bajar el listón no es quitarlo: mientras falte plata de la parte
+        que sí se quedó, el RC no sale."""
+        recaudo = self._recaudo_parcial_rechazado(db, recaudo_liq)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='debe pagar el valor completo'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[], monto_override=1450000)
+
+    def test_en_entregado_la_suma_sigue_dando_el_neto_de_la_factura(self, app, db, recaudo_liq):
+        """Sin devolución de por medio la regla nueva no afloja nada: 1.900.000
+        entregados + 100.000 descontados = los 2.000.000 de la factura."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1900000,
+                              motivo_desc='RETEFUENTE_2.5', monto_desc=100000)
+        recaudo.retencion_confirmada = False
+        db.session.commit()
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='debe pagar el valor completo'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[], monto_override=1900000)
+
+    def test_sin_monto_declarado_cae_al_neto_de_siesa(self, app, db, recaudo_liq):
+        """La liquidación masiva puede dejar `motivo_descuento` sin cuánto se
+        descontó. Ahí el neto de la factura sigue siendo la única referencia
+        disponible — no se puede dar por bueno cualquier monto."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        recaudo.retencion_confirmada = False
+        db.session.commit()
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='debe pagar el valor completo'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[], monto_override=1000000)
+
+
+class TestElRechazoNoEncierraAlAdmin:
+    """Un candado que tapa su propia llave.
+
+    La tarjeta bloqueaba el botón de cobro cuando el descuento estaba
+    rechazado — pero el monto se corrige en un campo que vive DENTRO del panel
+    que ese botón abre. El admin quedaba sin manera de llegar al único control
+    que destraba el bloqueo. El gate de verdad es el del servicio; la pantalla
+    solo traba lo que no tiene nada que resolver adentro (el pendiente).
+    """
+
+    import pathlib as _pl
+    _JS = _pl.Path(__file__).resolve().parents[1] / 'app' / 'static' / 'pwa' / 'liquidacion.js'
+
+    def test_solo_el_pendiente_traba_el_boton(self):
+        fuente = self._JS.read_text(encoding='utf-8')
+        i = fuente.find('function _liqRetencionTraba')
+        assert i != -1, '¿se renombró la regla de trabado?'
+        cuerpo = fuente[i:fuente.find('\n}', i)]
+        assert 'retencion_confirmada === false' not in cuerpo, (
+            '\nLa pantalla volvió a trabar el botón con el descuento '
+            'RECHAZADO. El monto que destraba se edita dentro del panel que '
+            'ese botón abre — trabarlo encierra al admin.')
+        assert 'retencion_confirmada === null' in cuerpo, (
+            '\nEl pendiente dejó de trabar el botón: se puede registrar un '
+            'cobro sobre un descuento que nadie verificó.')
+
+    def test_la_pantalla_usa_la_misma_referencia_que_el_servicio(self):
+        fuente = self._JS.read_text(encoding='utf-8')
+        i = fuente.find('function _liqEsperadoRetencion')
+        assert i != -1, '¿se renombró el cálculo de lo que el cliente debía?'
+        cuerpo = fuente[i:fuente.find('\n}', i)]
+        assert 'monto_descuento' in cuerpo and 'monto_cobrado' in cuerpo, (
+            '\nLa pantalla volvió a calcular lo que falta contra el neto de '
+            'Siesa. Si las dos reglas se separan, dice un número y el '
+            'servicio exige otro.')

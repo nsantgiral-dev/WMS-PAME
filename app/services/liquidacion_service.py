@@ -355,6 +355,12 @@ class LiquidacionService:
             # de última milla) — el admin lo ve premarcado abajo pero decide:
             # puede quitarlo o cambiarlo antes de confirmar el cobro.
             'motivo_descuento_sugerido': recaudo.motivo_descuento or '',
+            # Cuánto se descontó. Con esto la pantalla calcula lo que el
+            # cliente DEBÍA pagar si el descuento resulta improcedente
+            # (`monto_cobrado + monto_descuento`) — la misma referencia que
+            # usa el guard de `registrar_cobro_recaudo`, no el neto de la
+            # factura, que en un PARCIAL incluye lo devuelto.
+            'monto_descuento': float(recaudo.monto_descuento or 0),
             # None = pendiente de decisión (bloquea el RC), True = confirmada,
             # False = rechazada (bloquea el RC hasta pagar el valor completo).
             'retencion_confirmada': recaudo.retencion_confirmada,
@@ -621,24 +627,44 @@ class LiquidacionService:
         else:
             monto = float(recaudo.monto_cobrado or 0)
 
-        # Retención rechazada: el cliente debe pagar el valor completo. Se
-        # destraba solo cuando el monto usado alcanza el neto real de la
-        # factura — no hay un segundo estado de "ya pagó el resto" en el WMS
-        # a propósito (ver el campo en el modelo); el admin corrige el monto
-        # (override, o el toggle "Usar Siesa" del preview) cuando el dinero
-        # llegó, y el bloqueo se resuelve solo.
+        # Retención rechazada: el cliente debe pagar lo que le correspondía.
+        # No hay un segundo estado de "ya pagó el resto" en el WMS a propósito
+        # (ver el campo en el modelo): el admin corrige el monto cuando el
+        # dinero llegó y el bloqueo se resuelve solo.
+        #
+        # La referencia NO es `total_neto`. En una entrega PARCIAL el cliente
+        # devolvió mercancía, así que nunca va a pagar el neto completo de la
+        # factura — exigirlo dejaba esos pedidos trabados para siempre, sin
+        # ninguna salida en la pantalla. Lo que sí debía pagar es la parte que
+        # se quedó: `monto_cobrado + monto_descuento`, o sea el "valor a
+        # cobrar" que el conductor tenía en la puerta antes de restarle el
+        # descuento que ahora el admin declaró improcedente. En un ENTREGADO
+        # esa suma es el neto de la factura, así que la regla es una sola para
+        # ambos estados.
+        #
+        # `monto_cobrado` no se reescribe con el override (el override solo
+        # decide `monto`, arriba), así que la referencia no se mueve por
+        # editar el monto: es exactamente lo que se busca.
         if recaudo.motivo_descuento and recaudo.retencion_confirmada is False:
-            if not (datos_siesa_ok and total_neto > 0):
+            descuento_declarado = float(recaudo.monto_descuento or 0)
+            if descuento_declarado > 0:
+                esperado = float(recaudo.monto_cobrado or 0) + descuento_declarado
+            elif datos_siesa_ok and total_neto > 0:
+                # Sin monto declarado (el motivo pudo entrar por la liquidación
+                # masiva, que no guarda cuánto se descontó) queda el neto de la
+                # factura como única referencia disponible.
+                esperado = total_neto
+            else:
                 raise ValueError(
-                    'Retención rechazada y sin datos de Siesa para verificar '
-                    'el valor completo de la factura — reintenta cuando '
-                    'Siesa esté disponible'
+                    'Retención rechazada y sin monto de descuento declarado ni '
+                    'datos de Siesa para verificar cuánto debía pagar el '
+                    'cliente — reintenta cuando Siesa esté disponible'
                 )
             from app.services.cxc_cruce import TOLERANCIA as _TOL
-            if monto < total_neto - _TOL:
+            if monto < esperado - _TOL:
                 raise ValueError(
                     f'Retención rechazada — el cliente debe pagar el valor '
-                    f'completo (${total_neto:,.2f}). Monto actual: '
+                    f'completo (${esperado:,.2f}). Monto actual: '
                     f'${monto:,.2f}. Ajusta el monto cuando el cliente pague '
                     'la diferencia.'
                 )
