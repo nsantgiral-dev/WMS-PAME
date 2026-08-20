@@ -999,6 +999,11 @@
     <!-- Dashboard -->
     <div id="tab-dashboard" class="admin-content">
 
+      <!-- Ambiente: arriba de todo y en rojo por defecto. Un dato que hay que
+           ir a buscar no está publicado — la ausencia de comprobación no es un
+           estado tranquilo. Ver app/services/ambiente.py -->
+      <div id="franja-ambiente" style="margin-bottom:12px;border-radius:8px;overflow:hidden;"></div>
+
       <!-- Fila 1: KPIs principales (6 tarjetas) -->
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
         <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-pedidos')">
