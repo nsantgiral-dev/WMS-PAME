@@ -702,7 +702,7 @@ class RutaService:
 
         tipo_fe, consec_fe = resolver_fe_o_none(tarea)
         if not tipo_fe or not consec_fe:
-            return None, None, {}
+            return None, None, {}, None
 
         valor_factura = None
         valores_por_referencia = {}

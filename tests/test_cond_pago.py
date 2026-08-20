@@ -172,6 +172,36 @@ class TestRutaServiceNoAfirmaContado:
         assert es_contado is True
         assert crudo == 'C01', 'el crudo permite distinguir C01 de un vacío'
 
+    def test_sigue_devolviendo_4_valores_sin_fe_resuelta(self, monkeypatch):
+        """`resolver_fe_o_none` da `(None, None)` cuando la FE todavía no
+        existe (pedido sin facturar) — la salida temprana de
+        `_valor_y_cond_pago` para ese caso quedó con 3 valores en vez de 4
+        cuando se agregó `cond_pago_crudo` a los otros dos `return`. Rompía
+        `listar_paradas` con `ValueError: not enough values to unpack` —
+        toda la pantalla de paradas del conductor, 500, para cualquier ruta
+        con un pedido sin FE resuelta todavía."""
+        from app.services import ruta_service as rs
+        from app.services.connekta_gateway import connekta
+
+        class _Tarea:
+            id = 1
+            rm_tipo, rm_consec = 'RS', 7
+            tipo_docto_pedido_siesa = 'PD'
+            consec_docto_pedido_siesa = '999'
+
+        monkeypatch.setattr(connekta, 'modo_simulacion', False, raising=False)
+        # Sin filas que matcheen → resolver_fe levanta FENoEncontrada →
+        # resolver_fe_o_none devuelve (None, None) → la rama que fallaba.
+        monkeypatch.setattr(connekta, 'get_detalle_factura', lambda **kw: [], raising=False)
+
+        resultado = rs.RutaService._valor_y_cond_pago(_Tarea())
+        assert len(resultado) == 4
+        valor_factura, es_contado, valores_ref, crudo = resultado
+        assert valor_factura is None
+        assert es_contado is None
+        assert valores_ref == {}
+        assert crudo is None
+
 
 class TestElCrudoDistingueLoQueElDerivadoColapsa:
     """`es_contado is None` significa dos cosas: Siesa dijo que no hay
