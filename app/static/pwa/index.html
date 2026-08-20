@@ -8,6 +8,12 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>WMS · Papelería Medellín</title>
   <link rel="manifest" href="/static/pwa/manifest.json">
+  <!-- Favicon: no había NINGUNO declarado, así que la pestaña salía en blanco y
+       el navegador pedía un /favicon.ico de la raíz que tampoco existe.
+       Se usa la variante del círculo teal: a 32px una «m» azul sobre
+       transparente desaparece contra una pestaña oscura, el círculo no. -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/pwa/icon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/pwa/icon-180.png">
   <!-- Tipografía oficial: Nunito (Pilcrow Rounded equivalent, libre) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
