@@ -1051,7 +1051,11 @@ class ConnektaGateway:
         """
         GET API_v2_Ventas_Facturas_DesdePedido — detalle completo de la FE para impresión.
         Intento 1: filtra por RM (f460_id_tipo_docto / f460_consec_docto).
-        Intento 2 (fallback): filtra por consec_pedido si intento 1 devuelve vacío.
+        Intento 2 (fallback): filtra por consec_pedido si intento 1 devuelve
+        vacío **o si Siesa lo rechaza** — un rechazo del filtro RM no implica
+        que la FE no exista (visto en vivo el 2026-08-20: el intento por
+        pedido la trae completa). Sin `consec_pedido` un rechazo del intento
+        1 sí sigue subiendo — no hay con qué reemplazarlo.
         Falla silenciosamente: uso exclusivo de display, nunca de anti-duplicado.
         """
         if self.modo_simulacion:
@@ -1076,14 +1080,34 @@ class ConnektaGateway:
             # Intento 1: filtrar por documento base (RM)
             if tipo_docto_rm and str(tipo_docto_rm).strip():
                 consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
-                rows = _query(
-                    f"f350_id_co = {_lit(self.centro_op)} "
-                    f"AND f460_id_tipo_docto = {_lit(tipo_docto_rm)} "
-                    f"AND f460_consec_docto = {consec_int}"
-                )
-                if rows:
-                    return rows
-                logger.info('[CONNEKTA] get_detalle_factura intento RM vacío — probando por pedido')
+                try:
+                    rows = _query(
+                        f"f350_id_co = {_lit(self.centro_op)} "
+                        f"AND f460_id_tipo_docto = {_lit(tipo_docto_rm)} "
+                        f"AND f460_consec_docto = {consec_int}"
+                    )
+                    if rows:
+                        return rows
+                    logger.info('[CONNEKTA] get_detalle_factura intento RM vacío — probando por pedido')
+                except ConnektaConsultaRechazada as e:
+                    # Un RECHAZO del intento RM no es "no hay factura" — visto
+                    # en vivo el 2026-08-20: Siesa rechaza este filtro para
+                    # remisiones reales cuya FE sí existe (confirmado con el
+                    # intento por pedido, que la trae completa). Sin este
+                    # catch, `resolver_fe` nunca llegaba al intento 2 y
+                    # `_valor_y_cond_pago`/`listar_paradas` se quedaban sin
+                    # dato (o, antes del fix del unpack, con un 500).
+                    #
+                    # Sin un segundo intento que lo reemplace (sin
+                    # consec_pedido) SÍ hay que dejarlo subir — tragárselo acá
+                    # lo convertiría en "no hay nada", justo lo que
+                    # test_un_rechazo_de_siesa_no_se_lee_como_lista_vacia
+                    # prohíbe.
+                    if not consec_pedido:
+                        raise
+                    logger.warning(
+                        '[CONNEKTA] get_detalle_factura intento RM rechazado — '
+                        'probando por pedido: %s', e)
 
             # Intento 2: filtrar por pedido origen
             if consec_pedido:
