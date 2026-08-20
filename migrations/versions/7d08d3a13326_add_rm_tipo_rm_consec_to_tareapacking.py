@@ -25,8 +25,16 @@ def upgrade():
     with op.batch_alter_table('lpn', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_lpn_traslado_estado'))
 
-    with op.batch_alter_table('movimientos_inventario', schema=None) as batch_op:
-        batch_op.drop_index(batch_op.f('idx_movimientos_almacen_fecha'))
+    # `DROP INDEX IF EXISTS` y fuera del bloque batch: estos dos índices YA
+    # los dejó caer una migración anterior, así que sobre una base construida
+    # desde cero no existen y el drop revienta con `UndefinedObject`. Es churn
+    # de autogenerate —`5bdcedc43de0` dropea en el upgrade y recrea en el
+    # downgrade—, no un cambio de esquema real.
+    #
+    # En producción no cambia nada: la migración ya está aplicada y alembic no
+    # la re-ejecuta. Lo que desbloquea es levantar una base nueva.
+    # Verificado el 2026-08-20 contra PostgreSQL limpio.
+    op.execute('DROP INDEX IF EXISTS idx_movimientos_almacen_fecha')
 
     with op.batch_alter_table('pedidos_siesa', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_pedidos_siesa_numero_pedido'))
@@ -71,7 +79,8 @@ def upgrade():
 
     with op.batch_alter_table('tareas_reposicion', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_tareas_reposicion_almacen_estado'))
-        batch_op.drop_index(batch_op.f('ix_tareas_reposicion_estado'))
+    # Ver la nota de arriba: este ya no existe sobre una base desde cero.
+    op.execute('DROP INDEX IF EXISTS ix_tareas_reposicion_estado')
 
     with op.batch_alter_table('ubicaciones_productos', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_ubicaciones_productos_producto_id'))

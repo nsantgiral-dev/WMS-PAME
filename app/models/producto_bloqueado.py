@@ -47,6 +47,15 @@ class ProductoBloqueado(db.Model):
             return False  # desbloqueado sin vigencia (permanente)
         return True
 
+    __table_args__ = (
+        # Declarado con el nombre EXACTO que tiene en la base. Existía en
+        # migraciones y no en el modelo, así que `flask db check` lo
+        # reportaba como sobrante — trece líneas de ruido que volvían
+        # inservible el único detector que atrapa una columna sin
+        # migración (lo de `puede_usar_camara`, 2026-08-20).
+        db.Index('ix_prod_bloq_producto_activo', 'producto_id', 'activo'),
+    )
+
     def to_dict(self):
         return {
             'id': self.id,

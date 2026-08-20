@@ -58,6 +58,10 @@ class RegistroSync(db.Model):
     #: `IS NULL` / `IS NOT NULL` y no `= NULL`: una comparación con NULL da NULL
     #: y el CHECK la aprueba. Esa trampa ya costó una migración abortada.
     __table_args__ = (
+        # Declarado con el nombre EXACTO que tiene en la base: existía en
+        # migraciones y no en el modelo, y `flask db check` lo reportaba
+        # como sobrante.
+        db.Index('ix_registros_sync_tipo_inicio', 'tipo', 'inicio'),
         db.CheckConstraint(
             '(ok IS NULL AND fin IS NULL) OR (ok IS NOT NULL AND fin IS NOT NULL)',
             name='ck_registro_sync_cierre_completo'),

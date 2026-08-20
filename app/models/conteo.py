@@ -118,6 +118,35 @@ class SesionConteo(db.Model):
         lazy='select',
     )
 
+    __table_args__ = (
+        # El índice parcial que impide dos sesiones activas del mismo
+        # (producto, ubicación, almacén) — creado por
+        # `f4b84ad06843_add_sesion_conteo_unique_idx` para una carrera real
+        # entre la API y el scheduler.
+        #
+        # Se declara acá con el MISMO predicado que la migración. Si aun así
+        # `flask db check` lo sigue reportando, no es deriva: es que
+        # autogenerate no sabe comparar predicados parciales. Eso se declara
+        # en `tests/test_deriva_esquema.py` como excepción conocida, con su
+        # motivo — no se silencia sin decir por qué.
+        db.Index('ix_sesion_conteo_activa_unica',
+                 'producto_id', 'ubicacion_id', 'almacen_id',
+                 unique=True,
+                 postgresql_where=db.text(
+                     "estado IN ('PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO') "
+                     "AND es_segundo_conteo = false"),
+                 #: **`sqlite_where` también, o el índice se vuelve TOTAL en
+                 #: los tests.** Sin él, SQLite crea un único sobre
+                 #: (producto, ubicación, almacén) sin predicado: dos sesiones
+                 #: CERRADAS del mismo hueco —el historial normal— colisionan,
+                 #: y 13 tests se caen sobre operación legítima.
+                 #: Es la misma precaución que llevan los cuatro índices de
+                 #: m012; acá se me pasó y la suite lo dijo enseguida.
+                 sqlite_where=db.text(
+                     "estado IN ('PENDIENTE', 'EN_PROCESO', 'SEGUNDO_CONTEO') "
+                     "AND es_segundo_conteo = 0")),
+    )
+
     def to_dict_operario(self):
         """Vista para el operario — SIN cantidad esperada (conteo ciego).
         No exponer es_segundo_conteo: el operario no debe saber si está verificando."""

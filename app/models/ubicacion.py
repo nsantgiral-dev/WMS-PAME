@@ -67,6 +67,15 @@ class Ubicacion(db.Model):
     def es_reserva(self):
         return self.tipo_zona == 'RESERVA'
 
+    __table_args__ = (
+        # Declarado con el nombre EXACTO que tiene en la base. Existía en
+        # migraciones y no en el modelo, así que `flask db check` lo
+        # reportaba como sobrante — trece líneas de ruido que volvían
+        # inservible el único detector que atrapa una columna sin
+        # migración (lo de `puede_usar_camara`, 2026-08-20).
+        db.Index('ix_ubicaciones_producto_asignado', 'producto_asignado_id'),
+    )
+
     def to_dict(self):
         return {
             'id': self.id,
