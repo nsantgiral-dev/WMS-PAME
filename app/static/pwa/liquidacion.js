@@ -878,21 +878,27 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
     const retencionConfirmada = preview.retencion_confirmada;
     html += `<div id="liq-ret-status-${recaudoId}"></div>`;
 
-    // Retenciones checkboxes — premarcada la que el conductor eligió en
-    // campo, solo si la retención ya fue CONFIRMADA (si está pendiente o
-    // rechazada, no se ofrece marcarla: ver el bloque de arriba).
-    html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
-    (preview.retenciones_disponibles || []).forEach(ret => {
-      if (ret.monto_estimado <= 0) return;
-      const esLaSugerida = ret.tipo === motivoSugerido;
-      const marcarla = esLaSugerida && retencionConfirmada === true;
-      const deshabilitarla = esLaSugerida && retencionConfirmada !== true;
-      html += `
-        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:${deshabilitarla ? 'var(--tx3)' : 'var(--tx2)'};cursor:${deshabilitarla ? 'not-allowed' : 'pointer'};">
-          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
-          ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
-        </label>`;
-    });
+    // Retenciones checkboxes — SOLO si el conductor declaró un motivo en
+    // campo. Un pedido pagado completo y sin novedad no tiene nada que
+    // retener: mostrar acá las 12 retenciones del catálogo completo
+    // invitaba al admin a marcar una que nadie negoció con el cliente. La
+    // premarcada es la que el conductor eligió, y solo si ya fue CONFIRMADA
+    // (si está pendiente o rechazada, no se ofrece marcarla: ver el bloque
+    // de arriba).
+    if (motivoSugerido) {
+      html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
+      (preview.retenciones_disponibles || []).forEach(ret => {
+        if (ret.monto_estimado <= 0) return;
+        const esLaSugerida = ret.tipo === motivoSugerido;
+        const marcarla = esLaSugerida && retencionConfirmada === true;
+        const deshabilitarla = esLaSugerida && retencionConfirmada !== true;
+        html += `
+          <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:${deshabilitarla ? 'var(--tx3)' : 'var(--tx2)'};cursor:${deshabilitarla ? 'not-allowed' : 'pointer'};">
+            <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
+            ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
+          </label>`;
+      });
+    }
 
     // Preview dinámico
     html += `<div id="liq-preview-${recaudoId}" style="margin-top:10px;padding:8px;background:var(--bg-s);border-radius:6px;font-size:12px;"></div>`;
