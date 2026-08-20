@@ -626,8 +626,13 @@ function _liqRenderDetalle() {
       // boton de cobro: el admin tiene que poder verificarlo antes de que el
       // RC sea siquiera pulsable, y un panel que solo existe despues de
       // pulsar el boton no puede ser la puerta de ese boton.
+      // `rc_en_cola`: ya se encoló un RC para este recaudo aunque el DLQ
+      // todavía no lo haya procesado (`siesa_rc_triggered` solo se enciende
+      // ahí) — sin esto el botón seguía visible tras el primer clic y un
+      // segundo clic podía duplicar el RC.
       if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO'
-          && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered) {
+          && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered
+          && !rec.rc_en_cola) {
         const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
         html += _liqBloqueRetencion(ruta.id, rec, factura);
         const trabado = _liqRetencionTraba(rec);

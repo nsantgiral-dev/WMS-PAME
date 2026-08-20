@@ -92,6 +92,25 @@ class TestContadoEntregado:
         jobs = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='RECIBO_CAJA').all()
         assert len(jobs) == 1
 
+    def test_rc_ya_en_cola_no_se_duplica_en_el_barrido_masivo(self, app, db, recaudo_liq):
+        """Si `registrar_cobro_recaudo` ya encoló un RC (PENDIENTE, sin
+        `siesa_rc_triggered` todavía) y después corre 'Liquidar Ruta'
+        (barrido masivo sobre el mismo recaudo), no debe encolar un
+        segundo RECIBO_CAJA."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=1500000)
+        from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar(
+            tipo='RECIBO_CAJA',
+            payload={'recaudo_id': recaudo.id, 'monto': 1500000},
+            referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id,
+        )
+        db.session.commit()
+
+        _run_procesar(recaudo, db)
+
+        jobs = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='RECIBO_CAJA').all()
+        assert len(jobs) == 1
+
     def test_contado_entregado_con_retencion_encola_rc_y_dc(self, app, db, recaudo_liq):
         """`monto_desc` no viene declarado (default 0) — el motivo entró sin
         monto, como puede pasar con datos históricos (ver comentario en
@@ -389,6 +408,29 @@ class TestRegistrarCobroRecaudo:
         from app.services.liquidacion_service import LiquidacionService
         with pytest.raises(ValueError, match='idempotencia'):
             LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
+
+    def test_rc_ya_en_cola_bloquea_un_segundo_registro(self, app, db, recaudo_liq):
+        """`siesa_rc_triggered` solo se enciende cuando el DLQ procesa el
+        job — entre el primer 'Registrar Cobro' y ese momento, un segundo
+        clic pasaba el guard de idempotencia limpio y encolaba un segundo
+        RECIBO_CAJA para el mismo recaudo. Acá el job ya está PENDIENTE
+        (como quedaría tras el primer clic), sin `siesa_rc_triggered` aún."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar(
+            tipo='RECIBO_CAJA',
+            payload={'recaudo_id': recaudo.id, 'monto': 2000000},
+            referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id,
+        )
+        db.session.commit()
+
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa()):
+            with pytest.raises(ValueError, match='Ya hay un Recibo de Caja en cola'):
+                LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1)
+
+        assert SiesaJob.query.filter_by(
+            referencia_id=recaudo.id, tipo='RECIBO_CAJA').count() == 1
 
     def test_parcial_sin_nc_no_bloquea_el_rc(self, app, db, recaudo_liq):
         """2026-08-19: el RC ya no espera a que la NC dispare para poder

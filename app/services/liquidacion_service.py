@@ -119,6 +119,12 @@ class LiquidacionService:
             rd['numero_pedido'] = tarea.numero_pedido_siesa or '' if tarea else ''
             rd['tipo_docto'] = tarea.tipo_docto_pedido_siesa or '' if tarea else ''
             rd['consec_docto'] = tarea.consec_docto_pedido_siesa or '' if tarea else ''
+            # `siesa_rc_triggered` se enciende recién cuando el DLQ procesa
+            # el job (pre-flag), no al encolar — la pantalla necesita saber
+            # "ya se pidió" para ocultar el botón de inmediato tras el
+            # primer clic, sin esperar a que el DLQ corra. Ver
+            # `_hay_rc_en_cola` / el guard nuevo en `registrar_cobro_recaudo`.
+            rd['rc_en_cola'] = _hay_rc_en_cola(recaudo.id)
 
             factura_siesa = None
             from app.services.fe_resolver import resolver_fe_o_none
@@ -456,6 +462,21 @@ class LiquidacionService:
             raise ValueError(
                 f'RC ya fue disparado para recaudo {recaudo_id} — '
                 'no se puede re-encolar (idempotencia)'
+            )
+
+        # `siesa_rc_triggered` se enciende recién cuando el DLQ PROCESA el
+        # job (pre-flag, justo antes del POST) — no cuando se encola. Entre
+        # un primer clic en "Registrar Cobro" y ese momento (el DLQ corre
+        # cada 1 min salvo que `disparar_dlq_inmediato` ya haya alcanzado a
+        # correr) el guard de arriba no ve nada y un segundo clic encola un
+        # segundo RECIBO_CAJA para el mismo recaudo. Mirar la cola, no solo
+        # lo enviado — mismo patrón que ya costó un duplicado real en
+        # DOCUMENTO_CONTABLE_RET (`_pucs_en_cola`).
+        if _hay_rc_en_cola(recaudo_id):
+            raise ValueError(
+                f'Ya hay un Recibo de Caja en cola para el recaudo {recaudo_id} '
+                '— espera a que se procese antes de volver a intentar '
+                '(evita duplicar el RC)'
             )
 
         # PARCIAL sin NC disparada: NO bloquea la creación del RC (2026-08-19).
@@ -1255,13 +1276,39 @@ def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: s
     return True
 
 
+def _hay_rc_en_cola(recaudo_id: int) -> bool:
+    """¿Ya hay un RECIBO_CAJA en cola (o completado) para este recaudo? — no
+    solo ENVIADO (`siesa_rc_triggered`, que se enciende recién cuando el DLQ
+    llega al pre-flag, justo antes del POST, no al encolar). Mismo patrón que
+    `_pucs_en_cola` para las retenciones.
+    """
+    return SiesaJob.query.filter(
+        SiesaJob.tipo == 'RECIBO_CAJA',
+        SiesaJob.referencia_tipo == 'RecaudoEntrega',
+        SiesaJob.referencia_id == recaudo_id,
+        SiesaJob.estado.notin_(['FALLIDO', 'DESCARTADO']),
+    ).first() is not None
+
+
 def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                           consec_fe, tercero_nit: str, sucursal: str,
                           monto: float, forma_pago: str, notas: str,
                           admin_id: int = None, depende_de_nc: bool = False,
                           co_factura: str = '', cuenta_cxc: str = '',
                           unidad_negocio: str = ''):
-    """Encola job RECIBO_CAJA en la DLQ."""
+    """Encola job RECIBO_CAJA en la DLQ.
+
+    Guarda contra la cola, no solo contra `siesa_rc_triggered` — protege
+    también al barrido masivo (`_procesar_recaudo` / `liquidar_ruta_siesa`)
+    de encolar un segundo RC si `registrar_cobro_recaudo` ya encoló uno para
+    este recaudo y el DLQ todavía no lo procesó.
+    """
+    if _hay_rc_en_cola(recaudo.id):
+        logger.info(
+            '[LIQUIDACION] recaudo %d: ya hay un RECIBO_CAJA en cola — no se duplica',
+            recaudo.id
+        )
+        return
     SiesaJob.encolar(
         tipo='RECIBO_CAJA',
         payload={
