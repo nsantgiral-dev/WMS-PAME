@@ -363,22 +363,32 @@
       position: sticky; top: 0; z-index: 100;
       min-height: 64px;
     }
-    /* Logo centrado en el canvas cuadrado. Fórmula: render ≤ container/(0.9-0.5) = container/0.4
-       Header 260px → render max 310px → logo ≈248px ancho, sin recorte */
+    /* Los logos ya son HORIZONTALES (1200×134, ~9:1): se recortó la
+       transparencia del lienzo cuadrado de 4501×4501 en el que venían del
+       manual de marca.
+       Por eso desaparece el truco anterior —un img de 310×310 dentro de una
+       caja de 52px con overflow:hidden— que en la práctica mostraba una
+       tajada horizontal del logo y lo dejaba cortado arriba y abajo.
+       Ahora la caja se define por la ALTURA y el ancho sale del ratio. */
     .header-logo {
-      position: relative;
-      width: 260px;
-      height: 52px;
-      overflow: hidden;
-      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      height: 42px;
+      max-width: min(380px, 52vw);
+      flex-shrink: 1;
+      min-width: 0;
     }
     .header-logo img {
-      position: absolute;
-      top: 50%; left: 50%;
-      width: 310px; height: 310px;
+      /* Acotado por los DOS ejes: manda el que se quede corto primero. Con
+         `object-fit: contain` el logo nunca se deforma ni se recorta —
+         simplemente se hace más chico. En un ratio 9:1 el ancho es lo que
+         limita en pantallas angostas, y la altura en las anchas. */
+      max-height: 100%;
+      max-width: 100%;
+      width: auto;
+      height: auto;
       object-fit: contain;
-      object-position: center;
-      transform: translate(-50%, -50%);
+      display: block;
     }
 
     /* ── Login ── */
@@ -388,24 +398,18 @@
       padding: 40px 24px;
       background: radial-gradient(ellipse at top, #0D2020 0%, var(--bg) 60%);
     }
-    /* Login: canvas 4501×4501 (cuadrado) — logo centrado, ~85% ancho, ~15% alto.
-       width:100% escala el canvas al ancho del contenedor sin corte horizontal.
-       translateY(-50%) centra el canvas verticalmente → logo queda centrado. */
+    /* Login: el logo manda, no la caja. Ancho fluido con tope, alto derivado
+       del ratio 9:1 — sin `overflow:hidden` ni posicionado absoluto, que era
+       lo que recortaba. */
     .login-logo {
-      position: relative;
-      width: min(500px, 94vw);
-      height: 100px;
-      overflow: hidden;
+      width: min(520px, 88vw);
       align-self: center;
-      margin-bottom: 24px;
+      margin-bottom: 28px;
     }
     .login-logo img {
-      position: absolute;
-      top: 50%;
-      left: 0;
       width: 100%;
       height: auto;
-      transform: translateY(-50%);
+      display: block;
     }
     .login-subtitulo { font-size: 14px; color: var(--tx3); margin-bottom: 40px; text-align: center; letter-spacing: .03em; }
     .login-form { width: 100%; max-width: 360px; }
@@ -618,14 +622,17 @@
       border-bottom: 2px solid var(--pm-border);
     }
     .emp-header-titulo { font-size: 16px; font-weight: 700; color: var(--tx); }
+    /* Mismo caso que `.header-logo`: el logo ya es horizontal, así que la
+       caja se define por la altura. Sin `overflow:hidden`, que era lo que
+       recortaba. */
     .emp-header-logo {
-      position: relative; width: 260px; height: 50px; overflow: hidden; flex-shrink: 0;
+      display: flex; align-items: center; height: 36px;
+      max-width: min(320px, 55vw); flex-shrink: 1; min-width: 0;
     }
     .emp-header-logo img {
-      position: absolute; top: 50%; left: 50%;
-      width: 310px; height: 310px;
-      object-fit: contain; object-position: center;
-      transform: translate(-50%, -50%);
+      max-height: 100%; max-width: 100%;
+      width: auto; height: auto;
+      object-fit: contain; display: block;
     }
 
     #emp-lista { padding: 16px; }
@@ -705,7 +712,7 @@
                     radial-gradient(ellipse at 80% 80%, #08151E 0%, transparent 60%);
         padding: 60px 40px;
       }
-      .login-logo { width: min(560px, 42vw); height: 112px; }
+      .login-logo { width: min(600px, 46vw); }
       .login-subtitulo { font-size: 16px; letter-spacing: .06em; }
       .login-form { max-width: 420px; }
       .input-field { padding: 15px 20px; font-size: 15px; border-radius: 14px; }
@@ -858,8 +865,7 @@
 
       /* ── Header logo más grande ── */
       /* imagen 340px centrada en 320px → margen 10px c/lado, logo 85%=289px cabe */
-      .header-logo { width: 320px; height: 56px; }
-      .header-logo img { width: 340px; height: 340px; }
+      .header-logo { height: 48px; max-width: min(440px, 34vw); }
 
     /* ── Rec cards ── */
       .rec-card { padding: 24px 26px; }

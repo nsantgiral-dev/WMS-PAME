@@ -7,10 +7,24 @@
   }
 })();
 
-/** @param {boolean} isLight - Whether light theme is active. */
+/**
+ * Cambia el logo según el tema.
+ *
+ * `logo-white.png` es blanco: sobre fondo claro **desaparece**. El HTML lo
+ * trae fijo y esta función lo sustituye al cargar y al alternar tema.
+ *
+ * `.emp-header-logo` faltaba en el selector, así que las pantallas de
+ * empacador y picker se quedaban con el blanco y en tema claro mostraban un
+ * hueco. Un selector que enumera sitios a mano es exactamente la forma que
+ * deja fuera al que se agregue después — por eso ahora se buscan todas las
+ * imágenes que apunten a cualquiera de las dos variantes.
+ *
+ * @param {boolean} isLight - Whether light theme is active.
+ */
 function _actualizarLogo(isLight) {
   const src = isLight ? '/static/pwa/logo-h.png' : '/static/pwa/logo-white.png';
-  document.querySelectorAll('.header-logo img, .login-logo img').forEach(img => { img.src = src; });
+  document.querySelectorAll('img[src*="logo-white.png"], img[src*="logo-h.png"]')
+    .forEach(img => { img.src = src; });
 }
 
 /** Toggle between dark and light theme, persisting choice to localStorage. */
