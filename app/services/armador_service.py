@@ -195,12 +195,23 @@ class ArmadorService:
             .all()
         )
 
-        # Productos con origen
-        productos_origen = dict(
-            db.session.query(Producto.codigo_siesa, Producto.origen)
+        # Origen Y marca. **Eran dos defectos apilados.**
+        #
+        # `productos_origen` mapeaba `codigo_siesa → origen`, y el cruce por
+        # marca de abajo preguntaba si `'M003'` era subcadena de **origen**,
+        # cuyos valores son 'NACIONAL' y 'CHINA'. `'M003' in 'CHINA'` es
+        # False: la rama de marca **no podía darse ni con la columna poblada
+        # al 100%**. El comentario de `MARCAS_CHINA` decía «se cruzan con
+        # `producto.marca_siesa`» y describía un cruce que el código no hacía
+        # — `marca_siesa` no aparecía en ninguna línea ejecutable del módulo.
+        filas_origen = (
+            db.session.query(Producto.codigo_siesa, Producto.origen,
+                             Producto.marca_siesa)
             .filter(Producto.codigo_siesa.isnot(None))
             .all()
         )
+        productos_origen = {f[0]: f[1] for f in filas_origen}
+        productos_marca = {f[0]: f[2] for f in filas_origen}
 
         resultados_nac = []
         resultados_chi = []
@@ -221,8 +232,9 @@ class ArmadorService:
                 continue
 
             origen = (productos_origen.get(ref) or '').upper()
+            marca = (productos_marca.get(ref) or '').upper()
             es_china = origen == 'CHINA' or any(
-                m in (productos_origen.get(ref) or '') for m in MARCAS_CHINA
+                m.upper() in marca for m in MARCAS_CHINA if m
             )
 
             stock_actual = float(stock.get(ref, 0) or 0)
@@ -297,9 +309,41 @@ class ArmadorService:
 
         mult = (delta['ss_despues'] / delta['ss_antes']) if delta['ss_antes'] > 0 else 0
 
+        # ── El régimen China: ¿hay con qué distinguirlo? ────────────────
+        # `Producto.origen` **no tiene ningún escritor** en el repo: no lo pone
+        # el sync de Siesa, no está en la lista blanca de `actualizar_producto`,
+        # no hay ruta ni script. Con la columna vacía, `es_china` es siempre
+        # False y **todo SKU recibe régimen nacional** —LT nacional, R=0— y
+        # `resultados_chi` sale vacío.
+        #
+        # Eso no era un error visible: era una pantalla que mostraba el ROP
+        # dual como si existiera. Ahora se declara, porque un modelo que corre
+        # sobre un insumo ausente y no lo dice es la forma más cara de este
+        # repo: el número sale con cara de bueno y alguien compra con él.
+        _con_origen = sum(1 for v in productos_origen.values() if (v or '').strip())
+        _con_marca = sum(1 for v in productos_marca.values() if (v or '').strip())
+        _insumo = {
+            'skus_con_origen': _con_origen,
+            'skus_con_marca': _con_marca,
+            'skus_totales': len(productos_origen),
+            'regimen_china_operativo': bool(_con_origen or _con_marca),
+            'nota': (
+                'Ningún producto tiene `origen` ni `marca_siesa`: el régimen '
+                'China no puede activarse y TODOS los SKU se calcularon con '
+                'lead time nacional y R=0. La propuesta de contenedor sale '
+                'vacía por construcción, no porque no haga falta comprar.'
+                if not (_con_origen or _con_marca) else None),
+        }
+        if not _insumo['regimen_china_operativo']:
+            logger.warning(
+                '[ARMADOR] ROP dual sin insumo de origen: %d SKU calculados '
+                'todos como nacionales. `Producto.origen` no tiene escritor.',
+                len(productos_origen))
+
         return {
             'nivel_servicio': nivel_servicio,
             'z_score': round(z, 3),
+            'insumo_origen': _insumo,
             # Procedencia del cálculo — sin esto el número no es auditable
             'estimador_sigma_d': ESTIMADOR_SIGMA_D,
             'formula': 'sigma_LTD = sqrt((LT+R)*sigma_d^2 + d^2*sigma_LT^2)  §M0.4',

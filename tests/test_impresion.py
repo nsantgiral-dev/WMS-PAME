@@ -268,6 +268,10 @@ class TestElServidorSigueRespondiendoLoQueLaPantallaEspera:
 class TestElPanelDeRecuperacionEstaCompleto:
     """Cinco recuperaciones existían y solo se alcanzaban por `curl`.
 
+    Quedan **cuatro**: `siesaForzarPacking` se borró el 2026-08-19 por
+    duplicar remisión y factura sobre una tarea ya despachada. Recuperar y
+    duplicar no son lo mismo, y ese botón hacía lo segundo.
+
     Se necesitan el día que Siesa falla, que es a las 6 p.m. de un viernes y no
     a las 10 a.m. de un martes. Una capacidad de recuperación que exige armar un
     curl con un JWT **no existe cuando hace falta**: existe cuando hay tiempo, y
@@ -277,19 +281,18 @@ class TestElPanelDeRecuperacionEstaCompleto:
     _ESPERADOS = {
         'siesaVerCompromisos': '/api/despacho_parcial/${id}/compromisos',
         'siesaFacturarRMManual': '/api/despacho_parcial/${id}/facturar-rm-manual',
-        'siesaForzarPacking': '/api/packing/${id}/forzar-siesa',
         'siesaRecuperarPackingTraslados': '/api/traslados/recuperar-packing',
         'siesaReintentarTraslado': '/api/traslados/${id}/reintentar-siesa',
     }
 
-    def test_las_cinco_tienen_funcion_y_apuntan_a_su_endpoint(self):
+    def test_las_cuatro_tienen_funcion_y_apuntan_a_su_endpoint(self):
         app = _js('app.js')
         for fn, url in self._ESPERADOS.items():
             assert f'async function {fn}(' in app, f'falta {fn}'
             i = app.index(f'async function {fn}(')
             assert url in app[i:i + 1800], f'{fn} no llama a {url}'
 
-    def test_las_cinco_se_disparan_desde_la_pantalla(self):
+    def test_las_cuatro_se_disparan_desde_la_pantalla(self):
         app = _js('app.js')
         i = app.index('async function siesaRecuperacionCargar(')
         panel = app[i:app.index('/** Diagnóstico:', i)]
@@ -306,8 +309,9 @@ class TestLoPeligrosoNoSeConfundeConLoInocuo:
     cuando nadie tiene cabeza para distinguirlas.
     """
 
-    _PELIGROSAS = ('siesaFacturarRMManual', 'siesaForzarPacking',
-                   'siesaReintentarTraslado')
+    # `siesaForzarPacking` salió de acá el 2026-08-19: se borró. Era la única
+    # que reejecutaba la cadena entera sobre una tarea ya despachada.
+    _PELIGROSAS = ('siesaFacturarRMManual', 'siesaReintentarTraslado')
     _SEGURAS = ('siesaVerCompromisos', 'siesaReconciliarPacking',
                 'siesaVerRemision')
 
@@ -321,7 +325,7 @@ class TestLoPeligrosoNoSeConfundeConLoInocuo:
     def test_la_confirmacion_nombra_la_consecuencia(self):
         """Un «¿estás seguro?» pelado se contesta que sí sin leerlo."""
         app = _js('app.js')
-        for fn in ('siesaFacturarRMManual', 'siesaForzarPacking'):
+        for fn in ('siesaFacturarRMManual',):
             i = app.index(f'async function {fn}(')
             cuerpo = app[i:i + 1800]
             assert 'DUPLICADA' in cuerpo or 'DUPLICADOS' in cuerpo, (
@@ -354,7 +358,7 @@ class TestLoPeligrosoNoSeConfundeConLoInocuo:
         assert (panel.index('siesaVerCompromisos()')
                 < panel.index('siesaFacturarRMManual()'))
         assert (panel.index('siesaReconciliarPacking()')
-                < panel.index('siesaForzarPacking()'))
+                < panel.index('siesaFacturarRMManual()'))
 
 
 class TestLosEndpointsDeRecuperacionSiguenAhi:
@@ -363,7 +367,6 @@ class TestLosEndpointsDeRecuperacionSiguenAhi:
     @pytest.mark.parametrize('metodo,ruta', [
         ('GET', '/api/despacho_parcial/1/compromisos'),
         ('POST', '/api/despacho_parcial/1/facturar-rm-manual'),
-        ('POST', '/api/packing/1/forzar-siesa'),
         ('POST', '/api/traslados/1/reintentar-siesa'),
         ('POST', '/api/traslados/recuperar-packing'),
     ])
@@ -371,11 +374,21 @@ class TestLosEndpointsDeRecuperacionSiguenAhi:
         r = client.open(ruta, method=metodo)
         assert r.status_code == 401, f'{ruta} no exige sesión'
 
-    def test_forzar_siesa_es_solo_de_admin(self, client, jwt_token):
-        """Es el más peligroso: reejecuta la cadena entera."""
+    def test_forzar_siesa_ya_no_existe(self, client, jwt_token):
+        """Se borró el 2026-08-19. Apagaba `siesa_triggered` y su única
+        guardia —`estado == DESPACHADO`— admitía justo el caso que duplicaba
+        remisión y factura. El rescate legítimo es `resetear_siesa`, que sí
+        exige `not siesa_triggered`.
+
+        El test se conserva invertido a propósito: que la ruta vuelva a
+        aparecer tiene que ponerse rojo, no pasar callado.
+        """
         r = client.post('/api/packing/1/forzar-siesa',
                         headers={'Authorization': f'Bearer {jwt_token}'})
-        assert r.status_code == 403
+        assert r.status_code == 404, (
+            'volvió a existir /api/packing/<id>/forzar-siesa. Reejecuta '
+            '244328→142945→142943 sobre una tarea ya despachada: con el '
+            'documento ya en Siesa, duplica.')
 
 
 # ══════════════════════════════════════════════════════════════════════════

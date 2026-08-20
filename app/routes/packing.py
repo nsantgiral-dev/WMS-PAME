@@ -399,38 +399,20 @@ def resetear_siesa(id):
         return jsonify({'error': str(e)}), 400
 
 
-@packing_bp.route('/<int:id>/forzar-siesa', methods=['POST'])
-@jwt_required()
-def forzar_retry_siesa(id):
-    """
-    Fuerza el retry de Siesa aunque siesa_triggered=True. Solo admin.
-    Útil cuando el packing se cerró en MODO_ENSAYO y nunca llegó a Siesa real.
-    """
-    if not _solo_admin():
-        return jsonify({'error': 'Solo admin puede forzar retry de Siesa'}), 403
-    from app.extensions import db
-    tarea = TareaPacking.query.get_or_404(id)
-    if tarea.estado != 'DESPACHADO':
-        return jsonify({'error': f'La tarea debe estar DESPACHADO, está {tarea.estado}'}), 400
-    # Forzar siesa_triggered=False para que cerrar_packing lo reintente
-    tarea.siesa_triggered = False
-    db.session.commit()
-    try:
-        # Pasar bultos existentes como bultos_data para saltarse la validación de "sin piezas"
-        from app.models.bulto import Bulto as BultoModel
-        bultos_existentes = BultoModel.query.filter_by(tarea_id=id).all()
-        bultos_data_dummy = [{'tipo': b.tipo, 'cantidad': 1} for b in bultos_existentes] if bultos_existentes else [{'tipo': 'Caja', 'cantidad': 1}]
-        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data_dummy)
-        tarea = TareaPacking.query.get(id)
-        return jsonify({
-            'ok': True,
-            'siesa_triggered': tarea.siesa_triggered,
-            'siesa_response': tarea.siesa_response,
-            'bultos': [b.to_dict() for b in bultos]
-        }), 200
-    except Exception as e:
-        logger.exception(f'[PACKING] Error inesperado en forzar_retry_siesa id={id}')
-        return jsonify({'error': str(e)}), 500
+# `POST /<id>/forzar-siesa` se borró el 2026-08-19.
+#
+# Apagaba `siesa_triggered` para reejecutar 244328→142945→142943 sobre una
+# tarea ya DESPACHADO. Su única guardia era `estado == 'DESPACHADO'', que es
+# **el estado que alcanza un despacho exitoso**: admitía exactamente el caso
+# peligroso y rechazaba los demás. El docstring decía que servía para lo
+# cerrado en MODO_ENSAYO y nada verificaba esa condición; el `confirm()` del
+# frontend advertía del duplicado, pero una pregunta que se contesta con OK
+# no es una guardia. Con `SKIP_FE_CHECK=true` el anti-duplicado tampoco
+# preguntaba, así que no quedaba ninguna red.
+#
+# El caso legítimo lo cubre `resetear_siesa`, que sí exige
+# `not siesa_triggered` y bloquea si hay bultos ya entregados. Confirmado con
+# el dueño del sistema que este botón nunca se usó.
 
 
 @packing_bp.route('/<int:id>/remision', methods=['GET'])

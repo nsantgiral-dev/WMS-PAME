@@ -1108,6 +1108,37 @@ function _liqRenderReconciliacion(d, previo) {
          <td colspan="2" style="padding:6px;text-align:right;color:#6b7280;font-style:italic;">no medible — ${f.nota}</td></tr>`
   ).join('');
 
+  // Qué parada, y por qué. Un contador de ciclos rotos que sube sin decir
+  // cuál mandaría a revisar la ruta entera — que es como se aprende a
+  // ignorarlo. Las dos últimas causas no las ve el conteo de documentos:
+  // el ciclo está completo y aun así falta plata.
+  const _CAUSA = {
+    entrega_sin_cobro: ['Entregó y no registró cobro', '#f87171'],
+    cobro_sin_recibo:  ['Cobró y el recibo no llegó a Siesa', '#f87171'],
+    monto_reescrito:   ['El monto se cambió DESPUÉS de que el recibo salió', '#fbbf24'],
+    cobro_incompleto:  ['Cobró menos que la factura', '#fbbf24'],
+  };
+  const _filas = (d.detalle || []).map(x => {
+    const [txt, color] = _CAUSA[x.tramo] || [x.tramo, '#9ca3af'];
+    const cifras = x.tramo === 'monto_reescrito'
+      ? `recibo ${$(x.en_el_recibo)} · WMS ${$(x.cobrado)}${x.editado_por ? ` · editó usuario ${x.editado_por}` : ''}`
+      : x.tramo === 'cobro_incompleto'
+        ? `factura ${$(x.esperado)} · cobró ${$(x.cobrado)} · falta ${$(x.faltante)}`
+        : `esperado ${$(x.esperado)} · cobrado ${$(x.cobrado)}`;
+    return `<tr>
+      <td style="padding:6px;color:#9ca3af;">Parada ${x.tarea_id}</td>
+      <td style="padding:6px;color:${color};">${txt}</td>
+      <td style="padding:6px;text-align:right;color:#9ca3af;font-size:12px;">${cifras}</td></tr>`;
+  }).join('');
+  const paradasRotas = !_filas ? '' : `
+    <div style="margin-top:14px;">
+      <div style="font-size:11px;color:#9ca3af;text-transform:uppercase;font-weight:700;margin-bottom:4px;">
+        Paradas a revisar</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <tbody>${_filas}</tbody>
+      </table>
+    </div>`;
+
   const peor = d.peor_que_la_vara;
   const veredicto = peor === null
     ? `<span style="color:#6b7280;">sin paradas cobrables — no se midió</span>`
@@ -1135,6 +1166,7 @@ function _liqRenderReconciliacion(d, previo) {
           <th style="text-align:right;padding:6px;">Valor</th></tr></thead>
         <tbody>${fugas}</tbody>
       </table>
+      ${paradasRotas}
       <div style="margin-top:14px;padding:10px;border-radius:8px;background:#111827;font-size:13px;">
         Ciclos rotos: <b>${d.ciclos_rotos}</b>
         ${d.tasa_ciclos_rotos == null ? '' : ` · ${(d.tasa_ciclos_rotos * 100).toFixed(2)}% (vara: ${(d.vara * 100).toFixed(2)}%)`}

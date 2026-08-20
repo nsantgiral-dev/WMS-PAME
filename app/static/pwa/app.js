@@ -489,7 +489,55 @@ function tab(id) {
 }
 
 /** Fetch and render the full admin dashboard (KPIs, chart, alerts, productivity). */
+/**
+ * La franja de ambiente. **Va primero y no depende del resto del dashboard.**
+ *
+ * El 19-ago-2026 el Gestor de Cartera pasó ocho horas escribiendo contra la
+ * base equivocada sin que sonara nada, porque nadie había declarado nada y el
+ * silencio se leyó como conformidad. Un endpoint que hay que abrir no avisa:
+ * esto tiene que estar en la cara de quien entra.
+ *
+ * No intenta adivinar el ambiente —no se puede— sino mostrar si alguien
+ * cuadró una cifra contra algo de afuera, con nombre y fecha.
+ */
+async function cargarFranjaAmbiente() {
+  const cont = document.getElementById('franja-ambiente');
+  if (!cont) return;
+  let d;
+  try {
+    d = await get('/api/health/ambiente');
+  } catch (e) {
+    // El endpoint responde 409 cuando está en ALARMA, así que un error acá
+    // **no se puede leer como «todo bien»**: se pinta la alarma igual.
+    d = e && e.datos ? e.datos : null;
+    if (!d) {
+      cont.innerHTML = `<div style="padding:8px 12px;background:#7f1d1d;color:#fff;
+        font-size:12px;font-weight:700;">AMBIENTE SIN VERIFICAR — no se pudo
+        consultar el estado. El silencio no es «todo bien».</div>`;
+      return;
+    }
+  }
+  if (d.estado === 'DECLARADO') {
+    const u = d.ultima_declaracion || {};
+    cont.innerHTML = `<div style="padding:6px 12px;background:#064e3b;color:#d1fae5;
+      font-size:11px;">Ambiente contrastado por <b>${u.declarado_por_nombre || '—'}</b>
+      el ${(u.declarado_en || '').slice(0, 10)} · ${u.concepto || ''}
+      (WMS ${u.cifra_wms} vs ${u.fuente_externa}: ${u.cifra_externa})</div>`;
+    return;
+  }
+  cont.innerHTML = `<div style="padding:10px 12px;background:#7f1d1d;color:#fff;font-size:12px;">
+    <b style="font-size:13px;">AMBIENTE SIN VERIFICAR</b><br>
+    ${(d.motivos || []).map(m => `• ${m}`).join('<br>')}
+    <div style="margin-top:6px;opacity:.85;font-size:11px;">
+      El host y la compañía no distinguen producción de una copia: los dos son
+      iguales en las dos. Hace falta que alguien cuadre una cifra contra una
+      fuente externa al ERP.</div></div>`;
+}
+
 async function cargarDashboard() {
+  // Fuera del try de abajo a propósito: si el dashboard falla, la franja
+  // tiene que salir igual. Es la que avisa.
+  cargarFranjaAmbiente();
   try {
     const d = await get('/api/dashboard/resumen-completo?almacen_id=' + ALMACEN_ID);
     const k = d.kpis;
@@ -2718,13 +2766,6 @@ async function siesaRecuperacionCargar() {
         Para cuando la remisión SÍ existe en Siesa y el WMS no guardó su número:
         se busca en Siesa y se escribe acá. Crea la factura (142943) sobre esa RM.
       </p>
-      <button class="btn-flota" style="width:100%;margin-top:8px;border-color:var(--red);color:var(--red);"
-              onclick="siesaForzarPacking()">Forzar el envío completo a Siesa</button>
-      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
-        Reejecuta la cadena entera (244328→142945→142943) sobre una tarea ya
-        DESPACHADO. Es para lo que se cerró en modo ensayo y nunca llegó a Siesa
-        real. <b>Si ya había llegado, duplica.</b> Solo admin.
-      </p>
     </div>
 
     <div class="tabla-card" style="margin-top:12px;">
@@ -2820,31 +2861,6 @@ Si esa remisión ya estaba facturada, queda una ` +
   }
 }
 
-/** Reejecuta la cadena completa. El botón más peligroso del panel. */
-async function siesaForzarPacking() {
-  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
-  const out = document.getElementById('rec-resultado');
-  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
-  if (!confirm(`Se va a REEJECUTAR la cadena completa hacia Siesa para la tarea ${id}:
-` +
-               `compromisos (244328) → remisión (142945) → factura (142943).
-
-` +
-               `Si esos documentos ya existen en Siesa, quedan DUPLICADOS.
-
-` +
-               `Antes de seguir: ¿usaste «Reconciliar» para confirmar que Siesa ` +
-               `NO tiene la factura?`)) return;
-  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Reenviando la cadena…</p>';
-  try {
-    const r = await post(`/api/packing/${id}/forzar-siesa`, {});
-    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
-      ${r.mensaje || 'Cadena reenviada'}</p>`;
-    setTimeout(siesaRecuperacionCargar, 2000);
-  } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
-  }
-}
 
 /** Repara traslados sin tarea de packing. Solo toca el WMS, no Siesa. */
 async function siesaRecuperarPackingTraslados() {

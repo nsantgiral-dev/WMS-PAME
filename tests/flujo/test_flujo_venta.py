@@ -147,13 +147,60 @@ class TestElDetectorNoEstaCiego:
         assert next(x for x in r['resultados'] if x['codigo'] == 'VTA-50')['total'] == 1
 
     def test_ve_un_cobro_que_no_llego_a_siesa(self, db, flujo):
+        """La cartera fantasma **real**: el RC se intentó y no entró.
+
+        Esta prueba construía otra cosa —solo marcaba la ruta LIQUIDADA— y por
+        eso pasaba: `liquidar_ruta` deja LIQUIDADA sin encolar el RC, así que
+        el «hallazgo» era el estado normal de cualquier ruta recién liquidada.
+        El invariante gritaba sobre operación sana y callaba sobre esto.
+        """
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+
+        rec = RecaudoEntrega.query.get(flujo.recaudo_id)
+        rec.siesa_rc_triggered = True      # pre-flag: el POST se intentó
+        SiesaJob.encolar(tipo='RECIBO_CAJA',
+                         payload={'recaudo_id': rec.id, 'monto': 50000},
+                         referencia_tipo='RecaudoEntrega', referencia_id=rec.id)
+        j = SiesaJob.query.filter_by(referencia_id=rec.id,
+                                     tipo='RECIBO_CAJA').first()
+        j.estado = EstadoSiesaJob.FALLIDO  # ...y no entró
+        db.session.commit()
+
+        r = auditoria.auditar('venta')
+        assert next(x for x in r['resultados'] if x['codigo'] == 'VTA-60')['total'] == 1
+
+    def test_NO_grita_sobre_una_ruta_recien_liquidada(self, db, flujo):
+        """El falso positivo que este invariante producía sobre toda la
+        operación normal. `liquidar_ruta` marca LIQUIDADA y no encola el RC:
+        eso no es una fuga, es el paso siguiente."""
         from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
         ruta = RutaDespacho.query.get(flujo.ruta_id)
         ruta.estado_financiero = EstadoFinancieroRuta.LIQUIDADA
         db.session.commit()
 
         r = auditoria.auditar('venta')
-        assert next(x for x in r['resultados'] if x['codigo'] == 'VTA-60')['total'] == 1
+        assert next(x for x in r['resultados'] if x['codigo'] == 'VTA-60')['total'] == 0, (
+            'VTA-60 volvió a disparar sobre una ruta liquidada normalmente — '
+            'un BLOQUEA que grita sobre operación sana enseña a ignorar el canal')
+
+    def test_un_RC_completado_no_es_una_fuga(self, db, flujo):
+        """El ciclo cerrado. Si esto disparara, el invariante sería inútil."""
+        from app.models.recaudo_entrega import RecaudoEntrega
+        from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+
+        rec = RecaudoEntrega.query.get(flujo.recaudo_id)
+        rec.siesa_rc_triggered = True
+        SiesaJob.encolar(tipo='RECIBO_CAJA',
+                         payload={'recaudo_id': rec.id, 'monto': 50000},
+                         referencia_tipo='RecaudoEntrega', referencia_id=rec.id)
+        j = SiesaJob.query.filter_by(referencia_id=rec.id,
+                                     tipo='RECIBO_CAJA').first()
+        j.estado = EstadoSiesaJob.COMPLETADO
+        db.session.commit()
+
+        r = auditoria.auditar('venta')
+        assert next(x for x in r['resultados'] if x['codigo'] == 'VTA-60')['total'] == 0
 
     def test_ve_una_parada_de_contado(self, db, flujo, monkeypatch):
         from app.models.packing import TareaPacking

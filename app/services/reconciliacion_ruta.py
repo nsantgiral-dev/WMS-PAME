@@ -54,6 +54,9 @@ logger = logging.getLogger(__name__)
 #: 72 de 15.554 en doce meses. Ver el encabezado: es un piso.
 VARA_CICLOS_ROTOS = 0.0046
 
+#: Un peso. Los montos son enteros en pesos; esto solo absorbe ruido de float.
+TOLERANCIA_VALOR = 1.0
+
 #: Los tramos, en orden. El `id` es estable — lo consume la pantalla.
 TRAMOS = (
     ('entrega_sin_cobro', 'debian_cobrarse', 'cobros_registrados',
@@ -124,7 +127,7 @@ def _monto_del_recibo(recaudo_id: int):
 def reconciliar(ruta_id: int) -> dict:
     """Las cuatro columnas de una ruta, con las fugas por tramo."""
     from app.models.packing import TareaPacking
-    from app.models.recaudo_entrega import RecaudoEntrega
+    from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
     from app.models.ruta_despacho import RutaDespacho
     from app.services.connekta_gateway import connekta
 
@@ -184,6 +187,57 @@ def reconciliar(ruta_id: int) -> dict:
                 'tramo': 'entrega_sin_cobro' if cobrado <= 0 else 'cobro_sin_recibo',
             })
 
+        # ── Los defectos de VALOR ──────────────────────────────────────────
+        # Un ciclo puede estar **completo** —hay cobro y hay recibo— y aun así
+        # faltar plata. Los dos casos de abajo dan `documentos = 0` en todos
+        # los tramos: contando documentos, una ruta a la que le faltan
+        # $40.000 se declara limpia. Ya se reprodujo.
+
+        # (a) Lo que el recibo llevó a Siesa contra lo que el WMS dice hoy.
+        #     **No existe razón legítima para que difieran.** El RC se arma
+        #     desde `monto_cobrado`, así que si el payload y el campo no
+        #     coinciden es que el campo se reescribió DESPUÉS de que la plata
+        #     viajó — `confirmar_parada` admite re-confirmar una parada y no
+        #     mira `siesa_rc_triggered`. Único tramo sin matiz posible.
+        if del_recibo is not None and abs(del_recibo - cobrado) > TOLERANCIA_VALOR:
+            detalle.append({
+                'recaudo_id': r.id, 'tarea_id': r.tarea_id,
+                'estado_entrega': r.estado_entrega,
+                'modo_pantalla': r.modo_pantalla,
+                'cond_pago': getattr(tarea, 'cond_pago', None),
+                'esperado': esperado,
+                'cobrado': cobrado,
+                'en_el_recibo': del_recibo,
+                'rc_en_siesa': en_siesa,
+                'editado_por': r.editado_por,
+                'editado_en': r.editado_en.isoformat() if r.editado_en else None,
+                'tramo': 'monto_reescrito',
+            })
+
+        # (b) Entrega COMPLETA que cobró menos que la factura, con el descuento
+        #     declarado ya descontado.
+        #
+        #     En PARCIAL **no se mide**: cobrar menos es exactamente lo
+        #     correcto, y marcarlo sería el falso positivo que quema el canal
+        #     entero — la lección de los 639 avisos conocidos. El faltante de
+        #     una parcial exige valorizar `items_entregados`, que es otra
+        #     medición y no se finge acá.
+        if (r.estado_entrega == EstadoEntrega.ENTREGADO and cobrado > 0):
+            faltante = esperado - cobrado - _monto(r.monto_descuento)
+            if faltante > TOLERANCIA_VALOR:
+                detalle.append({
+                    'recaudo_id': r.id, 'tarea_id': r.tarea_id,
+                    'estado_entrega': r.estado_entrega,
+                    'modo_pantalla': r.modo_pantalla,
+                    'cond_pago': getattr(tarea, 'cond_pago', None),
+                    'esperado': esperado,
+                    'cobrado': cobrado,
+                    'descuento': _monto(r.monto_descuento),
+                    'faltante': round(faltante, 2),
+                    'rc_en_siesa': en_siesa,
+                    'tramo': 'cobro_incompleto',
+                })
+
     #: Sin fuente. **No se deriva de las otras**: una columna calculada desde
     #: lo que quiere contrastar no contrasta nada.
     cols['recaudo_verificado'] = {
@@ -207,7 +261,14 @@ def reconciliar(ruta_id: int) -> dict:
             'valor': round(a['valor'] - b['valor'], 2),
         })
 
-    rotos = sum(f.get('documentos', 0) for f in fugas if f.get('medible'))
+    #: **Una parada rota se cuenta una vez**, tenga uno o varios defectos.
+    #: Contar entradas de `detalle` inflaría la tasa contra la vara y haría
+    #: que un mismo caso pesara doble por tener dos síntomas.
+    #:
+    #: Antes esto era `sum(documentos)`, que solo veía fallas de TODO o NADA:
+    #: cualquier discrepancia de valor —cobrar de menos, o reescribir el monto
+    #: después del RC— daba 0 y la ruta salía limpia con la plata faltando.
+    rotos = len({d['recaudo_id'] for d in detalle})
     base = cols['debian_cobrarse']['n']
     tasa = (rotos / base) if base else None
 
