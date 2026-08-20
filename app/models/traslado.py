@@ -221,6 +221,32 @@ class ItemSolicitudTraslado(db.Model):
 
     producto = db.relationship('Producto', backref='items_traslado', lazy=True)
 
+    __table_args__ = (
+        # TRA-01 en disco: `solicitada ≥ aprobada ≥ enviada ≥ recibida`.
+        #
+        # Cada paso puede recortar; ninguno puede inventar. Una desigualdad al
+        # revés es mercancía que apareció de la nada entre dos etapas — y
+        # `cantidad_recibida` alimenta el payload del ETS 173079, así que una
+        # tienda que se equivoca al contar mete en la bodega destino más
+        # unidades de las que salieron del origen.
+        #
+        # El invariante estaba declarado como `BLOQUEA` en
+        # `app/services/auditoria/traslados.py`, pero **es detective**: solo
+        # aparece si alguien abre el panel de auditoría. Las cuatro columnas
+        # viven en la misma fila, así que el CHECK es trivial y es preventivo.
+        #
+        # Los NULL se dejan pasar: `cantidad_aprobada` es NULL hasta que el
+        # admin aprueba, y un CHECK que los rechazara impediría crear la
+        # solicitud. Cada comparación solo aplica cuando sus dos lados existen.
+        db.CheckConstraint(
+            '(cantidad_aprobada IS NULL OR cantidad_aprobada <= cantidad_solicitada) AND '
+            '(cantidad_enviada IS NULL OR cantidad_aprobada IS NULL OR '
+            ' cantidad_enviada <= cantidad_aprobada) AND '
+            '(cantidad_recibida IS NULL OR cantidad_enviada IS NULL OR '
+            ' cantidad_recibida <= cantidad_enviada)',
+            name='ck_traslado_cadena_no_crece'),
+    )
+
     def to_dict(self):
         return {
             'id': self.id,

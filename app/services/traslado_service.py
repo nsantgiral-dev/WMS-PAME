@@ -909,6 +909,32 @@ class TrasladoService:
                 f'recibido completo: eso es exactamente lo que hacía desaparecer '
                 f'la diferencia.'
             )
+        # Recibir MÁS de lo enviado es mercancía que aparece de la nada, y
+        # `cantidad_recibida` viaja en el payload del ETS 173079: Siesa metería
+        # en la bodega destino más unidades de las que salieron del origen.
+        #
+        # Desde `ck_traslado_cadena_no_crece` (m013) la base lo rechaza — pero
+        # el CHECK es la RED, no la puerta: sin esta validación el operario
+        # recibe un 500 con un mensaje de Postgres justo cuando necesita saber
+        # qué ítem contó mal. Es el mismo reparto que en custodia de flota: el
+        # dominio da el mensaje, el índice impide el dato.
+        excesos = [
+            (it.id, recibidos_map[it.id], it.cantidad_enviada)
+            for it in s.items
+            if it.cantidad_enviada is not None
+            and recibidos_map[it.id] is not None
+            and recibidos_map[it.id] > it.cantidad_enviada
+        ]
+        if excesos:
+            detalle = '; '.join(
+                f'ítem {i}: contaste {rec} y se enviaron {env}'
+                for i, rec, env in excesos[:5])
+            raise ValueError(
+                f'No se puede recibir más de lo que se envió. {detalle}. '
+                f'Revisá el conteo — si la mercancía de más existe de verdad, '
+                f'entró por otra vía y hay que registrarla aparte, no sumarla '
+                f'a este traslado.')
+
         for item in s.items:
             item.cantidad_recibida = recibidos_map[item.id]
         db.session.flush()

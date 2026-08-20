@@ -1237,6 +1237,21 @@ def liquidar_completo(id):
             # La FE, no el pedido — ver `app/services/fe_resolver.py`.
             from app.services.fe_resolver import resolver_fe_o_none
             _tipo_fe, _consec_fe = resolver_fe_o_none(tarea) if tarea else (None, None)
+            # ── La base de retención sale de Siesa o no sale ─────────────
+            # El fallback era `base_gravable = monto_cobrado` y `total_iva = 0`,
+            # y producía **dos daños opuestos, los dos silenciosos**:
+            #
+            # · reteIVA sobre `total_iva = 0` da 0 → el `continue` de abajo
+            #   descarta la línea y **el documento contable nunca se encola**,
+            #   con la pantalla diciendo `ok: true`;
+            # · retefuente e ICA se calculan sobre `monto_cobrado`, que es lo
+            #   que recaudó el conductor —**con IVA** y neto de descuentos—,
+            #   no el `f470_vlr_bruto`. El DC sale a Siesa por ~19% de más.
+            #
+            # La misma política en `liquidacion_service.registrar_cobro_recaudo`
+            # levanta `ValueError('Datos de Siesa no disponibles')`. Dos
+            # implementaciones, resultados opuestos; ésta era la degradada.
+            _base_de_siesa = False
             if _tipo_fe and _consec_fe:
                 try:
                     from app.services.connekta_gateway import connekta
@@ -1244,12 +1259,21 @@ def liquidar_completo(id):
                     if lineas_raw:
                         base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
                         total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
+                        _base_de_siesa = True
                 except Exception as e:
-                    logger.warning(
-                        '[LIQUIDAR-COMPLETO] No se pudo obtener base gravable Siesa para '
-                        'recaudo %d: %s — usando monto_cobrado como base',
-                        recaudo.id, e,
-                    )
+                    logger.error(
+                        '[LIQUIDAR-COMPLETO] no se pudo obtener la base gravable '
+                        'de Siesa para el recaudo %d: %s', recaudo.id, e)
+            if not _base_de_siesa:
+                # Se declara en `errores`, que es lo que decide el `ok` de la
+                # respuesta. El `except` anterior no lo tocaba, así que la
+                # pantalla salía en verde.
+                errores.append(
+                    f'Recaudo {recaudo.id}: no se pudo leer la base gravable de '
+                    f'la factura en Siesa. Las retenciones NO se encolaron — '
+                    f'calcularlas sobre el monto recaudado daría retefuente e '
+                    f'ICA sobre una base con IVA, y reteIVA en cero.')
+                continue
 
             # Obtener tercero para los DCs — sin NIT los jobs DC fallarán en Siesa
             tercero_nit, sucursal = '', '001'

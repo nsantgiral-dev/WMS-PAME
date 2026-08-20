@@ -288,13 +288,41 @@ class ConteoService:
         try:
             response = connekta.get_inventario_fecha(producto_codigo_siesa, bodega=bodega)
             tabla = response.get('detalle', {}).get('Table', [])
+            # El sobre de rechazo de Connekta —HTTP 200, una fila, una clave
+            # `alerta`— NO es una tabla vacía: pasa el `if not tabla` de abajo
+            # y `tabla[0].get('f400_cant_existencia_1', 0)` devuelve **0.0**.
+            # Y `0.0 is not None`, así que el llamador lo trata como dato
+            # bueno: `_encolar_ajuste_fisico` graba `existencia_siesa = 0`,
+            # marca `fuente_existencia='SIESA'` —afirmando que se verificó
+            # contra el ERP— y encola un AJ-ENT por TODO el conteo físico.
+            # El stock fiscal queda en `real + físico`, y un ajuste no lo
+            # reclama nadie: reaparece meses después.
+            from app.services.connekta_gateway import _alerta_de
+            alerta = _alerta_de(tabla)
+            if alerta:
+                logger.error(
+                    '[CONTEO] Siesa RECHAZÓ la consulta de existencia para %s '
+                    'bodega=%s: %s. No se devuelve 0 — no saber la existencia '
+                    'no es saber que es cero.',
+                    producto_codigo_siesa, bodega, alerta)
+                return None
             if not tabla:
                 logger.warning(
                     f'[CONTEO] Siesa devolvió Table vacío para {producto_codigo_siesa} '
                     f'bodega={bodega} — no se puede obtener existencia fiscal.'
                 )
                 return None
-            return float(tabla[0].get('f400_cant_existencia_1', 0))
+            # El campo tiene que venir. Si falta, la fila no es la que
+            # creemos —otra API, otro alias— y un default de 0 sería la misma
+            # mentira por otra puerta.
+            crudo = tabla[0].get('f400_cant_existencia_1')
+            if crudo is None:
+                logger.error(
+                    '[CONTEO] la fila de existencia de %s bodega=%s no trae '
+                    'f400_cant_existencia_1 (claves: %s). No se asume cero.',
+                    producto_codigo_siesa, bodega, list(tabla[0].keys()))
+                return None
+            return float(crudo)
         except Exception as e:
             logger.warning(f'[CONTEO] Error consultando Siesa para {producto_codigo_siesa}: {e}')
             return None
