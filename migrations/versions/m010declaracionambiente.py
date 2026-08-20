@@ -1,7 +1,7 @@
 """El ambiente no se detecta: se declara y se contrasta
 
 Revision ID: m010declaracionambiente
-Revises: m009fuenteexistencia
+Revises: m010retencionconfirmada
 Create Date: 2026-08-19
 
 El 19 de agosto de 2026 el Gestor de Cartera pasó **ocho horas mostrando
@@ -44,7 +44,11 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = 'm010declaracionambiente'
-down_revision = 'm009fuenteexistencia'
+# Encadenada bajo `m010retencionconfirmada`, que entró del remoto el
+# 2026-08-20 mientras esta rama estaba en curso: las dos partían de
+# `m009fuenteexistencia` y dejaban DOS heads. Con dos heads el
+# `releaseCommand` de Railway falla y el deploy no sale.
+down_revision = 'm010retencionconfirmada'
 branch_labels = None
 depends_on = None
 
