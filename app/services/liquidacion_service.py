@@ -1288,11 +1288,47 @@ def _encolar_recibo_caja(recaudo: RecaudoEntrega, tipo_docto_fe: str,
     )
 
 
+def _pucs_en_cola(recaudo_id: int) -> set:
+    """Cuentas PUC con un DOCUMENTO_CONTABLE_RET ya en cola para este recaudo
+    — no solo ya ENVIADO (`RecaudoEntrega.pucs_enviadas()`, que mira la
+    bandera de lo enviado). Un job PENDIENTE ya reserva esa cuenta: sin mirar
+    la cola, dos encoladores del mismo recaudo (`/liquidar-completo` y el
+    barrido de `_procesar_recaudo` que corre a continuación) duplican el job.
+    Compartida con `rutas.py` — era la misma consulta escrita dos veces.
+    """
+    pucs = set()
+    for j in SiesaJob.query.filter_by(
+            tipo='DOCUMENTO_CONTABLE_RET', referencia_tipo='RecaudoEntrega',
+            referencia_id=recaudo_id).all():
+        if j.estado in ('FALLIDO', 'DESCARTADO'):
+            continue
+        try:
+            pucs.add((j.get_payload() or {}).get('cuenta_puc'))
+        except Exception:
+            pass
+    return pucs
+
+
 def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                                   consec_fe, tercero_nit: str, sucursal: str,
                                   notas: str, admin_id: int = None,
                                   co_factura: str = '', cuenta_cxc: str = ''):
-    """Encola job DOCUMENTO_CONTABLE_RET en la DLQ."""
+    """Encola job DOCUMENTO_CONTABLE_RET en la DLQ.
+
+    El monto sale de `recaudo.monto_descuento` si ya viene declarado (lo que
+    el cliente retuvo de verdad en la puerta, o lo que `/liquidar-completo`
+    ya calculó con `monto_de_retencion()`). Si no viene declarado —el motivo
+    entró sin monto, p.ej. datos históricos de antes del 2026-08-13—, se
+    calcula acá con la MISMA fórmula de una sola fuente
+    (`base_de_retencion()`/`monto_de_retencion()`, base gravable/IVA reales
+    de Siesa).
+
+    Antes esta rama calculaba `monto_cobrado * tasa` para cualquier tipo de
+    retención. Para RETEIVA eso es la fórmula equivocada —RETEIVA va sobre el
+    IVA, no sobre lo cobrado (que incluye IVA + subtotal)— y sobreestimaba el
+    monto retenido hasta ~6x en una factura típica. Sin datos reales de Siesa
+    disponibles, Regla 0: no se inventa el monto, el DC no se encola.
+    """
     motivo = recaudo.motivo_descuento or ''
     cuenta_puc = RETENCION_PUC.get(motivo, '')
     if not cuenta_puc:
@@ -1302,12 +1338,38 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         )
         return
 
+    if cuenta_puc in _pucs_en_cola(recaudo.id):
+        logger.info(
+            '[LIQUIDACION] recaudo %d: ya hay un DOCUMENTO_CONTABLE_RET en cola '
+            'para la cuenta %s — no se duplica', recaudo.id, cuenta_puc
+        )
+        return
+
     monto_descuento = float(recaudo.monto_descuento or 0)
+    base_gravable_payload = float(recaudo.monto_cobrado or 0)
+
     if monto_descuento <= 0:
-        # Calcular automáticamente si no se especificó
-        tasa = RETENCION_TASA.get(motivo, 0)
-        base = float(recaudo.monto_cobrado or 0) + monto_descuento
-        monto_descuento = round(base * tasa, 2) if tasa else 0
+        from app.services.connekta_gateway import connekta
+        try:
+            lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
+        except Exception as e:
+            logger.warning(
+                '[LIQUIDACION] recaudo %d: no se pudo leer la factura en Siesa '
+                'para calcular la retención %s — DC no encolado: %s',
+                recaudo.id, motivo, e
+            )
+            return
+        if not lineas_raw:
+            logger.warning(
+                '[LIQUIDACION] recaudo %d: factura sin líneas en Siesa — '
+                'DC no encolado (retención %s)', recaudo.id, motivo
+            )
+            return
+
+        base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
+        total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
+        monto_descuento = monto_de_retencion(motivo, base_gravable, total_iva)
+        base_gravable_payload = base_de_retencion(motivo, base_gravable, total_iva)
         if monto_descuento <= 0:
             logger.warning(
                 '[LIQUIDACION] monto_descuento=0 para recaudo %d — DC no encolado',
@@ -1325,7 +1387,7 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             'sucursal': sucursal,
             'cuenta_puc': cuenta_puc,
             'monto': monto_descuento,
-            'base_gravable': float(recaudo.monto_cobrado or 0),
+            'base_gravable': base_gravable_payload,
             'co_factura': co_factura,
             'cuenta_cxc': cuenta_cxc,
             'notas': notas,

@@ -1186,6 +1186,7 @@ def liquidar_completo(id):
     from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
     from app.services.liquidacion_service import (
         LiquidacionService, RETENCION_PUC, RETENCION_TASA, _obtener_tercero,
+        _pucs_en_cola as _pucs_de_recaudo,
     )
 
     ruta = RutaDespacho.query.get(id)
@@ -1300,18 +1301,12 @@ def liquidar_completo(id):
             # Lo que la bandera pretendía evitar, hecho sobre la cola: un job
             # DC vivo para este recaudo y esta cuenta significa que ya se
             # encoló. Mirar la cola es lo que corresponde — la bandera del
-            # recaudo habla de lo enviado, no de lo encolado.
-            _pucs_en_cola = set()
-            for _j in SiesaJob.query.filter_by(
-                    tipo='DOCUMENTO_CONTABLE_RET',
-                    referencia_tipo='RecaudoEntrega',
-                    referencia_id=recaudo.id).all():
-                if _j.estado in ('FALLIDO', 'DESCARTADO'):
-                    continue
-                try:
-                    _pucs_en_cola.add((_j.get_payload() or {}).get('cuenta_puc'))
-                except Exception:
-                    pass
+            # recaudo habla de lo enviado, no de lo encolado. Compartida con
+            # `_encolar_documento_contable` — era la misma consulta escrita
+            # dos veces, y la otra copia es la que corre a continuación
+            # (Step 4 → `liquidar_ruta_siesa` → `_procesar_recaudo`) sin
+            # saber que esta ya encoló el DC de la misma cuenta.
+            _pucs_en_cola = _pucs_de_recaudo(recaudo.id)
 
             for ret in retenciones:
                 tipo_ret = ret.get('tipo', '')

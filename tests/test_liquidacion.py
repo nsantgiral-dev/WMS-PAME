@@ -93,9 +93,17 @@ class TestContadoEntregado:
         assert len(jobs) == 1
 
     def test_contado_entregado_con_retencion_encola_rc_y_dc(self, app, db, recaudo_liq):
+        """`monto_desc` no viene declarado (default 0) — el motivo entró sin
+        monto, como puede pasar con datos históricos (ver comentario en
+        `registrar_cobro_recaudo`). El DC tiene que calcularse con la base
+        real de Siesa (`f470_vlr_bruto`), no con `monto_cobrado`."""
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
                               motivo_desc='RETEFUENTE_2.5', monto=1000000)
-        resultado = _run_procesar(recaudo, db)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
+                                  'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
+                                  'f470_rowid': 'R1'}]):
+            resultado = _run_procesar(recaudo, db)
         assert resultado['rc'] == 1
         assert resultado['dc'] == 1
 
@@ -103,6 +111,50 @@ class TestContadoEntregado:
         rc_jobs = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='RECIBO_CAJA').all()
         dc_jobs = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').all()
         assert len(rc_jobs) == 1
+        assert len(dc_jobs) == 1
+        # Base correcta: 840.336 (f470_vlr_bruto real), no 1.000.000
+        # (monto_cobrado, que incluye IVA) — antes esta rama sobreestimaba.
+        assert dc_jobs[0].get_payload()['monto'] == round(840336 * 0.025, 2)
+
+    def test_reteiva_por_liquidacion_masiva_usa_el_iva_no_el_monto_cobrado(self, app, db, recaudo_liq):
+        """El caso que de verdad importaba: RETEIVA va sobre el IVA, no sobre
+        lo cobrado. Con la fórmula vieja (`monto_cobrado * 0.15`) esto salía
+        a $150.000 — casi 5x el valor real de $31.932,80."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
+                              motivo_desc='RETEIVA', monto=1000000)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
+                                  'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
+                                  'f470_rowid': 'R1'}]):
+            _run_procesar(recaudo, db)
+
+        from app.models.siesa_job import SiesaJob
+        dc = SiesaJob.query.filter_by(referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').first()
+        assert dc is not None
+        payload = dc.get_payload()
+        assert payload['monto'] == round(159664 * 0.15, 2)
+        assert payload['monto'] != round(1000000 * 0.15, 2)
+
+    def test_dc_ya_encolado_no_se_duplica(self, app, db, recaudo_liq):
+        """Simula lo que deja `/liquidar-completo`: el DC correcto ya está en
+        cola (PENDIENTE) cuando `_procesar_recaudo` corre encima — no debe
+        encolar un segundo job para la misma cuenta."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
+                              motivo_desc='RETEFUENTE_2.5', monto=1000000,
+                              monto_desc=21008.40)
+        from app.models.siesa_job import SiesaJob
+        SiesaJob.encolar(
+            tipo='DOCUMENTO_CONTABLE_RET',
+            payload={'recaudo_id': recaudo.id, 'cuenta_puc': '13551501',
+                     'monto': 21008.40, 'tipo_docto_fe': 'FEW', 'consec_fe': '1'},
+            referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id,
+        )
+        db.session.commit()
+
+        _run_procesar(recaudo, db)
+
+        dc_jobs = SiesaJob.query.filter_by(
+            referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').all()
         assert len(dc_jobs) == 1
 
     def test_ya_procesado_no_duplica(self, app, db, recaudo_liq):
@@ -223,7 +275,11 @@ class TestRetencionesPUC:
     def test_retefuente_puc_correcto(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
                               motivo_desc='RETEFUENTE_2.5', monto=1000000)
-        _run_procesar(recaudo, db)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
+                                  'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
+                                  'f470_rowid': 'R1'}]):
+            _run_procesar(recaudo, db)
 
         import json
         from app.models.siesa_job import SiesaJob
