@@ -25,6 +25,7 @@ siesa_bp = Blueprint('siesa', __name__)
 
 
 from app.routes._auth_helpers import _solo_admin, Roles
+from app.services.siesa_filtro import lit as _lit
 
 
 # ──────────────────────────────────────────────
@@ -237,7 +238,7 @@ def debug_pedidos_raw():
     elif consec:
         filtros = [f'f430_consec_docto={consec}']
         if co:
-            filtros.append(f"f430_id_co = ''{co}''")
+            filtros.append(f"f430_id_co = {_lit(co)}")
         if not sin_estado:
             filtros.append('f430_ind_estado=1')
         params['parametros'] = ' AND '.join(filtros)
@@ -529,12 +530,12 @@ def debug_barras_raw():
     if codigo:
         resultado = connekta._get(connekta.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f131_id = ''{codigo}''"
+            'parametros': f"f131_id = {_lit(codigo)}"
         })
     elif referencia:
         resultado = connekta._get(connekta.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f120_referencia = ''{referencia}''"
+            'parametros': f"f120_referencia = {_lit(referencia)}"
         })
     else:
         resultado = connekta._get(connekta.api_barras, {
@@ -1396,7 +1397,7 @@ def debug_stock_bodega():
             try:
                 resp = connekta._get(api, {
                     'paginacion': f'numPag={p}|tamPag={tam}',
-                    'parametros': f"f150_id = ''{bodega}'' AND f400_cant_existencia_1 > 0",
+                    'parametros': f"f150_id = {_lit(bodega)} AND f400_cant_existencia_1 > 0",
                 })
                 rows = resp.get('detalle', {}).get('Table', []) or []
                 paginas_revisadas += 1
@@ -1437,7 +1438,7 @@ def debug_stock_bodega():
             # Con filtro f150_id (igual que get_stock_bodega)
             resp = connekta._get(api, {
                 'paginacion': f'numPag={pag}|tamPag={tam}',
-                'parametros': f"f150_id = ''{bodega}'' AND f400_cant_existencia_1 > 0",
+                'parametros': f"f150_id = {_lit(bodega)} AND f400_cant_existencia_1 > 0",
             })
     except Exception as exc:
         return jsonify({'error': str(exc), 'bodega': bodega, 'modo': 'sin_filtro' if sin_filtro else 'con_filtro_f150_id'}), 502

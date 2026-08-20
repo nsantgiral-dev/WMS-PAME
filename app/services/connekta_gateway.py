@@ -27,6 +27,7 @@ import time
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from app.services.siesa_filtro import lit as _lit
 
 _TZ_BOGOTA = ZoneInfo('America/Bogota')
 
@@ -69,6 +70,93 @@ class ConnektaCircuitOpenError(Exception):
     """Raised when circuit breaker is OPEN — Siesa no disponible.
     DLQ handlers catch this to NOT waste retries."""
     pass
+
+
+class ConnektaConsultaRechazada(Exception):
+    """Siesa rechazó el filtro y contestó **HTTP 200**.
+
+    Cuando no le gusta la consulta, Connekta no devuelve un código de error:
+    devuelve una tabla con **una fila y una clave**::
+
+        {"detalle": {"Table": [{"alerta": "Por favor verifique los
+                                parámetros o filtros enviados en la petición."}]}}
+
+    Para el código eso es tan válido como una factura. Y el WMS lo trataba de
+    dos maneras, las dos malas:
+
+    · `rows = [r for r in rows if 'alerta' not in r]` — la tira y sigue con
+      `[]`. **«Tu consulta fue rechazada» se convierte en «no hay nada».**
+    · `if len(rows) == 1 and 'alerta' in rows[0]: break` — corta la
+      paginación y devuelve lo que haya, sin declarar que se cortó.
+
+    Es la misma forma de `CompromisosNoDisponibles`, que ya costó mercancía
+    saliendo del CD sin respaldo fiscal: un adaptador que **degrada hacia la
+    respuesta buena**.
+
+    Lleva el filtro en el mensaje a propósito: sin él hay que adivinar cuál de
+    las veinte consultas del sistema fue la que rebotó.
+    """
+
+
+def _alerta_de(rows, filtro: str = None) -> str:
+    """El texto de la alerta si la respuesta es un rechazo; `''` si son datos.
+
+    **Reconocimiento estrecho, y es deliberado:** exactamente una fila, con
+    exactamente una clave, que se llame `alerta`. Una consulta que devuelve un
+    único registro de un solo campo es rara pero legítima —un `COUNT`, un
+    maestro de una columna— y tratarla como error escondería datos buenos.
+    Ensanchar esto cambia un modo de fallo ruidoso por uno silencioso.
+    """
+    if not isinstance(rows, list) or len(rows) != 1:
+        return ''
+    fila = rows[0]
+    if not isinstance(fila, dict) or len(fila) != 1 or 'alerta' not in fila:
+        return ''
+    return str(fila['alerta'])
+
+
+def _exigir_datos(rows, consulta: str, filtro: str = None):
+    """Devuelve `rows`, o levanta si Siesa rechazó la consulta."""
+    alerta = _alerta_de(rows)
+    if alerta:
+        raise ConnektaConsultaRechazada(
+            f'Siesa rechazó la consulta {consulta}: {alerta}'
+            + (f' — filtro: {filtro}' if filtro else ''))
+    return rows
+
+
+#: Lectura de un POST. **Medido: Siesa tarda entre 30 y 60 s** en procesar una
+#: escritura (lecciones del Gestor de Cartera, 2026-08-19). Estaba en 30, así
+#: que la mitad de las escrituras exitosas se reportaban como fallidas.
+#: Gunicorn corta a los 120: no tiene sentido esperar más que él.
+_POST_READ_TIMEOUT = 120
+
+
+class ConnektaResultadoDesconocido(Exception):
+    """El POST salió y **no sabemos si Siesa lo procesó**.
+
+    No es un fallo. Es el tercer estado que faltaba, y confundirlo con
+    «falló» es la forma exacta del incidente RC-00002744.
+
+    Un timeout de lectura significa que la petición viajó y la respuesta no
+    volvió a tiempo. Con Siesa tardando 30-60 s, **lo más probable es que el
+    documento exista**. Tratarlo como fallo dispara las dos reacciones que
+    duplican:
+
+    · el pre-flag se revierte —«fallo explícito, no se creó nada»— y el DLQ
+      reintenta con la guardia anti-duplicado ya abajo;
+    · el mensaje manda al operario a reintentar a mano.
+
+    La Regla 3 dice que un POST no reintenta ante timeout. Esta excepción es
+    lo que hace que esa regla **se pueda cumplir**: sin un tipo propio, el
+    timeout llega a los handlers como `Exception` y es indistinguible de un
+    rechazo de Siesa, que sí se puede reintentar sin riesgo.
+
+    Quien la reciba tiene exactamente dos salidas honestas: **verificar**
+    contra Siesa si el documento entró (lo que hace `RECIBO_CAJA` con
+    `cxc_cruce.esta_saldada`), o **declararlo y parar**. Nunca reintentar a
+    ciegas, y nunca revertir el pre-flag.
+    """
 
 
 class ConnektaGateway:
@@ -294,6 +382,11 @@ class ConnektaGateway:
         self.concepto_traslados    = self._safe_int_env('SIESA_CONCEPTO_TRASLADOS', 607)
 
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
+        #: El host base, expuesto. Era una variable local y quien lo
+        #: necesitara tenía que releer `CONNEKTA_URL` con su propio default —
+        #: dos defaults para un valor es cómo una consulta termina yendo a una
+        #: compañía y la otra a otra (lecciones del Gestor, §7).
+        self.base_url = _base
         self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
         self.url_get = f'{_base}/api/siesa/v3/ejecutarconsultaestandar'
         self.url_get_dinamico = f'{_base}/api/connekta/v3/ejecutarconsulta'
@@ -701,7 +794,12 @@ class ConnektaGateway:
                 headers=self.headers,
                 params=params,
                 json=payload,
-                timeout=(10, 30),  # connect=10s, read=30s — falla rápido; gunicorn timeout=120s
+                # connect=10s, read=120s. Estaba en 30s y **medido, un POST a
+                # Siesa tarda entre 30 y 60** (lecciones del Gestor de
+                # Cartera, 2026-08-19). Cortar a los 30 no evitaba nada: el
+                # documento se seguía creando allá, y acá se reportaba fallo.
+                # «Fallar rápido» sirve cuando fallar rápido es *cierto*.
+                timeout=(10, _POST_READ_TIMEOUT),
             )
             if r.status_code == 429:
                 retry_after = r.headers.get('Retry-After', '300')
@@ -750,8 +848,26 @@ class ConnektaGateway:
             return resp_json
         except requests.exceptions.Timeout:
             self._cb_record_failure()
-            logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
-            raise Exception('Siesa no respondió en 30s — la recepción quedó EN_PROCESO, reintenta confirmar')
+            # **Un timeout no es un fallo: es no saber.** El POST pudo haberse
+            # procesado —de hecho es lo más probable, porque Siesa tarda entre
+            # 30 y 60s— y la respuesta no llegó a tiempo.
+            #
+            # El mensaje anterior decía «reintenta confirmar». La Regla 3
+            # impide que el DLQ reintente, pero ese texto le entregaba el
+            # duplicado a una persona, y para entonces el pre-flag ya se
+            # revirtió (el `except` de la Regla 6 revierte ante cualquier
+            # excepción, incluida ésta): la guardia anti-duplicado está abajo
+            # justo cuando el operario hace lo que el sistema le pidió.
+            # Es el incidente RC-00002744 por el camino que la Regla 3 no
+            # cubre. Regla 0, aplicada al texto que lee un humano.
+            logger.error(
+                f'[CONNEKTA] POST {id_conector}: timeout a los '
+                f'{_POST_READ_TIMEOUT}s — el documento PUEDE existir en Siesa')
+            raise ConnektaResultadoDesconocido(
+                f'Siesa no respondió en {_POST_READ_TIMEOUT}s. '
+                'NO se sabe si el documento quedó creado — probablemente sí. '
+                'Verificá en Siesa (Auditoría de documentos) antes de volver '
+                'a intentar: reintentar a ciegas crea un segundo documento.')
         except requests.exceptions.RequestException as e:
             self._cb_record_failure()
             logger.error(f'[CONNEKTA] POST {id_conector}: {e}')
@@ -785,8 +901,8 @@ class ConnektaGateway:
             res = self._get(self.api_pedidos, {
                 'paginacion': 'numPag=1|tamPag=1',
                 'parametros': (
-                    f"f430_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"f430_id_co = {_lit(self.centro_op)} "
+                    f"AND f430_id_tipo_docto = {_lit(tipo_docto)} "
                     f"AND f430_consec_docto = {consec_int}"
                 )
             })
@@ -814,15 +930,25 @@ class ConnektaGateway:
 
         try:
             consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+            parametros = (
+                f"f350_id_co = {_lit(self.centro_op)} "
+                f"AND f430_consec_docto = {consec_int}"
+            )
             res = self._get('papeleriamedellin_monitos_facturas_wms', {
                 'paginacion': 'numPag=1|tamPag=50',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f430_consec_docto = {consec_int}"
-                )
+                'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
+            # **La otra puerta.** El `except` de abajo protege del error de red;
+            # el sobre de rechazo de Connekta llega por HTTP 200 y no lanza
+            # nada. Sin esta línea, `{'alerta': ...}` no trae
+            # `f350_ind_estado`, el default `'9'` la marca como anulada, la
+            # filtra, y esta función devuelve `[]` = «no hay factura previa,
+            # seguí» — con el guard fail-fast intacto justo al lado.
+            rows = _exigir_datos(rows, 'get_factura_desde_pedido', parametros)
             return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
+        except ConnektaConsultaRechazada:
+            raise
         except Exception as e:
             # FAIL-FAST: no retornar [] ante error de red — el caller asumiría que no hay FE
             # y dispararía trigger_factura (238925) generando FE duplicada (riesgo fiscal / DIAN).
@@ -848,16 +974,23 @@ class ConnektaGateway:
 
         try:
             consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
+            parametros = (
+                f"f350_id_co = {_lit(self.centro_op)} "
+                f"AND f460_id_tipo_docto = {_lit(tipo_docto_rm)} "
+                f"AND f460_consec_docto = {consec_int}"
+            )
             res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
                 'paginacion': 'numPag=1|tamPag=50',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
-                    f"AND f460_consec_docto = {consec_int}"
-                )
+                'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
+            # Ver la nota de `get_factura_desde_pedido`: el sobre de rechazo
+            # entra por la puerta de datos, no por la de excepciones, y el
+            # default `'9'` lo hacía desaparecer.
+            rows = _exigir_datos(rows, 'get_factura_desde_remision', parametros)
             return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
+        except ConnektaConsultaRechazada:
+            raise
         except Exception as e:
             # FAIL-FAST: no retornar [] ante error de red — eso haría creer que no hay FE
             # y el caller procedería a crear una FE duplicada (riesgo fiscal / DIAN).
@@ -930,7 +1063,10 @@ class ConnektaGateway:
                 'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
-            rows = [r for r in rows if 'alerta' not in r]
+            # Antes: `[r for r in rows if 'alerta' not in r]` — tiraba el
+            # rechazo y seguía con `[]`, que acá se lee «la factura no tiene
+            # líneas».
+            rows = _exigir_datos(rows, 'get_detalle_factura', parametros)
             if rows:
                 logger.info('[CONNEKTA] get_detalle_factura: %d filas, keys=%s',
                             len(rows), list(rows[0].keys()) if rows else [])
@@ -941,8 +1077,8 @@ class ConnektaGateway:
             if tipo_docto_rm and str(tipo_docto_rm).strip():
                 consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
                 rows = _query(
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
+                    f"f350_id_co = {_lit(self.centro_op)} "
+                    f"AND f460_id_tipo_docto = {_lit(tipo_docto_rm)} "
                     f"AND f460_consec_docto = {consec_int}"
                 )
                 if rows:
@@ -953,7 +1089,7 @@ class ConnektaGateway:
             if consec_pedido:
                 consec_ped_int = int(consec_pedido) if str(consec_pedido).isdigit() else consec_pedido
                 rows = _query(
-                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"f350_id_co = {_lit(self.centro_op)} "
                     f"AND f430_consec_docto = {consec_ped_int}"
                 )
                 if rows:
@@ -961,8 +1097,15 @@ class ConnektaGateway:
                 logger.info('[CONNEKTA] get_detalle_factura intento pedido también vacío')
 
             return []
+        except ConnektaConsultaRechazada:
+            # **No se traga.** El `except Exception → return []` de abajo
+            # convierte cualquier error en «la factura no tiene líneas» —su
+            # propio log lo llamaba «falló silenciosamente»—, así que sin esta
+            # línea el rechazo se pierde igual que antes, solo que un nivel
+            # más arriba. Un raise que alguien atrapa no es un raise.
+            raise
         except Exception as e:
-            logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
+            logger.warning('[CONNEKTA] get_detalle_factura falló: %s', e)
             return []
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
@@ -980,7 +1123,7 @@ class ConnektaGateway:
         else:
             # estado=3 → Comprometido: inventario físicamente reservado en Siesa
             # estado=2 (Aprobado) NO entra — el inventario no está reservado aún
-            parametros = f"f430_id_co = ''{self.centro_op}'' AND f430_ind_estado = 3"
+            parametros = f"f430_id_co = {_lit(self.centro_op)} AND f430_ind_estado = 3"
 
         all_items = []
         _errores_consec = 0
@@ -1003,7 +1146,10 @@ class ConnektaGateway:
                     )
                 continue
             rows = res.get('detalle', {}).get('Table', [])
-            if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+            # Un rechazo no es «se acabaron las páginas»: cortar acá devolvía
+            # lo que hubiera juntado, sin decir que se cortó.
+            _exigir_datos(rows, 'get_pedidos_aprobados', parametros)
+            if not rows:
                 break
             all_items.extend(rows)
             if len(rows) < 100:
@@ -1060,18 +1206,36 @@ class ConnektaGateway:
         else:
             base_params = {'parametros': 'f420_ind_estado=1'}
         todos = []
-        for pag in range(1, 6):  # máximo 5 páginas = 500 items
+        #: **El tope se declara, no se calla.** Antes era `range(1, 6)` con un
+        #: comentario —«máximo 5 páginas = 500 items»— y nada en el resultado:
+        #: con más de 500 OC aprobadas el WMS veía 500 y el muelle de recepción
+        #: leía eso como el universo completo. Un conteo sin su base no es una
+        #: medición. Es el mismo tope mudo que el hallazgo K ya había costado
+        #: en el sync de pedidos, donde sí quedó declarado.
+        _MAX_PAGINAS = 5
+        completa = True
+        for pag in range(1, _MAX_PAGINAS + 1):
             params = {**base_params, 'paginacion': f'numPag={pag}|tamPag=100'}
             resp = self._get(self.api_ordenes, params)
             if self.modo_simulacion:
                 return resp
             rows = resp.get('detalle', {}).get('Table', [])
-            if not rows or (len(rows) == 1 and 'alerta' in rows[0]):
+            _exigir_datos(rows, 'get_ordenes_compra_aprobadas',
+                          base_params.get('parametros'))
+            if not rows:
                 break
             todos.extend(rows)
             if len(rows) < 100:
                 break
-        return {'detalle': {'Table': todos}}
+        else:
+            # Se agotaron las páginas sin que ninguna viniera corta: la última
+            # llegó llena, así que **hay más del otro lado**.
+            completa = False
+            logger.warning(
+                '[CONNEKTA] get_ordenes_compra_aprobadas: tope de %d páginas '
+                'con %d OC — el resultado está TRUNCADO. Filtrar por consec o '
+                'subir el tope.', _MAX_PAGINAS, len(todos))
+        return {'detalle': {'Table': todos}, 'paginacion_completa': completa}
 
     def validar_tipo_proveedor(self, nit: str) -> dict:
         """
@@ -1108,17 +1272,13 @@ class ConnektaGateway:
         _bodega = bodega or self.bodega
         return self._get(self.api_inventario, {
             'paginacion': 'numPag=1|tamPag=10',
-            'parametros': f"f120_referencia = ''{item_codigo}'' AND f150_id = ''{_bodega}''"
+            'parametros': f"f120_referencia = {_lit(item_codigo)} AND f150_id = {_lit(_bodega)}"
         }, timeout=8)
 
-    def get_item_por_barras(self, codigo_barras: str):
-        """API_v2_ItemsBarras — traduce EAN del escáner al código Siesa.
-        Campo correcto: f131_id. Sintaxis filtro Connekta: ''valor'' (doble comilla simple).
-        """
-        return self._get(self.api_barras, {
-            'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f131_id = ''{codigo_barras}''"
-        })
+    # `get_item_por_barras()` se borró el 2026-08-19: no tenía **ningún**
+    # llamador. El escaneo resuelve el EAN contra el catálogo local
+    # (`productos`), que alimenta el sync — no contra Siesa en vivo. El camino
+    # inverso, `buscar_barras_por_referencia()`, sí se usa y queda abajo.
 
     def buscar_barras_por_referencia(self, referencia: str):
         """
@@ -1134,12 +1294,15 @@ class ConnektaGateway:
         """
         if self.modo_simulacion:
             return []
-        ref = (referencia or '').strip().replace("'", "")
+        # El saneo vive en `lit()`. Acá quedaba un `.replace("'", "")` que
+        # limpiaba en silencio: buscaba un código distinto del pedido y
+        # devolvía un resultado con cara de bueno.
+        ref = (referencia or '').strip()
         if not ref:
             return []
         resultado = self._get(self.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f120_referencia = ''{ref}''"
+            'parametros': f"f120_referencia = {_lit(ref)}"
         })
         tabla = resultado.get('detalle', {}).get('Table', [])
         barras = []
@@ -1168,7 +1331,7 @@ class ConnektaGateway:
         """
         if self.modo_simulacion:
             return None
-        ref = (referencia or '').strip().replace("'", "")
+        ref = (referencia or '').strip()
         if not ref:
             return None
         api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
@@ -1177,7 +1340,7 @@ class ConnektaGateway:
         try:
             resultado = self._get(api_items, {
                 'paginacion': 'numPag=1|tamPag=5',
-                'parametros': f"f120_id_cia = {int(self.id_cia_siesa)} AND f120_referencia = ''{ref}''"
+                'parametros': f"f120_id_cia = {int(self.id_cia_siesa)} AND f120_referencia = {_lit(ref)}"
             })
         except Exception as e:
             # Confirmado en vivo 2026-07-31: cuando el filtro f120_referencia
@@ -1258,8 +1421,8 @@ class ConnektaGateway:
             else:
                 consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
                 parametros = (
-                    f"f430_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"f430_id_co = {_lit(self.centro_op)} "
+                    f"AND f430_id_tipo_docto = {_lit(tipo_docto)} "
                     f"AND f430_consec_docto = {consec_int}"
                 )
             res = self._get('API_v2_Ventas_Pedidos_Compromisos', {
@@ -1267,7 +1430,10 @@ class ConnektaGateway:
                 'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
-            rows = [r for r in rows if 'alerta' not in r]
+            # El `[]` de acá significa **«no queda nada por remisionar»**, y
+            # alimenta el despacho parcial: la misma forma que ya costó una vez
+            # con `CompromisosNoDisponibles`.
+            rows = _exigir_datos(rows, 'get_compromisos_pedido', parametros)
             return [r for r in rows if float(r.get('f405_cant_por_remisionar_base') or 0) > 0]
         except Exception as e:
             # NO se devuelve `[]`: el llamador lo leería como «el pedido ya se
@@ -1349,8 +1515,8 @@ class ConnektaGateway:
             res = self._get(self.api_pedidos, {
                 'paginacion': 'numPag=1|tamPag=5',
                 'parametros': (
-                    f"f430_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"f430_id_co = {_lit(self.centro_op)} "
+                    f"AND f430_id_tipo_docto = {_lit(tipo_docto)} "
                     f"AND f430_consec_docto = {consec_int} "
                     f"AND f430_ind_estado <> 9"
                 )
@@ -2342,7 +2508,7 @@ class ConnektaGateway:
         api_name = os.getenv('CONNEKTA_API_UBICACIONES', 'API_v2_Ubicaciones')
         params: dict = {'paginacion': f'numPag={pagina}|tamPag=100'}
         if bodega_id:
-            params['parametros'] = f"f150_id = ''{bodega_id}''"
+            params['parametros'] = f"f150_id = {_lit(bodega_id)}"
         return self._get(api_name, params)
 
     def transferir_entre_ubicaciones(self, bodega_id: str, ubicacion_origen: str,
@@ -2457,7 +2623,7 @@ class ConnektaGateway:
         if self.modo_simulacion:
             return self._get(self.api_inventario, {
                 'paginacion': 'numPag=1|tamPag=3',
-                'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0"
+                'parametros': f"f150_id = {_lit(bodega_id)} AND f400_cant_existencia_1 > 0"
             })
 
         rows_pass1 = self._fetch_stock_pages(bodega_id)
@@ -2501,7 +2667,7 @@ class ConnektaGateway:
                 try:
                     res = self._get(self.api_inventario, {
                         'paginacion': f'numPag={p}|tamPag={_tam}',
-                        'parametros': f"f150_id = ''{_bod}'' AND f400_cant_existencia_1 > 0"
+                        'parametros': f"f150_id = {_lit(_bod)} AND f400_cant_existencia_1 > 0"
                     })
                     # `_get` devuelve None cuando el circuit breaker bloquea o
                     # la respuesta no es 200. Sin esto, el `res.get('_error')`
@@ -2540,7 +2706,13 @@ class ConnektaGateway:
                         f'No se devuelve un inventario parcial.'
                     )
                 rows = res.get('detalle', {}).get('Table', [])
-                if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                # Este módulo ya se niega a devolver un inventario parcial
+                # (`ConnektaPaginacionError`, justo arriba). Un rechazo de
+                # filtro leído como «se acabaron las páginas» abría el mismo
+                # agujero por la otra puerta.
+                _exigir_datos(rows, '_fetch_stock_pages',
+                              f'bodega={bodega_id}')
+                if not rows:
                     done = True
                     break
                 all_rows.extend(rows)
@@ -3017,7 +3189,7 @@ class ConnektaGateway:
                     'paginacion': 'numPag=1|tamPag=5',
                     # f450_docto_alterno es único por traslado — no filtrar por CO para
                     # soportar traslados desde distintas bodegas (NB1→003, NS1→001, etc.)
-                    'parametros': f"f450_docto_alterno = ''{alterno}''",
+                    'parametros': f"f450_docto_alterno = {_lit(alterno)}",
                 },
             )
             rows = (
@@ -3052,8 +3224,8 @@ class ConnektaGateway:
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
                     'parametros': (
-                        f"f440_id_co = ''{self.centro_op}''"
-                        f" AND f440_referencia = ''{codigo_solicitud}''"
+                        f"f440_id_co = {_lit(self.centro_op)}"
+                        f" AND f440_referencia = {_lit(codigo_solicitud)}"
                     ),
                 },
             )
@@ -3270,7 +3442,7 @@ class ConnektaGateway:
           f200_nombres, f200_apellido1, f200_apellido2,
           f015_celular, f015_telefono, f015_email
         """
-        parametros_extra = f"t200.f200_nit = ''{nit}''" if nit else None
+        parametros_extra = f"t200.f200_nit = {_lit(nit)}" if nit else None
         try:
             res = self._get(
                 'papeleriamedellin_API_custom_TercerosContacto',
@@ -3310,26 +3482,27 @@ class ConnektaGateway:
 
         try:
             consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+            # tamPag=100 — regla #10: valores mayores (200 confirmado, no
+            # solo >=500) hacen que Siesa rechace la consulta entera con una
+            # fila {'alerta': ...} en vez de datos. Eso ahora lo levanta
+            # `_exigir_datos`; antes se descartaba en silencio y dejaba
+            # "0 líneas" sin explicación.
+            _filtro = (
+                f"f350_id_co = {_lit(self.centro_op)} "
+                f"AND f350_id_tipo_docto = {_lit(tipo_docto_fe)} "
+                f"AND f350_consec_docto = {consec_int}"
+            )
             res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
-                # tamPag=100 — regla #10: valores mayores (200 confirmado, no solo
-                # >=500) hacen que Siesa rechace la consulta entera con una fila
-                # {'alerta': '...'} en vez de datos, que antes se descartaba en
-                # silencio (ver bloque de abajo) dejando "0 líneas" sin explicación.
                 'paginacion': 'numPag=1|tamPag=100',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f350_id_tipo_docto = ''{tipo_docto_fe}'' "
-                    f"AND f350_consec_docto = {consec_int}"
-                )
+                'parametros': _filtro,
             })
             rows_crudas = res.get('detalle', {}).get('Table', [])
-            alertas = [r['alerta'] for r in rows_crudas if 'alerta' in r]
-            if alertas:
-                raise Exception(
-                    f'Siesa rechazó la consulta de FE {tipo_docto_fe}-{consec_fe}: '
-                    + '; '.join(alertas)
-                )
-            rows = rows_crudas
+            # Este sitio ya lo hacía bien, pero **a mano**: era la sexta
+            # copia y la tercera forma distinta de la misma pregunta. Así es
+            # como dos de las otras cinco terminaron degradando.
+            rows = _exigir_datos(
+                rows_crudas, f'get_rowids_factura FE {tipo_docto_fe}-{consec_fe}',
+                _filtro)
             if rows:
                 logger.info(
                     '[CONNEKTA] get_rowids_factura: FE %s-%s → %d líneas, keys=%s',
@@ -3517,8 +3690,8 @@ class ConnektaGateway:
             res = self._get('API_v2_CxC_General', {
                 'paginacion': 'numPag=1|tamPag=5',
                 'parametros': (
-                    f"f353_id_co_cruce = ''{self.centro_op}'' "
-                    f"AND f353_id_tipo_docto_cruce = ''{tipo_docto_fe}'' "
+                    f"f353_id_co_cruce = {_lit(self.centro_op)} "
+                    f"AND f353_id_tipo_docto_cruce = {_lit(tipo_docto_fe)} "
                     f"AND f353_consec_docto_cruce = {consec_int}"
                 ),
             })
@@ -3557,7 +3730,7 @@ class ConnektaGateway:
         try:
             res = self._get('API_v2_CxC_General', {
                 'paginacion': 'numPag=1|tamPag=100',
-                'parametros': f"f200_id = ''{nit}''",
+                'parametros': f"f200_id = {_lit(nit)}",
             })
             return res.get('detalle', {}).get('Table', [])
         except Exception as e:

@@ -73,6 +73,11 @@ def procesar_jobs_pendientes(app=None):
         return 0
 
 
+from app.services.connekta_gateway import (
+    ConnektaResultadoDesconocido as _ResultadoDesconocido,
+)
+
+
 class DependenciaPendiente(Exception):
     """El job no puede correr todavía porque otro paso no ha ocurrido.
 
@@ -251,6 +256,26 @@ def _run_dlq_jobs():
                 job.error_ultimo = str(e)[:2000]
                 db.session.commit()
                 logger.info('[DLQ] Job %s en espera: %s', job.id, e)
+                continue
+            if isinstance(e, _ResultadoDesconocido):
+                # El POST salió y no sabemos si Siesa lo procesó. **Reintentar
+                # es la única acción prohibida**: si el documento existe, el
+                # reintento crea el segundo.
+                #
+                # Va directo a FALLIDO —sin gastar los reintentos que quedan y
+                # sin reprogramarse— porque lo que desbloquea esto no es
+                # esperar: es que alguien mire Siesa. Un job que reintenta
+                # solo terminaría duplicando mientras nadie mira.
+                job.estado = EstadoSiesaJob.FALLIDO
+                job.proximo_intento = None
+                job.error_ultimo = str(e)[:2000]
+                db.session.commit()
+                logger.error(
+                    '[DLQ] Job %s (%s) con RESULTADO DESCONOCIDO — el '
+                    'documento puede existir en Siesa. No se reintenta: '
+                    'verificar en Auditoría de documentos antes de nada.',
+                    job.id, job.tipo)
+                _crear_alerta_admin(job)
                 continue
             if isinstance(e, ConnektaCircuitOpenError):
                 # Circuit breaker abierto — NO gastar reintento.
@@ -981,9 +1006,25 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 valor_cruce=float(valor_cruce),
                 notas=payload.get('notas', ''),
             )
+        except _ResultadoDesconocido:
+            # **El POST salió y no sabemos si entró.** NO se revierte el
+            # pre-flag: con la bandera abajo el DLQ reintenta, y si el
+            # documento sí se había creado eso es una SEGUNDA nota crédito
+            # —un documento fiscal que alguien tiene que reversar a mano.
+            #
+            # El `except Exception` que había acá decía «fallo explícito: no
+            # se creó nada» y atrapaba también el timeout, que es justo el
+            # caso donde sí se creó. Su hermana `RECIBO_CAJA` ya verificaba
+            # antes de revertir; esta no, y nada explicaba la diferencia.
+            logger.error(
+                '[DLQ] NOTA_CREDITO_FACTURA job=%s: timeout. La NC PUEDE '
+                'existir en Siesa. No se revierte el pre-flag ni se '
+                'reintenta — verificar en Auditoría de documentos.', job.id)
+            raise
         except Exception as _e_post:
-            # Fallo explícito: no se creó nada, se revierte para que el DLQ
-            # reintente. La otra mitad del pre-flag.
+            # Fallo explícito: Siesa contestó que no. Acá sí no se creó nada,
+            # y se revierte para que el DLQ reintente. La otra mitad del
+            # pre-flag.
             if recaudo:
                 try:
                     recaudo.siesa_nc_triggered = False
@@ -1063,33 +1104,77 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         _puede_dian = connekta.puede_fijar_motivo_dian
         _rowid_antes = connekta.get_max_rowid_nc() if _puede_dian else None
         _fecha_nc = fecha_hoy_bogota()
-        resultado = connekta.trigger_nota_factura_crear_cruzar(
-            tipo_docto_fe=tipo_docto_fe,
-            consec_fe=consec_fe,
-            lineas=lineas_nc,
-            valor_cruce=float(valor_cruce),
-            notas=payload.get('notas', ''),
-        )
+
+        # ── Pre-flag (Regla 6) ──────────────────────────────────────────────
+        # Este handler marcaba `siesa_nc_triggered` **después** del POST. Un
+        # crash o un timeout entre el POST y el commit dejaba la bandera en
+        # False, el DLQ reintentaba, y Siesa recibía una SEGUNDA nota crédito
+        # —documento fiscal, con cruce de cartera automático (251126).
+        #
+        # CLAUDE.md declara este defecto como corregido y lista este job como
+        # «pre-flag». Lo estaba en `NOTA_CREDITO_FACTURA`, que **no tiene
+        # productor**: el arreglo se aplicó al gemelo muerto. Este es el vivo
+        # —lo encola `devolucion_cliente_service.py:335`— y seguía marcando
+        # después.
+        if devolucion:
+            devolucion.siesa_nc_triggered = True
+            devolucion.siesa_nc_triggered_at = datetime.utcnow()
+            db.session.commit()
+
+        try:
+            resultado = connekta.trigger_nota_factura_crear_cruzar(
+                tipo_docto_fe=tipo_docto_fe,
+                consec_fe=consec_fe,
+                lineas=lineas_nc,
+                valor_cruce=float(valor_cruce),
+                notas=payload.get('notas', ''),
+            )
+        except _ResultadoDesconocido:
+            # El POST salió y no sabemos si entró. **No se revierte**: con la
+            # bandera abajo el DLQ reintenta, y si la NC ya existía eso es la
+            # segunda. Verificar en Auditoría de documentos.
+            logger.error(
+                '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: timeout. La NC '
+                'PUEDE existir en Siesa. No se revierte el pre-flag ni se '
+                'reintenta — verificar en Auditoría de documentos.', job.id)
+            raise
+        except Exception:
+            # Rechazo explícito de Siesa: acá sí no se creó nada, y revertir
+            # deja que el DLQ reintente. La otra mitad del pre-flag.
+            if devolucion:
+                try:
+                    devolucion.siesa_nc_triggered = False
+                    devolucion.siesa_nc_triggered_at = None
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+            raise
 
         _es_ensayo = bool(resultado.get('modo_ensayo'))
-        if devolucion and not _es_ensayo:
+        if devolucion and _es_ensayo:
+            # Modo ensayo: el POST se bloqueó, no hay documento que proteger.
             try:
-                devolucion.siesa_nc_triggered = True
-                devolucion.siesa_nc_triggered_at = datetime.utcnow()
+                devolucion.siesa_nc_triggered = False
+                devolucion.siesa_nc_triggered_at = None
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+        if devolucion and not _es_ensayo:
+            # La bandera ya se encendió ANTES del POST (pre-flag, arriba).
+            # Acá solo queda guardar la respuesta: si este commit falla, la
+            # protección anti-duplicado sigue en pie —que era justo lo que el
+            # `logger.critical` de la versión anterior tenía que gritar,
+            # porque entonces la bandera y el documento no estaban atados.
+            try:
                 devolucion.siesa_nc_response = json.dumps(resultado, ensure_ascii=False)
                 db.session.commit()
             except Exception as _e:
                 db.session.rollback()
-                logger.critical(
-                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: Siesa OK pero fallo '
-                    'siesa_nc_triggered — devolución %s en riesgo de NC duplicada: %s',
-                    job.id, devolucion.id, _e
-                )
-                try:
-                    devolucion.siesa_nc_triggered = True
-                    db.session.commit()
-                except Exception:
-                    db.session.rollback()
+                logger.error(
+                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: la NC entró '
+                    'pero no se pudo guardar la respuesta de Siesa en la '
+                    'devolución %s: %s. El pre-flag sigue arriba, así que no '
+                    'hay riesgo de duplicado.', job.id, devolucion.id, _e)
 
         # Bridge Liquidación de ruta → Devoluciones: si esta devolución se
         # originó en una entrega Parcial/Rechazada ("Liquidar en WMS", ver
