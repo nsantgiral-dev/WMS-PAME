@@ -978,6 +978,42 @@ class RutaService:
         recaudo = RecaudoEntrega.query.filter_by(ruta_id=ruta_id, tarea_id=tarea_id).first()
         es_edicion = recaudo is not None
 
+        # ── La plata que ya viajó al ERP no se reescribe acá ────────────────
+        # Re-confirmar una parada es una función deseada (un dedazo se
+        # corrige), pero **el recibo de caja se arma desde `monto_cobrado`**:
+        # si el campo se mueve después de que el RC salió, el WMS y Siesa
+        # quedan diciendo cifras distintas y ningún reintento lo reconcilia.
+        #
+        # Se congela con `siesa_rc_triggered`, que es la bandera de PRE-envío
+        # (Regla 6) y se revierte sola si el POST falla. Congelar recién con
+        # el job COMPLETADO dejaría abierta la ventana en que el POST está en
+        # vuelo — que es exactamente cuando la divergencia se vuelve
+        # irrecuperable. Regla 0: el lado conservador.
+        #
+        # `monto_descuento` entra en el congelamiento aunque no viaje en el
+        # RC: la reconciliación lo resta para decidir si hubo cobro
+        # incompleto, así que dejarlo abierto permitiría **tapar un faltante
+        # con un descuento escrito después**.
+        #
+        # Todo lo demás —observaciones, foto, motivo de rechazo— sigue
+        # editable: nada de eso cambia una cifra que Siesa ya tiene.
+        if es_edicion and recaudo.siesa_rc_triggered:
+            _nuevo_monto = float(data.get('monto_cobrado', 0) or 0)
+            _cambios = []
+            if abs(_nuevo_monto - float(recaudo.monto_cobrado or 0)) > 0.01:
+                _cambios.append(
+                    f'monto_cobrado ({recaudo.monto_cobrado} → {_nuevo_monto})')
+            if abs(monto_descuento - float(recaudo.monto_descuento or 0)) > 0.01:
+                _cambios.append(
+                    f'monto_descuento ({recaudo.monto_descuento} → {monto_descuento})')
+            if _cambios:
+                raise ValueError(
+                    'El recibo de caja de esta parada ya se registró en Siesa: '
+                    f'{" y ".join(_cambios)} no se puede cambiar desde el WMS. '
+                    'Una corrección de un valor ya contabilizado se hace con '
+                    'nota crédito. Las observaciones y la foto sí se pueden '
+                    'editar.')
+
         if not recaudo:
             recaudo = RecaudoEntrega(
                 ruta_id=ruta_id,

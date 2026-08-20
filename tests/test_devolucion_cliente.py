@@ -350,9 +350,15 @@ class TestPendientesAprobacionNC:
     def _make_devolucion(db, almacen, siesa_nc_triggered=False, nc_aprobada=False, codigo='DEVC-NC-001'):
         from app.models.packing import TareaPacking
         from app.models.devolucion_cliente import DevolucionCliente
+        # Un pedido por tarea activa. Las tres devoluciones del test
+        # compartían `numero_pedido_siesa='PD-NC'`, que es un estado que la
+        # operación prohíbe (`packing_service.py:48`) y que desde
+        # `uq_packing_pedido_activo` (2026-08-19) la base tampoco acepta.
+        # Cada devolución es de un pedido distinto; eso es lo que el test
+        # quería decir.
         tarea = TareaPacking(
             codigo=f'PK-{codigo}', tipo_documento='PEDIDO', estado='DESPACHADO',
-            almacen_id=almacen.id, numero_pedido_siesa='PD-NC',
+            almacen_id=almacen.id, numero_pedido_siesa=f'PD-NC-{codigo}',
             tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='500',
             siesa_triggered=True,
         )
@@ -360,7 +366,7 @@ class TestPendientesAprobacionNC:
         db.session.flush()
         devolucion = DevolucionCliente(
             codigo=codigo, tarea_packing_id=tarea.id,
-            numero_pedido_siesa='PD-NC', tipo_docto_fe='FEW', consec_fe='9999',
+            numero_pedido_siesa=f'PD-NC-{codigo}', tipo_docto_fe='FEW', consec_fe='9999',
             almacen_id=almacen.id, estado='CONFIRMADA',
             siesa_nc_triggered=siesa_nc_triggered,
             nc_aprobada_siesa=nc_aprobada,

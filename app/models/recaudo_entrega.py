@@ -111,6 +111,13 @@ class RecaudoEntrega(db.Model):
     retencion_confirmada_en = db.Column(db.DateTime, nullable=True)
 
     __table_args__ = (
+        # Un recaudo por parada. Lo comprueba `ruta_service.py:978` con un
+        # `.first()` sin bloqueo, y hay DOS escritores —`confirmar_parada` y
+        # `forzar_cierre_ruta`—, así que no hace falta concurrencia exótica.
+        # Con dos filas, `total_recaudado()` suma las dos, la liquidación
+        # emite dos RC, y el congelamiento del monto tras el RC se decide con
+        # un `.first()` sin `order_by`: dispara o no según el orden del heap.
+        db.Index('uq_recaudo_por_parada', 'ruta_id', 'tarea_id', unique=True),
         db.CheckConstraint(
             "modo_pantalla IS NULL OR modo_pantalla IN ('CREDITO','DINAMICO','LIBRE')",
             name='ck_recaudo_modo_pantalla'),
