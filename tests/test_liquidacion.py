@@ -564,7 +564,36 @@ class TestRegistrarCobroRecaudo:
         assert len(det) == 1
         assert det[0]['tipo'] == 'RETEFUENTE_2.5'
         assert det[0]['puc'] == '13551501'
-        assert det[0]['siesa_triggered'] is True
+
+    def test_badge_de_retencion_no_marca_verde_si_siesa_lo_rechazo(
+            self, app, db, recaudo_liq):
+        """Job 482 (recaudo 22, PD1425, ruta 23, 2026-08-21): el ✓ en
+        pantalla salía de `retenciones_detalle[i].siesa_triggered`, guardado
+        en True al ENCOLAR el job — Siesa rechazó el documento y el badge
+        seguía en verde. `to_dict()` debe recalcularlo contra
+        `pucs_enviadas()` (la marca real, revertida si el POST falla), no
+        confiar en la copia guardada al encolar."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        recaudo.retenciones_detalle = [{
+            'tipo': 'ICA_3X1000', 'puc': '13551802', 'tasa': 0.003,
+            'monto': 152.03, 'base': 50676.0,
+            'siesa_triggered': True,  # mentira: se guardó así al encolar
+            'job_id': 482,
+        }]
+        db.session.commit()
+
+        det = recaudo.to_dict()['retenciones_detalle']
+        assert det[0]['siesa_triggered'] is False, (
+            'El PUC nunca se marcó en pucs_enviadas() — Siesa lo rechazó, '
+            'el badge no debe salir en verde'
+        )
+
+        recaudo.marcar_puc_enviada('13551802')
+        db.session.commit()
+        det2 = recaudo.to_dict()['retenciones_detalle']
+        assert det2[0]['siesa_triggered'] is True, (
+            'Con el PUC sí confirmado en pucs_enviadas(), el badge debe salir en verde'
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
