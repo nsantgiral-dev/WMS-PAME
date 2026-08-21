@@ -4361,7 +4361,7 @@ class ConnektaGateway:
         )
         return self._post(
             self.conector_docto_contable,
-            'DocumentoContable',
+            'API_v1_DocumentoContable',
             payload,
         )
 

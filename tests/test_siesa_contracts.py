@@ -283,6 +283,27 @@ class TestContract142882:
         for seccion in ['Inicial', 'Documentocontable', 'Movimientocontable', 'MovimientoCxC', 'Final']:
             assert seccion in payload, f'Sección "{seccion}" falta en payload 142882'
 
+    def test_nombre_conector_lleva_el_prefijo_api_v1(self):
+        """El `nombreDocumento` que Siesa usa para ubicar la estructura registrada.
+
+        Todos los demás conectores lo mandan con el prefijo real
+        (`API_v1_ReciboCaja`, `API_v1_Compras_Comercial_EntradaOC`, ...). Este
+        era el único que mandaba solo `'DocumentoContable'` — sin el prefijo,
+        Siesa QA rechazaba con el mismo error genérico de estructura en cada
+        intento (5+ intentos reales, 2 cuentas PUC distintas, verificado
+        2026-08-21 contra `gestor-cartera-pame`, mismo Siesa, que sí manda
+        `API_v1_DocumentoContable` y sí crea el documento).
+        """
+        gw = _make_gateway()
+        with patch.object(gw, '_post', return_value={'codigo': 0}) as mock_post:
+            gw.trigger_documento_contable(
+                tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
+                monto=25000.0, base_gravable=1000000.0, tipo_docto_fe='FE',
+                consec_fe='5020',
+            )
+        nombre_conector = mock_post.call_args[0][1]
+        assert nombre_conector == 'API_v1_DocumentoContable'
+
     def test_documentocontable_campos(self):
         gw = _make_gateway()
         payload = self._capture_payload(gw)
