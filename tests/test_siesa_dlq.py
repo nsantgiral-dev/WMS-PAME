@@ -85,6 +85,39 @@ class TestPreFlagRC:
 
         assert call_order == [True], 'Flag debe ser True ANTES del POST'
 
+    def test_usa_el_monto_del_payload_aunque_difiera_de_monto_cobrado(
+            self, app, db, recaudo_factory):
+        """Job 483 (recaudo 22, PD1425, ruta 23, 2026-08-21): el payload
+        traía el neto correcto ($60.151,97 — la factura real menos la
+        retención), pero una "re-lectura" comparaba eso contra
+        `recaudo.monto_cobrado` ($50.000, lo que el conductor declaró en la
+        puerta) y, al no coincidir, pisaba el correcto con el crudo. El RC
+        salió a Siesa por $10.151,97 de menos. La diferencia es intencional
+        —ENTREGADO usa el neto de Siesa menos retenciones, no lo que
+        declaró el conductor— no una edición post-enqueue."""
+        recaudo = recaudo_factory(monto=50000)  # lo que declaró el conductor
+        from app.models.siesa_job import SiesaJob
+        job = SiesaJob.encolar('RECIBO_CAJA', {
+            'recaudo_id': recaudo.id,
+            'tercero_nit': '900123456', 'sucursal': '001',
+            'monto': 60151.97, 'forma_pago': 'EFECTIVO',  # el neto correcto
+            'tipo_docto_fe': 'FE', 'consec_fe': '5020',
+        })
+        db.session.commit()
+
+        montos_recibidos = []
+        with patch('app.services.connekta_gateway.connekta') as mc:
+            mc.trigger_recibo_caja.side_effect = (
+                lambda **kw: montos_recibidos.append(kw['monto']) or {'codigo': 0})
+            mc.modo_simulacion = False
+            mc.modo_ensayo = False
+            from app.services.siesa_job_service import _ejecutar_job
+            _ejecutar_job(job)
+
+        assert montos_recibidos == [60151.97], (
+            f'Se mandó {montos_recibidos} en vez del neto correcto del payload'
+        )
+
     def test_revierte_si_se_CONFIRMA_que_el_rc_no_entro(self, app, db, recaudo_factory):
         """El POST falló y la cartera confirma que la factura sigue con saldo:
         el recibo no entró, revertir y reintentar es correcto."""

@@ -1310,17 +1310,22 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'devolución. Sigue pendiente.'
             )
 
-        # Re-read monto: si el recaudo fue editado post-enqueue, usar el valor actual
+        # El monto ya viene calculado por la lógica de negocio real
+        # (`registrar_cobro_recaudo`/`_procesar_recaudo`): para ENTREGADO es
+        # el neto de Siesa menos retenciones, no `recaudo.monto_cobrado` —
+        # ese campo es lo que el conductor declaró en la puerta, un dato
+        # independiente para detectar discrepancias (ver
+        # `confirmar_retencion`), no la fuente de lo que hay que cobrar.
+        #
+        # Job 483 (recaudo 22, PD1425, ruta 23, 2026-08-21): acá había un
+        # "re-lectura" que comparaba el monto del payload ($60.151,97,
+        # correcto) contra `monto_cobrado` ($50.000, el dato crudo del
+        # conductor) y, al no coincidir, pisaba el correcto con el crudo —
+        # asumiendo que cualquier diferencia significaba que alguien editó
+        # el recaudo después de encolar el job. La diferencia era
+        # intencional (retención + neto real de Siesa), no una edición, y
+        # el RC salió a Siesa por $10.151,97 de menos.
         monto_payload = float(payload['monto'])
-        if recaudo:
-            monto_actual = float(recaudo.monto_cobrado or 0)
-            if abs(monto_actual - monto_payload) > 1 and monto_actual > 0:
-                logger.warning(
-                    '[DLQ] RECIBO_CAJA job=%s: monto payload=%.2f difiere de '
-                    'monto_cobrado actual=%.2f — usando actual',
-                    job.id, monto_payload, monto_actual
-                )
-                monto_payload = monto_actual
 
         # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?
         # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía)
