@@ -340,7 +340,7 @@ async function cargarMuelleConRuta(rutaId) {
 
   // — Sección 1: bultos ya en la ruta —
   if (_RUTA_MANIFIESTO_ACTUAL.length) {
-    html += `<div style="font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">
+    html += `<div style="font-size:13px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">
       En esta ruta · ${totalConf} confirmado${totalConf !== 1 ? 's' : ''} · ${totalPlan} por confirmar
     </div>`;
     html += _RUTA_MANIFIESTO_ACTUAL.map((grupo, gi) =>
@@ -360,8 +360,8 @@ async function cargarMuelleConRuta(rutaId) {
     html += `
       <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <span style="font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.08em;">📦 Pendientes por asignar</span>
-          <span style="background:#333;color:#aaa;font-size:12px;padding:2px 10px;border-radius:10px;">${dPendientes.total_bultos}</span>
+          <span style="font-size:13px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.08em;">📦 Pendientes por asignar</span>
+          <span style="background:#333;color:#ccc;font-size:13px;padding:2px 10px;border-radius:10px;">${dPendientes.total_bultos}</span>
         </div>
         ${gruposPendientes.map(g => _htmlGrupoPendiente(g, rutaId)).join('')}
       </div>`;
@@ -425,10 +425,10 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
     <div id="ruta-grupo-${gi}" style="margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
         <div style="flex:1;">
-          <span style="font-size:14px;font-weight:700;color:${todoConfirmado ? '#4ade80' : '#eee'};text-transform:uppercase;">
+          <span style="font-size:16px;font-weight:800;color:${todoConfirmado ? '#15803d' : '#b45309'};text-transform:uppercase;">
             📍 ${grupo.destino}
           </span>
-          <span style="font-size:12px;color:#555;"> · ${confirmados}/${totalGrupo} conf.</span>
+          <span style="font-size:13px;color:#555;"> · ${confirmados}/${totalGrupo} conf.</span>
         </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
@@ -438,7 +438,7 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
             ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
             : `<div style="width:28px;"></div>`}
         </div>
-        <div style="font-size:11px;color:#444;text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
+        <div style="font-size:12px;color:#444;text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
       </div>
       ${grupo.bultos.map(b => {
         const conf = b.estado === 'CARGADO';
@@ -446,9 +446,9 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
           <div style="background:#111;border:1px solid ${conf ? '#14532d' : '#333'};border-left:4px solid ${conf ? '#4ade80' : '#f59e0b'};border-radius:10px;padding:10px 12px;margin-bottom:6px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <div style="flex:1;">
-                <div style="font-size:14px;font-weight:700;font-family:monospace;color:${conf ? '#fff' : '#f59e0b'};">${b.codigo_barras}</div>
-                <div style="font-size:12px;color:#888;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
-                <div style="font-size:11px;color:#555;">${b.tipo} · pieza ${b.numero}/${b.total}</div>
+                <div style="font-size:15px;font-weight:700;font-family:monospace;color:${conf ? '#fff' : '#f59e0b'};">${b.codigo_barras}</div>
+                <div style="font-size:13px;color:#999;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
+                <div style="font-size:12px;color:#777;">${b.tipo} · pieza ${b.numero}/${b.total}</div>
               </div>
               <div style="display:flex;align-items:center;gap:8px;">
                 ${!conf ? `<button onclick="muelleDesasignar(${b.id})" title="Quitar de la ruta" style="background:none;border:none;color:#444;font-size:18px;cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
@@ -474,23 +474,23 @@ function _htmlGrupoPendiente(grupo, rutaId) {
     <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div>
-          <div style="font-size:14px;font-weight:700;color:#f59e0b;">📍 ${grupo.destino}</div>
-          <div style="font-size:12px;color:#555;margin-top:2px;">${grupo.total} bulto${grupo.total !== 1 ? 's' : ''}</div>
+          <div style="font-size:16px;font-weight:800;color:#b45309;">📍 ${grupo.destino}</div>
+          <div style="font-size:13px;color:#555;margin-top:2px;">${grupo.total} bulto${grupo.total !== 1 ? 's' : ''}</div>
         </div>
         <button onclick="muelleAsignar(null,'${numeroPedido}')"
-          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;">
           + Todo el pedido
         </button>
       </div>
       ${grupo.bultos.map(b => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #1a1a1a;">
           <div>
-            <span style="font-family:monospace;font-size:13px;color:#ccc;">${b.codigo_barras}</span>
-            <span style="font-size:11px;color:#555;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
-            ${b.cliente ? `<span style="font-size:11px;color:#666;margin-left:8px;">· ${b.cliente}</span>` : ''}
+            <span style="font-family:monospace;font-size:14px;color:#ddd;">${b.codigo_barras}</span>
+            <span style="font-size:12px;color:#999;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
+            ${b.cliente ? `<span style="font-size:12px;color:#999;margin-left:8px;">· ${b.cliente}</span>` : ''}
           </div>
           <button onclick="muelleAsignar(${b.id},null)"
-            style="background:#1a1a1a;color:#aaa;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;">
+            style="background:#1a1a1a;color:#ccc;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:13px;cursor:pointer;">
             + Solo esta
           </button>
         </div>`).join('')}
