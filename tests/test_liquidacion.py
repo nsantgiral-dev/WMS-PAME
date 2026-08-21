@@ -514,6 +514,42 @@ class TestRegistrarCobroRecaudo:
         job = SiesaJob.query.filter_by(tipo='RECIBO_CAJA', referencia_id=recaudo.id).first()
         assert job.get_payload()['unidad_negocio'] == '99'
 
+    def test_el_dc_de_retencion_tambien_lleva_la_un_real(self, app, db, recaudo_liq):
+        """Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20): el fix de la UN
+        real del 2026-08-18 (test de arriba) solo se aplicó al RC — el DC de
+        retención se encola aparte, directo con `SiesaJob.encolar`, y su
+        payload nunca llevó `unidad_negocio`. Primera liquidación con
+        retención real: FALLIDO 5/5, rechazo estructural de Siesa."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+                              motivo_desc='RETEFUENTE_2.5')
+        # Admin ya confirmó que el descuento sí correspondía (ver
+        # `confirmar_retencion`) — si no, `registrar_cobro_recaudo` bloquea
+        # antes de llegar a encolar nada.
+        recaudo.retencion_confirmada = True
+        db.session.commit()
+        mock_connekta = self._mock_siesa()
+        mock_connekta.get_cxc_general.return_value = [
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_id_un_cruce': '99',
+             'f353_total_db': 2000000, 'f353_total_cr': 0},
+        ]
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': 1680672, 'f470_vlr_imp': 319328,
+             'f470_vlr_neto': 2000000, 'f120_referencia': 'REF001',
+             'f470_rowid': 'R1'},
+        ]
+        from app.services.liquidacion_service import LiquidacionService
+        from app.models.siesa_job import SiesaJob
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[{'tipo': 'RETEFUENTE_2.5'}])
+
+        dc_job = SiesaJob.query.filter_by(
+            tipo='DOCUMENTO_CONTABLE_RET', referencia_id=recaudo.id).first()
+        assert dc_job is not None
+        assert dc_job.get_payload()['unidad_negocio'] == '99'
+
     def test_retenciones_detalle_guardado(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
         from app.services.liquidacion_service import LiquidacionService

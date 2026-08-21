@@ -372,6 +372,27 @@ class TestContract142882:
         payload = self._capture_payload(gw)
         _assert_21_chars(payload)
 
+    def test_un_real_de_la_factura_no_el_env_global(self):
+        """Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20): la primera
+        liquidación con retención que corrió de verdad quedó FALLIDO 5/5 con
+        rechazo estructural de Siesa. Mismo defecto que ya rechazó el RC
+        (142888) el 2026-08-18 — `F351_ID_UN` salía siempre con el env var
+        global (`SIESA_UNIDAD_NEGOCIO`) en vez de la UN real de la fila de
+        cartera que cruza. `unidad_negocio` explícito debe ganarle al env var
+        en las dos secciones que lo usan (Movimientocontable y MovimientoCxC)."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw, unidad_negocio='99')
+        assert payload['Movimientocontable'][0]['F351_ID_UN'] == '99'
+        assert payload['MovimientoCxC'][0]['F351_ID_UN'] == '99'
+
+    def test_un_fallback_al_env_si_no_se_conoce_la_real(self):
+        """Sin `unidad_negocio` (fila de cartera no encontrada), sigue
+        cayendo al comportamiento previo — no rompe llamadores viejos."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw)
+        assert payload['Movimientocontable'][0]['F351_ID_UN'] == (gw.unidad_negocio or '99')
+        assert payload['MovimientoCxC'][0]['F351_ID_UN'] == (gw.unidad_negocio or '99')
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 142946 — NotaFactura (trigger_nota_factura)

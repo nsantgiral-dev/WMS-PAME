@@ -4226,6 +4226,7 @@ class ConnektaGateway:
                                      tipo_docto_fe: str, consec_fe,
                                      co_factura: str = '',
                                      cuenta_cxc: str = '',
+                                     unidad_negocio: str = '',
                                      notas: str = '') -> dict:
         """
         142882 → DocumentoContable
@@ -4234,6 +4235,14 @@ class ConnektaGateway:
         cuenta_puc: cuenta auxiliar PUC débito (ej. '13551501' para retefuente compras 2.5%)
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
         cuenta_cxc: f253_id real de la factura para cruce crédito. Fallback: self.cxc_auxiliar.
+        unidad_negocio: `f353_id_un_cruce` REAL de la fila de cartera que cruza — mismo
+                    parámetro y mismo motivo que `trigger_recibo_caja` (PD1411/FE-1416,
+                    2026-08-18): antes de esto, este conector nunca lo recibía y usaba
+                    siempre `self.unidad_negocio` (el env var global) — job 470 (recaudo
+                    19, PD1421, ruta 22, 2026-08-20) es la primera liquidación con
+                    retención que corrió de verdad contra Siesa, y quedó FALLIDO 5/5
+                    intentos con rechazo estructural genérico. Si vacío, cae a
+                    `self.unidad_negocio` (comportamiento previo, no rompe llamadores viejos).
         """
         if not self.tipo_docto_docto_contable:
             raise ValueError(
@@ -4246,6 +4255,7 @@ class ConnektaGateway:
         co = self.centro_op
         co_fact = co_factura or co
         auxiliar_cxc = cuenta_cxc or self.cxc_auxiliar
+        un = unidad_negocio or self.unidad_negocio or '99'
 
         payload = {
             'Inicial': [{'F_CIA': cia}],
@@ -4283,7 +4293,7 @@ class ConnektaGateway:
                 'F351_ID_AUXILIAR': cuenta_puc,
                 'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_CO_MOV': co,
-                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
                 'F351_ID_FE': '',
                 'F351_VALOR_DB': self._fmt_valor(monto),
@@ -4310,7 +4320,7 @@ class ConnektaGateway:
                 'F351_ID_AUXILIAR': auxiliar_cxc,
                 'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_CO_MOV': co,
-                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
                 'F351_VALOR_DB': self._fmt_valor(0),
                 'F351_VALOR_CR': self._fmt_valor(monto),
