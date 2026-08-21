@@ -324,6 +324,32 @@ class TestContract142882:
         assert 'F351_ID_CO_MOV' in mc, 'Debe ser F351_ID_CO_MOV (no MOVTO)'
         assert 'F351_ID_CO_MOVTO' not in mc, 'F351_ID_CO_MOVTO es nombre incorrecto'
 
+    def test_movimientocontable_moneda_alterna_siempre_cero(self):
+        """Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20): rechazo
+        estructural de Siesa. `F351_VALOR_DB_ALT` llevaba el mismo valor del
+        débito en vez de cero — el spec dice «si la auxiliar no maneja
+        moneda alterna, debe ir en cero», y las cuentas de retención
+        colombianas (1355xxxx) no manejan una segunda moneda. Comparado
+        contra `gestor-cartera-pame` (mismo Siesa, en producción,
+        `retencion_payload.py`), que siempre manda cero acá."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw, monto=25000.0)
+        mc = payload['Movimientocontable'][0]
+        assert mc['F351_VALOR_DB_ALT'] == mc['F351_VALOR_CR']  # ambos cero, 21 chars
+        assert float(mc['F351_VALOR_DB_ALT']) == 0.0
+        assert float(mc['F351_VALOR_DB']) == 25000.0, 'El débito real sí debe llevar el monto'
+
+    def test_movimientocontable_sin_campos_fuera_de_spec(self):
+        """`F351_NRO_REGISTRO` y `F351_ID_SUCURSAL` no están en el spec DOCX
+        ni en la implementación probada de `gestor-cartera-pame` para el
+        mismo conector 142882 — en un plano posicional, un campo extra no
+        declarado puede desalinear el registro."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw)
+        mc = payload['Movimientocontable'][0]
+        assert 'F351_NRO_REGISTRO' not in mc
+        assert 'F351_ID_SUCURSAL' not in mc
+
     def test_movimiento_cxc_29_campos(self):
         """MovimientoCxC debe tener los 29 campos del spec DOCX."""
         gw = _make_gateway()
@@ -344,6 +370,15 @@ class TestContract142882:
         for campo in campos:
             assert campo in mcxc, f'Campo "{campo}" falta en MovimientoCxC 142882'
         assert len(campos) == 29
+
+    def test_movimiento_cxc_moneda_alterna_siempre_cero(self):
+        """Misma corrección que en Movimientocontable — `F351_VALOR_CR_ALT`
+        llevaba el mismo valor del crédito real en vez de cero."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw, monto=25000.0)
+        mcxc = payload['MovimientoCxC'][0]
+        assert float(mcxc['F351_VALOR_CR_ALT']) == 0.0
+        assert float(mcxc['F351_VALOR_CR']) == 25000.0, 'El crédito real sí debe llevar el monto'
 
     def test_movimiento_cxc_tercero_presente(self):
         """F351_ID_TERCERO obligatorio en MovimientoCxC (diferencia vs 142888)."""
