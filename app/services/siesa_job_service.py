@@ -96,7 +96,18 @@ class DependenciaPendiente(Exception):
     de «un contador, dos significados» que ya costó las banderas de
     idempotencia. El precedente estaba al lado: `ConnektaCircuitOpenError`
     tampoco gasta reintento.
+
+    `espera_minutos` (default 30, el caso de arriba — recepción física,
+    horas) es la excepción, no la regla: DC esperando su RC, o una RIT
+    esperando el consecutivo que 174646 le va a poner, resuelven en el mismo
+    ciclo del DLQ (segundos, la propia liquidación los encadena). 30 minutos
+    ahí no evita nada — solo hace que una NI ya destrabada tarde media hora
+    en salir sin ninguna razón real detrás.
     """
+
+    def __init__(self, mensaje: str, espera_minutos: int = 30):
+        super().__init__(mensaje)
+        self.espera_minutos = espera_minutos
 
 
 _ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
@@ -252,7 +263,8 @@ def _run_dlq_jobs():
                 # en 6 horas esperando una recepción que ocurre mañana, y el
                 # cobro no entra nunca.
                 job.estado = EstadoSiesaJob.PENDIENTE
-                job.proximo_intento = datetime.utcnow() + timedelta(minutes=30)
+                job.proximo_intento = datetime.utcnow() + timedelta(
+                    minutes=getattr(e, 'espera_minutos', 30))
                 job.error_ultimo = str(e)[:2000]
                 db.session.commit()
                 logger.info('[DLQ] Job %s en espera: %s', job.id, e)
@@ -1414,9 +1426,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
         # Siesa no ha reducido el saldo por el cash todavía.
         if recaudo and not recaudo.siesa_rc_triggered:
+            # Espera corta: el RC de este mismo recaudo suele resolverse en
+            # el mismo ciclo del DLQ (segundos) — no es la recepción física
+            # de horas/días que sí justifica el default de 30 min.
             raise DependenciaPendiente(
                 f'DOCUMENTO_CONTABLE_RET job={job.id}: DC espera el RC del '
-                f'recaudo {recaudo.id}. Sigue pendiente.'
+                f'recaudo {recaudo.id}. Sigue pendiente.',
+                espera_minutos=2,
             )
 
         # Pre-flag: cerrar crash window (misma lógica que RC), por cuenta.
@@ -1484,9 +1500,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'motivo': f'ya despachado (STS {s.siesa_salida_consec}) — '
                               f'la RIT queda suelta, no se toca'}
         if not s.siesa_requisicion_consec:
+            # Espera corta: 174646 corre en el mismo ciclo del DLQ, no es
+            # una espera de horas como la recepción física.
             raise DependenciaPendiente(
                 f'{s.codigo}: la RIT todavía no tiene consecutivo — '
-                f'esperar a que 174646 lo resuelva')
+                f'esperar a que 174646 lo resuelva',
+                espera_minutos=2,
+            )
 
         siesa_traslado.registrar_compromisos(
             consec_rit=s.siesa_requisicion_consec,
