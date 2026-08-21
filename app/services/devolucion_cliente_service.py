@@ -385,7 +385,7 @@ class DevolucionClienteService:
         devoluciones = (DevolucionCliente.query
                          .filter(DevolucionCliente.recaudo_entrega_id.isnot(None))
                          .filter_by(estado=EstadoDevolucionCliente.ABIERTA)
-                         .order_by(DevolucionCliente.fecha_creacion.asc())
+                         .order_by(DevolucionCliente.fecha_creacion.desc())
                          .all())
         return [d.to_dict() for d in devoluciones]
 

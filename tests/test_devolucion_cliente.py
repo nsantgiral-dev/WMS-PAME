@@ -405,3 +405,71 @@ class TestPendientesAprobacionNC:
         dev = self._make_devolucion(db, almacen, siesa_nc_triggered=False, codigo='DEVC-NC-E')
         with pytest.raises(ValueError, match='no tiene una NC'):
             DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id)
+
+
+class TestListarPendientesDeRuta:
+    """El panel de Recepción → Devoluciones (`recepcion.js::cargarPendientesDeRuta`)
+    pinta el array en el orden que llega del API, sin reordenar por su cuenta
+    — el orden real lo decide `listar_pendientes_de_ruta()`."""
+
+    @staticmethod
+    def _make_pendiente(db, almacen, codigo, fecha_creacion):
+        from datetime import datetime
+        from app.models.packing import TareaPacking
+        from app.models.ruta_despacho import RutaDespacho
+        from app.models.recaudo_entrega import RecaudoEntrega, EstadoEntrega
+        from app.models.usuario import Usuario
+        from app.models.devolucion_cliente import DevolucionCliente
+
+        conductor = Usuario.query.filter_by(email='cond_pend_ruta@test.com').first()
+        if not conductor:
+            conductor = Usuario(email='cond_pend_ruta@test.com', nombre='Conductor Pend',
+                                rol='conductor', activo=True)
+            conductor.set_password('test123')
+            db.session.add(conductor)
+            db.session.flush()
+
+        ruta = RutaDespacho(conductor_id=conductor.id, tipo_ruta='Urbana', estado='ENTREGADA')
+        db.session.add(ruta)
+        db.session.flush()
+
+        tarea = TareaPacking(
+            codigo=f'PK-{codigo}', tipo_documento='PEDIDO', estado='DESPACHADO',
+            almacen_id=almacen.id, numero_pedido_siesa=codigo,
+            tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='500',
+            siesa_triggered=True,
+        )
+        db.session.add(tarea)
+        db.session.flush()
+
+        recaudo = RecaudoEntrega(
+            ruta_id=ruta.id, tarea_id=tarea.id,
+            estado_entrega=EstadoEntrega.PARCIAL, forma_pago='EFECTIVO', monto_cobrado=1000,
+        )
+        db.session.add(recaudo)
+        db.session.flush()
+
+        devolucion = DevolucionCliente(
+            codigo=f'DEVC-{codigo}', tarea_packing_id=tarea.id,
+            numero_pedido_siesa=codigo, tipo_docto_fe='FEW', consec_fe='9999',
+            almacen_id=almacen.id, estado='ABIERTA',
+            recaudo_entrega_id=recaudo.id,
+            fecha_creacion=datetime.fromisoformat(fecha_creacion),
+        )
+        db.session.add(devolucion)
+        db.session.commit()
+        return devolucion
+
+    def test_la_ultima_creada_sale_primero(self, app, db, almacen):
+        """El caso real que lo destapó: PD1350 (2026-07-28, la más vieja del
+        panel) salía de primero y las recién liquidadas quedaban al fondo —
+        la recepcionista tenía que hacer scroll para llegar a lo urgente del
+        día. `fecha_creacion.asc()` → `desc()`."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        self._make_pendiente(db, almacen, 'PD-VIEJO', '2026-07-28T10:00:00')
+        self._make_pendiente(db, almacen, 'PD-MEDIO', '2026-08-15T10:00:00')
+        self._make_pendiente(db, almacen, 'PD-NUEVO', '2026-08-20T17:11:39')
+
+        pendientes = DevolucionClienteService.listar_pendientes_de_ruta()
+        codigos = [p['codigo'] for p in pendientes]
+        assert codigos == ['DEVC-PD-NUEVO', 'DEVC-PD-MEDIO', 'DEVC-PD-VIEJO']
