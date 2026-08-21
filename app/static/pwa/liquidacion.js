@@ -550,6 +550,10 @@ function _liqRenderDetalle() {
                 </div>`}
             `).join('')}
           </div>
+          ${rec.observaciones ? `
+            <div style="margin-top:6px;font-size:12px;color:var(--tx2);">
+              <span style="color:#fbbf24;font-weight:700;">Nota del conductor:</span> ${rec.observaciones}
+            </div>` : ''}
         </div>`;
     }
 
