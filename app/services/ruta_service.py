@@ -618,9 +618,15 @@ class RutaService:
         # de cada parada ya funciona offline sin volver a tocar Siesa.
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
-            valor_factura, es_contado, valores_ref, cond_pago_crudo = \
+            valor_factura, es_contado, valores_ref, cond_pago_crudo, base_gravable, iva_factura = \
                 RutaService._valor_y_cond_pago(t)
             p['valor_factura'] = valor_factura
+            # Desglose informativo (base + IVA = valor_factura) para que la
+            # pantalla del conductor lo muestre igual que en la factura real.
+            # `None` si Siesa no respondió — el frontend ya sabe caer al total
+            # solo cuando falta cualquiera de los dos.
+            p['base_gravable'] = base_gravable
+            p['iva_factura']   = iva_factura
             p['es_contado']    = es_contado
             # `''` = Siesa respondió sin condición. `None` = no se pudo
             # preguntar. Son cosas distintas y colapsarlas fue el defecto.
@@ -674,12 +680,24 @@ class RutaService:
 
     @staticmethod
     def _valor_y_cond_pago(tarea) -> tuple:
-        """`(valor_factura, es_contado, valores_por_referencia)` de la FE real
-        de una tarea. Cualquiera puede salir `None`/`{}` si Siesa no responde
-        — nunca levanta. Alimenta el toggle Pago Total/Parcial del conductor
-        y el recálculo en vivo cuando ajusta cantidades entregadas; si falta
-        el dato, el frontend cae al campo libre de siempre (sin bloquear la
-        pantalla).
+        """`(valor_factura, es_contado, valores_por_referencia, cond_pago_crudo,
+        base_gravable, iva)` de la FE real de una tarea. Cualquiera puede salir
+        `None`/`{}` si Siesa no responde — nunca levanta. Alimenta el toggle
+        Pago Total/Parcial del conductor y el recálculo en vivo cuando ajusta
+        cantidades entregadas; si falta el dato, el frontend cae al campo
+        libre de siempre (sin bloquear la pantalla).
+
+        `base_gravable`/`iva`: suma de `f470_vlr_bruto`/`f470_vlr_imp` de las
+        mismas líneas que ya se leen para `valor_factura` — sin consulta
+        extra. Existen solo para que la pantalla del conductor pueda mostrar
+        el desglose real de la factura (base + IVA = total), no para decidir
+        nada — `valor_factura` (el neto) sigue siendo el único valor que
+        gobierna el cobro.
+
+        ⚠️ Esta función tiene tres `return` — uno de ellos ya se rompió antes
+        (ver `tests/test_cond_pago.py::TestSalidaAntesDeConsultarSiesa`, "quedó
+        con 3 valores en vez de 4") por editar dos y olvidar el tercero.
+        Cualquier campo nuevo va en LOS TRES.
 
         `es_contado`: `True` | `False` | **`None` cuando no se sabe**.
 
@@ -702,14 +720,18 @@ class RutaService:
 
         tipo_fe, consec_fe = resolver_fe_o_none(tarea)
         if not tipo_fe or not consec_fe:
-            return None, None, {}, None
+            return None, None, {}, None, None, None
 
         valor_factura = None
+        base_gravable = None
+        iva_factura = None
         valores_por_referencia = {}
         try:
             lineas = connekta.get_rowids_factura(tipo_fe, consec_fe)
             if lineas:
                 valor_factura = round(sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas), 2)
+                base_gravable = round(sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas), 2)
+                iva_factura = round(sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas), 2)
                 for ln in lineas:
                     codigo = str(ln.get('f120_referencia', '')).strip()
                     cant = float(ln.get('f470_cant_base', 0) or 0)
@@ -764,7 +786,9 @@ class RutaService:
                     _cp0.cobra_en_la_puerta(
                         tarea.cond_pago, connekta.cond_pago_ventas, connekta.cond_pago_ruta),
                     valores_por_referencia,
-                    tarea.cond_pago)
+                    tarea.cond_pago,
+                    base_gravable,
+                    iva_factura)
         try:
             cabecera = connekta.get_pedido_cabecera(
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
@@ -793,7 +817,7 @@ class RutaService:
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
-        return valor_factura, es_contado, valores_por_referencia, cond_pago_crudo
+        return valor_factura, es_contado, valores_por_referencia, cond_pago_crudo, base_gravable, iva_factura
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:

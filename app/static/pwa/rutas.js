@@ -1964,6 +1964,21 @@ function _condItemsAjustados() {
   });
 }
 
+/**
+ * Desglose base gravable + IVA de la factura completa, tal como sale en
+ * Siesa — informativo, debajo del valor a cobrar. Se oculta si Siesa no
+ * respondió con alguno de los dos (backend manda `null`, no inventa un
+ * desglose sobre un total que ya viene sin ese detalle).
+ */
+function _condDesgloseHTML(p) {
+  if (p.base_gravable == null || p.iva_factura == null) return '';
+  return `
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a2a;">
+      <span>Base: $${Number(p.base_gravable).toLocaleString('es-CO')}</span>
+      <span>IVA: $${Number(p.iva_factura).toLocaleString('es-CO')}</span>
+    </div>`;
+}
+
 /** Renderiza el formulario de confirmacion de parada con estado, pago, foto y items. */
 function _condRenderFormParada() {
   const el = document.getElementById('cond-contenido');
@@ -2109,6 +2124,7 @@ function _condRenderFormParada() {
         <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
           $${Number(p.valor_factura).toLocaleString('es-CO')}
         </div>
+        ${_condDesgloseHTML(p)}
       </div>
       ` : ''}
       <div style="margin-bottom:14px;padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:13px;color:#aaa;display:flex;align-items:center;gap:10px;">
@@ -2121,6 +2137,7 @@ function _condRenderFormParada() {
         <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
           $${Number(p.valor_factura).toLocaleString('es-CO')}
         </div>
+        ${_condDesgloseHTML(p)}
       </div>
 
       <div id="cond-pago-toggle-wrap" style="margin-bottom:14px;">
