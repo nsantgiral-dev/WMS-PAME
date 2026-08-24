@@ -115,9 +115,16 @@ class TestContadoEntregado:
         """`monto_desc` no viene declarado (default 0) — el motivo entró sin
         monto, como puede pasar con datos históricos (ver comentario en
         `registrar_cobro_recaudo`). El DC tiene que calcularse con la base
-        real de Siesa (`f470_vlr_bruto`), no con `monto_cobrado`."""
+        real de Siesa (`f470_vlr_bruto`), no con `monto_cobrado`.
+
+        `monto` del conductor es el NETO real (factura $1.000.000 menos la
+        retención de $21.008,40) — es lo que el cliente físicamente paga
+        cuando hay RETEFUENTE de por medio, y es lo que el guard de
+        diferencia (`_validar_diferencia_declarada`) espera ver."""
+        ret_rf = round(840336 * 0.025, 2)
+        neto_esperado = round(1000000 - ret_rf, 2)
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
-                              motivo_desc='RETEFUENTE_2.5', monto=1000000)
+                              motivo_desc='RETEFUENTE_2.5', monto=neto_esperado)
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
@@ -133,14 +140,24 @@ class TestContadoEntregado:
         assert len(dc_jobs) == 1
         # Base correcta: 840.336 (f470_vlr_bruto real), no 1.000.000
         # (monto_cobrado, que incluye IVA) — antes esta rama sobreestimaba.
-        assert dc_jobs[0].get_payload()['monto'] == round(840336 * 0.025, 2)
+        assert dc_jobs[0].get_payload()['monto'] == ret_rf
+        # El RC sale NETO de la retención — RC + DC = factura completa.
+        # Antes el RC salía por el neto COMPLETO ($1.000.000) y el DC
+        # aparte, sobre-acreditando la cartera por $21.008,40.
+        assert rc_jobs[0].get_payload()['monto'] == neto_esperado
 
     def test_reteiva_por_liquidacion_masiva_usa_el_iva_no_el_monto_cobrado(self, app, db, recaudo_liq):
         """El caso que de verdad importaba: RETEIVA va sobre el IVA, no sobre
         lo cobrado. Con la fórmula vieja (`monto_cobrado * 0.15`) esto salía
-        a $150.000 — casi 5x el valor real de $31.932,80."""
+        a $150.000 — casi 5x el valor real de $31.932,80.
+
+        `monto` es el neto real (factura $1.000.000 menos la retención de
+        $23.949,60) — lo que el cliente físicamente paga con RETEIVA de
+        por medio."""
+        ret_iva_esperada = round(159664 * 0.15, 2)
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
-                              motivo_desc='RETEIVA', monto=1000000)
+                              motivo_desc='RETEIVA',
+                              monto=round(1000000 - ret_iva_esperada, 2))
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
@@ -292,8 +309,11 @@ class TestRechazado:
 class TestRetencionesPUC:
 
     def test_retefuente_puc_correcto(self, app, db, recaudo_liq):
+        # Neto real (factura $1.000.000 menos retención $21.008,40) — ver
+        # comentario en `test_contado_entregado_con_retencion_encola_rc_y_dc`.
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
-                              motivo_desc='RETEFUENTE_2.5', monto=1000000)
+                              motivo_desc='RETEFUENTE_2.5',
+                              monto=round(1000000 - round(840336 * 0.025, 2), 2))
         with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
                    return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
                                   'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
@@ -380,17 +400,19 @@ class TestRegistrarCobroRecaudo:
         mock_connekta.get_pedido_cabecera.assert_called_with('PD', '999')
 
     def test_contado_con_retenciones_rc_neto(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        # RC = neto (bruto - retenciones)
+        ret_rf = round(1680672 * 0.025, 2)   # RetefFuente 2.5% de base gravable
+        ret_iva = round(319328 * 0.15, 2)    # ReteIVA 15% de IVA (NO de base)
+        expected_neto = round(2000000 - ret_rf - ret_iva, 2)
+        # El conductor declara el neto real (con las dos retenciones ya
+        # descontadas) — es lo que el cliente físicamente entrega.
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=expected_neto)
         from app.services.liquidacion_service import LiquidacionService
         with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
              patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
             resultado = LiquidacionService.registrar_cobro_recaudo(
                 recaudo.id, admin_id=1,
                 retenciones=[{'tipo': 'RETEFUENTE_2.5'}, {'tipo': 'RETEIVA'}])
-        # RC = neto (bruto - retenciones)
-        ret_rf = round(1680672 * 0.025, 2)   # RetefFuente 2.5% de base gravable
-        ret_iva = round(319328 * 0.15, 2)    # ReteIVA 15% de IVA (NO de base)
-        expected_neto = round(2000000 - ret_rf - ret_iva, 2)
         assert resultado['monto_neto_rc'] == expected_neto
         assert len(resultado['dc_jobs']) == 2
         # Verify RETEIVA base is IVA, not base_gravable
@@ -520,7 +542,9 @@ class TestRegistrarCobroRecaudo:
         retención se encola aparte, directo con `SiesaJob.encolar`, y su
         payload nunca llevó `unidad_negocio`. Primera liquidación con
         retención real: FALLIDO 5/5, rechazo estructural de Siesa."""
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
+        # Neto real (factura $2.000.000 menos retención $42.016,80).
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO',
+                              monto=round(2000000 - round(1680672 * 0.025, 2), 2),
                               motivo_desc='RETEFUENTE_2.5')
         # Admin ya confirmó que el descuento sí correspondía (ver
         # `confirmar_retencion`) — si no, `registrar_cobro_recaudo` bloquea
@@ -551,7 +575,10 @@ class TestRegistrarCobroRecaudo:
         assert dc_job.get_payload()['unidad_negocio'] == '99'
 
     def test_retenciones_detalle_guardado(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000)
+        # Neto real (factura $2.000.000 menos retención $42.016,80).
+        recaudo = recaudo_liq(
+            estado='ENTREGADO', pago='EFECTIVO',
+            monto=round(2000000 - round(1680672 * 0.025, 2), 2))
         from app.services.liquidacion_service import LiquidacionService
         with patch('app.services.connekta_gateway.connekta', self._mock_siesa()), \
              patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
@@ -647,6 +674,63 @@ class TestDiferenciaGrandeSinExplicarBloqueaElRC:
                 recaudo.id, admin_id=1, retenciones=[], monto_override=50000)
         assert resultado['ok'] is True
         assert resultado['monto_neto_rc'] == 50000
+
+    def test_override_precargado_con_el_neto_de_siesa_tambien_bloquea(
+            self, app, db, recaudo_liq):
+        """PD1426 tal cual ocurre en producción: `liquidacion.js` SIEMPRE
+        manda `monto_override` — para ENTREGADO lo precarga con el neto de
+        Siesa (`mSiesa || mCobrado`), no con lo que el conductor declaró. Si
+        el admin no toca el campo, el override sale IGUAL al neto de Siesa
+        ($58.600), nunca al valor que el conductor dijo en la puerta
+        ($50.000).
+
+        La primera versión de este guard vivía en la rama `elif
+        monto_override is None`, así que en este escenario real —el único
+        que el frontend produce— nunca corría: quedó código muerto. Ahora el
+        guard compara `recaudo.monto_cobrado` contra el resultado final
+        (`monto_neto_rc`) sin importar de dónde salió `monto`, así que sí
+        atrapa este caso."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match=r'\$50.000.*\$58.600|diferencia'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[], monto_override=58600)
+
+    def test_override_precargado_con_retencion_legitima_no_bloquea(
+            self, app, db, recaudo_liq):
+        """La pregunta que motivó este rediseño: pagos parciales por
+        retención tributaria legítima. El conductor cobra en la puerta el
+        NETO de retención (lo que el cliente de verdad entrega), Liquidación
+        precarga `monto_override` con el neto de Siesa (bruto, sin la
+        retención descontada — Siesa no la conoce hasta que el admin la
+        declara acá) y el admin agrega la retención en la misma llamada.
+
+        El guard tiene que comparar contra el resultado FINAL —ya con la
+        retención restada—, no contra el bruto: por eso no debe bloquear
+        aunque el override valga $58.600 y el conductor haya declarado
+        $57.135 (58.600 − retención RETEFUENTE 2.5% de la base gravable)."""
+        base_gravable = 49244.0  # f470_vlr_bruto
+        ret_rf = round(base_gravable * 0.025, 2)
+        neto_declarado_por_conductor = round(58600 - ret_rf, 2)
+        recaudo = recaudo_liq(
+            estado='ENTREGADO', pago='EFECTIVO',
+            monto=neto_declarado_por_conductor)
+        mock_connekta = self._mock_siesa_neto(58600)
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': base_gravable, 'f470_vlr_imp': 9356,
+             'f470_vlr_neto': 58600, 'f120_referencia': 'REF001',
+             'f470_rowid': 'R1'}
+        ]
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1,
+                retenciones=[{'tipo': 'RETEFUENTE_2.5'}], monto_override=58600)
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == round(58600 - ret_rf, 2)
 
     def test_diferencia_dentro_del_tope_no_bloquea(self, app, db, recaudo_liq):
         """$50 de diferencia es residuo de redondeo, no un faltante —
@@ -755,8 +839,13 @@ class TestRetencionDeclaradaBloqueaElRC:
                 LiquidacionService.registrar_cobro_recaudo(recaudo.id, admin_id=1, retenciones=[])
 
     def test_confirmada_permite_el_rc(self, app, db, recaudo_liq):
-        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=2000000,
-                              motivo_desc='RETEFUENTE_2.5')
+        # Neto real (factura $2.000.000 menos retención $42.016,80) — un
+        # pago parcial por retención legítima, la pregunta que este guard
+        # tiene que contestar bien: no debe bloquear.
+        recaudo = recaudo_liq(
+            estado='ENTREGADO', pago='EFECTIVO',
+            monto=round(2000000 - round(1680672 * 0.025, 2), 2),
+            motivo_desc='RETEFUENTE_2.5')
         recaudo.retencion_confirmada = True
         db.session.commit()
         from app.services.liquidacion_service import LiquidacionService

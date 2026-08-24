@@ -700,17 +700,18 @@ class LiquidacionService:
         elif estado == EstadoEntrega.PARCIAL:
             monto = float(recaudo.monto_cobrado or 0)
         elif datos_siesa_ok and total_neto > 0:
-            # Antes de aceptar el neto de Siesa por defecto: si lo que
-            # declaró el conductor difiere de ese neto por más que un
-            # residuo de redondeo, NO se resuelve solo — ver
-            # `_validar_diferencia_declarada` (compartida con
-            # `_procesar_recaudo`, mismo guard en los dos caminos que
-            # pueden crear un RC).
-            _validar_diferencia_declarada(
-                float(recaudo.monto_cobrado or 0), total_neto)
             monto = total_neto
         else:
             monto = float(recaudo.monto_cobrado or 0)
+        # La validación de diferencia va DESPUÉS de calcular retenciones
+        # (ver más abajo, antes de encolar nada) — comparar acá contra
+        # `total_neto` no sirve: la Liquidación real SIEMPRE manda
+        # `monto_override` (precargado con el neto de Siesa por el propio
+        # frontend), así que esta rama nunca corre en el flujo real y el
+        # guard quedaría muerto. Lo que hay que comparar contra lo que
+        # declaró el conductor es el resultado FINAL — `monto` ya con la
+        # retención real descontada —, sin importar de cuál rama salió
+        # `monto`.
 
         # Retención rechazada: el cliente debe pagar lo que le correspondía.
         # No hay un segundo estado de "ya pagó el resto" en el WMS a propósito
@@ -754,10 +755,14 @@ class LiquidacionService:
                     'la diferencia.'
                 )
 
-        # ── Calculate retentions ────────────────────────────────────
+        # ── Calculate retentions (sin encolar todavía) ────────────────
+        # Se calcula la retención real ANTES de tocar la cola: el guard de
+        # diferencia (más abajo) necesita el neto final, y si bloquea no
+        # puede quedar un DC huérfano ya encolado para un RC que nunca sale.
         import json
         dc_jobs_info = []
         retenciones_detalle = []
+        retenciones_validas = []
         total_retenciones = 0
 
         if retenciones:
@@ -795,66 +800,89 @@ class LiquidacionService:
                     continue
 
                 total_retenciones += monto_ret
-
-                # Enqueue individual DC SiesaJob directly
-                dc_notas = (
-                    f'Liquidación per-recaudo | DC recaudo #{recaudo_id} | '
-                    f'Retención {tipo_ret} | Admin: {admin_id}'
-                )
-                dc_job = SiesaJob.encolar(
-                    tipo='DOCUMENTO_CONTABLE_RET',
-                    payload={
-                        'recaudo_id': recaudo_id,
-                        'tipo_docto_fe': tipo_docto_fe,
-                        'consec_fe': str(consec_fe),
-                        'tercero_nit': nit,
-                        'sucursal': sucursal,
-                        'cuenta_puc': cuenta_puc,
-                        'monto': monto_ret,
-                        'base_gravable': base_ret,
-                        'co_factura': co_factura,
-                        'cuenta_cxc': cuenta_cxc,
-                        # Misma fila de cartera que ya resuelve el RC (`un_cxc`,
-                        # `f353_id_un_cruce`) — sin esto el DC caía al fallback
-                        # global de `connekta.trigger_documento_contable`
-                        # (`SIESA_UNIDAD_NEGOCIO`), el mismo defecto que ya
-                        # rechazó el RC hermano (142888) el 2026-08-18. Job 470
-                        # (recaudo 19, PD1421, ruta 22, 2026-08-20) es la
-                        # primera liquidación con retención real: quedó
-                        # FALLIDO 5/5 con rechazo estructural de Siesa.
-                        'unidad_negocio': un_cxc,
-                        'notas': dc_notas,
-                        'accion_origen': 'liquidacion_per_recaudo',
-                    },
-                    referencia_tipo='RecaudoEntrega',
-                    referencia_id=recaudo_id,
-                    creado_por_id=admin_id,
-                )
-                # Flush to get dc_job.id
-                db.session.flush()
-
-                dc_jobs_info.append({
-                    'tipo': tipo_ret,
-                    'job_id': dc_job.id,
-                    'monto': monto_ret,
-                })
-                retenciones_detalle.append({
-                    'tipo': tipo_ret,
-                    'puc': cuenta_puc,
-                    'tasa': tasa,
-                    'monto': monto_ret,
-                    'base': base_ret,
-                    'siesa_triggered': True,
-                    'job_id': dc_job.id,
-                })
-
-                logger.info(
-                    '[LIQUIDACION] Encolado DC individual recaudo %d: %s PUC %s $%.2f',
-                    recaudo_id, tipo_ret, cuenta_puc, monto_ret
-                )
+                retenciones_validas.append(
+                    (tipo_ret, cuenta_puc, tasa, base_ret, monto_ret))
 
         # ── Calculate monto_neto_rc ─────────────────────────────────
         monto_neto_rc = round(monto - total_retenciones, 2)
+
+        # ── Guard: diferencia declarada vs. lo que el RC va a cobrar ──
+        # Comparar acá — contra `monto_neto_rc`, YA con la retención real
+        # descontada — es lo que hace que un pago parcial legítimo por
+        # retención (el cliente pagó neto de RETEFUENTE/RETEIVA/ICA) pase sin
+        # bloquear, en vez de comparar contra el bruto de la factura como en
+        # el primer intento de este guard (ver comentario en "Determine
+        # monto" arriba — ese punto nunca corría: el frontend siempre manda
+        # `monto_override`). Solo aplica a ENTREGADO — PARCIAL ya tiene su
+        # propia verificación arriba («Retención rechazada»), con su propia
+        # referencia (lo que el cliente se quedó, no el neto completo).
+        if estado == EstadoEntrega.ENTREGADO:
+            _validar_diferencia_declarada(
+                float(recaudo.monto_cobrado or 0),
+                monto_neto_rc,
+                contexto=(
+                    ' (neto, después de descontar la retención)'
+                    if total_retenciones else ''
+                ),
+            )
+
+        # ── Enqueue retentions (ahora sí, con el guard ya superado) ───
+        for tipo_ret, cuenta_puc, tasa, base_ret, monto_ret in retenciones_validas:
+            dc_notas = (
+                f'Liquidación per-recaudo | DC recaudo #{recaudo_id} | '
+                f'Retención {tipo_ret} | Admin: {admin_id}'
+            )
+            dc_job = SiesaJob.encolar(
+                tipo='DOCUMENTO_CONTABLE_RET',
+                payload={
+                    'recaudo_id': recaudo_id,
+                    'tipo_docto_fe': tipo_docto_fe,
+                    'consec_fe': str(consec_fe),
+                    'tercero_nit': nit,
+                    'sucursal': sucursal,
+                    'cuenta_puc': cuenta_puc,
+                    'monto': monto_ret,
+                    'base_gravable': base_ret,
+                    'co_factura': co_factura,
+                    'cuenta_cxc': cuenta_cxc,
+                    # Misma fila de cartera que ya resuelve el RC (`un_cxc`,
+                    # `f353_id_un_cruce`) — sin esto el DC caía al fallback
+                    # global de `connekta.trigger_documento_contable`
+                    # (`SIESA_UNIDAD_NEGOCIO`), el mismo defecto que ya
+                    # rechazó el RC hermano (142888) el 2026-08-18. Job 470
+                    # (recaudo 19, PD1421, ruta 22, 2026-08-20) es la
+                    # primera liquidación con retención real: quedó
+                    # FALLIDO 5/5 con rechazo estructural de Siesa.
+                    'unidad_negocio': un_cxc,
+                    'notas': dc_notas,
+                    'accion_origen': 'liquidacion_per_recaudo',
+                },
+                referencia_tipo='RecaudoEntrega',
+                referencia_id=recaudo_id,
+                creado_por_id=admin_id,
+            )
+            # Flush to get dc_job.id
+            db.session.flush()
+
+            dc_jobs_info.append({
+                'tipo': tipo_ret,
+                'job_id': dc_job.id,
+                'monto': monto_ret,
+            })
+            retenciones_detalle.append({
+                'tipo': tipo_ret,
+                'puc': cuenta_puc,
+                'tasa': tasa,
+                'monto': monto_ret,
+                'base': base_ret,
+                'siesa_triggered': True,
+                'job_id': dc_job.id,
+            })
+
+            logger.info(
+                '[LIQUIDACION] Encolado DC individual recaudo %d: %s PUC %s $%.2f',
+                recaudo_id, tipo_ret, cuenta_puc, monto_ret
+            )
 
         # ── Enqueue RC ──────────────────────────────────────────────
         rc_notas = (
@@ -1209,8 +1237,35 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                     total_neto_rc = round(
                         sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas_rc), 2)
                     if total_neto_rc > 0:
-                        _validar_diferencia_declarada(monto, total_neto_rc)
-                        monto_rc = total_neto_rc
+                        # Si hay retención, el RC debe salir NETO de ella —
+                        # RC + DC tiene que sumar la factura completa, no
+                        # sumar de más. Mandar el RC por el neto de Siesa
+                        # completo Y además un DC aparte (como hacía esto
+                        # antes) sobre-acreditaba la cartera del cliente por
+                        # el valor de la retención. Misma cuenta que ya hace
+                        # `registrar_cobro_recaudo` (`monto_neto_rc`).
+                        retencion_preview = 0.0
+                        if recaudo.motivo_descuento:
+                            retencion_preview = float(recaudo.monto_descuento or 0)
+                            if retencion_preview <= 0:
+                                base_gravable_rc = sum(
+                                    float(ln.get('f470_vlr_bruto', 0))
+                                    for ln in lineas_rc)
+                                total_iva_rc = sum(
+                                    float(ln.get('f470_vlr_imp', 0))
+                                    for ln in lineas_rc)
+                                retencion_preview = monto_de_retencion(
+                                    recaudo.motivo_descuento,
+                                    base_gravable_rc, total_iva_rc)
+                        monto_neto_rc = round(total_neto_rc - retencion_preview, 2)
+                        _validar_diferencia_declarada(
+                            monto, monto_neto_rc,
+                            contexto=(
+                                ' (neto, después de descontar la retención)'
+                                if retencion_preview else ''
+                            ),
+                        )
+                        monto_rc = monto_neto_rc
             except ValueError:
                 raise
             except Exception as e:
