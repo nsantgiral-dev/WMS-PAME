@@ -1019,79 +1019,105 @@ function _renderTareasBodegaHTML(tareas) {
       { label: '🔵 En proceso', color: '#93c5fd', tareas: porEstado.EN_PROCESO },
       { label: '⏳ En cola',    color: '#aaa',    tareas: porEstado.PENDIENTE  },
     ];
+    // Una línea/producto por tarea, pero varias tareas pueden ser del mismo
+    // pedido (ej. dos referencias bloqueadas del mismo PD). Agrupar por
+    // pedido evita que el mismo PD aparezca repetido como si fueran envíos
+    // distintos — una tarjeta por pedido, una fila por línea adentro, cada
+    // línea con su propio botón/panel de auditoría (id sigue siendo t.id,
+    // porque la decisión de auditoría es por línea, no por pedido entero).
+    const _lineaHTML = (t, esPrimera) => `
+      <div style="padding:10px 0;${esPrimera ? '' : 'border-top:1px solid #222;'}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
+            <div style="font-size:12px;color:#666;margin-top:2px;">${t.ubicacion_codigo || '—'}</div>
+            <div style="font-size:11px;color:#444;margin-top:2px;">${
+              t.operario_id
+                ? '👤 En proceso'
+                : t.estado === 'BLOQUEADO'
+                  ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada')
+                  : '⏳ En cola'
+            }</div>
+            ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
+              ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>`
+              : ''}
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
+            <div style="font-size:20px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
+          </div>
+        </div>
+        ${t.estado === 'BLOQUEADO' ? `
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
+          <button onclick="auditoriaMostrarPanel(${t.id})"
+            style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+            🔍 Auditoría
+          </button>
+          <div id="auditoria-panel-${t.id}" style="display:none;margin-top:10px;">
+            <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
+            <select id="auditoria-resultado-${t.id}"
+              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
+              <option value="">— Selecciona resultado —</option>
+              <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
+              <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
+              <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
+              <option value="AVERIA">🚫 Mercancía averiada</option>
+              <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
+            </select>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+              <div>
+                <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
+                <input id="auditoria-cantidad-${t.id}" type="number" min="0" value="0"
+                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+              </div>
+              <div>
+                <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
+                <input id="auditoria-ubicacion-${t.id}" type="text" placeholder="Ej: A-01-02"
+                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+              </div>
+            </div>
+            <textarea id="auditoria-obs-${t.id}" placeholder="Observaciones (opcional)..."
+              style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
+            <div style="display:flex;gap:8px;">
+              <button onclick="auditoriaCancelarPanel(${t.id})"
+                style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+                Cancelar
+              </button>
+              <button onclick="auditoriaGuardar(${t.id})"
+                style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
+                Guardar auditoría →
+              </button>
+            </div>
+          </div>
+        </div>` : ''}
+      </div>`;
+
     let html = '';
     grupos.forEach(({ label, color, tareas: ts }) => {
       if (!ts.length) return;
-      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${ts.length}</div>`;
-      html += ts.map(t => `
-        <div class="tabla-card" style="${t.estado==='BLOQUEADO'?'border-color:#7f1d1d;background:#110a0a;':''}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-            <div style="flex:1;min-width:0;">
-              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
-                ${t.tipo_documento === 'TRASLADO' ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
-              </div>
-              <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
-              <div style="font-size:11px;color:#444;margin-top:2px;">${
-                t.operario_id
-                  ? '👤 En proceso'
-                  : t.estado === 'BLOQUEADO'
-                    ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada')
-                    : '⏳ En cola'
-              }</div>
-              ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
-                ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>`
-                : ''}
-            </div>
-            <div style="text-align:right;flex-shrink:0;">
-              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
-              <div style="font-size:20px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
-            </div>
+
+      const porPedido = new Map();
+      ts.forEach(t => {
+        const key = `${t.referencia_documento || t.codigo}`;
+        if (!porPedido.has(key)) porPedido.set(key, []);
+        porPedido.get(key).push(t);
+      });
+
+      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${ts.length} línea${ts.length!==1?'s':''} · ${porPedido.size} pedido${porPedido.size!==1?'s':''}</div>`;
+
+      html += Array.from(porPedido.entries()).map(([pedido, items]) => {
+        const hayBloqueada = items.some(t => t.estado === 'BLOQUEADO');
+        const esTraslado = items[0].tipo_documento === 'TRASLADO';
+        return `
+        <div class="tabla-card" style="${hayBloqueada?'border-color:#7f1d1d;background:#110a0a;':''}">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">
+            <span style="font-size:14px;font-weight:700;">${pedido}</span>
+            ${esTraslado ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
+            <span style="font-size:11px;color:#555;">· ${items.length} línea${items.length!==1?'s':''}</span>
           </div>
-          ${t.estado === 'BLOQUEADO' ? `
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
-            <button onclick="auditoriaMostrarPanel(${t.id})"
-              style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-              🔍 Auditoría
-            </button>
-            <div id="auditoria-panel-${t.id}" style="display:none;margin-top:10px;">
-              <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
-              <select id="auditoria-resultado-${t.id}"
-                style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
-                <option value="">— Selecciona resultado —</option>
-                <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
-                <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
-                <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
-                <option value="AVERIA">🚫 Mercancía averiada</option>
-                <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
-              </select>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                <div>
-                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
-                  <input id="auditoria-cantidad-${t.id}" type="number" min="0" value="0"
-                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
-                </div>
-                <div>
-                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
-                  <input id="auditoria-ubicacion-${t.id}" type="text" placeholder="Ej: A-01-02"
-                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
-                </div>
-              </div>
-              <textarea id="auditoria-obs-${t.id}" placeholder="Observaciones (opcional)..."
-                style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
-              <div style="display:flex;gap:8px;">
-                <button onclick="auditoriaCancelarPanel(${t.id})"
-                  style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
-                  Cancelar
-                </button>
-                <button onclick="auditoriaGuardar(${t.id})"
-                  style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
-                  Guardar auditoría →
-                </button>
-              </div>
-            </div>
-          </div>` : ''}
-        </div>`).join('');
+          ${items.map((t, i) => _lineaHTML(t, i === 0)).join('')}
+        </div>`;
+      }).join('');
     });
     return html;
   } catch (e) {
