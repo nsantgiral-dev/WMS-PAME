@@ -15,14 +15,24 @@ logger = logging.getLogger(__name__)
 from app.routes._auth_helpers import _solo_admin
 
 
-def _picking_listo_batch(numeros_pedido: list) -> dict:
+def _picking_listo_batch(numeros_pedido: list) -> tuple[dict, dict]:
     """
-    Consulta en UNA sola query si el picking está completo para cada pedido.
-    Devuelve {numero_pedido: bool}.
+    Consulta en UNA sola query si el picking está completo para cada pedido,
+    y si el motivo de no estarlo es que hay una tarea BLOQUEADA esperando
+    auditoría (no que nadie la haya tomado todavía).
+
+    Devuelve (listo, bloqueado): {numero_pedido: bool} cada uno.
     Evita el N+1 de _enriquecer_picking_listo que hacía 1 query por packing.
+
+    La distinción importa para la pantalla del empacador: "Esperando
+    picking" invita a que alguien la pickee — pero una tarea BLOQUEADA
+    (ej. backorder Siesa, ver picking_service.bloquear_por_backorder_siesa)
+    no se resuelve pickeando, se resuelve en Bodega → Auditoría. Mostrar el
+    mismo texto para los dos casos manda al empacador a esperar algo que
+    nunca va a pasar solo.
     """
     if not numeros_pedido:
-        return {}
+        return {}, {}
 
     pickings = TareaPicking.query.filter(
         TareaPicking.referencia_documento.in_(numeros_pedido),
@@ -34,21 +44,26 @@ def _picking_listo_batch(numeros_pedido: list) -> dict:
     for p in pickings:
         num = p.referencia_documento
         if num not in por_pedido:
-            por_pedido[num] = {'total': 0, 'completados': 0}
+            por_pedido[num] = {'total': 0, 'completados': 0, 'bloqueados': 0}
         por_pedido[num]['total'] += 1
         if p.estado == EstadoPicking.COMPLETADO or (
             p.estado == EstadoPicking.BLOQUEADO and (p.cantidad_recogida or 0) > 0
         ):
             por_pedido[num]['completados'] += 1
+        if p.estado == EstadoPicking.BLOQUEADO:
+            por_pedido[num]['bloqueados'] += 1
 
-    resultado = {}
+    listo = {}
+    bloqueado = {}
     for num in numeros_pedido:
         datos = por_pedido.get(num)
         if not datos:
-            resultado[num] = True   # sin picking = creado manual, listo
+            listo[num] = True   # sin picking = creado manual, listo
+            bloqueado[num] = False
         else:
-            resultado[num] = datos['completados'] == datos['total']
-    return resultado
+            listo[num] = datos['completados'] == datos['total']
+            bloqueado[num] = datos['bloqueados'] > 0
+    return listo, bloqueado
 
 
 @packing_bp.route('/', methods=['GET'])
@@ -98,12 +113,13 @@ def listar_tareas():
 
     # Una sola query para todos los pickings de la página — sin N+1
     numeros = [t.numero_pedido_siesa for t in tareas.items]
-    picking_listo_map = _picking_listo_batch(numeros)
+    picking_listo_map, picking_bloqueado_map = _picking_listo_batch(numeros)
 
     items = []
     for t in tareas.items:
         d = t.to_dict()
         d['picking_listo'] = picking_listo_map.get(t.numero_pedido_siesa, True)
+        d['picking_bloqueado'] = picking_bloqueado_map.get(t.numero_pedido_siesa, False)
         items.append(d)
 
     return jsonify({
@@ -128,7 +144,9 @@ def obtener_tarea(id):
     if u.almacen_id and tarea.almacen_id and u.almacen_id != tarea.almacen_id and u.rol not in ('admin', 'supervisor', 'gerente'):
         return jsonify({'error': 'Sin acceso a esta tarea'}), 403
     d = tarea.to_dict()
-    d['picking_listo'] = _picking_listo_batch([tarea.numero_pedido_siesa]).get(tarea.numero_pedido_siesa, True)
+    _listo_map, _bloqueado_map = _picking_listo_batch([tarea.numero_pedido_siesa])
+    d['picking_listo'] = _listo_map.get(tarea.numero_pedido_siesa, True)
+    d['picking_bloqueado'] = _bloqueado_map.get(tarea.numero_pedido_siesa, False)
     return jsonify(d), 200
 
 

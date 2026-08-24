@@ -283,3 +283,88 @@ class TestIniciarDespachoExcluyeLineaSinCompromiso:
         assert resp.status_code in (200, 201, 207), resp.get_json()
         assert mock_crear_tareas.call_count == 1
         mock_bloquear.assert_not_called()
+
+
+class TestPickingBloqueadoEnPantallaDeEmpaque:
+    """El badge 'Esperando picking' de Packing Mixto invita al empacador a
+    esperar a que alguien pickee — pero una tarea BLOQUEADA (backorder,
+    faltante, avería...) no se resuelve pickeando, se resuelve en Bodega →
+    Auditoría. `picking_bloqueado` distingue los dos casos para que el
+    frontend no mande a esperar algo que nunca va a pasar solo."""
+
+    def test_picking_bloqueado_true_cuando_hay_tarea_bloqueada_sin_recoger(
+        self, app, db, client, jwt_token_admin, almacen, producto, producto2,
+    ):
+        from app.models.packing import TareaPacking
+        from app.models.picking import TareaPicking, EstadoPicking
+        from app.models.ubicacion import Ubicacion
+
+        ub = Ubicacion(codigo='UB-AUDIT-01', almacen_id=almacen.id, zona='A', tipo='estanteria', activo=True)
+        db.session.add(ub)
+        db.session.flush()
+
+        pk = TareaPacking(
+            codigo='PACK-TEST-AUDIT', numero_pedido_siesa='PD-TEST-AUDIT',
+            almacen_id=almacen.id, estado='PENDIENTE',
+        )
+        db.session.add(pk)
+        db.session.add(TareaPicking(
+            codigo='PICK-A', producto_id=producto.id, cantidad_solicitada=4,
+            cantidad_recogida=4, ubicacion_id=ub.id, almacen_id=almacen.id,
+            estado=EstadoPicking.COMPLETADO, referencia_documento='PD-TEST-AUDIT',
+        ))
+        db.session.add(TareaPicking(
+            codigo='PICK-B', producto_id=producto2.id, cantidad_solicitada=4,
+            cantidad_recogida=0, ubicacion_id=ub.id, almacen_id=almacen.id,
+            estado=EstadoPicking.BLOQUEADO, motivo_bloqueo='BACKORDER_SIESA',
+            referencia_documento='PD-TEST-AUDIT',
+        ))
+        db.session.commit()
+
+        resp = client.get(
+            '/api/packing/?activas=true',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        tarea = next(
+            t for t in resp.get_json()['tareas']
+            if t['numero_pedido_siesa'] == 'PD-TEST-AUDIT'
+        )
+        assert tarea['picking_listo'] is False
+        assert tarea['picking_bloqueado'] is True
+
+    def test_picking_bloqueado_false_cuando_solo_falta_pickear(
+        self, app, db, client, jwt_token_admin, almacen, producto,
+    ):
+        """Caso normal — nadie la ha tomado todavía, ningún bloqueo real."""
+        from app.models.packing import TareaPacking
+        from app.models.picking import TareaPicking, EstadoPicking
+        from app.models.ubicacion import Ubicacion
+
+        ub = Ubicacion(codigo='UB-NORMAL-01', almacen_id=almacen.id, zona='A', tipo='estanteria', activo=True)
+        db.session.add(ub)
+        db.session.flush()
+
+        pk = TareaPacking(
+            codigo='PACK-TEST-NORMAL', numero_pedido_siesa='PD-TEST-NORMAL',
+            almacen_id=almacen.id, estado='PENDIENTE',
+        )
+        db.session.add(pk)
+        db.session.add(TareaPicking(
+            codigo='PICK-C', producto_id=producto.id, cantidad_solicitada=4,
+            ubicacion_id=ub.id, almacen_id=almacen.id,
+            estado=EstadoPicking.PENDIENTE, referencia_documento='PD-TEST-NORMAL',
+        ))
+        db.session.commit()
+
+        resp = client.get(
+            '/api/packing/?activas=true',
+            headers={'Authorization': f'Bearer {jwt_token_admin}'},
+        )
+        assert resp.status_code == 200, resp.get_json()
+        tarea = next(
+            t for t in resp.get_json()['tareas']
+            if t['numero_pedido_siesa'] == 'PD-TEST-NORMAL'
+        )
+        assert tarea['picking_listo'] is False
+        assert tarea['picking_bloqueado'] is False
