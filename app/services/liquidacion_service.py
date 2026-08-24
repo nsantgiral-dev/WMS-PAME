@@ -17,6 +17,7 @@ financieros operan directamente contra facturas libres (sin amarre).
 """
 
 import logging
+import os
 from datetime import datetime
 from app.extensions import db
 from app.models.recaudo_entrega import RecaudoEntrega, EstadoEntrega
@@ -85,6 +86,61 @@ def monto_de_retencion(tipo_ret: str, base_gravable: float, total_iva: float) ->
     if not tasa:
         return 0.0
     return round(base_de_retencion(tipo_ret, base_gravable, total_iva) * tasa, 2)
+
+
+def tope_diferencia_recaudo() -> float:
+    """Cuánto puede absorberse en silencio entre lo que declaró el conductor
+    (`monto_cobrado`) y el neto de la factura, sin que un admin lo confirme
+    a mano.
+
+    Mismo patrón que `gestor-cartera-pame` (`recaudo/modelo.py::tope_ajuste`,
+    RECAUDO_AJUSTE_TOPE) para el mismo problema: un Recibo de Caja que sale
+    por el neto de Siesa en vez de por lo que el conductor dijo que cobró es
+    correcto cuando la diferencia es residuo de redondeo, y es un faltante
+    real sin explicar cuando no lo es (caso real: PD1426, $10.304 de
+    diferencia, sin devolución ni retención tributaria de por medio — el RC
+    salió por el neto completo igual, sin que nadie lo confirmara).
+
+    A diferencia del Gestor, acá no hay medición empírica propia todavía —
+    $100 es el mismo valor por defecto que allá, no uno recalculado contra
+    datos reales de WMS-PAME. Ajustar vía env var si la operación real dice
+    otra cosa.
+    """
+    try:
+        return float(os.environ.get('RECAUDO_DIFERENCIA_TOPE', '100'))
+    except (TypeError, ValueError):
+        return 100.0
+
+
+def _validar_diferencia_declarada(monto_declarado: float, total_neto: float,
+                                   contexto: str = '') -> None:
+    """Levanta `ValueError` si `monto_declarado` (lo que el conductor dijo
+    que cobró) difiere del neto de Siesa por encima del residuo de redondeo
+    tolerado — ver `tope_diferencia_recaudo`.
+
+    **Una sola función, dos llamadores** (`registrar_cobro_recaudo` y
+    `_procesar_recaudo`): antes de esto, el segundo mandaba `monto_cobrado`
+    directo a Siesa sin comparar nunca contra el neto real — la misma
+    política de "de dónde sale el monto del RC" escrita distinto en dos
+    sitios, y solo uno la validaba. Regla 0 corolario, ya documentado varias
+    veces en este repo para el mismo tipo de duplicación.
+
+    Sin efecto si `monto_declarado <= 0` (nunca se declaró — no hay nada que
+    comparar; Regla 0, ausencia de dato no es evidencia de faltante).
+    """
+    if monto_declarado <= 0:
+        return
+    diferencia = abs(total_neto - monto_declarado)
+    tope = tope_diferencia_recaudo()
+    if diferencia > tope:
+        raise ValueError(
+            f'El conductor declaró ${monto_declarado:,.2f} y la factura en Siesa '
+            f'dice ${total_neto:,.2f}{contexto} — una diferencia de '
+            f'${diferencia:,.2f}, por encima del residuo de redondeo tolerado '
+            f'(${tope:,.2f}). No es una devolución ni hay retención que la '
+            f'explique — decide el monto explícitamente (monto_override) antes '
+            f'de continuar.'
+        )
 
 
 class LiquidacionService:
@@ -644,6 +700,14 @@ class LiquidacionService:
         elif estado == EstadoEntrega.PARCIAL:
             monto = float(recaudo.monto_cobrado or 0)
         elif datos_siesa_ok and total_neto > 0:
+            # Antes de aceptar el neto de Siesa por defecto: si lo que
+            # declaró el conductor difiere de ese neto por más que un
+            # residuo de redondeo, NO se resuelve solo — ver
+            # `_validar_diferencia_declarada` (compartida con
+            # `_procesar_recaudo`, mismo guard en los dos caminos que
+            # pueden crear un RC).
+            _validar_diferencia_declarada(
+                float(recaudo.monto_cobrado or 0), total_neto)
             monto = total_neto
         else:
             monto = float(recaudo.monto_cobrado or 0)
@@ -1125,9 +1189,40 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     # ── CONTADO + ENTREGADO: RC (+ DC si retención) ──────────────
     if not es_credito and estado == EstadoEntrega.ENTREGADO:
         if not recaudo.siesa_rc_triggered and monto > 0:
+            # Mismo criterio que `registrar_cobro_recaudo`: preferir el
+            # neto real de Siesa sobre lo declarado, validando antes que no
+            # difieran más que el residuo de redondeo
+            # (`_validar_diferencia_declarada`). Antes este camino (el botón
+            # masivo) mandaba `monto_cobrado` directo, sin consultar Siesa
+            # ni comparar nunca — la misma decisión ("¿de dónde sale el
+            # monto del RC?") escrita distinto en dos sitios.
+            #
+            # Un fallo de red al consultar la factura NO bloquea el cobro
+            # —cae al monto declarado, igual que `registrar_cobro_recaudo`
+            # cuando `datos_siesa_ok` es False—; lo que sí bloquea es una
+            # diferencia real ya verificada contra Siesa.
+            monto_rc = monto
+            try:
+                from app.services.connekta_gateway import connekta as _connekta_rc
+                lineas_rc = _connekta_rc.get_rowids_factura(tipo_docto_fe, consec_fe)
+                if lineas_rc:
+                    total_neto_rc = round(
+                        sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas_rc), 2)
+                    if total_neto_rc > 0:
+                        _validar_diferencia_declarada(monto, total_neto_rc)
+                        monto_rc = total_neto_rc
+            except ValueError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    '[LIQUIDACION] _procesar_recaudo: no se pudo verificar neto '
+                    'Siesa para recaudo %d — usando monto declarado: %s',
+                    recaudo.id, e,
+                )
+
             _encolar_recibo_caja(
                 recaudo, tipo_docto_fe, consec_fe,
-                tercero_nit, sucursal, monto, forma_pago,
+                tercero_nit, sucursal, monto_rc, forma_pago,
                 notas=f'{notas_base} | ENTREGADO contado',
                 admin_id=admin_id,
             )

@@ -597,6 +597,126 @@ class TestRegistrarCobroRecaudo:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Diferencia grande sin explicar — decisión obligatoria del admin (2026-08-24)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestDiferenciaGrandeSinExplicarBloqueaElRC:
+    """Caso real PD1426: ENTREGADO completo (sin devolución), el conductor
+    declaró $50.000 y la factura en Siesa daba $58.600 — sin retención ni
+    devolución que expliquen la diferencia. El RC salió por el neto
+    completo de todas formas, sin que nadie lo confirmara.
+
+    Mismo principio que `AjustePorDiferencia` en gestor-cartera-pame: una
+    diferencia dentro del residuo de redondeo (`tope_diferencia_recaudo`,
+    $100 por defecto) se resuelve sola; una diferencia mayor exige
+    `monto_override` explícito — no se tapa dentro del RC."""
+
+    def _mock_siesa_neto(self, neto: float):
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': neto, 'f470_vlr_imp': 0, 'f470_vlr_neto': neto,
+             'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
+        ]
+        mock_connekta.get_pedido_cabecera.return_value = {
+            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
+            'f461_id_sucursal_pedido_rem': '001',
+        }
+        mock_connekta.get_cxc_general = MagicMock(return_value=[
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_total_db': neto, 'f353_total_cr': 0},
+        ])
+        return mock_connekta
+
+    def test_diferencia_grande_sin_override_bloquea_el_rc(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match=r'\$50.000.*\$58.600|diferencia'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[])
+
+    def test_monto_override_explicito_evita_el_bloqueo(self, app, db, recaudo_liq):
+        """El admin decidió a mano — el guard no pelea con una decisión
+        ya tomada, solo con una que nadie tomó."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[], monto_override=50000)
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == 50000
+
+    def test_diferencia_dentro_del_tope_no_bloquea(self, app, db, recaudo_liq):
+        """$50 de diferencia es residuo de redondeo, no un faltante —
+        se resuelve solo con el neto de Siesa, igual que siempre."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=58550)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == 58600
+
+    def test_sin_monto_declarado_no_bloquea(self, app, db, recaudo_liq):
+        """`monto_cobrado` en 0 (nunca declarado) no es una diferencia que
+        confirmar — no hay nada que comparar. Cae al neto de Siesa como
+        siempre lo hizo, sin exigir override."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=0)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == 58600
+
+    def test_parcial_no_activa_el_guard(self, app, db, recaudo_liq):
+        """PARCIAL ya usa `monto_cobrado` por diseño (la diferencia es la
+        devolución, la cierra la NC) — el guard es solo para ENTREGADO,
+        donde hoy no hay ningún documento que explique una diferencia."""
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=50000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[])
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == 50000
+
+    def test_el_camino_masivo_tambien_queda_bloqueado(self, app, db, recaudo_liq):
+        """El botón masivo 'Enviar a Siesa' (`_procesar_recaudo`,
+        `liquidar_ruta_siesa`) es un segundo camino independiente para crear
+        el mismo RC — antes de este fix mandaba `monto_cobrado` directo, sin
+        consultar Siesa. Mismo caso PD1426, por el camino masivo esta vez."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   return_value=[{'f470_vlr_bruto': 49244, 'f470_vlr_imp': 9356,
+                                  'f470_vlr_neto': 58600, 'f120_referencia': 'REF001',
+                                  'f470_rowid': 'R1'}]), \
+             patch('app.services.liquidacion_service._obtener_tercero',
+                   return_value=('900123456', '001')):
+            from app.services.liquidacion_service import _procesar_recaudo
+            with pytest.raises(ValueError, match='diferencia'):
+                _procesar_recaudo(recaudo, 'test liquidacion masiva')
+
+    def test_el_camino_masivo_no_bloquea_si_siesa_no_responde(self, app, db, recaudo_liq):
+        """Fallo de red consultando la factura no puede bloquear el cobro —
+        cae al monto declarado, igual que `registrar_cobro_recaudo` cuando
+        `datos_siesa_ok` es False."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   side_effect=Exception('timeout simulado')), \
+             patch('app.services.liquidacion_service._obtener_tercero',
+                   return_value=('900123456', '001')):
+            from app.services.liquidacion_service import _procesar_recaudo
+            resultado = _procesar_recaudo(recaudo, 'test liquidacion masiva')
+        assert resultado['rc'] == 1
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Retención declarada en campo — decisión obligatoria del admin (2026-08-19)
 # ═══════════════════════════════════════════════════════════════════
 
