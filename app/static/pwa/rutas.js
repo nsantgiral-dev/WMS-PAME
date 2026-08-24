@@ -1965,17 +1965,20 @@ function _condItemsAjustados() {
 }
 
 /**
- * Desglose base gravable + IVA de la factura completa, tal como sale en
- * Siesa — informativo, debajo del valor a cobrar. Se oculta si Siesa no
- * respondió con alguno de los dos (backend manda `null`, no inventa un
- * desglose sobre un total que ya viene sin ese detalle).
+ * Filas de Base + IVA, para pintar ARRIBA del total dentro del mismo
+ * recuadro — base, luego IVA, luego el total (que arma el caller). Se
+ * oculta si Siesa no respondió con alguno de los dos (backend manda
+ * `null`, no inventa un desglose sobre un total que ya viene sin ese
+ * detalle).
  */
 function _condDesgloseHTML(p) {
   if (p.base_gravable == null || p.iva_factura == null) return '';
   return `
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-top:8px;padding-top:8px;border-top:1px solid #2a2a2a;">
-      <span>Base: $${Number(p.base_gravable).toLocaleString('es-CO')}</span>
-      <span>IVA: $${Number(p.iva_factura).toLocaleString('es-CO')}</span>
+    <div style="display:flex;justify-content:space-between;font-size:15px;color:#aaa;margin-bottom:4px;">
+      <span>Base</span><span>$${Number(p.base_gravable).toLocaleString('es-CO')}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:15px;color:#aaa;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #333;">
+      <span>IVA</span><span>$${Number(p.iva_factura).toLocaleString('es-CO')}</span>
     </div>`;
 }
 
@@ -2121,10 +2124,10 @@ function _condRenderFormParada() {
       ${hayValorConocido ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
         <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
-        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
-          $${Number(p.valor_factura).toLocaleString('es-CO')}
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
+          ${_condDesgloseHTML(p)}
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#4ade80;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
-        ${_condDesgloseHTML(p)}
       </div>
       ` : ''}
       <div style="margin-bottom:14px;padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:13px;color:#aaa;display:flex;align-items:center;gap:10px;">
@@ -2134,10 +2137,10 @@ function _condRenderFormParada() {
       ${modoPago === 'DINAMICO' ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
         <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
-        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
-          $${Number(p.valor_factura).toLocaleString('es-CO')}
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
+          ${_condDesgloseHTML(p)}
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#4ade80;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
-        ${_condDesgloseHTML(p)}
       </div>
 
       <div id="cond-pago-toggle-wrap" style="margin-bottom:14px;">
@@ -2272,7 +2275,7 @@ function condRecalcularPago() {
   const valorAjustado = Math.max(0, Math.round(p.valor_factura - deduccion));
   el._valorAjustado = valorAjustado;
 
-  const campoValor = document.getElementById('cond-valorfactura-monto');
+  const campoValor = document.getElementById('cond-valorfactura-total');
   if (campoValor) {
     campoValor.innerHTML = hayAjuste
       ? `<span style="text-decoration:line-through;color:#888;font-size:12px;font-weight:500;display:block;margin-bottom:2px;">$${Number(p.valor_factura).toLocaleString('es-CO')}</span>$${valorAjustado.toLocaleString('es-CO')}`
