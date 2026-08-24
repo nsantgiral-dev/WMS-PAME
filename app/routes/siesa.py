@@ -1003,11 +1003,30 @@ def iniciar_despacho():
                      f'(packing {existing_packing.codigo}).'
         }), 409
 
+    # Backorder Siesa: qué líneas comprometió Siesa de verdad para este pedido
+    # (API_v2_Ventas_Pedidos_Compromisos), ANTES de mandar al operario a
+    # pickear algo que Siesa ya decidió cancelar (pedido con
+    # f430_ind_backorder="despachar disponible, cancelar el resto" —
+    # confirmado en vivo: cant_remisionada=0 en la línea, aunque el WMS
+    # creyera tener stock local suficiente). Distinto de `referencias_agotadas`
+    # en despacho_parcial_service.py, que es lo que el OPERARIO reporta al no
+    # encontrar el físico — esto es lo que SIESA ya decidió antes de que el
+    # operario camine a buscarlo.
+    #
+    # `None` = no se pudo consultar (red/timeout) → no se filtra nada este
+    # ciclo, se comporta exactamente como antes de este cambio. Un fallo de
+    # red no es evidencia de que Siesa canceló la línea (Regla 0).
+    from app.services import backorder_service
+    comprometidas_siesa = backorder_service.referencias_comprometidas_por_siesa(
+        tipo_docto, consec_docto)
+
     tareas_picking_ids = []
     items_ok = []
     errores = []
 
     for item in items:
+        item_codigo = (item.get('item_codigo') or '').strip()
+
         try:
             tareas = PickingService.crear_tareas(
                 producto_id=item['producto_id'],
@@ -1018,6 +1037,34 @@ def iniciar_despacho():
                 prioridad=2
             )
             tareas_picking_ids.extend([t.id for t in tareas])
+
+            # Siesa no comprometió esta línea (backorder) — la tarea se crea
+            # igual (reserva stock local vía FEFO) pero se bloquea de una vez,
+            # antes de que un operario la vea en su cola. No entra a items_ok:
+            # el packing no debe esperar que se empaque algo que no se va a
+            # pickear. Se cierra por el mismo camino que "el operario no lo
+            # encontró" — auditar_tarea(resultado='DISCREPANCIA_SIESA'),
+            # que ya existía para exactamente este caso.
+            if (comprometidas_siesa is not None
+                    and item_codigo
+                    and item_codigo not in comprometidas_siesa):
+                PickingService.bloquear_por_backorder_siesa(
+                    tareas,
+                    detalle=(
+                        f'Siesa no comprometió {item_codigo} para el pedido '
+                        f'{numero_pedido} (cantidad pedida '
+                        f'{item.get("cantidad_pendiente")}) — backorder, no se pickea.'
+                    ),
+                )
+                errores.append({
+                    'producto_id': item.get('producto_id'),
+                    'item_codigo': item_codigo,
+                    'producto_nombre': item.get('producto_nombre_wms'),
+                    'error': 'Siesa no comprometió esta línea (backorder) — '
+                             'tarea creada y bloqueada, ver pestaña Bodega',
+                })
+                continue
+
             items_ok.append(item)
         except (ValueError, TypeError) as e:
             errores.append({

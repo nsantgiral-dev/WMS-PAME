@@ -1006,7 +1006,8 @@ function _renderTareasBodegaHTML(tareas) {
       UBICACION_VACIA:    '📦 Ubicación vacía',
       FALTANTE:           '📉 Agotado',
       MERCANCIA_AVERIADA: '🚫 Mercancía averiada',
-      PRODUCTO_INCORRECTO:'❌ Producto incorrecto'
+      PRODUCTO_INCORRECTO:'❌ Producto incorrecto',
+      BACKORDER_SIESA:    '🔒 Sin backorder en Siesa'
     };
     const porEstado = { BLOQUEADO: [], EN_PROCESO: [], PENDIENTE: [] };
     tareas.forEach(t => {

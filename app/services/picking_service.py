@@ -762,3 +762,41 @@ class PickingService:
             'cantidad_encontrada': cantidad_encontrada,
             'cantidad_faltante': cantidad_faltante,
         }
+
+    @staticmethod
+    def bloquear_por_backorder_siesa(tareas: list, detalle: str = None) -> None:
+        """
+        Bloquea tareas recién creadas (aún PENDIENTE, sin operario) porque
+        Siesa no comprometió esa línea del pedido — ver
+        `backorder_service.referencias_comprometidas_por_siesa`.
+
+        Reutiliza el mismo ciclo BLOQUEADO → auditar_tarea() que ya existe
+        para "el operario no lo encontró" (`reportar_problema`), en vez de
+        una tabla nueva: mueve reservado→bloqueado exactamente igual, y
+        `auditar_tarea(resultado='DISCREPANCIA_SIESA')` ya sabe descongelarlo
+        y cancelar la tarea — esa opción existía desde antes precisamente
+        para "hay una discrepancia con Siesa, ajustar allá manualmente".
+
+        La diferencia con `reportar_problema` es la fuente: ahí el operario
+        caminó y no lo encontró; acá Siesa lo canceló ANTES de que el
+        operario llegara a intentarlo — el físico puede seguir estando en el
+        estante, solo que Siesa no lo va a facturar en este pedido.
+        """
+        for tarea in tareas:
+            reg = UbicacionProducto.query.filter_by(
+                ubicacion_id=tarea.ubicacion_id,
+                producto_id=tarea.producto_id,
+            ).with_for_update().first()
+            if reg:
+                cant = tarea.cantidad_solicitada
+                reg.bloqueado = reg.bloqueado + cant
+                reg.reservado = max(0, reg.reservado - cant)
+
+            tarea.estado = EstadoPicking.BLOQUEADO
+            tarea.operario_id = None
+            tarea.motivo_bloqueo = 'BACKORDER_SIESA'
+            tarea.observaciones_bloqueo = detalle or (
+                'Siesa no comprometió esta línea del pedido (backorder) — '
+                'no se pickeó, el físico puede seguir disponible para otro pedido.'
+            )
+        db.session.commit()
