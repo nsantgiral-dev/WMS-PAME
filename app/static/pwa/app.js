@@ -642,13 +642,6 @@ async function cargarDashboard() {
       const b = document.getElementById('bloq-count');
       if (b) b.textContent = nBloq;
     }
-    const audEl = document.getElementById('dashboard-auditorias-urgentes');
-    if (audEl) {
-      audEl.style.display = nAud > 0 ? 'block' : 'none';
-      const badge = document.getElementById('aud-urgentes-count');
-      if (badge) badge.textContent = nAud;
-      if (nAud > 0) cargarAuditoriasUrgentes();
-    }
     const tr = d.traslados_en_riesgo || {};
     const nCriticos = tr.total_critico || 0;
     const nAlertas  = tr.total_alerta  || 0;
@@ -1735,75 +1728,6 @@ function loadScript(src) {
 
 
 
-
-// ── Auditorías Urgentes (admin) ──────────────────────
-
-/** Fetch and render urgent audit tasks on the admin dashboard. */
-async function cargarAuditoriasUrgentes() {
-  const el = document.getElementById('lista-auditorias-urgentes');
-  if (!el) return;
-  try {
-    const d = await get('/api/conteo/auditorias-urgentes?almacen_id=' + ALMACEN_ID);
-    const tareas = d.auditorias || [];
-    if (!tareas.length) {
-      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:20px;font-size:13px;">✓ Sin auditorías pendientes</div>';
-      return;
-    }
-    const MOTIVOS = {'UBICACION_VACIA':'📦 Ubicación vacía','FALTANTE':'📉 Agotado','MERCANCIA_AVERIADA':'🚫 Mercancía averiada','PRODUCTO_INCORRECTO':'❌ Producto incorrecto'};
-    el.innerHTML = tareas.map(t => `
-        <div style="background:#111;border:1px solid #7f1d1d;border-radius:12px;padding:14px;margin-bottom:8px;">
-          <div style="margin-bottom:8px;">
-            <div style="font-size:13px;font-weight:700;color:#f87171;">${t.codigo}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px;">${t.producto_nombre || ''} · ${t.ubicacion_codigo || ''}</div>
-            <div style="font-size:10px;color:#444;margin-top:1px;">Pedido ${t.referencia_documento || '—'} · pedía ${t.cantidad_solicitada} uds</div>
-            ${t.motivo_bloqueo ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${MOTIVOS[t.motivo_bloqueo] || t.motivo_bloqueo}</div>` : ''}
-          </div>
-          <select id="da-resultado-${t.id}"
-            style="width:100%;padding:9px;margin-bottom:6px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;">
-            <option value="">¿Qué encontraste al verificar?</option>
-            <option value="NO_ENCONTRADO">Confirmo: agotado — no hay nada</option>
-            <option value="ENCONTRADO_COMPLETO">Encontré todo lo pedido (mal ubicado)</option>
-            <option value="ENCONTRADO_PARCIAL">Encontré una parte</option>
-            <option value="AVERIA">Está averiado</option>
-            <option value="DISCREPANCIA_SIESA">Discrepancia con Siesa — ajusto manual</option>
-          </select>
-          <input id="da-cantidad-${t.id}" type="number" min="0" placeholder="Cantidad hallada"
-            style="width:100%;padding:9px;margin-bottom:8px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;box-sizing:border-box;">
-          <button onclick="dashAuditarTarea(${t.id})"
-            style="width:100%;padding:11px;background:#7f1d1d;color:#fca5a5;border:1px solid #f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            ✓ Confirmar auditoría
-          </button>
-        </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando auditorías</div>';
-  }
-}
-
-/** @param {number} tareaId - Task ID to submit dashboard audit result for. */
-async function dashAuditarTarea(tareaId) {
-  const resultado = document.getElementById(`da-resultado-${tareaId}`)?.value;
-  const cantidad_hallada = parseInt(document.getElementById(`da-cantidad-${tareaId}`)?.value || '0', 10);
-  if (!resultado) { alerta('Selecciona qué encontraste', 'error'); return; }
-  const avisoParcial = resultado === 'NO_ENCONTRADO' || resultado === 'AVERIA'
-    ? '\n\nEsta línea se retira del pedido y el pedido sigue parcial con el resto.'
-    : '';
-  if (!confirm('¿Confirmar esta auditoría? Ajusta el inventario y el estado del pedido.' + avisoParcial)) return;
-  try {
-    const r = await fetch(API + `/api/picking/${tareaId}/auditar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ resultado, cantidad_hallada }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Auditoría registrada ✓', 'exito');
-      cargarAuditoriasUrgentes();
-      cargarDashboard();
-    } else {
-      alerta(d.error || 'Error al guardar auditoría', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
-}
 
 /**
  * Fetch OCs from Siesa and in-process receptions from DB, then render the list.
