@@ -4226,6 +4226,7 @@ class ConnektaGateway:
                                      tipo_docto_fe: str, consec_fe,
                                      co_factura: str = '',
                                      cuenta_cxc: str = '',
+                                     unidad_negocio: str = '',
                                      notas: str = '') -> dict:
         """
         142882 → DocumentoContable
@@ -4234,6 +4235,14 @@ class ConnektaGateway:
         cuenta_puc: cuenta auxiliar PUC débito (ej. '13551501' para retefuente compras 2.5%)
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
         cuenta_cxc: f253_id real de la factura para cruce crédito. Fallback: self.cxc_auxiliar.
+        unidad_negocio: `f353_id_un_cruce` REAL de la fila de cartera que cruza — mismo
+                    parámetro y mismo motivo que `trigger_recibo_caja` (PD1411/FE-1416,
+                    2026-08-18): antes de esto, este conector nunca lo recibía y usaba
+                    siempre `self.unidad_negocio` (el env var global) — job 470 (recaudo
+                    19, PD1421, ruta 22, 2026-08-20) es la primera liquidación con
+                    retención que corrió de verdad contra Siesa, y quedó FALLIDO 5/5
+                    intentos con rechazo estructural genérico. Si vacío, cae a
+                    `self.unidad_negocio` (comportamiento previo, no rompe llamadores viejos).
         """
         if not self.tipo_docto_docto_contable:
             raise ValueError(
@@ -4246,6 +4255,7 @@ class ConnektaGateway:
         co = self.centro_op
         co_fact = co_factura or co
         auxiliar_cxc = cuenta_cxc or self.cxc_auxiliar
+        un = unidad_negocio or self.unidad_negocio or '99'
 
         payload = {
             'Inicial': [{'F_CIA': cia}],
@@ -4271,10 +4281,16 @@ class ConnektaGateway:
             # el mismo defecto que dejó al 142888 mandando 22 de 33 campos y
             # que hizo que ningún recibo de caja llegara nunca a Siesa.
             #
-            # **Este conector no se ha ejercitado nunca contra Siesa.** El
-            # arreglo sale del spec, no de una corrida exitosa: es la corrección
-            # mejor fundada disponible, no una verificación. Se confirma la
-            # primera vez que una liquidación con retención llegue al DLQ.
+            # Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20) fue la primera
+            # liquidación con retención que corrió de verdad: quedó FALLIDO
+            # 5/5 con rechazo estructural genérico de Siesa. Dos causas
+            # encontradas y corregidas: la UN salía siempre del env var global
+            # en vez de la real (ver `unidad_negocio` más arriba), y los
+            # campos `_ALT` (moneda alterna) llevaban el mismo valor del
+            # movimiento en vez de cero, más dos campos (`F351_NRO_REGISTRO`,
+            # `F351_ID_SUCURSAL`) que no están en el spec ni en la
+            # implementación probada en producción de `gestor-cartera-pame`
+            # (mismo Siesa, mismo conector 142882/NI) — quitados.
             'Movimientocontable': [{
                 'F_CIA': cia,
                 'F350_ID_CO': co,
@@ -4283,22 +4299,23 @@ class ConnektaGateway:
                 'F351_ID_AUXILIAR': cuenta_puc,
                 'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_CO_MOV': co,
-                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
                 'F351_ID_FE': '',
                 'F351_VALOR_DB': self._fmt_valor(monto),
                 'F351_VALOR_CR': self._fmt_valor(0),
-                'F351_VALOR_DB_ALT': self._fmt_valor(monto),
+                # Moneda alterna — spec: "si la auxiliar no maneja moneda
+                # alterna, debe ir en cero". Las cuentas de retención
+                # colombianas (1355xxxx) no manejan una segunda moneda.
+                # Iba en `monto` (el mismo valor del débito) — comparado
+                # contra `gestor-cartera-pame` (mismo Siesa, en producción,
+                # `retencion_payload.py`), que siempre manda cero acá.
+                'F351_VALOR_DB_ALT': self._fmt_valor(0),
                 'F351_VALOR_CR_ALT': self._fmt_valor(0),
                 'F351_BASE_GRAVABLE': self._fmt_valor(base_gravable),
                 'F351_DOCTO_BANCO': '',
                 'F351_NRO_DOCTO_BANCO': '',
                 'F351_NOTAS': '',
-                # Fuera del spec — no se borran porque alguien los puso a
-                # propósito y no hay corrida real que diga si estorban. Van al
-                # final para no desplazar a los 18 declarados.
-                'F351_NRO_REGISTRO': 1,
-                'F351_ID_SUCURSAL': sucursal or '001',
             }],
             'MovimientoCxC': [{
                 # Campos del spec DOCX 142882 — TODOS los del esquema MovimientoCxC.
@@ -4310,12 +4327,14 @@ class ConnektaGateway:
                 'F351_ID_AUXILIAR': auxiliar_cxc,
                 'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_CO_MOV': co,
-                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
                 'F351_VALOR_DB': self._fmt_valor(0),
                 'F351_VALOR_CR': self._fmt_valor(monto),
+                # Moneda alterna — igual que en Movimientocontable arriba,
+                # siempre cero.
                 'F351_VALOR_DB_ALT': self._fmt_valor(0),
-                'F351_VALOR_CR_ALT': self._fmt_valor(monto),
+                'F351_VALOR_CR_ALT': self._fmt_valor(0),
                 'F351_NOTAS': '',
                 'F353_ID_SUCURSAL': sucursal or '001',
                 'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
@@ -4342,7 +4361,7 @@ class ConnektaGateway:
         )
         return self._post(
             self.conector_docto_contable,
-            'DocumentoContable',
+            'API_v1_DocumentoContable',
             payload,
         )
 

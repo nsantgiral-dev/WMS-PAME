@@ -283,6 +283,27 @@ class TestContract142882:
         for seccion in ['Inicial', 'Documentocontable', 'Movimientocontable', 'MovimientoCxC', 'Final']:
             assert seccion in payload, f'Sección "{seccion}" falta en payload 142882'
 
+    def test_nombre_conector_lleva_el_prefijo_api_v1(self):
+        """El `nombreDocumento` que Siesa usa para ubicar la estructura registrada.
+
+        Todos los demás conectores lo mandan con el prefijo real
+        (`API_v1_ReciboCaja`, `API_v1_Compras_Comercial_EntradaOC`, ...). Este
+        era el único que mandaba solo `'DocumentoContable'` — sin el prefijo,
+        Siesa QA rechazaba con el mismo error genérico de estructura en cada
+        intento (5+ intentos reales, 2 cuentas PUC distintas, verificado
+        2026-08-21 contra `gestor-cartera-pame`, mismo Siesa, que sí manda
+        `API_v1_DocumentoContable` y sí crea el documento).
+        """
+        gw = _make_gateway()
+        with patch.object(gw, '_post', return_value={'codigo': 0}) as mock_post:
+            gw.trigger_documento_contable(
+                tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
+                monto=25000.0, base_gravable=1000000.0, tipo_docto_fe='FE',
+                consec_fe='5020',
+            )
+        nombre_conector = mock_post.call_args[0][1]
+        assert nombre_conector == 'API_v1_DocumentoContable'
+
     def test_documentocontable_campos(self):
         gw = _make_gateway()
         payload = self._capture_payload(gw)
@@ -324,6 +345,32 @@ class TestContract142882:
         assert 'F351_ID_CO_MOV' in mc, 'Debe ser F351_ID_CO_MOV (no MOVTO)'
         assert 'F351_ID_CO_MOVTO' not in mc, 'F351_ID_CO_MOVTO es nombre incorrecto'
 
+    def test_movimientocontable_moneda_alterna_siempre_cero(self):
+        """Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20): rechazo
+        estructural de Siesa. `F351_VALOR_DB_ALT` llevaba el mismo valor del
+        débito en vez de cero — el spec dice «si la auxiliar no maneja
+        moneda alterna, debe ir en cero», y las cuentas de retención
+        colombianas (1355xxxx) no manejan una segunda moneda. Comparado
+        contra `gestor-cartera-pame` (mismo Siesa, en producción,
+        `retencion_payload.py`), que siempre manda cero acá."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw, monto=25000.0)
+        mc = payload['Movimientocontable'][0]
+        assert mc['F351_VALOR_DB_ALT'] == mc['F351_VALOR_CR']  # ambos cero, 21 chars
+        assert float(mc['F351_VALOR_DB_ALT']) == 0.0
+        assert float(mc['F351_VALOR_DB']) == 25000.0, 'El débito real sí debe llevar el monto'
+
+    def test_movimientocontable_sin_campos_fuera_de_spec(self):
+        """`F351_NRO_REGISTRO` y `F351_ID_SUCURSAL` no están en el spec DOCX
+        ni en la implementación probada de `gestor-cartera-pame` para el
+        mismo conector 142882 — en un plano posicional, un campo extra no
+        declarado puede desalinear el registro."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw)
+        mc = payload['Movimientocontable'][0]
+        assert 'F351_NRO_REGISTRO' not in mc
+        assert 'F351_ID_SUCURSAL' not in mc
+
     def test_movimiento_cxc_29_campos(self):
         """MovimientoCxC debe tener los 29 campos del spec DOCX."""
         gw = _make_gateway()
@@ -344,6 +391,15 @@ class TestContract142882:
         for campo in campos:
             assert campo in mcxc, f'Campo "{campo}" falta en MovimientoCxC 142882'
         assert len(campos) == 29
+
+    def test_movimiento_cxc_moneda_alterna_siempre_cero(self):
+        """Misma corrección que en Movimientocontable — `F351_VALOR_CR_ALT`
+        llevaba el mismo valor del crédito real en vez de cero."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw, monto=25000.0)
+        mcxc = payload['MovimientoCxC'][0]
+        assert float(mcxc['F351_VALOR_CR_ALT']) == 0.0
+        assert float(mcxc['F351_VALOR_CR']) == 25000.0, 'El crédito real sí debe llevar el monto'
 
     def test_movimiento_cxc_tercero_presente(self):
         """F351_ID_TERCERO obligatorio en MovimientoCxC (diferencia vs 142888)."""
@@ -371,6 +427,27 @@ class TestContract142882:
         gw = _make_gateway()
         payload = self._capture_payload(gw)
         _assert_21_chars(payload)
+
+    def test_un_real_de_la_factura_no_el_env_global(self):
+        """Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20): la primera
+        liquidación con retención que corrió de verdad quedó FALLIDO 5/5 con
+        rechazo estructural de Siesa. Mismo defecto que ya rechazó el RC
+        (142888) el 2026-08-18 — `F351_ID_UN` salía siempre con el env var
+        global (`SIESA_UNIDAD_NEGOCIO`) en vez de la UN real de la fila de
+        cartera que cruza. `unidad_negocio` explícito debe ganarle al env var
+        en las dos secciones que lo usan (Movimientocontable y MovimientoCxC)."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw, unidad_negocio='99')
+        assert payload['Movimientocontable'][0]['F351_ID_UN'] == '99'
+        assert payload['MovimientoCxC'][0]['F351_ID_UN'] == '99'
+
+    def test_un_fallback_al_env_si_no_se_conoce_la_real(self):
+        """Sin `unidad_negocio` (fila de cartera no encontrada), sigue
+        cayendo al comportamiento previo — no rompe llamadores viejos."""
+        gw = _make_gateway()
+        payload = self._capture_payload(gw)
+        assert payload['Movimientocontable'][0]['F351_ID_UN'] == (gw.unidad_negocio or '99')
+        assert payload['MovimientoCxC'][0]['F351_ID_UN'] == (gw.unidad_negocio or '99')
 
 
 # ═══════════════════════════════════════════════════════════════════

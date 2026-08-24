@@ -96,7 +96,18 @@ class DependenciaPendiente(Exception):
     de «un contador, dos significados» que ya costó las banderas de
     idempotencia. El precedente estaba al lado: `ConnektaCircuitOpenError`
     tampoco gasta reintento.
+
+    `espera_minutos` (default 30, el caso de arriba — recepción física,
+    horas) es la excepción, no la regla: DC esperando su RC, o una RIT
+    esperando el consecutivo que 174646 le va a poner, resuelven en el mismo
+    ciclo del DLQ (segundos, la propia liquidación los encadena). 30 minutos
+    ahí no evita nada — solo hace que una NI ya destrabada tarde media hora
+    en salir sin ninguna razón real detrás.
     """
+
+    def __init__(self, mensaje: str, espera_minutos: int = 30):
+        super().__init__(mensaje)
+        self.espera_minutos = espera_minutos
 
 
 _ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
@@ -252,7 +263,8 @@ def _run_dlq_jobs():
                 # en 6 horas esperando una recepción que ocurre mañana, y el
                 # cobro no entra nunca.
                 job.estado = EstadoSiesaJob.PENDIENTE
-                job.proximo_intento = datetime.utcnow() + timedelta(minutes=30)
+                job.proximo_intento = datetime.utcnow() + timedelta(
+                    minutes=getattr(e, 'espera_minutos', 30))
                 job.error_ultimo = str(e)[:2000]
                 db.session.commit()
                 logger.info('[DLQ] Job %s en espera: %s', job.id, e)
@@ -1298,17 +1310,22 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'devolución. Sigue pendiente.'
             )
 
-        # Re-read monto: si el recaudo fue editado post-enqueue, usar el valor actual
+        # El monto ya viene calculado por la lógica de negocio real
+        # (`registrar_cobro_recaudo`/`_procesar_recaudo`): para ENTREGADO es
+        # el neto de Siesa menos retenciones, no `recaudo.monto_cobrado` —
+        # ese campo es lo que el conductor declaró en la puerta, un dato
+        # independiente para detectar discrepancias (ver
+        # `confirmar_retencion`), no la fuente de lo que hay que cobrar.
+        #
+        # Job 483 (recaudo 22, PD1425, ruta 23, 2026-08-21): acá había un
+        # "re-lectura" que comparaba el monto del payload ($60.151,97,
+        # correcto) contra `monto_cobrado` ($50.000, el dato crudo del
+        # conductor) y, al no coincidir, pisaba el correcto con el crudo —
+        # asumiendo que cualquier diferencia significaba que alguien editó
+        # el recaudo después de encolar el job. La diferencia era
+        # intencional (retención + neto real de Siesa), no una edición, y
+        # el RC salió a Siesa por $10.151,97 de menos.
         monto_payload = float(payload['monto'])
-        if recaudo:
-            monto_actual = float(recaudo.monto_cobrado or 0)
-            if abs(monto_actual - monto_payload) > 1 and monto_actual > 0:
-                logger.warning(
-                    '[DLQ] RECIBO_CAJA job=%s: monto payload=%.2f difiere de '
-                    'monto_cobrado actual=%.2f — usando actual',
-                    job.id, monto_payload, monto_actual
-                )
-                monto_payload = monto_actual
 
         # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?
         # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía)
@@ -1414,9 +1431,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
         # Siesa no ha reducido el saldo por el cash todavía.
         if recaudo and not recaudo.siesa_rc_triggered:
+            # Espera corta: el RC de este mismo recaudo suele resolverse en
+            # el mismo ciclo del DLQ (segundos) — no es la recepción física
+            # de horas/días que sí justifica el default de 30 min.
             raise DependenciaPendiente(
                 f'DOCUMENTO_CONTABLE_RET job={job.id}: DC espera el RC del '
-                f'recaudo {recaudo.id}. Sigue pendiente.'
+                f'recaudo {recaudo.id}. Sigue pendiente.',
+                espera_minutos=2,
             )
 
         # Pre-flag: cerrar crash window (misma lógica que RC), por cuenta.
@@ -1435,6 +1456,7 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 consec_fe=payload['consec_fe'],
                 co_factura=payload.get('co_factura', ''),
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
+                unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
             )
         except Exception as _e_post:
@@ -1483,9 +1505,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'motivo': f'ya despachado (STS {s.siesa_salida_consec}) — '
                               f'la RIT queda suelta, no se toca'}
         if not s.siesa_requisicion_consec:
+            # Espera corta: 174646 corre en el mismo ciclo del DLQ, no es
+            # una espera de horas como la recepción física.
             raise DependenciaPendiente(
                 f'{s.codigo}: la RIT todavía no tiene consecutivo — '
-                f'esperar a que 174646 lo resuelva')
+                f'esperar a que 174646 lo resuelva',
+                espera_minutos=2,
+            )
 
         siesa_traslado.registrar_compromisos(
             consec_rit=s.siesa_requisicion_consec,

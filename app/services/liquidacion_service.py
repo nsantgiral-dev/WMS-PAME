@@ -750,6 +750,15 @@ class LiquidacionService:
                         'base_gravable': base_ret,
                         'co_factura': co_factura,
                         'cuenta_cxc': cuenta_cxc,
+                        # Misma fila de cartera que ya resuelve el RC (`un_cxc`,
+                        # `f353_id_un_cruce`) — sin esto el DC caía al fallback
+                        # global de `connekta.trigger_documento_contable`
+                        # (`SIESA_UNIDAD_NEGOCIO`), el mismo defecto que ya
+                        # rechazó el RC hermano (142888) el 2026-08-18. Job 470
+                        # (recaudo 19, PD1421, ruta 22, 2026-08-20) es la
+                        # primera liquidación con retención real: quedó
+                        # FALLIDO 5/5 con rechazo estructural de Siesa.
+                        'unidad_negocio': un_cxc,
                         'notas': dc_notas,
                         'accion_origen': 'liquidacion_per_recaudo',
                     },
@@ -1359,7 +1368,8 @@ def _pucs_en_cola(recaudo_id: int) -> set:
 def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                                   consec_fe, tercero_nit: str, sucursal: str,
                                   notas: str, admin_id: int = None,
-                                  co_factura: str = '', cuenta_cxc: str = ''):
+                                  co_factura: str = '', cuenta_cxc: str = '',
+                                  unidad_negocio: str = ''):
     """Encola job DOCUMENTO_CONTABLE_RET en la DLQ.
 
     El monto sale de `recaudo.monto_descuento` si ya viene declarado (lo que
@@ -1437,6 +1447,7 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             'base_gravable': base_gravable_payload,
             'co_factura': co_factura,
             'cuenta_cxc': cuenta_cxc,
+            'unidad_negocio': unidad_negocio,
             'notas': notas,
         },
         referencia_tipo='RecaudoEntrega',
