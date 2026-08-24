@@ -635,13 +635,6 @@ async function cargarDashboard() {
     movimientos(d.movimientos_recientes.movimientos);
 
     // ── Alertas (solo si hay datos) ────────────────────────────────
-    const nBloq = d.tareas_bloqueadas || 0;
-    const bloqEl = document.getElementById('dashboard-tareas-bloqueadas');
-    if (bloqEl) {
-      bloqEl.style.display = nBloq > 0 ? 'block' : 'none';
-      const b = document.getElementById('bloq-count');
-      if (b) b.textContent = nBloq;
-    }
     const tr = d.traslados_en_riesgo || {};
     const nCriticos = tr.total_critico || 0;
     const nAlertas  = tr.total_alerta  || 0;

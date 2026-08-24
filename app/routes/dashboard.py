@@ -87,7 +87,6 @@ def resumen_completo():
     if not almacen_id:
         return jsonify({'error': 'almacen_id es requerido'}), 400
     from app.models.conteo import SesionConteo
-    from app.models.picking import TareaPicking
     from app.services.traslado_monitor_service import get_resumen_alertas
     from app.services.dashboard_service import _tendencia_7d
     import logging as _log
@@ -118,19 +117,12 @@ def resumen_completo():
         logger.exception('[DASHBOARD] auditorias_urgentes query falló')
         auditorias_urgentes = None
 
-    try:
-        tareas_bloqueadas = TareaPicking.query.filter_by(estado='BLOQUEADO', almacen_id=almacen_id).count()
-    except Exception:
-        logger.exception('[DASHBOARD] tareas_bloqueadas query falló')
-        tareas_bloqueadas = None
-
     return jsonify({
         'kpis': kpis,
         'productividad': productividad,
         'alertas_stock': alertas,
         'movimientos_recientes': movimientos,
         'auditorias_urgentes': auditorias_urgentes,
-        'tareas_bloqueadas': tareas_bloqueadas,
         'traslados_en_riesgo': traslados_riesgo,
         'traslados': traslados_rutas['traslados'],
         'rutas': traslados_rutas['rutas'],
