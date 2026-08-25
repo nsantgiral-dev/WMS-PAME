@@ -158,10 +158,22 @@ class TestReposicionGuards:
 
 class TestTrasladoCloserGuards:
 
-    def test_sin_requisicion_consec_raise(self, app, db, almacen):
-        """Traslado sin siesa_requisicion_consec → ValueError."""
+    def test_sin_requisicion_consec_usa_fallback_sin_rit(self, app, db, almacen, producto):
+        """Traslado sin siesa_requisicion_consec → NO bloquea el cierre.
+
+        El ejecutor de DESPACHO_TRASLADO (siesa_job_service.py) ya sabe
+        despachar sin RIT (cae a 173076 directo, `registrar_salida_transito`)
+        — exactamente lo que TrasladoService.despachar() hacía antes de que
+        el cierre de PD y ST se unificara en este closer. Bloquear acá
+        exigía más de lo que el job de verdad necesita: encontrado en vivo
+        el 2026-08-25 (ST-20260825-8F64), donde una RIT huérfana (aceptada
+        por Siesa, consecutivo ilegible — ver CLAUDE.md "Las 28
+        requisiciones huérfanas") dejaba el traslado sin ninguna forma de
+        cerrar caja desde la UI actual.
+        """
         from app.models.traslado import SolicitudTraslado
-        from app.models.packing import TareaPacking
+        from app.models.packing import TareaPacking, ItemPacking
+        from app.models.siesa_job import SiesaJob
 
         from app.models.usuario import Usuario
         user = Usuario.query.filter_by(email='sol_guard@test.com').first()
@@ -174,8 +186,10 @@ class TestTrasladoCloserGuards:
         solicitud = SolicitudTraslado(
             codigo='ST-GUARD-01', estado='EN_PACKING',
             bodega_origen_siesa='NB1', bodega_destino_siesa='NC1',
+            bodega_transito_siesa='TRA1',
+            modo_transferencia='EN_TRANSITO',
             solicitante_id=user.id,
-            siesa_requisicion_consec=None,  # SIN consec
+            siesa_requisicion_consec=None,  # SIN consec — el caso huérfano
         )
         db.session.add(solicitud)
         db.session.flush()
@@ -186,12 +200,27 @@ class TestTrasladoCloserGuards:
             solicitud_id=solicitud.id,
         )
         db.session.add(tarea)
+        db.session.flush()
+        item = ItemPacking(tarea_id=tarea.id, producto_id=producto.id,
+                           cantidad_esperada=5, cantidad_real=5, verificado=True)
+        db.session.add(item)
         db.session.commit()
 
         from app.services.closing.traslado_closer import TrasladoPackingCloser
         closer = TrasladoPackingCloser()
-        with pytest.raises(ValueError, match='siesa_requisicion_consec'):
-            closer.ejecutar_cierre(tarea.id, [{'tipo': 'Caja', 'cantidad': 1}], user.id)
+        resultado = closer.ejecutar_cierre(tarea.id, [{'tipo': 'Caja', 'cantidad': 1}], user.id)
+
+        assert resultado.exitoso is True
+
+        job = SiesaJob.query.filter_by(
+            tipo='DESPACHO_TRASLADO', referencia_tipo='TareaPacking', referencia_id=tarea.id,
+        ).first()
+        assert job is not None
+        payload = job.get_payload()
+        # consec_rit ausente/None en el payload es justo lo que hace que el
+        # ejecutor caiga al fallback 173076 en vez de 174930.
+        assert not payload.get('consec_rit')
+        assert payload.get('items')
 
 
 # ═══════════════════════════════════════════════════════════════════
