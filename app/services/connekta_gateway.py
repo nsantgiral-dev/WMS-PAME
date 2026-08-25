@@ -1399,6 +1399,7 @@ class ConnektaGateway:
         return {
             'codigo_siesa': codigo_siesa,
             'nombre': (row.get('f120_descripcion') or '').strip(),
+            'tipo_inventario': (row.get('f120_id_tipo_inv_serv') or '').strip() or None,
         }
 
     def get_items_unidades_medida(self, pagina: int = 1):
