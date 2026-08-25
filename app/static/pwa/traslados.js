@@ -223,7 +223,7 @@ function _renderTrasladoCard(s) {
         <div style="font-size:13px;font-weight:700;">${s.codigo}</div>
         <div style="font-size:11px;color:#555;margin-top:2px;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha} ${alertaAntiguedad}</div>
       </div>
-      <span style="background:${col};color:#fff;font-size:10px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado}</span>
+      <span style="background:${col};color:#fff;font-size:22px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado.replace(/_/g, ' ')}</span>
     </div>
     <div style="margin-bottom:6px;">${itemsResumen}</div>
     ${pickingInfo}
