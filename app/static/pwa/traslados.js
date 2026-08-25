@@ -193,9 +193,6 @@ function _renderTrasladoCard(s) {
   if (faltaEntrada) {
     recuperacion.push(`<button onclick="trasReintentarRecepcionSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar recepción (ETS)</button>`);
   }
-  if (s.estado === 'EN_TRANSITO') {
-    recuperacion.push(`<button onclick="trasRevertir(${s.id})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>`);
-  }
 
   const bloqueRecuperacion = recuperacion.length ? `
     <div style="margin-top:10px;padding:8px;background:#1a0a0a;border:1px solid #7f1d1d;border-radius:8px;">
@@ -203,6 +200,16 @@ function _renderTrasladoCard(s) {
         ⚠ RECUPERACIÓN — crean documentos en Siesa. Verificá primero en Siesa que el documento no exista.
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">${recuperacion.join('')}</div>
+    </div>` : '';
+
+  // Revertir traslado no crea documentos en Siesa (el STS ya enviado se anula
+  // a mano allá) — es un control normal para un traslado sano en tránsito, no
+  // una recuperación de fallo. Va aparte para no heredar la caja roja de
+  // "RECUPERACIÓN" ni su advertencia, que describe solo los reintentos de
+  // arriba.
+  const bloqueRevertir = s.estado === 'EN_TRANSITO' ? `
+    <div style="margin-top:10px;">
+      <button onclick="trasRevertir(${s.id})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>
     </div>` : '';
 
   const operarioTag = s.operario_nombre
@@ -224,6 +231,7 @@ function _renderTrasladoCard(s) {
     ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
     ${acciones.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">${acciones.join('')}</div>` : ''}
     ${bloqueRecuperacion}
+    ${bloqueRevertir}
   </div>`;
 }
 
