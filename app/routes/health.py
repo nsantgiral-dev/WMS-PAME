@@ -157,6 +157,87 @@ def health_nc_consecutivo():
     }), 200
 
 
+@health_bp.route('/ets-consecutivo', methods=['GET'])
+@jwt_required()
+def health_ets_consecutivo():
+    """Prueba el conector de consulta de entrada en tránsito (ETS/173079) SIN
+    reenviar nada a Siesa — mismo motivo que `/nc-consecutivo`: encender un
+    recovery contra un nombre de conector adivinado y ver si se rompe en
+    producción no es un método.
+
+    `get_consec_entrada_transito_by_alterno` (connekta_gateway.py) usa
+    'API_v2_Inventarios_Transferencia_Entrada_Transito' por simetría con el
+    de salida (que sí está confirmado), pero nunca se verificó en vivo.
+
+    Requiere `?codigo=<traslado>` (un ST-... real, para filtrar por su
+    f450_docto_alterno). Acepta `?consulta=<nombre>` para probar un nombre
+    alternativo sin tocar el código. Es un GET puro — no crea ni modifica
+    nada en Siesa.
+    """
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Acceso restringido a roles de gestión'}), 403
+    from flask import request
+    from app.services.connekta_gateway import connekta
+    from app.services.siesa_filtro import lit as _lit
+
+    codigo = (request.args.get('codigo') or '').strip()
+    if not codigo:
+        return jsonify({
+            'apto': False,
+            'motivo': 'Falta ?codigo=<traslado> — se necesita un ST-... real '
+                      'para filtrar por f450_docto_alterno.',
+        }), 200
+
+    nombre = (request.args.get('consulta') or '').strip() \
+        or 'API_v2_Inventarios_Transferencia_Entrada_Transito'
+    alterno = connekta._fmt_alterno(codigo)
+
+    try:
+        res = connekta._get(
+            nombre,
+            params_extra={
+                'paginacion': 'numPag=1|tamPag=5',
+                'parametros': f"f450_docto_alterno = {_lit(alterno)}",
+            },
+        )
+    except Exception as e:
+        return jsonify({
+            'apto': False, 'consulta': nombre, 'codigo': codigo, 'alterno': alterno,
+            'motivo': f'La consulta falló: {str(e)[:400]}',
+            'siguiente_paso': 'Ese nombre de conector probablemente no existe en '
+                              'Connekta. Pedirle al consultor Siesa el nombre real '
+                              'del conector v2 para Transferencia en Tránsito Entrada '
+                              '(clase 66), o registrarlo si no existe.',
+        }), 200
+
+    if res is None:
+        return jsonify({
+            'apto': False, 'consulta': nombre, 'codigo': codigo,
+            'motivo': 'Circuit breaker abierto — Siesa no disponible ahora mismo. '
+                      'Reintentar más tarde.',
+        }), 200
+
+    detalle = res.get('detalle', {}) if isinstance(res, dict) else {}
+    filas = (detalle.get('Table') or detalle.get('Datos') or []) if isinstance(detalle, dict) else []
+
+    return jsonify({
+        'apto': bool(filas),
+        'consulta': nombre,
+        'codigo': codigo,
+        'alterno': alterno,
+        'filas': len(filas),
+        'ejemplo': filas[0] if filas else None,
+        'respuesta_cruda': res if not filas else None,
+        'motivo': None if filas else (
+            'La consulta respondió sin filas — puede ser un nombre de conector '
+            'correcto pero sin documento aún para este código, o un nombre '
+            'que Siesa acepta pero no filtra como se espera. Revisar '
+            '`respuesta_cruda` para distinguir.'
+        ),
+    }), 200
+
+
 @health_bp.route('/siesa', methods=['GET'])
 @jwt_required()
 def health_siesa():
