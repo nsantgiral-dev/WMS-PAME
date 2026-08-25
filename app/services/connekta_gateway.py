@@ -3077,7 +3077,22 @@ class ConnektaGateway:
         Conector estándar (v3) — único que ejecuta la lógica de liquidación
         de tránsito de Clase 66. El registro plano debe medir exactamente
         2700 bytes; todos los campos Dep van como None.
-        f470_id_bodega = bodega_origen (== f450_id_bodega_salida per spec).
+
+        f450_id_bodega_salida y f470_id_bodega DEBEN ser bodega_origen (la
+        bodega real de origen del STS), NUNCA bodega_transito (TRA1, bodega
+        lógica sin stock físico). Probado en vivo contra Siesa QA el
+        2026-06-12 (commit e3b7d89): con bodega_transito, Siesa rechaza con
+        62485 "bodega de salida diferente a la capturada en el STS" — TRA1
+        no es el origen que el STS registró.
+
+        ⚠️ Este valor SE REVIRTIÓ SOLO una vez sin que nadie lo pidiera: el
+        commit 1344c7a ("feat: motor estadístico... Vigía CUSUM...", una
+        funcionalidad sin relación alguna con traslados) pisó este bloque de
+        vuelta a bodega_transito el 2026-07-24, y desde entonces NINGÚN ETS
+        se completó (0/69 recepciones EN_TRANSITO en la auditoría del
+        2026-08-25). Si esto vuelve a fallar con 62485, revisar PRIMERO si
+        alguna migración de código reintrodujo bodega_transito acá antes de
+        investigar cualquier otra causa.
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -3126,7 +3141,8 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
                     'f450_id_concepto': 605,
-                    'f450_id_bodega_salida': bodega_transito,
+                    # bodega_origen, NUNCA bodega_transito (TRA1) — ver docstring.
+                    'f450_id_bodega_salida': bodega_origen or self.bodega,
                     # NC1: destino final. CO(NC1)==CO(doc)==_co_ent. Sin stock check.
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
@@ -3155,7 +3171,8 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_transito,
+                    # bodega_origen, NUNCA bodega_transito (TRA1) — ver docstring.
+                    'f470_id_bodega': bodega_origen or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
                     'f470_ind_naturaleza': 1,
