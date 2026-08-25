@@ -3239,7 +3239,7 @@ class ConnektaGateway:
 
     def get_consec_entrada_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
         """
-        Recovery: API_v2_Inventarios_Transferencia_Entrada_Transito filtrada por
+        Recovery: API_v2_Inventarios_Transferencia_Transito_Entrada filtrada por
         f450_docto_alterno. Retorna f350_consec_docto del ETS creado para este traslado.
 
         Espejo de `get_consec_salida_transito_by_alterno` (173076/STS) — mismo hueco,
@@ -3248,19 +3248,19 @@ class ConnektaGateway:
         indistinguible de "nunca se envió" (`siesa_entrada_consec` null para las 68
         recepciones EN_TRANSITO existentes, verificado 2026-08-25).
 
-        ⚠️ NO VERIFICADO en vivo contra Siesa — a diferencia del resto de los `API_v2_*`
-        de este archivo, este nombre de conector es una hipótesis por simetría con el de
-        salida, no una confirmación de Connekta. Si Siesa responde 404/consulta
-        inexistente, esta función lo traga (try/except) y el recovery simplemente no
-        aporta nada — no hay regresión posible porque hoy no existe ningún intento.
-        Antes de confiar en esto para producción: probar contra un ETS real en QA (igual
-        que se hizo con `CONNEKTA_CONSULTA_NC_CONSECUTIVO`) y, si el nombre no existe,
-        pedirle al consultor Siesa el nombre real del conector de consulta para
-        clase 66 (Transferencia en Tránsito Entrada).
+        ✅ VERIFICADO en vivo contra Siesa QA (2026-08-25, vía
+        `/api/health/ets-consecutivo`) contra ST-20260706-21B0: la primera
+        hipótesis por simetría — `API_v2_Inventarios_Transferencia_Entrada_Transito`
+        (mismo orden de palabras que el de salida) — devolvía 401 (no
+        registrada). El nombre real invierte el orden: "Transito_Entrada", no
+        "Entrada_Transito". Confirmado con datos reales: `f350_id_tipo_docto=ETS`,
+        `f350_consec_docto=19`, `f350_consec_docto_salida=53` (coincide con el STS
+        de ese mismo traslado) — el documento YA EXISTÍA en Siesa y el WMS nunca
+        había capturado su consecutivo.
         """
         try:
             res = self._get(
-                'API_v2_Inventarios_Transferencia_Entrada_Transito',
+                'API_v2_Inventarios_Transferencia_Transito_Entrada',
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
                     'parametros': f"f450_docto_alterno = {_lit(self._fmt_alterno(codigo_solicitud))}",
