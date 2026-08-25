@@ -175,11 +175,17 @@ function _renderTrasladoCard(s) {
   // «esto no está» y se termina llamando a soporte.
   const recuperacion = [];
 
+  // faltaSalida/faltaEntrada solo cuentan una vez que el paso físico
+  // correspondiente YA OCURRIÓ (despachar()/confirmar_recepcion() avanzan el
+  // estado sin importar si Siesa respondió, ver traslado_service.py). Antes
+  // de eso el consec ausente es lo esperado —nadie lo pidió todavía—, no un
+  // fallo: PREPARADO significa "aún no se despachó" y EN_TRANSITO significa
+  // "aún no se recibió", no "Siesa falló".
   const faltaSalida = !s.siesa_salida_consec
-    && ['PREPARADO', 'EN_TRANSITO', 'ENTREGADA'].includes(s.estado);
+    && ['EN_TRANSITO', 'ENTREGADA'].includes(s.estado);
   const faltaEntrada = s.modo_transferencia === 'EN_TRANSITO'
     && s.siesa_salida_consec && !s.siesa_entrada_consec
-    && ['EN_TRANSITO', 'ENTREGADA'].includes(s.estado);
+    && s.estado === 'ENTREGADA';
 
   if (faltaSalida) {
     recuperacion.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar despacho (STS)</button>`);
@@ -192,7 +198,7 @@ function _renderTrasladoCard(s) {
   }
 
   const bloqueRecuperacion = recuperacion.length ? `
-    <div style="margin-top:10px;padding:8px;background:#170a0a;border:1px solid #7f1d1d;border-radius:8px;">
+    <div style="margin-top:10px;padding:8px;background:#1a0a0a;border:1px solid #7f1d1d;border-radius:8px;">
       <div style="font-size:10px;color:#fca5a5;font-weight:700;margin-bottom:6px;">
         ⚠ RECUPERACIÓN — crean documentos en Siesa. Verificá primero en Siesa que el documento no exista.
       </div>
