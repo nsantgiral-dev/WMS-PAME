@@ -84,9 +84,9 @@ function _renderTrasladoCard(s) {
   if (fechaCreacion && ['EN_PICKING','PREPARADO','ENVIADA'].includes(s.estado)) {
     const diasTranscurridos = Math.floor((Date.now() - fechaCreacion) / 86400000);
     if (diasTranscurridos >= 3) {
-      alertaAntiguedad = `<span style="color:#ef4444;font-weight:700;font-size:10px;">⚠ ${diasTranscurridos}d sin avanzar</span>`;
+      alertaAntiguedad = `<span style="color:#ef4444;font-weight:700;font-size:14px;">⚠ ${diasTranscurridos}d sin avanzar</span>`;
     } else if (diasTranscurridos >= 1) {
-      alertaAntiguedad = `<span style="color:#f59e0b;font-size:10px;">${diasTranscurridos}d</span>`;
+      alertaAntiguedad = `<span style="color:#f59e0b;font-size:14px;">${diasTranscurridos}d</span>`;
     }
   }
 
@@ -95,7 +95,7 @@ function _renderTrasladoCard(s) {
       ? ` <span style="color:#f59e0b;">(aprobado: ${i.cantidad_aprobada})</span>` : '';
     const enviado = i.cantidad_enviada > 0
       ? ` <span style="color:#4ade80;">→ enviado: ${i.cantidad_enviada}</span>` : '';
-    return `<div style="font-size:11px;color:#666;">${i.producto_codigo || i.producto_nombre} · ${i.cantidad_solicitada} und${aprobado}${enviado}</div>`;
+    return `<div style="font-size:15px;color:#666;">${i.producto_codigo || i.producto_nombre} · ${i.cantidad_solicitada} und${aprobado}${enviado}</div>`;
   }).join('');
 
   // Barra de progreso picking
@@ -107,49 +107,49 @@ function _renderTrasladoCard(s) {
     pickingInfo = `
       <div style="margin:8px 0 4px;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-          <span style="font-size:10px;color:#888;">Picking: ${pp.completadas}/${pp.total} tareas</span>
-          <span style="font-size:10px;color:${barColor};font-weight:700;">${pct}%</span>
+          <span style="font-size:14px;color:#888;">Picking: ${pp.completadas}/${pp.total} tareas</span>
+          <span style="font-size:14px;color:${barColor};font-weight:700;">${pct}%</span>
         </div>
         <div style="height:4px;background:#222;border-radius:4px;overflow:hidden;">
           <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px;transition:width .3s;"></div>
         </div>
       </div>`;
   } else if (pp && pp.sin_tareas && s.estado === 'EN_PICKING') {
-    pickingInfo = `<div style="font-size:10px;color:#f59e0b;margin:6px 0;">⚠ Sin tareas de picking — picking manual requerido</div>`;
+    pickingInfo = `<div style="font-size:14px;color:#f59e0b;margin:6px 0;">⚠ Sin tareas de picking — picking manual requerido</div>`;
   }
 
   const acciones = [];
 
   if (s.estado === 'ENVIADA') {
-    acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
-    acciones.push(`<button onclick="trasRechazar(${s.id})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:13px;cursor:pointer;">Rechazar</button>`);
+    acciones.push(`<button onclick="trasAprobar(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer;">Aprobar y asignar</button>`);
+    acciones.push(`<button onclick="trasRechazar(${s.id})" style="padding:10px 12px;background:#7f1d1d;color:#fff;border:none;border-radius:8px;font-size:17px;cursor:pointer;">Rechazar</button>`);
   }
 
   if (s.estado === 'EN_PICKING') {
     const pickingCompleto = pp && !pp.sin_tareas && pp.completadas === pp.total && pp.total > 0;
     if (pickingCompleto) {
       // Picking formal completo → confirmar y avanzar a PREPARADO
-      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">✅ Confirmar recogida</button>`);
+      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#166534;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer;">✅ Confirmar recogida</button>`);
     } else {
       // Picking en proceso o manual → forzar confirmación o despachar directo
-      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:1px solid #1e3a5f;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Confirmar recogida manual</button>`);
+      acciones.push(`<button onclick="trasConfirmarRecogida(${s.id})" style="flex:1;padding:10px;background:#1e3a5f;color:#60a5fa;border:1px solid #1e3a5f;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;">Confirmar recogida manual</button>`);
     }
-    acciones.push(`<button onclick="trasDespacharDirecto(${s.id})" style="padding:10px 10px;background:#78350f;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">Despachar ⚡</button>`);
-    acciones.push(`<button onclick="trasReasignarOperario(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:11px;cursor:pointer;">↺ Operario</button>`);
+    acciones.push(`<button onclick="trasDespacharDirecto(${s.id})" style="padding:10px 10px;background:#78350f;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;">Despachar ⚡</button>`);
+    acciones.push(`<button onclick="trasReasignarOperario(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#aaa;border:1px solid #333;border-radius:8px;font-size:15px;cursor:pointer;">↺ Operario</button>`);
   }
 
   if (s.estado === 'PREPARADO') {
     const packDespachado = s.packing_info && s.packing_info.estado === 'DESPACHADO';
     if (packDespachado) {
-      acciones.push(`<div style="flex:1;padding:10px;color:#9ca3af;font-size:12px;text-align:center;background:#1a1a1a;border:1px solid #374151;border-radius:8px;">⏳ Despacho en proceso...</div>`);
+      acciones.push(`<div style="flex:1;padding:10px;color:#9ca3af;font-size:16px;text-align:center;background:#1a1a1a;border:1px solid #374151;border-radius:8px;">⏳ Despacho en proceso...</div>`);
     } else {
-      acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
+      acciones.push(`<button onclick="trasDespachar(${s.id})" style="flex:1;padding:10px;background:#b45309;color:#fff;border:none;border-radius:8px;font-size:17px;font-weight:700;cursor:pointer;">🚛 Despachar</button>`);
     }
-    acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:11px;cursor:pointer;">📦 LPNs</button>`);
+    acciones.push(`<button onclick="trasVerLPNs(${s.id})" style="padding:10px 10px;background:#1a1a1a;color:#a78bfa;border:1px solid #4c1d95;border-radius:8px;font-size:15px;cursor:pointer;">📦 LPNs</button>`);
   }
 
   if (s.estado === 'EN_TRANSITO') {
-    acciones.push(`<span style="font-size:12px;color:#f59e0b;font-weight:600;">🚚 Mercancía en camino — la tienda confirma recepción</span>`);
+    acciones.push(`<span style="font-size:16px;color:#f59e0b;font-weight:600;">🚚 Mercancía en camino — la tienda confirma recepción</span>`);
   }
 
   // ── Recuperación cuando Siesa falló ────────────────────────────────────
@@ -188,15 +188,15 @@ function _renderTrasladoCard(s) {
     && s.estado === 'ENTREGADA';
 
   if (faltaSalida) {
-    recuperacion.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar despacho (STS)</button>`);
+    recuperacion.push(`<button onclick="trasReintentarDespachoSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;">↻ Reintentar despacho (STS)</button>`);
   }
   if (faltaEntrada) {
-    recuperacion.push(`<button onclick="trasReintentarRecepcionSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↻ Reintentar recepción (ETS)</button>`);
+    recuperacion.push(`<button onclick="trasReintentarRecepcionSiesa(${s.id})" style="padding:8px 10px;background:#7f1d1d;color:#fecaca;border:1px solid #991b1b;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;">↻ Reintentar recepción (ETS)</button>`);
   }
 
   const bloqueRecuperacion = recuperacion.length ? `
     <div style="margin-top:10px;padding:8px;background:#1a0a0a;border:1px solid #7f1d1d;border-radius:8px;">
-      <div style="font-size:10px;color:#fca5a5;font-weight:700;margin-bottom:6px;">
+      <div style="font-size:14px;color:#fca5a5;font-weight:700;margin-bottom:6px;">
         ⚠ RECUPERACIÓN — crean documentos en Siesa. Verificá primero en Siesa que el documento no exista.
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;">${recuperacion.join('')}</div>
@@ -209,26 +209,26 @@ function _renderTrasladoCard(s) {
   // arriba.
   const bloqueRevertir = s.estado === 'EN_TRANSITO' ? `
     <div style="margin-top:10px;">
-      <button onclick="trasRevertir(${s.id})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>
+      <button onclick="trasRevertir(${s.id})" style="padding:8px 10px;background:#1a1a1a;color:#fbbf24;border:1px solid #92400e;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer;">↩ Revertir traslado</button>
     </div>` : '';
 
   const operarioTag = s.operario_nombre
-    ? `<div style="font-size:11px;color:#7c3aed;margin-bottom:6px;">👷 ${s.operario_nombre}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
-    : (s.estado === 'EN_PICKING' ? `<div style="font-size:11px;color:#f59e0b;margin-bottom:6px;">⚠ Sin operario asignado</div>` : '');
+    ? `<div style="font-size:15px;color:#7c3aed;margin-bottom:6px;">👷 ${s.operario_nombre}${s.estado==='PREPARADO' ? ' · Listo para despachar' : s.estado==='EN_PICKING' ? ' · Recogiendo' : ''}</div>`
+    : (s.estado === 'EN_PICKING' ? `<div style="font-size:15px;color:#f59e0b;margin-bottom:6px;">⚠ Sin operario asignado</div>` : '');
 
   return `
   <div style="background:#111;border:1px solid ${s.estado==='EN_PICKING' && pp?.sin_tareas ? '#78350f' : '#222'};border-radius:12px;padding:14px;margin-bottom:10px;">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
       <div>
-        <div style="font-size:13px;font-weight:700;">${s.codigo}</div>
-        <div style="font-size:11px;color:#555;margin-top:2px;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha} ${alertaAntiguedad}</div>
+        <div style="font-size:17px;font-weight:700;">${s.codigo}</div>
+        <div style="font-size:15px;color:#555;margin-top:2px;">${s.nombre_punto_venta || s.bodega_destino_siesa} · ${fecha} ${alertaAntiguedad}</div>
       </div>
-      <span style="background:${col};color:#fff;font-size:22px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado.replace(/_/g, ' ')}</span>
+      <span style="background:${col};color:#fff;font-size:19px;font-weight:700;padding:3px 8px;border-radius:8px;white-space:nowrap;">${s.estado.replace(/_/g, ' ')}</span>
     </div>
     <div style="margin-bottom:6px;">${itemsResumen}</div>
     ${pickingInfo}
     ${operarioTag}
-    ${s.siesa_error ? `<div style="font-size:10px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
+    ${s.siesa_error ? `<div style="font-size:14px;color:#f87171;margin-bottom:8px;">⚠ Siesa: ${s.siesa_error}</div>` : ''}
     ${acciones.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;">${acciones.join('')}</div>` : ''}
     ${bloqueRecuperacion}
     ${bloqueRevertir}
