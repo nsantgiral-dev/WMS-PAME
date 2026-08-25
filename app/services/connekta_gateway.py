@@ -288,6 +288,14 @@ class ConnektaGateway:
         self.nombre_conector_transito_entrada = os.getenv(
             'CONNEKTA_NOMBRE_TRANSITO_ENTRADA',
             'API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada')
+        # Consulta v2 (GET) para recovery de consecutivo — no el conector POST de arriba.
+        # Verificado en vivo 2026-08-25 contra ST-20260706-21B0 (consec=19). Un solo
+        # nombre, leído acá y en get_consec_entrada_transito_by_alterno — la primera
+        # versión de este código lo repitió como string literal en dos archivos y una
+        # corrección quedó aplicada a uno solo (Regla 0).
+        self.consulta_transito_entrada = os.getenv(
+            'CONNEKTA_CONSULTA_TRANSITO_ENTRADA',
+            'API_v2_Inventarios_Transferencia_Transito_Entrada')
         self.conector_transferencia_directa = os.getenv('CONNEKTA_CONECTOR_TRANSF_DIRECTA', '173066')
         # Tipo documento requisición de traslado (Siesa: clase 75 — distinto de clase 65 STS)
         # SIESA_TIPO_DOCTO_RIT toma precedencia; fallback a SIESA_TIPO_DOCTO_TRASLADO para
@@ -3260,7 +3268,7 @@ class ConnektaGateway:
         """
         try:
             res = self._get(
-                'API_v2_Inventarios_Transferencia_Transito_Entrada',
+                self.consulta_transito_entrada,
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
                     'parametros': f"f450_docto_alterno = {_lit(self._fmt_alterno(codigo_solicitud))}",

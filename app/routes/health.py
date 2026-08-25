@@ -166,8 +166,9 @@ def health_ets_consecutivo():
     producción no es un método.
 
     `get_consec_entrada_transito_by_alterno` (connekta_gateway.py) usa
-    'API_v2_Inventarios_Transferencia_Entrada_Transito' por simetría con el
-    de salida (que sí está confirmado), pero nunca se verificó en vivo.
+    'API_v2_Inventarios_Transferencia_Transito_Entrada' — verificado en vivo
+    2026-08-25 contra ST-20260706-21B0 (consec=19). El default de acá debe
+    coincidir con ese, no reinventar el nombre por su cuenta.
 
     Requiere `?codigo=<traslado>` (un ST-... real, para filtrar por su
     f450_docto_alterno). Acepta `?consulta=<nombre>` para probar un nombre
@@ -190,7 +191,7 @@ def health_ets_consecutivo():
         }), 200
 
     nombre = (request.args.get('consulta') or '').strip() \
-        or 'API_v2_Inventarios_Transferencia_Entrada_Transito'
+        or connekta.consulta_transito_entrada
     alterno = connekta._fmt_alterno(codigo)
 
     try:
