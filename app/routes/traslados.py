@@ -692,6 +692,7 @@ def reintentar_recepcion_siesa(id):
 
     from app.extensions import db
     from app.services.connekta_gateway import connekta
+    from app.services.siesa_traslado_adapter import siesa_traslado
     s = SolicitudTraslado.query.get_or_404(id)
 
     if s.estado != 'ENTREGADA':
@@ -700,6 +701,23 @@ def reintentar_recepcion_siesa(id):
         return jsonify({'error': f'173079 ya registrado (consec={s.siesa_entrada_consec})'}), 400
     if s.modo_transferencia != 'EN_TRANSITO':
         return jsonify({'error': 'Solo aplica a traslados EN_TRANSITO'}), 400
+
+    # Verificar ANTES de reenviar: un intento previo puede haber recibido 200
+    # de Siesa sin un consecutivo parseable en la respuesta (el hueco que
+    # `resolver_consecutivo_entrada` existe para cerrar). Sin este chequeo,
+    # reintentar sobre uno de esos casos manda un 173079 SEGUNDO y crea un
+    # documento de entrada duplicado en Siesa — exactamente lo que el aviso
+    # "Verificá primero en Siesa que el documento no exista" advierte.
+    consec_existente = siesa_traslado.recuperar_consec_entrada(s.codigo)
+    if consec_existente:
+        s.siesa_entrada_consec = consec_existente
+        s.siesa_error = None
+        db.session.commit()
+        return jsonify({
+            'ok': True,
+            'recuperado_sin_reenvio': True,
+            'solicitud': s.to_dict(),
+        }), 200
 
     items_payload = [
         {
