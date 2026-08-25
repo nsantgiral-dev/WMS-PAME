@@ -726,11 +726,10 @@ def reintentar_recepcion_siesa(id):
             bodega_origen=s.bodega_origen_siesa or connekta.bodega,
         )
         from app.services.traslado_service import TrasladoService
-        if not res.get('simulado') and not res.get('modo_ensayo'):
-            consec = TrasladoService._extraer_consec(res)
-            if consec:
-                s.siesa_entrada_consec = consec
-        s.siesa_error = None
+        consec, error = TrasladoService.resolver_consecutivo_entrada(s.codigo, res)
+        if consec:
+            s.siesa_entrada_consec = consec
+        s.siesa_error = error
         db.session.commit()
         return jsonify({'ok': True, 'siesa_response': res, 'solicitud': s.to_dict()}), 200
     except Exception as e:

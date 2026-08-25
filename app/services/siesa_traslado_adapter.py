@@ -141,6 +141,10 @@ class SiesaTrasladoAdapter:
             bodega_origen=bodega_origen,
         )
 
+    def recuperar_consec_entrada(self, codigo: str) -> 'int | None':
+        """Recovery: consulta API v2 cuando el consecutivo de 173079 no llegó en la respuesta."""
+        return connekta.get_consec_entrada_transito_by_alterno(codigo)
+
 
 # Singleton — mismo ciclo de vida que connekta
 siesa_traslado = SiesaTrasladoAdapter()

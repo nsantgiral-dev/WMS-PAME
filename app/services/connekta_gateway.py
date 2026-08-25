@@ -3237,6 +3237,49 @@ class ConnektaGateway:
                            codigo_solicitud, e)
         return None
 
+    def get_consec_entrada_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
+        """
+        Recovery: API_v2_Inventarios_Transferencia_Entrada_Transito filtrada por
+        f450_docto_alterno. Retorna f350_consec_docto del ETS creado para este traslado.
+
+        Espejo de `get_consec_salida_transito_by_alterno` (173076/STS) — mismo hueco,
+        mismo remedio: 173079 puede aceptar el documento (HTTP 200) sin devolver un
+        consecutivo parseable en la respuesta, y sin este recovery el ETS quedaba
+        indistinguible de "nunca se envió" (`siesa_entrada_consec` null para las 68
+        recepciones EN_TRANSITO existentes, verificado 2026-08-25).
+
+        ⚠️ NO VERIFICADO en vivo contra Siesa — a diferencia del resto de los `API_v2_*`
+        de este archivo, este nombre de conector es una hipótesis por simetría con el de
+        salida, no una confirmación de Connekta. Si Siesa responde 404/consulta
+        inexistente, esta función lo traga (try/except) y el recovery simplemente no
+        aporta nada — no hay regresión posible porque hoy no existe ningún intento.
+        Antes de confiar en esto para producción: probar contra un ETS real en QA (igual
+        que se hizo con `CONNEKTA_CONSULTA_NC_CONSECUTIVO`) y, si el nombre no existe,
+        pedirle al consultor Siesa el nombre real del conector de consulta para
+        clase 66 (Transferencia en Tránsito Entrada).
+        """
+        try:
+            res = self._get(
+                'API_v2_Inventarios_Transferencia_Entrada_Transito',
+                params_extra={
+                    'paginacion': 'numPag=1|tamPag=5',
+                    'parametros': f"f450_docto_alterno = {_lit(self._fmt_alterno(codigo_solicitud))}",
+                },
+            )
+            rows = (
+                res.get('detalle', {}).get('Table') or
+                res.get('detalle', {}).get('Datos') or []
+            )
+            if rows:
+                consec = rows[0].get('f350_consec_docto')
+                logger.info('[CONNEKTA] ETS %s: consec recuperado=%s',
+                            codigo_solicitud, consec)
+                return int(consec) if consec else None
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_consec_entrada_transito_by_alterno(%s): %s',
+                           codigo_solicitud, e)
+        return None
+
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
         """
         Recovery: API_v2_Inventarios_RequisicionesParaTransferir filtrada por f440_referencia.
