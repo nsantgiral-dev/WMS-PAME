@@ -64,8 +64,24 @@ class PickingService:
         quede stock, aunque sea de meses atrás: "antigüedad" no es lo mismo
         que "ubicación real". GENERAL sigue sirviendo de respaldo automático
         si el hueco real no alcanza a cubrir toda la cantidad pedida.
+
+        Cross-Dock (`Ubicacion.tipo == 'cross_dock'`) va PRIMERO, antes que
+        cualquier otra cosa — es mercancía que `recepcion_service._decidir_destino`
+        ya enrutó ahí precisamente porque existía una TareaPicking PENDIENTE
+        para ese producto: existe para cumplir un pedido ya en curso, no para
+        quedarse en el estante. Antes de esta regla, `tipo_zona == 'GENERAL'`
+        trataba Cross-Dock igual que SIESA-GENERAL y el desempate por
+        `fecha_ingreso` casi siempre lo dejaba último — mientras
+        SIESA-GENERAL tuviera con qué cubrir la demanda normal (y la Carga
+        Inicial lo repone completo en cada sync), Cross-Dock nunca se tocaba:
+        verificado en producción, 4,068 unidades en 10 SKUs quietas ahí desde
+        marzo/junio sin que ninguna tarea de picking las haya usado.
         """
-        _prioridad_zona = case((Ubicacion.tipo_zona == 'GENERAL', 1), else_=0)
+        _prioridad_zona = case(
+            (Ubicacion.tipo == 'cross_dock', 0),
+            (Ubicacion.tipo_zona == 'GENERAL', 2),
+            else_=1,
+        )
 
         registros = (
             UbicacionProducto.query

@@ -608,6 +608,38 @@ def _run_carga_inicial(app):
                           ).all())
             }
 
+            # Mapa 3b: stock que YA vive en una ubicación real (no SIESA-GENERAL)
+            # para cada producto de este almacén — típicamente porque Layout ya
+            # lo trasladó a un hueco de picking (`_traspasar_desde_general`) o
+            # porque una recepción lo mandó a Cross-Dock.
+            #
+            # Sin esto, el `reg.cantidad = existencia_siesa` de más abajo
+            # sobrescribe SIESA-GENERAL con el número COMPLETO de Siesa sin
+            # saber que una parte de esa misma mercancía ya está contada por
+            # separado en un hueco real — cada corrida de Carga Inicial vuelve
+            # a duplicar esa parte. Verificado en producción (2026-08-26):
+            # 5 SKUs asignados a picking el 10 de agosto quedaron duplicados
+            # exactos por la corrida de Carga Inicial de hoy (PAPELSL153: 400
+            # unidades de más, ni una de más ni de menos que lo que había en
+            # su hueco PIK-C2-C01-E02-H03).
+            _stock_en_ubicaciones_reales: dict = {
+                row.producto_id: int(row.total)
+                for row in (
+                    db.session.query(
+                        UbicacionProducto.producto_id,
+                        func.sum(UbicacionProducto.cantidad).label('total')
+                    )
+                    .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+                    .filter(
+                        Ubicacion.almacen_id == almacen.id,
+                        UbicacionProducto.ubicacion_id != ub_general.id,
+                        UbicacionProducto.lote.is_(None),
+                    )
+                    .group_by(UbicacionProducto.producto_id)
+                    .all()
+                )
+            }
+
             # SET de idempotency keys del día — evita reprocesar lo ya cargado hoy
             ikeys_hoy = {
                 row.idempotency_key
@@ -681,18 +713,31 @@ def _run_carga_inicial(app):
                         _savepoint.commit()
                         continue  # Ya se cargó hoy
 
+                    # Si el destino es SIESA-GENERAL, restar lo que ya está en una
+                    # ubicación real (hueco de picking, Cross-Dock) — ese stock es
+                    # la MISMA mercancía que reporta Siesa, ya localizada. Sin esto,
+                    # cada corrida vuelve a poner el número completo en el bucket
+                    # genérico ENCIMA de lo que ya se trasladó, duplicando esa
+                    # porción para siempre.
+                    if ub.id == ub_general.id:
+                        ya_en_reales = _stock_en_ubicaciones_reales.get(prod.id, 0)
+                        cantidad_destino = max(0, existencia_siesa - ya_en_reales)
+                    else:
+                        ya_en_reales = 0
+                        cantidad_destino = existencia_siesa
+
                     # El zero de otras ubicaciones se hizo en bulk antes del loop (M5)
                     saldo_antes = reg.cantidad if reg else 0
 
                     if reg:
-                        reg.cantidad = existencia_siesa
+                        reg.cantidad = cantidad_destino
                         reg.row_version += 1
                         actualizados += 1
                     else:
                         reg = UbicacionProducto(
                             ubicacion_id=ub.id,
                             producto_id=prod.id,
-                            cantidad=existencia_siesa,
+                            cantidad=cantidad_destino,
                             fecha_ingreso=datetime.utcnow()
                         )
                         db.session.add(reg)
@@ -703,15 +748,19 @@ def _run_carga_inicial(app):
                         _mapa_up[(ub.id, prod.id)] = reg
                         cargados += 1
 
+                    _motivo = f'Carga inicial desde Siesa {fecha_hoy} · bodega {connekta.bodega}'
+                    if ya_en_reales:
+                        _motivo += f' · {ya_en_reales} und ya en ubicación(es) real(es), restadas de SIESA-GENERAL'
+
                     movimiento = MovimientoInventario(
                         producto_id=prod.id,
                         ubicacion_id=ub.id,
                         almacen_id=almacen.id,
                         tipo='CARGA_INICIAL_SIESA',
-                        cantidad=existencia_siesa,
+                        cantidad=cantidad_destino,
                         saldo_antes=saldo_antes,
-                        saldo_despues=existencia_siesa,
-                        motivo=f'Carga inicial desde Siesa {fecha_hoy} · bodega {connekta.bodega}',
+                        saldo_despues=cantidad_destino,
+                        motivo=_motivo,
                         numero_documento='CARGA-SIESA',
                         idempotency_key=ikey
                     )
