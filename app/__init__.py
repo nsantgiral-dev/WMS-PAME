@@ -356,6 +356,12 @@ def create_app():
                 # (serie, semana), así que repetirlo no ensucia nada. Va aquí y no en
                 # _scheduler_pesados para que no dependa de HEAVY_SCHEDULERS=true.
                 ('app.services.vigia_service',              'init_scheduler',          '[VIGIA_SCHEDULER]'),
+                # Esencial: sin este barrido, un hueco PICKING que baja de mínimo por
+                # un conteo/devolución/traslado (no un picking) no genera
+                # TareaReposicion hasta que alguien entre a revisar a mano. El
+                # docstring de reposicion_service.py llevaba tiempo diciendo que
+                # este scheduler existía — no era cierto hasta ahora.
+                ('app.services.reposicion_service',         'init_scheduler',          '[REPOSICION_SCHEDULER]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_esenciales:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

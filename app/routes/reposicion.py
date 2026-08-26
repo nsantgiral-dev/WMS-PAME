@@ -30,7 +30,7 @@ from app.routes._auth_helpers import _es_admin_o_jefe, Roles
 from app.services.alertas_service import enviar_email, _config_resend
 from app.services.connekta_gateway import connekta
 from app.services.ola_predictiva_service import pre_verificar_ola as _verificar
-from app.services.reposicion_service import confirmar_reposicion, get_tarea_abastecedor, get_tareas_abastecedor, verificar_stock_picking
+from app.services.reposicion_service import confirmar_reposicion, configurar_umbral, get_tarea_abastecedor, get_tareas_abastecedor, verificar_stock_picking
 from app.services.siesa_job_service import get_jobs_fallidos, reintentar_job as _reintentar
 from app.services.ubicaciones_sync_service import get_estado, sync_ubicaciones_desde_siesa
 
@@ -248,24 +248,32 @@ def configurar_limites(ubicacion_id):
     El jefe de bodega los ajusta aquí.
 
     Payload: { stock_minimo, stock_maximo, secuencia_ruteo (opcional) }
+    La validación (zona, signo, mínimo ≤ máximo) vive en
+    reposicion_service.configurar_umbral — única función que la aplica,
+    la use esta ruta o Layout al asignar un SKU.
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén pueden configurar límites'}), 403
 
-    ub = Ubicacion.query.get(ubicacion_id)
-    if not ub:
+    if not Ubicacion.query.get(ubicacion_id):
         return jsonify({'error': f'Ubicación {ubicacion_id} no encontrada'}), 404
 
     data = request.get_json() or {}
+    kwargs = {}
     try:
         if 'stock_minimo' in data:
-            ub.stock_minimo = int(data['stock_minimo']) if data['stock_minimo'] is not None else None
+            kwargs['stock_minimo'] = int(data['stock_minimo']) if data['stock_minimo'] is not None else None
         if 'stock_maximo' in data:
-            ub.stock_maximo = int(data['stock_maximo']) if data['stock_maximo'] is not None else None
+            kwargs['stock_maximo'] = int(data['stock_maximo']) if data['stock_maximo'] is not None else None
         if 'secuencia_ruteo' in data:
-            ub.secuencia_ruteo = int(data['secuencia_ruteo']) if data['secuencia_ruteo'] is not None else None
+            kwargs['secuencia_ruteo'] = int(data['secuencia_ruteo']) if data['secuencia_ruteo'] is not None else None
     except (TypeError, ValueError) as e:
         return jsonify({'error': f'Valor numérico inválido: {e}'}), 400
+
+    try:
+        ub = configurar_umbral(ubicacion_id, **kwargs)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
 
     db.session.commit()
     return jsonify({'ok': True, 'ubicacion': ub.to_dict()}), 200

@@ -2,12 +2,17 @@
 Motor de Reabastecimiento RESERVA → PICKING.
 
 Responsabilidades:
-  1. verificar_stock_picking()  — el cron llama esto tras cada picking completado
-                                   y también el scheduler nocturno
+  1. verificar_stock_picking()  — corre tras cada picking confirmado, tras cada
+                                   reposición confirmada, por el botón manual
+                                   "Verificar stock ahora", y cada 30 min por
+                                   init_scheduler() (§5 más abajo)
   2. asignar_tarea()            — el abastecedor pide trabajo, el sistema asigna
   3. confirmar_reposicion()     — Abastecedor escanea LPN + confirma → "rompe la paca"
                                    → LPN CONSUMIDO + stock PICKING actualizado
                                    → job Siesa conector 173076 (tránsito entre ubicaciones)
+  4. configurar_umbral()        — única función que valida y escribe
+                                   stock_minimo/stock_maximo/secuencia_ruteo de
+                                   una ubicación (la usan esta ruta y Layout)
 
 Reglas:
   - Solo ubicaciones tipo_zona='PICKING' disparan alertas (RESERVA y GENERAL nunca)
@@ -27,6 +32,75 @@ from app.models.tarea_reposicion import TareaReposicion, EstadoReposicion
 from app.services.connekta_gateway import connekta
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 0. Configuración de umbrales — única función que valida y escribe
+#    stock_minimo/stock_maximo/secuencia_ruteo de una ubicación.
+# ──────────────────────────────────────────────────────────────────────────────
+
+_NOTSET = object()  # distingue "no vino en la llamada" de "vino None (limpiar el campo)"
+
+
+def configurar_umbral(ubicacion_id: int, stock_minimo=_NOTSET, stock_maximo=_NOTSET,
+                       secuencia_ruteo=_NOTSET, capacidad_referencia: int = None):
+    """
+    Configura los umbrales de reabastecimiento (stock_minimo/stock_maximo) que
+    verificar_stock_picking() lee para decidir cuándo generar una TareaReposicion.
+
+    Es la única función que valida y escribe estos campos — antes la ruta
+    (`PATCH /ubicacion/<id>/limites`) los escribía inline sin validar zona ni
+    signo, y Layout (al asignar un SKU) los habría escrito por su cuenta con
+    otra copia del mismo criterio. Layout es dueño de "cuánto cabe en el
+    hueco" (capacidad_maxima); Reposición es dueño de "cuándo avisar" — esta
+    función es el único puente entre los dos, para que Layout no tenga que
+    conocer las reglas de Reposición.
+
+    capacidad_referencia (opcional): si no se manda stock_maximo explícito y
+    la ubicación todavía no tiene uno propio, se usa como techo por defecto
+    — "cuánto cabe" es un límite razonable para "hasta cuánto reponer" cuando
+    nadie configuró explícitamente el segundo. Nunca pisa un stock_maximo ya
+    configurado a mano.
+
+    No hace commit — el caller decide la transacción (Layout la agrupa con el
+    movimiento de inventario; la ruta de Reposición commitea sola).
+    """
+    ubicacion = Ubicacion.query.get(ubicacion_id)
+    if not ubicacion:
+        raise ValueError(f'Ubicación {ubicacion_id} no encontrada')
+
+    quiere_minimo = stock_minimo is not _NOTSET and stock_minimo is not None
+    quiere_maximo = stock_maximo is not _NOTSET and stock_maximo is not None
+
+    if (quiere_minimo or quiere_maximo) and ubicacion.tipo_zona not in Ubicacion.ZONAS_SLOT_UNICO:
+        raise ValueError(
+            f'stock_minimo/stock_maximo solo aplican a huecos '
+            f'{"/".join(Ubicacion.ZONAS_SLOT_UNICO)} — en RESERVA/AVERIAS el '
+            f'hueco puede compartirse entre varios SKUs y un umbral por hueco '
+            f'no representa nada'
+        )
+    if quiere_minimo and stock_minimo < 0:
+        raise ValueError('stock_minimo no puede ser negativo')
+    if quiere_maximo and stock_maximo < 0:
+        raise ValueError('stock_maximo no puede ser negativo')
+
+    efectivo_minimo = stock_minimo if stock_minimo is not _NOTSET else ubicacion.stock_minimo
+    efectivo_maximo = stock_maximo if stock_maximo is not _NOTSET else ubicacion.stock_maximo
+    if efectivo_minimo is not None and efectivo_maximo is not None and efectivo_minimo > efectivo_maximo:
+        raise ValueError(
+            f'stock_minimo ({efectivo_minimo}) no puede ser mayor a stock_maximo ({efectivo_maximo})'
+        )
+
+    if stock_minimo is not _NOTSET:
+        ubicacion.stock_minimo = stock_minimo
+    if stock_maximo is not _NOTSET:
+        ubicacion.stock_maximo = stock_maximo
+    elif capacidad_referencia is not None and ubicacion.stock_maximo is None:
+        ubicacion.stock_maximo = capacidad_referencia
+    if secuencia_ruteo is not _NOTSET:
+        ubicacion.secuencia_ruteo = secuencia_ruteo
+
+    return ubicacion
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -341,3 +415,65 @@ def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
         f'[REPOSICION DLQ] Job {job.id} preparado para {tarea.codigo} '
         f'— bodega={bodega_siesa} centro_op={centro_op_siesa}'
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5. Scheduler — el barrido periódico que el módulo dice tener desde el
+#    docstring del archivo, pero que nunca se registró en app/__init__.py.
+#    Hasta ahora verificar_stock_picking() solo corría tras un picking
+#    confirmado o al apretar "Verificar stock ahora" a mano — un hueco que
+#    baja de mínimo por un ajuste de conteo, una devolución o un traslado no
+#    disparaba nada hasta que alguien pickeara de ahí o entrara a revisar.
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _barrido_stock_picking(app):
+    with app.app_context():
+        try:
+            # Advisory lock — evita que el barrido programado choque con un
+            # "Verificar stock ahora" manual corriendo al mismo tiempo.
+            lock = db.session.execute(
+                db.text('SELECT pg_try_advisory_lock(2011)')
+            ).scalar()
+            if not lock:
+                logger.info('[REPOSICION_SCHEDULER] Lock no disponible — omitiendo ejecución concurrente')
+                return
+            generadas = verificar_stock_picking()
+            if generadas:
+                logger.info(f'[REPOSICION_SCHEDULER] {generadas} tarea(s) de reposición generada(s)')
+        except Exception as e:
+            logger.error(f'[REPOSICION_SCHEDULER] Error en barrido periódico: {e}')
+        finally:
+            try:
+                db.session.execute(db.text('SELECT pg_advisory_unlock(2011)'))
+            except Exception:
+                pass
+
+
+def init_scheduler(app):
+    """Cron cada 30 min — barre todas las ubicaciones PICKING con mínimo configurado.
+
+    Complementa (no reemplaza) los disparos reactivos ya existentes tras
+    picking y tras reposición: cubre el caso donde el stock bajó por otro
+    camino (conteo, devolución, traslado) y nadie pickeó de ahí desde.
+    """
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+    except ImportError:
+        logger.error('[REPOSICION_SCHEDULER] APScheduler no instalado')
+        return None
+
+    scheduler = BackgroundScheduler(timezone='America/Bogota')
+    scheduler.add_job(
+        func=_barrido_stock_picking,
+        trigger=IntervalTrigger(minutes=30),
+        kwargs={'app': app},
+        id='reposicion_barrido_stock_picking',
+        name='Reposición — barrido periódico de stock PICKING bajo mínimo',
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+    )
+    scheduler.start()
+    logger.info('[REPOSICION_SCHEDULER] Scheduler iniciado — barrido cada 30 min')
+    return scheduler

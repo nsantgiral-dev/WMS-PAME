@@ -430,8 +430,11 @@ def reclasificar_ubicacion(ubicacion_id):
 def asignar_ubicacion(ubicacion_id):
     """
     Mecanismo B: amarra un SKU a una ubicación y suma la cantidad contada.
-    Payload: { producto_id, cantidad, capacidad_maxima? }
-    capacidad_maxima solo se acepta si la ubicación es PICKING (ver asignar_producto).
+    Payload: { producto_id, cantidad, capacidad_maxima?, stock_minimo? }
+    capacidad_maxima y stock_minimo solo se aceptan si la ubicación es PICKING
+    (ver asignar_producto). stock_minimo es el gatillo de reposición — se
+    configura acá mismo para no depender de un segundo paso manual en
+    Reposición → Configurar.
     """
     usuario = _es_admin_o_jefe()
     if not usuario:
@@ -441,12 +444,14 @@ def asignar_ubicacion(ubicacion_id):
         return jsonify({'error': 'producto_id y cantidad son requeridos'}), 400
     try:
         capacidad_maxima = data.get('capacidad_maxima')
+        stock_minimo = data.get('stock_minimo')
         resultado = layout_service.asignar_producto(
             ubicacion_id=ubicacion_id,
             producto_id=int(data['producto_id']),
             cantidad=int(data['cantidad']),
             usuario_id=usuario.id,
             capacidad_maxima=int(capacidad_maxima) if capacidad_maxima is not None else None,
+            stock_minimo=int(stock_minimo) if stock_minimo is not None else None,
         )
         return jsonify(resultado), 200
     except ValueError as e:

@@ -774,6 +774,7 @@ function layoutAbrirModalAsignar(ubId, codigo, tipoZona) {
   if (capWrap) {
     capWrap.style.display = _ZONAS_SLOT_UNICO.includes(tipoZona) ? 'block' : 'none';
     document.getElementById('layout-asignar-capacidad').value = '';
+    document.getElementById('layout-asignar-minimo').value = '';
   }
   m.style.display = 'flex';
   setTimeout(() => document.getElementById('layout-asignar-codigo')?.focus(), 50);
@@ -820,10 +821,13 @@ async function layoutConfirmarAsignar() {
 
   const capRaw = document.getElementById('layout-asignar-capacidad')?.value;
   const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
+  const minRaw = document.getElementById('layout-asignar-minimo')?.value;
+  const stock_minimo = minRaw ? parseInt(minRaw) : null;
 
   try {
     const payload = { producto_id: _layoutProductoId, cantidad };
     if (capacidad_maxima !== null && !isNaN(capacidad_maxima)) payload.capacidad_maxima = capacidad_maxima;
+    if (stock_minimo !== null && !isNaN(stock_minimo)) payload.stock_minimo = stock_minimo;
     const d = await post(`/api/almacenes/ubicaciones/${_layoutUbAsignarId}/asignar`, payload);
     alerta(`${d.producto_codigo} asignado — total ${d.cantidad_total} UNDs`, 'ok');
     layoutCerrarModalAsignar();
@@ -1152,7 +1156,11 @@ function _layoutAsignarEntFilaEdicion(u, huecoLabel, zona) {
           onkeydown="if(event.key==='Enter'){event.preventDefault();layoutAsignarEntSiguiente(${u.id});}"
           style="width:64px;padding:9px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:13px;text-align:center;box-sizing:border-box;">
       </div>
-      ${_ZONAS_SLOT_UNICO.includes(zona) ? `<input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" value="${u.capacidad_maxima ?? ''}" style="width:100%;margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">` : ''}
+      ${_ZONAS_SLOT_UNICO.includes(zona) ? `
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <input id="layout-asignar-ent-capacidad-${u.id}" type="number" min="0" placeholder="Capacidad máxima (opcional)" value="${u.capacidad_maxima ?? ''}" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">
+        <input id="layout-asignar-ent-minimo-${u.id}" type="number" min="0" placeholder="Mínimo reposición (opcional)" value="${u.stock_minimo ?? ''}" title="Bajo este número, Reposición genera tarea de reabastecimiento desde RESERVA" style="flex:1;min-width:0;padding:8px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx);font-size:12px;box-sizing:border-box;">
+      </div>` : ''}
     </div>`;
 }
 
@@ -1228,9 +1236,12 @@ async function layoutConfirmarAsignarEntrepano() {
     }
     const capRaw = document.getElementById(`layout-asignar-ent-capacidad-${u.id}`)?.value;
     const capacidad_maxima = capRaw ? parseInt(capRaw) : null;
+    const minRaw = document.getElementById(`layout-asignar-ent-minimo-${u.id}`)?.value;
+    const stock_minimo = minRaw ? parseInt(minRaw) : null;
     try {
       const payload = { producto_id: productoId, cantidad };
       if (capacidad_maxima !== null && !isNaN(capacidad_maxima)) payload.capacidad_maxima = capacidad_maxima;
+      if (stock_minimo !== null && !isNaN(stock_minimo)) payload.stock_minimo = stock_minimo;
       await post(`/api/almacenes/ubicaciones/${u.id}/asignar`, payload);
       ok++;
     } catch (e) { errores.push(`${u.codigo.split('-').pop()}: ${e.message || 'error'}`); }

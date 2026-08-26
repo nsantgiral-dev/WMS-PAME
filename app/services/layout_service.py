@@ -784,7 +784,7 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
 
 
 def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario_id: int = None,
-                     capacidad_maxima: int = None):
+                     capacidad_maxima: int = None, stock_minimo: int = None):
     """
     Amarra un SKU a una ubicación y suma la cantidad contada.
 
@@ -801,6 +801,17 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
     para este SKU" son la misma cosa. En RESERVA/AVERIAS un Hueco puede tener
     varios SKUs a la vez, así que un solo valor de capacidad por Hueco no
     representa nada — se rechaza para no pisar silenciosamente el dato.
+
+    stock_minimo (opcional, mismo alcance que capacidad_maxima) es el gatillo
+    que lee reposicion_service.verificar_stock_picking() — sin este dato el
+    hueco nunca genera TareaReposicion sin importar qué tan vacío quede.
+    Antes había que asignarlo acá y volver a Reposición → Configurar a
+    escribirlo por separado; ahora se hace en el mismo paso, delegando en
+    reposicion_service.configurar_umbral() — Layout no valida ni escribe
+    estos campos directamente, solo le pasa el dato a quien es dueño de esa
+    regla (si capacidad_maxima también viene, se ofrece como techo por
+    defecto de stock_maximo cuando la ubicación no tiene uno propio; ver
+    esa función para el porqué).
     """
     if cantidad <= 0:
         raise ValueError('cantidad debe ser mayor a 0')
@@ -842,7 +853,19 @@ def asignar_producto(ubicacion_id: int, producto_id: int, cantidad: int, usuario
         ubicacion.producto_asignado_id = producto_id
 
     if capacidad_maxima is not None:
-        ubicacion.capacidad_maxima = capacidad_maxima
+        ubicacion.capacidad_maxima = capacidad_maxima  # dato propio de Layout: cuánto cabe físicamente
+
+    if stock_minimo is not None or capacidad_maxima is not None:
+        # Layout no conoce las reglas de Reposición (zona válida, mínimo ≤
+        # máximo, cuándo usar capacidad_maxima como techo por defecto) —
+        # se las delega a quien es dueño de ellas. Ver configurar_umbral().
+        from app.services import reposicion_service as _reposicion
+        umbral_kwargs = {}
+        if stock_minimo is not None:
+            umbral_kwargs['stock_minimo'] = stock_minimo
+        if capacidad_maxima is not None:
+            umbral_kwargs['capacidad_referencia'] = capacidad_maxima
+        _reposicion.configurar_umbral(ubicacion.id, **umbral_kwargs)
 
     reg = UbicacionProducto.query.filter_by(
         ubicacion_id=ubicacion_id, producto_id=producto_id, lote=None,

@@ -12,6 +12,13 @@ class Ubicacion(db.Model):
     # repetir el string.
     CODIGO_GENERAL = 'SIESA-GENERAL'
 
+    # Zonas donde 1 hueco == 1 SKU (nunca compartido). Layout la usa para
+    # decidir si capacidad_maxima tiene sentido; Reposición la usa para
+    # decidir si stock_minimo/stock_maximo tienen sentido. Es la misma
+    # pregunta ("¿este hueco es de un solo SKU?") para dos dominios distintos
+    # — una sola constante, no dos tuplas que alguien puede desincronizar.
+    ZONAS_SLOT_UNICO = ('PICKING', 'IMPORTADOS')
+
     id = db.Column(db.Integer, primary_key=True)
     codigo = db.Column(db.String(50), unique=True, nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
