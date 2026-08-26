@@ -128,7 +128,7 @@ def test_asignar_y_reclasificar_endpoint(client, jwt_token_admin, almacen, produ
 
     r2 = client.post(
         f'/api/almacenes/ubicaciones/{ub_id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 40},
+        json={'producto_id': producto.id, 'cantidad': 40, 'capacidad_maxima': 100},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
     assert r2.status_code == 200
@@ -243,7 +243,7 @@ def test_eliminar_fila_bloquea_con_stock_endpoint(client, jwt_token_admin, almac
     ub = _crear_legacy_fila(almacen.id, 'A', 1, 1, 'PICKING')[0]
     client.post(
         f'/api/almacenes/ubicaciones/{ub.id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 10},
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
 
@@ -303,7 +303,7 @@ def test_eliminar_ubicacion_individual_bloquea_con_stock(client, jwt_token_admin
     ub_id = r1.get_json()['ubicaciones'][0]['id']
     client.post(
         f'/api/almacenes/ubicaciones/{ub_id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 10},
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
 
@@ -341,9 +341,9 @@ def test_importar_excel_endpoint(client, jwt_token_admin, almacen, producto):
 
     wb = Workbook()
     ws = wb.active
-    ws.append(['ubicacion_codigo', 'producto_codigo', 'cantidad'])
-    ws.append([codigo_ub, producto.codigo, 100])
-    ws.append(['NO-EXISTE', producto.codigo, 5])
+    ws.append(['ubicacion_codigo', 'producto_codigo', 'cantidad', 'capacidad_maxima'])
+    ws.append([codigo_ub, producto.codigo, 100, 200])
+    ws.append(['NO-EXISTE', producto.codigo, 5, 200])
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -426,7 +426,7 @@ def test_eliminar_cuerpo_endpoint_bloquea_con_stock(client, jwt_token_admin, alm
     ub_id = r1.get_json()['ubicaciones'][0]['id']
     client.post(
         f'/api/almacenes/ubicaciones/{ub_id}/asignar',
-        json={'producto_id': producto.id, 'cantidad': 10},
+        json={'producto_id': producto.id, 'cantidad': 10, 'capacidad_maxima': 50},
         headers={'Authorization': f'Bearer {jwt_token_admin}'},
     )
 
