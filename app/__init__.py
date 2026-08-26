@@ -330,6 +330,16 @@ def create_app():
         resultado = ejecutar_sync()
         click.echo(resultado)
 
+    # ── CLI: flask poblar-stock-minimo-abc ──────────────────────────────────
+    @app.cli.command('poblar-stock-minimo-abc')
+    @click.option('--dry-run', is_flag=True, default=False,
+                  help='Calcula y muestra el resultado sin escribir nada')
+    def cmd_poblar_stock_minimo_abc(dry_run):
+        """Deriva Producto.stock_minimo (NULL) desde clasificacion_abc + stock WMS actual."""
+        from app.services.abc_service import ABCService
+        resultado = ABCService.poblar_stock_minimo_desde_abc(dry_run=dry_run)
+        click.echo(resultado)
+
     # ── Schedulers ─────────────────────────────────────────────────────────
     # Arquitectura: web server corre DLQ + pedidos. Worker separado corre
     # los pesados (sync, inventory, prewarm). Nunca compiten por la DB.
