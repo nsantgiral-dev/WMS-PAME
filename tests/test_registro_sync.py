@@ -230,7 +230,12 @@ class TestElEndpointExponeLoPersistido:
         reg.cerrar_ok(reg.abrir('stock'), {'cargados': 900})
 
         e = estado_setup_inicial()
-        assert set(e['persistido']) == set(TIPOS)
+        # `persistido` cubre la secuencia de arranque (catálogo → barcodes →
+        # stock → setup_inicial) — no necesariamente TODO `TIPOS`.
+        # `reconciliacion` es una operación aparte, bajo demanda, que no
+        # corre como parte del setup inicial y por eso no aparece acá.
+        assert set(e['persistido']) == {'catalogo', 'barcodes', 'stock', 'setup_inicial'}
+        assert set(e['persistido']) <= set(TIPOS)
         assert e['persistido']['stock']['alguna_vez_ok'] is True
         assert e['persistido']['catalogo']['alguna_vez_ok'] is False
         assert 'cobertura' in e
@@ -252,9 +257,10 @@ class TestLosSyncsRegistranDeVerdad:
         'catalogo': 'app/services/siesa_sync_service.py',
         'barcodes': 'app/services/siesa_barcode_sync_service.py',
         'stock': 'app/services/inventario_siesa_service.py',
+        'reconciliacion': 'app/services/inventario_siesa_service.py',
     }
 
-    @pytest.mark.parametrize('tipo', ['catalogo', 'barcodes', 'stock'])
+    @pytest.mark.parametrize('tipo', ['catalogo', 'barcodes', 'stock', 'reconciliacion'])
     def test_el_sync_abre_y_cierra_su_registro(self, tipo):
         from pathlib import Path
         raiz = Path(__file__).resolve().parents[1]

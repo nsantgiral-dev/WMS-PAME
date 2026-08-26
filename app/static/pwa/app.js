@@ -1552,20 +1552,25 @@ async function verReconciliacion() {
           }
           const r = e.ultimo_resultado;
           if (!r) { res.style.color = '#fb923c'; res.textContent = 'Sin resultado — intenta de nuevo'; return; }
+          if (r.abortado) {
+            res.style.color = '#fb923c';
+            res.textContent = `⚠ Reconciliación no ejecutada — ${r.motivo}`;
+            return;
+          }
           if (r.total_discrepancias === 0) {
             res.style.color = '#4ade80';
-            res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${r.total_productos_siesa} productos)`;
+            res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${r.total_productos_siesa} productos, bodegas: ${(r.bodegas_comparadas||[]).join(', ')})`;
             return;
           }
           res.style.color = '#facc15';
-          res.textContent = `⚠ ${r.total_discrepancias} diferencias de ${r.total_productos_siesa} productos`;
+          res.textContent = `⚠ ${r.total_discrepancias} diferencias de ${r.total_productos_siesa} productos (bodegas: ${(r.bodegas_comparadas||[]).join(', ')})`;
           panel.innerHTML = `
-            <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa):</div>
+            <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa), por bodega:</div>
             ${r.discrepancias.slice(0,20).map(x => `
               <div class="tabla-fila" style="font-size:12px;">
                 <div>
                   <div style="font-weight:600;">${x.nombre}</div>
-                  <div style="color:#555;">${x.codigo}</div>
+                  <div style="color:#555;">${x.codigo} · <span style="color:#93c5fd;">${x.bodega||'?'}</span></div>
                 </div>
                 <div style="text-align:right;">
                   <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${x.stock_wms}</span>

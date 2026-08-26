@@ -29,7 +29,7 @@ from app.extensions import db
 
 #: Los tipos que se registran. Lista cerrada a propósito: un tipo libre haría
 #: que un typo (`'catalogo '`) cree una serie paralela que nadie consulta.
-TIPOS = ('catalogo', 'barcodes', 'stock', 'setup_inicial')
+TIPOS = ('catalogo', 'barcodes', 'stock', 'setup_inicial', 'reconciliacion')
 
 
 class RegistroSync(db.Model):

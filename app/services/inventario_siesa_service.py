@@ -871,7 +871,18 @@ _estado_reconciliacion = {
 
 
 def _run_reconciliacion(app):
-    """Lógica real de reconciliación — corre en hilo de fondo."""
+    """Lógica real de reconciliación — corre en hilo de fondo.
+
+    Compara, bodega por bodega, el stock WMS del almacén que le corresponde a
+    esa bodega contra la existencia Siesa de esa MISMA bodega. Antes (hasta el
+    2026-08-26) el lado WMS sumaba `UbicacionProducto` de TODOS los almacenes
+    sin filtrar, mientras el lado Siesa solo traía una bodega
+    (`connekta.bodega`, fija) — comparar "Siesa de una bodega" contra "WMS de
+    todas" producía discrepancias falsas. Verificado en producción:
+    ARTESA1119 (LANA ESCOLAR) reportaba 50 unidades de diferencia que no
+    existían — NB1 contra NB1 cuadraba exacto; el sobrante eran 50 unidades
+    sueltas en NC1 que no tenían nada que ver con esa comparación.
+    """
     global _estado_reconciliacion
 
     with app.app_context():
@@ -890,31 +901,71 @@ def _run_reconciliacion(app):
             logger.warning('[RECONCILIACION] Otro worker ya ejecuta — omitido')
             _estado_reconciliacion['en_curso'] = False
             return
+
+        # El registro se abre DESPUÉS de tomar el lock — si dos workers reciben
+        # el disparo casi al mismo tiempo, el que pierde el lock nunca abre fila
+        # (no queda un registro "en_curso" zombie que tape el resultado real
+        # del que sí corrió).
+        from app.services import registro_sync_service as _reg
+        _reg_id = _reg.abrir('reconciliacion')
+
         try:
-            # Stock WMS: una sola query bulk (no N+1)
+            # Bodegas reales: solo almacenes con bodega_siesa_id configurado.
+            # Cada bodega se reconcilia contra SU PROPIO almacén — nunca contra
+            # la suma de todos.
+            almacenes = Almacen.query.filter(
+                Almacen.bodega_siesa_id.isnot(None), Almacen.activo == True
+            ).all()
+            almacen_por_bodega = {a.bodega_siesa_id: a.id for a in almacenes}
+
+            if not almacen_por_bodega:
+                resultado = {
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'abortado': True,
+                    'motivo': 'Ningún almacén activo tiene bodega_siesa_id configurado',
+                    'total_discrepancias': 0,
+                    'discrepancias': [],
+                }
+                _estado_reconciliacion['ultimo_resultado'] = resultado
+                _estado_reconciliacion['en_curso'] = False
+                _reg.cerrar_ok(_reg_id, resultado)
+                logger.warning('[RECONCILIACION] Abortada: ningún almacén con bodega_siesa_id')
+                return
+
+            # Stock WMS: una sola query bulk (no N+1), agrupada por PRODUCTO Y
+            # ALMACÉN — agruparla solo por producto es lo que mezclaba bodegas.
             stock_wms_rows = (
                 db.session.query(
                     UbicacionProducto.producto_id,
+                    Ubicacion.almacen_id,
                     func.sum(UbicacionProducto.cantidad).label('total')
                 )
-                .group_by(UbicacionProducto.producto_id)
+                .join(Ubicacion, Ubicacion.id == UbicacionProducto.ubicacion_id)
+                .group_by(UbicacionProducto.producto_id, Ubicacion.almacen_id)
                 .all()
             )
-            stock_wms = {row.producto_id: int(row.total) for row in stock_wms_rows}
-            productos_ids = set(stock_wms.keys())
+            stock_wms_por_almacen: dict = {}
+            for row in stock_wms_rows:
+                stock_wms_por_almacen.setdefault(row.almacen_id, {})[row.producto_id] = int(row.total)
 
-            # Guard: si el WMS no tiene ningún producto mapeado, la carga inicial
-            # no se ha ejecutado — la reconciliación no tiene sentido y generaría
-            # miles de devoluciones falsas (todo Siesa aparecería como SIESA_MAYOR).
-            if not stock_wms:
-                _estado_reconciliacion['ultimo_resultado'] = {
+            # Guard: si ningún almacén con bodega_siesa_id tiene producto mapeado,
+            # la carga inicial no se ha ejecutado — la reconciliación no tiene
+            # sentido y generaría miles de discrepancias falsas (todo Siesa
+            # aparecería como SIESA_MAYOR).
+            tiene_stock_mapeado = any(
+                stock_wms_por_almacen.get(almacen_id) for almacen_id in almacen_por_bodega.values()
+            )
+            if not tiene_stock_mapeado:
+                resultado = {
                     'timestamp': datetime.utcnow().isoformat(),
                     'abortado': True,
                     'motivo': 'WMS sin stock mapeado — ejecuta la Carga Inicial primero',
                     'total_discrepancias': 0,
                     'discrepancias': [],
                 }
+                _estado_reconciliacion['ultimo_resultado'] = resultado
                 _estado_reconciliacion['en_curso'] = False
+                _reg.cerrar_ok(_reg_id, resultado)
                 logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
                 return
 
@@ -923,75 +974,90 @@ def _run_reconciliacion(app):
             # bloqueando requests concurrentes en un pool pequeño (Railway: 5-10 conexiones).
             db.session.commit()
 
-            # forzar=True: descarga datos frescos de Siesa ignorando el cache de la carga inicial.
-            # Sin esto, si la carga inicial corrió hace <1h, la reconciliación compararía
-            # el WMS (ya actualizado) contra los mismos datos Siesa → falsos negativos Y
-            # si el WMS tiene picks intermedios → TareaDevolucion falsas.
-            inventario_siesa = _descargar_inventario_siesa(forzar=True)
-
-            codigos_siesa = list(inventario_siesa.keys())
-            prods_siesa = (
-                Producto.query
-                .filter(
-                    db.or_(
-                        Producto.codigo_siesa.in_(codigos_siesa),
-                        Producto.codigo.in_(codigos_siesa)
-                    )
-                )
-                .all()
-            )
-            mapa_codigo = {}
-            for p in prods_siesa:
-                if p.codigo_siesa:
-                    mapa_codigo[p.codigo_siesa] = p
-                mapa_codigo[p.codigo] = p
+            # forzar=True: descarga datos frescos de Siesa ignorando el cache.
+            # Multibodega: una sola descarga trae las 9 bodegas PV a la vez —
+            # necesaria para poder comparar cada una contra su propio almacén.
+            inventario_multibodega = _descargar_inventario_siesa_raw(forzar=True)
 
             discrepancias = []
+            total_productos_siesa = 0
+            total_productos_wms_con_stock = 0
 
-            for codigo, datos in inventario_siesa.items():
-                existencia_siesa = int(round(datos['existencia']))
-                prod = mapa_codigo.get(codigo)
-                if not prod:
-                    continue
-                total_wms = stock_wms.get(prod.id, 0)
-                diferencia = total_wms - existencia_siesa
-                if diferencia != 0:
+            for bodega, almacen_id in sorted(almacen_por_bodega.items()):
+                inventario_bodega = inventario_multibodega.get(bodega, {})
+                stock_wms_almacen = stock_wms_por_almacen.get(almacen_id, {})
+                if not inventario_bodega and not stock_wms_almacen:
+                    continue  # nada que comparar en ninguno de los dos lados
+                total_productos_siesa += len(inventario_bodega)
+                total_productos_wms_con_stock += len(stock_wms_almacen)
+
+                codigos_siesa = list(inventario_bodega.keys())
+                prods_siesa = (
+                    Producto.query
+                    .filter(
+                        db.or_(
+                            Producto.codigo_siesa.in_(codigos_siesa),
+                            Producto.codigo.in_(codigos_siesa)
+                        )
+                    )
+                    .all()
+                )
+                mapa_codigo = {}
+                for p in prods_siesa:
+                    if p.codigo_siesa:
+                        mapa_codigo[p.codigo_siesa] = p
+                    mapa_codigo[p.codigo] = p
+
+                productos_ids_wms = set(stock_wms_almacen.keys())
+
+                for codigo, datos in inventario_bodega.items():
+                    existencia_siesa = int(round(datos['existencia']))
+                    prod = mapa_codigo.get(codigo)
+                    if not prod:
+                        continue
+                    total_wms = stock_wms_almacen.get(prod.id, 0)
+                    diferencia = total_wms - existencia_siesa
+                    if diferencia != 0:
+                        discrepancias.append({
+                            'bodega': bodega,
+                            'almacen_id': almacen_id,
+                            'producto_id': prod.id,
+                            'codigo': prod.codigo,
+                            'nombre': prod.nombre,
+                            'stock_wms': total_wms,
+                            'stock_siesa': existencia_siesa,
+                            'diferencia': diferencia,
+                            'diferencia_abs': abs(diferencia),
+                            'estado': 'WMS_MAYOR' if diferencia > 0 else 'SIESA_MAYOR'
+                        })
+                    productos_ids_wms.discard(prod.id)
+
+                # [53] Pre-cargar productos SOLO_WMS en dict antes del loop (evita N+1)
+                solo_wms_ids = [pid for pid in productos_ids_wms if stock_wms_almacen.get(pid, 0) > 0]
+                solo_wms_prods = {
+                    p.id: p
+                    for p in Producto.query.filter(Producto.id.in_(solo_wms_ids)).all()
+                } if solo_wms_ids else {}
+
+                for prod_id in productos_ids_wms:
+                    total_wms = stock_wms_almacen.get(prod_id, 0)
+                    if total_wms == 0:
+                        continue
+                    prod = solo_wms_prods.get(prod_id)
+                    if not prod:
+                        continue
                     discrepancias.append({
-                        'producto_id': prod.id,
+                        'bodega': bodega,
+                        'almacen_id': almacen_id,
+                        'producto_id': prod_id,
                         'codigo': prod.codigo,
                         'nombre': prod.nombre,
                         'stock_wms': total_wms,
-                        'stock_siesa': existencia_siesa,
-                        'diferencia': diferencia,
-                        'diferencia_abs': abs(diferencia),
-                        'estado': 'WMS_MAYOR' if diferencia > 0 else 'SIESA_MAYOR'
+                        'stock_siesa': 0,
+                        'diferencia': total_wms,
+                        'diferencia_abs': total_wms,
+                        'estado': 'SOLO_WMS'
                     })
-                productos_ids.discard(prod.id)
-
-            # [53] Pre-cargar productos SOLO_WMS en dict antes del loop (evita N+1)
-            solo_wms_ids = [pid for pid in productos_ids if stock_wms.get(pid, 0) > 0]
-            solo_wms_prods = {
-                p.id: p
-                for p in Producto.query.filter(Producto.id.in_(solo_wms_ids)).all()
-            } if solo_wms_ids else {}
-
-            for prod_id in productos_ids:
-                total_wms = stock_wms.get(prod_id, 0)
-                if total_wms == 0:
-                    continue
-                prod = solo_wms_prods.get(prod_id)
-                if not prod:
-                    continue
-                discrepancias.append({
-                    'producto_id': prod_id,
-                    'codigo': prod.codigo,
-                    'nombre': prod.nombre,
-                    'stock_wms': total_wms,
-                    'stock_siesa': 0,
-                    'diferencia': total_wms,
-                    'diferencia_abs': total_wms,
-                    'estado': 'SOLO_WMS'
-                })
 
             discrepancias.sort(key=lambda x: x['diferencia_abs'], reverse=True)
 
@@ -1001,9 +1067,9 @@ def _run_reconciliacion(app):
             # Solo si WMS tiene cobertura suficiente: >= 20% de los productos de Siesa.
             # Si la cobertura es baja, la reconciliación es informativa únicamente —
             # no creamos devoluciones porque casi todo aparecería como SIESA_MAYOR.
-            productos_wms_con_stock = len(stock_wms)
-            productos_siesa = len(inventario_siesa)
-            cobertura_pct = (productos_wms_con_stock / productos_siesa * 100) if productos_siesa else 0
+            cobertura_pct = (
+                total_productos_wms_con_stock / total_productos_siesa * 100
+            ) if total_productos_siesa else 0
 
             # DEPRECATED (2026-07-28): antes se llamaba a
             # devolucion_service.crear_tareas_desde_discrepancias() para crear
@@ -1015,33 +1081,36 @@ def _run_reconciliacion(app):
             # quedan visibles en GET /api/siesa/reconciliacion-estado para que
             # alguien las procese manualmente si corresponde a una devolución real.
             siesa_mayor = [d for d in discrepancias if d.get('estado') == 'SIESA_MAYOR']
-            almacen = _get_almacen()
-            if almacen and cobertura_pct >= 20 and siesa_mayor:
+            if cobertura_pct >= 20 and siesa_mayor:
                 logger.warning(
                     f'[RECONCILIACION] {len(siesa_mayor)} discrepancia(s) SIESA_MAYOR — '
                     'informativo únicamente, no se crean tareas (módulo de devolución ciega desactivado)'
                 )
-            elif almacen:
+            else:
                 logger.warning(
                     f'[RECONCILIACION] Cobertura WMS={cobertura_pct:.1f}% (<20%) — informativo únicamente'
                 )
 
-            _estado_reconciliacion['ultimo_resultado'] = {
+            resultado = {
                 'timestamp': ts,
-                'total_productos_siesa': productos_siesa,
-                'total_productos_wms': productos_wms_con_stock,
+                'bodegas_comparadas': sorted(almacen_por_bodega.keys()),
+                'total_productos_siesa': total_productos_siesa,
+                'total_productos_wms': total_productos_wms_con_stock,
                 'cobertura_pct': round(cobertura_pct, 1),
                 'devoluciones_activas': cobertura_pct >= 20,
                 'total_discrepancias': len(discrepancias),
                 'discrepancias': discrepancias[:100]
             }
+            _estado_reconciliacion['ultimo_resultado'] = resultado
             _estado_reconciliacion['ultimo_error'] = None
+            _reg.cerrar_ok(_reg_id, resultado)
 
         except Exception as e:
             logger.error('[RECONCILIACION] Error fatal — discrepancias SIESA_MAYOR sin procesar', exc_info=True)
             db.session.rollback()
             _estado_reconciliacion['ultimo_error'] = str(e)
             _estado_reconciliacion['ultimo_resultado'] = None
+            _reg.cerrar_error(_reg_id, e)
             try:
                 from app.services.alertas_service import enviar_email, _config_resend
                 if _config_resend():
@@ -1089,12 +1158,52 @@ def iniciar_reconciliacion(app):
     return {'iniciado': True, 'mensaje': 'Reconciliación iniciada — refresca en ~2 min'}
 
 
-def estado_reconciliacion():
+def _estado_reconciliacion_memoria():
     return {
         'en_curso': _estado_reconciliacion['en_curso'],
         'ultimo_inicio': _estado_reconciliacion['ultimo_inicio'].isoformat() if _estado_reconciliacion['ultimo_inicio'] else None,
         'ultimo_resultado': _estado_reconciliacion['ultimo_resultado'],
         'ultimo_error': _estado_reconciliacion['ultimo_error'],
+    }
+
+
+def estado_reconciliacion():
+    """Estado de la reconciliación — manda `registros_sync`, no la memoria.
+
+    `_estado_reconciliacion` es del PROCESO que lo atiende. Con 2 workers
+    Gunicorn (`--workers=2`, ver railway.toml), el POST que arranca la
+    reconciliación puede caer en un worker y este GET en el otro, que nunca
+    la vio correr — antes eso devolvía `ultimo_resultado: null` aunque el
+    reporte existiera, y el reporte es la única salida de esta función: a
+    diferencia de la carga inicial o el sync de catálogo, no queda respaldado
+    en ninguna otra tabla si se pierde acá. `registro_sync_service` sobrevive
+    tanto al worker equivocado como a un reinicio de Railway a mitad de la
+    corrida (ver app/models/registro_sync.py).
+    """
+    from app.services import registro_sync_service as _reg
+    persistido = _reg.ultimo('reconciliacion')
+
+    if persistido and '_error_lectura' in persistido:
+        memoria = _estado_reconciliacion_memoria()
+        memoria['ultimo_error'] = (
+            f"No se pudo leer el historial persistido ({persistido['_error_lectura']}) "
+            f"— mostrando solo lo que sabe este proceso"
+        )
+        return memoria
+
+    if persistido is None:
+        # Ninguna reconciliación ha llegado a abrir su fila todavía en NINGÚN
+        # proceso — cubre la ventana entre el POST y el primer commit del
+        # hilo, donde la tabla legítimamente no tiene nada que decir.
+        return _estado_reconciliacion_memoria()
+
+    return {
+        # `fin is None` en la fila más reciente == sigue corriendo, en este
+        # worker o en cualquier otro — la tabla no distingue por worker.
+        'en_curso': persistido['fin'] is None,
+        'ultimo_inicio': persistido['inicio'],
+        'ultimo_resultado': persistido['resultado'] if persistido['ok'] else None,
+        'ultimo_error': persistido['error'] if persistido['ok'] is False else None,
     }
 
 
