@@ -199,9 +199,12 @@ class DashboardService:
         operario_ids = [o.id for o in operarios]
 
         # [28] Consolidar los 4 COUNT queries por operario en queries batch con GROUP BY
-        # (acá había un `hoy = utcnow().date()` que nadie usaba: el filtro es
-        #  `fecha_inicio`. Se quitó — una variable muerta con un bug adentro
-        #  invita a copiarla al próximo sitio.)
+        # `hoy`/`inicio_hoy` SÍ se usan — en `conteos_hoy_por_op` más abajo.
+        # (Un intento anterior de "limpieza" los quitó por parecer muertos y
+        # rompió este endpoint en producción: NameError en cada llamada.)
+        from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+        hoy = dia_operativo()
+        inicio_hoy = inicio_del_dia_utc(hoy)
 
         pickings_por_op = {
             row.operario_id: row.cnt
@@ -246,7 +249,7 @@ class DashboardService:
                 func.count(SesionConteo.id).label('cnt')
             ).filter(
                 SesionConteo.operario_id.in_(operario_ids),
-                db.func.date(SesionConteo.fecha_inicio) == hoy
+                SesionConteo.fecha_inicio >= inicio_hoy
             ).group_by(SesionConteo.operario_id).all()
         }
 
