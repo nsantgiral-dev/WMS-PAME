@@ -578,6 +578,154 @@ Compras debe ordenar o trasladar mercancía para estos SKUs.
     _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'stock_critico')
 
 
+# ── Stock agotado a nivel de referencia (macro) ───────────────────────────────
+
+def verificar_y_alertar_stock_macro(app=None):
+    """
+    Cron diario a las 06:20 Bogotá.
+
+    Complementa a verificar_y_alertar_stock_critico() sin reemplazarla: esa
+    mira un hueco de PICKING puntual y si hay LPN en RESERVA para reponerlo
+    — es información que solo existe si alguien configuró `stock_minimo` en
+    ESE hueco. Esta mira la referencia completa: la suma de TODAS las
+    ubicaciones del almacén (picking + reserva + general), sin importar si
+    hay o no un hueco configurado — así una referencia que se agota sin
+    tener todavía layout físico también genera alarma.
+
+    Reutiliza DashboardService.alertas_stock() — la misma cuenta que ya
+    pinta la pestaña Stock del dashboard — para que el correo y la pantalla
+    nunca digan cosas distintas (Regla 0, una política una función). Antes
+    esa cuenta existía pero era puramente pasiva: alguien tenía que abrir el
+    dashboard para verla. `Producto.stock_minimo` sigue siendo un campo que
+    hay que configurar por referencia — sin eso configurado, ninguna
+    referencia entra en la comparación (mismo límite que ya tiene el
+    dashboard, no uno nuevo).
+    """
+    from flask import current_app as _app
+    ctx_app = app or _app._get_current_object()
+
+    with ctx_app.app_context():
+        from app.extensions import db as _db
+        _lock = _db.session.execute(_db.text('SELECT pg_try_advisory_lock(2016)')).scalar()
+        if not _lock:
+            logger.info('[ALERTAS] verificar_y_alertar_stock_macro omitida — otro worker ya la ejecuta')
+            return
+        try:
+            from app.models.almacen import Almacen
+            from app.services.dashboard_service import DashboardService
+
+            criticos = []
+            for almacen in Almacen.query.filter_by(activo=True).all():
+                resultado = DashboardService.alertas_stock(almacen.id)
+                for a in resultado.get('alertas', []):
+                    criticos.append({
+                        'almacen': almacen.codigo,
+                        'producto_codigo': a['codigo'],
+                        'producto_nombre': a['nombre'],
+                        'stock_actual': a['stock_actual'],
+                        'stock_minimo': a['stock_minimo'],
+                        'urgencia': a['urgencia'],
+                    })
+
+            if not criticos:
+                logger.info('[ALERTAS] Sin referencias agotadas/bajas a nivel general — no se envía email.')
+                return
+
+            logger.warning(f'[ALERTAS] {len(criticos)} referencia(s) agotada(s)/baja(s) a nivel general.')
+            _enviar_alerta_stock_macro(criticos)
+
+        except Exception as e:
+            logger.error(f'[ALERTAS] Error en verificar_y_alertar_stock_macro: {e}', exc_info=True)
+            try:
+                _enviar_email_con_dlq(
+                    '[WMS] Scheduler stock_macro falló',
+                    f'<p><b>Error:</b> {str(e)[:400]}</p>',
+                    f'Error: {str(e)[:400]}',
+                    'alertas_scheduler_stock_macro_fallo',
+                )
+            except Exception:
+                pass
+        finally:
+            try:
+                _db.session.rollback()
+                _db.session.execute(_db.text('SELECT pg_advisory_unlock(2016)'))
+                _db.session.commit()
+            except Exception as _fe:
+                logger.error(f'[ALERTAS] Error liberando advisory lock 2016: {_fe}')
+
+
+def _enviar_alerta_stock_macro(criticos: list):
+    n = len(criticos)
+    n_agotados = sum(1 for c in criticos if c['urgencia'] == 'CRITICO')
+    hoy = datetime.now().strftime('%d/%m/%Y %H:%M')
+    asunto = f'🛒 WMS — {n} referencia{"s" if n > 1 else ""} para gestionar con Compras'
+
+    filas_txt = '\n'.join(
+        f'  • [{c["urgencia"]}] {c["almacen"]} | {c["producto_codigo"]} {c["producto_nombre"]} '
+        f'— stock {c["stock_actual"]} / mín {c["stock_minimo"]}'
+        for c in criticos
+    )
+    cuerpo_texto = f"""WMS Papelería Medellín — Stock Agotado/Bajo a Nivel General
+Fecha: {hoy}
+
+{n} referencia(s) tienen el inventario TOTAL del almacén (picking + reserva +
+general) agotado o por debajo del mínimo configurado. {n_agotados} de ellas
+están completamente agotadas.
+
+REFERENCIAS AFECTADAS:
+{filas_txt}
+
+ACCIÓN REQUERIDA:
+Compras debe evaluar orden de compra para estas referencias.
+"""
+    filas_html = ''.join(f"""
+      <tr>
+        <td style="padding:10px 14px;font-size:11px;font-weight:700;color:{'#f87171' if c['urgencia']=='CRITICO' else '#fbbf24'};">{c['urgencia']}</td>
+        <td style="padding:10px 14px;font-family:monospace;font-size:12px;color:#60a5fa;">{c['almacen']}</td>
+        <td style="padding:10px 14px;font-size:12px;color:#60a5fa;">{c['producto_codigo']}</td>
+        <td style="padding:10px 14px;font-size:13px;color:#d1d5db;">{c['producto_nombre'][:40]}</td>
+        <td style="padding:10px 14px;text-align:center;font-weight:700;color:#f87171;">{c['stock_actual']}</td>
+        <td style="padding:10px 14px;text-align:center;color:#6b7280;">{c['stock_minimo']}</td>
+      </tr>""" for c in criticos)
+
+    cuerpo_html = f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#0f0f0f;font-family:system-ui,sans-serif;">
+  <div style="max-width:680px;margin:0 auto;padding:24px 16px;">
+    <div style="background:#1c1c1c;border:1px solid #333;border-radius:12px;
+                padding:20px 24px;margin-bottom:16px;border-left:4px solid #f59e0b;">
+      <div style="font-size:11px;font-weight:700;color:#f59e0b;text-transform:uppercase;
+                  letter-spacing:0.08em;margin-bottom:6px;">WMS Papelería Medellín · {hoy}</div>
+      <div style="font-size:22px;font-weight:800;color:#fff;margin-bottom:8px;">
+        🛒 {n} referencia{"s" if n > 1 else ""} para gestionar con Compras
+      </div>
+      <div style="font-size:14px;color:#9ca3af;">
+        Inventario <strong style="color:#ef4444;">total del almacén</strong> agotado o bajo mínimo —
+        no es un hueco puntual, es la referencia completa.
+      </div>
+    </div>
+    <div style="background:#1c1c1c;border:1px solid #333;border-radius:12px;overflow:hidden;margin-bottom:16px;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead><tr style="background:#111;">
+          <th style="padding:10px 14px;text-align:left;font-size:11px;color:#6b7280;">Urgencia</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;color:#6b7280;">Almacén</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;color:#6b7280;">Código</th>
+          <th style="padding:10px 14px;text-align:left;font-size:11px;color:#6b7280;">Producto</th>
+          <th style="padding:10px 14px;text-align:center;font-size:11px;color:#6b7280;">Stock</th>
+          <th style="padding:10px 14px;text-align:center;font-size:11px;color:#6b7280;">Mín</th>
+        </tr></thead>
+        <tbody>{filas_html}</tbody>
+      </table>
+    </div>
+    <div style="text-align:center;font-size:11px;color:#4b5563;padding:8px;">
+      WMS Papelería Medellín · Alerta automática · {hoy}
+    </div>
+  </div>
+</body></html>"""
+
+    _enviar_email_con_dlq(asunto, cuerpo_html, cuerpo_texto, 'stock_macro')
+
+
 # ── Resumen operativo diario ──────────────────────────────────────────────────
 
 def enviar_resumen_diario(app=None):
@@ -810,7 +958,8 @@ def init_scheduler(app):
     """
     Crons diarios:
       05:45 → alerta ubicaciones huérfanas
-      06:15 → alerta stock crítico sin reserva
+      06:15 → alerta stock crítico sin reserva (micro — un hueco puntual)
+      06:20 → alerta stock agotado/bajo a nivel de referencia (macro — el almacén completo)
       06:30 → alerta rutas entregadas sin liquidar
       06:45 → resumen operativo diario
     """
@@ -842,6 +991,14 @@ def init_scheduler(app):
         replace_existing=True, max_instances=1, misfire_grace_time=600,
     )
     scheduler.add_job(
+        func=verificar_y_alertar_stock_macro,
+        trigger=CronTrigger(hour=6, minute=20, timezone='America/Bogota'),
+        kwargs={'app': app},
+        id='alertas_stock_macro',
+        name='Alerta email stock agotado/bajo a nivel de referencia (06:20 Bogotá)',
+        replace_existing=True, max_instances=1, misfire_grace_time=600,
+    )
+    scheduler.add_job(
         func=verificar_y_alertar_rutas_sin_liquidar,
         trigger=CronTrigger(hour=6, minute=30, timezone='America/Bogota'),
         kwargs={'app': app},
@@ -862,7 +1019,7 @@ def init_scheduler(app):
     import atexit
     atexit.register(lambda: scheduler.shutdown(wait=False))
     logger.info('[ALERTAS] Scheduler iniciado — 05:45 huérfanas | 06:15 stock crítico | '
-                '06:30 rutas sin liquidar | 06:45 resumen')
+                '06:20 stock macro | 06:30 rutas sin liquidar | 06:45 resumen')
     return scheduler
 
 

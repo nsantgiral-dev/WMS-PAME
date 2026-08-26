@@ -432,7 +432,7 @@ def _barrido_stock_picking(app):
             # Advisory lock — evita que el barrido programado choque con un
             # "Verificar stock ahora" manual corriendo al mismo tiempo.
             lock = db.session.execute(
-                db.text('SELECT pg_try_advisory_lock(2011)')
+                db.text('SELECT pg_try_advisory_lock(2015)')
             ).scalar()
             if not lock:
                 logger.info('[REPOSICION_SCHEDULER] Lock no disponible — omitiendo ejecución concurrente')
@@ -444,7 +444,7 @@ def _barrido_stock_picking(app):
             logger.error(f'[REPOSICION_SCHEDULER] Error en barrido periódico: {e}')
         finally:
             try:
-                db.session.execute(db.text('SELECT pg_advisory_unlock(2011)'))
+                db.session.execute(db.text('SELECT pg_advisory_unlock(2015)'))
             except Exception:
                 pass
 
