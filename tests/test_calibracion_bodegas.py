@@ -83,6 +83,29 @@ class TestEstadoCargaAisladoPorBodega:
         assert inv_service.estado_carga_inventario('NC1')['ultimo_resultado'] is None
 
 
+class TestSiesaGeneralPorAlmacenNoGlobal:
+    """m016: `ubicaciones.codigo` era único GLOBAL — descubierto en vivo al
+    calibrar NS1 (2026-08-27): crear su propio SIESA-GENERAL chocó con el de
+    NB1 (`UniqueViolation: ubicaciones_codigo_key`). Nunca se notó porque
+    hasta entonces SIESA-GENERAL solo se creaba para NB1."""
+
+    def test_dos_almacenes_pueden_tener_siesa_general(self, db):
+        from app.models.ubicacion import Ubicacion
+
+        nb1 = Almacen(codigo='NB1', nombre='NB1', bodega_siesa_id='NB1', activo=True)
+        ns1 = Almacen(codigo='NS1', nombre='NS1', bodega_siesa_id='NS1', activo=True)
+        db.session.add_all([nb1, ns1])
+        db.session.commit()
+
+        ub_nb1 = inv_service._get_o_crear_ubicacion_general(nb1.id)
+        ub_ns1 = inv_service._get_o_crear_ubicacion_general(ns1.id)
+        db.session.commit()
+
+        assert ub_nb1.codigo == ub_ns1.codigo == Ubicacion.CODIGO_GENERAL
+        assert ub_nb1.almacen_id != ub_ns1.almacen_id
+        assert ub_nb1.id != ub_ns1.id
+
+
 class TestOperacionesActivasEsPorAlmacenNoGlobal:
     """`TareaPicking.almacen_id` es un campo propio (no derivado de la
     ubicación) — cubre que el guard compartido lo use directamente y no

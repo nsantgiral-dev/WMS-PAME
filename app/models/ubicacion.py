@@ -20,7 +20,10 @@ class Ubicacion(db.Model):
     ZONAS_SLOT_UNICO = ('PICKING', 'IMPORTADOS')
 
     id = db.Column(db.Integer, primary_key=True)
-    codigo = db.Column(db.String(50), unique=True, nullable=False)
+    # Único DENTRO de un almacén, no en todo el WMS (m016) — SIESA-GENERAL es
+    # un bucket genérico que cada almacén necesita poder tener con el mismo
+    # código sin chocar con el de otro.
+    codigo = db.Column(db.String(50), nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
     zona = db.Column(db.String(50))
     pasillo = db.Column(db.String(10))
@@ -81,6 +84,10 @@ class Ubicacion(db.Model):
         # inservible el único detector que atrapa una columna sin
         # migración (lo de `puede_usar_camara`, 2026-08-20).
         db.Index('ix_ubicaciones_producto_asignado', 'producto_asignado_id'),
+        # m016 (2026-08-27): antes `codigo` era único GLOBAL — bloqueaba que
+        # dos almacenes tuvieran cada uno su propio SIESA-GENERAL. El
+        # invariante real siempre fue "único dentro del almacén".
+        db.UniqueConstraint('almacen_id', 'codigo', name='uq_ubicacion_almacen_codigo'),
     )
 
     def to_dict(self):

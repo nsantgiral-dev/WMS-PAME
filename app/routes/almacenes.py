@@ -120,8 +120,8 @@ def crear_ubicacion(id):
     if not data or not data.get('codigo'):
         return jsonify({'error': 'Codigo requerido'}), 400
 
-    if Ubicacion.query.filter_by(codigo=data['codigo']).first():
-        return jsonify({'error': 'El codigo ya existe'}), 409
+    if Ubicacion.query.filter_by(codigo=data['codigo'], almacen_id=almacen.id).first():
+        return jsonify({'error': 'El codigo ya existe en este almacén'}), 409
 
     tipo_zona = data.get('tipo_zona')
     if tipo_zona is not None and tipo_zona not in (*layout_service.ZONAS_VALIDAS, 'GENERAL'):
