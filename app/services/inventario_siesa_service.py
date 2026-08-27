@@ -562,6 +562,18 @@ def _descargar_inventario_siesa(forzar=False, bodega: str = None, almacen_id: in
 _ADVISORY_LOCK_INV_SIESA = 2002  # clave única para pg_advisory_lock
 
 
+def _tipo_registro_stock(bod: str) -> str:
+    """Tipo de `registro_sync` para la carga física de una bodega.
+
+    'stock' a secas es la bodega default (NB1/connekta.bodega) — histórico,
+    no se toca para no invalidar filas ya escritas ni el `estado_persistido
+    ('stock', ...)` que ya usa `estado_setup_inicial()`. Cada bodega
+    adicional de la Fase 1 tiene su propio tipo en `RegistroSync.TIPOS`."""
+    if bod == connekta.bodega:
+        return 'stock'
+    return f'stock_{bod.lower()}'
+
+
 def _run_carga_inicial(app, bodega: str = None):
     """Lógica real de la carga inicial — corre en hilo de fondo.
 
@@ -586,7 +598,7 @@ def _run_carga_inicial(app, bodega: str = None):
         # UNA vez, y correrla dos veces duplica el inventario de arranque. Hasta
         # hoy la única defensa era la memoria de quien la ejecutó.
         from app.services import registro_sync_service as _reg
-        _reg_id = _reg.abrir('stock')
+        _reg_id = _reg.abrir(_tipo_registro_stock(bod))
 
         # Advisory lock de PostgreSQL — protege contra carga simultánea entre workers
         # Gunicorn. Es una sola clave global a propósito: además de proteger contra
@@ -1021,8 +1033,7 @@ def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
     return {'iniciado': True, 'bodega': bod, 'mensaje': f'Carga de inventario de {bod} iniciada — refresca en ~60 seg'}
 
 
-def estado_carga_inventario(bodega: str = None):
-    bod = bodega or connekta.bodega
+def _estado_carga_memoria(bod: str) -> dict:
     estado = _estado_carga_bodega(bod)
     return {
         'bodega': bod,
@@ -1030,6 +1041,49 @@ def estado_carga_inventario(bodega: str = None):
         'ultimo_inicio': estado['ultimo_inicio'].isoformat() if estado['ultimo_inicio'] else None,
         'ultimo_resultado': estado['ultimo_resultado'],
         'ultimo_error': estado['ultimo_error'],
+    }
+
+
+def estado_carga_inventario(bodega: str = None):
+    """Estado de la carga física — leído de `registros_sync`, no de memoria.
+
+    Con 2+ workers Gunicorn, el POST que arranca la carga puede caer en un
+    worker y este GET en otro que nunca la vio correr — el mismo problema
+    que ya tenía `estado_reconciliacion()` (ver su docstring), pero acá más
+    engañoso: `_estado_carga_bodega()` CREA la entrada en memoria con sus
+    valores por defecto la primera vez que se le pregunta por una bodega, así
+    que un worker que nunca corrió nada respondía `en_curso: false` con toda
+    naturalidad — no un hueco visible, un falso "no está corriendo" mientras
+    otro worker sí la tenía en curso. Se detectó en vivo el 2026-08-27
+    calibrando NS1: el polling contra este endpoint decía terminado a los
+    pocos segundos; la fila real en `registros_sync` seguía abierta 9 min.
+    """
+    bod = bodega or connekta.bodega
+    from app.services import registro_sync_service as _reg
+    persistido = _reg.ultimo(_tipo_registro_stock(bod))
+
+    if persistido and '_error_lectura' in persistido:
+        memoria = _estado_carga_memoria(bod)
+        memoria['ultimo_error'] = (
+            f"No se pudo leer el historial persistido ({persistido['_error_lectura']}) "
+            f"— mostrando solo lo que sabe este proceso"
+        )
+        return memoria
+
+    if persistido is None:
+        # Ninguna corrida ha llegado a abrir su fila todavía en NINGÚN
+        # proceso — cubre la ventana entre el POST y el primer commit del
+        # hilo, donde la tabla legítimamente no tiene nada que decir.
+        return _estado_carga_memoria(bod)
+
+    return {
+        'bodega': bod,
+        # `fin is None` en la fila más reciente == sigue corriendo, en este
+        # worker o en cualquier otro — la tabla no distingue por worker.
+        'en_curso': persistido['fin'] is None,
+        'ultimo_inicio': persistido['inicio'],
+        'ultimo_resultado': persistido['resultado'] if persistido['ok'] else None,
+        'ultimo_error': persistido['error'] if persistido['ok'] is False else None,
     }
 
 

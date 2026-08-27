@@ -71,7 +71,9 @@ class TestEstadoCargaAisladoPorBodega:
         assert e_nc1['en_curso'] is False
         assert e_nc1['ultimo_error'] is None
 
-    def test_estado_carga_inventario_expone_bodega_correcta(self):
+    def test_estado_carga_inventario_sin_nada_persistido_cae_a_memoria(self, db):
+        # Sin ninguna fila en registros_sync (tabla recién truncada), debe
+        # caer al fallback en memoria en vez de reventar.
         inv_service._estado_carga.clear()
         inv_service._estado_carga_bodega('NS1')['ultimo_resultado'] = {'cargados': 7}
 
@@ -81,6 +83,61 @@ class TestEstadoCargaAisladoPorBodega:
         }
         # NC1 no se contaminó con el resultado de NS1
         assert inv_service.estado_carga_inventario('NC1')['ultimo_resultado'] is None
+
+
+class TestEstadoCargaLeeDeRegistroSyncNoDeMemoria:
+    """Bug real detectado en vivo (2026-08-27) calibrando NS1: con 2+ workers
+    Gunicorn, `_estado_carga_bodega()` crea la entrada en memoria con sus
+    valores por defecto la primera vez que un worker la consulta — así que
+    un worker que NUNCA corrió la carga respondía `en_curso: false` con toda
+    naturalidad, aunque otro worker la tuviera en curso de verdad. El polling
+    contra el endpoint decía terminado a los pocos segundos; la fila real en
+    `registros_sync` siguió abierta 9 minutos más."""
+
+    def test_fila_abierta_en_bd_manda_aunque_la_memoria_diga_que_no(self, db):
+        from app.services import registro_sync_service as _reg
+        # Memoria de ESTE proceso: nunca oyó hablar de esta carga.
+        inv_service._estado_carga.clear()
+        # Otro "worker" abrió la corrida — solo existe en la tabla.
+        _reg.abrir('stock_ns1')
+
+        estado = inv_service.estado_carga_inventario('NS1')
+
+        assert estado['en_curso'] is True
+
+    def test_resultado_cerrado_en_bd_se_prefiere_sobre_memoria_vieja(self, db):
+        from app.services import registro_sync_service as _reg
+        inv_service._estado_carga.clear()
+        # Memoria vieja de ESTE proceso, de una corrida anterior — no debe
+        # ganarle a lo que la tabla dice que pasó de verdad.
+        inv_service._estado_carga_bodega('NC1')['ultimo_resultado'] = {'cargados': 999}
+
+        rid = _reg.abrir('stock_nc1')
+        _reg.cerrar_ok(rid, {'cargados': 6876, 'errores': 0})
+
+        estado = inv_service.estado_carga_inventario('NC1')
+
+        assert estado['en_curso'] is False
+        assert estado['ultimo_resultado'] == {'cargados': 6876, 'errores': 0}
+
+    def test_bodegas_distintas_no_se_mezclan_en_la_tabla(self, db):
+        from app.services import registro_sync_service as _reg
+        inv_service._estado_carga.clear()
+        rid = _reg.abrir('stock_ns1')
+        _reg.cerrar_ok(rid, {'bodega': 'NS1', 'cargados': 8324})
+
+        # NC1 nunca corrió — su tipo ('stock_nc1') no tiene ninguna fila,
+        # así que no debe heredar el resultado de NS1.
+        assert inv_service.estado_carga_inventario('NC1')['ultimo_resultado'] is None
+        assert inv_service.estado_carga_inventario('NS1')['ultimo_resultado'] == {
+            'bodega': 'NS1', 'cargados': 8324,
+        }
+
+    def test_tipo_registro_stock_default_es_el_historico_sin_sufijo(self):
+        from app.services.connekta_gateway import connekta
+        assert inv_service._tipo_registro_stock(connekta.bodega) == 'stock'
+        assert inv_service._tipo_registro_stock('NS1') == 'stock_ns1'
+        assert inv_service._tipo_registro_stock('NC1') == 'stock_nc1'
 
 
 class TestSiesaGeneralPorAlmacenNoGlobal:

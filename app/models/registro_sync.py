@@ -29,7 +29,14 @@ from app.extensions import db
 
 #: Los tipos que se registran. Lista cerrada a propósito: un tipo libre haría
 #: que un typo (`'catalogo '`) cree una serie paralela que nadie consulta.
-TIPOS = ('catalogo', 'barcodes', 'stock', 'setup_inicial', 'reconciliacion')
+#:
+#: `stock_ns1` / `stock_nc1` (2026-08-27, Fase 1 de calibración de tiendas):
+#: `stock` a secas sigue siendo la bodega default (NB1/connekta.bodega) —
+#: histórico, no se toca. Cada bodega adicional necesita su propio tipo
+#: porque `ultimo('stock')` devuelve una sola fila, la más reciente — sin
+#: separarlas, correr NS1 y luego NC1 el mismo cron haría que el estado de
+#: NC1 "tape" el de NS1 para cualquiera que consulte por bodega.
+TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial', 'reconciliacion')
 
 
 class RegistroSync(db.Model):
