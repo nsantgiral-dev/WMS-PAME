@@ -19,6 +19,8 @@ completo (eso ya lo cubre — indirectamente — la operación diaria de NB1;
 mockearlo de punta a punta para NS1/NC1 solo probaría los mocks).
 """
 from app.models.almacen import Almacen
+from app.models.picking import TareaPicking
+from app.models.packing import TareaPacking
 from app.services import inventario_siesa_service as inv_service
 
 
@@ -79,6 +81,101 @@ class TestEstadoCargaAisladoPorBodega:
         }
         # NC1 no se contaminó con el resultado de NS1
         assert inv_service.estado_carga_inventario('NC1')['ultimo_resultado'] is None
+
+
+class TestOperacionesActivasEsPorAlmacenNoGlobal:
+    """`TareaPicking.almacen_id` es un campo propio (no derivado de la
+    ubicación) — cubre que el guard compartido lo use directamente y no
+    mire, por accidente, operaciones de OTRO almacén."""
+
+    def _almacen(self, db, bodega):
+        a = Almacen(codigo=bodega, nombre=bodega, bodega_siesa_id=bodega, activo=True)
+        db.session.add(a)
+        db.session.commit()
+        return a
+
+    def test_picking_activo_en_otro_almacen_no_cuenta(self, db, producto):
+        from app.models.ubicacion import Ubicacion
+        nb1 = self._almacen(db, 'NB1')
+        ns1 = self._almacen(db, 'NS1')
+        ub_nb1 = Ubicacion(codigo='UB-NB1', almacen_id=nb1.id)
+        db.session.add(ub_nb1)
+        db.session.commit()
+        db.session.add(TareaPicking(
+            codigo='PICK-NB1-1', producto_id=producto.id, cantidad_solicitada=5,
+            ubicacion_id=ub_nb1.id, almacen_id=nb1.id, estado='PENDIENTE',
+        ))
+        db.session.commit()
+
+        picks, packs = inv_service._operaciones_activas_en_almacen(ns1.id)
+        assert (picks, packs) == (0, 0)
+
+        picks_nb1, _ = inv_service._operaciones_activas_en_almacen(nb1.id)
+        assert picks_nb1 == 1
+
+    def test_packing_completado_no_cuenta_como_activo(self, db):
+        nb1 = self._almacen(db, 'NB1')
+        db.session.add(TareaPacking(
+            codigo='PACK-1', tipo_documento='TRASLADO', almacen_id=nb1.id, estado='CARGADO',
+        ))
+        db.session.commit()
+
+        picks, packs = inv_service._operaciones_activas_en_almacen(nb1.id)
+        assert (picks, packs) == (0, 0)
+
+
+class TestCargaFisicaDiariaEsSecuencialYAcotadaPorBodega:
+
+    def test_omite_solo_la_bodega_con_operaciones_activas(self, db, app, producto, monkeypatch):
+        from app.models.ubicacion import Ubicacion
+        ns1 = Almacen(codigo='NS1', nombre='NS1', bodega_siesa_id='NS1', activo=True)
+        nc1 = Almacen(codigo='NC1', nombre='NC1', bodega_siesa_id='NC1', activo=True)
+        db.session.add_all([ns1, nc1])
+        db.session.commit()
+        ub_ns1 = Ubicacion(codigo='UB-NS1', almacen_id=ns1.id)
+        db.session.add(ub_ns1)
+        db.session.commit()
+        db.session.add(TareaPicking(
+            codigo='PICK-NS1-1', producto_id=producto.id, cantidad_solicitada=1,
+            ubicacion_id=ub_ns1.id, almacen_id=ns1.id, estado='EN_PROCESO',
+        ))
+        db.session.commit()
+
+        monkeypatch.setattr(inv_service, '_BODEGAS_CALIBRACION_FISICA', ('NS1', 'NC1'))
+        llamadas = []
+        monkeypatch.setattr(inv_service, '_run_carga_inicial',
+                             lambda app, bodega=None: llamadas.append(bodega))
+
+        inv_service._ejecutar_carga_fisica_diaria(app)
+
+        # NS1 tiene picking activo -> se omite. NC1 no -> se carga.
+        assert llamadas == ['NC1']
+
+    def test_flag_apagada_no_llama_a_nadie(self, app, monkeypatch):
+        monkeypatch.setenv('CARGA_FISICA_AUTOMATICA', 'false')
+        monkeypatch.setattr(inv_service, '_BODEGAS_CALIBRACION_FISICA', ('NS1', 'NC1'))
+        llamadas = []
+        monkeypatch.setattr(inv_service, '_run_carga_inicial',
+                             lambda app, bodega=None: llamadas.append(bodega))
+
+        inv_service._ejecutar_carga_fisica_diaria(app)
+
+        assert llamadas == []
+
+    def test_bodega_sin_almacen_se_omite_y_sigue_con_las_demas(self, db, app, monkeypatch):
+        nc1 = Almacen(codigo='NC1', nombre='NC1', bodega_siesa_id='NC1', activo=True)
+        db.session.add(nc1)
+        db.session.commit()
+
+        monkeypatch.setattr(inv_service, '_BODEGAS_CALIBRACION_FISICA', ('NS1', 'NC1'))
+        llamadas = []
+        monkeypatch.setattr(inv_service, '_run_carga_inicial',
+                             lambda app, bodega=None: llamadas.append(bodega))
+
+        inv_service._ejecutar_carga_fisica_diaria(app)
+
+        # NS1 no tiene Almacen todavia (Fase 2) -> se omite sin tumbar el resto
+        assert llamadas == ['NC1']
 
 
 class TestRutaCargarInventarioLimitaBodegasHabilitadas:

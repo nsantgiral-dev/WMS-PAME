@@ -23,6 +23,7 @@ Dos operaciones:
 Regla de oro: funciona en producción con 5000+ productos y 200 pedidos/día.
 """
 import logging
+import os
 import threading
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
@@ -159,6 +160,9 @@ def iniciar_refresh_periodico(app):
         def _carga_y_reprogramar():
             logger.info('[INV-SIESA] === CARGA DIARIA 7AM INICIADA ===')
             _ejecutar_descarga()
+            # Stock Siesa (stock_siesa) primero — la carga física reutiliza
+            # esa descarga recién hecha en vez de pedirla de nuevo por bodega.
+            _ejecutar_carga_fisica_diaria(app)
             _programar_carga_diaria()
 
         t = threading.Timer(segundos, _carga_y_reprogramar)
@@ -633,17 +637,7 @@ def _run_carga_inicial(app, bodega: str = None):
             # tiene nada que ver con una carga a NS1, y viceversa.
             from app.models.picking import TareaPicking as _TareaPicking
             from app.models.packing import TareaPacking as _TareaPacking2
-            picks_activos = (
-                _TareaPicking.query
-                .join(Ubicacion, Ubicacion.id == _TareaPicking.ubicacion_id)
-                .filter(Ubicacion.almacen_id == almacen.id,
-                        _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO']))
-                .count()
-            )
-            packs_activos = _TareaPacking2.query.filter(
-                _TareaPacking2.almacen_id == almacen.id,
-                _TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
-            ).count()
+            picks_activos, packs_activos = _operaciones_activas_en_almacen(almacen.id)
             # Productos con operaciones activas — sus ubicaciones se excluirán del bulk zero
             _prod_ids_activos: set = set()
             if picks_activos or packs_activos:
@@ -653,13 +647,10 @@ def _run_carga_inicial(app, bodega: str = None):
                     f'Sus productos serán excluidos del bulk zero para proteger el stock reservado.'
                 )
                 # Recopilar product_ids activos para excluirlos del bulk zero
-                _picks_prods = (
-                    _TareaPicking.query
-                    .join(Ubicacion, Ubicacion.id == _TareaPicking.ubicacion_id)
-                    .filter(Ubicacion.almacen_id == almacen.id,
-                            _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO']))
-                    .with_entities(_TareaPicking.producto_id).all()
-                )
+                _picks_prods = _TareaPicking.query.filter(
+                    _TareaPicking.almacen_id == almacen.id,
+                    _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+                ).with_entities(_TareaPicking.producto_id).all()
                 _prod_ids_activos |= {r.producto_id for r in _picks_prods if r.producto_id}
                 from app.models.packing import ItemPacking as _ItemPacking
                 _pack_prods = (
@@ -960,6 +951,28 @@ def _run_carga_inicial(app, bodega: str = None):
         _reg.cerrar_ok(_reg_id, resultado)
 
 
+def _operaciones_activas_en_almacen(almacen_id: int) -> tuple:
+    """(picks_activos, packs_activos) en un almacén — una sola implementación,
+    compartida entre el guard interactivo (`iniciar_carga_inventario`) y el
+    guard del cron diario (`_ejecutar_carga_fisica_diaria`). Repetirla en dos
+    sitios es exactamente el patrón que ya costó caro con `_BODEGA_CO_MAP`
+    (ver CLAUDE.md, Regla 0).
+
+    `TareaPicking.almacen_id` es un campo propio (no derivado de la
+    ubicación) — es la fuente de verdad de qué almacén reservó la tarea."""
+    from app.models.picking import TareaPicking as _TP
+    from app.models.packing import TareaPacking as _TP2
+    picks_activos = _TP.query.filter(
+        _TP.almacen_id == almacen_id,
+        _TP.estado.in_(['PENDIENTE', 'EN_PROCESO'])
+    ).count()
+    packs_activos = _TP2.query.filter(
+        _TP2.almacen_id == almacen_id,
+        _TP2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
+    ).count()
+    return picks_activos, packs_activos
+
+
 def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
     """Arranca la carga inicial en background. Retorna estado inmediatamente.
 
@@ -986,19 +999,7 @@ def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
             almacen = _get_almacen(bod)
             if not almacen:
                 return {'abortado': True, 'mensaje': f'No hay almacén activo en WMS para la bodega {bod}'}
-            from app.models.picking import TareaPicking as _TP
-            from app.models.packing import TareaPacking as _TP2
-            picks_activos = (
-                _TP.query
-                .join(Ubicacion, Ubicacion.id == _TP.ubicacion_id)
-                .filter(Ubicacion.almacen_id == almacen.id,
-                        _TP.estado.in_(['PENDIENTE', 'EN_PROCESO']))
-                .count()
-            )
-            packs_activos = _TP2.query.filter(
-                _TP2.almacen_id == almacen.id,
-                _TP2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
-            ).count()
+            picks_activos, packs_activos = _operaciones_activas_en_almacen(almacen.id)
             if picks_activos or packs_activos:
                 return {
                     'abortado': True,
@@ -1030,6 +1031,58 @@ def estado_carga_inventario(bodega: str = None):
         'ultimo_resultado': estado['ultimo_resultado'],
         'ultimo_error': estado['ultimo_error'],
     }
+
+
+#: Bodegas con Almacen/Ubicacion provisionado y calibración física habilitada
+#: (2026-08-27). `None` = connekta.bodega (NB1, comportamiento de siempre).
+#: Hermana de `_BODEGAS_CALIBRACION_HABILITADAS` en routes/siesa.py (esa
+#: lista es el whitelist del endpoint manual, sin NB1 porque el endpoint ya
+#: lo cubre como default; esta es la del cron, con los tres). Repetir la
+#: lista en dos archivos es el patrón que CLAUDE.md tolera —a diferencia del
+#: mapa CO/bodega— siempre que quien la toque sepa que tiene una hermana.
+_BODEGAS_CALIBRACION_FISICA = (None, 'NS1', 'NC1')
+
+
+def _ejecutar_carga_fisica_diaria(app):
+    """Corre `_run_carga_inicial` para cada bodega calibrada, EN SECUENCIA.
+
+    Nunca en paralelo: las tres comparten el advisory lock de Postgres
+    (`_ADVISORY_LOCK_INV_SIESA`), así que lanzarlas a la vez solo lograría que
+    la 2da y 3ra lo encontraran ocupado y se saltaran sin reintentar — el
+    lock existe para serializar reintentos de una misma bodega, no para
+    poner en cola cargas de bodegas distintas.
+
+    Aborta SOLO la bodega con operaciones activas en su almacén, no el lote
+    completo — un packing en curso en NB1 a las 7am no tiene por qué frenar
+    la calibración de NS1/NC1.
+
+    Apagable con `CARGA_FISICA_AUTOMATICA=false` sin redeploy — nace
+    ENCENDIDA a propósito (decisión explícita del 2026-08-27 de habilitarla
+    para NB1/NS1/NC1, no el default conservador «nace apagado» que usan
+    features nuevas sin esa confirmación, ver FLOTA_AVISOS).
+    """
+    if os.getenv('CARGA_FISICA_AUTOMATICA', 'true').lower() != 'true':
+        logger.info('[INV-SIESA] Carga física diaria desactivada (CARGA_FISICA_AUTOMATICA=false)')
+        return
+
+    for bod in _BODEGAS_CALIBRACION_FISICA:
+        bod_real = bod or connekta.bodega
+        try:
+            with app.app_context():
+                almacen = _get_almacen(bod)
+                if not almacen:
+                    logger.warning('[INV-SIESA] Carga física diaria: sin almacén para %s — omitido', bod_real)
+                    continue
+                picks, packs = _operaciones_activas_en_almacen(almacen.id)
+                if picks or packs:
+                    logger.warning(
+                        '[INV-SIESA] Carga física diaria de %s omitida: %d picking(s)/%d packing(s) activos',
+                        bod_real, picks, packs,
+                    )
+                    continue
+            _run_carga_inicial(app, bodega=bod)
+        except Exception as exc:
+            logger.error('[INV-SIESA] Carga física diaria de %s falló: %s', bod_real, exc, exc_info=True)
 
 
 # ─────────────────────────────────────────────
