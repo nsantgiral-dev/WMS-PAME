@@ -39,26 +39,47 @@ logger = logging.getLogger(__name__)
 # (compartida con layout_service.py, que también necesita reconocer este bucket).
 _CODIGO_UBICACION_GENERAL = Ubicacion.CODIGO_GENERAL
 
-# Estado compartido del proceso en background
-_estado_carga = {
-    'en_curso': False,
-    'ultimo_inicio': None,
-    'ultimo_resultado': None,
-    'ultimo_error': None,
-    # [M19] Marca de sync completo: se actualiza DESPUÉS del bulk-zero y el commit final.
-    # Si Railway reinicia a mitad del loop, 'ultimo_sync_completo' queda en el valor anterior
-    # (o None) — el próximo sync detecta que el último no terminó y lo registra en log.
-    'ultimo_sync_completo': None,
-}
+# Estado compartido del proceso en background — UNA entrada por bodega.
+# Antes de la Fase 1 de calibración de tiendas (2026-08-27) era un solo dict
+# plano: correr la carga para dos bodegas se habría pisado entre sí (la
+# segunda sobreescribe 'en_curso'/'ultimo_resultado' de la primera antes de
+# que nadie los lea). `estado_carga_inventario()` sigue devolviendo el mismo
+# contrato plano de siempre para NB1 (bodega=None) — no rompe al monitor ni
+# al endpoint existente.
+_estado_carga: dict = {}
+
+
+def _estado_carga_bodega(bodega: str) -> dict:
+    return _estado_carga.setdefault(bodega, {
+        'en_curso': False,
+        'ultimo_inicio': None,
+        'ultimo_resultado': None,
+        'ultimo_error': None,
+        # [M19] Marca de sync completo: se actualiza DESPUÉS del bulk-zero y el commit final.
+        # Si Railway reinicia a mitad del loop, 'ultimo_sync_completo' queda en el valor anterior
+        # (o None) — el próximo sync detecta que el último no terminó y lo registra en log.
+        'ultimo_sync_completo': None,
+    })
 
 
 # ─────────────────────────────────────────────
 # Helpers internos
 # ─────────────────────────────────────────────
 
-def _get_almacen(app_context=True):
-    """Resuelve el almacén que corresponde a la bodega Connekta."""
-    almacen = Almacen.query.filter_by(codigo=connekta.bodega, activo=True).first()
+def _get_almacen(bodega_siesa_id: str = None):
+    """Resuelve el almacén que corresponde a una bodega Siesa.
+
+    Sin argumento, preserva el comportamiento histórico (bodega de
+    `connekta.bodega`, con fallback a "cualquier almacén activo" — válido
+    cuando solo existía un almacén en todo el WMS). Con una bodega explícita
+    (Fase 1: calibración de NS1/NC1) el fallback NO aplica: devolver el
+    almacén equivocado significaría escribir el stock de una tienda sobre
+    otra, y eso es peor que fallar declarando que no hay almacén (Regla 0).
+    """
+    if bodega_siesa_id:
+        return Almacen.query.filter_by(bodega_siesa_id=bodega_siesa_id, activo=True).first()
+
+    almacen = Almacen.query.filter_by(bodega_siesa_id=connekta.bodega, activo=True).first()
     if not almacen:
         almacen = Almacen.query.filter_by(activo=True).first()
     return almacen
@@ -84,7 +105,7 @@ def _get_o_crear_ubicacion_general(almacen_id: int) -> Ubicacion:
     return ub
 
 
-_cache_inventario_siesa = {'data': None, 'ts': None}
+_cache_inventario_siesa: dict = {}  # {bodega: {'data': ..., 'ts': ...}}
 #: `ts` es la hora de la última descarga **que trajo datos de Siesa**, no la de
 #: la última vez que se armó el diccionario. `degradado` dice si lo que hay
 #: salió solo de la BD porque la API no respondió.
@@ -311,7 +332,7 @@ def _descargar_inventario_siesa_raw(forzar=False):
 
     inventario_global = {}
     for bod in _BODEGAS_PV:
-        inv_bd = _leer_stock_de_bd(bod)
+        inv_bd, _ = _leer_stock_de_bd(bod)
         inv_api = api_data.get(bod, {})
         if inv_bd and inv_api:
             merged = dict(inv_bd)
@@ -348,13 +369,23 @@ def _descargar_inventario_siesa_raw(forzar=False):
             'siendo la de la última descarga real (%s)',
             _cache_inventario_multibodega['ts'])
 
-    _guardar_stock_en_bd(inventario_global)
+    _guardar_stock_en_bd(inventario_global, degradado=_degradado)
 
     return inventario_global
 
 
-def _guardar_stock_en_bd(inventario_global: dict):
-    """Persiste el inventario descargado en la tabla stock_siesa (upsert)."""
+def _guardar_stock_en_bd(inventario_global: dict, degradado: bool = False):
+    """Persiste el inventario descargado en la tabla stock_siesa (upsert).
+
+    Si `degradado` es True, `inventario_global` no trajo nada nuevo de
+    Siesa — es la misma BD leída de vuelta (ver `_descargar_inventario_siesa_raw`).
+    Re-escribirlo pondría `updated_at = utcnow()` sobre un dato que sigue
+    siendo tan viejo como antes de esta corrida: un sello fresco sobre un
+    dato viejo, el mismo error que la Regla 0 ya obligó a evitar en el `ts`
+    del cache en memoria. Acá era el mismo bug, un nivel más abajo."""
+    if degradado:
+        logger.info('[INV-SIESA] BD: guardado omitido (cache degradado — nada nuevo que persistir)')
+        return
     from app.models.stock_siesa import StockSiesa
     try:
         for bod, productos in inventario_global.items():
@@ -386,14 +417,20 @@ def _guardar_stock_en_bd(inventario_global: dict):
         logger.error('[INV-SIESA] Error guardando en BD: %s', exc)
 
 
-def _leer_stock_de_bd(bodega_id: str) -> dict:
-    """Lee inventario de una bodega desde PostgreSQL (sobrevive deploys)."""
+def _leer_stock_de_bd(bodega_id: str):
+    """Lee inventario de una bodega desde PostgreSQL (sobrevive deploys).
+
+    Retorna (inventario, actualizado_en) — actualizado_en es el `updated_at`
+    más viejo entre las filas de la bodega, no el más nuevo: el snapshot
+    completo no es más fresco que su parte más antigua (Regla 0, fallar
+    hacia el lado conservador)."""
     from app.models.stock_siesa import StockSiesa
     try:
         rows = StockSiesa.query.filter_by(bodega=bodega_id).all()
         if not rows:
-            return {}
+            return {}, None
         inv = {}
+        actualizado_en = None
         for r in rows:
             inv[r.codigo_siesa] = {
                 'existencia': r.existencia or 0,
@@ -402,11 +439,13 @@ def _leer_stock_de_bd(bodega_id: str) -> dict:
                 'descripcion': r.descripcion or '',
                 'unidad': r.unidad_medida or 'UND',
             }
+            if r.updated_at and (actualizado_en is None or r.updated_at < actualizado_en):
+                actualizado_en = r.updated_at
         logger.info('[INV-SIESA] BD: %s leído (%d productos)', bodega_id, len(inv))
-        return inv
+        return inv, actualizado_en
     except Exception as exc:
         logger.error('[INV-SIESA] Error leyendo BD para %s: %s', bodega_id, exc)
-        return {}
+        return {}, None
 
 
 def obtener_stock_bodega(bodega_id: str, forzar=False):
@@ -414,20 +453,34 @@ def obtener_stock_bodega(bodega_id: str, forzar=False):
     1. Cache en memoria → instantáneo
     2. Si cache vacío → lee de PostgreSQL (sobrevive deploys) → instantáneo
     3. Si BD vacía → lanza precalentamiento background → retorna {}
+
+    Retorna (inventario, meta). `meta` trae `fuente` y `actualizado_en`
+    (ISO 8601 o None) para que el consumidor (pantalla de Pedir) pueda
+    mostrar qué tan viejo es el número antes de que alguien arme una
+    solicitud sobre un dato que ya no es el de Siesa en vivo.
     """
     data = _cache_inventario_multibodega['data']
     if data is not None and bodega_id in data:
-        return data[bodega_id]
+        ts = _cache_inventario_multibodega['ts']
+        meta = {
+            'fuente': 'siesa',
+            'actualizado_en': ts.isoformat() if ts else None,
+        }
+        return data[bodega_id], meta
 
-    inv_bd = _leer_stock_de_bd(bodega_id)
+    inv_bd, actualizado_en_bd = _leer_stock_de_bd(bodega_id)
     if inv_bd:
         if _cache_inventario_multibodega['data'] is None:
             _cache_inventario_multibodega['data'] = {}
         _cache_inventario_multibodega['data'][bodega_id] = inv_bd
-        return inv_bd
+        meta = {
+            'fuente': 'siesa_bd_snapshot',
+            'actualizado_en': actualizado_en_bd.isoformat() if actualizado_en_bd else None,
+        }
+        return inv_bd, meta
 
     precalentar_cache_multibodega()
-    return {}
+    return {}, {'fuente': 'sin_dato', 'actualizado_en': None}
 
 
 def obtener_bodegas_disponibles():
@@ -436,48 +489,65 @@ def obtener_bodegas_disponibles():
     return sorted(multi.keys())
 
 
-def _descargar_inventario_siesa(forzar=False):
+def _descargar_inventario_siesa(forzar=False, bodega: str = None, almacen_id: int = None):
     """
-    Retorna inventario de la bodega principal (connekta.bodega) para
-    compatibilidad con carga inicial y reconciliación existentes.
+    Retorna inventario de una bodega para carga inicial y reconciliación.
+
+    Sin `bodega`, preserva el comportamiento histórico (connekta.bodega,
+    típicamente NB1). El cache y el baseline de "respuesta sospechosa" están
+    keyed por bodega — antes de la Fase 1 (2026-08-27) eran un solo par
+    (data, ts) global: cargar una segunda bodega habría comparado su tamaño
+    contra el baseline de la primera y podido abortar por un falso "respuesta
+    parcial" (NC1 con 6.000 productos SIEMPRE se ve "parcial" al lado de un
+    baseline armado con el total de NB1).
+
+    `almacen_id`: si se pasa, el baseline de UbicacionProducto se cuenta SOLO
+    en ese almacén — sin esto, cargar NS1 por primera vez compara su tamaño
+    contra el conteo GLOBAL (que ya incluye miles de filas de NB1) y aborta
+    con "respuesta parcial" aunque NS1 nunca haya tenido ni una fila.
     """
     global _cache_inventario_siesa
+    bod = bodega or connekta.bodega
+    cache = _cache_inventario_siesa.setdefault(bod, {'data': None, 'ts': None})
     ahora = datetime.utcnow()
     if (not forzar
-            and _cache_inventario_siesa['data'] is not None
-            and _cache_inventario_siesa['ts'] is not None
-            and (ahora - _cache_inventario_siesa['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
-        logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h)')
-        return _cache_inventario_siesa['data']
+            and cache['data'] is not None
+            and cache['ts'] is not None
+            and (ahora - cache['ts']).total_seconds() < _CACHE_TTL_SEGUNDOS):
+        logger.info('[INV-SIESA] Usando inventario cacheado (TTL 1h) — bodega %s', bod)
+        return cache['data']
 
-    bodega = connekta.bodega
     multi = _descargar_inventario_siesa_raw(forzar=forzar)
-    inventario = multi.get(bodega, {})
+    inventario = multi.get(bod, {})
 
-    logger.info(f'[INV-SIESA] Bodega {bodega}: {len(inventario)} productos')
+    logger.info(f'[INV-SIESA] Bodega {bod}: {len(inventario)} productos')
 
-    _prev_count = len(_cache_inventario_siesa['data']) if _cache_inventario_siesa['data'] else 0
+    _prev_count = len(cache['data']) if cache['data'] else 0
     if not _prev_count:
         try:
             from app.models.inventario import UbicacionProducto as _UP
-            _prev_count = _UP.query.filter(_UP.cantidad > 0).count()
+            _q = _UP.query.filter(_UP.cantidad > 0)
+            if almacen_id is not None:
+                from app.models.ubicacion import Ubicacion as _Ub
+                _q = _q.join(_Ub, _Ub.id == _UP.ubicacion_id).filter(_Ub.almacen_id == almacen_id)
+            _prev_count = _q.count()
         except Exception as _e_prev:
             raise ValueError(
                 f'No se pudo obtener baseline de inventario (cache frío + DB inaccesible): {_e_prev}'
             ) from _e_prev
     if len(inventario) < 50:
         raise ValueError(
-            f'Respuesta de Siesa sospechosamente pequeña: {len(inventario)} productos '
+            f'Respuesta de Siesa sospechosamente pequeña para {bod}: {len(inventario)} productos '
             f'(mínimo absoluto = 50) — abortando para evitar zeroing masivo'
         )
     if _prev_count and len(inventario) < _prev_count * 0.70:
         raise ValueError(
-            f'Respuesta parcial de Siesa: {len(inventario)} productos recibidos, '
+            f'Respuesta parcial de Siesa para {bod}: {len(inventario)} productos recibidos, '
             f'{_prev_count} esperados (< 70%) — abortando para evitar falsos positivos'
         )
 
-    _cache_inventario_siesa['data'] = inventario
-    _cache_inventario_siesa['ts'] = datetime.utcnow()
+    cache['data'] = inventario
+    cache['ts'] = datetime.utcnow()
     return inventario
 
 
@@ -488,9 +558,15 @@ def _descargar_inventario_siesa(forzar=False):
 _ADVISORY_LOCK_INV_SIESA = 2002  # clave única para pg_advisory_lock
 
 
-def _run_carga_inicial(app):
-    """Lógica real de la carga inicial — corre en hilo de fondo."""
+def _run_carga_inicial(app, bodega: str = None):
+    """Lógica real de la carga inicial — corre en hilo de fondo.
+
+    `bodega`: código Siesa (ej. 'NS1'). Sin argumento, preserva el
+    comportamiento histórico (connekta.bodega, típicamente NB1).
+    """
     global _estado_carga
+    bod = bodega or connekta.bodega
+    estado = _estado_carga_bodega(bod)
 
     with app.app_context():
         # Sufijo de la clave de idempotencia: con utcnow cambiaba a las 7 p.m.
@@ -508,7 +584,11 @@ def _run_carga_inicial(app):
         from app.services import registro_sync_service as _reg
         _reg_id = _reg.abrir('stock')
 
-        # Advisory lock de PostgreSQL — protege contra carga simultánea entre workers Gunicorn
+        # Advisory lock de PostgreSQL — protege contra carga simultánea entre workers
+        # Gunicorn. Es una sola clave global a propósito: además de proteger contra
+        # una segunda corrida de la MISMA bodega, serializa cargas de bodegas
+        # distintas entre sí — más lento si se piden varias a la vez, pero ninguna
+        # pisa el `db.session` de otra a mitad de camino.
         from sqlalchemy import text as _text
         lock_adquirido = False
         try:
@@ -516,66 +596,77 @@ def _run_carga_inicial(app):
                 _text('SELECT pg_try_advisory_lock(:key)'), {'key': _ADVISORY_LOCK_INV_SIESA}
             ).scalar()
             if not lock_adquirido:
-                logger.warning('[INV-SIESA] Otro worker ya ejecuta la carga — omitido')
-                _estado_carga['en_curso'] = False
+                logger.warning('[INV-SIESA] Otro worker ya ejecuta una carga — omitido (bodega %s)', bod)
+                estado['en_curso'] = False
                 return
         except Exception as e:
             logger.warning(f'[INV-SIESA] Advisory lock no disponible: {e} — continuando sin él')
 
         # [M19] Detectar sync previo incompleto (Railway reinició entre loop y bulk-zero).
-        if _estado_carga.get('ultimo_inicio') and not _estado_carga.get('ultimo_sync_completo'):
+        if estado.get('ultimo_inicio') and not estado.get('ultimo_sync_completo'):
             logger.warning(
-                '[INV-SIESA] El sync anterior inició (%s) pero no marcó ultimo_sync_completo '
+                '[INV-SIESA] %s: el sync anterior inició (%s) pero no marcó ultimo_sync_completo '
                 '— posible restart a mitad de carga. El sync actual sobreescribirá cantidades.',
-                _estado_carga['ultimo_inicio'],
+                bod, estado['ultimo_inicio'],
             )
-        elif (_estado_carga.get('ultimo_inicio') and _estado_carga.get('ultimo_sync_completo')
-              and _estado_carga['ultimo_sync_completo'] < _estado_carga['ultimo_inicio']):
+        elif (estado.get('ultimo_inicio') and estado.get('ultimo_sync_completo')
+              and estado['ultimo_sync_completo'] < estado['ultimo_inicio']):
             logger.warning(
-                '[INV-SIESA] ultimo_sync_completo (%s) < ultimo_inicio (%s) '
+                '[INV-SIESA] %s: ultimo_sync_completo (%s) < ultimo_inicio (%s) '
                 '— sync anterior incompleto detectado.',
-                _estado_carga['ultimo_sync_completo'], _estado_carga['ultimo_inicio'],
+                bod, estado['ultimo_sync_completo'], estado['ultimo_inicio'],
             )
 
         try:
-            almacen = _get_almacen()
+            almacen = _get_almacen(bod)
             if not almacen:
-                raise ValueError('No hay almacén activo en WMS — crea uno primero')
+                raise ValueError(f'No hay almacén activo en WMS para la bodega {bod}')
 
             ub_general = _get_o_crear_ubicacion_general(almacen.id)
             db.session.commit()
 
-            inventario_siesa = _descargar_inventario_siesa()
+            inventario_siesa = _descargar_inventario_siesa(bodega=bod, almacen_id=almacen.id)
 
-            # [30] Advertencia: la carga inicial sobrescribe cantidades en ubicaciones WMS manuales.
-            # Si hay picking/packing activo, el stock reservado puede quedar incorrecto.
-            # Revisar tareas activas antes de ejecutar en producción con operaciones en curso.
+            # [30] Advertencia: la carga inicial sobrescribe cantidades en ubicaciones WMS
+            # manuales. Si hay picking/packing activo EN ESTE ALMACÉN, el stock reservado
+            # puede quedar incorrecto. Acotado por almacén — un picking en curso en NB1 no
+            # tiene nada que ver con una carga a NS1, y viceversa.
             from app.models.picking import TareaPicking as _TareaPicking
             from app.models.packing import TareaPacking as _TareaPacking2
-            picks_activos = _TareaPicking.query.filter(
-                _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-            ).count()
+            picks_activos = (
+                _TareaPicking.query
+                .join(Ubicacion, Ubicacion.id == _TareaPicking.ubicacion_id)
+                .filter(Ubicacion.almacen_id == almacen.id,
+                        _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO']))
+                .count()
+            )
             packs_activos = _TareaPacking2.query.filter(
+                _TareaPacking2.almacen_id == almacen.id,
                 _TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
             ).count()
             # Productos con operaciones activas — sus ubicaciones se excluirán del bulk zero
             _prod_ids_activos: set = set()
             if picks_activos or packs_activos:
                 logger.warning(
-                    f'[INV-SIESA] ATENCIÓN: carga inicial con operaciones activas — '
+                    f'[INV-SIESA] ATENCIÓN: carga inicial de {bod} con operaciones activas — '
                     f'{picks_activos} picking(s) y {packs_activos} packing(s) en curso. '
                     f'Sus productos serán excluidos del bulk zero para proteger el stock reservado.'
                 )
                 # Recopilar product_ids activos para excluirlos del bulk zero
-                _picks_prods = _TareaPicking.query.filter(
-                    _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])
-                ).with_entities(_TareaPicking.producto_id).all()
+                _picks_prods = (
+                    _TareaPicking.query
+                    .join(Ubicacion, Ubicacion.id == _TareaPicking.ubicacion_id)
+                    .filter(Ubicacion.almacen_id == almacen.id,
+                            _TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO']))
+                    .with_entities(_TareaPicking.producto_id).all()
+                )
                 _prod_ids_activos |= {r.producto_id for r in _picks_prods if r.producto_id}
                 from app.models.packing import ItemPacking as _ItemPacking
                 _pack_prods = (
                     _ItemPacking.query
                     .join(_TareaPacking2, _ItemPacking.tarea_id == _TareaPacking2.id)
-                    .filter(_TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO']))
+                    .filter(_TareaPacking2.almacen_id == almacen.id,
+                            _TareaPacking2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO']))
                     .with_entities(_ItemPacking.producto_id).all()
                 )
                 _prod_ids_activos |= {r.producto_id for r in _pack_prods if r.producto_id}
@@ -640,11 +731,15 @@ def _run_carga_inicial(app):
                 )
             }
 
-            # SET de idempotency keys del día — evita reprocesar lo ya cargado hoy
+            # SET de idempotency keys del día — evita reprocesar lo ya cargado hoy.
+            # Filtrado por bodega: la clave incluye `bod` (ver más abajo) porque el
+            # mismo producto existe en el catálogo de varias bodegas — sin el filtro,
+            # cargar NB1 primero marcaría el producto como "ya cargado hoy" y NS1/NC1
+            # lo saltarían sin escribir su propia fila.
             ikeys_hoy = {
                 row.idempotency_key
                 for row in MovimientoInventario.query.filter(
-                    MovimientoInventario.idempotency_key.like(f'SIESA-INI-%-{fecha_hoy}')
+                    MovimientoInventario.idempotency_key.like(f'SIESA-INI-{bod}-%-{fecha_hoy}')
                 ).with_entities(MovimientoInventario.idempotency_key).all()
             }
 
@@ -678,7 +773,11 @@ def _run_carga_inicial(app):
             _prod_ids_ya_hoy: set = set()
             for _ikey in ikeys_hoy:
                 try:
-                    _prod_ids_ya_hoy.add(int(_ikey.split('-')[2]))
+                    # Formato: SIESA-INI-{bod}-{prod.id}-{fecha_hoy} — el índice 3, no 2,
+                    # desde que la bodega se insertó en la clave. Asume que ningún código
+                    # de bodega Siesa trae un guion (cierto para las 10 reales, ver
+                    # BODEGA_CO en CLAUDE.md).
+                    _prod_ids_ya_hoy.add(int(_ikey.split('-')[3]))
                 except (IndexError, ValueError):
                     pass
             # Productos actualizados en este sync — se excluyen del bulk zero final
@@ -706,8 +805,8 @@ def _run_carga_inicial(app):
                     # Lookup O(1) del registro existente
                     reg = _mapa_up.get((ub.id, prod.id))
 
-                    # Idempotencia: clave única por producto + día
-                    ikey = f'SIESA-INI-{prod.id}-{fecha_hoy}'
+                    # Idempotencia: clave única por bodega + producto + día
+                    ikey = f'SIESA-INI-{bod}-{prod.id}-{fecha_hoy}'
                     # [45] Usar el SET pre-cargado en vez de hacer query individual
                     if ikey in ikeys_hoy:
                         _savepoint.commit()
@@ -748,7 +847,7 @@ def _run_carga_inicial(app):
                         _mapa_up[(ub.id, prod.id)] = reg
                         cargados += 1
 
-                    _motivo = f'Carga inicial desde Siesa {fecha_hoy} · bodega {connekta.bodega}'
+                    _motivo = f'Carga inicial desde Siesa {fecha_hoy} · bodega {bod}'
                     if ya_en_reales:
                         _motivo += f' · {ya_en_reales} und ya en ubicación(es) real(es), restadas de SIESA-GENERAL'
 
@@ -806,29 +905,29 @@ def _run_carga_inicial(app):
             # [M19] Marcar sync como completado — si Railway mata el proceso antes de
             # llegar aquí, 'ultimo_sync_completo' queda en el valor previo y el siguiente
             # sync puede detectar el gap con 'ultimo_inicio'.
-            _estado_carga['ultimo_sync_completo'] = datetime.utcnow()
+            estado['ultimo_sync_completo'] = datetime.utcnow()
 
         except Exception as e:
             # FM_RAILWAY_RESTART: si el proceso se mató a mitad del loop de páginas,
             # el bulk-zero nunca se ejecutó → productos de páginas no procesadas
             # conservan cantidad WMS potencialmente obsoleta. El siguiente sync
             # los actualizará, pero hay un gap hasta entonces.
-            logger.error(f'[INV-SIESA] Error en carga inicial: {e}', exc_info=True)
+            logger.error(f'[INV-SIESA] Error en carga inicial de {bod}: {e}', exc_info=True)
             db.session.rollback()
-            _estado_carga['ultimo_error'] = str(e)
-            _estado_carga['en_curso'] = False
+            estado['ultimo_error'] = str(e)
+            estado['en_curso'] = False
             _reg.cerrar_error(_reg_id, e)
             try:
                 from app.services.alertas_service import enviar_email, _config_resend
                 if _config_resend():
                     enviar_email(
-                        asunto='[WMS ALERTA] Sync inventario Siesa falló — bulk-zero puede estar incompleto',
+                        asunto=f'[WMS ALERTA] Sync inventario Siesa falló ({bod}) — bulk-zero puede estar incompleto',
                         cuerpo_texto=(
-                            f'El sync de inventario Siesa falló con error:\n{e}\n\n'
+                            f'El sync de inventario Siesa para la bodega {bod} falló con error:\n{e}\n\n'
                             'Si el fallo ocurrió a mitad del loop de páginas, el bulk-zero '
                             '(zeroing de productos no reportados) puede no haberse ejecutado. '
                             'Los productos de páginas no procesadas conservan cantidades WMS posiblemente obsoletas. '
-                            'Disparar sync manual: POST /api/inventario-siesa/cargar'
+                            f'Disparar sync manual: POST /api/siesa/cargar-inventario?bodega={bod}'
                         ),
                         cuerpo_html=None,
                     )
@@ -847,63 +946,89 @@ def _run_carga_inicial(app):
 
         resultado = {
             'timestamp': datetime.utcnow().isoformat(),
+            'bodega': bod,
             'cargados': cargados,
             'actualizados': actualizados,
             'sin_producto_wms': sin_producto_wms,
             'errores': errores,
             'total_siesa': len(inventario_siesa)
         }
-        logger.info(f'[INV-SIESA] Carga inicial completada: {resultado}')
-        _estado_carga['ultimo_resultado'] = resultado
-        _estado_carga['ultimo_error'] = None
-        _estado_carga['en_curso'] = False
+        logger.info(f'[INV-SIESA] Carga inicial de {bod} completada: {resultado}')
+        estado['ultimo_resultado'] = resultado
+        estado['ultimo_error'] = None
+        estado['en_curso'] = False
         _reg.cerrar_ok(_reg_id, resultado)
 
 
-def iniciar_carga_inventario(app, forzar: bool = False):
-    """Arranca la carga inicial en background. Retorna estado inmediatamente."""
-    global _estado_carga
+def iniciar_carga_inventario(app, forzar: bool = False, bodega: str = None):
+    """Arranca la carga inicial en background. Retorna estado inmediatamente.
 
-    if _estado_carga['en_curso']:
-        return {'en_curso': True, 'mensaje': 'Carga ya en proceso — espera que termine'}
+    `bodega`: código Siesa (ej. 'NS1'). Sin argumento, usa `connekta.bodega`
+    (NB1) — mismo comportamiento de siempre.
+    """
+    global _estado_carga
+    bod = bodega or connekta.bodega
+    estado = _estado_carga_bodega(bod)
+
+    if estado['en_curso']:
+        return {'en_curso': True, 'mensaje': f'Carga de {bod} ya en proceso — espera que termine'}
 
     if connekta.modo_simulacion:
         return {'simulado': True, 'mensaje': 'Modo simulación — conecta credenciales Siesa'}
 
-    # Guard: no sobrescribir stock si hay operaciones activas (a menos que se fuerce)
+    # Guard: no sobrescribir stock si hay operaciones activas EN ESE ALMACÉN
+    # (a menos que se fuerce). Acotado por almacén — antes de la Fase 1 de
+    # calibración de tiendas (2026-08-27) esto miraba picking/packing de
+    # TODO el WMS: un picking activo en NB1 habría bloqueado sin motivo una
+    # carga a NS1, y viceversa.
     if not forzar:
         with app.app_context():
+            almacen = _get_almacen(bod)
+            if not almacen:
+                return {'abortado': True, 'mensaje': f'No hay almacén activo en WMS para la bodega {bod}'}
             from app.models.picking import TareaPicking as _TP
             from app.models.packing import TareaPacking as _TP2
-            picks_activos = _TP.query.filter(_TP.estado.in_(['PENDIENTE', 'EN_PROCESO'])).count()
-            packs_activos = _TP2.query.filter(_TP2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])).count()
+            picks_activos = (
+                _TP.query
+                .join(Ubicacion, Ubicacion.id == _TP.ubicacion_id)
+                .filter(Ubicacion.almacen_id == almacen.id,
+                        _TP.estado.in_(['PENDIENTE', 'EN_PROCESO']))
+                .count()
+            )
+            packs_activos = _TP2.query.filter(
+                _TP2.almacen_id == almacen.id,
+                _TP2.estado.in_(['PENDIENTE', 'EN_PROCESO', 'VERIFICADO'])
+            ).count()
             if picks_activos or packs_activos:
                 return {
                     'abortado': True,
                     'mensaje': (
-                        f'Carga abortada: hay {picks_activos} picking(s) y {packs_activos} packing(s) activos. '
-                        f'La carga sobreescribiría el stock reservado. '
+                        f'Carga de {bod} abortada: hay {picks_activos} picking(s) y {packs_activos} packing(s) activos '
+                        f'en ese almacén. La carga sobreescribiría el stock reservado. '
                         f'Usa ?forzar=true solo si estás seguro.'
                     ),
                     'picks_activos': picks_activos,
                     'packs_activos': packs_activos,
                 }
 
-    _estado_carga['en_curso'] = True
-    _estado_carga['ultimo_inicio'] = datetime.now(timezone.utc)
+    estado['en_curso'] = True
+    estado['ultimo_inicio'] = datetime.now(timezone.utc)
 
-    hilo = threading.Thread(target=_run_carga_inicial, args=(app,), daemon=True)
+    hilo = threading.Thread(target=_run_carga_inicial, args=(app, bod), daemon=True)
     hilo.start()
 
-    return {'iniciado': True, 'mensaje': 'Carga de inventario iniciada — refresca en ~60 seg'}
+    return {'iniciado': True, 'bodega': bod, 'mensaje': f'Carga de inventario de {bod} iniciada — refresca en ~60 seg'}
 
 
-def estado_carga_inventario():
+def estado_carga_inventario(bodega: str = None):
+    bod = bodega or connekta.bodega
+    estado = _estado_carga_bodega(bod)
     return {
-        'en_curso': _estado_carga['en_curso'],
-        'ultimo_inicio': _estado_carga['ultimo_inicio'].isoformat() if _estado_carga['ultimo_inicio'] else None,
-        'ultimo_resultado': _estado_carga['ultimo_resultado'],
-        'ultimo_error': _estado_carga['ultimo_error'],
+        'bodega': bod,
+        'en_curso': estado['en_curso'],
+        'ultimo_inicio': estado['ultimo_inicio'].isoformat() if estado['ultimo_inicio'] else None,
+        'ultimo_resultado': estado['ultimo_resultado'],
+        'ultimo_error': estado['ultimo_error'],
     }
 
 
@@ -1285,14 +1410,16 @@ def _run_setup_inicial(app):
         _run_sync(app)
 
         _estado_setup['fase'] = 'stock'
-        # Marcar _estado_carga como en curso para que iniciar_carga_inicial()
-        # concurrente no lance un segundo hilo mientras el setup ejecuta la carga.
-        _estado_carga['en_curso'] = True
-        _estado_carga['ultimo_inicio'] = datetime.now(timezone.utc)
+        # Marcar _estado_carga (bodega default) como en curso para que
+        # iniciar_carga_inventario() concurrente no lance un segundo hilo
+        # mientras el setup ejecuta la carga.
+        _estado_default = _estado_carga_bodega(connekta.bodega)
+        _estado_default['en_curso'] = True
+        _estado_default['ultimo_inicio'] = datetime.now(timezone.utc)
         try:
             _run_carga_inicial(app)
         finally:
-            _estado_carga['en_curso'] = False
+            _estado_default['en_curso'] = False
 
         _estado_setup['fase'] = 'completado'
         _estado_setup['ultimo_error'] = None
@@ -1346,19 +1473,20 @@ def estado_setup_inicial():
     from app.services import registro_sync_service as _reg
 
     _cat = estado_sync().get('ultimo_resultado')
+    _resultado_stock = _estado_carga_bodega(connekta.bodega)['ultimo_resultado']
     return {
         'en_curso': _estado_setup['en_curso'],
         'fase': _estado_setup['fase'],
         'ultimo_inicio': _estado_setup['ultimo_inicio'].isoformat() if _estado_setup['ultimo_inicio'] else None,
         # En memoria — se pierden al reiniciar. Ver docstring.
         'resultado_catalogo': _cat,
-        'resultado_stock': _estado_carga['ultimo_resultado'],
+        'resultado_stock': _resultado_stock,
         'ultimo_error': _estado_setup['ultimo_error'],
         # En la base — sobreviven al deploy. ESTO es lo que hay que mirar.
         'persistido': {
             'catalogo': _reg.estado_persistido('catalogo', bool(_cat)),
             'barcodes': _reg.estado_persistido('barcodes'),
-            'stock': _reg.estado_persistido('stock', bool(_estado_carga['ultimo_resultado'])),
+            'stock': _reg.estado_persistido('stock', bool(_resultado_stock)),
             'setup_inicial': _reg.estado_persistido('setup_inicial'),
         },
         'cobertura': cobertura_catalogo(),

@@ -76,27 +76,47 @@ def sync_estado():
     return jsonify(estado_sync()), 200
 
 
+#: Fase 1 de calibración de tiendas (2026-08-27): NS1 y NC1 son las únicas bodegas
+#: de punto de venta con tráfico histórico real de traslados (84 y 19 solicitudes)
+#: fuera de NB1. Las demás (FC1, PC1, PT1, FF1, FN1, FP1) no tienen Almacen/Ubicacion
+#: provisionado todavía — habilitarlas es la Fase 2, no un cambio de esta lista sola.
+_BODEGAS_CALIBRACION_HABILITADAS = ('NS1', 'NC1')
+
+
 @siesa_bp.route('/cargar-inventario', methods=['POST'])
 @jwt_required()
 def cargar_inventario():
-    """Inicia la carga inicial de stock desde Siesa en background. Solo admin."""
+    """Inicia la carga inicial de stock desde Siesa en background. Solo admin.
+
+    ?bodega=NS1 — carga esa bodega en vez de la default (NB1, connekta.bodega).
+    Limitado a `_BODEGAS_CALIBRACION_HABILITADAS` — las demás no tienen
+    almacén WMS provisionado y fallarían con un error confuso más abajo.
+    """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede cargar inventario'}), 403
     from flask import current_app, request as _req
     from app.services.inventario_siesa_service import iniciar_carga_inventario
     forzar = _req.args.get('forzar', 'false').lower() == 'true'
-    resultado = iniciar_carga_inventario(current_app._get_current_object(), forzar=forzar)
+    bodega = _req.args.get('bodega') or None
+    if bodega and bodega not in _BODEGAS_CALIBRACION_HABILITADAS:
+        return jsonify({
+            'error': f'Bodega {bodega} no habilitada para carga todavía. '
+                     f'Disponibles: {", ".join(_BODEGAS_CALIBRACION_HABILITADAS)} (además de NB1 por defecto).'
+        }), 400
+    resultado = iniciar_carga_inventario(current_app._get_current_object(), forzar=forzar, bodega=bodega)
     return jsonify(resultado), 202
 
 
 @siesa_bp.route('/carga-inventario-estado', methods=['GET'])
 @jwt_required()
 def carga_inventario_estado():
-    """Estado de la carga de inventario en curso. Solo admin."""
+    """Estado de la carga de inventario en curso. Solo admin. ?bodega=NS1 opcional."""
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede ver estado de carga'}), 403
+    from flask import request as _req
     from app.services.inventario_siesa_service import estado_carga_inventario
-    return jsonify(estado_carga_inventario()), 200
+    bodega = _req.args.get('bodega') or None
+    return jsonify(estado_carga_inventario(bodega=bodega)), 200
 
 
 @siesa_bp.route('/setup-inicial', methods=['POST'])

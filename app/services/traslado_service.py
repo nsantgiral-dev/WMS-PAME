@@ -1463,7 +1463,7 @@ class TrasladoService:
             if connekta.modo_simulacion:
                 return TrasladoService._get_stock_wms(bod)
 
-            inv_bodega = obtener_stock_bodega(bod)
+            inv_bodega, meta_fuente = obtener_stock_bodega(bod)
             if not inv_bodega:
                 logger.warning('[TRASLADO] stock Siesa vacío para bodega %s — usando WMS', bod)
                 return TrasladoService._get_stock_wms(bod)
@@ -1489,7 +1489,11 @@ class TrasladoService:
                 }
 
             if not siesa_stock:
-                return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'siesa'}
+                return {
+                    'items': [], 'bodega': bod, 'total': 0,
+                    'fuente': meta_fuente['fuente'],
+                    'actualizado_en': meta_fuente['actualizado_en'],
+                }
 
             productos = {
                 p.codigo_siesa: p
@@ -1568,7 +1572,8 @@ class TrasladoService:
                 'items': items,
                 'bodega': bod,
                 'total': len(items),
-                'fuente': 'siesa',
+                'fuente': meta_fuente['fuente'],
+                'actualizado_en': meta_fuente['actualizado_en'],
                 'siesa_total_productos': len(inv_bodega),
                 'siesa_con_stock': len(siesa_stock),
             }
@@ -1590,9 +1595,10 @@ class TrasladoService:
         from app.models.ubicacion import Ubicacion
 
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
+        _ahora = datetime.utcnow().isoformat()
         almacen = Almacen.query.filter_by(bodega_siesa_id=bod).first()
         if not almacen:
-            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback'}
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback', 'actualizado_en': _ahora}
 
         registros = (
             db.session.query(
@@ -1606,7 +1612,7 @@ class TrasladoService:
             .all()
         )
         if not registros:
-            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback'}
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback', 'actualizado_en': _ahora}
 
         productos = {
             p.id: p
@@ -1632,7 +1638,7 @@ class TrasladoService:
                 'unidad_medida': prod.unidad_medida,
             })
         items.sort(key=lambda x: x['nombre'])
-        return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms_fallback'}
+        return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms_fallback', 'actualizado_en': _ahora}
 
     # Cache de bodegas — proceso-nivel, TTL 1 hora. Evita llamar a Siesa en cada request.
     _bodegas_cache: dict = {'data': None, 'ts': 0.0}

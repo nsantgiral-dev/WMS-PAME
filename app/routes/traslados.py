@@ -922,6 +922,7 @@ def stock_disponible():
             resultado['_debug'] = {
                 'bodega': resultado.get('bodega'),
                 'fuente': resultado.get('fuente'),
+                'actualizado_en': resultado.get('actualizado_en'),
                 'siesa_total_rows': resultado.get('siesa_total_rows'),
                 'siesa_con_stock': resultado.get('siesa_con_stock'),
                 'wms_mapeados': resultado.get('total'),
