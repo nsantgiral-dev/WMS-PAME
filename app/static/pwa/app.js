@@ -1112,6 +1112,33 @@ function _renderTareasBodegaHTML(tareas) {
   }
 }
 
+/**
+ * Renderiza la línea "Ahora: ..." de la tarjeta de operario — snapshot en
+ * vivo de `tarea_actual` (viene de /api/dashboard/productividad, refrescado
+ * cada 30s por TIMER_ADMIN mientras la pestaña Operarios esté abierta).
+ * @param {{tipo:string, tipo_documento?:string, referencia:string, ubicacion:string, producto:?string, minutos_en_tarea:?number}|null} t
+ */
+function _tareaActualHTML(t) {
+  if (!t) {
+    return `<div style="font-size:11px;color:#3a3a3a;margin-bottom:4px;">⚪ Sin tarea asignada</div>`;
+  }
+  const COLORES = { PICKING: '#1d4ed8', REPOSICION: '#c2410c', CONTEO: '#b45309', PACKING: '#7c3aed' };
+  const color = COLORES[t.tipo] || '#555';
+  const min = t.minutos_en_tarea;
+  // Mismo umbral que ConteoService/reposicion_service.liberar_tareas_zombi (2h) —
+  // si lleva más que eso en la misma tarea, probablemente está atascado, no trabajando.
+  const punto = min != null && min >= 120 ? '🔴' : '🟢';
+  const tiempo = min == null ? '' : min < 1 ? ' · recién' : ` · hace ${min} min`;
+  const etiqueta = t.tipo === 'PICKING'
+    ? `PICKING · ${t.tipo_documento === 'TRASLADO' ? 'Traslado' : 'Pedido'} ${t.referencia || ''}`
+    : `${t.tipo}${t.referencia ? ' · ' + t.referencia : ''}`;
+  const detalle = [t.ubicacion, t.producto].filter(Boolean).join(' · ');
+  return `
+    <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:1px;">${punto} Ahora: ${etiqueta}</div>
+    ${detalle ? `<div style="font-size:10px;color:#555;margin-bottom:4px;">${detalle}${tiempo}</div>` : ''}
+  `;
+}
+
 /** Fetch and render operator list with 7-day productivity metrics. */
 async function cargarOperarios() {
   const el = document.getElementById('lista-operarios');
@@ -1132,7 +1159,7 @@ async function cargarOperarios() {
     todos.sort((a, b) => (metricas[b.id]?.total_tareas || 0) - (metricas[a.id]?.total_tareas || 0));
 
     el.innerHTML = todos.map((u, i) => {
-      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0 };
+      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0, reposiciones_completadas: 0, tarea_actual: null };
       const badges = [u.puede_picar && '<span style="background:#1e40af;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Picker</span>',
                       u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>',
                       u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>'].filter(Boolean).join(' ');
@@ -1143,7 +1170,8 @@ async function cargarOperarios() {
           <div>
             <div style="font-size:14px;font-weight:600;">${u.nombre}</div>
             <div style="font-size:11px;color:#555;margin-bottom:2px;">${u.rol} ${badges}</div>
-            <div style="font-size:11px;color:#444;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Conteos:${op.conteos_completados}</div>
+            ${_tareaActualHTML(op.tarea_actual)}
+            <div style="font-size:11px;color:#444;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Repo:${op.reposiciones_completadas || 0} Conteos:${op.conteos_completados}</div>
             ${u.puede_picar && u.capacidad_diaria_conteo != null ? (() => {
               const cap = u.capacidad_diaria_conteo;
               const hoy = op.conteos_hoy || 0;
