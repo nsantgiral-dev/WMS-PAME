@@ -965,8 +965,16 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
     Guardarraíles:
       - No reclasifica zona ni desactiva si hay stock activo (cantidad > 0) —
         hay que mover ese stock antes.
-      - Avisa (no bloquea) si hay TareaPicking/TareaReposicion PENDIENTE/EN_PROCESO
-        apuntando a esta ubicación.
+      - Tampoco si hay TareaPicking/TareaReposicion PENDIENTE/EN_PROCESO
+        apuntando a esta ubicación — mismo nivel que el guardarraíl de
+        stock, no solo aviso. Un hueco PICKING con stock=0 y una
+        TareaReposicion PENDIENTE es exactamente el estado normal de "espera
+        reposición": el guardarraíl de stock por sí solo no lo cubre porque
+        stock=0 no dispara `stock > 0`. Sin este bloqueo, reclasificar o
+        desactivar ese hueco a medio camino dejaba a confirmar_reposicion()
+        escribiendo inventario en una ubicación que ya cambió de zona.
+      - capacidad_maxima solo (sin cambio de zona ni desactivación) no exige
+        nada de esto — ajustar cuánto cabe no interrumpe una tarea en curso.
     """
     ubicacion = Ubicacion.query.get(ubicacion_id)
     if not ubicacion:
@@ -980,6 +988,29 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
         raise ValueError(
             f'{ubicacion.codigo} tiene {stock} unidades activas — muévelas antes de '
             f'reclasificar o desactivar esta ubicación'
+        )
+
+    tareas_picking = TareaPicking.query.filter_by(
+        ubicacion_id=ubicacion_id
+    ).filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).count()
+
+    tareas_reposicion = TareaReposicion.query.filter(
+        db.or_(
+            TareaReposicion.ubicacion_picking_id == ubicacion_id,
+            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
+        ),
+        TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO']),
+    ).count()
+
+    if (cambia_zona or desactiva) and (tareas_picking or tareas_reposicion):
+        partes = []
+        if tareas_picking:
+            partes.append(f'{tareas_picking} tarea(s) de Picking')
+        if tareas_reposicion:
+            partes.append(f'{tareas_reposicion} tarea(s) de Reposición')
+        raise ValueError(
+            f'{ubicacion.codigo} tiene {" y ".join(partes)} pendiente(s) — '
+            f'complétalas o cancélalas antes de reclasificar o desactivar esta ubicación'
         )
 
     if liberar_slot:
@@ -999,20 +1030,11 @@ def reclasificar_ubicacion(ubicacion_id: int, tipo_zona: str = None,
     if activo is not None:
         ubicacion.activo = activo
 
+    # capacidad_maxima-only: cambio permitido con tareas vivas (ver docstring),
+    # pero sigue siendo información útil para quien lo edita.
     advertencias = []
-    tareas_picking = TareaPicking.query.filter_by(
-        ubicacion_id=ubicacion_id
-    ).filter(TareaPicking.estado.in_(['PENDIENTE', 'EN_PROCESO'])).count()
     if tareas_picking:
         advertencias.append(f'{tareas_picking} tarea(s) de Picking pendiente(s) en esta ubicación')
-
-    tareas_reposicion = TareaReposicion.query.filter(
-        db.or_(
-            TareaReposicion.ubicacion_picking_id == ubicacion_id,
-            TareaReposicion.ubicacion_reserva_id == ubicacion_id,
-        ),
-        TareaReposicion.estado.in_(['PENDIENTE', 'EN_PROCESO']),
-    ).count()
     if tareas_reposicion:
         advertencias.append(f'{tareas_reposicion} tarea(s) de Reposición pendiente(s) en esta ubicación')
 

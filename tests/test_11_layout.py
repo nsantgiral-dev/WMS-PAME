@@ -342,6 +342,39 @@ def test_reclasificar_permite_sin_stock(db, almacen):
     assert resultado['ubicacion']['tipo_zona'] == 'RESERVA'
 
 
+def test_reclasificar_bloquea_con_reposicion_pendiente(db, almacen, producto):
+    """Hueco PICKING con stock=0 (no dispara el guardarraíl de stock) pero con
+    una TareaReposicion PENDIENTE viva — es exactamente el estado normal de
+    "espera reposición" y reclasificar/desactivar debe bloquear igual que el
+    stock activo, no solo advertir."""
+    from app.models.tarea_reposicion import TareaReposicion
+
+    ub_picking = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
+    ub_reserva = svc.crear_cuerpo(almacen.id, 'B', 1, 1, 1, 'RESERVA')[0]
+    tarea = TareaReposicion(
+        codigo='REP-0000001',
+        producto_id=producto.id,
+        almacen_id=almacen.id,
+        cantidad_unidades=10,
+        ubicacion_reserva_id=ub_reserva.id,
+        ubicacion_picking_id=ub_picking.id,
+        estado='PENDIENTE',
+    )
+    db.session.add(tarea)
+    db.session.commit()
+
+    with pytest.raises(ValueError, match='Reposición'):
+        svc.reclasificar_ubicacion(ub_picking.id, tipo_zona='RESERVA')
+
+    with pytest.raises(ValueError, match='Reposición'):
+        svc.reclasificar_ubicacion(ub_picking.id, activo=False)
+
+    # capacidad_maxima sola sigue permitida con la tarea viva — no interrumpe nada
+    resultado = svc.reclasificar_ubicacion(ub_picking.id, capacidad_maxima=80)
+    assert resultado['ubicacion']['capacidad_maxima'] == 80
+    assert 'Reposición' in resultado['advertencias'][0]
+
+
 def test_reclasificar_liberar_slot_bloquea_con_stock(db, almacen, producto):
     ub = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING')[0]
     svc.asignar_producto(ub.id, producto.id, 50, capacidad_maxima=100)

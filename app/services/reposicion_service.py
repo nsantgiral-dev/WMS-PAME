@@ -417,6 +417,44 @@ def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
     )
 
 
+def liberar_tareas_zombi(timeout_horas: int = 2):
+    """
+    Libera TareaReposicion EN_PROCESO que llevan más de `timeout_horas` sin
+    progreso — el abastecedor escaneó mal, cerró la app o se fue de turno a
+    medio camino, y la tarea quedó con abastecedor_id fijo. Sin esto,
+    get_tarea_abastecedor() nunca la vuelve a ofrecer a nadie más — ni a otro
+    abastecedor (solo busca abastecedor_id=None) ni al mismo, hasta que su
+    cola de Pedido/Traslado se vacíe (nivel 2 de mobile_service.get_tarea_actual).
+
+    Mismo timeout y misma forma que ConteoService.liberar_tareas_zombi() —
+    no es casualidad, es el mismo problema (tarea EN_PROCESO abandonada) con
+    otro modelo. lpn_id no se toca: se fijó en verificar_stock_picking() al
+    crear la tarea, no al tomarla, y el LPN sigue ACTIVO — nadie lo consumió.
+    """
+    from datetime import timedelta
+    umbral = datetime.utcnow() - timedelta(hours=timeout_horas)
+    zombis = TareaReposicion.query.filter(
+        TareaReposicion.estado == 'EN_PROCESO',
+        TareaReposicion.fecha_inicio < umbral,
+    ).all()
+
+    liberadas = 0
+    for t in zombis:
+        logger.warning(
+            f'[REPOSICION TIMEOUT] Tarea {t.codigo} (id={t.id}) EN_PROCESO '
+            f'desde {t.fecha_inicio} — liberando (abastecedor #{t.abastecedor_id})'
+        )
+        t.estado = 'PENDIENTE'
+        t.abastecedor_id = None
+        t.fecha_inicio = None
+        liberadas += 1
+
+    if liberadas:
+        db.session.commit()
+        logger.info(f'[REPOSICION TIMEOUT] {liberadas} tarea(s) liberada(s)')
+    return liberadas
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 5. Scheduler — el barrido periódico que el módulo dice tener desde el
 #    docstring del archivo, pero que nunca se registró en app/__init__.py.
@@ -427,30 +465,35 @@ def _encolar_siesa_job(tarea: TareaReposicion, lpn: LPN, unidades: int):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _barrido_stock_picking(app):
+    from app.utils.lock import advisory_lock
+
     with app.app_context():
         try:
-            # Advisory lock — evita que el barrido programado choque con un
-            # "Verificar stock ahora" manual corriendo al mismo tiempo.
-            lock = db.session.execute(
-                db.text('SELECT pg_try_advisory_lock(2015)')
-            ).scalar()
-            if not lock:
-                logger.info('[REPOSICION_SCHEDULER] Lock no disponible — omitiendo ejecución concurrente')
-                return
-            generadas = verificar_stock_picking()
-            if generadas:
-                logger.info(f'[REPOSICION_SCHEDULER] {generadas} tarea(s) de reposición generada(s)')
+            # Lock 2016, NO 2015 — 2015 ya es de abc_service._liberar_zombis
+            # (ver app/utils/lock.py). Compartir número entre dos jobs
+            # DISTINTOS los vuelve mutuamente excluyentes sin que nadie lo
+            # haya querido: cuando los dos caen en la misma ventana de 30 min,
+            # uno de los dos se salta el ciclo en silencio — 'lock no
+            # disponible' se registra igual para 'otro worker corriendo esto
+            # mismo' que para 'un job completamente distinto lo tiene', y no
+            # hay forma de distinguirlos desde el log.
+            with advisory_lock(2016, 'reposicion_barrido') as tomado:
+                if not tomado:
+                    logger.info('[REPOSICION_SCHEDULER] Lock no disponible — omitiendo ejecución concurrente')
+                    return
+                generadas = verificar_stock_picking()
+                if generadas:
+                    logger.info(f'[REPOSICION_SCHEDULER] {generadas} tarea(s) de reposición generada(s)')
+                liberadas = liberar_tareas_zombi()
+                if liberadas:
+                    logger.info(f'[REPOSICION_SCHEDULER] {liberadas} tarea(s) zombi liberada(s)')
         except Exception as e:
             logger.error(f'[REPOSICION_SCHEDULER] Error en barrido periódico: {e}')
-        finally:
-            try:
-                db.session.execute(db.text('SELECT pg_advisory_unlock(2015)'))
-            except Exception:
-                pass
 
 
 def init_scheduler(app):
-    """Cron cada 30 min — barre todas las ubicaciones PICKING con mínimo configurado.
+    """Cron cada 30 min — barre todas las ubicaciones PICKING con mínimo configurado
+    y libera TareaReposicion zombi (EN_PROCESO >2h sin progreso).
 
     Complementa (no reemplaza) los disparos reactivos ya existentes tras
     picking y tras reposición: cubre el caso donde el stock bajó por otro

@@ -40,6 +40,13 @@ async function pedirTarea() {
         </div>`;
       return;
     }
+    if (d.tipo === 'REPOSICION') {
+      // Nivel 2 de la cola unificada (entre Traslado y Conteo) — reutiliza el
+      // HUD de escaneo del abastecedor, ya construido, en vez de un render propio.
+      TAREA_ACTUAL = d;
+      pickingReponerAhora(d);
+      return;
+    }
     TAREA_ACTUAL = d;
     renderTarea(d);
   } catch (e) {

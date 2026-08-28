@@ -527,6 +527,23 @@ async function repTestEmail(btn) {
 
 let ABAST_TAREA = null;
 let ABAST_TIMER = null;
+// true cuando el HUD se abrió desde la cola unificada de picking.js (pedirTarea) —
+// decide a dónde vuelve abastCerrarHUD() al terminar. false = abastecedor puro,
+// pantalla dedicada de siempre.
+let ABAST_UNIFICADO = false;
+
+/**
+ * Entrada desde la cola unificada (picking.js:pedirTarea) — el dispensador ya
+ * asignó la tarea de reposición, acá solo se muestra el HUD de escaneo sobre
+ * la pantalla actual. Sin botón, sin pantalla aparte: es un tipo de tarea más
+ * en la misma cola de Pedido/Traslado/Conteo.
+ */
+function pickingReponerAhora(tarea) {
+  ABAST_UNIFICADO = true;
+  ABAST_TAREA = tarea;
+  pantalla('pantalla-abastecedor');
+  abastMostrarHUD(tarea);
+}
 
 function abastIniciar() {
   pantalla('pantalla-abastecedor');
@@ -595,6 +612,16 @@ function abastCerrarHUD() {
   if (hud) hud.style.display = 'none';
   if (cont) cont.style.display = 'block';
   ABAST_TAREA = null;
+  if (ABAST_UNIFICADO) {
+    // Volvió de una tarea de la cola unificada — sigue en esa cola, no en la
+    // pantalla dedicada del abastecedor puro.
+    ABAST_UNIFICADO = false;
+    clearInterval(ABAST_TIMER);
+    pantalla('pantalla-operario');
+    if (OPERARIO) actualizarUI(OPERARIO);
+    pedirTarea();
+    return;
+  }
   abastCargarTarea();
 }
 
@@ -614,7 +641,7 @@ async function abastConfirmarScan() {
     const d = await r.json();
     if (r.ok && d.ok) {
       _abastFlash('#166534');
-      alerta(`Reposición completada — ${d.unidades_movidas || ''} uds a ${ABAST_TAREA.ubicacion_picking}`, 'ok');
+      alerta(`Reposición completada — ${d.tarea?.unidades_movidas || ''} uds a ${ABAST_TAREA.ubicacion_picking}`, 'ok');
       ABAST_TAREA = null;
       setTimeout(abastCerrarHUD, 800);
     } else {
@@ -649,30 +676,3 @@ function abastCambiarAModo(modo) {
   }
 }
 
-function abastVerificarBotonModo() {
-  const contenido = document.getElementById('contenido-tarea');
-  if (!contenido || !OPERARIO?.puede_abastecer) return;
-  if (TAREA_ACTUAL) {
-    const btn = document.getElementById('btn-modo-abastecedor');
-    if (btn) btn.remove();
-    return;
-  }
-  if (!document.getElementById('btn-modo-abastecedor')) {
-    const btn = document.createElement('button');
-    btn.id = 'btn-modo-abastecedor';
-    btn.textContent = 'Cambiar a modo Abastecedor';
-    btn.style.cssText = `
-      position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
-      padding:12px 24px;background:#1c2a1c;border:1px solid #166534;
-      border-radius:24px;color:#4ade80;font-size:13px;font-weight:700;
-      cursor:pointer;z-index:50;box-shadow:0 4px 20px #00000066;
-      white-space:nowrap;
-    `;
-    btn.onclick = () => {
-      clearInterval(TIMER_OPERARIO);
-      TAREA_ACTUAL = null;
-      abastIniciar();
-    };
-    document.body.appendChild(btn);
-  }
-}

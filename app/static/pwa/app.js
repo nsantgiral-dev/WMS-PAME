@@ -203,7 +203,8 @@ function mostrarSegunRol(rol) {
     empCargarTareas();
     TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
   } else if (puedeAbastecer && (puedePicar || puedeEmpacar)) {
-    // Rol dual: picker/empacador + abastecedor → picker por defecto, botón para cambiar
+    // Rol dual: picker/empacador + abastecedor → picker por defecto; Reposición
+    // entra sola como nivel 2 de la cola unificada (pedirTarea), sin botón de modo.
     pantalla('pantalla-operario');
     if (OPERARIO) actualizarUI(OPERARIO);
     pedirTarea();
