@@ -213,10 +213,21 @@ async function empIniciarHUD(packingId) {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
       });
-      await fetch(`/api/packing/${packingId}/iniciar`, {
+      const rIniciar = await fetch(`/api/packing/${packingId}/iniciar`, {
         method: 'PUT',
         headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
       });
+      if (!rIniciar.ok) {
+        // Otro empacador ya tomó esta tarea (o cambió de estado) entre que
+        // se cargó la lista y este clic -- no seguir: sin esto, el HUD se
+        // activaba igual sobre una tarea que ya no es de este empacador,
+        // y terminaba en "Exceso" infinito o un 403 al intentar cerrar caja.
+        EMP_TAREA = null;
+        const dErr = await rIniciar.json().catch(() => ({}));
+        alerta(dErr.error || 'Otro empacador ya tomó esta tarea — actualizando lista', 'advertencia');
+        empCargarTareas();
+        return;
+      }
       // Re-cargar para obtener cantidades actualizadas tras el sync de picking
       const tFresh = await get(`/api/packing/${packingId}`);
       if (tFresh && tFresh.id) Object.assign(t, tFresh);
