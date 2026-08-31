@@ -2187,13 +2187,14 @@ function _condRenderFormParada() {
 
         <div id="cond-motivo-descuento-wrap" style="margin-top:12px;display:none;">
           <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
-          <select id="cond-motivo-descuento"
+          <select id="cond-motivo-descuento" onchange="condActualizarPreviewDescuento()"
             style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
             <option value="">— Seleccionar —</option>
             ${_COND_RETENCIONES.map(ret =>
               `<option value="${ret.tipo}" ${ret.tipo===motivoActual?'selected':''}>${ret.nombre}</option>`
             ).join('')}
           </select>
+          <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:13px;color:#aaa;"></div>
         </div>
       </div>
       ` : `
@@ -2335,15 +2336,58 @@ function condSelTipoPago(tipo) {
   if (tipo === 'PARCIAL') condActualizarMotivoVisible();
 }
 
-/** Muestra el desplegable de motivo (del DESCUENTO, no del rechazo) solo si el conductor ya escribió un monto parcial menor al valor a cobrar. */
+/**
+ * Muestra el desplegable de motivo (del DESCUENTO, no del rechazo) apenas se
+ * elige Pago Parcial — antes esperaba a que el conductor ya hubiera escrito
+ * un monto menor al valor a cobrar, así que el select quedaba escondido justo
+ * cuando más falta hacía (recién elegido "Pago Parcial", campo de monto
+ * todavía vacío). El motivo no depende de cuánto se vaya a escribir, depende
+ * de que el pago sea parcial — así que se muestra con eso solo.
+ */
 function condActualizarMotivoVisible() {
   const el = document.getElementById('cond-contenido');
   const wrap = document.getElementById('cond-motivo-descuento-wrap');
-  const inp = document.getElementById('cond-monto-parcial');
-  if (!wrap || !inp || !el) return;
-  const monto = parseInt(inp.value, 10) || 0;
-  const techo = el._valorAjustado != null ? el._valorAjustado : 0;
-  wrap.style.display = (monto > 0 && monto < techo) ? 'block' : 'none';
+  if (!wrap || !el) return;
+  wrap.style.display = (el._tipoPagoSel === 'PARCIAL') ? 'block' : 'none';
+  condActualizarPreviewDescuento();
+}
+
+/**
+ * Calcula y muestra cuánto sería el descuento según la tasa real de la
+ * retención elegida — misma fórmula que usa Liquidación de escritorio
+ * (`base_de_retencion`/`monto_de_retencion` en liquidacion_service.py):
+ * ReteIVA va sobre el IVA de la factura, todo lo demás sobre la base
+ * gravable. `base_gravable`/`iva_factura` ya vienen en la parada (los trae
+ * `RutaService.listar_paradas` desde Siesa cuando se cargó la ruta), así que
+ * esto corre sin conexión — no hace falta volver a preguntarle a Siesa.
+ *
+ * Es una vista previa para que el conductor y quien liquide vean el mismo
+ * número desde el principio — la fuente de verdad sigue siendo Liquidación,
+ * que sí valida contra Siesa antes de mandar el Documento Contable.
+ */
+function condActualizarPreviewDescuento() {
+  const prev = document.getElementById('cond-motivo-descuento-preview');
+  if (!prev) return;
+  const tipo = document.getElementById('cond-motivo-descuento')?.value || '';
+  const p = _COND_PARADA_FORM;
+  if (!tipo || !p) { prev.textContent = ''; return; }
+
+  const ret = _COND_RETENCIONES.find(r => r.tipo === tipo);
+  const baseGravable = p.base_gravable;
+  const iva = p.iva_factura;
+  if (!ret || !ret.tasa || baseGravable == null || iva == null) {
+    prev.innerHTML = '<span style="color:#f59e0b;">No se pudo calcular el valor estimado — falta el desglose de Siesa para esta factura.</span>';
+    return;
+  }
+  const base = tipo === 'RETEIVA' ? iva : baseGravable;
+  const valor = Math.round(base * ret.tasa * 100) / 100;
+  prev.innerHTML = `Descuento estimado: <strong style="color:#4ade80;">${_condFmt(valor)}</strong>` +
+    ` (${(ret.tasa * 100).toLocaleString('es-CO', {maximumFractionDigits: 3})}% sobre ${_condFmt(base)})`;
+}
+
+/** Formatea un número como pesos colombianos, igual que el resto de la pantalla del conductor. */
+function _condFmt(v) {
+  return '$' + Number(v || 0).toLocaleString('es-CO');
 }
 
 /**
