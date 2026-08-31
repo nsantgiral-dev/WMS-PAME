@@ -1505,4 +1505,142 @@ class TestConnektaAjusteAlPesoDC:
                     monto=1231, base_gravable=49244, tipo_docto_fe='FE', consec_fe=1,
                     ajuste_valor=3000, ajuste_razon='Forzar descuadre',
                 )
-        mock_post.assert_not_called()
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Corregir monto declarado — reportado el 2026-08-31 (PD1443, BENAVIDES
+# PAPAMIJA ERICA JAZMIN): el conductor declaró $58.000, pero el cliente
+# tenía derecho a un descuento distinto (ICA 4x1000, $202,7) del que se
+# aplicó en la puerta — el neto real era $60.101,3. La diferencia
+# ($2.101,3) supera el tope del ajuste al peso ($1.000) y NO es un
+# faltante real: el cliente pagó lo que faltaba después. `confirmar_parada`
+# ya no acepta editar el monto porque la ruta pasó de EN_TRANSITO a
+# ENTREGADA — esta es la vía angosta que sí queda.
+# ═══════════════════════════════════════════════════════════════════
+
+class TestCorregirMontoDeclarado:
+
+    def test_corrige_monto_y_deja_auditoria(self, app, db, recaudo_liq):
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='TRANSFERENCIA', monto=58000)
+        resultado = LiquidacionService.corregir_monto_declarado(
+            recaudo.id, nuevo_monto=60101.3,
+            razon='Cliente pagó el faltante tras verificar que el descuento inicial fue excesivo',
+            admin_id=7)
+        assert resultado['monto_cobrado'] == 60101.3
+        db.session.refresh(recaudo)
+        assert float(recaudo.monto_cobrado) == 60101.3
+        assert recaudo.editado_por == 7
+        assert recaudo.editado_en is not None
+        assert '58,000' in recaudo.observaciones
+        assert 'faltante tras verificar' in recaudo.observaciones
+
+    def test_no_toca_siesa_no_encola_nada(self, app, db, recaudo_liq):
+        """Solo corrige el WMS — a diferencia del ajuste al peso, esto no
+        crea ningún SiesaJob por sí solo."""
+        from app.models.siesa_job import SiesaJob
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=58000)
+        LiquidacionService.corregir_monto_declarado(
+            recaudo.id, nuevo_monto=60101.3, razon='typo corregido', admin_id=1)
+        assert SiesaJob.query.filter_by(
+            referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id).count() == 0
+
+    def test_rechaza_si_rc_ya_disparado(self, app, db, recaudo_liq):
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=58000, rc=True)
+        with pytest.raises(ValueError, match='ya se envió'):
+            LiquidacionService.corregir_monto_declarado(
+                recaudo.id, nuevo_monto=60101.3, razon='typo', admin_id=1)
+
+    def test_rechaza_si_hay_rc_en_cola(self, app, db, recaudo_liq):
+        from app.models.siesa_job import SiesaJob
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=58000)
+        SiesaJob.encolar(tipo='RECIBO_CAJA', payload={'recaudo_id': recaudo.id},
+                         referencia_tipo='RecaudoEntrega', referencia_id=recaudo.id)
+        db.session.commit()
+        with pytest.raises(ValueError, match='en cola'):
+            LiquidacionService.corregir_monto_declarado(
+                recaudo.id, nuevo_monto=60101.3, razon='typo', admin_id=1)
+
+    def test_rechaza_estado_rechazado(self, app, db, recaudo_liq):
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='RECHAZADO', pago='EFECTIVO', monto=0)
+        with pytest.raises(ValueError, match='RECHAZADO'):
+            LiquidacionService.corregir_monto_declarado(
+                recaudo.id, nuevo_monto=1000, razon='typo', admin_id=1)
+
+    def test_rechaza_monto_cero_o_negativo(self, app, db, recaudo_liq):
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=58000)
+        with pytest.raises(ValueError, match='mayor a 0'):
+            LiquidacionService.corregir_monto_declarado(
+                recaudo.id, nuevo_monto=0, razon='typo', admin_id=1)
+
+    def test_rechaza_sin_razon(self, app, db, recaudo_liq):
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=58000)
+        with pytest.raises(ValueError, match='razón'):
+            LiquidacionService.corregir_monto_declarado(
+                recaudo.id, nuevo_monto=60101.3, razon='   ', admin_id=1)
+
+    def test_rechaza_si_no_cambia_nada(self, app, db, recaudo_liq):
+        from app.services.liquidacion_service import LiquidacionService
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=58000)
+        with pytest.raises(ValueError, match='igual al ya'):
+            LiquidacionService.corregir_monto_declarado(
+                recaudo.id, nuevo_monto=58000, razon='typo', admin_id=1)
+
+    def test_reproduce_pd1443_permite_registrar_cobro_tras_corregir(
+            self, app, db, recaudo_liq):
+        """El caso real: sin corregir, registrar_cobro_recaudo revienta con
+        el guard de diferencia (($2.101,3) > tope $1.000 del ajuste al
+        peso). Corregido el monto, el mismo registro pasa limpio, sin
+        ajuste al peso — porque ya no hay diferencia que explicar."""
+        from app.services.liquidacion_service import (
+            LiquidacionService, base_de_retencion, monto_de_retencion)
+
+        base_gravable, iva, neto = 50676.0, 9628.0, 60304.0
+        total_retencion = monto_de_retencion('ICA_4X1000', base_gravable, iva)
+        monto_neto_rc_esperado = round(neto - total_retencion, 2)
+
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='TRANSFERENCIA_BANCOLOMBIA_CTE',
+                              monto=58000)
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': base_gravable, 'f470_vlr_imp': iva,
+             'f470_vlr_neto': neto, 'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
+        ]
+        mock_connekta.get_pedido_cabecera.return_value = {
+            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
+            'f461_id_sucursal_pedido_rem': '001',
+        }
+        mock_connekta.get_cxc_general = MagicMock(return_value=[
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_total_db': neto, 'f353_total_cr': 0},
+        ])
+
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            # Sin corregir: el guard de diferencia bloquea (gap > tope del
+            # ajuste al peso, y sin ajuste_valor ni siquiera se intenta).
+            with pytest.raises(ValueError, match='diferencia'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1,
+                    retenciones=[{'tipo': 'ICA_4X1000'}],
+                    monto_override=neto)
+
+            LiquidacionService.corregir_monto_declarado(
+                recaudo.id, nuevo_monto=monto_neto_rc_esperado,
+                razon='Cliente pagó el faltante — el descuento inicial fue excesivo',
+                admin_id=1)
+
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1,
+                retenciones=[{'tipo': 'ICA_4X1000'}],
+                monto_override=neto)
+
+        assert resultado['ok'] is True
+        assert resultado['monto_neto_rc'] == monto_neto_rc_esperado
+        assert len(resultado['dc_jobs']) == 1

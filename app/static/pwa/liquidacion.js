@@ -858,6 +858,13 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
           <input type="number" id="liq-monto-${recaudoId}" value="${mDefault}" step="0.01"
             onchange="liqPreviewCobro(${recaudoId})"
             style="width:100%;margin-top:6px;padding:6px;background:var(--bg-s);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:12px;">
+          ${!esParcial ? `
+          <div style="margin-top:8px;">
+            <a href="#" onclick="event.preventDefault();liqCorregirMonto(${rutaId},${recaudoId},${mCobrado})"
+              style="font-size:11px;color:var(--tx3);text-decoration:underline;cursor:pointer;">
+              ¿El monto que declaró el conductor estaba mal (no un faltante real)? Corregirlo
+            </a>
+          </div>` : ''}
         </div>`;
     } else {
       html += `<input type="hidden" id="liq-monto-${recaudoId}" value="${mDefault}">`;
@@ -927,6 +934,50 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
     liqPreviewCobro(recaudoId);
   } catch (e) {
     panel.innerHTML = `<div style="padding:12px;color:#ef4444;">${e.message || 'Error obteniendo preview'}</div>`;
+  }
+}
+
+/**
+ * Corrige `monto_cobrado` cuando el número que declaró el conductor en la
+ * calle resultó estar mal — no un faltante real, un dato de origen
+ * incorrecto (ej. el cliente pagó de menos por un descuento que no le
+ * correspondía del todo y ya pagó la diferencia). Distinto del ajuste al
+ * peso: esto no declara nada en Siesa, solo corrige el dato del WMS para
+ * que el RC salga con el número real — por eso no tiene el tope de $1.000.
+ *
+ * Existe porque `RutaService.confirmar_parada` (donde se corregiría
+ * normalmente) exige `ruta.estado == EN_TRANSITO`, y el caso real que
+ * motivó esto llega tarde: la ruta ya está ENTREGADA cuando Liquidación
+ * descubre el número mal, y para entonces esa vía ya no acepta la edición.
+ */
+async function liqCorregirMonto(rutaId, recaudoId, montoActual) {
+  const nuevoStr = prompt(
+    `Monto declarado actualmente: ${_liqFmt(montoActual)}\n\n` +
+    `¿Cuál es el monto real (ya con lo que el cliente pagó de más, si aplica)?`,
+    montoActual
+  );
+  if (nuevoStr === null) return;
+  const nuevo = parseFloat(nuevoStr);
+  if (!nuevo || nuevo <= 0) {
+    alerta('Monto inválido', 'error');
+    return;
+  }
+  const razon = prompt(
+    '¿Por qué se corrige? (obligatorio — ej. "Cliente pagó el faltante tras ' +
+    'verificar que el descuento inicial fue excesivo")'
+  );
+  if (!razon || !razon.trim()) {
+    alerta('La corrección necesita una razón — no se guardó nada', 'advertencia');
+    return;
+  }
+  try {
+    await post(`/api/rutas/${rutaId}/recaudos/${recaudoId}/corregir-monto`, {
+      monto: nuevo, razon: razon.trim(),
+    });
+    alerta('Monto corregido', 'exito');
+    await _liqRenderPanelCobro(rutaId, recaudoId);
+  } catch (e) {
+    alerta(e.message || 'Error al corregir el monto', 'error');
   }
 }
 

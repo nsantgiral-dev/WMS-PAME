@@ -1091,6 +1091,95 @@ class LiquidacionService:
         }
 
     @staticmethod
+    def corregir_monto_declarado(recaudo_id: int, nuevo_monto: float, razon: str,
+                                  admin_id: int = None) -> dict:
+        """
+        Corrige `monto_cobrado` cuando lo que el conductor declaró en la calle
+        resultó estar mal — no porque falte plata, sino porque el número en sí
+        era incorrecto (el cliente pagó de menos por un descuento que no le
+        correspondía del todo y luego pagó la diferencia, un error de
+        digitación, etc.).
+
+        Deliberadamente NO es lo mismo que el ajuste al peso
+        (`ajuste_valor`/`ajuste_razon` en `registrar_cobro_recaudo`): ese
+        declara una pérdida real contra una cuenta de resultados de Siesa y
+        por eso tiene tope. Esto no le dice nada nuevo a Siesa — solo corrige
+        el dato de origen del WMS para que el RC (y, si aplica, el DC) salgan
+        con el número real cuando por fin se registre el cobro. Sin tope: un
+        error de digitación de $50.000 sigue siendo un error de digitación,
+        no un riesgo financiero de $50.000.
+
+        `RutaService.confirmar_parada` ya permite corregir este mismo campo,
+        pero SOLO mientras `ruta.estado == EN_TRANSITO` — el caso real que
+        motivó esto es exactamente el que llega tarde: la ruta ya está
+        ENTREGADA (o más allá) cuando Liquidación descubre el número mal.
+        Ese guard no se toca; este es un segundo camino, angosto a propósito
+        (solo el monto, nunca estado_entrega/items_entregados/bultos), para
+        el momento en que el primero ya no aplica.
+        """
+        recaudo = db.session.query(RecaudoEntrega).with_for_update().get(recaudo_id)
+        if not recaudo:
+            raise LookupError(f'RecaudoEntrega {recaudo_id} no encontrado')
+
+        if recaudo.estado_entrega not in (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL):
+            raise ValueError(
+                f'No se puede corregir el monto de una parada {recaudo.estado_entrega}: '
+                'solo ENTREGADO o PARCIAL representan dinero recibido')
+
+        # Mismo momento de congelamiento que `confirmar_parada` — y por la
+        # misma razón (ver ese comentario): el RC ya se arma desde este
+        # campo; cambiarlo después de que salió deja al WMS y a Siesa
+        # diciendo cifras distintas sin que ningún reintento lo reconcilie.
+        if recaudo.siesa_rc_triggered:
+            raise ValueError(
+                'El recibo de caja de esta parada ya se envió a Siesa — el '
+                'monto ya no se puede corregir desde acá. Una corrección de '
+                'un valor ya contabilizado se hace con nota crédito.'
+            )
+        if _hay_rc_en_cola(recaudo_id):
+            raise ValueError(
+                'Ya hay un Recibo de Caja en cola para este recaudo — espera '
+                'a que se procese (o falle) antes de corregir el monto.'
+            )
+
+        nuevo_monto = round(float(nuevo_monto or 0), 2)
+        if nuevo_monto <= 0:
+            raise ValueError('El monto corregido debe ser mayor a 0')
+        razon = (razon or '').strip()
+        if not razon:
+            raise ValueError(
+                'La corrección necesita una razón. No es un ajuste contable '
+                '—no toca Siesa—, pero sigue siendo dinero: sin razón, en '
+                'tres meses nadie sabe por qué cambió el número.'
+            )
+
+        monto_anterior = float(recaudo.monto_cobrado or 0)
+        if abs(nuevo_monto - monto_anterior) < 0.01:
+            raise ValueError(
+                f'El monto corregido (${nuevo_monto:,.2f}) es igual al ya '
+                'declarado — no hay nada que corregir')
+
+        ahora = _ahora_bogota()
+        nota = (
+            f'[CORRECCIÓN MONTO {ahora.strftime("%Y-%m-%d %H:%M")} · '
+            f'admin {admin_id}] ${monto_anterior:,.2f} → ${nuevo_monto:,.2f}: {razon}'
+        )
+        recaudo.observaciones = (
+            f'{recaudo.observaciones}\n{nota}' if recaudo.observaciones else nota
+        )
+        recaudo.monto_cobrado = nuevo_monto
+        recaudo.editado_por = admin_id
+        recaudo.editado_en = ahora
+        db.session.commit()
+
+        logger.info(
+            '[LIQUIDACION] Recaudo %d: monto_cobrado corregido $%.2f → $%.2f '
+            'por admin %s — %s',
+            recaudo_id, monto_anterior, nuevo_monto, admin_id, razon,
+        )
+        return recaudo.to_dict()
+
+    @staticmethod
     def liquidar_ruta_siesa(ruta_id: int, admin_id: int = None) -> dict:
         """
         Procesa todos los recaudos de una ruta y encola los jobs Siesa correspondientes.
