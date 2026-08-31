@@ -1007,7 +1007,7 @@ def liquidacion_dashboard():
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver el dashboard de liquidación'}), 403
 
     from datetime import date as _date
-    from sqlalchemy import func, or_
+    from sqlalchemy import and_, func, or_
     from sqlalchemy.orm import selectinload, joinedload
     from app.models.bulto import Bulto
     from app.models.recaudo_entrega import RecaudoEntrega
@@ -1037,8 +1037,23 @@ def liquidacion_dashboard():
                  joinedload(RutaDespacho.vehiculo),
                  joinedload(RutaDespacho.ruta_maestra),
              )
-             .filter(RutaDespacho.fecha_programada >= fecha_desde)
-             .filter(RutaDespacho.fecha_programada <= fecha_hasta)
+             # `fecha_programada IS NULL` cuenta como "siempre dentro del
+             # rango", no como "nunca" — que es lo que un `>=`/`<=` normal le
+             # hace a NULL en SQL. `crear_ruta()` (ruta ad-hoc del muelle, sin
+             # RutaMaestra) la dejaba sin asignar, y esta consulta la
+             # descartaba en silencio para CUALQUIER rango de fechas: una
+             # ruta ya despachada y con recaudos reales quedaba invisible
+             # para liquidar, sin que ningún filtro la recuperara. Ahora
+             # `crear_ruta()` la asigna (Regla 0), pero esto se queda como
+             # red de seguridad para lo que ya quedó huérfano en producción y
+             # para cualquier otro camino de creación que se le olvide.
+             .filter(or_(
+                 RutaDespacho.fecha_programada.is_(None),
+                 and_(
+                     RutaDespacho.fecha_programada >= fecha_desde,
+                     RutaDespacho.fecha_programada <= fecha_hasta,
+                 ),
+             ))
              .filter(or_(
                  RutaDespacho.estado == 'ENTREGADA',
                  RutaDespacho.estado_financiero != 'PENDIENTE',

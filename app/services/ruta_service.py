@@ -357,17 +357,32 @@ class RutaService:
             q = q.filter_by(vehiculo_id=vehiculo_id)
         if estado:
             q = q.filter_by(estado=estado)
-        # Rango de fechas (default: hoy si no se especifica)
+        # Rango de fechas (default: hoy si no se especifica).
+        #
+        # `fecha_programada IS NULL` cuenta como "siempre visible", no como
+        # "nunca" — que es lo que `>=`/`<=`/`==` normales le hacen a NULL en
+        # SQL. `crear_ruta()` (ad-hoc, sin RutaMaestra) podía dejarla sin
+        # asignar, y con un filtro estricto esa ruta no aparecía en NINGÚN
+        # rango de fechas posible, ni siquiera uno amplio a propósito. Con
+        # `crear_ruta()` ya asignándola (Regla 0), esto queda como red de
+        # seguridad para lo que quedó huérfano en producción.
         if fecha_desde or fecha_hasta:
             fd = _date.fromisoformat(fecha_desde) if fecha_desde else _dia_operativo()
             fh = _date.fromisoformat(fecha_hasta) if fecha_hasta else fd
             if fh < fd:
                 fd, fh = fh, fd
-            q = q.filter(RutaDespacho.fecha_programada >= fd,
-                         RutaDespacho.fecha_programada <= fh)
+            q = q.filter(db.or_(
+                RutaDespacho.fecha_programada.is_(None),
+                db.and_(RutaDespacho.fecha_programada >= fd,
+                        RutaDespacho.fecha_programada <= fh),
+            ))
         else:
-            # Sin filtro explícito → solo hoy para no cargar todo el histórico
-            q = q.filter(RutaDespacho.fecha_programada == _dia_operativo())
+            # Sin filtro explícito → hoy (+ huérfanas sin fecha) para no
+            # cargar todo el histórico.
+            q = q.filter(db.or_(
+                RutaDespacho.fecha_programada.is_(None),
+                RutaDespacho.fecha_programada == _dia_operativo(),
+            ))
         return q.paginate(page=page, per_page=50, error_out=False)
 
     @staticmethod
@@ -391,6 +406,17 @@ class RutaService:
             tipo_ruta=data['tipo_ruta'],
             notas=data.get('notas', '').strip() or None,
             estado=EstadoRutaDespacho.EN_CARGUE,
+            # A diferencia de `programar_viaje` (desde RutaMaestra, exige la
+            # fecha), esta ruta ad-hoc del muelle nunca traía una — quedaba
+            # `fecha_programada IS NULL` para siempre (nada la asigna después:
+            # `cerrar_ruta`/`entregar_ruta` solo tocan `fecha_cierre`/
+            # `fecha_entregada`). Cualquier consulta filtrada por rango de
+            # fechas —el dashboard de Liquidación, el panel de Rutas sin
+            # filtro explícito— excluye NULL por construcción en SQL: la ruta
+            # quedaba invisible para liquidar sin importar qué fecha se
+            # pidiera. `_dia_operativo()` (Bogotá, Regla 5) porque es el día
+            # en que se despachó de verdad.
+            fecha_programada=_dia_operativo(),
         )
         db.session.add(ruta)
         db.session.flush()
