@@ -165,10 +165,28 @@ class TestFormaPagoMapping:
     def test_consignacion_mapea_a_transferencia(self):
         assert self.gw._forma_pago_map.get('CONSIGNACION') == self.gw.medio_pago_transferencia
 
-    def test_forma_desconocida_no_rompe(self):
-        # get con default devuelve el medio por defecto
-        resultado = self.gw._forma_pago_map.get('BITCOIN', self.gw.medio_pago_efectivo)
-        assert resultado == self.gw.medio_pago_efectivo
+    def test_forma_desconocida_revienta_en_vez_de_reportarse_como_efectivo(self):
+        """Hasta el 2026-08-31 un `forma_pago` sin medio Siesa configurado
+        (CHEQUE, EXENTO, cualquier valor no mapeado) caía silencioso al
+        default de `.get()` y se reportaba como EFECTIVO — un cheque
+        cuadraba la caja de Siesa con plata que nunca entró en billetes.
+        Ahora revienta antes del POST (Regla 6) en vez de mentir el medio."""
+        with patch.object(self.gw, '_post', return_value={'detalle': 'ok'}):
+            with pytest.raises(ValueError, match='CHEQUE'):
+                self.gw.trigger_recibo_caja(
+                    tercero_nit='900123456', sucursal='001', monto=1000,
+                    forma_pago='CHEQUE', tipo_docto_fe='FE', consec_fe='1',
+                )
+            with pytest.raises(ValueError, match='EXENTO'):
+                self.gw.trigger_recibo_caja(
+                    tercero_nit='900123456', sucursal='001', monto=1000,
+                    forma_pago='EXENTO', tipo_docto_fe='FE', consec_fe='1',
+                )
+            with pytest.raises(ValueError, match='BITCOIN'):
+                self.gw.trigger_recibo_caja(
+                    tercero_nit='900123456', sucursal='001', monto=1000,
+                    forma_pago='BITCOIN', tipo_docto_fe='FE', consec_fe='1',
+                )
 
     def test_medios_default_correctos(self):
         assert self.gw.medio_pago_efectivo == 'EFE'

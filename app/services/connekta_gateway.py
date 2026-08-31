@@ -4200,7 +4200,12 @@ class ConnektaGateway:
         Registra cobro del conductor. Cruza automáticamente contra la factura (CxC).
 
         Secciones spec 142888: Inicial → RCyotrosingresos → Caja → CxC → Final
-        forma_pago: EFECTIVO | TRANSFERENCIA | TARJETA | CONSIGNACION → medio de pago Siesa.
+        forma_pago: cualquier clave de `self._forma_pago_map` (EFECTIVO, TARJETA,
+                    las transferencias por banco, TRANSFERENCIA/CONSIGNACION
+                    retrocompatibles) → medio de pago Siesa. `CHEQUE` y `EXENTO`
+                    existen como opción en la pantalla del conductor pero NO
+                    tienen código Siesa configurado todavía — levanta `ValueError`
+                    en vez de reportarlos como EFECTIVO (ver comentario más abajo).
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
         cuenta_cxc: f253_id real de la factura (ej '13050501'). Si vacío, usa self.cxc_auxiliar
                     como fallback — pero el cruce puede no aplicar si la factura usa otra cuenta.
@@ -4259,9 +4264,28 @@ class ConnektaGateway:
         co_fact = co_factura or co
 
         # Medio de pago Siesa según forma de pago WMS
-        medio_pago = self._forma_pago_map.get(
-            (forma_pago or '').upper(), self.medio_pago_efectivo
-        )
+        #
+        # SIN default a EFECTIVO. Hasta el 2026-08-31 un `forma_pago` sin
+        # entrada en el mapa (CHEQUE, EXENTO — nunca tuvieron código Siesa
+        # configurado, ver `docstring` de este método) caía silencioso a
+        # `self.medio_pago_efectivo`: un cheque quedaba reportado en Siesa
+        # como si hubiera entrado en efectivo, y la caja de ese día cuadraba
+        # con plata que nunca llegó en billetes. Regla 0 — ante dato ausente,
+        # el lado conservador es declararlo, no inventar el más parecido.
+        #
+        # Revienta ACÁ (antes del POST, Regla 6) para que el RC quede
+        # FALLIDO con motivo explícito en vez de "enviado" con el medio
+        # equivocado — un RC que no sale se reintenta y se ve en el DLQ; uno
+        # que sale mal casi nunca se nota hasta el cuadre de caja.
+        _fp = (forma_pago or '').upper()
+        if _fp not in self._forma_pago_map:
+            raise ValueError(
+                f'forma_pago={_fp!r} sin medio de pago Siesa configurado '
+                f'(Maestros → Medios de pago) — el RC no se envía como '
+                f'EFECTIVO por defecto. Medios válidos: '
+                f'{", ".join(sorted(self._forma_pago_map))}'
+            )
+        medio_pago = self._forma_pago_map[_fp]
         # Caja según CO (Siesa: Tesorería → Cajas)
         id_caja = self._co_caja_map.get(co, '999')
         un = unidad_negocio or self.unidad_negocio or '99'
