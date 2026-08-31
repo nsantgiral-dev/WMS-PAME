@@ -2381,8 +2381,20 @@ function condActualizarPreviewDescuento() {
   }
   const base = tipo === 'RETEIVA' ? iva : baseGravable;
   const valor = Math.round(base * ret.tasa * 100) / 100;
-  prev.innerHTML = `Descuento estimado: <strong style="color:#4ade80;">${_condFmt(valor)}</strong>` +
+  let html = `Descuento estimado: <strong style="color:#4ade80;">${_condFmt(valor)}</strong>` +
     ` (${(ret.tasa * 100).toLocaleString('es-CO', {maximumFractionDigits: 3})}% sobre ${_condFmt(base)})`;
+
+  // Total con el descuento ya aplicado — lo que de verdad debería cobrar el
+  // conductor en la puerta, no solo cuánto se descuenta. `p.valor_factura`
+  // es el mismo total que ya se ve arriba en "VALOR A COBRAR" ($61.588 en
+  // este caso), así que acá se resta el mismo descuento que se muestra
+  // arriba, no un cálculo aparte.
+  if (p.valor_factura != null) {
+    const totalConDescuento = Math.max(0, Math.round((p.valor_factura - valor) * 100) / 100);
+    html += `<div style="margin-top:4px;">Total a cobrar con descuento: ` +
+      `<strong style="color:#4ade80;">${_condFmt(totalConDescuento)}</strong></div>`;
+  }
+  prev.innerHTML = html;
 }
 
 /** Formatea un número como pesos colombianos, igual que el resto de la pantalla del conductor. */
