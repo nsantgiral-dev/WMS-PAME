@@ -35,7 +35,26 @@ class FormaPago:
     CHEQUE        = 'CHEQUE'
     CREDITO       = 'CREDITO'
     EXENTO        = 'EXENTO'
-    VALIDOS       = (EFECTIVO, TRANSFERENCIA, CHEQUE, CREDITO, EXENTO)
+    TARJETA       = 'TARJETA'
+    #: Medios bancarios específicos — alineados 1:1 con `_forma_pago_map` de
+    #: `connekta_gateway.py` y con `_FORMAS_PAGO_COBRO` de `rutas.js`. Antes
+    #: de esto, `TRANSFERENCIA` a secas era el único medio bancario que el
+    #: conductor podía declarar; el `<select>` se desglosó por banco pero
+    #: esta validación se quedó con la lista vieja, y el conductor no podía
+    #: confirmar ninguna parada pagada por transferencia (`forma_pago
+    #: inválido`, rechazado en el servidor pese a venir de una opción real
+    #: de la pantalla).
+    TRANSFERENCIAS_BANCO = (
+        'TRANSFERENCIA_BANCOLOMBIA_AH', 'TRANSFERENCIA_BANCOLOMBIA_CTE',
+        'TRANSFERENCIA_BBVA', 'TRANSFERENCIA_BOGOTA',
+        'TRANSFERENCIA_AGRARIO_AH', 'TRANSFERENCIA_AGRARIO_CTE',
+        'TRANSFERENCIA_DAVIVIENDA', 'TRANSFERENCIA_IHO_CTE',
+    )
+    #: `CONSIGNACION` es el otro sinónimo retrocompatible de `_forma_pago_map`
+    #: (no vive en el `<select>` actual, pero un `RecaudoEntrega` viejo o una
+    #: reedición pueden seguir mandándolo).
+    VALIDOS = (EFECTIVO, TRANSFERENCIA, 'CONSIGNACION', TARJETA, CHEQUE,
+               CREDITO, EXENTO) + TRANSFERENCIAS_BANCO
 
 
 class RutaService:
@@ -1106,7 +1125,8 @@ class RutaService:
         tareas = ruta.tareas_unicas()
         recaudos_map = {r.tarea_id: r for r in ruta.recaudos}
         paradas = []
-        totales = {'EFECTIVO': 0, 'TRANSFERENCIA': 0, 'CHEQUE': 0, 'CREDITO': 0, 'EXENTO': 0}
+        totales = {'EFECTIVO': 0, 'TRANSFERENCIA': 0, 'TARJETA': 0, 'CHEQUE': 0,
+                   'CREDITO': 0, 'EXENTO': 0}
         sin_gestionar = 0
 
         for t in tareas:
@@ -1131,7 +1151,15 @@ class RutaService:
             paradas.append(parada)
             if r:
                 fp = (r.forma_pago or '').upper()
-                if fp in totales:
+                # Mismo criterio que `liquidacion_dashboard` (rutas.py): un
+                # `==` fijo contra `'TRANSFERENCIA'` dejaba de bucketizar
+                # cualquier medio por banco (`TRANSFERENCIA_BANCOLOMBIA_AH`,
+                # etc.) — el monto seguía sumando a `total_recaudado()`
+                # (agnóstico de forma_pago), solo desaparecía de este
+                # desglose por medio.
+                if fp.startswith('TRANSFERENCIA') or fp == 'CONSIGNACION':
+                    totales['TRANSFERENCIA'] += float(r.monto_cobrado or 0)
+                elif fp in totales:
                     totales[fp] += float(r.monto_cobrado or 0)
             else:
                 sin_gestionar += 1
