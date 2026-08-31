@@ -8,7 +8,7 @@ crear_devolucion (tope contra lo facturado), confirmar_entrada_fisica
 flag en el payload de la NC).
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
@@ -309,6 +309,120 @@ class TestConfirmarEntradaFisica:
             referencia_tipo='DevolucionCliente', referencia_id=devolucion.id
         ).count()
         assert jobs == 1
+
+    @patch('app.services.siesa_job_service.disparar_dlq_inmediato')
+    def test_averiado_de_inicio_a_fin_wms_y_payload_real_a_siesa(
+            self, mock_dlq, app, db, tarea_packing_despachada,
+            producto, producto2, almacen, ub_reserva):
+        """Simulación completa del checkbox «Averiado», en una sola devolución
+        con DOS productos — uno marcado, uno no — para probar que es de
+        verdad POR LÍNEA y no una bandera global:
+
+        1. Recepción confirma entrada física (lo que hace este mismo test en
+           versiones más chicas, arriba) — se verifica dónde aterriza cada
+           producto en el WMS.
+        2. Se toma el SiesaJob REAL que esa confirmación encoló (no uno
+           fabricado a mano) y se ejecuta de verdad (`_ejecutar_job`) — se
+           verifica el payload que de verdad viajaría a Siesa (251126),
+           línea por línea.
+
+        Si el checkbox no cumpliera su función, alguna de estas cuatro
+        aserciones fallaría: el producto averiado terminaría en la ubicación
+        normal, o el sano en AVERIADOS, o el payload a Siesa no
+        distinguiría la bodega por línea."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        from app.services.siesa_job_service import _ejecutar_job
+        from app.models.inventario import UbicacionProducto, MovimientoInventario
+        from app.models.ubicacion import Ubicacion
+        from app.models.siesa_job import SiesaJob
+
+        # Un solo mock para las dos rutas de import de `connekta` que este
+        # flujo realmente atraviesa: devolucion_cliente_service lo importa a
+        # nivel de módulo (para el re-GET de confirmar_entrada_fisica) y
+        # siesa_job_service igual (para _ejecutar_job) — son dos referencias
+        # distintas al mismo singleton, así que las dos hay que parchearlas.
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            _fila_rowid(ref=producto.codigo_siesa, rowid='901', cant=10, bodega='NB1'),
+            _fila_rowid(ref=producto2.codigo_siesa, rowid='902', cant=10, bodega='NB1'),
+        ]
+
+        with patch('app.services.devolucion_cliente_service.connekta', mock_connekta), \
+             patch('app.services.connekta_gateway.connekta', mock_connekta):
+            devolucion = DevolucionClienteService.crear_devolucion(
+                tarea_packing_id=tarea_packing_despachada.id,
+                tipo_docto_fe='FEW', consec_fe='5555',
+                almacen_id=almacen.id, recepcionista_id=None,
+                lineas=[
+                    _linea_input(producto, cantidad_facturada=10, cantidad_devuelta=2,
+                                es_averiado=True),
+                    _linea_input(producto2, cantidad_facturada=10, cantidad_devuelta=3,
+                                es_averiado=False),
+                ],
+            )
+
+            # ── Paso 1: WMS — ¿cada producto aterriza donde debe? ──────────
+            DevolucionClienteService.confirmar_entrada_fisica(devolucion.id, recepcionista_id=1)
+
+            ub_averiados = Ubicacion.query.filter_by(
+                codigo='AVERIADOS', almacen_id=almacen.id).first()
+            assert ub_averiados is not None, (
+                'el producto averiado debía crear la ubicación AVERIADOS')
+
+            stock_averiado_en_averiados = UbicacionProducto.query.filter_by(
+                ubicacion_id=ub_averiados.id, producto_id=producto.id).first()
+            assert stock_averiado_en_averiados is not None
+            assert stock_averiado_en_averiados.cantidad == 2
+
+            stock_averiado_normal = UbicacionProducto.query.filter(
+                UbicacionProducto.producto_id == producto.id,
+                UbicacionProducto.ubicacion_id != ub_averiados.id,
+            ).first()
+            assert stock_averiado_normal is None, (
+                'el producto marcado averiado NO debe aparecer en ninguna '
+                'ubicación de stock vendible')
+
+            stock_sano = UbicacionProducto.query.filter_by(producto_id=producto2.id).first()
+            assert stock_sano is not None
+            assert stock_sano.ubicacion_id != ub_averiados.id, (
+                'el producto SIN marcar averiado no debe terminar en AVERIADOS')
+            assert stock_sano.cantidad == 3
+
+            mov_averiado = MovimientoInventario.query.filter_by(producto_id=producto.id).first()
+            mov_sano = MovimientoInventario.query.filter_by(producto_id=producto2.id).first()
+            assert mov_averiado.tipo == 'DEVOLUCION_CLIENTE_AVERIADO'
+            assert mov_sano.tipo == 'DEVOLUCION_CLIENTE'
+
+            # ── Paso 2: el job REAL que esa confirmación encoló, ejecutado
+            # de verdad — el payload que realmente viajaría a Siesa ───────
+            job = SiesaJob.query.filter_by(
+                referencia_tipo='DevolucionCliente', referencia_id=devolucion.id
+            ).first()
+            assert job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE'
+
+            mock_connekta.modo_simulacion = False
+            mock_connekta.causal_devolucion_default = '01'
+            mock_connekta.motivo_ventas = '01'
+            mock_connekta.uom_default = 'UND'
+            mock_connekta.bodega = 'NB1'
+            mock_connekta.bodega_averias = 'AV1'
+            mock_connekta.trigger_nota_factura_crear_cruzar.return_value = {'codigo': 0}
+
+            _ejecutar_job(job)
+
+        mock_connekta.trigger_nota_factura_crear_cruzar.assert_called_once()
+        _, kwargs = mock_connekta.trigger_nota_factura_crear_cruzar.call_args
+        lineas_por_ref = {ln['f120_referencia']: ln for ln in kwargs['lineas']}
+
+        assert lineas_por_ref[producto.codigo_siesa]['f470_id_bodega'] == 'AV1', (
+            'la línea averiada debe entrar a Siesa por la bodega de averías, '
+            'no por la bodega real del pedido')
+        assert lineas_por_ref[producto2.codigo_siesa]['f470_id_bodega'] == 'NB1', (
+            'la línea sana NO debe verse afectada por el averiado de la otra '
+            'línea de la misma devolución — es por línea, no global')
+
+        db.session.refresh(devolucion)
+        assert devolucion.siesa_nc_triggered is True
 
 
 # ═══════════════════════════════════════════════════════════════════
