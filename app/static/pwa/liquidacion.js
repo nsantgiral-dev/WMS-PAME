@@ -861,7 +861,7 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
           ${!esParcial ? `
           <div style="margin-top:8px;">
             <a href="#" onclick="event.preventDefault();liqCorregirMonto(${rutaId},${recaudoId},${mCobrado})"
-              style="font-size:11px;color:var(--tx3);text-decoration:underline;cursor:pointer;">
+              style="font-size:12px;color:var(--tx3);text-decoration:underline;cursor:pointer;">
               ¿El monto que declaró el conductor estaba mal (no un faltante real)? Corregirlo
             </a>
           </div>` : ''}
