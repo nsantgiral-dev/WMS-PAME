@@ -193,6 +193,42 @@ class TestContadoEntregado:
             referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').all()
         assert len(dc_jobs) == 1
 
+    def test_estimado_declarado_erroneo_no_llega_al_dc_siesa_manda(
+            self, app, db, recaudo_liq):
+        """Reportado el 2026-08-31: el estimado que ve el conductor en
+        pantalla (`condActualizarPreviewDescuento`, rutas.js) se calcula
+        offline y puede quedar mal — la fuente de verdad tiene que seguir
+        siendo Siesa, siempre, no lo que se declaró antes. Acá el conductor
+        "estimó" $999.999 (a propósito muy distinto del real) para probar
+        que ese número nunca llega al Documento Contable — y de paso, que
+        tampoco bloquea el RC: el conductor sí pagó el neto correcto, y una
+        primera versión de este fix seguía usando el estimado malo para
+        VALIDAR el RC (no solo para el monto del DC), rechazando un cobro
+        que en realidad coincidía con Siesa."""
+        ret_rf_real = round(840336 * 0.025, 2)  # $21.008,40 — el valor real
+        recaudo = recaudo_liq(
+            estado='ENTREGADO', pago='EFECTIVO',
+            motivo_desc='RETEFUENTE_2.5',
+            monto=round(1000000 - ret_rf_real, 2),  # el conductor sí pagó el neto correcto
+            monto_desc=999999,  # pero el "estimado" de descuento que declaró está mal
+        )
+        with patch('app.services.connekta_gateway.connekta.get_rowids_factura',
+                   return_value=[{'f470_vlr_bruto': 840336, 'f470_vlr_imp': 159664,
+                                  'f470_vlr_neto': 1000000, 'f120_referencia': 'REF001',
+                                  'f470_rowid': 'R1'}]):
+            resultado = _run_procesar(recaudo, db)
+        assert resultado['rc'] == 1
+        assert resultado['dc'] == 1
+
+        from app.models.siesa_job import SiesaJob
+        rc = SiesaJob.query.filter_by(
+            referencia_id=recaudo.id, tipo='RECIBO_CAJA').first()
+        assert rc.get_payload()['monto'] == round(1000000 - ret_rf_real, 2)
+        dc = SiesaJob.query.filter_by(
+            referencia_id=recaudo.id, tipo='DOCUMENTO_CONTABLE_RET').first()
+        assert dc.get_payload()['monto'] == ret_rf_real
+        assert dc.get_payload()['monto'] != 999999
+
     def test_ya_procesado_no_duplica(self, app, db, recaudo_liq):
         recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', rc=True)
         resultado = _run_procesar(recaudo, db)

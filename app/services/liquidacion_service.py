@@ -1482,19 +1482,26 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                         # antes) sobre-acreditaba la cartera del cliente por
                         # el valor de la retención. Misma cuenta que ya hace
                         # `registrar_cobro_recaudo` (`monto_neto_rc`).
+                        # SIEMPRE se recalcula contra Siesa — nunca se confía
+                        # en `recaudo.monto_descuento` directo (ver el mismo
+                        # criterio y su historia en `_encolar_documento_
+                        # contable`). Esto no es solo por consistencia: si el
+                        # estimado declarado está mal, usarlo acá bloquea un
+                        # pago que en realidad SÍ coincide con Siesa — el
+                        # guard de abajo compararía `monto` (correcto) contra
+                        # un `monto_neto_rc` armado con la retención
+                        # equivocada, y rechazaría un cobro que estaba bien.
                         retencion_preview = 0.0
                         if recaudo.motivo_descuento:
-                            retencion_preview = float(recaudo.monto_descuento or 0)
-                            if retencion_preview <= 0:
-                                base_gravable_rc = sum(
-                                    float(ln.get('f470_vlr_bruto', 0))
-                                    for ln in lineas_rc)
-                                total_iva_rc = sum(
-                                    float(ln.get('f470_vlr_imp', 0))
-                                    for ln in lineas_rc)
-                                retencion_preview = monto_de_retencion(
-                                    recaudo.motivo_descuento,
-                                    base_gravable_rc, total_iva_rc)
+                            base_gravable_rc = sum(
+                                float(ln.get('f470_vlr_bruto', 0))
+                                for ln in lineas_rc)
+                            total_iva_rc = sum(
+                                float(ln.get('f470_vlr_imp', 0))
+                                for ln in lineas_rc)
+                            retencion_preview = monto_de_retencion(
+                                recaudo.motivo_descuento,
+                                base_gravable_rc, total_iva_rc)
                         monto_neto_rc = round(total_neto_rc - retencion_preview, 2)
                         _validar_diferencia_declarada(
                             monto, monto_neto_rc,
@@ -1760,19 +1767,28 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                                   unidad_negocio: str = ''):
     """Encola job DOCUMENTO_CONTABLE_RET en la DLQ.
 
-    El monto sale de `recaudo.monto_descuento` si ya viene declarado (lo que
-    el cliente retuvo de verdad en la puerta, o lo que `/liquidar-completo`
-    ya calculó con `monto_de_retencion()`). Si no viene declarado —el motivo
-    entró sin monto, p.ej. datos históricos de antes del 2026-08-13—, se
-    calcula acá con la MISMA fórmula de una sola fuente
-    (`base_de_retencion()`/`monto_de_retencion()`, base gravable/IVA reales
-    de Siesa).
+    El monto SIEMPRE se recalcula contra Siesa (`base_de_retencion()`/
+    `monto_de_retencion()`, base gravable/IVA reales — misma fórmula, una
+    sola fuente) — nunca sale de `recaudo.monto_descuento` directo.
 
-    Antes esta rama calculaba `monto_cobrado * tasa` para cualquier tipo de
-    retención. Para RETEIVA eso es la fórmula equivocada —RETEIVA va sobre el
-    IVA, no sobre lo cobrado (que incluye IVA + subtotal)— y sobreestimaba el
-    monto retenido hasta ~6x en una factura típica. Sin datos reales de Siesa
-    disponibles, Regla 0: no se inventa el monto, el DC no se encola.
+    Antes: si `monto_descuento` ya venía declarado (lo que el conductor
+    escribió en la puerta, calculado offline con datos que pudieron quedar
+    desactualizados, o un valor histórico), se usaba tal cual sin volver a
+    preguntarle a Siesa — la única rama que sí llamaba a Siesa era cuando el
+    campo venía vacío. El estimado que ve el conductor en pantalla (ver
+    `condActualizarPreviewDescuento` en rutas.js) es una vista previa a
+    propósito: puede quedar desactualizado si algo de la factura cambia
+    entre que se cargó la ruta y que se liquida. Con retención ReteIVA
+    calculada mal (`monto_cobrado * tasa` en vez de `IVA * tasa`) esto ya
+    costó ~6x de sobreestimación una vez — no hay razón para confiar un
+    segundo estimado sin verificarlo, cuando ya se sabe que puede estar mal.
+
+    `recaudo.monto_descuento` no desaparece: si difiere del valor real de
+    Siesa más allá del residuo de redondeo, queda trazado en el log — no
+    bloquea la liquidación masiva de la ruta por una diferencia menor.
+
+    Si Siesa no responde, no se inventa el monto (Regla 0): el DC no se
+    encola en este ciclo — la próxima liquidación lo reintenta.
     """
     motivo = recaudo.motivo_descuento or ''
     cuenta_puc = RETENCION_PUC.get(motivo, '')
@@ -1790,37 +1806,44 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         )
         return
 
-    monto_descuento = float(recaudo.monto_descuento or 0)
-    base_gravable_payload = float(recaudo.monto_cobrado or 0)
+    from app.services.connekta_gateway import connekta
+    try:
+        lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
+    except Exception as e:
+        logger.warning(
+            '[LIQUIDACION] recaudo %d: no se pudo leer la factura en Siesa '
+            'para calcular la retención %s — DC no encolado: %s',
+            recaudo.id, motivo, e
+        )
+        return
+    if not lineas_raw:
+        logger.warning(
+            '[LIQUIDACION] recaudo %d: factura sin líneas en Siesa — '
+            'DC no encolado (retención %s)', recaudo.id, motivo
+        )
+        return
 
+    base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
+    total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
+    monto_descuento = monto_de_retencion(motivo, base_gravable, total_iva)
+    base_gravable_payload = base_de_retencion(motivo, base_gravable, total_iva)
     if monto_descuento <= 0:
-        from app.services.connekta_gateway import connekta
-        try:
-            lineas_raw = connekta.get_rowids_factura(tipo_docto_fe, consec_fe)
-        except Exception as e:
-            logger.warning(
-                '[LIQUIDACION] recaudo %d: no se pudo leer la factura en Siesa '
-                'para calcular la retención %s — DC no encolado: %s',
-                recaudo.id, motivo, e
-            )
-            return
-        if not lineas_raw:
-            logger.warning(
-                '[LIQUIDACION] recaudo %d: factura sin líneas en Siesa — '
-                'DC no encolado (retención %s)', recaudo.id, motivo
-            )
-            return
+        logger.warning(
+            '[LIQUIDACION] monto_descuento=0 para recaudo %d — DC no encolado',
+            recaudo.id
+        )
+        return
 
-        base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
-        total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
-        monto_descuento = monto_de_retencion(motivo, base_gravable, total_iva)
-        base_gravable_payload = base_de_retencion(motivo, base_gravable, total_iva)
-        if monto_descuento <= 0:
-            logger.warning(
-                '[LIQUIDACION] monto_descuento=0 para recaudo %d — DC no encolado',
-                recaudo.id
+    declarado = float(recaudo.monto_descuento or 0)
+    if declarado > 0:
+        from app.services.cxc_cruce import TOLERANCIA as _TOL
+        if abs(declarado - monto_descuento) > _TOL:
+            logger.info(
+                '[LIQUIDACION] recaudo %d: estimado declarado ($%.2f) difiere '
+                'del valor real de Siesa ($%.2f) para %s — se envía el de '
+                'Siesa, la diferencia queda solo trazada acá',
+                recaudo.id, declarado, monto_descuento, motivo
             )
-            return
 
     SiesaJob.encolar(
         tipo='DOCUMENTO_CONTABLE_RET',
