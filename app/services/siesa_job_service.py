@@ -1362,6 +1362,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
                 unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
+                ajuste_valor=float(payload.get('ajuste_valor') or 0),
+                ajuste_es_sobrante=bool(payload.get('ajuste_es_sobrante', False)),
             )
         except Exception as _e_post:
             # POST falló — verificar el saldo real antes de revertir (Regla #3:
@@ -1458,6 +1460,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
                 unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
+                ajuste_valor=float(payload.get('ajuste_valor') or 0),
+                ajuste_razon=payload.get('ajuste_razon', ''),
             )
         except Exception as _e_post:
             if recaudo and _puc:

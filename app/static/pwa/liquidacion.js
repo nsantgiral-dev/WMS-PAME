@@ -1065,31 +1065,100 @@ function liqPreviewCobro(recaudoId) {
     <div style="margin-top:6px;font-weight:700;color:var(--tx);">Total CxC cerrado: ${_liqFmt(monto)}</div>`;
 }
 
-async function liqRegistrarCobro(rutaId, recaudoId) {
+/**
+ * Ajuste al peso — mismo mecanismo que gestor-cartera-pame contra el mismo
+ * Siesa (AjustePorDiferencia). El servicio (`registrar_cobro_recaudo`)
+ * bloquea con un error que menciona "diferencia" cuando lo que declaró el
+ * conductor y el neto que el RC va a cobrar no coinciden más allá del
+ * residuo de redondeo ($100 por defecto) — y hasta ahora esa era una pared
+ * sin puerta: no había forma de decirle al sistema "sí, faltaron/sobraron
+ * $X, y esta es la razón" desde este panel.
+ *
+ * En vez de armar un segundo formulario de antemano (que la mayoría de los
+ * cobros nunca usa), se reacciona AL rechazo: el monto y las retenciones que
+ * el admin ya tiene en pantalla alcanzan para calcular exactamente cuánto
+ * ajuste explicaría la diferencia — se le pide la razón con un solo prompt
+ * y se reintenta UNA vez con eso declarado. Si el reintento también falla
+ * (tope superado, retención+sobrante sin probar, etc.) se muestra ESE error
+ * tal cual lo manda el servicio — no hay un tercer intento automático.
+ */
+function _liqCalcularAjusteParaReintento(recaudoId, monto) {
+  const panel = document.getElementById(`liq-cobro-panel-${recaudoId}`);
+  const preview = panel?.dataset.preview ? JSON.parse(panel.dataset.preview) : {};
+  const retsDisp = preview.retenciones_disponibles || [];
+  const checks = document.querySelectorAll(`.liq-ret-check-${recaudoId}:checked`);
+  let totalRet = 0;
+  checks.forEach(chk => {
+    const ret = retsDisp.find(r => r.tipo === chk.value);
+    if (ret) totalRet += ret.monto_estimado;
+  });
+  const montoNetoRc = monto - totalRet;
+  const montoCobrado = preview.monto_cobrado || 0;
+  const diferencia = montoNetoRc - montoCobrado;
+  return {
+    ajuste_valor: Math.round(Math.abs(diferencia) * 100) / 100,
+    // Mismo signo que usa el servicio: neto del RC por debajo de lo que el
+    // conductor dijo = sobrante (entregó de más); por encima = faltante.
+    ajuste_es_sobrante: diferencia < 0,
+  };
+}
+
+async function liqRegistrarCobro(rutaId, recaudoId, _ajuste) {
   const montoInput = document.getElementById(`liq-monto-${recaudoId}`);
   const monto = montoInput ? parseFloat(montoInput.value) : null;
   const checks = document.querySelectorAll(`.liq-ret-check-${recaudoId}:checked`);
   const retenciones = [];
   checks.forEach(chk => retenciones.push({ tipo: chk.value }));
 
-  if (!confirm(`¿Registrar cobro${retenciones.length ? ' con ' + retenciones.length + ' retención(es)' : ''}?`)) return;
+  // El confirm() solo se pregunta en el primer intento — un reintento con
+  // ajuste ya viene de una decisión explícita (el prompt de la razón).
+  if (!_ajuste && !confirm(`¿Registrar cobro${retenciones.length ? ' con ' + retenciones.length + ' retención(es)' : ''}?`)) return;
+
+  const body = { retenciones, monto_override: monto };
+  if (_ajuste) {
+    body.ajuste_valor = _ajuste.ajuste_valor;
+    body.ajuste_es_sobrante = _ajuste.ajuste_es_sobrante;
+    body.ajuste_razon = _ajuste.ajuste_razon;
+  }
 
   try {
     const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/registrar-cobro`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ retenciones, monto_override: monto }),
+      body: JSON.stringify(body),
     });
     const d = await r.json();
     if (r.ok && d.ok) {
       const partes = [`RC por ${_liqFmt(d.monto_neto_rc)}`];
       if (d.dc_jobs && d.dc_jobs.length) partes.push(`${d.dc_jobs.length} DC`);
+      if (_ajuste) partes.push(`ajuste ${_ajuste.ajuste_es_sobrante ? 'sobrante' : 'faltante'} de ${_liqFmt(_ajuste.ajuste_valor)}`);
       alerta(partes.join(' + ') + ' encolados', 'exito');
       _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
       _liqRenderDetalle();
-    } else {
-      alerta(d.error || 'Error al registrar cobro', 'error');
+      return;
     }
+
+    const msg = d.error || 'Error al registrar cobro';
+    // Solo se ofrece el ajuste en el PRIMER rechazo por diferencia — si el
+    // reintento con ajuste también rebota (tope, no explica, sobrante+
+    // retención), es un rechazo distinto y se muestra tal cual: seguir
+    // insistiendo con otro prompt sería ignorar lo que el servicio ya
+    // explicó (ver el mensaje de cada guard en `registrar_cobro_recaudo`).
+    if (!_ajuste && /diferencia/i.test(msg)) {
+      const calc = _liqCalcularAjusteParaReintento(recaudoId, monto);
+      if (calc.ajuste_valor > 0) {
+        const lado = calc.ajuste_es_sobrante ? 'SOBRANTE' : 'FALTANTE';
+        const razon = prompt(
+          `${msg}\n\n¿Fue un ${lado} real de ${_liqFmt(calc.ajuste_valor)}? ` +
+          `Escribe la razón para declararlo en Siesa (cancelar = no registrar el cobro):`
+        );
+        if (razon && razon.trim()) {
+          await liqRegistrarCobro(rutaId, recaudoId, { ...calc, ajuste_razon: razon.trim() });
+          return;
+        }
+      }
+    }
+    alerta(msg, 'error');
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 

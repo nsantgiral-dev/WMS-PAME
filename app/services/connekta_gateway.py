@@ -252,6 +252,22 @@ class ConnektaGateway:
         self.flujo_efectivo_rc = os.getenv('SIESA_FLUJO_EFECTIVO', '1103')
         # Cuenta auxiliar CxC para cruces (CxC → Plan de cuentas). 13050501 = CxC comercial.
         self.cxc_auxiliar = os.getenv('SIESA_CXC_AUXILIAR', '13050501')
+        # --- Ajuste al peso (faltante/sobrante entre lo cobrado y la factura) ---
+        # Mismo par de cuentas que usa gestor-cartera-pame contra el mismo Siesa
+        # (`recaudo/modelo.py::CUENTA_SOBRANTE/CUENTA_FALTANTE`) — procedimiento
+        # manual de cartera, no una decisión nueva de este archivo.
+        self.cuenta_ajuste_sobrante = os.getenv('SIESA_RC_CUENTA_SOBRANTE', '42958101')
+        self.cuenta_ajuste_faltante = os.getenv('SIESA_RC_CUENTA_FALTANTE', '53959503')
+        # Centro de costo de las cuentas de ajuste que SÍ lo manejan (familia 5xxxxx,
+        # el faltante — el sobrante es cuenta de ingreso y no lo maneja). Medido por
+        # gestor-cartera-pame el 25-ago-2026 contra el mismo Siesa: 165/165 movimientos
+        # del último año en las seis sedes caen en '301' (GASTOS FINANCIEROS) — no es
+        # un valor elegido acá, es el que contabilidad ya usa.
+        self.ccosto_ajuste = os.getenv('SIESA_RC_CCOSTO_AJUSTE', '301')
+        # Sucursal/UN del bloque "otros ingresos" del sobrante — decisión de Santiago
+        # (gestor-cartera-pame, 20-ago-2026): U.N. '001' fija, CO el del recibo mismo.
+        self.sucursal_ajuste = os.getenv('SIESA_RC_SUCURSAL_AJUSTE', '001')
+        self.un_ajuste = os.getenv('SIESA_RC_UN_AJUSTE', '001')
         # Medios de pago: código Siesa (CxC → Maestros → Medios de pago)
         self.medio_pago_efectivo = os.getenv('SIESA_MEDIO_PAGO_EFECTIVO', 'EFE')
         self.medio_pago_transferencia = os.getenv('SIESA_MEDIO_PAGO_TRANSFERENCIA', 'TBA')
@@ -270,10 +286,34 @@ class ConnektaGateway:
             except Exception:
                 logger.warning('[CONNEKTA] SIESA_CO_CAJA_MAP no es JSON válido, usando mapa por defecto')
         # Mapa medio de pago WMS → código Siesa (para forma_pago del RecaudoEntrega)
+        #
+        # Alineado 1:1 con `MedioPago` de gestor-cartera-pame
+        # (`dominio/recaudo/modelo.py`) — mismo Siesa, mismo maestro de medios
+        # de pago (CxC → Maestros → Medios de pago), y el mismo cobrador de
+        # ruta puede terminar pagando por cualquiera de estos bancos. Antes
+        # WMS solo distinguía un "TRANSFERENCIA" genérico (siempre TBA,
+        # Bancolombia Ahorros) sin importar el banco real — el gestor de
+        # cartera ya resolvía esto por banco desde antes, y liquidación de
+        # ruta es el mismo hecho económico con otro origen.
+        #
+        # `TRANSFERENCIA` y `CONSIGNACION` (los nombres viejos) se conservan
+        # como sinónimos de la Bancolombia Ahorros genérica — retrocompatible
+        # con cualquier RecaudoEntrega ya guardado con esos valores.
         self._forma_pago_map = {
             'EFECTIVO': self.medio_pago_efectivo,
-            'TRANSFERENCIA': self.medio_pago_transferencia,
+            'TRANSFERENCIA_BANCOLOMBIA_AH': os.getenv('SIESA_MEDIO_PAGO_TBA', 'TBA'),
+            'TRANSFERENCIA_BANCOLOMBIA_CTE': os.getenv('SIESA_MEDIO_PAGO_TBC', 'TBC'),
+            'TRANSFERENCIA_BBVA': os.getenv('SIESA_MEDIO_PAGO_TBB', 'TBB'),
+            'TRANSFERENCIA_BOGOTA': os.getenv('SIESA_MEDIO_PAGO_TBG', 'TBG'),
+            'TRANSFERENCIA_AGRARIO_AH': os.getenv('SIESA_MEDIO_PAGO_TAA', 'TAA'),
+            'TRANSFERENCIA_AGRARIO_CTE': os.getenv('SIESA_MEDIO_PAGO_TAC', 'TAC'),
+            'TRANSFERENCIA_DAVIVIENDA': os.getenv('SIESA_MEDIO_PAGO_TDV', 'TDV'),
+            # Cuenta `014` (Consignaciones), creada en Siesa el 26-ago-2026 —
+            # ver el comentario del mismo medio en gestor-cartera-pame.
+            'TRANSFERENCIA_IHO_CTE': os.getenv('SIESA_MEDIO_PAGO_TCI', 'TCI'),
             'TARJETA': self.medio_pago_tarjeta,
+            # Sinónimos retrocompatibles — mismo valor que antes de este cambio.
+            'TRANSFERENCIA': self.medio_pago_transferencia,
             'CONSIGNACION': self.medio_pago_transferencia,
         }
         # Traslados entre bodegas (puntos de venta)
@@ -508,6 +548,41 @@ class ConnektaGateway:
         o el registro plano queda corto (Siesa lo rechaza por tamaño)."""
         ancho = enteros + 1 + decimales
         return f'{abs(float(v)):0{ancho}.{decimales}f}'
+
+    @staticmethod
+    def _verificar_partida_doble_dc(payload: dict) -> None:
+        """Débitos == créditos en el DocumentoContable (142882), medido sobre
+        el payload que se va a mandar. Hasta que solo llevaba una retención
+        esto cuadraba por construcción — el débito y el crédito salían del
+        mismo monto, no había forma de descuadrarlo. Con el ajuste al peso
+        como segundo concepto (entra por el débito, tiene que salir por el
+        crédito de cartera) esa garantía deja de ser estructural.
+
+        Revienta ACÁ, antes del POST — mismo patrón que gestor-cartera-pame
+        (`retencion_payload.py::_cuadra_la_partida_doble`) contra el mismo
+        conector: un descuadre de un peso lo rechaza Siesa después de 30 a 60
+        segundos y con el documento a medio camino, no antes de intentarlo.
+        """
+        from decimal import Decimal
+
+        def total(seccion: str, campo: str) -> Decimal:
+            return sum(
+                (Decimal(m[campo].lstrip('+')) for m in payload.get(seccion, ())),
+                Decimal('0'),
+            )
+
+        debitos = total('Movimientocontable', 'F351_VALOR_DB') + total(
+            'MovimientoCxC', 'F351_VALOR_DB')
+        creditos = total('Movimientocontable', 'F351_VALOR_CR') + total(
+            'MovimientoCxC', 'F351_VALOR_CR')
+
+        if debitos != creditos:
+            raise ValueError(
+                f'DocumentoContable (142882) no cuadra: débitos ${debitos:,} '
+                f'contra créditos ${creditos:,} (diferencia '
+                f'${debitos - creditos:,}). No se manda — Siesa lo rechazaría '
+                'con el documento a medio camino.'
+            )
 
     # ── Circuit Breaker Methods ───────────────────────────────────────────────
 
@@ -4117,7 +4192,9 @@ class ConnektaGateway:
                              co_factura: str = '',
                              cuenta_cxc: str = '',
                              unidad_negocio: str = '',
-                             notas: str = '') -> dict:
+                             notas: str = '',
+                             ajuste_valor: float = 0.0,
+                             ajuste_es_sobrante: bool = False) -> dict:
         """
         142888 → API_v1_ReciboCaja
         Registra cobro del conductor. Cruza automáticamente contra la factura (CxC).
@@ -4138,6 +4215,37 @@ class ConnektaGateway:
                     proyecto del mismo negocio, mismo Siesa) ya resuelve esto leyendo
                     `f353_id_un_cruce` de la fila de cartera real en vez de un env var — mismo
                     fix acá. Si vacío, cae a `self.unidad_negocio` (comportamiento previo).
+
+        ajuste_valor / ajuste_es_sobrante: diferencia al peso entre lo que el
+                    conductor entregó y `monto` (el saldo que este RC cancela).
+                    `monto` sigue siendo el saldo de la factura — no cambia para
+                    quien ya lo usa así. Con `ajuste_valor=0` (default) el
+                    comportamiento es idéntico al de antes de este parámetro.
+
+                    Replica el procedimiento manual de cartera, ya probado por
+                    gestor-cartera-pame contra el MISMO Siesa: un recibo con
+                    ajuste declarado tiene que cancelar el documento completo
+                    (`CR + APROVECHA = saldo`, medido en el rechazo real del
+                    RC 004-RC-670: "DB: 880.613 CR: 880.614 DIF: 1"). Por eso
+                    el faltante se resta de `F354_VALOR_CR` y se declara aparte
+                    en `F354_VALOR_APROVECHA` — nunca simplemente se omite.
+
+                    FALTANTE (`ajuste_es_sobrante=False`): el conductor entregó
+                    menos. Plata que NUNCA entró a caja — `F357_VALOR_INGRESO`
+                    baja con ella.
+                    SOBRANTE (`ajuste_es_sobrante=True`): el conductor entregó
+                    de más. Plata que SÍ entró — `F357_VALOR_INGRESO` sube, y el
+                    excedente sale por el bloque "otros ingresos" (Siesa deriva
+                    el valor de la diferencia, no se manda un campo aparte).
+
+                    Retención Y ajuste al peso NO caben en el mismo RC — el
+                    142888 no tiene base gravable para justificar una
+                    retención en ninguna de sus cinco secciones (medido por
+                    gestor-cartera-pame en 13551501/13551701/13551801). Cuando
+                    el recaudo lleva retención, el llamador debe mandar
+                    `ajuste_valor=0` acá y declarar el ajuste en el
+                    `trigger_documento_contable()` de esa misma retención en su
+                    lugar (ver ese método).
         """
         if not self.tipo_docto_recibo_caja:
             raise ValueError(
@@ -4158,6 +4266,32 @@ class ConnektaGateway:
         id_caja = self._co_caja_map.get(co, '999')
         un = unidad_negocio or self.unidad_negocio or '99'
 
+        # --- Ajuste al peso: cuánto entró de verdad vs. cuánto cruza ---
+        # `monto` sigue siendo el saldo de la factura (F354_VALOR_CR cuando no
+        # hay ajuste). Con ajuste, la caja recibe otra cifra y el cruce se
+        # completa con la diferencia declarada — nunca se manda un cruce
+        # parcial sin decir a dónde fue el resto (eso es lo que deja el saldo
+        # abierto para siempre en la factura).
+        ajuste_abs = abs(float(ajuste_valor or 0))
+        if ajuste_abs and ajuste_abs >= float(monto):
+            raise ValueError(
+                f'El ajuste al peso (${ajuste_abs:,.2f}) no puede ser mayor o '
+                f'igual al saldo que este RC cancela (${monto:,.2f}) — eso no '
+                'es un residuo de redondeo, es cobrar prácticamente nada.'
+            )
+        if ajuste_abs and ajuste_es_sobrante:
+            cash_recibido = float(monto) + ajuste_abs
+            valor_cr = float(monto)
+            valor_aprovecha = 0.0
+        elif ajuste_abs:
+            cash_recibido = float(monto) - ajuste_abs
+            valor_cr = cash_recibido
+            valor_aprovecha = ajuste_abs
+        else:
+            cash_recibido = float(monto)
+            valor_cr = float(monto)
+            valor_aprovecha = 0.0
+
         # --- Sección RCyotrosingresos (Header) ---
         header = {
             'F_CIA': cia,
@@ -4170,9 +4304,9 @@ class ConnektaGateway:
             'F357_FECHA_RECAUDO': fecha_hoy,
             'F350_ID_TERCERO': tercero_nit,
             'F357_ID_MONEDA_INGRESO': 'COP',
-            'F357_VALOR_INGRESO': self._fmt_valor(monto),
+            'F357_VALOR_INGRESO': self._fmt_valor(cash_recibido),
             'F357_ID_MONEDA_APLICAR': 'COP',
-            'F357_VALOR_APLICAR_REAL': self._fmt_valor(monto),
+            'F357_VALOR_APLICAR_REAL': self._fmt_valor(cash_recibido),
             'F357_ID_COBRADOR': self.cobrador_rc,
             'F357_ID_UN': un,
             'F357_ID_CCOSTO': '',
@@ -4181,7 +4315,7 @@ class ConnektaGateway:
             'F350_IND_ESTADO': 1,
             'F350_IND_IMPRESION': 0,
             'F350_NOTAS': notas[:2000] if notas else '',
-            # ── Ajuste y otros ingresos: NO se usan, pero OCUPAN SU ANCHO ────
+            # ── Ajuste y otros ingresos: OCUPAN SU ANCHO SIEMPRE ────
             #
             # Connekta convierte este JSON en un plano posicional. Omitir un
             # campo no lo deja vacío: **acorta la línea y corre todo lo que
@@ -4193,15 +4327,33 @@ class ConnektaGateway:
             # Verificado el 2026-08-11 contra `docs/siesa-specs/142888
             # API_v1_ReciboCaja.docx`: la sección son 33 campos, no 22.
             # Mandábamos 22 y ningún RC llegó nunca a Siesa (job 439).
-            'F351_ID_AUXILIAR_AJUSTE': '',
-            'F351_ID_CCOSTO_AJUSTE': '',
+            #
+            # Sin ajuste, los once quedan vacíos — comportamiento idéntico al
+            # de siempre. Con faltante, la cuenta y el centro de costo van acá
+            # (el VALOR va en `F354_VALOR_APROVECHA` del cruce, no acá — Siesa
+            # solo deriva el valor del SOBRANTE, no el del faltante, ver
+            # `estrategia_faltante` en gestor-cartera-pame para la medición).
+            'F351_ID_AUXILIAR_AJUSTE': self.cuenta_ajuste_faltante if valor_aprovecha else '',
+            'F351_ID_CCOSTO_AJUSTE': self.ccosto_ajuste if valor_aprovecha else '',
             'F351_ID_AUXILIAR_PP': '',
             'F351_ID_CCOSTO_PP': '',
-            'F351_ID_AUXILIAR_OTRO_ING': '',
-            'F351_ID_TERCERO_OTRO_ING': '',
-            'F351_ID_SUCURSAL_OTRO_ING': '',
-            'F351_ID_CO_OTRO_ING': '',
-            'F351_ID_UN_OTRO_ING': '',
+            'F351_ID_AUXILIAR_OTRO_ING': (
+                self.cuenta_ajuste_sobrante if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            'F351_ID_TERCERO_OTRO_ING': (
+                tercero_nit if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            'F351_ID_SUCURSAL_OTRO_ING': (
+                self.sucursal_ajuste if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            'F351_ID_CO_OTRO_ING': co if (ajuste_abs and ajuste_es_sobrante) else '',
+            'F351_ID_UN_OTRO_ING': (
+                self.un_ajuste if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            # Vacío a propósito: la cuenta del sobrante es de INGRESO y no
+            # maneja centro de costo (gestor-cartera-pame, 459/459 movimientos
+            # medidos sin ccosto en las cinco sedes). Solo el FALTANTE
+            # (familia 5xxxxx, arriba) lo lleva.
             'F351_ID_CCOSTO_OTRO_ING': '',
             'F357_REFERENCIA': '',
             'F357_IND_VALIDA_MEDPAGO': 0,
@@ -4216,7 +4368,7 @@ class ConnektaGateway:
             'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
             'F350_CONSEC_DOCTO': 0,
             'F358_ID_MEDIOS_PAGO': medio_pago,
-            'F358_VALOR': self._fmt_valor(monto),
+            'F358_VALOR': self._fmt_valor(cash_recibido),
             'F358_ID_BANCO': '',
             'F358_NRO_CHEQUE': 0,
             'F358_NRO_CUENTA': '',
@@ -4263,9 +4415,13 @@ class ConnektaGateway:
             'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
             'F353_CONSEC_DOCTO_CRUCE': consec_int,
             'F353_NRO_CUOTA_CRUCE': 0,
-            'F354_VALOR_CR': self._fmt_valor(monto),
+            'F354_VALOR_CR': self._fmt_valor(valor_cr),
             'F354_VALOR_APLICADO_PP': self._fmt_valor(0),
-            'F354_VALOR_APROVECHA': self._fmt_valor(0),
+            # El sobrante no usa este campo (sale por "otros ingresos" arriba,
+            # que Siesa deriva solo). El faltante sí: `CR + APROVECHA = monto`
+            # (el saldo completo) es lo que exige el cruce con ajuste — ver el
+            # docstring del método.
+            'F354_VALOR_APROVECHA': self._fmt_valor(valor_aprovecha),
             'F354_VALOR_RETENCION': self._fmt_valor(0),
         }
 
@@ -4296,7 +4452,9 @@ class ConnektaGateway:
                                      co_factura: str = '',
                                      cuenta_cxc: str = '',
                                      unidad_negocio: str = '',
-                                     notas: str = '') -> dict:
+                                     notas: str = '',
+                                     ajuste_valor: float = 0.0,
+                                     ajuste_razon: str = '') -> dict:
         """
         142882 → DocumentoContable
         Registra retenciones (retefuente, reteIVA, ICA) como documento contable.
@@ -4312,6 +4470,22 @@ class ConnektaGateway:
                     retención que corrió de verdad contra Siesa, y quedó FALLIDO 5/5
                     intentos con rechazo estructural genérico. Si vacío, cae a
                     `self.unidad_negocio` (comportamiento previo, no rompe llamadores viejos).
+
+        ajuste_valor: SOLO faltante (el conductor entregó menos que el saldo
+                    de la factura) — nunca sobrante, que es plata que sí entró
+                    a caja y por eso lo declara el RC, no esta nota. Este
+                    documento es donde el ajuste al peso tiene que ir cuando el
+                    recaudo TAMBIÉN lleva retención: el 142888 no tiene base
+                    gravable para justificar una retención en ninguna de sus
+                    cinco secciones, así que retención y ajuste no caben juntos
+                    en el RC (medido por gestor-cartera-pame contra el mismo
+                    Siesa — ver `trigger_recibo_caja`). Acá sí caben: se agrega
+                    un segundo débito (`cuenta_ajuste_faltante`) y el crédito de
+                    cartera sube por la misma plata, en la MISMA línea que la
+                    retención — dos créditos contra el mismo (tipo, consec,
+                    cuota) es algo que Siesa no se le ha visto aceptar.
+        `ajuste_valor=0` (default): comportamiento idéntico al de antes de
+                    este parámetro.
         """
         if not self.tipo_docto_docto_contable:
             raise ValueError(
@@ -4325,6 +4499,14 @@ class ConnektaGateway:
         co_fact = co_factura or co
         auxiliar_cxc = cuenta_cxc or self.cxc_auxiliar
         un = unidad_negocio or self.unidad_negocio or '99'
+        ajuste_abs = abs(float(ajuste_valor or 0))
+
+        notas_doc = notas[:2000] if notas else ''
+        if ajuste_abs:
+            _nota_ajuste = f' | Ajuste al peso -${ajuste_abs:,.2f}'
+            if ajuste_razon:
+                _nota_ajuste += f': {ajuste_razon}'
+            notas_doc = (notas_doc + _nota_ajuste)[:2000]
 
         payload = {
             'Inicial': [{'F_CIA': cia}],
@@ -4339,7 +4521,7 @@ class ConnektaGateway:
                 'F350_ID_CLASE_DOCTO': 30,
                 'F350_IND_ESTADO': 1,
                 'F350_IND_IMPRESION': 0,
-                'F350_NOTAS': notas[:2000] if notas else '',
+                'F350_NOTAS': notas_doc,
                 # Faltaba. Ver la nota de abajo: mismo defecto que el 142888.
                 'f350_id_mandato': '',
             }],
@@ -4399,7 +4581,11 @@ class ConnektaGateway:
                 'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
                 'F351_VALOR_DB': self._fmt_valor(0),
-                'F351_VALOR_CR': self._fmt_valor(monto),
+                # El crédito de cartera cierra por TODO lo que el RC no
+                # aplicó — retención + ajuste al peso, sumados en esta MISMA
+                # línea. Con ajuste_abs=0 (el caso de siempre) esto sigue
+                # siendo exactamente `monto`.
+                'F351_VALOR_CR': self._fmt_valor(monto + ajuste_abs),
                 # Moneda alterna — igual que en Movimientocontable arriba,
                 # siempre cero.
                 'F351_VALOR_DB_ALT': self._fmt_valor(0),
@@ -4423,10 +4609,40 @@ class ConnektaGateway:
             }],
             'Final': [{'F_CIA': cia}],
         }
+        if ajuste_abs:
+            # El gasto por faltante — cuenta de gasto (familia 5xxxxx), por
+            # eso SÍ lleva centro de costo (a diferencia de la retención,
+            # que es activo 1355xxxx y no lo maneja). Base gravable en cero:
+            # una cuenta de gasto no tiene impuesto que justificar — medido
+            # por gestor-cartera-pame, 0 de 68 movimientos con base en la
+            # cuenta hermana de estampillas.
+            payload['Movimientocontable'].append({
+                'F_CIA': cia,
+                'F350_ID_CO': co,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
+                'F350_CONSEC_DOCTO': 0,
+                'F351_ID_AUXILIAR': self.cuenta_ajuste_faltante,
+                'F351_ID_TERCERO': tercero_nit,
+                'F351_ID_CO_MOV': co,
+                'F351_ID_UN': un,
+                'F351_ID_CCOSTO': self.ccosto_ajuste,
+                'F351_ID_FE': '',
+                'F351_VALOR_DB': self._fmt_valor(ajuste_abs),
+                'F351_VALOR_CR': self._fmt_valor(0),
+                'F351_VALOR_DB_ALT': self._fmt_valor(0),
+                'F351_VALOR_CR_ALT': self._fmt_valor(0),
+                'F351_BASE_GRAVABLE': self._fmt_valor(0),
+                'F351_DOCTO_BANCO': '',
+                'F351_NRO_DOCTO_BANCO': '',
+                'F351_NOTAS': (ajuste_razon or 'Ajuste al peso')[:255],
+            })
+        self._verificar_partida_doble_dc(payload)
 
         logger.info(
-            '[CONNEKTA] DoctoContable 142882: tercero=%s PUC=%s FE=%s-%s monto=%.2f base=%.2f',
-            tercero_nit, cuenta_puc, tipo_docto_fe, consec_fe, monto, base_gravable
+            '[CONNEKTA] DoctoContable 142882: tercero=%s PUC=%s FE=%s-%s monto=%.2f '
+            'base=%.2f ajuste=%.2f',
+            tercero_nit, cuenta_puc, tipo_docto_fe, consec_fe, monto, base_gravable,
+            ajuste_abs,
         )
         return self._post(
             self.conector_docto_contable,

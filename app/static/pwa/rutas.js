@@ -1982,6 +1982,28 @@ function _condDesgloseHTML(p) {
     </div>`;
 }
 
+// Medios de pago del cobro en puerta — alineados 1:1 con `MedioPago` de
+// gestor-cartera-pame (`dominio/recaudo/modelo.py`) y con `_forma_pago_map`
+// en `connekta_gateway.py`: mismo Siesa, mismo maestro de medios de pago.
+// CHEQUE/CREDITO/EXENTO no existen en el Gestor (ahí no hay "no se cobró" —
+// solo recaudos que sí ocurrieron); acá siguen porque describen un hecho
+// distinto del conductor en la puerta, no un medio de pago bancario.
+const _FORMAS_PAGO_COBRO = [
+  { v: 'EFECTIVO', l: 'Efectivo' },
+  { v: 'TRANSFERENCIA_BANCOLOMBIA_AH', l: 'Transferencia Bancolombia Ahorros' },
+  { v: 'TRANSFERENCIA_BANCOLOMBIA_CTE', l: 'Transferencia Bancolombia Corriente' },
+  { v: 'TRANSFERENCIA_BBVA', l: 'Transferencia BBVA' },
+  { v: 'TRANSFERENCIA_BOGOTA', l: 'Transferencia Bogotá' },
+  { v: 'TRANSFERENCIA_AGRARIO_AH', l: 'Transferencia Agrario Ahorros' },
+  { v: 'TRANSFERENCIA_AGRARIO_CTE', l: 'Transferencia Agrario Corriente' },
+  { v: 'TRANSFERENCIA_DAVIVIENDA', l: 'Transferencia Davivienda' },
+  { v: 'TRANSFERENCIA_IHO_CTE', l: 'Transferencia IHO Corriente' },
+  { v: 'TARJETA', l: 'Tarjeta (datáfono)' },
+  { v: 'CHEQUE', l: 'Cheque' },
+  { v: 'CREDITO', l: 'Crédito' },
+  { v: 'EXENTO', l: 'Exento' },
+];
+
 /** Renderiza el formulario de confirmacion de parada con estado, pago, foto y items. */
 function _condRenderFormParada() {
   const el = document.getElementById('cond-contenido');
@@ -2187,8 +2209,8 @@ function _condRenderFormParada() {
         <select id="cond-forma-pago"
           style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
           <option value="">— Seleccionar —</option>
-          ${['EFECTIVO','TRANSFERENCIA','CHEQUE','CREDITO','EXENTO'].map(f =>
-            `<option value="${f}" ${f===formaActual?'selected':''}>${f.charAt(0)+f.slice(1).toLowerCase()}</option>`
+          ${_FORMAS_PAGO_COBRO.map(f =>
+            `<option value="${f.v}" ${f.v===formaActual?'selected':''}>${f.l}</option>`
           ).join('')}
         </select>
       </div>

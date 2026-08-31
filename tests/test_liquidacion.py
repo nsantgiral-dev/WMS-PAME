@@ -1196,3 +1196,313 @@ class TestElRechazoNoEncierraAlAdmin:
             '\nLa pantalla volvió a calcular lo que falta contra el neto de '
             'Siesa. Si las dos reglas se separan, dice un número y el '
             'servicio exige otro.')
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Ajuste al peso — mismo mecanismo que gestor-cartera-pame contra el
+# mismo Siesa (AjustePorDiferencia). Antes de esto, una diferencia real
+# más allá del residuo de redondeo ($100) solo se podía "resolver" con
+# monto_override = monto_cobrado — el RC salía por un cruce parcial sin
+# decir a dónde fue el resto, y la factura quedaba con ese saldo abierto
+# para siempre. Ahora el admin puede declarar el faltante/sobrante con
+# razón y queda cerrado en Siesa (cuenta 53959503/42958101).
+# ═══════════════════════════════════════════════════════════════════
+
+class TestAjusteAlPeso:
+
+    def _mock_siesa_neto(self, neto: float, bruto: float = None, iva: float = 0):
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            {'f470_vlr_bruto': bruto if bruto is not None else neto,
+             'f470_vlr_imp': iva, 'f470_vlr_neto': neto,
+             'f120_referencia': 'REF001', 'f470_rowid': 'R1'}
+        ]
+        mock_connekta.get_pedido_cabecera.return_value = {
+            'f430_id_co': '003', 'f200_id_pedido_fact': '900123456',
+            'f461_id_sucursal_pedido_rem': '001',
+        }
+        mock_connekta.get_cxc_general = MagicMock(return_value=[
+            {'f353_id_tipo_docto_cruce': 'PD', 'f353_consec_docto_cruce': 999,
+             'f253_id': '13050502', 'f353_total_db': neto, 'f353_total_cr': 0},
+        ])
+        return mock_connekta
+
+    def _rc_job_payload(self, recaudo_id):
+        import json
+        from app.models.siesa_job import SiesaJob
+        job = SiesaJob.query.filter_by(
+            referencia_tipo='RecaudoEntrega', referencia_id=recaudo_id,
+            tipo='RECIBO_CAJA').order_by(SiesaJob.id.desc()).first()
+        return json.loads(job.payload) if job else None
+
+    def _dc_job_payloads(self, recaudo_id):
+        import json
+        from app.models.siesa_job import SiesaJob
+        jobs = SiesaJob.query.filter_by(
+            referencia_tipo='RecaudoEntrega', referencia_id=recaudo_id,
+            tipo='DOCUMENTO_CONTABLE_RET').order_by(SiesaJob.id.asc()).all()
+        return [json.loads(j.payload) for j in jobs]
+
+    def test_faltante_sin_retencion_se_declara_en_el_rc(self, app, db, recaudo_liq):
+        """$800 de faltante real, dentro del tope ($1.000) — con razón, en
+        vez de bloquear, queda declarado en el propio RC (sin retención, el
+        142888 sí puede llevarlo)."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=57800)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[],
+                ajuste_valor=800, ajuste_es_sobrante=False,
+                ajuste_razon='Cliente entregó de menos, confirmado por teléfono')
+        assert resultado['ok'] is True
+        payload = self._rc_job_payload(recaudo.id)
+        assert payload['ajuste_valor'] == 800
+        assert payload['ajuste_es_sobrante'] is False
+
+    def test_sobrante_sin_retencion_se_declara_en_el_rc(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=60000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1, retenciones=[],
+                ajuste_valor=1400, ajuste_es_sobrante=True,
+                ajuste_razon='Cliente redondeó el pago hacia arriba')
+        assert resultado['ok'] is True
+        payload = self._rc_job_payload(recaudo.id)
+        assert payload['ajuste_valor'] == 1400
+        assert payload['ajuste_es_sobrante'] is True
+
+    def test_faltante_con_retencion_se_declara_en_el_ultimo_dc_no_en_el_rc(
+            self, app, db, recaudo_liq):
+        """El 142888 no tiene base gravable para justificar una retención —
+        con retención de por medio, el ajuste tiene que viajar en el
+        DocumentoContable, nunca en el RC."""
+        base_gravable = 49244.0
+        ret_rf = round(base_gravable * 0.025, 2)
+        neto_siesa = 58600.0
+        faltante = 800.0
+        monto_cobrado = round(neto_siesa - ret_rf - faltante, 2)
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=monto_cobrado)
+        mock_connekta = self._mock_siesa_neto(neto_siesa, bruto=base_gravable, iva=9356)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', mock_connekta), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            resultado = LiquidacionService.registrar_cobro_recaudo(
+                recaudo.id, admin_id=1,
+                retenciones=[{'tipo': 'RETEFUENTE_2.5'}],
+                ajuste_valor=faltante, ajuste_es_sobrante=False,
+                ajuste_razon='Faltante real, confirmado con el conductor')
+        assert resultado['ok'] is True
+        rc_payload = self._rc_job_payload(recaudo.id)
+        assert 'ajuste_valor' not in rc_payload
+        dc_payloads = self._dc_job_payloads(recaudo.id)
+        assert len(dc_payloads) == 1
+        assert dc_payloads[0]['ajuste_valor'] == faltante
+        assert dc_payloads[0]['ajuste_razon']
+
+    def test_sobrante_con_retencion_sigue_bloqueado(self, app, db, recaudo_liq):
+        """Combinación no probada contra Siesa — igual que en gestor-cartera-
+        pame, se bloquea con su propia razón en vez de intentarlo a ciegas."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=60000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta',
+                   self._mock_siesa_neto(58600, bruto=49244, iva=9356)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match='sobrante'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1,
+                    retenciones=[{'tipo': 'RETEFUENTE_2.5'}],
+                    ajuste_valor=1400, ajuste_es_sobrante=True,
+                    ajuste_razon='Sobrante con retención')
+
+    def test_ajuste_sin_razon_se_bloquea(self, app, db, recaudo_liq):
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match='razón'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[],
+                    ajuste_valor=8600, ajuste_es_sobrante=False, ajuste_razon='')
+
+    def test_ajuste_que_no_explica_la_diferencia_se_bloquea(self, app, db, recaudo_liq):
+        """$8.600 es el faltante real — declarar $500 no cierra la cuenta:
+        el ajuste tiene que EXPLICAR la diferencia, no ser un valor libre."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=50000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match='no explica'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[],
+                    ajuste_valor=500, ajuste_es_sobrante=False,
+                    ajuste_razon='Faltante')
+
+    def test_ajuste_faltante_supera_su_tope_se_bloquea(self, app, db, recaudo_liq):
+        """Tope de faltante por defecto: $1.000 (más estricto que el de
+        sobrante — es cartera que se da por cobrada sin que la plata haya
+        entrado)."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=48600)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match='tope'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[],
+                    ajuste_valor=10000, ajuste_es_sobrante=False,
+                    ajuste_razon='Faltante grande')
+
+    def test_ajuste_sin_monto_declarado_se_bloquea(self, app, db, recaudo_liq):
+        """No hay `monto_cobrado` contra qué comparar — Regla 0: ausencia de
+        dato no es evidencia de faltante."""
+        recaudo = recaudo_liq(estado='ENTREGADO', pago='EFECTIVO', monto=0)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match='declarado'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[],
+                    ajuste_valor=8600, ajuste_es_sobrante=False,
+                    ajuste_razon='Faltante')
+
+    def test_ajuste_en_parcial_se_bloquea(self, app, db, recaudo_liq):
+        """PARCIAL ya tiene su propio mecanismo (monto_descuento / retención
+        rechazada) para la misma pregunta — el ajuste al peso es solo de
+        ENTREGADO."""
+        recaudo = recaudo_liq(estado='PARCIAL', pago='EFECTIVO', monto=50000)
+        from app.services.liquidacion_service import LiquidacionService
+        with patch('app.services.connekta_gateway.connekta', self._mock_siesa_neto(58600)), \
+             patch('app.services.siesa_job_service.disparar_dlq_inmediato', MagicMock()):
+            with pytest.raises(ValueError, match='ENTREGADO'):
+                LiquidacionService.registrar_cobro_recaudo(
+                    recaudo.id, admin_id=1, retenciones=[],
+                    ajuste_valor=8600, ajuste_es_sobrante=False,
+                    ajuste_razon='Faltante')
+
+
+class TestConnektaAjusteAlPesoRC:
+    """Payload de `trigger_recibo_caja` — contrato del ajuste al peso."""
+
+    def _gw(self):
+        from app.services.connekta_gateway import ConnektaGateway
+        return ConnektaGateway()
+
+    def test_sin_ajuste_comportamiento_identico_al_de_siempre(self):
+        gw = self._gw()
+        with patch.object(gw, '_post', return_value={'detalle': 'ok'}) as mock_post:
+            gw.trigger_recibo_caja(
+                tercero_nit='900123456', sucursal='001', monto=58600,
+                forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
+            )
+        payload = mock_post.call_args[0][2]
+        header = payload['RCyotrosingresos'][0]
+        cxc = payload['CxC'][0]
+        assert header['F357_VALOR_INGRESO'] == gw._fmt_valor(58600)
+        assert cxc['F354_VALOR_CR'] == gw._fmt_valor(58600)
+        assert cxc['F354_VALOR_APROVECHA'] == gw._fmt_valor(0)
+        assert header['F351_ID_AUXILIAR_AJUSTE'] == ''
+
+    def test_faltante_reduce_ingreso_y_declara_aprovecha(self):
+        gw = self._gw()
+        with patch.object(gw, '_post', return_value={'detalle': 'ok'}) as mock_post:
+            gw.trigger_recibo_caja(
+                tercero_nit='900123456', sucursal='001', monto=58600,
+                forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
+                ajuste_valor=1, ajuste_es_sobrante=False,
+            )
+        payload = mock_post.call_args[0][2]
+        header = payload['RCyotrosingresos'][0]
+        caja = payload['Caja'][0]
+        cxc = payload['CxC'][0]
+        # DB caja 58599, DB gasto 1 (APROVECHA), CR CxC 58600 — mismo asiento
+        # que el 004-RC-670 medido por gestor-cartera-pame, con "aprovecha".
+        assert header['F357_VALOR_INGRESO'] == gw._fmt_valor(58599)
+        assert caja['F358_VALOR'] == gw._fmt_valor(58599)
+        assert cxc['F354_VALOR_CR'] == gw._fmt_valor(58599)
+        assert cxc['F354_VALOR_APROVECHA'] == gw._fmt_valor(1)
+        assert header['F351_ID_AUXILIAR_AJUSTE'] == gw.cuenta_ajuste_faltante
+        assert header['F351_ID_CCOSTO_AJUSTE'] == gw.ccosto_ajuste
+
+    def test_sobrante_sube_ingreso_y_cruce_completo(self):
+        gw = self._gw()
+        with patch.object(gw, '_post', return_value={'detalle': 'ok'}) as mock_post:
+            gw.trigger_recibo_caja(
+                tercero_nit='900123456', sucursal='001', monto=58600,
+                forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
+                ajuste_valor=1400, ajuste_es_sobrante=True,
+            )
+        payload = mock_post.call_args[0][2]
+        header = payload['RCyotrosingresos'][0]
+        cxc = payload['CxC'][0]
+        assert header['F357_VALOR_INGRESO'] == gw._fmt_valor(60000)
+        assert cxc['F354_VALOR_CR'] == gw._fmt_valor(58600)
+        assert cxc['F354_VALOR_APROVECHA'] == gw._fmt_valor(0)
+        assert header['F351_ID_AUXILIAR_OTRO_ING'] == gw.cuenta_ajuste_sobrante
+        assert header['F351_ID_TERCERO_OTRO_ING'] == '900123456'
+
+    def test_ajuste_mayor_o_igual_al_saldo_se_rechaza(self):
+        gw = self._gw()
+        with pytest.raises(ValueError, match='saldo'):
+            gw.trigger_recibo_caja(
+                tercero_nit='900123456', sucursal='001', monto=100,
+                forma_pago='EFECTIVO', tipo_docto_fe='FE', consec_fe=1,
+                ajuste_valor=100, ajuste_es_sobrante=False,
+            )
+
+
+class TestConnektaAjusteAlPesoDC:
+    """Payload de `trigger_documento_contable` — el ajuste cuando hay retención."""
+
+    def _gw(self):
+        from app.services.connekta_gateway import ConnektaGateway
+        return ConnektaGateway()
+
+    def test_sin_ajuste_una_sola_linea_de_movimiento(self):
+        gw = self._gw()
+        with patch.object(gw, '_post', return_value={'detalle': 'ok'}) as mock_post:
+            gw.trigger_documento_contable(
+                tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
+                monto=1231, base_gravable=49244, tipo_docto_fe='FE', consec_fe=1,
+            )
+        payload = mock_post.call_args[0][2]
+        assert len(payload['Movimientocontable']) == 1
+        assert payload['MovimientoCxC'][0]['F351_VALOR_CR'] == gw._fmt_valor(1231)
+
+    def test_con_ajuste_segunda_linea_de_gasto_y_credito_combinado(self):
+        gw = self._gw()
+        with patch.object(gw, '_post', return_value={'detalle': 'ok'}) as mock_post:
+            gw.trigger_documento_contable(
+                tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
+                monto=1231, base_gravable=49244, tipo_docto_fe='FE', consec_fe=1,
+                ajuste_valor=3000, ajuste_razon='Faltante confirmado',
+            )
+        payload = mock_post.call_args[0][2]
+        movs = payload['Movimientocontable']
+        assert len(movs) == 2
+        assert movs[0]['F351_VALOR_DB'] == gw._fmt_valor(1231)
+        assert movs[1]['F351_VALOR_DB'] == gw._fmt_valor(3000)
+        assert movs[1]['F351_ID_AUXILIAR'] == gw.cuenta_ajuste_faltante
+        assert movs[1]['F351_ID_CCOSTO'] == gw.ccosto_ajuste
+        assert movs[1]['F351_BASE_GRAVABLE'] == gw._fmt_valor(0)
+        # El crédito de cartera cierra por retención + ajuste, en una sola línea.
+        cxc = payload['MovimientoCxC'][0]
+        assert cxc['F351_VALOR_CR'] == gw._fmt_valor(1231 + 3000)
+
+    def test_partida_doble_desbalanceada_revienta_antes_del_post(self):
+        """Si algún día alguien rompe la simetría débito/crédito, el guardia
+        de partida doble tiene que atajarlo antes del POST — no después del
+        rechazo de Siesa, con el documento a medio camino."""
+        gw = self._gw()
+        with patch.object(gw, '_post') as mock_post, \
+             patch.object(gw, '_fmt_valor',
+                          side_effect=lambda v: f'+{abs(v):020.4f}' if v != 3000
+                          else f'+{abs(v) + 1:020.4f}'):
+            with pytest.raises(ValueError, match='no cuadra'):
+                gw.trigger_documento_contable(
+                    tercero_nit='900123456', sucursal='001', cuenta_puc='13551501',
+                    monto=1231, base_gravable=49244, tipo_docto_fe='FE', consec_fe=1,
+                    ajuste_valor=3000, ajuste_razon='Forzar descuadre',
+                )
+        mock_post.assert_not_called()

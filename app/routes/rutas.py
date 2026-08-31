@@ -602,6 +602,9 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
             admin_id=uid,
             retenciones=data.get('retenciones', []),
             monto_override=data.get('monto_override'),
+            ajuste_valor=data.get('ajuste_valor', 0) or 0,
+            ajuste_es_sobrante=bool(data.get('ajuste_es_sobrante', False)),
+            ajuste_razon=data.get('ajuste_razon', '') or '',
         )
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
@@ -1095,7 +1098,15 @@ def liquidacion_dashboard():
             fp = (r.forma_pago or '').upper()
             if fp == 'EFECTIVO':
                 total_efectivo += monto
-            elif fp == 'TRANSFERENCIA':
+            # `TRANSFERENCIA` a secas (retrocompatible) + los medios
+            # específicos por banco (TRANSFERENCIA_BANCOLOMBIA_AH, etc.,
+            # alineados con `MedioPago` de gestor-cartera-pame) + TARJETA —
+            # todo lo que no es efectivo ni crédito cae en este bucket. Un
+            # `==` fijo contra el string viejo dejaba de contar cualquier
+            # medio nuevo sin que nada avisara — el monto seguía sumando a
+            # `ruta_recaudado`/`total_recaudado`, solo desaparecía del
+            # desglose por medio.
+            elif fp.startswith('TRANSFERENCIA') or fp in ('CONSIGNACION', 'TARJETA'):
                 total_transferencia += monto
             elif fp == 'CREDITO':
                 total_credito += monto

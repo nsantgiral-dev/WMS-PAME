@@ -112,6 +112,36 @@ def tope_diferencia_recaudo() -> float:
         return 100.0
 
 
+def tope_ajuste_faltante() -> float:
+    """Cuánto faltante al peso puede declararse CON razón explícita, más allá
+    del residuo silencioso de `tope_diferencia_recaudo` ($100).
+
+    Dos topes, no uno — mismo principio que `gestor-cartera-pame`
+    (`recaudo/modelo.py::tope_ajuste_faltante/_sobrante`, RECAUDO_AJUSTE_
+    TOPE_FALTANTE) contra el mismo Siesa: el faltante es cartera que se da
+    por cobrada sin que la plata haya entrado — «eso se borra sin cobrarla»
+    — así que el techo es más estricto que el del sobrante. Mismo default
+    ($1.000) que allá; acá tampoco hay medición propia todavía.
+    """
+    try:
+        return float(os.environ.get('RECAUDO_AJUSTE_TOPE_FALTANTE', '1000'))
+    except (TypeError, ValueError):
+        return 1000.0
+
+
+def tope_ajuste_sobrante() -> float:
+    """Cuánto sobrante al peso puede declararse CON razón explícita.
+
+    El sobrante es plata que SÍ entró — el riesgo no es perder cartera sino
+    cobrarle al cliente algo que no debía —, por eso el tope es más laxo que
+    el del faltante. Mismo default ($5.000) que gestor-cartera-pame.
+    """
+    try:
+        return float(os.environ.get('RECAUDO_AJUSTE_TOPE_SOBRANTE', '5000'))
+    except (TypeError, ValueError):
+        return 5000.0
+
+
 def _validar_diferencia_declarada(monto_declarado: float, total_neto: float,
                                    contexto: str = '') -> None:
     """Levanta `ValueError` si `monto_declarado` (lo que el conductor dijo
@@ -470,13 +500,29 @@ class LiquidacionService:
     @staticmethod
     def registrar_cobro_recaudo(recaudo_id: int, admin_id: int = None,
                                 retenciones: list = None,
-                                monto_override: float = None) -> dict:
+                                monto_override: float = None,
+                                ajuste_valor: float = 0,
+                                ajuste_es_sobrante: bool = False,
+                                ajuste_razon: str = '') -> dict:
         """
         Enqueues RC + individual DCs for a single recaudo.
 
         Uses with_for_update() for concurrency protection.
         Validates sequencing (NC before RC for PARCIAL).
         Calculates retentions with correct bases (RETEIVA on IVA, others on base_gravable).
+
+        ajuste_valor / ajuste_es_sobrante / ajuste_razon: decisión EXPLÍCITA
+        del admin sobre una diferencia al peso que `tope_diferencia_recaudo`
+        ($100) no absorbe sola. Mismo mecanismo que `gestor-cartera-pame`
+        contra el mismo Siesa (`AjustePorDiferencia`) — el faltante/sobrante
+        se declara en Siesa (cuenta 53959503/42958101), en vez de dejar el
+        saldo de la factura abierto para siempre sin que nadie lo explique.
+        Requiere razón (no se acepta en silencio) y tiene que EXPLICAR la
+        diferencia real entre lo declarado y el neto de Siesa — no es un
+        valor libre. Solo aplica a ENTREGADO: PARCIAL ya tiene su propio
+        mecanismo (`monto_descuento`/retención rechazada, arriba) para una
+        pregunta distinta (cuánto debía pagar el cliente, no un residuo de
+        redondeo del cobro).
         """
         if retenciones is None:
             retenciones = []
@@ -806,6 +852,72 @@ class LiquidacionService:
         # ── Calculate monto_neto_rc ─────────────────────────────────
         monto_neto_rc = round(monto - total_retenciones, 2)
 
+        # ── El ajuste al peso: decisión explícita, no un valor libre ──────
+        # Se valida ANTES del guard de diferencia — si explica la diferencia
+        # real, el guard de abajo ni se llama para ese gap. Si no la explica
+        # (o no trae razón, o excede su propio tope), revienta acá con su
+        # propio mensaje en vez de caer en el genérico de "diferencia sin
+        # explicar".
+        ajuste_abs = round(abs(float(ajuste_valor or 0)), 2)
+        ajuste_aplicado = False
+        if ajuste_abs > 0:
+            if estado != EstadoEntrega.ENTREGADO:
+                raise ValueError(
+                    'El ajuste al peso solo aplica a cobros ENTREGADO — un '
+                    'PARCIAL ya tiene su propio mecanismo (monto_descuento / '
+                    'retención rechazada) para la misma pregunta.'
+                )
+            if not ajuste_razon.strip():
+                raise ValueError(
+                    'Un ajuste al peso necesita razón. Es el único movimiento '
+                    'en que la liquidación toca una cuenta de resultados '
+                    '(53959503/42958101); sin razón, en tres meses nadie sabe '
+                    'qué pasó.'
+                )
+            if ajuste_es_sobrante and total_retenciones > 0:
+                raise ValueError(
+                    'Este recaudo tiene retención Y un SOBRANTE al mismo '
+                    'tiempo — esa combinación no está probada contra Siesa '
+                    '(el faltante sí: se absorbe en el documento contable de '
+                    'la retención). Registra el cobro por el neto exacto, sin '
+                    'el sobrante, y abónalo aparte.'
+                )
+            tope = tope_ajuste_sobrante() if ajuste_es_sobrante else tope_ajuste_faltante()
+            if ajuste_abs > tope:
+                lado = 'sobrante' if ajuste_es_sobrante else 'faltante'
+                raise ValueError(
+                    f'El {lado} declarado (${ajuste_abs:,.2f}) supera el tope '
+                    f'para este caso (${tope:,.2f}). Una diferencia mayor no es '
+                    'redondeo: es un error de digitación o algo que hay que '
+                    'resolver antes de cerrar el cobro, no taparlo en una '
+                    'cuenta de resultados.'
+                )
+            monto_cobrado_ajuste = float(recaudo.monto_cobrado or 0)
+            if monto_cobrado_ajuste <= 0:
+                raise ValueError(
+                    'No hay monto declarado por el conductor para comparar — '
+                    'un ajuste al peso explica una diferencia contra ALGO '
+                    'declarado, no se puede justificar contra nada (Regla 0).'
+                )
+            diferencia_real = round(monto_neto_rc - monto_cobrado_ajuste, 2)
+            es_sobrante_real = diferencia_real < 0
+            from app.services.cxc_cruce import TOLERANCIA as _TOL
+            if (
+                es_sobrante_real != ajuste_es_sobrante
+                or abs(ajuste_abs - abs(diferencia_real)) > _TOL
+            ):
+                raise ValueError(
+                    f'El ajuste declarado (${ajuste_abs:,.2f}, '
+                    f'{"sobrante" if ajuste_es_sobrante else "faltante"}) no '
+                    f'explica la diferencia real entre lo que dijo el '
+                    f'conductor (${monto_cobrado_ajuste:,.2f}) y el neto de '
+                    f'Siesa (${monto_neto_rc:,.2f}{" tras la retención" if total_retenciones else ""}'
+                    f'): la diferencia real es '
+                    f'${abs(diferencia_real):,.2f} '
+                    f'{"sobrante" if es_sobrante_real else "faltante"}.'
+                )
+            ajuste_aplicado = True
+
         # ── Guard: diferencia declarada vs. lo que el RC va a cobrar ──
         # Comparar acá — contra `monto_neto_rc`, YA con la retención real
         # descontada — es lo que hace que un pago parcial legítimo por
@@ -816,7 +928,11 @@ class LiquidacionService:
         # `monto_override`). Solo aplica a ENTREGADO — PARCIAL ya tiene su
         # propia verificación arriba («Retención rechazada»), con su propia
         # referencia (lo que el cliente se quedó, no el neto completo).
-        if estado == EstadoEntrega.ENTREGADO:
+        #
+        # Se salta cuando el ajuste al peso YA validó y va a explicar esta
+        # misma diferencia en Siesa — no tiene sentido bloquear un gap que el
+        # admin acaba de justificar con razón y que va a quedar declarado.
+        if estado == EstadoEntrega.ENTREGADO and not ajuste_aplicado:
             _validar_diferencia_declarada(
                 float(recaudo.monto_cobrado or 0),
                 monto_neto_rc,
@@ -913,6 +1029,39 @@ class LiquidacionService:
             payload_rc = json.loads(rc_job.payload)
             payload_rc['accion_origen'] = 'liquidacion_per_recaudo'
             rc_job.payload = json.dumps(payload_rc, ensure_ascii=False)
+
+        # ── El ajuste al peso viaja en UN solo documento ──────────────────
+        # Sin retención: el RC lo lleva (142888 puede declararlo solo). Con
+        # retención: el RC NO puede — no tiene base gravable para justificar
+        # la retención junto con un ajuste (ver `trigger_recibo_caja`) — así
+        # que va en el ÚLTIMO DocumentoContable encolado. "Último" y no
+        # "todos": declararlo en más de uno duplicaría el crédito de cartera
+        # por la misma plata.
+        if ajuste_aplicado:
+            if dc_jobs_info:
+                _ultimo_dc = SiesaJob.query.get(dc_jobs_info[-1]['job_id'])
+                if _ultimo_dc:
+                    payload_dc = json.loads(_ultimo_dc.payload)
+                    payload_dc['ajuste_valor'] = ajuste_abs
+                    payload_dc['ajuste_razon'] = ajuste_razon
+                    _ultimo_dc.payload = json.dumps(payload_dc, ensure_ascii=False)
+                    logger.info(
+                        '[LIQUIDACION] Ajuste al peso ($%.2f) declarado en el '
+                        'DC %s de recaudo %d (lleva retención)',
+                        ajuste_abs, _ultimo_dc.id, recaudo_id,
+                    )
+            elif rc_job:
+                payload_rc = json.loads(rc_job.payload)
+                payload_rc['ajuste_valor'] = ajuste_abs
+                payload_rc['ajuste_es_sobrante'] = bool(ajuste_es_sobrante)
+                rc_job.payload = json.dumps(payload_rc, ensure_ascii=False)
+                logger.info(
+                    '[LIQUIDACION] Ajuste al peso ($%.2f, %s) declarado en el '
+                    'RC %s de recaudo %d',
+                    ajuste_abs,
+                    'sobrante' if ajuste_es_sobrante else 'faltante',
+                    rc_job.id, recaudo_id,
+                )
 
         # Save retenciones_detalle on recaudo
         if retenciones_detalle:
