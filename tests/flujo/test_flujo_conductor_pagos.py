@@ -110,6 +110,11 @@ def _jobs(tipo, referencia_tipo, referencia_id):
     ).all()
 
 
+def _recaudo(recaudo_id):
+    from app.models.recaudo_entrega import RecaudoEntrega
+    return RecaudoEntrega.query.get(recaudo_id)
+
+
 class TestEntregaTotalPagoTotal:
 
     def test_pago_total_encola_solo_el_rc(self, db, almacen, victor):
@@ -263,6 +268,62 @@ class TestPedidoParcialDevolucion:
         nc_jobs = _jobs('NOTA_CREDITO_DEVOLUCION_CLIENTE', 'DevolucionCliente', devolucion.id)
         assert len(nc_jobs) == 1
         assert nc_jobs[0].get_payload()['items_devueltos'][0]['cantidad_devuelta'] == devuelto
+
+
+class TestBultosConDevolucionEnParcial:
+
+    def test_marcar_el_bulto_no_toca_las_cantidades_declaradas(self, db, almacen, victor):
+        """«BULTOS CON DEVOLUCIÓN» (rutas.js) es opcional y solo dice EN QUÉ
+        CAJA FÍSICA va lo que se devuelve — no reemplaza la cantidad por
+        referencia que ya declaró items_entregados. Viaja en el mismo campo
+        `bultos_rechazados` que usa RECHAZADO (ver el comentario de
+        `confirmar_parada`), así que ese bulto SÍ queda `RECHAZADO` — a nivel
+        de bulto no existe un estado "parcial" — y entra a la cola de
+        reingreso, aunque la parada completa sea PARCIAL y la mayoría de lo
+        que traía esa caja sí haya llegado al cliente."""
+        from app.models.bulto import Bulto, EstadoBulto
+        from app.services.liquidacion_service import LiquidacionService
+        from app.services.ruta_service import RutaService
+
+        flujo, producto = _armar_parada(db, almacen, victor, cantidad_pedida=10)
+        mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)
+        entregado, devuelto = 6, 4
+        monto_cobrado = round((neto / 10) * entregado, 2)
+
+        with patch('app.services.connekta_gateway.connekta', mock):
+            recaudo_id, _ = RutaService.confirmar_parada(
+                flujo.ruta_id, flujo.packing_id, victor['usuario_id'], {
+                    'estado_entrega': 'PARCIAL', 'forma_pago': 'EFECTIVO',
+                    'monto_cobrado': monto_cobrado,
+                    'observaciones': 'Cliente devolvio 4 unidades, van en la caja 1',
+                    'items_entregados': [{
+                        'codigo': producto.codigo, 'nombre': producto.nombre,
+                        'unidad': 'und', 'cantidad_pedida': 10,
+                        'cantidad_entregada': entregado,
+                    }],
+                    # El check de "BULTOS CON DEVOLUCIÓN" — un solo bulto.
+                    'bultos_rechazados': [flujo.bultos[0]],
+                })
+
+            recaudo = _recaudo(recaudo_id)
+            assert recaudo.estado_entrega == 'PARCIAL'
+            assert recaudo.items_entregados[0]['cantidad_devuelta'] == devuelto
+
+            bulto = Bulto.query.get(flujo.bultos[0])
+            assert bulto.estado == EstadoBulto.RECHAZADO
+
+            cola = RutaService.bultos_rechazados(page=1, limit=50)
+            assert flujo.bultos[0] in [b['id'] for b in cola['bultos']]
+
+            # La liquidación sigue calculando sobre lo declarado por
+            # referencia (4 unidades), no sobre "toda la caja" — el bulto
+            # marcado no infla la devolución contable.
+            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+            assert not resumen['errores']
+            from app.models.devolucion_cliente import DevolucionCliente
+            devolucion = DevolucionCliente.query.filter_by(
+                recaudo_entrega_id=recaudo_id).one()
+            assert devolucion.lineas[0].cantidad_devuelta == devuelto
 
 
 class TestPedidoRechazado:

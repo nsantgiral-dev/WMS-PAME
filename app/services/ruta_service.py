@@ -1001,10 +1001,21 @@ class RutaService:
             # inventario que este estado vino a impedir. Lo que falta es el
             # pago, y eso lo dice `estado_entrega`, no el bulto.
             bultos_rechazados_ids = []
-        # PARCIAL no exige seleccionar bultos rechazados — la devolución se
-        # rastrea por referencia (items_entregados), no por bulto completo.
-        # Los bultos de esta tarea quedan ENTREGADO (el checklist de "bulto
-        # rechazado" es exclusivo de RECHAZADO).
+        # PARCIAL no EXIGE seleccionar bultos rechazados — la devolución se
+        # rastrea por referencia (items_entregados), no por bulto completo, y
+        # sin selección los bultos de esta tarea quedan ENTREGADO.
+        #
+        # Pero si el conductor SÍ marca alguno ("BULTOS CON DEVOLUCIÓN" en la
+        # pantalla, opcional, solo visible cuando hay ítems devueltos) ese
+        # bulto entra por acá igual que en RECHAZADO — es la misma casilla de
+        # `bultos_rechazados`, y el bloque de abajo no distingue el estado.
+        # No es una contradicción: a nivel de bulto solo existe ENTREGADO/
+        # RECHAZADO, nunca "parcial", y la caja física no se puede separar en
+        # la puerta — marcarla dice «esta caja concreta vuelve completa a
+        # bodega para que ahí la abran y cuenten», no «todo lo que traía se
+        # devolvió» (eso lo sigue definiendo `items_entregados`). Entra a la
+        # cola de reingreso (`bultos_rechazados()`) igual que un RECHAZADO
+        # total.
 
         ahora = datetime.utcnow()
         ids_rechazados_set = set(bultos_rechazados_ids)
