@@ -170,6 +170,73 @@ class TestEntregaTotalPagoTotal:
         assert rc_payload['forma_pago'] == 'TRANSFERENCIA_BANCOLOMBIA_CTE'
 
 
+#: Las 13 opciones reales del `<select>` del conductor — `_FORMAS_PAGO_COBRO`
+#: en rutas.js. Mismo orden que se ve en pantalla.
+FORMAS_PAGO_COBRO_PUERTA = (
+    'EFECTIVO',
+    'TRANSFERENCIA_BANCOLOMBIA_AH', 'TRANSFERENCIA_BANCOLOMBIA_CTE',
+    'TRANSFERENCIA_BBVA', 'TRANSFERENCIA_BOGOTA',
+    'TRANSFERENCIA_AGRARIO_AH', 'TRANSFERENCIA_AGRARIO_CTE',
+    'TRANSFERENCIA_DAVIVIENDA', 'TRANSFERENCIA_IHO_CTE',
+    'TARJETA', 'CHEQUE', 'EXENTO',
+)
+
+
+class TestTodasLasFormasDePagoHastaLiquidacion:
+    """Cada opción del `<select>` «Forma de pago» del conductor tiene que
+    poder confirmar la parada y llegar viva hasta `liquidar_ruta_siesa` —
+    exactamente la clase de bug que capturó en QA el «forma_pago inválido»
+    (`FormaPago.VALIDOS` desalineado del `<select>`, ya corregido). Acá se
+    ejerce el `<select>` completo, no solo el caso puntual de ese bug."""
+
+    @pytest.mark.parametrize('forma_pago', FORMAS_PAGO_COBRO_PUERTA)
+    def test_confirma_y_encola_rc_por_el_medio_declarado(
+            self, db, almacen, victor, forma_pago):
+        from app.services.liquidacion_service import LiquidacionService
+        from app.services.ruta_service import RutaService
+
+        flujo, producto = _armar_parada(db, almacen, victor, cantidad_pedida=10)
+        mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)
+
+        with patch('app.services.connekta_gateway.connekta', mock):
+            recaudo_id, _ = RutaService.confirmar_parada(
+                flujo.ruta_id, flujo.packing_id, victor['usuario_id'], {
+                    'estado_entrega': 'ENTREGADO', 'forma_pago': forma_pago,
+                    'monto_cobrado': neto,
+                })
+            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+
+        assert not resumen['errores'], f'{forma_pago}: {resumen["errores"]}'
+        assert resumen['rc_encolados'] == 1, f'{forma_pago} no encoló RC'
+        rc_payload = _jobs('RECIBO_CAJA', 'RecaudoEntrega', recaudo_id)[0].get_payload()
+        assert rc_payload['forma_pago'] == forma_pago
+        assert rc_payload['monto'] == neto
+
+    def test_credito_no_cobra_en_la_puerta_queda_en_cartera(self, db, almacen, victor):
+        """CREDITO es la excepción real de la lista: no se cobra en la
+        entrega — la factura queda abierta y la gestiona el Gestor de
+        Cartera, no un RC de ruta (`_procesar_recaudo`: «CRÉDITO + ENTREGADO
+        → noop»)."""
+        from app.services.liquidacion_service import LiquidacionService
+        from app.services.ruta_service import RutaService
+
+        flujo, producto = _armar_parada(db, almacen, victor, cantidad_pedida=10)
+        mock, bruto, iva, neto = _mock_connekta(producto, cantidad_facturada=10)
+
+        with patch('app.services.connekta_gateway.connekta', mock):
+            recaudo_id, _ = RutaService.confirmar_parada(
+                flujo.ruta_id, flujo.packing_id, victor['usuario_id'], {
+                    'estado_entrega': 'ENTREGADO', 'forma_pago': 'CREDITO',
+                    'monto_cobrado': 0,
+                })
+            resumen = LiquidacionService.liquidar_ruta_siesa(flujo.ruta_id)
+
+        assert not resumen['errores']
+        assert resumen['credito_omitidos'] == 1
+        assert resumen['rc_encolados'] == 0
+        assert not _jobs('RECIBO_CAJA', 'RecaudoEntrega', recaudo_id)
+
+
 class TestEntregaTotalPagoParcial:
 
     def test_retencion_en_la_puerta_encola_rc_y_dc(self, db, almacen, victor):
