@@ -95,6 +95,23 @@ class TestBuscarPedido:
         assert len(resultado['lineas']) == 1
         assert resultado['lineas'][0]['producto_id'] == producto.id
         assert resultado['lineas'][0]['cantidad_facturada'] == 10
+        assert resultado['lineas'][0]['codigo_barras'] == producto.codigo_barras
+
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_expone_codigo_barras_para_el_escaner(self, mock_connekta, app, db,
+                                                   tarea_packing_despachada, producto):
+        """Reportado el 2026-08-31: el conteo de recepción en Devoluciones era
+        100% manual — sin código de barras en el payload, el escáner no tenía
+        contra qué emparejar (solo quedaba codigo_siesa/producto_codigo, que
+        no son lo que trae la etiqueta física del producto)."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        producto.codigo_barras = '7701234567890'
+        db.session.commit()
+        mock_connekta.get_detalle_factura.return_value = [dict(_FILA_FE_CABECERA)]
+        mock_connekta.get_rowids_factura.return_value = [_fila_rowid(ref=producto.codigo_siesa)]
+
+        resultado = DevolucionClienteService.buscar_pedido('PD9001')
+        assert resultado['lineas'][0]['codigo_barras'] == '7701234567890'
 
     @patch('app.services.devolucion_cliente_service.connekta')
     def test_sin_fe_en_siesa_falla(self, mock_connekta, app, db, tarea_packing_despachada):
@@ -140,6 +157,23 @@ class TestCrearDevolucion:
                 almacen_id=almacen.id, recepcionista_id=None,
                 lineas=[_linea_input(producto, cantidad_devuelta=0)],
             )
+
+    def test_to_dict_expone_codigo_barras(self, app, db, tarea_packing_despachada,
+                                          producto, almacen):
+        """El camino de "devoluciones pendientes de ruta" (Liquidación arma la
+        devolución sola) lee las líneas ya guardadas vía to_dict() — sin este
+        campo, esas devoluciones tampoco se podían escanear, aunque
+        buscar_pedido() sí lo tuviera."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        producto.codigo_barras = '7701234567890'
+        db.session.commit()
+        devolucion = DevolucionClienteService.crear_devolucion(
+            tarea_packing_id=tarea_packing_despachada.id,
+            tipo_docto_fe='FEW', consec_fe='5555',
+            almacen_id=almacen.id, recepcionista_id=None,
+            lineas=[_linea_input(producto, cantidad_facturada=10, cantidad_devuelta=4)],
+        )
+        assert devolucion.lineas[0].to_dict()['codigo_barras'] == '7701234567890'
 
 
 # ═══════════════════════════════════════════════════════════════════

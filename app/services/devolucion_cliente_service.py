@@ -89,6 +89,7 @@ class DevolucionClienteService:
                 'producto_id': producto.id,
                 'producto_codigo': producto.codigo,
                 'producto_nombre': producto.nombre,
+                'codigo_barras': producto.codigo_barras,
                 'codigo_siesa': ref,
                 'cantidad_facturada': float(row.get('f470_cant_base') or 0),
                 'f470_id_unidad_medida': (row.get('f470_id_unidad_medida') or '').strip(),
