@@ -110,6 +110,7 @@ Buscar aquí antes de darlos por inexistentes:
 | API_v2_Ubicaciones | `get_ubicaciones_siesa()` | Ubicaciones por bodega |
 | API_v2_Ventas_Facturas_DesdePedido | `get_factura_desde_pedido()`, `get_rowids_factura()` | Anti-duplicado FE, rowids para NCE, base gravable |
 | API_v2_CxC_General | `get_cxc_general()` | Cuentas por cobrar (f253_id para cruce) |
+| papeleriamedellin_WMS_Vendedor_Contacto | `get_vendedor_contacto()` | Nombre + teléfono real del asesor (JOIN T210×T200×T015), para mostrárselo al conductor en pago parcial |
 
 ---
 
@@ -1454,6 +1455,50 @@ actualizar es un invariante que algún día no corre y nadie nota.
 
 **Todo invariante nuevo necesita su test de detector ciego** — romper el flujo
 a propósito y exigir que lo vea. Sin eso `0 hallazgos` no significa nada.
+
+---
+
+## Teléfono del asesor en pago parcial (2026-09-01)
+
+El conductor no tenía cómo contactar al vendedor que tomó el pedido al
+registrar un pago parcial. `f200_razon_social_vendedor` (nombre) ya viaja en
+`API_v2_Ventas_Facturas_DesdePedido` — usado hace tiempo en la FE — pero esa
+API no trae teléfono, y el maestro de vendedores (`t210_mm_vendedores`) tampoco
+lo tiene directo: hay que unirlo con `t200_mm_terceros`
+(`f210_rowid_tercero = f200_rowid`) y de ahí con `t015_mm_contactos`
+(`f200_rowid_contacto = f015_rowid`), que sí trae `f015_telefono`. Verificado
+en vivo contra Siesa QA con un caso real (Camacho Zapata, NIT 1117492941) antes
+de registrar la consulta.
+
+Nueva consulta dinámica `papeleriamedellin_WMS_Vendedor_Contacto` (armada por
+el usuario vía Generic Transfer, mismo mecanismo que
+`papeleriamedellin_pame_descubrir_tablas`), JOIN de las tres tablas —
+100 vendedores en total, cabe en una sola página (`tamPag=100`). **Sin filtro
+por parámetro**: las consultas dinámicas custom de este ambiente no aceptan
+`parametros` en tiempo real (mismo hallazgo ya documentado en
+`get_terceros_contacto`) — se trae la lista completa una vez por carga de ruta
+y se cruza en memoria por código de vendedor.
+
+`get_vendedor_contacto()` en `connekta_gateway.py`. El código de vendedor
+(`f200_id_vendedor`) ya venía en la respuesta que usa
+`RutaService._valor_y_cond_pago()` (vía `get_rowids_factura`) — no hizo falta
+una llamada extra a Siesa por tarea, solo leer un campo que no se estaba
+leyendo. `listar_paradas()` carga el mapa de vendedores una sola vez por ruta
+y lo cruza por tarea; si el pedido quedó con vendedor `Generico` (dato de
+prueba, no de negocio) el código simplemente no cruza con ningún vendedor real
+y el frontend no muestra el bloque — sin inventar nombre ni teléfono (Regla 0).
+
+**Bug encontrado de paso**: la rama sin FE resuelta de `_valor_y_cond_pago`
+devolvía una tupla de 3 valores (`return None, None, {}`) mientras el único
+caller desempaquetaba 4 — cualquier tarea sin FE habría reventado
+`listar_paradas` con `ValueError`. Corregido junto con el 5to valor nuevo
+(`codigo_vendedor`); los 7 tests de `test_cond_pago.py` que desempaquetaban la
+tupla se actualizaron a la aridad nueva.
+
+Pendiente de ver en la app real: si el `f200_id_vendedor` de pedidos nuevos
+(no los de prueba usados para verificar) trae el código real y no `Generico`
+— eso depende de cómo se estén creando los pedidos en Siesa, no de este
+cambio.
 
 ---
 

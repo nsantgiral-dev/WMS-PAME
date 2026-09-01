@@ -2097,6 +2097,13 @@ function _condRenderFormParada() {
               `<option value="${ret.tipo}" ${ret.tipo===motivoActual?'selected':''}>${ret.nombre}</option>`
             ).join('')}
           </select>
+          ${(p.vendedor_nombre || p.vendedor_telefono) ? `
+          <div style="margin-top:10px;padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
+            <div style="font-size:10px;color:#666;font-weight:700;margin-bottom:4px;">ASESOR DEL PEDIDO</div>
+            <div style="font-size:14px;color:#fff;font-weight:700;">${p.vendedor_nombre || '—'}</div>
+            ${p.vendedor_telefono ? `<a href="tel:${p.vendedor_telefono}" style="display:inline-block;margin-top:4px;color:#4ade80;font-size:14px;text-decoration:none;">📞 ${p.vendedor_telefono}</a>` : ''}
+          </div>
+          ` : ''}
         </div>
       </div>
       ` : `

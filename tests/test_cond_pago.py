@@ -141,7 +141,7 @@ class TestRutaServiceNoAfirmaContado:
         monkeypatch.setattr(connekta, 'get_pedido_cabecera',
                             lambda *a, **k: {'f430_id_cond_pago': ''}, raising=False)
 
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(_Tarea())
+        _, es_contado, _, crudo, _ = rs.RutaService._valor_y_cond_pago(_Tarea())
         assert crudo == '', (
             'el campo crudo tiene que viajar: `es_contado` lo deriva esta '
             'misma función y no sirve para verificar el supuesto que la gobierna')
@@ -168,7 +168,7 @@ class TestRutaServiceNoAfirmaContado:
         monkeypatch.setattr(connekta, 'get_pedido_cabecera',
                             lambda *a, **k: {'f430_id_cond_pago': 'C01'}, raising=False)
 
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(_Tarea())
+        _, es_contado, _, crudo, _ = rs.RutaService._valor_y_cond_pago(_Tarea())
         assert es_contado is True
         assert crudo == 'C01', 'el crudo permite distinguir C01 de un vacío'
 
@@ -205,14 +205,14 @@ class TestElCrudoDistingueLoQueElDerivadoColapsa:
         return rs.RutaService._valor_y_cond_pago(self._Tarea())
 
     def test_siesa_responde_sin_condicion(self, monkeypatch):
-        _, es_contado, _, crudo = self._correr(
+        _, es_contado, _, crudo, _ = self._correr(
             monkeypatch, lambda *a, **k: {'f430_id_cond_pago': ''})
         assert crudo == '' and es_contado is None
 
     def test_siesa_no_responde(self, monkeypatch):
         def _explota(*a, **k):
             raise Exception('Connekta caído')
-        _, es_contado, _, crudo = self._correr(monkeypatch, _explota)
+        _, es_contado, _, crudo, _ = self._correr(monkeypatch, _explota)
         assert crudo is None, 'sin consulta no hay dato crudo — no es lo mismo que vacío'
         assert es_contado is None
 
@@ -302,7 +302,7 @@ class TestLaCondicionQuedaAnotadaEnLaTarea:
         self._preparar(
             monkeypatch,
             lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(t)
+        _, es_contado, _, crudo, _ = rs.RutaService._valor_y_cond_pago(t)
         assert crudo == 'C01' and es_contado is True
 
     def test_lo_anotado_vacio_no_dispara_otra_consulta(self, monkeypatch):
@@ -316,7 +316,7 @@ class TestLaCondicionQuedaAnotadaEnLaTarea:
         self._preparar(
             monkeypatch,
             lambda *a, **k: (_ for _ in ()).throw(AssertionError('volvió a preguntar')))
-        _, es_contado, _, crudo = rs.RutaService._valor_y_cond_pago(t)
+        _, es_contado, _, crudo, _ = rs.RutaService._valor_y_cond_pago(t)
         assert crudo == '' and es_contado is None
 
 
@@ -574,7 +574,7 @@ class TestLaPantallaDelConductorReconoceLaCondicionDeRuta:
                             lambda *a, **k: (_ for _ in ()).throw(
                                 AssertionError('volvió a preguntar')), raising=False)
 
-        _, cobra, _, crudo = rs.RutaService._valor_y_cond_pago(self._Tarea())
+        _, cobra, _, crudo, _ = rs.RutaService._valor_y_cond_pago(self._Tarea())
         assert crudo == 'C02'
         assert cobra is True, (
             'C02 anotado tiene que pedir cobro en la pantalla del conductor, '

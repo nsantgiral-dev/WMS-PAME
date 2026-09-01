@@ -616,15 +616,40 @@ class RutaService:
         # cachea entero en el dispositivo (ver condAbrirParadas en rutas.js),
         # así que esto es lo único que necesita conectividad; la confirmación
         # de cada parada ya funciona offline sin volver a tocar Siesa.
+        # Vendedores — una sola llamada para toda la ruta (100 filas fijas,
+        # no una por tarea). Si Siesa no responde, el mapa queda vacío y
+        # cada tarea simplemente no muestra el bloque de asesor.
+        from app.services.connekta_gateway import connekta as _connekta_vend
+        vendedores_map: dict = {}
+        try:
+            for v in _connekta_vend.get_vendedor_contacto():
+                cod = str(v.get('codigo_vendedor', '')).strip()
+                if not cod:
+                    continue
+                nombre = ' '.join(filter(None, [
+                    str(v.get('f200_nombres', '') or '').strip(),
+                    str(v.get('f200_apellido1', '') or '').strip(),
+                    str(v.get('f200_apellido2', '') or '').strip(),
+                ])).strip()
+                vendedores_map[cod] = {
+                    'nombre': nombre or str(v.get('f200_razon_social', '') or '').strip() or None,
+                    'telefono': str(v.get('f015_telefono', '') or '').strip() or None,
+                }
+        except Exception as e:
+            logger.warning('[RUTAS] no se pudo cargar vendedores_contacto: %s', e)
+
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
-            valor_factura, es_contado, valores_ref, cond_pago_crudo = \
+            valor_factura, es_contado, valores_ref, cond_pago_crudo, codigo_vendedor = \
                 RutaService._valor_y_cond_pago(t)
             p['valor_factura'] = valor_factura
             p['es_contado']    = es_contado
             # `''` = Siesa respondió sin condición. `None` = no se pudo
             # preguntar. Son cosas distintas y colapsarlas fue el defecto.
             p['cond_pago']     = cond_pago_crudo
+            _vend = vendedores_map.get(str(codigo_vendedor or '').strip()) or {}
+            p['vendedor_nombre']   = _vend.get('nombre')
+            p['vendedor_telefono'] = _vend.get('telefono')
             # El modo lo calculaba `rutas.js` y se descartaba: el desglose
             # sabía qué eligió el conductor, no qué opciones tenía enfrente.
             from app.services import cond_pago as _cpm
@@ -674,12 +699,20 @@ class RutaService:
 
     @staticmethod
     def _valor_y_cond_pago(tarea) -> tuple:
-        """`(valor_factura, es_contado, valores_por_referencia)` de la FE real
-        de una tarea. Cualquiera puede salir `None`/`{}` si Siesa no responde
-        — nunca levanta. Alimenta el toggle Pago Total/Parcial del conductor
-        y el recálculo en vivo cuando ajusta cantidades entregadas; si falta
-        el dato, el frontend cae al campo libre de siempre (sin bloquear la
-        pantalla).
+        """`(valor_factura, es_contado, valores_por_referencia, cond_pago_crudo,
+        codigo_vendedor)` de la FE real de una tarea. Cualquiera puede salir
+        `None`/`{}` si Siesa no responde — nunca levanta. Alimenta el toggle
+        Pago Total/Parcial del conductor y el recálculo en vivo cuando ajusta
+        cantidades entregadas; si falta el dato, el frontend cae al campo
+        libre de siempre (sin bloquear la pantalla).
+
+        `codigo_vendedor`: `f200_id_vendedor` crudo de la FE (viene en la
+        misma respuesta que ya trae `get_rowids_factura`, sin llamada extra
+        a Siesa). El caller lo cruza contra `get_vendedor_contacto()` para
+        mostrarle al conductor nombre y teléfono del asesor. Puede ser
+        `"Generico"` en pedidos donde Siesa no asignó vendedor real — ese
+        código no cruza con ningún vendedor real y el frontend simplemente
+        no muestra el bloque.
 
         `es_contado`: `True` | `False` | **`None` cuando no se sabe**.
 
@@ -702,14 +735,16 @@ class RutaService:
 
         tipo_fe, consec_fe = resolver_fe_o_none(tarea)
         if not tipo_fe or not consec_fe:
-            return None, None, {}
+            return None, None, {}, None, None
 
         valor_factura = None
         valores_por_referencia = {}
+        codigo_vendedor = None
         try:
             lineas = connekta.get_rowids_factura(tipo_fe, consec_fe)
             if lineas:
                 valor_factura = round(sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas), 2)
+                codigo_vendedor = str(lineas[0].get('f200_id_vendedor') or '').strip() or None
                 for ln in lineas:
                     codigo = str(ln.get('f120_referencia', '')).strip()
                     cant = float(ln.get('f470_cant_base', 0) or 0)
@@ -764,7 +799,8 @@ class RutaService:
                     _cp0.cobra_en_la_puerta(
                         tarea.cond_pago, connekta.cond_pago_ventas, connekta.cond_pago_ruta),
                     valores_por_referencia,
-                    tarea.cond_pago)
+                    tarea.cond_pago,
+                    codigo_vendedor)
         try:
             cabecera = connekta.get_pedido_cabecera(
                 tarea.tipo_docto_pedido_siesa, tarea.consec_docto_pedido_siesa)
@@ -793,7 +829,7 @@ class RutaService:
         except Exception as e:
             logger.warning('[RUTAS] cond_pago falló para tarea %s: %s', tarea.id, e)
 
-        return valor_factura, es_contado, valores_por_referencia, cond_pago_crudo
+        return valor_factura, es_contado, valores_por_referencia, cond_pago_crudo, codigo_vendedor
 
     @staticmethod
     def confirmar_parada(ruta_id: int, tarea_id: int, usuario_id: int, data: dict) -> tuple:

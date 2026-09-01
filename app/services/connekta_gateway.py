@@ -3289,6 +3289,38 @@ class ConnektaGateway:
             logger.warning('[CONNEKTA] get_terceros_contacto(nit=%s): %s', nit, e)
             return []
 
+    def get_vendedor_contacto(self, codigo: str = None) -> list[dict]:
+        """
+        papeleriamedellin_WMS_Vendedor_Contacto — Connekta Consultas Dinámicas.
+        JOIN T210 (vendedores) x T200 (terceros) x T015 (contactos): nombre y
+        teléfono real de cada vendedor. Verificado en vivo (2026-09-01):
+        solo 100 filas — se trae completa en una sola página. Sin filtro en
+        tiempo real: las consultas dinámicas custom de este ambiente no
+        soportan `parametros` (mismo hallazgo que `get_terceros_contacto`).
+        `codigo` filtra en memoria sobre la página ya traída.
+        Retorna lista de dicts con: codigo_vendedor, f200_nit,
+          f200_razon_social, f200_nombres, f200_apellido1, f200_apellido2,
+          f015_telefono, f015_email
+        """
+        try:
+            res = self._get(
+                'papeleriamedellin_WMS_Vendedor_Contacto',
+                params_extra={'paginacion': 'numPag=1|tamPag=100'},
+                url=self.url_get_dinamico,
+            )
+            rows = (
+                res.get('detalle', {}).get('Table') or
+                res.get('detalle', {}).get('Datos') or []
+            )
+            if codigo:
+                rows = [r for r in rows
+                        if str(r.get('codigo_vendedor', '')).strip() == str(codigo).strip()]
+            logger.info('[CONNEKTA] get_vendedor_contacto: %d registros', len(rows))
+            return rows
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_vendedor_contacto(codigo=%s): %s', codigo, e)
+            return []
+
 
     # ==========================================
     # Liquidación de ruta — conectores financieros
