@@ -2196,8 +2196,8 @@ function _condRenderFormParada() {
           </select>
           <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:13px;color:#aaa;"></div>
           ${(p.vendedor_nombre || p.vendedor_telefono) ? `
-          <div style="margin-top:10px;padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
-            <div style="font-size:10px;color:#666;font-weight:700;margin-bottom:4px;">ASESOR DEL PEDIDO</div>
+          <div style="margin-top:10px;padding:12px;background:#451a03;border:1px solid #d97706;border-radius:10px;">
+            <div style="font-size:12px;color:#fbbf24;font-weight:700;margin-bottom:6px;">⚠ Comunícate con el vendedor para validar este pago parcial</div>
             <div style="font-size:14px;color:#fff;font-weight:700;">${p.vendedor_nombre || '—'}</div>
             ${p.vendedor_telefono ? `<a href="tel:${p.vendedor_telefono}" style="display:inline-block;margin-top:4px;color:#4ade80;font-size:14px;text-decoration:none;">📞 ${p.vendedor_telefono}</a>` : ''}
           </div>
