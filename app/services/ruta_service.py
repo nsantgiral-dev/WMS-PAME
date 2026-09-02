@@ -812,7 +812,13 @@ class RutaService:
                 valor_factura = round(sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas), 2)
                 base_gravable = round(sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas), 2)
                 iva_factura = round(sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas), 2)
-                codigo_vendedor = str(lineas[0].get('f200_id_vendedor') or '').strip() or None
+                # `f200_id_vendedor` es el NIT del vendedor, no su código — nunca
+                # cruza con `get_vendedor_contacto()` (que llave por `codigo_vendedor`,
+                # ej. '002'). El código real es `f210_codigo_vendedor`. Verificado en
+                # vivo 2026-09-02 con PD1447/FE-1444 (vendedor real, no "Generico"):
+                # f200_id_vendedor='53051164' (NIT) vs f210_codigo_vendedor='002 '
+                # (coincide con el maestro — FIGUEROA ANACONA LEIDA YOANA).
+                codigo_vendedor = str(lineas[0].get('f210_codigo_vendedor') or '').strip() or None
                 for ln in lineas:
                     codigo = str(ln.get('f120_referencia', '')).strip()
                     cant = float(ln.get('f470_cant_base', 0) or 0)
