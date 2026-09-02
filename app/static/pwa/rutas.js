@@ -2071,6 +2071,17 @@ function _condRenderFormParada() {
       <div style="font-size:12px;color:#555;margin-top:2px;">${p.numero_pedido} · ${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}</div>
     </div>
 
+    ${(p.vendedor_nombre || p.vendedor_telefono) ? `
+    <div style="background:#0a1628;border:1px solid #1e3a5f;border-radius:12px;padding:10px 14px;margin-bottom:16px;display:flex;align-items:center;gap:10px;">
+      <span style="font-size:18px;">🧑‍💼</span>
+      <div>
+        <div style="font-size:10px;color:#60a5fa;font-weight:700;letter-spacing:.5px;">ASESOR DEL PEDIDO — POR SI HAY ALGUNA NOVEDAD</div>
+        <div style="font-size:14px;font-weight:700;color:#fff;">${p.vendedor_nombre || '—'}</div>
+        ${p.vendedor_telefono ? `<a href="tel:${p.vendedor_telefono}" style="color:#4ade80;font-size:13px;text-decoration:none;">📞 ${p.vendedor_telefono}</a>` : ''}
+      </div>
+    </div>
+    ` : ''}
+
     <div style="margin-bottom:14px;">
       <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">RESULTADO</label>
       <div style="display:flex;gap:6px;" id="cond-estado-btns">
