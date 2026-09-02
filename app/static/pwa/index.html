@@ -3213,6 +3213,48 @@
     </div>
   </div>
 
+  <!-- Modal Layout: Detalle de Cuerpo — la lista solo muestra la fila resumen;
+       este popup trae los entrepaños y las acciones del cuerpo (Esquema,
+       Etiquetas, Editar, Reclasificar, Eliminar) que antes vivían siempre
+       expandidas en la pantalla. -->
+  <div id="modal-layout-cuerpo-detalle" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:flex-start;justify-content:center;padding:6vh 16px;overflow-y:auto;">
+    <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;width:100%;max-width:620px;max-height:88vh;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="background:linear-gradient(135deg,var(--pm),#166473);padding:18px 20px;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-shrink:0;">
+        <div>
+          <div id="layout-cuerpo-detalle-codigo" style="font-size:18px;font-weight:900;color:#fff;font-family:monospace;"></div>
+          <div id="layout-cuerpo-detalle-sub" style="font-size:12px;color:#ffffffcc;margin-top:3px;font-weight:700;"></div>
+        </div>
+        <button onclick="layoutCerrarModalCuerpoDetalle()"
+          style="width:30px;height:30px;border-radius:8px;border:none;cursor:pointer;flex-shrink:0;background:#ffffff29;color:#fff;font-size:15px;">
+          ✕
+        </button>
+      </div>
+      <div style="display:flex;gap:8px;padding:12px 20px;border-bottom:1px solid var(--brd);flex-wrap:wrap;flex-shrink:0;">
+        <button id="layout-cuerpo-detalle-esquema"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          📐 Esquema
+        </button>
+        <button id="layout-cuerpo-detalle-etiquetas"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          🖨 Etiquetas
+        </button>
+        <button id="layout-cuerpo-detalle-editar"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          ✏ Editar
+        </button>
+        <button id="layout-cuerpo-detalle-reclasificar"
+          style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
+          ⇄ Reclasificar
+        </button>
+        <button id="layout-cuerpo-detalle-eliminar"
+          style="padding:7px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;font-weight:700;cursor:pointer;margin-left:auto;">
+          🗑 Eliminar
+        </button>
+      </div>
+      <div id="layout-cuerpo-detalle-body" style="padding:6px 20px 20px;overflow-y:auto;"></div>
+    </div>
+  </div>
+
   <!-- Modal Layout: Asignar SKU — Entrepaño completo, todos sus huecos de una vez -->
   <div id="modal-layout-asignar-entrepano" style="display:none;position:fixed;inset:0;background:#000000cc;z-index:200;align-items:center;justify-content:center;padding:16px;">
     <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:16px;padding:20px;width:100%;max-width:440px;max-height:90vh;overflow-y:auto;">

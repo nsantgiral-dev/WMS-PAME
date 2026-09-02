@@ -235,41 +235,34 @@ function layoutRenderUbicaciones() {
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     } else if (g.tipo === 'cuerpo') {
       // Nomenclatura real del código: {PREFIJO_ZONA}-{PASILLO}{FILA}-C{CUERPO} — ej. PIK-A1-C01.
+      // Fila colapsada — el detalle (entrepaños + acciones del cuerpo) vive en
+      // modal-layout-cuerpo-detalle (layoutAbrirModalCuerpoDetalle). Antes cada
+      // cuerpo mostraba sus entrepaños siempre expandidos; con 20+ cuerpos por
+      // zona era puro scroll para encontrar uno solo.
       const codigoCuerpo = _layoutCodigoCuerpo(g.items[0].codigo);
-      const nivelesEnZona = [...g.niveles.keys()].sort((a, b) => a - b);
-      const idsCuerpoCsv = g.items.map(u => u.id).join(',');
-      const zonaCuerpo = g.items[0].tipo_zona; // un cuerpo es 100% de una sola zona
-      let cuerpoHtml = `
-        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
-          <div style="font-size:20px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
-          <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            <button onclick="layoutAbrirModalEsquemaCuerpo('${idsCuerpoCsv}')"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              📐 Esquema
-            </button>
-            <button onclick="layoutImprimirEtiquetasCuerpo('${idsCuerpoCsv}')"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              🖨 Etiquetas
-            </button>
-            <button onclick="layoutAbrirModalEditarCuerpo('${g.pasillo}', ${g.fila}, ${g.cuerpo}, ${nivelesEnZona.length})"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              ✏ Editar
-            </button>
-            <button onclick="layoutAbrirModalReclasificarCuerpo('${g.pasillo}', ${g.fila}, ${g.cuerpo}, '${zonaCuerpo}')"
-              style="padding:7px 10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:11px;font-weight:700;cursor:pointer;">
-              ⇄ Reclasificar
-            </button>
-            <button onclick="layoutEliminarCuerpo('${g.pasillo}', ${g.fila}, ${g.cuerpo})"
-              style="padding:7px 10px;background:var(--bg);border:1px solid #7f1d1d;border-radius:6px;color:#f87171;font-size:11px;font-weight:700;cursor:pointer;">
-              🗑 Eliminar
-            </button>
+      const total = g.items.length;
+      const sinAsignar = g.items.filter(u => !u.producto_asignado_codigo).length;
+      const asignados = total - sinAsignar;
+      const pct = total ? Math.round((asignados / total) * 100) : 0;
+      const chip = sinAsignar === 0
+        ? `<span class="badge badge-green">Completo</span>`
+        : `<span class="badge badge-yellow">${sinAsignar} sin asignar</span>`;
+      html += `
+        <button onclick="layoutAbrirModalCuerpoDetalle('${g.pasillo}', ${g.fila}, ${g.cuerpo})"
+          class="tabla-card" style="display:flex;align-items:center;gap:12px;width:100%;text-align:left;
+          margin-top:10px;cursor:pointer;font:inherit;color:inherit;">
+          <svg width="17" height="17" viewBox="0 0 20 20" fill="none" style="flex-shrink:0;color:var(--tx3);">
+            <path d="M7 4l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div style="min-width:120px;font-size:15px;font-weight:800;font-family:monospace;color:var(--tx);">${codigoCuerpo}</div>
+          <div style="flex:1;min-width:140px;">
+            <div style="font-size:12px;font-weight:700;color:var(--tx2);"><b style="color:var(--tx);">${asignados}</b> de ${total} huecos asignados</div>
+            <div style="height:5px;border-radius:3px;background:var(--bg-s2);overflow:hidden;margin-top:4px;">
+              <span style="display:block;height:100%;border-radius:3px;background:var(--green,#16a34a);width:${pct}%;"></span>
+            </div>
           </div>
-        </div>`;
-      nivelesEnZona.forEach((nivel, idx) => {
-        const huecos = g.niveles.get(nivel).sort((a, b) => a.hueco - b.hueco);
-        cuerpoHtml += _layoutRenderEntrepanoSeccion(huecos, idx === 0);
-      });
-      html += `<div class="tabla-card" style="margin-top:16px;">${cuerpoHtml}</div>`;
+          ${chip}
+        </button>`;
     } else {
       g.items.forEach(u => { html += _layoutRenderUbicacionCard(u); });
     }
@@ -1048,6 +1041,50 @@ async function layoutImportarExcel(btn) {
   }
 }
 
+
+// ── Modal: Detalle de Cuerpo (popup flotante) ────────────────────────────────
+// La fila de la lista (layoutRenderUbicaciones) solo colapsa/expande el
+// contenedor visual — este modal recalcula los huecos del cuerpo desde
+// _layoutUbicacionesCache en vez de guardar una copia aparte, para no
+// arriesgar que el popup muestre un estado viejo si el cache se refrescó
+// entre que se pintó la lista y que se abrió el cuerpo.
+function layoutAbrirModalCuerpoDetalle(pasillo, fila, cuerpo) {
+  const huecos = _layoutUbicacionesCache.filter(u =>
+    u.pasillo === pasillo && u.fila === fila && u.cuerpo === cuerpo && u.tipo_zona === _layoutZonaActual
+  );
+  if (!huecos.length) return;
+
+  const codigoCuerpo = _layoutCodigoCuerpo(huecos[0].codigo);
+  const zonaCuerpo = huecos[0].tipo_zona; // un cuerpo es 100% de una sola zona
+  const idsCuerpoCsv = huecos.map(u => u.id).join(',');
+  const sinAsignar = huecos.filter(u => !u.producto_asignado_codigo).length;
+  const nivelesEnZona = [...new Set(huecos.map(u => u.nivel))].sort((a, b) => a - b);
+
+  document.getElementById('layout-cuerpo-detalle-codigo').textContent = codigoCuerpo;
+  document.getElementById('layout-cuerpo-detalle-sub').textContent =
+    `${zonaCuerpo} · ${huecos.length} hueco(s) · ${sinAsignar ? sinAsignar + ' sin asignar' : 'todos asignados'}`;
+
+  // Mismos handlers que ya existían en el header siempre-expandido — solo
+  // se movieron adentro del modal, ningún comportamiento nuevo.
+  document.getElementById('layout-cuerpo-detalle-esquema').onclick     = () => layoutAbrirModalEsquemaCuerpo(idsCuerpoCsv);
+  document.getElementById('layout-cuerpo-detalle-etiquetas').onclick   = () => layoutImprimirEtiquetasCuerpo(idsCuerpoCsv);
+  document.getElementById('layout-cuerpo-detalle-editar').onclick      = () => layoutAbrirModalEditarCuerpo(pasillo, fila, cuerpo, nivelesEnZona.length);
+  document.getElementById('layout-cuerpo-detalle-reclasificar').onclick = () => layoutAbrirModalReclasificarCuerpo(pasillo, fila, cuerpo, zonaCuerpo);
+  document.getElementById('layout-cuerpo-detalle-eliminar').onclick    = () => layoutEliminarCuerpo(pasillo, fila, cuerpo);
+
+  let body = '';
+  nivelesEnZona.forEach((nivel, idx) => {
+    const hs = huecos.filter(u => u.nivel === nivel).sort((a, b) => a.hueco - b.hueco);
+    body += _layoutRenderEntrepanoSeccion(hs, idx === 0);
+  });
+  document.getElementById('layout-cuerpo-detalle-body').innerHTML = body;
+
+  document.getElementById('modal-layout-cuerpo-detalle').style.display = 'flex';
+}
+
+function layoutCerrarModalCuerpoDetalle() {
+  document.getElementById('modal-layout-cuerpo-detalle').style.display = 'none';
+}
 
 // ── Entrepaño: render, asignar SKU batch, ver detalle, imprimir ─────────────
 // Post-modularización: gestión de entrepaños como unidad. Movidas desde app.js.
