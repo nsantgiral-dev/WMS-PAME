@@ -66,8 +66,10 @@ function layoutSubtab(sec) {
     if (!cont || !btn) return;
     const activo = s === sec;
     cont.style.display = activo ? 'block' : 'none';
-    btn.style.background = activo ? 'var(--pm)' : 'transparent';
-    btn.style.color = activo ? '#fff' : 'var(--tx3)';
+    // Tabs reales (subrayado), no segmented control — Ubicaciones e Importar
+    // Excel son pantallas distintas, no una misma vista filtrada de dos formas.
+    btn.style.color = activo ? 'var(--pm)' : 'var(--tx3)';
+    btn.style.borderBottomColor = activo ? 'var(--pm)' : 'transparent';
     btn.style.fontWeight = activo ? '700' : '400';
   });
   if (sec === 'ubicaciones') layoutCargarUbicaciones();

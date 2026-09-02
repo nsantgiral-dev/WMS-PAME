@@ -2006,40 +2006,50 @@
       Las ubicaciones se crean y clasifican 100% en el WMS — pasillos, filas y zonas no dependen de Siesa.
     </div>
 
-    <!-- Sub-nav de secciones -->
-    <div style="display:flex;gap:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:10px;overflow:hidden;margin-bottom:16px;flex-wrap:wrap;">
+    <!-- Sub-nav de secciones — tabs reales, no segmented control: "Ubicaciones"
+         e "Importar Excel" muestran contenido totalmente distinto (lista vs.
+         carga de archivo), no una misma vista filtrada de dos formas. -->
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--brd);margin-bottom:16px;">
       <div id="layout-sub-ubicaciones" onclick="layoutSubtab('ubicaciones')"
-        style="flex:1;min-width:100px;padding:10px 6px;font-size:12px;font-weight:700;text-align:center;cursor:pointer;background:var(--pm);color:#fff;">
+        style="padding:9px 4px;margin-right:20px;font-size:13px;font-weight:700;cursor:pointer;color:var(--pm);border-bottom:2px solid var(--pm);">
         Ubicaciones
       </div>
       <div id="layout-sub-importar" onclick="layoutSubtab('importar')"
-        style="flex:1;min-width:100px;padding:10px 6px;font-size:12px;text-align:center;cursor:pointer;color:var(--tx3);">
+        style="padding:9px 4px;margin-right:20px;font-size:13px;cursor:pointer;color:var(--tx3);border-bottom:2px solid transparent;">
         Importar Excel
       </div>
     </div>
 
     <!-- ── SECCIÓN: UBICACIONES ─────────────────────────────────────── -->
     <div id="layout-sec-ubicaciones">
-      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-        <button onclick="layoutAbrirModalCuerpo('PICKING')"
-          style="padding:10px 16px;background:var(--pm);border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
-          + Crear picking
-        </button>
-        <button onclick="layoutAbrirModalCuerpo('RESERVA')"
-          style="padding:10px 16px;background:#22c55e;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
-          + Crear reserva
-        </button>
-        <button onclick="layoutAbrirModalCuerpo('IMPORTADOS')"
-          style="padding:10px 16px;background:#f59e0b;border:none;border-radius:8px;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">
-          + Crear importados
-        </button>
-        <button onclick="layoutCrearAverias()"
-          style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
-          + Ubicación AVERIAS
-        </button>
-        <button onclick="layoutCargarUbicaciones()"
-          style="padding:10px 16px;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:13px;cursor:pointer;">
-          Actualizar
+      <!-- Las 4 formas de crear ubicación son la acción menos frecuente de la
+           pantalla (setup) — antes eran 3 botones sólidos de colores distintos
+           compitiendo entre sí y con el resto de la pantalla. Agrupadas con un
+           solo borde compartido leen como una familia, no como 3 CTAs sueltos;
+           el punto de color reemplaza el fondo sólido. "Actualizar" es una
+           acción distinta (refrescar, no crear) y queda aparte. -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:10px;flex-wrap:wrap;">
+        <div style="display:inline-flex;border:1px solid var(--brd);border-radius:8px;overflow:hidden;flex-wrap:wrap;">
+          <button onclick="layoutAbrirModalCuerpo('PICKING')"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;border-right:1px solid var(--brd);color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#2563eb;flex-shrink:0;"></span>+ Picking
+          </button>
+          <button onclick="layoutAbrirModalCuerpo('RESERVA')"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;border-right:1px solid var(--brd);color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#22c55e;flex-shrink:0;"></span>+ Reserva
+          </button>
+          <button onclick="layoutAbrirModalCuerpo('IMPORTADOS')"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;border-right:1px solid var(--brd);color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#f59e0b;flex-shrink:0;"></span>+ Importados
+          </button>
+          <button onclick="layoutCrearAverias()"
+            style="display:flex;align-items:center;gap:7px;padding:9px 13px;background:var(--bg-s);border:none;color:var(--tx2);font-size:12.5px;font-weight:700;cursor:pointer;">
+            <span style="width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;"></span>+ Avería
+          </button>
+        </div>
+        <button onclick="layoutCargarUbicaciones()" title="Actualizar"
+          style="width:34px;height:34px;flex-shrink:0;background:var(--bg-s);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:15px;cursor:pointer;">
+          ↻
         </button>
       </div>
 
