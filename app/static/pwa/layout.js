@@ -1097,27 +1097,43 @@ let _layoutAsignarEntEditando = new Set(); // ids de hueco con SKU ya asignado q
 
 function _layoutRenderEntrepanoSeccion(huecos, esPrimero) {
   const zona = huecos[0].tipo_zona;
-  const color = _layoutColorZona(zona);
   const nivel = huecos[0].nivel;
   const idsCsv = huecos.map(u => u.id).join(',');
   const sinAsignar = huecos.filter(u => !u.producto_asignado_codigo).length;
-  const subtitulo = sinAsignar
-    ? `${huecos.length} hueco(s) · ${sinAsignar} sin SKU asignado`
-    : `${huecos.length} hueco(s) · todos asignados`;
+  const ok = sinAsignar === 0;
+  const subtitulo = ok
+    ? `${huecos.length} hueco(s) · todos asignados`
+    : `${huecos.length} hueco(s) · ${sinAsignar} sin SKU asignado`;
+  // Estado en la forma del bloque (icono + borde + fondo tenue), no solo en
+  // el color de un texto de 11px — y "Asignar SKU" solo se ve como acción
+  // principal donde de verdad falta algo (antes era teal sólido en los 5
+  // entrepaños aunque ya estuvieran completos). La zona ya no se repite acá:
+  // el popup que llama a esta función (layoutAbrirModalCuerpoDetalle) ya la
+  // muestra una vez en el título — un cuerpo es 100% de una sola zona.
+  const asignarBtnStyle = ok
+    ? 'background:transparent;color:var(--pm);border:1px solid var(--brd);'
+    : 'background:var(--pm);color:#fff;border:none;';
   return `
-    <div style="${esPrimero ? '' : 'border-top:1px solid var(--brd);margin-top:14px;padding-top:14px;'}">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">
-        <div>
-          <div style="font-size:15px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
-          <div style="font-size:11px;color:${sinAsignar ? '#555' : '#60a5fa'};margin-top:3px;font-weight:600;">${subtitulo}</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;
+      padding:11px 14px;border-radius:10px;border-left:3px solid ${ok ? 'transparent' : 'var(--warn,#d97706)'};
+      background:${ok ? 'transparent' : 'color-mix(in srgb, var(--warn,#d97706) 7%, var(--bg-s))'};
+      ${esPrimero ? '' : 'margin-top:6px;'}">
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;">
+        <span style="width:24px;height:24px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;
+          justify-content:center;font-size:12px;font-weight:900;
+          background:${ok ? 'var(--gbg,#DCFCE7)' : 'var(--warn-bg,#FEF3C7)'};
+          color:${ok ? 'var(--green,#16a34a)' : 'var(--warn,#d97706)'};">${ok ? '✓' : '!'}</span>
+        <div style="min-width:0;">
+          <div style="font-size:13.5px;font-weight:800;color:var(--tx);">Entrepaño ${nivel}</div>
+          <div style="font-size:11.5px;margin-top:1px;font-weight:${ok ? 600 : 700};
+            color:${ok ? 'var(--tx3)' : 'var(--warn,#d97706)'};font-variant-numeric:tabular-nums;">${subtitulo}</div>
         </div>
-        <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${zona}</span>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <div style="display:flex;gap:6px;flex-shrink:0;">
         <button onclick="layoutAbrirModalAsignarEntrepano('${idsCsv}', '${zona}')"
-          style="flex:1;min-width:120px;padding:10px;background:var(--pm);border:none;border-radius:6px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Asignar SKU</button>
+          style="padding:8px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;${asignarBtnStyle}">Asignar SKU</button>
         <button onclick="layoutAbrirModalVerEntrepano('${idsCsv}')"
-          style="flex:1;min-width:90px;padding:10px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">Ver</button>
+          style="padding:8px 12px;background:transparent;border:1px solid var(--brd);border-radius:6px;color:var(--tx2);font-size:12px;cursor:pointer;">Ver</button>
       </div>
     </div>`;
 }
