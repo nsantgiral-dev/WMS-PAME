@@ -20,9 +20,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def referencias_comprometidas_por_siesa(tipo_docto: str, consec_docto: str) -> set | None:
-    """SKUs que Siesa confirma comprometidos (listos para remisionar) para
-    este pedido, o `None` si no se pudo consultar (fallo de red).
+def compromisos_por_siesa(tipo_docto: str, consec_docto: str) -> dict | None:
+    """SKU → `f405_cant_por_remisionar_base` que Siesa confirma comprometido
+    para este pedido, o `None` si no se pudo consultar (fallo de red).
+
+    Es la misma consulta que ya usaba `referencias_comprometidas_por_siesa`
+    (esta función existe para no repetirla — Regla 0), pero conserva la
+    cantidad en vez de colapsarla a presencia/ausencia: la cantidad es lo
+    que permite mostrarle al operario "disponible X de Y" mientras cuenta,
+    no solo bloquear la línea si Y es cero.
 
     `None` es una señal explícita de "no sé" — el caller NO debe tratarlo
     como "ninguno está comprometido" (eso bloquearía picking legítimo por
@@ -50,8 +56,22 @@ def referencias_comprometidas_por_siesa(tipo_docto: str, consec_docto: str) -> s
         )
         return None
 
-    return {
-        str(f.get('f120_referencia', '')).strip()
-        for f in filas
-        if str(f.get('f120_referencia', '')).strip()
-    }
+    resultado = {}
+    for f in filas:
+        sku = str(f.get('f120_referencia', '')).strip()
+        if not sku:
+            continue
+        cant = float(f.get('f405_cant_por_remisionar_base') or 0)
+        resultado[sku] = resultado.get(sku, 0.0) + cant
+    return resultado
+
+
+def referencias_comprometidas_por_siesa(tipo_docto: str, consec_docto: str) -> set | None:
+    """SKUs que Siesa confirma comprometidos (listos para remisionar) para
+    este pedido, o `None` si no se pudo consultar. Vista derivada de
+    `compromisos_por_siesa` — ver esa función para el detalle por cantidad.
+    """
+    compromisos = compromisos_por_siesa(tipo_docto, consec_docto)
+    if compromisos is None:
+        return None
+    return set(compromisos.keys())

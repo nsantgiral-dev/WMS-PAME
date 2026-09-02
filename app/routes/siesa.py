@@ -1037,8 +1037,9 @@ def iniciar_despacho():
     # ciclo, se comporta exactamente como antes de este cambio. Un fallo de
     # red no es evidencia de que Siesa canceló la línea (Regla 0).
     from app.services import backorder_service
-    comprometidas_siesa = backorder_service.referencias_comprometidas_por_siesa(
+    compromisos_siesa = backorder_service.compromisos_por_siesa(
         tipo_docto, consec_docto)
+    comprometidas_siesa = None if compromisos_siesa is None else set(compromisos_siesa.keys())
 
     tareas_picking_ids = []
     items_ok = []
@@ -1084,6 +1085,21 @@ def iniciar_despacho():
                              'tarea creada y bloqueada, ver pestaña Bodega',
                 })
                 continue
+
+            # PD1447 (2026-09-02): esta línea SÍ pasó el filtro de backorder,
+            # pero eso fue una foto de este instante — Siesa puede reasignar
+            # ese mismo cupo a otro pedido antes de que el operario termine de
+            # contar. Guardar el número visible (`disponible_siesa`) no evita
+            # la carrera, pero le da al operario la misma información que
+            # tiene el WMS en vez de que el rechazo aparezca recién en el
+            # despacho. `None` si no se pudo consultar — nunca se inventa.
+            if compromisos_siesa is not None and item_codigo:
+                _disp = compromisos_siesa.get(item_codigo)
+                if _disp is not None:
+                    from app.extensions import db as _db_disp
+                    for _t in tareas:
+                        _t.disponible_siesa = _disp
+                    _db_disp.session.commit()
 
             items_ok.append(item)
         except (ValueError, TypeError) as e:

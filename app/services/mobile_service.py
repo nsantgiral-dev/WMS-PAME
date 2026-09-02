@@ -162,6 +162,7 @@ class MobileService:
                 'estado': tarea_activa.estado,
                 'referencia': tarea_activa.referencia_documento,
                 'lote': tarea_activa.lote,
+                'disponible_siesa': float(tarea_activa.disponible_siesa) if tarea_activa.disponible_siesa is not None else None,
             }
 
         # Tomar siguiente tarea de la cola global — más prioritaria y más antigua.
@@ -451,6 +452,7 @@ class MobileService:
         _tarea_referencia = tarea.referencia_documento
         _tarea_lote = tarea.lote
         _tarea_tipo_documento = tarea.tipo_documento or 'PEDIDO'
+        _tarea_disponible_siesa = float(tarea.disponible_siesa) if tarea.disponible_siesa is not None else None
 
         # Asignar picking al operario
         tarea.operario_id = operario_id
@@ -479,6 +481,7 @@ class MobileService:
             'referencia': _tarea_referencia,
             'lote': _tarea_lote,
             'conteo_intercalado': conteo_intercalado,
+            'disponible_siesa': _tarea_disponible_siesa,
         }
         return resultado
 
