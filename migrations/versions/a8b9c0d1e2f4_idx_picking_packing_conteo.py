@@ -55,15 +55,29 @@ def upgrade():
                     'recaudos_entrega', ['tarea_id'], unique=False)
 
     # ── tareas_reposicion ─────────────────────────────────────────────────────
-    op.create_index('ix_tareas_reposicion_estado',
-                    'tareas_reposicion', ['estado'], unique=False)
+    # `IF NOT EXISTS` porque `y6z7a8b9c0d1_add_zonas_reposicion` (dos
+    # migraciones antes en la cadena) YA crea este mismo índice. Con
+    # `create_index` normal, **la cadena desde cero no puede completarse**:
+    # revienta acá con `DuplicateTable`. Verificado el 2026-08-20 contra una
+    # base PostgreSQL limpia.
+    #
+    # En producción no cambia nada —ambas migraciones ya están aplicadas y
+    # alembic no las re-ejecuta—; lo que desbloquea es levantar un ambiente
+    # nuevo: un QA propio, la máquina de alguien que entra, o la verificación
+    # de un respaldo restaurado.
+    #
+    # Es el único choque real del historial: las otras 43 repeticiones de
+    # `create_index` son `batch_op`, que recrean el índice después de
+    # reconstruir la tabla y por eso no colisionan.
+    op.execute('CREATE INDEX IF NOT EXISTS ix_tareas_reposicion_estado '
+               'ON tareas_reposicion (estado)')
     op.create_index('ix_tareas_reposicion_almacen_estado',
                     'tareas_reposicion', ['almacen_id', 'estado'], unique=False)
 
 
 def downgrade():
     op.drop_index('ix_tareas_reposicion_almacen_estado',   table_name='tareas_reposicion')
-    op.drop_index('ix_tareas_reposicion_estado',           table_name='tareas_reposicion')
+    op.execute('DROP INDEX IF EXISTS ix_tareas_reposicion_estado')
     op.drop_index('ix_recaudos_entrega_tarea_id',          table_name='recaudos_entrega')
     op.drop_index('ix_recaudos_entrega_ruta_id',           table_name='recaudos_entrega')
     op.drop_index('ix_sesiones_conteo_estado',             table_name='sesiones_conteo')

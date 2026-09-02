@@ -125,11 +125,34 @@ class PedidoPackingCloser(IPackingCloser):
                 return (f'Pedido {tarea_pre.numero_pedido_siesa} ya tiene factura '
                         f'{f0.get("f350_id_tipo_docto","?")}{f0.get("f350_consec_docto","?")} en Siesa')
         except (FutTimeout, Exception) as e:
-            logger.warning(
-                '[PEDIDO_CLOSER] precheck Siesa timeout/error para %s%s: %s — '
-                'continuando (DLQ reconciliará si hay conflicto)',
+            # **No se continúa.** Este `except` decía «continuando (DLQ
+            # reconciliará si hay conflicto)» y se tragaba el fail-fast
+            # deliberado de `get_factura_desde_pedido`, cuyo propio comentario
+            # dice que no devuelve `[]` ante error de red **precisamente**
+            # para que nadie asuma que no hay FE y dispare una duplicada.
+            #
+            # El DLQ no reconcilia esto: aguas abajo se encola DESPACHO_F470,
+            # que ejecuta 244328 → 142945 (remisión, descarga inventario) →
+            # 142943 (FE). Cuando el DLQ mira, los documentos ya existen.
+            #
+            # Y el presupuesto son 8 s contra los 30 del GET: el camino de
+            # fallo se dispara cada vez que Siesa va lento — que es justo
+            # cuando el intento anterior quedó a medias.
+            #
+            # La versión que sí propagaba, `_cerrar_packing_pedido_legacy`,
+            # no tiene un solo caller. Una política, dos implementaciones, y
+            # la viva era la degradada.
+            logger.error(
+                '[PEDIDO_CLOSER] precheck Siesa falló para %s%s: %s — se '
+                'ABORTA el cierre. No se puede saber si el pedido ya tiene '
+                'factura, y seguir sería arriesgar una FE duplicada.',
                 tipo, consec, e
             )
+            return (
+                f'No se pudo verificar en Siesa si el pedido '
+                f'{tarea_pre.numero_pedido_siesa} ya tiene factura ({e}). '
+                f'El cierre se detiene para no emitir una factura duplicada. '
+                f'Reintentá cuando Siesa responda.')
         finally:
             # shutdown(wait=False) evita bloquear hasta 30s si un future aún
             # espera respuesta HTTP de Connekta después de nuestro timeout de 8s.

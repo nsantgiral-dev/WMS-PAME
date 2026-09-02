@@ -179,3 +179,50 @@ class TestConfirmarReposicion:
                 tarea_id=tarea_dict['id'],
                 abastecedor_id=9999,  # otro usuario
             )
+
+
+class TestLiberarTareasZombi:
+
+    def test_libera_en_proceso_vieja(self, app, db, inv_picking, inv_reserva,
+                                      lpn_activo, almacen, usuario):
+        """EN_PROCESO hace >2h sin progreso — se libera a PENDIENTE, sin
+        abastecedor, para que alguien (el mismo u otro) la vuelva a tomar."""
+        from datetime import datetime, timedelta
+        from app.services.reposicion_service import (
+            verificar_stock_picking, get_tarea_abastecedor, liberar_tareas_zombi,
+        )
+        from app.models.tarea_reposicion import TareaReposicion
+
+        verificar_stock_picking(almacen_id=almacen.id)
+        tarea_dict = get_tarea_abastecedor(usuario.id)
+
+        tarea = TareaReposicion.query.get(tarea_dict['id'])
+        tarea.fecha_inicio = datetime.utcnow() - timedelta(hours=3)
+        db.session.commit()
+
+        liberadas = liberar_tareas_zombi(timeout_horas=2)
+
+        assert liberadas == 1
+        db.session.refresh(tarea)
+        assert tarea.estado == 'PENDIENTE'
+        assert tarea.abastecedor_id is None
+        assert tarea.fecha_inicio is None
+        # El LPN no se tocó — nadie lo consumió, sigue disponible para retomar
+        assert tarea.lpn_id == lpn_activo.id
+
+    def test_no_libera_en_proceso_reciente(self, app, db, inv_picking, inv_reserva,
+                                            lpn_activo, almacen, usuario):
+        from app.services.reposicion_service import (
+            verificar_stock_picking, get_tarea_abastecedor, liberar_tareas_zombi,
+        )
+        from app.models.tarea_reposicion import TareaReposicion
+
+        verificar_stock_picking(almacen_id=almacen.id)
+        tarea_dict = get_tarea_abastecedor(usuario.id)
+
+        liberadas = liberar_tareas_zombi(timeout_horas=2)
+
+        assert liberadas == 0
+        tarea = TareaReposicion.query.get(tarea_dict['id'])
+        assert tarea.estado == 'EN_PROCESO'
+        assert tarea.abastecedor_id == usuario.id

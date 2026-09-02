@@ -220,40 +220,6 @@ def confirmar_ajuste(id):
         return jsonify({'error': str(e)}), 500
 
 
-@conteo_bp.route('/auditorias-urgentes', methods=['GET'])
-@jwt_required()
-def auditorias_urgentes():
-    """
-    Tareas de picking BLOQUEADAS pendientes de que el admin/supervisor las
-    audite directamente (ver PickingService.auditar_tarea). Reemplaza el
-    conteo doble-ciego para excepciones puntuales de picking — el admin
-    confirma si el producto está realmente agotado (el pedido sigue parcial)
-    o si estaba mal ubicado (se completa la línea), sin esperar turno de
-    otro operario en la cola de conteo cíclico.
-    """
-    from app.models.usuario import Usuario
-    from app.models.picking import TareaPicking
-    from sqlalchemy.orm import selectinload as _sl
-    try:
-        uid = int(get_jwt_identity())
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Token inválido'}), 401
-    usuario = Usuario.query.get(uid)
-    if not usuario or usuario.rol not in Roles.SUPERVISION:
-        return jsonify({'error': 'Solo admin o supervisor puede ver las auditorías urgentes'}), 403
-    almacen_id = request.args.get('almacen_id', type=int)
-    q = (TareaPicking.query
-         .options(_sl(TareaPicking.producto), _sl(TareaPicking.ubicacion))
-         .filter(TareaPicking.estado == 'BLOQUEADO'))
-    if almacen_id:
-        q = q.filter_by(almacen_id=almacen_id)
-    tareas = q.order_by(TareaPicking.fecha_creacion.desc()).all()
-    return jsonify({
-        'auditorias': [t.to_dict() for t in tareas],
-        'total': len(tareas),
-    }), 200
-
-
 @conteo_bp.route('/abc/generar-tareas', methods=['POST'])
 @jwt_required()
 def generar_tareas_abc():

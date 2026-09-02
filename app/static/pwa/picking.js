@@ -40,6 +40,13 @@ async function pedirTarea() {
         </div>`;
       return;
     }
+    if (d.tipo === 'REPOSICION') {
+      // Nivel 2 de la cola unificada (entre Traslado y Conteo) — reutiliza el
+      // HUD de escaneo del abastecedor, ya construido, en vez de un render propio.
+      TAREA_ACTUAL = d;
+      pickingReponerAhora(d);
+      return;
+    }
     TAREA_ACTUAL = d;
     renderTarea(d);
   } catch (e) {
@@ -128,8 +135,8 @@ function renderTarea(t) {
 
       <div style="background:#111;border-radius:16px;padding:16px;margin-bottom:12px;">
         <div style="font-size:13px;color:#666;">PRODUCTO</div>
-        <div style="font-size:26px;font-weight:700;">${t.producto_codigo}</div>
-        <div style="font-size:15px;color:#aaa;">${t.producto_nombre}</div>
+        <div style="font-size:20px;font-weight:700;">${t.producto_nombre}</div>
+        <div style="font-size:15px;color:#aaa;font-weight:400;">${t.producto_codigo}</div>
       </div>
 
       ${esPicking && t.producto_id ? `

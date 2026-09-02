@@ -31,6 +31,7 @@ from zoneinfo import ZoneInfo
 from collections import defaultdict
 from app.extensions import db
 from app.utils.fecha import dia_operativo as _dia_operativo
+from app.services.siesa_filtro import lit as _lit
 
 logger = logging.getLogger(__name__)
 
@@ -899,7 +900,7 @@ class VigiaService:
                 res = connekta._get('API_v2_Ventas_Facturas_DesdePedido', {
                     'paginacion': f'numPag={pag}|tamPag=100',
                     'parametros': (
-                        f"f350_id_co = ''{co}'' "
+                        f"f350_id_co = {_lit(co)} "
                         f"AND f350_fecha >= {desde.strftime('%Y%m%d')} "
                         f"AND f350_fecha <= {hasta.strftime('%Y%m%d')}"
                     ),

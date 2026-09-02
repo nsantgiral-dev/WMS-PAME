@@ -29,7 +29,14 @@ from app.extensions import db
 
 #: Los tipos que se registran. Lista cerrada a propósito: un tipo libre haría
 #: que un typo (`'catalogo '`) cree una serie paralela que nadie consulta.
-TIPOS = ('catalogo', 'barcodes', 'stock', 'setup_inicial')
+#:
+#: `stock_ns1` / `stock_nc1` (2026-08-27, Fase 1 de calibración de tiendas):
+#: `stock` a secas sigue siendo la bodega default (NB1/connekta.bodega) —
+#: histórico, no se toca. Cada bodega adicional necesita su propio tipo
+#: porque `ultimo('stock')` devuelve una sola fila, la más reciente — sin
+#: separarlas, correr NS1 y luego NC1 el mismo cron haría que el estado de
+#: NC1 "tape" el de NS1 para cualquiera que consulte por bodega.
+TIPOS = ('catalogo', 'barcodes', 'stock', 'stock_ns1', 'stock_nc1', 'setup_inicial', 'reconciliacion')
 
 
 class RegistroSync(db.Model):
@@ -58,6 +65,10 @@ class RegistroSync(db.Model):
     #: `IS NULL` / `IS NOT NULL` y no `= NULL`: una comparación con NULL da NULL
     #: y el CHECK la aprueba. Esa trampa ya costó una migración abortada.
     __table_args__ = (
+        # Declarado con el nombre EXACTO que tiene en la base: existía en
+        # migraciones y no en el modelo, y `flask db check` lo reportaba
+        # como sobrante.
+        db.Index('ix_registros_sync_tipo_inicio', 'tipo', 'inicio'),
         db.CheckConstraint(
             '(ok IS NULL AND fin IS NULL) OR (ok IS NOT NULL AND fin IS NOT NULL)',
             name='ck_registro_sync_cierre_completo'),

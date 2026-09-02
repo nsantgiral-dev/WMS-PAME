@@ -26,7 +26,11 @@ class DevolucionCliente(db.Model):
     __tablename__ = 'devoluciones_cliente'
 
     id = db.Column(db.Integer, primary_key=True)
-    codigo = db.Column(db.String(50), unique=True, nullable=False)
+    #: Sin `unique=True`: la unicidad la impone el índice único
+    #: `ix_devolucion_cliente_codigo`, declarado abajo con el nombre que
+    #: tiene en la base. Con `unique=True` el modelo pedía un CONSTRAINT y la
+    #: base tiene un ÍNDICE — mismo efecto, distinta forma, deriva perpetua.
+    codigo = db.Column(db.String(50), nullable=False)
 
     # Ancla al pedido ya despachado — no se vuelve a buscar en Siesa desde cero
     tarea_packing_id = db.Column(db.Integer, db.ForeignKey('tareas_packing.id'), nullable=False)
@@ -90,6 +94,27 @@ class DevolucionCliente(db.Model):
     lineas = db.relationship('LineaDevolucionCliente', backref='devolucion',
                               lazy=True, cascade='all, delete-orphan')
 
+        # Declarado con el nombre EXACTO que tiene en la base. Existía en
+        # migraciones y no en el modelo, así que `flask db check` lo
+        # reportaba como sobrante — trece líneas de ruido que volvían
+        # inservible el único detector que atrapa una columna sin
+        # migración (lo de `puede_usar_camara`, 2026-08-20).
+    __table_args__ = (
+        db.Index('ix_devolucion_cliente_codigo', 'codigo', unique=True),
+        db.Index('ix_devolucion_cliente_pedido', 'numero_pedido_siesa'),
+        # Una devolución activa por recaudo. `crear_devoluciones_pendientes_ruta`
+        # se invoca desde `liquidar_ruta` Y desde `forzar_cierre_ruta`; el
+        # guard de `liquidacion_service.py:1033` es un `.first()` sin lock.
+        # Dos filas → la recepcionista confirma las dos → dos notas crédito
+        # 251126 sobre la misma factura, con cruce de cartera automático.
+        db.Index('uq_devolucion_por_recaudo', 'recaudo_entrega_id',
+                 unique=True,
+                 postgresql_where=db.text(
+                     "estado <> 'CANCELADA' AND recaudo_entrega_id IS NOT NULL"),
+                 sqlite_where=db.text(
+                     "estado <> 'CANCELADA' AND recaudo_entrega_id IS NOT NULL")),
+    )
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -151,6 +176,7 @@ class LineaDevolucionCliente(db.Model):
             'producto_id': self.producto_id,
             'producto_codigo': self.producto.codigo if self.producto else None,
             'producto_nombre': self.producto.nombre if self.producto else None,
+            'codigo_barras': self.producto.codigo_barras if self.producto else None,
             'codigo_siesa': self.codigo_siesa,
             'cantidad_facturada': float(self.cantidad_facturada or 0),
             'cantidad_devuelta': float(self.cantidad_devuelta or 0),

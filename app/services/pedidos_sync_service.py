@@ -17,6 +17,7 @@ from app.extensions import db
 from app.models.pedido_siesa import PedidoSiesa
 from app.models.producto import Producto
 from app.services.connekta_gateway import connekta
+from app.services.siesa_filtro import lit as _lit
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def _run_sync(app):
         try:
             # estado=3 → Comprometido: inventario físicamente reservado en Siesa
             # estado=2 (Aprobado) NO entra — el inventario no está reservado aún
-            parametros = f"f430_id_co = ''{connekta.centro_op}'' AND f430_ind_estado = 3"
+            parametros = f"f430_id_co = {_lit(connekta.centro_op)} AND f430_ind_estado = 3"
 
             all_items = []
             _sync_inicio = datetime.utcnow()

@@ -72,25 +72,126 @@ _ABIERTAS_A_PROPOSITO = {
 
 
 class _BuscaRol(ast.NodeVisitor):
-    """¿Esta función consulta un rol? Directo o vía un helper del módulo."""
+    """¿Esta función **decide** con el rol? No: ¿lo menciona?
+
+    ## La diferencia costó una auditoría entera
+
+    La primera versión marcaba `tiene = True` con **cualquier** llamada a un
+    guard, sin comprobar nunca que el resultado se usara. Con eso, degradar
+
+        if not _es_compras():
+            return jsonify(...), 403
+
+    a una llamada suelta —`_es_compras()`, resultado descartado— dejaba el
+    endpoint abierto a cualquier usuario autenticado **y el trinquete en
+    verde**. Demostrado por mutación el 2026-08-19 sobre
+    `routes/compras.py:576`: la suite completa pasó con el endpoint abierto.
+
+    Es la misma forma que ya costó en el trinquete de rutas huérfanas —*medía
+    presencia, no adyacencia*— y en el mapa bodega→CO. Un detector que busca
+    que el nombre esté escrito no mide autorización: mide vocabulario.
+
+    ## Qué se exige ahora
+
+    Que el resultado del guard **participe en una decisión**: estar en el test
+    de un `if`, en un `assert`, o pasar por `abort()`. La llamada suelta no
+    cuenta, y `usuario.rol` tampoco si nadie lo compara.
+    """
 
     def __init__(self, guards):
         self.tiene = False
         self.guards = guards
+        #: Variables ligadas al resultado de un guard. `u = _es_compras()`
+        #: seguido de `if not u:` es asignar-y-ramificar, que es tan válido
+        #: como llamar dentro del `if` — y la primera versión de este detector
+        #: estricto lo marcaba como endpoint sin rol. Un trinquete que manda a
+        #: arreglar lo que no está roto se apaga, y apagado cuesta lo mismo
+        #: que no existir.
+        self.ligadas = set()
 
-    def visit_Attribute(self, n):
-        if n.attr == 'rol':                                   # usuario.rol
+    def _es_llamada_a_guard(self, nodo) -> bool:
+        for n in ast.walk(nodo):
+            if isinstance(n, ast.Call):
+                f = n.func
+                nombre = f.attr if isinstance(f, ast.Attribute) else getattr(f, 'id', '')
+                if nombre in self.guards:
+                    return True
+            if isinstance(n, ast.Attribute):
+                if n.attr == 'rol':
+                    return True
+                if isinstance(n.value, ast.Name) and n.value.id == 'Roles':
+                    return True
+        return False
+
+    def visit(self, nodo):
+        """Antes de recorrer, se anotan las variables que llevan el resultado
+        de un guard. Se hace en una pasada previa para no depender del orden
+        del recorrido."""
+        if not self.ligadas:
+            for n in ast.walk(nodo):
+                destinos = []
+                if isinstance(n, ast.Assign):
+                    destinos, valor = n.targets, n.value
+                elif isinstance(n, ast.AnnAssign) and n.value is not None:
+                    destinos, valor = [n.target], n.value
+                elif isinstance(n, ast.Tuple):
+                    continue
+                else:
+                    continue
+                if not self._es_llamada_a_guard(valor):
+                    continue
+                for t in destinos:
+                    for sub in ast.walk(t):
+                        if isinstance(sub, ast.Name):
+                            self.ligadas.add(sub.id)
+        return super().visit(nodo)
+
+    # ── lo que sí cuenta ────────────────────────────────────────────────
+    def _menciona_rol(self, nodo) -> bool:
+        """¿En este subárbol se consulta un rol, directo o por una variable
+        que ya lo lleva?"""
+        if self._es_llamada_a_guard(nodo):
+            return True
+        for n in ast.walk(nodo):
+            if isinstance(n, ast.Name) and n.id in self.ligadas:
+                return True
+        return False
+
+    def visit_If(self, n):
+        # El caso normal: `if not _solo_admin(): return 403`
+        if self._menciona_rol(n.test):
             self.tiene = True
-        if isinstance(n.value, ast.Name) and n.value.id == 'Roles':
-            self.tiene = True                                 # Roles.GESTION
+        self.generic_visit(n)
+
+    def visit_IfExp(self, n):
+        if self._menciona_rol(n.test):
+            self.tiene = True
+        self.generic_visit(n)
+
+    def visit_Assert(self, n):
+        if self._menciona_rol(n.test):
+            self.tiene = True
+        self.generic_visit(n)
+
+    def visit_Return(self, n):
+        # `return jsonify(...), 403 if not _solo_admin() else 200` y la forma
+        # `return _solo_admin() or abort(403)`.
+        if n.value is not None and self._menciona_rol(n.value):
+            self.tiene = True
         self.generic_visit(n)
 
     def visit_Call(self, n):
         f = n.func
         nombre = f.attr if isinstance(f, ast.Attribute) else getattr(f, 'id', '')
-        if nombre in self.guards:
+        if nombre in self.guards and nombre in _ABORTAN_SOLOS:
             self.tiene = True
         self.generic_visit(n)
+
+
+#: Guards que no devuelven un booleano: cortan la petición ellos mismos. Para
+#: éstos la llamada suelta SÍ es una decisión. La lista es explícita a
+#: propósito — si se dedujera, volveríamos a contar vocabulario.
+_ABORTAN_SOLOS = frozenset()
 
 
 def _arboles():

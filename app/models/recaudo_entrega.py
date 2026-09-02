@@ -111,6 +111,13 @@ class RecaudoEntrega(db.Model):
     retencion_confirmada_en = db.Column(db.DateTime, nullable=True)
 
     __table_args__ = (
+        # Un recaudo por parada. Lo comprueba `ruta_service.py:978` con un
+        # `.first()` sin bloqueo, y hay DOS escritores —`confirmar_parada` y
+        # `forzar_cierre_ruta`—, así que no hace falta concurrencia exótica.
+        # Con dos filas, `total_recaudado()` suma las dos, la liquidación
+        # emite dos RC, y el congelamiento del monto tras el RC se decide con
+        # un `.first()` sin `order_by`: dispara o no según el orden del heap.
+        db.Index('uq_recaudo_por_parada', 'ruta_id', 'tarea_id', unique=True),
         db.CheckConstraint(
             "modo_pantalla IS NULL OR modo_pantalla IN ('CREDITO','DINAMICO','LIBRE')",
             name='ck_recaudo_modo_pantalla'),
@@ -207,7 +214,18 @@ class RecaudoEntrega(db.Model):
             'siesa_rc_triggered':    self.siesa_rc_triggered or False,
             'siesa_nc_triggered':    self.siesa_nc_triggered or False,
             'siesa_dc_triggered':    self.siesa_dc_triggered or False,
-            'retenciones_detalle':   self.retenciones_detalle or [],
+            # `siesa_triggered` en cada línea se guardó en True al ENCOLAR el
+            # job (`registrar_cobro_recaudo`), no al confirmarse el envío —
+            # un DC que Siesa rechaza (job 482, recaudo 22, PD1425, ruta 23,
+            # 2026-08-21) se mostraba con ✓ en pantalla aunque nunca llegó a
+            # Siesa. `pucs_enviadas()` sí es la marca real (pre-flag antes
+            # del POST, revertida si falla) — se recalcula acá para que el
+            # dato que sale de este modelo sea el mismo para cualquier
+            # pantalla que lo consuma, no una copia que puede quedar vieja.
+            'retenciones_detalle':   [
+                {**rd, 'siesa_triggered': rd.get('puc') in self.pucs_enviadas()}
+                for rd in (self.retenciones_detalle or [])
+            ],
             'confirmado_por':        self.confirmado_por,
             'editado_por':           self.editado_por,
             'editado_en':            self.editado_en.isoformat() if self.editado_en else None,

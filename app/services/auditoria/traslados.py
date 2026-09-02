@@ -59,7 +59,17 @@ def _solicitudes(estados=None, limite=1000):
                  'aparece de la nada entre dos etapas y descuadra las dos '
                  'bodegas a la vez.',
     severidad=BLOQUEA,
-    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_ve_que_se_envio_mas_de_lo_aprobado',
+    # Desde `ck_traslado_cadena_no_crece` (migración m013, 2026-08-19) la
+    # violación **no se puede escribir**: el CHECK la rechaza en el commit. Por
+    # eso el detector ciego ya no puede construirla persistiendo una fila, y
+    # apunta al test que prueba que la base la rechaza — que es estrictamente
+    # más fuerte que probar que el auditor la ve después.
+    #
+    # El invariante se conserva porque **sigue cubriendo las filas escritas
+    # antes del CHECK**, que la migración no reescribe: son las que este
+    # invariante venía reportando y que alguien tiene que corregir con el
+    # conteo físico en la mano.
+    detector_ciego='tests/flujo/test_flujo_traslados.py::TestElDetectorNoEstaCiego::test_la_base_impide_enviar_mas_de_lo_aprobado',
 )
 def las_cantidades_solo_bajan(ctx=None):
     """`solicitada ≥ aprobada ≥ enviada ≥ recibida`.

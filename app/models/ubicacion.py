@@ -12,8 +12,18 @@ class Ubicacion(db.Model):
     # repetir el string.
     CODIGO_GENERAL = 'SIESA-GENERAL'
 
+    # Zonas donde 1 hueco == 1 SKU (nunca compartido). Layout la usa para
+    # decidir si capacidad_maxima tiene sentido; Reposición la usa para
+    # decidir si stock_minimo/stock_maximo tienen sentido. Es la misma
+    # pregunta ("¿este hueco es de un solo SKU?") para dos dominios distintos
+    # — una sola constante, no dos tuplas que alguien puede desincronizar.
+    ZONAS_SLOT_UNICO = ('PICKING', 'IMPORTADOS')
+
     id = db.Column(db.Integer, primary_key=True)
-    codigo = db.Column(db.String(50), unique=True, nullable=False)
+    # Único DENTRO de un almacén, no en todo el WMS (m016) — SIESA-GENERAL es
+    # un bucket genérico que cada almacén necesita poder tener con el mismo
+    # código sin chocar con el de otro.
+    codigo = db.Column(db.String(50), nullable=False)
     almacen_id = db.Column(db.Integer, db.ForeignKey('almacenes.id'), nullable=False)
     zona = db.Column(db.String(50))
     pasillo = db.Column(db.String(10))
@@ -66,6 +76,19 @@ class Ubicacion(db.Model):
     @property
     def es_reserva(self):
         return self.tipo_zona == 'RESERVA'
+
+    __table_args__ = (
+        # Declarado con el nombre EXACTO que tiene en la base. Existía en
+        # migraciones y no en el modelo, así que `flask db check` lo
+        # reportaba como sobrante — trece líneas de ruido que volvían
+        # inservible el único detector que atrapa una columna sin
+        # migración (lo de `puede_usar_camara`, 2026-08-20).
+        db.Index('ix_ubicaciones_producto_asignado', 'producto_asignado_id'),
+        # m016 (2026-08-27): antes `codigo` era único GLOBAL — bloqueaba que
+        # dos almacenes tuvieran cada uno su propio SIESA-GENERAL. El
+        # invariante real siempre fue "único dentro del almacén".
+        db.UniqueConstraint('almacen_id', 'codigo', name='uq_ubicacion_almacen_codigo'),
+    )
 
     def to_dict(self):
         return {

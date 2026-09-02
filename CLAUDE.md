@@ -1458,6 +1458,122 @@ a propósito y exigir que lo vea. Sin eso `0 hallazgos` no significa nada.
 
 ---
 
+## Reposición Micro — RESERVA→PICKING (2026-08-27)
+
+Reposición **micro** es la única que queda en el módulo — la macro (alerta
+diaria a Compras por stock total del almacén, sin importar layout físico) se
+retiró el mismo día: `verificar_y_alertar_stock_macro()` y
+`_enviar_alerta_stock_macro()` salieron de `alertas_service.py` completas, sin
+dejar código huérfano. Micro trabaja a nivel de hueco físico, no de
+referencia — son cosas distintas, no una versión reducida de la otra.
+
+### Es 100% cálculo local — cero Siesa
+
+La decisión de "¿hay que reponer este hueco?" nunca consulta Siesa. Vive
+entera en `UbicacionProducto` (una fila por hueco × SKU) y dos campos:
+`cantidad` (lo físico contado ahí) y `reservado` (comprometido a un
+pedido/traslado, todavía no sacado). Reposición mira
+`disponible = cantidad - reservado`, no `cantidad` cruda — así reacciona
+desde el momento en que un pedido **compromete** el hueco, no cuando el
+operario efectivamente lo vacía.
+
+El descuento pasa en dos tiempos, no uno:
+
+1. **Al crear la tarea de picking** (`PickingService.crear_tareas()`, FEFO)
+   — reserva: `reg.reservado += cantidad`. Antes de que el operario camine.
+2. **Al confirmar** (`confirmar_picking()`) — descuento real:
+   `reg.cantidad -= cantidad_recogida`, reserva liberada.
+
+Siesa se entera después y solo para contabilidad — `confirmar_reposicion()`
+dispara el job 173076 (tránsito entre ubicaciones) una vez el WMS ya decidió
+y ejecutó, nunca antes.
+
+### Tres disparadores, no uno
+
+| Disparador | Corre | Por qué |
+|---|---|---|
+| Reactivo | Tras cada picking confirmado (`mobile_service.confirmar_tarea`, hilo background) | El caso normal |
+| Predictivo (`ola_predictiva_service.pre_verificar_ola`) | **Antes** de crear las tareas de picking, cruza demanda total de la ola contra `disponible` | Evita que el picker llegue y encuentre el hueco en 0 porque un pedido grande lo vació entre que se generó la ola y que el picker llegó — el Abastecedor ya va en camino mientras el picker empieza |
+| Barrido cada 30 min (`reposicion_service.init_scheduler`) | Periódico | Cubre stock que bajó por otro camino: conteo cíclico, devolución, traslado |
+
+Los tres alimentan la misma comparación (`stock_actual < Ubicacion.stock_minimo`,
+configurado desde Layout vía `configurar_umbral()` — única función que
+escribe ese campo, la use Reposición o Layout al asignar un SKU) y el mismo
+destino: `TareaReposicion`.
+
+### Cola unificada de dispensación
+
+Reposición dejó de ser una pantalla aparte con botón manual — se integró
+como nivel 2 de la misma cola que ya reparte Picking
+(`mobile_service.get_tarea_actual()`):
+
+```
+1. Pedido / Traslado   (TareaPicking)
+2. Reposición          (TareaReposicion — solo si puede_abastecer)
+3. Conteo cíclico      (SesionConteo)
+```
+
+Orden por criticidad de negocio, no por antigüedad: un hueco PICKING vacío
+bloquea el próximo pedido que se pueda pickear de ahí, así que pesa más que
+Conteo (higiene de inventario, puede esperar sin que nada se detenga por
+eso). Pedido/Traslado le siguen ganando a Reposición porque interrumpir una
+salida en curso para ir a reponer un hueco que hoy nadie está pickeando no
+se justifica.
+
+El botón manual "Cambiar a modo Abastecedor" (`abastVerificarBotonModo` en
+`reposicion.js`) nunca se conectó a nada — quedó como código muerto, borrado
+el mismo día que se integró la cola unificada. La pantalla dedicada del
+abastecedor puro (`puede_abastecer && !puede_picar && !puede_empacar`, login
+directo a `abastIniciar()`) sigue existiendo para quien solo hace
+reposición; el HUD de escaneo (`abastMostrarHUD`) se reutiliza sin cambios
+para los dos caminos — la bandera `ABAST_UNIFICADO` decide a dónde vuelve
+`abastCerrarHUD()` al terminar.
+
+### Exclusivo de NB1
+
+Solo NB1 (Bodega CD) tiene huecos PICKING/RESERVA configurados en Layout —
+verificado en BD (2026-08-27): NS1/NC1/PC1/FC1 solo tienen zona GENERAL.
+Ningún filtro de almacén en el dispensador (`get_tarea_abastecedor`,
+`siguiente_tarea_para`) es necesario hoy por esto — es inerte, no
+corregido; si algún día se activa layout PICKING/RESERVA en otro almacén,
+ese es el momento de revisarlo.
+
+### Bugs encontrados y corregidos en la revisión (2026-08-27)
+
+1. **Choque de advisory lock 2015** —
+   `reposicion_service._barrido_stock_picking` (patrón crudo
+   `pg_try_advisory_lock`) y `abc_service._liberar_zombis` (vía
+   `app/utils/lock.advisory_lock`) usaban el mismo número. Dos jobs
+   **distintos** compartiendo lock se vuelven mutuamente excluyentes sin que
+   nadie lo quisiera — cuando coinciden en la misma ventana de 30 min, uno se
+   salta el ciclo en silencio, y el log no distingue "otro worker corriendo
+   esto mismo" de "un job completamente distinto lo tiene". Reposición migró
+   a `advisory_lock(2016, 'reposicion_barrido')`.
+2. **Reposición zombi sin liberar** — una `TareaReposicion` EN_PROCESO
+   abandonada (LPN mal escaneado, app cerrada a medio camino) no tenía
+   liberación por timeout, a diferencia de Conteo
+   (`ConteoService.liberar_tareas_zombi`). Sin esto, ni otro abastecedor
+   podía tomarla (`get_tarea_abastecedor` solo busca `abastecedor_id=None`)
+   ni el mismo la volvía a ver hasta vaciar su cola de Pedido/Traslado — más
+   consecuente ahora que la cola está unificada. `reposicion_service.
+   liberar_tareas_zombi(timeout_horas=2)`, misma forma que la de Conteo,
+   corre en el mismo barrido de 30 min. `lpn_id` no se toca: se fijó al
+   crear la tarea, no al tomarla, y el LPN sigue ACTIVO.
+3. **`reclasificar_ubicacion()` no bloqueaba con reposición viva** — un
+   hueco PICKING con stock=0 (el estado normal de "espera reposición") y una
+   `TareaReposicion` PENDIENTE apuntándole podía reclasificarse o
+   desactivarse, porque el guardarraíl solo miraba `stock > 0` y stock=0 no
+   lo dispara. Ahora bloquea igual que el guardarraíl de stock, no solo
+   advierte — `capacidad_maxima` sola sigue permitida con tareas vivas, no
+   interrumpe nada físico.
+4. **Toast de confirmación con dato vacío** — `abastConfirmarScan()` leía
+   `d.unidades_movidas` en la raíz de la respuesta de
+   `POST /api/reposicion/confirmar`; el campo vive anidado en
+   `d.tarea.unidades_movidas`. Cosmético — el toast decía "Reposición
+   completada — uds a PIK-XX" sin número.
+
+---
+
 ## Teléfono del asesor en pago parcial (2026-09-01)
 
 El conductor no tenía cómo contactar al vendedor que tomó el pedido al
@@ -1491,9 +1607,10 @@ y el frontend no muestra el bloque — sin inventar nombre ni teléfono (Regla 0
 **Bug encontrado de paso**: la rama sin FE resuelta de `_valor_y_cond_pago`
 devolvía una tupla de 3 valores (`return None, None, {}`) mientras el único
 caller desempaquetaba 4 — cualquier tarea sin FE habría reventado
-`listar_paradas` con `ValueError`. Corregido junto con el 5to valor nuevo
-(`codigo_vendedor`); los 7 tests de `test_cond_pago.py` que desempaquetaban la
-tupla se actualizaron a la aridad nueva.
+`listar_paradas` con `ValueError`. `base_gravable`/`iva_factura` se agregaron
+en paralelo, en otro cambio, a la misma tupla; el merge de los dos dejó 7
+valores en total, `codigo_vendedor` al final. Los tests de `test_cond_pago.py`
+que la desempaquetaban se actualizaron a la aridad nueva.
 
 Pendiente de ver en la app real: si el `f200_id_vendedor` de pedidos nuevos
 (no los de prueba usados para verificar) trae el código real y no `Generico`

@@ -73,6 +73,11 @@ def procesar_jobs_pendientes(app=None):
         return 0
 
 
+from app.services.connekta_gateway import (
+    ConnektaResultadoDesconocido as _ResultadoDesconocido,
+)
+
+
 class DependenciaPendiente(Exception):
     """El job no puede correr todavía porque otro paso no ha ocurrido.
 
@@ -91,7 +96,18 @@ class DependenciaPendiente(Exception):
     de «un contador, dos significados» que ya costó las banderas de
     idempotencia. El precedente estaba al lado: `ConnektaCircuitOpenError`
     tampoco gasta reintento.
+
+    `espera_minutos` (default 30, el caso de arriba — recepción física,
+    horas) es la excepción, no la regla: DC esperando su RC, o una RIT
+    esperando el consecutivo que 174646 le va a poner, resuelven en el mismo
+    ciclo del DLQ (segundos, la propia liquidación los encadena). 30 minutos
+    ahí no evita nada — solo hace que una NI ya destrabada tarde media hora
+    en salir sin ninguna razón real detrás.
     """
+
+    def __init__(self, mensaje: str, espera_minutos: int = 30):
+        super().__init__(mensaje)
+        self.espera_minutos = espera_minutos
 
 
 _ADVISORY_LOCK_DLQ = 2007  # evita thundering herd cuando Siesa se recupera y hay N workers
@@ -247,10 +263,31 @@ def _run_dlq_jobs():
                 # en 6 horas esperando una recepción que ocurre mañana, y el
                 # cobro no entra nunca.
                 job.estado = EstadoSiesaJob.PENDIENTE
-                job.proximo_intento = datetime.utcnow() + timedelta(minutes=30)
+                job.proximo_intento = datetime.utcnow() + timedelta(
+                    minutes=getattr(e, 'espera_minutos', 30))
                 job.error_ultimo = str(e)[:2000]
                 db.session.commit()
                 logger.info('[DLQ] Job %s en espera: %s', job.id, e)
+                continue
+            if isinstance(e, _ResultadoDesconocido):
+                # El POST salió y no sabemos si Siesa lo procesó. **Reintentar
+                # es la única acción prohibida**: si el documento existe, el
+                # reintento crea el segundo.
+                #
+                # Va directo a FALLIDO —sin gastar los reintentos que quedan y
+                # sin reprogramarse— porque lo que desbloquea esto no es
+                # esperar: es que alguien mire Siesa. Un job que reintenta
+                # solo terminaría duplicando mientras nadie mira.
+                job.estado = EstadoSiesaJob.FALLIDO
+                job.proximo_intento = None
+                job.error_ultimo = str(e)[:2000]
+                db.session.commit()
+                logger.error(
+                    '[DLQ] Job %s (%s) con RESULTADO DESCONOCIDO — el '
+                    'documento puede existir en Siesa. No se reintenta: '
+                    'verificar en Auditoría de documentos antes de nada.',
+                    job.id, job.tipo)
+                _crear_alerta_admin(job)
                 continue
             if isinstance(e, ConnektaCircuitOpenError):
                 # Circuit breaker abierto — NO gastar reintento.
@@ -981,9 +1018,25 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 valor_cruce=float(valor_cruce),
                 notas=payload.get('notas', ''),
             )
+        except _ResultadoDesconocido:
+            # **El POST salió y no sabemos si entró.** NO se revierte el
+            # pre-flag: con la bandera abajo el DLQ reintenta, y si el
+            # documento sí se había creado eso es una SEGUNDA nota crédito
+            # —un documento fiscal que alguien tiene que reversar a mano.
+            #
+            # El `except Exception` que había acá decía «fallo explícito: no
+            # se creó nada» y atrapaba también el timeout, que es justo el
+            # caso donde sí se creó. Su hermana `RECIBO_CAJA` ya verificaba
+            # antes de revertir; esta no, y nada explicaba la diferencia.
+            logger.error(
+                '[DLQ] NOTA_CREDITO_FACTURA job=%s: timeout. La NC PUEDE '
+                'existir en Siesa. No se revierte el pre-flag ni se '
+                'reintenta — verificar en Auditoría de documentos.', job.id)
+            raise
         except Exception as _e_post:
-            # Fallo explícito: no se creó nada, se revierte para que el DLQ
-            # reintente. La otra mitad del pre-flag.
+            # Fallo explícito: Siesa contestó que no. Acá sí no se creó nada,
+            # y se revierte para que el DLQ reintente. La otra mitad del
+            # pre-flag.
             if recaudo:
                 try:
                     recaudo.siesa_nc_triggered = False
@@ -1063,33 +1116,77 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         _puede_dian = connekta.puede_fijar_motivo_dian
         _rowid_antes = connekta.get_max_rowid_nc() if _puede_dian else None
         _fecha_nc = fecha_hoy_bogota()
-        resultado = connekta.trigger_nota_factura_crear_cruzar(
-            tipo_docto_fe=tipo_docto_fe,
-            consec_fe=consec_fe,
-            lineas=lineas_nc,
-            valor_cruce=float(valor_cruce),
-            notas=payload.get('notas', ''),
-        )
+
+        # ── Pre-flag (Regla 6) ──────────────────────────────────────────────
+        # Este handler marcaba `siesa_nc_triggered` **después** del POST. Un
+        # crash o un timeout entre el POST y el commit dejaba la bandera en
+        # False, el DLQ reintentaba, y Siesa recibía una SEGUNDA nota crédito
+        # —documento fiscal, con cruce de cartera automático (251126).
+        #
+        # CLAUDE.md declara este defecto como corregido y lista este job como
+        # «pre-flag». Lo estaba en `NOTA_CREDITO_FACTURA`, que **no tiene
+        # productor**: el arreglo se aplicó al gemelo muerto. Este es el vivo
+        # —lo encola `devolucion_cliente_service.py:335`— y seguía marcando
+        # después.
+        if devolucion:
+            devolucion.siesa_nc_triggered = True
+            devolucion.siesa_nc_triggered_at = datetime.utcnow()
+            db.session.commit()
+
+        try:
+            resultado = connekta.trigger_nota_factura_crear_cruzar(
+                tipo_docto_fe=tipo_docto_fe,
+                consec_fe=consec_fe,
+                lineas=lineas_nc,
+                valor_cruce=float(valor_cruce),
+                notas=payload.get('notas', ''),
+            )
+        except _ResultadoDesconocido:
+            # El POST salió y no sabemos si entró. **No se revierte**: con la
+            # bandera abajo el DLQ reintenta, y si la NC ya existía eso es la
+            # segunda. Verificar en Auditoría de documentos.
+            logger.error(
+                '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: timeout. La NC '
+                'PUEDE existir en Siesa. No se revierte el pre-flag ni se '
+                'reintenta — verificar en Auditoría de documentos.', job.id)
+            raise
+        except Exception:
+            # Rechazo explícito de Siesa: acá sí no se creó nada, y revertir
+            # deja que el DLQ reintente. La otra mitad del pre-flag.
+            if devolucion:
+                try:
+                    devolucion.siesa_nc_triggered = False
+                    devolucion.siesa_nc_triggered_at = None
+                    db.session.commit()
+                except Exception:
+                    db.session.rollback()
+            raise
 
         _es_ensayo = bool(resultado.get('modo_ensayo'))
-        if devolucion and not _es_ensayo:
+        if devolucion and _es_ensayo:
+            # Modo ensayo: el POST se bloqueó, no hay documento que proteger.
             try:
-                devolucion.siesa_nc_triggered = True
-                devolucion.siesa_nc_triggered_at = datetime.utcnow()
+                devolucion.siesa_nc_triggered = False
+                devolucion.siesa_nc_triggered_at = None
+                db.session.commit()
+            except Exception:
+                db.session.rollback()
+        if devolucion and not _es_ensayo:
+            # La bandera ya se encendió ANTES del POST (pre-flag, arriba).
+            # Acá solo queda guardar la respuesta: si este commit falla, la
+            # protección anti-duplicado sigue en pie —que era justo lo que el
+            # `logger.critical` de la versión anterior tenía que gritar,
+            # porque entonces la bandera y el documento no estaban atados.
+            try:
                 devolucion.siesa_nc_response = json.dumps(resultado, ensure_ascii=False)
                 db.session.commit()
             except Exception as _e:
                 db.session.rollback()
-                logger.critical(
-                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: Siesa OK pero fallo '
-                    'siesa_nc_triggered — devolución %s en riesgo de NC duplicada: %s',
-                    job.id, devolucion.id, _e
-                )
-                try:
-                    devolucion.siesa_nc_triggered = True
-                    db.session.commit()
-                except Exception:
-                    db.session.rollback()
+                logger.error(
+                    '[DLQ] NOTA_CREDITO_DEVOLUCION_CLIENTE job=%s: la NC entró '
+                    'pero no se pudo guardar la respuesta de Siesa en la '
+                    'devolución %s: %s. El pre-flag sigue arriba, así que no '
+                    'hay riesgo de duplicado.', job.id, devolucion.id, _e)
 
         # Bridge Liquidación de ruta → Devoluciones: si esta devolución se
         # originó en una entrega Parcial/Rechazada ("Liquidar en WMS", ver
@@ -1213,17 +1310,22 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 f'devolución. Sigue pendiente.'
             )
 
-        # Re-read monto: si el recaudo fue editado post-enqueue, usar el valor actual
+        # El monto ya viene calculado por la lógica de negocio real
+        # (`registrar_cobro_recaudo`/`_procesar_recaudo`): para ENTREGADO es
+        # el neto de Siesa menos retenciones, no `recaudo.monto_cobrado` —
+        # ese campo es lo que el conductor declaró en la puerta, un dato
+        # independiente para detectar discrepancias (ver
+        # `confirmar_retencion`), no la fuente de lo que hay que cobrar.
+        #
+        # Job 483 (recaudo 22, PD1425, ruta 23, 2026-08-21): acá había un
+        # "re-lectura" que comparaba el monto del payload ($60.151,97,
+        # correcto) contra `monto_cobrado` ($50.000, el dato crudo del
+        # conductor) y, al no coincidir, pisaba el correcto con el crudo —
+        # asumiendo que cualquier diferencia significaba que alguien editó
+        # el recaudo después de encolar el job. La diferencia era
+        # intencional (retención + neto real de Siesa), no una edición, y
+        # el RC salió a Siesa por $10.151,97 de menos.
         monto_payload = float(payload['monto'])
-        if recaudo:
-            monto_actual = float(recaudo.monto_cobrado or 0)
-            if abs(monto_actual - monto_payload) > 1 and monto_actual > 0:
-                logger.warning(
-                    '[DLQ] RECIBO_CAJA job=%s: monto payload=%.2f difiere de '
-                    'monto_cobrado actual=%.2f — usando actual',
-                    job.id, monto_payload, monto_actual
-                )
-                monto_payload = monto_actual
 
         # Pre-flight: ¿la factura que vamos a pagar ya quedó sin saldo?
         # (cross-flow WMS↔Cartera — alguien más ya la cruzó por otra vía)
@@ -1260,6 +1362,8 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
                 unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
+                ajuste_valor=float(payload.get('ajuste_valor') or 0),
+                ajuste_es_sobrante=bool(payload.get('ajuste_es_sobrante', False)),
             )
         except Exception as _e_post:
             # POST falló — verificar el saldo real antes de revertir (Regla #3:
@@ -1329,9 +1433,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # Si el RC no pasó aún, el cruce CxC del NI puede fallar porque
         # Siesa no ha reducido el saldo por el cash todavía.
         if recaudo and not recaudo.siesa_rc_triggered:
+            # Espera corta: el RC de este mismo recaudo suele resolverse en
+            # el mismo ciclo del DLQ (segundos) — no es la recepción física
+            # de horas/días que sí justifica el default de 30 min.
             raise DependenciaPendiente(
                 f'DOCUMENTO_CONTABLE_RET job={job.id}: DC espera el RC del '
-                f'recaudo {recaudo.id}. Sigue pendiente.'
+                f'recaudo {recaudo.id}. Sigue pendiente.',
+                espera_minutos=2,
             )
 
         # Pre-flag: cerrar crash window (misma lógica que RC), por cuenta.
@@ -1350,7 +1458,10 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                 consec_fe=payload['consec_fe'],
                 co_factura=payload.get('co_factura', ''),
                 cuenta_cxc=payload.get('cuenta_cxc', ''),
+                unidad_negocio=payload.get('unidad_negocio', ''),
                 notas=payload.get('notas', ''),
+                ajuste_valor=float(payload.get('ajuste_valor') or 0),
+                ajuste_razon=payload.get('ajuste_razon', ''),
             )
         except Exception as _e_post:
             if recaudo and _puc:
@@ -1398,9 +1509,13 @@ def _ejecutar_job(job: SiesaJob) -> dict:
                     'motivo': f'ya despachado (STS {s.siesa_salida_consec}) — '
                               f'la RIT queda suelta, no se toca'}
         if not s.siesa_requisicion_consec:
+            # Espera corta: 174646 corre en el mismo ciclo del DLQ, no es
+            # una espera de horas como la recepción física.
             raise DependenciaPendiente(
                 f'{s.codigo}: la RIT todavía no tiene consecutivo — '
-                f'esperar a que 174646 lo resuelva')
+                f'esperar a que 174646 lo resuelva',
+                espera_minutos=2,
+            )
 
         siesa_traslado.registrar_compromisos(
             consec_rit=s.siesa_requisicion_consec,

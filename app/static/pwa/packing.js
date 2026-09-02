@@ -126,9 +126,14 @@ function empRenderListaTareas() {
         const siesaFallo = t.estado === 'VERIFICADO' && !t.siesa_triggered && !pedidoAnulado;
         const enProceso = t.estado === 'EN_PROCESO';
         const bloqueado = (!pickingListo && t.estado === 'PENDIENTE') || pedidoAnulado;
-        const color = pedidoAnulado ? 'var(--red)' : bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
-        const bg    = pedidoAnulado ? 'var(--rbg)' : bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
-        const label = pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
+        // Una tarea BLOQUEADA (backorder Siesa, faltante, avería...) no se
+        // resuelve pickeando — la resuelve un admin en Bodega → Auditoría.
+        // "Esperando picking" ahí manda al empacador a esperar algo que
+        // nunca va a pasar solo.
+        const enAuditoria = bloqueado && !pedidoAnulado && t.picking_bloqueado === true;
+        const color = pedidoAnulado ? 'var(--red)' : enAuditoria ? '#c084fc' : bloqueado ? '#6b7280' : siesaFallo ? '#fca5a5' : enProceso ? '#93c5fd' : '#facc15';
+        const bg    = pedidoAnulado ? 'var(--rbg)' : enAuditoria ? '#2e1065' : bloqueado ? '#1a1a1a'  : siesaFallo ? '#7f1d1d'  : enProceso ? '#1e3a5f' : '#713f12';
+        const label = pedidoAnulado ? '🚫 PEDIDO ANULADO EN SIESA' : enAuditoria ? '🔍 En auditoría' : bloqueado ? 'Esperando picking' : siesaFallo ? '⚠ Reintentar Siesa' : enProceso ? 'En proceso' : 'Pendiente';
         const anulado_banner = pedidoAnulado ? `
           <div style="margin-top:10px;background:var(--rbg);border:1px solid var(--rbrd);border-radius:8px;padding:10px 12px;">
             <div style="font-size:12px;font-weight:700;color:var(--red);margin-bottom:4px;">🚫 Pedido anulado en Siesa (estado ${t.pedido_estado_siesa_detectado || '9'})</div>
@@ -208,10 +213,21 @@ async function empIniciarHUD(packingId) {
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
       });
-      await fetch(`/api/packing/${packingId}/iniciar`, {
+      const rIniciar = await fetch(`/api/packing/${packingId}/iniciar`, {
         method: 'PUT',
         headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' }
       });
+      if (!rIniciar.ok) {
+        // Otro empacador ya tomó esta tarea (o cambió de estado) entre que
+        // se cargó la lista y este clic -- no seguir: sin esto, el HUD se
+        // activaba igual sobre una tarea que ya no es de este empacador,
+        // y terminaba en "Exceso" infinito o un 403 al intentar cerrar caja.
+        EMP_TAREA = null;
+        const dErr = await rIniciar.json().catch(() => ({}));
+        alerta(dErr.error || 'Otro empacador ya tomó esta tarea — actualizando lista', 'advertencia');
+        empCargarTareas();
+        return;
+      }
       // Re-cargar para obtener cantidades actualizadas tras el sync de picking
       const tFresh = await get(`/api/packing/${packingId}`);
       if (tFresh && tFresh.id) Object.assign(t, tFresh);

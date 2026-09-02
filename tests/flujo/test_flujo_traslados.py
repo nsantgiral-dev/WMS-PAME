@@ -75,20 +75,44 @@ class TestElDetectorNoEstaCiego:
         r = auditoria.auditar('traslados')
         return next(x for x in r['resultados'] if x['codigo'] == codigo)
 
-    def test_ve_que_se_envio_mas_de_lo_aprobado(self, db, traslado):
+    # ── TRA-01 pasó de detective a preventivo (2026-08-19) ───────────────
+    #
+    # Estos dos tests construían la violación —enviar más de lo aprobado,
+    # recibir más de lo enviado— y exigían que el auditor la viera. Desde
+    # `ck_traslado_cadena_no_crece` **la base ya no deja construirla**, así
+    # que el `db.session.commit()` levanta antes de llegar al auditor.
+    #
+    # Se reescriben en vez de aflojar el CHECK, porque prevenir es más fuerte
+    # que detectar: TRA-01 solo aparecía si alguien abría el panel, y mientras
+    # tanto `cantidad_recibida` ya había alimentado el payload del ETS 173079.
+    #
+    # **Lo que TRA-01 sigue cubriendo son las filas escritas ANTES** del
+    # CHECK, que la migración no reescribe. Por eso el invariante se queda y
+    # su prueba de no-ceguera vive ahora en `test_bloqueo_cadena_traslado.py`,
+    # ejercitando el predicado sobre datos que el CHECK ya no admite.
+
+    def test_la_base_impide_enviar_mas_de_lo_aprobado(self, db, traslado):
+        import pytest as _pytest
+        from sqlalchemy.exc import IntegrityError
+
         from app.models.traslado import ItemSolicitudTraslado
         it = ItemSolicitudTraslado.query.filter_by(solicitud_id=traslado.id).first()
         it.cantidad_enviada = (it.cantidad_aprobada or 0) + 3
-        db.session.commit()
-        assert self._res('TRA-01')['total'] == 1
+        with _pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
 
-    def test_ve_que_se_recibio_mas_de_lo_enviado(self, db, traslado):
+    def test_la_base_impide_recibir_mas_de_lo_enviado(self, db, traslado):
+        import pytest as _pytest
+        from sqlalchemy.exc import IntegrityError
+
         from app.models.traslado import ItemSolicitudTraslado
         it = ItemSolicitudTraslado.query.filter_by(solicitud_id=traslado.id).first()
         it.cantidad_enviada = 5
         it.cantidad_recibida = 9
-        db.session.commit()
-        assert self._res('TRA-01')['total'] == 1
+        with _pytest.raises(IntegrityError):
+            db.session.commit()
+        db.session.rollback()
 
     def test_aprobada_en_None_no_es_aprobada_en_cero(self, db, traslado):
         """`NULL` significa «todavía no se aprobó». Tratarlo como 0 haría que

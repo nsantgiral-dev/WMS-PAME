@@ -909,6 +909,32 @@ class TrasladoService:
                 f'recibido completo: eso es exactamente lo que hacía desaparecer '
                 f'la diferencia.'
             )
+        # Recibir MÁS de lo enviado es mercancía que aparece de la nada, y
+        # `cantidad_recibida` viaja en el payload del ETS 173079: Siesa metería
+        # en la bodega destino más unidades de las que salieron del origen.
+        #
+        # Desde `ck_traslado_cadena_no_crece` (m013) la base lo rechaza — pero
+        # el CHECK es la RED, no la puerta: sin esta validación el operario
+        # recibe un 500 con un mensaje de Postgres justo cuando necesita saber
+        # qué ítem contó mal. Es el mismo reparto que en custodia de flota: el
+        # dominio da el mensaje, el índice impide el dato.
+        excesos = [
+            (it.id, recibidos_map[it.id], it.cantidad_enviada)
+            for it in s.items
+            if it.cantidad_enviada is not None
+            and recibidos_map[it.id] is not None
+            and recibidos_map[it.id] > it.cantidad_enviada
+        ]
+        if excesos:
+            detalle = '; '.join(
+                f'ítem {i}: contaste {rec} y se enviaron {env}'
+                for i, rec, env in excesos[:5])
+            raise ValueError(
+                f'No se puede recibir más de lo que se envió. {detalle}. '
+                f'Revisá el conteo — si la mercancía de más existe de verdad, '
+                f'entró por otra vía y hay que registrarla aparte, no sumarla '
+                f'a este traslado.')
+
         for item in s.items:
             item.cantidad_recibida = recibidos_map[item.id]
         db.session.flush()
@@ -953,31 +979,30 @@ class TrasladoService:
                     co_destino=_co_destino,
                     bodega_origen=s.bodega_origen_siesa,
                 )
-                if not res.get('simulado') and not res.get('modo_ensayo'):
-                    consec = TrasladoService._extraer_consec(res)
-                    if consec:
-                        s.siesa_entrada_consec = consec
-                        # ── P_EMERGENCY_COMMIT: persistir consec aislado ──
+                consec, error = TrasladoService.resolver_consecutivo_entrada(s.codigo, res)
+                if consec:
+                    s.siesa_entrada_consec = consec
+                    # ── P_EMERGENCY_COMMIT: persistir consec aislado ──
+                    try:
+                        db.session.commit()
+                    except Exception as _e_ec:
+                        db.session.rollback()
+                        logger.critical(
+                            '[TRASLADO] EMERGENCY COMMIT falló siesa_entrada_consec %s en %s: %s',
+                            consec, s.codigo, _e_ec,
+                        )
                         try:
+                            s = db.session.merge(s)
+                            s.siesa_entrada_consec = consec
                             db.session.commit()
-                        except Exception as _e_ec:
+                        except Exception as _e_ec2:
                             db.session.rollback()
                             logger.critical(
-                                '[TRASLADO] EMERGENCY COMMIT falló siesa_entrada_consec %s en %s: %s',
-                                consec, s.codigo, _e_ec,
+                                '[TRASLADO] EMERGENCY COMMIT retry falló %s: %s',
+                                s.codigo, _e_ec2,
                             )
-                            try:
-                                s = db.session.merge(s)
-                                s.siesa_entrada_consec = consec
-                                db.session.commit()
-                            except Exception as _e_ec2:
-                                db.session.rollback()
-                                logger.critical(
-                                    '[TRASLADO] EMERGENCY COMMIT retry falló %s: %s',
-                                    s.codigo, _e_ec2,
-                                )
-                                raise
-                s.siesa_error = None
+                            raise
+                s.siesa_error = error
             except Exception as e:
                 s.siesa_error = f'173079: {str(e)}'
                 logger.error(f'[TRASLADO] Error entrada Siesa {s.codigo}: {e}')
@@ -1359,6 +1384,50 @@ class TrasladoService:
             logger.error(f'[TRASLADO] _extraer_consec excepción: {e} — response: {str(respuesta_siesa)[:400]}')
         return None
 
+    @staticmethod
+    def resolver_consecutivo_entrada(codigo: str, res: dict) -> 'tuple[int | None, str | None]':
+        """
+        Interpreta la respuesta de 173079 (entrada en tránsito) y decide el
+        consecutivo real — usado por `confirmar_recepcion` y por el reintento
+        manual (`/traslados/<id>/reintentar-recepcion`). Regla 0: la pregunta
+        «¿vino el consecutivo?» estaba contestada dos veces, y las dos veces
+        igual de mal.
+
+        Antes de esto, un 200 de Siesa sin consecutivo parseable dejaba
+        `siesa_error = None` sin haber recuperado nada — indistinguible de un
+        envío exitoso. Auditoría del 2026-08-25 contra producción: **0 de 68**
+        traslados EN_TRANSITO ya `ENTREGADA` tenían `siesa_entrada_consec`; 24
+        de esos 68 no mostraban ningún error pese al consecutivo ausente — el
+        mismo hueco que 173076 (STS) ya tenía y ya resolvió con
+        `recuperar_consec_salida`. Este método aplica el mismo remedio al ETS.
+
+        Retorna (consecutivo, error). Si ambos son None, fue un envío
+        simulado/de ensayo — no hay nada que recuperar todavía.
+        """
+        if res.get('simulado') or res.get('modo_ensayo'):
+            return None, None
+        consec = TrasladoService._extraer_consec(res)
+        if consec:
+            return consec, None
+        logger.warning(
+            '[TRASLADO] %s: consecutivo null en respuesta 173079 — '
+            'intentando recovery via API v2 (Transferencia Entrada Tránsito)', codigo)
+        consec_recuperado = siesa_traslado.recuperar_consec_entrada(codigo)
+        if consec_recuperado:
+            logger.info(
+                '[TRASLADO] %s: consecutivo de entrada recuperado via API v2: %s',
+                codigo, consec_recuperado)
+            return consec_recuperado, None
+        logger.error(
+            '[TRASLADO] %s: 173079 OK pero consecutivo null y recovery fallido — '
+            'entrada en tránsito sin consecutivo registrado. Response: %s',
+            codigo, str(res)[:500])
+        return None, (
+            'AVISO: 173079 enviado correctamente a Siesa pero el WMS no pudo '
+            'leer el consecutivo. Usa WMS Admin → Traslados → Reintentar recepción '
+            'para forzar el recovery, o cárgalo manualmente.'
+        )
+
     # ── Cache stock Siesa — proceso-nivel, TTL 5 min por bodega ─────────────────
     _stock_siesa_cache: dict = {}   # {bodega_id: {'data': dict, 'ts': float}}
     _STOCK_SIESA_TTL = 300.0        # 5 minutos
@@ -1394,7 +1463,7 @@ class TrasladoService:
             if connekta.modo_simulacion:
                 return TrasladoService._get_stock_wms(bod)
 
-            inv_bodega = obtener_stock_bodega(bod)
+            inv_bodega, meta_fuente = obtener_stock_bodega(bod)
             if not inv_bodega:
                 logger.warning('[TRASLADO] stock Siesa vacío para bodega %s — usando WMS', bod)
                 return TrasladoService._get_stock_wms(bod)
@@ -1420,7 +1489,11 @@ class TrasladoService:
                 }
 
             if not siesa_stock:
-                return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'siesa'}
+                return {
+                    'items': [], 'bodega': bod, 'total': 0,
+                    'fuente': meta_fuente['fuente'],
+                    'actualizado_en': meta_fuente['actualizado_en'],
+                }
 
             productos = {
                 p.codigo_siesa: p
@@ -1499,7 +1572,8 @@ class TrasladoService:
                 'items': items,
                 'bodega': bod,
                 'total': len(items),
-                'fuente': 'siesa',
+                'fuente': meta_fuente['fuente'],
+                'actualizado_en': meta_fuente['actualizado_en'],
                 'siesa_total_productos': len(inv_bodega),
                 'siesa_con_stock': len(siesa_stock),
             }
@@ -1521,9 +1595,10 @@ class TrasladoService:
         from app.models.ubicacion import Ubicacion
 
         bod = bodega_id or BODEGA_ORIGEN_DEFAULT
+        _ahora = datetime.utcnow().isoformat()
         almacen = Almacen.query.filter_by(bodega_siesa_id=bod).first()
         if not almacen:
-            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback'}
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback', 'actualizado_en': _ahora}
 
         registros = (
             db.session.query(
@@ -1537,7 +1612,7 @@ class TrasladoService:
             .all()
         )
         if not registros:
-            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback'}
+            return {'items': [], 'bodega': bod, 'total': 0, 'fuente': 'wms_fallback', 'actualizado_en': _ahora}
 
         productos = {
             p.id: p
@@ -1563,7 +1638,7 @@ class TrasladoService:
                 'unidad_medida': prod.unidad_medida,
             })
         items.sort(key=lambda x: x['nombre'])
-        return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms_fallback'}
+        return {'items': items, 'bodega': bod, 'total': len(items), 'fuente': 'wms_fallback', 'actualizado_en': _ahora}
 
     # Cache de bodegas — proceso-nivel, TTL 1 hora. Evita llamar a Siesa en cada request.
     _bodegas_cache: dict = {'data': None, 'ts': 0.0}

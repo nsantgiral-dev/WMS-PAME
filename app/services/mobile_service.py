@@ -265,6 +265,21 @@ class MobileService:
             )
 
         if not tarea:
+            # Reposición RESERVA→PICKING — nivel 2 de la cola unificada, entre
+            # Pedido/Traslado (arriba) y Conteo cíclico (abajo): un hueco
+            # PICKING vacío bloquea el próximo pedido/traslado que se pueda
+            # pickear de ahí, así que pesa más que el conteo (higiene de
+            # inventario, puede esperar). Gateado por puede_abastecer — RESERVA
+            # es zona exclusiva de Abastecedor (ver REGLA ESTRICTA arriba);
+            # roles de tienda/traslado nunca la reciben, igual que Conteo.
+            # Reutiliza get_tarea_abastecedor() — misma función que ya usa la
+            # pantalla dedicada del abastecedor puro, Regla 0.
+            if not _solo_traslado and _u_pick and _u_pick.puede_abastecer:
+                from app.services.reposicion_service import get_tarea_abastecedor as _get_rep
+                rep = _get_rep(operario_id)
+                if rep:
+                    return rep
+
             # Roles de tienda/traslado nunca reciben conteos cíclicos — solo NB1
             if not _solo_traslado:
                 # Retomar el conteo propio en curso (pospuesto arriba porque un

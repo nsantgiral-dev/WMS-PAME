@@ -15,14 +15,24 @@ logger = logging.getLogger(__name__)
 from app.routes._auth_helpers import _solo_admin
 
 
-def _picking_listo_batch(numeros_pedido: list) -> dict:
+def _picking_listo_batch(numeros_pedido: list) -> tuple[dict, dict]:
     """
-    Consulta en UNA sola query si el picking está completo para cada pedido.
-    Devuelve {numero_pedido: bool}.
+    Consulta en UNA sola query si el picking está completo para cada pedido,
+    y si el motivo de no estarlo es que hay una tarea BLOQUEADA esperando
+    auditoría (no que nadie la haya tomado todavía).
+
+    Devuelve (listo, bloqueado): {numero_pedido: bool} cada uno.
     Evita el N+1 de _enriquecer_picking_listo que hacía 1 query por packing.
+
+    La distinción importa para la pantalla del empacador: "Esperando
+    picking" invita a que alguien la pickee — pero una tarea BLOQUEADA
+    (ej. backorder Siesa, ver picking_service.bloquear_por_backorder_siesa)
+    no se resuelve pickeando, se resuelve en Bodega → Auditoría. Mostrar el
+    mismo texto para los dos casos manda al empacador a esperar algo que
+    nunca va a pasar solo.
     """
     if not numeros_pedido:
-        return {}
+        return {}, {}
 
     pickings = TareaPicking.query.filter(
         TareaPicking.referencia_documento.in_(numeros_pedido),
@@ -34,21 +44,26 @@ def _picking_listo_batch(numeros_pedido: list) -> dict:
     for p in pickings:
         num = p.referencia_documento
         if num not in por_pedido:
-            por_pedido[num] = {'total': 0, 'completados': 0}
+            por_pedido[num] = {'total': 0, 'completados': 0, 'bloqueados': 0}
         por_pedido[num]['total'] += 1
         if p.estado == EstadoPicking.COMPLETADO or (
             p.estado == EstadoPicking.BLOQUEADO and (p.cantidad_recogida or 0) > 0
         ):
             por_pedido[num]['completados'] += 1
+        if p.estado == EstadoPicking.BLOQUEADO:
+            por_pedido[num]['bloqueados'] += 1
 
-    resultado = {}
+    listo = {}
+    bloqueado = {}
     for num in numeros_pedido:
         datos = por_pedido.get(num)
         if not datos:
-            resultado[num] = True   # sin picking = creado manual, listo
+            listo[num] = True   # sin picking = creado manual, listo
+            bloqueado[num] = False
         else:
-            resultado[num] = datos['completados'] == datos['total']
-    return resultado
+            listo[num] = datos['completados'] == datos['total']
+            bloqueado[num] = datos['bloqueados'] > 0
+    return listo, bloqueado
 
 
 @packing_bp.route('/', methods=['GET'])
@@ -98,12 +113,13 @@ def listar_tareas():
 
     # Una sola query para todos los pickings de la página — sin N+1
     numeros = [t.numero_pedido_siesa for t in tareas.items]
-    picking_listo_map = _picking_listo_batch(numeros)
+    picking_listo_map, picking_bloqueado_map = _picking_listo_batch(numeros)
 
     items = []
     for t in tareas.items:
         d = t.to_dict()
         d['picking_listo'] = picking_listo_map.get(t.numero_pedido_siesa, True)
+        d['picking_bloqueado'] = picking_bloqueado_map.get(t.numero_pedido_siesa, False)
         items.append(d)
 
     return jsonify({
@@ -128,7 +144,9 @@ def obtener_tarea(id):
     if u.almacen_id and tarea.almacen_id and u.almacen_id != tarea.almacen_id and u.rol not in ('admin', 'supervisor', 'gerente'):
         return jsonify({'error': 'Sin acceso a esta tarea'}), 403
     d = tarea.to_dict()
-    d['picking_listo'] = _picking_listo_batch([tarea.numero_pedido_siesa]).get(tarea.numero_pedido_siesa, True)
+    _listo_map, _bloqueado_map = _picking_listo_batch([tarea.numero_pedido_siesa])
+    d['picking_listo'] = _listo_map.get(tarea.numero_pedido_siesa, True)
+    d['picking_bloqueado'] = _bloqueado_map.get(tarea.numero_pedido_siesa, False)
     return jsonify(d), 200
 
 
@@ -399,38 +417,20 @@ def resetear_siesa(id):
         return jsonify({'error': str(e)}), 400
 
 
-@packing_bp.route('/<int:id>/forzar-siesa', methods=['POST'])
-@jwt_required()
-def forzar_retry_siesa(id):
-    """
-    Fuerza el retry de Siesa aunque siesa_triggered=True. Solo admin.
-    Útil cuando el packing se cerró en MODO_ENSAYO y nunca llegó a Siesa real.
-    """
-    if not _solo_admin():
-        return jsonify({'error': 'Solo admin puede forzar retry de Siesa'}), 403
-    from app.extensions import db
-    tarea = TareaPacking.query.get_or_404(id)
-    if tarea.estado != 'DESPACHADO':
-        return jsonify({'error': f'La tarea debe estar DESPACHADO, está {tarea.estado}'}), 400
-    # Forzar siesa_triggered=False para que cerrar_packing lo reintente
-    tarea.siesa_triggered = False
-    db.session.commit()
-    try:
-        # Pasar bultos existentes como bultos_data para saltarse la validación de "sin piezas"
-        from app.models.bulto import Bulto as BultoModel
-        bultos_existentes = BultoModel.query.filter_by(tarea_id=id).all()
-        bultos_data_dummy = [{'tipo': b.tipo, 'cantidad': 1} for b in bultos_existentes] if bultos_existentes else [{'tipo': 'Caja', 'cantidad': 1}]
-        bultos = PackingService.cerrar_packing(tarea_id=id, bultos_data=bultos_data_dummy)
-        tarea = TareaPacking.query.get(id)
-        return jsonify({
-            'ok': True,
-            'siesa_triggered': tarea.siesa_triggered,
-            'siesa_response': tarea.siesa_response,
-            'bultos': [b.to_dict() for b in bultos]
-        }), 200
-    except Exception as e:
-        logger.exception(f'[PACKING] Error inesperado en forzar_retry_siesa id={id}')
-        return jsonify({'error': str(e)}), 500
+# `POST /<id>/forzar-siesa` se borró el 2026-08-19.
+#
+# Apagaba `siesa_triggered` para reejecutar 244328→142945→142943 sobre una
+# tarea ya DESPACHADO. Su única guardia era `estado == 'DESPACHADO'', que es
+# **el estado que alcanza un despacho exitoso**: admitía exactamente el caso
+# peligroso y rechazaba los demás. El docstring decía que servía para lo
+# cerrado en MODO_ENSAYO y nada verificaba esa condición; el `confirm()` del
+# frontend advertía del duplicado, pero una pregunta que se contesta con OK
+# no es una guardia. Con `SKIP_FE_CHECK=true` el anti-duplicado tampoco
+# preguntaba, así que no quedaba ninguna red.
+#
+# El caso legítimo lo cubre `resetear_siesa`, que sí exige
+# `not siesa_triggered` y bloquea si hay bultos ya entregados. Confirmado con
+# el dueño del sistema que este botón nunca se usó.
 
 
 @packing_bp.route('/<int:id>/remision', methods=['GET'])

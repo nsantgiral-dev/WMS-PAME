@@ -8,6 +8,12 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>WMS · Papelería Medellín</title>
   <link rel="manifest" href="/static/pwa/manifest.json">
+  <!-- Favicon: no había NINGUNO declarado, así que la pestaña salía en blanco y
+       el navegador pedía un /favicon.ico de la raíz que tampoco existe.
+       Se usa la variante del círculo teal: a 32px una «m» azul sobre
+       transparente desaparece contra una pestaña oscura, el círculo no. -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/pwa/icon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/pwa/icon-180.png">
   <!-- Tipografía oficial: Nunito (Pilcrow Rounded equivalent, libre) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -357,22 +363,32 @@
       position: sticky; top: 0; z-index: 100;
       min-height: 64px;
     }
-    /* Logo centrado en el canvas cuadrado. Fórmula: render ≤ container/(0.9-0.5) = container/0.4
-       Header 260px → render max 310px → logo ≈248px ancho, sin recorte */
+    /* Los logos ya son HORIZONTALES (1200×134, ~9:1): se recortó la
+       transparencia del lienzo cuadrado de 4501×4501 en el que venían del
+       manual de marca.
+       Por eso desaparece el truco anterior —un img de 310×310 dentro de una
+       caja de 52px con overflow:hidden— que en la práctica mostraba una
+       tajada horizontal del logo y lo dejaba cortado arriba y abajo.
+       Ahora la caja se define por la ALTURA y el ancho sale del ratio. */
     .header-logo {
-      position: relative;
-      width: 260px;
-      height: 52px;
-      overflow: hidden;
-      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      height: 42px;
+      max-width: min(380px, 52vw);
+      flex-shrink: 1;
+      min-width: 0;
     }
     .header-logo img {
-      position: absolute;
-      top: 50%; left: 50%;
-      width: 310px; height: 310px;
+      /* Acotado por los DOS ejes: manda el que se quede corto primero. Con
+         `object-fit: contain` el logo nunca se deforma ni se recorta —
+         simplemente se hace más chico. En un ratio 9:1 el ancho es lo que
+         limita en pantallas angostas, y la altura en las anchas. */
+      max-height: 100%;
+      max-width: 100%;
+      width: auto;
+      height: auto;
       object-fit: contain;
-      object-position: center;
-      transform: translate(-50%, -50%);
+      display: block;
     }
 
     /* ── Login ── */
@@ -382,24 +398,18 @@
       padding: 40px 24px;
       background: radial-gradient(ellipse at top, #0D2020 0%, var(--bg) 60%);
     }
-    /* Login: canvas 4501×4501 (cuadrado) — logo centrado, ~85% ancho, ~15% alto.
-       width:100% escala el canvas al ancho del contenedor sin corte horizontal.
-       translateY(-50%) centra el canvas verticalmente → logo queda centrado. */
+    /* Login: el logo manda, no la caja. Ancho fluido con tope, alto derivado
+       del ratio 9:1 — sin `overflow:hidden` ni posicionado absoluto, que era
+       lo que recortaba. */
     .login-logo {
-      position: relative;
-      width: min(500px, 94vw);
-      height: 100px;
-      overflow: hidden;
+      width: min(520px, 88vw);
       align-self: center;
-      margin-bottom: 24px;
+      margin-bottom: 28px;
     }
     .login-logo img {
-      position: absolute;
-      top: 50%;
-      left: 0;
       width: 100%;
       height: auto;
-      transform: translateY(-50%);
+      display: block;
     }
     .login-subtitulo { font-size: 14px; color: var(--tx3); margin-bottom: 40px; text-align: center; letter-spacing: .03em; }
     .login-form { width: 100%; max-width: 360px; }
@@ -612,14 +622,17 @@
       border-bottom: 2px solid var(--pm-border);
     }
     .emp-header-titulo { font-size: 16px; font-weight: 700; color: var(--tx); }
+    /* Mismo caso que `.header-logo`: el logo ya es horizontal, así que la
+       caja se define por la altura. Sin `overflow:hidden`, que era lo que
+       recortaba. */
     .emp-header-logo {
-      position: relative; width: 260px; height: 50px; overflow: hidden; flex-shrink: 0;
+      display: flex; align-items: center; height: 36px;
+      max-width: min(320px, 55vw); flex-shrink: 1; min-width: 0;
     }
     .emp-header-logo img {
-      position: absolute; top: 50%; left: 50%;
-      width: 310px; height: 310px;
-      object-fit: contain; object-position: center;
-      transform: translate(-50%, -50%);
+      max-height: 100%; max-width: 100%;
+      width: auto; height: auto;
+      object-fit: contain; display: block;
     }
 
     #emp-lista { padding: 16px; }
@@ -699,7 +712,7 @@
                     radial-gradient(ellipse at 80% 80%, #08151E 0%, transparent 60%);
         padding: 60px 40px;
       }
-      .login-logo { width: min(560px, 42vw); height: 112px; }
+      .login-logo { width: min(600px, 46vw); }
       .login-subtitulo { font-size: 16px; letter-spacing: .06em; }
       .login-form { max-width: 420px; }
       .input-field { padding: 15px 20px; font-size: 15px; border-radius: 14px; }
@@ -852,8 +865,7 @@
 
       /* ── Header logo más grande ── */
       /* imagen 340px centrada en 320px → margen 10px c/lado, logo 85%=289px cabe */
-      .header-logo { width: 320px; height: 56px; }
-      .header-logo img { width: 340px; height: 340px; }
+      .header-logo { height: 48px; max-width: min(440px, 34vw); }
 
     /* ── Rec cards ── */
       .rec-card { padding: 24px 26px; }
@@ -999,6 +1011,11 @@
     <!-- Dashboard -->
     <div id="tab-dashboard" class="admin-content">
 
+      <!-- Ambiente: arriba de todo y en rojo por defecto. Un dato que hay que
+           ir a buscar no está publicado — la ausencia de comprobación no es un
+           estado tranquilo. Ver app/services/ambiente.py -->
+      <div id="franja-ambiente" style="margin-bottom:12px;border-radius:8px;overflow:hidden;"></div>
+
       <!-- Fila 1: KPIs principales (6 tarjetas) -->
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;">
         <div class="kpi-card" style="cursor:pointer;" onclick="tab('tab-pedidos')">
@@ -1055,30 +1072,6 @@
           </div>
         </div>
         <div style="position:relative;height:180px;"><canvas id="chart-tendencia"></canvas></div>
-      </div>
-
-      <!-- Alertas activas (colapsadas, solo cuando hay datos) -->
-      <div id="dashboard-tareas-bloqueadas" style="display:none;background:var(--rbg);border:1px solid var(--rbrd);border-radius:14px;padding:14px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;">
-          <div>
-            <div style="font-size:14px;font-weight:800;color:var(--red);">🔴 Pedidos Bloqueados</div>
-            <div style="font-size:11px;color:var(--tx2);margin-top:2px;">Operario reportó novedad — requieren decisión del jefe</div>
-          </div>
-          <span id="bloq-count" style="background:var(--rbrd);color:var(--red);font-size:20px;font-weight:800;padding:4px 14px;border-radius:10px;">0</span>
-        </div>
-        <button onclick="tab('tab-pedidos')" style="width:100%;margin-top:10px;padding:9px;background:var(--rbg);border:1px solid var(--rbrd);color:var(--red);border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">Ver tareas bloqueadas →</button>
-      </div>
-
-      <div id="dashboard-auditorias-urgentes" style="display:none;background:var(--rbg);border:1px solid var(--rbrd);border-radius:14px;padding:16px;margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-          <div>
-            <div style="font-size:15px;font-weight:800;color:#f87171;">🚨 Auditorías Urgentes</div>
-            <div style="font-size:11px;color:#7f1d1d;margin-top:2px;">Excepciones de picking sin resolver — verifica y confirma directamente</div>
-          </div>
-          <span id="aud-urgentes-count" style="background:#7f1d1d;color:#fca5a5;font-size:20px;font-weight:800;padding:4px 14px;border-radius:10px;">0</span>
-        </div>
-        <div id="lista-auditorias-urgentes"><div style="color:#555;font-size:12px;">Cargando...</div></div>
-        <button onclick="_refreshBtn(event, cargarAuditoriasUrgentes)" style="width:100%;margin-top:8px;padding:8px;background:#111;border:1px solid #333;color:#666;border-radius:8px;font-size:12px;cursor:pointer;">↻ Actualizar</button>
       </div>
 
       <div id="dashboard-traslados-riesgo" style="display:none;background:#0a0e11;border:1px solid #1e3a5f;border-radius:14px;padding:14px;margin-bottom:10px;">
@@ -1254,55 +1247,55 @@
     <!-- MONITOR DE MUELLE -->
     <div id="tab-muelle" class="admin-content" style="display:none;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="font-size:16px;font-weight:700;">🚛 Monitor de Muelle</div>
+        <div style="font-size:18px;font-weight:700;">🚛 Monitor de Muelle</div>
         <div style="display:flex;align-items:center;gap:10px;">
           <!-- El manifiesto es el papel que va con el conductor y contra el que
                firma el cliente. El endpoint existía sin botón. -->
           <button onclick="muelleImprimirManifiesto()"
-            style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">
+            style="padding:8px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;">
             🖨 Manifiesto
           </button>
-          <div id="muelle-contador" style="font-size:12px;color:#666;"></div>
+          <div id="muelle-contador" style="font-size:13px;color:#666;"></div>
         </div>
       </div>
 
       <!-- Ruta activa -->
       <div style="background:var(--bg-s);border:1px solid var(--brd);border-radius:12px;padding:14px;margin-bottom:12px;">
-        <div style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
+        <div style="font-size:13px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Ruta activa (opcional)</div>
         <div style="display:flex;gap:8px;align-items:center;">
           <select id="muelle-ruta-select" onchange="muelleSeleccionarRuta(this.value)"
-            style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:14px;">
+            style="flex:1;padding:10px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;font-size:15px;">
             <option value="">— Sin ruta (solo registrar) —</option>
           </select>
-          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:13px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
+          <button onclick="tab('tab-rutas')" style="padding:10px 14px;background:var(--bg-input);border:1px solid var(--brd-b);color:var(--tx2);border-radius:8px;font-size:14px;cursor:pointer;white-space:nowrap;">+ Nueva</button>
         </div>
-        <div id="muelle-ruta-info" style="font-size:11px;color:#555;margin-top:6px;min-height:16px;"></div>
+        <div id="muelle-ruta-info" style="font-size:12px;color:#555;margin-top:6px;min-height:16px;"></div>
       </div>
 
       <!-- Scan-to-Truck -->
       <div style="background:var(--bg-s);border:2px solid var(--pm-border);border-radius:12px;padding:14px;margin-bottom:16px;">
-        <div id="muelle-scan-label" style="font-size:12px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
+        <div id="muelle-scan-label" style="font-size:13px;color:#666;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em;">Confirmar carga física — escanear código de caja</div>
         <!-- Botón cámara visible en móvil -->
         <button id="muelle-scan-activar" onclick="abrirCamaraMuelle()"
-          style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:15px;font-weight:700;cursor:pointer;margin-bottom:8px;">
+          style="display:none;width:100%;padding:18px;background:#000;border:2px dashed #1E8395;border-radius:10px;color:#1E8395;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:8px;">
           📷 Escanear con cámara
         </button>
         <div id="camara-box-muelle" style="display:none;margin-bottom:8px;">
           <div id="lector-qr-muelle" style="border-radius:10px;overflow:hidden;"></div>
           <button onclick="cerrarCamara('camara-box-muelle')"
-            style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:13px;cursor:pointer;">
+            style="width:100%;margin-top:6px;padding:10px;background:#111;border:1px solid #333;color:#aaa;border-radius:8px;font-size:14px;cursor:pointer;">
             Cerrar cámara
           </button>
         </div>
         <div id="muelle-scan-campo" style="display:flex;gap:8px;">
           <input id="muelle-scan-input" type="text" placeholder="Escanea o escribe código..." autocomplete="off"
-            style="flex:1;padding:12px;font-size:15px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
+            style="flex:1;padding:12px;font-size:16px;background:#000;border:2px solid #333;border-radius:8px;color:#fff;outline:none;"
             onkeydown="if(event.key==='Enter'){ muelleCargarCaja(); }"
             onblur="muelleScanBlur()"
             oninput="this.value=this.value.toUpperCase()">
-          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;">✓</button>
+          <button onclick="muelleCargarCaja()" style="padding:12px 16px;background:var(--pm);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:16px;cursor:pointer;">✓</button>
         </div>
-        <div id="muelle-scan-feedback" style="font-size:13px;margin-top:8px;min-height:20px;"></div>
+        <div id="muelle-scan-feedback" style="font-size:14px;margin-top:8px;min-height:20px;"></div>
       </div>
 
       <!-- Lista agrupada por destino -->
@@ -1905,15 +1898,8 @@
     <div style="font-size:16px;font-weight:700;margin-bottom:4px;">💰 Liquidación Financiera</div>
     <div style="font-size:12px;color:var(--tx3);margin-bottom:16px;">Cuadre financiero de rutas — el Líder verifica plata, devoluciones y retenciones. Un click dispara NCE/RC/DC en Siesa.</div>
 
-    <!-- KPIs rápidos -->
-    <div id="liq-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;"></div>
-    <!-- Desglose: contado/crédito, parcial/rechazado, rezago de liquidación y
-         facturas emitidas como contado por dato faltante. Los tres números que
-         decidían el rediseño de facturación y que no se podían sacar de
-         ninguna pantalla. -->
-    <div id="liq-desglose" style="margin-bottom:16px;"></div>
-
-    <!-- Filtro de fecha (rango) -->
+    <!-- Filtro de fecha (rango) — arriba, junto con las pestañas, para no
+         tener que bajar toda la pantalla hasta la lista accionable. -->
     <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center;">
       <label for="liq-fecha-desde" style="font-size:12px;color:var(--tx3);">Desde</label>
       <input type="date" id="liq-fecha-desde"
@@ -1979,6 +1965,15 @@
         <div style="text-align:center;padding:30px;color:#555;">Cargando...</div>
       </div>
     </div>
+
+    <!-- KPIs rápidos — debajo de la lista accionable: son contexto, no lo
+         primero que hace falta ver o con lo que se interactúa. -->
+    <div id="liq-kpis" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;margin-top:24px;"></div>
+    <!-- Desglose: contado/crédito, parcial/rechazado, rezago de liquidación y
+         facturas emitidas como contado por dato faltante. Los tres números que
+         decidían el rediseño de facturación y que no se podían sacar de
+         ninguna pantalla. -->
+    <div id="liq-desglose" style="margin-bottom:16px;"></div>
 
     <!-- ── MODAL: DETALLE DE RUTA PARA LIQUIDAR ───────────────────── -->
     <div id="liq-modal-ruta" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:2000;overflow-y:auto;">
@@ -2523,6 +2518,7 @@
           title="Actualizar stock desde Siesa"
           style="padding:11px 14px;background:#111;border:1px solid #333;border-radius:10px;color:#fff;font-size:18px;cursor:pointer;flex-shrink:0;line-height:1;">↻</button>
       </div>
+      <div id="tienda-stock-frescura" style="margin-bottom:10px;"></div>
       <div id="tienda-stock-lista">
         <div style="text-align:center;padding:30px;color:#555;">Cargando stock disponible...</div>
       </div>
@@ -2636,7 +2632,7 @@
   <div id="pantalla-empacador">
     <div class="emp-header">
       <div class="emp-header-logo"><img src="/static/pwa/logo-white.png" alt="Papelería Medellín WMS"></div>
-      <div id="emp-modo-titulo" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);white-space:nowrap;text-align:center;font-size:21px;font-weight:800;color:var(--tx);letter-spacing:.2px;"></div>
+      <div id="emp-modo-titulo" style="position:absolute;left:50%;top:100%;transform:translate(-50%,8px);white-space:nowrap;text-align:center;font-size:21px;font-weight:800;color:var(--tx);letter-spacing:.2px;"></div>
       <div style="display:flex;align-items:center;gap:10px;">
         <span id="emp-nombre" style="font-size:13px;color:#666;"></span>
         <button class="btn-logout" onclick="salir()">Salir</button>
@@ -3195,8 +3191,12 @@
       <!-- Solo aplica en huecos PICKING/IMPORTADOS: ahí el hueco nunca se comparte con otro SKU,
            así que "capacidad del hueco" y "capacidad para este SKU" son lo mismo. -->
       <div id="layout-asignar-capacidad-wrap" style="display:none;">
-        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima del hueco (opcional)</label>
+        <label id="layout-asignar-capacidad-label" style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Capacidad máxima del hueco</label>
         <input id="layout-asignar-capacidad" type="number" min="0" placeholder="Cuántas unidades de este SKU caben aquí"
+          style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
+
+        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Mínimo de reposición (opcional)</label>
+        <input id="layout-asignar-minimo" type="number" min="0" placeholder="Bajo este número, Reposición pide reponer desde RESERVA"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:16px;">
       </div>
 

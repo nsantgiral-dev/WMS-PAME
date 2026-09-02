@@ -37,6 +37,7 @@ consecuencia correcta. Un dato que se puede malinterpretar viaja con su
 interpretación o no viaja.
 """
 from datetime import date, datetime, timedelta
+import uuid
 
 import pytest
 
@@ -90,13 +91,37 @@ def _recaudo(db, ruta_id, tarea_id, estado, pago):
     return r
 
 
+def _otra_parada(db, plantilla, **attrs):
+    """Otra parada de la misma ruta.
+
+    Los tests que cruzan varios estados o formas de pago reusaban la MISMA
+    `tarea_id` para todos sus recaudos — un estado que la operación no
+    produce (una parada tiene un recaudo) y que desde `uq_recaudo_por_parada`
+    (2026-08-19) la base tampoco acepta. Lo que querían decir era «varias
+    paradas», y eso es esto.
+    """
+    from app.models.packing import TareaPacking
+    t = TareaPacking(
+        codigo=f'PK-DES-{uuid.uuid4().hex[:6]}', estado='DESPACHADO',
+        almacen_id=plantilla.almacen_id,
+        tipo_docto_pedido_siesa='PD',
+        consec_docto_pedido_siesa=plantilla.consec_docto_pedido_siesa,
+        numero_pedido_siesa=f'PED-DES-{uuid.uuid4().hex[:4]}',
+    )
+    for k, v in attrs.items():
+        setattr(t, k, v)
+    db.session.add(t)
+    db.session.commit()
+    return t
+
+
 class TestElDesgloseDeEntregas:
 
     def test_cruza_forma_de_pago_con_estado(self, client, db, h, ruta_con_tarea):
         ruta, tarea = ruta_con_tarea
         _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
-        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.PARCIAL, 'EFECTIVO')
-        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')
+        _recaudo(db, ruta.id, _otra_parada(db, tarea).id, EstadoEntrega.PARCIAL, 'EFECTIVO')
+        _recaudo(db, ruta.id, _otra_parada(db, tarea).id, EstadoEntrega.ENTREGADO, 'CREDITO')
 
         r = client.get(_URL, headers=h).get_json()['recaudos']
         assert r['total'] == 3
@@ -109,8 +134,8 @@ class TestElDesgloseDeEntregas:
         también con la que se ejerce el control «no paga, no se entrega»."""
         ruta, tarea = ruta_con_tarea
         _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
-        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.PARCIAL, 'EFECTIVO')
-        _recaudo(db, ruta.id, tarea.id, EstadoEntrega.RECHAZADO, None)
+        _recaudo(db, ruta.id, _otra_parada(db, tarea).id, EstadoEntrega.PARCIAL, 'EFECTIVO')
+        _recaudo(db, ruta.id, _otra_parada(db, tarea).id, EstadoEntrega.RECHAZADO, None)
 
         r = client.get(_URL, headers=h).get_json()['recaudos']
         assert r['parcial_o_rechazado'] == 2
@@ -272,7 +297,8 @@ class TestElModoDePantalla:
     def test_cuenta_las_paradas_en_modo_libre(self, client, db, h, ruta_con_tarea):
         ruta, tarea = ruta_con_tarea
         for modo in ('LIBRE', 'LIBRE', 'DINAMICO'):
-            r = _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
+            r = _recaudo(db, ruta.id, _otra_parada(db, tarea).id,
+                         EstadoEntrega.ENTREGADO, 'EFECTIVO')
             r.modo_pantalla = modo
         db.session.commit()
 
@@ -350,7 +376,8 @@ class TestLoQueCarteraNecesitaCruzar:
         ruta, tarea = ruta_con_tarea
         r1 = _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'CREDITO')
         r1.modo_pantalla = 'LIBRE'
-        r2 = _recaudo(db, ruta.id, tarea.id, EstadoEntrega.ENTREGADO, 'EFECTIVO')
+        r2 = _recaudo(db, ruta.id, _otra_parada(db, tarea).id,
+                      EstadoEntrega.ENTREGADO, 'EFECTIVO')
         r2.modo_pantalla = 'LIBRE'
         db.session.commit()
 

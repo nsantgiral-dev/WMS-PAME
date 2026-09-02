@@ -400,27 +400,66 @@ def las_paradas_en_modo_libre_se_pueden_contar(ctx=None):
     detector_ciego='tests/flujo/test_flujo_venta.py::TestElDetectorNoEstaCiego::test_ve_un_cobro_que_no_llego_a_siesa',
 )
 def un_cobro_registrado_llego_a_siesa(ctx=None):
-    """Una parada de contado con monto cobrado, en una ruta ya liquidada, tiene
-    que haber disparado su recibo de caja."""
-    from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
-    from app.models.ruta_despacho import EstadoFinancieroRuta, RutaDespacho
+    """El recibo de caja **se intentó y no entró**. Es la cartera fantasma.
 
-    liquidadas = {r.id for r in RutaDespacho.query.filter(
-        RutaDespacho.estado_financiero == EstadoFinancieroRuta.LIQUIDADA).all()}
-    if not liquidadas:
+    ## Este invariante estaba invertido en las dos direcciones
+
+    Medía `ruta LIQUIDADA + monto > 0 + siesa_rc_triggered falso`. Con eso:
+
+    · **Gritaba sobre toda ruta liquidada normalmente.** `liquidar_ruta` marca
+      `LIQUIDADA` y **no encola el RC** —su propio comentario lo dice: «RC/DC
+      siguen siendo manuales en el módulo Liquidación»—. O sea que el estado
+      normal de cualquier ruta recién liquidada disparaba un `BLOQUEA`. Un
+      falso positivo estructural en el canal financiero es cómo se aprende a
+      ignorarlo, que es la lección de los 639 avisos conocidos.
+
+    · **Callaba sobre el único caso que existe para ver.** `siesa_rc_triggered`
+      es la bandera de **pre-envío** (Regla 6): con el POST fallado queda en
+      `True` y el job en `FALLIDO`. Nada llegó a Siesa y este invariante daba
+      cero. `recepcion.py` documenta esta misma trampa para REC-01 y
+      `reconciliacion_ruta` la resolvió leyendo el estado del job; VTA-60 era
+      el sitio que había quedado sin corregir.
+
+    ## Qué mide ahora
+
+    El intento existió (`siesa_rc_triggered`) y **no hay un job COMPLETADO**.
+    Eso es exactamente «la plata salió del cliente y el ERP no la tiene», sin
+    depender de si la ruta se liquidó ni de en qué orden.
+
+    Lo que NO mide, a propósito: «se liquidó y el RC todavía no se intentó».
+    Eso es un estado normal de esta operación —alguien revisa retenciones
+    antes de disparar— y su medición es el tramo `cobro_sin_recibo` de
+    `reconciliacion_ruta`, que sí tiene el denominador a la vista.
+    """
+    from app.models.recaudo_entrega import EstadoEntrega, RecaudoEntrega
+    from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+
+    candidatos = (RecaudoEntrega.query
+                  .filter(RecaudoEntrega.monto_cobrado > 0)
+                  .filter(RecaudoEntrega.siesa_rc_triggered.is_(True))
+                  .filter(RecaudoEntrega.estado_entrega.in_(
+                      (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)))
+                  .order_by(RecaudoEntrega.id.desc()).limit(500).all())
+    if not candidatos:
         return []
-    filas = (RecaudoEntrega.query
-             .filter(RecaudoEntrega.ruta_id.in_(liquidadas))
-             .filter(RecaudoEntrega.monto_cobrado > 0)
-             .filter(db.or_(RecaudoEntrega.siesa_rc_triggered.is_(False),
-                            RecaudoEntrega.siesa_rc_triggered.is_(None)))
-             .filter(RecaudoEntrega.estado_entrega.in_(
-                 (EstadoEntrega.ENTREGADO, EstadoEntrega.PARCIAL)))
-             .order_by(RecaudoEntrega.id.desc()).limit(500).all())
+
+    # El job COMPLETADO es la única evidencia de que Siesa lo procesó.
+    # `FALLIDO` y `DESCARTADO` significan que no entró — y `DESCARTADO` es
+    # «un humano decidió no intentarlo más», que ya costó una vez con 103
+    # ajustes contados como enviados.
+    llegaron = {j.referencia_id for j in SiesaJob.query.filter(
+        SiesaJob.tipo == 'RECIBO_CAJA',
+        SiesaJob.referencia_tipo == 'RecaudoEntrega',
+        SiesaJob.referencia_id.in_([r.id for r in candidatos]),
+        SiesaJob.estado == EstadoSiesaJob.COMPLETADO,
+    ).all()}
+
+    filas = [r for r in candidatos if r.id not in llegaron]
     return [
         Hallazgo(
             referencia=f'ruta#{r.ruta_id}/tarea#{r.tarea_id}',
-            detalle=f'cobró {r.monto_cobrado} y no se disparó el recibo de caja',
+            detalle=(f'cobró {r.monto_cobrado}, el recibo de caja se intentó '
+                     f'y no hay job COMPLETADO: el ERP no tiene ese dinero'),
             datos={'forma_pago': r.forma_pago, 'estado': r.estado_entrega},
         ) for r in filas
     ]

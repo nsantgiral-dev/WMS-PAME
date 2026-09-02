@@ -581,6 +581,38 @@ def confirmar_retencion_recaudo(ruta_id, recaudo_id):
     return jsonify({'recaudo': resultado}), 200
 
 
+@rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/corregir-monto', methods=['POST'])
+@jwt_required()
+def corregir_monto_recaudo(ruta_id, recaudo_id):
+    """Corrige monto_cobrado cuando el número que declaró el conductor
+    resultó estar mal (no un faltante real — un dato de origen incorrecto),
+    para cuando la ruta ya pasó de EN_TRANSITO y `confirmar_parada` ya no
+    permite editarlo. Ver LiquidacionService.corregir_monto_declarado."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe puede corregir el monto declarado'}), 403
+    uid = _uid()
+    if not uid:
+        return jsonify({'error': 'Token inválido'}), 401
+    from app.models.recaudo_entrega import RecaudoEntrega
+    recaudo = RecaudoEntrega.query.get(recaudo_id)
+    if not recaudo or recaudo.ruta_id != ruta_id:
+        return jsonify({'error': 'Recaudo no pertenece a esta ruta'}), 404
+    data = request.get_json() or {}
+    try:
+        from app.services.liquidacion_service import LiquidacionService
+        resultado = LiquidacionService.corregir_monto_declarado(
+            recaudo_id,
+            nuevo_monto=data.get('monto'),
+            razon=data.get('razon', ''),
+            admin_id=uid,
+        )
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'recaudo': resultado}), 200
+
+
 @rutas_bp.route('/<int:ruta_id>/recaudos/<int:recaudo_id>/registrar-cobro', methods=['POST'])
 @jwt_required()
 def registrar_cobro_recaudo(ruta_id, recaudo_id):
@@ -602,6 +634,9 @@ def registrar_cobro_recaudo(ruta_id, recaudo_id):
             admin_id=uid,
             retenciones=data.get('retenciones', []),
             monto_override=data.get('monto_override'),
+            ajuste_valor=data.get('ajuste_valor', 0) or 0,
+            ajuste_es_sobrante=bool(data.get('ajuste_es_sobrante', False)),
+            ajuste_razon=data.get('ajuste_razon', '') or '',
         )
     except LookupError as e:
         return jsonify({'error': str(e)}), 404
@@ -1004,7 +1039,7 @@ def liquidacion_dashboard():
         return jsonify({'error': 'Solo admin o jefe de almacén puede ver el dashboard de liquidación'}), 403
 
     from datetime import date as _date
-    from sqlalchemy import func, or_
+    from sqlalchemy import and_, func, or_
     from sqlalchemy.orm import selectinload, joinedload
     from app.models.bulto import Bulto
     from app.models.recaudo_entrega import RecaudoEntrega
@@ -1034,8 +1069,23 @@ def liquidacion_dashboard():
                  joinedload(RutaDespacho.vehiculo),
                  joinedload(RutaDespacho.ruta_maestra),
              )
-             .filter(RutaDespacho.fecha_programada >= fecha_desde)
-             .filter(RutaDespacho.fecha_programada <= fecha_hasta)
+             # `fecha_programada IS NULL` cuenta como "siempre dentro del
+             # rango", no como "nunca" — que es lo que un `>=`/`<=` normal le
+             # hace a NULL en SQL. `crear_ruta()` (ruta ad-hoc del muelle, sin
+             # RutaMaestra) la dejaba sin asignar, y esta consulta la
+             # descartaba en silencio para CUALQUIER rango de fechas: una
+             # ruta ya despachada y con recaudos reales quedaba invisible
+             # para liquidar, sin que ningún filtro la recuperara. Ahora
+             # `crear_ruta()` la asigna (Regla 0), pero esto se queda como
+             # red de seguridad para lo que ya quedó huérfano en producción y
+             # para cualquier otro camino de creación que se le olvide.
+             .filter(or_(
+                 RutaDespacho.fecha_programada.is_(None),
+                 and_(
+                     RutaDespacho.fecha_programada >= fecha_desde,
+                     RutaDespacho.fecha_programada <= fecha_hasta,
+                 ),
+             ))
              .filter(or_(
                  RutaDespacho.estado == 'ENTREGADA',
                  RutaDespacho.estado_financiero != 'PENDIENTE',
@@ -1095,7 +1145,15 @@ def liquidacion_dashboard():
             fp = (r.forma_pago or '').upper()
             if fp == 'EFECTIVO':
                 total_efectivo += monto
-            elif fp == 'TRANSFERENCIA':
+            # `TRANSFERENCIA` a secas (retrocompatible) + los medios
+            # específicos por banco (TRANSFERENCIA_BANCOLOMBIA_AH, etc.,
+            # alineados con `MedioPago` de gestor-cartera-pame) + TARJETA —
+            # todo lo que no es efectivo ni crédito cae en este bucket. Un
+            # `==` fijo contra el string viejo dejaba de contar cualquier
+            # medio nuevo sin que nada avisara — el monto seguía sumando a
+            # `ruta_recaudado`/`total_recaudado`, solo desaparecía del
+            # desglose por medio.
+            elif fp.startswith('TRANSFERENCIA') or fp in ('CONSIGNACION', 'TARJETA'):
                 total_transferencia += monto
             elif fp == 'CREDITO':
                 total_credito += monto
@@ -1186,6 +1244,7 @@ def liquidar_completo(id):
     from app.services.motivos_rechazo import SIN_RETORNO as _MR_SIN_RETORNO
     from app.services.liquidacion_service import (
         LiquidacionService, RETENCION_PUC, RETENCION_TASA, _obtener_tercero,
+        _pucs_en_cola as _pucs_de_recaudo,
     )
 
     ruta = RutaDespacho.query.get(id)
@@ -1237,6 +1296,21 @@ def liquidar_completo(id):
             # La FE, no el pedido — ver `app/services/fe_resolver.py`.
             from app.services.fe_resolver import resolver_fe_o_none
             _tipo_fe, _consec_fe = resolver_fe_o_none(tarea) if tarea else (None, None)
+            # ── La base de retención sale de Siesa o no sale ─────────────
+            # El fallback era `base_gravable = monto_cobrado` y `total_iva = 0`,
+            # y producía **dos daños opuestos, los dos silenciosos**:
+            #
+            # · reteIVA sobre `total_iva = 0` da 0 → el `continue` de abajo
+            #   descarta la línea y **el documento contable nunca se encola**,
+            #   con la pantalla diciendo `ok: true`;
+            # · retefuente e ICA se calculan sobre `monto_cobrado`, que es lo
+            #   que recaudó el conductor —**con IVA** y neto de descuentos—,
+            #   no el `f470_vlr_bruto`. El DC sale a Siesa por ~19% de más.
+            #
+            # La misma política en `liquidacion_service.registrar_cobro_recaudo`
+            # levanta `ValueError('Datos de Siesa no disponibles')`. Dos
+            # implementaciones, resultados opuestos; ésta era la degradada.
+            _base_de_siesa = False
             if _tipo_fe and _consec_fe:
                 try:
                     from app.services.connekta_gateway import connekta
@@ -1244,12 +1318,21 @@ def liquidar_completo(id):
                     if lineas_raw:
                         base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
                         total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
+                        _base_de_siesa = True
                 except Exception as e:
-                    logger.warning(
-                        '[LIQUIDAR-COMPLETO] No se pudo obtener base gravable Siesa para '
-                        'recaudo %d: %s — usando monto_cobrado como base',
-                        recaudo.id, e,
-                    )
+                    logger.error(
+                        '[LIQUIDAR-COMPLETO] no se pudo obtener la base gravable '
+                        'de Siesa para el recaudo %d: %s', recaudo.id, e)
+            if not _base_de_siesa:
+                # Se declara en `errores`, que es lo que decide el `ok` de la
+                # respuesta. El `except` anterior no lo tocaba, así que la
+                # pantalla salía en verde.
+                errores.append(
+                    f'Recaudo {recaudo.id}: no se pudo leer la base gravable de '
+                    f'la factura en Siesa. Las retenciones NO se encolaron — '
+                    f'calcularlas sobre el monto recaudado daría retefuente e '
+                    f'ICA sobre una base con IVA, y reteIVA en cero.')
+                continue
 
             # Obtener tercero para los DCs — sin NIT los jobs DC fallarán en Siesa
             tercero_nit, sucursal = '', '001'
@@ -1276,18 +1359,12 @@ def liquidar_completo(id):
             # Lo que la bandera pretendía evitar, hecho sobre la cola: un job
             # DC vivo para este recaudo y esta cuenta significa que ya se
             # encoló. Mirar la cola es lo que corresponde — la bandera del
-            # recaudo habla de lo enviado, no de lo encolado.
-            _pucs_en_cola = set()
-            for _j in SiesaJob.query.filter_by(
-                    tipo='DOCUMENTO_CONTABLE_RET',
-                    referencia_tipo='RecaudoEntrega',
-                    referencia_id=recaudo.id).all():
-                if _j.estado in ('FALLIDO', 'DESCARTADO'):
-                    continue
-                try:
-                    _pucs_en_cola.add((_j.get_payload() or {}).get('cuenta_puc'))
-                except Exception:
-                    pass
+            # recaudo habla de lo enviado, no de lo encolado. Compartida con
+            # `_encolar_documento_contable` — era la misma consulta escrita
+            # dos veces, y la otra copia es la que corre a continuación
+            # (Step 4 → `liquidar_ruta_siesa` → `_procesar_recaudo`) sin
+            # saber que esta ya encoló el DC de la misma cuenta.
+            _pucs_en_cola = _pucs_de_recaudo(recaudo.id)
 
             for ret in retenciones:
                 tipo_ret = ret.get('tipo', '')

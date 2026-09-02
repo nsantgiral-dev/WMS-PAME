@@ -429,6 +429,34 @@ class Custodia(db.Model):
                  unique=True,
                  postgresql_where=db.text('fin_ts IS NULL'),
                  sqlite_where=db.text('fin_ts IS NULL')),
+        # INVARIANTE 3 — un conductor, un vehículo. **El hermano que faltaba.**
+        #
+        # El de arriba impone 0-o-1 activa **por vehículo** y este 0-o-1 **por
+        # conductor**. Son preguntas distintas y solo la primera tenía respaldo
+        # en disco: la segunda vivía únicamente en
+        # `dom.validar_un_vehiculo_por_conductor`, comprobada en Python con un
+        # `.all()` sin bloqueo (`traspaso.py`).
+        #
+        # La diferencia importa por cómo falla cada una. Dos aperturas
+        # simultáneas sobre el mismo vehículo chocan contra el índice y el
+        # usuario ve un error feo — molesto, pero el dato queda íntegro. Dos
+        # aperturas simultáneas del mismo conductor sobre vehículos distintos
+        # **no chocaban con nada**: pasaban las dos, sin error, y dejaban el
+        # invariante roto en silencio.
+        #
+        # Ya ocurrió sin necesidad de una carrera: el 2026-08-13 un conductor
+        # acumuló tres custodias abiertas y tumbó `/flota/conductor/mi-turno`
+        # con `MultipleResultsFound`. La validación de dominio se escribió por
+        # eso; lo que no se escribió fue el respaldo.
+        #
+        # `custodio_conductor_id` es NULL cuando el custodio es una sede, y
+        # Postgres trata los NULL como distintos: cualquier cantidad de
+        # custodias de sede convive sin colisionar. No hace falta filtrar por
+        # `custodio_tipo`.
+        db.Index('uq_flota_custodia_conductor_activa', 'custodio_conductor_id',
+                 unique=True,
+                 postgresql_where=db.text('fin_ts IS NULL'),
+                 sqlite_where=db.text('fin_ts IS NULL')),
     )
 
 

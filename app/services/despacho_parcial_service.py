@@ -34,8 +34,23 @@ class DespachoParialService:
 
     @staticmethod
     def obtener_compromisos(tipo_docto: str, consec_docto: str) -> list:
-        """Devuelve las líneas de compromiso del pedido desde Siesa."""
+        """Devuelve las líneas de compromiso del pedido desde Siesa.
+
+        Verificado en vivo contra Siesa QA (2026-08-24): la consulta
+        `API_v2_Ventas_Pedidos_Compromisos` filtrando por CO+tipo+consecutivo
+        (sin `f430_rowid`) la rechaza — "Por favor verifique los filtros
+        enviados" — tanto para un pedido ya despachado como para uno recién
+        sincronizado, sin TareaPacking todavía. La misma consulta CON
+        `f430_rowid` (el que ya usa `despachar_parcial`, vía la cabecera) sí
+        responde. Se resuelve acá, una vez, para que ningún caller tenga que
+        volver a descubrirlo — ver Regla 1 (leer el DOCX/probar en vivo antes
+        de asumir un filtro).
+        """
         from app.services.connekta_gateway import connekta
+        cabecera = connekta.get_pedido_cabecera(tipo_docto, consec_docto)
+        f430_rowid = cabecera.get('f430_rowid') if cabecera else None
+        if f430_rowid:
+            return connekta.get_compromisos_pedido(tipo_docto, consec_docto, f430_rowid)
         return connekta.get_compromisos_pedido(tipo_docto, consec_docto)
 
     @staticmethod

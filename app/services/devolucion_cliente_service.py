@@ -89,6 +89,7 @@ class DevolucionClienteService:
                 'producto_id': producto.id,
                 'producto_codigo': producto.codigo,
                 'producto_nombre': producto.nombre,
+                'codigo_barras': producto.codigo_barras,
                 'codigo_siesa': ref,
                 'cantidad_facturada': float(row.get('f470_cant_base') or 0),
                 'f470_id_unidad_medida': (row.get('f470_id_unidad_medida') or '').strip(),
@@ -385,7 +386,7 @@ class DevolucionClienteService:
         devoluciones = (DevolucionCliente.query
                          .filter(DevolucionCliente.recaudo_entrega_id.isnot(None))
                          .filter_by(estado=EstadoDevolucionCliente.ABIERTA)
-                         .order_by(DevolucionCliente.fecha_creacion.asc())
+                         .order_by(DevolucionCliente.fecha_creacion.desc())
                          .all())
         return [d.to_dict() for d in devoluciones]
 

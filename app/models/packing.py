@@ -80,6 +80,16 @@ class TareaPacking(db.Model):
     valor_factura = db.Column(db.Numeric(14, 2), nullable=True)
 
     __table_args__ = (
+        # Una tarea activa por pedido. `packing_service.py:48` lo comprueba y
+        # `.first()`-inserta sin lock: dos cierres del mismo pedido casi a la
+        # vez producen dos remisiones y dos facturas. Parcial sobre lo no
+        # cancelado, igual que el filtro del servicio.
+        db.Index('uq_packing_pedido_activo', 'numero_pedido_siesa',
+                 unique=True,
+                 postgresql_where=db.text(
+                     "estado <> 'CANCELADO' AND numero_pedido_siesa IS NOT NULL"),
+                 sqlite_where=db.text(
+                     "estado <> 'CANCELADO' AND numero_pedido_siesa IS NOT NULL")),
         # Mismo CHECK que la migración. Solo allá, `create_all()` no lo tendría
         # y ningún test lo ejercitaría — media factura se leería como una.
         db.CheckConstraint(

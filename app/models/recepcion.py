@@ -65,6 +65,18 @@ class RecepcionMercancia(db.Model):
     def items_escaneados(self):
         return sum(1 for i in self.items if i.cantidad_recibida > 0)
 
+    __table_args__ = (
+        # Una recepción activa por OC. El endpoint dice ser idempotente
+        # (`routes/siesa.py:1141`) y la idempotencia vive en un `.first()`
+        # sin lock: dos recepcionistas abriendo la misma OC desde el listado
+        # crean dos, cada una escanea parte del físico, y salen dos entradas
+        # 142948 con doble suma de inventario.
+        db.Index('uq_recepcion_oc_activa', 'numero_oc_siesa', 'co_oc_siesa',
+                 unique=True,
+                 postgresql_where=db.text("estado <> 'CANCELADA'"),
+                 sqlite_where=db.text("estado <> 'CANCELADA'")),
+    )
+
     def to_dict(self):
         return {
             'id': self.id,

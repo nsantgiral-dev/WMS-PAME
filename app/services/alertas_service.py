@@ -810,7 +810,7 @@ def init_scheduler(app):
     """
     Crons diarios:
       05:45 → alerta ubicaciones huérfanas
-      06:15 → alerta stock crítico sin reserva
+      06:15 → alerta stock crítico sin reserva (hueco PICKING puntual)
       06:30 → alerta rutas entregadas sin liquidar
       06:45 → resumen operativo diario
     """

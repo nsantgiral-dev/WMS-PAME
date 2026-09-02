@@ -22,6 +22,7 @@ from app.models.siesa_job import SiesaJob
 from app.models.ubicacion_huerfana import UbicacionHuerfana
 from app.models.stock_siesa import StockSiesa
 from app.models.producto_bloqueado import ProductoBloqueado, FugaRecompra
+from app.models.declaracion_ambiente import DeclaracionAmbiente
 from app.services.kardex_service import KardexMovimiento, StockDiario
 from app.services.vigia_service import SerieVigia, AlarmaVigia
 from app.models.importacion import FichaImportacion, Contenedor, ItemEnTransito

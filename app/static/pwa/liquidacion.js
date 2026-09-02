@@ -550,6 +550,10 @@ function _liqRenderDetalle() {
                 </div>`}
             `).join('')}
           </div>
+          ${rec.observaciones ? `
+            <div style="margin-top:6px;font-size:12px;color:var(--tx2);">
+              <span style="color:#fbbf24;font-weight:700;">Nota del conductor:</span> ${rec.observaciones}
+            </div>` : ''}
         </div>`;
     }
 
@@ -626,8 +630,13 @@ function _liqRenderDetalle() {
       // boton de cobro: el admin tiene que poder verificarlo antes de que el
       // RC sea siquiera pulsable, y un panel que solo existe despues de
       // pulsar el boton no puede ser la puerta de ese boton.
+      // `rc_en_cola`: ya se encoló un RC para este recaudo aunque el DLQ
+      // todavía no lo haya procesado (`siesa_rc_triggered` solo se enciende
+      // ahí) — sin esto el botón seguía visible tras el primer clic y un
+      // segundo clic podía duplicar el RC.
       if (!esCred && fp !== 'EXENTO' && estado !== 'RECHAZADO'
-          && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered) {
+          && estado !== 'ENTREGADO_SIN_PAGO' && !rec.siesa_rc_triggered
+          && !rec.rc_en_cola) {
         const rcEsperaNC = (estado === 'PARCIAL' && !rec.siesa_nc_triggered);
         html += _liqBloqueRetencion(ruta.id, rec, factura);
         const trabado = _liqRetencionTraba(rec);
@@ -849,6 +858,13 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
           <input type="number" id="liq-monto-${recaudoId}" value="${mDefault}" step="0.01"
             onchange="liqPreviewCobro(${recaudoId})"
             style="width:100%;margin-top:6px;padding:6px;background:var(--bg-s);border:1px solid var(--brd);border-radius:4px;color:var(--tx);font-size:12px;">
+          ${!esParcial ? `
+          <div style="margin-top:8px;">
+            <a href="#" onclick="event.preventDefault();liqCorregirMonto(${rutaId},${recaudoId},${mCobrado})"
+              style="font-size:12px;color:var(--tx3);text-decoration:underline;cursor:pointer;">
+              ¿El monto que declaró el conductor estaba mal (no un faltante real)? Corregirlo
+            </a>
+          </div>` : ''}
         </div>`;
     } else {
       html += `<input type="hidden" id="liq-monto-${recaudoId}" value="${mDefault}">`;
@@ -861,55 +877,39 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
     // pulsar el boton no puede ser la puerta del boton. Acá queda el estado
     // y el candado, por si otro admin decidio distinto entre el render de la
     // lista y este preview. Ver LiquidacionService.registrar_cobro_recaudo.
+    //
+    // El contenido real de este bloque (y del botón de abajo) lo escribe
+    // `_liqActualizarBloqueoRetencion` — recalculado contra el monto que el
+    // admin tiene escrito EN ESE MOMENTO, no el que había al abrir el panel.
+    // Antes se calculaba una sola vez acá mismo: subir el monto actualizaba
+    // el preview de abajo pero el botón se quedaba en "resuelve la
+    // retención primero" para siempre, aunque el texto dijera "el bloqueo
+    // se resuelve solo".
     const motivoSugerido = preview.motivo_descuento_sugerido || '';
     const retencionConfirmada = preview.retencion_confirmada;
-    let bloqueadoPorRetencion = false;
+    html += `<div id="liq-ret-status-${recaudoId}"></div>`;
 
+    // Retenciones checkboxes — SOLO si el conductor declaró un motivo en
+    // campo. Un pedido pagado completo y sin novedad no tiene nada que
+    // retener: mostrar acá las 12 retenciones del catálogo completo
+    // invitaba al admin a marcar una que nadie negoció con el cliente. La
+    // premarcada es la que el conductor eligió, y solo si ya fue CONFIRMADA
+    // (si está pendiente o rechazada, no se ofrece marcarla: ver el bloque
+    // de arriba).
     if (motivoSugerido) {
-      const nombreMotivo = (preview.retenciones_disponibles || [])
-        .find(r => r.tipo === motivoSugerido)?.nombre || motivoSugerido;
-
-      if (retencionConfirmada === null || retencionConfirmada === undefined) {
-        bloqueadoPorRetencion = true;
+      html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
+      (preview.retenciones_disponibles || []).forEach(ret => {
+        if (ret.monto_estimado <= 0) return;
+        const esLaSugerida = ret.tipo === motivoSugerido;
+        const marcarla = esLaSugerida && retencionConfirmada === true;
+        const deshabilitarla = esLaSugerida && retencionConfirmada !== true;
         html += `
-          <div style="margin-bottom:12px;padding:10px 12px;background:#78350f22;border:1px solid #fbbf2444;border-radius:8px;">
-            <div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:4px;">⚠ Descuento sin verificar: ${nombreMotivo}</div>
-            <div style="font-size:11px;color:var(--tx3);">Cierra este panel y decide en la tarjeta si al cliente le correspondía el descuento — el RC no se puede registrar antes.</div>
-          </div>`;
-      } else if (retencionConfirmada === false) {
-        // Misma referencia que el servicio: lo que entró más lo que se
-        // descontó, NO el neto de la factura (que en un PARCIAL incluye lo
-        // devuelto, y el cliente nunca lo va a pagar).
-        const esperado = _liqEsperadoRetencion(
-          { monto_descuento: preview.monto_descuento, monto_cobrado: mCobrado },
-          { total_neto: mSiesa });
-        const faltaPagar = Math.max(0, Math.round(esperado - mCobrado));
-        bloqueadoPorRetencion = faltaPagar > 1;
-        html += `
-          <div style="margin-bottom:12px;padding:10px 12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
-            <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Descuento rechazado: ${nombreMotivo}</div>
-            <div style="font-size:11px;color:var(--tx3);">Al cliente NO le correspondía — debe pagar ${_liqFmt(esperado)}.${bloqueadoPorRetencion ? ` Faltan ${_liqFmt(faltaPagar)}: sube el monto de arriba cuando el dinero llegue y el bloqueo se resuelve solo.` : ' El monto ya cubre lo que debía — puedes continuar.'}</div>
-          </div>`;
-      } else {
-        html += `<div style="margin-bottom:10px;font-size:11px;color:#4ade80;">✓ Descuento confirmado — el cliente sí tenía derecho.</div>`;
-      }
+          <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:${deshabilitarla ? 'var(--tx3)' : 'var(--tx2)'};cursor:${deshabilitarla ? 'not-allowed' : 'pointer'};">
+            <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
+            ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
+          </label>`;
+      });
     }
-
-    // Retenciones checkboxes — premarcada la que el conductor eligió en
-    // campo, solo si la retención ya fue CONFIRMADA (si está pendiente o
-    // rechazada, no se ofrece marcarla: ver el bloque de arriba).
-    html += `<div style="font-size:11px;font-weight:700;color:var(--tx2);margin-bottom:6px;">Retenciones:</div>`;
-    (preview.retenciones_disponibles || []).forEach(ret => {
-      if (ret.monto_estimado <= 0) return;
-      const esLaSugerida = ret.tipo === motivoSugerido;
-      const marcarla = esLaSugerida && retencionConfirmada === true;
-      const deshabilitarla = esLaSugerida && retencionConfirmada !== true;
-      html += `
-        <label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px;color:${deshabilitarla ? 'var(--tx3)' : 'var(--tx2)'};cursor:${deshabilitarla ? 'not-allowed' : 'pointer'};">
-          <input type="checkbox" class="liq-ret-check-${recaudoId}" value="${ret.tipo}" ${marcarla ? 'checked' : ''} ${deshabilitarla ? 'disabled' : ''} onchange="liqPreviewCobro(${recaudoId})">
-          ${ret.nombre} — ${_liqFmt(ret.monto_estimado)} <span style="color:var(--tx3);">(base ${_liqFmt(ret.base)})</span>
-        </label>`;
-    });
 
     // Preview dinámico
     html += `<div id="liq-preview-${recaudoId}" style="margin-top:10px;padding:8px;background:var(--bg-s);border-radius:6px;font-size:12px;"></div>`;
@@ -918,31 +918,142 @@ async function _liqRenderPanelCobro(rutaId, recaudoId) {
       html += `<div style="color:#f59e0b;font-size:11px;margin-top:6px;">⚠ Siesa no opera después de 8PM — jobs quedarán en cola</div>`;
     }
 
-    if (bloqueadoPorRetencion) {
-      html += `
-        <button disabled id="liq-btn-cobro-${recaudoId}"
-          style="width:100%;margin-top:12px;padding:14px;background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:8px;font-size:14px;font-weight:800;cursor:not-allowed;">
-          🔒 Registrar Cobro (resuelve la retención primero)
-        </button>`;
-    } else {
-      html += `
-        <button onclick="liqRegistrarCobro(${rutaId}, ${recaudoId})" id="liq-btn-cobro-${recaudoId}"
-          style="width:100%;margin-top:12px;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">
-          Confirmar y Enviar RC
-        </button>`;
-    }
+    html += `<div id="liq-btn-cobro-wrap-${recaudoId}"></div>`;
     html += `</div>`;
 
     panel.innerHTML = html;
 
-    // Store preview data for later use
+    // Store preview data for later use — rutaId incluido para que
+    // _liqActualizarBloqueoRetencion arme el onclick del botón sin
+    // necesitar que cada caller se lo pase.
     panel.dataset.preview = JSON.stringify(preview);
+    panel.dataset.rutaId = rutaId;
 
-    // Initial preview render
+    // Initial render — liqPreviewCobro ya llama a
+    // _liqActualizarBloqueoRetencion antes de pintar el preview de RC.
     liqPreviewCobro(recaudoId);
   } catch (e) {
     panel.innerHTML = `<div style="padding:12px;color:#ef4444;">${e.message || 'Error obteniendo preview'}</div>`;
   }
+}
+
+/**
+ * Corrige `monto_cobrado` cuando el número que declaró el conductor en la
+ * calle resultó estar mal — no un faltante real, un dato de origen
+ * incorrecto (ej. el cliente pagó de menos por un descuento que no le
+ * correspondía del todo y ya pagó la diferencia). Distinto del ajuste al
+ * peso: esto no declara nada en Siesa, solo corrige el dato del WMS para
+ * que el RC salga con el número real — por eso no tiene el tope de $1.000.
+ *
+ * Existe porque `RutaService.confirmar_parada` (donde se corregiría
+ * normalmente) exige `ruta.estado == EN_TRANSITO`, y el caso real que
+ * motivó esto llega tarde: la ruta ya está ENTREGADA cuando Liquidación
+ * descubre el número mal, y para entonces esa vía ya no acepta la edición.
+ */
+async function liqCorregirMonto(rutaId, recaudoId, montoActual) {
+  const nuevoStr = prompt(
+    `Monto declarado actualmente: ${_liqFmt(montoActual)}\n\n` +
+    `¿Cuál es el monto real (ya con lo que el cliente pagó de más, si aplica)?`,
+    montoActual
+  );
+  if (nuevoStr === null) return;
+  const nuevo = parseFloat(nuevoStr);
+  if (!nuevo || nuevo <= 0) {
+    alerta('Monto inválido', 'error');
+    return;
+  }
+  const razon = prompt(
+    '¿Por qué se corrige? (obligatorio — ej. "Cliente pagó el faltante tras ' +
+    'verificar que el descuento inicial fue excesivo")'
+  );
+  if (!razon || !razon.trim()) {
+    alerta('La corrección necesita una razón — no se guardó nada', 'advertencia');
+    return;
+  }
+  try {
+    await post(`/api/rutas/${rutaId}/recaudos/${recaudoId}/corregir-monto`, {
+      monto: nuevo, razon: razon.trim(),
+    });
+    alerta('Monto corregido', 'exito');
+    await _liqRenderPanelCobro(rutaId, recaudoId);
+  } catch (e) {
+    alerta(e.message || 'Error al corregir el monto', 'error');
+  }
+}
+
+/**
+ * Recalcula el bloque de estado de la retención y el candado del botón
+ * "Confirmar y Enviar RC" contra el monto que el admin tiene escrito AHORA
+ * MISMO en el panel — no el `monto_cobrado` guardado cuando se abrió.
+ *
+ * Antes esto se calculaba una sola vez al construir el panel
+ * (`_liqRenderPanelCobro`): subir el monto (o pulsar "Usar Siesa") solo
+ * actualizaba el texto de preview de más abajo, y el botón se quedaba
+ * disabled para siempre — el mensaje en pantalla prometía "el bloqueo se
+ * resuelve solo" y no era cierto, no había forma de registrar el cobro
+ * corregido desde este panel. Se llama al abrir el panel y en cada
+ * `onchange` del monto o de las retenciones (ver `liqPreviewCobro`).
+ */
+function _liqActualizarBloqueoRetencion(recaudoId) {
+  const panel = document.getElementById(`liq-cobro-panel-${recaudoId}`);
+  const estadoDiv = document.getElementById(`liq-ret-status-${recaudoId}`);
+  const btnWrap = document.getElementById(`liq-btn-cobro-wrap-${recaudoId}`);
+  if (!panel || !estadoDiv || !btnWrap) return;
+
+  const preview = panel.dataset.preview ? JSON.parse(panel.dataset.preview) : {};
+  const rutaId = panel.dataset.rutaId;
+  const montoInput = document.getElementById(`liq-monto-${recaudoId}`);
+  const monto = montoInput ? (parseFloat(montoInput.value) || 0) : (preview.monto_cobrado || 0);
+  const mSiesa = (preview.datos_factura || {}).total_neto || 0;
+  const motivoSugerido = preview.motivo_descuento_sugerido || '';
+  const retencionConfirmada = preview.retencion_confirmada;
+
+  let bloqueado = false;
+  let estadoHtml = '';
+
+  if (motivoSugerido) {
+    const nombreMotivo = (preview.retenciones_disponibles || [])
+      .find(r => r.tipo === motivoSugerido)?.nombre || motivoSugerido;
+
+    if (retencionConfirmada === null || retencionConfirmada === undefined) {
+      bloqueado = true;
+      estadoHtml = `
+        <div style="margin-bottom:12px;padding:10px 12px;background:#78350f22;border:1px solid #fbbf2444;border-radius:8px;">
+          <div style="font-size:12px;font-weight:700;color:#fbbf24;margin-bottom:4px;">⚠ Descuento sin verificar: ${nombreMotivo}</div>
+          <div style="font-size:11px;color:var(--tx3);">Cierra este panel y decide en la tarjeta si al cliente le correspondía el descuento — el RC no se puede registrar antes.</div>
+        </div>`;
+    } else if (retencionConfirmada === false) {
+      // Misma referencia que el servicio: lo que entró más lo que se
+      // descontó, NO el neto de la factura (que en un PARCIAL incluye lo
+      // devuelto, y el cliente nunca lo va a pagar). `esperado` es fijo
+      // (sale de lo guardado); lo que cambia con el input es cuánto falta.
+      const esperado = _liqEsperadoRetencion(
+        { monto_descuento: preview.monto_descuento, monto_cobrado: preview.monto_cobrado },
+        { total_neto: mSiesa });
+      const faltaPagar = Math.max(0, Math.round(esperado - monto));
+      bloqueado = faltaPagar > 1;
+      estadoHtml = `
+        <div style="margin-bottom:12px;padding:10px 12px;background:#450a0a33;border:1px solid #f8717144;border-radius:8px;">
+          <div style="font-size:12px;font-weight:700;color:#f87171;margin-bottom:4px;">✗ Descuento rechazado: ${nombreMotivo}</div>
+          <div style="font-size:11px;color:var(--tx3);">Al cliente NO le correspondía — debe pagar ${_liqFmt(esperado)}.${bloqueado ? ` Faltan ${_liqFmt(faltaPagar)}: sube el monto de arriba cuando el dinero llegue.` : ' El monto ya cubre lo que debía — puedes continuar.'}</div>
+        </div>`;
+    } else {
+      estadoHtml = `<div style="margin-bottom:10px;font-size:11px;color:#4ade80;">✓ Descuento confirmado — el cliente sí tenía derecho.</div>`;
+    }
+  }
+  estadoDiv.innerHTML = estadoHtml;
+
+  btnWrap.innerHTML = bloqueado
+    ? `
+      <button disabled id="liq-btn-cobro-${recaudoId}"
+        style="width:100%;margin-top:12px;padding:14px;background:var(--bg-s);color:var(--tx3);border:1px solid var(--brd);border-radius:8px;font-size:14px;font-weight:800;cursor:not-allowed;">
+        🔒 Registrar Cobro (resuelve la retención primero)
+      </button>`
+    : `
+      <button onclick="liqRegistrarCobro(${rutaId}, ${recaudoId})" id="liq-btn-cobro-${recaudoId}"
+        style="width:100%;margin-top:12px;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:8px;font-size:14px;font-weight:800;cursor:pointer;">
+        Confirmar y Enviar RC
+      </button>`;
 }
 
 /** Decisión del admin sobre la retención que el conductor declaró en campo. */
@@ -972,6 +1083,11 @@ async function liqConfirmarRetencion(rutaId, recaudoId, confirmar) {
 }
 
 function liqPreviewCobro(recaudoId) {
+  // Recalcula el candado del botón contra el monto actual del input —
+  // ver _liqActualizarBloqueoRetencion. Se dispara en cada onchange (monto
+  // o checkboxes de retención), no solo al abrir el panel.
+  _liqActualizarBloqueoRetencion(recaudoId);
+
   const montoInput = document.getElementById(`liq-monto-${recaudoId}`);
   const previewDiv = document.getElementById(`liq-preview-${recaudoId}`);
   if (!montoInput || !previewDiv) return;
@@ -1000,31 +1116,100 @@ function liqPreviewCobro(recaudoId) {
     <div style="margin-top:6px;font-weight:700;color:var(--tx);">Total CxC cerrado: ${_liqFmt(monto)}</div>`;
 }
 
-async function liqRegistrarCobro(rutaId, recaudoId) {
+/**
+ * Ajuste al peso — mismo mecanismo que gestor-cartera-pame contra el mismo
+ * Siesa (AjustePorDiferencia). El servicio (`registrar_cobro_recaudo`)
+ * bloquea con un error que menciona "diferencia" cuando lo que declaró el
+ * conductor y el neto que el RC va a cobrar no coinciden más allá del
+ * residuo de redondeo ($100 por defecto) — y hasta ahora esa era una pared
+ * sin puerta: no había forma de decirle al sistema "sí, faltaron/sobraron
+ * $X, y esta es la razón" desde este panel.
+ *
+ * En vez de armar un segundo formulario de antemano (que la mayoría de los
+ * cobros nunca usa), se reacciona AL rechazo: el monto y las retenciones que
+ * el admin ya tiene en pantalla alcanzan para calcular exactamente cuánto
+ * ajuste explicaría la diferencia — se le pide la razón con un solo prompt
+ * y se reintenta UNA vez con eso declarado. Si el reintento también falla
+ * (tope superado, retención+sobrante sin probar, etc.) se muestra ESE error
+ * tal cual lo manda el servicio — no hay un tercer intento automático.
+ */
+function _liqCalcularAjusteParaReintento(recaudoId, monto) {
+  const panel = document.getElementById(`liq-cobro-panel-${recaudoId}`);
+  const preview = panel?.dataset.preview ? JSON.parse(panel.dataset.preview) : {};
+  const retsDisp = preview.retenciones_disponibles || [];
+  const checks = document.querySelectorAll(`.liq-ret-check-${recaudoId}:checked`);
+  let totalRet = 0;
+  checks.forEach(chk => {
+    const ret = retsDisp.find(r => r.tipo === chk.value);
+    if (ret) totalRet += ret.monto_estimado;
+  });
+  const montoNetoRc = monto - totalRet;
+  const montoCobrado = preview.monto_cobrado || 0;
+  const diferencia = montoNetoRc - montoCobrado;
+  return {
+    ajuste_valor: Math.round(Math.abs(diferencia) * 100) / 100,
+    // Mismo signo que usa el servicio: neto del RC por debajo de lo que el
+    // conductor dijo = sobrante (entregó de más); por encima = faltante.
+    ajuste_es_sobrante: diferencia < 0,
+  };
+}
+
+async function liqRegistrarCobro(rutaId, recaudoId, _ajuste) {
   const montoInput = document.getElementById(`liq-monto-${recaudoId}`);
   const monto = montoInput ? parseFloat(montoInput.value) : null;
   const checks = document.querySelectorAll(`.liq-ret-check-${recaudoId}:checked`);
   const retenciones = [];
   checks.forEach(chk => retenciones.push({ tipo: chk.value }));
 
-  if (!confirm(`¿Registrar cobro${retenciones.length ? ' con ' + retenciones.length + ' retención(es)' : ''}?`)) return;
+  // El confirm() solo se pregunta en el primer intento — un reintento con
+  // ajuste ya viene de una decisión explícita (el prompt de la razón).
+  if (!_ajuste && !confirm(`¿Registrar cobro${retenciones.length ? ' con ' + retenciones.length + ' retención(es)' : ''}?`)) return;
+
+  const body = { retenciones, monto_override: monto };
+  if (_ajuste) {
+    body.ajuste_valor = _ajuste.ajuste_valor;
+    body.ajuste_es_sobrante = _ajuste.ajuste_es_sobrante;
+    body.ajuste_razon = _ajuste.ajuste_razon;
+  }
 
   try {
     const r = await fetch(API + `/api/rutas/${rutaId}/recaudos/${recaudoId}/registrar-cobro`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ retenciones, monto_override: monto }),
+      body: JSON.stringify(body),
     });
     const d = await r.json();
     if (r.ok && d.ok) {
       const partes = [`RC por ${_liqFmt(d.monto_neto_rc)}`];
       if (d.dc_jobs && d.dc_jobs.length) partes.push(`${d.dc_jobs.length} DC`);
+      if (_ajuste) partes.push(`ajuste ${_ajuste.ajuste_es_sobrante ? 'sobrante' : 'faltante'} de ${_liqFmt(_ajuste.ajuste_valor)}`);
       alerta(partes.join(' + ') + ' encolados', 'exito');
       _liqDetalleRuta = await get(`/api/rutas/${rutaId}/liquidacion-detalle`);
       _liqRenderDetalle();
-    } else {
-      alerta(d.error || 'Error al registrar cobro', 'error');
+      return;
     }
+
+    const msg = d.error || 'Error al registrar cobro';
+    // Solo se ofrece el ajuste en el PRIMER rechazo por diferencia — si el
+    // reintento con ajuste también rebota (tope, no explica, sobrante+
+    // retención), es un rechazo distinto y se muestra tal cual: seguir
+    // insistiendo con otro prompt sería ignorar lo que el servicio ya
+    // explicó (ver el mensaje de cada guard en `registrar_cobro_recaudo`).
+    if (!_ajuste && /diferencia/i.test(msg)) {
+      const calc = _liqCalcularAjusteParaReintento(recaudoId, monto);
+      if (calc.ajuste_valor > 0) {
+        const lado = calc.ajuste_es_sobrante ? 'SOBRANTE' : 'FALTANTE';
+        const razon = prompt(
+          `${msg}\n\n¿Fue un ${lado} real de ${_liqFmt(calc.ajuste_valor)}? ` +
+          `Escribe la razón para declararlo en Siesa (cancelar = no registrar el cobro):`
+        );
+        if (razon && razon.trim()) {
+          await liqRegistrarCobro(rutaId, recaudoId, { ...calc, ajuste_razon: razon.trim() });
+          return;
+        }
+      }
+    }
+    alerta(msg, 'error');
   } catch (e) { alerta(e.message || 'Error de conexión', 'error'); }
 }
 
@@ -1108,6 +1293,37 @@ function _liqRenderReconciliacion(d, previo) {
          <td colspan="2" style="padding:6px;text-align:right;color:#6b7280;font-style:italic;">no medible — ${f.nota}</td></tr>`
   ).join('');
 
+  // Qué parada, y por qué. Un contador de ciclos rotos que sube sin decir
+  // cuál mandaría a revisar la ruta entera — que es como se aprende a
+  // ignorarlo. Las dos últimas causas no las ve el conteo de documentos:
+  // el ciclo está completo y aun así falta plata.
+  const _CAUSA = {
+    entrega_sin_cobro: ['Entregó y no registró cobro', '#f87171'],
+    cobro_sin_recibo:  ['Cobró y el recibo no llegó a Siesa', '#f87171'],
+    monto_reescrito:   ['El monto se cambió DESPUÉS de que el recibo salió', '#fbbf24'],
+    cobro_incompleto:  ['Cobró menos que la factura', '#fbbf24'],
+  };
+  const _filas = (d.detalle || []).map(x => {
+    const [txt, color] = _CAUSA[x.tramo] || [x.tramo, '#9ca3af'];
+    const cifras = x.tramo === 'monto_reescrito'
+      ? `recibo ${$(x.en_el_recibo)} · WMS ${$(x.cobrado)}${x.editado_por ? ` · editó usuario ${x.editado_por}` : ''}`
+      : x.tramo === 'cobro_incompleto'
+        ? `factura ${$(x.esperado)} · cobró ${$(x.cobrado)} · falta ${$(x.faltante)}`
+        : `esperado ${$(x.esperado)} · cobrado ${$(x.cobrado)}`;
+    return `<tr>
+      <td style="padding:6px;color:#9ca3af;">Parada ${x.tarea_id}</td>
+      <td style="padding:6px;color:${color};">${txt}</td>
+      <td style="padding:6px;text-align:right;color:#9ca3af;font-size:12px;">${cifras}</td></tr>`;
+  }).join('');
+  const paradasRotas = !_filas ? '' : `
+    <div style="margin-top:14px;">
+      <div style="font-size:11px;color:#9ca3af;text-transform:uppercase;font-weight:700;margin-bottom:4px;">
+        Paradas a revisar</div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <tbody>${_filas}</tbody>
+      </table>
+    </div>`;
+
   const peor = d.peor_que_la_vara;
   const veredicto = peor === null
     ? `<span style="color:#6b7280;">sin paradas cobrables — no se midió</span>`
@@ -1135,6 +1351,7 @@ function _liqRenderReconciliacion(d, previo) {
           <th style="text-align:right;padding:6px;">Valor</th></tr></thead>
         <tbody>${fugas}</tbody>
       </table>
+      ${paradasRotas}
       <div style="margin-top:14px;padding:10px;border-radius:8px;background:#111827;font-size:13px;">
         Ciclos rotos: <b>${d.ciclos_rotos}</b>
         ${d.tasa_ciclos_rotos == null ? '' : ` · ${(d.tasa_ciclos_rotos * 100).toFixed(2)}% (vara: ${(d.vara * 100).toFixed(2)}%)`}

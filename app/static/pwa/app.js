@@ -7,10 +7,24 @@
   }
 })();
 
-/** @param {boolean} isLight - Whether light theme is active. */
+/**
+ * Cambia el logo según el tema.
+ *
+ * `logo-white.png` es blanco: sobre fondo claro **desaparece**. El HTML lo
+ * trae fijo y esta función lo sustituye al cargar y al alternar tema.
+ *
+ * `.emp-header-logo` faltaba en el selector, así que las pantallas de
+ * empacador y picker se quedaban con el blanco y en tema claro mostraban un
+ * hueco. Un selector que enumera sitios a mano es exactamente la forma que
+ * deja fuera al que se agregue después — por eso ahora se buscan todas las
+ * imágenes que apunten a cualquiera de las dos variantes.
+ *
+ * @param {boolean} isLight - Whether light theme is active.
+ */
 function _actualizarLogo(isLight) {
   const src = isLight ? '/static/pwa/logo-h.png' : '/static/pwa/logo-white.png';
-  document.querySelectorAll('.header-logo img, .login-logo img').forEach(img => { img.src = src; });
+  document.querySelectorAll('img[src*="logo-white.png"], img[src*="logo-h.png"]')
+    .forEach(img => { img.src = src; });
 }
 
 /** Toggle between dark and light theme, persisting choice to localStorage. */
@@ -189,7 +203,8 @@ function mostrarSegunRol(rol) {
     empCargarTareas();
     TIMER_OPERARIO = setInterval(empCargarTareas, 20000);
   } else if (puedeAbastecer && (puedePicar || puedeEmpacar)) {
-    // Rol dual: picker/empacador + abastecedor → picker por defecto, botón para cambiar
+    // Rol dual: picker/empacador + abastecedor → picker por defecto; Reposición
+    // entra sola como nivel 2 de la cola unificada (pedirTarea), sin botón de modo.
     pantalla('pantalla-operario');
     if (OPERARIO) actualizarUI(OPERARIO);
     pedirTarea();
@@ -489,7 +504,55 @@ function tab(id) {
 }
 
 /** Fetch and render the full admin dashboard (KPIs, chart, alerts, productivity). */
+/**
+ * La franja de ambiente. **Va primero y no depende del resto del dashboard.**
+ *
+ * El 19-ago-2026 el Gestor de Cartera pasó ocho horas escribiendo contra la
+ * base equivocada sin que sonara nada, porque nadie había declarado nada y el
+ * silencio se leyó como conformidad. Un endpoint que hay que abrir no avisa:
+ * esto tiene que estar en la cara de quien entra.
+ *
+ * No intenta adivinar el ambiente —no se puede— sino mostrar si alguien
+ * cuadró una cifra contra algo de afuera, con nombre y fecha.
+ */
+async function cargarFranjaAmbiente() {
+  const cont = document.getElementById('franja-ambiente');
+  if (!cont) return;
+  let d;
+  try {
+    d = await get('/api/health/ambiente');
+  } catch (e) {
+    // El endpoint responde 409 cuando está en ALARMA, así que un error acá
+    // **no se puede leer como «todo bien»**: se pinta la alarma igual.
+    d = e && e.datos ? e.datos : null;
+    if (!d) {
+      cont.innerHTML = `<div style="padding:8px 12px;background:#7f1d1d;color:#fff;
+        font-size:12px;font-weight:700;">AMBIENTE SIN VERIFICAR — no se pudo
+        consultar el estado. El silencio no es «todo bien».</div>`;
+      return;
+    }
+  }
+  if (d.estado === 'DECLARADO') {
+    const u = d.ultima_declaracion || {};
+    cont.innerHTML = `<div style="padding:6px 12px;background:#064e3b;color:#d1fae5;
+      font-size:11px;">Ambiente contrastado por <b>${u.declarado_por_nombre || '—'}</b>
+      el ${(u.declarado_en || '').slice(0, 10)} · ${u.concepto || ''}
+      (WMS ${u.cifra_wms} vs ${u.fuente_externa}: ${u.cifra_externa})</div>`;
+    return;
+  }
+  cont.innerHTML = `<div style="padding:10px 12px;background:#7f1d1d;color:#fff;font-size:12px;">
+    <b style="font-size:13px;">AMBIENTE SIN VERIFICAR</b><br>
+    ${(d.motivos || []).map(m => `• ${m}`).join('<br>')}
+    <div style="margin-top:6px;opacity:.85;font-size:11px;">
+      El host y la compañía no distinguen producción de una copia: los dos son
+      iguales en las dos. Hace falta que alguien cuadre una cifra contra una
+      fuente externa al ERP.</div></div>`;
+}
+
 async function cargarDashboard() {
+  // Fuera del try de abajo a propósito: si el dashboard falla, la franja
+  // tiene que salir igual. Es la que avisa.
+  cargarFranjaAmbiente();
   try {
     const d = await get('/api/dashboard/resumen-completo?almacen_id=' + ALMACEN_ID);
     const k = d.kpis;
@@ -573,20 +636,6 @@ async function cargarDashboard() {
     movimientos(d.movimientos_recientes.movimientos);
 
     // ── Alertas (solo si hay datos) ────────────────────────────────
-    const nBloq = d.tareas_bloqueadas || 0;
-    const bloqEl = document.getElementById('dashboard-tareas-bloqueadas');
-    if (bloqEl) {
-      bloqEl.style.display = nBloq > 0 ? 'block' : 'none';
-      const b = document.getElementById('bloq-count');
-      if (b) b.textContent = nBloq;
-    }
-    const audEl = document.getElementById('dashboard-auditorias-urgentes');
-    if (audEl) {
-      audEl.style.display = nAud > 0 ? 'block' : 'none';
-      const badge = document.getElementById('aud-urgentes-count');
-      if (badge) badge.textContent = nAud;
-      if (nAud > 0) cargarAuditoriasUrgentes();
-    }
     const tr = d.traslados_en_riesgo || {};
     const nCriticos = tr.total_critico || 0;
     const nAlertas  = tr.total_alerta  || 0;
@@ -944,7 +993,8 @@ function _renderTareasBodegaHTML(tareas) {
       UBICACION_VACIA:    '📦 Ubicación vacía',
       FALTANTE:           '📉 Agotado',
       MERCANCIA_AVERIADA: '🚫 Mercancía averiada',
-      PRODUCTO_INCORRECTO:'❌ Producto incorrecto'
+      PRODUCTO_INCORRECTO:'❌ Producto incorrecto',
+      BACKORDER_SIESA:    '🔒 Sin backorder en Siesa'
     };
     const porEstado = { BLOQUEADO: [], EN_PROCESO: [], PENDIENTE: [] };
     tareas.forEach(t => {
@@ -956,84 +1006,137 @@ function _renderTareasBodegaHTML(tareas) {
       { label: '🔵 En proceso', color: '#93c5fd', tareas: porEstado.EN_PROCESO },
       { label: '⏳ En cola',    color: '#aaa',    tareas: porEstado.PENDIENTE  },
     ];
+    // Una línea/producto por tarea, pero varias tareas pueden ser del mismo
+    // pedido (ej. dos referencias bloqueadas del mismo PD). Agrupar por
+    // pedido evita que el mismo PD aparezca repetido como si fueran envíos
+    // distintos — una tarjeta por pedido, una fila por línea adentro, cada
+    // línea con su propio botón/panel de auditoría (id sigue siendo t.id,
+    // porque la decisión de auditoría es por línea, no por pedido entero).
+    const _lineaHTML = (t, esPrimera) => `
+      <div style="padding:10px 0;${esPrimera ? '' : 'border-top:1px solid #222;'}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="flex:1;min-width:0;">
+            <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
+            <div style="font-size:12px;color:#666;margin-top:2px;">${t.ubicacion_codigo || '—'}</div>
+            <div style="font-size:11px;color:#444;margin-top:2px;">${
+              t.operario_id
+                ? '👤 En proceso'
+                : t.estado === 'BLOQUEADO'
+                  ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada')
+                  : '⏳ En cola'
+            }</div>
+            ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
+              ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>`
+              : ''}
+          </div>
+          <div style="text-align:right;flex-shrink:0;">
+            <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
+            <div style="font-size:20px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
+          </div>
+        </div>
+        ${t.estado === 'BLOQUEADO' ? `
+        <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
+          <button onclick="auditoriaMostrarPanel(${t.id})"
+            style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
+            🔍 Auditoría
+          </button>
+          <div id="auditoria-panel-${t.id}" style="display:none;margin-top:10px;">
+            <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
+            <select id="auditoria-resultado-${t.id}"
+              style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
+              <option value="">— Selecciona resultado —</option>
+              <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
+              <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
+              <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
+              <option value="AVERIA">🚫 Mercancía averiada</option>
+              <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
+            </select>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+              <div>
+                <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
+                <input id="auditoria-cantidad-${t.id}" type="number" min="0" value="0"
+                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+              </div>
+              <div>
+                <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
+                <input id="auditoria-ubicacion-${t.id}" type="text" placeholder="Ej: A-01-02"
+                  style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
+              </div>
+            </div>
+            <textarea id="auditoria-obs-${t.id}" placeholder="Observaciones (opcional)..."
+              style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
+            <div style="display:flex;gap:8px;">
+              <button onclick="auditoriaCancelarPanel(${t.id})"
+                style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
+                Cancelar
+              </button>
+              <button onclick="auditoriaGuardar(${t.id})"
+                style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
+                Guardar auditoría →
+              </button>
+            </div>
+          </div>
+        </div>` : ''}
+      </div>`;
+
     let html = '';
     grupos.forEach(({ label, color, tareas: ts }) => {
       if (!ts.length) return;
-      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${ts.length}</div>`;
-      html += ts.map(t => `
-        <div class="tabla-card" style="${t.estado==='BLOQUEADO'?'border-color:#7f1d1d;background:#110a0a;':''}">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
-            <div style="flex:1;min-width:0;">
-              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                <span style="font-size:14px;font-weight:600;">${t.producto_nombre || t.producto_codigo}</span>
-                ${t.tipo_documento === 'TRASLADO' ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
-              </div>
-              <div style="font-size:12px;color:#666;margin-top:2px;">${t.referencia_documento || t.codigo} · ${t.ubicacion_codigo || '—'}</div>
-              <div style="font-size:11px;color:#444;margin-top:2px;">${
-                t.operario_id
-                  ? '👤 En proceso'
-                  : t.estado === 'BLOQUEADO'
-                    ? '🔴 Bloqueado — ' + (MOTIVO_LABEL[t.motivo_bloqueo] || t.motivo_bloqueo || 'novedad reportada')
-                    : '⏳ En cola'
-              }</div>
-              ${t.estado === 'BLOQUEADO' && t.observaciones_bloqueo
-                ? `<div style="font-size:11px;color:#ef4444;margin-top:3px;font-style:italic;">"${t.observaciones_bloqueo}"</div>`
-                : ''}
-            </div>
-            <div style="text-align:right;flex-shrink:0;">
-              <span class="badge ${t.estado==='EN_PROCESO'?'badge-blue':t.estado==='BLOQUEADO'?'badge-red':'badge-yellow'}">${t.estado}</span>
-              <div style="font-size:20px;font-weight:800;margin-top:4px;">${t.cantidad_recogida||0}/${t.cantidad_solicitada}</div>
-            </div>
+
+      const porPedido = new Map();
+      ts.forEach(t => {
+        const key = `${t.referencia_documento || t.codigo}`;
+        if (!porPedido.has(key)) porPedido.set(key, []);
+        porPedido.get(key).push(t);
+      });
+
+      html += `<div style="font-size:11px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.8px;padding:10px 0 5px;border-bottom:1px solid #222;margin-bottom:8px;">${label} · ${ts.length} línea${ts.length!==1?'s':''} · ${porPedido.size} pedido${porPedido.size!==1?'s':''}</div>`;
+
+      html += Array.from(porPedido.entries()).map(([pedido, items]) => {
+        const hayBloqueada = items.some(t => t.estado === 'BLOQUEADO');
+        const esTraslado = items[0].tipo_documento === 'TRASLADO';
+        return `
+        <div class="tabla-card" style="${hayBloqueada?'border-color:#7f1d1d;background:#110a0a;':''}">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px;">
+            <span style="font-size:14px;font-weight:700;">${pedido}</span>
+            ${esTraslado ? '<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;background:#1e3a5f;color:#60a5fa;letter-spacing:.5px;">🔄 TRANSFERENCIA</span>' : ''}
+            <span style="font-size:11px;color:#555;">· ${items.length} línea${items.length!==1?'s':''}</span>
           </div>
-          ${t.estado === 'BLOQUEADO' ? `
-          <div style="margin-top:10px;padding-top:10px;border-top:1px solid #2a1010;">
-            <button onclick="auditoriaMostrarPanel(${t.id})"
-              style="width:100%;padding:9px;background:#1a1a2a;color:#a78bfa;border:1px solid #2d1b69;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;">
-              🔍 Auditoría
-            </button>
-            <div id="auditoria-panel-${t.id}" style="display:none;margin-top:10px;">
-              <div style="font-size:11px;color:#888;margin-bottom:8px;">¿Qué encontraste físicamente?</div>
-              <select id="auditoria-resultado-${t.id}"
-                style="width:100%;padding:10px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;margin-bottom:8px;">
-                <option value="">— Selecciona resultado —</option>
-                <option value="ENCONTRADO_COMPLETO">✅ Encontrado completo (error del operario)</option>
-                <option value="ENCONTRADO_PARCIAL">📉 Encontrado parcial</option>
-                <option value="NO_ENCONTRADO">❌ No encontrado — faltante confirmado</option>
-                <option value="AVERIA">🚫 Mercancía averiada</option>
-                <option value="DISCREPANCIA_SIESA">⚠️ Discrepancia Siesa (existe en sistema, no en físico)</option>
-              </select>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
-                <div>
-                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Cant. hallada</div>
-                  <input id="auditoria-cantidad-${t.id}" type="number" min="0" value="0"
-                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
-                </div>
-                <div>
-                  <div style="font-size:11px;color:#666;margin-bottom:4px;">Ubicación hallada</div>
-                  <input id="auditoria-ubicacion-${t.id}" type="text" placeholder="Ej: A-01-02"
-                    style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:13px;box-sizing:border-box;">
-                </div>
-              </div>
-              <textarea id="auditoria-obs-${t.id}" placeholder="Observaciones (opcional)..."
-                style="width:100%;padding:9px;background:#0d0d0d;border:1px solid #333;border-radius:8px;color:#fff;font-size:12px;resize:vertical;min-height:56px;box-sizing:border-box;margin-bottom:8px;"></textarea>
-              <div style="display:flex;gap:8px;">
-                <button onclick="auditoriaCancelarPanel(${t.id})"
-                  style="flex:1;padding:9px;background:#1a1a1a;border:1px solid #333;color:#aaa;border-radius:8px;font-size:12px;cursor:pointer;">
-                  Cancelar
-                </button>
-                <button onclick="auditoriaGuardar(${t.id})"
-                  style="flex:2;padding:9px;background:#a78bfa;color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;">
-                  Guardar auditoría →
-                </button>
-              </div>
-            </div>
-          </div>` : ''}
-        </div>`).join('');
+          ${items.map((t, i) => _lineaHTML(t, i === 0)).join('')}
+        </div>`;
+      }).join('');
     });
     return html;
   } catch (e) {
     return '<div style="color:#ef4444;text-align:center;">Error mostrando tareas de bodega</div>';
   }
+}
+
+/**
+ * Renderiza la línea "Ahora: ..." de la tarjeta de operario — snapshot en
+ * vivo de `tarea_actual` (viene de /api/dashboard/productividad, refrescado
+ * cada 30s por TIMER_ADMIN mientras la pestaña Operarios esté abierta).
+ * @param {{tipo:string, tipo_documento?:string, referencia:string, ubicacion:string, producto:?string, minutos_en_tarea:?number}|null} t
+ */
+function _tareaActualHTML(t) {
+  if (!t) {
+    return `<div style="font-size:11px;color:#3a3a3a;margin-bottom:4px;">⚪ Sin tarea asignada</div>`;
+  }
+  const COLORES = { PICKING: '#1d4ed8', REPOSICION: '#c2410c', CONTEO: '#b45309', PACKING: '#7c3aed' };
+  const color = COLORES[t.tipo] || '#555';
+  const min = t.minutos_en_tarea;
+  // Mismo umbral que ConteoService/reposicion_service.liberar_tareas_zombi (2h) —
+  // si lleva más que eso en la misma tarea, probablemente está atascado, no trabajando.
+  const punto = min != null && min >= 120 ? '🔴' : '🟢';
+  const tiempo = min == null ? '' : min < 1 ? ' · recién' : ` · hace ${min} min`;
+  const etiqueta = t.tipo === 'PICKING'
+    ? `PICKING · ${t.tipo_documento === 'TRASLADO' ? 'Traslado' : 'Pedido'} ${t.referencia || ''}`
+    : `${t.tipo}${t.referencia ? ' · ' + t.referencia : ''}`;
+  const detalle = [t.ubicacion, t.producto].filter(Boolean).join(' · ');
+  return `
+    <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:1px;">${punto} Ahora: ${etiqueta}</div>
+    ${detalle ? `<div style="font-size:10px;color:#555;margin-bottom:4px;">${detalle}${tiempo}</div>` : ''}
+  `;
 }
 
 /** Fetch and render operator list with 7-day productivity metrics. */
@@ -1056,7 +1159,7 @@ async function cargarOperarios() {
     todos.sort((a, b) => (metricas[b.id]?.total_tareas || 0) - (metricas[a.id]?.total_tareas || 0));
 
     el.innerHTML = todos.map((u, i) => {
-      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0 };
+      const op = metricas[u.id] || { total_tareas: 0, pickings_completados: 0, packings_completados: 0, conteos_completados: 0, reposiciones_completadas: 0, tarea_actual: null };
       const badges = [u.puede_picar && '<span style="background:#1e40af;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Picker</span>',
                       u.puede_empacar && '<span style="background:#6b21a8;color:#fff;border-radius:4px;padding:1px 5px;font-size:10px;">Empacador</span>',
                       u.puede_abastecer && '<span style="background:#7c2d12;color:#fed7aa;border-radius:4px;padding:1px 5px;font-size:10px;">Abastecedor</span>'].filter(Boolean).join(' ');
@@ -1067,7 +1170,8 @@ async function cargarOperarios() {
           <div>
             <div style="font-size:14px;font-weight:600;">${u.nombre}</div>
             <div style="font-size:11px;color:#555;margin-bottom:2px;">${u.rol} ${badges}</div>
-            <div style="font-size:11px;color:#444;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Conteos:${op.conteos_completados}</div>
+            ${_tareaActualHTML(op.tarea_actual)}
+            <div style="font-size:11px;color:#444;">Pick:${op.pickings_completados} Pack:${op.packings_completados} Repo:${op.reposiciones_completadas || 0} Conteos:${op.conteos_completados}</div>
             ${u.puede_picar && u.capacidad_diaria_conteo != null ? (() => {
               const cap = u.capacidad_diaria_conteo;
               const hoy = op.conteos_hoy || 0;
@@ -1477,20 +1581,25 @@ async function verReconciliacion() {
           }
           const r = e.ultimo_resultado;
           if (!r) { res.style.color = '#fb923c'; res.textContent = 'Sin resultado — intenta de nuevo'; return; }
+          if (r.abortado) {
+            res.style.color = '#fb923c';
+            res.textContent = `⚠ Reconciliación no ejecutada — ${r.motivo}`;
+            return;
+          }
           if (r.total_discrepancias === 0) {
             res.style.color = '#4ade80';
-            res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${r.total_productos_siesa} productos)`;
+            res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${r.total_productos_siesa} productos, bodegas: ${(r.bodegas_comparadas||[]).join(', ')})`;
             return;
           }
           res.style.color = '#facc15';
-          res.textContent = `⚠ ${r.total_discrepancias} diferencias de ${r.total_productos_siesa} productos`;
+          res.textContent = `⚠ ${r.total_discrepancias} diferencias de ${r.total_productos_siesa} productos (bodegas: ${(r.bodegas_comparadas||[]).join(', ')})`;
           panel.innerHTML = `
-            <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa):</div>
+            <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa), por bodega:</div>
             ${r.discrepancias.slice(0,20).map(x => `
               <div class="tabla-fila" style="font-size:12px;">
                 <div>
                   <div style="font-weight:600;">${x.nombre}</div>
-                  <div style="color:#555;">${x.codigo}</div>
+                  <div style="color:#555;">${x.codigo} · <span style="color:#93c5fd;">${x.bodega||'?'}</span></div>
                 </div>
                 <div style="text-align:right;">
                   <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${x.stock_wms}</span>
@@ -1646,75 +1755,6 @@ function loadScript(src) {
 
 
 
-
-// ── Auditorías Urgentes (admin) ──────────────────────
-
-/** Fetch and render urgent audit tasks on the admin dashboard. */
-async function cargarAuditoriasUrgentes() {
-  const el = document.getElementById('lista-auditorias-urgentes');
-  if (!el) return;
-  try {
-    const d = await get('/api/conteo/auditorias-urgentes?almacen_id=' + ALMACEN_ID);
-    const tareas = d.auditorias || [];
-    if (!tareas.length) {
-      el.innerHTML = '<div style="color:#4ade80;text-align:center;padding:20px;font-size:13px;">✓ Sin auditorías pendientes</div>';
-      return;
-    }
-    const MOTIVOS = {'UBICACION_VACIA':'📦 Ubicación vacía','FALTANTE':'📉 Agotado','MERCANCIA_AVERIADA':'🚫 Mercancía averiada','PRODUCTO_INCORRECTO':'❌ Producto incorrecto'};
-    el.innerHTML = tareas.map(t => `
-        <div style="background:#111;border:1px solid #7f1d1d;border-radius:12px;padding:14px;margin-bottom:8px;">
-          <div style="margin-bottom:8px;">
-            <div style="font-size:13px;font-weight:700;color:#f87171;">${t.codigo}</div>
-            <div style="font-size:11px;color:#555;margin-top:2px;">${t.producto_nombre || ''} · ${t.ubicacion_codigo || ''}</div>
-            <div style="font-size:10px;color:#444;margin-top:1px;">Pedido ${t.referencia_documento || '—'} · pedía ${t.cantidad_solicitada} uds</div>
-            ${t.motivo_bloqueo ? `<div style="font-size:10px;color:#b45309;margin-top:1px;">Motivo: ${MOTIVOS[t.motivo_bloqueo] || t.motivo_bloqueo}</div>` : ''}
-          </div>
-          <select id="da-resultado-${t.id}"
-            style="width:100%;padding:9px;margin-bottom:6px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;">
-            <option value="">¿Qué encontraste al verificar?</option>
-            <option value="NO_ENCONTRADO">Confirmo: agotado — no hay nada</option>
-            <option value="ENCONTRADO_COMPLETO">Encontré todo lo pedido (mal ubicado)</option>
-            <option value="ENCONTRADO_PARCIAL">Encontré una parte</option>
-            <option value="AVERIA">Está averiado</option>
-            <option value="DISCREPANCIA_SIESA">Discrepancia con Siesa — ajusto manual</option>
-          </select>
-          <input id="da-cantidad-${t.id}" type="number" min="0" placeholder="Cantidad hallada"
-            style="width:100%;padding:9px;margin-bottom:8px;background:#0a0a0a;border:1px solid #333;color:#ccc;border-radius:8px;font-size:12px;box-sizing:border-box;">
-          <button onclick="dashAuditarTarea(${t.id})"
-            style="width:100%;padding:11px;background:#7f1d1d;color:#fca5a5;border:1px solid #f87171;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;">
-            ✓ Confirmar auditoría
-          </button>
-        </div>`).join('');
-  } catch (e) {
-    el.innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">Error cargando auditorías</div>';
-  }
-}
-
-/** @param {number} tareaId - Task ID to submit dashboard audit result for. */
-async function dashAuditarTarea(tareaId) {
-  const resultado = document.getElementById(`da-resultado-${tareaId}`)?.value;
-  const cantidad_hallada = parseInt(document.getElementById(`da-cantidad-${tareaId}`)?.value || '0', 10);
-  if (!resultado) { alerta('Selecciona qué encontraste', 'error'); return; }
-  const avisoParcial = resultado === 'NO_ENCONTRADO' || resultado === 'AVERIA'
-    ? '\n\nEsta línea se retira del pedido y el pedido sigue parcial con el resto.'
-    : '';
-  if (!confirm('¿Confirmar esta auditoría? Ajusta el inventario y el estado del pedido.' + avisoParcial)) return;
-  try {
-    const r = await fetch(API + `/api/picking/${tareaId}/auditar`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + TOKEN },
-      body: JSON.stringify({ resultado, cantidad_hallada }),
-    });
-    const d = await r.json();
-    if (r.ok) {
-      alerta('Auditoría registrada ✓', 'exito');
-      cargarAuditoriasUrgentes();
-      cargarDashboard();
-    } else {
-      alerta(d.error || 'Error al guardar auditoría', 'error');
-    }
-  } catch (e) { alerta('Error de conexión', 'error'); }
-}
 
 /**
  * Fetch OCs from Siesa and in-process receptions from DB, then render the list.
@@ -2718,13 +2758,6 @@ async function siesaRecuperacionCargar() {
         Para cuando la remisión SÍ existe en Siesa y el WMS no guardó su número:
         se busca en Siesa y se escribe acá. Crea la factura (142943) sobre esa RM.
       </p>
-      <button class="btn-flota" style="width:100%;margin-top:8px;border-color:var(--red);color:var(--red);"
-              onclick="siesaForzarPacking()">Forzar el envío completo a Siesa</button>
-      <p style="font-size:11px;color:var(--tx3);margin:6px 0 0;">
-        Reejecuta la cadena entera (244328→142945→142943) sobre una tarea ya
-        DESPACHADO. Es para lo que se cerró en modo ensayo y nunca llegó a Siesa
-        real. <b>Si ya había llegado, duplica.</b> Solo admin.
-      </p>
     </div>
 
     <div class="tabla-card" style="margin-top:12px;">
@@ -2820,31 +2853,6 @@ Si esa remisión ya estaba facturada, queda una ` +
   }
 }
 
-/** Reejecuta la cadena completa. El botón más peligroso del panel. */
-async function siesaForzarPacking() {
-  const id = parseInt(document.getElementById('rec-packing-id')?.value, 10);
-  const out = document.getElementById('rec-resultado');
-  if (!Number.isFinite(id)) { alerta('Poné el ID de la tarea', 'error'); return; }
-  if (!confirm(`Se va a REEJECUTAR la cadena completa hacia Siesa para la tarea ${id}:
-` +
-               `compromisos (244328) → remisión (142945) → factura (142943).
-
-` +
-               `Si esos documentos ya existen en Siesa, quedan DUPLICADOS.
-
-` +
-               `Antes de seguir: ¿usaste «Reconciliar» para confirmar que Siesa ` +
-               `NO tiene la factura?`)) return;
-  out.innerHTML = '<p style="color:var(--tx3);font-size:12px;">Reenviando la cadena…</p>';
-  try {
-    const r = await post(`/api/packing/${id}/forzar-siesa`, {});
-    out.innerHTML = `<p style="color:var(--green);font-size:12px;">
-      ${r.mensaje || 'Cadena reenviada'}</p>`;
-    setTimeout(siesaRecuperacionCargar, 2000);
-  } catch (e) {
-    out.innerHTML = `<p style="color:var(--red);font-size:12px;">${e.message}</p>`;
-  }
-}
 
 /** Repara traslados sin tarea de packing. Solo toca el WMS, no Siesa. */
 async function siesaRecuperarPackingTraslados() {

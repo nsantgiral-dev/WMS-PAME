@@ -230,7 +230,12 @@ class TestElEndpointExponeLoPersistido:
         reg.cerrar_ok(reg.abrir('stock'), {'cargados': 900})
 
         e = estado_setup_inicial()
-        assert set(e['persistido']) == set(TIPOS)
+        # `persistido` cubre la secuencia de arranque (catálogo → barcodes →
+        # stock → setup_inicial) — no necesariamente TODO `TIPOS`.
+        # `reconciliacion` es una operación aparte, bajo demanda, que no
+        # corre como parte del setup inicial y por eso no aparece acá.
+        assert set(e['persistido']) == {'catalogo', 'barcodes', 'stock', 'setup_inicial'}
+        assert set(e['persistido']) <= set(TIPOS)
         assert e['persistido']['stock']['alguna_vez_ok'] is True
         assert e['persistido']['catalogo']['alguna_vez_ok'] is False
         assert 'cobertura' in e
@@ -252,15 +257,30 @@ class TestLosSyncsRegistranDeVerdad:
         'catalogo': 'app/services/siesa_sync_service.py',
         'barcodes': 'app/services/siesa_barcode_sync_service.py',
         'stock': 'app/services/inventario_siesa_service.py',
+        'reconciliacion': 'app/services/inventario_siesa_service.py',
     }
 
-    @pytest.mark.parametrize('tipo', ['catalogo', 'barcodes', 'stock'])
+    @pytest.mark.parametrize('tipo', ['catalogo', 'barcodes', 'stock', 'reconciliacion'])
     def test_el_sync_abre_y_cierra_su_registro(self, tipo):
         from pathlib import Path
         raiz = Path(__file__).resolve().parents[1]
         fuente = (raiz / self._SERVICIOS[tipo]).read_text(encoding='utf-8')
-        assert f"abrir('{tipo}')" in fuente, (
-            f'{self._SERVICIOS[tipo]} no abre registro para {tipo} — el estado '
-            f'seguiría viviendo solo en memoria')
+        if tipo == 'stock':
+            # Desde la Fase 1 de calibración de tiendas (2026-08-27) el tipo
+            # ya no es el literal 'stock' — sale de _tipo_registro_stock(bod),
+            # que devuelve 'stock' para la bodega default y 'stock_ns1'/
+            # 'stock_nc1' para las demás (cada bodega necesita su propio tipo,
+            # si no `ultimo()` mezclaría sus estados). El detector sigue
+            # exigiendo el mismo hecho — que se abre un registro para esta
+            # bodega — solo que ahora a través del helper.
+            assert 'abrir(_tipo_registro_stock(' in fuente, (
+                f'{self._SERVICIOS[tipo]} no abre registro para stock — el estado '
+                f'seguiría viviendo solo en memoria')
+            assert "return 'stock'" in fuente, (
+                "_tipo_registro_stock ya no devuelve 'stock' para la bodega default")
+        else:
+            assert f"abrir('{tipo}')" in fuente, (
+                f'{self._SERVICIOS[tipo]} no abre registro para {tipo} — el estado '
+                f'seguiría viviendo solo en memoria')
         assert 'cerrar_ok(' in fuente, f'{tipo}: nunca cierra con éxito'
         assert 'cerrar_error(' in fuente, f'{tipo}: no registra el fallo'

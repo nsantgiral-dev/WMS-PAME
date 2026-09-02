@@ -865,9 +865,22 @@ class TestConnektaGatewayTraslados:
             mov = payloads[0]['Movimientos'][0]
             assert mov['f470_id_ubicacion_aux_ent'] is None
 
-    def test_173079_bodega_salida_es_transito_no_origen(self, app):
-        """ETS debe usar bodega_transito (TRA1) en f450_id_bodega_salida y f470_id_bodega.
-        Siesa valida: ETS.bodega_salida == STS.bodega_entrada (error 62485 si no coincide)."""
+    def test_173079_bodega_salida_es_origen_no_transito(self, app):
+        """ETS debe usar bodega_origen (la bodega real, no TRA1) en
+        f450_id_bodega_salida y f470_id_bodega.
+
+        Verificado en vivo contra Siesa QA el 2026-06-12 (commit e3b7d89):
+        con bodega_transito (TRA1, bodega lógica sin stock físico), Siesa
+        rechaza con 62485 "bodega de salida diferente a la capturada en el
+        STS" — el STS registró su origen real, no TRA1.
+
+        Este test reemplaza uno que afirmaba lo contrario
+        (test_173079_bodega_salida_es_transito_no_origen) y que quedó en
+        verde codificando la regresión del commit 1344c7a (2026-07-24, un
+        commit de Vigía/CUSUM sin relación con traslados que pisó
+        accidentalmente este bloque) — confirmada en producción el
+        2026-08-25: 0/69 recepciones EN_TRANSITO completaban el ETS.
+        """
         with app.app_context():
             from app.services.connekta_gateway import connekta
             connekta.tipo_docto_transito_salida = 'TTS'
@@ -877,16 +890,16 @@ class TestConnektaGatewayTraslados:
             with patch.object(connekta, '_post',
                                side_effect=lambda c, n, p, **kw: payloads.append(p) or {}):
                 connekta.transferencia_transito_entrada(
-                    bodega_transito='TR', bodega_destino='NC1',
+                    bodega_transito='TR', bodega_destino='NC1', bodega_origen='NB1',
                     items=self._items_validos(1), codigo_solicitud='ST-BGO',
                     consec_salida=5000,
                 )
 
             doc = payloads[0]['Documentos'][0]
             mov = payloads[0]['Movimientos'][0]
-            assert doc['f450_id_bodega_salida'] == 'TR', 'debe ser la bodega de tránsito, no el origen'
+            assert doc['f450_id_bodega_salida'] == 'NB1', 'debe ser la bodega de origen, no TRA1'
             assert doc['f450_id_bodega_entrada'] == 'NC1'
-            assert mov['f470_id_bodega'] == 'TR', 'debe coincidir con f450_id_bodega_salida'
+            assert mov['f470_id_bodega'] == 'NB1', 'debe coincidir con f450_id_bodega_salida'
 
     def test_173079_referencia_al_doc_salida(self, app):
         with app.app_context():

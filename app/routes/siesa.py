@@ -25,6 +25,7 @@ siesa_bp = Blueprint('siesa', __name__)
 
 
 from app.routes._auth_helpers import _solo_admin, Roles
+from app.services.siesa_filtro import lit as _lit
 
 
 # ──────────────────────────────────────────────
@@ -75,27 +76,47 @@ def sync_estado():
     return jsonify(estado_sync()), 200
 
 
+#: Fase 1 de calibración de tiendas (2026-08-27): NS1 y NC1 son las únicas bodegas
+#: de punto de venta con tráfico histórico real de traslados (84 y 19 solicitudes)
+#: fuera de NB1. Las demás (FC1, PC1, PT1, FF1, FN1, FP1) no tienen Almacen/Ubicacion
+#: provisionado todavía — habilitarlas es la Fase 2, no un cambio de esta lista sola.
+_BODEGAS_CALIBRACION_HABILITADAS = ('NS1', 'NC1')
+
+
 @siesa_bp.route('/cargar-inventario', methods=['POST'])
 @jwt_required()
 def cargar_inventario():
-    """Inicia la carga inicial de stock desde Siesa en background. Solo admin."""
+    """Inicia la carga inicial de stock desde Siesa en background. Solo admin.
+
+    ?bodega=NS1 — carga esa bodega en vez de la default (NB1, connekta.bodega).
+    Limitado a `_BODEGAS_CALIBRACION_HABILITADAS` — las demás no tienen
+    almacén WMS provisionado y fallarían con un error confuso más abajo.
+    """
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede cargar inventario'}), 403
     from flask import current_app, request as _req
     from app.services.inventario_siesa_service import iniciar_carga_inventario
     forzar = _req.args.get('forzar', 'false').lower() == 'true'
-    resultado = iniciar_carga_inventario(current_app._get_current_object(), forzar=forzar)
+    bodega = _req.args.get('bodega') or None
+    if bodega and bodega not in _BODEGAS_CALIBRACION_HABILITADAS:
+        return jsonify({
+            'error': f'Bodega {bodega} no habilitada para carga todavía. '
+                     f'Disponibles: {", ".join(_BODEGAS_CALIBRACION_HABILITADAS)} (además de NB1 por defecto).'
+        }), 400
+    resultado = iniciar_carga_inventario(current_app._get_current_object(), forzar=forzar, bodega=bodega)
     return jsonify(resultado), 202
 
 
 @siesa_bp.route('/carga-inventario-estado', methods=['GET'])
 @jwt_required()
 def carga_inventario_estado():
-    """Estado de la carga de inventario en curso. Solo admin."""
+    """Estado de la carga de inventario en curso. Solo admin. ?bodega=NS1 opcional."""
     if not _solo_admin():
         return jsonify({'error': 'Solo admin puede ver estado de carga'}), 403
+    from flask import request as _req
     from app.services.inventario_siesa_service import estado_carga_inventario
-    return jsonify(estado_carga_inventario()), 200
+    bodega = _req.args.get('bodega') or None
+    return jsonify(estado_carga_inventario(bodega=bodega)), 200
 
 
 @siesa_bp.route('/setup-inicial', methods=['POST'])
@@ -237,7 +258,7 @@ def debug_pedidos_raw():
     elif consec:
         filtros = [f'f430_consec_docto={consec}']
         if co:
-            filtros.append(f"f430_id_co = ''{co}''")
+            filtros.append(f"f430_id_co = {_lit(co)}")
         if not sin_estado:
             filtros.append('f430_ind_estado=1')
         params['parametros'] = ' AND '.join(filtros)
@@ -529,12 +550,12 @@ def debug_barras_raw():
     if codigo:
         resultado = connekta._get(connekta.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f131_id = ''{codigo}''"
+            'parametros': f"f131_id = {_lit(codigo)}"
         })
     elif referencia:
         resultado = connekta._get(connekta.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f120_referencia = ''{referencia}''"
+            'parametros': f"f120_referencia = {_lit(referencia)}"
         })
     else:
         resultado = connekta._get(connekta.api_barras, {
@@ -1002,11 +1023,30 @@ def iniciar_despacho():
                      f'(packing {existing_packing.codigo}).'
         }), 409
 
+    # Backorder Siesa: qué líneas comprometió Siesa de verdad para este pedido
+    # (API_v2_Ventas_Pedidos_Compromisos), ANTES de mandar al operario a
+    # pickear algo que Siesa ya decidió cancelar (pedido con
+    # f430_ind_backorder="despachar disponible, cancelar el resto" —
+    # confirmado en vivo: cant_remisionada=0 en la línea, aunque el WMS
+    # creyera tener stock local suficiente). Distinto de `referencias_agotadas`
+    # en despacho_parcial_service.py, que es lo que el OPERARIO reporta al no
+    # encontrar el físico — esto es lo que SIESA ya decidió antes de que el
+    # operario camine a buscarlo.
+    #
+    # `None` = no se pudo consultar (red/timeout) → no se filtra nada este
+    # ciclo, se comporta exactamente como antes de este cambio. Un fallo de
+    # red no es evidencia de que Siesa canceló la línea (Regla 0).
+    from app.services import backorder_service
+    comprometidas_siesa = backorder_service.referencias_comprometidas_por_siesa(
+        tipo_docto, consec_docto)
+
     tareas_picking_ids = []
     items_ok = []
     errores = []
 
     for item in items:
+        item_codigo = (item.get('item_codigo') or '').strip()
+
         try:
             tareas = PickingService.crear_tareas(
                 producto_id=item['producto_id'],
@@ -1017,6 +1057,34 @@ def iniciar_despacho():
                 prioridad=2
             )
             tareas_picking_ids.extend([t.id for t in tareas])
+
+            # Siesa no comprometió esta línea (backorder) — la tarea se crea
+            # igual (reserva stock local vía FEFO) pero se bloquea de una vez,
+            # antes de que un operario la vea en su cola. No entra a items_ok:
+            # el packing no debe esperar que se empaque algo que no se va a
+            # pickear. Se cierra por el mismo camino que "el operario no lo
+            # encontró" — auditar_tarea(resultado='DISCREPANCIA_SIESA'),
+            # que ya existía para exactamente este caso.
+            if (comprometidas_siesa is not None
+                    and item_codigo
+                    and item_codigo not in comprometidas_siesa):
+                PickingService.bloquear_por_backorder_siesa(
+                    tareas,
+                    detalle=(
+                        f'Siesa no comprometió {item_codigo} para el pedido '
+                        f'{numero_pedido} (cantidad pedida '
+                        f'{item.get("cantidad_pendiente")}) — backorder, no se pickea.'
+                    ),
+                )
+                errores.append({
+                    'producto_id': item.get('producto_id'),
+                    'item_codigo': item_codigo,
+                    'producto_nombre': item.get('producto_nombre_wms'),
+                    'error': 'Siesa no comprometió esta línea (backorder) — '
+                             'tarea creada y bloqueada, ver pestaña Bodega',
+                })
+                continue
+
             items_ok.append(item)
         except (ValueError, TypeError) as e:
             errores.append({
@@ -1396,7 +1464,7 @@ def debug_stock_bodega():
             try:
                 resp = connekta._get(api, {
                     'paginacion': f'numPag={p}|tamPag={tam}',
-                    'parametros': f"f150_id = ''{bodega}'' AND f400_cant_existencia_1 > 0",
+                    'parametros': f"f150_id = {_lit(bodega)} AND f400_cant_existencia_1 > 0",
                 })
                 rows = resp.get('detalle', {}).get('Table', []) or []
                 paginas_revisadas += 1
@@ -1437,7 +1505,7 @@ def debug_stock_bodega():
             # Con filtro f150_id (igual que get_stock_bodega)
             resp = connekta._get(api, {
                 'paginacion': f'numPag={pag}|tamPag={tam}',
-                'parametros': f"f150_id = ''{bodega}'' AND f400_cant_existencia_1 > 0",
+                'parametros': f"f150_id = {_lit(bodega)} AND f400_cant_existencia_1 > 0",
             })
     except Exception as exc:
         return jsonify({'error': str(exc), 'bodega': bodega, 'modo': 'sin_filtro' if sin_filtro else 'con_filtro_f150_id'}), 502

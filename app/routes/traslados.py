@@ -597,6 +597,11 @@ def reintentar_despacho(id):
     s = SolicitudTraslado.query.get_or_404(id)
     if s.estado not in ('EN_TRANSITO', 'ENTREGADA'):
         return jsonify({'error': f'Solo se puede reintentar despacho en EN_TRANSITO o ENTREGADA (estado: {s.estado})'}), 400
+    # Idempotencia, igual que la ruta hermana del ETS (`reintentar-recepcion`).
+    # Sin esto, cada clic emitía un STS nuevo: la mercancía se descargaba otra
+    # vez del origen y se cargaba otra vez a la bodega de tránsito.
+    if s.siesa_salida_consec:
+        return jsonify({'error': f'173076 ya registrado (consec={s.siesa_salida_consec})'}), 400
 
     # Usar cantidad_enviada (lo que salió físicamente) para consistencia con el despacho original
     items_payload = [
@@ -632,8 +637,38 @@ def reintentar_despacho(id):
         from app.services.traslado_service import TrasladoService
         if not res.get('simulado') and not res.get('modo_ensayo'):
             consec = TrasladoService._extraer_consec(res)
+            if not consec:
+                # El STS **sí se creó**: lo que falló fue leer su consecutivo.
+                # El servicio ya hace esta recuperación (`traslado_service.py:654`);
+                # esta ruta no la hacía, borraba `siesa_error` y respondía
+                # `ok: True` — y el botón del PWA se muestra justamente cuando
+                # `siesa_salida_consec` está vacío, así que seguía ahí y cada
+                # clic emitía otro STS.
+                from app.services import siesa_traslado
+                logger.warning(
+                    '[TRASLADO] %s: consecutivo null en respuesta 173076 — '
+                    'intentando recovery', s.codigo)
+                consec = siesa_traslado.recuperar_consec_salida(s.codigo)
             if consec:
                 s.siesa_salida_consec = consec
+            else:
+                # No se degrada a éxito. Sin consecutivo el ETS 173079 no se
+                # puede emitir nunca y la mercancía queda en la bodega de
+                # tránsito — el limbo que los invariantes de traslado existen
+                # para detectar. Se declara y se deja el error puesto.
+                s.siesa_error = (
+                    'El STS (173076) se envió y Siesa no devolvió su '
+                    'consecutivo, ni se pudo recuperar. EL DOCUMENTO PUEDE '
+                    'EXISTIR: verificalo en Siesa antes de reintentar — otro '
+                    'envío descarga la mercancía dos veces.')
+                db.session.commit()
+                return jsonify({
+                    'ok': False,
+                    'resultado_desconocido': True,
+                    'error': s.siesa_error,
+                    'siesa_response': res,
+                    'solicitud': s.to_dict(),
+                }), 409
         s.siesa_error = None
         db.session.commit()
         return jsonify({'ok': True, 'siesa_response': res, 'solicitud': s.to_dict()}), 200
@@ -657,6 +692,7 @@ def reintentar_recepcion_siesa(id):
 
     from app.extensions import db
     from app.services.connekta_gateway import connekta
+    from app.services.siesa_traslado_adapter import siesa_traslado
     s = SolicitudTraslado.query.get_or_404(id)
 
     if s.estado != 'ENTREGADA':
@@ -665,6 +701,23 @@ def reintentar_recepcion_siesa(id):
         return jsonify({'error': f'173079 ya registrado (consec={s.siesa_entrada_consec})'}), 400
     if s.modo_transferencia != 'EN_TRANSITO':
         return jsonify({'error': 'Solo aplica a traslados EN_TRANSITO'}), 400
+
+    # Verificar ANTES de reenviar: un intento previo puede haber recibido 200
+    # de Siesa sin un consecutivo parseable en la respuesta (el hueco que
+    # `resolver_consecutivo_entrada` existe para cerrar). Sin este chequeo,
+    # reintentar sobre uno de esos casos manda un 173079 SEGUNDO y crea un
+    # documento de entrada duplicado en Siesa — exactamente lo que el aviso
+    # "Verificá primero en Siesa que el documento no exista" advierte.
+    consec_existente = siesa_traslado.recuperar_consec_entrada(s.codigo)
+    if consec_existente:
+        s.siesa_entrada_consec = consec_existente
+        s.siesa_error = None
+        db.session.commit()
+        return jsonify({
+            'ok': True,
+            'recuperado_sin_reenvio': True,
+            'solicitud': s.to_dict(),
+        }), 200
 
     items_payload = [
         {
@@ -691,11 +744,10 @@ def reintentar_recepcion_siesa(id):
             bodega_origen=s.bodega_origen_siesa or connekta.bodega,
         )
         from app.services.traslado_service import TrasladoService
-        if not res.get('simulado') and not res.get('modo_ensayo'):
-            consec = TrasladoService._extraer_consec(res)
-            if consec:
-                s.siesa_entrada_consec = consec
-        s.siesa_error = None
+        consec, error = TrasladoService.resolver_consecutivo_entrada(s.codigo, res)
+        if consec:
+            s.siesa_entrada_consec = consec
+        s.siesa_error = error
         db.session.commit()
         return jsonify({'ok': True, 'siesa_response': res, 'solicitud': s.to_dict()}), 200
     except Exception as e:
@@ -870,6 +922,7 @@ def stock_disponible():
             resultado['_debug'] = {
                 'bodega': resultado.get('bodega'),
                 'fuente': resultado.get('fuente'),
+                'actualizado_en': resultado.get('actualizado_en'),
                 'siesa_total_rows': resultado.get('siesa_total_rows'),
                 'siesa_con_stock': resultado.get('siesa_con_stock'),
                 'wms_mapeados': resultado.get('total'),

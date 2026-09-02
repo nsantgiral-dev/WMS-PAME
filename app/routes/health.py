@@ -13,7 +13,8 @@ import logging
 from datetime import datetime
 from flask import Blueprint, current_app, jsonify
 from flask_jwt_extended import jwt_required
-from app.routes._auth_helpers import _es_gestion
+from app.routes._auth_helpers import (_es_admin_o_jefe, _es_gestion,
+                                      _solo_admin)
 
 health_bp = Blueprint('health', __name__)
 logger = logging.getLogger(__name__)
@@ -152,6 +153,88 @@ def health_nc_consecutivo():
             if apto and _original != nombre else
             'Ya está configurada y responde bien.' if apto else
             'Corregir el SELECT de la consulta en Connekta y volver a probar.'
+        ),
+    }), 200
+
+
+@health_bp.route('/ets-consecutivo', methods=['GET'])
+@jwt_required()
+def health_ets_consecutivo():
+    """Prueba el conector de consulta de entrada en tránsito (ETS/173079) SIN
+    reenviar nada a Siesa — mismo motivo que `/nc-consecutivo`: encender un
+    recovery contra un nombre de conector adivinado y ver si se rompe en
+    producción no es un método.
+
+    `get_consec_entrada_transito_by_alterno` (connekta_gateway.py) usa
+    'API_v2_Inventarios_Transferencia_Transito_Entrada' — verificado en vivo
+    2026-08-25 contra ST-20260706-21B0 (consec=19). El default de acá debe
+    coincidir con ese, no reinventar el nombre por su cuenta.
+
+    Requiere `?codigo=<traslado>` (un ST-... real, para filtrar por su
+    f450_docto_alterno). Acepta `?consulta=<nombre>` para probar un nombre
+    alternativo sin tocar el código. Es un GET puro — no crea ni modifica
+    nada en Siesa.
+    """
+    u = _es_gestion()
+    if not u:
+        return jsonify({'error': 'Acceso restringido a roles de gestión'}), 403
+    from flask import request
+    from app.services.connekta_gateway import connekta
+    from app.services.siesa_filtro import lit as _lit
+
+    codigo = (request.args.get('codigo') or '').strip()
+    if not codigo:
+        return jsonify({
+            'apto': False,
+            'motivo': 'Falta ?codigo=<traslado> — se necesita un ST-... real '
+                      'para filtrar por f450_docto_alterno.',
+        }), 200
+
+    nombre = (request.args.get('consulta') or '').strip() \
+        or connekta.consulta_transito_entrada
+    alterno = connekta._fmt_alterno(codigo)
+
+    try:
+        res = connekta._get(
+            nombre,
+            params_extra={
+                'paginacion': 'numPag=1|tamPag=5',
+                'parametros': f"f450_docto_alterno = {_lit(alterno)}",
+            },
+        )
+    except Exception as e:
+        return jsonify({
+            'apto': False, 'consulta': nombre, 'codigo': codigo, 'alterno': alterno,
+            'motivo': f'La consulta falló: {str(e)[:400]}',
+            'siguiente_paso': 'Ese nombre de conector probablemente no existe en '
+                              'Connekta. Pedirle al consultor Siesa el nombre real '
+                              'del conector v2 para Transferencia en Tránsito Entrada '
+                              '(clase 66), o registrarlo si no existe.',
+        }), 200
+
+    if res is None:
+        return jsonify({
+            'apto': False, 'consulta': nombre, 'codigo': codigo,
+            'motivo': 'Circuit breaker abierto — Siesa no disponible ahora mismo. '
+                      'Reintentar más tarde.',
+        }), 200
+
+    detalle = res.get('detalle', {}) if isinstance(res, dict) else {}
+    filas = (detalle.get('Table') or detalle.get('Datos') or []) if isinstance(detalle, dict) else []
+
+    return jsonify({
+        'apto': bool(filas),
+        'consulta': nombre,
+        'codigo': codigo,
+        'alterno': alterno,
+        'filas': len(filas),
+        'ejemplo': filas[0] if filas else None,
+        'respuesta_cruda': res if not filas else None,
+        'motivo': None if filas else (
+            'La consulta respondió sin filas — puede ser un nombre de conector '
+            'correcto pero sin documento aún para este código, o un nombre '
+            'que Siesa acepta pero no filtra como se espera. Revisar '
+            '`respuesta_cruda` para distinguir.'
         ),
     }), 200
 
@@ -349,3 +432,67 @@ def health_siesa():
 
     status_code = 200 if resultado['ok'] else 503
     return jsonify(resultado), status_code
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# El ambiente: se declara y se contrasta, no se detecta
+#
+# `/siesa` de arriba reporta `parece_qa`, derivado del host. **Esa es la
+# primera de las cuatro comprobaciones que el post-mortem del Gestor de
+# Cartera (2026-08-19) documenta como incapaces de distinguir producción de
+# una copia** — y las cuatro dieron en verde mientras el sistema llevaba ocho
+# horas leyendo la base equivocada.
+#
+# Lo de abajo no intenta adivinar el ambiente. No se puede.
+# ══════════════════════════════════════════════════════════════════════════
+
+@health_bp.route('/ambiente', methods=['GET'])
+@jwt_required()
+def ambiente_estado():
+    """El estado del ambiente. **Arranca en ALARMA**, no en neutro."""
+    if not _es_gestion():
+        return jsonify({'error': 'Requiere rol de gestión'}), 403
+    from app.services import ambiente
+    est = ambiente.estado()
+    # 409 y no 200 cuando está en alarma: un monitor externo que solo mira el
+    # código tiene que verlo. El silencio es lo que costó ocho horas allá.
+    return jsonify(est), (200 if est['estado'] == 'DECLARADO' else 409)
+
+
+@health_bp.route('/ambiente/tamiz', methods=['GET'])
+@jwt_required()
+def ambiente_tamiz():
+    """Le pregunta lo mismo a los dos juegos de credenciales y compara.
+
+    **Solo lee.** Es lo que probó el caso del Gestor: 4.601 filas idénticas
+    con dos hosts, dos ConniKey y dos tokens.
+    """
+    if not _solo_admin():
+        return jsonify({'error': 'Solo admin'}), 403
+    from app.services import ambiente
+    r = ambiente.comparar_credenciales()
+    return jsonify(r), (409 if r['veredicto'] == 'MISMA_BASE' else 200)
+
+
+@health_bp.route('/ambiente/declarar', methods=['POST'])
+@jwt_required()
+def ambiente_declarar():
+    """Una persona con nombre declara que cuadró una cifra contra el mundo."""
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Requiere admin o jefe de almacén'}), 403
+    from flask import request
+    from app.routes._auth_helpers import _get_uid
+    from app.services import ambiente
+    d = request.get_json() or {}
+    try:
+        dec = ambiente.declarar_contraste(
+            usuario_id=_get_uid(),
+            concepto=d.get('concepto', ''),
+            cifra_wms=d.get('cifra_wms', ''),
+            cifra_externa=d.get('cifra_externa', ''),
+            fuente_externa=d.get('fuente_externa', ''),
+            notas=d.get('notas'),
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'declaracion': dec.to_dict()}), 201

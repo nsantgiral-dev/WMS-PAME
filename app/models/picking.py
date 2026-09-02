@@ -36,7 +36,7 @@ class TareaPicking(db.Model):
     # Estado
     estado = db.Column(db.String(20), default='PENDIENTE', nullable=False)
     prioridad = db.Column(db.Integer, default=1)
-    motivo_bloqueo = db.Column(db.String(50))  # UBICACION_VACIA|FALTANTE|MERCANCIA_AVERIADA|PRODUCTO_INCORRECTO
+    motivo_bloqueo = db.Column(db.String(50))  # UBICACION_VACIA|FALTANTE|MERCANCIA_AVERIADA|PRODUCTO_INCORRECTO|BACKORDER_SIESA
     observaciones_bloqueo = db.Column(db.Text)
 
     # Referencia origen

@@ -252,21 +252,21 @@ async function cargarMuelleSinRuta() {
   }
 
   el.innerHTML = `
-    <div style="background:#1a1a1a;border-radius:10px;padding:12px;margin-bottom:16px;text-align:center;font-size:12px;color:#666;">
+    <div style="background:#1a1a1a;border-radius:10px;padding:12px;margin-bottom:16px;text-align:center;font-size:13px;color:#666;">
       Selecciona una ruta arriba para empezar a planificar el cargue
     </div>
     ${grupos.map(g => `
       <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
-        <div style="font-size:13px;font-weight:700;color:#f59e0b;">📍 ${g.destino}
-          <span style="font-size:11px;color:#555;font-weight:400;"> · ${g.total} bulto${g.total !== 1 ? 's' : ''}</span>
+        <div style="font-size:14px;font-weight:700;color:#f59e0b;">📍 ${g.destino}
+          <span style="font-size:12px;color:#555;font-weight:400;"> · ${g.total} bulto${g.total !== 1 ? 's' : ''}</span>
         </div>
         ${g.bultos.map(b => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #1a1a1a;margin-top:6px;">
             <div>
-              <span style="font-family:monospace;font-size:12px;color:#ccc;">${b.codigo_barras}</span>
-              <span style="font-size:10px;color:#555;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
+              <span style="font-family:monospace;font-size:13px;color:#ccc;">${b.codigo_barras}</span>
+              <span style="font-size:11px;color:#555;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
             </div>
-            <span style="font-size:10px;color:#555;">${b.numero_pedido}</span>
+            <span style="font-size:11px;color:#555;">${b.numero_pedido}</span>
           </div>`).join('')}
       </div>`).join('')}`;
 }
@@ -322,9 +322,25 @@ async function cargarMuelleConRuta(rutaId) {
   // Construir HTML completo en un solo paso
   let html = '';
 
+  // — Cargue físico completo: ofrece cerrar la ruta desde el mismo lugar
+  // donde se termina de escanear, sin cambiar a la pestaña Rutas. Es la
+  // misma transición EN_CARGUE → EN_TRANSITO del botón "🚛 Salió" de allá
+  // (mismo endpoint, misma validación de 0 pendientes en el servidor) —
+  // este botón solo decide cuándo OFRECERLA, no duplica la regla.
+  if (totalEnRuta > 0 && totalPlan === 0) {
+    html += `
+      <div style="background:#0a1a0a;border:1px solid #166534;border-radius:12px;padding:14px;margin-bottom:16px;text-align:center;">
+        <div style="font-size:14px;color:#4ade80;font-weight:700;margin-bottom:8px;">✓ Los ${totalConf} bulto${totalConf !== 1 ? 's' : ''} de esta ruta ya están cargados</div>
+        <button onclick="muelleConfirmarCargueCompleto(${rutaId})"
+          style="width:100%;padding:14px;background:#14532d;color:#4ade80;border:none;border-radius:10px;font-size:16px;font-weight:800;cursor:pointer;">
+          🚛 Confirmar cargue completo — Ruta lista para salir
+        </button>
+      </div>`;
+  }
+
   // — Sección 1: bultos ya en la ruta —
   if (_RUTA_MANIFIESTO_ACTUAL.length) {
-    html += `<div style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">
+    html += `<div style="font-size:13px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">
       En esta ruta · ${totalConf} confirmado${totalConf !== 1 ? 's' : ''} · ${totalPlan} por confirmar
     </div>`;
     html += _RUTA_MANIFIESTO_ACTUAL.map((grupo, gi) =>
@@ -334,8 +350,8 @@ async function cargarMuelleConRuta(rutaId) {
     html += `
       <div style="text-align:center;padding:20px;background:#111;border-radius:12px;border:1px dashed #333;margin-bottom:16px;">
         <div style="font-size:28px;margin-bottom:6px;">🚛</div>
-        <div style="font-size:13px;font-weight:700;color:#eee;">Ruta vacía</div>
-        <div style="font-size:11px;color:#555;margin-top:4px;">Asigna pedidos desde la lista de abajo</div>
+        <div style="font-size:14px;font-weight:700;color:#eee;">Ruta vacía</div>
+        <div style="font-size:12px;color:#555;margin-top:4px;">Asigna pedidos desde la lista de abajo</div>
       </div>`;
   }
 
@@ -344,19 +360,50 @@ async function cargarMuelleConRuta(rutaId) {
     html += `
       <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <span style="font-size:11px;color:#666;text-transform:uppercase;letter-spacing:.08em;">📦 Pendientes por asignar</span>
-          <span style="background:#333;color:#aaa;font-size:11px;padding:2px 10px;border-radius:10px;">${dPendientes.total_bultos}</span>
+          <span style="font-size:13px;font-weight:600;color:#555;text-transform:uppercase;letter-spacing:.08em;">📦 Pendientes por asignar</span>
+          <span style="background:#333;color:#ccc;font-size:13px;padding:2px 10px;border-radius:10px;">${dPendientes.total_bultos}</span>
         </div>
         ${gruposPendientes.map(g => _htmlGrupoPendiente(g, rutaId)).join('')}
       </div>`;
   } else if (_RUTA_MANIFIESTO_ACTUAL.length > 0) {
     html += `
-      <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;text-align:center;font-size:12px;color:#555;">
+      <div style="margin-top:20px;padding-top:16px;border-top:1px solid #222;text-align:center;font-size:13px;color:#555;">
         ✓ Todos los bultos del muelle están en esta ruta
       </div>`;
   }
 
   el.innerHTML = html;
+}
+
+/**
+ * Confirma que la ruta activa terminó su cargue físico completo —misma
+ * transición EN_CARGUE → EN_TRANSITO que ya existía como botón "🚛 Salió"
+ * en la pestaña Rutas (`rutaCerrar`), ofrecida acá donde el operario
+ * realmente termina de escanear. El backend (`RutaService.cerrar_ruta`) es
+ * quien valida que no queden bultos PENDIENTE — este botón solo decide
+ * cuándo mostrarse, la regla real vive del lado del servidor.
+ * @param {number} rutaId - ID de la ruta a cerrar
+ */
+async function muelleConfirmarCargueCompleto(rutaId) {
+  if (!confirm(`¿Confirmar que la Ruta #${rutaId} se cargó físicamente completa?\n\nPasará a EN TRÁNSITO — ya no se podrán agregar ni escanear más bultos.`)) return;
+  try {
+    const r = await fetch(API + '/api/rutas/' + rutaId + '/cerrar', {
+      method: 'POST', headers: { Authorization: 'Bearer ' + TOKEN }
+    });
+    const d = await r.json();
+    if (r.ok) {
+      alerta(`Ruta #${rutaId} confirmada — salió a reparto`, 'exito');
+      // No hace falta limpiar RUTA_ACTIVA_ID a mano: cargarRutaSelector()
+      // ya nota que la ruta dejó de estar EN_CARGUE y se reinicia sola
+      // (mismo mecanismo que usa rutaCerrar() en la pestaña Rutas) — el
+      // muelle queda listo para seleccionar o crear la próxima ruta.
+      cargarMuelle();
+    } else {
+      alerta(d.error || 'Error al confirmar el cargue', 'error');
+    }
+  } catch (e) {
+    alerta('Error de conexión', 'error');
+  }
 }
 
 // ── Helpers de renderizado ────────────────────────────
@@ -378,10 +425,10 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
     <div id="ruta-grupo-${gi}" style="margin-bottom:16px;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
         <div style="flex:1;">
-          <span style="font-size:13px;font-weight:700;color:${todoConfirmado ? '#4ade80' : '#eee'};text-transform:uppercase;">
+          <span style="font-size:16px;font-weight:800;color:${todoConfirmado ? '#15803d' : '#b45309'};text-transform:uppercase;">
             📍 ${grupo.destino}
           </span>
-          <span style="font-size:11px;color:#555;"> · ${confirmados}/${totalGrupo} conf.</span>
+          <span style="font-size:13px;color:#555;"> · ${confirmados}/${totalGrupo} conf.</span>
         </div>
         <div style="display:flex;gap:4px;">
           ${gi > 0
@@ -391,7 +438,7 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
             ? `<button onclick="rutaMoverGrupo(${gi},1,${rutaId})" style="background:#222;border:1px solid #333;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↓</button>`
             : `<div style="width:28px;"></div>`}
         </div>
-        <div style="font-size:10px;color:#444;text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
+        <div style="font-size:12px;color:#444;text-align:right;min-width:40px;">Parada<br>#${gi + 1}</div>
       </div>
       ${grupo.bultos.map(b => {
         const conf = b.estado === 'CARGADO';
@@ -399,13 +446,13 @@ function _htmlGrupoRuta(grupo, gi, totalGrupos, rutaId) {
           <div style="background:#111;border:1px solid ${conf ? '#14532d' : '#333'};border-left:4px solid ${conf ? '#4ade80' : '#f59e0b'};border-radius:10px;padding:10px 12px;margin-bottom:6px;">
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <div style="flex:1;">
-                <div style="font-size:13px;font-weight:700;font-family:monospace;color:${conf ? '#fff' : '#f59e0b'};">${b.codigo_barras}</div>
-                <div style="font-size:11px;color:#888;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
-                <div style="font-size:10px;color:#555;">${b.tipo} · pieza ${b.numero}/${b.total}</div>
+                <div style="font-size:15px;font-weight:700;font-family:monospace;color:${conf ? '#fff' : '#f59e0b'};">${b.codigo_barras}</div>
+                <div style="font-size:13px;color:#999;margin-top:2px;">${b.numero_pedido} · ${b.cliente || ''}</div>
+                <div style="font-size:12px;color:#777;">${b.tipo} · pieza ${b.numero}/${b.total}</div>
               </div>
               <div style="display:flex;align-items:center;gap:8px;">
                 ${!conf ? `<button onclick="muelleDesasignar(${b.id})" title="Quitar de la ruta" style="background:none;border:none;color:#444;font-size:18px;cursor:pointer;line-height:1;padding:4px;">×</button>` : ''}
-                <span style="background:${conf ? '#14532d' : '#451a03'};color:${conf ? '#4ade80' : '#f59e0b'};font-size:10px;padding:3px 10px;border-radius:20px;font-weight:700;white-space:nowrap;">
+                <span style="background:${conf ? '#14532d' : '#451a03'};color:${conf ? '#4ade80' : '#f59e0b'};font-size:11px;padding:3px 10px;border-radius:20px;font-weight:700;white-space:nowrap;">
                   ${conf ? '✓ Cargado' : '⏳ Pendiente'}
                 </span>
               </div>
@@ -427,23 +474,23 @@ function _htmlGrupoPendiente(grupo, rutaId) {
     <div style="background:#111;border:1px solid #222;border-radius:12px;padding:14px;margin-bottom:8px;">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
         <div>
-          <div style="font-size:13px;font-weight:700;color:#f59e0b;">📍 ${grupo.destino}</div>
-          <div style="font-size:11px;color:#555;margin-top:2px;">${grupo.total} bulto${grupo.total !== 1 ? 's' : ''}</div>
+          <div style="font-size:16px;font-weight:800;color:#b45309;">📍 ${grupo.destino}</div>
+          <div style="font-size:13px;color:#555;margin-top:2px;">${grupo.total} bulto${grupo.total !== 1 ? 's' : ''}</div>
         </div>
         <button onclick="muelleAsignar(null,'${numeroPedido}')"
-          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
+          style="background:#fff;color:#000;border:none;padding:8px 14px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;white-space:nowrap;">
           + Todo el pedido
         </button>
       </div>
       ${grupo.bultos.map(b => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-top:1px solid #1a1a1a;">
           <div>
-            <span style="font-family:monospace;font-size:12px;color:#ccc;">${b.codigo_barras}</span>
-            <span style="font-size:10px;color:#555;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
-            ${b.cliente ? `<span style="font-size:10px;color:#666;margin-left:8px;">· ${b.cliente}</span>` : ''}
+            <span style="font-family:monospace;font-size:14px;color:#ddd;">${b.codigo_barras}</span>
+            <span style="font-size:12px;color:#999;margin-left:8px;">${b.tipo} ${b.numero}/${b.total}</span>
+            ${b.cliente ? `<span style="font-size:12px;color:#999;margin-left:8px;">· ${b.cliente}</span>` : ''}
           </div>
           <button onclick="muelleAsignar(${b.id},null)"
-            style="background:#1a1a1a;color:#aaa;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">
+            style="background:#1a1a1a;color:#ccc;border:1px solid #333;padding:4px 10px;border-radius:6px;font-size:13px;cursor:pointer;">
             + Solo esta
           </button>
         </div>`).join('')}
@@ -1786,7 +1833,15 @@ async function condAbrirParadas(rutaId) {
   el.innerHTML = '<div style="text-align:center;padding:60px;color:#555;">Cargando paradas...</div>';
   let data = null;
   try {
-    if (!navigator.onLine) throw new Error('offline');
+    // `navigator.onLine` NO confirma internet real — solo dice si el
+    // adaptador de red está conectado a algo (cambio de torre en datos
+    // móviles, VPN, redes raras: puede dar `false` con internet
+    // funcionando). Cortar acá antes de intentar la petición real hacía
+    // que el conductor viera "sin conexión" aunque sí tuviera señal — se
+    // saltaba directo a la caché vacía sin comprobar nada.
+    // `cargarRutasConductor()`, la función hermana justo arriba en este
+    // archivo, ya hacía esto bien: intenta la red primero y solo cae a
+    // caché si el fetch de verdad falla. Misma política, ahora en los dos.
     const d = await get('/api/rutas/' + rutaId + '/paradas');
     data = d;
     await _condDB.set('paradas_' + rutaId, d);
@@ -1908,6 +1963,46 @@ function _condItemsAjustados() {
     return { ...it, idx, pedido, entregado, devuelto: pedido - entregado };
   });
 }
+
+/**
+ * Filas de Base + IVA, para pintar ARRIBA del total dentro del mismo
+ * recuadro — base, luego IVA, luego el total (que arma el caller). Se
+ * oculta si Siesa no respondió con alguno de los dos (backend manda
+ * `null`, no inventa un desglose sobre un total que ya viene sin ese
+ * detalle).
+ */
+function _condDesgloseHTML(p) {
+  if (p.base_gravable == null || p.iva_factura == null) return '';
+  return `
+    <div style="display:flex;justify-content:space-between;font-size:15px;color:#aaa;margin-bottom:4px;">
+      <span>Base</span><span>$${Number(p.base_gravable).toLocaleString('es-CO')}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;font-size:15px;color:#aaa;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #333;">
+      <span>IVA</span><span>$${Number(p.iva_factura).toLocaleString('es-CO')}</span>
+    </div>`;
+}
+
+// Medios de pago del cobro en puerta — alineados 1:1 con `MedioPago` de
+// gestor-cartera-pame (`dominio/recaudo/modelo.py`) y con `_forma_pago_map`
+// en `connekta_gateway.py`: mismo Siesa, mismo maestro de medios de pago.
+// CHEQUE/CREDITO/EXENTO no existen en el Gestor (ahí no hay "no se cobró" —
+// solo recaudos que sí ocurrieron); acá siguen porque describen un hecho
+// distinto del conductor en la puerta, no un medio de pago bancario.
+const _FORMAS_PAGO_COBRO = [
+  { v: 'EFECTIVO', l: 'Efectivo' },
+  { v: 'TRANSFERENCIA_BANCOLOMBIA_AH', l: 'Transferencia Bancolombia Ahorros' },
+  { v: 'TRANSFERENCIA_BANCOLOMBIA_CTE', l: 'Transferencia Bancolombia Corriente' },
+  { v: 'TRANSFERENCIA_BBVA', l: 'Transferencia BBVA' },
+  { v: 'TRANSFERENCIA_BOGOTA', l: 'Transferencia Bogotá' },
+  { v: 'TRANSFERENCIA_AGRARIO_AH', l: 'Transferencia Agrario Ahorros' },
+  { v: 'TRANSFERENCIA_AGRARIO_CTE', l: 'Transferencia Agrario Corriente' },
+  { v: 'TRANSFERENCIA_DAVIVIENDA', l: 'Transferencia Davivienda' },
+  { v: 'TRANSFERENCIA_IHO_CTE', l: 'Transferencia IHO Corriente' },
+  { v: 'TARJETA', l: 'Tarjeta (datáfono)' },
+  { v: 'CHEQUE', l: 'Cheque' },
+  { v: 'CREDITO', l: 'Crédito' },
+  { v: 'EXENTO', l: 'Exento' },
+];
 
 /** Renderiza el formulario de confirmacion de parada con estado, pago, foto y items. */
 function _condRenderFormParada() {
@@ -2051,8 +2146,9 @@ function _condRenderFormParada() {
       ${hayValorConocido ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
         <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR FACTURA</label>
-        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
-          $${Number(p.valor_factura).toLocaleString('es-CO')}
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
+          ${_condDesgloseHTML(p)}
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#4ade80;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
       </div>
       ` : ''}
@@ -2063,8 +2159,9 @@ function _condRenderFormParada() {
       ${modoPago === 'DINAMICO' ? `
       <div id="cond-valorfactura-wrap" style="margin-bottom:14px;">
         <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">VALOR A COBRAR</label>
-        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;font-size:20px;font-weight:800;color:#4ade80;">
-          $${Number(p.valor_factura).toLocaleString('es-CO')}
+        <div id="cond-valorfactura-monto" style="padding:14px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
+          ${_condDesgloseHTML(p)}
+          <div id="cond-valorfactura-total" style="font-size:20px;font-weight:800;color:#4ade80;">$${Number(p.valor_factura).toLocaleString('es-CO')}</div>
         </div>
       </div>
 
@@ -2090,13 +2187,14 @@ function _condRenderFormParada() {
 
         <div id="cond-motivo-descuento-wrap" style="margin-top:12px;display:none;">
           <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">MOTIVO DEL DESCUENTO</label>
-          <select id="cond-motivo-descuento"
+          <select id="cond-motivo-descuento" onchange="condActualizarPreviewDescuento()"
             style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
             <option value="">— Seleccionar —</option>
             ${_COND_RETENCIONES.map(ret =>
               `<option value="${ret.tipo}" ${ret.tipo===motivoActual?'selected':''}>${ret.nombre}</option>`
             ).join('')}
           </select>
+          <div id="cond-motivo-descuento-preview" style="margin-top:8px;font-size:13px;color:#aaa;"></div>
           ${(p.vendedor_nombre || p.vendedor_telefono) ? `
           <div style="margin-top:10px;padding:12px;background:#1a1a1a;border:1px solid #333;border-radius:10px;">
             <div style="font-size:10px;color:#666;font-weight:700;margin-bottom:4px;">ASESOR DEL PEDIDO</div>
@@ -2119,8 +2217,8 @@ function _condRenderFormParada() {
         <select id="cond-forma-pago"
           style="width:100%;padding:14px;background:#1a1a1a;border:1px solid #333;color:#fff;border-radius:10px;font-size:15px;">
           <option value="">— Seleccionar —</option>
-          ${['EFECTIVO','TRANSFERENCIA','CHEQUE','CREDITO','EXENTO'].map(f =>
-            `<option value="${f}" ${f===formaActual?'selected':''}>${f.charAt(0)+f.slice(1).toLowerCase()}</option>`
+          ${_FORMAS_PAGO_COBRO.map(f =>
+            `<option value="${f.v}" ${f.v===formaActual?'selected':''}>${f.l}</option>`
           ).join('')}
         </select>
       </div>
@@ -2207,7 +2305,7 @@ function condRecalcularPago() {
   const valorAjustado = Math.max(0, Math.round(p.valor_factura - deduccion));
   el._valorAjustado = valorAjustado;
 
-  const campoValor = document.getElementById('cond-valorfactura-monto');
+  const campoValor = document.getElementById('cond-valorfactura-total');
   if (campoValor) {
     campoValor.innerHTML = hayAjuste
       ? `<span style="text-decoration:line-through;color:#888;font-size:12px;font-weight:500;display:block;margin-bottom:2px;">$${Number(p.valor_factura).toLocaleString('es-CO')}</span>$${valorAjustado.toLocaleString('es-CO')}`
@@ -2245,15 +2343,70 @@ function condSelTipoPago(tipo) {
   if (tipo === 'PARCIAL') condActualizarMotivoVisible();
 }
 
-/** Muestra el desplegable de motivo (del DESCUENTO, no del rechazo) solo si el conductor ya escribió un monto parcial menor al valor a cobrar. */
+/**
+ * Muestra el desplegable de motivo (del DESCUENTO, no del rechazo) apenas se
+ * elige Pago Parcial — antes esperaba a que el conductor ya hubiera escrito
+ * un monto menor al valor a cobrar, así que el select quedaba escondido justo
+ * cuando más falta hacía (recién elegido "Pago Parcial", campo de monto
+ * todavía vacío). El motivo no depende de cuánto se vaya a escribir, depende
+ * de que el pago sea parcial — así que se muestra con eso solo.
+ */
 function condActualizarMotivoVisible() {
   const el = document.getElementById('cond-contenido');
   const wrap = document.getElementById('cond-motivo-descuento-wrap');
-  const inp = document.getElementById('cond-monto-parcial');
-  if (!wrap || !inp || !el) return;
-  const monto = parseInt(inp.value, 10) || 0;
-  const techo = el._valorAjustado != null ? el._valorAjustado : 0;
-  wrap.style.display = (monto > 0 && monto < techo) ? 'block' : 'none';
+  if (!wrap || !el) return;
+  wrap.style.display = (el._tipoPagoSel === 'PARCIAL') ? 'block' : 'none';
+  condActualizarPreviewDescuento();
+}
+
+/**
+ * Calcula y muestra cuánto sería el descuento según la tasa real de la
+ * retención elegida — misma fórmula que usa Liquidación de escritorio
+ * (`base_de_retencion`/`monto_de_retencion` en liquidacion_service.py):
+ * ReteIVA va sobre el IVA de la factura, todo lo demás sobre la base
+ * gravable. `base_gravable`/`iva_factura` ya vienen en la parada (los trae
+ * `RutaService.listar_paradas` desde Siesa cuando se cargó la ruta), así que
+ * esto corre sin conexión — no hace falta volver a preguntarle a Siesa.
+ *
+ * Es una vista previa para que el conductor y quien liquide vean el mismo
+ * número desde el principio — la fuente de verdad sigue siendo Liquidación,
+ * que sí valida contra Siesa antes de mandar el Documento Contable.
+ */
+function condActualizarPreviewDescuento() {
+  const prev = document.getElementById('cond-motivo-descuento-preview');
+  if (!prev) return;
+  const tipo = document.getElementById('cond-motivo-descuento')?.value || '';
+  const p = _COND_PARADA_FORM;
+  if (!tipo || !p) { prev.textContent = ''; return; }
+
+  const ret = _COND_RETENCIONES.find(r => r.tipo === tipo);
+  const baseGravable = p.base_gravable;
+  const iva = p.iva_factura;
+  if (!ret || !ret.tasa || baseGravable == null || iva == null) {
+    prev.innerHTML = '<span style="color:#f59e0b;">No se pudo calcular el valor estimado — falta el desglose de Siesa para esta factura.</span>';
+    return;
+  }
+  const base = tipo === 'RETEIVA' ? iva : baseGravable;
+  const valor = Math.round(base * ret.tasa * 100) / 100;
+  let html = `Descuento estimado: <strong style="color:#4ade80;">${_condFmt(valor)}</strong>` +
+    ` (${(ret.tasa * 100).toLocaleString('es-CO', {maximumFractionDigits: 3})}% sobre ${_condFmt(base)})`;
+
+  // Total con el descuento ya aplicado — lo que de verdad debería cobrar el
+  // conductor en la puerta, no solo cuánto se descuenta. `p.valor_factura`
+  // es el mismo total que ya se ve arriba en "VALOR A COBRAR" ($61.588 en
+  // este caso), así que acá se resta el mismo descuento que se muestra
+  // arriba, no un cálculo aparte.
+  if (p.valor_factura != null) {
+    const totalConDescuento = Math.max(0, Math.round((p.valor_factura - valor) * 100) / 100);
+    html += `<div style="margin-top:4px;">Total a cobrar con descuento: ` +
+      `<strong style="color:#4ade80;">${_condFmt(totalConDescuento)}</strong></div>`;
+  }
+  prev.innerHTML = html;
+}
+
+/** Formatea un número como pesos colombianos, igual que el resto de la pantalla del conductor. */
+function _condFmt(v) {
+  return '$' + Number(v || 0).toLocaleString('es-CO');
 }
 
 /**

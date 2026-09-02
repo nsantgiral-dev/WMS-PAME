@@ -8,7 +8,7 @@ crear_devolucion (tope contra lo facturado), confirmar_entrada_fisica
 flag en el payload de la NC).
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
@@ -95,6 +95,23 @@ class TestBuscarPedido:
         assert len(resultado['lineas']) == 1
         assert resultado['lineas'][0]['producto_id'] == producto.id
         assert resultado['lineas'][0]['cantidad_facturada'] == 10
+        assert resultado['lineas'][0]['codigo_barras'] == producto.codigo_barras
+
+    @patch('app.services.devolucion_cliente_service.connekta')
+    def test_expone_codigo_barras_para_el_escaner(self, mock_connekta, app, db,
+                                                   tarea_packing_despachada, producto):
+        """Reportado el 2026-08-31: el conteo de recepción en Devoluciones era
+        100% manual — sin código de barras en el payload, el escáner no tenía
+        contra qué emparejar (solo quedaba codigo_siesa/producto_codigo, que
+        no son lo que trae la etiqueta física del producto)."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        producto.codigo_barras = '7701234567890'
+        db.session.commit()
+        mock_connekta.get_detalle_factura.return_value = [dict(_FILA_FE_CABECERA)]
+        mock_connekta.get_rowids_factura.return_value = [_fila_rowid(ref=producto.codigo_siesa)]
+
+        resultado = DevolucionClienteService.buscar_pedido('PD9001')
+        assert resultado['lineas'][0]['codigo_barras'] == '7701234567890'
 
     @patch('app.services.devolucion_cliente_service.connekta')
     def test_sin_fe_en_siesa_falla(self, mock_connekta, app, db, tarea_packing_despachada):
@@ -140,6 +157,23 @@ class TestCrearDevolucion:
                 almacen_id=almacen.id, recepcionista_id=None,
                 lineas=[_linea_input(producto, cantidad_devuelta=0)],
             )
+
+    def test_to_dict_expone_codigo_barras(self, app, db, tarea_packing_despachada,
+                                          producto, almacen):
+        """El camino de "devoluciones pendientes de ruta" (Liquidación arma la
+        devolución sola) lee las líneas ya guardadas vía to_dict() — sin este
+        campo, esas devoluciones tampoco se podían escanear, aunque
+        buscar_pedido() sí lo tuviera."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        producto.codigo_barras = '7701234567890'
+        db.session.commit()
+        devolucion = DevolucionClienteService.crear_devolucion(
+            tarea_packing_id=tarea_packing_despachada.id,
+            tipo_docto_fe='FEW', consec_fe='5555',
+            almacen_id=almacen.id, recepcionista_id=None,
+            lineas=[_linea_input(producto, cantidad_facturada=10, cantidad_devuelta=4)],
+        )
+        assert devolucion.lineas[0].to_dict()['codigo_barras'] == '7701234567890'
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -276,6 +310,120 @@ class TestConfirmarEntradaFisica:
         ).count()
         assert jobs == 1
 
+    @patch('app.services.siesa_job_service.disparar_dlq_inmediato')
+    def test_averiado_de_inicio_a_fin_wms_y_payload_real_a_siesa(
+            self, mock_dlq, app, db, tarea_packing_despachada,
+            producto, producto2, almacen, ub_reserva):
+        """Simulación completa del checkbox «Averiado», en una sola devolución
+        con DOS productos — uno marcado, uno no — para probar que es de
+        verdad POR LÍNEA y no una bandera global:
+
+        1. Recepción confirma entrada física (lo que hace este mismo test en
+           versiones más chicas, arriba) — se verifica dónde aterriza cada
+           producto en el WMS.
+        2. Se toma el SiesaJob REAL que esa confirmación encoló (no uno
+           fabricado a mano) y se ejecuta de verdad (`_ejecutar_job`) — se
+           verifica el payload que de verdad viajaría a Siesa (251126),
+           línea por línea.
+
+        Si el checkbox no cumpliera su función, alguna de estas cuatro
+        aserciones fallaría: el producto averiado terminaría en la ubicación
+        normal, o el sano en AVERIADOS, o el payload a Siesa no
+        distinguiría la bodega por línea."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        from app.services.siesa_job_service import _ejecutar_job
+        from app.models.inventario import UbicacionProducto, MovimientoInventario
+        from app.models.ubicacion import Ubicacion
+        from app.models.siesa_job import SiesaJob
+
+        # Un solo mock para las dos rutas de import de `connekta` que este
+        # flujo realmente atraviesa: devolucion_cliente_service lo importa a
+        # nivel de módulo (para el re-GET de confirmar_entrada_fisica) y
+        # siesa_job_service igual (para _ejecutar_job) — son dos referencias
+        # distintas al mismo singleton, así que las dos hay que parchearlas.
+        mock_connekta = MagicMock()
+        mock_connekta.get_rowids_factura.return_value = [
+            _fila_rowid(ref=producto.codigo_siesa, rowid='901', cant=10, bodega='NB1'),
+            _fila_rowid(ref=producto2.codigo_siesa, rowid='902', cant=10, bodega='NB1'),
+        ]
+
+        with patch('app.services.devolucion_cliente_service.connekta', mock_connekta), \
+             patch('app.services.connekta_gateway.connekta', mock_connekta):
+            devolucion = DevolucionClienteService.crear_devolucion(
+                tarea_packing_id=tarea_packing_despachada.id,
+                tipo_docto_fe='FEW', consec_fe='5555',
+                almacen_id=almacen.id, recepcionista_id=None,
+                lineas=[
+                    _linea_input(producto, cantidad_facturada=10, cantidad_devuelta=2,
+                                es_averiado=True),
+                    _linea_input(producto2, cantidad_facturada=10, cantidad_devuelta=3,
+                                es_averiado=False),
+                ],
+            )
+
+            # ── Paso 1: WMS — ¿cada producto aterriza donde debe? ──────────
+            DevolucionClienteService.confirmar_entrada_fisica(devolucion.id, recepcionista_id=1)
+
+            ub_averiados = Ubicacion.query.filter_by(
+                codigo='AVERIADOS', almacen_id=almacen.id).first()
+            assert ub_averiados is not None, (
+                'el producto averiado debía crear la ubicación AVERIADOS')
+
+            stock_averiado_en_averiados = UbicacionProducto.query.filter_by(
+                ubicacion_id=ub_averiados.id, producto_id=producto.id).first()
+            assert stock_averiado_en_averiados is not None
+            assert stock_averiado_en_averiados.cantidad == 2
+
+            stock_averiado_normal = UbicacionProducto.query.filter(
+                UbicacionProducto.producto_id == producto.id,
+                UbicacionProducto.ubicacion_id != ub_averiados.id,
+            ).first()
+            assert stock_averiado_normal is None, (
+                'el producto marcado averiado NO debe aparecer en ninguna '
+                'ubicación de stock vendible')
+
+            stock_sano = UbicacionProducto.query.filter_by(producto_id=producto2.id).first()
+            assert stock_sano is not None
+            assert stock_sano.ubicacion_id != ub_averiados.id, (
+                'el producto SIN marcar averiado no debe terminar en AVERIADOS')
+            assert stock_sano.cantidad == 3
+
+            mov_averiado = MovimientoInventario.query.filter_by(producto_id=producto.id).first()
+            mov_sano = MovimientoInventario.query.filter_by(producto_id=producto2.id).first()
+            assert mov_averiado.tipo == 'DEVOLUCION_CLIENTE_AVERIADO'
+            assert mov_sano.tipo == 'DEVOLUCION_CLIENTE'
+
+            # ── Paso 2: el job REAL que esa confirmación encoló, ejecutado
+            # de verdad — el payload que realmente viajaría a Siesa ───────
+            job = SiesaJob.query.filter_by(
+                referencia_tipo='DevolucionCliente', referencia_id=devolucion.id
+            ).first()
+            assert job.tipo == 'NOTA_CREDITO_DEVOLUCION_CLIENTE'
+
+            mock_connekta.modo_simulacion = False
+            mock_connekta.causal_devolucion_default = '01'
+            mock_connekta.motivo_ventas = '01'
+            mock_connekta.uom_default = 'UND'
+            mock_connekta.bodega = 'NB1'
+            mock_connekta.bodega_averias = 'AV1'
+            mock_connekta.trigger_nota_factura_crear_cruzar.return_value = {'codigo': 0}
+
+            _ejecutar_job(job)
+
+        mock_connekta.trigger_nota_factura_crear_cruzar.assert_called_once()
+        _, kwargs = mock_connekta.trigger_nota_factura_crear_cruzar.call_args
+        lineas_por_ref = {ln['f120_referencia']: ln for ln in kwargs['lineas']}
+
+        assert lineas_por_ref[producto.codigo_siesa]['f470_id_bodega'] == 'AV1', (
+            'la línea averiada debe entrar a Siesa por la bodega de averías, '
+            'no por la bodega real del pedido')
+        assert lineas_por_ref[producto2.codigo_siesa]['f470_id_bodega'] == 'NB1', (
+            'la línea sana NO debe verse afectada por el averiado de la otra '
+            'línea de la misma devolución — es por línea, no global')
+
+        db.session.refresh(devolucion)
+        assert devolucion.siesa_nc_triggered is True
+
 
 # ═══════════════════════════════════════════════════════════════════
 # _construir_lineas_nc (extraída en siesa_job_service.py) — función pura
@@ -350,9 +498,15 @@ class TestPendientesAprobacionNC:
     def _make_devolucion(db, almacen, siesa_nc_triggered=False, nc_aprobada=False, codigo='DEVC-NC-001'):
         from app.models.packing import TareaPacking
         from app.models.devolucion_cliente import DevolucionCliente
+        # Un pedido por tarea activa. Las tres devoluciones del test
+        # compartían `numero_pedido_siesa='PD-NC'`, que es un estado que la
+        # operación prohíbe (`packing_service.py:48`) y que desde
+        # `uq_packing_pedido_activo` (2026-08-19) la base tampoco acepta.
+        # Cada devolución es de un pedido distinto; eso es lo que el test
+        # quería decir.
         tarea = TareaPacking(
             codigo=f'PK-{codigo}', tipo_documento='PEDIDO', estado='DESPACHADO',
-            almacen_id=almacen.id, numero_pedido_siesa='PD-NC',
+            almacen_id=almacen.id, numero_pedido_siesa=f'PD-NC-{codigo}',
             tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='500',
             siesa_triggered=True,
         )
@@ -360,7 +514,7 @@ class TestPendientesAprobacionNC:
         db.session.flush()
         devolucion = DevolucionCliente(
             codigo=codigo, tarea_packing_id=tarea.id,
-            numero_pedido_siesa='PD-NC', tipo_docto_fe='FEW', consec_fe='9999',
+            numero_pedido_siesa=f'PD-NC-{codigo}', tipo_docto_fe='FEW', consec_fe='9999',
             almacen_id=almacen.id, estado='CONFIRMADA',
             siesa_nc_triggered=siesa_nc_triggered,
             nc_aprobada_siesa=nc_aprobada,
@@ -399,3 +553,71 @@ class TestPendientesAprobacionNC:
         dev = self._make_devolucion(db, almacen, siesa_nc_triggered=False, codigo='DEVC-NC-E')
         with pytest.raises(ValueError, match='no tiene una NC'):
             DevolucionClienteService.marcar_nc_aprobada(dev.id, usuario_admin.id)
+
+
+class TestListarPendientesDeRuta:
+    """El panel de Recepción → Devoluciones (`recepcion.js::cargarPendientesDeRuta`)
+    pinta el array en el orden que llega del API, sin reordenar por su cuenta
+    — el orden real lo decide `listar_pendientes_de_ruta()`."""
+
+    @staticmethod
+    def _make_pendiente(db, almacen, codigo, fecha_creacion):
+        from datetime import datetime
+        from app.models.packing import TareaPacking
+        from app.models.ruta_despacho import RutaDespacho
+        from app.models.recaudo_entrega import RecaudoEntrega, EstadoEntrega
+        from app.models.usuario import Usuario
+        from app.models.devolucion_cliente import DevolucionCliente
+
+        conductor = Usuario.query.filter_by(email='cond_pend_ruta@test.com').first()
+        if not conductor:
+            conductor = Usuario(email='cond_pend_ruta@test.com', nombre='Conductor Pend',
+                                rol='conductor', activo=True)
+            conductor.set_password('test123')
+            db.session.add(conductor)
+            db.session.flush()
+
+        ruta = RutaDespacho(conductor_id=conductor.id, tipo_ruta='Urbana', estado='ENTREGADA')
+        db.session.add(ruta)
+        db.session.flush()
+
+        tarea = TareaPacking(
+            codigo=f'PK-{codigo}', tipo_documento='PEDIDO', estado='DESPACHADO',
+            almacen_id=almacen.id, numero_pedido_siesa=codigo,
+            tipo_docto_pedido_siesa='PD', consec_docto_pedido_siesa='500',
+            siesa_triggered=True,
+        )
+        db.session.add(tarea)
+        db.session.flush()
+
+        recaudo = RecaudoEntrega(
+            ruta_id=ruta.id, tarea_id=tarea.id,
+            estado_entrega=EstadoEntrega.PARCIAL, forma_pago='EFECTIVO', monto_cobrado=1000,
+        )
+        db.session.add(recaudo)
+        db.session.flush()
+
+        devolucion = DevolucionCliente(
+            codigo=f'DEVC-{codigo}', tarea_packing_id=tarea.id,
+            numero_pedido_siesa=codigo, tipo_docto_fe='FEW', consec_fe='9999',
+            almacen_id=almacen.id, estado='ABIERTA',
+            recaudo_entrega_id=recaudo.id,
+            fecha_creacion=datetime.fromisoformat(fecha_creacion),
+        )
+        db.session.add(devolucion)
+        db.session.commit()
+        return devolucion
+
+    def test_la_ultima_creada_sale_primero(self, app, db, almacen):
+        """El caso real que lo destapó: PD1350 (2026-07-28, la más vieja del
+        panel) salía de primero y las recién liquidadas quedaban al fondo —
+        la recepcionista tenía que hacer scroll para llegar a lo urgente del
+        día. `fecha_creacion.asc()` → `desc()`."""
+        from app.services.devolucion_cliente_service import DevolucionClienteService
+        self._make_pendiente(db, almacen, 'PD-VIEJO', '2026-07-28T10:00:00')
+        self._make_pendiente(db, almacen, 'PD-MEDIO', '2026-08-15T10:00:00')
+        self._make_pendiente(db, almacen, 'PD-NUEVO', '2026-08-20T17:11:39')
+
+        pendientes = DevolucionClienteService.listar_pendientes_de_ruta()
+        codigos = [p['codigo'] for p in pendientes]
+        assert codigos == ['DEVC-PD-NUEVO', 'DEVC-PD-MEDIO', 'DEVC-PD-VIEJO']

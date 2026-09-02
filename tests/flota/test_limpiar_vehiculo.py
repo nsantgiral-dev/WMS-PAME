@@ -42,12 +42,21 @@ def dos_vehiculos(db):
     testigo = Vehiculo(placa='LIM200', tipo='Van', activo=True)
     db.session.add_all([objetivo, testigo])
     db.session.flush()
+    # **Un conductor por vehículo, no uno para los dos.** El fixture abría dos
+    # custodias simultáneas del mismo conductor, que es un estado que la
+    # operación prohíbe —y desde `uq_flota_custodia_conductor_activa`
+    # (2026-08-19) también la base—. Nadie lo notaba porque el invariante solo
+    # vivía en `dom.validar_un_vehiculo_por_conductor`, que este fixture no
+    # pasa: inserta directo.
+    #
+    # El testigo sigue siendo el testigo; lo único que cambia es de quién es.
     con = Conductor(nombre='Conductor LIM', cedula='LIM-1', activo=True)
-    db.session.add(con)
+    con2 = Conductor(nombre='Conductor LIM 2', cedula='LIM-2', activo=True)
+    db.session.add_all([con, con2])
     db.session.flush()
 
     ahora = datetime(2026, 8, 3, 12, 0)
-    for v, km in ((objetivo, 1000), (testigo, 2000)):
+    for v, km, c in ((objetivo, 1000, con), (testigo, 2000, con2)):
         db.session.add(FichaTecnica(
             vehiculo_id=v.id, posiciones_llanta=6, km_inicial=km,
             km_inicial_ts=ahora))
@@ -56,7 +65,7 @@ def dos_vehiculos(db):
             autor_usuario_id=1))
         db.session.add(Custodia(
             vehiculo_id=v.id, custodio_tipo='conductor',
-            custodio_conductor_id=con.id, custodio_estado='resuelto',
+            custodio_conductor_id=c.id, custodio_estado='resuelto',
             registrado_por_usuario_id=1, inicio_ts=ahora, km_inicio=km))
     db.session.commit()
     return {'objetivo': objetivo.id, 'testigo': testigo.id}

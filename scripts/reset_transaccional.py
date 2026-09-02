@@ -102,6 +102,22 @@ OPERATIVAS = [
     # Bitácora de corridas de sincronización. Se vuelve a llenar sola en la
     # primera sync después del corte.
     'registros_sync',
+    # Declaraciones de ambiente. **Se borran a propósito, y es la decisión
+    # menos obvia de esta lista.**
+    #
+    # Una declaración dice «fulano cuadró esta cifra contra el mundo, con esta
+    # configuración». El módulo ya la invalida sola si cambia el host o la
+    # compañía — pero el post-mortem del Gestor (2026-08-19) demuestra que
+    # **el destino de la conexión puede cambiar sin que el host cambie**: eso
+    # fue exactamente su incidente, dos hosts distintos apuntando a la misma
+    # base.
+    #
+    # Con la huella insuficiente, la pregunta es qué dice una declaración
+    # hecha ANTES del corte sobre el después. La respuesta honesta es nada, y
+    # el corte es el momento de máximo riesgo. Regla 0: arrancar en ALARMA y
+    # obligar a declarar de nuevo cuesta media hora; heredar un verde de QA
+    # cuesta ocho horas escribiendo en la base equivocada.
+    'declaraciones_ambiente',
 ]
 
 # NUNCA. Si aparecen en OPERATIVAS, el script aborta.

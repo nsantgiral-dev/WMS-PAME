@@ -159,6 +159,58 @@ class TestDispensador:
         assert resultado['id'] == tarea_activa.id
         assert resultado['estado'] == 'EN_PROCESO'
 
+    def test_dispensador_ofrece_reposicion_como_nivel_2(
+        self, app, db, usuario_abastecedor, inv_picking, inv_reserva, lpn_activo, almacen,
+    ):
+        """
+        Sin Pedido/Traslado pendiente, con una TareaReposicion PENDIENTE y el
+        operario con puede_abastecer=True, el dispensador la entrega como
+        nivel 2 de la cola unificada (entre Pedido/Traslado y Conteo cíclico).
+        """
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.services.mobile_service import MobileService
+
+        generadas = verificar_stock_picking(almacen_id=almacen.id)
+        assert generadas == 1
+
+        resultado = MobileService.get_tarea_actual(usuario_abastecedor.id)
+
+        assert resultado is not None
+        assert resultado['tipo'] == 'REPOSICION'
+        assert resultado['ubicacion_picking'] is not None
+        assert resultado['lpn_codigo'] == lpn_activo.codigo
+
+    def test_pedido_pendiente_gana_a_reposicion(
+        self, app, db, usuario_abastecedor, inv_picking, inv_reserva, lpn_activo, almacen,
+        producto, ub_picking,
+    ):
+        """Con un Pedido PENDIENTE Y una TareaReposicion PENDIENTE, el Pedido
+        sale primero — nivel 1 (Pedido/Traslado) le gana al nivel 2 (Reposición)."""
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.services.mobile_service import MobileService
+
+        verificar_stock_picking(almacen_id=almacen.id)
+        tarea_pedido = _crear_tarea(db, producto, ub_picking, almacen)
+
+        resultado = MobileService.get_tarea_actual(usuario_abastecedor.id)
+
+        assert resultado['tipo'] == 'PICKING'
+        assert resultado['id'] == tarea_pedido.id
+
+    def test_reposicion_no_se_ofrece_sin_permiso_abastecer(
+        self, app, db, usuario, inv_picking, inv_reserva, lpn_activo, almacen,
+    ):
+        """Un operario sin puede_abastecer nunca recibe una TareaReposicion —
+        cae directo a None (sin conteo pendiente en este setup)."""
+        from app.services.reposicion_service import verificar_stock_picking
+        from app.services.mobile_service import MobileService
+
+        verificar_stock_picking(almacen_id=almacen.id)
+
+        resultado = MobileService.get_tarea_actual(usuario.id)
+
+        assert resultado is None
+
 
 class TestProcesarEscaneo:
 

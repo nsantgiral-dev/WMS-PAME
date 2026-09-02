@@ -27,6 +27,7 @@ import time
 import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from app.services.siesa_filtro import lit as _lit
 
 _TZ_BOGOTA = ZoneInfo('America/Bogota')
 
@@ -69,6 +70,93 @@ class ConnektaCircuitOpenError(Exception):
     """Raised when circuit breaker is OPEN — Siesa no disponible.
     DLQ handlers catch this to NOT waste retries."""
     pass
+
+
+class ConnektaConsultaRechazada(Exception):
+    """Siesa rechazó el filtro y contestó **HTTP 200**.
+
+    Cuando no le gusta la consulta, Connekta no devuelve un código de error:
+    devuelve una tabla con **una fila y una clave**::
+
+        {"detalle": {"Table": [{"alerta": "Por favor verifique los
+                                parámetros o filtros enviados en la petición."}]}}
+
+    Para el código eso es tan válido como una factura. Y el WMS lo trataba de
+    dos maneras, las dos malas:
+
+    · `rows = [r for r in rows if 'alerta' not in r]` — la tira y sigue con
+      `[]`. **«Tu consulta fue rechazada» se convierte en «no hay nada».**
+    · `if len(rows) == 1 and 'alerta' in rows[0]: break` — corta la
+      paginación y devuelve lo que haya, sin declarar que se cortó.
+
+    Es la misma forma de `CompromisosNoDisponibles`, que ya costó mercancía
+    saliendo del CD sin respaldo fiscal: un adaptador que **degrada hacia la
+    respuesta buena**.
+
+    Lleva el filtro en el mensaje a propósito: sin él hay que adivinar cuál de
+    las veinte consultas del sistema fue la que rebotó.
+    """
+
+
+def _alerta_de(rows, filtro: str = None) -> str:
+    """El texto de la alerta si la respuesta es un rechazo; `''` si son datos.
+
+    **Reconocimiento estrecho, y es deliberado:** exactamente una fila, con
+    exactamente una clave, que se llame `alerta`. Una consulta que devuelve un
+    único registro de un solo campo es rara pero legítima —un `COUNT`, un
+    maestro de una columna— y tratarla como error escondería datos buenos.
+    Ensanchar esto cambia un modo de fallo ruidoso por uno silencioso.
+    """
+    if not isinstance(rows, list) or len(rows) != 1:
+        return ''
+    fila = rows[0]
+    if not isinstance(fila, dict) or len(fila) != 1 or 'alerta' not in fila:
+        return ''
+    return str(fila['alerta'])
+
+
+def _exigir_datos(rows, consulta: str, filtro: str = None):
+    """Devuelve `rows`, o levanta si Siesa rechazó la consulta."""
+    alerta = _alerta_de(rows)
+    if alerta:
+        raise ConnektaConsultaRechazada(
+            f'Siesa rechazó la consulta {consulta}: {alerta}'
+            + (f' — filtro: {filtro}' if filtro else ''))
+    return rows
+
+
+#: Lectura de un POST. **Medido: Siesa tarda entre 30 y 60 s** en procesar una
+#: escritura (lecciones del Gestor de Cartera, 2026-08-19). Estaba en 30, así
+#: que la mitad de las escrituras exitosas se reportaban como fallidas.
+#: Gunicorn corta a los 120: no tiene sentido esperar más que él.
+_POST_READ_TIMEOUT = 120
+
+
+class ConnektaResultadoDesconocido(Exception):
+    """El POST salió y **no sabemos si Siesa lo procesó**.
+
+    No es un fallo. Es el tercer estado que faltaba, y confundirlo con
+    «falló» es la forma exacta del incidente RC-00002744.
+
+    Un timeout de lectura significa que la petición viajó y la respuesta no
+    volvió a tiempo. Con Siesa tardando 30-60 s, **lo más probable es que el
+    documento exista**. Tratarlo como fallo dispara las dos reacciones que
+    duplican:
+
+    · el pre-flag se revierte —«fallo explícito, no se creó nada»— y el DLQ
+      reintenta con la guardia anti-duplicado ya abajo;
+    · el mensaje manda al operario a reintentar a mano.
+
+    La Regla 3 dice que un POST no reintenta ante timeout. Esta excepción es
+    lo que hace que esa regla **se pueda cumplir**: sin un tipo propio, el
+    timeout llega a los handlers como `Exception` y es indistinguible de un
+    rechazo de Siesa, que sí se puede reintentar sin riesgo.
+
+    Quien la reciba tiene exactamente dos salidas honestas: **verificar**
+    contra Siesa si el documento entró (lo que hace `RECIBO_CAJA` con
+    `cxc_cruce.esta_saldada`), o **declararlo y parar**. Nunca reintentar a
+    ciegas, y nunca revertir el pre-flag.
+    """
 
 
 class ConnektaGateway:
@@ -164,6 +252,22 @@ class ConnektaGateway:
         self.flujo_efectivo_rc = os.getenv('SIESA_FLUJO_EFECTIVO', '1103')
         # Cuenta auxiliar CxC para cruces (CxC → Plan de cuentas). 13050501 = CxC comercial.
         self.cxc_auxiliar = os.getenv('SIESA_CXC_AUXILIAR', '13050501')
+        # --- Ajuste al peso (faltante/sobrante entre lo cobrado y la factura) ---
+        # Mismo par de cuentas que usa gestor-cartera-pame contra el mismo Siesa
+        # (`recaudo/modelo.py::CUENTA_SOBRANTE/CUENTA_FALTANTE`) — procedimiento
+        # manual de cartera, no una decisión nueva de este archivo.
+        self.cuenta_ajuste_sobrante = os.getenv('SIESA_RC_CUENTA_SOBRANTE', '42958101')
+        self.cuenta_ajuste_faltante = os.getenv('SIESA_RC_CUENTA_FALTANTE', '53959503')
+        # Centro de costo de las cuentas de ajuste que SÍ lo manejan (familia 5xxxxx,
+        # el faltante — el sobrante es cuenta de ingreso y no lo maneja). Medido por
+        # gestor-cartera-pame el 25-ago-2026 contra el mismo Siesa: 165/165 movimientos
+        # del último año en las seis sedes caen en '301' (GASTOS FINANCIEROS) — no es
+        # un valor elegido acá, es el que contabilidad ya usa.
+        self.ccosto_ajuste = os.getenv('SIESA_RC_CCOSTO_AJUSTE', '301')
+        # Sucursal/UN del bloque "otros ingresos" del sobrante — decisión de Santiago
+        # (gestor-cartera-pame, 20-ago-2026): U.N. '001' fija, CO el del recibo mismo.
+        self.sucursal_ajuste = os.getenv('SIESA_RC_SUCURSAL_AJUSTE', '001')
+        self.un_ajuste = os.getenv('SIESA_RC_UN_AJUSTE', '001')
         # Medios de pago: código Siesa (CxC → Maestros → Medios de pago)
         self.medio_pago_efectivo = os.getenv('SIESA_MEDIO_PAGO_EFECTIVO', 'EFE')
         self.medio_pago_transferencia = os.getenv('SIESA_MEDIO_PAGO_TRANSFERENCIA', 'TBA')
@@ -182,10 +286,34 @@ class ConnektaGateway:
             except Exception:
                 logger.warning('[CONNEKTA] SIESA_CO_CAJA_MAP no es JSON válido, usando mapa por defecto')
         # Mapa medio de pago WMS → código Siesa (para forma_pago del RecaudoEntrega)
+        #
+        # Alineado 1:1 con `MedioPago` de gestor-cartera-pame
+        # (`dominio/recaudo/modelo.py`) — mismo Siesa, mismo maestro de medios
+        # de pago (CxC → Maestros → Medios de pago), y el mismo cobrador de
+        # ruta puede terminar pagando por cualquiera de estos bancos. Antes
+        # WMS solo distinguía un "TRANSFERENCIA" genérico (siempre TBA,
+        # Bancolombia Ahorros) sin importar el banco real — el gestor de
+        # cartera ya resolvía esto por banco desde antes, y liquidación de
+        # ruta es el mismo hecho económico con otro origen.
+        #
+        # `TRANSFERENCIA` y `CONSIGNACION` (los nombres viejos) se conservan
+        # como sinónimos de la Bancolombia Ahorros genérica — retrocompatible
+        # con cualquier RecaudoEntrega ya guardado con esos valores.
         self._forma_pago_map = {
             'EFECTIVO': self.medio_pago_efectivo,
-            'TRANSFERENCIA': self.medio_pago_transferencia,
+            'TRANSFERENCIA_BANCOLOMBIA_AH': os.getenv('SIESA_MEDIO_PAGO_TBA', 'TBA'),
+            'TRANSFERENCIA_BANCOLOMBIA_CTE': os.getenv('SIESA_MEDIO_PAGO_TBC', 'TBC'),
+            'TRANSFERENCIA_BBVA': os.getenv('SIESA_MEDIO_PAGO_TBB', 'TBB'),
+            'TRANSFERENCIA_BOGOTA': os.getenv('SIESA_MEDIO_PAGO_TBG', 'TBG'),
+            'TRANSFERENCIA_AGRARIO_AH': os.getenv('SIESA_MEDIO_PAGO_TAA', 'TAA'),
+            'TRANSFERENCIA_AGRARIO_CTE': os.getenv('SIESA_MEDIO_PAGO_TAC', 'TAC'),
+            'TRANSFERENCIA_DAVIVIENDA': os.getenv('SIESA_MEDIO_PAGO_TDV', 'TDV'),
+            # Cuenta `014` (Consignaciones), creada en Siesa el 26-ago-2026 —
+            # ver el comentario del mismo medio en gestor-cartera-pame.
+            'TRANSFERENCIA_IHO_CTE': os.getenv('SIESA_MEDIO_PAGO_TCI', 'TCI'),
             'TARJETA': self.medio_pago_tarjeta,
+            # Sinónimos retrocompatibles — mismo valor que antes de este cambio.
+            'TRANSFERENCIA': self.medio_pago_transferencia,
             'CONSIGNACION': self.medio_pago_transferencia,
         }
         # Traslados entre bodegas (puntos de venta)
@@ -200,6 +328,14 @@ class ConnektaGateway:
         self.nombre_conector_transito_entrada = os.getenv(
             'CONNEKTA_NOMBRE_TRANSITO_ENTRADA',
             'API_v1_Inventarios_Comercial_TransferenciaEnTransitoEntrada')
+        # Consulta v2 (GET) para recovery de consecutivo — no el conector POST de arriba.
+        # Verificado en vivo 2026-08-25 contra ST-20260706-21B0 (consec=19). Un solo
+        # nombre, leído acá y en get_consec_entrada_transito_by_alterno — la primera
+        # versión de este código lo repitió como string literal en dos archivos y una
+        # corrección quedó aplicada a uno solo (Regla 0).
+        self.consulta_transito_entrada = os.getenv(
+            'CONNEKTA_CONSULTA_TRANSITO_ENTRADA',
+            'API_v2_Inventarios_Transferencia_Transito_Entrada')
         self.conector_transferencia_directa = os.getenv('CONNEKTA_CONECTOR_TRANSF_DIRECTA', '173066')
         # Tipo documento requisición de traslado (Siesa: clase 75 — distinto de clase 65 STS)
         # SIESA_TIPO_DOCTO_RIT toma precedencia; fallback a SIESA_TIPO_DOCTO_TRASLADO para
@@ -294,6 +430,11 @@ class ConnektaGateway:
         self.concepto_traslados    = self._safe_int_env('SIESA_CONCEPTO_TRASLADOS', 607)
 
         _base = os.getenv('CONNEKTA_URL', 'https://serviciosqa.siesacloud.com').rstrip('/')
+        #: El host base, expuesto. Era una variable local y quien lo
+        #: necesitara tenía que releer `CONNEKTA_URL` con su propio default —
+        #: dos defaults para un valor es cómo una consulta termina yendo a una
+        #: compañía y la otra a otra (lecciones del Gestor, §7).
+        self.base_url = _base
         self.id_sistema = os.getenv('CONNEKTA_ID_SISTEMA', '')
         self.url_get = f'{_base}/api/siesa/v3/ejecutarconsultaestandar'
         self.url_get_dinamico = f'{_base}/api/connekta/v3/ejecutarconsulta'
@@ -407,6 +548,41 @@ class ConnektaGateway:
         o el registro plano queda corto (Siesa lo rechaza por tamaño)."""
         ancho = enteros + 1 + decimales
         return f'{abs(float(v)):0{ancho}.{decimales}f}'
+
+    @staticmethod
+    def _verificar_partida_doble_dc(payload: dict) -> None:
+        """Débitos == créditos en el DocumentoContable (142882), medido sobre
+        el payload que se va a mandar. Hasta que solo llevaba una retención
+        esto cuadraba por construcción — el débito y el crédito salían del
+        mismo monto, no había forma de descuadrarlo. Con el ajuste al peso
+        como segundo concepto (entra por el débito, tiene que salir por el
+        crédito de cartera) esa garantía deja de ser estructural.
+
+        Revienta ACÁ, antes del POST — mismo patrón que gestor-cartera-pame
+        (`retencion_payload.py::_cuadra_la_partida_doble`) contra el mismo
+        conector: un descuadre de un peso lo rechaza Siesa después de 30 a 60
+        segundos y con el documento a medio camino, no antes de intentarlo.
+        """
+        from decimal import Decimal
+
+        def total(seccion: str, campo: str) -> Decimal:
+            return sum(
+                (Decimal(m[campo].lstrip('+')) for m in payload.get(seccion, ())),
+                Decimal('0'),
+            )
+
+        debitos = total('Movimientocontable', 'F351_VALOR_DB') + total(
+            'MovimientoCxC', 'F351_VALOR_DB')
+        creditos = total('Movimientocontable', 'F351_VALOR_CR') + total(
+            'MovimientoCxC', 'F351_VALOR_CR')
+
+        if debitos != creditos:
+            raise ValueError(
+                f'DocumentoContable (142882) no cuadra: débitos ${debitos:,} '
+                f'contra créditos ${creditos:,} (diferencia '
+                f'${debitos - creditos:,}). No se manda — Siesa lo rechazaría '
+                'con el documento a medio camino.'
+            )
 
     # ── Circuit Breaker Methods ───────────────────────────────────────────────
 
@@ -701,7 +877,12 @@ class ConnektaGateway:
                 headers=self.headers,
                 params=params,
                 json=payload,
-                timeout=(10, 30),  # connect=10s, read=30s — falla rápido; gunicorn timeout=120s
+                # connect=10s, read=120s. Estaba en 30s y **medido, un POST a
+                # Siesa tarda entre 30 y 60** (lecciones del Gestor de
+                # Cartera, 2026-08-19). Cortar a los 30 no evitaba nada: el
+                # documento se seguía creando allá, y acá se reportaba fallo.
+                # «Fallar rápido» sirve cuando fallar rápido es *cierto*.
+                timeout=(10, _POST_READ_TIMEOUT),
             )
             if r.status_code == 429:
                 retry_after = r.headers.get('Retry-After', '300')
@@ -750,8 +931,26 @@ class ConnektaGateway:
             return resp_json
         except requests.exceptions.Timeout:
             self._cb_record_failure()
-            logger.error(f'[CONNEKTA] POST {id_conector}: timeout — Siesa tardó más de 30s')
-            raise Exception('Siesa no respondió en 30s — la recepción quedó EN_PROCESO, reintenta confirmar')
+            # **Un timeout no es un fallo: es no saber.** El POST pudo haberse
+            # procesado —de hecho es lo más probable, porque Siesa tarda entre
+            # 30 y 60s— y la respuesta no llegó a tiempo.
+            #
+            # El mensaje anterior decía «reintenta confirmar». La Regla 3
+            # impide que el DLQ reintente, pero ese texto le entregaba el
+            # duplicado a una persona, y para entonces el pre-flag ya se
+            # revirtió (el `except` de la Regla 6 revierte ante cualquier
+            # excepción, incluida ésta): la guardia anti-duplicado está abajo
+            # justo cuando el operario hace lo que el sistema le pidió.
+            # Es el incidente RC-00002744 por el camino que la Regla 3 no
+            # cubre. Regla 0, aplicada al texto que lee un humano.
+            logger.error(
+                f'[CONNEKTA] POST {id_conector}: timeout a los '
+                f'{_POST_READ_TIMEOUT}s — el documento PUEDE existir en Siesa')
+            raise ConnektaResultadoDesconocido(
+                f'Siesa no respondió en {_POST_READ_TIMEOUT}s. '
+                'NO se sabe si el documento quedó creado — probablemente sí. '
+                'Verificá en Siesa (Auditoría de documentos) antes de volver '
+                'a intentar: reintentar a ciegas crea un segundo documento.')
         except requests.exceptions.RequestException as e:
             self._cb_record_failure()
             logger.error(f'[CONNEKTA] POST {id_conector}: {e}')
@@ -785,8 +984,8 @@ class ConnektaGateway:
             res = self._get(self.api_pedidos, {
                 'paginacion': 'numPag=1|tamPag=1',
                 'parametros': (
-                    f"f430_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"f430_id_co = {_lit(self.centro_op)} "
+                    f"AND f430_id_tipo_docto = {_lit(tipo_docto)} "
                     f"AND f430_consec_docto = {consec_int}"
                 )
             })
@@ -814,15 +1013,25 @@ class ConnektaGateway:
 
         try:
             consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
+            parametros = (
+                f"f350_id_co = {_lit(self.centro_op)} "
+                f"AND f430_consec_docto = {consec_int}"
+            )
             res = self._get('papeleriamedellin_monitos_facturas_wms', {
                 'paginacion': 'numPag=1|tamPag=50',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f430_consec_docto = {consec_int}"
-                )
+                'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
+            # **La otra puerta.** El `except` de abajo protege del error de red;
+            # el sobre de rechazo de Connekta llega por HTTP 200 y no lanza
+            # nada. Sin esta línea, `{'alerta': ...}` no trae
+            # `f350_ind_estado`, el default `'9'` la marca como anulada, la
+            # filtra, y esta función devuelve `[]` = «no hay factura previa,
+            # seguí» — con el guard fail-fast intacto justo al lado.
+            rows = _exigir_datos(rows, 'get_factura_desde_pedido', parametros)
             return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
+        except ConnektaConsultaRechazada:
+            raise
         except Exception as e:
             # FAIL-FAST: no retornar [] ante error de red — el caller asumiría que no hay FE
             # y dispararía trigger_factura (238925) generando FE duplicada (riesgo fiscal / DIAN).
@@ -848,16 +1057,23 @@ class ConnektaGateway:
 
         try:
             consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
+            parametros = (
+                f"f350_id_co = {_lit(self.centro_op)} "
+                f"AND f460_id_tipo_docto = {_lit(tipo_docto_rm)} "
+                f"AND f460_consec_docto = {consec_int}"
+            )
             res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
                 'paginacion': 'numPag=1|tamPag=50',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
-                    f"AND f460_consec_docto = {consec_int}"
-                )
+                'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
+            # Ver la nota de `get_factura_desde_pedido`: el sobre de rechazo
+            # entra por la puerta de datos, no por la de excepciones, y el
+            # default `'9'` lo hacía desaparecer.
+            rows = _exigir_datos(rows, 'get_factura_desde_remision', parametros)
             return [r for r in rows if str(r.get('f350_ind_estado', '9')) != '9']
+        except ConnektaConsultaRechazada:
+            raise
         except Exception as e:
             # FAIL-FAST: no retornar [] ante error de red — eso haría creer que no hay FE
             # y el caller procedería a crear una FE duplicada (riesgo fiscal / DIAN).
@@ -918,7 +1134,11 @@ class ConnektaGateway:
         """
         GET API_v2_Ventas_Facturas_DesdePedido — detalle completo de la FE para impresión.
         Intento 1: filtra por RM (f460_id_tipo_docto / f460_consec_docto).
-        Intento 2 (fallback): filtra por consec_pedido si intento 1 devuelve vacío.
+        Intento 2 (fallback): filtra por consec_pedido si intento 1 devuelve
+        vacío **o si Siesa lo rechaza** — un rechazo del filtro RM no implica
+        que la FE no exista (visto en vivo el 2026-08-20: el intento por
+        pedido la trae completa). Sin `consec_pedido` un rechazo del intento
+        1 sí sigue subiendo — no hay con qué reemplazarlo.
         Falla silenciosamente: uso exclusivo de display, nunca de anti-duplicado.
         """
         if self.modo_simulacion:
@@ -930,7 +1150,10 @@ class ConnektaGateway:
                 'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
-            rows = [r for r in rows if 'alerta' not in r]
+            # Antes: `[r for r in rows if 'alerta' not in r]` — tiraba el
+            # rechazo y seguía con `[]`, que acá se lee «la factura no tiene
+            # líneas».
+            rows = _exigir_datos(rows, 'get_detalle_factura', parametros)
             if rows:
                 logger.info('[CONNEKTA] get_detalle_factura: %d filas, keys=%s',
                             len(rows), list(rows[0].keys()) if rows else [])
@@ -940,20 +1163,40 @@ class ConnektaGateway:
             # Intento 1: filtrar por documento base (RM)
             if tipo_docto_rm and str(tipo_docto_rm).strip():
                 consec_int = int(consec_rm) if str(consec_rm).isdigit() else consec_rm
-                rows = _query(
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f460_id_tipo_docto = ''{tipo_docto_rm}'' "
-                    f"AND f460_consec_docto = {consec_int}"
-                )
-                if rows:
-                    return rows
-                logger.info('[CONNEKTA] get_detalle_factura intento RM vacío — probando por pedido')
+                try:
+                    rows = _query(
+                        f"f350_id_co = {_lit(self.centro_op)} "
+                        f"AND f460_id_tipo_docto = {_lit(tipo_docto_rm)} "
+                        f"AND f460_consec_docto = {consec_int}"
+                    )
+                    if rows:
+                        return rows
+                    logger.info('[CONNEKTA] get_detalle_factura intento RM vacío — probando por pedido')
+                except ConnektaConsultaRechazada as e:
+                    # Un RECHAZO del intento RM no es "no hay factura" — visto
+                    # en vivo el 2026-08-20: Siesa rechaza este filtro para
+                    # remisiones reales cuya FE sí existe (confirmado con el
+                    # intento por pedido, que la trae completa). Sin este
+                    # catch, `resolver_fe` nunca llegaba al intento 2 y
+                    # `_valor_y_cond_pago`/`listar_paradas` se quedaban sin
+                    # dato (o, antes del fix del unpack, con un 500).
+                    #
+                    # Sin un segundo intento que lo reemplace (sin
+                    # consec_pedido) SÍ hay que dejarlo subir — tragárselo acá
+                    # lo convertiría en "no hay nada", justo lo que
+                    # test_un_rechazo_de_siesa_no_se_lee_como_lista_vacia
+                    # prohíbe.
+                    if not consec_pedido:
+                        raise
+                    logger.warning(
+                        '[CONNEKTA] get_detalle_factura intento RM rechazado — '
+                        'probando por pedido: %s', e)
 
             # Intento 2: filtrar por pedido origen
             if consec_pedido:
                 consec_ped_int = int(consec_pedido) if str(consec_pedido).isdigit() else consec_pedido
                 rows = _query(
-                    f"f350_id_co = ''{self.centro_op}'' "
+                    f"f350_id_co = {_lit(self.centro_op)} "
                     f"AND f430_consec_docto = {consec_ped_int}"
                 )
                 if rows:
@@ -961,8 +1204,15 @@ class ConnektaGateway:
                 logger.info('[CONNEKTA] get_detalle_factura intento pedido también vacío')
 
             return []
+        except ConnektaConsultaRechazada:
+            # **No se traga.** El `except Exception → return []` de abajo
+            # convierte cualquier error en «la factura no tiene líneas» —su
+            # propio log lo llamaba «falló silenciosamente»—, así que sin esta
+            # línea el rechazo se pierde igual que antes, solo que un nivel
+            # más arriba. Un raise que alguien atrapa no es un raise.
+            raise
         except Exception as e:
-            logger.warning('[CONNEKTA] get_detalle_factura falló silenciosamente: %s', e)
+            logger.warning('[CONNEKTA] get_detalle_factura falló: %s', e)
             return []
 
     def get_pedidos_aprobados(self, sin_filtros: bool = False):
@@ -980,7 +1230,7 @@ class ConnektaGateway:
         else:
             # estado=3 → Comprometido: inventario físicamente reservado en Siesa
             # estado=2 (Aprobado) NO entra — el inventario no está reservado aún
-            parametros = f"f430_id_co = ''{self.centro_op}'' AND f430_ind_estado = 3"
+            parametros = f"f430_id_co = {_lit(self.centro_op)} AND f430_ind_estado = 3"
 
         all_items = []
         _errores_consec = 0
@@ -1003,7 +1253,10 @@ class ConnektaGateway:
                     )
                 continue
             rows = res.get('detalle', {}).get('Table', [])
-            if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+            # Un rechazo no es «se acabaron las páginas»: cortar acá devolvía
+            # lo que hubiera juntado, sin decir que se cortó.
+            _exigir_datos(rows, 'get_pedidos_aprobados', parametros)
+            if not rows:
                 break
             all_items.extend(rows)
             if len(rows) < 100:
@@ -1060,18 +1313,36 @@ class ConnektaGateway:
         else:
             base_params = {'parametros': 'f420_ind_estado=1'}
         todos = []
-        for pag in range(1, 6):  # máximo 5 páginas = 500 items
+        #: **El tope se declara, no se calla.** Antes era `range(1, 6)` con un
+        #: comentario —«máximo 5 páginas = 500 items»— y nada en el resultado:
+        #: con más de 500 OC aprobadas el WMS veía 500 y el muelle de recepción
+        #: leía eso como el universo completo. Un conteo sin su base no es una
+        #: medición. Es el mismo tope mudo que el hallazgo K ya había costado
+        #: en el sync de pedidos, donde sí quedó declarado.
+        _MAX_PAGINAS = 5
+        completa = True
+        for pag in range(1, _MAX_PAGINAS + 1):
             params = {**base_params, 'paginacion': f'numPag={pag}|tamPag=100'}
             resp = self._get(self.api_ordenes, params)
             if self.modo_simulacion:
                 return resp
             rows = resp.get('detalle', {}).get('Table', [])
-            if not rows or (len(rows) == 1 and 'alerta' in rows[0]):
+            _exigir_datos(rows, 'get_ordenes_compra_aprobadas',
+                          base_params.get('parametros'))
+            if not rows:
                 break
             todos.extend(rows)
             if len(rows) < 100:
                 break
-        return {'detalle': {'Table': todos}}
+        else:
+            # Se agotaron las páginas sin que ninguna viniera corta: la última
+            # llegó llena, así que **hay más del otro lado**.
+            completa = False
+            logger.warning(
+                '[CONNEKTA] get_ordenes_compra_aprobadas: tope de %d páginas '
+                'con %d OC — el resultado está TRUNCADO. Filtrar por consec o '
+                'subir el tope.', _MAX_PAGINAS, len(todos))
+        return {'detalle': {'Table': todos}, 'paginacion_completa': completa}
 
     def validar_tipo_proveedor(self, nit: str) -> dict:
         """
@@ -1108,17 +1379,13 @@ class ConnektaGateway:
         _bodega = bodega or self.bodega
         return self._get(self.api_inventario, {
             'paginacion': 'numPag=1|tamPag=10',
-            'parametros': f"f120_referencia = ''{item_codigo}'' AND f150_id = ''{_bodega}''"
+            'parametros': f"f120_referencia = {_lit(item_codigo)} AND f150_id = {_lit(_bodega)}"
         }, timeout=8)
 
-    def get_item_por_barras(self, codigo_barras: str):
-        """API_v2_ItemsBarras — traduce EAN del escáner al código Siesa.
-        Campo correcto: f131_id. Sintaxis filtro Connekta: ''valor'' (doble comilla simple).
-        """
-        return self._get(self.api_barras, {
-            'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f131_id = ''{codigo_barras}''"
-        })
+    # `get_item_por_barras()` se borró el 2026-08-19: no tenía **ningún**
+    # llamador. El escaneo resuelve el EAN contra el catálogo local
+    # (`productos`), que alimenta el sync — no contra Siesa en vivo. El camino
+    # inverso, `buscar_barras_por_referencia()`, sí se usa y queda abajo.
 
     def buscar_barras_por_referencia(self, referencia: str):
         """
@@ -1134,12 +1401,15 @@ class ConnektaGateway:
         """
         if self.modo_simulacion:
             return []
-        ref = (referencia or '').strip().replace("'", "")
+        # El saneo vive en `lit()`. Acá quedaba un `.replace("'", "")` que
+        # limpiaba en silencio: buscaba un código distinto del pedido y
+        # devolvía un resultado con cara de bueno.
+        ref = (referencia or '').strip()
         if not ref:
             return []
         resultado = self._get(self.api_barras, {
             'paginacion': 'numPag=1|tamPag=5',
-            'parametros': f"f120_referencia = ''{ref}''"
+            'parametros': f"f120_referencia = {_lit(ref)}"
         })
         tabla = resultado.get('detalle', {}).get('Table', [])
         barras = []
@@ -1168,7 +1438,7 @@ class ConnektaGateway:
         """
         if self.modo_simulacion:
             return None
-        ref = (referencia or '').strip().replace("'", "")
+        ref = (referencia or '').strip()
         if not ref:
             return None
         api_items = os.getenv('CONNEKTA_API_ITEMS', 'API_v2_Items')
@@ -1177,7 +1447,7 @@ class ConnektaGateway:
         try:
             resultado = self._get(api_items, {
                 'paginacion': 'numPag=1|tamPag=5',
-                'parametros': f"f120_id_cia = {int(self.id_cia_siesa)} AND f120_referencia = ''{ref}''"
+                'parametros': f"f120_id_cia = {int(self.id_cia_siesa)} AND f120_referencia = {_lit(ref)}"
             })
         except Exception as e:
             # Confirmado en vivo 2026-07-31: cuando el filtro f120_referencia
@@ -1204,6 +1474,7 @@ class ConnektaGateway:
         return {
             'codigo_siesa': codigo_siesa,
             'nombre': (row.get('f120_descripcion') or '').strip(),
+            'tipo_inventario': (row.get('f120_id_tipo_inv_serv') or '').strip() or None,
         }
 
     def get_items_unidades_medida(self, pagina: int = 1):
@@ -1258,8 +1529,8 @@ class ConnektaGateway:
             else:
                 consec_int = int(consec_docto) if str(consec_docto).isdigit() else consec_docto
                 parametros = (
-                    f"f430_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"f430_id_co = {_lit(self.centro_op)} "
+                    f"AND f430_id_tipo_docto = {_lit(tipo_docto)} "
                     f"AND f430_consec_docto = {consec_int}"
                 )
             res = self._get('API_v2_Ventas_Pedidos_Compromisos', {
@@ -1267,7 +1538,10 @@ class ConnektaGateway:
                 'parametros': parametros,
             })
             rows = res.get('detalle', {}).get('Table', [])
-            rows = [r for r in rows if 'alerta' not in r]
+            # El `[]` de acá significa **«no queda nada por remisionar»**, y
+            # alimenta el despacho parcial: la misma forma que ya costó una vez
+            # con `CompromisosNoDisponibles`.
+            rows = _exigir_datos(rows, 'get_compromisos_pedido', parametros)
             return [r for r in rows if float(r.get('f405_cant_por_remisionar_base') or 0) > 0]
         except Exception as e:
             # NO se devuelve `[]`: el llamador lo leería como «el pedido ya se
@@ -1349,8 +1623,8 @@ class ConnektaGateway:
             res = self._get(self.api_pedidos, {
                 'paginacion': 'numPag=1|tamPag=5',
                 'parametros': (
-                    f"f430_id_co = ''{self.centro_op}'' "
-                    f"AND f430_id_tipo_docto = ''{tipo_docto}'' "
+                    f"f430_id_co = {_lit(self.centro_op)} "
+                    f"AND f430_id_tipo_docto = {_lit(tipo_docto)} "
                     f"AND f430_consec_docto = {consec_int} "
                     f"AND f430_ind_estado <> 9"
                 )
@@ -2342,7 +2616,7 @@ class ConnektaGateway:
         api_name = os.getenv('CONNEKTA_API_UBICACIONES', 'API_v2_Ubicaciones')
         params: dict = {'paginacion': f'numPag={pagina}|tamPag=100'}
         if bodega_id:
-            params['parametros'] = f"f150_id = ''{bodega_id}''"
+            params['parametros'] = f"f150_id = {_lit(bodega_id)}"
         return self._get(api_name, params)
 
     def transferir_entre_ubicaciones(self, bodega_id: str, ubicacion_origen: str,
@@ -2457,7 +2731,7 @@ class ConnektaGateway:
         if self.modo_simulacion:
             return self._get(self.api_inventario, {
                 'paginacion': 'numPag=1|tamPag=3',
-                'parametros': f"f150_id = ''{bodega_id}'' AND f400_cant_existencia_1 > 0"
+                'parametros': f"f150_id = {_lit(bodega_id)} AND f400_cant_existencia_1 > 0"
             })
 
         rows_pass1 = self._fetch_stock_pages(bodega_id)
@@ -2501,7 +2775,7 @@ class ConnektaGateway:
                 try:
                     res = self._get(self.api_inventario, {
                         'paginacion': f'numPag={p}|tamPag={_tam}',
-                        'parametros': f"f150_id = ''{_bod}'' AND f400_cant_existencia_1 > 0"
+                        'parametros': f"f150_id = {_lit(_bod)} AND f400_cant_existencia_1 > 0"
                     })
                     # `_get` devuelve None cuando el circuit breaker bloquea o
                     # la respuesta no es 200. Sin esto, el `res.get('_error')`
@@ -2540,7 +2814,13 @@ class ConnektaGateway:
                         f'No se devuelve un inventario parcial.'
                     )
                 rows = res.get('detalle', {}).get('Table', [])
-                if not rows or (len(rows) == 1 and 'alerta' in (rows[0] or {})):
+                # Este módulo ya se niega a devolver un inventario parcial
+                # (`ConnektaPaginacionError`, justo arriba). Un rechazo de
+                # filtro leído como «se acabaron las páginas» abría el mismo
+                # agujero por la otra puerta.
+                _exigir_datos(rows, '_fetch_stock_pages',
+                              f'bodega={bodega_id}')
+                if not rows:
                     done = True
                     break
                 all_rows.extend(rows)
@@ -2873,7 +3153,22 @@ class ConnektaGateway:
         Conector estándar (v3) — único que ejecuta la lógica de liquidación
         de tránsito de Clase 66. El registro plano debe medir exactamente
         2700 bytes; todos los campos Dep van como None.
-        f470_id_bodega = bodega_origen (== f450_id_bodega_salida per spec).
+
+        f450_id_bodega_salida y f470_id_bodega DEBEN ser bodega_origen (la
+        bodega real de origen del STS), NUNCA bodega_transito (TRA1, bodega
+        lógica sin stock físico). Probado en vivo contra Siesa QA el
+        2026-06-12 (commit e3b7d89): con bodega_transito, Siesa rechaza con
+        62485 "bodega de salida diferente a la capturada en el STS" — TRA1
+        no es el origen que el STS registró.
+
+        ⚠️ Este valor SE REVIRTIÓ SOLO una vez sin que nadie lo pidiera: el
+        commit 1344c7a ("feat: motor estadístico... Vigía CUSUM...", una
+        funcionalidad sin relación alguna con traslados) pisó este bloque de
+        vuelta a bodega_transito el 2026-07-24, y desde entonces NINGÚN ETS
+        se completó (0/69 recepciones EN_TRANSITO en la auditoría del
+        2026-08-25). Si esto vuelve a fallar con 62485, revisar PRIMERO si
+        alguna migración de código reintrodujo bodega_transito acá antes de
+        investigar cualquier otra causa.
         """
         if not self.tipo_docto_transito_entrada:
             raise ValueError(
@@ -2922,7 +3217,8 @@ class ConnektaGateway:
                     'f350_ind_impresion': 0,
                     'f350_notas': f'WMS Recepcion {codigo_solicitud}',
                     'f450_id_concepto': 605,
-                    'f450_id_bodega_salida': bodega_transito,
+                    # bodega_origen, NUNCA bodega_transito (TRA1) — ver docstring.
+                    'f450_id_bodega_salida': bodega_origen or self.bodega,
                     # NC1: destino final. CO(NC1)==CO(doc)==_co_ent. Sin stock check.
                     'f450_id_bodega_entrada': bodega_destino,
                     'f450_docto_alterno': self._fmt_alterno(codigo_solicitud),
@@ -2951,7 +3247,8 @@ class ConnektaGateway:
                     'f470_id_tipo_docto': self.tipo_docto_transito_entrada,
                     'f470_consec_docto': 0,
                     'f470_nro_registro': idx + 1,
-                    'f470_id_bodega': bodega_transito,
+                    # bodega_origen, NUNCA bodega_transito (TRA1) — ver docstring.
+                    'f470_id_bodega': bodega_origen or self.bodega,
                     'f470_id_ubicacion_aux': None,
                     'f470_id_lote': None,
                     'f470_ind_naturaleza': 1,
@@ -3017,7 +3314,7 @@ class ConnektaGateway:
                     'paginacion': 'numPag=1|tamPag=5',
                     # f450_docto_alterno es único por traslado — no filtrar por CO para
                     # soportar traslados desde distintas bodegas (NB1→003, NS1→001, etc.)
-                    'parametros': f"f450_docto_alterno = ''{alterno}''",
+                    'parametros': f"f450_docto_alterno = {_lit(alterno)}",
                 },
             )
             rows = (
@@ -3041,6 +3338,49 @@ class ConnektaGateway:
                            codigo_solicitud, e)
         return None
 
+    def get_consec_entrada_transito_by_alterno(self, codigo_solicitud: str) -> int | None:
+        """
+        Recovery: API_v2_Inventarios_Transferencia_Transito_Entrada filtrada por
+        f450_docto_alterno. Retorna f350_consec_docto del ETS creado para este traslado.
+
+        Espejo de `get_consec_salida_transito_by_alterno` (173076/STS) — mismo hueco,
+        mismo remedio: 173079 puede aceptar el documento (HTTP 200) sin devolver un
+        consecutivo parseable en la respuesta, y sin este recovery el ETS quedaba
+        indistinguible de "nunca se envió" (`siesa_entrada_consec` null para las 68
+        recepciones EN_TRANSITO existentes, verificado 2026-08-25).
+
+        ✅ VERIFICADO en vivo contra Siesa QA (2026-08-25, vía
+        `/api/health/ets-consecutivo`) contra ST-20260706-21B0: la primera
+        hipótesis por simetría — `API_v2_Inventarios_Transferencia_Entrada_Transito`
+        (mismo orden de palabras que el de salida) — devolvía 401 (no
+        registrada). El nombre real invierte el orden: "Transito_Entrada", no
+        "Entrada_Transito". Confirmado con datos reales: `f350_id_tipo_docto=ETS`,
+        `f350_consec_docto=19`, `f350_consec_docto_salida=53` (coincide con el STS
+        de ese mismo traslado) — el documento YA EXISTÍA en Siesa y el WMS nunca
+        había capturado su consecutivo.
+        """
+        try:
+            res = self._get(
+                self.consulta_transito_entrada,
+                params_extra={
+                    'paginacion': 'numPag=1|tamPag=5',
+                    'parametros': f"f450_docto_alterno = {_lit(self._fmt_alterno(codigo_solicitud))}",
+                },
+            )
+            rows = (
+                res.get('detalle', {}).get('Table') or
+                res.get('detalle', {}).get('Datos') or []
+            )
+            if rows:
+                consec = rows[0].get('f350_consec_docto')
+                logger.info('[CONNEKTA] ETS %s: consec recuperado=%s',
+                            codigo_solicitud, consec)
+                return int(consec) if consec else None
+        except Exception as e:
+            logger.warning('[CONNEKTA] get_consec_entrada_transito_by_alterno(%s): %s',
+                           codigo_solicitud, e)
+        return None
+
     def get_consec_rit_by_referencia(self, codigo_solicitud: str) -> int | None:
         """
         Recovery: API_v2_Inventarios_RequisicionesParaTransferir filtrada por f440_referencia.
@@ -3052,8 +3392,8 @@ class ConnektaGateway:
                 params_extra={
                     'paginacion': 'numPag=1|tamPag=5',
                     'parametros': (
-                        f"f440_id_co = ''{self.centro_op}''"
-                        f" AND f440_referencia = ''{codigo_solicitud}''"
+                        f"f440_id_co = {_lit(self.centro_op)}"
+                        f" AND f440_referencia = {_lit(codigo_solicitud)}"
                     ),
                 },
             )
@@ -3270,7 +3610,7 @@ class ConnektaGateway:
           f200_nombres, f200_apellido1, f200_apellido2,
           f015_celular, f015_telefono, f015_email
         """
-        parametros_extra = f"t200.f200_nit = ''{nit}''" if nit else None
+        parametros_extra = f"t200.f200_nit = {_lit(nit)}" if nit else None
         try:
             res = self._get(
                 'papeleriamedellin_API_custom_TercerosContacto',
@@ -3342,26 +3682,27 @@ class ConnektaGateway:
 
         try:
             consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+            # tamPag=100 — regla #10: valores mayores (200 confirmado, no
+            # solo >=500) hacen que Siesa rechace la consulta entera con una
+            # fila {'alerta': ...} en vez de datos. Eso ahora lo levanta
+            # `_exigir_datos`; antes se descartaba en silencio y dejaba
+            # "0 líneas" sin explicación.
+            _filtro = (
+                f"f350_id_co = {_lit(self.centro_op)} "
+                f"AND f350_id_tipo_docto = {_lit(tipo_docto_fe)} "
+                f"AND f350_consec_docto = {consec_int}"
+            )
             res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
-                # tamPag=100 — regla #10: valores mayores (200 confirmado, no solo
-                # >=500) hacen que Siesa rechace la consulta entera con una fila
-                # {'alerta': '...'} en vez de datos, que antes se descartaba en
-                # silencio (ver bloque de abajo) dejando "0 líneas" sin explicación.
                 'paginacion': 'numPag=1|tamPag=100',
-                'parametros': (
-                    f"f350_id_co = ''{self.centro_op}'' "
-                    f"AND f350_id_tipo_docto = ''{tipo_docto_fe}'' "
-                    f"AND f350_consec_docto = {consec_int}"
-                )
+                'parametros': _filtro,
             })
             rows_crudas = res.get('detalle', {}).get('Table', [])
-            alertas = [r['alerta'] for r in rows_crudas if 'alerta' in r]
-            if alertas:
-                raise Exception(
-                    f'Siesa rechazó la consulta de FE {tipo_docto_fe}-{consec_fe}: '
-                    + '; '.join(alertas)
-                )
-            rows = rows_crudas
+            # Este sitio ya lo hacía bien, pero **a mano**: era la sexta
+            # copia y la tercera forma distinta de la misma pregunta. Así es
+            # como dos de las otras cinco terminaron degradando.
+            rows = _exigir_datos(
+                rows_crudas, f'get_rowids_factura FE {tipo_docto_fe}-{consec_fe}',
+                _filtro)
             if rows:
                 logger.info(
                     '[CONNEKTA] get_rowids_factura: FE %s-%s → %d líneas, keys=%s',
@@ -3549,8 +3890,8 @@ class ConnektaGateway:
             res = self._get('API_v2_CxC_General', {
                 'paginacion': 'numPag=1|tamPag=5',
                 'parametros': (
-                    f"f353_id_co_cruce = ''{self.centro_op}'' "
-                    f"AND f353_id_tipo_docto_cruce = ''{tipo_docto_fe}'' "
+                    f"f353_id_co_cruce = {_lit(self.centro_op)} "
+                    f"AND f353_id_tipo_docto_cruce = {_lit(tipo_docto_fe)} "
                     f"AND f353_consec_docto_cruce = {consec_int}"
                 ),
             })
@@ -3589,7 +3930,7 @@ class ConnektaGateway:
         try:
             res = self._get('API_v2_CxC_General', {
                 'paginacion': 'numPag=1|tamPag=100',
-                'parametros': f"f200_id = ''{nit}''",
+                'parametros': f"f200_id = {_lit(nit)}",
             })
             return res.get('detalle', {}).get('Table', [])
         except Exception as e:
@@ -3883,13 +4224,20 @@ class ConnektaGateway:
                              co_factura: str = '',
                              cuenta_cxc: str = '',
                              unidad_negocio: str = '',
-                             notas: str = '') -> dict:
+                             notas: str = '',
+                             ajuste_valor: float = 0.0,
+                             ajuste_es_sobrante: bool = False) -> dict:
         """
         142888 → API_v1_ReciboCaja
         Registra cobro del conductor. Cruza automáticamente contra la factura (CxC).
 
         Secciones spec 142888: Inicial → RCyotrosingresos → Caja → CxC → Final
-        forma_pago: EFECTIVO | TRANSFERENCIA | TARJETA | CONSIGNACION → medio de pago Siesa.
+        forma_pago: cualquier clave de `self._forma_pago_map` (EFECTIVO, TARJETA,
+                    las transferencias por banco, TRANSFERENCIA/CONSIGNACION
+                    retrocompatibles) → medio de pago Siesa. `CHEQUE` y `EXENTO`
+                    existen como opción en la pantalla del conductor pero NO
+                    tienen código Siesa configurado todavía — levanta `ValueError`
+                    en vez de reportarlos como EFECTIVO (ver comentario más abajo).
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
         cuenta_cxc: f253_id real de la factura (ej '13050501'). Si vacío, usa self.cxc_auxiliar
                     como fallback — pero el cruce puede no aplicar si la factura usa otra cuenta.
@@ -3904,6 +4252,37 @@ class ConnektaGateway:
                     proyecto del mismo negocio, mismo Siesa) ya resuelve esto leyendo
                     `f353_id_un_cruce` de la fila de cartera real en vez de un env var — mismo
                     fix acá. Si vacío, cae a `self.unidad_negocio` (comportamiento previo).
+
+        ajuste_valor / ajuste_es_sobrante: diferencia al peso entre lo que el
+                    conductor entregó y `monto` (el saldo que este RC cancela).
+                    `monto` sigue siendo el saldo de la factura — no cambia para
+                    quien ya lo usa así. Con `ajuste_valor=0` (default) el
+                    comportamiento es idéntico al de antes de este parámetro.
+
+                    Replica el procedimiento manual de cartera, ya probado por
+                    gestor-cartera-pame contra el MISMO Siesa: un recibo con
+                    ajuste declarado tiene que cancelar el documento completo
+                    (`CR + APROVECHA = saldo`, medido en el rechazo real del
+                    RC 004-RC-670: "DB: 880.613 CR: 880.614 DIF: 1"). Por eso
+                    el faltante se resta de `F354_VALOR_CR` y se declara aparte
+                    en `F354_VALOR_APROVECHA` — nunca simplemente se omite.
+
+                    FALTANTE (`ajuste_es_sobrante=False`): el conductor entregó
+                    menos. Plata que NUNCA entró a caja — `F357_VALOR_INGRESO`
+                    baja con ella.
+                    SOBRANTE (`ajuste_es_sobrante=True`): el conductor entregó
+                    de más. Plata que SÍ entró — `F357_VALOR_INGRESO` sube, y el
+                    excedente sale por el bloque "otros ingresos" (Siesa deriva
+                    el valor de la diferencia, no se manda un campo aparte).
+
+                    Retención Y ajuste al peso NO caben en el mismo RC — el
+                    142888 no tiene base gravable para justificar una
+                    retención en ninguna de sus cinco secciones (medido por
+                    gestor-cartera-pame en 13551501/13551701/13551801). Cuando
+                    el recaudo lleva retención, el llamador debe mandar
+                    `ajuste_valor=0` acá y declarar el ajuste en el
+                    `trigger_documento_contable()` de esa misma retención en su
+                    lugar (ver ese método).
         """
         if not self.tipo_docto_recibo_caja:
             raise ValueError(
@@ -3917,12 +4296,57 @@ class ConnektaGateway:
         co_fact = co_factura or co
 
         # Medio de pago Siesa según forma de pago WMS
-        medio_pago = self._forma_pago_map.get(
-            (forma_pago or '').upper(), self.medio_pago_efectivo
-        )
+        #
+        # SIN default a EFECTIVO. Hasta el 2026-08-31 un `forma_pago` sin
+        # entrada en el mapa (CHEQUE, EXENTO — nunca tuvieron código Siesa
+        # configurado, ver `docstring` de este método) caía silencioso a
+        # `self.medio_pago_efectivo`: un cheque quedaba reportado en Siesa
+        # como si hubiera entrado en efectivo, y la caja de ese día cuadraba
+        # con plata que nunca llegó en billetes. Regla 0 — ante dato ausente,
+        # el lado conservador es declararlo, no inventar el más parecido.
+        #
+        # Revienta ACÁ (antes del POST, Regla 6) para que el RC quede
+        # FALLIDO con motivo explícito en vez de "enviado" con el medio
+        # equivocado — un RC que no sale se reintenta y se ve en el DLQ; uno
+        # que sale mal casi nunca se nota hasta el cuadre de caja.
+        _fp = (forma_pago or '').upper()
+        if _fp not in self._forma_pago_map:
+            raise ValueError(
+                f'forma_pago={_fp!r} sin medio de pago Siesa configurado '
+                f'(Maestros → Medios de pago) — el RC no se envía como '
+                f'EFECTIVO por defecto. Medios válidos: '
+                f'{", ".join(sorted(self._forma_pago_map))}'
+            )
+        medio_pago = self._forma_pago_map[_fp]
         # Caja según CO (Siesa: Tesorería → Cajas)
         id_caja = self._co_caja_map.get(co, '999')
         un = unidad_negocio or self.unidad_negocio or '99'
+
+        # --- Ajuste al peso: cuánto entró de verdad vs. cuánto cruza ---
+        # `monto` sigue siendo el saldo de la factura (F354_VALOR_CR cuando no
+        # hay ajuste). Con ajuste, la caja recibe otra cifra y el cruce se
+        # completa con la diferencia declarada — nunca se manda un cruce
+        # parcial sin decir a dónde fue el resto (eso es lo que deja el saldo
+        # abierto para siempre en la factura).
+        ajuste_abs = abs(float(ajuste_valor or 0))
+        if ajuste_abs and ajuste_abs >= float(monto):
+            raise ValueError(
+                f'El ajuste al peso (${ajuste_abs:,.2f}) no puede ser mayor o '
+                f'igual al saldo que este RC cancela (${monto:,.2f}) — eso no '
+                'es un residuo de redondeo, es cobrar prácticamente nada.'
+            )
+        if ajuste_abs and ajuste_es_sobrante:
+            cash_recibido = float(monto) + ajuste_abs
+            valor_cr = float(monto)
+            valor_aprovecha = 0.0
+        elif ajuste_abs:
+            cash_recibido = float(monto) - ajuste_abs
+            valor_cr = cash_recibido
+            valor_aprovecha = ajuste_abs
+        else:
+            cash_recibido = float(monto)
+            valor_cr = float(monto)
+            valor_aprovecha = 0.0
 
         # --- Sección RCyotrosingresos (Header) ---
         header = {
@@ -3936,9 +4360,9 @@ class ConnektaGateway:
             'F357_FECHA_RECAUDO': fecha_hoy,
             'F350_ID_TERCERO': tercero_nit,
             'F357_ID_MONEDA_INGRESO': 'COP',
-            'F357_VALOR_INGRESO': self._fmt_valor(monto),
+            'F357_VALOR_INGRESO': self._fmt_valor(cash_recibido),
             'F357_ID_MONEDA_APLICAR': 'COP',
-            'F357_VALOR_APLICAR_REAL': self._fmt_valor(monto),
+            'F357_VALOR_APLICAR_REAL': self._fmt_valor(cash_recibido),
             'F357_ID_COBRADOR': self.cobrador_rc,
             'F357_ID_UN': un,
             'F357_ID_CCOSTO': '',
@@ -3947,7 +4371,7 @@ class ConnektaGateway:
             'F350_IND_ESTADO': 1,
             'F350_IND_IMPRESION': 0,
             'F350_NOTAS': notas[:2000] if notas else '',
-            # ── Ajuste y otros ingresos: NO se usan, pero OCUPAN SU ANCHO ────
+            # ── Ajuste y otros ingresos: OCUPAN SU ANCHO SIEMPRE ────
             #
             # Connekta convierte este JSON en un plano posicional. Omitir un
             # campo no lo deja vacío: **acorta la línea y corre todo lo que
@@ -3959,15 +4383,33 @@ class ConnektaGateway:
             # Verificado el 2026-08-11 contra `docs/siesa-specs/142888
             # API_v1_ReciboCaja.docx`: la sección son 33 campos, no 22.
             # Mandábamos 22 y ningún RC llegó nunca a Siesa (job 439).
-            'F351_ID_AUXILIAR_AJUSTE': '',
-            'F351_ID_CCOSTO_AJUSTE': '',
+            #
+            # Sin ajuste, los once quedan vacíos — comportamiento idéntico al
+            # de siempre. Con faltante, la cuenta y el centro de costo van acá
+            # (el VALOR va en `F354_VALOR_APROVECHA` del cruce, no acá — Siesa
+            # solo deriva el valor del SOBRANTE, no el del faltante, ver
+            # `estrategia_faltante` en gestor-cartera-pame para la medición).
+            'F351_ID_AUXILIAR_AJUSTE': self.cuenta_ajuste_faltante if valor_aprovecha else '',
+            'F351_ID_CCOSTO_AJUSTE': self.ccosto_ajuste if valor_aprovecha else '',
             'F351_ID_AUXILIAR_PP': '',
             'F351_ID_CCOSTO_PP': '',
-            'F351_ID_AUXILIAR_OTRO_ING': '',
-            'F351_ID_TERCERO_OTRO_ING': '',
-            'F351_ID_SUCURSAL_OTRO_ING': '',
-            'F351_ID_CO_OTRO_ING': '',
-            'F351_ID_UN_OTRO_ING': '',
+            'F351_ID_AUXILIAR_OTRO_ING': (
+                self.cuenta_ajuste_sobrante if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            'F351_ID_TERCERO_OTRO_ING': (
+                tercero_nit if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            'F351_ID_SUCURSAL_OTRO_ING': (
+                self.sucursal_ajuste if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            'F351_ID_CO_OTRO_ING': co if (ajuste_abs and ajuste_es_sobrante) else '',
+            'F351_ID_UN_OTRO_ING': (
+                self.un_ajuste if (ajuste_abs and ajuste_es_sobrante) else ''
+            ),
+            # Vacío a propósito: la cuenta del sobrante es de INGRESO y no
+            # maneja centro de costo (gestor-cartera-pame, 459/459 movimientos
+            # medidos sin ccosto en las cinco sedes). Solo el FALTANTE
+            # (familia 5xxxxx, arriba) lo lleva.
             'F351_ID_CCOSTO_OTRO_ING': '',
             'F357_REFERENCIA': '',
             'F357_IND_VALIDA_MEDPAGO': 0,
@@ -3982,7 +4424,7 @@ class ConnektaGateway:
             'F350_ID_TIPO_DOCTO': self.tipo_docto_recibo_caja,
             'F350_CONSEC_DOCTO': 0,
             'F358_ID_MEDIOS_PAGO': medio_pago,
-            'F358_VALOR': self._fmt_valor(monto),
+            'F358_VALOR': self._fmt_valor(cash_recibido),
             'F358_ID_BANCO': '',
             'F358_NRO_CHEQUE': 0,
             'F358_NRO_CUENTA': '',
@@ -4029,9 +4471,13 @@ class ConnektaGateway:
             'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
             'F353_CONSEC_DOCTO_CRUCE': consec_int,
             'F353_NRO_CUOTA_CRUCE': 0,
-            'F354_VALOR_CR': self._fmt_valor(monto),
+            'F354_VALOR_CR': self._fmt_valor(valor_cr),
             'F354_VALOR_APLICADO_PP': self._fmt_valor(0),
-            'F354_VALOR_APROVECHA': self._fmt_valor(0),
+            # El sobrante no usa este campo (sale por "otros ingresos" arriba,
+            # que Siesa deriva solo). El faltante sí: `CR + APROVECHA = monto`
+            # (el saldo completo) es lo que exige el cruce con ajuste — ver el
+            # docstring del método.
+            'F354_VALOR_APROVECHA': self._fmt_valor(valor_aprovecha),
             'F354_VALOR_RETENCION': self._fmt_valor(0),
         }
 
@@ -4061,7 +4507,10 @@ class ConnektaGateway:
                                      tipo_docto_fe: str, consec_fe,
                                      co_factura: str = '',
                                      cuenta_cxc: str = '',
-                                     notas: str = '') -> dict:
+                                     unidad_negocio: str = '',
+                                     notas: str = '',
+                                     ajuste_valor: float = 0.0,
+                                     ajuste_razon: str = '') -> dict:
         """
         142882 → DocumentoContable
         Registra retenciones (retefuente, reteIVA, ICA) como documento contable.
@@ -4069,6 +4518,30 @@ class ConnektaGateway:
         cuenta_puc: cuenta auxiliar PUC débito (ej. '13551501' para retefuente compras 2.5%)
         co_factura: CO de la factura cruzada (puede diferir del CO del RC).
         cuenta_cxc: f253_id real de la factura para cruce crédito. Fallback: self.cxc_auxiliar.
+        unidad_negocio: `f353_id_un_cruce` REAL de la fila de cartera que cruza — mismo
+                    parámetro y mismo motivo que `trigger_recibo_caja` (PD1411/FE-1416,
+                    2026-08-18): antes de esto, este conector nunca lo recibía y usaba
+                    siempre `self.unidad_negocio` (el env var global) — job 470 (recaudo
+                    19, PD1421, ruta 22, 2026-08-20) es la primera liquidación con
+                    retención que corrió de verdad contra Siesa, y quedó FALLIDO 5/5
+                    intentos con rechazo estructural genérico. Si vacío, cae a
+                    `self.unidad_negocio` (comportamiento previo, no rompe llamadores viejos).
+
+        ajuste_valor: SOLO faltante (el conductor entregó menos que el saldo
+                    de la factura) — nunca sobrante, que es plata que sí entró
+                    a caja y por eso lo declara el RC, no esta nota. Este
+                    documento es donde el ajuste al peso tiene que ir cuando el
+                    recaudo TAMBIÉN lleva retención: el 142888 no tiene base
+                    gravable para justificar una retención en ninguna de sus
+                    cinco secciones, así que retención y ajuste no caben juntos
+                    en el RC (medido por gestor-cartera-pame contra el mismo
+                    Siesa — ver `trigger_recibo_caja`). Acá sí caben: se agrega
+                    un segundo débito (`cuenta_ajuste_faltante`) y el crédito de
+                    cartera sube por la misma plata, en la MISMA línea que la
+                    retención — dos créditos contra el mismo (tipo, consec,
+                    cuota) es algo que Siesa no se le ha visto aceptar.
+        `ajuste_valor=0` (default): comportamiento idéntico al de antes de
+                    este parámetro.
         """
         if not self.tipo_docto_docto_contable:
             raise ValueError(
@@ -4081,6 +4554,15 @@ class ConnektaGateway:
         co = self.centro_op
         co_fact = co_factura or co
         auxiliar_cxc = cuenta_cxc or self.cxc_auxiliar
+        un = unidad_negocio or self.unidad_negocio or '99'
+        ajuste_abs = abs(float(ajuste_valor or 0))
+
+        notas_doc = notas[:2000] if notas else ''
+        if ajuste_abs:
+            _nota_ajuste = f' | Ajuste al peso -${ajuste_abs:,.2f}'
+            if ajuste_razon:
+                _nota_ajuste += f': {ajuste_razon}'
+            notas_doc = (notas_doc + _nota_ajuste)[:2000]
 
         payload = {
             'Inicial': [{'F_CIA': cia}],
@@ -4095,7 +4577,7 @@ class ConnektaGateway:
                 'F350_ID_CLASE_DOCTO': 30,
                 'F350_IND_ESTADO': 1,
                 'F350_IND_IMPRESION': 0,
-                'F350_NOTAS': notas[:2000] if notas else '',
+                'F350_NOTAS': notas_doc,
                 # Faltaba. Ver la nota de abajo: mismo defecto que el 142888.
                 'f350_id_mandato': '',
             }],
@@ -4106,10 +4588,16 @@ class ConnektaGateway:
             # el mismo defecto que dejó al 142888 mandando 22 de 33 campos y
             # que hizo que ningún recibo de caja llegara nunca a Siesa.
             #
-            # **Este conector no se ha ejercitado nunca contra Siesa.** El
-            # arreglo sale del spec, no de una corrida exitosa: es la corrección
-            # mejor fundada disponible, no una verificación. Se confirma la
-            # primera vez que una liquidación con retención llegue al DLQ.
+            # Job 470 (recaudo 19, PD1421, ruta 22, 2026-08-20) fue la primera
+            # liquidación con retención que corrió de verdad: quedó FALLIDO
+            # 5/5 con rechazo estructural genérico de Siesa. Dos causas
+            # encontradas y corregidas: la UN salía siempre del env var global
+            # en vez de la real (ver `unidad_negocio` más arriba), y los
+            # campos `_ALT` (moneda alterna) llevaban el mismo valor del
+            # movimiento en vez de cero, más dos campos (`F351_NRO_REGISTRO`,
+            # `F351_ID_SUCURSAL`) que no están en el spec ni en la
+            # implementación probada en producción de `gestor-cartera-pame`
+            # (mismo Siesa, mismo conector 142882/NI) — quitados.
             'Movimientocontable': [{
                 'F_CIA': cia,
                 'F350_ID_CO': co,
@@ -4118,22 +4606,23 @@ class ConnektaGateway:
                 'F351_ID_AUXILIAR': cuenta_puc,
                 'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_CO_MOV': co,
-                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
                 'F351_ID_FE': '',
                 'F351_VALOR_DB': self._fmt_valor(monto),
                 'F351_VALOR_CR': self._fmt_valor(0),
-                'F351_VALOR_DB_ALT': self._fmt_valor(monto),
+                # Moneda alterna — spec: "si la auxiliar no maneja moneda
+                # alterna, debe ir en cero". Las cuentas de retención
+                # colombianas (1355xxxx) no manejan una segunda moneda.
+                # Iba en `monto` (el mismo valor del débito) — comparado
+                # contra `gestor-cartera-pame` (mismo Siesa, en producción,
+                # `retencion_payload.py`), que siempre manda cero acá.
+                'F351_VALOR_DB_ALT': self._fmt_valor(0),
                 'F351_VALOR_CR_ALT': self._fmt_valor(0),
                 'F351_BASE_GRAVABLE': self._fmt_valor(base_gravable),
                 'F351_DOCTO_BANCO': '',
                 'F351_NRO_DOCTO_BANCO': '',
                 'F351_NOTAS': '',
-                # Fuera del spec — no se borran porque alguien los puso a
-                # propósito y no hay corrida real que diga si estorban. Van al
-                # final para no desplazar a los 18 declarados.
-                'F351_NRO_REGISTRO': 1,
-                'F351_ID_SUCURSAL': sucursal or '001',
             }],
             'MovimientoCxC': [{
                 # Campos del spec DOCX 142882 — TODOS los del esquema MovimientoCxC.
@@ -4145,12 +4634,18 @@ class ConnektaGateway:
                 'F351_ID_AUXILIAR': auxiliar_cxc,
                 'F351_ID_TERCERO': tercero_nit,
                 'F351_ID_CO_MOV': co,
-                'F351_ID_UN': self.unidad_negocio or '99',
+                'F351_ID_UN': un,
                 'F351_ID_CCOSTO': '',
                 'F351_VALOR_DB': self._fmt_valor(0),
-                'F351_VALOR_CR': self._fmt_valor(monto),
+                # El crédito de cartera cierra por TODO lo que el RC no
+                # aplicó — retención + ajuste al peso, sumados en esta MISMA
+                # línea. Con ajuste_abs=0 (el caso de siempre) esto sigue
+                # siendo exactamente `monto`.
+                'F351_VALOR_CR': self._fmt_valor(monto + ajuste_abs),
+                # Moneda alterna — igual que en Movimientocontable arriba,
+                # siempre cero.
                 'F351_VALOR_DB_ALT': self._fmt_valor(0),
-                'F351_VALOR_CR_ALT': self._fmt_valor(monto),
+                'F351_VALOR_CR_ALT': self._fmt_valor(0),
                 'F351_NOTAS': '',
                 'F353_ID_SUCURSAL': sucursal or '001',
                 'F353_ID_TIPO_DOCTO_CRUCE': tipo_docto_fe,
@@ -4170,14 +4665,44 @@ class ConnektaGateway:
             }],
             'Final': [{'F_CIA': cia}],
         }
+        if ajuste_abs:
+            # El gasto por faltante — cuenta de gasto (familia 5xxxxx), por
+            # eso SÍ lleva centro de costo (a diferencia de la retención,
+            # que es activo 1355xxxx y no lo maneja). Base gravable en cero:
+            # una cuenta de gasto no tiene impuesto que justificar — medido
+            # por gestor-cartera-pame, 0 de 68 movimientos con base en la
+            # cuenta hermana de estampillas.
+            payload['Movimientocontable'].append({
+                'F_CIA': cia,
+                'F350_ID_CO': co,
+                'F350_ID_TIPO_DOCTO': self.tipo_docto_docto_contable,
+                'F350_CONSEC_DOCTO': 0,
+                'F351_ID_AUXILIAR': self.cuenta_ajuste_faltante,
+                'F351_ID_TERCERO': tercero_nit,
+                'F351_ID_CO_MOV': co,
+                'F351_ID_UN': un,
+                'F351_ID_CCOSTO': self.ccosto_ajuste,
+                'F351_ID_FE': '',
+                'F351_VALOR_DB': self._fmt_valor(ajuste_abs),
+                'F351_VALOR_CR': self._fmt_valor(0),
+                'F351_VALOR_DB_ALT': self._fmt_valor(0),
+                'F351_VALOR_CR_ALT': self._fmt_valor(0),
+                'F351_BASE_GRAVABLE': self._fmt_valor(0),
+                'F351_DOCTO_BANCO': '',
+                'F351_NRO_DOCTO_BANCO': '',
+                'F351_NOTAS': (ajuste_razon or 'Ajuste al peso')[:255],
+            })
+        self._verificar_partida_doble_dc(payload)
 
         logger.info(
-            '[CONNEKTA] DoctoContable 142882: tercero=%s PUC=%s FE=%s-%s monto=%.2f base=%.2f',
-            tercero_nit, cuenta_puc, tipo_docto_fe, consec_fe, monto, base_gravable
+            '[CONNEKTA] DoctoContable 142882: tercero=%s PUC=%s FE=%s-%s monto=%.2f '
+            'base=%.2f ajuste=%.2f',
+            tercero_nit, cuenta_puc, tipo_docto_fe, consec_fe, monto, base_gravable,
+            ajuste_abs,
         )
         return self._post(
             self.conector_docto_contable,
-            'DocumentoContable',
+            'API_v1_DocumentoContable',
             payload,
         )
 

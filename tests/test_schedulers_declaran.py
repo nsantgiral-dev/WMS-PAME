@@ -51,6 +51,7 @@ REGISTRADOS = {
     'traslado_service': 'init_scheduler',
     'alertas_service': 'init_scheduler',
     'traslado_monitor_service': 'init_scheduler',
+    'reposicion_service': 'init_scheduler',
     'abc_service': 'init_scheduler',
     'inventario_siesa_service': 'iniciar_refresh_periodico',
 }
