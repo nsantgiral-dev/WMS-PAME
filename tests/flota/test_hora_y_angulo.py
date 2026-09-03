@@ -438,7 +438,7 @@ class TestListadoDeFotosDeUnaCustodia:
                               'fotos_inicio': [
                                   {'clase': 'evidencia_estado', 'data_url': _DATA_URL,
                                    'ancho': 800, 'alto': 600},
-                                  {'clase': 'foto_dato', 'data_url': _DATA_URL,
+                                  {'clase': 'foto_dato', 'data_url': _data_url_real(1600, 1200),
                                    'ancho': 1600, 'alto': 1200},
                               ]},
                         headers=_auth(jwt_token_admin))
@@ -475,6 +475,27 @@ _JPEG_B64 = (
     '5ufo6erx8vP09fb3+Pn6/9oACAEBAAA/APn+iiigD//Z'
 )
 _DATA_URL = f'data:image/jpeg;base64,{_JPEG_B64}'
+
+
+def _data_url_real(ancho=1600, alto=1200):
+    """Un JPEG de verdad del tamaño pedido.
+
+    `_DATA_URL` es un JPEG de **1×1 px**: alcanza para `evidencia_estado`, que no
+    tiene mínimo de resolución. Para una `foto_dato` no alcanza, y hasta el
+    2026-09-01 pasaba igual porque `guardar_foto` copiaba el `ancho`/`alto` del
+    JSON sin mirar el archivo — o sea que el fixture declaraba 1600×1200 sobre
+    un píxel y el CHECK `ck_flota_foto_dato_resolucion` le creía.
+
+    Ahora las dimensiones se miden. El test no cambió lo que afirma; lo que
+    cambió es que su insumo dejó de mentir.
+    """
+    import base64
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (ancho, alto), (17, 17, 17)).save(buf, 'JPEG', quality=85)
+    return 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode()
 
 
 class TestLaReferenciaNoCuestaEsperar:

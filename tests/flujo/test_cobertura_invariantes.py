@@ -13,7 +13,7 @@ from app.services import auditoria
 #: flujo desaparece de acá es que alguien borró sus invariantes, y eso tiene
 #: que doler.
 FLUJOS_CUBIERTOS = {'venta', 'traslados', 'conteo', 'devoluciones',
-                    'recepcion', 'reposicion'}
+                    'recepcion', 'reposicion', 'inventario'}
 
 #: Flujos del WMS que mueven inventario o dinero y **todavía no tienen
 #: invariantes**. Escrito para que se vea, no para que se olvide.

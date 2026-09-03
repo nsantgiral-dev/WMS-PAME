@@ -665,6 +665,32 @@ def motivos_rechazo():
     return jsonify({'motivos': para_frontend()}), 200
 
 
+@rutas_bp.route('/geo/cobertura', methods=['GET'])
+@jwt_required()
+def geo_cobertura():
+    """Cuántos clientes ya tienen coordenada y cuántos no. **La medida.**
+
+    Ese número subiendo mes a mes es el activo entero de la captura del
+    conductor: sin él, en tres meses nadie sabe si la funcionalidad sirvió, y
+    lo primero que se corta es lo que no se puede mostrar.
+
+    **Vive en rutas y no en el health de flota, y la elección tiene motivo.**
+    Lo que se mide acá es una propiedad del **maestro de clientes** —dónde
+    queda la tienda—, no del vehículo: no cambia si se vende un camión, no
+    entra en el CPK y no dispara ninguna tarea de mantenimiento. Flota
+    contesta «¿el camión está en condiciones de salir?»; esto contesta
+    «¿sabemos a dónde mandarlo?». Meterlo en `/flota/health` habría puesto el
+    número donde nadie que planea rutas lo mira, que es la forma más segura de
+    que deje de mirarse.
+
+    Lo lee admin o jefe: es una medida de gestión, no un dato de la calle.
+    """
+    if not _es_admin_o_jefe():
+        return jsonify({'error': 'Solo admin o jefe puede ver la cobertura'}), 403
+    from app.services import geo_cliente as _geo
+    return jsonify(_geo.cobertura()), 200
+
+
 @rutas_bp.route('/<int:ruta_id>/reconciliacion', methods=['GET'])
 @jwt_required()
 def reconciliacion_ruta(ruta_id):

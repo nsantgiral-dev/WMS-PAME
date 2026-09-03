@@ -12,7 +12,10 @@ fantasma", y la cobertura del comité no es 40% — es CERO.
 JERARQUÍA DE COSTO — de más a menos confiable, y el criterio es económico:
   1. ACUERDO_VIGENTE   precio pactado hoy con el proveedor
   2. COTIZACION        cotización reciente del proveedor
-  3. KARDEX_PROMEDIO   costo promedio ponderado de los movimientos
+  3. KARDEX_PROMEDIO   costo promedio ponderado de las ENTRADAS POR COMPRA
+                       (`kardex_service.CONCEPTOS_COMPRA`) — no de todos los
+                       movimientos: saldos iniciales, traslados y ventas no
+                       dicen qué costó comprar (ver `_costos_kardex`)
   4. MAESTRO           Producto.precio_compra, si alguien lo cargó a mano
 
 Los dos primeros son costo HACIA ADELANTE: la plata en riesgo es la que se va
@@ -151,29 +154,70 @@ def _costos_cotizacion(refs, meses=6):
 
 
 def _costos_kardex(refs):
-    """Costo promedio ponderado de los movimientos, con antigüedad.
+    """Costo promedio ponderado DE COMPRA, con antigüedad.
 
     Mira hacia atrás: con 500 días de inventario refleja compras de ~1,5 años.
     Por eso lleva bandera — no se descarta, se declara.
+
+    PONDERA SOLO LOS CONCEPTOS DE COMPRA (`CONCEPTOS_COMPRA`, la tabla vive en
+    kardex_service junto a `CONCEPTO_DEFINICION` — aquí no se escribe ninguna
+    lista de conceptos, porque una lista copiada diverge).
+
+    QUÉ COSTABA NO FILTRAR. La consulta ponderaba TODAS las filas del SKU:
+      · 699 saldos iniciales — costo viejo con cantidades enormes;
+      · 603 ajustes;
+      · 501 ventas — la mayoría de las filas del kardex;
+      · 607 traslados — DOS filas por las MISMAS unidades físicas (salida en
+        origen + entrada en destino), o sea doble peso por mercancía que nunca
+        se compró dos veces.
+    En el caso construido (100 und compradas a $1.000 por 601, 500 de saldo
+    inicial a $400 por 699, un traslado de 100 ida y vuelta por 607 y una venta
+    de 80 por 501) devolvía 659,09 en vez de 1.000: **34,1% por debajo**.
+
+    Y la dirección del error no es neutra. Este es el nivel 3 de la jerarquía y
+    alimenta Cu/Co del newsvendor: subestimar el costo infla Cu y desinfla Co,
+    las dos empujan el ratio crítico hacia COMPRAR MÁS — el lado irreversible
+    (un contenedor embarcado son 120 días y la caja ya se fue).
+
+    También se exige naturaleza ENTRADA: una fila de compra en salida es una
+    devolución al proveedor, y no describe lo que costó reponer. Un SKU cuyas
+    únicas filas de compra sean salidas queda SIN costo de kardex —cae a
+    MAESTRO o a SIN_COSTO, visible en `resumen_por_fuente`— y se declara en el
+    log en vez de irse en silencio: Regla 0, el denominador tiene que verse.
+
+    `fecha_costo` es ahora la fecha de la ÚLTIMA COMPRA, no la del último
+    movimiento cualquiera. Una venta de ayer hacía pasar por fresco un costo de
+    hace año y medio y apagaba la bandera `anejo`.
     """
     from sqlalchemy import func
-    from app.services.kardex_service import KardexMovimiento
+    from app.services.kardex_service import (
+        KardexMovimiento, CONCEPTOS_COMPRA, NATURALEZA_ENTRADA,
+    )
 
+    # Se agrupa TAMBIÉN por naturaleza —en vez de filtrar entradas en el SQL—
+    # para poder declarar las referencias que solo tienen compras en salida.
+    # Filtrarlas en la consulta las haría desaparecer sin dejar rastro.
     filas = (
         db.session.query(
             KardexMovimiento.referencia,
+            KardexMovimiento.naturaleza,
             func.sum(KardexMovimiento.costo_promedio * KardexMovimiento.cantidad),
             func.sum(KardexMovimiento.cantidad),
             func.max(KardexMovimiento.fecha),
         )
         .filter(KardexMovimiento.referencia.in_(refs))
         .filter(KardexMovimiento.costo_promedio > 0)
-        .group_by(KardexMovimiento.referencia)
+        .filter(KardexMovimiento.concepto.in_(CONCEPTOS_COMPRA))
+        .group_by(KardexMovimiento.referencia, KardexMovimiento.naturaleza)
         .all()
     )
     hoy = _dia_operativo()
     salida = {}
-    for ref, valor, cant, ultima in filas:
+    solo_salidas = set()
+    for ref, naturaleza, valor, cant, ultima in filas:
+        if naturaleza != NATURALEZA_ENTRADA:
+            solo_salidas.add(ref)
+            continue
         c = float(cant or 0)
         if c <= 0:
             continue
@@ -185,6 +229,13 @@ def _costos_kardex(refs):
             'dias_antiguedad': dias,
             'anejo': dias is not None and dias > DIAS_COSTO_ANEJO,
         }
+
+    huerfanas = sorted(solo_salidas - set(salida))
+    if huerfanas:
+        logger.warning(
+            '[COSTO] %d referencia(s) con movimientos de compra SOLO en salida '
+            '(devolución a proveedor sin entrada): sin costo de kardex, caen a '
+            'MAESTRO o SIN_COSTO. %s', len(huerfanas), huerfanas[:20])
     return salida
 
 

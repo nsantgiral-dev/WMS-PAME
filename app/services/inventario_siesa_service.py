@@ -13,12 +13,25 @@ Dos operaciones:
    - Corre en hilo de fondo (puede tardar minutos con 5000 productos).
    - Idempotente: correr dos veces el mismo día no duplica nada.
 
-2. RECONCILIACIÓN (reconciliar_inventario)
-   - Descarga existencias de Siesa (mismo proceso).
-   - Compara con totales WMS por producto (SUM de todas las ubicaciones).
-   - NO modifica nada. Solo informa diferencias.
-   - Retorna lista de discrepancias ordenada por diferencia absoluta.
+2. RECONCILIACIÓN (_run_reconciliacion → _calcular_reconciliacion)
+   - Descarga existencias de Siesa de TODAS las bodegas del universo
+     (`_BODEGAS_INVENTARIO`), no solo de `connekta.bodega`.
+   - Compara **bodega contra bodega**: el lado WMS se agrupa por
+     `Almacen.bodega_siesa_id` uniendo UbicacionProducto → Ubicacion → Almacen.
+   - Declara el tercer estado, «no se puede comparar», en vez de mezclarlo en
+     la suma: almacén WMS sin bodega Siesa, bodega WMS sin datos de Siesa,
+     bodega Siesa sin almacén WMS, SKU de Siesa sin producto en el catálogo.
+   - Publica el DENOMINADOR (`cuadre_pct`, `skus_comparados`, `por_bodega`):
+     un conteo de diferencias sin cuántos SKU se compararon no se interpreta.
+   - NO modifica nada. Solo informa.
    - El admin decide: "aceptar Siesa" (ajuste WMS) o "hacer conteo físico".
+
+   Hasta 2026-08-20 sumaba `UbicacionProducto` de TODOS los almacenes —
+   incluidas las tiendas `PV-*`, que tienen stock físico real— contra el
+   inventario de una sola bodega de Siesa. Dos poblaciones distintas restadas
+   una de la otra, publicadas como «✓ Sin diferencias». Ese veredicto es la
+   casilla de la Fase 4 de `docs/arranque_produccion.md`: la luz verde para que
+   los operarios arranquen en producción.
 
 Regla de oro: funciona en producción con 5000+ productos y 200 pedidos/día.
 """
@@ -189,6 +202,31 @@ def precalentar_cache_multibodega(app=None):
 # ella, su stock es invisible para el WMS y para la reconciliación.
 _BODEGAS_PV = ['NB1', 'NC1', 'NS1', 'NS2', 'FC1', 'PC1', 'PT1', 'FF1', 'FN1', 'FP1']
 
+#: Bodegas de SERVICIO — no son puntos de venta y **no llevan almacén en el
+#: WMS** (ver la tabla de bodegas de `CLAUDE.md`). Se descargan igual porque no
+#: descargarlas no las hace desaparecer: las vuelve invisibles.
+#:
+#:   · `AV1` (Averías CDI, `SIESA_BODEGA_AVERIAS`) — `siesa_job_service` mueve
+#:     la avería en Siesa de NB1 a AV1, mientras `devolucion_cliente_service`
+#:     (el escritor VIVO; `devolucion_service` está DEPRECATED) la deja en
+#:     una ubicación `AVERIADOS` (zona CUARENTENA) **dentro del almacén NB1**.
+#:     Sin AV1 descargada, cada avería producía un `WMS_MAYOR` permanente en NB1
+#:     y nadie podía explicar de dónde salía. Su contraparte en el WMS existe
+#:     pero es una UBICACIÓN, no un almacén: se declara y se mide, no se cuadra.
+#:   · `TRA1` (bodega en Tránsito, `SIESA_BODEGA_TRANSITO`) — **no tiene ninguna
+#:     contraparte en el WMS**. El STS descuenta del origen y el ETS acredita en
+#:     el destino; lo que quede en TRA1 es el limbo que los invariantes de
+#:     traslado existen para detectar.
+#:
+#: Se mantienen FUERA de `_BODEGAS_PV` a propósito: esa constante significa
+#: «bodegas que el WMS OPERA» y `tests/test_bodegas_coherentes.py` la vigila
+#: contra el maestro. Meterlas ahí las convertiría en destino válido de un
+#: traslado y en opción de un desplegable de punto de venta.
+_BODEGAS_SERVICIO = ['AV1', 'TRA1']
+
+#: El universo que se le pide a Siesa. Operadas + servicio.
+_BODEGAS_INVENTARIO = _BODEGAS_PV + _BODEGAS_SERVICIO
+
 
 def _descargar_una_pasada_custom():
     """Una pasada completa de la consulta custom. Retorna dict {bodega: {codigo: {...}}}."""
@@ -231,7 +269,7 @@ def _descargar_una_pasada_custom():
         for row in rows:
             bodega = (row.get('f150_id') or '').strip()
             codigo = (row.get('f120_referencia') or '').strip()
-            if not bodega or not codigo or bodega not in _BODEGAS_PV:
+            if not bodega or not codigo or bodega not in _BODEGAS_INVENTARIO:
                 continue
             if bodega not in inventario:
                 inventario[bodega] = {}
@@ -310,7 +348,7 @@ def _descargar_inventario_siesa_raw(forzar=False):
         api_data = {}
 
     inventario_global = {}
-    for bod in _BODEGAS_PV:
+    for bod in _BODEGAS_INVENTARIO:
         inv_bd = _leer_stock_de_bd(bod)
         inv_api = api_data.get(bod, {})
         if inv_bd and inv_api:
@@ -348,7 +386,35 @@ def _descargar_inventario_siesa_raw(forzar=False):
             'siendo la de la última descarga real (%s)',
             _cache_inventario_multibodega['ts'])
 
-    _guardar_stock_en_bd(inventario_global)
+    # La persistencia va DESPUÉS del guard anti-parcial, no antes.
+    #
+    # `stock_siesa` alimenta `armador_service.rop_dual` → `deficit` → el
+    # contenedor, que es irreversible 120 días. Es **acumulativa** (upsert sin
+    # borrado) y `_guardar_stock_en_bd` commitea **por bodega, dentro del
+    # bucle**: un barrido que moría a mitad dejaba unas bodegas frescas y otras
+    # viejas, ya commiteadas, y nada las distinguía — la tabla no guarda marca
+    # de corrida, solo `updated_at`.
+    #
+    # El guard existía y protegía el **reporte** de la reconciliación (`:497`,
+    # `:546`), no la **tabla**. O sea que la respuesta parcial abortaba el
+    # veredicto y ya había escrito el inventario incompleto sobre el que se
+    # compra.
+    #
+    # No se levanta: esta función tiene cinco llamadores que esperan el dict, y
+    # dos ya corren su propio guard. Lo que cambia es que el dato parcial no
+    # llega a la tabla. La bodega que no se refrescó conserva su última foto y
+    # su `updated_at` viejo — que `rop_dual` ahora publica como `frescura_stock`,
+    # porque el histórico ya escrito **no es distinguible** y purgarlo exigiría
+    # un barrido completo confiable que hoy no tenemos.
+    try:
+        _verificar_respuesta_no_parcial(inventario_global.get(connekta.bodega, {}))
+    except ValueError as _e_parcial:
+        logger.error(
+            '[INV-SIESA] Barrido parcial — NO se persiste en stock_siesa: %s. '
+            'Cada bodega conserva su última foto; la antigüedad viaja en '
+            '`frescura_stock` de la fila del Armador.', _e_parcial)
+    else:
+        _guardar_stock_en_bd(inventario_global)
 
     return inventario_global
 
@@ -456,6 +522,25 @@ def _descargar_inventario_siesa(forzar=False):
 
     logger.info(f'[INV-SIESA] Bodega {bodega}: {len(inventario)} productos')
 
+    _verificar_respuesta_no_parcial(inventario)
+
+    _cache_inventario_siesa['data'] = inventario
+    _cache_inventario_siesa['ts'] = datetime.utcnow()
+    return inventario
+
+
+def _verificar_respuesta_no_parcial(inventario: dict):
+    """Aborta si la respuesta de Siesa para la bodega principal llegó a medias.
+
+    Una respuesta parcial no se distingue de «Siesa dice que no hay»: en la
+    carga inicial pone en cero miles de productos, y en la reconciliación
+    convierte el catálogo entero en `WMS_MAYOR`. Las dos veces el resultado se
+    ve como un dato, no como un fallo.
+
+    Vive en una función porque la usan los dos caminos —carga inicial y
+    reconciliación— y el mismo criterio escrito dos veces diverge (Regla 0,
+    corolario «una política, una función»).
+    """
     _prev_count = len(_cache_inventario_siesa['data']) if _cache_inventario_siesa['data'] else 0
     if not _prev_count:
         try:
@@ -476,9 +561,18 @@ def _descargar_inventario_siesa(forzar=False):
             f'{_prev_count} esperados (< 70%) — abortando para evitar falsos positivos'
         )
 
-    _cache_inventario_siesa['data'] = inventario
-    _cache_inventario_siesa['ts'] = datetime.utcnow()
-    return inventario
+
+def _descargar_inventario_multibodega_para_reconciliar():
+    """El inventario de Siesa **por bodega**, con el mismo guard anti-parcial.
+
+    La reconciliación necesita el diccionario completo `{bodega: {codigo: …}}`,
+    no la vista aplastada de `connekta.bodega`. Lo que no puede perder al
+    dejar de usar `_descargar_inventario_siesa()` es su guard: por eso lo llama
+    acá explícitamente sobre la bodega principal.
+    """
+    multi = _descargar_inventario_siesa_raw(forzar=True)
+    _verificar_respuesta_no_parcial(multi.get(connekta.bodega, {}))
+    return multi
 
 
 # ─────────────────────────────────────────────
@@ -869,6 +963,509 @@ _estado_reconciliacion = {
     'ultimo_error': None,
 }
 
+#: Motivos del tercer estado. «No se puede comparar» no es «cuadra»: es una
+#: respuesta distinta, y mezclarla en la suma la hace desaparecer.
+_SIN_BODEGA_SIESA = 'ALMACEN_WMS_SIN_BODEGA_SIESA'
+_SIN_DATOS_SIESA = 'BODEGA_WMS_SIN_DATOS_DE_SIESA'
+_SIN_ALMACEN_WMS = 'BODEGA_SIESA_SIN_ALMACEN_WMS'
+
+
+def _stock_wms_por_bodega():
+    """Stock del WMS agrupado por **bodega Siesa**, no por producto suelto.
+
+    El defecto que esto arregla: la reconciliación sumaba
+    `UbicacionProducto.cantidad` de TODOS los almacenes contra el inventario de
+    una sola bodega de Siesa. Las tiendas (`PV-NC1`, `PV-PC1`…), que
+    `tienda_oc_service.resolver_almacen` crea con stock físico real, entraban en
+    el lado WMS y no en el de Siesa. El número resultante no era un error de
+    redondeo: era la suma de dos poblaciones distintas, y salía por pantalla
+    como «✓ Sin diferencias» o como un sobrante que nadie podía explicar.
+
+    Se une con `outerjoin` a propósito. Un `join` interno descarta en silencio
+    la fila cuya ubicación o cuyo almacén no existe — que es exactamente el dato
+    que hay que declarar, no perder.
+
+    Retorna `(por_bodega, sin_bodega)`:
+      · `por_bodega` → `{bodega_siesa_id: {producto_id: cantidad}}`
+      · `sin_bodega` → `{codigo_almacen: {producto_id: cantidad}}`, los almacenes
+        sin `bodega_siesa_id` asignado. Regla 0: ante dato ausente no se
+        inventa una bodega, se declara que no se puede comparar.
+    """
+    filas = (
+        db.session.query(
+            Almacen.bodega_siesa_id.label('bodega'),
+            Almacen.codigo.label('almacen'),
+            UbicacionProducto.producto_id.label('producto_id'),
+            func.sum(UbicacionProducto.cantidad).label('total'),
+        )
+        .select_from(UbicacionProducto)
+        .outerjoin(Ubicacion, UbicacionProducto.ubicacion_id == Ubicacion.id)
+        .outerjoin(Almacen, Ubicacion.almacen_id == Almacen.id)
+        .group_by(Almacen.bodega_siesa_id, Almacen.codigo,
+                  UbicacionProducto.producto_id)
+        .all()
+    )
+
+    por_bodega = {}
+    sin_bodega = {}
+    for fila in filas:
+        cantidad = int(fila.total or 0)
+        if cantidad == 0:
+            continue
+        bodega = (fila.bodega or '').strip()
+        if bodega:
+            por_bodega.setdefault(bodega, {})
+            por_bodega[bodega][fila.producto_id] = (
+                por_bodega[bodega].get(fila.producto_id, 0) + cantidad)
+        else:
+            # Sin almacén = ubicación huérfana. Se declara igual, con un nombre
+            # que no miente sobre lo que es.
+            clave = fila.almacen or '(ubicación sin almacén)'
+            sin_bodega.setdefault(clave, {})
+            sin_bodega[clave][fila.producto_id] = (
+                sin_bodega[clave].get(fila.producto_id, 0) + cantidad)
+
+    return por_bodega, sin_bodega
+
+
+def _cuarentena_wms():
+    """Unidades del WMS en ubicaciones de cuarentena (`AVERIADOS`).
+
+    Es la contraparte real de la bodega `AV1` de Siesa, y no es un almacén: es
+    una UBICACIÓN dentro de NB1 (`devolucion_cliente_service`, el escritor VIVO).
+    Se mide para poder
+    declararla al lado del saldo de AV1 — **no para cuadrar contra él**: son dos
+    poblaciones que nadie ha verificado que coincidan, y afirmar que coinciden
+    sería reintroducir el mismo defecto en pequeño.
+    """
+    try:
+        filas = (
+            db.session.query(func.sum(UbicacionProducto.cantidad),
+                             func.count(func.distinct(UbicacionProducto.producto_id)))
+            .select_from(UbicacionProducto)
+            .join(Ubicacion, UbicacionProducto.ubicacion_id == Ubicacion.id)
+            .filter(db.or_(Ubicacion.tipo == 'cuarentena',
+                           Ubicacion.zona == 'CUARENTENA',
+                           Ubicacion.tipo_zona == 'AVERIAS'))
+            .first()
+        )
+        return {'unidades': int(filas[0] or 0), 'skus': int(filas[1] or 0)}
+    except Exception as exc:   # pragma: no cover — no puede tumbar el veredicto
+        logger.error('[RECONCILIACION] No se pudo medir la cuarentena: %s', exc)
+        return {'unidades': None, 'skus': None}
+
+
+def _calcular_reconciliacion(inventario_por_bodega: dict) -> dict:
+    """Compara **bodega contra bodega** y declara lo que no se puede comparar.
+
+    Tres respuestas posibles por bodega, no dos:
+
+      · cuadra          — WMS y Siesa dicen lo mismo para ese SKU.
+      · discrepa        — dicen cosas distintas. Va con su bodega en la fila:
+                          una diferencia sin bodega no se puede ir a contar a
+                          ningún lado.
+      · no se puede     — falta un lado entero. Un almacén WMS sin
+        comparar        `bodega_siesa_id`, una bodega WMS que Siesa no reportó,
+                          o una bodega de Siesa sin almacén en el WMS. Antes
+                          estos casos se mezclaban en la suma y desaparecían.
+
+    El veredicto `sin_diferencias` exige cero discrepancias **y** cero
+    incomparables IMPREVISTOS. Es la casilla de la Fase 4 de
+    `docs/arranque_produccion.md` — la luz verde para que los operarios
+    arranquen —, así que «no sé» tiene que pintar distinto de «está bien»…
+    pero también tiene que poder ponerse en verde alguna vez: exigirle cero
+    incomparables **de cualquier clase** la dejaba en ámbar para siempre,
+    porque `AV1` no tiene almacén WMS y nunca lo va a tener. El corte lo hace
+    `_incomparable_esperado()`, que es donde está escrito el porqué de cada
+    exención.
+
+    Nota sobre traslados recibidos: `traslado_service.confirmar_recepcion` manda
+    el ETS a Siesa y no acredita `UbicacionProducto` en el almacén destino. Si
+    las tiendas destino llevan bins en el WMS, ese traslado aparece acá como
+    `SIESA_MAYOR` en la bodega de la tienda — visible y con nombre, en vez de
+    tapado dentro de un total. Si no los llevan, la tienda no tiene almacén y
+    cae en `BODEGA_SIESA_SIN_ALMACEN_WMS`. La pregunta sigue abierta; el
+    resultado la muestra en cualquiera de las dos formas.
+    """
+    wms_por_bodega, wms_sin_bodega = _stock_wms_por_bodega()
+
+    # Total plano — se conserva porque el guard de «carga inicial sin correr» y
+    # la cobertura de catálogo se miden sobre el catálogo, no por bodega.
+    stock_wms_total = {}
+    for mapa in list(wms_por_bodega.values()) + list(wms_sin_bodega.values()):
+        for pid, cant in mapa.items():
+            stock_wms_total[pid] = stock_wms_total.get(pid, 0) + cant
+
+    if not stock_wms_total:
+        # Sin esto, todo Siesa aparecería como SIESA_MAYOR.
+        logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
+        return {
+            'timestamp': datetime.utcnow().isoformat(),
+            'abortado': True,
+            'motivo': 'WMS sin stock mapeado — ejecuta la Carga Inicial primero',
+            'sin_diferencias': False,
+            'total_discrepancias': 0,
+            'discrepancias': [],
+            'total_no_comparable': 0,
+            'total_no_comparable_esperado': 0,
+            'total_no_comparable_imprevisto': 0,
+            'no_comparable': _no_comparable_vacio(),
+            'por_bodega': [],
+        }
+
+    # Un solo mapa código→Producto para todas las bodegas.
+    codigos_siesa = set()
+    for productos in inventario_por_bodega.values():
+        codigos_siesa.update(productos.keys())
+    mapa_codigo = {}
+    if codigos_siesa:
+        for p in (Producto.query
+                  .filter(db.or_(Producto.codigo_siesa.in_(codigos_siesa),
+                                 Producto.codigo.in_(codigos_siesa)))
+                  .all()):
+            if p.codigo_siesa:
+                mapa_codigo[p.codigo_siesa] = p
+            mapa_codigo[p.codigo] = p
+
+    # La tabla `almacenes` es la autoridad sobre qué bodega tiene almacén: un
+    # almacén sin stock sigue siendo una contraparte válida.
+    bodegas_con_almacen = {
+        (a.bodega_siesa_id or '').strip(): a
+        for a in Almacen.query.filter(Almacen.bodega_siesa_id.isnot(None)).all()
+        if (a.bodega_siesa_id or '').strip()
+    }
+    # [53] Pre-cargar en un solo query los productos del lado WMS: el bucle de
+    # SOLO_WMS los necesita por id y con 5000 SKU un N+1 acá cuesta minutos.
+    ids_wms = {pid for mapa in wms_por_bodega.values() for pid in mapa}
+    prods_wms = {
+        p.id: p for p in Producto.query.filter(Producto.id.in_(ids_wms)).all()
+    } if ids_wms else {}
+
+    discrepancias = []
+    por_bodega = []
+    no_comparable = _no_comparable_vacio()
+
+    universo = sorted(set(inventario_por_bodega) | set(wms_por_bodega))
+    for bodega in universo:
+        siesa_b = inventario_por_bodega.get(bodega, {})
+        wms_b = wms_por_bodega.get(bodega, {})
+        unidades_siesa = int(round(sum(d['existencia'] for d in siesa_b.values())))
+        unidades_wms = sum(wms_b.values())
+
+        tiene_almacen = bodega in bodegas_con_almacen
+        tiene_siesa = bodega in inventario_por_bodega
+
+        if not tiene_almacen:
+            if not siesa_b:
+                continue
+            justificacion = _incomparable_esperado(bodega)
+            entrada = {
+                'bodega': bodega,
+                'motivo': _SIN_ALMACEN_WMS,
+                'skus_siesa': len(siesa_b),
+                'unidades_siesa': unidades_siesa,
+                'contraparte_wms': _contraparte_declarada(bodega),
+                # «Previsto y declarado» vs. «nadie lo previó». Lo primero no
+                # descalifica el veredicto; lo segundo sí. Viaja en la fila
+                # para que la pantalla los pinte distinto sin volver a
+                # decidirlo por su cuenta.
+                'esperado': justificacion is not None,
+                'justificacion': justificacion,
+            }
+            no_comparable['bodegas_siesa_sin_almacen_wms'].append(entrada)
+            por_bodega.append({
+                'bodega': bodega, 'comparable': False, 'motivo': _SIN_ALMACEN_WMS,
+                'skus_wms': 0, 'skus_siesa': len(siesa_b),
+                'unidades_wms': 0, 'unidades_siesa': unidades_siesa,
+                'denominador': 0, 'cuadran': 0, 'cuadre_pct': None,
+                'discrepancias': 0,
+                # La misma distinción, en la fila de la tabla por bodega: si la
+                # tabla pintara AV1 igual que una bodega inesperada, la
+                # separación del veredicto no se vería donde se mira primero.
+                'esperado': justificacion is not None,
+            })
+            continue
+
+        if not tiene_siesa:
+            if not wms_b:
+                continue
+            no_comparable['bodegas_wms_sin_datos_siesa'].append({
+                'bodega': bodega,
+                'motivo': _SIN_DATOS_SIESA,
+                'almacen': bodegas_con_almacen[bodega].codigo,
+                'skus_wms': len(wms_b),
+                'unidades_wms': unidades_wms,
+            })
+            por_bodega.append({
+                'bodega': bodega, 'comparable': False, 'motivo': _SIN_DATOS_SIESA,
+                'skus_wms': len(wms_b), 'skus_siesa': 0,
+                'unidades_wms': unidades_wms, 'unidades_siesa': 0,
+                'denominador': 0, 'cuadran': 0, 'cuadre_pct': None,
+                'discrepancias': 0,
+                # Que Siesa no reporte una bodega que el WMS opera nunca está
+                # previsto: o falló la descarga, o alguien dejó de usarla sin
+                # decirlo. Las dos merecen que alguien mire.
+                'esperado': False,
+            })
+            continue
+
+        # ── Comparable: los dos lados existen ──────────────────────────
+        vistos = set()
+        denominador = 0
+        cuadran = 0
+        sin_mapeo = 0
+        discrepancias_bodega = 0
+
+        for codigo, datos in siesa_b.items():
+            existencia = int(round(datos['existencia']))
+            prod = mapa_codigo.get(codigo)
+            if not prod:
+                # Un SKU de Siesa sin producto en el catálogo del WMS tampoco
+                # «cuadra»: no se puede comparar. Antes se descartaba callado.
+                if existencia:
+                    sin_mapeo += 1
+                continue
+            vistos.add(prod.id)
+            total_wms = wms_b.get(prod.id, 0)
+            if total_wms == 0 and existencia == 0:
+                continue   # nada en juego: no infla el denominador
+            denominador += 1
+            diferencia = total_wms - existencia
+            if diferencia == 0:
+                cuadran += 1
+                continue
+            discrepancias_bodega += 1
+            discrepancias.append({
+                'bodega': bodega,
+                'producto_id': prod.id,
+                'codigo': prod.codigo,
+                'nombre': prod.nombre,
+                'stock_wms': total_wms,
+                'stock_siesa': existencia,
+                'diferencia': diferencia,
+                'diferencia_abs': abs(diferencia),
+                'estado': 'WMS_MAYOR' if diferencia > 0 else 'SIESA_MAYOR',
+            })
+
+        for pid, cantidad in wms_b.items():
+            if pid in vistos or cantidad == 0:
+                continue
+            prod = prods_wms.get(pid)
+            if not prod:
+                continue
+            denominador += 1
+            discrepancias_bodega += 1
+            discrepancias.append({
+                'bodega': bodega,
+                'producto_id': pid,
+                'codigo': prod.codigo,
+                'nombre': prod.nombre,
+                'stock_wms': cantidad,
+                'stock_siesa': 0,
+                'diferencia': cantidad,
+                'diferencia_abs': cantidad,
+                'estado': 'SOLO_WMS',
+            })
+
+        no_comparable['skus_siesa_sin_producto_wms'] += sin_mapeo
+        por_bodega.append({
+            'bodega': bodega,
+            'comparable': True,
+            'motivo': None,
+            'skus_wms': len(wms_b),
+            'skus_siesa': len(siesa_b),
+            'unidades_wms': unidades_wms,
+            'unidades_siesa': unidades_siesa,
+            'denominador': denominador,
+            'cuadran': cuadran,
+            'cuadre_pct': round(100.0 * cuadran / denominador, 1) if denominador else None,
+            'discrepancias': discrepancias_bodega,
+            'skus_siesa_sin_producto_wms': sin_mapeo,
+        })
+
+    # Almacenes sin bodega Siesa asignada — el tercer estado más silencioso:
+    # su stock se sumaba al total del WMS y aparecía como sobrante de NB1.
+    for codigo_almacen, productos in sorted(wms_sin_bodega.items()):
+        no_comparable['almacenes_sin_bodega_siesa'].append({
+            'almacen': codigo_almacen,
+            'motivo': _SIN_BODEGA_SIESA,
+            'skus': len(productos),
+            'unidades': sum(productos.values()),
+        })
+
+    discrepancias.sort(key=lambda x: x['diferencia_abs'], reverse=True)
+
+    total_no_comparable = (
+        sum(a['skus'] for a in no_comparable['almacenes_sin_bodega_siesa'])
+        + sum(b['skus_wms'] for b in no_comparable['bodegas_wms_sin_datos_siesa'])
+        + sum(b['skus_siesa'] for b in no_comparable['bodegas_siesa_sin_almacen_wms'])
+        + no_comparable['skus_siesa_sin_producto_wms']
+    )
+
+    # El mismo total, partido en dos: lo que se sabía que iba a pasar y lo que
+    # no. `total_no_comparable` se conserva con el significado de siempre —lo
+    # incomparable, todo— porque es lo que hay que seguir mirando; el veredicto
+    # es el que deja de exigirle cero.
+    total_no_comparable_esperado = sum(
+        b['skus_siesa'] for b in no_comparable['bodegas_siesa_sin_almacen_wms']
+        if b['esperado'])
+    total_no_comparable_imprevisto = (
+        total_no_comparable - total_no_comparable_esperado)
+
+    denominador_total = sum(b['denominador'] for b in por_bodega)
+    cuadran_total = sum(b['cuadran'] for b in por_bodega)
+
+    productos_wms_con_stock = len(stock_wms_total)
+    productos_siesa = len(codigos_siesa)
+    cobertura_pct = (productos_wms_con_stock / productos_siesa * 100) if productos_siesa else 0
+
+    # DEPRECATED (2026-07-28): antes se llamaba a
+    # devolucion_service.crear_tareas_desde_discrepancias() para crear
+    # TareaDevolucion ciegas (sin saber de qué pedido venía el excedente,
+    # sin generar Nota Crédito). Reemplazado por el flujo proactivo de
+    # DevolucionCliente (recepcionista busca el pedido/factura real) —
+    # ver app/services/devolucion_cliente_service.py. La reconciliación
+    # ahora es puramente informativa: las discrepancias SIESA_MAYOR
+    # quedan visibles en GET /api/siesa/reconciliacion-estado para que
+    # alguien las procese manualmente si corresponde a una devolución real.
+    siesa_mayor = [d for d in discrepancias if d.get('estado') == 'SIESA_MAYOR']
+    almacen = _get_almacen()
+    if almacen and cobertura_pct >= 20 and siesa_mayor:
+        logger.warning(
+            f'[RECONCILIACION] {len(siesa_mayor)} discrepancia(s) SIESA_MAYOR — '
+            'informativo únicamente, no se crean tareas (módulo de devolución ciega desactivado)')
+    elif almacen:
+        logger.warning(
+            f'[RECONCILIACION] Cobertura WMS={cobertura_pct:.1f}% (<20%) — informativo únicamente')
+
+    if total_no_comparable_imprevisto:
+        logger.warning(
+            '[RECONCILIACION] %d SKU no se pueden comparar y nadie los previó '
+            '— el veredicto NO es «sin diferencias» aunque las discrepancias '
+            'sean cero', total_no_comparable_imprevisto)
+    if total_no_comparable_esperado:
+        logger.info(
+            '[RECONCILIACION] %d SKU incomparables PREVISTOS (%s) — se declaran '
+            'y no descalifican el veredicto', total_no_comparable_esperado,
+            ', '.join(b['bodega'] for b in
+                      no_comparable['bodegas_siesa_sin_almacen_wms']
+                      if b['esperado']))
+
+    return {
+        'timestamp': datetime.utcnow().isoformat(),
+        # ⚠ CAMBIO DE SIGNIFICADO (2026-08-20): antes exigía cero incomparables
+        # de cualquier clase, y con AV1 sin almacén —que nunca lo va a tener—
+        # el verde era inalcanzable. Ahora exige cero discrepancias y cero
+        # incomparables IMPREVISTOS. Los previstos siguen publicados, contados
+        # y pintados; lo que dejan de hacer es descalificar la Fase 4.
+        'sin_diferencias': not discrepancias and not total_no_comparable_imprevisto,
+        'total_productos_siesa': productos_siesa,
+        'total_productos_wms': productos_wms_con_stock,
+        'cobertura_pct': round(cobertura_pct, 1),
+        'devoluciones_activas': cobertura_pct >= 20,
+        'total_discrepancias': len(discrepancias),
+        'discrepancias': discrepancias[:100],
+        # El denominador del cuadre, visible. Un conteo de discrepancias sin
+        # cuántos SKU se compararon no se puede interpretar.
+        'cuadre_pct': round(100.0 * cuadran_total / denominador_total, 1) if denominador_total else None,
+        'skus_comparados': denominador_total,
+        'skus_cuadran': cuadran_total,
+        'bodegas_comparadas': sorted(b['bodega'] for b in por_bodega if b['comparable']),
+        'por_bodega': por_bodega,
+        'total_no_comparable': total_no_comparable,
+        'total_no_comparable_esperado': total_no_comparable_esperado,
+        'total_no_comparable_imprevisto': total_no_comparable_imprevisto,
+        'no_comparable': no_comparable,
+    }
+
+
+def _no_comparable_vacio():
+    return {
+        'almacenes_sin_bodega_siesa': [],
+        'bodegas_wms_sin_datos_siesa': [],
+        'bodegas_siesa_sin_almacen_wms': [],
+        'skus_siesa_sin_producto_wms': 0,
+    }
+
+
+#: Por qué cada bodega de servicio no puede tener almacén en el WMS. Es la
+#: **lista de excepciones al veredicto**, y por eso está escrita entera y con
+#: motivo por bodega: una lista de excepciones sin justificación se convierte en
+#: el sitio donde alguien mete lo que le molesta. Dos entradas, las mismas dos
+#: que `CLAUDE.md` declara bodegas de servicio, vigiladas por
+#: `tests/test_reconciliacion_por_bodega.py::TestLaListaDeExentasEsCortaYVigilada`.
+_JUSTIFICACION_SIN_ALMACEN = {
+    'AV1': ('Averías CDI — el WMS deja la avería en una ubicación AVERIADOS '
+            '(cuarentena) dentro de NB1, no en un almacén propio. La '
+            'contraparte existe, está medida y no se cuadra.'),
+    'TRA1': ('Bodega en Tránsito — el STS descuenta del origen y el ETS '
+             'acredita en el destino. Que quede saldo mientras un traslado '
+             'viaja es la operación normal; el limbo que sí importa lo mide '
+             '`auditoria/traslados`, que puede ver la ANTIGÜEDAD y esta '
+             'comparación no.'),
+}
+
+
+def _incomparable_esperado(bodega: str):
+    """¿Esta bodega de Siesa sin almacén WMS estaba prevista? Devuelve el motivo.
+
+    **Una política, una función.** El veredicto y la pantalla preguntan lo
+    mismo y tienen que recibir la misma respuesta; escribirlo dos veces es la
+    divergencia que la Regla 0 prohíbe.
+
+    Por qué existe la distinción: `sin_diferencias` exigía cero incomparables de
+    cualquier clase, y `AV1` no tiene almacén WMS y **nunca lo va a tener**
+    (`CLAUDE.md` la declara bodega de servicio). Cada avería la ponía en
+    `bodegas_siesa_sin_almacen_wms`, o sea que la casilla de la Fase 4 de
+    `docs/arranque_produccion.md` —la luz verde para que los operarios
+    arranquen— quedaba en ámbar **estructuralmente**. Una casilla que no se
+    puede poner en verde deja de mirarse, y lo que se deja de mirar no avisa de
+    nada: el ámbar permanente no es conservador, es ruido.
+
+    Lo que sí tiene que descalificar es el incomparable **que nadie previó** —
+    una bodega de Siesa con saldo que no está en esta lista. Ahí «no sé» sigue
+    sin ser «está bien».
+
+    Exigir las DOS condiciones —estar en `_BODEGAS_SERVICIO` y tener
+    contraparte declarada— no es redundante: es lo que impide que agregar una
+    bodega a la lista de descarga la exima de paso del veredicto. Eximir cuesta
+    escribir por qué.
+    """
+    if bodega not in _BODEGAS_SERVICIO:
+        return None
+    if _contraparte_declarada(bodega) is None:
+        return None
+    return _JUSTIFICACION_SIN_ALMACEN.get(bodega)
+
+
+def _contraparte_declarada(bodega: str):
+    """Dónde guarda el WMS lo que Siesa tiene en una bodega de servicio.
+
+    `AV1`: el WMS deja la avería en una ubicación `AVERIADOS` **dentro de NB1**,
+    así que la contraparte existe pero no es un almacén — se declara medida y
+    con `comparable: False`. Sin esto, la avería producía un `WMS_MAYOR`
+    permanente en NB1 que nadie sabía explicar.
+
+    `TRA1`: no hay contraparte. El STS descuenta del origen y el ETS acredita en
+    el destino; lo que quede en tránsito es el limbo, y decir que «cuadra» sería
+    justo lo contrario de detectarlo.
+    """
+    if bodega == connekta.bodega_averias or bodega == 'AV1':
+        medida = _cuarentena_wms()
+        return {
+            'tipo': 'UBICACION',
+            'descripcion': f'Ubicación AVERIADOS (cuarentena) dentro de {connekta.bodega}',
+            'comparable': False,
+            **medida,
+        }
+    if bodega == connekta.bodega_transito or bodega == 'TRA1':
+        return {
+            'tipo': None,
+            'descripcion': 'Sin contraparte en el WMS — mercancía en tránsito',
+            'comparable': False,
+        }
+    return None
+
 
 def _run_reconciliacion(app):
     """Lógica real de reconciliación — corre en hilo de fondo."""
@@ -891,150 +1488,25 @@ def _run_reconciliacion(app):
             _estado_reconciliacion['en_curso'] = False
             return
         try:
-            # Stock WMS: una sola query bulk (no N+1)
-            stock_wms_rows = (
-                db.session.query(
-                    UbicacionProducto.producto_id,
-                    func.sum(UbicacionProducto.cantidad).label('total')
-                )
-                .group_by(UbicacionProducto.producto_id)
-                .all()
-            )
-            stock_wms = {row.producto_id: int(row.total) for row in stock_wms_rows}
-            productos_ids = set(stock_wms.keys())
-
-            # Guard: si el WMS no tiene ningún producto mapeado, la carga inicial
-            # no se ha ejecutado — la reconciliación no tiene sentido y generaría
-            # miles de devoluciones falsas (todo Siesa aparecería como SIESA_MAYOR).
-            if not stock_wms:
-                _estado_reconciliacion['ultimo_resultado'] = {
-                    'timestamp': datetime.utcnow().isoformat(),
-                    'abortado': True,
-                    'motivo': 'WMS sin stock mapeado — ejecuta la Carga Inicial primero',
-                    'total_discrepancias': 0,
-                    'discrepancias': [],
-                }
-                _estado_reconciliacion['en_curso'] = False
-                logger.warning('[RECONCILIACION] Abortada: ubicacion_productos vacía — ejecuta carga inicial')
-                return
-
             # Liberar la conexión DB antes del HTTP download (puede tardar 2+ min).
             # Sin este commit, la sesión retiene la conexión del pool durante toda la descarga
             # bloqueando requests concurrentes en un pool pequeño (Railway: 5-10 conexiones).
             db.session.commit()
 
-            # forzar=True: descarga datos frescos de Siesa ignorando el cache de la carga inicial.
-            # Sin esto, si la carga inicial corrió hace <1h, la reconciliación compararía
-            # el WMS (ya actualizado) contra los mismos datos Siesa → falsos negativos Y
-            # si el WMS tiene picks intermedios → TareaDevolucion falsas.
-            inventario_siesa = _descargar_inventario_siesa(forzar=True)
+            # Se descarga el diccionario POR BODEGA, no la vista aplastada de
+            # `connekta.bodega`: el lado de Siesa ya venía por bodega y se
+            # aplastaba justo antes de comparar. Forzado, para no comparar el
+            # WMS de ahora contra un cache de la carga inicial de hace un rato.
+            inventario_por_bodega = _descargar_inventario_multibodega_para_reconciliar()
 
-            codigos_siesa = list(inventario_siesa.keys())
-            prods_siesa = (
-                Producto.query
-                .filter(
-                    db.or_(
-                        Producto.codigo_siesa.in_(codigos_siesa),
-                        Producto.codigo.in_(codigos_siesa)
-                    )
-                )
-                .all()
-            )
-            mapa_codigo = {}
-            for p in prods_siesa:
-                if p.codigo_siesa:
-                    mapa_codigo[p.codigo_siesa] = p
-                mapa_codigo[p.codigo] = p
-
-            discrepancias = []
-
-            for codigo, datos in inventario_siesa.items():
-                existencia_siesa = int(round(datos['existencia']))
-                prod = mapa_codigo.get(codigo)
-                if not prod:
-                    continue
-                total_wms = stock_wms.get(prod.id, 0)
-                diferencia = total_wms - existencia_siesa
-                if diferencia != 0:
-                    discrepancias.append({
-                        'producto_id': prod.id,
-                        'codigo': prod.codigo,
-                        'nombre': prod.nombre,
-                        'stock_wms': total_wms,
-                        'stock_siesa': existencia_siesa,
-                        'diferencia': diferencia,
-                        'diferencia_abs': abs(diferencia),
-                        'estado': 'WMS_MAYOR' if diferencia > 0 else 'SIESA_MAYOR'
-                    })
-                productos_ids.discard(prod.id)
-
-            # [53] Pre-cargar productos SOLO_WMS en dict antes del loop (evita N+1)
-            solo_wms_ids = [pid for pid in productos_ids if stock_wms.get(pid, 0) > 0]
-            solo_wms_prods = {
-                p.id: p
-                for p in Producto.query.filter(Producto.id.in_(solo_wms_ids)).all()
-            } if solo_wms_ids else {}
-
-            for prod_id in productos_ids:
-                total_wms = stock_wms.get(prod_id, 0)
-                if total_wms == 0:
-                    continue
-                prod = solo_wms_prods.get(prod_id)
-                if not prod:
-                    continue
-                discrepancias.append({
-                    'producto_id': prod_id,
-                    'codigo': prod.codigo,
-                    'nombre': prod.nombre,
-                    'stock_wms': total_wms,
-                    'stock_siesa': 0,
-                    'diferencia': total_wms,
-                    'diferencia_abs': total_wms,
-                    'estado': 'SOLO_WMS'
-                })
-
-            discrepancias.sort(key=lambda x: x['diferencia_abs'], reverse=True)
-
-            ts = datetime.utcnow().isoformat()
-
-            # Disparar creación automática de tareas de logística inversa
-            # Solo si WMS tiene cobertura suficiente: >= 20% de los productos de Siesa.
-            # Si la cobertura es baja, la reconciliación es informativa únicamente —
-            # no creamos devoluciones porque casi todo aparecería como SIESA_MAYOR.
-            productos_wms_con_stock = len(stock_wms)
-            productos_siesa = len(inventario_siesa)
-            cobertura_pct = (productos_wms_con_stock / productos_siesa * 100) if productos_siesa else 0
-
-            # DEPRECATED (2026-07-28): antes se llamaba a
-            # devolucion_service.crear_tareas_desde_discrepancias() para crear
-            # TareaDevolucion ciegas (sin saber de qué pedido venía el excedente,
-            # sin generar Nota Crédito). Reemplazado por el flujo proactivo de
-            # DevolucionCliente (recepcionista busca el pedido/factura real) —
-            # ver app/services/devolucion_cliente_service.py. La reconciliación
-            # ahora es puramente informativa: las discrepancias SIESA_MAYOR
-            # quedan visibles en GET /api/siesa/reconciliacion-estado para que
-            # alguien las procese manualmente si corresponde a una devolución real.
-            siesa_mayor = [d for d in discrepancias if d.get('estado') == 'SIESA_MAYOR']
-            almacen = _get_almacen()
-            if almacen and cobertura_pct >= 20 and siesa_mayor:
-                logger.warning(
-                    f'[RECONCILIACION] {len(siesa_mayor)} discrepancia(s) SIESA_MAYOR — '
-                    'informativo únicamente, no se crean tareas (módulo de devolución ciega desactivado)'
-                )
-            elif almacen:
-                logger.warning(
-                    f'[RECONCILIACION] Cobertura WMS={cobertura_pct:.1f}% (<20%) — informativo únicamente'
-                )
-
-            _estado_reconciliacion['ultimo_resultado'] = {
-                'timestamp': ts,
-                'total_productos_siesa': productos_siesa,
-                'total_productos_wms': productos_wms_con_stock,
-                'cobertura_pct': round(cobertura_pct, 1),
-                'devoluciones_activas': cobertura_pct >= 20,
-                'total_discrepancias': len(discrepancias),
-                'discrepancias': discrepancias[:100]
-            }
+            # El guard de «WMS sin stock mapeado» vive DENTRO del cálculo, así
+            # que ahora se evalúa después de la descarga y no antes. Es a
+            # propósito: la política de cuándo abortar se escribe una sola vez
+            # (Regla 0, corolario). El costo es una descarga en un estado que
+            # solo ocurre antes de la primera carga inicial — y esa descarga
+            # deja el cache caliente, no se tira.
+            _estado_reconciliacion['ultimo_resultado'] = _calcular_reconciliacion(
+                inventario_por_bodega)
             _estado_reconciliacion['ultimo_error'] = None
 
         except Exception as e:

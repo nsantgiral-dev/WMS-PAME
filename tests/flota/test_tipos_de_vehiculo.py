@@ -18,7 +18,7 @@ siempre, el desplegable no la ofrecía, y BDT261 no se podía registrar bien.
 import re
 from pathlib import Path
 
-from flota.dominio.valores import POSICIONES_LLANTA_POR_TIPO, _normalizar
+from flota.dominio.valores import POSICIONES_LLANTA_POR_TIPO, normalizar_tipo
 
 _INDEX = Path(__file__).resolve().parents[2] / 'app' / 'static' / 'pwa' / 'index.html'
 
@@ -42,7 +42,7 @@ class TestElFormularioNoOfreceTiposQueElDominioIgnora:
 
     def test_toda_opcion_esta_en_el_mapa_de_llantas(self):
         faltan = [o for o in _opciones_del_desplegable()
-                  if _normalizar(o) not in POSICIONES_LLANTA_POR_TIPO]
+                  if normalizar_tipo(o) not in POSICIONES_LLANTA_POR_TIPO]
         assert not faltan, (
             f'\nTipos ofrecidos en el formulario que el dominio no conoce: {faltan}\n'
             f'Cada vehículo registrado así va a pedir 4 fotos de llanta por '
@@ -62,5 +62,5 @@ class TestElFormularioNoOfreceTiposQueElDominioIgnora:
     def test_la_normalizacion_tolera_tildes_y_mayusculas(self):
         """`Camión` del formulario tiene que encontrar `camion` del mapa —
         si no, el tipo más común del parque cae al fallback."""
-        assert _normalizar('Camión') in POSICIONES_LLANTA_POR_TIPO
-        assert _normalizar('CAMIONETA') in POSICIONES_LLANTA_POR_TIPO
+        assert normalizar_tipo('Camión') in POSICIONES_LLANTA_POR_TIPO
+        assert normalizar_tipo('CAMIONETA') in POSICIONES_LLANTA_POR_TIPO

@@ -155,6 +155,53 @@ def toca_avisar_vencimiento(vencimiento: date, hoy: date,
     return 0 <= restantes <= dias_antes
 
 
+def toca_avisar_vencido(vencimiento: date, hoy: date) -> bool:
+    """¿Este documento YA venció, y hay que insistir?
+
+    La «otra vía» que el docstring de arriba nombraba y **que no existía**.
+
+    `toca_avisar_vencimiento` excluye a propósito los ya vencidos: renovar antes
+    y circular ilegal no son el mismo mensaje. Pero la vía alternativa era el
+    contador `documentos_vencidos` del health — un endpoint que **no tiene un
+    solo consumidor en todo el repo**. O sea: si nadie renovó dentro de los 15
+    días, el canal se callaba justo cuando el vehículo pasaba a ser ilegal, y el
+    número que lo sabía no lo miraba nadie.
+
+    Medido el 2026-09-01 contra producción: hay **una RTM vencida desde
+    2025-11-11** que nunca generó ni va a generar un aviso.
+
+    Un vencido es una alarma que no se apaga sola: el camión sigue siendo
+    ilegal cada día hasta que alguien renueve. Por eso devuelve `True` siempre
+    que esté vencido — la cadencia la decide la clave de idempotencia, no esta
+    función. Mezclarlas haría que el aviso dependiera de en qué día corrió el
+    cron, que es el defecto que la ventana de arriba existe para evitar.
+    """
+    if vencimiento is None:
+        return False
+    return (vencimiento - hoy).days < 0
+
+
+def hito_semanal(hoy: date) -> str:
+    """`2026-W36` — el hito que hace que un vencido avise UNA vez por semana.
+
+    Ni una sola vez ni todos los días, y las dos alternativas son peores:
+
+    · **Una vez** (hito = la fecha de vencimiento) es el silencio de hoy con
+      un mensaje adelante. Si ese aviso se pierde —teléfono cambiado, canal
+      apagado esa noche— el camión queda ilegal y nadie vuelve a decir nada.
+    · **Todos los días** silencia el chat en tres días, y entonces el aviso que
+      importa llega a un silencio. Es lo que el docstring de `clave_aviso` ya
+      declara como el motivo de que exista el hito.
+
+    Semanal es una cadencia de notificación, no un umbral sobre el dato: no
+    decide si algo está mal, decide cada cuánto se repite algo que ya se sabe
+    que está mal. Y se apaga sola — el día que el documento se renueva cambia
+    su `fecha_vencimiento`, deja de estar vencido y el barrido no lo mira más.
+    """
+    ano, semana, _ = hoy.isocalendar()
+    return f'{ano}-W{semana:02d}'
+
+
 def clave_aviso(plantilla: str, entidad: str, entidad_id: int, hito: str) -> str:
     """Identidad del aviso: una notificación por EVENTO, no por consulta.
 

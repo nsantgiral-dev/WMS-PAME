@@ -26,6 +26,13 @@ from app.models.siesa_job import SiesaJob, EstadoSiesaJob
 from app.services.connekta_gateway import connekta
 from app.services.recepcion_service import RecepcionService
 from app.utils.fecha import ahora_bogota as _ahora_bogota
+# La política única de «esto no es vendible» — un solo sitio la define y este
+# servicio, que es el escritor VIVO de bins de averías, la obedece en vez de
+# re-escribirla. Ver el bloque de cabecera de picking_service.py.
+from app.services.picking_service import (
+    campos_ubicacion_averias as _campos_ubicacion_averias,
+    es_ubicacion_vendible as _es_ubicacion_vendible,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -322,11 +329,25 @@ class DevolucionClienteService:
         devolucion.fecha_confirmacion = datetime.utcnow()
 
         # [P8] SiesaJob creado ANTES del commit final — atómico con el inventario.
+        #
+        # `f470_rowid` va en el payload porque es **la clave del cruce** de
+        # `_construir_lineas_nc`, no un adorno de diagnóstico. Con solo la
+        # referencia, un producto de doble unidad —la misma referencia facturada
+        # en dos líneas, PQ y UND, cada una con su rowid y su valor— matcheaba
+        # las DOS filas de la factura con el mismo item y las metía a la nota
+        # crédito con la cantidad completa: `F353_VLR_CRUCE` de más contra la
+        # cartera (Regla 21) y reingreso de inventario que nadie devolvió.
+        # El dato ya venía entero desde `buscar_pedido` → PWA → la columna
+        # `LineaDevolucionCliente.f470_rowid`; se perdía justo acá, en el último
+        # salto. `f470_id_unidad_medida` viaja para que el mensaje de error y el
+        # log digan PQ o UND en vez de repetir dos veces la misma referencia.
         items_devueltos = [
             {
                 'codigo': l.codigo_siesa,
                 'cantidad_devuelta': float(l.cantidad_devuelta),
                 'es_averiado': l.es_averiado,
+                'f470_rowid': l.f470_rowid,
+                'f470_id_unidad_medida': l.f470_id_unidad_medida,
             }
             for l in devolucion.lineas
             if float(l.cantidad_devuelta or 0) > 0
@@ -427,9 +448,24 @@ class DevolucionClienteService:
         if es_averiado:
             ub = Ubicacion.query.filter_by(codigo=_UBICACION_AVERIADOS, almacen_id=almacen_id).first()
             if not ub:
+                # Los campos los pone la política única (`picking_service.
+                # campos_ubicacion_averias`), no este archivo.
+                #
+                # **Este es el escritor VIVO.** El arreglo del 2026-08-20 cayó
+                # primero en `devolucion_service.py`, que está DEPRECATED desde
+                # el 2026-07-28 y no tiene ningún caller de producción: el bin
+                # se seguía creando mal por acá. La migración `m016` limpia los
+                # que ya existen; sin esta línea, este camino los volvía a crear
+                # con `tipo_zona` en el default del modelo ('GENERAL', o sea
+                # VENDIBLE) y la mercancía recién declarada averiada volvía a
+                # entrar al FEFO de pedidos de cliente.
+                #
+                # Con dos implementaciones y una sin caller, el arreglo cae en
+                # la muerta y los tests no avisan: los de la muerta pasan.
                 ub = Ubicacion(
                     codigo=_UBICACION_AVERIADOS, almacen_id=almacen_id,
-                    zona='CUARENTENA', tipo='cuarentena', activo=True,
+                    activo=True,
+                    **_campos_ubicacion_averias(),
                 )
                 db.session.add(ub)
                 try:
@@ -439,6 +475,31 @@ class DevolucionClienteService:
                     ub = Ubicacion.query.filter_by(codigo=_UBICACION_AVERIADOS, almacen_id=almacen_id).first()
                     if not ub:
                         raise
+            elif _es_ubicacion_vendible(ub):
+                # Bin de averías que YA existía sin marcar. `m016` corrige las
+                # filas de producción, pero una base que no la haya corrido
+                # todavía —o una copia— seguiría despachando esta mercancía a
+                # clientes.
+                #
+                # **El docstring de m016 promete esta red** («el propio servicio
+                # la vuelve a corregir la próxima vez que alguien confirme una
+                # avería ahí») para justificar un `WHERE` estrecho. La rama se
+                # escribió el 2026-08-20 en `devolucion_service.py`, que está
+                # DEPRECATED y sin caller: la promesa no existía en el camino
+                # vivo. Segunda mitad del mismo gemelo muerto.
+                #
+                # Misma condición estrecha del backfill: solo el bin de averías
+                # de este servicio, solo cuando estamos metiéndole una avería.
+                # Marcar de más sacaría del FEFO stock vendible — el error caro
+                # en la dirección contraria.
+                for _campo, _valor in _campos_ubicacion_averias().items():
+                    setattr(ub, _campo, _valor)
+                logger.warning(
+                    '[DEV_CLIENTE] Ubicación %s (id=%s) estaba marcada como '
+                    'vendible — corregida a zona de averías. Su stock estuvo '
+                    'disponible para pedidos de cliente.',
+                    ub.codigo, ub.id,
+                )
             return ub
 
         slot_fijo = Ubicacion.query.filter_by(

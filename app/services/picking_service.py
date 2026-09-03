@@ -16,6 +16,111 @@ from app.models.producto import Producto
 from app.models.ubicacion import Ubicacion
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# LA POLÍTICA ÚNICA — «¿este stock se puede vender?»
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Una política, una función (corolario de la Regla 0 de CLAUDE.md). El
+# 2026-08-20 esta pregunta estaba escrita tres veces y las tres respondían
+# distinto:
+#
+#   · `calcular_fefo`               → `tipo_zona != 'AVERIAS'`
+#   · `consulta_productos_bajo_minimo` → `tipo_zona notin ('AVERIAS',)`
+#   · `inventario_siesa_service._cuarentena_wms`
+#         → `tipo == 'cuarentena' OR zona == 'CUARENTENA' OR tipo_zona == 'AVERIAS'`
+#
+# Y el escritor más grande de averías —`devolucion_cliente_service._resolver_ubicacion`,
+# que es el VIVO; `devolucion_service` está DEPRECATED y sin callers—
+# con `es_averiado=True`— escribía las DOS primeras señales y ninguna de las que
+# las dos primeras consultas miran: el bin `AVERIADOS` nacía con el default del
+# modelo, `tipo_zona='GENERAL'`. Los dos filtros nuevos quedaron verdes porque
+# probaban al OTRO escritor (`layout_service.crear_ubicacion_averias`, que sí
+# marca `tipo_zona`), mientras la mercancía devuelta como averiada salía al FEFO
+# y tapaba el mínimo del tablero.
+#
+# ── Por qué UN campo canónico y no la condición de tres ──────────────────────
+#
+# `tipo_zona` es el campo que Siesa gobierna (API_v2_Ubicaciones), el que el
+# sync clasifica, el que el modelo declara `nullable=False` con default, el
+# único indexable con una sola condición, y ya es el que usa la dirección
+# contraria de esta misma pregunta (`_ubicacion_averias_disponible`, «dame un
+# bin de averías»). Una condición de tres campos hace lo opuesto de unificar:
+# deja tres maneras válidas de decir lo mismo, así que un cuarto escritor puede
+# marcar dos de tres y volver a pasar. Además `zona` y `tipo` son texto libre
+# sin catálogo — nada impide que mañana alguien escriba 'Cuarentena'.
+#
+# El precio del campo único es el backfill de los bins ya creados en producción:
+# `migrations/versions/m016_bin_averiados_sin_tipo_zona.py`.
+#
+# ── Dónde debería vivir ──────────────────────────────────────────────────────
+#
+# El sitio natural es `app/models/ubicacion.py`, junto a `CODIGO_GENERAL` y a
+# `es_picking`/`es_reserva`: es una propiedad de la ubicación, no del picking.
+# Ese archivo no es de este agente en esta tanda (2026-08-20) — queda acá, que
+# es el consumidor caliente, y MOVERLO ES EL PRÓXIMO PASO, no un pendiente
+# cosmético. Al moverlo hay que mover con él el trinquete
+# `tests/test_politica_vendible_unica.py`, que apunta a este módulo por nombre.
+
+ZONA_AVERIAS = 'AVERIAS'
+
+# Señales legadas que los dos escritores de devoluciones ya venían poniendo en
+# el bin `AVERIADOS`. NO son la política —`tipo_zona` lo es— pero se siguen
+# escribiendo porque `inventario_siesa_service._cuarentena_wms` (que no es de
+# este agente) mide la cuarentena con un OR sobre las tres: dejar de escribirlas
+# cambiaría en silencio la población que ese reporte declara.
+ZONA_LEGADA_CUARENTENA = 'CUARENTENA'
+TIPO_LEGADO_CUARENTENA = 'cuarentena'
+
+
+def filtro_ubicacion_vendible():
+    """
+    Cláusula SQLAlchemy: la ubicación contiene stock que SE PUEDE VENDER.
+
+    Se usa como filtro sobre `Ubicacion` (o sobre cualquier consulta que ya
+    tenga el join hecho). Es el complemento exacto de
+    `filtro_ubicacion_averias()` — las dos leen el mismo campo, así que no
+    pueden divergir.
+    """
+    return Ubicacion.tipo_zona != ZONA_AVERIAS
+
+
+def filtro_ubicacion_averias():
+    """
+    Cláusula SQLAlchemy: la ubicación es zona de averías (mercancía dañada o en
+    revisión, `app/models/ubicacion.py:39`).
+
+    Dirección contraria de la misma pregunta. Existe para que «dame el stock
+    averiado» y «excluí el stock averiado» no se escriban con criterios
+    distintos, que es como empezó este defecto.
+    """
+    return Ubicacion.tipo_zona == ZONA_AVERIAS
+
+
+def es_ubicacion_vendible(ubicacion) -> bool:
+    """Versión en Python de `filtro_ubicacion_vendible()`, para objetos ya
+    cargados. Misma respuesta que la de SQL, por construcción."""
+    return getattr(ubicacion, 'tipo_zona', None) != ZONA_AVERIAS
+
+
+def campos_ubicacion_averias() -> dict:
+    """
+    Los campos que un escritor DEBE poner al crear un bin de averías para que la
+    política de arriba lo reconozca.
+
+    Existe para cerrar el hueco por el que entró este defecto: el escritor y el
+    lector acordaban de palabra (un comentario que decía «el picking filtra tipo
+    != cuarentena», un filtro que jamás existió) en vez de compartir código. Con
+    esto, agregar un campo a la política lo heredan todos los escritores que la
+    usan; el que no la use lo delata el trinquete
+    `tests/test_politica_vendible_unica.py`.
+    """
+    return {
+        'tipo_zona': ZONA_AVERIAS,
+        'zona': ZONA_LEGADA_CUARENTENA,
+        'tipo': TIPO_LEGADO_CUARENTENA,
+    }
+
+
 class PickingService:
 
     @staticmethod
@@ -25,16 +130,26 @@ class PickingService:
         (AVE1, AVE2...) y devuelve la primera con capacidad disponible.
         Si ninguna tiene capacidad_maxima configurada, no bloquea el registro
         de la avería — usa la primera del orden como respaldo.
+
+        Los códigos que no son `AVE<n>` van AL FINAL, no al principio. Antes
+        ordenaban con clave 0 —delante de AVE1— y eso no se notaba porque el
+        único código no-AVE de esta zona (`AVERIADOS`, el bin de devoluciones)
+        no estaba marcado como AVERIAS y por lo tanto nunca era candidato. Al
+        marcarlo, la avería de una auditoría de picking habría empezado a caer
+        en el bin de devoluciones en vez de AVE1, en silencio y sin que nadie lo
+        hubiera pedido. El destino de hoy se conserva.
         """
         import re
 
         def _orden(ub):
             m = re.match(r'^AVE(\d+)', ub.codigo, re.IGNORECASE)
-            return (int(m.group(1)) if m else 0, ub.codigo)
+            return (int(m.group(1)) if m else float('inf'), ub.codigo)
 
         candidatas = sorted(
-            Ubicacion.query.filter_by(
-                almacen_id=almacen_id, tipo_zona='AVERIAS', activo=True
+            Ubicacion.query.filter(
+                Ubicacion.almacen_id == almacen_id,
+                filtro_ubicacion_averias(),
+                Ubicacion.activo.is_(True),
             ).all(),
             key=_orden,
         )
@@ -57,13 +172,29 @@ class PickingService:
         Prioriza lotes que vencen primero.
         Retorna lista de {ubicacion, cantidad, lote, fecha_vencimiento}
 
-        Ubicaciones reales de Layout (PICKING/RESERVA/AVERIAS) van antes que
-        GENERAL (SIESA-GENERAL, el bucket sin ubicación física del sync de
-        Siesa) — sin este criterio, un hueco recién organizado con fecha de
-        ingreso reciente siempre pierde contra GENERAL mientras a este le
-        quede stock, aunque sea de meses atrás: "antigüedad" no es lo mismo
-        que "ubicación real". GENERAL sigue sirviendo de respaldo automático
-        si el hueco real no alcanza a cubrir toda la cantidad pedida.
+        AVERIAS queda FUERA — no es una prioridad más baja, es stock que no
+        existe para un pedido. Quién es AVERIAS lo decide
+        `filtro_ubicacion_vendible()`, la política única de este módulo, no un
+        literal escrito acá: la copia de esa condición es exactamente lo que
+        dejó pasar la mercancía del bin `AVERIADOS` de devoluciones.
+        `app/models/ubicacion.py:39` la define como
+        «productos dañados/en revisión», y ahí es donde `auditar_tarea` deja lo
+        que un operario reportó roto. Ese stock no se mueve, así que su
+        `fecha_ingreso` es casi siempre la más vieja del producto: sin excluirla
+        **ganaba el FEFO**, se generaba una TareaPicking contra ella y la
+        mercancía averiada salía hacia un cliente. Dejarla como última opción
+        tampoco sirve: como respaldo taparía un faltante que hay que declarar
+        (Regla 0) — que el pedido salga corto lo corrige alguien mañana; una
+        caja rota entregada, no.
+
+        Las zonas vendibles conservan su orden anterior sin cambios: ubicaciones
+        reales de Layout (PICKING/RESERVA/IMPORTADOS) van antes que GENERAL
+        (SIESA-GENERAL, el bucket sin ubicación física del sync de Siesa) — sin
+        este criterio, un hueco recién organizado con fecha de ingreso reciente
+        siempre pierde contra GENERAL mientras a este le quede stock, aunque sea
+        de meses atrás: "antigüedad" no es lo mismo que "ubicación real".
+        GENERAL sigue sirviendo de respaldo automático si el hueco real no
+        alcanza a cubrir toda la cantidad pedida.
         """
         _prioridad_zona = case((Ubicacion.tipo_zona == 'GENERAL', 1), else_=0)
 
@@ -73,6 +204,7 @@ class PickingService:
             .filter(
                 UbicacionProducto.producto_id == producto_id,
                 Ubicacion.almacen_id == almacen_id,
+                filtro_ubicacion_vendible(),
                 UbicacionProducto.cantidad > 0
             )
             .order_by(

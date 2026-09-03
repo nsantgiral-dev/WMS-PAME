@@ -26,7 +26,7 @@ tienda.js       (1,160)         Módulo tienda
 etiquetas.js      (110)         Impresión de etiquetas
 vigia.js          (513)         Panel CUSUM, alarmas, carga de series
 compras_ia.js     (394)         Acuerdos marco, Armador, deriva, inteligencia inventario
-flota.js        (1,839)         Custodia de vehículos, ficha, documentos, avisos
+flota.js        (2,198)         Custodia de vehículos, ficha, documentos, avisos, daños
 kardex.js         (446)         Motor kardex
 temporada.js      (365)         Temporada escolar
 ```
@@ -43,7 +43,7 @@ Paquete propio en la raíz, con arquitectura hexagonal (`dominio/`,
 `adaptadores/`, `api/`, `puertos.py`) — distinta del resto del repo, que es
 `routes/` + `services/` + `models/`.
 
-**Un `grep` acotado a `app/` no lo ve.** Sus 17 endpoints están registrados
+**Un `grep` acotado a `app/` no lo ve.** Sus 21 endpoints están registrados
 (`/flota/*`) y funcionan; buscarlos en `app/routes/` da cero resultados y la
 conclusión natural —«esto es UI muerta»— es falsa. Para verificar si un
 endpoint existe, la fuente es el `url_map`:
@@ -59,6 +59,7 @@ print([str(r) for r in create_app().url_map.iter_rules() if 'flota' in str(r)])"
 | `FLOTA_AVISOS` | Enciende el barrido de vencimientos. **Nace apagado** — un cron que escribe no se enciende solo |
 | `FLOTA_AVISOS_REALES` | Segunda decisión explícita: sin ella el barrido registra pero no manda |
 | `FLOTA_AVISO_TELEFONOS` | Destinatarios |
+| `FLOTA_PREVENTIVO` | Enciende el cron de **siembra del plan preventivo** desde la ficha técnica (05:30 Bogotá). **Nace apagado**, default ausente = `false`. El primer ciclo escribe hasta ~36 filas de plan y **manda cero avisos**: ninguna tarea tiene ejecución registrada todavía, y una tarea sin línea base no está al día ni vencida. Nace apagado igual, porque la regla 10 no se dobla con un argumento y porque el ciclo peligroso no es el primero sino el que sigue a una carga masiva del historial del taller |
 | `FLOTA_FOTOS_DIR` | Almacén de fotos de custodia |
 | `GUPSHUP_API_KEY` · `GUPSHUP_SOURCE` · `GUPSHUP_APP_NAME` · `GUPSHUP_TEMPLATE_IDS` | Canal WhatsApp. **`GUPSHUP_SOURCE` es la línea de mensajería cuya habilitación a producción depende de un tercero** — la misma que BK-OPS-01 §4.3 lista bajo Gestor de Cartera. Un número, dos consumidores |
 
@@ -108,8 +109,32 @@ Buscar aquí antes de darlos por inexistentes:
 | API_v2_ItemsBarras | `get_item_por_barras()` | Barcode → SKU |
 | API_v2_ItemsUnidadesMedida | `get_items_unidades_medida()` | Factores de conversión empaque |
 | API_v2_Ubicaciones | `get_ubicaciones_siesa()` | Ubicaciones por bodega |
-| API_v2_Ventas_Facturas_DesdePedido | `get_factura_desde_pedido()`, `get_rowids_factura()` | Anti-duplicado FE, rowids para NCE, base gravable |
+| API_v2_Ventas_Facturas_DesdePedido | `get_factura_desde_remision()`, `get_rowids_factura()`, `vigia_service._facturas_de_semana()` | Anti-duplicado de la FE **desde remisión**, rowids para NCE, base gravable. Ojo: `get_factura_desde_pedido()` NO usa esta API pese al nombre — usa la dinámica `papeleriamedellin_monitos_facturas_wms` |
 | API_v2_CxC_General | `get_cxc_general()` | Cuentas por cobrar (f253_id para cruce) |
+| API_v2_Bodegas | `get_bodegas_siesa()` (`connekta_gateway`) | Maestro de bodegas configuradas en Siesa |
+| API_v2_Ventas_Pedidos_Compromisos | `get_compromisos_pedido()` + una ruta de auditoría en `routes/siesa.py` | Cantidades comprometidas por línea de pedido |
+| API_v2_Inventarios_Transferencia_Salida_Transito | `get_sts_info_by_alterno()` | Recovery: encontrar el STS ya creado tras un timeout (`f450_docto_alterno`) |
+| API_v2_Inventarios_RequisicionesParaTransferir | `get_consec_rit_by_referencia()` | Recovery: encontrar la RIT ya creada tras un timeout (`f440_referencia`) |
+| `238920` (dinámico) | `get_clasificacion_items()` | Clasificación ABC por ítem — reemplaza el CSV manual de rotación |
+| `papeleriamedellin_WMS_Stock_Bodega_v2` | `inventario_siesa_service._descargar_una_pasada_custom()` | **Existencias multi-bodega** — la que llena `stock_siesa` |
+| `papeleriamedellin_papeleriamedellin_API_custom_KardexWMS` | `kardex_service` (`KARDEX_CONSULTA_NOMBRE`) | Movimientos de kardex para demanda y costeo |
+| `papeleriamedellin_compromisos_wms` | `get_compromisos_t405()` | Compromisos por pedido (variante dinámica, lee t405) |
+| `papeleriamedellin_WMS_Remision_DesdePedido` | `get_remision_desde_pedido()` | Remisión asociada a un pedido |
+| `papeleriamedellin_WMS_PuntoEnvio_FE` | `get_punto_envio_factura()` | Punto de envío para la FE (fallback de `SIESA_PUNTO_ENVIO_DEFAULT`) |
+| `papeleriamedellin_API_custom_TercerosContacto` | `get_terceros_contacto()` | Contacto del tercero |
+| `papeleriamedellin_monitos_facturas_wms` | `get_factura_desde_pedido()`, `get_monitor_facturas_raw()` | Factura del día por pedido — **es la guarda anti-duplicado de FE**, no solo un monitor |
+| `papeleriamedellin_pame_descubrir_tablas` | `routes/factura_admin.py` | Descubrimiento de tablas — **solo diagnóstico** |
+
+Dos más son **configurables sin default**, así que su nombre no está en el
+repo: `CONNEKTA_CONSULTA_NC_CONSECUTIVO` (consecutivo real de la NC, ver
+«Motivo DIAN») y el `api_abc` que `abc_service.sincronizar_clasificacion_desde_siesa`
+recibe por parámetro.
+
+> ⚠️ **La Regla 1 no se puede cumplir para la mayoría de estas lecturas.**
+> De los 22 nombres de la tabla, **6 tienen contrato completo** en
+> `docs/siesa-specs/`. El resto se codificó descubriendo campos contra la API
+> viva. Ver «Specs DOCX del Consultor → Cobertura del lado LECTURA» antes de
+> tocar cualquier conector de esta tabla.
 
 ---
 
@@ -231,6 +256,29 @@ puede grepear, y esta es la tabla que hace falta cada vez que se toca un traslad
 `AV1` Averías CDI (`SIESA_BODEGA_AVERIAS`) · `TRA1` Bodega en Tránsito
 (`SIESA_BODEGA_TRANSITO`) · `BC99` Bodega Contratación (no la usa el WMS).
 
+⚠️ **«No lleva almacén en el WMS» ya no significa «el WMS no las ve».** Desde
+el 2026-08-20, `AV1` y `TRA1` **se descargan de Siesa y se persisten en
+`stock_siesa`** igual que un punto de venta (`_BODEGAS_SERVICIO` →
+`_BODEGAS_INVENTARIO` en `inventario_siesa_service`). No descargarlas no las
+hacía desaparecer: las volvía invisibles — cada avería que `siesa_job_service`
+movía de NB1 a AV1 producía un `WMS_MAYOR` permanente en NB1 que nadie sabía
+explicar. `BC99` sigue fuera: el WMS no la lee ni la escribe.
+
+Dos consecuencias, y las dos hay que tenerlas presentes antes de decidir algo
+sobre esas bodegas:
+
+1. **`stock_siesa` ya no es «lo que el WMS opera»**: una consulta que la sume
+   sin filtrar por bodega está sumando averías y mercancía en limbo. Ver abajo.
+2. **Esta tabla es fuente normativa para la reconciliación.**
+   `inventario_siesa_service._incomparable_esperado()` exime a `AV1`/`TRA1` del
+   veredicto «sin diferencias» citando por escrito que *este documento* las
+   declara bodegas de servicio. La exención pide **dos** condiciones —estar en
+   `_BODEGAS_SERVICIO` **y** tener contraparte declarada en
+   `_JUSTIFICACION_SIN_ALMACEN`—, justamente para que agregar una bodega a la
+   lista de descarga no la exima de paso: eximir cuesta escribir por qué. Si
+   alguien mueve una bodega de servicio a operada acá, tiene que mover también
+   esas dos.
+
 **Ignorar:** `FD1`, `ND1`, `PD1` — bodegas «DUPLICADA» en Siesa. El WMS no las
 toca y no debe empezar a tocarlas.
 
@@ -279,20 +327,81 @@ La causa de fondo es anterior:
 no-op —*«centro_op_siesa ya manejado por dict en código»*—. Ese es el día en
 que el maestro dejó de ser el maestro sin que nadie lo declarara.
 
+#### Las tres listas de bodegas — cuál decide qué (corregido 2026-08-20)
+
+Viven todas en `inventario_siesa_service` y **no son intercambiables**. El
+nombre de la primera miente un poco y por eso hay que leer las tres juntas:
+
+| Constante | Qué significa de verdad | Qué decide |
+|---|---|---|
+| `_BODEGAS_PV` | «bodegas que el WMS **opera**» — incluye `NS2`, que es parqueo de licitaciones y no punto de venta | El universo operado. `armador_service.rop_dual` filtra `stock_siesa` por ella |
+| `_BODEGAS_SERVICIO` | `AV1` + `TRA1`. Fuera de `_BODEGAS_PV` **a propósito**: meterlas ahí las volvería destino válido de un traslado y opción de un desplegable de sede | Nada por sí sola |
+| `_BODEGAS_INVENTARIO` | `_BODEGAS_PV + _BODEGAS_SERVICIO` | **Qué se le pide a Siesa y qué entra a `stock_siesa`** |
+
+**Estas listas dejaron de ser cosméticas.** Hasta el 2026-08-20 este documento
+decía de ellas *«no mueven inventario ni deciden un CO: un desacuerdo ahí
+muestra un código crudo donde debería ir un nombre»*, y recomendaba no
+unificarlas por ser refactor cosmético. Eso era cierto cuando la única lista
+era de nombres para pintar. Hoy no:
+
+- `_BODEGAS_INVENTARIO` es la **lista blanca de ingreso a `stock_siesa`**: lo
+  que no está ahí, `_descargar_una_pasada_custom` lo descarta y nunca se
+  persiste.
+- `stock_siesa` alimenta al **Armador** (`rop_dual`), que calcula
+  `posicion = stock + en_transito − comprometido − salida_sin_conf` y de ahí el
+  `deficit` que **dimensiona el contenedor**. Regla 0: irreversible 120 días.
+
+El defecto que esto ya causó: al agregar `AV1`/`TRA1` al universo descargado,
+sus filas entraron a `stock_siesa` y la consulta del Armador —que sumaba
+*todas* las bodegas de la tabla, y no cambió— empezó a contar averías y
+mercancía en tránsito como existencia comprable. Medido sobre un SKU real:
+`{'NB1': 100, 'AV1': 40, 'TRA1': 25}` → el Armador veía **165** donde lo
+vendible era **100**. Nadie tocó esa línea; **cambió lo que había en la tabla**.
+Y era la única de las tres respuestas a «¿esto se puede vender?» que las
+incluía: `dashboard_service` ya declaraba AVERIAS zona no vendible y
+`picking_service` ya la excluía del FEFO — el único de los tres que **compra**
+era el que las sumaba.
+
+El arreglo es **lista blanca, no negra**: `.filter(StockSiesa.bodega.in_(
+_BODEGAS_PV))`. Un `notin_(['AV1','TRA1'])` dejaría pasar `BC99`, las
+«DUPLICADA» `FD1`/`ND1`/`PD1` y —sobre todo— la bodega de servicio que alguien
+agregue mañana, que es exactamente el defecto que se está arreglando. Con lista
+blanca, una bodega nueva es invisible hasta que se declare operada.
+
+> Antes de agregar una bodega a `_BODEGAS_INVENTARIO`, preguntá quién suma
+> `stock_siesa`. Hoy: `armador_service.rop_dual` (filtra por `_BODEGAS_PV`),
+> `kardex_service` (ancla de saldo, por bodega), `vigia_service` (frescura),
+> `inventario_siesa_service._leer_stock_de_bd` (fallback por bodega). La tabla
+> es **acumulativa — upsert sin borrado**: una fila persistida una vez se sigue
+> devolviendo aunque la API deje de reportarla.
+
+**Hueco conocido, declarado y NO arreglado:** `ItemEnTransito` no tiene ningún
+escritor en `app/` —solo lecturas en `armador_service`—, así que el
+`en_transito` de `posicion` es **siempre 0** en producción. La fórmula está
+bien; el término no tiene fuente.
+
 #### Lo que sigue repartido (y por qué se deja)
 
-Las **listas** —no el mapa de CO— siguen en varios sitios, y el trinquete las
-vigila entre sí: `traslado_service._BODEGAS_PREWARM` ·
-`inventario_siesa_service._BODEGAS_PV` · cinco mapas de **nombres** en el JS
-(`traslados.js`, `tienda.js`, `app.js` ×3, una inline en un `onchange`).
+Fuera de `inventario_siesa_service` queda `traslado_service._BODEGAS_PREWARM`:
+una cuarta lista, con las 10 operadas, que solo decide a cuáles se les calienta
+el caché de stock. No filtra ni persiste nada — quedarse corta cuesta una
+consulta lenta, no un número equivocado. Igual el trinquete la cruza contra
+`_BODEGAS_PV`, porque una bodega operada que no se pre-calienta es una tienda
+que espera.
 
-No mueven inventario ni deciden un CO: un desacuerdo ahí muestra un código
-crudo donde debería ir un nombre. Unificarlas es refactor cosmético sobre
-código que funciona, y hacerlo antes de un corte es «validar contra producción
-real» al revés.
+Los mapas de **nombres** del JS sí siguen siendo cosméticos y siguen en varios
+sitios: `traslados.js`, `tienda.js`, `app.js` ×3 (uno inline en un `onchange`).
+Un desacuerdo ahí muestra un código crudo donde debería ir un nombre; no mueve
+inventario ni decide un CO. Unificarlos antes de un corte es «validar contra
+producción real» al revés.
 
-Trinquete: `tests/test_bodegas_coherentes.py` (18 tests). El detector de copias
-está probado por mutación — reintroducir un mapa lo pone rojo.
+Trinquete: `tests/test_bodegas_coherentes.py` (18 tests) cruza
+`_BODEGAS_PREWARM` y `_BODEGAS_PV` entre sí y contra el maestro;
+`tests/test_reconciliacion_por_bodega.py` exige que `AV1`/`TRA1` estén en
+`_BODEGAS_INVENTARIO` y **no** en `_BODEGAS_PV`;
+`tests/test_armador_bodegas_servicio.py` exige que el Armador sume solo las
+operadas. El detector de copias está probado por mutación — reintroducir un
+mapa lo pone rojo.
 
 ### CO → Caja
 
@@ -1707,7 +1816,11 @@ print(ScriptDirectory.from_config(cfg).get_heads())"
 
 Los specs originales de cada conector están en `docs/siesa-specs/`. **Cada cambio a connekta_gateway.py DEBE cruzarse campo por campo contra el spec DOCX.**
 
-Conectores con spec verificado contra código (julio 2026):
+Esa exigencia (Regla 1) **se cumple del lado de ESCRITURA y no del lado de
+LECTURA**. La tabla de abajo es la de los POST, y está completa. Lo que se lee
+está cubierto a un tercio — ver la sección siguiente antes de tocar un GET.
+
+### Escritura (POST) — conectores con spec verificado contra código (julio 2026)
 
 | Conector | Spec DOCX | Estado |
 |----------|-----------|--------|
@@ -1724,6 +1837,57 @@ Conectores con spec verificado contra código (julio 2026):
 | 174646 | `174646 - API_v1_Inventarios_Comercial_RequisicionesParaTransferir.docx` | ✓ Limpio (4 extras low-risk) |
 | 251126 | `251126 - PapeleriaMedellin_NotaCredito_CrearCruzar_WMS_v2.docx` | ✓ 34/34 campos verificados (2026-08-13) — sección Movimientos SÍ declara destino de inventario (`f470_id_bodega`, `f470_id_ubicacion_aux`, `f470_id_lote`, `f470_id_motivo`, `f470_id_causal_devol`), confirma que no es un documento puramente financiero |
 | 251546 | `251546 - PapeleriaMedellin_NotaCredito_CrearCruzarDian_WMS.docx` | ✓ Verificado 2026-08-13 |
+
+### Cobertura del lado LECTURA — dos tercios sin contrato (medido 2026-08-20)
+
+**Esto es una limitación estructural, no una nota al pie.** El WMS lee **22
+nombres de API** (ver «Mapa de Conectores → Consulta (GET)»; el conteo sale de
+recorrer por AST todas las llamadas a `connekta._get()` y resolver los defaults
+de las env vars). De esos 22:
+
+| Estado | Cuántos | Cuáles |
+|---|---|---|
+| ✓ Contrato completo (campos de respuesta declarados) | **6** | `API_v2_Compras_Ordenes` (89 campos) · `API_v2_Inventarios_InvFecha` (19) · `API_v2_Items` (35) · `API_v2_Ubicaciones` (5) · `API_v2_Ventas_Facturas_DesdePedido` (138, en `45 API_v2_...docx`) · `API_v2_CxC_General` (PDF) |
+| ⚠ Archivo presente con **cero** campos de respuesta | **2** | `API_v2_Ventas_Pedidos_Compromisos` y `papeleriamedellin_monitos_facturas_wms` — los dos `.docx` traen solo la URL, los headers y los params. Ninguna sección «Estructura de Datos». Son un archivo, no un contrato |
+| ⚠ Trae el contrato de **otra cosa** | **1** | `238920 - CLASIFICACION DE ITEMS.docx` describe el **plano de importación** (`F_NUMERO_REG`/`F_TIPO_REG`, posiciones fijas): el formato para ESCRIBIR clasificación en Siesa. El código usa 238920 como GET para LEERLA. El docstring de `get_clasificacion_items()` lo admite sin decirlo: *«los campos exactos se descubren con `/api/siesa/debug-clasificacion-raw`»* |
+| ✗ Ausente | **13** | `API_v2_Ventas_Pedidos` · `API_v2_ItemsBarras` · `API_v2_ItemsUnidadesMedida` · `API_v2_Bodegas` · `API_v2_Inventarios_RequisicionesParaTransferir` · `API_v2_Inventarios_Transferencia_Salida_Transito` · y las 7 consultas dinámicas `papeleriamedellin_*` |
+
+**La ausente más cara es `API_v2_Ventas_Pedidos`, la API más leída del sistema**
+(`get_pedidos_aprobados`, `get_estado_pedido`, `get_pedido_cabecera`,
+`pedidos_sync_service`, y el tamiz de ambiente `ambiente._API_TAMIZ`). No hay
+ningún `API_v2_Ventas_Pedidos.docx` en `docs/siesa-specs/` — y el docstring de
+`get_pedido_cabecera()` lo cita por ese nombre exacto **como si estuviera en el
+repo**: *«el procedimiento almacenado usa aliases que difieren del spec v2
+(API_v2_Ventas_Pedidos.docx)»*. Ese docstring es el caso completo: manda a
+cruzar contra un archivo que no existe, y quien lo intente va a concluir que se
+le perdió, no que nunca llegó. Lo que sí dice —y es lo único verificable— es la
+lista de aliases reales descubiertos en vivo el 2026-05-08 (`f200_id_fact` del
+spec → `f200_id_pedido_fact` real). **Esa lista es hoy el contrato.**
+
+Consecuencias operativas, no teóricas:
+
+- **Un campo que la API deja de mandar no falla: `.get()` devuelve el default y
+  el default se escribe.** Ya pasó en `siesa_sync_service` —con contrato
+  disponible— con `f120_ind_estado` (no existe → `activo=True` siempre → cada
+  corrida deshacía la desactivación manual de un admin) y con
+  `f120_id_unidad_medida_inventario` (el nombre real es
+  `f120_id_unidad_inventario` → todo el catálogo nacía en `'UND'`). En las 16
+  lecturas sin contrato ese mismo error no tiene con qué detectarse.
+- **El único trinquete que cruza lectura contra contrato es
+  `tests/test_sync_catalogo_vs_contrato.py`**, y cubre un solo módulo
+  (`siesa_sync_service` contra `API_v2_Items.docx`, por AST). El patrón es
+  replicable: donde haya contrato, se puede cruzar. Donde no lo hay, no hay
+  trinquete posible — hay que pedirle el spec al consultor.
+
+Antes de tocar un conector de lectura: **mirá primero en qué fila de esta tabla
+cae.** Si cae en las tres últimas, «lo crucé contra el spec» no es una frase que
+se pueda decir, y el descubrimiento en vivo contra QA es el único método
+disponible. Declararlo es más barato que fingir que se cumplió la Regla 1.
+
+Dos consultas más ni siquiera tienen nombre en el repo (`api_abc`, por
+parámetro; `CONNEKTA_CONSULTA_NC_CONSECUTIVO`, por env sin default), así que no
+entran en el conteo de 22: no se puede cruzar contra un spec el nombre de algo
+que se resuelve en tiempo de ejecución.
 
 ---
 

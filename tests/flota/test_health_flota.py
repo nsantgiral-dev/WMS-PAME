@@ -72,7 +72,7 @@ class TestNingunCampoCaeACero:
                 valor = getattr(medidor, campo)()
                 assert valor is None, f'{campo} devolvió {valor!r} sin fuente; debía ser None'
 
-    def test_con_las_tablas_creadas_los_doce_campos_miden(self, client, jwt_token_admin):
+    def test_con_las_tablas_creadas_todos_los_campos_miden(self, client, jwt_token_admin):
         cuerpo = _get(client, jwt_token_admin).get_json()
         sin_medir = [c for c in _CAMPOS_MEDIDOS if cuerpo[c] is None]
         assert not sin_medir, (

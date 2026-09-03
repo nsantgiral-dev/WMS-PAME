@@ -1272,6 +1272,10 @@ class TrasladoService:
             )
             return
 
+        # Bins que pertenecen al almacén origen — se arma una sola vez.
+        from app.models.ubicacion import Ubicacion
+        _ubis_del_almacen = db.select(Ubicacion.id).where(Ubicacion.almacen_id == almacen.id)
+
         for item in solicitud.items:
             # Usar la cantidad que el operario confirma haber enviado.
             # Si picking no corrió (despacho directo), caer a cantidad_aprobada → solicitada.
@@ -1280,14 +1284,37 @@ class TrasladoService:
                 continue
 
             restante = cantidad
+            # El descuento se acota al almacén que firma el movimiento.
+            #
+            # Sin este filtro la consulta barría los bins de TODA la red y el
+            # `order_by` ascendente empezaba por los más pequeños — que son los
+            # de las tiendas. Un traslado que salía del CD (NB1) vaciaba el bin
+            # de Neiva Centro y anotaba la salida contra Bodega CD. No era un
+            # caso de borde: era el primer bin que tocaba.
+            #
+            # Y ningún cuadre por sumas lo detecta — el total de la red no
+            # cambia, solo se mueve de un almacén a otro. Lo que se rompe es el
+            # saldo por bodega: la tienda queda con menos de lo que tiene en el
+            # piso (su picker reporta un faltante inexistente) y el CD con más
+            # de lo que tiene (promete stock que ya salió).
+            #
+            # Se filtra por `ubicacion_id IN (...)` y no con un JOIN porque el
+            # `FOR UPDATE` de un join bloquearía también filas de `ubicaciones`,
+            # que este bloque no modifica.
             ubicaciones = (
                 UbicacionProducto.query
                 .filter_by(producto_id=item.producto_id)
+                .filter(UbicacionProducto.ubicacion_id.in_(_ubis_del_almacen))
                 .filter(UbicacionProducto.cantidad > 0)
                 .order_by(UbicacionProducto.cantidad.asc())  # FIFO: vaciar las más pequeñas primero
                 .with_for_update()
                 .all()
             )
+            # Con el filtro puesto, `saldo_antes`/`saldo_despues` pasan a ser el
+            # saldo del almacén origen. Es lo correcto y no lo era antes: el
+            # movimiento va firmado con `almacen_id=almacen.id`, así que el
+            # kardex de esa bodega venía declarando un saldo que incluía stock
+            # de otras.
             saldo_antes = sum(u.cantidad for u in ubicaciones)
 
             for ub in ubicaciones:
@@ -1297,15 +1324,41 @@ class TrasladoService:
                 ub.cantidad -= descuento
                 restante -= descuento
 
-            saldo_despues = saldo_antes - (cantidad - restante)
+            descontado = cantidad - restante
+            saldo_despues = saldo_antes - descontado
+
+            # Stock insuficiente en el almacén correcto: se descuenta lo que hay
+            # y el faltante SE DECLARA en el movimiento — no se completa.
+            #
+            # Antes «se completaba» porque el descuento cruzaba de bodega, que
+            # es el defecto mismo. Las dos alternativas honestas se descartaron:
+            #   · abortar el despacho — la mercancía ya salió físicamente cuando
+            #     este fallback corre (`despachar`, `traslado_closer`); reventar
+            #     acá dejaría el WMS afirmando que el stock sigue en el CD, que
+            #     es la mentira más cara de las dos;
+            #   · descontar igual hasta negativo — lo bloquea el CHECK
+            #     `ck_cantidad_no_negativa`, y un saldo negativo tampoco informa.
+            #
+            # Regla 0: se falla hacia el lado conservador (no se inventa stock
+            # que salga de otra bodega) Y SE DECLARA. Un `logger.warning` no es
+            # una declaración: nadie lee los logs de un despacho que salió en
+            # verde. El faltante queda en `motivo`, que es la fila que alguien
+            # consulta cuando el saldo por bodega no cuadra.
+            motivo = f'Traslado {solicitud.codigo} → {solicitud.nombre_punto_venta}'
+            if restante > 0:
+                motivo = (
+                    f'{motivo} — FALTANTE {restante} und '
+                    f'(pedido {cantidad}, descontado {descontado} en {almacen.codigo})'
+                )[:200]
+
             mov = MovimientoInventario(
                 producto_id=item.producto_id,
                 almacen_id=almacen.id,
                 tipo='SALIDA_TRASLADO',
-                cantidad=-(cantidad - restante),
+                cantidad=-descontado,
                 saldo_antes=saldo_antes,
                 saldo_despues=saldo_despues,
-                motivo=f'Traslado {solicitud.codigo} → {solicitud.nombre_punto_venta}',
+                motivo=motivo,
                 numero_documento=solicitud.codigo,
                 siesa_sync='OMITIDO',  # Siesa lo maneja por su cuenta con 173066/173076
             )
@@ -1313,8 +1366,9 @@ class TrasladoService:
 
             if restante > 0:
                 logger.warning(
-                    f'[TRASLADO] Stock WMS insuficiente para {item.producto_codigo_siesa}: '
-                    f'pedido {cantidad}, disponible {cantidad - restante}'
+                    f'[TRASLADO] Stock WMS insuficiente en {almacen.codigo} '
+                    f'({almacen.bodega_siesa_id}) para {item.producto_codigo_siesa}: '
+                    f'pedido {cantidad}, descontado {descontado}, faltante {restante}'
                 )
 
     @staticmethod

@@ -543,27 +543,110 @@ Botón: **"⚖ Ver reconciliación WMS vs Siesa"**
 - Cuando hay quejas de que el WMS muestra stock pero físicamente no hay
 
 **Qué hace:**
-Compara el stock de cada producto en el WMS contra el stock que reporta Siesa, y lista las diferencias.
+Compara **bodega contra bodega**: para cada par (bodega, producto), lo que dice el WMS contra lo que reporta Siesa de esa misma bodega. No compara totales del WMS contra una sola bodega de Siesa — eso restaría dos poblaciones distintas y daría un "todo bien" falso.
 
-**Cómo leer el resultado:**
+**Qué cambió (2026-08-20):** hasta esa fecha la pantalla comparaba producto por producto sumando todos los almacenes. Si tenés un manual impreso o recordás las frases viejas (`✓ Sin diferencias — WMS y Siesa coinciden (X productos)`, `⚠ X diferencias de Y productos`), **ya no aparecen**. No busques ese texto: la pantalla no está rota, dice otra cosa.
 
-*Sin diferencias:*
-`✓ Sin diferencias — WMS y Siesa coinciden (X productos)`
+---
 
-*Con diferencias:*
-`⚠ X diferencias de Y productos`
+#### El veredicto de arriba — tres respuestas, no dos
 
-Debajo aparece la lista de los 20 productos con mayor diferencia:
-- Nombre y código del producto
-- **WMS: X** (lo que dice el WMS)
-- **Siesa: X** (lo que dice Siesa)
-- Diferencia en verde (+) o rojo (-) según a quién le "sobra"
+La línea de arriba es una de estas cuatro. **Solo la primera es verde.**
+
+**1. Verde — todo cuadra y no quedó nada *imprevisto* sin comparar:**
+`✓ Sin diferencias — cada bodega cuadra con la suya (X/Y SKU en N bodega(s))`
+y, si las hay, ` · Z SKU incomparables previstos`
+
+Puede salir en verde y aun así listar cosas abajo: son las **previstas** — las bodegas de servicio `AV1` (averías) y `TRA1` (tránsito), que por diseño no tienen almacén en el WMS y nunca lo van a tener. Si contaran para el veredicto, la pantalla quedaría en ámbar para siempre, y una casilla que no se puede poner en verde deja de mirarse. Lo que sí baja el veredicto es el incomparable **que nadie previó**.
+
+**2. Naranja — no hay diferencias, pero hay cosas que no se pudieron comparar:**
+`⚠ Cuadra lo comparable (X% de Y SKU), pero Z SKU no se pueden comparar`
+
+Esto **no es un aprobado**. Quiere decir: de lo que se pudo mirar, todo coincide; pero hay stock que quedó fuera de la comparación y nadie lo había previsto. Andá al bloque naranja de más abajo.
+
+**3. Amarillo — hay diferencias reales:**
+`⚠ X diferencias · cuadre Y% de Z SKU comparados`
+(y si además quedó algo sin comparar, agrega ` · N SKU sin comparar`)
+
+**4. Naranja — la reconciliación se abortó:**
+`⚠ WMS sin stock mapeado — ejecuta la Carga Inicial primero`
+
+Pasa cuando la tabla de ubicaciones del WMS está vacía. Sin ese corte, **todo Siesa aparecería como faltante del WMS** y el resultado sería basura. Corré primero la Carga Inicial (§8.3) y volvé.
+
+> **Por qué importa el porcentaje y no solo el conteo.** "12 diferencias" no significa nada sin saber sobre cuántos SKU. 12 de 15.000 es ruido; 12 de 20 es un problema. Por eso el veredicto siempre trae el denominador.
+
+---
+
+#### La tabla por bodega
+
+Debajo del veredicto, lo primero es **una fila por bodega**, con el encabezado `Cuadre por bodega (SKU que coinciden / SKU comparados)`. Es el contenido principal de la pantalla — mirala antes que la lista de productos.
+
+Cada fila trae:
+- **Código de bodega** (`NB1`, `NC1`, `PT1`…)
+- Debajo: cuántas diferencias tiene esa bodega, o el motivo por el que no se pudo comparar
+- A la derecha: `cuadran / comparados · porcentaje`
+  - **verde** = 100 %
+  - **amarillo** = cuadra parcialmente
+  - **naranja** = `no comparable`
+- Y en chiquito: `WMS X und · Siesa Y und` — el total de unidades de cada lado
+
+Esto es lo que te dice **dónde** está el problema. Un 100 % general con una sola bodega en naranja es una bodega entera que nadie está mirando.
+
+> Un SKU que está en cero de los dos lados **no cuenta** en el denominador: no hay nada en juego y solo inflaría el porcentaje.
+
+---
+
+#### Lo que no se pudo comparar — dos bloques, y no significan lo mismo
+
+Existen porque **"no sé" tiene que verse distinto de "está bien"**. Antes estos casos se mezclaban en la suma y desaparecían.
+
+**Bloque naranja — `No se puede comparar y nadie lo previó — N SKU (no es «cuadra»)`**
+
+Esto **es lo que hay que atender**. Es lo que dejó el veredicto en ámbar. Cuatro situaciones, cada una con su nombre:
+
+| Lo que ves | Qué significa | Qué hacer |
+|---|---|---|
+| `Almacén XXX sin bodega Siesa asignada` | Un almacén del WMS que no tiene bodega de Siesa configurada. No se sabe contra qué compararlo | Asignarle su bodega Siesa en la configuración del almacén |
+| `XXX: el WMS tiene stock y Siesa no reportó nada` | El WMS dice que hay mercancía en esa bodega y Siesa no devolvió ninguna fila de ella | Revisar si la bodega existe en Siesa y si la descarga la incluyó |
+| `XXX: bodega de Siesa sin almacén en el WMS` | Siesa reporta stock en una bodega que el WMS no lleva **y nadie lo declaró** | O es un punto de venta al que le falta crear el almacén en el WMS, o es una bodega que nadie sabía que tenía saldo. Las dos hay que resolverlas |
+| `N SKU de Siesa sin producto en el catálogo WMS` | Siesa tiene productos que el WMS no conoce | Sincronizar el catálogo (§8.3, fase 1) |
+
+**Bloque gris — `Incomparable previsto y declarado — N SKU (no descalifica el veredicto)`**
+
+Acá van `AV1` y `TRA1`, y **cada fila trae escrito su motivo**:
+
+- **`AV1` (Averías CDI):** el WMS deja la avería en una ubicación `AVERIADOS` (cuarentena) dentro de NB1, no en un almacén propio. La contraparte existe, está medida, y no se cuadra.
+- **`TRA1` (Bodega en Tránsito):** el despacho descuenta del origen y la recepción acredita en el destino. Que quede saldo mientras un traslado viaja es la operación normal. Lo que sí importa —un traslado que lleva demasiado tiempo en tránsito— lo mide la auditoría de traslados, que puede ver la antigüedad; esta pantalla no.
+
+Este bloque **se muestra aunque el veredicto sea verde**, a propósito: una exención que no se ve en pantalla es una exención silenciosa, y de ahí salen las listas que crecen. Si aparece una bodega que **no** es `AV1` ni `TRA1` en el bloque gris, alguien la eximió — averiguá quién y por qué.
+
+---
+
+#### Cobertura de catálogo
+
+Una línea al final: `Cobertura de catálogo: X% (A productos con stock en el WMS de B que Siesa reporta)`.
+
+Es otra cosa que el cuadre: mide cuánto del catálogo de Siesa el WMS siquiera conoce. Cobertura baja significa que la carga inicial quedó incompleta.
+
+---
+
+#### La lista de diferencias
+
+Solo aparece si hay diferencias, bajo el título `Top diferencias (WMS vs Siesa)`. Son **las 20 mayores**, ordenadas por tamaño de la diferencia:
+
+- Nombre del producto
+- Debajo: `código · bodega` — **la bodega es parte del renglón**, porque el mismo producto puede cuadrar en una bodega y descuadrar en otra
+- **WMS: X** (lo que dice el WMS) · **Siesa: X** (lo que dice Siesa)
+- La diferencia, en verde (+, al WMS le sobra) o rojo (−, al WMS le falta)
 
 **Qué hacer con las diferencias:**
 - Diferencia pequeña (±1 o ±2 unidades): probablemente picking en proceso, ignorar
 - Diferencia grande: investigar — puede haber merma, robo, o un error de registro
 - Si WMS > Siesa: el WMS "tiene más" de lo que Siesa registra — posible recepción que no se confirmó en Siesa
 - Si WMS < Siesa: el WMS "tiene menos" — posible picking que no se descontó correctamente
+- **Si la diferencia está en la bodega de una tienda destino de traslados:** puede ser un traslado que llegó a Siesa y no se acreditó en el WMS. Es un hueco conocido, no necesariamente un error de conteo
+
+**Esta pantalla no modifica nada.** Solo informa. Después de leerla, vos decidís: aceptar lo que dice Siesa (ajuste en el WMS) o mandar un conteo físico.
 
 El proceso tarda ~2 minutos. No cierres la pantalla mientras corre.
 

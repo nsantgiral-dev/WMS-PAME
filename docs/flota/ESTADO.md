@@ -1047,3 +1047,912 @@ Cuatro superficies nuevas —entregar turno, ubicación, "cómo estaba",
 idempotencia— y **ninguna la tocó una persona**. Pendiente la corrida real con
 el camión y los cinco números: recibir, entregar, legibilidad del odómetro,
 utilidad del "cómo estaba", y si la referencia abre instantánea.
+
+---
+
+## `flota_hallazgo` — la tabla donde nace un daño (2026-09-01)
+
+Pedido literal: *«llevar control sobre los daños que pasan»*.
+
+### Lo que había
+
+`flota/dominio/hallazgo.py`: 153 líneas de política, canon cerrado por Santiago
+el 2026-08-03, 23 tests escritos antes del cálculo — y **cero callers**. Los 53
+ítems de inspección estaban sembrados en producción esperando una tabla que no
+existía. Un daño no podía nacer.
+
+Es el mismo patrón que este módulo lleva encontrando toda la semana: capacidad
+construida, probada y desplegada, y el gesto que la enciende nunca escrito.
+
+### Alcance: el hallazgo solo, sin la inspección
+
+Un daño no necesita la inspección completa para nacer. Hoy llega por tres vías
+—inspección diaria, recibo de turno, alguien que vio un golpe en el patio— y la
+primera **no tiene pantalla**. Atarlo a `inspeccion_id` lo habría dejado sin
+poder nacer por las dos vías que sí ocurren.
+
+Por eso la columna no existe. Una FK que apunta a una tabla ausente no es
+previsora, es rota.
+
+### Las cuatro decisiones que no son de quien llama
+
+| | Cómo se resuelve | Por qué no lo elige el cliente |
+|---|---|---|
+| `fecha_limite` | Se calcula de la criticidad (regla 6) | Si se pudiera escribir a dedo, «bloqueante» sería una etiqueta que se negocia |
+| `custodia_id` | Se deriva de la custodia activa | Dejarlo en el cuerpo sería dejar elegir a quién se le cuelga el daño (regla 2) |
+| `linea_base` | Se deriva de la custodia | El desorden viejo no le cuenta a quien lo encontró |
+| `lectura_id` | NOT NULL, con la lectura anclada en la misma transacción | Regla 3, impuesta por la base y no por acordarse |
+
+### El plazo es un DÍA, no un instante
+
+`bloqueante = 0 días` se guardó como **el final del día de Bogotá**, no como
+`reportado_ts`. Con lo segundo, todo bloqueante sale vencido un segundo después
+de nacer, el rojo deja de distinguir y el tablero se deja de mirar — la lección
+de los 639 avisos conocidos.
+
+Y el día se calcula **en Bogotá**: a las 8 p.m. de Colombia, en UTC ya es el día
+siguiente, así que `utcnow().date()` hacía nacer vencido cualquier bloqueante de
+la noche. Regla 5 del WMS aplicada al plazo.
+
+### El odómetro se ancla, no se fabrica
+
+`_anclar_odometro` reutiliza la última lectura si el kilometraje coincide, y
+solo escribe una nueva si el número cambió.
+
+Escribir una lectura por cada hallazgo habría producido desde adentro del
+sistema el mismo patrón que `lecturas_ts_duplicado` existe para contar —diez
+lecturas con el mismo segundo, de un reintento— y el contador habría dejado de
+distinguir un reintento de la operación normal. Tres hallazgos de una misma
+revisión cuelgan de la misma lectura, que es lo que de verdad pasó.
+
+El vocabulario de `origen` se ensanchó con `'hallazgo'`. Reusar `preoperacional`
+u `ot` sería una lectura que dice de dónde vino y miente; la columna existe
+justamente para no adivinarlo.
+
+### Quién puede qué
+
+**El conductor reporta y no cierra.** Si quien reporta también cierra, el camino
+barato es reportar y descartar en el mismo minuto (regla 11) y el registro queda
+decorativo. Reportar es `LECTURA_FLOTA` —el que ve el golpe es el que maneja—;
+cerrar, descartar y aplazar son `MAESTROS_FLOTA`.
+
+### La medida nace con la tabla
+
+`hallazgos_abiertos` y `hallazgos_vencidos` salen en `/flota/health` **y** en el
+bloque de salud del tablero, desde el primer día. `flota_lectura_odometro` vivió
+un mes con cero campos en el health y por eso nada avisó de las 26 lecturas sin
+foto ni del salto de 16,3 millones de km. Contadores separados: sumarlos esconde
+el vencido, que es el único que urge.
+
+### Lo que se descubrió al construirlo, no al planearlo
+
+| Hallazgo | Quién lo encontró |
+|---|---|
+| La URL de `/aplazar` armada con `+ verbo` dejaba el endpoint sin consumidor | El trinquete de rutas huérfanas, y tenía razón: una URL que solo existe en tiempo de ejecución no se puede auditar leyendo el repo |
+| El fixture de PostgreSQL borraba `flota_lectura_odometro` sin borrar antes `flota_hallazgo` | La corrida contra el motor real. Misma forma que ya costó dos veces en `reset_transaccional.py` |
+| `motivo_cierre` iba a guardar los aplazamientos de filas ABIERTAS | Revisión antes de la migración. Se separó en `bitacora`: un nombre que promete una cosa y contiene otra se lee con confianza y se lee mal |
+| `_colgar_fotos` quedó duplicado palabra por palabra entre `traspaso` y `hallazgos` | Regla 0, corolario. Unificado en `almacen_fotos.colgar_fotos` |
+| El arnés de mutación reportaba «sobrevivió» sobre tests que **se saltaban** | `node` fuera del PATH recortado del subproceso. Un skip en verde, producido por el propio arnés que persigue skips en verde |
+
+### Verificación
+
+· 32 tests de dominio+adaptador, 24 de frontera HTTP, 5 de render — todos contra
+  la base real, ninguno contra mocks.
+· **26 mutaciones aplicadas, 26 muertas.** Incluyen las dos direcciones de cada
+  guard: que dispare, y que NO dispare sobre operación sana.
+· Suite completa: **3110 passed, 1 skipped, 33 deselected** contra SQLite
+  en memoria, el 2026-09-01 (venía de 3048 antes de esta tanda). Regla 13:
+  el número es de esa corrida y de ese motor, no de producción.
+· **33/33 contra PostgreSQL 17 local** — el CHECK de desenlace es el único de
+  flota escrito con `CASE WHEN`, forma elegida para no repetir el bug de
+  booleanos sumados que costó el release del 2026-08-01.
+· `flask db upgrade` completo contra PostgreSQL limpio hasta `m017flotahallazgo`,
+  y `downgrade` de vuelta a `m016`, verificando el CHECK ensanchado y el
+  estrechado.
+
+### Lo que NO se hizo, y por qué
+
+| | Motivo |
+|---|---|
+| Fotos de hallazgo en la pantalla | El endpoint las acepta y las cuelga (`entidad_tipo='hallazgo'` estaba en el CHECK desde la tanda 1). La captura desde el celular no se conectó: **regla 12** — primero que alguien reporte un daño de verdad |
+| La inspección diaria | Es la tanda 2 y tiene su propio alcance. El hallazgo se cuelga de ella cuando exista, con `item_id`, que ya está |
+| Aviso de WhatsApp por hallazgo vencido | `flota_hallazgo_vencido` está en `PLANTILLAS` desde la tanda 1 y **no está aprobada en Meta**. La deuda es de aprobación, no de código |
+| Umbral de aplazamientos («más de N ya es evitar») | Regla 13: no hay una sola medición todavía. El contador existe para poder fijarlo dentro de un mes |
+
+### Lo que sigue sin ejercerse
+
+**Nadie ha reportado un daño real.** Cinco endpoints, una tabla, dos medidas y
+una pantalla, y cero uso. La compuerta de esta tanda es un conductor reportando
+un golpe desde el celular en el patio, y hasta que eso pase esto es superficie
+construida — que es exactamente lo que la regla 12 existe para contar.
+
+---
+
+## `flota_gasto` — la plata que sale (2026-09-02)
+
+Pedido del plan: contestar *«¿cuánto me cuesta el kilómetro del TGZ653?»*, que el
+ERP no contesta hoy **y no porque le falte la plata: le falta el kilómetro**.
+
+### Lo que había, y lo que faltaba
+
+`flota/dominio/costos.py`: 415 líneas de cálculo, ocho funciones, los cuatro
+vocabularios de los que la tabla saca sus CHECK — y **cero tests y cero
+callers**. `flota_gasto` y `flota_tanqueo` existían con sus 20 CHECK y su
+migración verificada contra PostgreSQL. Faltaba todo lo que convierte eso en una
+capacidad: la puerta, la pantalla, el canon y la medida.
+
+El trinquete de cobertura estaba **rojo por eso mismo**, y tenía razón. Es el
+patrón «función sin caller» que este módulo lleva pagando toda la semana,
+detectado esta vez por el guard antes que por un auditor.
+
+### El canon del CPK — con una debilidad declarada arriba de todo
+
+`docs/flota/canones/costo_por_kilometro.md`. Fija la definición, el reparto, los
+dos ceros y los tres `sin_dato`. Caso trabajado a mano: **$840,00 por kilómetro**
+sobre marzo de 2026, con $730.000 de SOAT repartidos a $2.000/día ($62.000 en 31
+días), $588.000 de combustible, $190.000 de mantenimiento y 1.000 km de odómetro.
+El mismo mes por el lado del combustible da **24,0 km/galón agregando** contra
+24,25 promediando las razones — dos números que existen y solo uno es el
+rendimiento.
+
+**Tres cosas que el canon dice de sí mismo y que no se disimularon:**
+
+1. **Lo llenó la misma mano que escribió el código.** `PLANTILLA.md` dice que
+   no debe ser así. Queda escrito en el encabezado en vez de fingir procedencia:
+   un canon que miente sobre quién lo llenó vale menos que ninguno.
+2. **Los insumos del §5 son sintéticos**, elegidos para que cada división sea
+   exacta. No hay un solo peso de flota registrado en producción, así que **la
+   magnitud no está fijada** — a diferencia de `dias_hallazgo_abierto`, que tiene
+   el THP 696 de papel. El §9 dice qué falta para cerrarlo.
+3. **Corrigió una afirmación del código contra la medición.** El docstring de
+   `imputar_a_ventana` decía que «con Decimal y en este orden, los doce meses
+   suman exacto». Medido: $730.000 y $1.860.000 suman exacto **en los dos
+   órdenes**, y $1.000.000 no suma exacto en ninguno. Lo que decide la exactitud
+   es que el valor sea divisible entre los días del período, no el orden. La
+   decisión de multiplicar primero se conserva —un redondeo en vez de dos— y la
+   justificación se ajustó. Regla 13.
+
+### Lo que se construyó
+
+| | Dónde |
+|---|---|
+| Tests del dominio, derivados del canon | `tests/flota/test_costos.py` — 77 |
+| Adaptador: dos verbos y la única consulta del CPK del repo | `flota/adaptadores/gastos.py` |
+| Endpoints: listar con CPK, registrar gasto, registrar tanqueo | `flota/api/gastos.py` |
+| Pantalla: expediente de plata por vehículo | `flota.js` · botón «Gastos» |
+| Health: cuatro campos, **visibles en el tablero** | `_CAMPOS`, `MedidorDeFlota`, `MedidorSQL`, `flotaBloqueSalud()` |
+| Tests de adaptador y frontera, contra la base | `tests/flota/test_gastos.py` — 65 |
+| Render ejecutado en Node, no leído | `tests/flota/test_render_gastos_js.py` — 29 |
+
+### La decisión que no estaba en el plan: de dónde sale la lectura
+
+Regla 3: `lectura_id` es NOT NULL. La política de anclaje es
+**`hallazgos.anclar_odometro`, reutilizada, no copiada** (regla 0) — si el
+kilometraje coincide con la última lectura se reutiliza esa fila, en vez de
+fabricar desde adentro del sistema el ruido que `lecturas_ts_duplicado` existe
+para contar.
+
+Lo que apareció al construirlo: **el vocabulario de `origen` no tiene un valor
+que signifique «pagué el SOAT en una oficina»**. Escribir `ot` ahí sería una
+lectura que dice de dónde vino y miente, y la columna existe justamente para no
+adivinarlo. Ensancharlo es una migración, y esta fase no toca el esquema.
+
+Así que las categorías se parten en dos **por lo que de verdad pasa**:
+
+| | Categorías | Kilometraje |
+|---|---|---|
+| **De campo** | `combustible`→`tanqueo`; `mantenimiento`, `repuesto`, `llanta`→`ot` | Se pide, y puede nacer una lectura |
+| **De escritorio** | las otras nueve | No se pide: el gasto se cuelga de la última lectura conocida |
+
+Un gasto de escritorio sobre un vehículo **sin ninguna lectura levanta**. No es
+burocracia: ese gasto no podría entrar a ningún CPK, y guardarlo sería guardar
+una fila que nadie va a poder dividir.
+
+### Quién puede qué
+
+| | Rol | Motivo |
+|---|---|---|
+| Registrar un **tanqueo** | `LECTURA_FLOTA` (con conductor) | El que tanquea es el que maneja. Si solo lo registra un jefe, se registra el lunes y la factura ya se perdió — que es lo que pasa hoy |
+| Registrar **cualquier otro gasto** | `MAESTROS_FLOTA` | El SOAT y una entrada a taller no los paga el conductor: son maestros del vehículo |
+| **Ver los gastos y el CPK** | `MAESTROS_FLOTA` | *«¿Cuánto cuesta este camión?»* no es una pregunta del turno. Un CPK en la pantalla del conductor está a un paso de leerse como una medida suya, y el número no mide a nadie (regla 2) |
+
+### El detector que SÍ se construyó, y por qué es el único
+
+`galones > capacidad_tanque`. **No necesita umbral, ni canon, ni un mes de
+historia**: un tanque de 15 galones que recibe 22 no es un error de medición.
+
+Y **no acusa a nadie**. Lo que afirma es que *dos datos no pueden ser los dos
+ciertos*: la capacidad de la ficha o los galones registrados. Una capacidad mal
+levantada, un tanque auxiliar que la ficha no conoce, dos vehículos en la misma
+factura y un dedo en el teclado producen el mismo renglón, y las cuatro se
+investigan igual de rápido — ninguna se investiga mejor si el sistema ya dictó
+sentencia. Está probado: hay un test que recorre las respuestas HTTP y las
+cadenas de los tres módulos por AST exigiendo que ninguna palabra impute un
+delito.
+
+**El campo que impide que el detector se apague solo:**
+`tanqueos_sin_capacidad_declarada`, contador **aparte** del de excesos. Sin
+capacidad en la ficha, `excede_capacidad` devuelve `SIN_DATO` y jamás `False` —
+`False` significaría «se revisó y está bien»—. Sin ese segundo contador, un
+parque entero sin capacidad levantada se ve idéntico a un parque sin un solo
+exceso. Es la forma exacta de `REC-01` y las otras cinco de la auditoría del
+2026-08-15.
+
+### La medida nace con la tabla
+
+`tanqueos_sobre_capacidad`, `tanqueos_sin_capacidad_declarada`,
+`gastos_sin_documento` y `cpk_mes` salen en `/flota/health` **y** en el bloque de
+salud del tablero, desde el primer día. `cpk_mes` es una **lista por vehículo y
+no un promedio de flota**: el canon dice que el CPK no compara vehículos, y
+promediar un NHR con un motocarro mide la composición del parque.
+
+`gastos_sin_documento` no es un defecto del sistema: es **la medida de si la
+operación está entregando las facturas**. Por eso se cuenta en vez de bloquearse
+— un formulario que exige la factura produce cero gastos registrados, no más
+facturas.
+
+### Supuestos declarados (el dueño no contestó)
+
+Los dos están escritos en el docstring de `flota/adaptadores/gastos.py`, no solo
+acá:
+
+1. **¿Tanquean con tarjeta/convenio o con efectivo del conductor?**
+   `origen_costo` es obligatorio, se escribe con palabras y `sin_dato` **no es el
+   default**. Si la respuesta es efectivo, cada registro es además una
+   legalización de gasto y **quién aprueba cambia**; la columna ya distingue los
+   casos sin migrar. Hoy **nadie aprueba dentro del WMS** y no hay verbo de
+   aprobación: la aprobación real es la causación en Siesa, y un segundo
+   «aprobado» acá sería un estado que contradice al ERP sin poder corregirlo.
+2. **¿Contabilidad causa con placa o con centro de costo por vehículo?**
+   `documento_numero` y `centro_op` son nullables y los dos se cuentan. Si causan
+   con placa, `documento_numero` deja de ser un campo que alguien teclea y pasa a
+   ser una clave de cruce que se podría **leer de Siesa** en vez de digitarse. La
+   espina aguanta las dos respuestas; lo que cambia es quién llena el campo.
+
+### Lo que NO se hizo, y por qué
+
+| | Motivo |
+|---|---|
+| **Detector de caída de rendimiento** contra la historia del vehículo | Necesita ventanas acumuladas: mes 2, no día 1. Deuda declarada abajo con su condición de disparo |
+| Foto de la factura del tanqueo | La columna de fotos existe y acepta `foto_dato`. La captura no se conectó: **regla 12** — primero que alguien registre un tanqueo de verdad |
+| Editar o borrar un gasto | Hoy no hay una sola fila que corregir. La primera corrección real que alguien pida define el gesto; inventarlo antes es diseñar contra un caso imaginado |
+| Precio del galón por estación, agrupado | `costos.precio_por_galon` ya lo calcula por tanqueo y la fila lo muestra. El agrupado por estación pide una serie que todavía no existe |
+| Un promedio de CPK de la flota | **No es un olvido: el canon lo prohíbe.** Mediría la composición del parque |
+| Umbral de «CPK alto» | Regla 13: no hay una sola medición. El número se publica para poder fijarlo |
+
+### Deuda declarada, con condición de disparo
+
+#### 1. El segundo detector — caída de rendimiento contra la propia historia
+
+**Qué sería:** avisar cuando un vehículo rinde muy por debajo de su propia
+mediana. *«El TGZ653 rindió 19 km/gal contra una mediana de 27»* — nunca
+comparado contra otro vehículo, y **nunca con un nombre de persona al lado**.
+
+**Por qué no hoy:** con dos o tres ventanas lleno-a-lleno, la mediana la mueve
+una sola ventana. Un detector que dispara sobre ruido se apaga en una semana, y
+apagado es indistinguible de no tenerlo.
+
+> **Condición de disparo, las tres a la vez:**
+>
+> 1. **≥ 6 ventanas lleno-a-lleno del mismo vehículo** (o sea 7 tanqueos con
+>    `tanque='lleno'`). Con seis hay dos mitades comparables; con tres, cualquier
+>    ventana corta manda.
+> 2. Esas ventanas **cubren ≥ 60 días**, para que un cambio de ruta o de
+>    temporada no se lea como una caída mecánica.
+> 3. La mediana se calcula **por vehículo**. Contra la flota mediría la
+>    diferencia entre un NHR y un motocarro.
+>
+> El umbral de caída **no se fija ahora** (regla 13): se fija con esa serie, con
+> procedencia y en un canon propio, igual que se hizo con `dias_hallazgo_abierto`.
+
+Lo que ya está listo para eso: `ventanas_lleno_a_lleno` y `rendimiento_km_galon`
+existen, probados; `flota_tanqueo.tanque` decide qué ventana es medible; y
+`tanqueos_de()` entrega la serie ordenada por odómetro.
+
+#### 2. ~~La marca de confianza del CPK es una constante~~ — SALDADA el 2026-09-02
+
+`MARCA_MIENTRAS_NO_HAY_COLUMNA` ya no existe. La columna `confianza` se creó en
+la fase 0 y `cpk_de` llama a `confianza_del_tramo` con las dos lecturas extremas
+del tramo, como decía la condición de disparo. El contrato de
+`costo_por_kilometro` **no cambió**, que era el punto.
+
+Consecuencia medida y no cosmética: como ninguna lectura de gasto trae foto del
+tablero, **los dos extremos nacen `dudosa` y el CPK sale `sin_dato` hasta que
+alguien pase por la cola de verificación**. Ver la sección de la fase 0.
+
+#### 3. `origen` de lectura no tiene un valor para el gasto de escritorio
+
+Nueve categorías se cuelgan de la última lectura conocida en vez de tener la
+suya. Funciona y es honesto, pero significa que un SOAT y un impuesto pagados el
+mismo día comparten ancla con el último tanqueo.
+
+> **Condición de disparo:** la próxima migración que toque
+> `flota_lectura_odometro` agrega `'gasto'` al vocabulario en la misma migración.
+> Es un peaje, no un proyecto: ensanchar un CHECK a solas no justifica un
+> despliegue.
+
+#### 4. `CalculoImposible` no la levanta nadie
+
+Está definida y exportada en `flota/dominio/costos.py` y **ningún camino la
+levanta**. No es dañina —es vocabulario, no una función muerta que alguien pueda
+llamar creyendo que hace algo—, pero es exactamente la forma que este módulo
+persigue, y se declara en vez de dejarla pasar.
+
+> **Condición de disparo:** el primer cálculo que necesite decir «la pregunta
+> está mal hecha» en vez de devolver `SIN_DATO` la usa. Si al cerrar la fase 2
+> sigue sin un solo `raise`, se borra.
+
+### Verificación
+
+· **174 tests nuevos**: 77 de dominio derivados del canon, 68 de adaptador y
+  frontera HTTP contra la base real, 29 de render **ejecutando el `flota.js` real
+  en Node** — ninguno contra mocks.
+· **30 mutaciones aplicadas, 30 muertas.** El arnés
+  (`scratchpad/mutaciones_gastos.py`) distingue `MUERTA` de `NO SE JUZGÓ`
+  parseando el resumen de pytest, no el returncode: **un test saltado sale con
+  exit 0 igual que uno que pasó**, que es el defecto que el arnés del hallazgo
+  produjo el 2026-09-01 al recortarle el `PATH` al subproceso. Acá se le pasa el
+  entorno completo y se exige la base en verde antes de mutar nada.
+· Cada guard, en **las dos direcciones**: que dispare al violarlo y que **no**
+  dispare sobre operación sana. Incluye los tres detectores de la fase, los tres
+  permisos y los dos ceros del canon.
+· `node --check app/static/pwa/flota.js` limpio.
+· Suite completa: **3409 passed, 1 skipped, 33 deselected, 0 failed** contra
+  SQLite en memoria, el 2026-09-02. Venía de **3110 passed y 1 failed** — el rojo
+  era el trinquete de cobertura sobre `costos.py` sin tests, y era el punto de
+  partida de esta fase. Regla 13: ese motor, esa fecha, no producción.
+· Las tres rutas montadas y verificadas contra el `url_map` real:
+  `/flota/gastos`, `/flota/gastos/<placa>`, `/flota/tanqueos`.
+· **Sin correr contra PostgreSQL**: esta fase no toca el esquema. Las tablas y
+  su migración ya se verificaron ida y vuelta contra PostgreSQL real antes de
+  esto (`m018flotainspecciongasto`).
+
+#### El 30/30 es de la segunda pasada. La primera dio 26/30, y las cuatro valen
+
+Se reportan porque **son el resultado, no un borrador**: cada superviviente era
+un test en verde sobre una propiedad que la vía de prueba satisfacía por otra
+razón. Las tres primeras se arreglaron con tests nuevos; ninguna aflojando nada.
+
+| Sobrevivió | Por qué el test no podía fallar | Qué se hizo |
+|---|---|---|
+| `hubo_gastos=True` fijo en `cpk_de` | El único vehículo sin gastos que los tests miraban **tampoco tenía kilómetros**: la guarda del odómetro contestaba primero y tapaba la del gasto | Un vehículo que rodó 300 km y no tiene un peso registrado. Tiene que dar `sin_dato`, no `$0` |
+| El gasto del tanqueo con `commit=True` propio | El test de la transacción fallaba en una validación **anterior a escribir nada**: no había nada que deshacer | La extremidad revienta **después** de escrito el gasto. Se exige que no quede ni el gasto ni su lectura |
+| Los kilómetros del CPK sin filtrar por ventana | *(reemplazó a una mutación equivalente: `len(lecturas) >= 2` → `>= 1` no cambia ningún resultado, y se dejó escrita en el arnés como equivalente en vez de borrarla)* | Lecturas de abril sobre el CPK de marzo: numerador de un mes y denominador de otro |
+| La URL del tanqueo armada por concatenación | **El trinquete de rutas huérfanas se satisfizo con un comentario mío.** La URL estaba escrita dos veces en `flota.js`: en la constante y dentro de un docstring que explicaba por qué usarla | Se reescribió el comentario sin la URL. **Octava vez en este repo que un detector de texto se atrapa en su propio comentario** |
+
+La última es la que más enseña, y no es sobre esta fase: el guard de huérfanas
+mide texto, así que **cualquier comentario que cite una URL vuelve inmune a esa
+ruta**. Vale para las 24 rutas de flota, no solo para ésta.
+
+### Lo que sigue sin ejercerse
+
+**Nadie ha registrado un gasto real.** Tres endpoints, dos tablas, cuatro medidas
+y una pantalla, y cero uso. Lo que falta para la compuerta de esta fase:
+
+1. **Un tanqueo real cargado por quien tanquea**, con su factura en la mano, para
+   saber si el formulario se llena en el patio o solo en el escritorio.
+2. **La capacidad de tanque de los seis vehículos**, levantada con procedencia.
+   Sin ella el único detector de la fase no mira nada — y el health lo dice,
+   que es distinto de que nadie se entere.
+3. **La respuesta del dueño sobre tarjeta contra efectivo**, que es la que decide
+   si esto necesita un verbo de aprobación.
+
+Hasta que eso pase, esto es superficie construida — que es exactamente lo que la
+regla 12 existe para contar.
+
+---
+
+## La inspección diaria — donde el conductor contesta (2026-09-02)
+
+### Lo que había, y lo que faltaba
+
+| Pieza | Estado al empezar |
+|---|---|
+| `flota/dominio/inspeccion.py` | Política completa desde la tanda 1: orden, periodicidad, veredicto, plazos |
+| 53 ítems de catálogo | Sembrados en producción desde el 2026-08-02 |
+| `flota_inspeccion` + `flota_respuesta_item` | Modelos y migración `m018` verificados contra PostgreSQL, ida y vuelta |
+| `flota/adaptadores/inspecciones.py` | **370 líneas, cero tests, cero endpoints, cero pantalla** |
+
+Sexta aparición del patrón «función sin caller» en este módulo, y la más cara de
+todas: la política ordenaba una lista que nadie veía, sobre 53 ítems que nadie
+podía contestar. **El conductor no tenía dónde responder.**
+
+Esta tanda no escribió política nueva. Escribió los tests, los dos endpoints y
+la pantalla — el gesto que enciende lo que ya estaba.
+
+### El hallazgo nace automático, y no lo confirma el conductor
+
+Es la decisión de diseño de la tanda, y va contra la lectura ingenua de la regla
+2. Un ítem marcado `no_apto` produce su hallazgo **en la misma transacción**, sin
+un segundo gesto:
+
+1. **Regla 11 es la que decide.** Con confirmación, el camino barato no es
+   «marco `no_apto` y no confirmo»: es **no marcar `no_apto`**. Un paso extra le
+   pone precio a la honestidad, y lo que se paga con ese precio es que el freno
+   quede en `optimo`.
+2. **Regla 2 no lo prohíbe, porque el hallazgo no imputa a nadie.**
+   `reportado_por_usuario_id` es quien lo vio y `custodia_id` es bajo la
+   custodia de quién apareció — dos hechos. No hay ningún cálculo señalando a
+   una persona: hay un humano que marcó una falla con el dedo, y el automatismo
+   le ahorra volver a escribirlo.
+
+`sin_dato` **nunca** produce hallazgo. «No sé» no es «está mal»: bloquea el
+despacho vía `incompleta` y no le abre a nadie una tarea con fecha límite sobre
+un daño que nadie constató. El CHECK `ck_flota_resp_hallazgo_solo_si_no_apto` lo
+respalda en disco, y se ejerce con inserciones crudas — un invariante que solo
+vive en el adaptador es una sugerencia.
+
+### Una sola vía de nacimiento
+
+El hallazgo pasa por `hallazgos.reportar(commit=False)`, la misma función que usa
+el reporte a mano. No hay un segundo `INSERT INTO flota_hallazgo` en el módulo, y
+hay un trinquete **por AST** que lo impide: la segunda vía es siempre la que se
+olvida de calcular la fecha límite (regla 6).
+
+Lo mismo con el odómetro: `hallazgos.anclar_odometro(origen=PREOPERACIONAL)`. Una
+inspección y los tres daños que encontró cuelgan de **una** lectura, porque eso
+es lo que pasó — alguien miró el tablero una vez.
+
+### Quién puede qué
+
+| | Rol | Motivo |
+|---|---|---|
+| Ver los ítems del día | `LECTURA_FLOTA` (incluye conductor) | Si necesitara un jefe para abrir la lista, la inspección se hace a las nueve o no se hace |
+| Registrar la inspección | `LECTURA_FLOTA` (incluye conductor) | Es **su** turno y **su** respaldo. Que la registre un admin por él la convierte en un registro *sobre* el conductor hecho por otro |
+| Cerrar el daño que produjo | `MAESTROS_FLOTA` (sin conductor) | Regla 11: si quien inspecciona también cierra, el camino barato es marcar `no_apto` y cerrarlo en el mismo minuto |
+
+La asimetría **no se reescribió**: vive en los endpoints de hallazgo desde el
+2026-09-01, y hay un test de punta a punta que comprueba que el puente nuevo no
+la rodea.
+
+### La pantalla, y el default que no está
+
+Objetivo dos minutos. **Ningún control nace marcado** — ni un `checked`, ni un
+`<select>` con la primera opción puesta. Lo que no se toca **no se manda**, y el
+servidor lo escribe como `sin_dato`.
+
+Ese es el único punto donde la regla 1 se puede romper sin que ningún CHECK lo
+vea: si la pantalla mandara `optimo` por omisión, el servidor recibiría una
+respuesta válida y escribiría `apto` sobre veintiocho ítems que nadie miró. Por
+eso el test **ejecuta `flotaCondGuardarInspeccion` en Node** y mira el payload
+real, en vez de reimplementar el armado — la primera versión lo reimplementaba y
+la mutación sobrevivió.
+
+Dos botones por ítem y no tres: no hay «no sé». No responder ya es `sin_dato`, y
+un tercer botón sería un camino de un toque para declarar «no sé» sobre la lista
+entera.
+
+### La medida nace con la pantalla
+
+| Campo | Qué contesta |
+|---|---|
+| `vehiculos_sin_inspeccion_hoy` | Los camiones que **nadie miró**. No aparecen en ningún otro lado del tablero: no tienen daño, no tienen aviso, no tienen fila |
+| `inspecciones_incompletas_hoy` | Los que se miraron **a medias**. Aparte, porque se corrige distinto: uno hablando con el conductor, el otro mirando por qué la pantalla se abandona |
+| `segundos_llenado_30d` | El mínimo del mes **con cuántos ítems tenía al lado**, más la mediana. Hecho, no umbral |
+
+**Ningún umbral de tiempo** (regla 13): no hay una sola medición todavía. Veinte
+segundos con todo óptimo se registra igual y queda a la vista — imponer antes de
+medir deja camiones en patio el primer día y la operación desmonta el sistema en
+48 horas. Mismo trato que `salto_km_maximo_30d`.
+
+Los tres se ven en `flotaBloqueSalud()`. Un campo que nadie mira es el defecto
+que este módulo lleva toda la semana arreglando.
+
+### Verificación
+
+· 63 tests de adaptador y veredicto contra la base real, 31 de frontera HTTP, 23
+  de pantalla ejecutada en Node — ninguno contra mocks.
+· Los CHECK ejercidos **con inserciones crudas**, no solo por el adaptador: 10
+  sobre `ck_flota_insp_veredicto_coherente` y 7 sobre
+  `ck_flota_resp_hallazgo_solo_si_no_apto`, cada uno con su dirección sana.
+· **29 mutaciones aplicadas, 29 muertas.** El arnés distingue «muerta» de «no se
+  juzgó» parseando el resumen de pytest, porque un test saltado sale con exit 0
+  igual que uno que pasó — y le pasa el `PATH` real al subproceso, sin el cual
+  `node` no existe y los 23 tests de pantalla se saltan solos.
+· Suite completa: **3406 passed, 1 skipped, 33 deselected**, contra SQLite en
+  memoria, el 2026-09-02 (regla 13: ese motor, esa fecha, no producción).
+· `node --check app/static/pwa/flota.js` limpio.
+
+### Lo que NO se hizo, y por qué
+
+| | Motivo |
+|---|---|
+| Bloquear el despacho de un vehículo `incompleta` o `no_apto` | `habilita_despacho` se publica y **no bloquea**. Medir → corregir → imponer, en ese orden |
+| `corregir` y `reabrir` una inspección | Editarla es cambiar el testimonio sin dejar rastro. Si el conductor se equivocó, inspecciona de nuevo y quedan las dos — que además es lo que hace visible el patrón de reinspeccionar hasta que dé apto |
+| Fotos del ítem `no_apto` | El hallazgo ya las acepta por su endpoint. Conectarlas acá antes de que alguien use el formulario es la regla 12 al revés |
+| Un umbral de `segundos_llenado` | Regla 13. El campo existe para poder fijarlo con dato dentro de un mes |
+| La plantilla de `motocarro` | Es tanda 3. El adaptador distingue «no sé qué preguntarle» de «sé qué preguntarle y el catálogo no está sembrado», y el segundo mensaje nombra el script |
+
+### Lo que sigue sin ejercerse
+
+**Nadie ha contestado una inspección real.** Dos endpoints, una pantalla, tres
+medidas, y cero uso. La compuerta de esta tanda es un conductor contestando los
+28 ítems en el patio a las 5 a.m., y de ahí salen las tres cosas que hoy no se
+pueden saber:
+
+1. **Si son dos minutos.** El objetivo está escrito y no medido; el primer
+   `segundos_llenado` real es el que lo dice.
+2. **Si el orden barajado se lee o se aprende igual.** La defensa de la regla 11
+   es una hipótesis hasta que haya tres semanas de datos.
+3. **Si marcar `no_apto` se siente barato.** Lo que se está probando es que
+   reportar una falla no cueste más que ignorarla — y eso solo lo contesta
+   alguien que tuvo la falla enfrente.
+
+Hasta que eso pase, esto es superficie construida, que es exactamente lo que la
+regla 12 existe para contar.
+
+---
+
+## El conductor como geocodificador (2026-09-02)
+
+`app/models/geo_entrega.py` · `app/services/geo_cliente.py` ·
+`GET /api/rutas/geo/cobertura`
+
+### El diagnóstico, verificado antes de construir
+
+**El sistema no sabe dónde queda ningún cliente, y no es que las direcciones
+estén sucias: no hay direcciones.** `pedidos_sync_service.py:124` lee
+`f015_id_depto_pe` y `f015_id_ciudad_pe` —códigos de departamento y ciudad— y
+persiste el nombre del municipio. Verificado por grep el 2026-09-02: `direccion`
+no aparece en ningún modelo del WMS salvo `almacenes.direccion`, que es nuestra.
+Una «parada» es un municipio; una ruta maestra, una secuencia de ciudades.
+
+Y geocodificar tampoco es la salida. Números de casa mapeados, medido contra
+Overpass: **Neiva 72 · Pitalito 10 · Florencia ~31**, en todo el municipio. Con
+esos números, el conductor que ya estuvo parado en la puerta es estrictamente
+mejor que cualquier API.
+
+### Dónde vive la coordenada, y por qué son dos tablas
+
+| Tabla | Qué afirma | En el acta de corte |
+|---|---|---|
+| `entregas_geo` | **dónde estuvo el camión** el día que entregó esa factura | **se vacía** — es registro del ensayo, como las lecturas de odómetro |
+| `clientes_geo` | **dónde queda la tienda** | **se conserva** — es el activo que tarda tres meses en construirse |
+
+Las dos cosas son ciertas y distintas. El plan quiere la segunda para rutear,
+pero la segunda **se construye a partir de las primeras**: con una sola tabla la
+segunda captura tendría que pisar a la primera y no habría contra qué comparar
+—ni mediana, ni dispersión, ni forma de notar que dos tiendas comparten razón
+social—. Y una sola tabla obliga a elegir en el corte entre borrar el ensayo y
+conservar el activo; cualquiera de las dos elecciones está mal.
+
+Clasificadas en `scripts/reset_transaccional.py`: `entregas_geo` en `OPERATIVAS`
+**antes de `recaudos_entrega`** (FK hija, mismo tropiezo que ya costó tres
+veces) y `clientes_geo` en `PROTEGIDAS_MAESTRAS`.
+
+### Cómo elige el maestro entre varias capturas
+
+`geo_cliente.elegir_coordenada_del_maestro` — **una función, escrita una vez y
+fuera de toda consulta**. En orden:
+
+1. Una corrección a mano gana, la más reciente.
+2. Entre las de GPS votan solo las de precisión **conocida y ≤ 100 m**.
+3. Sin votantes no hay maestro, y el motivo distingue `sin_capturas` de
+   `precision_insuficiente` — se arreglan distinto.
+4. **Mediana por coordenada** (no geométrica, y lo dice).
+5. Si la mitad o más queda a más de **500 m** de esa mediana: `capturas_dispersas`
+   y **no se elige punto**. Mitad y mitad no es ruido de GPS: es evidencia de dos
+   lugares bajo una clave. Un punto en el medio mandaría al conductor a ninguna
+   de las dos direcciones — peor que no tener maestro (Regla 0).
+
+Mediana y no «la más reciente» porque la última confirmación puede venir de una
+corrección hecha en la oficina; ni «la más precisa» porque premia lo que el
+teléfono dice de sí mismo, no lo que midió.
+
+### La ausencia (Regla 4) y la procedencia (Regla 13)
+
+`fuente ∈ {gps_conductor, corregida_a_mano, sin_dato}` + `motivo_sin_dato`, y
+`lat/lon` en NULL cuando no se sabe — **nunca 0,0**, que es un punto real en el
+Golfo de Guinea y el default de todo `float` sin inicializar. Cuatro CHECK lo
+hacen estructural, incluido el rango de Colombia, que atrapa además los **ejes
+cambiados** (`lat=-75.28` pasa cualquier validación global y pone la tienda en
+el Pacífico Sur).
+
+**La entrega no se traba por la geografía.** La captura ocurre después del
+`commit` de `confirmar_parada` y en su propia transacción: un CHECK que rechace
+una coordenada rara pierde una captura, no la entrega. Una parada trabada en la
+calle no la desbloquea nadie.
+
+### La medida
+
+`GET /api/rutas/geo/cobertura`, y se pinta sola al abrir **Rutas → Maestras**
+(no detrás de un botón: un número que hay que ir a buscar es un número que
+nadie mira). Vive en rutas y no en `/flota/health` porque mide una propiedad
+del **maestro de clientes**, no del vehículo: flota contesta «¿el camión puede
+salir?»; esto, «¿sabemos a dónde mandarlo?».
+
+Denominador = **clientes visitados**, no clientes existentes: uno al que nunca
+se le entregó no tuvo oportunidad de tener coordenada, y meterlo haría que la
+cifra bajara al crecer el negocio. Regla 11 — la única forma de subirla es
+tocar el botón en la puerta del cliente, que es exactamente el trabajo.
+
+Base al cerrar: **0 clientes visitados, 0 con coordenada**, SQLite en memoria,
+2026-09-02 (Regla 13). El primer número real sale de la primera ruta.
+
+### Deuda declarada, con condición de disparo
+
+| Deuda | Condición de disparo |
+|---|---|
+| **Ruteo / optimización / predicción de tiempos** | **≥ 150 clientes en `clientes_geo` con coordenada** (`geo_cliente.UMBRAL_PARA_RUTEAR`, publicado en el propio endpoint). Una ruta urbana tiene 15-25 paradas; optimizar el orden conociendo la mitad de los puntos produce una secuencia que el conductor descarta al segundo desvío. *«No hay nada que entrenar hasta tener las dos cosas. El primer paso honesto es capturar la coordenada y esperar.»* |
+| **`tel:` al cliente** | Que el teléfono del cliente esté en la base. **Hoy no está** — verificado por grep: ningún modelo del WMS persiste teléfono de cliente. El camino existe y está nombrado: `connekta.get_terceros_contacto()` (`papeleriamedellin_API_custom_TercerosContacto`) devuelve `f015_celular` / `f015_telefono` por NIT o razón social. Disparo: un sync que los persista. **No se inventó un botón sin dato detrás.** |
+| **Botón de navegación por dirección de texto** | Que exista una dirección. Hoy, sin coordenada **no se pinta ningún botón**: uno alimentado con «Neiva» abre el centro de Neiva, y un conductor que abre eso una vez no vuelve a tocarlo nunca. La pantalla dice «no sabemos dónde queda» y cómo se arregla. |
+| **Puerta para `corregida_a_mano`** | Que aparezca el primer maestro `capturas_dispersas` o un cliente que se mudó. El valor está en el catálogo y en la elección —la precedencia se escribe una vez o se escribe mal— pero **ningún endpoint lo escribe todavía**. |
+| **NIT como clave del cliente** | Que el WMS lo persista. Hoy la clave es razón social + municipio normalizados; el NIT solo existe en vuelo (`liquidacion_service.py:254`). El municipio entra en la clave a propósito: fragmentar es el lado conservador, colisionar no. |
+| **Migración de las dos tablas** | La escribe el CTO. El DDL exacto está listo; se dejó fuera para no romper el head único con otra migración en paralelo. Mientras tanto, `tests/test_deriva_esquema.py::_SIN_MIGRACION_ACEPTADO` las declara — **esa lista tiene que volver a quedar vacía**. |
+
+### Lo que NO se construyó, y no por falta de tiempo
+
+**Nada de Nominatim ni de OSRM.** Verificado: Nominatim **prohíbe
+explícitamente** este caso de uso (*«package/vehicle tracking applications must
+run their own service»*) y el servidor demo de OSRM es solo no comercial.
+`tests/test_geo_cliente.py::test_no_hay_ninguna_llamada_a_nominatim_ni_a_osrm`
+se pone rojo el día que alguien los agregue «para probar».
+
+**Leer la dirección del tercero desde Siesa** queda fuera: exige un export que
+no llegó, y consultar producción está prohibido. No se inventó qué campo trae.
+
+### Lo que sigue sin ejercerse
+
+**Ningún conductor ha tocado «Estoy aquí».** Cero capturas reales, cero
+maestros. Lo que solo contesta una tarde de uso real:
+
+1. **Si el botón se toca.** Es opcional y no bloquea nada — a propósito. Si la
+   cobertura sigue en cero a la semana, el problema no es el GPS.
+2. **Qué precisión reportan los teléfonos de verdad** en el centro de Neiva. El
+   umbral de 100 m se eligió por orden de magnitud, no por medición; si descarta
+   la mitad de las capturas hay que mirarlo con dato en la mano, no bajarlo.
+3. **Si `capturas_dispersas` dispara sobre operación sana.** El radio de 500 m
+   es una hipótesis hasta que haya un cliente con seis visitas.
+
+---
+
+## El kilómetro confiable — la columna `confianza` (fase 0, 2026-09-02)
+
+Del plan (`WMS_plan_flota.md` §«Fase 0»): *«sin esto, todo lo demás hereda los
+16 millones de kilómetros»*.
+
+### Lo que había
+
+`flota/dominio/odometro.py` tenía `confianza_al_nacer` y `confianza_del_tramo`
+—la política completa, con su umbral declarado y justificado— y **ni tests, ni
+un solo caller, ni columna donde guardar el resultado**. Una política que decide
+algo que nadie persiste, que es el mismo patrón que este módulo lleva pagando
+toda la semana: `dominio/hallazgo.py` sin tabla, `dominio/costos.py` sin
+adaptador, `dominio/inspeccion.py` sin formulario.
+
+El vacío que tapa es concreto y está medido: `validar_lectura` contesta «¿entra
+o no entra?» y por eso **los 16.697.948 km del THP696 entraron** — crecer es lo
+único que la monotonía exige. Una vez adentro, ese número es indistinguible de
+uno bueno para cualquier cálculo aguas abajo.
+
+### La columna, y por qué no tiene default
+
+`confianza ∈ {declarada, dudosa, verificada}`, NOT NULL, **sin `server_default`**
+(regla 4 del módulo, regla 5 del WMS). Un default haría que un `INSERT` que no
+diga nada quede `declarada` en silencio; sin él, ese INSERT falla ruidosamente.
+Van con ella `motivo_dudosa`, `verificada_por_usuario_id` y `verificada_ts`.
+
+Cuatro CHECK, y dos son la dirección que se olvida: que una `declarada` no pueda
+traer motivo de duda, y que **una fila no verificada no pueda llevar el nombre
+de un verificador** — sin eso el health contaría trabajo que no afirma nada.
+
+### Se escribe en UN lugar: un `before_insert`, no cinco llamadas
+
+Los escritores de lecturas son cinco (traspaso de turno, lectura suelta,
+hallazgo, inspección diaria y gasto de campo) y entran por tres construcciones
+—`traspaso.py`, `hallazgos.anclar_odometro`, `api/custodia.py`—, enumeradas por
+AST y no de memoria. Una llamada por escritor serían cinco copias de la misma
+regla, y la sexta es la que se olvida: **la copia que falta no falla, deja
+pasar**, y la lectura mala entra sin marca.
+
+Por eso la marca la escribe el `before_insert` del modelo, que es exactamente el
+llamador para el que `confianza_al_nacer` está escrita (*«quien llama a esta
+función está dentro de un `before_insert` y tiene columnas, no objetos de
+dominio»*). Un trinquete por AST exige que **ningún escritor fije la marca a
+mano**: `LecturaOdometro(..., confianza=...)` en un adaptador sería la segunda
+implementación de la regla, la que no mira la foto ni el salto.
+
+Lo que el gancho no puede ver es un `INSERT` crudo. Contra eso está la columna
+NOT NULL sin default, y el trigger `flota_odometro_nace_no_verificada`.
+
+### `verificada` no la escribe ningún automatismo — y el append-only
+
+Una lectura no puede nacer verificada: lo dice el gancho con un error legible y
+lo impone la base con un trigger, para que no exista camino que lo esquive.
+
+El problema estructural fue el otro: `flota_lectura_odometro` es append-only por
+trigger, así que **la verificación humana no tenía dónde escribirse**. Se
+resolvió reemplazando el bloqueo total de `UPDATE` por uno de forma exacta —toda
+otra columna idéntica, y la confianza solo hacia `verificada`—, que es *más*
+estricto que el anterior en algo que el anterior no decía: de `verificada` no se
+sale. El número sigue sin poder editarse; lo que se escribe no es el número.
+
+La alternativa era una tabla aparte. Se descartó: dejaría la confianza real
+repartida entre dos tablas, y `confianza_del_tramo` recibe UN campo — el día que
+alguien consultara la lectura sin el JOIN publicaría un CPK sobre una
+verificación que no vio.
+
+### La cola, y por qué no es la regla 12 rota
+
+`GET /flota/odometro/dudosas` + pantalla. **Nace con contenido y está medido**:
+`medicion.lecturas_sin_foto` cuenta las lecturas con `foto_id IS NULL` y en
+producción eran **26 de 26** (2026-09-01). La regla 1 de `confianza_al_nacer`
+marca `dudosa` toda lectura sin foto, así que la cola tiene esas 26 desde el
+primer día. No es una pantalla esperando un caso hipotético: es la pantalla del
+estado actual de la flota.
+
+Dos salidas, y **corregir no vive en la cola**: reusa `POST /flota/odometro` con
+`origen=correccion`, la única puerta que exige motivo escrito. Lo que sí vive
+acá es la consecuencia — una lectura que una corrección posterior dejó atrás
+**sale de la cola**, con la misma ventana que usa `validar_lectura`
+(`vigentes_tras_la_ultima_correccion`, extraída al dominio porque ahora tiene
+dos consumidores). Sin eso, cada corrección dejaría un ítem eterno y la pantalla
+se abandonaría en una semana.
+
+La fila dice **si la lectura no tiene foto**, en amarillo: confirmar sin foto es
+la palabra de quien confirma, no la de una evidencia. Esconderlo convertiría 26
+lecturas sin respaldo en 26 firmas sobre nada.
+
+### Quién verifica: `MAESTROS_FLOTA`, no `LECTURA_FLOTA`
+
+Verificar un kilometraje no es operar un turno. El corte de `_permisos.py` ya
+estaba escrito y esto cae del lado de la ficha técnica: `LECTURA_FLOTA` es
+recibir, entregar y registrar odómetro —lo que el conductor hace hoy con su
+vehículo—; `MAESTROS` es lo que queda afirmado sobre el vehículo después.
+
+Y hay una razón más concreta que la analogía: **el conductor es casi siempre el
+autor de la lectura que habría que verificar**. Con `LECTURA_FLOTA`, quien tecleó
+el número certificaría el número, y `verificada` —la única marca que afirma que
+alguien miró— sería una casilla que se marca sola (regla 11). `control_flota` sí
+entra: el levantamiento de campo es su trabajo (FLO-PR-01).
+
+### El CPK ya usa la marca — y el efecto no es cosmético
+
+`MARCA_MIENTRAS_NO_HAY_COLUMNA` desapareció. `cpk_de` llama a
+`confianza_del_tramo` con las dos lecturas extremas del tramo (las que producen
+la resta), y con menos de dos lecturas devuelve `SIN_DATO`: no hay tramo que
+juzgar, y publicar `declarada` ahí afirmaría que se pudo mirar una resta que no
+existió.
+
+> **Lo que esto cambia en producción, dicho antes de que sorprenda:** ninguna
+> lectura de gasto trae foto del tablero —el formulario de gasto no la pide—, así
+> que los dos extremos nacen `dudosa` y **el CPK de esos vehículos sale
+> `sin_dato` hasta que alguien pase por la cola**. No es una regresión: es la
+> fase 0 haciendo lo que se le pidió —*«nunca un promedio que rellena»*— y es la
+> presión que hace que la cola se atienda. Un extremo verificado alcanza para
+> publicar el número **con la marca `dudosa`** al lado.
+
+### El trigger hermano del ancla — SOLO la mitad segura
+
+`flota_ficha_ancla_no_baja`: un `BEFORE UPDATE` sobre `flota_ficha_tecnica` que
+impide bajar `km_inicial` por debajo del máximo ya escrito en la serie de ese
+vehículo. Sin él, el piso se mueve bajo el techo y el invariante se rompe sin dar
+error.
+
+**La condición exige también que el valor BAJE**, y esa mitad la decidió la
+medición: sin ella, la condición sería «el ancla quedó por debajo del máximo» —y
+eso ya es cierto para las cuatro fichas incoherentes—, así que cualquier edición
+de esas fichas quedaría bloqueada aunque nadie tocara el kilometraje.
+
+### La medida nace con la columna
+
+`lecturas_dudosas_pendientes` y `lecturas_verificadas_30d`, en `/flota/health`,
+en el puerto, en `MedidorSQL` **y en el bloque de salud del tablero**. Separados
+y no sumados: uno es la deuda y el otro dice si alguien la está pagando —«cero
+verificadas sobre cero dudosas» (flota sana) y «cero sobre veinte» (cola que
+nadie abre) son los dos estados que hay que distinguir.
+
+El primero **lo cuenta `verificacion.pendientes()`**, no un `WHERE` propio: con
+dos consultas, el health diría un número y la pantalla mostraría otra lista, y no
+habría forma de saber cuál creer (regla 0). El caso que las separa es la
+corrección.
+
+### Lo que se descubrió al construirlo, no al planearlo
+
+| Hallazgo | Quién lo encontró |
+|---|---|
+| La verificación humana **no tenía dónde escribirse**: la tabla es append-only por trigger | Escribir el adaptador. Obligó a rediseñar el trigger en vez de agregar una tabla |
+| `str()` sobre un enum de Python 3.11 devuelve `'Confianza.DUDOSA'` — eso iba a llegar al tablero tal cual | El primer render del CPK. Se pasa `.value` |
+| `flota/api/ficha.py` atrapaba solo `IntegrityError`: el `RAISE EXCEPTION` de plpgsql llega como `InternalError`, así que el trigger del ancla daba **409 en la suite y 500 en producción** | Leer el motor, no la suite. La suite corre contra SQLite y no puede ver esta clase |
+| El CPK del canon dejó de dar 840: sus lecturas nacen `dudosa` | La suite. Los fixtures ahora pasan por la cola explícitamente, y hay un test que afirma que **sin** verificar da `sin_dato` |
+| Un test que ya afirmaba `sin_dato` seguía en verde **por otra razón** (el tramo dudoso, no la falta de gastos) | El mismo cambio. Se le agregó la verificación para que siga probando lo que dice |
+
+### Verificación
+
+· **62 tests nuevos** en `test_confianza_odometro.py` (las cinco vías de
+  escritura, los cuatro CHECK, los tres triggers, la cola, los permisos, el CPK
+  y el health) y **15 de render** ejecutando el `flota.js` real en Node.
+· Cada guard, en **las dos direcciones**: que el trigger dispare y que la
+  verificación legítima pase; que el ancla no baje y que la ficha ya incoherente
+  se pueda seguir editando; que la cola esconda lo superseded y que no esconda
+  nada cuando no hubo correcciones.
+· **37 mutaciones aplicadas, 37 muertas.** El arnés
+  (`scratchpad/mutaciones_confianza.py`) distingue `MUERTA` de `NO SE JUZGÓ`
+  parseando el resumen de pytest y le pasa el entorno completo al subproceso:
+  **un test saltado sale con exit 0 igual que uno que pasó**.
+· Suite completa: **3577 passed, 1 skipped, 45 deselected, 0 failed** contra
+  SQLite en memoria, el 2026-09-02. Venía de 3417. Regla 13: ese motor, esa
+  fecha, no producción.
+
+#### El 37/37 es de la segunda pasada. La primera dio 30/37, y los seis valen
+
+Se reportan porque **son el resultado, no un borrador**: cada superviviente era
+un test en verde sobre una propiedad que la vía de prueba satisfacía por otra
+razón. Ninguno se arregló aflojando nada.
+
+| Sobrevivió | Por qué el test no podía fallar | Qué se hizo |
+|---|---|---|
+| Sacar `valor_km` de las columnas inmutables | El `UPDATE` de prueba tocaba **solo** el número, y ahí lo frenaba la otra mitad de la condición (la confianza no iba hacia `verificada`) | Cinco tests que **verifican Y de paso mueven** el número, el reloj, el vehículo, el origen o el motivo. La rendija no deja pasar nada más |
+| Permitir desverificar (`OLD.confianza <> 'verificada'` borrado) | El test bajaba a `declarada`, y eso lo frena la otra mitad | Re-verificar por SQL crudo **con otro nombre**, dejando la confianza en `verificada` |
+| Que el gancho no resuelva el `ts` | Todos los tests pasaban `ts` explícito | Una lectura sin `ts`, con `utcnow` congelado: es el caso de las diez filas del reintento del 2026-08-03 |
+| `min()` en vez de `max()` sobre las correcciones | Con **una** corrección los dos criterios coinciden | El caso de dos correcciones, que es el único que los separa |
+| Borrar el renglón del motivo en la fila de la cola | El motivo del fixture decía «sin foto del tablero», la misma frase que aporta el aviso de «sin foto» | Un motivo que solo puede venir del campo: el salto de ×301 del THP696 |
+| Armar la URL de `/verificar` concatenando | **El trinquete global no puede matarla**: trocea la ruta en `/flota/odometro/` y `/verificar`, y `/verificar` ya existe en el PWA por `reposicion.js` (`/api/reposicion/verificar-stock`) | Un guard propio que exige las dos URL escritas enteras. Es la novena aparición del detector que se satisface con un texto ajeno |
+· `node --check app/static/pwa/flota.js` limpio.
+· **Sin correr contra PostgreSQL.** Los cuatro CHECK, los dos triggers nuevos y
+  el `no_update` reemplazado no se ejercieron en el motor real: la suite de
+  invariantes está deseleccionada en CI y esta tanda no tuvo base a mano. La
+  rama `InternalError` de `ficha.py` tampoco.
+
+### Lo que NO se hizo, y por qué
+
+| | Motivo |
+|---|---|
+| **El piso duro del ancla** (`MAX(histórico, km_inicial)` en el trigger de monotonía) | Deuda declarada abajo con su condición de disparo. 4 de 6 fichas contradicen su propia serie |
+| La migración | **La encadena el CTO.** Había otro agente escribiendo en `migrations/` el mismo día y dos migraciones simultáneas rompen el head único: con el head roto el `releaseCommand` falla y no despliega nada. DDL exacto listo, con su backfill y su orden |
+| Pedir foto del tablero en el gasto y en la lectura suelta | Es lo que sacaría de la cola a la mayoría de las lecturas nuevas, y es de otra tanda. Hoy la cola las recibe y las declara |
+| Un umbral de km/día (`km_dia_plausible_max`) | Regla 13. `salto_km_maximo_30d` publica el hecho para poder fijarlo con dato dentro de un mes |
+| Verificar en lote («confirmar todas») | Es el gesto que vuelve decorativa la marca: la forma de maximizar `verificadas` sin mirar nada. Se confirma de a una, con la foto al lado |
+| Un aviso cuando la cola crece | El campo del health está y se ve en el tablero. Un canal más antes del primer uso real es la regla 12 al revés |
+
+### Deuda declarada, con condición de disparo
+
+#### El piso duro del ancla — el `MAX(histórico, km_inicial)` que NO se impuso
+
+**Qué sería:** que el trigger de monotonía rechazara toda lectura por debajo de
+`MAX(máximo histórico, ficha.km_inicial)`, y no solo por debajo del máximo
+histórico.
+
+**Por qué no hoy, con el número:** verificado contra producción el 2026-09-01,
+**4 de 6 fichas contradicen su propia serie** — la del THP696 dice 433.434 y su
+primera lectura es 55.349. Con el piso puesto, esos cuatro vehículos no podrían
+registrar una lectura real: quedarían trabados por una segunda vía, justo cuando
+la primera (la lectura envenenada) acaba de arreglarse. Y la vía de escape sería
+marcar todo como `correccion`, o sea mentir — que es la falla que la ventana de
+corrección resolvió el 2026-09-01.
+
+> **Condición de disparo, las tres a la vez:**
+>
+> 1. **`fichas_con_ancla_incoherente = 0` durante un mes corrido.** La medida ya
+>    existe y ya sale en el health y en el tablero. Mientras sea > 0, imponer el
+>    piso traba un vehículo por cada ficha incoherente.
+> 2. **Que se sepa cuál de los dos números miente en cada caso**, ficha por
+>    ficha, con alguien que fue a mirar el tablero. Hoy no se sabe, y elegir en
+>    silencio es lo que la regla 0 prohíbe.
+> 3. **Que exista la vía para arreglar el ancla sin trabar nada**, que es este
+>    mismo trigger hermano ya puesto: subir `km_inicial` se puede, bajarlo por
+>    debajo de la serie no.
+>
+> El día que las tres se cumplan, la mitad que falta es una línea en
+> `_SQLITE_DDL`/`_PG_DDL` —el `COALESCE` del `SELECT MAX` contra
+> `flota_ficha_tecnica.km_inicial`— y su par de tests en las dos direcciones.
+
+### Lo que sigue sin ejercerse
+
+**Nadie ha verificado un kilometraje real.** Dos endpoints, una pantalla, dos
+medidas, tres triggers, y cero uso. La compuerta de esta tanda es alguien de
+control de flota abriendo la cola con las 26 lecturas de producción adentro y
+confirmando o corrigiendo la primera. Hasta que eso pase, tres cosas no se
+pueden saber:
+
+1. **Si 26 filas sin foto se pueden verificar de verdad**, o si sin foto lo
+   honesto es dejarlas dudosas para siempre y arreglar el problema hacia
+   adelante (pidiendo la foto en el gasto y en la lectura suelta).
+2. **Cuánto tarda la cola en drenarse**, que es lo que dice si el CPK va a
+   existir este mes o no.
+3. **Si el ×10 marca operación sana.** El umbral está justificado y no medido:
+   el primer mes de lecturas reales es el que lo confirma o lo corrige.
+
+Y una cuarta que no depende de nadie: **la migración no está encadenada**, así
+que en producción esta columna todavía no existe. Hasta que el CTO la encadene,
+todo esto corre solo contra SQLite.

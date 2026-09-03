@@ -16,7 +16,7 @@ Tipos de job implementados:
 import json
 import logging
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from app.extensions import db
 from app.models.siesa_job import SiesaJob, EstadoSiesaJob
 from app.models.packing import EstadoPacking
@@ -277,6 +277,32 @@ def _run_dlq_jobs():
                     job.id, job.tipo)
                 _crear_alerta_admin(job)
                 continue
+            if isinstance(e, LineaDevueltaAmbigua):
+                # **Determinista**: los mismos datos la producen siempre. El
+                # payload del job no cambia entre intentos y la factura
+                # tampoco, así que los 5 reintentos dan el mismo resultado —
+                # lo único que agregan son 185 minutos (5+15+45+120) de silencio
+                # mientras el operario cree que la nota crédito va en camino.
+                #
+                # Va a FALLIDO sin gastar reintentos, igual que
+                # `_ResultadoDesconocido`, por la misma razón: lo que lo
+                # desbloquea no es esperar, es que una persona mire. Acá esa
+                # persona rehace la devolución desde Recepción con el
+                # `f470_rowid` por línea.
+                #
+                # `intentos` mide fallos que pueden salir distinto la próxima
+                # vez. Éste no puede. Confundirlos es la misma clase de «un
+                # contador, dos significados» que ya costó las banderas de
+                # idempotencia.
+                job.estado = EstadoSiesaJob.FALLIDO
+                job.proximo_intento = None
+                job.error_ultimo = str(e)[:2000]
+                db.session.commit()
+                logger.error(
+                    '[DLQ] Job %s (%s) AMBIGUO — no se reintenta (el reintento '
+                    'daría lo mismo): %s', job.id, job.tipo, e)
+                _crear_alerta_admin(job)
+                continue
             if isinstance(e, ConnektaCircuitOpenError):
                 # Circuit breaker abierto — NO gastar reintento.
                 # El job se queda en PROCESANDO/PENDIENTE y se reintenta
@@ -337,6 +363,54 @@ def _marcar_motivo_dian_manual(job: SiesaJob, error_msg: str):
         logger.error('[DLQ] no se pudo marcar motivo DIAN manual (job=%s): %s', job.id, e)
 
 
+class LineaDevueltaAmbigua(Exception):
+    """No se puede decir A QUÉ LÍNEA de la factura corresponde lo devuelto.
+
+    Se levanta desde `_construir_lineas_nc` (rama parcial) cuando un item
+    declarado llega **sin `f470_rowid`** y su referencia aparece en más de una
+    línea de la factura — el producto de doble unidad (PQ + UND).
+
+    Es la Regla 0 aplicada a este caso: adivinar por referencia mete las DOS
+    líneas en la nota crédito con la cantidad completa, cruza de más contra la
+    cartera (Regla 21: Siesa no aprueba un documento cuya cartera no cuadre) y
+    reingresa a la bodega mercancía que nadie devolvió. Que el job falle y
+    alguien mire es reversible; una NC de más es un documento fiscal que hay
+    que reversar a mano.
+
+    **No gasta reintentos** (ver el clasificador en `_run_dlq_jobs`). Es
+    determinista: el payload del job no cambia entre intentos y la factura
+    tampoco, así que los cinco intentos dan el mismo resultado. Lo único que
+    agregan es el backoff —185 minutos— antes de avisarle a la única persona
+    que puede resolverla, mientras el operario cree que la nota crédito va en
+    camino. El precedente es `_ResultadoDesconocido`: a FALLIDO directo con
+    alerta, porque lo que desbloquea esto no es esperar.
+
+    Por eso los handlers la re-lanzan **con su tipo intacto**, agregándole el
+    contexto (job, devolución/recaudo, factura) dentro del mensaje. Envuelta en
+    una `Exception` genérica el clasificador no la puede distinguir de un
+    rechazo de Siesa, que sí se reintenta sin riesgo — la misma confusión que
+    `ConnektaPaginacionError` documenta del otro lado del flujo.
+    """
+
+
+def _cant_declarada(valor) -> Decimal:
+    """Cantidad devuelta como `Decimal`, tolerando `None` y basura.
+
+    Un `None` en `cantidad_devuelta` hacía reventar `int()` con un `TypeError`
+    sin tipo propio: el clasificador del DLQ lo trataba como transitorio y
+    quemaba los cinco reintentos (185 min) sobre un fallo determinista — justo
+    lo que `LineaDevueltaAmbigua` se introdujo para evitar. Acá vale 0, que cae
+    por el filtro de «no se devolvió nada» y no crea línea.
+    """
+    try:
+        return Decimal(str(valor if valor is not None else 0))
+    except (InvalidOperation, ValueError):
+        logger.warning(
+            '[DLQ] cantidad_devuelta ilegible (%r) — se trata como 0, la línea '
+            'no entra a la NC', valor)
+        return Decimal(0)
+
+
 def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: list,
                           causal: str, motivo: str, uom_default: str, bodega_default: str,
                           bodega_averias: str = None) -> list:
@@ -355,8 +429,45 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
     Liquidación cuando no hay items_devueltos explícito). No soporta bodega_averias
     por línea — si se necesita ese flag, usar es_total=False con items_devueltos.
     es_total=False: solo las líneas presentes en items_devueltos (match por
-    'codigo'), con su 'cantidad_devuelta'. Si un item trae 'es_averiado': True
-    y se pasó bodega_averias, esa línea usa bodega_averias en vez de f150_id.
+    'f470_rowid', ver abajo), con su 'cantidad_devuelta'. Si un item trae
+    'es_averiado': True y se pasó bodega_averias, esa línea usa bodega_averias
+    en vez de f150_id.
+
+    ## La clave del match es `f470_rowid`, no la referencia
+
+    Este repo tiene **productos de doble unidad**: la misma referencia se
+    factura en DOS líneas, una en PQ y otra en UND, con `f470_rowid` y valores
+    distintos (PAPELSP6741 — el incidente ya documentado en
+    `despacho_parcial_service.py:102-106`, donde un dict indexado solo por
+    referencia *«guardaba la ÚLTIMA línea (UND) causando el error 244328»*).
+
+    Indexando por referencia, las **dos** filas de la factura matchean el mismo
+    item devuelto y las dos entran a la NC con la cantidad completa. Reproducido
+    sobre una devolución de 1 paquete: NC con 2 líneas y `F353_VLR_CRUCE=26675`
+    cuando debía ser 24250 — se cruza de más contra la factura y se reingresan
+    2 unidades de inventario por 1 devuelta.
+
+    **No `(referencia, uom)`:** el rowid identifica la línea sin ambigüedad, es
+    lo que Siesa exige en el payload (`f470_rowid_movto`), y el par
+    referencia+unidad seguiría siendo ambiguo si una factura repitiera la misma
+    referencia y unidad en dos renglones.
+
+    El dato ya existe de punta a punta: `LineaDevolucionCliente.f470_rowid` lo
+    puebla `devolucion_cliente_service.buscar_pedido` (y
+    `liquidacion_service._crear_devolucion_pendiente` para las de ruta), y el
+    PWA lo devuelve por línea. Solo faltaba propagarlo al payload del job.
+
+    ## Ítem sin `f470_rowid` (Regla 0)
+
+    Un payload encolado antes de este arreglo no lleva rowid. La política:
+
+    · **referencia con UNA sola línea en la factura** → se usa esa línea. No es
+      adivinar: la correspondencia es única, y es exactamente el caso de todas
+      las devoluciones históricas (verificado: 29 de 29 líneas en producción ya
+      tienen rowid, y ningún job NC quedó pendiente con payload viejo).
+    · **referencia con DOS o más líneas** —el producto de doble unidad, el único
+      caso donde la ambigüedad existe— → `LineaDevueltaAmbigua`. El job falla,
+      el DLQ alerta y alguien mira. Fallar es reversible; cruzar de más no.
     """
     lineas_nc = []
     if es_total:
@@ -378,17 +489,75 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
             })
         return lineas_nc
 
-    devueltos_map = {
-        it['codigo']: it
-        for it in items_devueltos
-        if int(it.get('cantidad_devuelta', 0)) > 0
-    }
+    # devueltos_map: f470_rowid (normalizado a str) → item declarado.
+    # devueltos_sin_rowid: referencia → items sin rowid (payloads viejos).
+    devueltos_map = {}
+    devueltos_sin_rowid = {}
+    for it in items_devueltos:
+        # `Decimal`, no `int`. `LineaDevolucionCliente.cantidad_devuelta` es
+        # `Numeric(14, 4)`: las fracciones son representables y llegan hasta acá.
+        # Con `int()`, una devolución de 0,5 unidades daba 0, el ítem se caía del
+        # mapa, el job devolvía `{'sin_lineas': True}` y el DLQ lo marcaba
+        # COMPLETADO — sin nota crédito, con la factura abierta en cartera y el
+        # inventario ya reingresado en el WMS. La falla devolvía algo
+        # indistinguible del éxito.
+        #
+        # El gemelo de esta misma pregunta (`liquidacion_service.
+        # _cantidades_por_linea_de_factura`) siempre usó float y por eso los dos
+        # divergían: 2,5 → 2 acá y 2,5 allá.
+        if _cant_declarada(it.get('cantidad_devuelta')) <= 0:
+            continue
+        rowid_item = str(it.get('f470_rowid') or '').strip()
+        if rowid_item:
+            if rowid_item in devueltos_map:
+                # Ningún productor de hoy arma esto (una línea de devolución por
+                # línea de factura, en Recepción y en Liquidación). Si algún día
+                # lo arma, que no se pierda en silencio como se perdía la línea
+                # PQ con el dict indexado por referencia.
+                logger.warning(
+                    '[DLQ] _construir_lineas_nc: dos items declaran el mismo '
+                    'f470_rowid %s (%r) — se usa el último, la NC puede quedar '
+                    'corta', rowid_item, it.get('codigo'))
+            devueltos_map[rowid_item] = it
+        else:
+            devueltos_sin_rowid.setdefault(it.get('codigo', ''), []).append(it)
+
+    # Cuántas líneas de la factura trae cada referencia. >1 es el producto de
+    # doble unidad: ahí la referencia sola no alcanza para decidir.
+    lineas_por_ref = {}
+    for row in rowids_data:
+        _r = row.get('f120_referencia', '')
+        lineas_por_ref[_r] = lineas_por_ref.get(_r, 0) + 1
+
+    consumidos = set()
     for row in rowids_data:
         ref = row.get('f120_referencia', '')
-        item = devueltos_map.get(ref)
+        rowid_fila = str(row.get('f470_rowid') or '').strip()
+        item = devueltos_map.get(rowid_fila)
+        if item is not None:
+            consumidos.add(id(item))
+        else:
+            candidatos = devueltos_sin_rowid.get(ref) or []
+            if candidatos:
+                if len(candidatos) > 1 or lineas_por_ref.get(ref, 0) > 1:
+                    _rowids_fac = [str(r.get('f470_rowid') or '') for r in rowids_data
+                                   if r.get('f120_referencia', '') == ref]
+                    raise LineaDevueltaAmbigua(
+                        f'la referencia {ref!r} se devolvió sin f470_rowid y la '
+                        f'factura tiene {len(_rowids_fac)} línea(s) con esa '
+                        f'referencia (rowids {_rowids_fac}, '
+                        f'{len(candidatos)} item(s) declarado(s)) — es un producto '
+                        'de doble unidad: no se puede saber a cuál corresponde lo '
+                        'devuelto. No se construye la NC: adivinar cruzaría de más '
+                        'contra la factura y reingresaría inventario que nadie '
+                        'devolvió. Rehacer la devolución desde Recepción (el PWA '
+                        'ya manda el rowid por línea).'
+                    )
+                item = candidatos[0]
+                consumidos.add(id(item))
         if not item:
             continue
-        cant_dev = int(item['cantidad_devuelta'])
+        cant_dev = _cant_declarada(item['cantidad_devuelta'])
         bodega = row.get('f150_id') or bodega_default
         if item.get('es_averiado') and bodega_averias:
             bodega = bodega_averias
@@ -415,6 +584,22 @@ def _construir_lineas_nc(rowids_data: list, es_total: bool, items_devueltos: lis
             'f120_referencia': ref,
             'f470_vlr_neto_prorrateado': vlr_prorrateado,
         })
+
+    # Lo declarado que no encontró su línea en la factura. Antes desaparecía sin
+    # ruido: la NC salía corta y el cruce quedaba por debajo del saldo, que es
+    # el lado conservador pero también el silencioso. Se declara (no se levanta:
+    # una NC corta se completa; una de más hay que reversarla en el ERP).
+    _declarados = list(devueltos_map.values()) + [
+        it for lista in devueltos_sin_rowid.values() for it in lista
+    ]
+    _huerfanos = [it for it in _declarados if id(it) not in consumidos]
+    if _huerfanos:
+        logger.warning(
+            '[DLQ] _construir_lineas_nc: %d item(s) devuelto(s) sin línea en la '
+            'factura — NO entran a la NC: %s',
+            len(_huerfanos),
+            [(it.get('codigo'), it.get('f470_rowid')) for it in _huerfanos],
+        )
     return lineas_nc
 
 
@@ -957,11 +1142,30 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         es_total = payload.get('es_total', False)
         causal = payload.get('causal_devolucion') or connekta.causal_devolucion_default
 
-        lineas_nc = _construir_lineas_nc(
-            rowids_data, es_total, items_devueltos, causal,
-            motivo=connekta.motivo_ventas, uom_default=connekta.uom_default,
-            bodega_default=connekta.bodega,
-        )
+        try:
+            lineas_nc = _construir_lineas_nc(
+                rowids_data, es_total, items_devueltos, causal,
+                motivo=connekta.motivo_ventas, uom_default=connekta.uom_default,
+                bodega_default=connekta.bodega,
+            )
+        except LineaDevueltaAmbigua as _e_amb:
+            # Regla 0: el job falla nombrando el recaudo y la referencia. Ocurre
+            # ANTES del pre-flag, así que no queda ninguna bandera encendida.
+            #
+            # Se re-lanza **la misma clase** con el contexto adentro del
+            # mensaje. El envoltorio en `Exception` genérica que había acá le
+            # borraba el tipo al clasificador del DLQ, que entonces no la podía
+            # distinguir de un rechazo de Siesa —reintentable— y le gastaba los
+            # 5 intentos: 185 minutos de backoff antes de avisarle a la única
+            # persona que puede resolverla. La ambigüedad es determinista: los
+            # mismos datos la producen siempre. Es la convención que ya siguen
+            # `ConnektaPaginacionError` y `_ResultadoDesconocido`: el contexto
+            # se agrega, el tipo no se toca.
+            raise LineaDevueltaAmbigua(
+                f'NOTA_CREDITO_FACTURA job={job.id} recaudo='
+                f'{payload.get("recaudo_id")} FE {tipo_docto_fe}-{consec_fe}: '
+                f'{_e_amb}'
+            ) from _e_amb
 
         if not lineas_nc:
             logger.warning(
@@ -1075,11 +1279,28 @@ def _ejecutar_job(job: SiesaJob) -> dict:
         # completas"): items_devueltos ya trae la cantidad exacta contada por
         # línea y el flag es_averiado por línea — la rama es_total del conector
         # de Liquidación no soporta ese flag por línea.
-        lineas_nc = _construir_lineas_nc(
-            rowids_data, es_total=False, items_devueltos=items_devueltos,
-            causal=causal, motivo=connekta.motivo_ventas, uom_default=connekta.uom_default,
-            bodega_default=connekta.bodega, bodega_averias=connekta.bodega_averias,
-        )
+        try:
+            lineas_nc = _construir_lineas_nc(
+                rowids_data, es_total=False, items_devueltos=items_devueltos,
+                causal=causal, motivo=connekta.motivo_ventas, uom_default=connekta.uom_default,
+                bodega_default=connekta.bodega, bodega_averias=connekta.bodega_averias,
+            )
+        except LineaDevueltaAmbigua as _e_amb:
+            # Regla 0: el job falla nombrando la devolución y la referencia, en
+            # vez de emitir una NC que cruza de más. Ocurre ANTES del pre-flag
+            # (`siesa_nc_triggered` sigue en False), así que la devolución se
+            # puede rehacer desde Recepción sin destrabar nada a mano.
+            #
+            # Misma clase, mensaje enriquecido — ver la gemela en
+            # NOTA_CREDITO_FACTURA. Envolverla en `Exception` la volvía
+            # indistinguible de un rechazo reintentable y le costaba 3 horas de
+            # backoff a un error que da lo mismo las cinco veces. Y éste es el
+            # handler **vivo**: lo encola `devolucion_cliente_service.py`.
+            raise LineaDevueltaAmbigua(
+                f'NOTA_CREDITO_DEVOLUCION_CLIENTE job={job.id} devolución='
+                f'{devolucion.codigo if devolucion else payload.get("devolucion_id")} '
+                f'FE {tipo_docto_fe}-{consec_fe}: {_e_amb}'
+            ) from _e_amb
 
         if not lineas_nc:
             logger.warning(

@@ -4,7 +4,7 @@ Consolida datos de todos los módulos para visibilidad gerencial.
 """
 import logging
 from datetime import datetime, timedelta
-from sqlalchemy import func
+from sqlalchemy import func, case
 from app.extensions import db
 from app.models.picking import TareaPicking
 from app.models.packing import TareaPacking
@@ -15,8 +15,93 @@ from app.models.producto import Producto
 from app.models.usuario import Usuario
 from app.models.ubicacion import Ubicacion
 from app.services.connekta_gateway import connekta
+# La política única de «esto no es vendible». Acá había una tupla propia
+# (`_ZONAS_NO_VENDIBLES = ('AVERIAS',)`) que contestaba la misma pregunta que el
+# FEFO con otras palabras, y las dos ignoraban al escritor que no marca
+# `tipo_zona`. Ver el bloque de cabecera de `picking_service.py`.
+from app.services.picking_service import filtro_ubicacion_vendible
 
 logger = logging.getLogger(__name__)
+
+# Tope de filas que `alertas_stock` serializa en una respuesta. Medido: con el
+# outerjoin (que ahora sí ve el agotado total), una carga masiva de mínimos
+# lleva la respuesta de 1.000 a 28.000 filas y de 277 ms a 6,9 s — un endpoint
+# de tablero que tarda siete segundos deja de mirarse.
+#
+# El tope NO es la medición: `total_alertas` sigue siendo el conteo real y sin
+# tope, y la respuesta declara cuántas mostró y si truncó. Un número recortado
+# sin decir sobre qué base se recortó es un conteo sin su base (CLAUDE.md), y
+# ahí el jefe de almacén cree que hay 500 productos por reponer cuando hay
+# 28.000. Las que se recortan son las MENOS urgentes: el orden lo pone la
+# consulta, no el `LIMIT`.
+LIMITE_ALERTAS_STOCK = 500
+
+
+def consulta_productos_bajo_minimo(almacen_id: int):
+    """
+    Productos activos cuyo stock **vendible** en este almacén no alcanza su
+    `stock_minimo`. Devuelve un Query de filas `(Producto, stock_vendible)`
+    para que el llamador decida si lo cuenta o lo lista.
+
+    Existe como función única porque la consulta estaba escrita dos veces —
+    `alertas_stock()` y el bloque de alertas de `kpis_operativos()`— y las dos
+    copias tenían los mismos dos defectos. Una política, una función (Regla 0
+    de CLAUDE.md): el mismo patrón duplicado ya costó tres horas y 25× de
+    sobrecompra en el fallback de días expuestos. Con dos copias, el próximo
+    arreglo se aplica en una sola y el tablero y la lista dejan de coincidir
+    sin que nadie sepa cuál de los dos números creer.
+
+    Los dos defectos que corrige, y lo que costaban:
+
+    · **`outerjoin`, no `join`.** El join interno exigía al menos una fila de
+      `UbicacionProducto`, así que el producto **agotado total** — el que no
+      tiene ninguna — jamás entraba, justo el caso que el docstring de
+      `alertas_stock` promete («bajo mínimo *o sin stock*») y el más urgente de
+      reponer. Sin fila, `stock_vendible` es NULL, y `NULL <= minimo` no es
+      verdadero: por eso el `coalesce(..., 0)` es parte del arreglo, no
+      cosmética.
+
+    · **AVERIAS fuera de la suma.** Mercancía dañada sumaba como cobertura:
+      2 unidades vendibles + 40 averiadas tapaban un mínimo de 10. La alerta de
+      reposición se apagaba con inventario que no se puede vender.
+
+    El filtro por almacén se conserva dentro de la subconsulta: la pregunta es
+    «¿cuánto hay ACÁ?», y el stock de otra bodega no cubre este mínimo.
+
+    Qué zona es vendible NO se decide acá: lo decide `filtro_ubicacion_vendible`
+    (`picking_service`), la misma cláusula que usa el FEFO. Acá había una tupla
+    propia con el literal `'AVERIAS'`, y una copia de la política es una
+    política que va a divergir — de hecho ya divergía del escritor.
+
+    Viene ORDENADA por urgencia (agotado primero, luego clasificación ABC).
+    El orden es parte de la consulta y no del llamador porque `alertas_stock`
+    tiene tope: ordenar después del `LIMIT` tiraría justo los CRITICO, que son
+    los únicos que no se pueden perder.
+    """
+    stock_vendible = db.session.query(
+        UbicacionProducto.producto_id,
+        func.sum(UbicacionProducto.cantidad).label('stock_total')
+    ).join(Ubicacion).filter(
+        Ubicacion.almacen_id == almacen_id,
+        filtro_ubicacion_vendible(),
+    ).group_by(UbicacionProducto.producto_id).subquery()
+
+    stock = func.coalesce(stock_vendible.c.stock_total, 0)
+
+    return db.session.query(Producto, stock.label('stock_total')).outerjoin(
+        stock_vendible,
+        Producto.id == stock_vendible.c.producto_id
+    ).filter(
+        Producto.activo == True,
+        Producto.stock_minimo > 0,
+        stock <= Producto.stock_minimo
+    ).order_by(
+        # CRITICO (stock 0) antes que BAJO — mismo criterio que `urgencia`
+        case((stock == 0, 0), else_=1).asc(),
+        # 'Z' para el producto sin clasificar: va último, no primero
+        func.coalesce(Producto.clasificacion_abc, 'Z').asc(),
+        Producto.id.asc(),   # desempate estable — sin él el tope corta distinto en cada corrida
+    )
 
 
 def _tendencia_7d():
@@ -137,24 +222,11 @@ class DashboardService:
         conteos_descuadre  = c_row.descuadre
         conteos_match_hoy  = c_row.match_hoy
 
-        # --- ALERTAS DE STOCK — misma lógica que alertas_stock() ---
-        stock_sub = db.session.query(
-            UbicacionProducto.producto_id,
-            func.sum(UbicacionProducto.cantidad).label('stock_total')
-        ).join(Ubicacion).filter(
-            Ubicacion.almacen_id == almacen_id
-        ).group_by(UbicacionProducto.producto_id).subquery()
-
-        productos_bajo_minimo = db.session.query(
-            func.count(Producto.id)
-        ).join(
-            stock_sub,
-            Producto.id == stock_sub.c.producto_id
-        ).filter(
-            Producto.activo == True,
-            Producto.stock_minimo > 0,
-            stock_sub.c.stock_total <= Producto.stock_minimo
-        ).scalar() or 0
+        # --- ALERTAS DE STOCK ---
+        # LA MISMA consulta que alertas_stock(), no «la misma lógica»: acá
+        # había una copia, y las copias divergen. El KPI del tablero y la lista
+        # de alertas tienen que dar siempre el mismo número.
+        productos_bajo_minimo = consulta_productos_bajo_minimo(almacen_id).count()
 
         return {
             'fecha': hoy.isoformat(),
@@ -199,9 +271,20 @@ class DashboardService:
         operario_ids = [o.id for o in operarios]
 
         # [28] Consolidar los 4 COUNT queries por operario en queries batch con GROUP BY
-        # (acá había un `hoy = utcnow().date()` que nadie usaba: el filtro es
-        #  `fecha_inicio`. Se quitó — una variable muerta con un bug adentro
-        #  invita a copiarla al próximo sitio.)
+        #
+        # Acá decía que `hoy = utcnow().date()` era una variable muerta y se
+        # quitó. NO estaba muerta: `conteos_hoy_por_op` la usa más abajo. Desde
+        # entonces esta función levantaba `NameError` **siempre** —
+        # `/api/dashboard/productividad` devolvía 500, y en `resumen_completo`
+        # el `_safe()` se lo tragaba y el panel de productividad salía vacío sin
+        # ningún error visible. Un guard que no da error deja pasar.
+        #
+        # Se restituye con el día OPERATIVO, no el UTC: el cupo diario de conteo
+        # del operario es una de las cuatro fechas que CLAUDE.md (Regla 5) lista
+        # como reiniciadas a las 7 p.m. Colombia, en mitad del turno. Las
+        # columnas guardan UTC naive, así que el corte se expresa en ese marco.
+        from app.utils.fecha import dia_operativo, inicio_del_dia_utc
+        inicio_hoy = inicio_del_dia_utc(dia_operativo())
 
         pickings_por_op = {
             row.operario_id: row.cnt
@@ -246,7 +329,7 @@ class DashboardService:
                 func.count(SesionConteo.id).label('cnt')
             ).filter(
                 SesionConteo.operario_id.in_(operario_ids),
-                db.func.date(SesionConteo.fecha_inicio) == hoy
+                SesionConteo.fecha_inicio >= inicio_hoy
             ).group_by(SesionConteo.operario_id).all()
         }
 
@@ -292,23 +375,43 @@ class DashboardService:
 
     @staticmethod
     def alertas_stock(almacen_id: int):
-        """Productos bajo mínimo o sin stock."""
-        stock_sub = db.session.query(
-            UbicacionProducto.producto_id,
-            func.sum(UbicacionProducto.cantidad).label('stock_total')
-        ).join(Ubicacion).filter(
-            Ubicacion.almacen_id == almacen_id
-        ).group_by(UbicacionProducto.producto_id).subquery()
+        """
+        Productos bajo mínimo o sin stock — el disparador de reposición/compra
+        que mira el jefe de almacén.
 
-        # [07] Incluir stock_total en el SELECT principal para evitar N+1 por producto
-        productos_alerta = db.session.query(Producto, stock_sub.c.stock_total).join(
-            stock_sub,
-            Producto.id == stock_sub.c.producto_id
-        ).filter(
-            Producto.activo == True,
-            Producto.stock_minimo > 0,
-            stock_sub.c.stock_total <= Producto.stock_minimo
-        ).all()
+        «Sin stock» incluye el agotado total (sin ninguna fila de inventario) y
+        el stock reportado es el **vendible**: lo que está en la zona de averías
+        no cubre el mínimo. Ambas reglas viven en
+        `consulta_productos_bajo_minimo`, la misma que alimenta el KPI
+        `productos_bajo_minimo` del tablero.
+
+        ── El tope, y por qué el total viaja igual ──────────────────────────
+        Esta lista se serializaba entera. Medido tras abrir el join hacia
+        afuera: una carga masiva de mínimos la lleva de 1.000 a 28.000 filas y
+        de 277 ms a 6,9 s. Ahora se cortan las `LIMITE_ALERTAS_STOCK` más
+        urgentes — y se declara la base:
+
+          `total_alertas`     conteo REAL, sin tope (contrato que ya existía;
+                              es el número que tiene que coincidir con el KPI
+                              `productos_bajo_minimo` del tablero)
+          `alertas_mostradas` cuántas trae esta respuesta
+          `limite` / `truncado`  el tope aplicado y si mordió
+
+        Un tope sin su base convierte «28.000 productos por reponer» en «500» y
+        nadie se entera. `routes/dashboard.py` serializa este dict tal cual, así
+        que la declaración viaja acá adentro y no en un header ni en un
+        parámetro nuevo.
+        """
+        consulta = consulta_productos_bajo_minimo(almacen_id)
+
+        # Dos consultas a propósito: el conteo tiene que ser el de TODAS las
+        # filas, no el de las que sobrevivieron al tope.
+        total = consulta.count()
+
+        # [07] stock_total viene en el SELECT principal — evita N+1 por producto
+        # La consulta ya viene ordenada por urgencia: el LIMIT recorta por la
+        # cola (lo menos urgente), nunca por el medio.
+        productos_alerta = consulta.limit(LIMITE_ALERTAS_STOCK).all()
 
         alertas = []
         for p, stock_actual in productos_alerta:
@@ -324,14 +427,15 @@ class DashboardService:
                 'urgencia': 'CRITICO' if stock_actual == 0 else 'BAJO'
             })
 
-        alertas.sort(key=lambda x: (
-            0 if x['urgencia'] == 'CRITICO' else 1,
-            x['clasificacion_abc'] or 'Z'
-        ))
+        # El orden ya lo puso la consulta (tiene que ser así: ordenar en Python
+        # después del LIMIT ordenaría solo el pedazo que sobrevivió).
 
         return {
             'almacen_id': almacen_id,
-            'total_alertas': len(alertas),
+            'total_alertas': total,
+            'alertas_mostradas': len(alertas),
+            'limite': LIMITE_ALERTAS_STOCK,
+            'truncado': total > len(alertas),
             'alertas': alertas
         }
 

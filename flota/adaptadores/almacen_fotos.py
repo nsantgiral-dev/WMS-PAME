@@ -23,6 +23,7 @@ evidencia falsa, que es exactamente lo que este módulo existe para impedir.
 """
 import base64
 import hashlib
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,33 @@ from typing import Dict, Tuple
 
 from flota.dominio.fotos import validar_formato
 from flota.dominio.valores import ClaseFoto
+
+logger = logging.getLogger(__name__)
+
+
+def _medir_dimensiones(contenido: bytes):
+    """Ancho y alto REALES del archivo, o `None` si no se pueden medir.
+
+    `None` es un tercer estado y no un cero: significa «esto no es una
+    imagen que yo sepa abrir» —un PDF adjunto, un archivo truncado—, no
+    «mide cero». El llamador conserva lo declarado y sigue; rechazar acá
+    trabaría un traspaso de custodia por un formato que la clase sí
+    permite.
+
+    Pillow está en `requirements.txt:30`. El import va adentro para que
+    un entorno sin la dependencia degrade a «no medí» en vez de tumbar
+    el módulo entero al importarlo — que es exactamente lo que le
+    pasaba a `AlmacenLocal.dimensiones()`, la función gemela que nadie
+    llamaba y que habría reventado el día que alguien la usara.
+    """
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+        with Image.open(BytesIO(contenido)) as img:
+            return {'ancho': img.width, 'alto': img.height}
+    except Exception:
+        return None
 
 #: Extensión en disco por tipo de archivo. **No es la política de qué se
 #: acepta** — eso lo decide `flota.dominio.fotos.validar_formato` según la
@@ -160,6 +188,38 @@ def guardar_foto(datos: dict) -> dict:
     contenido, mime = desde_data_url(
         datos['data_url'] if 'data_url' in datos else '')
     campos.update({'bytes': len(contenido), 'mime': mime})
+
+    # ── Las dimensiones se MIDEN, no se creen (2026-09-01) ───────────────────
+    # Antes salían de `datos['ancho']`/`datos['alto']`, o sea del JSON que manda
+    # el cliente, y el CHECK de la base que exige 1600 px de lado largo para una
+    # `foto_dato` evaluaba **ese número autorreportado**. La foto del tablero es
+    # la única evidencia del kilometraje, y su respaldo se apoyaba en una
+    # promesa: cualquiera que arme el POST a mano declara `{ancho: 4000}` sobre
+    # una imagen de 100 px y pasa.
+    #
+    # `AlmacenLocal.dimensiones()` medía de verdad con PIL desde la tanda 1 y
+    # **no tenía un solo caller** — la pieza estaba construida y desconectada.
+    # No se usa ésa porque toma un `storage_ref` y acá todavía no se guardó
+    # nada: se mide sobre los bytes ya decodificados, que además es más honesto
+    # (valida lo mismo que se va a escribir).
+    #
+    # NO rechaza cuando no puede medir. Un PDF adjunto no tiene píxeles, y un
+    # traspaso de custodia no se puede trabar a las 5 a.m. porque PIL no supo
+    # abrir un archivo: ante «no sé», se conserva lo declarado y sigue el
+    # camino de validación de siempre.
+    #
+    # Para el PWA de hoy esto es no-op: `flotaComprimir` dibuja en un canvas de
+    # w×h y declara esos mismos w×h, así que declarado == medido (verificado
+    # generando JPEG de 1600×1200, 800×600, 1600×900 y 1200×1600).
+    medido = _medir_dimensiones(contenido)
+    if medido is not None:
+        if (campos['ancho'], campos['alto']) != (medido['ancho'], medido['alto']):
+            logger.warning(
+                '[FLOTA] foto %s: el cliente declaró %sx%s y el archivo mide '
+                '%sx%s — se guarda lo medido',
+                datos.get('angulo') or clase.value,
+                campos['ancho'], campos['alto'], medido['ancho'], medido['alto'])
+        campos.update(medido)
     # El mime que manda a la validación es el del contenido, no el declarado en
     # el JSON: si el cliente dijera 'image/jpeg' y subiera otra cosa, la fila
     # afirmaría un formato que el archivo no tiene.
@@ -182,4 +242,42 @@ def guardar_foto(datos: dict) -> dict:
     return campos
 
 
-__all__ = ['AlmacenLocal', 'ErrorAlmacen', 'desde_data_url', 'guardar_foto']
+def colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
+    """Ata cada foto a su padre y GUARDA EL ARCHIVO. Devuelve las filas creadas.
+
+    Un archivo sin padre es un bug (regla 7); un padre sin archivo es evidencia
+    falsa, que es peor. El binario se escribe en el almacén y la fila queda con
+    la referencia y el hash REALES. Si el almacén falla, `guardar_foto` devuelve
+    la fila marcada `pendiente_evidencia` — nunca un hash de ceros.
+
+    **Vive acá y no en cada adaptador.** Nació en `traspaso.py` y el 2026-09-01
+    se copió a `hallazgos.py` con el cuerpo idéntico. Regla 0 del WMS, corolario:
+    el mismo concepto implementado dos veces divergió en tres horas la vez que
+    pasó de verdad. Acá lo que divergiría es qué se considera evidencia guardada
+    — y la copia que se quede atrás es la que va a decir «foto ok» sobre un
+    archivo que no se escribió.
+
+    No se importa desde `traspaso` para no crear una dependencia entre dos
+    adaptadores hermanos: la política de fotos es del almacén, no del traspaso.
+    """
+    from app.extensions import db
+    from flota.adaptadores.modelos import Foto
+
+    creadas = []
+    for f in fotos or []:
+        campos = guardar_foto(f)
+        fila = Foto(
+            entidad_tipo=entidad_tipo, entidad_id=entidad_id,
+            ts_captura=f['ts_captura'] if 'ts_captura' in f else ahora,
+            gps_lat=f['gps_lat'] if 'gps_lat' in f else None,
+            gps_lon=f['gps_lon'] if 'gps_lon' in f else None,
+            autor_usuario_id=autor_id,
+            **campos,
+        )
+        db.session.add(fila)
+        creadas.append(fila)
+    return creadas
+
+
+__all__ = ['AlmacenLocal', 'ErrorAlmacen', 'desde_data_url', 'guardar_foto',
+           'colgar_fotos']

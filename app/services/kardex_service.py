@@ -55,6 +55,40 @@ CONCEPTOS_VENTA = {501}
 # Devoluciones (502) — restan demanda
 CONCEPTOS_DEVOLUCION = {502}
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CONCEPTOS DE COMPRA — los únicos que dicen QUÉ COSTÓ COMPRAR el SKU.
+#
+# Vive aquí, al lado de CONCEPTO_DEFINICION, y no en costo_service: el mismo
+# concepto clasificado en dos archivos diverge, y esa vez nadie está comparando
+# (Regla 0, corolario «una política, una función»).
+#
+# QUÉ COSTABA NO TENERLO: `costo_service._costos_kardex` ponderaba
+# `costo_promedio * cantidad` sobre TODAS las filas del SKU. Entraban los saldos
+# iniciales (699, costo viejo con cantidades enormes), los ajustes (603), las
+# ventas (501 — la mayoría de las filas del kardex) y los traslados (607, que
+# aportan DOS filas por las MISMAS unidades físicas: salida en origen y entrada
+# en destino, o sea doble peso por mercancía que nunca se compró dos veces).
+# En el caso construido de `tests/test_costo_compra_y_ancla.py` el promedio salía
+# 659,09 en vez de 1.000 — un 34,1% por debajo. Y `KARDEX_PROMEDIO` es el nivel 3
+# de la jerarquía de costo: subestimar el costo infla Cu y desinfla Co, y las dos
+# empujan el ratio crítico del newsvendor hacia COMPRAR MÁS, que es el lado
+# irreversible.
+#
+# FUNDAMENTO DE LA ELECCIÓN — la tabla de arriba, leída literal: 601 es el único
+# concepto cuya descripción declara una entrada por compra. De los demás, cada
+# descripción dice explícitamente que es otra cosa (venta, devolución de venta,
+# salida directa, ajuste, transferencia «logística interna, NUNCA demanda»,
+# saldo inicial). No se inventa ningún concepto que la tabla no clasifique: uno
+# que no esté en CONCEPTO_DEFINICION es además uno que la compuerta de conceptos
+# desconocidos (`reconciliar_kardex`) no vigila.
+CONCEPTOS_COMPRA = {601}
+
+# f470_ind_naturaleza: 1=Entrada (suma al stock), 2=Salida (resta).
+# El costo ponderado de compra suma ENTRADAS: una fila de compra en salida es
+# una devolución al proveedor y no describe lo que costó reponer.
+NATURALEZA_ENTRADA = 1
+NATURALEZA_SALIDA = 2
+
 
 class KardexMovimiento(db.Model):
     """Log crudo de movimientos de inventario descargados de Siesa."""
@@ -664,7 +698,14 @@ class KardexService:
         3. Resta entradas, suma salidas (inverso de la naturaleza)
         4. Marca tuvo_stock = True si stock_cierre > 0
 
-        Returns: {referencias_procesadas, dias_generados}
+        El paso 1 puede no encontrar ancla (hoy solo consulta `stock_siesa`).
+        Esas referencias se reconstruyen desde 0 —serie plana, `tuvo_stock`
+        False siempre— y quedan CONTADAS en `refs_sin_ancla`: es el denominador
+        de la demanda descensurada, y un cero silencioso ahí se lee como
+        «agotado» y hace comprar de menos. Ver `_obtener_saldo_actual`.
+
+        Returns: {referencias_procesadas, dias_generados, reporte_calidad,
+                  refs_sin_ancla}
         """
         from sqlalchemy import func, distinct
 
@@ -680,12 +721,15 @@ class KardexService:
         refs_procesadas = 0
         dias_generados = 0
         calidad = []  # reporte de calidad por SKU×bodega
+        sin_ancla = []  # SKU×bodega reconstruidos sobre un ancla que no existe
         UMBRAL_NEGATIVO = 0.10  # 10% — por encima, dato insuficiente
 
         from collections import defaultdict
 
         for ref, bod in combos:
-            saldo_actual = KardexService._obtener_saldo_actual(ref, bod)
+            saldo_actual, fuente_ancla = KardexService._obtener_saldo_actual(ref, bod)
+            if fuente_ancla is None:
+                sin_ancla.append({'referencia': ref, 'bodega': bod})
 
             movimientos = (
                 KardexMovimiento.query
@@ -761,13 +805,40 @@ class KardexService:
 
         logger.info(
             '[KARDEX] Reconstrucción completa: %d referencias, %d días, '
-            '%d con saldos negativos (%d dato insuficiente)',
-            refs_procesadas, dias_generados, len(calidad), datos_insuficientes
+            '%d con saldos negativos (%d dato insuficiente), %d SIN ANCLA',
+            refs_procesadas, dias_generados, len(calidad), datos_insuficientes,
+            len(sin_ancla)
         )
+        if sin_ancla:
+            logger.warning(
+                '[KARDEX] %d SKU×bodega reconstruidos con ancla 0 por no tener '
+                'fila en stock_siesa. Su serie queda plana en cero, se lee como '
+                '«agotado» y CENSURA LA DEMANDA HACIA ABAJO (d_avg, sigma_d, ROP, '
+                's_objetivo, contenedor). Primeros: %s',
+                len(sin_ancla), sin_ancla[:20])
 
         return {
             'referencias_procesadas': refs_procesadas,
             'dias_generados': dias_generados,
+            # EL DENOMINADOR TIENE QUE SER VISIBLE. Mismo patrón que
+            # `factor_censura`/`censurado` por fila en la descensura: un SKU sin
+            # ancla no falla ni da error — ancla en 0, serie plana, `tuvo_stock`
+            # False todos los días, demanda censurada hacia abajo → se compra de
+            # menos. Y `reporte_calidad` no puede verlo: mide una PROXY
+            # (pct_negativo) que solo dispara si la serie se va a negativo.
+            'refs_sin_ancla': {
+                'cantidad': len(sin_ancla),
+                'detalle': sin_ancla[:50],
+                'nota': (
+                    'Sin fila en stock_siesa: la reconstrucción ancló en 0 y la '
+                    'serie queda plana en cero — indistinguible de un agotado '
+                    'legítimo. Su demanda descensurada SUBESTIMA. El docstring de '
+                    '_obtener_saldo_actual promete una segunda fuente '
+                    '(ubicacion_producto) que todavía no está implementada; '
+                    'completarla mueve las series históricas de todo el catálogo y '
+                    'es una decisión aparte.'
+                ) if sin_ancla else None,
+            },
             'reporte_calidad': {
                 'total_con_negativos': len(calidad),
                 'dato_insuficiente': datos_insuficientes,
@@ -1405,15 +1476,42 @@ class KardexService:
         }
 
     @staticmethod
-    def _obtener_saldo_actual(referencia: str, bodega: str) -> float:
-        """Obtiene saldo actual de stock_siesa o ubicacion_producto."""
+    def _obtener_saldo_actual(referencia: str, bodega: str):
+        """Obtiene saldo actual de stock_siesa o ubicacion_producto.
+
+        ⚠️ EL DOCSTRING PROMETE DOS FUENTES Y HAY UNA. La rama de
+        `ubicacion_producto` NO está implementada — se deja escrita a propósito
+        porque describe la INTENCIÓN: arreglar el documento en vez del código
+        es la forma que este repo ya documenta como recurrente. Mientras no
+        exista, un SKU ausente de `stock_siesa` no tiene ancla, y eso ahora se
+        DECLARA (ver `refs_sin_ancla` en `reconstruir_stock_diario`) en vez de
+        devolverse como un cero.
+
+        POR QUÉ EL CERO ERA CARO. El ancla reconstruye `StockDiario` hacia
+        atrás, y `tuvo_stock` es EL DENOMINADOR de la demanda descensurada
+        (`tasa_demanda_descensurada`) → d_avg / sigma_d → ROP, s_objetivo, el
+        armado del contenedor y el newsvendor de temporada. Anclar en 0 deja
+        `tuvo_stock=False` todos los días, la serie se lee como «agotado» y la
+        demanda se censura HACIA ABAJO: se compra de menos.
+
+        Y el guard que existía no podía verlo: `pct_negativo` mide una PROXY —
+        solo dispara si el ancla queda demasiado BAJA y la serie se va a
+        negativo. Un ancla en 0 sobre un SKU con stock real produce una serie
+        plana en cero, indistinguible de un agotado legítimo.
+
+        «NO HAY ANCLA» ES UN TERCER ESTADO, no un cero. Un saldo real de 0 y la
+        ausencia de fila son hechos distintos y devolvían lo mismo; por eso la
+        fuente sale en el retorno y no se infiere del valor.
+
+        Returns: (saldo, fuente) — fuente 'STOCK_SIESA' o None si no hay ancla.
+        """
         from app.models.stock_siesa import StockSiesa
         reg = StockSiesa.query.filter_by(
             bodega=bodega, codigo_siesa=referencia
         ).first()
         if reg:
-            return float(reg.existencia or 0)
-        return 0
+            return float(reg.existencia or 0), 'STOCK_SIESA'
+        return 0.0, None
 
     # ══════════════════════════════════════════════════════════════════════════
     # M0.3 — TSB (Teunter-Syntetos-Babai) para demanda intermitente

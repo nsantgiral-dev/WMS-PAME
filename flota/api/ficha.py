@@ -16,7 +16,7 @@ alguien va a programar un cambio de correa contra una suposición.
 """
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import jwt_required
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, InternalError
 
 from app.extensions import db
 from app.routes._auth_helpers import Roles
@@ -127,7 +127,15 @@ def guardar_ficha(placa):
 
     try:
         db.session.commit()
-    except IntegrityError as e:
+    except (IntegrityError, InternalError) as e:
+        # `InternalError` **no es redundante y no es defensivo**: un `RAISE
+        # EXCEPTION` de plpgsql —que es como PostgreSQL impone el trigger del
+        # ancla (`flota_ficha_ancla_no_baja`)— llega como `InternalError`,
+        # mientras que el `RAISE(ABORT)` de SQLite llega como `IntegrityError`.
+        # Con solo el segundo, bajar el `km_inicial` daba 409 en los tests y
+        # **500 en producción**: la misma regla, dos caras según el motor, y la
+        # fea es la que ve el usuario. Es la clase de defecto que la suite no
+        # puede ver porque corre contra SQLite (ver ESTADO.md).
         db.session.rollback()
         # `str(e.orig)` directo: si el driver cambiara de forma, esto tiene que
         # reventar en un test, no devolver una cadena vacía que se lea como

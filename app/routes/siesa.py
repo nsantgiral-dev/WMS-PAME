@@ -142,6 +142,40 @@ def reconciliacion_estado():
     return jsonify(estado_reconciliacion()), 200
 
 
+def _semaforo_de_estado(estado):
+    """Traduce el estado de un sincronizador a un color.
+
+    Leía `resultado`, `ultima_sync` y `error`. **Ninguna de las tres existe**:
+    las cuatro funciones que lo alimentan —`siesa_sync_service.estado_sync`,
+    `pedidos_sync_service.estado_sync`, `estado_carga_inventario` y
+    `estado_reconciliacion`— devuelven `ultimo_resultado`, `ultimo_inicio` y
+    `ultimo_error`. O sea que el semáforo solo podía dar AMARILLO (mientras
+    corría) o GRIS: **una reconciliación que reventó se veía igual que una que
+    nunca se corrió.** La desalineación no era de un módulo, era de los cuatro.
+
+    Vive a nivel de módulo y no anidada en la ruta para que el trinquete pueda
+    ejercerla directamente: un color que solo se puede probar levantando el
+    endpoint es un color que nadie prueba.
+
+    `is not None` y no truthiness: `ultimo_resultado = {}` es un resultado, y
+    con `or` se leería como «nunca corrió».
+
+    Qué NO mide: si el inventario cuadra. Eso es el veredicto de la
+    reconciliación y tiene su propia pantalla; mezclarlos deja un rojo que
+    nadie sabe si es del sincronizador o del stock.
+    """
+    if estado.get('en_curso'):
+        return 'AMARILLO'
+    # El error va ANTES que el resultado a propósito: si la última corrida
+    # falló, el resultado de la anterior sigue en memoria, y pintarlo verde
+    # sería declarar buena una corrida que reventó.
+    if estado.get('ultimo_error'):
+        return 'ROJO'
+    if estado.get('ultimo_resultado') is not None or estado.get('ultimo_inicio'):
+        return 'VERDE'
+    return 'GRIS'
+
+
 @siesa_bp.route('/monitor', methods=['GET'])
 @jwt_required()
 def monitor_sincronizacion():
@@ -172,23 +206,35 @@ def monitor_sincronizacion():
         reconciliacion = {}
         inventario = {}
 
-    def semaforo(estado_dict):
-        """Verde si terminó sin error, amarillo si en curso, rojo si hay error."""
-        if estado_dict.get('en_curso'):
-            return 'AMARILLO'
-        if estado_dict.get('error'):
-            return 'ROJO'
-        if estado_dict.get('resultado') or estado_dict.get('ultima_sync'):
-            return 'VERDE'
-        return 'GRIS'
+    # La cola, que es lo que el panel de recuperación del PWA lee de acá.
+    # `siesaRecuperacionCargar()` pinta `monitor.pendientes` y
+    # `monitor.fallidos` desde siempre y este endpoint no los devolvía nunca:
+    # las dos casillas mostraban `—`. Mismo defecto que el semáforo —un canal
+    # que no llega a la pantalla— en el mismo endpoint.
+    #
+    # `PENDIENTE` es el mismo estado que el procesador de la cola toma
+    # (`siesa_job_service`, el filtro del barrido) — contar acá otra cosa
+    # produciría un número que nadie puede cruzar con lo que el cron hace.
+    try:
+        from app.models.siesa_job import EstadoSiesaJob, SiesaJob
+        pendientes = SiesaJob.query.filter_by(
+            estado=EstadoSiesaJob.PENDIENTE).count()
+        fallidos = SiesaJob.query.filter_by(
+            estado=EstadoSiesaJob.FALLIDO).count()
+    except Exception:
+        # Un contador que no se pudo leer no puede tumbar el monitor: es lo que
+        # se mira cuando algo ya está roto.
+        pendientes = fallidos = 0
 
     return jsonify({
         'modulos': {
-            'productos':      {'estado': semaforo(productos),      'detalle': productos},
-            'pedidos':        {'estado': semaforo(pedidos),        'detalle': pedidos},
-            'inventario':     {'estado': semaforo(inventario),     'detalle': inventario},
-            'reconciliacion': {'estado': semaforo(reconciliacion), 'detalle': reconciliacion},
+            'productos':      {'estado': _semaforo_de_estado(productos),      'detalle': productos},
+            'pedidos':        {'estado': _semaforo_de_estado(pedidos),        'detalle': pedidos},
+            'inventario':     {'estado': _semaforo_de_estado(inventario),     'detalle': inventario},
+            'reconciliacion': {'estado': _semaforo_de_estado(reconciliacion), 'detalle': reconciliacion},
         },
+        'pendientes': pendientes,
+        'fallidos': fallidos,
         'connekta': connekta.estado(),
     }), 200
 
@@ -711,20 +757,26 @@ def ordenes_compra():
             item_codigo = row.get('f120_referencia', '').strip()
 
             prod = _buscar_producto(item_codigo)
+            co_oc = row.get('f420_id_co', '').strip()
+            # Regla 18: la PK documental es CO + tipo + consecutivo. El CO se
+            # incluye en la clave aunque hoy `items_raw` venga filtrado a un
+            # solo CO — la clave que describe la identidad no puede depender
+            # de un filtro que está veinte líneas más arriba.
+            clave_oc = (co_oc, numero_oc)
 
-            if numero_oc not in ordenes:
-                ordenes[numero_oc] = {
+            if clave_oc not in ordenes:
+                ordenes[clave_oc] = {
                     'numero_oc': numero_oc,
                     'tipo_docto': tipo_docto,
                     'consec_docto': consec_docto,
-                    'co': row.get('f420_id_co', '').strip(),
+                    'co': co_oc,
                     'proveedor': row.get('f200_razon_social_prov', ''),
                     'proveedor_codigo': (row.get('f200_nit_prov', '') or row.get('f200_id_prov', '')).strip(),  # NIT proveedor (campo oficial API_v2_Compras_Ordenes)
                     'sucursal_prov': row.get('f202_id_sucursal_prov', '').strip(),  # sucursal proveedor (campo oficial API_v2_Compras_Ordenes)
                     'cond_pago': row.get('f420_id_cond_pago', '').strip(),        # Condición de pago
                     'items': []
                 }
-            ordenes[numero_oc]['items'].append({
+            ordenes[clave_oc]['items'].append({
                 'item_codigo': item_codigo,
                 'item_descripcion': row.get('f120_descripcion', ''),
                 'producto_id': prod.id if prod else None,
@@ -736,16 +788,41 @@ def ordenes_compra():
         except (ValueError, TypeError):
             continue
 
-    # Enriquecer con estado WMS — evita mostrar OCs ya confirmadas como pendientes
+    # Enriquecer con estado WMS — evita mostrar OCs ya confirmadas como pendientes.
+    #
+    # El cruce va por **(CO, número de OC)**, no por el número solo. Siesa
+    # numera por Centro de Operación: la tienda de Pitalito (CO 004) y el CDI
+    # (CO 003) tienen cada una su `EO9911`, y son documentos distintos. Con la
+    # clave incompleta, la recepción que la tienda ya confirmó marcaba la OC
+    # del CDI como recepcionada: nadie la abre, la mercancía llega al patio y
+    # no entra ni al WMS ni a Siesa — y la pantalla no muestra un error,
+    # muestra un estado.
+    #
+    # Su gemela `tienda_oc_service.listar_ocs` (líneas 85-90) ya filtraba por
+    # CO; este sitio era el que había quedado corto. Corolario de la Regla 0:
+    # una política, dos implementaciones, y la divergencia no avisa.
+    #
+    # `co_oc_siesa` es nullable (`3f9a1c7d2e85`): una fila sin CO no dice de
+    # quién es, y perder su estado mandaría a recibir dos veces lo mismo. Ante
+    # el dato ausente se conserva el estado (Regla 0) — el índice único
+    # `uq_recepcion_oc_activa` es (numero_oc_siesa, co_oc_siesa), así que estas
+    # filas son a lo sumo una por OC.
+    from sqlalchemy import or_
     from app.models.recepcion import RecepcionMercancia
-    numeros_oc = list(ordenes.keys())
+    numeros_oc = list({oc['numero_oc'] for oc in ordenes.values()})
+    cos_oc     = list({co for co, _ in ordenes.keys()} | {''})
     recepciones_wms = RecepcionMercancia.query.filter(
         RecepcionMercancia.numero_oc_siesa.in_(numeros_oc)
+    ).filter(
+        or_(RecepcionMercancia.co_oc_siesa.in_(cos_oc),
+            RecepcionMercancia.co_oc_siesa.is_(None))
     ).filter(RecepcionMercancia.estado.notin_(['CANCELADA'])).all()
-    estado_por_oc = {r.numero_oc_siesa: r.estado for r in recepciones_wms}
+    estado_por_oc = {((r.co_oc_siesa or '').strip(), r.numero_oc_siesa): r.estado
+                     for r in recepciones_wms}
 
-    for numero_oc, oc in ordenes.items():
-        oc['recepcion_wms_estado'] = estado_por_oc.get(numero_oc)
+    for (co_oc, numero_oc), oc in ordenes.items():
+        oc['recepcion_wms_estado'] = (estado_por_oc.get((co_oc, numero_oc)) or
+                                      estado_por_oc.get(('', numero_oc)))
 
     lista = sorted(ordenes.values(), key=lambda o: int(o.get('consec_docto') or 0), reverse=True)
     return jsonify({'ordenes': lista, 'total': len(lista)}), 200
@@ -1138,11 +1215,31 @@ def iniciar_recepcion():
                 )
             }), 422
 
-    # Idempotente: si ya existe una recepción activa para esta OC, redirigir a ella
+    # Idempotente: si ya existe una recepción activa para esta OC, redirigir a ella.
+    #
+    # «Esta OC» es (CO, número), no el número solo — la misma clave incompleta
+    # que la cola de recepción de arriba, pero del lado que **actúa**: la
+    # recepción que la tienda confirmó para su `EO9911` (otro CO) devolvía 409
+    # «ya fue recepcionada» sobre la OC del CDI, y el recepcionista no puede ni
+    # empezar. `RecepcionService.crear_recepcion` ya incluía el CO en su filtro
+    # (`recepcion_service.py:42-43`); esta guarda era la que había quedado
+    # corta, y es la que se ejecuta primero.
+    #
+    # Se sigue considerando propia la fila con `co_oc_siesa` vacío o nulo
+    # (columna nullable desde `3f9a1c7d2e85`): no sabemos de quién es, y
+    # duplicar una recepción son dos entradas 142948 con doble suma de
+    # inventario — irreversible desde el WMS. Bloquear de más se resuelve
+    # cancelando la recepción desde Admin. Regla 0.
+    from sqlalchemy import or_
     from app.models.recepcion import RecepcionMercancia
-    existente = RecepcionMercancia.query.filter_by(
-        numero_oc_siesa=data['numero_oc']
-    ).filter(RecepcionMercancia.estado.notin_(['CANCELADA'])).first()
+    _co_oc = (data.get('co') or '').strip()
+    _q = RecepcionMercancia.query.filter_by(numero_oc_siesa=data['numero_oc'])
+    if _co_oc:
+        _q = _q.filter(or_(RecepcionMercancia.co_oc_siesa == _co_oc,
+                           RecepcionMercancia.co_oc_siesa == '',
+                           RecepcionMercancia.co_oc_siesa.is_(None)))
+    existente = _q.filter(
+        RecepcionMercancia.estado.notin_(['CANCELADA'])).first()
 
     if existente:
         if existente.estado == 'EN_PROCESO':

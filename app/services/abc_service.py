@@ -188,12 +188,25 @@ class ABCService:
                 if not productos_clase:
                     continue
 
-                # Pre-cargar todos los counts de picks en un solo query GROUP BY
+                # Pre-cargar todos los counts de picks en un solo query GROUP BY.
+                #
+                # El filtro por almacén NO es una optimización: es lo que hace que
+                # el número signifique lo que el umbral supone. Sin él se contaban
+                # los picks de TODOS los almacenes, y un producto clase C de una
+                # tienda cuyos 30 picks ocurrieron en el CD superaba el umbral de C
+                # (10) y disparaba un override en la tienda: SesionConteo
+                # WATCHDOG_ABC sobre una ubicación que nadie tenía razón para
+                # contar, cupo diario del operario consumido, y un ajuste 142951
+                # contra Siesa al final. Ese flujo es el de riesgo silencioso —
+                # nadie reclama un ajuste. Toda la demás evidencia que consulta
+                # esta función ya está acotada al almacén (clase ABC, ubicaciones
+                # con stock, conteos activos); esta era la única que no.
                 producto_ids_clase = [p.id for p in productos_clase]
                 picks_rows = (
                     db.session.query(TareaPicking.producto_id, func.count(TareaPicking.id))
                     .filter(
                         TareaPicking.producto_id.in_(producto_ids_clase),
+                        TareaPicking.almacen_id == almacen_id,
                         TareaPicking.estado == 'COMPLETADO',  # [A] corrección typo: era 'COMPLETADA'
                         TareaPicking.fecha_completado >= ventana
                     )

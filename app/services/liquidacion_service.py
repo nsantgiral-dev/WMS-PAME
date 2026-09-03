@@ -17,6 +17,7 @@ financieros operan directamente contra facturas libres (sin amarre).
 """
 
 import logging
+from collections import namedtuple
 from datetime import datetime
 from app.extensions import db
 from app.models.recaudo_entrega import RecaudoEntrega, EstadoEntrega
@@ -876,6 +877,18 @@ class LiquidacionService:
                 resumen['dc_encolados'] += r.get('dc', 0)
                 resumen['credito_omitidos'] += r.get('credito', 0)
                 resumen['ya_procesados'] += r.get('ya_procesado', 0)
+                # Un documento que no se encoló y no levantó (el DC sin base
+                # gravable) llega por acá. Antes solo dejaba un WARNING en el
+                # log mientras el contador subía: la pantalla decía «1 DC» sin
+                # documento. `errores` es lo que el PWA pinta en rojo
+                # (`rutas.js:2893`), mismo canal que usa el caller gemelo de
+                # `/liquidar-completo`.
+                for _msg in r.get('errores', []):
+                    resumen['errores'].append({
+                        'recaudo_id': recaudo.id,
+                        'tarea_id': recaudo.tarea_id,
+                        'error': _msg,
+                    })
             except Exception as e:
                 logger.error(
                     '[LIQUIDACION] Error procesando recaudo %d (tarea %d): %s',
@@ -978,6 +991,25 @@ class LiquidacionService:
         return resumen
 
 
+def _contar_dc(resultado: dict, r_dc) -> None:
+    """Traduce el desenlace del documento contable al resultado del recaudo.
+
+    **Una función, un lugar**: las dos ramas que encolan retención (CONTADO
+    PARCIAL y CONTADO ENTREGADO) hacían `resultado['dc'] = 1` cada una por su
+    lado, y las dos mentían igual. Si mañana aparece una tercera rama, que use
+    ésta y no una tercera copia de la regla.
+
+    `dc` cuenta **documentos de retención en la cola** tras esta corrida: 1
+    cuando se encoló acá y 1 cuando ya había uno encolado para esa cuenta PUC
+    (existe y se va a enviar). 0 cuando no hay ninguno — y ahí el motivo se
+    declara en `errores`, que es lo que la pantalla pinta en rojo.
+    """
+    if r_dc.estado in (DC_ENCOLADO, DC_YA_EN_COLA):
+        resultado['dc'] = 1
+        return
+    resultado.setdefault('errores', []).append(r_dc.motivo)
+
+
 def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
                        admin_id: int = None) -> dict:
     """
@@ -998,6 +1030,11 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     Devoluciones. Esa confirmación dispara la NC real (251126, con cruce
     automático de cartera) y marca recaudo.siesa_nc_triggered=True (bridge en
     siesa_job_service.py), que es lo que destraba el RC dependiente.
+
+    El dict devuelto trae además `errores`: los documentos que NO se encolaron
+    sin levantar excepción (hoy, el DC sin base gravable — ver `_contar_dc`).
+    Cada contador cuenta documentos que existen; lo que falta viaja por
+    `errores`, no por el silencio del log.
     """
     tarea = recaudo.tarea
     if not tarea:
@@ -1030,7 +1067,12 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
     resultado = {'rc': 0, 'nc': 0, 'dc': 0, 'credito': 0, 'ya_procesado': 0,
                  # Cuenta aparte y no dentro de `credito`: un crédito lo
                  # autorizó alguien; esto no lo autorizó nadie.
-                 'sin_pago': 0}
+                 'sin_pago': 0,
+                 # Lo que NO se encoló y no levantó excepción. Sin este canal,
+                 # un documento financiero abortado solo dejaba un WARNING en
+                 # el log y el contador subía igual — ver
+                 # `_encolar_documento_contable`.
+                 'errores': []}
 
     # ── ENTREGADO_SIN_PAGO: la excepción. No se automatiza nada. ─────────
     #
@@ -1101,15 +1143,15 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
             )
             resultado['rc'] = 1
 
-        # Retención (si aplica)
+        # Retención (si aplica) — el contador refleja lo que quedó en la cola,
+        # no la intención de encolar. Ver `_encolar_documento_contable`.
         if not recaudo.siesa_dc_triggered and recaudo.motivo_descuento:
-            _encolar_documento_contable(
+            _contar_dc(resultado, _encolar_documento_contable(
                 recaudo, tipo_docto_fe, consec_fe,
                 tercero_nit, sucursal,
                 notas=f'{notas_base} | Retención {recaudo.motivo_descuento}',
                 admin_id=admin_id,
-            )
-            resultado['dc'] = 1
+            ))
 
         return resultado
 
@@ -1125,13 +1167,12 @@ def _procesar_recaudo(recaudo: RecaudoEntrega, notas_base: str,
             resultado['rc'] = 1
 
         if not recaudo.siesa_dc_triggered and recaudo.motivo_descuento:
-            _encolar_documento_contable(
+            _contar_dc(resultado, _encolar_documento_contable(
                 recaudo, tipo_docto_fe, consec_fe,
                 tercero_nit, sucursal,
                 notas=f'{notas_base} | Retención {recaudo.motivo_descuento}',
                 admin_id=admin_id,
-            )
-            resultado['dc'] = 1
+            ))
 
         if recaudo.siesa_rc_triggered and not recaudo.motivo_descuento:
             resultado['ya_procesado'] = 1
@@ -1166,6 +1207,128 @@ def _obtener_tercero(tarea) -> tuple:
     return '', '001'
 
 
+def _cantidades_por_linea_de_factura(filas: list, items_devueltos: list,
+                                      recaudo_id: int) -> list:
+    """Cuánto se devolvió de **cada línea de la factura**, en el orden de `filas`.
+
+    ## Por qué no alcanza con la referencia
+
+    Este repo tiene **productos de doble unidad**: la misma referencia se
+    factura en DOS líneas, una en PQ y otra en UND, con `f470_rowid` y valores
+    distintos (PAPELSP6741 — `despacho_parcial_service.py:102-106`). Indexando
+    lo declarado por código, las dos filas resuelven al MISMO producto y las dos
+    se llevan la cantidad declarada entera: 1 unidad devuelta → 2 líneas de
+    devolución. Medido contra la ruta de Recepción, ya arreglada: 1 línea NC de
+    24.250 allá, 2 líneas de 25.058,33 acá. La correspondencia correcta es
+    línea-de-factura → línea-de-devolución, y la clave es `f470_rowid` (la misma
+    que eligió `siesa_job_service._construir_lineas_nc` — una política, una
+    función; si acá se eligiera otra, las dos rutas volverían a divergir).
+
+    ## Y cuando el conductor no dijo a cuál línea corresponde
+
+    Éste es el caso real de esta ruta, no un residuo histórico: lo que declara
+    el conductor pasa por `ruta_service.confirmar_parada`, que recorta cada item
+    a `codigo/nombre/unidad/cantidad_*` — **el rowid no existe en el dato de
+    entrada**. Así que ante «devolvió 3 de PAPELSP6741» con la referencia en dos
+    líneas, el código no sabe a cuál corresponde. Las opciones eran:
+
+    · **repartir por orden de la factura hasta agotar** — es adivinar. Las dos
+      líneas valen distinto por unidad (24.250 el paquete, 2.425 la unidad
+      suelta): elegir mal cruza cartera por ~10× el valor real, y Siesa no
+      aprueba un documento cuya cartera no cuadre con sus CxC (Regla 21). El
+      error se descubre en contabilidad, no acá;
+    · **exigir el rowid al declarante** — es lo correcto a futuro, pero hoy no
+      se puede hacer desde este archivo: el rowid tendría que viajar desde el
+      PWA del conductor y sobrevivir el recorte de `ruta_service`. Queda
+      soportado abajo (`rowid` declarado manda) para el día que llegue;
+    · **declarar la ambigüedad y no crear la devolución** — lo elegido.
+
+    Regla 0: ante dato ausente, el lado conservador **y declarado**. Conservador
+    porque no crear nada es reversible —el recaudo queda en `errores`, la
+    pantalla lo pinta en rojo y la recepcionista arma esa devolución en el
+    módulo de Devoluciones, donde el PWA sí manda el rowid por línea— mientras
+    que una devolución de más ya reingresó inventario que nadie devolvió y ya
+    cruzó cartera de más: eso se reversa a mano en el ERP. Declarado porque el
+    silencio era justamente el defecto: las dos líneas salían con rowid válido
+    cada una y el guard de `_construir_lineas_nc` las daba por desambiguadas.
+
+    Una referencia con **una sola** línea en la factura no es ambigua: la
+    correspondencia es única y se usa, que es el caso de toda la operación de
+    unidad única (el detector no puede dispararle a la operación sana).
+    """
+    from app.services.siesa_job_service import LineaDevueltaAmbigua
+
+    declarados = []
+    for it in items_devueltos:
+        cant = it.get('cantidad_devuelta') or it.get('devuelto', 0)
+        if float(cant or 0) > 0:
+            declarados.append({
+                'codigo': it.get('codigo'),
+                'cantidad': float(cant),
+                'rowid': str(it.get('f470_rowid') or '').strip(),
+            })
+
+    por_rowid = {}
+    por_codigo = {}
+    for i, fila in enumerate(filas):
+        if fila['rowid']:
+            por_rowid.setdefault(fila['rowid'], i)
+        por_codigo.setdefault(fila['producto'].codigo, []).append(i)
+
+    # Cuántas veces se declaró el mismo código SIN rowid: dos declaraciones del
+    # mismo código tampoco se pueden repartir entre sí, aunque la factura traiga
+    # una sola línea. El dict de antes se quedaba con la última, en silencio.
+    veces_sin_rowid = {}
+    for d in declarados:
+        if not d['rowid']:
+            veces_sin_rowid[d['codigo']] = veces_sin_rowid.get(d['codigo'], 0) + 1
+
+    cantidades = [0.0] * len(filas)
+    huerfanos = []
+    for d in declarados:
+        if d['rowid']:
+            idx = por_rowid.get(d['rowid'])
+            if idx is None:
+                huerfanos.append(d)
+                continue
+            cantidades[idx] += d['cantidad']
+            continue
+
+        indices = por_codigo.get(d['codigo']) or []
+        if not indices:
+            huerfanos.append(d)
+            continue
+        if len(indices) > 1 or veces_sin_rowid.get(d['codigo'], 0) > 1:
+            rowids = [filas[i]['rowid'] for i in indices]
+            uoms = [filas[i]['uom'] for i in indices]
+            raise LineaDevueltaAmbigua(
+                f'recaudo {recaudo_id}: la referencia {filas[indices[0]]["ref"]!r} '
+                f'({d["codigo"]}) se declaró devuelta sin f470_rowid y la factura '
+                f'tiene {len(indices)} línea(s) con ese producto '
+                f'(rowids {rowids}, unidades {uoms}, '
+                f'{veces_sin_rowid.get(d["codigo"], 0)} declaración(es)) — es un '
+                'producto de doble unidad: la correspondencia es ambigua y no se '
+                'puede saber a cuál línea corresponde lo devuelto. NO se crea la '
+                'devolución: adivinar cruzaría cartera de más contra la factura '
+                '(Regla 21, Siesa no la aprobaría) y reingresaría inventario que '
+                'nadie devolvió. Armar esta devolución desde Recepción, que '
+                'declara el rowid por línea.'
+            )
+        cantidades[indices[0]] += d['cantidad']
+
+    if huerfanos:
+        # Lo declarado que no tiene línea en la factura. Antes desaparecía sin
+        # ruido y la devolución salía corta. Se declara, no se levanta: una
+        # devolución corta se completa; una de más hay que reversarla.
+        logger.warning(
+            '[LIQUIDACION] recaudo %d: %d item(s) declarado(s) sin línea en la '
+            'factura — NO entran a la devolución: %s',
+            recaudo_id, len(huerfanos),
+            [(h['codigo'], h['rowid'] or None) for h in huerfanos]
+        )
+    return cantidades
+
+
 def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: str,
                                  consec_fe, items_devueltos, notas: str) -> bool:
     """
@@ -1190,6 +1353,14 @@ def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: s
     CONFIRMADA) para este recaudo — evita duplicar el pendiente si
     "Liquidar en WMS" se vuelve a apretar antes de que la recepcionista
     confirme la primera vez.
+
+    Levanta `LineaDevueltaAmbigua` (la misma de `siesa_job_service`) si lo
+    declarado no se puede atribuir a una línea concreta de la factura — el
+    producto de doble unidad. El porqué está en
+    `_cantidades_por_linea_de_factura`. Los dos llamadores
+    (`liquidar_ruta_siesa` y `crear_devoluciones_pendientes_ruta`) lo recogen en
+    su lista `errores`: el recaudo queda sin devolución y declarado, no
+    silenciosamente con una de más.
     """
     from app.models.devolucion_cliente import DevolucionCliente
     from app.models.producto import Producto
@@ -1214,15 +1385,9 @@ def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: s
             'no se puede armar la devolución pendiente'
         )
 
-    declarado_por_codigo = None  # None = total, dict = parcial
-    if items_devueltos:
-        declarado_por_codigo = {}
-        for it in items_devueltos:
-            cant = it.get('cantidad_devuelta') or it.get('devuelto', 0)
-            if float(cant or 0) > 0:
-                declarado_por_codigo[it.get('codigo')] = float(cant)
-
-    lineas = []
+    # Filas reales de la factura, resueltas a producto WMS. El orden de la
+    # factura se conserva: es el que ve quien compara la NC contra el papel.
+    filas = []
     for row in rowids_data:
         ref = (row.get('f120_referencia') or '').strip()
         if not ref:
@@ -1234,21 +1399,37 @@ def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: s
                 'sin producto WMS — omitida', recaudo.id, ref
             )
             continue
-        cant_facturada = float(row.get('f470_cant_base') or 0)
-        if declarado_por_codigo is None:
-            cant_devuelta = cant_facturada
-        else:
-            cant_devuelta = declarado_por_codigo.get(producto.codigo, 0)
+        filas.append({
+            'producto': producto,
+            'ref': ref,
+            'rowid': str(row.get('f470_rowid') or '').strip(),
+            'cant_facturada': float(row.get('f470_cant_base') or 0),
+            'uom': (row.get('f470_id_unidad_medida') or '').strip(),
+            'bodega': (row.get('f150_id') or '').strip(),
+        })
+
+    es_total = not items_devueltos
+    if es_total:
+        # Devolución total: todas las líneas, completas. Acá la doble unidad NO
+        # es ambigua —volvió la factura entera, las dos líneas incluidas—, por
+        # eso esta rama no necesita clave.
+        cantidades = [f['cant_facturada'] for f in filas]
+    else:
+        cantidades = _cantidades_por_linea_de_factura(
+            filas, items_devueltos, recaudo.id)
+
+    lineas = []
+    for fila, cant_devuelta in zip(filas, cantidades):
         if cant_devuelta <= 0:
             continue
         lineas.append({
-            'producto_id': producto.id,
-            'codigo_siesa': ref,
-            'cantidad_facturada': cant_facturada,
-            'cantidad_devuelta': min(cant_devuelta, cant_facturada),
-            'f470_id_unidad_medida': (row.get('f470_id_unidad_medida') or '').strip(),
-            'f150_id_bodega': (row.get('f150_id') or '').strip(),
-            'f470_rowid': str(row.get('f470_rowid') or ''),
+            'producto_id': fila['producto'].id,
+            'codigo_siesa': fila['ref'],
+            'cantidad_facturada': fila['cant_facturada'],
+            'cantidad_devuelta': min(cant_devuelta, fila['cant_facturada']),
+            'f470_id_unidad_medida': fila['uom'],
+            'f150_id_bodega': fila['bodega'],
+            'f470_rowid': fila['rowid'],
         })
 
     if not lineas:
@@ -1264,7 +1445,7 @@ def _crear_devolucion_pendiente(recaudo: RecaudoEntrega, tarea, tipo_docto_fe: s
         almacen_id=tarea.almacen_id,
         recepcionista_id=None,
         lineas=lineas,
-        es_total=(declarado_por_codigo is None),
+        es_total=es_total,
         observaciones=notas,
         recaudo_entrega_id=recaudo.id,
         commit=False,
@@ -1356,11 +1537,41 @@ def _pucs_en_cola(recaudo_id: int) -> set:
     return pucs
 
 
+#: Los tres desenlaces de `_encolar_documento_contable`. **Son tres, no dos**:
+#: «lo encolé ahora», «ya había uno en la cola» y «no se pudo, no hay documento».
+#: Con los cinco `return` vacíos de antes el llamador no podía distinguirlos y
+#: contaba 1 en los tres casos — incluido el tercero, que es el defecto de las
+#: tres banderas de idempotencia financiera otra vez: el tablero informando un
+#: documento de retención que nunca se envió (CLAUDE.md, «Las tres banderas»).
+DC_ENCOLADO = 'ENCOLADO'
+DC_YA_EN_COLA = 'YA_EN_COLA'
+DC_NO_ENCOLADO = 'NO_ENCOLADO'
+
+#: `motivo` solo viene con DC_NO_ENCOLADO: es el texto que va a `errores` y que
+#: la pantalla pinta en rojo (`rutas.js:2893`). Mismo patrón que el caller
+#: gemelo de `/liquidar-completo` (`rutas.py:1259-1276`), que acumula en
+#: `errores` y con eso decide el `ok` de la respuesta.
+ResultadoDC = namedtuple('ResultadoDC', 'estado motivo')
+
+
 def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                                   consec_fe, tercero_nit: str, sucursal: str,
                                   notas: str, admin_id: int = None,
-                                  co_factura: str = '', cuenta_cxc: str = ''):
-    """Encola job DOCUMENTO_CONTABLE_RET en la DLQ.
+                                  co_factura: str = '', cuenta_cxc: str = '') -> ResultadoDC:
+    """Encola job DOCUMENTO_CONTABLE_RET en la DLQ. **Dice si encoló o no.**
+
+    Devolvía `None` en los cinco caminos —encolado, duplicado y tres abortos— y
+    el llamador hacía `resultado['dc'] = 1` igual. Con `get_rowids_factura`
+    levantando (hoy puede: barrido incompleto), la retención no se encolaba,
+    `SiesaJob.encolar` no se llamaba, y `dc_encolados` subía y pintaba «1 DC» en
+    la pantalla. Un documento contable que el tablero da por hecho y que nadie
+    va a buscar a Siesa es el mismo daño que las tres banderas.
+
+    **No levanta.** El aborto se devuelve como dato porque este documento es el
+    último paso del recaudo: el RC (y la devolución, si la hubo) ya se encolaron
+    de verdad, y una excepción acá se llevaría puestos esos conteos ciertos —el
+    tablero pasaría de informar de más a informar de menos. Se declara en
+    `errores` y el operador ve el rojo con el motivo.
 
     El monto sale de `recaudo.monto_descuento` si ya viene declarado (lo que
     el cliente retuvo de verdad en la puerta, o lo que `/liquidar-completo`
@@ -1383,14 +1594,19 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
             '[LIQUIDACION] motivo_descuento=%s sin cuenta PUC mapeada — DC no encolado',
             motivo
         )
-        return
+        return ResultadoDC(DC_NO_ENCOLADO, (
+            f'Recaudo {recaudo.id}: la retención {motivo!r} no tiene cuenta PUC '
+            f'en CATALOGO_RETENCIONES — el documento contable NO se encoló.'))
 
     if cuenta_puc in _pucs_en_cola(recaudo.id):
         logger.info(
             '[LIQUIDACION] recaudo %d: ya hay un DOCUMENTO_CONTABLE_RET en cola '
             'para la cuenta %s — no se duplica', recaudo.id, cuenta_puc
         )
-        return
+        # Sí hay documento para esa cuenta: lo encoló otro camino
+        # (`/liquidar-completo`) y sigue en la cola. Cuenta como documento
+        # existente —el tablero no miente— y no es un error que declarar.
+        return ResultadoDC(DC_YA_EN_COLA, None)
 
     monto_descuento = float(recaudo.monto_descuento or 0)
     base_gravable_payload = float(recaudo.monto_cobrado or 0)
@@ -1405,13 +1621,21 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                 'para calcular la retención %s — DC no encolado: %s',
                 recaudo.id, motivo, e
             )
-            return
+            return ResultadoDC(DC_NO_ENCOLADO, (
+                f'Recaudo {recaudo.id}: no se pudo leer la factura '
+                f'{tipo_docto_fe}-{consec_fe} en Siesa para calcular la '
+                f'retención {motivo} ({e}). El documento contable NO se '
+                f'encoló — calcularlo sin la base real de Siesa daría un monto '
+                f'inventado.'))
         if not lineas_raw:
             logger.warning(
                 '[LIQUIDACION] recaudo %d: factura sin líneas en Siesa — '
                 'DC no encolado (retención %s)', recaudo.id, motivo
             )
-            return
+            return ResultadoDC(DC_NO_ENCOLADO, (
+                f'Recaudo {recaudo.id}: la factura {tipo_docto_fe}-{consec_fe} '
+                f'volvió sin líneas de Siesa — sin base gravable, el documento '
+                f'contable de la retención {motivo} NO se encoló.'))
 
         base_gravable = sum(float(ln.get('f470_vlr_bruto', 0)) for ln in lineas_raw)
         total_iva = sum(float(ln.get('f470_vlr_imp', 0)) for ln in lineas_raw)
@@ -1422,7 +1646,10 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
                 '[LIQUIDACION] monto_descuento=0 para recaudo %d — DC no encolado',
                 recaudo.id
             )
-            return
+            return ResultadoDC(DC_NO_ENCOLADO, (
+                f'Recaudo {recaudo.id}: la retención {motivo} calculada sobre '
+                f'la factura da 0 — el documento contable NO se encoló. '
+                f'Revisar el motivo declarado contra la factura real.'))
 
     SiesaJob.encolar(
         tipo='DOCUMENTO_CONTABLE_RET',
@@ -1447,6 +1674,7 @@ def _encolar_documento_contable(recaudo: RecaudoEntrega, tipo_docto_fe: str,
         '[LIQUIDACION] Encolado DOCUMENTO_CONTABLE_RET para recaudo %d (PUC %s, $%.2f)',
         recaudo.id, cuenta_puc, monto_descuento
     )
+    return ResultadoDC(DC_ENCOLADO, None)
 
 
 def _nombre_retencion(tipo: str) -> str:

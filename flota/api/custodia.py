@@ -61,10 +61,16 @@ def _vehiculo_por_placa(placa: str) -> Vehiculo:
 
 
 def _lecturas_dominio(vehiculo_id):
+    """La serie del vehículo como la ve el dominio.
+
+    La traducción es `LecturaOdometro.a_dominio()` y no un `Lectura(...)`
+    escrito acá: desde que existe la columna `confianza`, armar la estructura a
+    mano dejaba la marca en el default del dataclass —`declarada`— sobre filas
+    que la base tiene como `dudosa`. Un cargador que miente sobre la confianza
+    es peor que ninguno: publica un CPK que nadie puede respaldar.
+    """
     return [
-        Lectura(valor_km=l.valor_km, ts=l.ts, origen=OrigenLectura(l.origen),
-                autor_usuario_id=l.autor_usuario_id,
-                motivo_correccion=l.motivo_correccion)
+        l.a_dominio()
         for l in LecturaOdometro.query.filter_by(vehiculo_id=vehiculo_id)
                                       .order_by(LecturaOdometro.ts).all()
     ]
@@ -471,8 +477,105 @@ def registrar_odometro():
     )
     db.session.add(fila)
     db.session.commit()
+    # `confianza` y `motivo_dudosa` viajan en la respuesta porque la lectura
+    # acaba de nacer marcada y quien la registró tiene que verlo AHORA: si salió
+    # `dudosa` por no tener foto, el momento de sacar la foto es ese, parado al
+    # lado del camión — no cuando alguien abra la cola tres días después.
     return jsonify({'lectura_id': fila.id, 'valor_km': fila.valor_km,
-                    'origen': fila.origen}), 201
+                    'origen': fila.origen, 'confianza': fila.confianza,
+                    'motivo_dudosa': fila.motivo_dudosa}), 201
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# La cola de verificación — §«Fase 0» del plan
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ## Rol: `MAESTROS_FLOTA`, no `LECTURA_FLOTA`
+#
+# **Verificar un kilometraje no es operar un turno.** El corte de `_permisos.py`
+# ya está escrito y esto cae del mismo lado que la ficha técnica: `LECTURA_FLOTA`
+# es «recibir, entregar, registrar odómetro» —lo que el conductor hace con su
+# vehículo hoy— y `MAESTROS` es lo que queda afirmado sobre el vehículo después
+# de que el turno terminó.
+#
+# Y hay una razón más concreta que la analogía: **el conductor es casi siempre
+# el autor de la lectura que habría que verificar**. Con `LECTURA_FLOTA`, quien
+# tecleó el número sería quien certifica que el número es bueno, y `verificada`
+# —la única marca que afirma que alguien miró— se volvería una casilla que se
+# marca sola. Es la regla 11: la forma de maximizarla sin hacer el trabajo es
+# confirmar lo propio, y el permiso es lo que lo impide de entrada.
+#
+# `control_flota` SÍ entra: el levantamiento de campo es su trabajo (FLO-PR-01)
+# y es quien tiene la foto y el vehículo a mano.
+
+@custodia_bp.route('/odometro/dudosas', methods=['GET'])
+@jwt_required()
+@exige(MAESTROS_FLOTA, 'ver la cola de kilometrajes por verificar')
+def odometro_dudosas():
+    """Los kilometrajes que nadie puede respaldar todavía, la más vieja primero.
+
+    QUÉ AFIRMA cada fila: que está marcada `dudosa`, por qué lo está —el motivo
+    lo escribió `confianza_al_nacer`, con TODOS los motivos acumulados— y si
+    tiene foto con qué cotejarla.
+
+    QUÉ NO AFIRMA: que el número esté mal. En producción son 26 lecturas sin
+    foto (medido 2026-09-01) y casi con seguridad son correctas; lo que no
+    tienen es con qué demostrarlo.
+
+    `tiene_foto` viaja aparte y no se deduce de `foto_id`: la pantalla tiene que
+    poder decir «esta no tiene foto, confirmarla es tu palabra» en vez de mostrar
+    un recuadro vacío que se lee como un error de carga.
+    """
+    from flota.adaptadores import verificacion
+
+    filas = verificacion.pendientes()
+    return jsonify({
+        'pendientes': [{
+            'lectura_id': l.id,
+            'vehiculo_id': l.vehiculo_id,
+            'placa': placa,
+            'valor_km': l.valor_km,
+            'ts': iso_utc(l.ts),
+            'origen': l.origen,
+            'motivo': l.motivo_dudosa,
+            'tiene_foto': l.foto_id is not None,
+            'foto_id': l.foto_id,
+        } for l, placa in filas],
+        'total': len(filas),
+    }), 200
+
+
+@custodia_bp.route('/odometro/<int:lectura_id>/verificar', methods=['POST'])
+@jwt_required()
+@exige(MAESTROS_FLOTA, 'verificar un kilometraje')
+def odometro_verificar(lectura_id):
+    """Confirma que el número es el del tablero. Queda quién y cuándo.
+
+    No recibe el kilometraje: **confirmar no es escribir un número.** Si el
+    número está mal, lo que corresponde no es este endpoint sino una lectura
+    nueva con `origen=correccion` y motivo — la tabla es append-only y una
+    lectura no se edita.
+
+    `usuario_id` sale del token, jamás del cuerpo. Quién dice que miró la foto
+    no lo elige quien manda el JSON: es el único contenido de esta marca.
+    """
+    from flota.adaptadores import verificacion
+
+    try:
+        fila = verificacion.verificar(lectura_id=lectura_id,
+                                      usuario_id=_usuario_id())
+    except ErrorFlota as e:
+        # 409 y no 400: el cuerpo está bien; es el estado del mundo el que no
+        # admite la operación —ya verificada, o nunca estuvo en duda—.
+        return jsonify({'error': str(e)}), 409
+
+    return jsonify({
+        'lectura_id': fila.id,
+        'valor_km': fila.valor_km,
+        'confianza': fila.confianza,
+        'verificada_por_usuario_id': fila.verificada_por_usuario_id,
+        'verificada_ts': iso_utc(fila.verificada_ts),
+    }), 200
 
 
 __all__ = ['custodia_bp']

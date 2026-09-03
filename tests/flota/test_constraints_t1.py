@@ -61,13 +61,22 @@ def semilla(db):
     return {'vehiculo': veh.id, 'almacen': alm.id, 'usuario': usr.id, 'conductor': con.id}
 
 
-def _insertar_lectura(db, s, km, minutos, origen='entrega', motivo='NULL'):
+def _insertar_lectura(db, s, km, minutos, origen='entrega', motivo='NULL',
+                      confianza='declarada'):
+    """Un `INSERT` crudo, que desde el 2026-09-02 **tiene que declarar la marca**.
+
+    `confianza` es NOT NULL y no tiene `server_default`: un INSERT que no la
+    diga falla ruidosamente en vez de quedar `declarada` en silencio. Eso es
+    deliberado — el ORM la calcula en su `before_insert`, y esta vía (psql, una
+    migración, un script) es justamente la que ese gancho no ve.
+    """
     motivo_sql = 'NULL' if motivo == 'NULL' else f"'{motivo}'"
     db.session.execute(text(
         f"INSERT INTO flota_lectura_odometro "
-        f"(vehiculo_id, valor_km, ts, origen, autor_usuario_id, motivo_correccion) "
+        f"(vehiculo_id, valor_km, ts, origen, autor_usuario_id, "
+        f" motivo_correccion, confianza) "
         f"VALUES ({s['vehiculo']}, {km}, '{_ts(minutos)}', '{origen}', "
-        f"{s['usuario']}, {motivo_sql})"
+        f"{s['usuario']}, {motivo_sql}, '{confianza}')"
     ))
     db.session.commit()
 

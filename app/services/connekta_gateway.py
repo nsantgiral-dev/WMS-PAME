@@ -3466,6 +3466,13 @@ class ConnektaGateway:
     # Liquidación de ruta — conectores financieros
     # ==========================================
 
+    #: Tope de páginas de `get_rowids_factura` — 50 × 100 = 5.000 líneas de una
+    #: sola factura. **Se declara, no se calla**: alcanzarlo levanta
+    #: `ConnektaPaginacionError` en vez de devolver lo leído (ver el docstring
+    #: de la función). El tope existe para que un filtro roto no barra la tabla
+    #: entera de movimientos, no para acotar una factura real.
+    _MAX_PAGINAS_FACTURA = 50
+
     def get_rowids_factura(self, tipo_docto_fe: str, consec_fe) -> list:
         """
         GET API_v2_Ventas_Facturas_DesdePedido — obtiene f470_rowid por línea de factura.
@@ -3473,6 +3480,44 @@ class ConnektaGateway:
         que vincula la nota crédito al renglón exacto de la factura original.
         Retorna lista de dicts con al menos: f470_rowid, f120_referencia, f470_cant_base,
         f470_id_unidad_medida, f150_id (bodega).
+
+        ## Pagina, y no es opcional
+
+        Esto pedía `numPag=1|tamPag=100` **una sola vez** y devolvía esa página
+        como si fuera la factura entera. La Regla 10 fija 100 como techo duro
+        —200 ya hace que Siesa rechace la consulta con una fila `{'alerta': ...}`
+        y ≥500 devuelve registros fantasma con todos los campos NULL—, así que
+        subir el `tamPag` nunca fue una salida: la única es paginar.
+
+        Y el truncamiento **no se distingue de una factura corta**. Las dos
+        consecuencias son financieras y ninguna avisa:
+
+        · `routes/rutas.py:1261` y `services/liquidacion_service.py:1416` suman
+          `f470_vlr_bruto`/`f470_vlr_imp` de estas filas para la base gravable
+          del Documento Contable de retenciones. Base truncada → **el DC declara
+          menos retención de la que el cliente efectivamente retuvo.** Eso es
+          una diferencia contra la DIAN, no un número feo en una pantalla.
+
+        · Las mismas filas arman `_construir_lineas_nc(es_total=True)` y su
+          `valor_cruce` (`F353_VLR_CRUCE`). Una NC total sobre una factura de
+          más de 100 líneas **cruza menos que el saldo y la factura queda
+          abierta en cartera** — que es exactamente lo que el conector 251126
+          existe para evitar.
+
+        `_exigir_datos` no lo detectaba y no es su trabajo: ve el rechazo de
+        Siesa, no el truncamiento. Una página llena es una respuesta válida.
+
+        ## El barrido incompleto se levanta, no se devuelve
+
+        Misma política que `_fetch_stock_pages` (`ConnektaPaginacionError`):
+        esta función devuelve la lista directamente, no un dict con bandera como
+        `get_ordenes_compra_aprobadas`, así que la única forma honesta de
+        declarar el truncamiento es levantar. Los callers ya tratan la excepción
+        como «no se pudo leer la base gravable» y **declaran el error en vez de
+        seguir** — Regla 0. Devolver las filas leídas sería el defecto de
+        origen con otro nombre.
+
+        Trinquete: `tests/test_rowids_factura_paginacion.py`.
         """
         if self.modo_simulacion:
             return []
@@ -3480,33 +3525,61 @@ class ConnektaGateway:
         if not tipo_docto_fe or not str(tipo_docto_fe).strip():
             raise ValueError('tipo_docto_fe requerido para obtener f470_rowid')
 
+        consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
+        # El filtro se arma UNA vez y se reusa en todas las páginas: recalcularlo
+        # adentro del bucle abre la puerta a que una página traiga líneas de otro
+        # documento, y eso sí sería una NC contra la factura equivocada.
+        _filtro = (
+            f"f350_id_co = {_lit(self.centro_op)} "
+            f"AND f350_id_tipo_docto = {_lit(tipo_docto_fe)} "
+            f"AND f350_consec_docto = {consec_int}"
+        )
         try:
-            consec_int = int(consec_fe) if str(consec_fe).isdigit() else consec_fe
-            # tamPag=100 — regla #10: valores mayores (200 confirmado, no
-            # solo >=500) hacen que Siesa rechace la consulta entera con una
-            # fila {'alerta': ...} en vez de datos. Eso ahora lo levanta
-            # `_exigir_datos`; antes se descartaba en silencio y dejaba
-            # "0 líneas" sin explicación.
-            _filtro = (
-                f"f350_id_co = {_lit(self.centro_op)} "
-                f"AND f350_id_tipo_docto = {_lit(tipo_docto_fe)} "
-                f"AND f350_consec_docto = {consec_int}"
-            )
-            res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': _filtro,
-            })
-            rows_crudas = res.get('detalle', {}).get('Table', [])
-            # Este sitio ya lo hacía bien, pero **a mano**: era la sexta
-            # copia y la tercera forma distinta de la misma pregunta. Así es
-            # como dos de las otras cinco terminaron degradando.
-            rows = _exigir_datos(
-                rows_crudas, f'get_rowids_factura FE {tipo_docto_fe}-{consec_fe}',
-                _filtro)
+            rows = []
+            _paginas_leidas = 0
+            for pag in range(1, self._MAX_PAGINAS_FACTURA + 1):
+                _paginas_leidas = pag
+                # tamPag=100 — regla #10: valores mayores (200 confirmado, no
+                # solo >=500) hacen que Siesa rechace la consulta entera con una
+                # fila {'alerta': ...} en vez de datos. Eso lo levanta
+                # `_exigir_datos`; antes se descartaba en silencio y dejaba
+                # "0 líneas" sin explicación.
+                res = self._get('API_v2_Ventas_Facturas_DesdePedido', {
+                    'paginacion': f'numPag={pag}|tamPag=100',
+                    'parametros': _filtro,
+                })
+                rows_crudas = (res or {}).get('detalle', {}).get('Table', [])
+                # Este sitio ya lo hacía bien, pero **a mano**: era la sexta
+                # copia y la tercera forma distinta de la misma pregunta. Así es
+                # como dos de las otras cinco terminaron degradando. Va por
+                # página: un rechazo en la página 2 leído como «se acabaron las
+                # líneas» devolvería las 100 primeras en silencio.
+                pagina = _exigir_datos(
+                    rows_crudas,
+                    f'get_rowids_factura FE {tipo_docto_fe}-{consec_fe} pág {pag}',
+                    _filtro)
+                if not pagina:
+                    break
+                rows.extend(pagina)
+                if len(pagina) < 100:
+                    break
+            else:
+                # Se agotaron las páginas sin que ninguna viniera corta: la
+                # última llegó llena, así que **hay más del otro lado** y no se
+                # sabe cuánto. Regla 0 — se declara, no se entrega parcial.
+                raise ConnektaPaginacionError(
+                    f'La factura {tipo_docto_fe}-{consec_fe} superó el tope de '
+                    f'{self._MAX_PAGINAS_FACTURA} páginas ({len(rows)} líneas '
+                    f'leídas): el barrido quedó TRUNCADO y no se devuelve una '
+                    f'factura parcial — la base gravable y el valor de cruce '
+                    f'saldrían cortos sin que nada fallara.'
+                )
             if rows:
                 logger.info(
-                    '[CONNEKTA] get_rowids_factura: FE %s-%s → %d líneas, keys=%s',
-                    tipo_docto_fe, consec_fe, len(rows), list(rows[0].keys())
+                    '[CONNEKTA] get_rowids_factura: FE %s-%s → %d líneas '
+                    'en %d página(s), keys=%s',
+                    tipo_docto_fe, consec_fe, len(rows),
+                    _paginas_leidas, list(rows[0].keys())
                 )
             else:
                 logger.warning(
@@ -3514,6 +3587,14 @@ class ConnektaGateway:
                     tipo_docto_fe, consec_fe
                 )
             return rows
+        except ConnektaPaginacionError:
+            # Se deja pasar con su tipo intacto. Envolverla en un `Exception`
+            # genérico la haría indistinguible de un rechazo de Siesa, que sí
+            # se puede reintentar sin riesgo — la misma confusión que costó el
+            # incidente RC-00002744 por el lado de los POST.
+            logger.error('[CONNEKTA] get_rowids_factura: barrido incompleto de '
+                         'FE %s-%s', tipo_docto_fe, consec_fe)
+            raise
         except Exception as e:
             logger.error('[CONNEKTA] get_rowids_factura falló: %s', e)
             raise Exception(
@@ -3707,6 +3788,11 @@ class ConnektaGateway:
             )
             return fallback
 
+    #: Tope de páginas de `get_cxc_general` — 50 × 100 = 5.000 filas de cartera
+    #: de un mismo tercero. Alcanzarlo se declara (log de ERROR) y devuelve `[]`,
+    #: nunca la cartera parcial: ver el docstring de la función.
+    _MAX_PAGINAS_CXC = 50
+
     def get_cxc_general(self, nit: str) -> list:
         """
         GET API_v2_CxC_General filtrado por tercero (f200_id) — todas las
@@ -3724,15 +3810,64 @@ class ConnektaGateway:
         Nota de alias (2026-08-11): el campo real de NIT en esta respuesta
         es f200_id, NO f350_id_tercero (ese no existe acá) — mismo patrón
         de aliases reales-vs-spec ya documentado para get_pedido_cabecera.
+
+        ## Pagina — y sí, esto define una guarda anti-duplicado
+
+        Tenía la misma forma de una sola página que `get_rowids_factura`, y acá
+        el universo que devuelve **es** el universo de `cxc_cruce.esta_saldada`,
+        la guarda anti-duplicado del recibo de caja. Una fila que falta por
+        truncamiento se lee como «esa factura no está en la cartera del
+        cliente»: `esta_saldada` responde `None` («no sé»), y en el pre-flight
+        eso **no bloquea el POST** — el RC sale igual, y si la factura ya estaba
+        saldada es un segundo recibo de caja. Un cliente con más de 100 filas de
+        cartera abierta no es raro: el mayorista de ruta es exactamente ese
+        cliente.
+
+        ## Por qué acá el barrido incompleto NO levanta hacia afuera
+
+        Esta función tiene una política de errores declarada y con trinquete
+        propio (`test_error_no_propaga_devuelve_lista_vacia`): nunca bloquea el
+        camino crítico del RC, degrada a `[]`. Se respeta. Pero un barrido
+        incompleto tampoco devuelve las filas leídas: `[]` aguas abajo es «no
+        sé» (`esta_saldada` → `None`) y por Regla 3 no se reintenta, mientras
+        que 100 filas parciales **afirman** «la cartera del cliente es ésta».
+        Entre las dos mentiras posibles se elige la que se declara.
+
+        Trinquete: `tests/test_rowids_factura_paginacion.py`.
         """
         if self.modo_simulacion or not nit:
             return []
+        _filtro = f"f200_id = {_lit(nit)}"
         try:
-            res = self._get('API_v2_CxC_General', {
-                'paginacion': 'numPag=1|tamPag=100',
-                'parametros': f"f200_id = {_lit(nit)}",
-            })
-            return res.get('detalle', {}).get('Table', [])
+            filas = []
+            for pag in range(1, self._MAX_PAGINAS_CXC + 1):
+                res = self._get('API_v2_CxC_General', {
+                    'paginacion': f'numPag={pag}|tamPag=100',
+                    'parametros': _filtro,
+                })
+                pagina = _exigir_datos(
+                    (res or {}).get('detalle', {}).get('Table', []),
+                    f'get_cxc_general NIT {nit} pág {pag}', _filtro)
+                if not pagina:
+                    break
+                filas.extend(pagina)
+                if len(pagina) < 100:
+                    break
+            else:
+                raise ConnektaPaginacionError(
+                    f'La cartera del NIT {nit} superó el tope de '
+                    f'{self._MAX_PAGINAS_CXC} páginas ({len(filas)} filas '
+                    f'leídas): barrido TRUNCADO. No se devuelve una cartera '
+                    f'parcial — una fila ausente se lee como «esa factura no '
+                    f'tiene cartera» y deja pasar un recibo de caja duplicado.'
+                )
+            return filas
+        except ConnektaPaginacionError as e:
+            # Se convierte a `[]` acá, en el borde, y con log de ERROR: la
+            # política de esta función es no bloquear el RC (ver docstring).
+            # Lo que no se hace es devolver lo leído.
+            logger.error('[CONNEKTA] get_cxc_general(%s): %s', nit, e)
+            return []
         except Exception as e:
             logger.warning('[CONNEKTA] get_cxc_general(%s) falló: %s', nit, e)
             return []

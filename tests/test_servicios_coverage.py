@@ -224,20 +224,130 @@ class TestInventarioSiesaService:
 
     def test_reconciliacion_ya_no_crea_tareas_devolucion_ciegas(self):
         """
-        Regresión (2026-07-28): _run_reconciliacion ya NO debe invocar
-        devolucion_service.crear_tareas_desde_discrepancias — ese flujo reactivo
-        (TareaDevolucion ciega, sin NC) fue reemplazado por el flujo proactivo
-        de DevolucionCliente (ver devolucion_cliente_service.py). Verificación
-        por inspección de fuente: el símbolo no debe volver a aparecer.
+        Regresión (2026-07-28): la reconciliación de inventario ya NO debe
+        invocar `devolucion_service.crear_tareas_desde_discrepancias` — ese
+        flujo reactivo (TareaDevolucion ciega, sin NC, sin saber de qué pedido
+        venía el excedente) fue reemplazado por el flujo proactivo de
+        DevolucionCliente (ver `devolucion_cliente_service.py`).
+
+        ⚠️ POR QUÉ MIRA EL MÓDULO ENTERO Y NO UNA FUNCIÓN NOMBRADA A MANO.
+        La versión anterior inspeccionaba `getsource(_run_reconciliacion)`. **El
+        cuerpo se mudó**: esa función pasó de ~200 líneas a 71 y la lógica —con
+        el comentario `DEPRECATED` que le daba sentido al guard— vive ahora en
+        `_calcular_reconciliacion`. Reintroducir la llamada allí dejaba el guard
+        **en verde**. Es la forma que este repo ya documenta seis veces: el
+        detector lleva escrito a mano dónde mirar, y el código se muda de casa.
+
+        La propiedad no es «esta función no lo llama». Es **«el módulo de
+        reconciliación no lo alcanza, viva donde viva»** — así que se recorre
+        el módulo completo, y las funciones se descubren, no se listan.
+
+        Y por AST, nunca por texto: un detector de texto se atrapa en este mismo
+        docstring (ya pasó siete veces en una semana en este repo). El AST no ve
+        docstrings ni comentarios — el comentario histórico de
+        `_calcular_reconciliacion` puede quedarse donde está.
+
+        LÍMITE DECLARADO: una invocación armada por string
+        (`getattr(mod, 'crear_' + ...)`) no se ve desde el AST. Se acepta: no es
+        una forma que este repo use, y el guard no puede afirmar más de lo que
+        mide.
         """
-        import inspect
-        from app.services import inventario_siesa_service
-        fuente = inspect.getsource(inventario_siesa_service._run_reconciliacion)
-        # El símbolo puede seguir mencionado en un comentario explicando la
-        # historia — lo que no debe existir es el import (única forma real de
-        # invocarlo, ya que el módulo lo importa localmente dentro de la función).
-        assert 'import crear_tareas_desde_discrepancias' not in fuente
-        assert 'crear_tareas_desde_discrepancias(discrepancias' not in fuente
+        alcances = self._alcances_del_simbolo(
+            self._arbol_de('app.services.inventario_siesa_service'),
+            'crear_tareas_desde_discrepancias')
+        assert not alcances, (
+            'el módulo de reconciliación volvió a alcanzar el flujo de '
+            'devolución ciega en: ' + ', '.join(alcances))
+
+    # ── El detector, medido en las dos direcciones ──────────────────────────
+    #
+    # Un detector que solo prueba que NO dispara sobre código sano prueba la
+    # mitad — y es exactamente la mitad que estaba en verde mientras el guard
+    # viejo miraba una función vacía.
+
+    @staticmethod
+    def _arbol_de(modulo):
+        import ast
+        import importlib
+        with open(importlib.import_module(modulo).__file__, encoding='utf-8') as fh:
+            return ast.parse(fh.read())
+
+    @staticmethod
+    def _alcances_del_simbolo(arbol, simbolo):
+        """Dónde alcanza el módulo a `simbolo`, por AST. Devuelve `func:línea`.
+
+        Cuenta como alcance: importarlo (`from x import simbolo`, con o sin
+        `as`), nombrarlo (`simbolo(...)`), o llamarlo por atributo
+        (`modulo.simbolo(...)`). No cuenta: docstrings, comentarios ni cadenas
+        — el AST no los confunde con código, que es la razón de usarlo.
+
+        El nombre de la función que lo contiene se DESCUBRE recorriendo el
+        árbol; ninguna función va escrita a mano.
+        """
+        import ast
+        hallazgos = []
+
+        def _recorrer(nodo, contexto):
+            for hijo in ast.iter_child_nodes(nodo):
+                sub = contexto
+                if isinstance(hijo, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    sub = f'{contexto}.{hijo.name}' if contexto else hijo.name
+                if isinstance(hijo, (ast.Import, ast.ImportFrom)):
+                    for alias in hijo.names:
+                        if simbolo in (alias.name, alias.asname):
+                            hallazgos.append(f'{sub or "<módulo>"}:{hijo.lineno} (import)')
+                elif isinstance(hijo, ast.Name) and hijo.id == simbolo:
+                    hallazgos.append(f'{sub or "<módulo>"}:{hijo.lineno} (nombre)')
+                elif isinstance(hijo, ast.Attribute) and hijo.attr == simbolo:
+                    hallazgos.append(f'{sub or "<módulo>"}:{hijo.lineno} (atributo)')
+                _recorrer(hijo, sub)
+
+        _recorrer(arbol, '')
+        return hallazgos
+
+    @pytest.mark.parametrize('cuerpo', [
+        'from app.services.devolucion_service import crear_tareas_desde_discrepancias\n'
+        '    crear_tareas_desde_discrepancias(d, a, t)',
+        'from app.services import devolucion_service\n'
+        '    devolucion_service.crear_tareas_desde_discrepancias(d, a, t)',
+        'from app.services.devolucion_service import (\n'
+        '        crear_tareas_desde_discrepancias as _crear)\n'
+        '    _crear(d, a, t)',
+    ])
+    @pytest.mark.parametrize('anfitriona', ['_run_reconciliacion',
+                                            '_calcular_reconciliacion',
+                                            '_una_funcion_que_todavia_no_existe'])
+    def test_el_detector_dispara_viva_donde_viva(self, anfitriona, cuerpo):
+        """Mutación en memoria: la llamada prohibida, en tres funciones distintas.
+
+        La tercera anfitriona es el punto: una función que hoy no existe. Si el
+        guard vuelve a nombrar a mano dónde mirar, este caso lo delata sin
+        esperar a la próxima mudanza del cuerpo.
+        """
+        import ast
+        arbol = ast.parse(f'def {anfitriona}(d, a, t):\n    {cuerpo}\n')
+        assert self._alcances_del_simbolo(
+            arbol, 'crear_tareas_desde_discrepancias'), (
+            f'el detector no ve la llamada dentro de {anfitriona}()')
+
+    def test_el_detector_no_se_atrapa_en_prosa(self):
+        """La otra dirección: docstrings y comentarios NO son alcance.
+
+        El comentario `DEPRECATED` de `_calcular_reconciliacion` nombra el
+        símbolo a propósito, para explicar la historia. Un detector de texto lo
+        leería como una llamada y obligaría a borrar la explicación — así se
+        pierden los motivos.
+        """
+        import ast
+        arbol = ast.parse(
+            'def _calcular_reconciliacion(x):\n'
+            '    """Antes llamaba a crear_tareas_desde_discrepancias()."""\n'
+            '    # DEPRECATED: crear_tareas_desde_discrepancias(discrepancias, a, t)\n'
+            '    otro = "crear_tareas_desde_discrepancias"\n'
+            '    return otro\n')
+        assert self._alcances_del_simbolo(
+            arbol, 'crear_tareas_desde_discrepancias') == [], (
+            'el detector está contando prosa como código')
 
 
 class TestTiendaOcService:

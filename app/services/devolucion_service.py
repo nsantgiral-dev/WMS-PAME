@@ -31,6 +31,13 @@ from app.models.almacen import Almacen
 from app.services.connekta_gateway import connekta
 from sqlalchemy.exc import IntegrityError as _IntegrityError
 from app.utils.fecha import ahora_bogota as _ahora_bogota
+# La política única de «esto no es vendible» — un solo sitio la define y este
+# servicio, que es el escritor, la obedece en vez de re-escribirla. Ver el
+# bloque de cabecera de picking_service.py.
+from app.services.picking_service import (
+    campos_ubicacion_averias as _campos_ubicacion_averias,
+    es_ubicacion_vendible as _es_ubicacion_vendible,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -226,12 +233,20 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
 
     if not ub:
         if es_averiado:
+            # Los campos los pone la política única (`picking_service.
+            # campos_ubicacion_averias`), no este archivo. Antes se escribían a
+            # mano `zona='CUARENTENA'` y `tipo='cuarentena'` con un comentario
+            # que decía «el picking filtra tipo != cuarentena» — un filtro que
+            # el FEFO nunca tuvo. El bin nacía con `tipo_zona` en el default del
+            # modelo ('GENERAL', `app/models/ubicacion.py:37`), o sea marcado
+            # como VENDIBLE, y la mercancía que el recepcionista acababa de
+            # declarar averiada entraba al FEFO de pedidos de cliente y tapaba
+            # el mínimo del tablero.
             ub = Ubicacion(
                 codigo=_UBICACION_AVERIADOS,
                 almacen_id=tarea.almacen_id,
-                zona='CUARENTENA',
-                tipo='cuarentena',  # el picking filtra tipo != cuarentena
-                activo=True
+                activo=True,
+                **_campos_ubicacion_averias(),
             )
         else:
             ub = Ubicacion(
@@ -251,6 +266,22 @@ def confirmar_ubicacion(tarea_id: int, ubicacion_codigo: str, recepcionista_id: 
             ub = Ubicacion.query.filter_by(codigo=codigo_ub, almacen_id=tarea.almacen_id).first()
             if not ub:
                 raise  # fallo por otra razón — propagar
+
+    # Bin de averías que ya existía sin marcar. La migración m016 corrige las
+    # filas de producción, pero una base que no la haya corrido todavía (o una
+    # copia) seguiría despachando esta mercancía a clientes. Se repara acá
+    # también, con la misma condición estrecha del backfill: solo el bin de
+    # averías de este servicio, solo cuando estamos metiéndole una avería.
+    # Marcar de más sacaría del FEFO stock vendible — ese es el error caro en la
+    # dirección contraria.
+    if es_averiado and ub is not None and _es_ubicacion_vendible(ub):
+        for _campo, _valor in _campos_ubicacion_averias().items():
+            setattr(ub, _campo, _valor)
+        logger.warning(
+            '[DEV] Ubicación %s (id=%s) estaba marcada como vendible — corregida a '
+            'zona de averías. Su stock estuvo disponible para pedidos de cliente.',
+            ub.codigo, ub.id,
+        )
 
     # [36] Actualizar stock con SELECT FOR UPDATE para evitar race condition
     reg = UbicacionProducto.query.filter_by(

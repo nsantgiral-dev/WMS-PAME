@@ -47,11 +47,35 @@ class TestLaPlacaViajaConElFormulario:
     enviar se comprueba que sigan coincidiendo.
     """
 
-    def test_los_tres_botones_sellan_su_placa(self):
+    def test_los_formularios_que_se_dibujan_sellan_su_placa(self):
+        """CINCO: recibo de escritorio, recibo del conductor, entrega, el
+        reporte de daño (2026-09-01) y la inspección diaria (2026-09-02).
+
+        Se contaba «los tres que mandan fotos» — pero lo que hace falta sellar
+        no es mandar fotos: es **escribir contra un vehículo**. El reporte de
+        daño no manda fotos todavía y escribe un hallazgo con su lectura de
+        odómetro; si se fuera al camión equivocado el daño quedaría en el
+        expediente de otro, que es el mismo defecto con otro nombre.
+
+        La inspección es el caso más caro de los cinco: escribe una inspección,
+        una lectura de odómetro y **hasta veintiocho respuestas más los
+        hallazgos que produzcan**. Un veredicto `apto` en el expediente del
+        camión equivocado es evidencia falsa de seguridad sobre un vehículo que
+        nadie miró — exactamente lo que la regla 1 existe para impedir, cometido
+        por otra puerta.
+
+        **SEIS desde el 2026-09-02**: entra el registro de gastos y tanqueos.
+        Escribe una fila de `flota_gasto` con su valor, su período y su lectura
+        de odómetro. Un tanqueo cargado al camión equivocado no se pierde: se
+        suma al costo por kilómetro de otro vehículo y **le baja el rendimiento
+        a un tercero**, sin que nada falle y sin que ningún número se vea raro.
+        Es el mismo defecto de las fotos cruzadas, con plata y sin síntoma.
+        """
         js = _js()
-        # Recibo de escritorio, recibo del conductor y entrega.
-        assert js.count('data-placa="${FLOTA_PLACA}"') == 3, (
-            'algún formulario que manda fotos volvió a depender solo de la global')
+        # 6 → 10 el 2026-09-02: taller, preventivo y llantas.
+        assert js.count('data-placa="${FLOTA_PLACA}"') == 10, (
+            'algún formulario que escribe contra un vehículo volvió a depender '
+            'solo de la global')
 
     def test_ningun_envio_lee_la_global_como_placa(self):
         """TRINQUETE — `placa: FLOTA_PLACA` es literalmente el bug."""
@@ -70,12 +94,15 @@ class TestLaPlacaViajaConElFormulario:
         """
         js = _js()
         assert js.count('function flotaPlacaDelFormulario') == 1
-        # 1 definición + los SEIS formularios que escriben contra una placa:
-        # recibo de escritorio, recibo del conductor, entrega, ficha, odómetro y
-        # documentos. La primera pasada selló solo los tres que mandan fotos, y
-        # el que quedó afuera —la ficha— guardó en el vehículo equivocado esa
-        # misma tarde.
-        assert js.count('flotaPlacaDelFormulario(') == 7
+        # 1 definición + los NUEVE formularios que escriben contra una placa:
+        # recibo de escritorio, recibo del conductor, entrega, ficha, odómetro,
+        # documentos, el reporte de daño (2026-09-01), la inspección diaria
+        # (2026-09-02) y el registro de gastos y tanqueos (2026-09-02). La
+        # primera pasada selló solo los tres que mandan fotos, y el que quedó
+        # afuera —la ficha— guardó en el vehículo equivocado esa misma tarde.
+        # 1 definición + 11 formularios que escriben contra una placa
+        # (2026-09-02: taller, preventivo y llantas).
+        assert js.count('flotaPlacaDelFormulario(') == 12
 
     def test_la_comprobacion_compara_las_dos_fuentes(self):
         js = _js()
@@ -416,8 +443,18 @@ class TestElVisorExisteDondeSeUsa:
     """
 
     def test_las_cuatro_pantallas_tienen_visor(self):
+        """4 → 5 el 2026-09-02, y el número sube porque apareció la quinta
+        pantalla **con** su visor, no porque se haya aflojado el criterio.
+
+        La quinta es la cola de verificación (`flotaRenderVerificacion`): ofrece
+        «Ver la foto» sobre la lectura dudosa, así que necesita dónde pintarla.
+        Sin el div, el botón habría contestado con el mismo error interno que
+        Yesid vio el 2026-08-05 — que es exactamente lo que este conteo
+        persigue. Si la próxima pantalla se olvida del visor, esto vuelve a
+        ponerse rojo con 5 ≠ 6.
+        """
         js = _js()
-        assert js.count('id="flota-visor"') == 4, (
+        assert js.count('id="flota-visor"') == 5, (
             'una pantalla que ofrece «cómo estaba» sin visor produce un botón '
             'que responde con un error interno')
 
@@ -448,11 +485,27 @@ class TestLaFichaNoDiceGuardadaSobreOtroVehiculo:
                  if 'FLOTA_PLACA' in l and ('/ficha' in l or '/documentos' in l)]
         assert not malas, f'volvió a construir la URL con la global: {malas}'
 
-    def test_los_seis_formularios_sellan_su_placa(self):
+    def test_los_nueve_formularios_sellan_su_placa(self):
+        """Nueve desde el 2026-09-02: entraron la inspección diaria y el
+        registro de gastos y tanqueos.
+
+        El contador se sube **a mano y con motivo escrito**, nunca ajustándolo
+        para que pase: es la única forma de que agregar un formulario que
+        escribe contra un vehículo obligue a mirar si selló su placa. Un
+        trinquete que se afloja solo no es un trinquete.
+
+        El de gastos es el noveno y el motivo de que entre a esta lista es el de
+        siempre con una consecuencia nueva: escribe contra un vehículo. Un
+        tanqueo en el expediente equivocado **le sube el costo por kilómetro a
+        un camión y le baja el rendimiento a otro**, y ninguno de los dos
+        números se ve raro.
+        """
         js = _js()
-        assert js.count('data-placa=') == 6, (
-            'recibo escritorio, recibo conductor, entrega, ficha, odómetro y '
-            'documentos: los seis escriben contra una placa')
+        # 9 → 13 el 2026-09-02: taller, preventivo y llantas.
+        assert js.count('data-placa=') == 13, (
+            'recibo escritorio, recibo conductor, entrega, ficha, odómetro, '
+            'documentos, reporte de daño, inspección diaria y registro de '
+            'gastos: los nueve escriben contra una placa')
 
     def test_el_aviso_de_guardado_dice_sobre_QUE_vehiculo(self):
         """Un «guardada ✓» sin placa no se puede desmentir mirando la pantalla."""

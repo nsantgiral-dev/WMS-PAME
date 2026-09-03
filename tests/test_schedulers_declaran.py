@@ -60,6 +60,11 @@ REGISTRADOS = {
 #: ahora», así que el aviso de SOAT dependía de que alguien se acordara.
 REGISTRADOS_EXTERNOS = {
     'flota.adaptadores.avisos': 'init_scheduler',
+    # La siembra del plan preventivo (2026-09-02). Nace apagada por
+    # `FLOTA_PREVENTIVO`, y el interruptor vive dentro de `sembrar_todo` — un
+    # segundo interruptor en el scheduler daría dos sitios donde apagar lo
+    # mismo, y el segundo se olvida.
+    'flota.adaptadores.preventivo': 'init_scheduler',
 }
 
 

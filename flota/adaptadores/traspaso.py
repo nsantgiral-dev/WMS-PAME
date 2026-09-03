@@ -26,11 +26,12 @@ from typing import List, Optional
 
 from app.extensions import db
 from app.models.vehiculo import Vehiculo
-from flota.adaptadores.modelos import Custodia, Foto, LecturaOdometro
+from flota.adaptadores.modelos import Custodia, LecturaOdometro
 from flota.dominio import custodia as dom
 from flota.dominio import odometro as dom_odo
 from flota.dominio.errores import CustodiaInvalida
 from flota.dominio.valores import (
+    ClaseFoto,
     Custodia as CustodiaDom,
     CustodioEstado,
     CustodioTipo,
@@ -224,6 +225,11 @@ def traspasar(
 
     # ── 2. Escribir todo en una transacción ──────────────────────────────
     try:
+        # Inicializada acá y no dentro del `if`: la primera custodia de un
+        # vehículo no cierra nada, y sin esto el vínculo foto↔lectura de abajo
+        # levantaría `NameError` justo en el arranque en frío — el único caso
+        # que no se puede probar dos veces.
+        colgadas_fin = []
         if vigente is not None:
             vigente.fin_ts = ahora
             vigente.km_fin = km
@@ -232,8 +238,8 @@ def traspasar(
                 vigente.cierre_forzado_por_usuario_id = registrado_por_usuario_id
                 vigente.cierre_forzado_motivo = motivo_forzado.strip()
             db.session.flush()
-            _colgar_fotos(fotos_fin, 'custodia_fin', vigente.id,
-                          registrado_por_usuario_id, ahora)
+            colgadas_fin = _colgar_fotos(fotos_fin, 'custodia_fin', vigente.id,
+                                         registrado_por_usuario_id, ahora)
 
         nueva = Custodia(
             vehiculo_id=vehiculo_id,
@@ -257,13 +263,42 @@ def traspasar(
         db.session.add(nueva)
         db.session.flush()
 
+        colgadas_inicio = _colgar_fotos(fotos_inicio, 'custodia_inicio', nueva.id,
+                                        registrado_por_usuario_id, ahora)
+
+        # ── La foto del tablero se ata a la LECTURA, no solo a la custodia ────
+        # `LecturaOdometro.foto_id` existe desde la tanda 1 con su FK, y **nadie
+        # la escribía**: en producción son 26 de 26 lecturas con `foto_id` NULL.
+        # La foto del tablero colgaba solo de `custodia_inicio`, así que para
+        # auditar un kilometraje había que cruzar a mano por `custodia_id` y
+        # confiar en que la foto y el número eran del mismo gesto.
+        #
+        # El padre de la foto NO se toca. Sigue siendo `custodia_inicio` porque
+        # `GET /flota/custodia/<id>/fotos` filtra por eso (`api/custodia.py:216`)
+        # y cambiarlo la haría desaparecer del recibo. El vínculo es aditivo:
+        # una foto, dos lecturas posibles de para qué sirve.
+        #
+        # Se elige por CLASE y no por ángulo: `foto_dato` es lo que el propio
+        # sistema ya usa para identificar el tablero *«sin adivinar por el
+        # orden»*, y el ángulo puede venir vacío. Si hay `foto_dato` en los dos
+        # juegos manda la de inicio: es la que toma quien recibe el vehículo, y
+        # el `km` de esta lectura es el que él declara.
+        # **Las fotos van PRIMERO y la lectura nace con el vínculo puesto.** No
+        # se puede escribir la lectura y después actualizarle el `foto_id`: la
+        # tabla es append-only por trigger y ese `UPDATE` se rechaza. La primera
+        # versión de este cambio lo intentó y el invariante la frenó —
+        # exactamente para lo que existe.
+        _tablero = next((f for f in (colgadas_inicio + colgadas_fin)
+                         if f.clase == ClaseFoto.FOTO_DATO.value), None)
+        if _tablero is not None:
+            db.session.flush()          # para que la foto tenga id
+
         db.session.add(LecturaOdometro(
             vehiculo_id=vehiculo_id, valor_km=km, ts=ahora,
             origen=OrigenLectura.ENTREGA.value,
             autor_usuario_id=registrado_por_usuario_id,
+            foto_id=_tablero.id if _tablero is not None else None,
         ))
-        _colgar_fotos(fotos_inicio, 'custodia_inicio', nueva.id,
-                      registrado_por_usuario_id, ahora)
 
         db.session.commit()
         return nueva
@@ -306,25 +341,16 @@ def _traspaso_reciente_identico(vehiculo_id, km, conductor_id, sede_id, ahora):
 
 
 def _colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora):
-    """Ata cada foto a su padre y GUARDA EL ARCHIVO. Un archivo sin padre es un
-    bug (regla 7); un padre sin archivo es evidencia falsa, que es peor.
+    """Delega en `almacen_fotos.colgar_fotos` — una política, una función.
 
-    El binario se escribe en el almacén y la fila queda con la referencia y el
-    hash REALES. Si el almacén falla, `guardar_foto` devuelve la fila marcada
-    `pendiente_evidencia` — nunca un hash de ceros.
+    El cuerpo vivía acá y el 2026-09-01 `hallazgos.py` lo copió palabra por
+    palabra. Dos copias de «qué es una foto guardada» divergen, y la que se
+    quede atrás va a afirmar `estado='ok'` sobre un archivo que no se escribió.
+    Se conserva el nombre local porque los tests de custodia lo nombran.
     """
-    from flota.adaptadores.almacen_fotos import guardar_foto
+    from flota.adaptadores.almacen_fotos import colgar_fotos
 
-    for f in fotos or []:
-        campos = guardar_foto(f)
-        db.session.add(Foto(
-            entidad_tipo=entidad_tipo, entidad_id=entidad_id,
-            ts_captura=f['ts_captura'] if 'ts_captura' in f else ahora,
-            gps_lat=f['gps_lat'] if 'gps_lat' in f else None,
-            gps_lon=f['gps_lon'] if 'gps_lon' in f else None,
-            autor_usuario_id=autor_id,
-            **campos,
-        ))
+    return colgar_fotos(fotos, entidad_tipo, entidad_id, autor_id, ahora)
 
 
 __all__ = ['traspasar', 'custodia_activa', 'FOTOS_POR_CUSTODIA']

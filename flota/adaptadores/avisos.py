@@ -27,6 +27,8 @@ from flota.dominio.aviso import (
     DIAS_AVISO_DOCUMENTO,
     clave_aviso,
     parametros_documento_vence,
+    hito_semanal,
+    toca_avisar_vencido,
     toca_avisar_vencimiento,
 )
 
@@ -154,6 +156,74 @@ def barrer_documentos_por_vencer(canal_usado=None, hoy=None) -> dict:
         # número, esa persona recibe el aviso que todavía está vigente en vez de
         # quedar afuera para siempre porque "ya se avisó".
         for i, telefono in pendientes:
+            fila = _registrar(f'{base}:{i}', 'flota_documento_vence',
+                              telefono, parametros, canal_usado)
+            if fila.estado == 'fallido':
+                resumen['fallidos'] += 1
+            else:
+                resumen['enviados'] += 1
+
+    # ── Segunda pasada: los que YA vencieron ─────────────────────────────────
+    #
+    # `toca_avisar_vencimiento` los excluye a propósito —renovar antes y
+    # circular ilegal no son el mismo mensaje— y remitía a «otra vía». Esa vía
+    # era el contador `documentos_vencidos` del health, **un endpoint sin un
+    # solo consumidor en el repo**. Así que si nadie renovaba dentro de los 15
+    # días, el canal se callaba justo cuando el vehículo pasaba a ser ilegal.
+    #
+    # En producción hay una RTM vencida desde 2025-11-11 que nunca avisó.
+    #
+    # Se cuenta aparte de `en_ventana`: son dos poblaciones y sumarlas esconde
+    # la segunda, que es la grave. Es el mismo criterio con el que
+    # `documentos_no_encontrados` está separado de `documentos_vencidos`.
+    resumen['vencidos_en_ventana'] = 0
+    for doc in docs:
+        if not toca_avisar_vencido(doc.fecha_vencimiento, hoy):
+            continue
+        resumen['vencidos_en_ventana'] += 1
+
+        if not telefonos:
+            resumen['sin_destinatario'] += 1
+            continue
+
+        # El hito es la SEMANA, no la fecha de vencimiento. Con el vencimiento
+        # como hito avisaría una sola vez en la vida: si ese mensaje se pierde,
+        # el camión queda ilegal y nadie vuelve a decir nada. Con la semana
+        # insiste hasta que se renueve, y se apaga solo cuando cambia la fecha.
+        base = clave_aviso('flota_documento_vencido', 'documento', doc.id,
+                           hito_semanal(hoy))
+        pendientes = [(i, t) for i, t in enumerate(telefonos)
+                      if Aviso.query.filter_by(clave=f'{base}:{i}').first() is None]
+        if not pendientes:
+            resumen['ya_avisados'] += 1
+            continue
+
+        placa = doc.vehiculo.placa if doc.vehiculo is not None else ''
+        try:
+            parametros = parametros_documento_vence(
+                placa, doc.tipo, doc.fecha_vencimiento)
+        except AvisoInvalido as e:
+            logger.error('[FLOTA/AVISO] documento vencido %s no se puede '
+                         'describir: %s', doc.id, e)
+            resumen['fallidos'] += 1
+            continue
+
+        for i, telefono in pendientes:
+            # **Se manda con la plantilla `flota_documento_vence`, no con una
+            # propia.** Una plantilla nueva exige aprobación de Gupshup, y este
+            # canal entero ya está bloqueado esperando los ids definitivos de
+            # un tercero: crear una segunda dependencia del mismo tercero
+            # dejaría el aviso de vencidos apagado por más tiempo que el de por
+            # vencer.
+            #
+            # El mensaje sale correcto aunque en tiempo verbal incómodo — «el
+            # documento RTM del TGZ653 vence el 11 de noviembre de 2025», leído
+            # en septiembre de 2026, se entiende sin ambigüedad. La CLAVE sí
+            # lleva `flota_documento_vencido`, así que los dos avisos no se
+            # deduplican entre sí y el registro distingue de cuál se trata.
+            #
+            # Deuda declarada: cuando se pidan las plantillas a Gupshup, va una
+            # propia con el texto correcto.
             fila = _registrar(f'{base}:{i}', 'flota_documento_vence',
                               telefono, parametros, canal_usado)
             if fila.estado == 'fallido':

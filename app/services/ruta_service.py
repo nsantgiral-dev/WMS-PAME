@@ -616,10 +616,26 @@ class RutaService:
         # cachea entero en el dispositivo (ver condAbrirParadas en rutas.js),
         # así que esto es lo único que necesita conectividad; la confirmación
         # de cada parada ya funciona offline sin volver a tocar Siesa.
+        # Base y numerador de la medición que se publica abajo: de cuántas
+        # referencias se pudo sacar un unitario y cuántas quedaron sin poder
+        # desambiguar. Se acumulan sobre TODAS las paradas de la ruta porque la
+        # pregunta operativa ("¿cuánto de esta ruta va a salir en campo
+        # libre?") es de la ruta, no de una factura.
+        _refs_valoradas = _refs_ambiguas = 0
         for tid, p in tareas_map.items():
             t = p.pop('_tarea')
+            _diag = {'valoradas': 0, 'ambiguas': 0, 'referencias': []}
             valor_factura, es_contado, valores_ref, cond_pago_crudo = \
-                RutaService._valor_y_cond_pago(t)
+                RutaService._valor_y_cond_pago(t, diagnostico=_diag)
+            _refs_valoradas += _diag['valoradas']
+            _refs_ambiguas  += _diag['ambiguas']
+            # Campos NUEVOS (aditivos, no reemplazan a nadie): el consumidor
+            # puede distinguir "esta referencia no vino en la factura" de "vino
+            # y no se pudo saber a qué precio". Sin esto, las dos llegaban como
+            # `valor_unitario: null` y eran indistinguibles.
+            p['referencias_valoradas'] = _diag['valoradas']
+            p['referencias_ambiguas']  = _diag['ambiguas']
+            _ambiguas = set(_diag['referencias'])
             p['valor_factura'] = valor_factura
             p['es_contado']    = es_contado
             # `''` = Siesa respondió sin condición. `None` = no se pudo
@@ -637,6 +653,10 @@ class RutaService:
             # DINAMICO no se disparaba nunca, con o sin C02, con o sin precio.
             for item in p['items']:
                 item['valor_unitario'] = valores_ref.get(item['codigo'])
+                item['valor_unitario_ambiguo'] = item['codigo'] in _ambiguas
+            # Un solo ítem sin unitario ya manda la parada entera al campo
+            # libre, y eso es lo correcto: un total parcial es más engañoso que
+            # ninguno — el conductor no tiene cómo ver que le faltó un renglón.
             _hay_valor = valor_factura is not None and bool(p['items']) and all(
                 it.get('valor_unitario') is not None for it in p['items'])
             # **No es `es_contado`.** Toda venta de ruta sale en C02, que no es
@@ -648,6 +668,21 @@ class RutaService:
             p['se_cobra_en_puerta'] = _cpm.cobra_en_la_puerta(
                 cond_pago_crudo, connekta.cond_pago_ventas, connekta.cond_pago_ruta)
             p['modo_pago'] = _cpm.modo_pantalla(p['se_cobra_en_puerta'], _hay_valor)
+
+            # ── Dónde queda este cliente, si alguien ya estuvo ─────────────
+            #
+            # `None` significa **«nadie capturó nada todavía»**; un dict con
+            # `lat: null` significa «se capturó y no se pudo elegir un punto».
+            # La pantalla los pinta distinto a propósito: el primero se arregla
+            # tocando el botón, el segundo mirando por qué. Colapsarlos en un
+            # `if (!p.geo)` es la ausencia muda que la Regla 4 persigue.
+            #
+            # Viaja en el mismo payload que la pantalla ya cachea entero para
+            # trabajar offline (`condAbrirParadas`): un botón de navegación que
+            # necesita red es un botón que no existe en carretera.
+            from app.services import geo_cliente as _geo_c
+            _m = _geo_c.maestro_de(t.cliente, t.municipio)
+            p['geo'] = _m.to_dict() if _m is not None else None
 
         paradas = sorted(tareas_map.values(), key=lambda x: (x['municipio'], x['cliente']))
         # Ojo: `paradas` está indexado por tarea_id, así que cada entrada es una
@@ -670,10 +705,152 @@ class RutaService:
             # Alias de transición para PWA en caché — retirar post go-live
             'paradas_gestionadas':     gestionadas,
             'retenciones_disponibles': retenciones_disponibles,
+            # Campos NUEVOS y aditivos. `referencias_ambiguas` sin
+            # `referencias_valoradas` no se puede leer: "4 ambiguas" es una
+            # ruta rota si la base es 5 y ruido si es 300. Van juntos o no van.
+            'referencias_valoradas':   _refs_valoradas,
+            'referencias_ambiguas':    _refs_ambiguas,
         }
 
+    # La unidad que el sync roto inventó en TODO el catálogo. No es una lista
+    # de unidades prohibidas: es exactamente el valor que
+    # `siesa_sync_service.py:19-22` documenta como escrito por error
+    # (`f120_id_unidad_medida_inventario` no existe, `.get()` devolvía el
+    # default del modelo) y del que se decidió NO hacer backfill. Mientras no
+    # corra un sync completo, un `unidad_medida == 'UND'` sin `unidad_empaque`
+    # es indistinguible de "nunca se pobló".
+    _UOM_DEFAULT_DEL_SYNC_ROTO = 'UND'
+
     @staticmethod
-    def _valor_y_cond_pago(tarea) -> tuple:
+    def _uom_declarada(producto) -> str:
+        """Unidad que el WMS **declara** para un producto, o `''` si no declara
+        ninguna. No es `unidad_empaque or unidad_medida`.
+
+        `unidad_empaque` es un campo que solo se llena a mano o desde
+        `f120_id_unidad_empaque`, que sí existe en el contrato: si trae algo,
+        es una declaración.
+
+        `unidad_medida` no vale lo mismo. Todo el catálogo nació con `'UND'`
+        ahí por un campo mal nombrado en el sync, y no hay backfill. Un `'UND'`
+        sin `unidad_empaque` puede ser la unidad real o puede ser el residuo
+        del error, y no hay forma de distinguirlos desde la base. Tratarlo como
+        declaración es lo que hacía que el desempate del unitario **degradara
+        al defecto original justo donde hacía falta**: ganaba la línea UND de
+        la factura, que es exactamente la que dividía el precio por el factor
+        de empaque (2.425 en vez de 24.250).
+
+        Cualquier otro valor —'PQ', 'CJA', 'KG'— no lo pudo escribir el sync
+        roto, así que sí es evidencia y se usa. El día que corra un sync
+        completo, `unidad_medida` vuelve a valer para todos y esta excepción
+        se puede retirar; hasta entonces retirarla reabre el defecto.
+        """
+        empaque = (getattr(producto, 'unidad_empaque', '') or '').strip().upper()
+        if empaque:
+            return empaque
+        medida = (getattr(producto, 'unidad_medida', '') or '').strip().upper()
+        if medida and medida != RutaService._UOM_DEFAULT_DEL_SYNC_ROTO:
+            return medida
+        return ''
+
+    @staticmethod
+    def _unitarios_por_referencia(lineas, uom_wms: dict) -> tuple:
+        """`({referencia: unitario_o_None}, diagnostico)` — el valor neto por
+        unidad de cada referencia de la factura, o `None` **declarado** cuando
+        no se puede saber cuál es.
+
+        ── Por qué `None` y no "la línea más grande" ──
+
+        Este número viaja a `rutas.js:2199`, donde se multiplica por lo que el
+        conductor recibe de vuelta en la puerta del cliente. Un producto de
+        doble unidad (PAPELSP6741) sale en la FE como dos líneas con la misma
+        `f120_referencia`, una en PQ y otra en UND, y sus unitarios difieren
+        por el factor de empaque: 24.250 contra 2.425.
+
+        Elegir "la de mayor cantidad" parece conservador y no lo es. Cuando el
+        WMS no declara la unidad del producto, no sabemos **en qué unidad está
+        expresada la cantidad que el conductor va a devolver** — `listar_paradas`
+        ni siquiera puede rotularla en pantalla, porque `items[].unidad` sale
+        del mismo `unidad_empaque` vacío. Un precio por unidad desconocida
+        multiplicado por una cantidad de unidad desconocida no es una
+        estimación con sesgo: es un número sin dimensión. Y el error no es
+        simétrico ni pequeño — es un factor 10 en cualquiera de los dos
+        sentidos, sobre plata que se cobra o se deja de cobrar en la calle, sin
+        que ningún tablero lo note (`valor_factura` sigue sumando bien).
+
+        Así que lo conservador acá es **no mostrar el número**, no mostrarlo
+        sesgado hacia abajo o hacia arriba. Regla 0: ante dato ausente, fallar
+        hacia el lado conservador Y DECLARARLO. El camino de salida ya existe y
+        ya está probado: sin `valor_unitario` en todos los ítems, `_hay_valor`
+        da `False`, `modo_pantalla` devuelve LIBRE y el conductor escribe el
+        monto mirando la factura que tiene en la mano — el mismo camino al que
+        cae `es_contado = None`. Se pierde una comodidad; no se pierde la
+        entrega, y nadie cobra de más ni de menos por un decimal corrido.
+
+        ── Criterios, en orden ──
+
+        1. Las líneas cuya `f470_id_unidad_medida` coincide con la unidad
+           declarada del producto (`_uom_declarada`). Es la unidad en la que el
+           conductor cuenta lo devuelto.
+        2. Si ninguna coincide (o el WMS no declara unidad), se miran TODAS las
+           líneas de esa referencia. Si todas dan el mismo unitario no hay nada
+           que desambiguar —caso de una sola línea, o de una línea partida en
+           dos en la misma unidad— y ese unitario es la respuesta.
+        3. Si las candidatas discrepan en el unitario: `None`, contada como
+           ambigua.
+
+        ── Por qué no queda ninguna dependencia del orden ──
+
+        El resultado se decide sobre el **conjunto** de unitarios de las
+        candidatas, no recorriendo filas y quedándose con la que gane. Un
+        auditor midió el defecto anterior: `24250.0` y `2425.0` con las mismas
+        dos líneas en orden invertido, porque el `>` estricto sobre el puntaje
+        dejaba ganar a la primera fila ante empate. Con un conjunto, invertir
+        las filas no puede cambiar nada — y la lista de referencias del
+        diagnóstico sale ordenada por la misma razón.
+
+        `diagnostico`: `{'valoradas': N, 'ambiguas': M, 'referencias': [...]}`.
+        `N` es la base —referencias de la factura con cantidad > 0—, `M` las
+        que no se pudieron desambiguar. Un conteo sin su base no es una
+        medición: sin `N`, "3 ambiguas" no distingue una factura rota de una
+        operación normal con tres productos de doble unidad.
+        """
+        por_referencia = {}
+        for ln in (lineas or []):
+            codigo = str(ln.get('f120_referencia', '')).strip()
+            cant = float(ln.get('f470_cant_base', 0) or 0)
+            vlr_neto = float(ln.get('f470_vlr_neto', 0) or 0)
+            # Cantidad 0 no da unitario y tampoco entra a la base del conteo:
+            # inflar el denominador con líneas que nunca se pudieron valorar
+            # haría ver mejor la medición justo cuando la factura viene peor.
+            if not codigo or cant <= 0:
+                continue
+            uom_fe = str(ln.get('f470_id_unidad_medida', '') or '').strip().upper()
+            por_referencia.setdefault(codigo, []).append(
+                (uom_fe, round(vlr_neto / cant, 4)))
+
+        valores, ambiguas = {}, []
+        for codigo, filas in por_referencia.items():
+            uom_ref = uom_wms.get(codigo) or ''
+            candidatas = [f for f in filas if uom_ref and f[0] == uom_ref]
+            if not candidatas:
+                candidatas = filas
+            unitarios = {u for _uom, u in candidatas}
+            if len(unitarios) == 1:
+                valores[codigo] = unitarios.pop()
+            else:
+                # Se deja la clave puesta en `None` a propósito, en vez de
+                # omitirla: "la factura no trae esta referencia" y "la trae y
+                # no sé a qué precio" son cosas distintas, y el consumidor las
+                # tiene que poder separar.
+                valores[codigo] = None
+                ambiguas.append(codigo)
+
+        return valores, {'valoradas': len(por_referencia),
+                         'ambiguas': len(ambiguas),
+                         'referencias': sorted(ambiguas)}
+
+    @staticmethod
+    def _valor_y_cond_pago(tarea, diagnostico: dict = None) -> tuple:
         """`(valor_factura, es_contado, valores_por_referencia)` de la FE real
         de una tarea. Cualquiera puede salir `None`/`{}` si Siesa no responde
         — nunca levanta. Alimenta el toggle Pago Total/Parcial del conductor
@@ -696,29 +873,89 @@ class RutaService:
         real de Siesa por unidad de cada línea (`f470_vlr_neto / f470_cant_base`),
         para poder restar exactamente lo que vale una devolución parcial en
         vez de prorratear el total de la factura a ojo.
+
+        **La referencia sola no identifica una línea de factura.** Un producto
+        de doble unidad sale en la FE como dos líneas con la misma
+        `f120_referencia`, una en PQ y otra en UND (PAPELSP6741 — el mismo caso
+        que ya costó el error 244328, ver `despacho_parcial_service.py:102-106`).
+        Asignando por referencia sola ganaba **la última**, la de UND, y el
+        unitario quedaba dividido por el factor de empaque: 2.425 en vez de
+        24.250.
+
+        Lo que lo volvía invisible es la asimetría: `valor_factura` **suma
+        bien** (las dos líneas entran a la suma), así que el total se ve
+        correcto y nada parece roto. El unitario, en cambio, es lo que
+        `listar_paradas` cuelga de cada ítem y `rutas.js:2199` multiplica por
+        lo devuelto — **plata mal descontada en la puerta del cliente**, sin
+        que ningún tablero lo note.
+
+        La desambiguación arranca por la unidad **declarada** del producto en
+        el WMS: la línea cuya `f470_id_unidad_medida` coincide con ella es la
+        que el conductor cuenta en la puerta. Cuando esa evidencia no existe,
+        el unitario se declara desconocido (`None`) en vez de elegirse — ver
+        `_unitarios_por_referencia`, que es donde vive la política entera y el
+        porqué. Lo que ya no decide nada es el orden de llegada de las filas.
+
+        `diagnostico`: parámetro de SALIDA opcional. Si se pasa un dict, se
+        llena con `{'valoradas': N, 'ambiguas': M, 'referencias': [...]}` de la
+        corrida. Es un parámetro y no un quinto elemento de la tupla a
+        propósito: la aridad de 4 la desempaquetan `listar_paradas` y tres
+        archivos de test, y cambiarla para publicar una medición habría roto
+        código sano.
         """
         from app.services.connekta_gateway import connekta
         from app.services.fe_resolver import resolver_fe_o_none
 
         tipo_fe, consec_fe = resolver_fe_o_none(tarea)
         if not tipo_fe or not consec_fe:
-            return None, None, {}
+            # Cuatro elementos, no tres. Este `return` devolvía una tupla de 3
+            # mientras los dos callers desempaquetan 4: una tarea sin FE
+            # resoluble reventaba con `ValueError: not enough values to
+            # unpack` y se llevaba la lista de paradas ENTERA — el camino que
+            # el `None` de `es_contado` existe justamente para no romper.
+            return None, None, {}, None
 
         valor_factura = None
         valores_por_referencia = {}
+        diag = {'valoradas': 0, 'ambiguas': 0, 'referencias': []}
+        # Unidad con la que el WMS maneja cada referencia. Se indexa por las
+        # dos formas del código (Siesa e interna) porque el consumidor
+        # (`listar_paradas`) busca por `producto.codigo` y la factura viene
+        # por `f120_referencia` — cuál de las dos coincide depende del maestro.
+        _uom_wms = {}
+        for _it in (getattr(tarea, 'items', None) or []):
+            _p = getattr(_it, 'producto', None)
+            if _p is None:
+                continue
+            _uom = RutaService._uom_declarada(_p)
+            if not _uom:
+                continue
+            for _ref in ((getattr(_p, 'codigo_siesa', '') or '').strip(),
+                         (getattr(_p, 'codigo', '') or '').strip()):
+                if _ref:
+                    _uom_wms.setdefault(_ref, _uom)
         try:
             lineas = connekta.get_rowids_factura(tipo_fe, consec_fe)
             if lineas:
+                # `valor_factura` suma TODAS las líneas y no lo toca nada de lo
+                # de abajo: es el dato sano de esta función. Que el unitario de
+                # una referencia se declare desconocido no puede alterarlo.
                 valor_factura = round(sum(float(ln.get('f470_vlr_neto', 0)) for ln in lineas), 2)
-                for ln in lineas:
-                    codigo = str(ln.get('f120_referencia', '')).strip()
-                    cant = float(ln.get('f470_cant_base', 0) or 0)
-                    vlr_neto = float(ln.get('f470_vlr_neto', 0) or 0)
-                    if codigo and cant > 0:
-                        valores_por_referencia[codigo] = round(vlr_neto / cant, 4)
+                valores_por_referencia, diag = \
+                    RutaService._unitarios_por_referencia(lineas, _uom_wms)
+                if diag['ambiguas']:
+                    # Con su base: un conteo sin denominador no es una medición.
+                    logger.warning(
+                        '[RUTAS] unitario no desambiguable en %s de %s referencias '
+                        '(tarea %s, FE %s-%s): %s. La parada cae al campo libre.',
+                        diag['ambiguas'], diag['valoradas'], tarea.id, tipo_fe,
+                        consec_fe, ', '.join(diag['referencias']))
         except Exception as e:
             logger.warning('[RUTAS] valor_factura falló para tarea %s (FE %s-%s): %s',
                             tarea.id, tipo_fe, consec_fe, e)
+
+        if diagnostico is not None:
+            diagnostico.update(diag)
 
         # Se anota igual que la FE. Sin esto, la distribución de valores por
         # parada —el insumo del tope de contado declarado— exige volver a
@@ -1066,6 +1303,40 @@ class RutaService:
             recaudo.items_entregados = None
 
         db.session.commit()
+
+        # ── La coordenada, DESPUÉS del commit y en su propia transacción ────
+        #
+        # El orden no es casual y es la decisión de diseño de todo este bloque:
+        # **la entrega no se traba por la geografía**. Si la captura entrara en
+        # la misma transacción, un CHECK que rechaza una coordenada rara —un
+        # cliente viejo mandando 0,0, una precisión negativa— haría fallar el
+        # `commit` de la entrega entera, y una parada trabada en la calle no la
+        # desbloquea nadie. Es el mismo criterio que esta función ya aplica con
+        # la condición de pago que no se alcanzó a anotar (Regla 0: no saber no
+        # bloquea).
+        #
+        # El costo del orden inverso es que un fallo acá pierde UNA captura de
+        # las muchas que va a tener ese cliente. Se registra como advertencia
+        # para que se pueda contar si empieza a pasar seguido.
+        try:
+            from app.services import geo_cliente as _geo
+            _t_geo = db.session.get(TareaPacking, tarea_id)
+            _res_geo = _geo.registrar_captura(
+                recaudo.id,
+                getattr(_t_geo, 'cliente', None),
+                getattr(_t_geo, 'municipio', None),
+                data.get('geo'),
+                ahora=ahora)
+            if _res_geo not in ('no_vino', 'ya_capturada'):
+                db.session.commit()
+        except Exception as _e_geo:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            logger.warning('[GEO] no se pudo registrar la captura de la parada '
+                           '%s/%s: %s', ruta_id, tarea_id, _e_geo)
+
         return recaudo.id, es_edicion
 
     @staticmethod

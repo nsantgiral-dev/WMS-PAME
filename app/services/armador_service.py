@@ -15,7 +15,7 @@ Armador de contenedor:
 import logging
 import math
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from collections import defaultdict
 from app.extensions import db
 from app.utils.fecha import dia_operativo as _dia_operativo
@@ -145,6 +145,22 @@ class ArmadorService:
         El en_transito se resta de la posición de inventario, no del ROP.
         posicion = stock_actual + en_transito - backorders
 
+        **Los `backorders` son lo que Siesa ya tiene comprometido**:
+        `StockSiesa.comprometido` (`f400_cant_comprometida_1`) más
+        `salida_sin_conf` (`f400_cant_salida_sin_conf_1`) — mercancía vendida,
+        todavía en la bodega, con dueño. Esta línea del docstring declaraba la
+        política correcta desde el primer día y **el código no la restaba**:
+        `posicion = stock_actual + qty_transito`, sin más. La palabra
+        `comprometido` no aparecía en ninguna línea de este archivo.
+
+        Lo que costaba: `bajo_rop` salía False sobre un SKU con 100 en bodega y
+        80 ya vendidos —tiene 20— y el `deficit` de la rama China, que es el
+        número que **arma el contenedor**, salía corto exactamente en lo ya
+        comprometido. No se repone lo que ya está vendido y pendiente de
+        despachar: agotado, con la pantalla en verde. Y un contenedor es
+        irreversible 120 días (Regla 0), así que este de los cuatro sitios que
+        contestan «¿cuánto hay de verdad?» es el que más pesa.
+
         Args:
             nivel_servicio: 0.95 = z_score ~1.645
 
@@ -184,16 +200,102 @@ class ArmadorService:
             .all()
         )
 
-        # Stock actual
+        # Stock actual — existencia VENDIBLE Y lo que ya tiene dueño.
+        #
+        # El repo ya contestaba «¿cuánto hay de verdad?» en tres sitios, los
+        # tres con la MISMA forma: `existencia - comprometida - salida_sin_conf`
+        # (`routes/siesa.py::debug_stock_bodega`,
+        # `routes/siesa.py::debug_traza_ref`,
+        # `services/traslado_service.py::get_stock_disponible`). Este es el
+        # cuarto y el único que COMPRA — usa esa política, no una cuarta
+        # variante (Regla 0: «la tercera implementación divergirá y esa vez
+        # nadie estará comparando»).
+        #
+        # Se citan por NOMBRE DE FUNCIÓN y no por línea a propósito: las tres
+        # citas anteriores —`siesa.py:1472`, `siesa.py:1616`,
+        # `traslado_service.py:1436`— se corrieron las tres cuando un vecino
+        # editó esos archivos, y una cita rota manda a leer código que no tiene
+        # nada que ver. Un nombre de función sobrevive a que le agreguen
+        # líneas encima.
+        #
+        # ── POR QUÉ HAY FILTRO DE BODEGA, Y POR QUÉ ES LISTA BLANCA ─────────
+        #
+        # El comentario que estaba acá decía «se suman sobre TODAS las
+        # bodegas», y era cierto cuando «todas» eran las 10 que el WMS opera.
+        # Después `inventario_siesa_service` agregó `AV1` (averías) y `TRA1`
+        # (tránsito) al universo que se le pide a Siesa, y esas filas se
+        # PERSISTEN en `stock_siesa` igual que las de un punto de venta. Esta
+        # consulta no cambió: cambió lo que hay en la tabla.
+        #
+        # Medido sobre un SKU real:
+        #     filas persistidas: {'NB1': 100.0, 'AV1': 40.0, 'TRA1': 25.0}
+        #     stock_actual que veía el Armador: 165.0   ·   vendible: 100
+        #
+        # Lo que costaba: `posicion` se infla, `deficit = max(0, s_objetivo -
+        # posicion)` sale corto exactamente en las averías más el tránsito, y
+        # ese déficit es el número que ARMA EL CONTENEDOR. Irreversible 120
+        # días (Regla 0): el error no se corrige el mes que viene, se descubre
+        # agotado cuatro meses después. Y es lo peor que puede inflar un
+        # número de compra —mercancía que no se va a vender nunca: una avería
+        # está en AV1 justo porque salió del universo vendible—.
+        #
+        # Era además la única de tres respuestas que las incluía:
+        # `dashboard_service` declara AVERIAS zona no vendible y
+        # `picking_service` la excluye del FEFO. El único de los tres que
+        # compra era el que las sumaba.
+        #
+        # Agravante: `stock_siesa` es acumulativa (upsert sin borrado).
+        # Persistidas una vez, `_leer_stock_de_bd` las devuelve para siempre
+        # aunque la API deje de reportarlas.
+        #
+        # LISTA BLANCA, no negra: `notin_(['AV1','TRA1'])` deja pasar `BC99`
+        # (Bodega Contratación), las «DUPLICADA» `FD1`/`ND1`/`PD1`, y sobre
+        # todo la bodega de servicio que alguien agregue mañana — el defecto
+        # que se está arreglando es exactamente eso, una bodega nueva que entró
+        # a la tabla sin que nadie tocara esta línea. Con lista blanca, una
+        # bodega nueva es invisible hasta que se declara operada, que es el
+        # lado conservador.
+        #
+        # Y es `_BODEGAS_PV`, la constante que ya existe, no una lista nueva:
+        # tres `_BODEGA_CO_MAP` con 10, 9 y 8 entradas ya costaron un traslado
+        # rechazado por Siesa. Su nombre dice «PV» pero su contenido es
+        # «bodegas que el WMS OPERA» (incluye NS2, que es parqueo y no punto de
+        # venta), y `tests/test_bodegas_coherentes.py` la vigila contra el
+        # maestro. `_BODEGAS_SERVICIO` vive aparte a propósito, y por eso
+        # excluirla es no incluirla, sin escribir sus códigos acá.
+        #
+        # Las CUATRO columnas salen de la misma consulta filtrada: dejar fuera
+        # la existencia de AV1 y adentro su comprometido descontaría contra un
+        # stock que no está, y la posición saldría por debajo de la real.
         from app.models.stock_siesa import StockSiesa
-        stock = dict(
+        from app.services.inventario_siesa_service import _BODEGAS_PV
+        _filas_stock = (
             db.session.query(
                 StockSiesa.codigo_siesa,
                 func.sum(StockSiesa.existencia),
+                func.sum(StockSiesa.comprometido),
+                func.sum(StockSiesa.salida_sin_conf),
+                # La foto más vieja que entra en esta suma.
+                #
+                # `stock_siesa` es acumulativa y no guarda marca de corrida: una
+                # bodega que dejó de refrescarse conserva sus filas para siempre
+                # y **suma igual** que una fresca. Antes de esto, una posición
+                # calculada con la foto de hace tres semanas de PC1 era
+                # indistinguible de una calculada con la de hoy.
+                #
+                # No se filtra por antigüedad ni se descarta nada: descartar
+                # stock sube el déficit y el contenedor es irreversible 120
+                # días. Se **declara** y decide el comprador (Regla 0).
+                func.min(StockSiesa.updated_at),
             )
+            .filter(StockSiesa.bodega.in_(_BODEGAS_PV))
             .group_by(StockSiesa.codigo_siesa)
             .all()
         )
+        stock = {f[0]: float(f[1] or 0) for f in _filas_stock}
+        comprometido = {f[0]: float(f[2] or 0) for f in _filas_stock}
+        salida_sin_conf = {f[0]: float(f[3] or 0) for f in _filas_stock}
+        frescura = {f[0]: f[4] for f in _filas_stock}
 
         # Origen Y marca. **Eran dos defectos apilados.**
         #
@@ -238,8 +340,30 @@ class ArmadorService:
             )
 
             stock_actual = float(stock.get(ref, 0) or 0)
+            qty_comprometido = float(comprometido.get(ref, 0) or 0)
+            qty_salida_sin_conf = float(salida_sin_conf.get(ref, 0) or 0)
+            _frescura = frescura.get(ref)
             qty_transito = float(transito.get(ref, 0) or 0)
-            posicion = stock_actual + qty_transito
+
+            # ── POSICIÓN DE INVENTARIO, SIN `max(0, ...)` A PROPÓSITO ───────
+            #
+            # Los tres sitios que calculan esto aplastan a cero, y hacen bien:
+            # contestan «¿cuánto puedo despachar ahora?», y una cantidad
+            # asignable negativa no significa nada.
+            #
+            # Acá la pregunta es otra: «¿en qué punto estoy respecto del
+            # objetivo?». Es una posición con signo, y una posición negativa
+            # —más comprometido que stock— es un hecho medido, no un dato
+            # ausente: hay mercancía vendida que todavía se debe. Aplastarla a
+            # cero dejaría `deficit = s_objetivo - 0` en vez de
+            # `s_objetivo + sobrevendido`, y el contenedor llegaría corto
+            # exactamente en lo que ya se debía. La Regla 0 no aplica: no es
+            # incertidumbre, es información.
+            #
+            # `deficit` sí conserva su `max(0, ...)` — no se puede comprar una
+            # cantidad negativa.
+            posicion = (stock_actual + qty_transito
+                        - qty_comprometido - qty_salida_sin_conf)
 
             lt = lt_china if es_china else LT_NACIONAL_DIAS
             sigma_lt = sigma_lt_china if es_china else SIGMA_LT_NACIONAL
@@ -267,6 +391,23 @@ class ArmadorService:
                 'safety_stock': round(safety_stock),
                 'sigma_ltd': round(s_ltd, 2),
                 'stock_actual': round(stock_actual),
+                # Procedencia de la posición: sin estos dos el comprador no
+                # puede reconstruir por qué su posición no es su existencia, y
+                # un número que no se puede auditar se cree a ciegas o se
+                # ignora. Las dos cosas salen caras cuando arman un contenedor.
+                'comprometido': round(qty_comprometido),
+                'salida_sin_conf': round(qty_salida_sin_conf),
+                'posicion': round(posicion),
+                # Y la tercera pata de la procedencia: **de cuándo es la foto**.
+                # `None` = este SKU no tiene ninguna fila en `stock_siesa`, que
+                # no es lo mismo que tener cero — otra vez el hueco y el cero
+                # confundidos. Los días se calculan acá y no en el JS para que
+                # el corte sea el mismo dondequiera que se lea.
+                'frescura_stock': (
+                    _frescura.isoformat() if _frescura is not None else None),
+                'stock_dias_de_antiguedad': (
+                    (datetime.utcnow() - _frescura).days
+                    if _frescura is not None else None),
                 'cobertura_dias': round(cobertura, 1),
                 'lt_dias': lt,
                 'sigma_lt': sigma_lt,
@@ -295,7 +436,8 @@ class ArmadorService:
                     'sigma_ltr': round(s_ltr, 2),
                     's_objetivo': round(s_objetivo),
                     'en_transito': round(qty_transito),
-                    'posicion': round(posicion),
+                    # `posicion` ya viene en la fila base — no se repite acá
+                    # para que no haya dos sitios donde cambiarla.
                     'deficit': round(max(0, s_objetivo - posicion)),
                     'topado_por_cobertura': topado,
                 })

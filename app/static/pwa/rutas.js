@@ -1101,8 +1101,54 @@ async function cargarListaMaestrasEnSelect(selectId) {
   } catch (e) {}
 }
 
+/**
+ * Cuantos clientes ya tienen coordenada y cuantos no.
+ *
+ * Ese numero subiendo mes a mes es el activo entero de la captura del
+ * conductor. Vive en Maestras —el catalogo de recorridos— y se carga solo al
+ * abrir la pestana: un numero que hay que ir a buscar con un boton es un
+ * numero que nadie mira, y a los tres meses nadie sabe si la funcionalidad
+ * sirvio. El boton de recargar existe para despues de una ruta, no para
+ * llegar por primera vez.
+ */
+async function rutasCargarCoberturaGeo() {
+  const el = document.getElementById('rutas-cobertura-geo');
+  if (!el) return;
+  try {
+    const d = await get('/api/rutas/geo/cobertura');
+    const con = d.con_coordenada || 0;
+    const sin = d.sin_coordenada || 0;
+    const base = con + sin;
+    const pct = base ? Math.round((con * 100) / base) : 0;
+    const umbral = d.umbral_para_rutear || 0;
+    const solas = d.con_una_sola_captura || 0;
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="font-size:12px;color:var(--tx3);font-weight:700;">UBICACIÓN DE CLIENTES</div>
+        <button onclick="rutasCargarCoberturaGeo()"
+          style="padding:4px 10px;background:#1a1a1a;border:1px solid #333;color:#9ca3af;border-radius:6px;font-size:11px;cursor:pointer;">↻</button>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:8px;">
+        <div style="font-size:26px;font-weight:800;color:#4ade80;">${con}</div>
+        <div style="font-size:12px;color:#9ca3af;">de ${base} clientes visitados tienen coordenada (${pct}%)</div>
+      </div>
+      <div style="height:6px;background:#1a1a1a;border-radius:3px;margin:8px 0;overflow:hidden;">
+        <div style="height:100%;width:${pct}%;background:#16a34a;"></div>
+      </div>
+      <div style="font-size:11px;color:#666;line-height:1.6;">
+        ${solas} con una sola visita · ${d.capturas_con_punto || 0} capturas con punto de ${d.capturas_totales || 0}<br>
+        Ruteo no se construye hasta llegar a <b style="color:#9ca3af;">${umbral}</b> clientes con coordenada.
+        ${con >= umbral ? '<span style="color:#4ade80;">Umbral alcanzado — ver docs/flota/ESTADO.md.</span>' : ''}
+      </div>`;
+  } catch (e) {
+    el.innerHTML = `<div style="font-size:11px;color:#ef4444;">No se pudo leer la cobertura: ${e.message || 'error'}
+      <button onclick="rutasCargarCoberturaGeo()" style="margin-left:8px;padding:3px 8px;background:#1a1a1a;border:1px solid #333;color:#9ca3af;border-radius:6px;font-size:11px;cursor:pointer;">Reintentar</button></div>`;
+  }
+}
+
 /** Carga y renderiza la lista completa de rutas maestras (activas e inactivas). */
 async function cargarListaMaestras() {
+  rutasCargarCoberturaGeo();
   const el = document.getElementById('lista-maestras');
   if (!el) return;
   try {
@@ -1974,6 +2020,7 @@ function _condRenderFormParada() {
       <div style="font-size:16px;font-weight:800;color:#fff;">${p.cliente}</div>
       <div style="font-size:13px;color:#aaa;margin-top:4px;">📍 ${p.municipio}</div>
       <div style="font-size:12px;color:#555;margin-top:2px;">${p.numero_pedido} · ${p.bultos.length} bulto${p.bultos.length !== 1 ? 's' : ''}</div>
+      ${_condBloqueNavegacion(p)}
     </div>
 
     <div style="margin-bottom:14px;">
@@ -2164,6 +2211,19 @@ function _condRenderFormParada() {
       ${r && r.foto_entrega ? `<div style="margin-top:8px;font-size:11px;color:#4ade80;">✓ Foto guardada — toma una nueva para reemplazarla</div>` : ''}
     </div>
 
+    <div style="margin-bottom:20px;">
+      <label style="font-size:12px;color:#aaa;font-weight:700;display:block;margin-bottom:8px;">
+        UBICACIÓN DEL CLIENTE <span style="color:#555;font-weight:400;">(opcional)</span>
+      </label>
+      <button type="button" onclick="condCapturarUbicacion()" id="cond-geo-btn"
+        style="width:100%;padding:16px;background:#f0fdf4;color:#15803d;border:2px dashed #86efac;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer;">
+        📍 Estoy aquí
+      </button>
+      <div id="cond-geo-estado" style="margin-top:8px;font-size:11px;color:#9ca3af;">
+        Tocalo parado en la puerta del cliente. Queda guardado para que la próxima ruta sepa dónde es.
+      </div>
+    </div>
+
     <div style="position:sticky;bottom:16px;">
       <button onclick="condGuardarParada()"
         style="width:100%;padding:20px;background:#1d4ed8;color:#fff;border:none;border-radius:14px;font-size:18px;font-weight:800;cursor:pointer;">
@@ -2173,6 +2233,11 @@ function _condRenderFormParada() {
 
   // Guardar estado seleccionado
   el._estadoSel = estadoUi;
+  // Arranca en «no se pidió» y no en null: el conductor que confirma sin tocar
+  // el botón está dando una respuesta —«no lo hice»— y ésa es contable. Un
+  // null llegaría al servidor como «no vino nada», que es lo que significa un
+  // cliente viejo con el service worker en caché, y son cosas distintas.
+  el._geo = { fuente: 'sin_dato', motivo: 'no_se_pidio' };
 
   if (mostrarValorDinamico) {
     condSelTipoPago(el._tipoPagoSel);
@@ -2292,6 +2357,131 @@ function condSelEstado(estado) {
   if (divBultosDev && estado === 'RECHAZADO') divBultosDev.style.display = 'none';
 
   if (estado === 'ENTREGADO') condRecalcularPago();
+}
+
+// ── Dónde queda el cliente ────────────────────────────────────────
+//
+// El WMS **no tiene direcciones de clientes** — el sync de pedidos lee códigos
+// de departamento y ciudad, no calles. Y geocodificar tampoco resuelve: en
+// Neiva hay 72 números de casa mapeados en todo el municipio, 10 en Pitalito.
+// El conductor que ya estuvo parado en la puerta es estrictamente mejor que
+// cualquier API, y por eso el punto lo pone él.
+
+/**
+ * El bloque de navegacion de la ficha del cliente.
+ *
+ * Degrada CON HONESTIDAD: sin coordenada NO pinta boton. Un boton de Waze
+ * alimentado con "Neiva" abre el centro de Neiva, que no es la tienda — y un
+ * conductor que abre eso una vez no vuelve a tocar el boton nunca, aunque
+ * despues sirva. Mejor decir que no se sabe y explicar como se arregla.
+ *
+ * Tres estados, y son tres cosas distintas (Regla 4 — la ausencia se modela
+ * con palabras):
+ *   · hay punto            -> Waze + Google Maps, con cuantas visitas lo
+ *                             sostienen y con que precision.
+ *   · geo == null          -> nadie capturo nada todavia.
+ *   · geo sin lat          -> se capturo y no se pudo elegir un punto, con el
+ *                             motivo (disperso, precision insuficiente).
+ * @param {Object} p - Parada del conductor
+ * @returns {string} HTML del bloque
+ */
+function _condBloqueNavegacion(p) {
+  const g = p.geo;
+  const aviso = (txt) => `<div style="margin-top:10px;padding:10px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:10px;font-size:11px;color:#9ca3af;line-height:1.5;">${txt}</div>`;
+
+  if (!g) {
+    return aviso('📍 <b style="color:#d1d5db;">No sabemos dónde queda.</b><br>Tocá «Estoy aquí» al confirmar y la próxima ruta ya lo va a tener.');
+  }
+  if (g.lat == null || g.lon == null) {
+    const motivos = {
+      sin_capturas:           'todavía no se capturó ninguna ubicación',
+      precision_insuficiente: 'las capturas llegaron sin precisión suficiente',
+      capturas_dispersas:     'las capturas no coinciden entre sí — puede haber dos clientes con el mismo nombre',
+    };
+    const razon = motivos[g.motivo_sin_maestro] || 'no se pudo determinar';
+    return aviso(`📍 <b style="color:#d1d5db;">No sabemos dónde queda</b> — ${razon}.<br>Tocá «Estoy aquí» al confirmar.`);
+  }
+
+  const ll = `${g.lat},${g.lon}`;
+  const prec = g.precision_m != null ? ` · ±${Math.round(g.precision_m)} m` : '';
+  const n = g.capturas_consideradas || 0;
+  return `
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <a href="https://waze.com/ul?ll=${ll}&navigate=yes" target="_blank" rel="noopener"
+        style="flex:1;text-align:center;padding:12px;background:#0a3d62;color:#7dd3fc;border:1px solid #1e5f8a;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none;">
+        🧭 Waze
+      </a>
+      <a href="https://www.google.com/maps/dir/?api=1&destination=${ll}" target="_blank" rel="noopener"
+        style="flex:1;text-align:center;padding:12px;background:#14532d;color:#86efac;border:1px solid #166534;border-radius:10px;font-size:13px;font-weight:700;text-decoration:none;">
+        🗺️ Maps
+      </a>
+    </div>
+    <div style="font-size:10px;color:#555;margin-top:6px;">
+      Punto de ${n} visita${n !== 1 ? 's' : ''}${prec} · lo pusieron los conductores
+    </div>`;
+}
+
+/**
+ * Captura la coordenada del GPS del telefono para esta parada.
+ *
+ * NO bloquea nada: si el GPS no responde, el conductor confirma igual y la
+ * parada queda con "sin_dato" y su motivo. Una entrega trabada en la calle no
+ * la desbloquea nadie — mismo criterio que `confirmar_parada` ya aplica con la
+ * condicion de pago que no se alcanzo a anotar.
+ *
+ * Lo que NUNCA hace es guardar 0,0: cada rama de error escribe una palabra.
+ */
+function condCapturarUbicacion() {
+  const el = document.getElementById('cond-contenido');
+  const estado = document.getElementById('cond-geo-estado');
+  const btn = document.getElementById('cond-geo-btn');
+  if (!el) return;
+
+  const decir = (txt, color) => { if (estado) { estado.textContent = txt; estado.style.color = color || '#9ca3af'; } };
+
+  if (!navigator.geolocation) {
+    el._geo = { fuente: 'sin_dato', motivo: 'no_soportado' };
+    decir('Este dispositivo no tiene GPS disponible. Podés confirmar igual.', '#f59e0b');
+    return;
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = '📍 Buscando señal...'; }
+  decir('Buscando señal...');
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      if (btn) { btn.disabled = false; btn.textContent = '📍 Ubicación tomada ✓'; btn.style.background = '#dcfce7'; }
+      el._geo = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        // El radio de incertidumbre que declara el navegador. Viaja siempre:
+        // sin el, el servidor no puede decidir si esta captura sirve para
+        // ubicar la tienda o solo para saber que el camion anduvo cerca.
+        precision_m: pos.coords.accuracy,
+        fuente: 'gps_conductor',
+      };
+      decir(`Ubicación tomada · ±${Math.round(pos.coords.accuracy || 0)} m de precisión`, '#4ade80');
+    },
+    (err) => {
+      if (btn) { btn.disabled = false; btn.textContent = '📍 Estoy aquí'; }
+      // Las tres ramas del error del navegador son tres cosas distintas, y se
+      // guardan distinto: 1 = el usuario dijo que no, 2 = no hubo senal,
+      // 3 = se acabo la espera. Colapsarlas en "sin ubicacion" borraria la
+      // unica informacion que dice si esto se arregla hablando con el
+      // conductor o cambiandole el telefono.
+      const motivos = { 1: 'permiso_denegado', 2: 'sin_senal', 3: 'timeout' };
+      const motivo = motivos[err && err.code] || 'no_declarado';
+      el._geo = { fuente: 'sin_dato', motivo: motivo };
+      const textos = {
+        permiso_denegado: 'Permiso de ubicación denegado. Podés confirmar igual.',
+        sin_senal:        'Sin señal de GPS acá. Podés confirmar igual.',
+        timeout:          'El GPS tardó demasiado. Podés confirmar igual.',
+        no_declarado:     'No se pudo tomar la ubicación. Podés confirmar igual.',
+      };
+      decir(textos[motivo], '#f59e0b');
+    },
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+  );
 }
 
 /** Previsualiza la foto de evidencia seleccionada por el conductor. */
@@ -2488,6 +2678,15 @@ async function condGuardarParada() {
     foto_entrega:      fotoBase64 || null,
     bultos_rechazados: estadoEntrega === 'RECHAZADO' ? bultosRechazados : bultosDevolucion,
     items_entregados:  itemsEntregados.length ? itemsEntregados : null,
+    // Dónde estaba el camión. Va DENTRO del payload y no en una llamada
+    // aparte: la confirmación tiene que funcionar sin señal, y un segundo
+    // request es un segundo request que se pierde. Con la cola offline, la
+    // coordenada viaja pegada a la entrega que la produjo.
+    //
+    // El servidor no lo revalida contra Siesa ni contra nada: solo lo juzga
+    // (¿cae en Colombia? ¿trae precisión?) y guarda lo que sea, con su
+    // procedencia. Ver `services/geo_cliente.leer_captura_del_conductor`.
+    geo:               el._geo || { fuente: 'sin_dato', motivo: 'no_se_pidio' },
   };
 
   // ── Sin conexión: encolar y actualizar local ────────────────────

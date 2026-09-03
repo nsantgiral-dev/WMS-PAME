@@ -48,6 +48,46 @@ class OrigenLectura(str, Enum):
     OT             = 'ot'
     TANQUEO        = 'tanqueo'
     CORRECCION     = 'correccion'
+    #: Alguien miró el tablero para reportar un daño. No es un turno ni un
+    #: tanqueo: es el gesto de la regla 3 cuando el evento que se persiste es
+    #: un hallazgo. Sin este valor la lectura tendría que mentir sobre su
+    #: origen, y `origen` existe justamente para no tener que adivinarlo.
+    HALLAZGO       = 'hallazgo'
+
+
+class Confianza(str, Enum):
+    """Cuánto respalda una lectura de odómetro el número que afirma.
+
+    Regla 4 aplicada al kilometraje: el tercer estado es «no sé», y se escribe
+    con una palabra. Sin él, el sistema tiene dos categorías —la lectura entró o
+    no entró— y el THP696 demostró que eso no alcanza: sus 16.697.948 km
+    **pasaron** la validación de monotonía, porque crecer es lo único que ésta
+    exige. Un número imposible que entró queda indistinguible de uno bueno.
+
+    QUÉ AFIRMA cada valor:
+
+        declarada  — alguien la registró y nada evidente la contradice. NO
+                     significa «verificada»: significa que no hay motivo para
+                     dudar. Es el estado normal de la operación.
+        dudosa     — hay un motivo concreto, escrito en `motivo_dudosa`, para no
+                     usarla en un cálculo. **No es un rechazo**: la fila existe,
+                     el número está, el turno se registró. Lo que cambia es que
+                     aguas abajo se sabe que no se puede dividir por ella.
+        verificada — una persona la miró con la foto al lado y dijo que sí. Es
+                     el único valor que ningún automatismo escribe.
+
+    QUÉ NO AFIRMA ninguno: que el número sea cierto. `verificada` afirma que
+    alguien lo cotejó contra una foto y quedó su nombre; `declarada` no afirma
+    ni eso. La diferencia importa el día que un CPK se discuta.
+
+    El orden entre los tres —`verificada` > `declarada` > `dudosa`— vive en
+    `flota.dominio.odometro.confianza_del_tramo` y no acá: es una política sobre
+    los valores, no parte del vocabulario.
+    """
+
+    DECLARADA  = 'declarada'
+    DUDOSA     = 'dudosa'
+    VERIFICADA = 'verificada'
 
 
 #: Orígenes que el endpoint de **lectura suelta** puede registrar hoy.
@@ -60,13 +100,18 @@ class OrigenLectura(str, Enum):
 #:     anterior y abre la nueva. Una lectura suelta que se declare `entrega`
 #:     dice que hubo un cambio de turno que nunca ocurrió — y queda
 #:     indistinguible de las reales en el histórico que alimenta el CPK.
-#:   · `preoperacional` viene de la inspección diaria (tanda 2).
-#:   · `ot` viene de la orden de trabajo (tanda 3).
+#:   · `preoperacional` lo escribe la inspección diaria, en su misma
+#:     transacción y anclado a ella (desde 2026-09-01, tanda 2).
+#:   · `ot` lo escribe `taller.abrir`, en su misma transacción (desde
+#:     2026-09-02, fase 2).
 #:
-#: Para los dos últimos el problema no es que la pantalla los ofrezca: es que
-#: **la lectura apuntaría a un padre que no puede existir**. Un `ot` sin OT es
-#: una referencia colgada, y el día que la tanda 3 exista habrá filas viejas que
-#: no se pueden reconciliar con ninguna orden.
+#: Para los dos últimos el problema **ya no es que falte el padre** —los dos lo
+#: tienen— sino que una lectura suelta con ese origen queda **indistinguible de
+#: las que sí lo tienen detrás**, y esas dos series son justamente las que
+#: dicen si alguien está inspeccionando de verdad y cuánto taller hubo. El
+#: motivo de `ot` decía hasta el 2026-09-02 que las órdenes «todavía no
+#: existen»: se reescribió cuando dejó de ser cierto, en vez de dejar una razón
+#: caduca que se lee con confianza.
 #:
 #: Se habilitan agregándolos acá, no editando la pantalla: el selector se
 #: valida contra esta tupla (`tests/flota/test_origen_lectura.py`).
@@ -87,10 +132,29 @@ MOTIVO_ORIGEN_NO_SUELTO = {
         'Una entrega se registra en el recibo de turno, que además cierra la '
         'custodia anterior y abre la nueva.',
     OrigenLectura.PREOPERACIONAL:
-        'La inspección diaria todavía no existe (tanda 2).',
+        'El kilometraje de la inspección diaria se registra al responderla, en '
+        'la misma transacción (regla 3). Suelta quedaría una lectura que dice '
+        '"acá hubo una inspección" sin ninguna inspección al lado.',
+    # Actualizado el 2026-09-02: **ahora las órdenes de trabajo existen.** El
+    # motivo anterior decía «todavía no existen (tanda 3): la lectura quedaría
+    # apuntando a una OT imposible», y con `flota_orden_trabajo` creada esa
+    # frase pasó a ser falsa. Se reescribe en vez de dejarla: un motivo que dejó
+    # de ser cierto es peor que ninguno — se lee con confianza y se lee mal.
+    #
+    # Y `ot` sigue FUERA de `ORIGENES_LECTURA_SUELTA`, por el motivo nuevo y no
+    # por inercia. Antes el problema era que no había padre; ahora es que **sí
+    # lo hay y la lectura nace con él**, en la misma transacción
+    # (`taller.abrir`). Una suelta quedaría indistinguible de las que sí tienen
+    # una orden detrás, y esa serie es la que dice cuánto taller hubo.
     OrigenLectura.OT:
-        'Las órdenes de trabajo todavía no existen (tanda 3): la lectura '
-        'quedaría apuntando a una OT imposible.',
+        'El kilometraje de una entrada a taller se registra al abrir la orden '
+        'de trabajo, en la misma transacción (regla 3). Suelta quedaría una '
+        'lectura que dice "acá hubo una entrada a taller" sin ninguna orden al '
+        'lado.',
+    OrigenLectura.HALLAZGO:
+        'El kilometraje de un daño se registra al reportarlo, en la misma '
+        'transacción. Suelto quedaría una lectura que dice "acá hubo un '
+        'hallazgo" sin ningún hallazgo al lado.',
 }
 
 
@@ -174,7 +238,14 @@ POSICIONES_LLANTA_POR_TIPO = {
 POSICIONES_LLANTA_FALLBACK = 4
 
 
-def _normalizar(texto: str) -> str:
+def normalizar_tipo(texto: str) -> str:
+    """`Vehiculo.tipo` es texto libre: se compara normalizado o no se compara.
+
+    Pública y no `_normalizar` desde el 2026-09-01: `dominio/inspeccion.py`
+    necesita la MISMA normalización para resolver qué plantilla le toca a un
+    tipo. Dos normalizadores para el mismo texto libre son dos formas de
+    escribir «Camión» que se separan el día que alguien agregue una tilde.
+    """
     tildes = str.maketrans('áéíóúü', 'aeiouu')
     return (texto or '').strip().lower().translate(tildes)
 
@@ -192,7 +263,7 @@ def posiciones_llanta(ficha_posiciones, tipo_vehiculo):
     """
     if ficha_posiciones:
         return int(ficha_posiciones), 'ficha'
-    n = POSICIONES_LLANTA_POR_TIPO.get(_normalizar(tipo_vehiculo))
+    n = POSICIONES_LLANTA_POR_TIPO.get(normalizar_tipo(tipo_vehiculo))
     if n:
         return n, 'tipo'
     return POSICIONES_LLANTA_FALLBACK, 'fallback'
@@ -315,6 +386,23 @@ TIPOS_DOCUMENTO = ('soat', 'rtm', 'poliza_rc', 'tarjeta_propiedad')
 TIPOS_SIN_VENCIMIENTO = ('tarjeta_propiedad',)
 
 
+#: De dónde salió un dato de la ficha técnica que después decide algo.
+#:
+#: **Subió acá el 2026-09-02, desde `flota/adaptadores/modelos.py`.** Vivía
+#: escrito en la tabla porque su único uso eran tres CHECK; el preventivo le dio
+#: un segundo consumidor —la tarea hereda la procedencia del campo que la
+#: sembró (`distribucion_km_cambio` → `distribucion_fuente`)— y el dominio no
+#: puede importar del adaptador (trinquete 1). La alternativa era una segunda
+#: tupla con el mismo contenido, y dos listas iguales se separan el día que
+#: alguien agregue un valor a una sola: el modelo lo aceptaría y la base lo
+#: rechazaría, o al revés.
+#:
+#: El orden va de lo documental a lo declarado. No es cosmético: `FUENTES_BLANDAS`
+#: en `flota/dominio/preventivo.py` corta esta misma lista.
+FUENTES = ('manual_fabricante', 'concesionario', 'placa_motor', 'taller',
+           'estimado', 'sin_dato')
+
+
 def exige_vencimiento(tipo_documento: str) -> bool:
     """¿Este tipo de documento tiene fecha de vencimiento?
 
@@ -370,13 +458,23 @@ class EntidadFoto(str, Enum):
 
 @dataclass(frozen=True)
 class Lectura:
-    """Una lectura de odómetro. Append-only: no se edita, se corrige."""
+    """Una lectura de odómetro. Append-only: no se edita, se corrige.
+
+    `confianza` lleva default `DECLARADA` **solo para no romper a los llamadores
+    que construyen una lectura propuesta** —la que todavía no existe en la base y
+    cuya marca se calcula al insertarla—. No es un default optimista disfrazado:
+    quien lee una fila ya persistida tiene que pasar la confianza real, y el
+    cargador que lo hace es uno solo (`flota.api.custodia._lecturas_dominio`).
+    Dos cargadores con criterios distintos serían el corolario de la regla 0 otra
+    vez, ahora sobre el dato que decide si un CPK se puede calcular.
+    """
 
     valor_km: int
     ts: datetime
     origen: OrigenLectura
     autor_usuario_id: int
     motivo_correccion: Optional[str] = None
+    confianza: Confianza = Confianza.DECLARADA
 
 
 @dataclass(frozen=True)

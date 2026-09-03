@@ -382,6 +382,14 @@ def create_app():
                 # tecnomecánica dependía de que alguien se acordara. La ventana
                 # son 15 días — lo que tarda una cita de tecnomecánica.
                 ('flota.adaptadores.avisos',                'init_scheduler',          '[FLOTA_AVISOS]'),
+                # La siembra del plan preventivo desde la ficha técnica. Nace
+                # apagada por `FLOTA_PREVENTIVO` (regla 10 del módulo de flota):
+                # el interruptor vive dentro de `sembrar_todo`, que sin la
+                # variable devuelve su motivo y no escribe una fila.
+                #
+                # 05:30 y no 06:00: el barrido de avisos corre a las 06:00 y lee
+                # el plan. Al revés, el aviso del día miraría el plan de ayer.
+                ('flota.adaptadores.preventivo',            'init_scheduler',          '[FLOTA_PREVENTIVO]'),
             ]
             for _mod_path, _fn_name, _tag in _scheduler_pesados:
                 _registrar_scheduler(app, _il, _app_logger, _mod_path, _fn_name, _tag)

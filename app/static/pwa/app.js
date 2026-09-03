@@ -1517,7 +1517,25 @@ async function testBarras() {
   }
 }
 
-/** Start WMS vs Siesa stock reconciliation and poll for results. */
+/**
+ * Start WMS vs Siesa stock reconciliation and poll for results.
+ *
+ * Pinta TRES respuestas, no dos. «No se puede comparar» —un almacén sin bodega
+ * Siesa, una bodega Siesa sin almacén WMS— no es «cuadra»: antes se mezclaba en
+ * la suma y desaparecía, y el veredicto verde de esta pantalla es la casilla de
+ * la Fase 4 de `docs/arranque_produccion.md`, la luz verde para que los
+ * operarios arranquen.
+ *
+ * Y pinta el DENOMINADOR: el backend ya calculaba `cobertura_pct` y lo publicaba
+ * en el JSON, y el render no lo mostraba. Un conteo pelado de diferencias sin
+ * cuántos SKU se compararon no se puede interpretar.
+ *
+ * De las tres respuestas, la tercera se abre en dos: incomparable **previsto y
+ * declarado** (AV1, TRA1 — no llevan almacén en el WMS y nunca lo van a llevar)
+ * e incomparable que **nadie previó**. Se pintan distinto porque exigen cosas
+ * distintas: el previsto se lee y se sigue, el imprevisto manda a levantarse de
+ * la silla. Solo el segundo deja el veredicto en ámbar.
+ */
 async function verReconciliacion() {
   const res = document.getElementById('inv-resultado');
   const panel = document.getElementById('panel-reconciliacion');
@@ -1539,20 +1557,106 @@ async function verReconciliacion() {
           }
           const r = e.ultimo_resultado;
           if (!r) { res.style.color = '#fb923c'; res.textContent = 'Sin resultado — intenta de nuevo'; return; }
-          if (r.total_discrepancias === 0) {
-            res.style.color = '#4ade80';
-            res.textContent = `✓ Sin diferencias — WMS y Siesa coinciden (${r.total_productos_siesa} productos)`;
-            return;
+          if (r.abortado) {
+            res.style.color = '#fb923c'; res.textContent = '⚠ ' + (r.motivo || 'Reconciliación abortada'); return;
           }
-          res.style.color = '#facc15';
-          res.textContent = `⚠ ${r.total_discrepancias} diferencias de ${r.total_productos_siesa} productos`;
+          const nc = r.no_comparable || {};
+          const noComp = r.total_no_comparable || 0;
+          // «Previsto y declarado» vs. «nadie lo previó». El backend ya hizo la
+          // distinción (`_incomparable_esperado`); acá NO se vuelve a decidir,
+          // solo se pinta — si la pantalla tuviera su propio criterio serían
+          // dos políticas para una pregunta, y divergirían.
+          const noCompImprev = r.total_no_comparable_imprevisto != null
+            ? r.total_no_comparable_imprevisto : noComp;
+          const noCompPrev = r.total_no_comparable_esperado || 0;
+          const bodegasSinAlmacen = nc.bodegas_siesa_sin_almacen_wms || [];
+          const previstas = bodegasSinAlmacen.filter(b => b.esperado);
+          const imprevistas = bodegasSinAlmacen.filter(b => !b.esperado);
+          const porBodega = r.por_bodega || [];
+          const cuadre = (r.cuadre_pct === null || r.cuadre_pct === undefined) ? '—' : r.cuadre_pct + '%';
+          const comparadas = (r.bodegas_comparadas || []).length;
+
+          // Veredicto. Verde SOLO si no hay diferencias Y no hay nada que se
+          // haya quedado sin comparar.
+          if (r.sin_diferencias) {
+            res.style.color = '#4ade80';
+            res.textContent = `✓ Sin diferencias — cada bodega cuadra con la suya `
+              + `(${r.skus_cuadran}/${r.skus_comparados} SKU en ${comparadas} bodega(s))`
+              + (noCompPrev ? ` · ${noCompPrev} SKU incomparables previstos` : '');
+          } else if (r.total_discrepancias === 0) {
+            res.style.color = '#fb923c';
+            res.textContent = `⚠ Cuadra lo comparable (${cuadre} de ${r.skus_comparados} SKU), `
+              + `pero ${noCompImprev} SKU no se pueden comparar`;
+          } else {
+            res.style.color = '#facc15';
+            res.textContent = `⚠ ${r.total_discrepancias} diferencias · cuadre ${cuadre} `
+              + `de ${r.skus_comparados} SKU comparados`
+              + (noCompImprev ? ` · ${noCompImprev} SKU sin comparar` : '');
+          }
+
+          const filaNoComparable = (etiqueta, detalle, color) => `
+            <div class="tabla-fila" style="font-size:12px;">
+              <div><div style="font-weight:600;color:${color || '#fb923c'};">${etiqueta}</div>
+                   <div style="color:#555;">${detalle}</div></div>
+            </div>`;
+          const filaBodegaSinAlmacen = (b, color) => filaNoComparable(
+            `${b.bodega}: bodega de Siesa sin almacén en el WMS`,
+            `${b.skus_siesa} SKU · ${b.unidades_siesa} und`
+            + (b.contraparte_wms ? ` — ${b.contraparte_wms.descripcion}`
+               + (b.contraparte_wms.unidades != null ? ` (${b.contraparte_wms.unidades} und en el WMS, sin cuadrar)` : '')
+               : '')
+            + (b.justificacion ? `<br>${b.justificacion}` : ''), color);
+
+          // Lo IMPREVISTO: naranja, y es lo que dejó el veredicto en ámbar.
+          const bloqueNoComparable = noCompImprev ? `
+            <div style="font-size:12px;color:#fb923c;margin:12px 0 6px;">
+              No se puede comparar y nadie lo previó — ${noCompImprev} SKU (no es «cuadra»):</div>
+            ${(nc.almacenes_sin_bodega_siesa || []).map(a => filaNoComparable(
+                `Almacén ${a.almacen} sin bodega Siesa asignada`,
+                `${a.skus} SKU · ${a.unidades} und — no se sabe contra qué bodega comparar`)).join('')}
+            ${(nc.bodegas_wms_sin_datos_siesa || []).map(b => filaNoComparable(
+                `${b.bodega}: el WMS tiene stock y Siesa no reportó nada`,
+                `${b.skus_wms} SKU · ${b.unidades_wms} und`)).join('')}
+            ${imprevistas.map(b => filaBodegaSinAlmacen(b)).join('')}
+            ${nc.skus_siesa_sin_producto_wms ? filaNoComparable(
+                `${nc.skus_siesa_sin_producto_wms} SKU de Siesa sin producto en el catálogo WMS`,
+                'no hay contra qué compararlos — falta sincronizar catálogo') : ''}` : '';
+
+          // Lo PREVISTO: gris, y con el motivo escrito. No descalificar no es
+          // esconder — una exención que no se ve en la pantalla es una
+          // exención silenciosa, que es de donde salen las listas que crecen.
+          const bloquePrevisto = previstas.length ? `
+            <div style="font-size:12px;color:#94a3b8;margin:12px 0 6px;">
+              Incomparable previsto y declarado — ${noCompPrev} SKU
+              (no descalifica el veredicto):</div>
+            ${previstas.map(b => filaBodegaSinAlmacen(b, '#94a3b8')).join('')}` : '';
+
           panel.innerHTML = `
-            <div style="font-size:12px;color:#555;margin-bottom:8px;">Top diferencias (WMS vs Siesa):</div>
+            <div style="font-size:12px;color:#555;margin-bottom:6px;">
+              Cuadre por bodega (SKU que coinciden / SKU comparados):</div>
+            ${porBodega.map(b => `
+              <div class="tabla-fila" style="font-size:12px;">
+                <div><div style="font-weight:600;">${b.bodega}</div>
+                     <div style="color:#555;">${b.comparable ? (b.discrepancias + ' diferencia(s)') : b.motivo}</div></div>
+                <div style="text-align:right;">
+                  <span style="color:${b.comparable ? (b.cuadre_pct === 100 ? '#4ade80' : '#facc15') : (b.esperado ? '#94a3b8' : '#fb923c')};font-weight:700;">
+                    ${b.comparable ? (b.cuadran + '/' + b.denominador + ' · ' + (b.cuadre_pct === null ? '—' : b.cuadre_pct + '%'))
+                      : (b.esperado ? 'no comparable (previsto)' : 'no comparable')}</span>
+                  <div style="color:#555;font-size:11px;">WMS ${b.unidades_wms} und · Siesa ${b.unidades_siesa} und</div>
+                </div>
+              </div>`).join('')}
+            ${bloqueNoComparable}
+            ${bloquePrevisto}
+            <div style="font-size:11px;color:#555;margin:12px 0 6px;">
+              Cobertura de catálogo: ${r.cobertura_pct}% (${r.total_productos_wms} productos con stock en el WMS
+              de ${r.total_productos_siesa} que Siesa reporta)</div>
+            ${r.total_discrepancias ? `
+            <div style="font-size:12px;color:#555;margin:12px 0 6px;">Top diferencias (WMS vs Siesa):</div>
             ${r.discrepancias.slice(0,20).map(x => `
               <div class="tabla-fila" style="font-size:12px;">
                 <div>
                   <div style="font-weight:600;">${x.nombre}</div>
-                  <div style="color:#555;">${x.codigo}</div>
+                  <div style="color:#555;">${x.codigo} · ${x.bodega || '—'}</div>
                 </div>
                 <div style="text-align:right;">
                   <span style="color:${x.diferencia > 0 ? '#4ade80' : '#f87171'}">WMS: ${x.stock_wms}</span>
@@ -1560,7 +1664,7 @@ async function verReconciliacion() {
                   <span style="color:#93c5fd;">Siesa: ${x.stock_siesa}</span>
                   <div style="color:${x.diferencia > 0 ? '#4ade80':'#f87171'};font-size:11px;">${x.diferencia > 0 ? '+' : ''}${x.diferencia}</div>
                 </div>
-              </div>`).join('')}`;
+              </div>`).join('')}` : ''}`;
         } else { res.textContent = '⏳ Comparando WMS vs Siesa...'; }
       } catch(err) { clearInterval(iv); res.style.color = '#ef4444'; res.textContent = 'Error polling'; }
     }, 8000);
@@ -2701,6 +2805,30 @@ async function siesaRecuperacionCargar() {
          <span style="color:var(--red);font-size:12px;">no se pudo consultar: ${datos._error}</span></div>`
     : render(datos);
 
+  // Los cuatro semáforos de sincronización. `/api/siesa/monitor` los calculaba
+  // desde siempre y `modulos` **no se pintaba en ninguna pantalla del PWA** —
+  // una luz encendida en un tablero que nadie ve. Van acá, que es la pestaña
+  // donde alguien mira cuando algo se rompió.
+  const COLOR_SEMAFORO = {
+    VERDE: 'var(--green)', AMARILLO: '#f59e0b',
+    ROJO: 'var(--red)', GRIS: 'var(--tx3)',
+  };
+  const filaModulo = (nombre, m) => {
+    const d = m.detalle || {};
+    // El motivo, al lado del color: un rojo sin motivo manda a leer logs, que
+    // es justo de donde este panel existe para sacar a alguien.
+    const nota = d.ultimo_error
+      ? `<span style="color:var(--red);">${String(d.ultimo_error).slice(0, 80)}</span>`
+      : (m.estado === 'GRIS' ? 'nunca corrió en este proceso' : (d.ultimo_inicio || ''));
+    return `
+      <div class="tabla-fila">
+        <span class="tabla-nombre" style="font-size:12px;">${nombre}<br>
+          <span style="color:var(--tx3);font-size:11px;">${nota}</span></span>
+        <span style="color:${COLOR_SEMAFORO[m.estado] || 'var(--tx3)'};font-weight:700;font-size:12px;">
+          ${m.estado}</span>
+      </div>`;
+  };
+
   el.innerHTML = `
     <div class="tabla-card">
       <div class="tabla-titulo">Recuperación Siesa</div>
@@ -2708,6 +2836,8 @@ async function siesaRecuperacionCargar() {
         Herramientas para cuando algo no llegó a Siesa. Todas dejan registro con
         tu nombre.
       </p>
+      ${bloque('Sincronizadores', monitor, d => Object.entries(d.modulos || {})
+          .map(([nombre, m]) => filaModulo(nombre, m)).join(''))}
       ${bloque('Cola DLQ', monitor, d => `
         <div class="tabla-fila"><span class="tabla-nombre">Jobs pendientes</span>
           <span class="badge ${(d.pendientes||0) ? 'badge-yellow' : 'badge-green'}">${d.pendientes ?? '—'}</span></div>
@@ -3145,6 +3275,10 @@ async function syncEstadosCargar() {
  *
  * Se pinta el CATÁLOGO completo, no solo lo roto: «0 hallazgos» y «no corrió
  * nada» se leen igual, y esa confusión es la que hace inútil un tablero.
+ *
+ * Y se pinta el UNIVERSO MIRADO (`consultas_truncadas`): «0 hallazgos sobre
+ * todo» y «0 hallazgos sobre los primeros 20.000 movimientos» también se leen
+ * igual, y ése es el tercer modo del mismo error.
  */
 async function cargarAuditoriaFlujo() {
   const el = document.getElementById('auditoria-flujo');
@@ -3188,6 +3322,25 @@ async function cargarAuditoriaFlujo() {
     // La hora de ESTA corrida. Es lo único que hace visible que el botón hizo
     // algo cuando el resultado no cambió.
     const hora = new Date().toLocaleTimeString('es-CO');
+
+    // El UNIVERSO MIRADO. `auditar()` declara qué consultas chocaron con su
+    // tope y el panel no lo pintaba: con `movimientos_inventario` —la tabla
+    // más grande, y la del tope más fácil de alcanzar (20.000)— truncada, el
+    // «0 hallazgos» de arriba se lee como limpio cuando significa «no se
+    // buscó en todo». Va arriba de las filas a propósito: es la advertencia de
+    // cómo leer lo que sigue, no una nota al pie.
+    const truncadas = d.consultas_truncadas || [];
+    const bloqueTruncadas = truncadas.length ? `
+      <div style="border:1px solid #f59e0b;border-radius:8px;padding:8px 10px;
+                  margin-bottom:10px;font-size:11px;color:var(--tx2);">
+        <b style="color:#f59e0b;">Universo parcial — no le creas al 0</b>
+        <div style="margin-top:4px;">
+          ${truncadas.length} consulta(s) chocaron con su tope de filas: los
+          hallazgos de abajo salen de una muestra, no de todo. Subí el tope
+          antes de dar esto por limpio.</div>
+        ${truncadas.map(t => `<div style="padding-left:8px;">· <code>${t}</code></div>`).join('')}
+      </div>` : '';
+
     el.innerHTML = `
       <div class="tabla-card">
         <div class="tabla-titulo">Auditoría de flujo
@@ -3196,6 +3349,7 @@ async function cargarAuditoriaFlujo() {
             · <span title="hora de esta corrida">${hora}</span></span>
         </div>
         <div style="font-size:11px;color:var(--tx3);margin-bottom:8px;">${d.nota || ''}</div>
+        ${bloqueTruncadas}
         ${filas}
         <button onclick="cargarAuditoriaFlujo()"
           style="margin-top:10px;padding:8px 14px;border:none;border-radius:8px;cursor:pointer;background:var(--brd);color:var(--tx);font-size:12px;font-weight:700;">
