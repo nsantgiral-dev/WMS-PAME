@@ -109,9 +109,25 @@ _ZONAS_CUERPO = ('PICKING', 'RESERVA', 'IMPORTADOS')  # zonas que se arman con M
 # regla 1:1). RESERVA/AVERIAS quedan fuera: ahí N:N es libre.
 _ZONAS_SLOT_UNICO = ('PICKING', 'IMPORTADOS')
 
+# Tipo de mueble físico dentro de un Cuerpo — no confundir con tipo_zona (la
+# función operativa: PICKING/RESERVA/AVERIAS/IMPORTADOS). 'estanteria' es el
+# Cuerpo multi-nivel de siempre (Mecanismo A tal cual). 'vitrina'/'estiba' son
+# un mueble de una sola posición (vitrina de exhibición o pallet en el piso)
+# que no tiene pasillos reales de estantería detrás — pero sigue viviendo en
+# la grilla pasillo/fila/cuerpo a propósito: así hereda el orden de ruta
+# física de picking_service.orden_ruta_fisica() (que manda al final cualquier
+# ubicación sin pasillo asignado — correcto para AVERIAS/GENERAL, pero
+# rompería el recorrido real del operario si una vitrina/estiba que sí es una
+# posición de picking quedara siempre de última). Antes de esto, `tipo` vivía
+# en la tabla sin usarse nunca (siempre 'estanteria', en los dos mecanismos de
+# creación) — no fue necesaria ninguna migración para activarlo.
+_TIPOS_MUEBLE = ('estanteria', 'vitrina', 'estiba')
+_SUFIJO_MUEBLE = {'vitrina': 'VIT', 'estiba': 'EST'}
+
 
 def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
-                 cantidad_entrepanos: int, tipo_zona: str, huecos_por_nivel: list = None):
+                 cantidad_entrepanos: int, tipo_zona: str, huecos_por_nivel: list = None,
+                 tipo_mueble: str = 'estanteria'):
     """
     Crea un Cuerpo completo de una vez: sus N Entrepaños (Nivel 1 = piso, subiendo)
     y, dentro de cada Entrepaño, sus Huecos. huecos_por_nivel es una lista de N
@@ -129,13 +145,28 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     mezclados por Nivel dentro del mismo Cuerpo: así cada Cuerpo se revisa
     completo en una sola pestaña de zona.
 
+    tipo_mueble='vitrina'/'estiba' arma un mueble suelto de una sola posición
+    en vez de un Cuerpo de estantería: fuerza cantidad_entrepanos=1 y
+    huecos_por_nivel=[1] sin importar lo que llegue (ver _TIPOS_MUEBLE), y el
+    código generado usa un sufijo propio (VIT/EST) en vez de E{nivel}-H{hueco}
+    — para que no se lea como una bahía de estantería con niveles que no
+    existen.
+
     Dirección física: Pasillo -> Fila (1/2, lado del pasillo) -> Cuerpo (bahía)
     -> Nivel (entrepaño) -> Hueco.
-    Código generado: {PREFIJO}-{PASILLO}{FILA}-C{CUERPO:02d}-E{NIVEL:02d}-H{HUECO:02d}
+    Código generado (estanteria): {PREFIJO}-{PASILLO}{FILA}-C{CUERPO:02d}-E{NIVEL:02d}-H{HUECO:02d}
     ej. PIK-A1-C03-E02-H01 — la letra por eje (C/E/H = Cuerpo/Entrepaño/Hueco)
     evita confundir Cuerpo con Nivel al leer el código (antes eran dos dígitos
     seguidos, indistinguibles sin memorizar la posición).
+    Código generado (vitrina/estiba): {PREFIJO}-{PASILLO}{FILA}-{VIT|EST}{CUERPO:02d}
+    ej. PIK-A1-VIT03.
     """
+    if tipo_mueble not in _TIPOS_MUEBLE:
+        raise ValueError(f'tipo_mueble debe ser una de {_TIPOS_MUEBLE}')
+    if tipo_mueble != 'estanteria':
+        cantidad_entrepanos = 1
+        huecos_por_nivel = [1]
+
     if fila not in (1, 2):
         raise ValueError('fila debe ser 1 o 2 — cada pasillo tiene exactamente 2 filas')
     if cuerpo < 1:
@@ -160,7 +191,10 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     creadas = []
     for nivel in range(1, cantidad_entrepanos + 1):
         for hueco in range(1, huecos_por_nivel[nivel - 1] + 1):
-            codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
+            if tipo_mueble == 'estanteria':
+                codigo = f'{prefijo}-{pasillo}{fila}-C{cuerpo:02d}-E{nivel:02d}-H{hueco:02d}'
+            else:
+                codigo = f'{prefijo}-{pasillo}{fila}-{_SUFIJO_MUEBLE[tipo_mueble]}{cuerpo:02d}'
             if Ubicacion.query.filter_by(codigo=codigo).first():
                 raise ValueError(f'La ubicación {codigo} ya existe')
 
@@ -173,7 +207,7 @@ def crear_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
                 nivel=nivel,
                 hueco=hueco,
                 tipo_zona=tipo_zona,
-                tipo='estanteria',
+                tipo=tipo_mueble,
                 origen='MANUAL',
                 activo=True,
             )
@@ -720,9 +754,13 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
     de "Editar": corregir la modulación después de empezar a asignar SKUs, no
     solo antes. El stock tampoco bloquea (se traspasa); solo el historial de
     operación física real bloquea.
+
+    Conserva también el tipo_mueble original (estanteria/vitrina/estiba) —
+    igual que la zona, remodular estructura no cambia qué clase de mueble es.
     """
     ubicaciones = _ubicaciones_de_cuerpo(almacen_id, pasillo, fila, cuerpo)
     tipo_zona = ubicaciones[0].tipo_zona  # un cuerpo es 100% de una sola zona
+    tipo_mueble = ubicaciones[0].tipo or 'estanteria'
 
     if cantidad_entrepanos < 1:
         raise ValueError('cantidad_entrepanos debe ser mayor a 0')
@@ -775,11 +813,11 @@ def editar_cuerpo(almacen_id: int, pasillo: str, fila: int, cuerpo: int,
         db.session.delete(ub)
     db.session.flush()
 
-    # Reconstruir desde cero con la nueva numeración (misma zona) — commitea al final
+    # Reconstruir desde cero con la nueva numeración (misma zona, mismo tipo de mueble) — commitea al final
     return crear_cuerpo(
         almacen_id=almacen_id, pasillo=pasillo, fila=fila, cuerpo=cuerpo,
         cantidad_entrepanos=cantidad_entrepanos, tipo_zona=tipo_zona,
-        huecos_por_nivel=huecos_por_nivel,
+        huecos_por_nivel=huecos_por_nivel, tipo_mueble=tipo_mueble,
     )
 
 

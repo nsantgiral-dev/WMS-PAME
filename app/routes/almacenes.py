@@ -167,10 +167,12 @@ def crear_cuerpo(id):
     Mecanismo A: crea un Cuerpo completo — sus Entrepaños (Nivel) y Huecos, en
     bloque. Un Cuerpo es 100% de una sola Zona (tipo_zona) — PICKING, RESERVA e
     IMPORTADOS se arman como Cuerpos separados, no mezclados por Nivel dentro del mismo Cuerpo.
-    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel? }
+    Payload: { pasillo, fila, cuerpo, cantidad_entrepanos, tipo_zona, huecos_por_nivel?, tipo_mueble? }
     tipo_zona debe ser PICKING, RESERVA o IMPORTADOS. huecos_por_nivel es una lista de N
     enteros (uno por entrepaño, N=cantidad_entrepanos, en orden de Nivel 1..N);
     si no viene, cada entrepaño nace con 1 hueco.
+    tipo_mueble (default 'estanteria') puede ser 'vitrina' o 'estiba' — mueble
+    de una sola posición, sin niveles reales (fuerza cantidad_entrepanos=1).
     """
     if not _es_admin_o_jefe():
         return jsonify({'error': 'Solo admin o jefe de almacén'}), 403
@@ -191,6 +193,7 @@ def crear_cuerpo(id):
             cantidad_entrepanos=int(data['cantidad_entrepanos']),
             tipo_zona=data['tipo_zona'],
             huecos_por_nivel=huecos_por_nivel,
+            tipo_mueble=data.get('tipo_mueble', 'estanteria'),
         )
         return jsonify({'ubicaciones': [u.to_dict() for u in creadas]}), 201
     except ValueError as e:

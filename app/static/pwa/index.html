@@ -2964,6 +2964,22 @@
 
       <!-- Paso 1: dirección del cuerpo -->
       <div id="layout-cuerpo-paso1">
+        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Tipo de mueble</label>
+        <div style="display:flex;gap:6px;margin-bottom:12px;">
+          <button type="button" id="layout-cuerpo-tipo-estanteria" onclick="layoutCuerpoSetTipoMueble('estanteria')"
+            style="flex:1;padding:9px 6px;background:var(--pm);border:1px solid var(--brd);border-radius:8px;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">
+            Estantería
+          </button>
+          <button type="button" id="layout-cuerpo-tipo-vitrina" onclick="layoutCuerpoSetTipoMueble('vitrina')"
+            style="flex:1;padding:9px 6px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:12px;font-weight:700;cursor:pointer;">
+            Vitrina
+          </button>
+          <button type="button" id="layout-cuerpo-tipo-estiba" onclick="layoutCuerpoSetTipoMueble('estiba')"
+            style="flex:1;padding:9px 6px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx2);font-size:12px;font-weight:700;cursor:pointer;">
+            Estiba
+          </button>
+        </div>
+
         <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Pasillo</label>
         <select id="layout-cuerpo-pasillo"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
@@ -2980,9 +2996,11 @@
         <input id="layout-cuerpo-numero" type="number" min="1" placeholder="ej. 3"
           style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:12px;">
 
-        <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad de entrepaños</label>
-        <input id="layout-cuerpo-entrepanos" type="number" min="1" placeholder="ej. 4"
-          style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:4px;">
+        <div id="layout-cuerpo-entrepanos-wrap">
+          <label style="font-size:12px;color:var(--tx3);display:block;margin-bottom:4px;">Cantidad de entrepaños</label>
+          <input id="layout-cuerpo-entrepanos" type="number" min="1" placeholder="ej. 4"
+            style="width:100%;padding:12px;background:var(--bg);border:1px solid var(--brd);border-radius:8px;color:var(--tx);font-size:15px;box-sizing:border-box;margin-bottom:4px;">
+        </div>
         <div id="layout-cuerpo-zona-hint" style="font-size:11px;color:var(--tx3);margin-bottom:16px;">El entrepaño 1 es el más bajo (piso) y sube desde ahí.</div>
 
         <button id="layout-cuerpo-btn-repetir" onclick="layoutRepetirCuerpoAnterior()" style="display:none;width:100%;padding:9px;margin-bottom:12px;background:transparent;border:1px dashed var(--brd);border-radius:8px;color:var(--tx3);font-size:12px;cursor:pointer;">
@@ -2990,7 +3008,7 @@
         </button>
 
         <div style="display:flex;gap:8px;">
-          <button onclick="layoutCuerpoIrAPaso2()"
+          <button id="layout-cuerpo-btn-siguiente" onclick="layoutCuerpoPaso1Continuar()"
             style="flex:1;padding:13px;background:var(--pm);border:none;border-radius:10px;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">
             Siguiente
           </button>

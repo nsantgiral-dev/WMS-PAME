@@ -85,11 +85,14 @@ async function cargarLayout() {
  * @param {Object} u - Ubicacion object with code, zone, stock, and product data.
  * @returns {string} HTML string for the ubicacion card.
  */
+const _TIPO_MUEBLE_BADGE = { vitrina: '🗄 Vitrina', estiba: '📦 Estiba' };
+
 function _layoutRenderUbicacionCard(u) {
   const color = _layoutColorZona(u.tipo_zona);
   const skuLabel = u.producto_asignado_codigo
     ? `📦 ${u.producto_asignado_codigo}${u.producto_asignado_nombre ? ' — ' + u.producto_asignado_nombre : ''}`
     : (u.tipo_zona === 'PICKING' ? 'Sin SKU asignado' : null);
+  const badgeMueble = _TIPO_MUEBLE_BADGE[u.tipo];
 
   return `
     <div class="tabla-card" style="margin-bottom:10px;">
@@ -100,6 +103,7 @@ function _layoutRenderUbicacionCard(u) {
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
           <span style="font-size:11px;font-weight:700;color:${color};background:${color}22;padding:3px 8px;border-radius:20px;">${u.tipo_zona}</span>
+          ${badgeMueble ? `<span style="font-size:10px;font-weight:700;color:var(--tx3);background:var(--bg-s2);padding:3px 8px;border-radius:20px;">${badgeMueble}</span>` : ''}
           ${!u.activo ? `<span style="font-size:10px;color:#888;background:#88888822;padding:3px 8px;border-radius:20px;">INACTIVA</span>` : ''}
         </div>
       </div>
@@ -175,11 +179,17 @@ function layoutRenderUbicaciones() {
   const ts = u => u.fecha_creacion ? new Date(u.fecha_creacion).getTime() : 0;
 
   // legado: fila plana (estante) — mecanismo anterior al rediseño de 5 ejes.
-  // cuerpo: Cuerpo -> Entrepaño (nivel) -> Huecos — mecanismo nuevo (Mecanismo A).
-  //         un Cuerpo puede tener entrepaños en varias zonas; al filtrar `items`
-  //         por zona antes de agrupar, cada grupo de cuerpo queda ya con solo
-  //         los entrepaños de la pestaña activa.
-  // suelta: AVERIAS/GENERAL sin dirección física de cuerpo, una por grupo.
+  // cuerpo: Cuerpo -> Entrepaño (nivel) -> Huecos — mecanismo nuevo (Mecanismo A),
+  //         SOLO para tipo='estanteria'. Un Cuerpo puede tener entrepaños en
+  //         varias zonas; al filtrar `items` por zona antes de agrupar, cada
+  //         grupo de cuerpo queda ya con solo los entrepaños de la pestaña activa.
+  // suelta: AVERIAS/GENERAL (sin dirección física) Y también vitrina/estiba
+  //         — estas SÍ tienen pasillo/fila/cuerpo (lo necesitan para el orden
+  //         de ruta física de picking, ver orden_ruta_fisica() en
+  //         picking_service.py), pero son de una sola posición: agruparlas
+  //         como "Cuerpo" las mostraría detrás de un click con lenguaje de
+  //         "Entrepaño" que no aplica. El criterio de agrupación es tipo de
+  //         mueble, no presencia de los ejes físicos.
   const grupos = [];
   const filasPorClave = new Map();
   const cuerposPorClave = new Map();
@@ -194,7 +204,7 @@ function layoutRenderUbicaciones() {
         grupos.push(g);
       }
       g.items.push(u);
-    } else if (u.pasillo && u.fila != null && u.cuerpo != null) {
+    } else if (u.pasillo && u.fila != null && u.cuerpo != null && (u.tipo || 'estanteria') === 'estanteria') {
       const clave = `${u.pasillo}|${u.fila}|${u.cuerpo}`;
       let g = cuerposPorClave.get(clave);
       if (!g) {
@@ -287,6 +297,75 @@ function layoutRenderUbicaciones() {
 
 let _layoutCuerpoZona = 'PICKING';
 let _layoutCuerpoHuecosPrevios = null; // huecosPorNivel del último cuerpo creado, para "repetir"
+let _layoutCuerpoTipoMueble = 'estanteria'; // 'estanteria' | 'vitrina' | 'estiba' — ver layoutCuerpoSetTipoMueble()
+
+const _TIPO_MUEBLE_LABEL = { estanteria: 'Cuerpo', vitrina: 'Vitrina', estiba: 'Estiba' };
+// Vitrinas solo tienen sentido en PICKING (mueble de exhibición al que el
+// operario pickea directo); estibas en el suelo aplican a PICKING y RESERVA;
+// IMPORTADOS no tiene ninguna reportada hoy — solo Cuerpo de estantería.
+const _TIPOS_MUEBLE_POR_ZONA = {
+  PICKING: ['estanteria', 'vitrina', 'estiba'],
+  RESERVA: ['estanteria', 'estiba'],
+  IMPORTADOS: ['estanteria'],
+};
+
+/** Toggle which tipo_mueble is selected in the crear-cuerpo wizard and adjust step-1 fields accordingly. */
+function layoutCuerpoSetTipoMueble(tipo) {
+  _layoutCuerpoTipoMueble = tipo;
+  ['estanteria', 'vitrina', 'estiba'].forEach(t => {
+    const btn = document.getElementById(`layout-cuerpo-tipo-${t}`);
+    if (!btn) return;
+    const activo = t === tipo;
+    btn.style.background = activo ? 'var(--pm)' : 'var(--bg)';
+    btn.style.color = activo ? '#fff' : 'var(--tx2)';
+  });
+  const esMuebleSuelto = tipo !== 'estanteria';
+  const wrapEntrepanos = document.getElementById('layout-cuerpo-entrepanos-wrap');
+  if (wrapEntrepanos) wrapEntrepanos.style.display = esMuebleSuelto ? 'none' : 'block';
+  const btnSiguiente = document.getElementById('layout-cuerpo-btn-siguiente');
+  if (btnSiguiente) btnSiguiente.textContent = esMuebleSuelto ? 'Crear' : 'Siguiente';
+  const hint = document.getElementById('layout-cuerpo-zona-hint');
+  if (hint) {
+    hint.textContent = esMuebleSuelto
+      ? `${_TIPO_MUEBLE_LABEL[tipo]} de una sola posición, zona ${_layoutCuerpoZona} — no se subdivide en entrepaños.`
+      : `El entrepaño 1 es el más bajo (piso) y sube desde ahí. Todo este Cuerpo queda en zona ${_layoutCuerpoZona}.`;
+  }
+}
+
+/** Submit a single-position mueble suelto (vitrina/estiba) directly, skipping the entrepaños/huecos step. */
+async function layoutCuerpoCrearMuebleSuelto() {
+  const pasillo = document.getElementById('layout-cuerpo-pasillo').value;
+  const fila = parseInt(document.getElementById('layout-cuerpo-fila').value);
+  const cuerpo = parseInt(document.getElementById('layout-cuerpo-numero').value);
+
+  if (!pasillo || isNaN(fila) || isNaN(cuerpo)) {
+    alerta('Completa pasillo, fila y número', 'error');
+    return;
+  }
+
+  try {
+    const payload = {
+      pasillo, fila, cuerpo, cantidad_entrepanos: 1, tipo_zona: _layoutCuerpoZona,
+      huecos_por_nivel: [1], tipo_mueble: _layoutCuerpoTipoMueble,
+    };
+    await post(`/api/almacenes/${ALMACEN_ID}/ubicaciones/cuerpo`, payload);
+    const label = _TIPO_MUEBLE_LABEL[_layoutCuerpoTipoMueble];
+    alerta(`${label} ${pasillo}${fila}-${String(cuerpo).padStart(2, '0')} (${_layoutCuerpoZona}) creada`, 'ok');
+    layoutCerrarModalCuerpo();
+    layoutCargarUbicaciones();
+  } catch (e) {
+    alerta(e.message || `Error creando la ${_TIPO_MUEBLE_LABEL[_layoutCuerpoTipoMueble].toLowerCase()}`, 'error');
+  }
+}
+
+/** Dispatch step-1 "continue": full wizard (paso 2) for estanteria, direct submit for mueble suelto. */
+function layoutCuerpoPaso1Continuar() {
+  if (_layoutCuerpoTipoMueble === 'estanteria') {
+    layoutCuerpoIrAPaso2();
+  } else {
+    layoutCuerpoCrearMuebleSuelto();
+  }
+}
 
 /** Open the 2-step wizard modal to create a full cuerpo (body) with entrepanos and huecos. */
 async function layoutAbrirModalCuerpo(zona) {
@@ -294,10 +373,14 @@ async function layoutAbrirModalCuerpo(zona) {
   if (!m) return;
   _layoutCuerpoZona = zona;
 
-  document.getElementById('layout-cuerpo-titulo').textContent =
-    zona === 'RESERVA' ? 'Crear Cuerpo — RESERVA' : 'Crear Cuerpo — PICKING';
-  document.getElementById('layout-cuerpo-zona-hint').textContent =
-    `El entrepaño 1 es el más bajo (piso) y sube desde ahí. Todo este Cuerpo queda en zona ${zona}.`;
+  document.getElementById('layout-cuerpo-titulo').textContent = `Crear ubicación — ${zona}`;
+
+  const tiposPermitidos = _TIPOS_MUEBLE_POR_ZONA[zona] || ['estanteria'];
+  ['estanteria', 'vitrina', 'estiba'].forEach(t => {
+    const btn = document.getElementById(`layout-cuerpo-tipo-${t}`);
+    if (btn) btn.style.display = tiposPermitidos.includes(t) ? '' : 'none';
+  });
+  layoutCuerpoSetTipoMueble('estanteria');
 
   const existentes = [...new Set(_layoutUbicacionesCache.map(u => u.pasillo).filter(Boolean))].sort();
   let disponibles = [];

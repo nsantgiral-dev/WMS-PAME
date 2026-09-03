@@ -121,6 +121,49 @@ def test_crear_cuerpo_rechaza_codigo_duplicado(db, almacen):
         svc.crear_cuerpo(almacen.id, 'A', 1, 3, 2, 'PICKING')
 
 
+def test_crear_cuerpo_tipo_mueble_estanteria_por_defecto(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 2, 'PICKING')
+    assert all(u.tipo == 'estanteria' for u in creadas)
+
+
+def test_crear_cuerpo_vitrina_es_una_sola_posicion_con_codigo_propio(db, almacen):
+    creadas = svc.crear_cuerpo(almacen.id, 'A', 1, 1, 4, 'PICKING',
+                                huecos_por_nivel=[3, 2, 1, 1], tipo_mueble='vitrina')
+    # cantidad_entrepanos/huecos_por_nivel se ignoran y se fuerza 1x1 — el
+    # payload del wizard puede llegar con basura ahí (campos ocultos en la
+    # UI) y el backend no puede confiar en que el cliente los mandó en 1.
+    assert len(creadas) == 1
+    ub = creadas[0]
+    assert ub.codigo == 'PIK-A1-VIT01'
+    assert ub.tipo == 'vitrina'
+    assert ub.tipo_zona == 'PICKING'
+    assert ub.fila == 1 and ub.cuerpo == 1 and ub.nivel == 1 and ub.hueco == 1
+
+
+def test_crear_cuerpo_estiba_en_reserva_codigo_propio(db, almacen):
+    ub = svc.crear_cuerpo(almacen.id, 'B', 2, 5, 1, 'RESERVA', tipo_mueble='estiba')[0]
+    assert ub.codigo == 'RES-B2-EST05'
+    assert ub.tipo == 'estiba'
+    assert ub.tipo_zona == 'RESERVA'
+
+
+def test_crear_cuerpo_rechaza_tipo_mueble_invalido(db, almacen):
+    with pytest.raises(ValueError, match='tipo_mueble debe ser una de'):
+        svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING', tipo_mueble='mostrador')
+
+
+def test_editar_cuerpo_conserva_tipo_mueble_al_remodular(db, almacen):
+    svc.crear_cuerpo(almacen.id, 'A', 1, 1, 1, 'PICKING', tipo_mueble='vitrina')
+    # Remodular una vitrina sigue produciendo 1x1 con su código propio —
+    # aunque el caller pida más entrepaños/huecos, editar_cuerpo delega en
+    # crear_cuerpo() con el tipo_mueble original, que fuerza 1x1 igual que
+    # en la creación.
+    creadas = svc.editar_cuerpo(almacen.id, 'A', 1, 1, cantidad_entrepanos=3, huecos_por_nivel=[2, 2, 2])
+    assert len(creadas) == 1
+    assert creadas[0].codigo == 'PIK-A1-VIT01'
+    assert creadas[0].tipo == 'vitrina'
+
+
 def test_crear_ubicacion_averias_numera_secuencial(db, almacen):
     a1 = svc.crear_ubicacion_averias(almacen.id)
     a2 = svc.crear_ubicacion_averias(almacen.id)
