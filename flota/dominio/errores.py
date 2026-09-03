@@ -21,3 +21,13 @@ class CustodiaInvalida(ErrorFlota):
 
 class FotoInvalida(ErrorFlota):
     """Una foto no tiene padre resoluble o degrada su clase."""
+
+
+class PermisoInsuficiente(ErrorFlota):
+    """La operación existe, el dato está bien, y quien la pide no puede hacerla.
+
+    Es distinta de `ErrorFlota` a secas porque la frontera la traduce a **403**
+    y no a 409: no es que el mundo no admita la operación, es que este usuario
+    no. Confundirlas manda a alguien a revisar sus datos cuando lo que le falta
+    es un permiso.
+    """

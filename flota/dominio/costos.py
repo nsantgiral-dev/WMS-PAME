@@ -78,6 +78,43 @@ CATEGORIAS_GASTO = (
 #: sobre un día (regla 11).
 CATEGORIAS_CON_PERIODO = ('soat', 'rtm', 'impuesto_vehicular', 'seguro')
 
+#: Las categorías que puede registrar quien está PARADO AL LADO DEL CAMIÓN.
+#:
+#: Hoy una sola. El conductor tanquea, tiene la factura en la mano y sabe los
+#: galones — pedirle a un jefe que cargue cada tanqueo es cómo se deja de
+#: cargar. Todo lo demás —el SOAT, el impuesto, la póliza, el peaje— nace en un
+#: escritorio con un documento delante, y ahí la pregunta «¿quién autorizó este
+#: gasto?» tiene que tener respuesta.
+#:
+#: **Existe por una escalada real, encontrada el 2026-09-02.** `POST
+#: /flota/tanqueos` pedía `LECTURA_FLOTA` y por dentro llamaba a
+#: `registrar_gasto`, cuyo endpoint propio pide `MAESTROS_FLOTA`: un conductor
+#: escribía en la tabla de la que sale el CPK y **no podía leer lo que acababa
+#: de escribir**. Es la forma exacta de `/liquidar-completo`, que ya costó una
+#: vez: *un endpoint compuesto no puede exigir menos que el más estricto de sus
+#: componentes*.
+#:
+#: La lista vive acá y no en la frontera a propósito. Un guard en la ruta
+#: protege esa ruta; el guard de la operación tiene que estar donde la
+#: operación ocurre, o la segunda puerta no lo hereda — la lección de packing.
+CATEGORIAS_DE_CAMPO = ('combustible',)
+
+
+def exige_maestros(categoria: str) -> bool:
+    """¿Esta categoría necesita rol de maestros para registrarse?
+
+    QUÉ AFIRMA: que la categoría no es una de las que nacen en el campo.
+
+    QUÉ NO AFIRMA: nada sobre el usuario. Quién es se resuelve contra la base,
+    no contra un parámetro de quien llama — un guard cuya precondición la manda
+    el que pide no es un guard.
+
+    Sin `.get(x, default)`: una categoría desconocida **exige maestros**. Es el
+    lado conservador (regla 0): lo que no se sabe clasificar no lo escribe el
+    rol más amplio.
+    """
+    return categoria not in CATEGORIAS_DE_CAMPO
+
 #: De dónde salió la plata. **Es la pregunta que el dueño no contestó todavía**
 #: (¿tanquean con tarjeta/convenio o con efectivo del conductor?), modelada con
 #: palabras para que la tabla aguante las dos respuestas sin migrar.
@@ -416,6 +453,7 @@ def rendimiento_km_galon(tanqueos: Sequence[dict]) -> Union[Decimal, str]:
 
 
 __all__ = [
+    'CATEGORIAS_DE_CAMPO', 'exige_maestros',
     'CATEGORIAS_GASTO', 'CATEGORIAS_CON_PERIODO', 'ORIGENES_COSTO',
     'ESTADOS_TANQUE', 'MARCAS_TRAMO', 'exige_periodo', 'dias_del_periodo',
     'imputar_a_ventana', 'costo_por_kilometro', 'precio_por_galon',

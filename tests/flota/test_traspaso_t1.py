@@ -33,12 +33,31 @@ def mundo(db):
     usr.set_password('x')
     db.session.add_all([veh, alm, usr])
     db.session.flush()
-    c1 = Conductor(nombre='Turno A', cedula='TRA-1', activo=True)
-    c2 = Conductor(nombre='Turno B', cedula='TRA-2', activo=True)
+    # Cada conductor con su CUENTA vinculada. Desde el 2026-09-02 no es
+    # decoración: `mismo_custodio` exige que quien pide sea el custodio actual
+    # —resuelto por `Conductor.usuario_id` contra el token—, porque antes se
+    # comparaba el conductor que venía EN EL CUERPO del request y eso dejaba a
+    # un conductor cerrarle el turno a otro.
+    #
+    # Un conductor sin cuenta no puede demostrar que es él, así que no recibe el
+    # atajo del no-op: el sistema no puede distinguirlo de alguien que dice
+    # serlo. El health ya cuenta ese hueco en `conductores_activos_sin_cuenta`,
+    # y `TestElConductorSinCuentaNoRecibeElAtajo` lo fija como comportamiento
+    # esperado, no como accidente.
+    u1 = Usuario(email='turno_a@test.com', nombre='Turno A', rol='conductor',
+                 activo=True)
+    u1.set_password('x')
+    u2 = Usuario(email='turno_b@test.com', nombre='Turno B', rol='conductor',
+                 activo=True)
+    u2.set_password('x')
+    db.session.add_all([u1, u2])
+    db.session.flush()
+    c1 = Conductor(nombre='Turno A', cedula='TRA-1', activo=True, usuario_id=u1.id)
+    c2 = Conductor(nombre='Turno B', cedula='TRA-2', activo=True, usuario_id=u2.id)
     db.session.add_all([c1, c2])
     db.session.commit()
     return {'db': db, 'veh': veh.id, 'alm': alm.id, 'usr': usr.id,
-            'c1': c1.id, 'c2': c2.id}
+            'c1': c1.id, 'c2': c2.id, 'u1': u1.id, 'u2': u2.id}
 
 
 def _traspasar(mundo, conductor, km, minutos, **kw):
@@ -225,10 +244,10 @@ class TestQuienPuedeRecibir:
     cerrar y el camión tiene que salir a las 5 a.m.
     """
 
-    def _recibir(self, mundo, conductor, quien, **kw):
+    def _recibir(self, mundo, conductor, quien, pide_usuario=None, **kw):
         return traspaso.traspasar(
             vehiculo_id=mundo['veh'], km=100_500,
-            registrado_por_usuario_id=mundo['usr'],
+            registrado_por_usuario_id=pide_usuario or mundo['usr'],
             custodio_tipo=CustodioTipo.CONDUCTOR,
             custodio_conductor_id=mundo[conductor],
             quien_pide=quien,
@@ -263,7 +282,8 @@ class TestQuienPuedeRecibir:
     def test_recibir_lo_que_ya_se_tiene_no_es_conflicto(self, mundo):
         """Un no-op, no una colisión: el vehículo ya es suyo."""
         _traspasar(mundo, 'c1', 100_000, 0)
-        self._recibir(mundo, 'c1', QuienPide.CONDUCTOR)
+        # Con SU usuario: es la única forma de que el sistema sepa que es él.
+        self._recibir(mundo, 'c1', QuienPide.CONDUCTOR, pide_usuario=mundo['u1'])
         assert traspaso.custodia_activa(mundo['veh']).custodio_conductor_id == mundo['c1']
 
     def test_el_admin_si_puede_pero_exige_motivo_escrito(self, mundo):
@@ -390,7 +410,10 @@ class TestUnVehiculoPorConductor:
         _traspasar(dos_vehiculos, 'c1', 100_000, 0)
         traspaso.traspasar(
             vehiculo_id=dos_vehiculos['veh'], km=100_050,
-            registrado_por_usuario_id=dos_vehiculos['usr'],
+            # Con SU usuario: desde el 2026-09-02 el atajo del no-op exige que
+            # quien pide sea el custodio, resuelto contra el token y no contra
+            # el `custodio_conductor_id` que viene en el cuerpo.
+            registrado_por_usuario_id=dos_vehiculos['u1'],
             custodio_tipo=CustodioTipo.CONDUCTOR,
             custodio_conductor_id=dos_vehiculos['c1'],
             quien_pide=QuienPide.CONDUCTOR,
@@ -433,3 +456,92 @@ class TestUnVehiculoPorConductor:
             ts=_T0 + timedelta(minutes=10),
         )
         assert nueva.vehiculo_id == dos_vehiculos['veh2']
+
+
+class TestElConductorNoLeCierraElTurnoAOtro:
+    """La escalada B, encontrada ejecutando el 2026-09-02.
+
+    ```
+    [puerta 1] B entrega a la sede    → 409 «lo tiene Turno A… tiene que entrar
+                                        con SU usuario»
+    [puerta 2] B nombra a A custodio  → 201     ← el agujero
+       turno de A: fin_ts=ahora  km_fin=88888  cierre_forzado=False
+    ```
+
+    `mismo_custodio` comparaba `custodio_conductor_id` **del cuerpo del request**
+    contra el custodio actual. B mandaba «el que recibe es A», salía verdadero, y
+    `puede_recibir` no se evaluaba nunca. B le cerraba el turno a A con un
+    `km_fin` inventado —que nace como `LecturaOdometro` `origen='entrega'`— **y
+    sin la marca de forzado**: la pantalla que existe para que A se entere decía
+    `cerrado_a_la_fuerza: False`.
+
+    No es la lección de packing (guard en la ruta, segunda ruta sin guardia)
+    sino su prima: **un guard cuya precondición la manda quien pide no es un
+    guard de la operación.**
+    """
+
+    def test_B_no_puede_cerrar_el_turno_de_A_nombrandolo_custodio(self, mundo):
+        """**El ataque, literal.** 409 donde antes daba 201."""
+        _traspasar(mundo, 'c1', 100_000, 0)
+        with pytest.raises(CustodiaInvalida):
+            traspaso.traspasar(
+                vehiculo_id=mundo['veh'], km=88_888,
+                registrado_por_usuario_id=mundo['u2'],   # ← B, con SU token
+                custodio_tipo=CustodioTipo.CONDUCTOR,
+                custodio_conductor_id=mundo['c1'],       # ← pero dice «recibe A»
+                quien_pide=QuienPide.CONDUCTOR,
+                ts=_T0 + timedelta(minutes=900),
+            )
+
+    def test_y_el_turno_de_A_queda_intacto(self, mundo):
+        """Que levante no alcanza: lo que importa es que no haya escrito nada.
+        Un cierre a medias con `km_fin` inventado es peor que el 201."""
+        _traspasar(mundo, 'c1', 100_000, 0)
+        with pytest.raises(CustodiaInvalida):
+            traspaso.traspasar(
+                vehiculo_id=mundo['veh'], km=88_888,
+                registrado_por_usuario_id=mundo['u2'],
+                custodio_tipo=CustodioTipo.CONDUCTOR,
+                custodio_conductor_id=mundo['c1'],
+                quien_pide=QuienPide.CONDUCTOR,
+                ts=_T0 + timedelta(minutes=900),
+            )
+        vigente = traspaso.custodia_activa(mundo['veh'])
+        assert vigente is not None and vigente.fin_ts is None
+        assert vigente.custodio_conductor_id == mundo['c1']
+        assert vigente.km_fin is None
+
+    def test_A_SI_puede_re_declararse_con_su_usuario(self, mundo):
+        """La otra dirección. Si el arreglo cerrara también esta puerta, el
+        conductor no podría reconfirmar su propio turno y el remedio sería peor
+        que la enfermedad."""
+        _traspasar(mundo, 'c1', 100_000, 0)
+        traspaso.traspasar(
+            vehiculo_id=mundo['veh'], km=100_500,
+            registrado_por_usuario_id=mundo['u1'],
+            custodio_tipo=CustodioTipo.CONDUCTOR,
+            custodio_conductor_id=mundo['c1'],
+            quien_pide=QuienPide.CONDUCTOR,
+            ts=_T0 + timedelta(minutes=900),
+        )
+        assert traspaso.custodia_activa(mundo['veh']).custodio_conductor_id == mundo['c1']
+
+    def test_gestion_conserva_su_camino_con_motivo_escrito(self, mundo):
+        """Un admin de zona SÍ cierra turnos ajenos — con motivo escrito y
+        dejando la marca. Eso no cambió: `quien_pide` sale del ROL, no del
+        cuerpo, así que un conductor no puede declararse admin."""
+        _traspasar(mundo, 'c1', 100_000, 0)
+        traspaso.traspasar(
+            vehiculo_id=mundo['veh'], km=100_600,
+            registrado_por_usuario_id=mundo['usr'],
+            custodio_tipo=CustodioTipo.CONDUCTOR,
+            custodio_conductor_id=mundo['c2'],
+            quien_pide=QuienPide.ADMIN_ZONA,
+            motivo_forzado='Turno A se fue sin cerrar, el camión sale a las 6',
+            ts=_T0 + timedelta(minutes=900),
+        )
+        anterior = Custodia.query.filter(Custodia.fin_ts.isnot(None)).order_by(
+            Custodia.id.desc()).first()
+        assert anterior.cierre_forzado is True, (
+            'cerró el turno de otro sin dejar la marca — la pantalla que existe '
+            'para que el custodio se entere no lo va a mostrar')

@@ -140,10 +140,44 @@ def traspasar(
 
     vigente = custodia_activa(vehiculo_id)
 
-    # ¿Puede recibirlo? La decisión es del dominio, no de un `if` acá — una
-    # regla escrita en el adaptador se pierde en el próximo refactor.
-    mismo_custodio = (
+    # ¿Quien está pidiendo esto ES el custodio actual?
+    #
+    # Se resuelve por USUARIO —el del token— y no por el conductor que viene en
+    # el cuerpo: el vínculo `Conductor.usuario_id` es el que los une. Esta es la
+    # única de las dos preguntas que el que pide no puede contestar a su favor.
+    es_el_custodio_actual = (
         vigente is not None
+        and vigente.custodio_conductor is not None
+        and vigente.custodio_conductor.usuario_id is not None
+        and vigente.custodio_conductor.usuario_id == registrado_por_usuario_id
+    )
+
+    # ── El no-op: el mismo custodio se re-declara a sí mismo ─────────────
+    #
+    # **Exige las dos mitades, y la segunda se agregó el 2026-09-02.** Hasta
+    # entonces solo comparaba `custodio_conductor_id`, que **viene en el cuerpo
+    # del request**: un conductor B mandaba «el que recibe es A» —el custodio
+    # actual—, `mismo_custodio` daba verdadero, y `puede_recibir` no se evaluaba
+    # nunca. B le cerraba el turno a A con un `km_fin` inventado, **y sin la
+    # marca de cierre forzado**: `GET /flota/custodia/cierres-forzados` devolvía
+    # vacío y la pantalla de A decía `cerrado_a_la_fuerza: False`. La pantalla
+    # que existe para que A se entere no lo mostraba.
+    #
+    # Lo encontró la auditoría adversarial ejecutándolo: 201 donde tocaba 409.
+    #
+    # No es la lección de packing (guard en la ruta, segunda ruta sin guardia)
+    # sino su prima: **un guard cuya precondición la manda quien pide no es un
+    # guard de la operación.** Es la misma forma que la escalada de
+    # `/flota/tanqueos` del mismo día, y por eso `_exigir_autoridad` en
+    # `gastos.py` resuelve el rol contra la base y no por parámetro.
+    # `quien_pide` sale del ROL (`_es_gestion()`), no del cuerpo — un conductor
+    # no puede declararse admin. Gestión ya tiene autoridad para cerrar turnos
+    # ajenos con motivo escrito, así que darle el atajo no le concede nada nuevo.
+    # Lo que se cierra es el atajo del CONDUCTOR que no es el custodio.
+    _pide_gestion = quien_pide == QuienPide.ADMIN_ZONA
+    mismo_custodio = (
+        (es_el_custodio_actual or _pide_gestion)
+        and vigente is not None
         and vigente.custodio_conductor_id is not None
         and vigente.custodio_conductor_id == custodio_conductor_id
     )
@@ -166,19 +200,10 @@ def traspasar(
             for o in otras_abiertas
         ])
 
-    # ¿Quien está pidiendo esto ES el custodio actual? Es otra pregunta que
-    # `mismo_custodio`, y la diferencia es el día entero: al ENTREGAR a una sede
-    # el custodio entrante no es un conductor, así que `mismo_custodio` da falso
-    # y el conductor quedaba sin poder soltar su propio vehículo.
-    #
-    # Se resuelve por USUARIO y no por conductor porque quien pide se identifica
-    # con su cuenta; el vínculo `Conductor.usuario_id` es el que los une.
-    es_el_custodio_actual = (
-        vigente is not None
-        and vigente.custodio_conductor is not None
-        and vigente.custodio_conductor.usuario_id is not None
-        and vigente.custodio_conductor.usuario_id == registrado_por_usuario_id
-    )
+    # `es_el_custodio_actual` se calcula ARRIBA, antes de `mismo_custodio`, que
+    # ahora depende de él. Al ENTREGAR a una sede el custodio entrante no es un
+    # conductor, así que `mismo_custodio` da falso y hace falta esta variable
+    # para que el conductor pueda soltar su propio vehículo.
     forzado = False
     if vigente is not None and not mismo_custodio:
         nombre = (vigente.custodio_conductor.nombre

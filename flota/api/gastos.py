@@ -45,7 +45,7 @@ from flota.adaptadores.gastos import numero_legible
 from flota.adaptadores.modelos import Gasto
 from flota.api._permisos import MAESTROS_FLOTA, exige
 from flota.dominio import costos
-from flota.dominio.errores import ErrorFlota
+from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
 
 gastos_bp = Blueprint('flota_gastos', __name__)
 
@@ -293,6 +293,8 @@ def registrar_tanqueo():
             centro_op=datos['centro_op'] if 'centro_op' in datos else None,
             descripcion=datos['descripcion'] if 'descripcion' in datos else None,
         )
+    except PermisoInsuficiente as e:
+        return jsonify({'error': str(e)}), 403
     except ErrorFlota as e:
         return jsonify({'error': str(e)}), 409
 

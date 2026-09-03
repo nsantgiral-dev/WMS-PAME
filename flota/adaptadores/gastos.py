@@ -87,7 +87,7 @@ entregando las facturas.
 · **No aprueba nada.** La aprobación real es la causación en Siesa. Un segundo
   «aprobado» acá sería un estado que contradice al ERP sin poder corregirlo.
 """
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import List, Optional, Union
 
@@ -98,7 +98,7 @@ from flota.adaptadores.modelos import (FichaTecnica, Gasto, LecturaOdometro,
 from flota.dominio import costos
 from flota.dominio import odometro as dom_odo
 from flota.dominio.costos import SIN_DATO
-from flota.dominio.errores import ErrorFlota
+from flota.dominio.errores import ErrorFlota, PermisoInsuficiente
 from flota.dominio.valores import Confianza, OrigenLectura
 
 
@@ -283,6 +283,60 @@ def _ultima_lectura(vehiculo_id: int) -> Optional[LecturaOdometro]:
     return max(filas, key=lambda l: (l.ts, l.id), default=None)
 
 
+def _dia_operativo_de(ts: datetime) -> date:
+    """El día de Bogotá al que pertenece un timestamp guardado en UTC.
+
+    QUÉ AFIRMA: que un turno cerrado a las 8 p.m. de Colombia cuenta en el día
+    en que el conductor lo cerró, no en el siguiente.
+
+    QUÉ NO AFIRMA: nada sobre la confianza de la lectura. Son dos preguntas —
+    «¿el número es creíble?» y «¿de qué día es?»— y hasta el 2026-09-02 la
+    segunda no la contestaba nadie.
+
+    Una sola implementación, y consume `TZ_BOGOTA` de `app/utils/fecha.py`: la
+    regla 5 del WMS ya existía, ya tenía helper y ya tenía tests, y se aplicaba
+    en 4 de 16 sitios. Este es el sitio 17.
+    """
+    from app.utils.fecha import TZ_BOGOTA
+
+    return ts.replace(tzinfo=timezone.utc).astimezone(TZ_BOGOTA).date()
+
+
+def _exigir_autoridad(categoria: str, usuario_id: int) -> None:
+    """Levanta si este usuario no puede registrar esta categoría.
+
+    QUÉ AFIRMA al no levantar: que el rol REAL del usuario —el de su fila, no
+    el que vino en el request— admite esta categoría.
+
+    QUÉ NO AFIRMA: que el gasto esté aprobado. Nadie aprueba gastos dentro del
+    WMS en esta fase, y FLO-PR-01 dice que `control_flota` no aprueba.
+
+    **La autoridad se resuelve contra la base, no por parámetro.** Un guard cuya
+    precondición la manda quien llama no es un guard — es el defecto gemelo que
+    la auditoría del 2026-09-02 encontró en `traspaso.py`, donde `mismo_custodio`
+    salía del cuerpo del request.
+
+    Un usuario inexistente o inactivo **no pasa**, y una categoría desconocida
+    exige maestros: el lado conservador (regla 0). Ningún `.get(x, default)` —
+    un rol que no se reconoce no degrada al más amplio, que es exactamente cómo
+    se cuela una escalada.
+    """
+    from app.models.usuario import Usuario
+    from app.routes._auth_helpers import Roles
+
+    if not costos.exige_maestros(categoria):
+        return
+
+    permitidos = tuple(Roles.GESTION) + (Roles.CONTROL_FLOTA,)
+    u = Usuario.query.get(usuario_id)
+    if u is None or not u.activo or u.rol not in permitidos:
+        raise PermisoInsuficiente(
+            f'la categoría «{categoria}» la registra gestión o control de '
+            f'flota, no el rol «{u.rol if u is not None else "desconocido"}». '
+            f'En campo se registra: {", ".join(costos.CATEGORIAS_DE_CAMPO)}.'
+        )
+
+
 def registrar_gasto(
     *,
     vehiculo_id: int,
@@ -334,6 +388,16 @@ def registrar_gasto(
     después. Ver `_lectura_para` para qué se verifica y por qué no es un rodeo.
     """
     ahora = ts if ts is not None else datetime.utcnow()
+
+    # ── 0. La autoridad, antes que el dato ───────────────────────────────
+    #
+    # Va acá y no en la ruta porque `registrar_tanqueo` es una SEGUNDA PUERTA a
+    # esta misma operación: hasta el 2026-09-02 pedía `LECTURA_FLOTA` mientras
+    # `POST /flota/gastos` pedía `MAESTROS_FLOTA`, así que un conductor escribía
+    # en la tabla de la que sale el CPK y no podía leer lo que acababa de
+    # escribir. Es la forma de `/liquidar-completo`. Un guard en la ruta protege
+    # esa ruta; uno en el servicio protege la operación (lección de packing).
+    _exigir_autoridad(categoria, registrado_por_usuario_id)
 
     # ── 1. Juzgar ANTES de escribir ──────────────────────────────────────
     if not (proveedor or '').strip():
@@ -628,9 +692,25 @@ def cpk_de(vehiculo_id: int, desde: date, hasta: date) -> dict:
          for g in gastos),
         Decimal('0'))
 
+    # ── La ventana se compara en DÍA OPERATIVO, no en UTC ────────────────
+    #
+    # `l.ts` es UTC naive; `desde`/`hasta` vienen de `dia_operativo()`, que es
+    # Bogotá. Comparar `l.ts.date()` contra esa ventana corre el reloj cinco
+    # horas: **todo turno cerrado entre las 7 p.m. y medianoche se contaba en el
+    # día siguiente**, y en la frontera del mes se fugaba al mes siguiente.
+    #
+    # Medido el 2026-09-02 con tres turnos de agosto: el CPK salía exactamente
+    # al DOBLE ($200/km contra $100/km reales) y lo hacía con la marca
+    # `verificada` — la única que afirma que una persona miró. La confianza mide
+    # la LECTURA; nadie medía la VENTANA.
+    #
+    # Los 1455 tests no lo veían porque todos sus `ts` son a las 08:00 UTC, la
+    # única franja del día en que la fecha UTC y la de Bogotá coinciden. Es la
+    # regla 5 del WMS —una fecha que alguien LEE como día va en Bogotá— violada
+    # en código escrito esta misma semana.
     lecturas = [l for l in LecturaOdometro.query
                 .filter_by(vehiculo_id=vehiculo_id).all()
-                if desde <= l.ts.date() <= hasta]
+                if desde <= _dia_operativo_de(l.ts) <= hasta]
     # Una sola lectura no delimita un tramo, y cero lecturas tampoco. **No es 0
     # km recorridos**: es que no se puede medir el tramo, y el dominio traduce
     # eso a `sin_dato` en vez de a un CPK con denominador inventado.
